@@ -256,66 +256,96 @@ const commands = {
 
   update(args) {
     const restart = args?.includes('restart') || args?.includes('-r');
-    console.log('🔄 Updating NewClaw...');
+    console.log('🔄 Atualizando NewClaw...');
     try {
       execSync('git fetch origin main', { cwd: DIR, stdio: 'inherit' });
       const local = execSync('git rev-parse HEAD', { cwd: DIR }).toString().trim();
       const remote = execSync('git rev-parse origin/main', { cwd: DIR }).toString().trim();
       
       if (local === remote) {
-        console.log('✅ Already up to date');
+        console.log('✅ Sistema já está na versão mais recente.');
         return;
       }
       
-      console.log('📥 Pulling...');
+      console.log('📥 Baixando atualizações...');
       execSync('git pull origin main', { cwd: DIR, stdio: 'inherit' });
-      console.log('🔧 Building...');
+      console.log('🔧 Compilando projeto...');
       execSync('npm run build', { cwd: DIR, stdio: 'inherit' });
       
       if (restart) {
-        console.log('🔄 Restarting...');
+        console.log('🔄 Reiniciando...');
         commands.restart(['--daemon']);
       } else {
-        console.log('⚠️  Build complete. Run "node bin/newclaw update restart" to apply.');
+        console.log('⚠️  Build concluído. Execute "newclaw update restart" para aplicar as mudanças.');
       }
-      console.log('✅ Done!');
+      console.log('✅ Concluído!');
     } catch (e) {
-      console.error('❌ Update failed:', e.message);
+      console.error('❌ Falha na atualização:', e.message);
+    }
+  },
+
+  restore() {
+    const isWin = process.platform === 'win32';
+    const script = isWin ? 'restore.ps1' : 'restore.sh';
+    const scriptPath = path.join(DIR, 'scripts', script);
+    
+    if (!fs.existsSync(scriptPath)) {
+      console.error(`❌ Erro: Script de restauração não encontrado em ${scriptPath}`);
+      return;
+    }
+
+    console.log('🔄 Iniciando assistente de restauração...');
+    if (isWin) {
+      spawn('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-File', scriptPath], { stdio: 'inherit' });
+    } else {
+      spawn('bash', [scriptPath], { stdio: 'inherit' });
+    }
+  },
+
+  uninstall() {
+    const isWin = process.platform === 'win32';
+    const script = isWin ? 'uninstall.ps1' : 'uninstall.sh';
+    const scriptPath = path.join(DIR, script);
+    
+    if (!fs.existsSync(scriptPath)) {
+      console.error(`❌ Erro: Script de desinstalação não encontrado em ${scriptPath}`);
+      return;
+    }
+
+    console.log('⚠️  Iniciando desinstalador...');
+    if (isWin) {
+      spawn('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-File', scriptPath], { stdio: 'inherit' });
+    } else {
+      spawn('bash', [scriptPath], { stdio: 'inherit' });
     }
   },
 
   help() {
     console.log(`
-🪐 NewClaw CLI — Command Reference
+🪐 NewClaw CLI — Referência de Comandos
 
-  node bin/newclaw start [--daemon] [--debug] [--tail] [--lang=xx]
-      Start NewClaw agent
-      --daemon    Run in background
-      --debug     Enable debug logging (LOG_LEVEL=debug)
-      --tail      Debug + live log stream (like tail -f)
-      --lang=xx   Override language (e.g. pt-BR, en-US)
+Comando                 Descrição
+----------------------- ----------------------------------------------------
+newclaw start           Inicia o agente (foreground)
+newclaw start --daemon  Inicia em segundo plano (ideal para VPS)
+newclaw stop            Encerra o serviço graciosamente
+newclaw status          Mostra o status, PID, uptime e configurações
+newclaw logs -f         Visualiza os logs em tempo real
+newclaw update          Atualiza o código do GitHub e recompila o projeto
+newclaw restore         Abre o assistente de restauração de backups
+newclaw uninstall       Remove o NewClaw e limpa o sistema
+newclaw help            Mostra esta tela de ajuda
 
-  node bin/newclaw stop           Stop the agent
-  node bin/newclaw restart        Restart (stop + start --daemon)
-  node bin/newclaw status [--lang=xx]  Show PID, uptime, config
-  node bin/newclaw logs [--follow|-f]  View logs (tail -f)
-  node bin/newclaw lang           Show current language
-  node bin/newclaw lang <locale>  Set language persistently
-  node bin/newclaw update [restart]   Pull from GitHub, build, optionally restart
-  node bin/newclaw help           Show this help
+Exemplos:
+  newclaw start --daemon --tail
+  newclaw status --lang=pt-BR
+  newclaw update restart
+  newclaw logs -f
 
-Examples:
-  node bin/newclaw start --daemon
-  node bin/newclaw start --debug --daemon --tail
-  node bin/newclaw start --debug --tail
-  node bin/newclaw status --lang=pt-BR
-  node bin/newclaw update restart
-  node bin/newclaw logs -f
-
-Debug Tips:
-  Set LOG_LEVEL=debug in .env for persistent debug logging
-  Use --tail to watch logs in real-time while running as daemon
-  Logs are stored in: ./logs/newclaw-stdout.log
+Dicas:
+  - Use --debug para ver logs detalhados (LOG_LEVEL=debug)
+  - Backups são armazenados em: ~/newclaw-backups (Linux) ou %USERPROFILE%\\newclaw-backups (Windows)
+  - Logs detalhados em: ./logs/newclaw-stdout.log
 `);
   }
 };

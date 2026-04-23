@@ -444,6 +444,13 @@ install_newclaw() {
   info "Compilando código..."
   npm run build
   ok "Código compilado!"
+
+  # Garantir permissão de execução em todos os scripts
+  info "Configurando permissões de execução..."
+  run chmod +x bin/newclaw
+  run chmod +x uninstall.sh
+  run chmod +x scripts/*.sh 2>/dev/null || true
+  ok "Permissões configuradas!"
 }
 
 # ── 7. Configuração ──────────────────────────────────────────
