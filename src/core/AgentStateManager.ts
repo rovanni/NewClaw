@@ -8,6 +8,10 @@ export interface AgentState {
     confidence: number;
     user_alignment: number;
     current_focus: AgentFocus;
+    meta: {
+        stability: number;
+        drift_risk: number;
+    };
 }
 
 export class AgentStateManager {
@@ -30,13 +34,32 @@ export class AgentStateManager {
             mode: 'learning',
             confidence: 0.5,
             user_alignment: 0.5,
-            current_focus: 'unknown'
+            current_focus: 'unknown',
+            meta: {
+                stability: 1.0,
+                drift_risk: 0.0
+            }
         };
     }
+
+    private lastStates: Partial<AgentState>[] = [];
 
     updateState(updates: Partial<AgentState>): void {
         const currentState = this.getState();
         const newState = { ...currentState, ...updates };
+
+        // Calculate stability and drift
+        this.lastStates.push(updates);
+        if (this.lastStates.length > 5) this.lastStates.shift();
+
+        const focusChanges = this.lastStates.filter(s => s.current_focus && s.current_focus !== currentState.current_focus).length;
+        const newStability = Math.max(0, 1.0 - (focusChanges * 0.2));
+        const newDriftRisk = (focusChanges * 0.1) + (newState.confidence < 0.4 ? 0.2 : 0);
+
+        newState.meta = {
+            stability: newStability,
+            drift_risk: Math.min(1.0, newDriftRisk)
+        };
         
         this.memory.addNode({
             id: 'agent_state',

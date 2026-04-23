@@ -17,6 +17,10 @@ import { ContextCompressor } from './ContextCompressor';
 import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
 import { MemoryScoringEngine } from '../memory/MemoryScoringEngine';
+import { MemoryReconciliationEngine } from '../memory/MemoryReconciliationEngine';
+import { StateStabilityGuard } from '../core/StateStabilityGuard';
+import { ContextValidator } from './ContextValidator';
+import { DecisionPostProcessor } from './DecisionPostProcessor';
 
 export interface ToolResult {
     success: boolean;
@@ -70,6 +74,10 @@ export class AgentLoop {
     private modelRouter: ModelRouter;
     private stateManager: AgentStateManager;
     private scoringEngine: MemoryScoringEngine;
+    private reconciliationEngine: MemoryReconciliationEngine;
+    private stabilityGuard: StateStabilityGuard;
+    private contextValidator: ContextValidator;
+    private postProcessor: DecisionPostProcessor;
 
     public getStateManager(): AgentStateManager {
         return this.stateManager;
@@ -94,6 +102,10 @@ export class AgentLoop {
         this.modelRouter = new ModelRouter();
         this.stateManager = new AgentStateManager(memory);
         this.scoringEngine = new MemoryScoringEngine(memory);
+        this.reconciliationEngine = new MemoryReconciliationEngine(memory);
+        this.stabilityGuard = new StateStabilityGuard(this.stateManager);
+        this.contextValidator = new ContextValidator();
+        this.postProcessor = new DecisionPostProcessor();
         this.config = {
             languageDirective: config?.languageDirective || 'Responda SEMPRE em português brasileiro. Seja direto e conciso.',
             systemPrompt: config?.systemPrompt || 'Voce e o NewClaw, um agente cognitivo local. Ao usar ferramentas (tools), seja extremamente preciso com nomes de arquivos e caminhos. NUNCA mostre codigo tecnico ou saida de comandos ao usuario. Sempre formate a resposta de forma natural e amigavel. IMPORTANTE: Voce tem acesso ao historico completo da conversa — quando o usuario se referir a algo mencionado antes (ex: "esses valores", "aquele arquivo", "o que acabamos de falar"), USE as informacoes do contexto anterior relevante que esta disponivel. NUNCA diga que nao se lembra ou que nao tem acesso ao historico. EDICAO DE ARQUIVOS: Para modificar um arquivo existente, use file_ops com uma destas acoes: (1) action=replace — troca texto exato (target e replacement). (2) action=patch — troca por numero de linha (startLine, endLine, content). (3) action=append — adiciona conteudo ao final do arquivo. NUNCA recrie o arquivo inteiro com action=create se ele ja existe — isso apaga todo o conteudo original. Para edicoes grandes em HTML/CSS/JS, prefira action=patch com numeros de linha.'
@@ -112,7 +124,6 @@ export class AgentLoop {
         if (sendAudio?.setContext) sendAudio.setContext(chatId, botToken);
         const sendDocument = this.tools.get('send_document') as any;
         if (sendDocument?.setContext) sendDocument.setContext(chatId, botToken);
-        console.log(`[${this.ts()}] [CTX] send_document chatId=${(sendDocument as any)?.chatId || 'NOT_SET'}, botToken=${(sendDocument as any)?.botToken ? 'SET' : 'EMPTY'}`);
     }
 
     private buildToolDefinitions(): ToolDefinition[] {
@@ -183,14 +194,30 @@ export class AgentLoop {
 
     async process(userId: string, text: string): Promise<string> {
         const trace = traceManager.startTrace(userId, text);
+        const stateBefore = this.stateManager.getState();
         const conversationId = this.memory.getOrCreateConversation(userId);
         this.memory.addMessage(conversationId, 'user', text);
 
-        // Log removed to avoid duplication with input handlers
-
         let result: string;
         try {
+            // Context Validation (pre-run)
+            const rawContext = await this.contextBuilder.buildContext(text);
+            const validation = this.contextValidator.validate(text, rawContext, stateBefore);
+
             result = await this.runWithTools(conversationId, text, 0);
+            
+            // Decision Post-Processing
+            result = this.postProcessor.process(result, stateBefore, validation);
+
+            // Cognitive Logging
+            console.log('[COGNITIVE_LOG]', JSON.stringify({
+                userId,
+                intent: text.slice(0, 50),
+                state: stateBefore,
+                validation,
+                adjustmentsApplied: true // Simplified for log
+            }));
+
         } catch (error: any) {
             const activeModel = this.providerFactory.getOllamaProvider()?.getModel() || 'unknown';
             console.error(`[AGENT] Error with model ${activeModel}: ${error.message}`);
@@ -237,6 +264,9 @@ export class AgentLoop {
 
         this.memory.addMessage(conversationId, 'assistant', result);
         try {
+            // Update cognitive state using Stability Guard for transitions
+            this.stabilityGuard.requestTransition({}); // Triggers stability calculations
+            
             this.stateManager.updateFromInteraction(true, 1.0, 0.0);
             this.skillLearner.observe('interaction_pattern', {
                 userId,
@@ -245,19 +275,26 @@ export class AgentLoop {
                 response_length: result.length
             });
             this.scoringEngine.applyDecay();
+            
+            // Periodic Reconciliation
+            const interactionCount = parseInt(this.memory.getSetting('interaction_count') || '0');
+            if (interactionCount % 10 === 0) {
+                this.reconciliationEngine.reconcile();
+            }
         } catch {}
         traceManager.completeTrace(trace, 'completed', result);
         return result;
     }
 
+    private ts(): string { return new Date().toLocaleTimeString('pt-BR', { hour12: false }); }
+
     /**
      * Main loop — native tool calling (like OpenClaw)
      * 
-     * KEY CHANGE: Tool results are ALWAYS fed back to the LLM.
+     * Tool results are ALWAYS fed back to the LLM.
      * The LLM formats the response naturally — no raw output leaks to the user.
      * Only send_audio returns directly (already sent via Telegram).
      */
-    private ts(): string { return new Date().toLocaleTimeString('pt-BR', { hour12: false }); }
     private async runWithTools(conversationId: string, userText: string, iteration: number, userId?: string): Promise<string> {
         if (iteration >= this.maxIterations) {
             return 'Nao consegui completar a tarefa apos varias tentativas.';
@@ -428,6 +465,9 @@ export class AgentLoop {
                 }
                 
                 if (toolResult.success && toolName === 'memory_write') {
+                    // Cognitive Regulation: Calibrate confidence after write
+                    if (toolParams.id) this.scoringEngine.calibrate(toolParams.id, 'consistent');
+                    
                     toolOutput += '\n\n[UX] Responda ao usuario de forma educada e natural. Confirme o que voce entendeu e, quando fizer sentido, diga que isso foi salvo na memoria. Nao responda apenas com texto tecnico.';
                 }
                 // Keep context growing so the LLM remembers executed steps

@@ -68,4 +68,32 @@ export class MemoryScoringEngine {
         // Preferences from user profile should have high confidence
         db.prepare("UPDATE memory_nodes SET confidence = 0.9 WHERE type = 'preference'").run();
     }
+    /**
+     * Calibrate confidence based on interaction success or consistency signal.
+     * Integrated from ConfidenceCalibrator to reduce code duplication.
+     */
+    calibrate(nodeId: string, signal: 'consistent' | 'contradictory' | 'neutral'): void {
+        const node = this.memory.getNode(nodeId);
+        if (!node) return;
+
+        const delta = 0.03; // Small incremental changes
+        let currentConfidence = node.confidence ?? 0.5;
+
+        switch (signal) {
+            case 'consistent':
+                currentConfidence = Math.min(1.0, currentConfidence + delta);
+                break;
+            case 'contradictory':
+                currentConfidence = Math.max(0.1, currentConfidence - (delta * 2));
+                break;
+            case 'neutral':
+                break;
+        }
+
+        this.memory.addNode({
+            ...node,
+            confidence: currentConfidence,
+            last_updated: new Date().toISOString()
+        });
+    }
 }
