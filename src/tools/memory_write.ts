@@ -44,12 +44,34 @@ export class MemoryWriteTool implements ToolExecutor {
     }
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
-        const action = (args.action as string) || (args.content ? 'create' : '');
+        let action = (args.action as string) || (args.content ? 'create' : '');
+
+        // 1. Normalization Layer: Extract structured data if it looks like an identity statement
+        if (args.content && !args.name && args.type !== 'identity') {
+            const nameMatch = (args.content as string).match(/meu nome é ([\w\s]+)|me chamo ([\w\s]+)|sou o ([\w\s]+)/i);
+            if (nameMatch) {
+                const name = (nameMatch[1] || nameMatch[2] || nameMatch[3]).trim();
+                args.name = name;
+                args.type = 'identity';
+                args.id = 'user_identity';
+                args.content = `Nome oficial: ${name}`;
+                action = 'create';
+            }
+        }
 
         if (!args.id && args.content) {
             args.id = `fact_${Date.now()}`;
             args.name = (args.content as string).slice(0, 50);
             args.type = args.type || 'fact';
+        }
+
+        // 2. Validation Layer: Prevent free-text identity nodes
+        if (args.type === 'identity' && action === 'create') {
+            const forbiddenPatterns = [/se chama/i, /é o/i, /é a/i, /chamado/i, /usuário/i];
+            const isUnstructured = (args.content || '').length > 60 || forbiddenPatterns.some(p => p.test(args.content || ''));
+            if (isUnstructured) {
+                return { success: false, output: '', error: 'Erro de integridade: Nós de identidade devem ser curtos e estruturados (apenas o nome). Rejeitado: ' + args.content };
+            }
         }
 
         try {
@@ -95,12 +117,19 @@ export class MemoryWriteTool implements ToolExecutor {
 
         this.memoryManager.addNode({ id, type: type as any, name, content });
 
+        // Auto-connect identity to core_user if it's not core_user itself
+        if (type === 'identity' && id !== 'core_user') {
+            try {
+                this.memoryManager.addEdge('core_user', id, 'has_identity');
+            } catch (e) { /* ignore if already connected or relation failed */ }
+        }
+
         // Set domain if provided
         if (domain) {
             this.getDb()?.prepare('UPDATE memory_nodes SET domain = ? WHERE id = ?').run(domain, id);
         }
 
-        return { success: true, output: `✅ Nó "${id}" criado no domínio ${domain || type}. Use action=connect para ligá-lo.` };
+        return { success: true, output: `✅ Nó "${id}" criado e conectado ao core_user (se identity). Use action=connect para outras ligações.` };
     }
 
     // ── UPDATE ────────────────────────────────────────────────

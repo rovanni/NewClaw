@@ -15,7 +15,7 @@ export interface AgentState {
 }
 
 export class AgentStateManager {
-    private memory: MemoryManager;
+    public memory: MemoryManager;
 
     constructor(memory: MemoryManager) {
         this.memory = memory;

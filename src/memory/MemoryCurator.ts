@@ -149,10 +149,56 @@ export class MemoryCurator {
 
         result.details.push(`Fixed ${result.orphansFixed} orphans, created ${result.hubsCreated} hubs, ${result.edgesCreated.length} edges`);
 
+        // ── Identity Cleanup ──
+        const cleanup = this.cleanupInvalidNodes();
+        result.details.push(`Cleaned ${cleanup.invalidCount} invalid identity nodes`);
+
         // ── Temporal Decay ──
         await this.applyTemporalDecay();
 
         return result;
+    }
+
+    /**
+     * Detect and fix unstructured identity nodes as requested.
+     */
+    private cleanupInvalidNodes(): { invalidCount: number } {
+        const db = (this.mm as any).db;
+        let invalidCount = 0;
+
+        // 1. Find identity nodes that look like free text
+        const identityNodes = db.prepare('SELECT id, name, content FROM memory_nodes WHERE type = "identity"').all();
+        const forbiddenPatterns = [/se chama/i, /é o/i, /é a/i, /chamado/i, /meu nome/i, /nome é/i];
+
+        for (const node of identityNodes) {
+            const isUnstructured = node.content.length > 80 || forbiddenPatterns.some(p => p.test(node.content));
+            
+            if (isUnstructured && node.id !== 'core_user' && node.id !== 'identity' && node.id !== 'core_agent') {
+                // Reduce weight and mark as potentially invalid in metadata
+                db.prepare(`
+                    UPDATE memory_nodes 
+                    SET weight = 0.2, 
+                        confidence = 0.2, 
+                        metadata = json_insert(COALESCE(metadata, '{}'), '$.invalid', true, '$.reason', 'unstructured_identity') 
+                    WHERE id = ?
+                `).run(node.id);
+                invalidCount++;
+            }
+        }
+
+        // 2. Ensure identity nodes are connected to core_user
+        const orphans = db.prepare(`
+            SELECT n.id FROM memory_nodes n 
+            LEFT JOIN memory_edges e ON n.id = e.to_node AND e.from_node = 'core_user'
+            WHERE n.type = 'identity' AND n.id NOT IN ('core_user', 'identity', 'core_agent', 'core_identity')
+            AND e.from_node IS NULL
+        `).all();
+
+        for (const orphan of orphans) {
+            this.addEdgeSafe('core_user', orphan.id, 'has_identity');
+        }
+
+        return { invalidCount };
     }
 
     /**

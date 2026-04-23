@@ -50,6 +50,7 @@ export interface MemoryEdge {
     weight?: number;
 }
 
+// Memory management core
 export class MemoryManager {
     private db: Database.Database;
     private dbPath: string;
@@ -90,6 +91,7 @@ export class MemoryManager {
         has_preference: { label: 'possui preferência', description: 'Preferência de usuário',     allowedFrom: ['identity'],                             allowedTo: ['preference'] },
         has_goal:       { label: 'tem objetivo',      description: 'Objetivo ou meta',          allowedFrom: ['identity'],                             allowedTo: ['project', 'fact'] },
         has_trait:      { label: 'possui traço',      description: 'Característica ou perícia',  allowedFrom: ['identity'],                             allowedTo: ['fact', 'preference'] },
+        has_identity:   { label: 'tem identidade',    description: 'Relaciona usuário ao seu nome/ID', allowedFrom: ['identity'],                       allowedTo: ['identity'] },
     };
 
     private validateRelation(fromType: string, relation: string, toType: string): boolean {
@@ -408,6 +410,12 @@ export class MemoryManager {
                 autonomy_level = COALESCE(autonomy_level, 'balanced'),
                 onboarding_completed = COALESCE(onboarding_completed, 0)
         `);
+    }
+
+    setUserName(userId: string, name: string): void {
+        this.db.prepare('UPDATE user_profile SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?').run(name, userId);
+        this.addNode({ id: 'user_identity', type: 'identity', name: name, content: `Nome oficial: ${name}`, confidence: 1.0 });
+        try { this.addEdge('core_user', 'user_identity', 'has_identity', 1.0, 1.0); } catch {}
     }
 
     private bootstrapCoreGraph(): void {

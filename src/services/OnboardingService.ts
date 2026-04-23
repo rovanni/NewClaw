@@ -307,11 +307,9 @@ Mensagem: "${text}"`;
             const data = state.data;
             const userName = data.name || 'Usuário';
             const now = new Date().toISOString();
-
-            this.db.prepare('UPDATE memory_nodes SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
-                `Perfil de ${userName}. Foco: ${data.intent}. Expertise: ${data.expertise || 'n/a'}. Objetivos: ${data.goals || 'n/a'}.`,
-                'core_user'
-            );
+            
+            // Use the new explicit method for name persistence
+            this.stateManager.memory.setUserName(state.userId, userName);
 
             if (data.response_style) {
                 insertNode.run('pref_style', 'preference', 'Estilo de Resposta', `Preferência: ${data.response_style}`, '{}', 1.0, 0.9, now);
