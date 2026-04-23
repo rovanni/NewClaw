@@ -417,9 +417,19 @@ install_newclaw() {
   if [ -d "$NEWCLAW_DIR" ]; then
     warn "Pasta ${NEWCLAW_DIR} já existe!"
     if ask_yes "Atualizar com git pull?" "y"; then
-      run cd "$NEWCLAW_DIR"
-      run git pull origin main 2>/dev/null || run git pull
-      ok "Código atualizado!"
+      cd "$NEWCLAW_DIR"
+      if git pull origin main 2>/dev/null; then
+        ok "Código atualizado!"
+      else
+        warn "Conflito detectado: Você tem mudanças locais que impedem a atualização."
+        if ask_yes "Deseja descartar suas mudanças locais e forçar a atualização?" "n"; then
+          run git reset --hard HEAD
+          run git pull origin main
+          ok "Código atualizado (mudanças locais descartadas)!"
+        else
+          info "Mantendo versão local para preservar suas alterações."
+        fi
+      fi
     else
       info "Mantendo código existente"
     fi

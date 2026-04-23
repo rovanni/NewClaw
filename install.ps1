@@ -330,9 +330,24 @@ function Step-InstallNewClaw {
         Write-Warn "Pasta $Dir já existe!"
         if (Read-YesNo "Atualizar com git pull?" "y") {
             Push-Location $Dir
-            Invoke-Step "git pull origin main"
+            try {
+                $pullResult = git pull origin main 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warn "Conflito detectado: Você tem mudanças locais que impedem a atualização."
+                    if (Read-YesNo "Deseja descartar suas mudanças locais e forçar a atualização?" "n") {
+                        Invoke-Step "git reset --hard HEAD"
+                        Invoke-Step "git pull origin main"
+                        Write-Ok "Código atualizado (mudanças locais descartadas)!"
+                    } else {
+                        Write-Info "Mantendo versão local para preservar suas alterações."
+                    }
+                } else {
+                    Write-Ok "Código atualizado!"
+                }
+            } catch {
+                Write-Warn "Erro ao atualizar: $_"
+            }
             Pop-Location
-            Write-Ok "Código atualizado!"
         } else {
             Write-Info "Mantendo código existente"
         }
