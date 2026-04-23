@@ -1,14 +1,16 @@
 /**
  * OnboardingService - apresentação e questionário inicial do NewClaw.
- *
- * Quando o usuário ainda não completou o onboarding, o agente se apresenta,
- * coleta preferências básicas e semeia a memória inicial com nós úteis.
+ * 
+ * Transformado em fluxo dinâmico com classificação de intenção via LLM.
  */
 import { Database } from 'better-sqlite3';
+import { ProviderFactory } from '../core/ProviderFactory';
+import { SkillLearner } from '../loop/SkillLearner';
 
 export interface UserProfile {
     user_id: string;
     name: string | null;
+    intent: 'automation' | 'study' | 'projects' | 'curiosity' | 'general' | null;
     assistant_name: string | null;
     expertise: string | null;
     goals: string | null;
@@ -31,7 +33,7 @@ export interface OnboardingState {
 
 type UserProfileWithSkip = Partial<UserProfile> & { __skip__?: boolean };
 
-function classificarEntrada(input: string): UserProfileWithSkip {
+function classificarEntradaHeuristica(input: string): UserProfileWithSkip {
     const resposta = input.trim().toLowerCase();
     const result: UserProfileWithSkip = {};
 
@@ -55,26 +57,6 @@ function classificarEntrada(input: string): UserProfileWithSkip {
         if (nome.length > 1) result.name = nome;
     }
 
-    if (/seu nome e|seu nome é|te chamo de|call you|assistant name/i.test(input)) {
-        const nome = input
-            .replace(/.*(seu nome e|seu nome é|te chamo de|call you|assistant name)\s*/i, '')
-            .split(/[,.!\n]/)[0]
-            .trim();
-        if (nome.length > 1) result.assistant_name = nome;
-    }
-
-    if (/(professor|engenheiro|dev|designer|medico|médico|advogado|teacher|engineer|developer|doctor|lawyer)/i.test(resposta)) {
-        result.expertise = input.trim();
-    }
-
-    if (/(meu objetivo|quero|preciso|busco|goal|i want|i need|my goal)/i.test(input)) {
-        result.goals = input.trim();
-    }
-
-    if (/pular|skip|depois|nao quero|não quero|next|proxima|próxima/i.test(resposta)) {
-        result.__skip__ = true;
-    }
-
     if (Object.keys(result).length === 0 && resposta.length >= 2 && resposta.length <= 50) {
         result.name = input.trim();
     }
@@ -85,47 +67,26 @@ function classificarEntrada(input: string): UserProfileWithSkip {
 const ONBOARDING_STEPS = [
     {
         id: 'name',
-        question: () => '👋 Olá! Eu sou o *NewClaw*, seu assistente cognitivo local.\n\nAcabei de acordar, já criei meu grafo-base, mas ainda não te conheço. Qual é o seu nome?',
+        question: () => '👋 Olá! Eu sou o *NewClaw*, seu assistente cognitivo local.\n\nJá inicializei minha memória e estrutura cognitiva. Quero entender como posso ser mais útil pra você.\n\nPara começar, qual é o seu nome?',
         saveField: 'name'
     },
     {
-        id: 'familiarity',
-        question: (data: Partial<UserProfile>) => `Prazer em te conhecer, *${data.name || 'amigo'}*.\n\nQual é seu nível de familiaridade com IA e programação?\n\n1️⃣ Iniciante\n2️⃣ Intermediário\n3️⃣ Avançado\n\n_(Pode responder com número ou palavra)_`,
-        saveField: 'familiarity'
-    },
-    {
-        id: 'expertise',
-        question: () => 'Qual é sua área de atuação hoje?\n\nEx: Engenheiro de Software, professor, designer, médico...',
-        saveField: 'expertise'
-    },
-    {
-        id: 'goals',
-        question: () => 'Qual é o principal objetivo que você quer atingir comigo?\n\n1️⃣ Desenvolvimento de código\n2️⃣ Pesquisa e conhecimento\n3️⃣ Criação de conteúdo\n4️⃣ Gestão de tarefas\n5️⃣ Análise de dados\n6️⃣ Aprendizado e tutoria\n7️⃣ Outro',
-        saveField: 'goals'
-    },
-    {
-        id: 'response_style',
-        question: () => 'Como você prefere minhas respostas?\n\n1️⃣ Concisas\n2️⃣ Detalhadas\n3️⃣ Adaptativas',
-        saveField: 'response_style'
-    },
-    {
-        id: 'autonomy_level',
-        question: () => 'Quanto de autonomia você quer me dar?\n\n1️⃣ Conservador: pergunto antes de agir\n2️⃣ Balanceado: executo o simples e consulto no sensível\n3️⃣ Confiante: ajo e te aviso',
-        saveField: 'autonomy_level'
-    },
-    {
-        id: 'language_preference',
-        question: () => 'Idioma preferido?\n\n1️⃣ Sistema (pt-BR)\n2️⃣ Inglês técnico\n3️⃣ Dinâmico',
-        saveField: 'language_preference'
+        id: 'intent',
+        question: (data: Partial<UserProfile>) => `Prazer em te conhecer, *${data.name || 'amigo'}*!\n\nO que te traz ao NewClaw hoje? O que você busca realizar?\n\n_(Ex: automatizar tarefas, estudar algo novo, gerenciar projetos, curiosidade...)_`,
+        saveField: 'intent'
     }
 ];
 
 export class OnboardingService {
     private db: Database;
+    private skillLearner: SkillLearner;
+    private providerFactory: ProviderFactory;
     private states: Map<string, OnboardingState> = new Map();
 
-    constructor(db: Database) {
+    constructor(db: Database, skillLearner: SkillLearner, providerFactory: ProviderFactory) {
         this.db = db;
+        this.skillLearner = skillLearner;
+        this.providerFactory = providerFactory;
         this.ensureTable();
     }
 
@@ -134,6 +95,7 @@ export class OnboardingService {
             CREATE TABLE IF NOT EXISTS user_profile (
                 user_id TEXT PRIMARY KEY,
                 name TEXT,
+                intent TEXT,
                 assistant_name TEXT,
                 expertise TEXT,
                 goals TEXT,
@@ -152,10 +114,9 @@ export class OnboardingService {
         const columns = new Set(
             ((this.db.prepare("PRAGMA table_info(user_profile)").all() as any[]) || []).map(c => c.name)
         );
-        const addColumn = (sql: string) => {
-            try { this.db.exec(sql); } catch { /* ignore if already exists */ }
-        };
+        const addColumn = (sql: string) => { try { this.db.exec(sql); } catch { } };
 
+        if (!columns.has('intent')) addColumn("ALTER TABLE user_profile ADD COLUMN intent TEXT");
         if (!columns.has('assistant_name')) addColumn("ALTER TABLE user_profile ADD COLUMN assistant_name TEXT");
         if (!columns.has('goals')) addColumn("ALTER TABLE user_profile ADD COLUMN goals TEXT");
         if (!columns.has('familiarity')) addColumn("ALTER TABLE user_profile ADD COLUMN familiarity TEXT");
@@ -187,119 +148,144 @@ export class OnboardingService {
         }
     }
 
-    isDbEmpty(): boolean {
-        const row = this.db.prepare('SELECT COUNT(*) as c FROM user_profile').get() as any;
-        return row.c === 0;
-    }
-
     getUserProfile(userId: string): UserProfile | null {
         return this.db.prepare('SELECT * FROM user_profile WHERE user_id = ?').get(userId) as UserProfile | null;
     }
 
     startOnboarding(userId: string): { question: string } | null {
         if (this.isOnboardingCompleted(userId)) return null;
-
         const state: OnboardingState = { step: 0, userId, data: {} };
         this.states.set(userId, state);
-        return this.getNextQuestion(state.data);
+        return { question: ONBOARDING_STEPS[0].question() };
     }
 
-    processAnswer(userId: string, answer: string): { question?: string; completed?: boolean; welcomeMessage?: string } | null {
+    async processAnswer(userId: string, answer: string): Promise<{ question?: string; completed?: boolean; welcomeMessage?: string } | null> {
         const state = this.states.get(userId);
-        if (!state) {
-            if (!this.isOnboardingCompleted(userId)) return this.startOnboarding(userId);
-            return null;
+        if (!state) return this.startOnboarding(userId);
+
+        if (!state.data.name) {
+            const fields = classificarEntradaHeuristica(answer);
+            state.data.name = fields.name || answer.trim();
+            return { question: ONBOARDING_STEPS[1].question(state.data) };
         }
 
-        const campos = classificarEntrada(answer);
-        if (campos.__skip__) {
-            return this.getNextQuestion(state.data);
+        if (!state.data.intent) {
+            state.data.intent = await this.classifyUserIntent(answer);
+            state.data.goals = answer.trim();
+            // Ir para a próxima pergunta adaptativa
+            const next = this.getNextAdaptiveQuestion(state.data);
+            return { question: next };
         }
-        Object.assign(state.data, campos);
 
-        const preenchidos = Object.keys(state.data).filter(k => state.data[k as keyof UserProfile] && k !== '__skip__');
-        if (preenchidos.length >= 6 || (state.data.name && preenchidos.length >= 3)) {
+        // Processar respostas adaptativas ou finais
+        const fields = classificarEntradaHeuristica(answer);
+        Object.assign(state.data, fields);
+        
+        // Se a heurística não pegou expertise mas era o que esperávamos
+        if (!state.data.expertise && !state.data.response_style) {
+            state.data.expertise = answer.trim();
+        }
+
+        const next = this.getNextAdaptiveQuestion(state.data);
+        if (typeof next === 'string') {
+            return { question: next };
+        } else {
             this.completeOnboarding(state);
             this.createMemoryNodes(state);
-            const welcomeMsg = this.generateWelcomeMessage(state.data);
+            this.skillLearner.observe('user_onboarding_completed', { userId, intent: state.data.intent });
             this.states.delete(userId);
-            return { completed: true, welcomeMessage: welcomeMsg };
+            return { completed: true, welcomeMessage: this.generateWelcomeMessage(state.data) };
         }
-
-        return this.getNextQuestion(state.data);
     }
 
-    private getNextQuestion(data: Partial<UserProfile>): { question: string } {
-        for (const step of ONBOARDING_STEPS) {
-            if (!data[step.saveField as keyof UserProfile]) {
-                return { question: step.question(data) };
-            }
+    private async classifyUserIntent(text: string): Promise<UserProfile['intent']> {
+        const prompt = `Analise a intenção do usuário e retorne APENAS uma das palavras: automation, study, projects, curiosity ou general.
+Mensagem: "${text}"`;
+        try {
+            const response = await this.providerFactory.chatWithFallback([
+                { role: 'system', content: 'Você é um classificador de intenções rápido e preciso.' },
+                { role: 'user', content: prompt }
+            ], []);
+            const content = (response.content || '').toLowerCase();
+            if (content.includes('automation')) return 'automation';
+            if (content.includes('study')) return 'study';
+            if (content.includes('projects')) return 'projects';
+            if (content.includes('curiosity')) return 'curiosity';
+            return 'general';
+        } catch {
+            return 'general';
         }
-        return { question: this.generateWelcomeMessage(data) };
+    }
+
+    private getNextAdaptiveQuestion(data: Partial<UserProfile>): string | true {
+        if (!data.expertise) {
+            if (data.intent === 'automation') return 'Legal, automação! Quais ferramentas ou linguagens você costuma usar? E qual seu nível técnico?';
+            if (data.intent === 'study') return 'Foco em estudo! Qual área você quer explorar comigo e qual seu nível atual nela?';
+            if (data.intent === 'projects') return 'Projetos! Em qual projeto você está trabalhando agora e qual o seu papel nele?';
+            return 'Qual é sua área de atuação ou especialidade principal hoje?';
+        }
+
+        if (!data.response_style) {
+            return 'Como você prefere minhas respostas?\n\n1️⃣ Concisas\n2️⃣ Detalhadas\n3️⃣ Adaptativas';
+        }
+
+        if (!data.autonomy_level) {
+            return 'Quanta autonomia posso ter?\n\n1️⃣ Conservador: pergunto antes de agir\n2️⃣ Balanceado: executo o simples e consulto no sensível\n3️⃣ Confiante: ajo e te aviso';
+        }
+
+        return true;
     }
 
     private completeOnboarding(state: OnboardingState): void {
         const now = new Date().toISOString();
         this.db.prepare(`
             INSERT OR REPLACE INTO user_profile
-            (user_id, name, assistant_name, expertise, goals, familiarity, response_style, learning_mode, autonomy_level, workspace_path, language_preference, onboarding_completed, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            (user_id, name, intent, expertise, goals, response_style, autonomy_level, onboarding_completed, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
         `).run(
             state.userId,
-            state.data.name || null,
-            state.data.assistant_name || null,
+            state.data.name || 'Usuário',
+            state.data.intent || 'general',
             state.data.expertise || null,
             state.data.goals || null,
-            state.data.familiarity || null,
             state.data.response_style || 'adaptive',
-            'enabled',
             state.data.autonomy_level || 'balanced',
-            state.data.workspace_path || null,
-            state.data.language_preference || 'system',
             now,
             now
         );
-        console.log(`[Onboarding] Completed for user ${state.userId}`);
     }
 
     private createMemoryNodes(state: OnboardingState): void {
         try {
-            const insertNode = this.db.prepare(
-                'INSERT OR IGNORE INTO memory_nodes (id, type, name, content, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)'
-            );
-            const insertEdge = this.db.prepare(
-                'INSERT OR IGNORE INTO memory_edges (from_node, to_node, relation, weight, confidence, created_at) VALUES (?, ?, ?, 1.0, 1.0, CURRENT_TIMESTAMP)'
-            );
+            const insertNode = this.db.prepare('INSERT OR REPLACE INTO memory_nodes (id, type, name, content, metadata, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)');
+            const insertEdge = this.db.prepare('INSERT OR REPLACE INTO memory_edges (from_node, to_node, relation, weight, confidence) VALUES (?, ?, ?, 1.0, 1.0)');
 
-            const userName = state.data.name || 'Usuário';
+            const data = state.data;
+            const userName = data.name || 'Usuário';
+
             this.db.prepare('UPDATE memory_nodes SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
-                `${userName}. Área: ${state.data.expertise || 'não informada'}. Familiaridade: ${state.data.familiarity || 'não informada'}. Objetivos: ${state.data.goals || 'em descoberta'}. Estilo: ${state.data.response_style || 'adaptive'}. Autonomia: ${state.data.autonomy_level || 'balanced'}.`,
+                `Perfil de ${userName}. Foco: ${data.intent}. Expertise: ${data.expertise || 'n/a'}. Objetivos: ${data.goals || 'n/a'}.`,
                 'core_user'
             );
 
-            if (state.data.response_style) {
-                insertNode.run('pref_style', 'preference', 'Estilo de Resposta', `Estilo preferido: ${state.data.response_style}`, '{"source":"onboarding"}');
-                insertEdge.run('core_user', 'pref_style', 'prefers');
+            if (data.response_style) {
+                insertNode.run('pref_style', 'preference', 'Estilo de Resposta', `Preferência: ${data.response_style}`, '{}');
+                insertEdge.run('core_user', 'pref_style', 'has_preference');
+            }
+            if (data.autonomy_level) {
+                insertNode.run('pref_autonomy', 'preference', 'Autonomia', `Preferência: ${data.autonomy_level}`, '{}');
+                insertEdge.run('core_user', 'pref_autonomy', 'has_preference');
+            }
+            if (data.goals) {
+                insertNode.run('user_goals', 'project', 'Metas do Usuário', data.goals, '{}');
+                insertEdge.run('core_user', 'user_goals', 'has_goal');
+            }
+            if (data.expertise) {
+                insertNode.run('user_expertise', 'fact', 'Perfil Técnico', data.expertise, '{}');
+                insertEdge.run('core_user', 'user_expertise', 'has_trait');
             }
 
-            if (state.data.autonomy_level) {
-                insertNode.run('pref_autonomy', 'preference', 'Nível de Autonomia', `Autonomia preferida: ${state.data.autonomy_level}`, '{"source":"onboarding"}');
-                insertEdge.run('core_user', 'pref_autonomy', 'prefers');
-            }
-
-            if (state.data.goals) {
-                insertNode.run('user_goals', 'project', 'Objetivos do Usuário', `${state.data.goals}`, '{"source":"onboarding"}');
-                insertEdge.run('core_user', 'user_goals', 'works_on');
-            }
-
-            if (state.data.expertise) {
-                insertNode.run('user_expertise', 'fact', 'Área de Atuação', `${state.data.expertise}`, '{"source":"onboarding"}');
-                insertEdge.run('core_user', 'user_expertise', 'related_to');
-            }
-
-            try { this.db.exec('INSERT INTO memory_nodes_fts(memory_nodes_fts) VALUES("rebuild")'); } catch { /* optional */ }
-
-            console.log('[Onboarding] Memory nodes created from profile');
+            console.log('[Onboarding] Memory nodes created with semantic connections');
         } catch (e: any) {
             console.error('[Onboarding] Error creating memory nodes:', e.message);
         }
@@ -307,23 +293,16 @@ export class OnboardingService {
 
     private generateWelcomeMessage(data: Partial<UserProfile>): string {
         const name = data.name || 'amigo';
-        const style = data.response_style === 'concise'
-            ? 'conciso e direto'
-            : data.response_style === 'detailed'
-                ? 'detalhado e explicativo'
-                : 'adaptativo';
-        const autonomy = data.autonomy_level === 'conservative'
-            ? 'sempre pergunto antes'
-            : data.autonomy_level === 'confident'
-                ? 'executo e aviso'
-                : 'balanceado';
+        const intentMap: any = {
+            automation: 'impulsionar sua automação',
+            study: 'acelerar seu aprendizado',
+            projects: 'gerenciar seus projetos',
+            curiosity: 'explorar novas fronteiras',
+            general: 'te ajudar no dia a dia'
+        };
+        const intentText = intentMap[data.intent || 'general'];
 
-        return `✅ *Tudo pronto, ${name}!*\n\nAqui está o resumo:\n• 🎨 Estilo: ${style}\n• ⚡ Autonomia: ${autonomy}\n• 🧠 Memória: ativada e com grafo inicial criado\n• 🌐 Idioma: ${data.language_preference === 'english-tech' ? 'Inglês técnico' : 'Português'}\n\nJá preparei os nós-base *AGENTS, SOUL, TOOLS, IDENTITY, USER, HEARTBEAT e MEMORY* para começarmos com contexto desde o primeiro dia.`;
-    }
-
-    resetOnboarding(userId: string): void {
-        this.db.prepare('UPDATE user_profile SET onboarding_completed = 0 WHERE user_id = ?').run(userId);
-        this.states.delete(userId);
+        return `✅ *Tudo pronto, ${name}!* \n\nJá configurei minha memória e estrutura cognitiva com base no seu perfil. Estou pronto para *${intentText}*.\n\nComo podemos começar hoje?`;
     }
 
     getOnboardingState(userId: string): OnboardingState | undefined {

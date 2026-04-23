@@ -84,6 +84,9 @@ export class MemoryManager {
         reads:     { label: 'lê',              description: 'Leitura de dados',               allowedFrom: ['skill','project'],                       allowedTo: ['skill','context'] },
         writes:    { label: 'escreve',          description: 'Escrita de dados',              allowedFrom: ['skill','project'],                       allowedTo: ['skill','context'] },
         hosts:     { label: 'hospeda',          description: 'Infraestrutura hospeda projeto', allowedFrom: ['infrastructure'],                       allowedTo: ['project','skill'] },
+        has_preference: { label: 'possui preferência', description: 'Preferência de usuário',     allowedFrom: ['identity'],                             allowedTo: ['preference'] },
+        has_goal:       { label: 'tem objetivo',      description: 'Objetivo ou meta',          allowedFrom: ['identity'],                             allowedTo: ['project', 'fact'] },
+        has_trait:      { label: 'possui traço',      description: 'Característica ou perícia',  allowedFrom: ['identity'],                             allowedTo: ['fact', 'preference'] },
     };
 
     private validateRelation(fromType: string, relation: string, toType: string): boolean {
@@ -327,7 +330,47 @@ export class MemoryManager {
         `);
 
         this.ensureUserProfileSchema();
+        this.incrementBootCount();
         this.bootstrapCoreGraph();
+    }
+
+    private incrementBootCount(): void {
+        const key = 'boot_count';
+        const current = this.db.prepare('SELECT value FROM memory WHERE key = ?').get(key) as { value: string } | undefined;
+        const newValue = (parseInt(current?.value || '0') + 1).toString();
+        this.db.prepare('INSERT OR REPLACE INTO memory (key, value, category) VALUES (?, ?, ?)').run(key, newValue, 'system');
+    }
+
+    public incrementInteractionCount(): void {
+        const key = 'interaction_count';
+        const current = this.db.prepare('SELECT value FROM memory WHERE key = ?').get(key) as { value: string } | undefined;
+        const newValue = (parseInt(current?.value || '0') + 1).toString();
+        this.db.prepare('INSERT OR REPLACE INTO memory (key, value, category) VALUES (?, ?, ?)').run(key, newValue, 'system');
+        this.updateLastActive();
+        this.refreshHeartbeatNode();
+    }
+
+    private updateLastActive(): void {
+        const key = 'last_active';
+        this.db.prepare('INSERT OR REPLACE INTO memory (key, value, category) VALUES (?, ?, ?)').run(key, new Date().toISOString(), 'system');
+    }
+
+    private refreshHeartbeatNode(): void {
+        const boot = this.getSetting('boot_count') || '0';
+        const interactions = this.getSetting('interaction_count') || '0';
+        const last = this.getSetting('last_active') || 'Never';
+        
+        this.addNode({
+            id: 'core_heartbeat',
+            type: 'fact',
+            name: 'HEARTBEAT',
+            content: `Estado do sistema: Boot #${boot}, Interações: ${interactions}, Última atividade: ${last}.`
+        });
+    }
+
+    getSetting(key: string): string | null {
+        const row = this.db.prepare('SELECT value FROM memory WHERE key = ?').get(key) as { value: string } | undefined;
+        return row ? row.value : null;
     }
 
     private ensureUserProfileSchema(): void {
@@ -408,6 +451,12 @@ export class MemoryManager {
                 type: 'context',
                 name: 'MEMORY',
                 content: 'Hub da memória semântica persistente. Organiza nós, relações, contexto relevante e recuperação futura.'
+            },
+            {
+                id: 'system_reflection',
+                type: 'fact',
+                name: 'system_reflection',
+                content: 'System initialized with base cognitive graph and awaiting user interaction'
             }
         ];
 
@@ -478,6 +527,7 @@ export class MemoryManager {
     addMessage(conversationId: string, role: Message['role'], content: string): void {
         this.db.prepare('INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)').run(conversationId, role, content);
         this.db.prepare('UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(conversationId);
+        if (role === 'user') this.incrementInteractionCount();
     }
 
     getRecentMessages(conversationId: string, limit: number = 5): Message[] {

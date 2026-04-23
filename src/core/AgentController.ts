@@ -11,6 +11,7 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { SkillLoader } from '../skills/SkillLoader';
 import { TelegramInputHandler } from '../input/TelegramInputHandler';
 import { OnboardingService } from '../services/OnboardingService';
+import { SkillLearner } from '../loop/SkillLearner';
 import { TelegramOutputHandler } from '../output/TelegramOutputHandler';
 import { ExecCommandTool } from '../tools/exec_command';
 import { WebSearchTool } from '../tools/web_search';
@@ -51,6 +52,7 @@ export class AgentController {
     private memory: MemoryManager;
     public getMemory(): MemoryManager { return this.memory; }
     private skillLoader: SkillLoader;
+    private skillLearner: SkillLearner;
     private inputHandler: TelegramInputHandler;
     private outputHandler: TelegramOutputHandler;
 
@@ -69,6 +71,7 @@ export class AgentController {
             defaultProvider: config.defaultProvider
         });
         this.skillLoader = new SkillLoader(config.skillsDir);
+        this.skillLearner = new SkillLearner(this.memory.getDatabase());
 
         // Construir system prompt
         const languageDirective = this.buildLanguageDirective(config.language);
@@ -81,11 +84,16 @@ export class AgentController {
             {
                 languageDirective,
                 systemPrompt
-            }
+            },
+            this.skillLearner
         );
 
         // Inicializar onboarding
-        const onboardingService = new OnboardingService((this.memory as any).db || (this.memory as any)._db);
+        const onboardingService = new OnboardingService(
+            (this.memory as any).db || (this.memory as any)._db,
+            this.skillLearner,
+            this.providerFactory
+        );
 
         // Inicializar handlers
         this.inputHandler = new TelegramInputHandler(

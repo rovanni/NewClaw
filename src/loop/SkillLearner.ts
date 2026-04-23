@@ -493,4 +493,13 @@ export class SkillLearner {
             updated_at: new Date().toISOString()
         };
     }
+    /**
+     * Observe a meta-event or state change in the system.
+     */
+    observe(event: string, metadata?: any): void {
+        console.log(`[SKILL] Observed event: ${event}`, metadata || '');
+        this.db.prepare(
+            'INSERT INTO skill_patterns (pattern, tool_name, success_count, fail_count, avg_latency_ms, last_seen) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(pattern, tool_name) DO UPDATE SET last_seen = CURRENT_TIMESTAMP, success_count = success_count + 1'
+        ).run(`event:${event}`, 'system', 1, 0, 0);
+    }
 }

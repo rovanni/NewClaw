@@ -144,7 +144,7 @@ export class TelegramInputHandler {
                 }
             } else {
                 // Process answer
-                const result = this.onboardingService.processAnswer(userId, text);
+                const result = await this.onboardingService.processAnswer(userId, text);
                 if (result?.completed) {
                     await ctx.reply(result.welcomeMessage!, { parse_mode: 'Markdown' });
                     return;

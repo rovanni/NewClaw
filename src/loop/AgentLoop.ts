@@ -74,14 +74,15 @@ export class AgentLoop {
     constructor(
         providerFactory: ProviderFactory,
         memory: MemoryManager,
-        config?: Partial<AgentLoopConfig>
+        config?: Partial<AgentLoopConfig>,
+        skillLearner?: SkillLearner
     ) {
         this.providerFactory = providerFactory;
         this.memory = memory;
         this.compressor = new ContextCompressor(providerFactory);
         this.contextBuilder = new ContextBuilder(memory);
         this.responseBuilder = new ResponseBuilder();
-        this.skillLearner = new SkillLearner(memory.getDatabase());
+        this.skillLearner = skillLearner || new SkillLearner(memory.getDatabase());
         this.modelRouter = new ModelRouter();
         this.config = {
             languageDirective: config?.languageDirective || 'Responda SEMPRE em português brasileiro. Seja direto e conciso.',
