@@ -30,7 +30,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # ── Variáveis padrão ─────────────────────────────────────────
-NEWCLAW_DIR="${NEWCLAW_HOME:-$HOME/NewClaw}"
+NEWCLAW_DIR="${NEWCLAW_HOME:-$HOME/newclaw}"
 ENV_FILE=""
 BOT_TOKEN="${NEWCLAW_TOKEN:-}"
 USER_ID="${NEWCLAW_USER_ID:-}"
@@ -434,14 +434,15 @@ install_newclaw() {
     return
   fi
 
-  cd "$NEWCLAW_DIR"
+  # Instalar deps e build
+  cd "$NEWCLAW_DIR" || fail "Não foi possível entrar na pasta $NEWCLAW_DIR"
 
-  info "Instalando dependências..."
-  run npm install
+  info "Instalando dependências (npm install)..."
+  npm install
   ok "Dependências instaladas!"
 
   info "Compilando código..."
-  run npm run build
+  npm run build
   ok "Código compilado!"
 }
 

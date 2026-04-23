@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node src/index.ts",
-    "build": "tsc && node -e \"const fs=require('fs'); fs.mkdirSync('dist/dashboard', {recursive:true}); fs.cpSync('src/dashboard/public', 'dist/dashboard/public', {recursive:true, force:true})\"",
+    "build": "tsc && node -e \"const fs=require('fs'); const path=require('path'); const src=path.join('src','dashboard','public'); const dest=path.join('dist','dashboard','public'); fs.mkdirSync(path.dirname(dest), {recursive:true}); fs.cpSync(src, dest, {recursive:true, force:true}); console.log('Dashboard static files copied to dist/')\"",
     "start": "node dist/index.js",
     "start:debug": "node --inspect dist/index.js"
   },
