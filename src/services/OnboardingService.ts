@@ -142,13 +142,41 @@ export class OnboardingService {
         `);
     }
 
-    isOnboardingCompleted(userId: string): boolean {
+    isOnboardingRequired(userId: string): boolean {
         try {
-            const row = this.db.prepare('SELECT onboarding_completed FROM user_profile WHERE user_id = ?').get(userId) as any;
-            return row?.onboarding_completed === 1;
-        } catch {
+            const profile = this.getUserProfile(userId);
+            
+            if (!profile) {
+                console.log(`[DEBUG-ONBOARDING] No profile found for ${userId}. Onboarding required.`);
+                return true;
+            }
+
+            if (profile.onboarding_completed !== 1) {
+                console.log(`[DEBUG-ONBOARDING] Profile exists but onboarding not completed for ${userId}.`);
+                return true;
+            }
+
+            // Strict check for essential fields
+            const missingFields = [];
+            if (!profile.name) missingFields.push('name');
+            if (!profile.intent) missingFields.push('intent');
+            if (!profile.response_style) missingFields.push('response_style');
+            if (!profile.autonomy_level) missingFields.push('autonomy_level');
+            
+            if (missingFields.length > 0) {
+                console.log(`[DEBUG-ONBOARDING] Missing essential fields for ${userId}: ${missingFields.join(', ')}. Onboarding required.`);
+                return true;
+            }
+
             return false;
+        } catch (e: any) {
+            console.error(`[DEBUG-ONBOARDING] Error checking onboarding status: ${e.message}`);
+            return true; // Safe fallback
         }
+    }
+
+    isOnboardingCompleted(userId: string): boolean {
+        return !this.isOnboardingRequired(userId);
     }
 
     getUserProfile(userId: string): UserProfile | null {
@@ -324,5 +352,25 @@ Mensagem: "${text}"`;
 
     getOnboardingState(userId: string): OnboardingState | undefined {
         return this.states.get(userId);
+    }
+
+    async handle(userId: string, text: string): Promise<{ response: string; completed: boolean }> {
+        console.log(`[DEBUG-ONBOARDING] Handling message for ${userId}: "${text.slice(0, 20)}..."`);
+        const state = this.getOnboardingState(userId);
+        
+        if (!state) {
+            console.log(`[DEBUG-ONBOARDING] No active state for ${userId}, starting...`);
+            const first = this.startOnboarding(userId);
+            return { response: first?.question || 'Erro ao iniciar onboarding.', completed: false };
+        }
+
+        const result = await this.processAnswer(userId, text);
+        if (result?.completed) {
+            console.log(`[DEBUG-ONBOARDING] Onboarding completed for ${userId}.`);
+            return { response: result.welcomeMessage || 'Onboarding concluído!', completed: true };
+        }
+        
+        console.log(`[DEBUG-ONBOARDING] Next question for ${userId} generated.`);
+        return { response: result?.question || 'Erro ao processar resposta.', completed: false };
     }
 }
