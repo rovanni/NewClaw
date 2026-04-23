@@ -219,6 +219,15 @@
     </div>
 
     <div class="section">
+      <div class="section-title">🛡️ Telegram Security</div>
+      <div class="form-group">
+        <label class="form-label">Usuários Autorizados (Whitelist)</label>
+        <input type="text" class="form-input" id="telegramAllowedUserIds" placeholder="Ex: 123456789, 987654321">
+        <div class="form-hint">IDs numéricos separados por vírgula. Apenas estes usuários podem interagir com o bot. O seu ID atual pode ser obtido via @userinfobot no Telegram.</div>
+      </div>
+    </div>
+
+    <div class="section">
       <div class="section-title" data-i18n="keys_title">🔑 Outros Providers</div>
       <div class="form-group"><label class="form-label">Gemini API Key</label>
         <div class="api-key-group"><input type="password" class="form-input" id="geminiKey" placeholder="AIza..."><span class="api-key-status" id="geminiStatus">—</span></div></div>
@@ -336,6 +345,7 @@
           document.getElementById('maxIterations').value = data.config.maxIterations;
           document.getElementById('memoryWindowSize').value = data.config.memoryWindowSize;
           document.getElementById('systemPrompt').value = data.config.systemPrompt || '';
+          document.getElementById('telegramAllowedUserIds').value = data.config.telegramAllowedUserIds || '';
           document.getElementById('ollamaUrl').value = data.config.ollamaUrl || 'http://localhost:11434';
           document.getElementById('ollamaModel').value = data.config.ollamaModel || 'glm-5.1:cloud';
           document.getElementById('sysModel').textContent = data.config.currentModel || data.config.ollamaModel;
@@ -383,7 +393,7 @@
           document.getElementById('toolsGrid').innerHTML = data.tools.map(t => {
             const icon = toolIcons[t.name]||'🔧';
             const badges = (t.enabled?'<span class="badge badge-active">ON</span>':'<span class="badge" style="background:rgba(248,113,113,0.15);color:var(--danger)">OFF</span>')+(t.dangerous?'<span class="badge" style="background:rgba(251,191,36,0.15);color:var(--warning)">⚠️</span>':'');
-            const btn = t.enabled?`<button class="tool-toggle on" onclick="toggleTool('${t.name}',false)">Disable</button>`:`<button class="tool-toggle off" onclick="toggleTool('${t.name}',true)">Enable</button>`;
+            const btn = t.enabled? `<button class="tool-toggle on" onclick="toggleTool('${t.name}',false)">Disable</button>` : `<button class="tool-toggle off" onclick="toggleTool('${t.name}',true)">Enable</button>`;
             return `<div class="tool-card"><div class="tool-icon">${icon}</div><div style="flex:1"><div class="tool-name">${t.name} ${badges}</div><div class="tool-desc">${t.description}</div></div>${btn}</div>`;
           }).join('');
         }
@@ -472,6 +482,7 @@
       const config = { defaultProvider:document.getElementById('defaultProvider').value, language:document.getElementById('language').value,
         maxIterations:parseInt(document.getElementById('maxIterations').value), memoryWindowSize:parseInt(document.getElementById('memoryWindowSize').value),
         systemPrompt:document.getElementById('systemPrompt').value, ollamaUrl:document.getElementById('ollamaUrl').value, ollamaModel:document.getElementById('ollamaModel').value,
+        telegramAllowedUserIds:document.getElementById('telegramAllowedUserIds').value,
         ollamaApiKey:document.getElementById('ollamaApiKey').value||undefined,
         modelRouter: { chat:document.getElementById('modelChat').value, code:document.getElementById('modelCode').value,
           vision:document.getElementById('modelVision').value, light:document.getElementById('modelLight').value,
@@ -485,36 +496,30 @@
           const checkData = await checkRes.json();
           if (checkData.success && !checkData.exists) {
             showToast('⬇️ Modelo "' + model + '" não encontrado. Baixando...', 'success');
-            // Pull the model
             const pullRes = await fetch('/api/ollama/pull', {
               method: 'POST', headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({ model })
             });
             const pullData = await pullRes.json();
-            if (pullData.success) {
-              showToast('✅ Modelo "' + model + '" baixado!', 'success');
-              loadProviders(); // Refresh model list
-            } else {
-              showToast('⚠️ Falha ao baixar: ' + (pullData.error || 'desconhecido'), 'error');
-            }
+            if (pullData.success) { showToast('✅ Modelo "' + model + '" baixado!', 'success'); loadProviders(); }
+            else { showToast('⚠️ Falha ao baixar: ' + (pullData.error || 'desconhecido'), 'error'); }
           }
-        } catch (e) { /* skip check if API fails */ }
+        } catch (e) { }
       }
 
       try {
         const res = await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});
         const data = await res.json();
-        if (data.success) { showToast('✅ Salvo! Modelo: '+config.ollamaModel,'success'); document.getElementById('sysModel').textContent=config.ollamaModel; }
+        if (data.success) { showToast('✅ Salvo!','success'); document.getElementById('sysModel').textContent=config.ollamaModel; }
         else showToast('❌ Erro: '+(data.error||'desconhecido'),'error');
       } catch(e) { showToast('❌ Conexão: '+e.message,'error'); }
     }
     async function saveAndRestart() {
       await saveConfig();
-      if (!confirm('Reiniciar o NewClaw? O processo será reiniciado.')) return;
+      if (!confirm('Reiniciar o NewClaw?')) return;
       try {
         await fetch('/api/restart',{method:'POST'});
         showToast('🔄 Reiniciando... Aguarde.','success');
-        // Wait for server to come back
         let tries = 0;
         const check = async () => {
           try {
@@ -522,10 +527,10 @@
             if (r.ok) { location.reload(); return; }
           } catch {}
           tries++;
-          if (tries < 30) setTimeout(check, 2000); // retry every 2s, max 60s
+          if (tries < 30) setTimeout(check, 2000);
           else location.reload();
         };
-        setTimeout(check, 5000); // start checking after 5s
+        setTimeout(check, 5000);
       } catch(e) { showToast('⚠️ Reiniciando...','error'); setTimeout(()=>location.reload(),8000); }
     }
     function resetConfig() {
@@ -533,13 +538,12 @@
       document.getElementById('defaultProvider').value='ollama'; document.getElementById('language').value='pt-BR';
       document.getElementById('maxIterations').value=5; document.getElementById('memoryWindowSize').value=20;
       document.getElementById('systemPrompt').value=''; document.getElementById('ollamaModel').value='glm-5.1:cloud';
-      showToast('🔄 Resetado. Clique Salvar para aplicar.','success');
+      document.getElementById('telegramAllowedUserIds').value='';
+      showToast('🔄 Resetado.','success');
     }
     function showToast(msg,type) { const t=document.getElementById('toast'); t.textContent=msg; t.className=`toast ${type}`; setTimeout(()=>t.classList.add('show'),10); setTimeout(()=>t.classList.remove('show'),3000); }
 
-    
     let availableModelsList = [];
-    
     function initModelDropdowns() {
       if (window.isDropdownsInit) return; window.isDropdownsInit = true;
       const inputs = ['ollamaModel', 'modelChat', 'modelCode', 'modelVision', 'modelLight', 'modelAnalysis'];
@@ -548,18 +552,11 @@
         const dropdown = document.getElementById(`dropdown-${id}`);
         const container = document.getElementById(`container-${id}`);
         if (!input || !dropdown) return;
-        
         const showDropdown = () => { renderDropdown(id); dropdown.classList.add('show'); };
-        
         input.addEventListener('focus', showDropdown);
         input.addEventListener('click', showDropdown);
         input.addEventListener('input', showDropdown);
-        
-        document.addEventListener('click', (e) => {
-          if (container && !container.contains(e.target)) {
-            dropdown.classList.remove('show');
-          }
-        });
+        document.addEventListener('click', (e) => { if (container && !container.contains(e.target)) dropdown.classList.remove('show'); });
       });
     }
 
@@ -567,57 +564,36 @@
       const input = document.getElementById(inputId);
       const dropdown = document.getElementById(`dropdown-${inputId}`);
       const filter = input.value.toLowerCase().trim();
-      
       const clouds = availableModelsList.filter(m => m.includes('cloud') || m.includes('groq') || m.includes('gemini'));
       const locals = availableModelsList.filter(m => !clouds.includes(m));
-      
       const filterList = (list) => filter ? list.filter(m => m.toLowerCase().includes(filter)) : list;
       const filteredClouds = filterList(clouds);
       const filteredLocals = filterList(locals);
-      
       let html = '';
-      
       if (filteredClouds.length > 0) {
         html += `<div class="model-dropdown-group">Cloud Models</div>`;
         filteredClouds.forEach(m => {
           html += `<div class="model-item" onclick="selectDropdownModel('${inputId}', '${m}')">
-                     <span class="model-name">${m}</span>
-                     <span class="badge badge-cloud">cloud</span>
+                     <span class="model-name">${m}</span><span class="badge badge-cloud">cloud</span>
                    </div>`;
         });
       }
-      
       if (filteredLocals.length > 0) {
         html += `<div class="model-dropdown-group">Local Models</div>`;
         filteredLocals.forEach(m => {
           html += `<div class="model-item" onclick="selectDropdownModel('${inputId}', '${m}')">
-                     <span class="model-name">${m}</span>
-                     <span class="badge badge-local">local</span>
+                     <span class="model-name">${m}</span><span class="badge badge-local">local</span>
                    </div>`;
         });
       }
-      
       if (filter && filteredClouds.length === 0 && filteredLocals.length === 0) {
-        html += `<div class="model-item-pull" onclick="pullAndSelect('${inputId}', '${filter}')">
-                   ⬇️ Baixar modelo "${filter}"...
-                 </div>`;
+        html += `<div class="model-item-pull" onclick="pullAndSelect('${inputId}', '${filter}')">⬇️ Baixar modelo "${filter}"...</div>`;
       }
-      
-      dropdown.innerHTML = html || `<div style="padding:10px;font-size:0.8rem;color:var(--text-soft);text-align:center;">Nenhum modelo disponível</div>`;
+      dropdown.innerHTML = html || `<div style="padding:10px;font-size:0.8rem;color:var(--text-soft);text-align:center;">Nenhum modelo</div>`;
     }
 
-    window.selectDropdownModel = function(inputId, modelName) {
-      document.getElementById(inputId).value = modelName;
-      document.getElementById(`dropdown-${inputId}`).classList.remove('show');
-    };
-
-    window.pullAndSelect = function(inputId, modelName) {
-      document.getElementById(inputId).value = modelName;
-      document.getElementById(`dropdown-${inputId}`).classList.remove('show');
-      pullModel(modelName);
-    };
-
-    // Replace the loadProviders logic
+    window.selectDropdownModel = function(inputId, modelName) { document.getElementById(inputId).value = modelName; document.getElementById(`dropdown-${inputId}`).classList.remove('show'); };
+    window.pullAndSelect = function(inputId, modelName) { document.getElementById(inputId).value = modelName; document.getElementById(`dropdown-${inputId}`).classList.remove('show'); pullModel(modelName); };
 
     loadConfig(); loadStatus(); loadTools(); loadProviders(); loadSkillLearnerInsights();
     setInterval(loadStatus, 30000);

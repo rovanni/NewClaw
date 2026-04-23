@@ -12,7 +12,7 @@ dotenv.config();
 
 const config = {
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
-    telegramAllowedUserIds: (process.env.TELEGRAM_ALLOWED_USER_IDS || '').split(','),
+    telegramAllowedUserIds: (process.env.TELEGRAM_ALLOWED_USER_IDS || '').split(',').map(id => id.trim()).filter(id => id.length > 0),
     language: process.env.APP_LANG || 'pt-BR',
     defaultProvider: process.env.DEFAULT_PROVIDER || 'gemini',
     geminiApiKey: process.env.GEMINI_API_KEY,

@@ -133,7 +133,12 @@ export class TelegramInputHandler {
 
 
         // Check onboarding first
-        if (this.onboardingService && !this.onboardingService.isOnboardingCompleted(userId)) {
+        if (this.onboardingService && this.onboardingService.isOnboardingRequired(userId)) {
+            const res = await this.onboardingService.handle(userId, text);
+            await ctx.reply(res.response, { parse_mode: 'Markdown' });
+            return;
+        }
+        if (false) {
             const state = this.onboardingService.getOnboardingState(userId);
             if (!state) {
                 // Start onboarding

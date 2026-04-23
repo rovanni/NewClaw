@@ -55,6 +55,7 @@ export class AgentController {
     private skillLearner: SkillLearner;
     private inputHandler: TelegramInputHandler;
     private outputHandler: TelegramOutputHandler;
+    private onboardingService: OnboardingService;
 
     constructor(config: NewClawConfig) {
         this.config = config;
@@ -89,7 +90,7 @@ export class AgentController {
         );
 
         // Inicializar onboarding
-        const onboardingService = new OnboardingService(
+        this.onboardingService = new OnboardingService(
             (this.memory as any).db || (this.memory as any)._db,
             this.skillLearner,
             this.providerFactory,
@@ -106,7 +107,7 @@ export class AgentController {
             },
             this.agentLoop,
             this.memory,
-            onboardingService
+            this.onboardingService
         );
 
         this.outputHandler = new TelegramOutputHandler({
@@ -136,6 +137,10 @@ export class AgentController {
      */
     async handleWebMessage(sessionId: string, message: string): Promise<string> {
         try {
+            if (this.onboardingService.isOnboardingRequired(sessionId)) {
+                const res = await this.onboardingService.handle(sessionId, message);
+                return res.response;
+            }
             const result = await this.agentLoop.process(sessionId, message);
             return result;
         } catch (err: any) {

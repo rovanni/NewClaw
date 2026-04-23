@@ -77,7 +77,7 @@ export class DashboardServer {
             res.sendFile(path.join(__dirname, 'public', 'help.html'));
         });
 
-        this.app.get('/traces', (_req: Request, res: Response) => {
+                this.app.get('/traces', (_req: Request, res: Response) => {
             res.sendFile(path.join(__dirname, 'public', 'traces.html'));
         });
 
@@ -111,6 +111,7 @@ export class DashboardServer {
                     ollamaModel: this.config.ollamaModel || ollama?.getModel() || 'glm-5.1:cloud',
                     ollamaApiKey: this.config.ollamaApiKey ? '••••' : '',
                     systemPrompt: this.config.systemPrompt || '',
+                    telegramAllowedUserIds: this.config.telegramAllowedUserIds.join(','),
                     hasGeminiKey: !!this.config.geminiApiKey,
                     hasDeepseekKey: !!this.config.deepseekApiKey,
                     hasGroqKey: !!this.config.groqApiKey,
@@ -121,7 +122,7 @@ export class DashboardServer {
 
         // Update config (runtime)
         this.app.post('/api/config', (req: Request, res: Response) => {
-            const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl } = req.body;
+            const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl, telegramAllowedUserIds } = req.body;
 
             console.log(`[CONFIG] POST /api/config — ollamaModel="${ollamaModel}" provider="${defaultProvider}"`);
 
@@ -1335,6 +1336,7 @@ export class DashboardServer {
                 'OLLAMA_URL': this.config.ollamaUrl || 'http://localhost:11434',
                 'MAX_ITERATIONS': String(this.config.maxIterations),
                 'MEMORY_WINDOW_SIZE': String(this.config.memoryWindowSize),
+                'TELEGRAM_ALLOWED_USER_IDS': this.config.telegramAllowedUserIds.join(','),
             };
 
             // Only write OLLAMA_API_KEY if provided (don't overwrite with empty)
