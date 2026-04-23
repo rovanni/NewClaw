@@ -612,8 +612,9 @@ function Show-Summary {
     Write-Host "    Pasta:      $Dir" -ForegroundColor Cyan
     Write-Host "    Modelo:     $Model" -ForegroundColor Cyan
     Write-Host "    Dashboard:  http://localhost:$Port" -ForegroundColor Cyan
+    Write-Host "    Config URL: http://localhost:$Port/config" -ForegroundColor Cyan
     Write-Host "    Logs:       $Dir\logs\newclaw.log" -ForegroundColor Cyan
-    Write-Host "    Config:     $Dir\.env" -ForegroundColor Cyan
+    Write-Host "    Config File:$Dir\.env" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "    Comandos úteis:" -ForegroundColor White
     Write-Host "      newclaw status    — ver status" -ForegroundColor Cyan
