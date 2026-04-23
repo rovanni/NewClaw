@@ -204,7 +204,7 @@ flowchart TD
     G3 --> H
     G4 --> H
     H --> I["🔑 Configurar Token + ID do Telegram"]
-    I --> J["▶️ node bin/newclaw start --daemon"]
+    I --> J["▶️ newclaw start --daemon"]
     J --> K{"Opcional"}
     K -->|"Sim"| L["🖥️ systemd + firewall"]
     K -->|"Não"| M["🪐 Pronto!"]
@@ -230,7 +230,7 @@ npm install
 cp .env.example .env
 # Edit .env with your Telegram Token, User ID and OLLAMA_MODEL
 npm run build
-node bin/newclaw start --daemon
+newclaw start --daemon
 ```
 
 ### 🪟 Windows Install
@@ -282,12 +282,12 @@ Ubuntu/Debian users get the best navigation experience because the installer add
 
 | Command | Description |
 |---|---|
-| `node bin/newclaw start` | Start the agent (foreground) |
-| `node bin/newclaw start --daemon` | Run in background (VPS mode) |
-| `node bin/newclaw stop` | Gracefully stop the service |
-| `node bin/newclaw status` | Show health, PID, and uptime |
-| `node bin/newclaw logs -f` | Tail execution logs |
-| `node bin/newclaw update` | Pull latest version and rebuild |
+| `newclaw start` | Start the agent (foreground) |
+| `newclaw start --daemon` | Run in background (VPS mode) |
+| `newclaw stop` | Gracefully stop the service |
+| `newclaw status` | Show health, PID, and uptime |
+| `newclaw logs -f` | Tail execution logs |
+| `newclaw update` | Pull latest version and rebuild |
 
 ### 🗑️ Uninstall
 
@@ -409,8 +409,8 @@ flowchart TD
     G2 --> H
     G3 --> H
     G4 --> H
-    H --> I["🔑 Configurar Token + ID do Telegram"]
-    I --> J["▶️ node bin/newclaw start --daemon"]
+    I --> I["🔑 Configurar Token + ID do Telegram"]
+    I --> J["▶️ newclaw start --daemon"]
     J --> K{"Opcional"}
     K -->|"Linux"| L1["🐧 systemd + firewall"]
     K -->|"Windows"| L2["🪟 Windows Service + firewall"]
@@ -456,12 +456,12 @@ irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
 
 | Comando | Descrição |
 |---|---|
-| `node bin/newclaw start` | Inicia o agente |
-| `node bin/newclaw start --daemon` | Execução em segundo plano (VPS) |
-| `node bin/newclaw stop` | Encerra o serviço graciosamente |
-| `node bin/newclaw status` | Health check e uptime |
-| `node bin/newclaw logs -f` | Logs em tempo real |
-| `node bin/newclaw update` | Atualiza e recompila o projeto |
+| `newclaw start` | Inicia o agente |
+| `newclaw start --daemon` | Execução em segundo plano (VPS) |
+| `newclaw stop` | Encerra o serviço graciosamente |
+| `newclaw status` | Health check e uptime |
+| `newclaw logs -f` | Logs em tempo real |
+| `newclaw update` | Atualiza e recompila o projeto |
 
 ### 🗑️ Desinstalação
 

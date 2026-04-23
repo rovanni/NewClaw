@@ -246,7 +246,7 @@ function Step-InstallGit {
 # ── 5. Ollama ────────────────────────────────────────────────
 
 function Step-InstallOllama {
-    Write-Step "4/7 — Instalando Ollama"
+    Write-Step "4/8 — Instalando Ollama"
 
     if (Test-Command "ollama") {
         Write-Ok "Ollama encontrado!"
@@ -292,7 +292,7 @@ function Step-InstallOllama {
 # ── 6. Modelo ───────────────────────────────────────────────
 
 function Step-DownloadModel {
-    Write-Step "5/7 — Baixando o modelo de IA"
+    Write-Step "5/8 — Baixando o modelo de IA"
 
     if ($DryRun) { Write-Dry "baixar modelo $Model"; return }
 
@@ -324,7 +324,7 @@ function Step-DownloadModel {
 # ── 7. NewClaw ───────────────────────────────────────────────
 
 function Step-InstallNewClaw {
-    Write-Step "6/7 — Baixando o NewClaw"
+    Write-Step "6/8 — Baixando o NewClaw"
 
     if (Test-Path $Dir) {
         Write-Warn "Pasta $Dir já existe!"
@@ -358,7 +358,7 @@ function Step-InstallNewClaw {
 # ── 8. Configuração ──────────────────────────────────────────
 
 function Step-Configure {
-    Write-Step "7/7 — Configurando o NewClaw"
+    Write-Step "7/8 — Configurando o NewClaw"
 
     $envFile = Join-Path $Dir ".env"
 
@@ -380,25 +380,34 @@ function Step-Configure {
         Write-Host ""
         Write-Host "    ━━━ Configuração do Telegram ━━━" -ForegroundColor Yellow
         Write-Host ""
-        Write-Host "    Precisamos de 2 informações:" -ForegroundColor Cyan
-        Write-Host "    1. Token do bot (do @BotFather no Telegram)"
-        Write-Host "    2. Seu ID de usuário (do @userinfobot no Telegram)"
-        Write-Host ""
-        Write-Host "    Se ainda não criou o bot:" -ForegroundColor Yellow
-        Write-Host "     → Telegram → @BotFather → /newbot → copie o token"
-        Write-Host "     → Telegram → @userinfobot → copie seu ID"
+        Write-Host "    Você precisará de 2 códigos diferentes:" -ForegroundColor Cyan
+        Write-Host "    1. Bot Token  → Pegue com o @BotFather (Ex: 12345:AAFF...)"
+        Write-Host "    2. Seu User ID → Pegue com o @userinfobot (Ex: 987654321)"
         Write-Host ""
 
         while ([string]::IsNullOrWhiteSpace($Token)) {
-            $Token = Read-Answer "Cole o TOKEN do bot do Telegram" ""
-            if ([string]::IsNullOrWhiteSpace($Token)) { Write-Fail "Token é obrigatório!" }
+            $Token = Read-Answer "1. Cole o TOKEN COMPLETO do bot" ""
+            if ([string]::IsNullOrWhiteSpace($Token)) { 
+                Write-Fail "Token é obrigatório!" 
+            } elseif ($Token -notlike "*:*") {
+                Write-Warn "Isso não parece um Token válido (falta o ':'). Tente novamente."
+                $Token = ""
+            }
         }
     }
 
     if ([string]::IsNullOrWhiteSpace($UserId)) {
         while ([string]::IsNullOrWhiteSpace($UserId)) {
-            $UserId = Read-Answer "Cole seu USER ID do Telegram" ""
-            if ([string]::IsNullOrWhiteSpace($UserId)) { Write-Fail "User ID é obrigatório!" }
+            $UserId = Read-Answer "2. Cole o SEU ID de usuário (números)" ""
+            if ([string]::IsNullOrWhiteSpace($UserId)) {
+                Write-Fail "User ID é obrigatório!"
+            } elseif ($UserId -like "*:*") {
+                Write-Warn "Você colou o Token no lugar do ID! Use o ID do @userinfobot (apenas números)."
+                $UserId = ""
+            } elseif ($UserId -notmatch "^\d+$") {
+                Write-Warn "O ID deve conter apenas números. Tente novamente."
+                $UserId = ""
+            }
         }
     }
 
@@ -441,6 +450,41 @@ WHISPER_PATH=
 "@
     Set-Content -Path $envFile -Value $envContent -Encoding UTF8
     Write-Ok "Arquivo .env configurado!"
+}
+
+# ── 8. Atalhos ───────────────────────────────────────────────
+
+function Step-SetupCLI {
+    Write-Step "8/8 — Configurando comando 'newclaw'"
+
+    if ($DryRun) { Write-Dry "configurar comando global newclaw"; return }
+
+    $binDir = Join-Path $Dir "bin"
+    $wrapperPath = Join-Path $binDir "newclaw.cmd"
+
+    # 1. Criar wrapper .cmd para Windows
+    $cmdContent = "@echo off`r`nnode `"%~dp0newclaw`" %*"
+    try {
+        Set-Content -Path $wrapperPath -Value $cmdContent -Encoding Ascii -ErrorAction Stop
+        Write-Ok "Arquivo de atalho 'newclaw.cmd' criado."
+    } catch {
+        Write-Warn "Não foi possível criar o wrapper em $wrapperPath"
+    }
+
+    # 2. Adicionar ao PATH do Usuário
+    try {
+        $oldPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        if ($oldPath -notlike "*$binDir*") {
+            $newPath = "$oldPath;$binDir"
+            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+            Write-Ok "Pasta 'bin' adicionada ao PATH do usuário."
+            Write-Info "Reinicie o terminal para usar o comando 'newclaw' de qualquer lugar."
+        } else {
+            Write-Info "Pasta 'bin' já está no PATH."
+        }
+    } catch {
+        Write-Warn "Não foi possível atualizar o PATH automaticamente."
+    }
 }
 
 # ── Serviço Windows ──────────────────────────────────────────
@@ -533,11 +577,10 @@ function Show-Summary {
     Write-Host "    Config:     $Dir\.env" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "    Comandos úteis:" -ForegroundColor White
-    Write-Host "      cd $Dir" -ForegroundColor Cyan
-    Write-Host "      node bin/newclaw status    — ver status" -ForegroundColor Cyan
-    Write-Host "      node bin/newclaw logs -f   — ver logs" -ForegroundColor Cyan
-    Write-Host "      node bin/newclaw restart   — reiniciar" -ForegroundColor Cyan
-    Write-Host "      node bin/newclaw stop      — parar" -ForegroundColor Cyan
+    Write-Host "      newclaw status    — ver status" -ForegroundColor Cyan
+    Write-Host "      newclaw logs -f   — ver logs" -ForegroundColor Cyan
+    Write-Host "      newclaw restart   — reiniciar" -ForegroundColor Cyan
+    Write-Host "      newclaw stop      — parar" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "    Agora abra o Telegram e mande 'Oi' para seu bot! 🎉" -ForegroundColor Yellow
     Write-Host ""
@@ -558,6 +601,7 @@ try {
     Step-DownloadModel
     Step-InstallNewClaw
     Step-Configure
+    Step-SetupCLI
     Step-Start
     Step-SetupWindowsService
     Step-SetupFirewall

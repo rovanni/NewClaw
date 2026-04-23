@@ -230,7 +230,7 @@ run() {
 # ── 1. Verificar sistema ─────────────────────────────────────
 
 check_system() {
-  step "1/8 — Verificando o sistema"
+  step "1/9 — Verificando o sistema"
 
   # OS
   if [ ! -f /etc/os-release ]; then
@@ -278,7 +278,7 @@ check_system() {
 # ── 2. Atualizar sistema ─────────────────────────────────────
 
 update_system() {
-  step "2/8 — Atualizando o sistema"
+  step "2/9 — Atualizando o sistema"
 
   if [ "$SKIP_UPDATE" -eq 1 ]; then
     info "Pulando (flag --no-update)"
@@ -309,7 +309,7 @@ update_system() {
 # ── 3. Node.js ───────────────────────────────────────────────
 
 install_node() {
-  step "3/8 — Instalando o Node.js"
+  step "3/9 — Instalando o Node.js"
 
   if check_cmd node; then
     local node_ver
@@ -339,7 +339,7 @@ install_node() {
 # ── 4. Ollama ────────────────────────────────────────────────
 
 install_ollama() {
-  step "4/8 — Instalando o Ollama"
+  step "4/9 — Instalando o Ollama"
 
   if check_cmd ollama; then
     ok "Ollama encontrado: $(ollama --version 2>/dev/null || echo 'instalado')"
@@ -375,7 +375,7 @@ install_ollama() {
 # ── 5. Modelo ───────────────────────────────────────────────
 
 download_model() {
-  step "5/8 — Baixando o modelo de IA"
+  step "5/9 — Baixando o modelo de IA"
 
   if [ "$DRY_RUN" -eq 1 ]; then
     dry "baixar modelo ${OLLAMA_MODEL}"
@@ -412,7 +412,7 @@ download_model() {
 # ── 6. NewClaw ───────────────────────────────────────────────
 
 install_newclaw() {
-  step "6/8 — Baixando o NewClaw"
+  step "6/9 — Baixando o NewClaw"
 
   if [ -d "$NEWCLAW_DIR" ]; then
     warn "Pasta ${NEWCLAW_DIR} já existe!"
@@ -448,7 +448,7 @@ install_newclaw() {
 # ── 7. Configuração ──────────────────────────────────────────
 
 configure() {
-  step "7/8 — Configurando o NewClaw"
+  step "7/9 — Configurando o NewClaw"
 
   ENV_FILE="${NEWCLAW_DIR}/.env"
 
@@ -479,27 +479,31 @@ configure() {
     echo ""
     echo -e "  ${BOLD}${YELLOW}━━━ Configuração do Telegram ━━━${NC}"
     echo ""
-    echo -e "  ${CYAN}Precisamos de 2 informações:${NC}"
-    echo -e "  1. Token do bot (do @BotFather no Telegram)"
-    echo -e "  2. Seu ID de usuário (do @userinfobot no Telegram)"
-    echo ""
-    echo -e "  ${YELLOW}Se ainda não criou o bot:${NC}"
-    echo -e "   → Telegram → @BotFather → /newbot → copie o token"
-    echo -e "   → Telegram → @userinfobot → copie seu ID"
+    echo -e "  ${CYAN}Você precisará de 2 códigos diferentes:${NC}"
+    echo -e "  1. ${BOLD}Bot Token${NC}  → Pegue com o @BotFather (Ex: 12345:AAFF...)"
+    echo -e "  2. ${BOLD}Seu User ID${NC} → Pegue com o @userinfobot (Ex: 987654321)"
     echo ""
 
-    ask "Cole o TOKEN do bot do Telegram" BOT_TOKEN
+    # Perguntar Token
     while [ -z "$BOT_TOKEN" ]; do
-      fail "Token é obrigatório!"
-      ask "Cole o TOKEN do bot do Telegram" BOT_TOKEN
+      ask "1. Cole o TOKEN COMPLETO do bot" BOT_TOKEN
+      if [ -n "$BOT_TOKEN" ] && [[ "$BOT_TOKEN" != *":"* ]]; then
+        warn "Isso não parece um Token válido (falta o ':'). Tente novamente."
+        BOT_TOKEN=""
+      fi
     done
   fi
 
   if [ -z "$USER_ID" ]; then
-    ask "Cole seu USER ID do Telegram" USER_ID
     while [ -z "$USER_ID" ]; do
-      fail "User ID é obrigatório!"
-      ask "Cole seu USER ID do Telegram" USER_ID
+      ask "2. Cole o SEU ID de usuário (números)" USER_ID
+      if [[ "$USER_ID" == *":"* ]]; then
+        warn "Você colou o Token no lugar do ID! Use o ID do @userinfobot (apenas números)."
+        USER_ID=""
+      elif [[ -n "$USER_ID" && ! "$USER_ID" =~ ^[0-9]+$ ]]; then
+        warn "O ID deve conter apenas números. Tente novamente."
+        USER_ID=""
+      fi
     done
   fi
 
@@ -548,10 +552,42 @@ EOF
   ok "Arquivo .env configurado!"
 }
 
-# ── 8. Iniciar ───────────────────────────────────────────────
+# ── 8. Atalhos ───────────────────────────────────────────────
+
+setup_cli() {
+  step "8/9 — Configurando comando 'newclaw'"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    dry "configurar comando global newclaw"
+    return
+  fi
+
+  # 1. Tornar executável
+  chmod +x "${NEWCLAW_DIR}/bin/newclaw"
+
+  # 2. Tentar symlink (mais profissional)
+  if sudo ln -sf "${NEWCLAW_DIR}/bin/newclaw" /usr/local/bin/newclaw 2>/dev/null; then
+    ok "Comando 'newclaw' instalado em /usr/local/bin"
+  else
+    # 3. Fallback para alias se symlink falhar
+    local shell_rc="$HOME/.bashrc"
+    [ -n "$ZSH_VERSION" ] && shell_rc="$HOME/.zshrc"
+    [ -f "$HOME/.zshrc" ] && shell_rc="$HOME/.zshrc"
+
+    if ! grep -q "alias newclaw=" "$shell_rc" 2>/dev/null; then
+      echo -e "\n# NewClaw CLI Alias\nalias newclaw='node ${NEWCLAW_DIR}/bin/newclaw'" >> "$shell_rc"
+      ok "Atalho 'newclaw' adicionado a $shell_rc"
+      info "Use 'source $shell_rc' para ativar agora."
+    else
+      info "Atalho 'newclaw' já existe em $shell_rc"
+    fi
+  fi
+}
+
+# ── 9. Iniciar ───────────────────────────────────────────────
 
 start_newclaw() {
-  step "8/8 — Iniciando o NewClaw"
+  step "9/9 — Iniciando o NewClaw"
 
   if [ "$DRY_RUN" -eq 1 ]; then
     dry "iniciar NewClaw em ${NEWCLAW_DIR}"
@@ -669,10 +705,10 @@ show_summary() {
   echo ""
   echo -e "  ${BOLD}Comandos úteis:${NC}"
   echo -e "    ${CYAN}cd ${NEWCLAW_DIR}${NC}"
-  echo -e "    ${CYAN}node bin/newclaw status${NC}      — ver status"
-  echo -e "    ${CYAN}node bin/newclaw logs -f${NC}     — ver logs em tempo real"
-  echo -e "    ${CYAN}node bin/newclaw restart${NC}     — reiniciar"
-  echo -e "    ${CYAN}node bin/newclaw stop${NC}        — parar"
+  echo -e "    ${CYAN}newclaw status${NC}           — ver status"
+  echo -e "    ${CYAN}newclaw logs -f${NC}          — ver logs em tempo real"
+  echo -e "    ${CYAN}newclaw restart${NC}          — reiniciar"
+  echo -e "    ${CYAN}newclaw stop${NC}             — parar"
   echo ""
   echo -e "  ${YELLOW}Agora abra o Telegram e mande 'Oi' para seu bot! 🎉${NC}"
   echo ""
@@ -698,6 +734,7 @@ main() {
   download_model
   install_newclaw
   configure
+  setup_cli
   start_newclaw
   setup_systemd
   setup_firewall
