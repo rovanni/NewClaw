@@ -6,6 +6,7 @@
 import { Database } from 'better-sqlite3';
 import { ProviderFactory } from '../core/ProviderFactory';
 import { SkillLearner } from '../loop/SkillLearner';
+import { AgentStateManager } from '../core/AgentStateManager';
 
 export interface UserProfile {
     user_id: string;
@@ -81,12 +82,14 @@ export class OnboardingService {
     private db: Database;
     private skillLearner: SkillLearner;
     private providerFactory: ProviderFactory;
+    private stateManager: AgentStateManager;
     private states: Map<string, OnboardingState> = new Map();
 
-    constructor(db: Database, skillLearner: SkillLearner, providerFactory: ProviderFactory) {
+    constructor(db: Database, skillLearner: SkillLearner, providerFactory: ProviderFactory, stateManager: AgentStateManager) {
         this.db = db;
         this.skillLearner = skillLearner;
         this.providerFactory = providerFactory;
+        this.stateManager = stateManager;
         this.ensureTable();
     }
 
@@ -192,6 +195,7 @@ export class OnboardingService {
         } else {
             this.completeOnboarding(state);
             this.createMemoryNodes(state);
+            this.stateManager.initializeAfterOnboarding(state.data.intent || 'general');
             this.skillLearner.observe('user_onboarding_completed', { userId, intent: state.data.intent });
             this.states.delete(userId);
             return { completed: true, welcomeMessage: this.generateWelcomeMessage(state.data) };
@@ -257,11 +261,16 @@ Mensagem: "${text}"`;
 
     private createMemoryNodes(state: OnboardingState): void {
         try {
-            const insertNode = this.db.prepare('INSERT OR REPLACE INTO memory_nodes (id, type, name, content, metadata, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)');
+            const insertNode = this.db.prepare(`
+                INSERT OR REPLACE INTO memory_nodes 
+                (id, type, name, content, metadata, weight, confidence, last_updated, updated_at) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            `);
             const insertEdge = this.db.prepare('INSERT OR REPLACE INTO memory_edges (from_node, to_node, relation, weight, confidence) VALUES (?, ?, ?, 1.0, 1.0)');
 
             const data = state.data;
             const userName = data.name || 'Usuário';
+            const now = new Date().toISOString();
 
             this.db.prepare('UPDATE memory_nodes SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
                 `Perfil de ${userName}. Foco: ${data.intent}. Expertise: ${data.expertise || 'n/a'}. Objetivos: ${data.goals || 'n/a'}.`,
@@ -269,19 +278,19 @@ Mensagem: "${text}"`;
             );
 
             if (data.response_style) {
-                insertNode.run('pref_style', 'preference', 'Estilo de Resposta', `Preferência: ${data.response_style}`, '{}');
+                insertNode.run('pref_style', 'preference', 'Estilo de Resposta', `Preferência: ${data.response_style}`, '{}', 1.0, 0.9, now);
                 insertEdge.run('core_user', 'pref_style', 'has_preference');
             }
             if (data.autonomy_level) {
-                insertNode.run('pref_autonomy', 'preference', 'Autonomia', `Preferência: ${data.autonomy_level}`, '{}');
+                insertNode.run('pref_autonomy', 'preference', 'Autonomia', `Preferência: ${data.autonomy_level}`, '{}', 1.0, 0.9, now);
                 insertEdge.run('core_user', 'pref_autonomy', 'has_preference');
             }
             if (data.goals) {
-                insertNode.run('user_goals', 'project', 'Metas do Usuário', data.goals, '{}');
+                insertNode.run('user_goals', 'project', 'Metas do Usuário', data.goals, '{}', 1.0, 0.8, now);
                 insertEdge.run('core_user', 'user_goals', 'has_goal');
             }
             if (data.expertise) {
-                insertNode.run('user_expertise', 'fact', 'Perfil Técnico', data.expertise, '{}');
+                insertNode.run('user_expertise', 'fact', 'Perfil Técnico', data.expertise, '{}', 1.0, 0.8, now);
                 insertEdge.run('core_user', 'user_expertise', 'has_trait');
             }
 

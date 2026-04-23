@@ -36,6 +36,9 @@ export interface MemoryNode {
     pagerank?: number;
     degree?: number;
     community_id?: number;
+    weight?: number;
+    confidence?: number;
+    last_updated?: string;
     created_at?: string;
     updated_at?: string;
 }
@@ -330,8 +333,18 @@ export class MemoryManager {
         `);
 
         this.ensureUserProfileSchema();
+        this.ensureMemorySchema();
         this.incrementBootCount();
         this.bootstrapCoreGraph();
+    }
+
+    private ensureMemorySchema(): void {
+        const tryAddColumn = (table: string, column: string, type: string) => {
+            try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`); } catch (e) { /* column exists */ }
+        };
+        tryAddColumn('memory_nodes', 'weight', 'REAL DEFAULT 1.0');
+        tryAddColumn('memory_nodes', 'confidence', 'REAL DEFAULT 1.0');
+        tryAddColumn('memory_nodes', 'last_updated', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
     }
 
     private incrementBootCount(): void {
@@ -457,6 +470,17 @@ export class MemoryManager {
                 type: 'fact',
                 name: 'system_reflection',
                 content: 'System initialized with base cognitive graph and awaiting user interaction'
+            },
+            {
+                id: 'agent_state',
+                type: 'context',
+                name: 'agent_state',
+                content: JSON.stringify({
+                    mode: 'learning',
+                    confidence: 0.5,
+                    user_alignment: 0.5,
+                    current_focus: 'unknown'
+                })
             }
         ];
 
@@ -582,15 +606,30 @@ export class MemoryManager {
 
     addNode(node: MemoryNode): void {
         this.db.prepare(`
-            INSERT OR REPLACE INTO memory_nodes (id, type, name, content, metadata, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        `).run(node.id, node.type, node.name, node.content, JSON.stringify(node.metadata || {}));
+            INSERT OR REPLACE INTO memory_nodes (id, type, name, content, metadata, weight, confidence, last_updated, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        `).run(
+            node.id, 
+            node.type, 
+            node.name, 
+            node.content, 
+            JSON.stringify(node.metadata || {}),
+            node.weight ?? 1.0,
+            node.confidence ?? 1.0,
+            node.last_updated || new Date().toISOString()
+        );
     }
 
     getNode(id: string): MemoryNode | undefined {
         const row = this.db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(id) as any;
         if (!row) return undefined;
-        return { ...row, metadata: JSON.parse(row.metadata || '{}') };
+        return { 
+            ...row, 
+            metadata: JSON.parse(row.metadata || '{}'),
+            weight: row.weight,
+            confidence: row.confidence,
+            last_updated: row.last_updated
+        };
     }
 
     getNodesByType(type: MemoryNode['type']): MemoryNode[] {

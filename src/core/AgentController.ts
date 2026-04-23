@@ -92,7 +92,8 @@ export class AgentController {
         const onboardingService = new OnboardingService(
             (this.memory as any).db || (this.memory as any)._db,
             this.skillLearner,
-            this.providerFactory
+            this.providerFactory,
+            this.agentLoop.getStateManager()
         );
 
         // Inicializar handlers

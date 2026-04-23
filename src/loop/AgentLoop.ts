@@ -15,6 +15,8 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { traceManager } from '../core/ExecutionTrace';
 import { ContextCompressor } from './ContextCompressor';
 import { SkillLearner } from './SkillLearner';
+import { AgentStateManager } from '../core/AgentStateManager';
+import { MemoryScoringEngine } from '../memory/MemoryScoringEngine';
 
 export interface ToolResult {
     success: boolean;
@@ -66,6 +68,12 @@ export class AgentLoop {
     private responseBuilder: ResponseBuilder;
     private skillLearner: SkillLearner;
     private modelRouter: ModelRouter;
+    private stateManager: AgentStateManager;
+    private scoringEngine: MemoryScoringEngine;
+
+    public getStateManager(): AgentStateManager {
+        return this.stateManager;
+    }
 
     updateConfig(updates: Partial<AgentLoopConfig>): void {
         this.config = { ...this.config, ...updates };
@@ -84,6 +92,8 @@ export class AgentLoop {
         this.responseBuilder = new ResponseBuilder();
         this.skillLearner = skillLearner || new SkillLearner(memory.getDatabase());
         this.modelRouter = new ModelRouter();
+        this.stateManager = new AgentStateManager(memory);
+        this.scoringEngine = new MemoryScoringEngine(memory);
         this.config = {
             languageDirective: config?.languageDirective || 'Responda SEMPRE em português brasileiro. Seja direto e conciso.',
             systemPrompt: config?.systemPrompt || 'Voce e o NewClaw, um agente cognitivo local. Ao usar ferramentas (tools), seja extremamente preciso com nomes de arquivos e caminhos. NUNCA mostre codigo tecnico ou saida de comandos ao usuario. Sempre formate a resposta de forma natural e amigavel. IMPORTANTE: Voce tem acesso ao historico completo da conversa — quando o usuario se referir a algo mencionado antes (ex: "esses valores", "aquele arquivo", "o que acabamos de falar"), USE as informacoes do contexto anterior relevante que esta disponivel. NUNCA diga que nao se lembra ou que nao tem acesso ao historico. EDICAO DE ARQUIVOS: Para modificar um arquivo existente, use file_ops com uma destas acoes: (1) action=replace — troca texto exato (target e replacement). (2) action=patch — troca por numero de linha (startLine, endLine, content). (3) action=append — adiciona conteudo ao final do arquivo. NUNCA recrie o arquivo inteiro com action=create se ele ja existe — isso apaga todo o conteudo original. Para edicoes grandes em HTML/CSS/JS, prefira action=patch com numeros de linha.'
@@ -129,6 +139,9 @@ export class AgentLoop {
         // Compact system prompt — only essential info, no context stuffing
         let prompt = this.config.systemPrompt;
 
+        // Add cognitive state and behavioral adaptation
+        prompt += '\n\n' + this.buildAdaptiveSystemPrompt(userId);
+
         try {
             const soul = this.memory.getSetting('soul');
             if (soul) {
@@ -146,6 +159,25 @@ export class AgentLoop {
             }
         } catch { /* skip */ }
 
+        return prompt;
+    }
+
+    private buildAdaptiveSystemPrompt(userId?: string): string {
+        const interactionCount = parseInt(this.memory.getSetting('interaction_count') || '0');
+        const state = this.stateManager.getState();
+        
+        let prompt = `[COGNITIVE STATE] Mode: ${state.mode}, Focus: ${state.current_focus}, Confidence: ${state.confidence.toFixed(2)}\n`;
+        
+        if (interactionCount < 3) {
+            prompt += "USER STATUS: NEW. Guidance level: HIGH. Be more explanatory and helpful. Explain tool usage if needed.\n";
+        } else if (interactionCount > 20) {
+            prompt += "USER STATUS: VETERAN. Guidance level: LOW. Be direct and concise. Skip obvious explanations.\n";
+        }
+        
+        if (state.confidence > 0.7 && state.current_focus !== 'unknown') {
+            prompt += `PROACTIVITY: ENABLED. You may suggest logical next steps related to ${state.current_focus} if they add value.\n`;
+        }
+        
         return prompt;
     }
 
@@ -204,6 +236,16 @@ export class AgentLoop {
 
 
         this.memory.addMessage(conversationId, 'assistant', result);
+        try {
+            this.stateManager.updateFromInteraction(true, 1.0, 0.0);
+            this.skillLearner.observe('interaction_pattern', {
+                userId,
+                intent: text.slice(0, 50),
+                success: true,
+                response_length: result.length
+            });
+            this.scoringEngine.applyDecay();
+        } catch {}
         traceManager.completeTrace(trace, 'completed', result);
         return result;
     }
