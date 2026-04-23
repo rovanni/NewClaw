@@ -182,7 +182,7 @@ export class AgentController {
         const languages: Record<string, string> = {
             'pt-BR': 'Você DEVE responder SEMPRE em português brasileiro (pt-BR). QUANDO usar ferramentas, TRADUZA todo o resultado para pt-BR antes de responder. NUNCA responda em inglês.',
             'en-US': 'You MUST respond in American English. When using tools, translate any non-English content to English.',
-            'es-ES': 'Debes responder SIEMPRE en español. Cuando uses herramientas, traduce todo el contenido al español.',
+            'es-ES': 'Debes responder SIEMPRE en español. Quando uses ferramentas, traduce todo el contenido al español.',
         };
 
         return languages[lang] || languages['pt-BR'];
@@ -212,6 +212,7 @@ REGRAS DE OURO:
 7. Quando terminar tudo, dê uma resposta final clara e amigável confirmando o QUE foi feito.${skillSection}
 
 Você possui memória persistente em grafo.
+Seu Workspace padrão para arquivos e projetos é "/newclaw/workspace".
 Você aprende automaticamente informações importantes do usuário durante a conversa.
 Você PODE afirmar que lembra dessas informações.`;
     }

@@ -493,11 +493,12 @@ export class MemoryManager {
 
         const existingUserPref = this.getNode('pref_workspace');
         if (!existingUserPref) {
+            const defaultPath = process.env.WORKSPACE_DIR || '/newclaw/workspace';
             this.addNode({
                 id: 'pref_workspace',
                 type: 'preference',
                 name: 'Workspace',
-                content: `Workspace principal do NewClaw em ${process.cwd()}`
+                content: `Workspace principal do NewClaw em ${defaultPath}`
             });
         }
 
