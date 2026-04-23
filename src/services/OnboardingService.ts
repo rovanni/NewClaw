@@ -165,12 +165,13 @@ export class OnboardingService {
         const state = this.states.get(userId);
         if (!state) return this.startOnboarding(userId);
 
-        // 1. LLM Extraction Layer
-        // Extrai dados da resposta e verifica se o usuário quer pular/vincular
-        const extracted = await this.extractDataViaLLM(answer, state.data);
+        const lastQuestion = this.getLastQuestionForState(state);
+
+        // 1. LLM Extraction & Classification Layer (Single Call)
+        const extracted = await this.extractDataViaLLM(answer, state.data, lastQuestion);
         
-        // 2. Smart Link Logic (Sessão compartilhada)
-        if (extracted.__skip__ || answer.toLowerCase().includes('já respondi') || answer.toLowerCase().includes('ja respondi')) {
+        // 2. Smart Link Logic
+        if (extracted.__skip__ || answer.toLowerCase().includes('já respondi')) {
             const otherProfile = this.db.prepare('SELECT * FROM user_profile WHERE onboarding_completed = 1 AND user_id != ? LIMIT 1').get(userId) as UserProfile | undefined;
             if (otherProfile) {
                 const now = new Date().toISOString();
@@ -180,44 +181,23 @@ export class OnboardingService {
                     VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                 `).run(userId, otherProfile.name, otherProfile.intent, otherProfile.expertise, otherProfile.goals, otherProfile.response_style, otherProfile.autonomy_level, now, now);
                 this.states.delete(userId);
-                return { completed: true, welcomeMessage: `✅ *Reconhecido!* Recuperei seu perfil como *${otherProfile.name}*.\n\nSincronizei suas preferências do Dashboard. Como posso ajudar agora?` };
+                return { completed: true, welcomeMessage: `✅ *Reconhecido!* Recuperei seu perfil como *${otherProfile.name}*.\n\nSincronizei suas preferências. Como posso ajudar agora?` };
             }
         }
 
-        // Merge extracted data
+        // Merge all extracted data (including intent if found)
         Object.assign(state.data, extracted);
+        if (extracted.goals) state.data.goals = extracted.goals;
+        else if (!state.data.goals && state.data.name && !state.data.intent) state.data.goals = answer.trim();
 
-        // Se ainda não temos o nome, forçamos a captura ou usamos a resposta pura
+        // 3. Flow Control
         if (!state.data.name) {
             state.data.name = answer.trim().slice(0, 50);
             return { question: ONBOARDING_STEPS[1].question(state.data) };
         }
 
-        if (!state.data.intent) {
-            state.data.intent = await this.classifyUserIntent(answer);
-            state.data.goals = answer.trim();
-            // Ir para a próxima pergunta adaptativa
-            const next = this.getNextAdaptiveQuestion(state.data);
-            if (next === true) {
-                this.completeOnboarding(state);
-                this.createMemoryNodes(state);
-                this.stateManager.initializeAfterOnboarding(state.data.intent || 'general');
-                this.skillLearner.observe('user_onboarding_completed', { userId, intent: state.data.intent });
-                this.states.delete(userId);
-                return { completed: true, welcomeMessage: this.generateWelcomeMessage(state.data) };
-            }
-            return { question: next };
-        }
-
-        // Processar respostas adaptativas ou finais
-        if (!state.data.expertise && !state.data.response_style && !state.data.autonomy_level) {
-            state.data.expertise = answer.trim();
-        }
-
         const next = this.getNextAdaptiveQuestion(state.data);
-        if (typeof next === 'string') {
-            return { question: next };
-        } else {
+        if (next === true) {
             this.completeOnboarding(state);
             this.createMemoryNodes(state);
             this.stateManager.initializeAfterOnboarding(state.data.intent || 'general');
@@ -225,54 +205,47 @@ export class OnboardingService {
             this.states.delete(userId);
             return { completed: true, welcomeMessage: this.generateWelcomeMessage(state.data) };
         }
+        
+        return { question: next };
     }
 
-    private async extractDataViaLLM(text: string, currentData: Partial<UserProfile>): Promise<UserProfileWithSkip> {
+    private getLastQuestionForState(state: OnboardingState): string {
+        if (!state.data.name) return ONBOARDING_STEPS[0].question(state.data);
+        if (!state.data.intent) return ONBOARDING_STEPS[1].question(state.data);
+        const next = this.getNextAdaptiveQuestion(state.data);
+        return typeof next === 'string' ? next : '';
+    }
+
+    private async extractDataViaLLM(text: string, currentData: Partial<UserProfile>, lastQuestion: string): Promise<UserProfileWithSkip & { goals?: string }> {
         const prompt = `Analise a resposta do usuário no onboarding e extraia informações para o perfil.
 Responda APENAS um JSON com os campos encontrados.
 
-CAMPOS POSSÍVEIS:
-- name: nome da pessoa (se mencionado)
-- response_style: "concise", "detailed" ou "adaptive"
-- familiarity: "beginner", "intermediate" ou "advanced"
-- autonomy_level: "conservative", "balanced" ou "confident"
-- __skip__: true se o usuário disser que já respondeu, quer pular ou já tem cadastro.
-
+CONTEXTO:
+Pergunta feita: "${lastQuestion}"
 Resposta do usuário: "${text}"
-Dados atuais: ${JSON.stringify(currentData)}
+Dados já conhecidos: ${JSON.stringify(currentData)}
+
+CAMPOS POSSÍVEIS:
+- name: nome da pessoa
+- intent: "automation", "study", "projects", "curiosity" ou "general"
+- expertise: área de atuação/especialidade mencionada
+- goals: o que o usuário quer realizar (objetivos)
+- response_style: "concise", "detailed" ou "adaptive" (mapeie opções 1, 2, 3 se houver)
+- autonomy_level: "conservative", "balanced" ou "confident" (mapeie opções 1, 2, 3 se houver)
+- __skip__: true se o usuário já respondeu ou quer pular.
 
 JSON:`;
 
         try {
             const response = await this.providerFactory.chatWithFallback([
-                { role: 'system', content: 'Você é um assistente de extração de dados estruturados.' },
+                { role: 'system', content: 'Você é um assistente de extração de dados JSON preciso.' },
                 { role: 'user', content: prompt }
             ], []);
-            
             const content = response.content || '{}';
             const jsonStr = content.match(/\{[\s\S]*\}/)?.[0] || '{}';
             return JSON.parse(jsonStr);
         } catch {
             return {};
-        }
-    }
-
-    private async classifyUserIntent(text: string): Promise<UserProfile['intent']> {
-        const prompt = `Analise a intenção do usuário e retorne APENAS uma das palavras: automation, study, projects, curiosity ou general.
-Mensagem: "${text}"`;
-        try {
-            const response = await this.providerFactory.chatWithFallback([
-                { role: 'system', content: 'Você é um classificador de intenções rápido e preciso.' },
-                { role: 'user', content: prompt }
-            ], []);
-            const content = (response.content || '').toLowerCase();
-            if (content.includes('automation')) return 'automation';
-            if (content.includes('study')) return 'study';
-            if (content.includes('projects')) return 'projects';
-            if (content.includes('curiosity')) return 'curiosity';
-            return 'general';
-        } catch {
-            return 'general';
         }
     }
 
