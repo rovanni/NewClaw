@@ -131,6 +131,12 @@ export class DashboardServer {
             if (maxIterations) this.config.maxIterations = parseInt(String(maxIterations));
             if (memoryWindowSize) this.config.memoryWindowSize = parseInt(String(memoryWindowSize));
 
+            // Update Telegram Whitelist
+            if (telegramAllowedUserIds !== undefined) {
+                this.config.telegramAllowedUserIds = String(telegramAllowedUserIds).split(',').map(id => id.trim()).filter(id => id);
+                console.log(`[CONFIG] Telegram whitelist updated: ${this.config.telegramAllowedUserIds.join(', ')}`);
+            }
+
             // Provider switch
             if (defaultProvider) {
                 try {
@@ -179,9 +185,6 @@ export class DashboardServer {
                 if (loop && typeof loop.updateConfig === 'function') {
                     loop.updateConfig({
                         maxIterations: this.config.maxIterations,
-                        languageDirective: this.config.language === 'pt-BR'
-                            ? 'Você DEVE responder SEMPRE em português brasileiro (pt-BR). QUANDO usar ferramentas, TRADUZA todo o resultado para pt-BR antes de responder. NUNCA responda em inglês.'
-                            : 'You MUST respond in American English.',
                         systemPrompt: this.config.systemPrompt || ''
                     });
                 }
@@ -199,6 +202,7 @@ export class DashboardServer {
                 memoryWindowSize: this.config.memoryWindowSize,
                 ollamaUrl: this.config.ollamaUrl,
                 ollamaModel: this.config.ollamaModel,
+                telegramAllowedUserIds: this.config.telegramAllowedUserIds.join(','),
                 systemPrompt: this.config.systemPrompt || '',
                 hasGeminiKey: !!this.config.geminiApiKey,
                 hasDeepseekKey: !!this.config.deepseekApiKey,
@@ -208,9 +212,16 @@ export class DashboardServer {
             res.json({ success: true, config: safeConfig });
         });
 
+        // Restart route
+        this.app.post('/api/restart', (_req: Request, res: Response) => {
+            console.log('🔄 Restart requested via Dashboard...');
+            res.json({ success: true, message: 'Restarting NewClaw...' });
+            setTimeout(() => { process.exit(0); }, 1000);
+        });
+
         // Get available providers and models
         this.app.get('/api/providers', async (_req: Request, res: Response) => {
-            let ollamaModels: string[] = [];
+            let ollamaModels = [];
             try {
                 const ollamaUrl = this.config.ollamaUrl || 'http://localhost:11434';
                 const resp = await fetch(`${ollamaUrl}/api/tags`);
