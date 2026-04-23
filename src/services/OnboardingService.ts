@@ -34,39 +34,7 @@ export interface OnboardingState {
 
 type UserProfileWithSkip = Partial<UserProfile> & { __skip__?: boolean };
 
-function classificarEntradaHeuristica(input: string): UserProfileWithSkip {
-    const resposta = input.trim().toLowerCase();
-    const result: UserProfileWithSkip = {};
-
-    if (/(conciso|curto|resumido|1|short|concise)/i.test(resposta)) result.response_style = 'concise';
-    else if (/(detalhado|longo|explicativo|2|detailed|long)/i.test(resposta)) result.response_style = 'detailed';
-    else if (/(adaptativo|auto|3|adaptive)/i.test(resposta)) result.response_style = 'adaptive';
-
-    if (/(iniciante|1|beginner|basic)/i.test(resposta)) result.familiarity = 'beginner';
-    else if (/(intermediario|intermediário|2|intermediate|medium)/i.test(resposta)) result.familiarity = 'intermediate';
-    else if (/(avancado|avançado|3|advanced|pro|expert)/i.test(resposta)) result.familiarity = 'advanced';
-
-    if (/(conservador|baixo risco|1|conservative)/i.test(resposta)) result.autonomy_level = 'conservative';
-    else if (/(balanceado|equilibrado|2|balanced)/i.test(resposta)) result.autonomy_level = 'balanced';
-    else if (/(confiante|ousado|3|confident)/i.test(resposta)) result.autonomy_level = 'confident';
-
-    if (/meu nome e|meu nome é|me chamo|sou o|sou a|name is|i am |i'm /i.test(input)) {
-        const nome = input
-            .replace(/.*(meu nome e|meu nome é|me chamo|sou o|sou a|name is|i am|i'm)\s*/i, '')
-            .split(/[,.!\n]/)[0]
-            .trim();
-        if (nome.length > 1) result.name = nome;
-    }
-
-    if (Object.keys(result).length === 0 && resposta.length >= 2 && resposta.length <= 50) {
-        // Avoid common phrases or skip keywords
-        if (!/(respondi|pular|skip|ajuda|menu|oi|olá)/i.test(resposta)) {
-            result.name = input.trim();
-        }
-    }
-
-    return result;
-}
+// Removendo heurística para usar extração via LLM
 
 const ONBOARDING_STEPS = [
     {
@@ -197,39 +165,31 @@ export class OnboardingService {
         const state = this.states.get(userId);
         if (!state) return this.startOnboarding(userId);
 
-        if (!state.data.name) {
-            // Smart Skip/Link Detection
-            const lowerAnswer = answer.toLowerCase();
-            if (lowerAnswer.includes('já respondi') || lowerAnswer.includes('ja respondi') || lowerAnswer.includes('pular') || lowerAnswer.includes('skip')) {
-                // Check if any completed profile exists in the DB (likely from dashboard)
-                const otherProfile = this.db.prepare('SELECT * FROM user_profile WHERE onboarding_completed = 1 AND user_id != ? LIMIT 1').get(userId) as UserProfile | undefined;
-                
-                if (otherProfile) {
-                    // Clone the profile for the new userId (Telegram)
-                    const now = new Date().toISOString();
-                    this.db.prepare(`
-                        INSERT OR REPLACE INTO user_profile
-                        (user_id, name, intent, expertise, goals, response_style, autonomy_level, onboarding_completed, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                    `).run(
-                        userId,
-                        otherProfile.name,
-                        otherProfile.intent,
-                        otherProfile.expertise,
-                        otherProfile.goals,
-                        otherProfile.response_style,
-                        otherProfile.autonomy_level,
-                        now,
-                        now
-                    );
-                    
-                    this.states.delete(userId);
-                    return { completed: true, welcomeMessage: `✅ *Entendido!* Recuperei seu perfil de *${otherProfile.name}* do sistema.\n\nBem-vindo de volta! Como posso ajudar agora?` };
-                }
+        // 1. LLM Extraction Layer
+        // Extrai dados da resposta e verifica se o usuário quer pular/vincular
+        const extracted = await this.extractDataViaLLM(answer, state.data);
+        
+        // 2. Smart Link Logic (Sessão compartilhada)
+        if (extracted.__skip__ || answer.toLowerCase().includes('já respondi') || answer.toLowerCase().includes('ja respondi')) {
+            const otherProfile = this.db.prepare('SELECT * FROM user_profile WHERE onboarding_completed = 1 AND user_id != ? LIMIT 1').get(userId) as UserProfile | undefined;
+            if (otherProfile) {
+                const now = new Date().toISOString();
+                this.db.prepare(`
+                    INSERT OR REPLACE INTO user_profile
+                    (user_id, name, intent, expertise, goals, response_style, autonomy_level, onboarding_completed, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                `).run(userId, otherProfile.name, otherProfile.intent, otherProfile.expertise, otherProfile.goals, otherProfile.response_style, otherProfile.autonomy_level, now, now);
+                this.states.delete(userId);
+                return { completed: true, welcomeMessage: `✅ *Reconhecido!* Recuperei seu perfil como *${otherProfile.name}*.\n\nSincronizei suas preferências do Dashboard. Como posso ajudar agora?` };
             }
+        }
 
-            const fields = classificarEntradaHeuristica(answer);
-            state.data.name = fields.name || answer.trim();
+        // Merge extracted data
+        Object.assign(state.data, extracted);
+
+        // Se ainda não temos o nome, forçamos a captura ou usamos a resposta pura
+        if (!state.data.name) {
+            state.data.name = answer.trim().slice(0, 50);
             return { question: ONBOARDING_STEPS[1].question(state.data) };
         }
 
@@ -250,11 +210,7 @@ export class OnboardingService {
         }
 
         // Processar respostas adaptativas ou finais
-        const fields = classificarEntradaHeuristica(answer);
-        Object.assign(state.data, fields);
-        
-        // Se a heurística não pegou expertise mas era o que esperávamos
-        if (!state.data.expertise && !state.data.response_style) {
+        if (!state.data.expertise && !state.data.response_style && !state.data.autonomy_level) {
             state.data.expertise = answer.trim();
         }
 
@@ -268,6 +224,36 @@ export class OnboardingService {
             this.skillLearner.observe('user_onboarding_completed', { userId, intent: state.data.intent });
             this.states.delete(userId);
             return { completed: true, welcomeMessage: this.generateWelcomeMessage(state.data) };
+        }
+    }
+
+    private async extractDataViaLLM(text: string, currentData: Partial<UserProfile>): Promise<UserProfileWithSkip> {
+        const prompt = `Analise a resposta do usuário no onboarding e extraia informações para o perfil.
+Responda APENAS um JSON com os campos encontrados.
+
+CAMPOS POSSÍVEIS:
+- name: nome da pessoa (se mencionado)
+- response_style: "concise", "detailed" ou "adaptive"
+- familiarity: "beginner", "intermediate" ou "advanced"
+- autonomy_level: "conservative", "balanced" ou "confident"
+- __skip__: true se o usuário disser que já respondeu, quer pular ou já tem cadastro.
+
+Resposta do usuário: "${text}"
+Dados atuais: ${JSON.stringify(currentData)}
+
+JSON:`;
+
+        try {
+            const response = await this.providerFactory.chatWithFallback([
+                { role: 'system', content: 'Você é um assistente de extração de dados estruturados.' },
+                { role: 'user', content: prompt }
+            ], []);
+            
+            const content = response.content || '{}';
+            const jsonStr = content.match(/\{[\s\S]*\}/)?.[0] || '{}';
+            return JSON.parse(jsonStr);
+        } catch {
+            return {};
         }
     }
 
