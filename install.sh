@@ -14,6 +14,9 @@
 
 set -e
 
+# ── Tratamento global de erros ───────────────────────────────
+trap 'fail "Instalação falhou na linha $LINENO. Rode com --verbose para mais detalhes."; exit 1' ERR
+
 # ── Versão ───────────────────────────────────────────────────
 INSTALLER_VERSION="1.0.0"
 
@@ -286,9 +289,16 @@ update_system() {
     info "Pulando atualização"
   fi
 
-  info "Instalando curl, git, build-essential e w3m..."
-  run sudo apt install -y curl git build-essential w3m
-  ok "Dependências básicas OK"
+  info "Instalando dependências básicas (curl, git, build-essential)..."
+  run sudo apt install -y curl git build-essential
+  ok "Dependências básicas instaladas!"
+
+  # w3m é opcional — não aborta a instalação se falhar
+  if run sudo apt install -y w3m 2>/dev/null; then
+    ok "w3m instalado (navegação web aprimorada)"
+  else
+    warn "w3m não instalado — o agente usará fallback HTML (funcional)"
+  fi
 }
 
 # ── 3. Node.js ───────────────────────────────────────────────
@@ -334,20 +344,25 @@ install_ollama() {
     ok "Ollama instalado!"
   fi
 
-  # Verificar se está rodando
+  # Verificar se está rodando (com retry)
   if curl -s http://localhost:11434/api/tags &>/dev/null; then
     ok "Ollama rodando na porta 11434"
   else
     warn "Ollama não está rodando. Iniciando..."
     if [ "$DRY_RUN" -eq 0 ]; then
       ollama serve &>/dev/null &
-      sleep 3
-    fi
-
-    if curl -s http://localhost:11434/api/tags &>/dev/null; then
-      ok "Ollama iniciado!"
-    else
-      warn "Não foi possível verificar. Rode 'ollama serve' manualmente depois."
+      local retries=0
+      while [ $retries -lt 6 ]; do
+        sleep 2
+        if curl -s http://localhost:11434/api/tags &>/dev/null; then
+          ok "Ollama iniciado!"
+          break
+        fi
+        retries=$((retries + 1))
+      done
+      if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
+        warn "Não foi possível verificar. Rode 'ollama serve' manualmente depois."
+      fi
     fi
   fi
 }
@@ -540,6 +555,11 @@ start_newclaw() {
 
   cd "$NEWCLAW_DIR"
 
+  # Verificar se a porta já está em uso
+  if command -v ss &>/dev/null && ss -tlnp | grep -q ":${DASHBOARD_PORT}"; then
+    warn "Porta ${DASHBOARD_PORT} já em uso! Verifique antes de continuar."
+  fi
+
   info "Iniciando o bot..."
   run node bin/newclaw start --daemon
   sleep 2
@@ -639,7 +659,8 @@ show_summary() {
   echo -e "  ${CYAN}Pasta:${NC}       ${NEWCLAW_DIR}"
   echo -e "  ${CYAN}Modelo:${NC}      ${OLLAMA_MODEL}"
   echo -e "  ${CYAN}Dashboard:${NC}   http://localhost:${DASHBOARD_PORT}"
-  echo -e "  ${CYAN}Config:${NC}     ${ENV_FILE}"
+  echo -e "  ${CYAN}Logs:${NC}        ${NEWCLAW_DIR}/logs/newclaw.log"
+  echo -e "  ${CYAN}Config:${NC}      ${ENV_FILE}"
   echo ""
   echo -e "  ${BOLD}Comandos úteis:${NC}"
   echo -e "    ${CYAN}cd ${NEWCLAW_DIR}${NC}"

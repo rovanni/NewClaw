@@ -228,10 +228,47 @@ git clone https://github.com/rovanni/NewClaw.git
 cd NewClaw
 npm install
 cp .env.example .env
-# Edit .env with your Telegram Token and Model specs
+# Edit .env with your Telegram Token, User ID and OLLAMA_MODEL
 npm run build
 node bin/newclaw start --daemon
 ```
+
+### 🪟 Windows Install
+
+**Quick install (PowerShell — run as Administrator):**
+
+```powershell
+irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
+```
+
+**Options:**
+
+```powershell
+# With pre-set credentials
+.\install.ps1 -Token "YOUR_TOKEN" -UserId "YOUR_ID" -NoPrompt
+
+# Dry run (simulate without changes)
+.\install.ps1 -DryRun
+
+# Specific model
+.\install.ps1 -Model "llama3.1:8b"
+
+# Skip Windows service creation
+.\install.ps1 -NoService
+```
+
+**What it does:**
+- Verifies system (RAM, disk, internet)
+- Installs Node.js 22 LTS via `winget`
+- Installs Git via `winget`
+- Installs and starts Ollama
+- Downloads your chosen AI model
+- Clones the repo and builds
+- Configures `.env` interactively
+- Optionally creates a Windows Service for auto-start
+- Optionally opens firewall port
+
+> **Requirements:** Windows 10 1809+ or Windows 11. Run PowerShell as Administrator for service/firewall features.
 
 ### Optional Dependency: `w3m`
 
@@ -251,6 +288,28 @@ Ubuntu/Debian users get the best navigation experience because the installer add
 | `node bin/newclaw status` | Show health, PID, and uptime |
 | `node bin/newclaw logs -f` | Tail execution logs |
 | `node bin/newclaw update` | Pull latest version and rebuild |
+
+### 🗑️ Uninstall
+
+The uninstaller backs up your data (database, workspace, skills) before removing.
+
+**Linux/macOS:**
+
+```bash
+./uninstall.sh                   # Interactive (recommended)
+./uninstall.sh --backup-only     # Just create a backup
+./uninstall.sh --keep-data       # Remove code, keep data
+```
+
+**Windows (PowerShell):**
+
+```powershell
+.\uninstall.ps1                  # Interactive (recommended)
+.\uninstall.ps1 -BackupOnly      # Just create a backup
+.\uninstall.ps1 -KeepData        # Remove code, keep data
+```
+
+Backups are saved to `~/newclaw-backups/` with a timestamp.
 
 ---
 <a name="português"></a>
@@ -333,11 +392,65 @@ O sistema analisa a intenção do usuário e seleciona o modelo mais adequado:
 
 ## 🚀 Instalação
 
-### Instalação Rápida (Recomendado)
+### Fluxo de Instalação
+
+```mermaid
+flowchart TD
+    A["📦 Run install.sh / install.ps1"] --> B["✅ Verificar Sistema"]
+    B --> C["🔄 Instalar Dependências"]
+    C --> D["🟢 Instalar Node.js 22"]
+    D --> E["🤖 Instalar Ollama"]
+    E --> F{"Escolher Modelo"}
+    F -->|"1"| G1["glm-5:cloud — Recomendado"]
+    F -->|"2"| G2["llama3.1:8b — Rápido"]
+    F -->|"3"| G3["mistral:7b — Conversação"]
+    F -->|"4"| G4["qwen2.5:3b — Leve"]
+    G1 --> H["📥 git clone + npm install + build"]
+    G2 --> H
+    G3 --> H
+    G4 --> H
+    H --> I["🔑 Configurar Token + ID do Telegram"]
+    I --> J["▶️ node bin/newclaw start --daemon"]
+    J --> K{"Opcional"}
+    K -->|"Linux"| L1["🐧 systemd + firewall"]
+    K -->|"Windows"| L2["🪟 Windows Service + firewall"]
+    K -->|"Não"| M["🪐 Pronto!"]
+    L1 --> M
+    L2 --> M
+
+    style A fill:#38bdf8,color:#000
+    style I fill:#f472b6,color:#000
+    style M fill:#00d4aa,color:#000
+```
+
+### Instalação Rápida — Linux/macOS (Recomendado)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | bash
 ```
+
+### Instalação Rápida — Windows 🪟
+
+**Execute o PowerShell como Administrador:**
+
+```powershell
+irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
+```
+
+**Opções PowerShell:**
+
+```powershell
+# Com credenciais pré-definidas
+.\install.ps1 -Token "SEU_TOKEN" -UserId "SEU_ID" -NoPrompt
+
+# Dry run (simular sem executar)
+.\install.ps1 -DryRun
+
+# Modelo específico
+.\install.ps1 -Model "llama3.1:8b"
+```
+
+> **Requisitos Windows:** Windows 10 1809+ ou Windows 11. Execute como Administrador para criar serviço e configurar firewall.
 
 ### Comandos CLI
 
@@ -349,6 +462,28 @@ curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | b
 | `node bin/newclaw status` | Health check e uptime |
 | `node bin/newclaw logs -f` | Logs em tempo real |
 | `node bin/newclaw update` | Atualiza e recompila o projeto |
+
+### 🗑️ Desinstalação
+
+O desinstalador faz backup dos seus dados (banco, workspace, skills) antes de remover.
+
+**Linux/macOS:**
+
+```bash
+./uninstall.sh                   # Interativo (recomendado)
+./uninstall.sh --backup-only     # Apenas criar backup
+./uninstall.sh --keep-data       # Remover código, manter dados
+```
+
+**Windows (PowerShell):**
+
+```powershell
+.\uninstall.ps1                  # Interativo (recomendado)
+.\uninstall.ps1 -BackupOnly      # Apenas criar backup
+.\uninstall.ps1 -KeepData        # Remover código, manter dados
+```
+
+Backups são salvos em `~/newclaw-backups/` com timestamp.
 
 ---
 

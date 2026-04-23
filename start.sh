@@ -1,10 +1,11 @@
-#!/bin/bash
+﻿#!/bin/bash
 # NewClaw start/restart script
 # Usage: ./start.sh [start|stop|restart]
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 PIDFILE="$DIR/newclaw.pid"
-LOGFILE="/tmp/newclaw.log"
+LOGDIR="$DIR/logs"
+LOGFILE="$LOGDIR/newclaw.log"
 WATCHDOG_PIDFILE="$DIR/watchdog.pid"
 
 case "$1" in
@@ -13,6 +14,7 @@ case "$1" in
       echo "NewClaw already running (PID $(cat "$PIDFILE"))"
       exit 0
     fi
+    mkdir -p "$LOGDIR"
     cd "$DIR"
     nohup node dist/index.js >> "$LOGFILE" 2>&1 &
     echo $! > "$PIDFILE"
