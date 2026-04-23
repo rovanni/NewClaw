@@ -6,6 +6,10 @@
 import dotenv from 'dotenv';
 import { AgentController } from './core/AgentController';
 import { DashboardServer } from './dashboard/DashboardServer';
+import { Logger } from './shared/Logger';
+
+// Inicializar Logger (adiciona timestamps ao console.log)
+Logger.hookGlobalConsole();
 
 // Carregar .env
 dotenv.config();
