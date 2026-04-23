@@ -877,7 +877,7 @@
         container: document.getElementById('cy'), elements: els,
         style: [
           { selector:'node', style:{ 'label':showLabels?'data(label)':'', 'text-wrap':'wrap','text-max-width':'120px','font-size':10,'font-family':'var(--font-family)','font-weight':600,'color':'#fff','text-outline-color':'rgba(10, 18, 33, 0.8)','text-outline-width':2,'text-valign':'center','text-halign':'center','width':'data(size)','height':'data(size)','background-color':'data(nodeColor)','border-width':2,'border-color':'#fff','border-opacity':0.3 } },
-          { selector:'edge', style:{ 'width':'data(edgeWidth)','line-color':'rgba(148,163,184,0.3)','curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'rgba(148,163,184,0.3)','label':showLabels?'data(relation)':'','font-size':8,'font-family':'var(--font-family)','font-weight':500,'color':'var(--text-soft)','text-rotation':'autorotate','text-margin-y':-6,'text-outline-color':'var(--bg-base)','text-outline-width':2,'text-opacity':showLabels?0.8:0 } },
+          { selector:'edge', style:{ 'width':'data(edgeWidth)','line-color':'rgba(148, 163, 184, 0.45)','curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'rgba(148, 163, 184, 0.45)','label':showLabels?'data(relation)':'','font-size':9,'font-family':'var(--font-family)','font-weight':600,'color':'#fff','text-rotation':'autorotate','text-margin-y':-8,'text-outline-color':'#0a1221','text-outline-width':3,'text-outline-opacity':1,'text-opacity':showLabels?1:0 } },
           ...typeStyles,
           { selector:'.faded', style:{'opacity':0.1,'filter':'grayscale(1)'} },
           { selector:'.highlighted', style:{'border-width':3,'border-color':'var(--accent)','border-opacity':1,'opacity':1,'z-index':999} },
@@ -1269,7 +1269,16 @@
       // Edges first
       cy.edges().forEach(e => {
         const sPos = e.source().position(), tPos = e.target().position();
-        svg += `  <line x1="${sPos.x}" y1="${sPos.y}" x2="${tPos.x}" y2="${tPos.y}" stroke="rgba(148,163,184,0.4)" stroke-width="${e.data('edgeWidth')||2}" stroke-linecap="round"/>\n`;
+        const color = "rgba(148, 163, 184, 0.5)";
+        svg += `  <line x1="${sPos.x}" y1="${sPos.y}" x2="${tPos.x}" y2="${tPos.y}" stroke="${color}" stroke-width="${e.data('edgeWidth')||2}" stroke-linecap="round"/>\n`;
+        
+        // Edge Labels in SVG
+        if (showLabels && e.data('relation')) {
+          const mx = (sPos.x + tPos.x) / 2;
+          const my = (sPos.y + tPos.y) / 2;
+          svg += `  <text x="${mx}" y="${my - 10}" text-anchor="middle" fill="#fff" font-family="Inter, sans-serif" font-size="9" font-weight="600" style="text-shadow: 0 1px 4px #000">${esc(e.data('relation'))}</text>\n`;
+        }
+
         // Simple arrow head
         const angle = Math.atan2(tPos.y - sPos.y, tPos.x - sPos.x);
         const arrowLen = 10, arrowSide = 0.5;
@@ -1277,7 +1286,7 @@
         const ay1 = tPos.y - arrowLen * Math.sin(angle - arrowSide);
         const ax2 = tPos.x - arrowLen * Math.cos(angle + arrowSide);
         const ay2 = tPos.y - arrowLen * Math.sin(angle + arrowSide);
-        svg += `  <path d="M ${tPos.x} ${tPos.y} L ${ax1} ${ay1} L ${ax2} ${ay2} Z" fill="rgba(148,163,184,0.4)"/>\n`;
+        svg += `  <path d="M ${tPos.x} ${tPos.y} L ${ax1} ${ay1} L ${ax2} ${ay2} Z" fill="${color}"/>\n`;
       });
 
       // Nodes
