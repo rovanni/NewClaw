@@ -59,7 +59,10 @@ function classificarEntradaHeuristica(input: string): UserProfileWithSkip {
     }
 
     if (Object.keys(result).length === 0 && resposta.length >= 2 && resposta.length <= 50) {
-        result.name = input.trim();
+        // Avoid common phrases or skip keywords
+        if (!/(respondi|pular|skip|ajuda|menu|oi|olá)/i.test(resposta)) {
+            result.name = input.trim();
+        }
     }
 
     return result;
@@ -195,6 +198,36 @@ export class OnboardingService {
         if (!state) return this.startOnboarding(userId);
 
         if (!state.data.name) {
+            // Smart Skip/Link Detection
+            const lowerAnswer = answer.toLowerCase();
+            if (lowerAnswer.includes('já respondi') || lowerAnswer.includes('ja respondi') || lowerAnswer.includes('pular') || lowerAnswer.includes('skip')) {
+                // Check if any completed profile exists in the DB (likely from dashboard)
+                const otherProfile = this.db.prepare('SELECT * FROM user_profile WHERE onboarding_completed = 1 AND user_id != ? LIMIT 1').get(userId) as UserProfile | undefined;
+                
+                if (otherProfile) {
+                    // Clone the profile for the new userId (Telegram)
+                    const now = new Date().toISOString();
+                    this.db.prepare(`
+                        INSERT OR REPLACE INTO user_profile
+                        (user_id, name, intent, expertise, goals, response_style, autonomy_level, onboarding_completed, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    `).run(
+                        userId,
+                        otherProfile.name,
+                        otherProfile.intent,
+                        otherProfile.expertise,
+                        otherProfile.goals,
+                        otherProfile.response_style,
+                        otherProfile.autonomy_level,
+                        now,
+                        now
+                    );
+                    
+                    this.states.delete(userId);
+                    return { completed: true, welcomeMessage: `✅ *Entendido!* Recuperei seu perfil de *${otherProfile.name}* do sistema.\n\nBem-vindo de volta! Como posso ajudar agora?` };
+                }
+            }
+
             const fields = classificarEntradaHeuristica(answer);
             state.data.name = fields.name || answer.trim();
             return { question: ONBOARDING_STEPS[1].question(state.data) };
