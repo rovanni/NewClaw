@@ -14,45 +14,51 @@ export class ContextValidator {
         let quality = 1.0;
         let hasConflict = false;
 
-        // 1. Density Check
-        if (context.length < 50) {
-            quality -= 0.4; // Very low context
-        } else if (context.length < 200) {
-            quality -= 0.2;
+        // 1. Density Check (Normalized)
+        if (context.length < 30) {
+            quality -= 0.3; // Noise floor
+        } else if (context.length < 150) {
+            quality -= 0.1;
         }
 
-        // 2. Metadata Check (Drift/Stability)
-        if (state.meta.drift_risk > 0.6) {
+        // 2. Metadata Check (High Thresholds)
+        if (state.meta.drift_risk > 0.8) { // Only penalize high drift
             quality -= 0.2;
         }
-        if (state.meta.stability < 0.4) {
+        if (state.meta.stability < 0.3) {
             quality -= 0.1;
         }
 
         // 3. Simple Conflict Detection
-        // Looking for potential contradictions in retrieved memory nodes
-        const lines = context.split('\n');
+        const lines = context.split('\n').filter(l => l.trim().length > 10);
         const subjects = new Map<string, string>();
         for (const line of lines) {
             if (line.includes(':')) {
-                const [subject, value] = line.split(':').map(s => s.trim().toLowerCase());
+                const parts = line.split(':');
+                const subject = parts[0].trim().toLowerCase();
+                const value = parts.slice(1).join(':').trim().toLowerCase();
+                
                 if (subjects.has(subject) && subjects.get(subject) !== value) {
                     hasConflict = true;
-                    quality -= 0.3;
+                    quality -= 0.4;
                     break;
                 }
                 subjects.set(subject, value);
             }
         }
 
-        // 4. Recommendation Logic
+        // 4. Recommendation Logic (Balanced Thresholds)
         let recommendation: ValidationResult['recommendation'] = 'assertive';
         
-        if (quality < 0.5 || hasConflict || state.confidence < 0.3) {
+        // Thresholds: Assertive > 0.8, Neutral 0.5 - 0.8, Cautious < 0.5
+        if (quality < 0.5 || hasConflict || state.confidence < 0.2) {
             recommendation = 'cautious';
-        } else if (quality < 0.8 || state.meta.drift_risk > 0.4) {
+        } else if (quality < 0.8 || state.meta.drift_risk > 0.6) {
             recommendation = 'neutral';
         }
+
+        // Log distribution signal
+        console.log(`[VALIDATOR] Quality: ${quality.toFixed(2)}, Recommendation: ${recommendation}, Conflict: ${hasConflict}`);
 
         return {
             quality: Math.max(0, quality),
