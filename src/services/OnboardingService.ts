@@ -68,7 +68,7 @@ function classificarEntradaHeuristica(input: string): UserProfileWithSkip {
 const ONBOARDING_STEPS = [
     {
         id: 'name',
-        question: () => '👋 Olá! Eu sou o *NewClaw*, seu assistente cognitivo local.\n\nJá inicializei minha memória e estrutura cognitiva. Quero entender como posso ser mais útil pra você.\n\nPara começar, qual é o seu nome?',
+        question: (_data: Partial<UserProfile>) => '👋 Olá! Eu sou o *NewClaw*, seu assistente cognitivo local.\n\nJá inicializei minha memória e estrutura cognitiva. Quero entender como posso ser mais útil pra você.\n\nPara começar, qual é o seu nome?',
         saveField: 'name'
     },
     {
@@ -159,7 +159,7 @@ export class OnboardingService {
         if (this.isOnboardingCompleted(userId)) return null;
         const state: OnboardingState = { step: 0, userId, data: {} };
         this.states.set(userId, state);
-        return { question: ONBOARDING_STEPS[0].question() };
+        return { question: ONBOARDING_STEPS[0].question(state.data) };
     }
 
     async processAnswer(userId: string, answer: string): Promise<{ question?: string; completed?: boolean; welcomeMessage?: string } | null> {
@@ -177,6 +177,14 @@ export class OnboardingService {
             state.data.goals = answer.trim();
             // Ir para a próxima pergunta adaptativa
             const next = this.getNextAdaptiveQuestion(state.data);
+            if (next === true) {
+                this.completeOnboarding(state);
+                this.createMemoryNodes(state);
+                this.stateManager.initializeAfterOnboarding(state.data.intent || 'general');
+                this.skillLearner.observe('user_onboarding_completed', { userId, intent: state.data.intent });
+                this.states.delete(userId);
+                return { completed: true, welcomeMessage: this.generateWelcomeMessage(state.data) };
+            }
             return { question: next };
         }
 

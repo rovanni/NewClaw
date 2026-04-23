@@ -381,11 +381,6 @@ export class MemoryManager {
         });
     }
 
-    getSetting(key: string): string | null {
-        const row = this.db.prepare('SELECT value FROM memory WHERE key = ?').get(key) as { value: string } | undefined;
-        return row ? row.value : null;
-    }
-
     private ensureUserProfileSchema(): void {
         const columns = new Set(
             ((this.db.prepare("PRAGMA table_info(user_profile)").all() as any[]) || []).map(c => c.name)
