@@ -20,6 +20,8 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NEWCLAW_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKUP_ROOT="${HOME}/newclaw-backups"
+# Adicionar suporte ao caminho legado/customizado da VPS
+ALT_BACKUP_ROOT="/home/venus/backups"
 
 banner() {
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -29,19 +31,19 @@ banner() {
 
 # ── 1. Localizar Backups ─────────────────────────────────────
 find_backups() {
-  if [ ! -d "$BACKUP_ROOT" ]; then
-    echo -e "${RED}❌ Pasta de backups não encontrada: $BACKUP_ROOT${NC}"
-    exit 1
+  SEARCH_PATHS=("$BACKUP_ROOT")
+  if [ -d "$ALT_BACKUP_ROOT" ]; then
+    SEARCH_PATHS+=("$ALT_BACKUP_ROOT")
   fi
 
-  echo -e "\n${BOLD}Buscando backups disponíveis em ${BACKUP_ROOT}...${NC}\n"
+  echo -e "\n${BOLD}Buscando backups disponíveis...${NC}\n"
   
   # Listar pastas de backup (do desinstalador) e arquivos .db (do backup_db.sh)
-  # Usamos um array para guardar os caminhos
-  mapfile -t BACKUPS < <(find "$BACKUP_ROOT" -maxdepth 1 \( -type d -name "newclaw_*" -o -type f -name "newclaw_*.db" \) | sort -r)
+  mapfile -t BACKUPS < <(find "${SEARCH_PATHS[@]}" -maxdepth 1 \( -type d -name "newclaw_*" -o -type f -name "newclaw_*.db" \) 2>/dev/null | sort -r)
 
   if [ ${#BACKUPS[@]} -eq 0 ]; then
-    echo -e "${YELLOW}⚠️  Nenhum backup encontrado.${NC}"
+    echo -e "${YELLOW}⚠️  Nenhum backup encontrado em:${NC}"
+    for p in "${SEARCH_PATHS[@]}"; do echo "  - $p"; done
     exit 1
   fi
 

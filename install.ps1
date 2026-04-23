@@ -373,11 +373,22 @@ function Step-InstallNewClaw {
 # ── 8. Configuração ──────────────────────────────────────────
 
 function Step-CheckForBackups {
-    if (Test-Path $BackupRoot) {
-        $Backups = Get-ChildItem -Path $BackupRoot | Where-Object { $_.Name -like "newclaw_*" }
-        if ($Backups.Count -gt 0) {
-            Write-Step "Bônus: Backups encontrados!"
-            Write-Info "Detectamos $($Backups.Count) backup(s) em $BackupRoot"
+    $BackupRoot = Join-Path $env:USERPROFILE "newclaw-backups"
+    $AltBackupRoot = "C:\home\venus\backups"
+
+    $SearchPaths = @($BackupRoot)
+    if (Test-Path $AltBackupRoot) { $SearchPaths += $AltBackupRoot }
+
+    $Backups = @()
+    foreach ($path in $SearchPaths) {
+        if (Test-Path $path) {
+            $Backups += Get-ChildItem -Path $path | Where-Object { $_.Name -like "newclaw_*" }
+        }
+    }
+
+    if ($Backups.Count -gt 0) {
+        Write-Step "Bônus: Backups encontrados!"
+        Write-Info "Detectamos $($Backups.Count) backup(s) disponível(is)."
             
             if (Read-YesNo "Deseja restaurar um backup agora em vez de fazer uma configuração limpa?" "n") {
                 $RestoreScript = Join-Path $Dir "scripts\restore.ps1"

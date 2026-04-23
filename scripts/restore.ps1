@@ -12,6 +12,7 @@ param()
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $NewClawDir = Resolve-Path (Join-Path $ScriptDir "..")
 $BackupRoot = Join-Path $env:USERPROFILE "newclaw-backups"
+$AltBackupRoot = "C:\home\venus\backups" # Caso mapeado ou similar
 
 function Write-Banner {
     Write-Host "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
@@ -21,17 +22,23 @@ function Write-Banner {
 
 # ── 1. Localizar Backups ─────────────────────────────────────
 function Get-BackupSelection {
-    if (-not (Test-Path $BackupRoot)) {
-        Write-Host "❌ Pasta de backups não encontrada: $BackupRoot" -ForegroundColor Red
-        exit 1
-    }
+    $SearchPaths = @($BackupRoot)
+    if (Test-Path $AltBackupRoot) { $SearchPaths += $AltBackupRoot }
 
-    Write-Host "`nBuscando backups disponíveis em $BackupRoot...`n" -ForegroundColor White
+    Write-Host "`nBuscando backups disponíveis...`n" -ForegroundColor White
     
-    $Backups = Get-ChildItem -Path $BackupRoot | Where-Object { $_.Name -like "newclaw_*" } | Sort-Object LastWriteTime -Descending
+    $Backups = @()
+    foreach ($path in $SearchPaths) {
+        if (Test-Path $path) {
+            $Backups += Get-ChildItem -Path $path | Where-Object { $_.Name -like "newclaw_*" }
+        }
+    }
+    
+    $Backups = $Backups | Sort-Object LastWriteTime -Descending
 
     if ($Backups.Count -eq 0) {
-        Write-Host "⚠️ Nenhum backup encontrado." -ForegroundColor Yellow
+        Write-Host "⚠️ Nenhum backup encontrado em:" -ForegroundColor Yellow
+        foreach ($p in $SearchPaths) { Write-Host "  - $p" -ForegroundColor Gray }
         exit 1
     }
 
