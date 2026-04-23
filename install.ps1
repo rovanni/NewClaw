@@ -357,6 +357,30 @@ function Step-InstallNewClaw {
 
 # ── 8. Configuração ──────────────────────────────────────────
 
+function Step-CheckForBackups {
+    if (Test-Path $BackupRoot) {
+        $Backups = Get-ChildItem -Path $BackupRoot | Where-Object { $_.Name -like "newclaw_*" }
+        if ($Backups.Count -gt 0) {
+            Write-Step "Bônus: Backups encontrados!"
+            Write-Info "Detectamos $($Backups.Count) backup(s) em $BackupRoot"
+            
+            if (Read-YesNo "Deseja restaurar um backup agora em vez de fazer uma configuração limpa?" "n") {
+                $RestoreScript = Join-Path $Dir "scripts\restore.ps1"
+                if (Test-Path $RestoreScript) {
+                    & $RestoreScript
+                    # Se restaurou, podemos pular a configuração manual se o .env existir
+                    if (Test-Path (Join-Path $Dir ".env")) {
+                        Write-Ok "Backup restaurado com sucesso. Pulando configuração manual."
+                        $script:NoOnboard = $true
+                    }
+                } else {
+                    Write-Warn "Script de restauração não encontrado em $RestoreScript"
+                }
+            }
+        }
+    }
+}
+
 function Step-Configure {
     Write-Step "7/8 — Configurando o NewClaw"
 
@@ -600,6 +624,7 @@ try {
     Step-InstallOllama
     Step-DownloadModel
     Step-InstallNewClaw
+    Step-CheckForBackups
     Step-Configure
     Step-SetupCLI
     Step-Start

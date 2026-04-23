@@ -448,6 +448,32 @@ install_newclaw() {
 
 # ── 7. Configuração ──────────────────────────────────────────
 
+check_for_backups() {
+  if [ -d "${HOME}/newclaw-backups" ]; then
+    local backup_count
+    backup_count=$(find "${HOME}/newclaw-backups" -maxdepth 1 \( -type d -name "newclaw_*" -o -type f -name "newclaw_*.db" \) | wc -l)
+    
+    if [ "$backup_count" -gt 0 ]; then
+      echo ""
+      step "Bônus: Backups encontrados!"
+      info "Detectamos ${backup_count} backup(s) em ~/newclaw-backups"
+      
+      if ask_yes "Deseja restaurar um backup agora em vez de fazer uma configuração limpa?" "n"; then
+        if [ -f "${NEWCLAW_DIR}/scripts/restore.sh" ]; then
+          bash "${NEWCLAW_DIR}/scripts/restore.sh"
+          # Se restaurou, podemos pular a configuração manual do .env se ele já existir
+          if [ -f "${NEWCLAW_DIR}/.env" ]; then
+            ok "Backup restaurado com sucesso. Pulando configuração manual."
+            NO_ONBOARD=1
+          fi
+        else
+          warn "Script de restauração não encontrado. Por favor, restaure manualmente depois."
+        fi
+      fi
+    fi
+  fi
+}
+
 configure() {
   step "7/9 — Configurando o NewClaw"
 
@@ -734,6 +760,7 @@ main() {
   install_ollama
   download_model
   install_newclaw
+  check_for_backups
   configure
   setup_cli
   start_newclaw
