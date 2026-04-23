@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 # NewClaw Auto-Update Script
 # Usage: ./update.sh [restart]
 # Pulls from GitHub, builds, and optionally restarts
@@ -29,7 +29,7 @@ echo ""
 echo "âš ï¸  ATENÃ‡ÃƒO: O sync irÃ¡ descartar alteraÃ§Ãµes locais nÃ£o commitadas."
 echo "   Certifique-se de ter backup do .env e skills customizados."
 echo -n "   Continuar? [s/N]: "
-read -r confirm
+read -r confirm < /dev/tty
 case "$confirm" in
   s|S|y|Y) ;;
   *) echo "âŒ Update cancelado."; exit 0 ;;

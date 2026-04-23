@@ -84,7 +84,7 @@ ask_yes() {
   local default_show="y/N"
   [ "$default" = "y" ] && default_show="Y/n"
   echo -ne "  ${BOLD}${prompt} [${default_show}]:${NC} "
-  read -r answer
+  read -r answer < /dev/tty
   answer="${answer:-$default}"
   case "$answer" in
     y|Y|s|S) return 0 ;;
