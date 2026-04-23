@@ -135,6 +135,7 @@ export class DashboardServer {
             if (telegramAllowedUserIds !== undefined) {
                 this.config.telegramAllowedUserIds = String(telegramAllowedUserIds).split(',').map(id => id.trim()).filter(id => id);
                 console.log(`[CONFIG] Telegram whitelist updated: ${this.config.telegramAllowedUserIds.join(', ')}`);
+                console.log(`💡 Para gerenciar usuários autorizados e outras configurações, acesse o Dashboard em: http://localhost:${this.config.dashboardPort || 3090}/config`);
             }
 
             // Provider switch

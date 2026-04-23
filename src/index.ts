@@ -60,6 +60,7 @@ async function main() {
     dashboard.setProviderFactory(controller.getProviderFactory());
     dashboard.setMemoryManager(controller.getMemory());
     dashboard.start(config.dashboardPort);
+    console.log(`\n⚙️  Configurações e Whitelist disponíveis em: http://localhost:${config.dashboardPort}/config\n`);
 
     await controller.start();
 }
