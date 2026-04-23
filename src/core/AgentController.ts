@@ -41,6 +41,7 @@ export interface NewClawConfig {
     skillsDir: string;
     tmpDir: string;
     whisperPath: string;
+    dashboardPort?: number;
     systemPrompt?: string;
 }
 
