@@ -239,7 +239,7 @@ export class MemoryAdminTool implements ToolExecutor {
         // Safety: never remove identity or preference nodes
         const safeToRemove = toRemove.filter(id => {
             const node = db.prepare('SELECT type, id FROM memory_nodes WHERE id = ?').get(id) as any;
-            return node && node.type !== 'identity' && !id.startsWith('core:') && !id.startsWith('pref_');
+            return node && node.type !== 'identity' && !id.startsWith('core:') && !id.startsWith('core_') && !id.startsWith('pref_');
         });
 
         if (safeToRemove.length === 0) return { success: true, output: '✅ Nenhum ghost seguro para remover (identity, core, pref são protegidos).' };
@@ -263,7 +263,7 @@ export class MemoryAdminTool implements ToolExecutor {
 
         return {
             success: true,
-            output: `🧹 Cleanup concluído:\n   ${deletedNodes} nós removidos\n   ${deletedEdges} arestas removidas\n   ${deletedEmbeddings} embeddings removidos\n   ${deletedMetrics} métricas removidas\n   Protegidos: identity, core:*, pref_*`
+            output: `🧹 Cleanup concluído:\n   ${deletedNodes} nós removidos\n   ${deletedEdges} arestas removidas\n   ${deletedEmbeddings} embeddings removidos\n   ${deletedMetrics} métricas removidas\n   Protegidos: identity, core:*, core_*, pref_*`
         };
     }
 

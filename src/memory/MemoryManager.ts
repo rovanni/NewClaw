@@ -325,6 +325,132 @@ export class MemoryManager {
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         `);
+
+        this.ensureUserProfileSchema();
+        this.bootstrapCoreGraph();
+    }
+
+    private ensureUserProfileSchema(): void {
+        const columns = new Set(
+            ((this.db.prepare("PRAGMA table_info(user_profile)").all() as any[]) || []).map(c => c.name)
+        );
+        const addColumn = (sql: string) => {
+            try { this.db.exec(sql); } catch { /* ignore if already exists */ }
+        };
+
+        if (!columns.has('assistant_name')) addColumn("ALTER TABLE user_profile ADD COLUMN assistant_name TEXT");
+        if (!columns.has('goals')) addColumn("ALTER TABLE user_profile ADD COLUMN goals TEXT");
+        if (!columns.has('familiarity')) addColumn("ALTER TABLE user_profile ADD COLUMN familiarity TEXT");
+        if (!columns.has('learning_mode')) addColumn("ALTER TABLE user_profile ADD COLUMN learning_mode TEXT DEFAULT 'enabled'");
+        if (!columns.has('autonomy_level')) addColumn("ALTER TABLE user_profile ADD COLUMN autonomy_level TEXT DEFAULT 'balanced'");
+        if (!columns.has('workspace_path')) addColumn("ALTER TABLE user_profile ADD COLUMN workspace_path TEXT");
+        if (!columns.has('onboarding_completed')) addColumn("ALTER TABLE user_profile ADD COLUMN onboarding_completed INTEGER DEFAULT 0");
+        if (!columns.has('created_at')) addColumn("ALTER TABLE user_profile ADD COLUMN created_at TEXT");
+
+        this.db.exec(`
+            UPDATE user_profile
+            SET created_at = COALESCE(created_at, updated_at, CURRENT_TIMESTAMP),
+                updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP),
+                response_style = COALESCE(response_style, 'adaptive'),
+                language_preference = COALESCE(language_preference, 'system'),
+                learning_mode = COALESCE(learning_mode, 'enabled'),
+                autonomy_level = COALESCE(autonomy_level, 'balanced'),
+                onboarding_completed = COALESCE(onboarding_completed, 0)
+        `);
+    }
+
+    private bootstrapCoreGraph(): void {
+        const nodes: MemoryNode[] = [
+            {
+                id: 'identity',
+                type: 'identity',
+                name: 'IDENTITY',
+                content: 'Nó-raiz da identidade cognitiva do NewClaw. Conecta agente, usuário, estilo e princípios.'
+            },
+            {
+                id: 'core_identity',
+                type: 'identity',
+                name: 'IDENTITY CORE',
+                content: 'Hub estrutural da identidade cognitiva. Mantido para compatibilidade com curadoria e expansão do grafo.'
+            },
+            {
+                id: 'core_agent',
+                type: 'identity',
+                name: 'AGENTS',
+                content: 'Representa o agente NewClaw, seu papel como copiloto local, memória persistente e capacidade de agir com ferramentas.'
+            },
+            {
+                id: 'core_soul',
+                type: 'context',
+                name: 'SOUL',
+                content: 'Guarda a personalidade, voz, valores e tom do sistema: útil, acolhedor, direto e persistente.'
+            },
+            {
+                id: 'core_tools',
+                type: 'skill',
+                name: 'TOOLS',
+                content: 'Hub das ferramentas disponíveis para pesquisar, editar arquivos, executar comandos, navegar e gerenciar memória.'
+            },
+            {
+                id: 'core_user',
+                type: 'identity',
+                name: 'USER',
+                content: 'Perfil vivo do usuário. Deve ser enriquecido gradualmente com nome, objetivos, preferências, contexto e histórico.'
+            },
+            {
+                id: 'core_heartbeat',
+                type: 'fact',
+                name: 'HEARTBEAT',
+                content: 'Marca o estado inicial do sistema e serve como trilha de vida do agente: instalação, boot, onboarding e eventos importantes.'
+            },
+            {
+                id: 'core_memory',
+                type: 'context',
+                name: 'MEMORY',
+                content: 'Hub da memória semântica persistente. Organiza nós, relações, contexto relevante e recuperação futura.'
+            }
+        ];
+
+        for (const node of nodes) {
+            this.addNode(node);
+        }
+
+        const existingUserPref = this.getNode('pref_workspace');
+        if (!existingUserPref) {
+            this.addNode({
+                id: 'pref_workspace',
+                type: 'preference',
+                name: 'Workspace',
+                content: `Workspace principal do NewClaw em ${process.cwd()}`
+            });
+        }
+
+        const baseEdges: Array<[string, string, string]> = [
+            ['identity', 'core_agent', 'related_to'],
+            ['identity', 'core_user', 'related_to'],
+            ['identity', 'core_soul', 'related_to'],
+            ['identity', 'core_memory', 'related_to'],
+            ['identity', 'core_identity', 'related_to'],
+            ['core_identity', 'core_agent', 'related_to'],
+            ['core_identity', 'core_user', 'related_to'],
+            ['core_identity', 'core_memory', 'related_to'],
+            ['core_agent', 'core_tools', 'uses'],
+            ['core_agent', 'core_memory', 'related_to'],
+            ['core_agent', 'core_heartbeat', 'created'],
+            ['core_user', 'core_memory', 'related_to'],
+            ['core_user', 'pref_workspace', 'prefers'],
+            ['core_memory', 'core_heartbeat', 'contains'],
+            ['core_memory', 'core_tools', 'contains'],
+            ['core_soul', 'core_agent', 'related_to']
+        ];
+
+        for (const [from, to, relation] of baseEdges) {
+            try {
+                this.addEdge(from, to, relation);
+            } catch {
+                // Keep bootstrap resilient across ontology changes.
+            }
+        }
     }
 
     // === Conversas ===
@@ -680,7 +806,7 @@ export class MemoryManager {
 
         // Inject core knowledge nodes (tools, workspace, structure)
         const coreNodes = this.db.prepare(
-            "SELECT id, name, content FROM memory_nodes WHERE id LIKE 'core:%' OR id = 'pref_workspace' ORDER BY id"
+            "SELECT id, name, content FROM memory_nodes WHERE id LIKE 'core_%' OR id = 'pref_workspace' ORDER BY id"
         ).all() as Array<{id: string; name: string; content: string}>;
         if (coreNodes.length) {
             context += '\nConhecimento do sistema:\n';
