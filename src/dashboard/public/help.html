@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NewClaw — Help</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/shared.css">
+  <style>
+    .main { max-width: 780px; margin: 0 auto; padding: 32px 24px; }
+    .card {
+      background: var(--bg-surface); border: 1px solid var(--border-color);
+      border-radius: var(--radius); padding: 24px; margin-bottom: 20px;
+    }
+    .card h2 { font-size: 1rem; font-weight: 600; color: var(--accent); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+    .card p, .card li { font-size: 0.88rem; color: var(--text-muted); line-height: 1.6; }
+    .card ul { list-style: none; padding: 0; }
+    .card li { padding: 6px 0; padding-left: 20px; position: relative; }
+    .card li::before { content: '→'; position: absolute; left: 0; color: var(--accent); }
+    code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.82rem; color: var(--accent); }
+    pre { background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 0.82rem; color: var(--accent); margin: 12px 0; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .step-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .step-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius); padding: 20px; }
+    .step-card h3 { font-size: 0.95rem; color: var(--text-main); margin: 0 0 10px; }
+    .step-card p, .step-card li { font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; }
+    .step-card ul { list-style: none; padding: 0; }
+    .step-card li { padding: 4px 0; padding-left: 18px; position: relative; }
+    .step-card li::before { content: '•'; position: absolute; left: 0; color: var(--accent); }
+    .step-num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-bg); border: 1px solid var(--accent); color: var(--accent); font-size: 0.8rem; font-weight: 700; margin-bottom: 8px; }
+    .hint { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: rgba(96,165,250,0.08); border: 1px solid rgba(96,165,250,0.18); font-size: 0.8rem; color: var(--text-muted); }
+    .hint.warn { background: rgba(251,191,36,0.1); border-color: rgba(251,191,36,0.22); }
+    .quick-links { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+    .quick-link { display: block; padding: 10px 12px; border-radius: 10px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); text-decoration: none; transition: all 0.2s; }
+    .quick-link:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+    .quick-link strong { display: block; font-size: 0.84rem; margin-bottom: 2px; }
+    .quick-link span { font-size: 0.76rem; color: var(--text-soft); }
+    @media (max-width: 640px) { .step-grid, .quick-links { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div id="header-root"></div>
+  <div class="main">
+
+    <div class="card">
+      <h2>🧭 Tutorial do NewClaw</h2>
+      <p>Guia passo a passo para configurar, conversar, auditar e cuidar da memória do sistema.</p>
+      <div class="quick-links">
+        <a href="/config" class="quick-link"><strong>1. Config</strong><span>Provider, modelo, idioma e tools</span></a>
+        <a href="/" class="quick-link"><strong>2. Chat</strong><span>Converse, use voz, exporte conversas</span></a>
+        <a href="/traces" class="quick-link"><strong>3. Traces</strong><span>Audite decisões, tools e respostas</span></a>
+        <a href="/memory-graph" class="quick-link"><strong>4. Memória</strong><span>Explore o grafo, revise e conecte nós</span></a>
+      </div>
+      <div class="hint warn">Se o sistema acabou de ser instalado, comece por Config antes de testar qualquer tool.</div>
+    </div>
+
+    <div class="card" id="step1">
+      <h2>🚀 Passo 1 — Configurar o Sistema</h2>
+      <p>Abra <a href="/config">Config</a> e configure:</p>
+      <ul>
+        <li><code>Provider</code> — escolha Ollama, Gemini, DeepSeek ou Groq</li>
+        <li><code>Modelo</code> — selecione ou digite o modelo (ex: glm-5.1:cloud)</li>
+        <li><code>Idioma</code> — ajuste o idioma preferencial</li>
+        <li><code>Tools</code> — ative/desative ferramentas conforme necessidade</li>
+        <li><code>Salvar & Reiniciar</code> — aplique mudanças de provider ou modelo</li>
+      </ul>
+      <div class="hint">Fluxo recomendado: selecione provider → ajuste modelo → confira lista de modelos → salve.</div>
+    </div>
+
+    <div class="card" id="step2">
+      <h2>💬 Passo 2 — Conversar no Chat</h2>
+      <p>Na tela <a href="/">Chat</a>:</p>
+      <ul>
+        <li><code>+ Nova</code> — cria conversa vazia</li>
+        <li><code>🎤</code> — reconhecimento de voz do navegador</li>
+        <li><code>🔊</code> — liga/desliga TTS automático</li>
+        <li><code>📥 / 📤</code> — exporta/importa conversas em JSON</li>
+        <li><code>📋</code> — copia resposta individual (hover na mensagem)</li>
+      </ul>
+      <div class="hint">Enter envia, Shift+Enter cria nova linha.</div>
+    </div>
+
+    <div class="card" id="step3">
+      <h2>🔍 Passo 3 — Auditar com Traces</h2>
+      <p>Na tela <a href="/traces">Traces</a>, veja o caminho completo de cada execução:</p>
+      <ul>
+        <li><code>Decisão</code> — como o agente classificou a intenção</li>
+        <li><code>Tool Calls</code> — quais ferramentas foram chamadas</li>
+        <li><code>Resultados</code> — o que cada tool retornou</li>
+        <li><code>Resposta Final</code> — texto enviado ao usuário</li>
+      </ul>
+      <div class="hint">Se o chat respondeu errado, olhe o trace antes de mexer no prompt.</div>
+    </div>
+
+    <div class="step-grid">
+      <div class="step-card" id="step4">
+        <div class="step-num">4</div>
+        <h3>Memória Textual</h3>
+        <p>Na tela <a href="/memory">Memória</a>:</p>
+        <ul>
+          <li><code>Buscar</code> — procura por nome ou conteúdo</li>
+          <li><code>Filtros</code> — separa por tipo (identity, fact, skill...)</li>
+          <li><code>Salvar</code> — atualiza nó selecionado</li>
+          <li><code>Deletar</code> — remove nó e relações</li>
+          <li><code>Adicionar Relação</code> — conecta dois nós</li>
+        </ul>
+      </div>
+
+      <div class="step-card" id="step5">
+        <div class="step-num">5</div>
+        <h3>Grafo de Memória</h3>
+        <p>Na tela <a href="/memory-graph">Grafo</a>:</p>
+        <ul>
+          <li><code>➕ Novo Nó</code> — cria nó manualmente</li>
+          <li><code>🔗 Conectar</code> — liga dois nós visualmente</li>
+          <li><code>📷 PNG / SVG / JSON</code> — exporta o grafo</li>
+          <li><code>🔍 Busca</code> — busca semântica no grafo</li>
+          <li><code>📊 Métricas</code> — PageRank, Louvain, comunidades</li>
+          <li>Clique num nó → painel direito com detalhes e edição</li>
+        </ul>
+        <div class="hint">🔍 <strong>Modo Foco:</strong> Selecione um nó → clique "Isolar Nó" para ver apenas ele e vizinhos. Use profundidade (1 hop / 2 hops) e o slider de importância para filtrar ruído.</div>
+      </div>
+
+      <div class="step-card" id="step6">
+        <div class="step-num">6</div>
+        <h3>Revisão de Memória</h3>
+        <p>Na tela <a href="/memory-review">Revisão</a>:</p>
+        <ul>
+          <li><code>Mesclar</code> — resolve duplicatas</li>
+          <li><code>Interligar Datas</code> — cria relações cronológicas</li>
+          <li><code>Órfãos</code> — nós sem conexões</li>
+          <li><code>Nós Fracos</code> — baixo pagerank</li>
+        </ul>
+        <div class="hint warn">Use mescla apenas quando os pares representam o mesmo conceito.</div>
+      </div>
+
+      <div class="step-card" id="tools">
+        <div class="step-num">🛠</div>
+        <h3>Ferramentas do Agente (8)</h3>
+        <ul>
+          <li><code>exec_command</code> ⚠️ — executa comandos shell</li>
+          <li><code>web_search</code> 🔍 — busca iterativa com leitura de páginas e síntese multi-fonte</li>
+          <li><code>file_ops</code> 📁 — lê, grava e lista arquivos</li>
+          <li><code>memory_search</code> 🧠 — busca semântica na memória</li>
+          <li><code>memory_write</code> ✏️ — create, update, connect, delete, <strong>merge</strong></li>
+          <li><code>send_audio</code> 🔊 — TTS e envio de voz no Telegram</li>
+          <li><code>send_document</code> 📄 — envia arquivos (HTML, PDF, imagens)</li>
+          <li><code>memory_admin</code> 🔧 — diagnosticar, limpar, reindexar</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>🔍 Modo Foco — Navegação Inteligente</h2>
+      <p>O grafo cognitivo pode ter centenas de nós. O Modo Foco resolve o problema de "tudo amontuado":</p>
+      <div class="step-grid">
+        <div class="step-card">
+          <h3>1. Isolar Nó</h3>
+          <p>Clique em qualquer nó → clique <code>🔍 Isolar Nó</code> na sidebar. Apenas o nó selecionado e seus vizinhos diretos ficam visíveis. O resto fica esmaecido.</p>
+        </div>
+        <div class="step-card">
+          <h3>2. Profundidade</h3>
+          <p><code>1 hop</code> — mostra apenas conexões diretas (recomendado).<br>
+          <code>2 hops</code> — inclui vizinhos dos vizinhos.<br>
+          <code>Tudo</code> — mostra o grafo completo.</p>
+        </div>
+        <div class="step-card">
+          <h3>3. Importância</h3>
+          <p>O slider <code>⭐ Importância mín.</code> filtra nós com PageRank baixo. Aumente para ver apenas os nós mais relevantes.</p>
+        </div>
+        <div class="step-card">
+          <h3>4. Visão Geral</h3>
+          <p>Clique <code>🔄 Visão Geral</code> ou clique no fundo do grafo para restaurar a visualização completa.</p>
+        </div>
+      </div>
+      <div class="hint">Dica: Comece com 1 hop e slider em 0%. Ajuste conforme necessário. O objetivo é ver <strong>contexto relevante</strong>, não o grafo inteiro.</div>
+    </div>
+
+    <div class="card" id="faq">
+      <h2>❓ Dúvidas Comuns</h2>
+      <p><strong>O chat respondeu errado.</strong> → Abra Traces, verifique a decisão e tool chamada antes de mexer no prompt.</p>
+      <p><strong>Troquei o modelo e nada mudou.</strong> → Use Salvar & Reiniciar na tela Config.</p>
+      <p><strong>A memória está bagunçada.</strong> → Use <code>memory_admin</code> com ação <code>cleanup</code> para remover ghosts e órfãos automaticamente. No dashboard: Grafo → Modo Foco para visualizar sem ruído.</p>
+      <p><strong>Posso usar só pelo Telegram?</strong> → Sim, mas o dashboard é essencial para config, traces e manutenção.</p>
+    </div>
+
+    <div class="card">
+      <h2>⚙️ Variáveis de Ambiente</h2>
+      <pre>TELEGRAM_BOT_TOKEN=seu_token
+TELEGRAM_ALLOWED_USER_IDS=123456789
+APP_LANG=pt-BR
+DEFAULT_PROVIDER=ollama
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=glm-5.1:cloud
+DASHBOARD_PORT=3090</pre>
+    </div>
+
+  </div>
+  <script src="/shared.js"></script>
+  <script>document.getElementById('header-root').innerHTML = newclawHeader('help'); newclawInitTheme();</script>
+</body>
+</html>

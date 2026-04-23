@@ -1,0 +1,16 @@
+node_modules/
+dist/
+data/
+tmp/
+.env
+*.sqlite
+*.sqlite-shm
+*.sqlite-walaudio/
+backups/
+logs/
+*.pid
+*.ogg
+*.mp3
+*.db
+workspace/sites/*.html
+workspace/space-invaders*.html

@@ -1,0 +1,1508 @@
+<!DOCTYPE html>
+<html data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>(function(){var w=console.warn;console.warn=function(){var a=arguments[0];if(a&&typeof a==='string'&&a.includes('style bypass'))return;w.apply(console,arguments)};})();</script>
+  <title>NewClaw — Memory Graph</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/shared.css">
+  <script src="https://unpkg.com/cytoscape@3.26.0/dist/cytoscape.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+      font-family: var(--font-family); background: var(--bg-base);
+    }
+    .app-layout { display: flex; flex: 1; overflow: hidden; position: relative; }
+
+    /* ── Sidebars (Shared) ── */
+    .glass-sidebar {
+      background: var(--bg-glass);
+      backdrop-filter: blur(var(--blur-md));
+      -webkit-backdrop-filter: blur(var(--blur-md));
+      border-color: var(--border-color);
+      z-index: 20;
+      transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s ease;
+    }
+
+    #leftSidebar {
+      width: 280px; min-width: 280px; height: 100vh;
+      display: flex; flex-direction: column; overflow-y: auto;
+      border-right: 1px solid var(--border-color);
+    }
+    #leftSidebar.collapsed { width: 0; min-width: 0; overflow: hidden; }
+
+    #rightSidebar {
+      width: 320px; min-width: 320px; height: 100vh;
+      display: flex; flex-direction: column; overflow-y: auto;
+      border-left: 1px solid var(--border-color);
+    }
+    #rightSidebar.collapsed { width: 0; min-width: 0; overflow: hidden; }
+
+    .sidebar-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 18px; border-bottom: 1px solid var(--border-color);
+    }
+    .sidebar-header h2 { font-size: 0.85rem; color: var(--text-main); font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+    .sidebar-toggle {
+      background: var(--bg-muted); border: 1px solid var(--border-color); color: var(--text-muted);
+      cursor: pointer; font-size: 0.9rem; width: 28px; height: 28px; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center; transition: all 0.2s;
+    }
+    .sidebar-toggle:hover { color: var(--accent); background: var(--accent-bg); border-color: var(--accent); }
+
+    .sidebar-section { padding: 14px 18px; border-bottom: 1px solid var(--border-color); }
+    .sidebar-section h3 { font-size: 0.68rem; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; font-weight: 700; letter-spacing: 0.08em; }
+
+    /* ── Modern Controls ── */
+    .tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .sidebar-btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 10px;
+      background: rgba(148, 163, 184, 0.08); border: 1px solid rgba(148, 163, 184, 0.15);
+      border-radius: var(--radius-sm); color: var(--text-main); font-size: 0.72rem; font-weight: 500;
+      cursor: pointer; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .sidebar-btn:hover {
+      background: var(--accent-bg); color: var(--accent); border-color: var(--accent);
+      transform: translateY(-1px); box-shadow: 0 4px 12px rgba(125, 211, 252, 0.15);
+    }
+    .sidebar-btn.active { background: var(--accent); color: var(--bg-base); border-color: var(--accent); font-weight: 600; }
+
+    .input-group { margin-bottom: 12px; }
+    .input-group label { display: block; font-size: 0.68rem; color: var(--text-muted); margin-bottom: 4px; font-weight: 600; }
+    .input-group input, .input-group select, .detail-input, .detail-select, .detail-textarea {
+      width: 100%; background: rgba(148, 163, 184, 0.05); border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm); padding: 8px 10px; color: var(--text-main); font-size: 0.78rem;
+      transition: all 0.2s;
+    }
+    .input-group input:focus, .input-group select:focus, .detail-input:focus, .detail-select:focus, .detail-textarea:focus {
+      outline: none; border-color: var(--accent); background: rgba(148, 163, 184, 0.1);
+      box-shadow: 0 0 0 2px var(--accent-bg);
+    }
+
+    .type-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.62rem; font-weight: 700; text-transform: uppercase; }
+
+    .search-dropdown {
+      position: absolute; left: 0; right: 0; top: 100%; max-height: 180px;
+      overflow-y: auto; background: var(--bg-surface); border: 1px solid var(--border-color);
+      border-radius: 0 0 8px 8px; z-index: 100; display: none;
+      box-shadow: var(--shadow-lg); backdrop-filter: blur(20px);
+    }
+    .search-dropdown div { padding: 8px 12px; cursor: pointer; font-size: 0.75rem; color: var(--text-muted); border-bottom: 1px solid rgba(148,163,184,0.05); }
+    .search-dropdown div:hover { background: var(--accent-bg); color: var(--text-main); }
+
+    .legend-item {
+      display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+      border-radius: 20px; cursor: pointer; font-size: 0.68rem; margin: 3px;
+      background: rgba(148, 163, 184, 0.05); border: 1px solid transparent; transition: all 0.2s;
+    }
+    .legend-item:hover { border-color: var(--border-color); background: rgba(148, 163, 184, 0.1); }
+    .legend-item.inactive { opacity: 0.25; filter: grayscale(1); }
+    .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+    /* ── Detail View ── */
+    #rightContent { padding: 18px; }
+    .detail-id { font-size: 0.68rem; color: var(--text-soft); font-family: monospace; opacity: 0.7; margin-bottom: 12px; word-break: break-all; }
+    .edge-item {
+      padding: 10px 12px; font-size: 0.72rem; color: var(--text-muted);
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(148, 163, 184, 0.05); border: 1px solid var(--border-color);
+      border-radius: 10px; margin-bottom: 6px; transition: all 0.2s;
+    }
+    .edge-item:hover { background: rgba(148, 163, 184, 0.1); border-color: var(--accent-bg); }
+    .edge-item a { color: var(--accent); text-decoration: none; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+    .edge-item button {
+      width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--border-color);
+      color: var(--text-soft); background: rgba(248, 113, 113, 0.05); cursor: pointer;
+      display: flex; align-items: center; justify-content: center; font-size: 0.7rem; transition: all 0.2s;
+    }
+    .edge-item button:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+    /* ── Main Layout ── */
+    #main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+
+    #topbar {
+      display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+      background: var(--bg-glass); backdrop-filter: blur(var(--blur-md));
+      border-bottom: 1px solid var(--border-color); z-index: 10;
+    }
+    #topbar button {
+      background: rgba(148, 163, 184, 0.1); border: 1px solid var(--border-color);
+      border-radius: 8px; padding: 6px 12px; color: var(--text-main); font-size: 0.72rem; font-weight: 500;
+      cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 4px;
+    }
+    #topbar button:hover { background: var(--accent-bg); color: var(--accent); border-color: var(--accent); }
+    #topbar .node-count { font-size: 0.7rem; color: var(--text-muted); margin-left: auto; font-weight: 600; letter-spacing: 0.02em; }
+
+    #cy { flex: 1; background: var(--bg-base); cursor: grab; }
+    #cy:active { cursor: grabbing; }
+
+    /* ── Reopen buttons ── */
+    .reopen-btn {
+      position: fixed; top: 50%; transform: translateY(-50%);
+      width: 32px; height: 64px; background: var(--bg-glass-strong);
+      backdrop-filter: blur(10px); border: 1px solid var(--border-color); color: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; font-size: 0.9rem; z-index: 30; transition: all 0.2s;
+    }
+    .reopen-btn:hover { background: var(--accent); color: var(--bg-base); box-shadow: 0 0 20px var(--accent-bg); }
+    #reopenLeft { left: 0; border-radius: 0 12px 12px 0; border-left: none; }
+    #reopenRight { right: 0; border-radius: 12px 0 0 12px; border-right: none; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      background: var(--bg-surface); border: 1px solid var(--accent); color: var(--text-main);
+      padding: 10px 20px; border-radius: 12px; font-size: 0.82rem; font-weight: 500; z-index: 9999;
+      display: none; box-shadow: var(--shadow-lg); animation: slideUp 0.3s ease;
+    }
+    @keyframes slideUp { from { transform: translate(-50%, 20px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+
+    /* ── Modal Premium ── */
+    .premium-modal {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px);
+      display: none; align-items: center; justify-content: center; z-index: 1500;
+    }
+    .premium-modal.show { display: flex; }
+    .modal-box {
+      background: var(--bg-surface); border: 1px solid var(--border-color);
+      border-radius: 20px; padding: 28px; max-width: 440px; width: 90%;
+      box-shadow: var(--shadow-lg); transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .modal-box h3 { color: var(--text-main); margin: 0 0 16px; font-size: 1.1rem; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
+    .btn-cancel { padding: 9px 18px; border-radius: 10px; border: 1px solid var(--border-color); background: rgba(148, 163, 184, 0.05); color: var(--text-muted); cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
+    .btn-cancel:hover { background: rgba(148, 163, 184, 0.15); color: var(--text-main); }
+    .btn-confirm { padding: 9px 18px; border-radius: 10px; border: none; background: var(--accent); color: var(--bg-base); font-weight: 700; cursor: pointer; font-size: 0.85rem; box-shadow: 0 4px 14px var(--accent-bg); transition: all 0.2s; }
+    .btn-confirm:hover { transform: translateY(-1px); box-shadow: 0 6px 20px var(--accent-bg); filter: brightness(1.1); }
+
+    /* ── Mobile/Responsive ── */
+    @media (max-width: 1024px) {
+      #leftSidebar { width: 260px; }
+      #rightSidebar { width: 280px; }
+    }
+
+    @media (max-width: 768px) {
+      #leftSidebar { position: fixed; left: 0; top: 0; z-index: 50; transform: translateX(-100%); transition: transform 0.3s ease; }
+      #leftSidebar.open { transform: translateX(0); }
+      #rightSidebar { position: fixed; right: 0; top: 0; z-index: 50; transform: translateX(100%); transition: transform 0.3s ease; }
+      #rightSidebar.open { transform: translateX(0); }
+      .reopen-btn { display: flex !important; }
+    }
+
+    /* Detail View Styles */
+    #detailPanel { margin-top: 10px; }
+    .detail-id { font-size: 0.72rem; color: var(--text-soft); font-family: monospace; border-bottom: 1px solid var(--border-color); padding-bottom: 6px; margin-bottom: 10px; }
+    .node-type { padding: 2px 8px; border-radius: 4px; font-weight: 600; font-size: 0.65rem; text-transform: uppercase; }
+    .node-type.identity { background: rgba(94, 234, 212, 0.15); color: #2dd4bf; }
+    .node-type.preference { background: rgba(244, 114, 182, 0.15); color: #f472b6; }
+    .node-type.project { background: rgba(96, 165, 250, 0.15); color: #60a5fa; }
+    .node-type.context { background: rgba(168, 85, 247, 0.15); color: #a855f7; }
+    .node-type.fact { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+    .node-type.skill { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
+
+    .edge-list { margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 12px; }
+    .edge-relation { font-weight: 600; color: var(--accent); }
+    #edgeDropdown { display:none; position:absolute; left:0; right:0; top:100%; max-height:200px; overflow-y:auto; background:var(--bg-surface); border:1px solid var(--border-color); border-radius:0 0 6px 6px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,0.3); }
+    .edge-opt { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border-color); font-size: 0.8rem; }
+    .edge-opt:hover { background: var(--bg-muted); }
+    .edge-search-container { position: relative; width: 100%; }
+    .detail-form { display: flex; flex-direction: column; gap: 10px; }
+    .detail-actions { display: flex; gap: 8px; margin-top: 4px; }
+    .detail-input, .detail-select, .detail-textarea {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      color: var(--text-main);
+      font-size: 0.8rem;
+    }
+    .detail-input, .detail-select { padding: 8px 10px; }
+    .detail-textarea { min-height: 180px; padding: 12px; resize: vertical; line-height: 1.5; }
+    .detail-input:focus, .detail-select:focus, .detail-textarea:focus { outline: none; border-color: var(--accent); }
+    .detail-btn {
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      background: var(--accent-bg);
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+    .detail-btn.danger { background: rgba(248, 113, 113, 0.15); color: var(--danger); border-color: rgba(248, 113, 113, 0.25); }
+    .detail-meta { font-size: 0.72rem; color: var(--text-soft); }
+    .detail-section-title { font-size: 0.74rem; color: var(--accent); font-weight: 700; margin-top: 8px; }
+  
+    .depth-controls { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+    .depth-btn { flex: 1; padding: 6px; background: rgba(148,163,184,0.08); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-main); font-size: 0.72rem; cursor: pointer; text-align: center; transition: all 0.2s; }
+    .depth-btn:hover, .depth-btn.active { background: var(--accent); color: var(--bg-base); border-color: var(--accent); font-weight: 600; }
+    .importance-slider { width: 100%; margin-top: 6px; accent-color: var(--accent); }
+    .focus-banner { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: var(--bg-glass); backdrop-filter: blur(12px); border: 1px solid var(--accent); border-radius: 12px; padding: 8px 20px; z-index: 30; display: none; font-size: 0.78rem; color: var(--accent); align-items: center; gap: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+    .focus-banner button { background: var(--accent); color: var(--bg-base); border: none; border-radius: 6px; padding: 4px 12px; font-size: 0.72rem; font-weight: 600; cursor: pointer; }
+
+</style>
+</head>
+<body>
+  <!-- Header (injected by JS) -->
+  <div id="header-root"></div>
+
+  <!-- Reopen buttons (moved inside app-layout if needed, or kept absolute) -->
+  <div id="reopenLeft" class="reopen-btn" onclick="toggleLeft()">▶</div>
+  <div id="reopenRight" class="reopen-btn" onclick="toggleRight()">◀</div>
+
+  <div id="focusBanner" class="focus-banner">🔍 Modo Foco: <span id="focusNodeName"></span> <button onclick="exitFocus()">✕ Sair</button></div>
+  <div class="app-layout">
+    <!-- Left Sidebar: Controls -->
+    <div id="leftSidebar" class="glass-sidebar">
+    <div class="sidebar-header">
+      <h2>🧠 Graph Controls</h2>
+      <button class="sidebar-toggle" onclick="toggleLeft()" title="Collapse">◀</button>
+    </div>
+    <div class="sidebar-section">
+      <h3>Ferramentas</h3>
+      <div class="tool-grid">
+        <button class="sidebar-btn" onclick="openCreateNodeModal()">➕ Novo Nó</button>
+        <a class="sidebar-btn" href="/memory-review" style="text-decoration:none;">📋 Revisão</a>
+        <button class="sidebar-btn" onclick="resetLayout()">🔄 Centralizar</button>
+        <button class="sidebar-btn" onclick="toggleLabels()">🏷️ Labels</button>
+        <button class="sidebar-btn" id="connectBtn" onclick="toggleConnect()">🔗 Conectar</button>
+        <button class="sidebar-btn" onclick="exportPNG(2)">📷 PNG</button>
+        <button class="sidebar-btn" onclick="exportPNG(4)">💎 Ultra PNG</button>
+        <button class="sidebar-btn" onclick="exportSVG()">🎨 SVG</button>
+        <button class="sidebar-btn" onclick="exportJSON()">📄 JSON</button>
+        <button class="sidebar-btn" onclick="loadGraph()">🔃 Atualizar</button>
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <h3>Criar Relação</h3>
+      <div class="input-group" style="position:relative">
+        <label>De:</label>
+        <input id="edgeFromSearch" placeholder="🔍 Buscar nó..." autocomplete="off" oninput="searchNodeFor('from')" onfocus="searchNodeFor('from')">
+        <div id="fromDropdown" class="search-dropdown"></div>
+        <input type="hidden" id="edgeFrom">
+      </div>
+      <div class="input-group">
+        <label>Tipo:</label>
+        <select id="edgeRelation" onchange="onRelationChange()"><option value="">Selecionar...</option></select>
+      </div>
+      <div id="customRelationRow" class="input-group" style="display:none">
+        <input id="customRelation" placeholder="Relação customizada...">
+      </div>
+      <div class="input-group" style="position:relative">
+        <label>Para:</label>
+        <input id="edgeToSearch" placeholder="🔍 Buscar nó..." autocomplete="off" oninput="searchNodeFor('to')" onfocus="searchNodeFor('to')">
+        <div id="toDropdown" class="search-dropdown"></div>
+        <input type="hidden" id="edgeTo">
+      </div>
+      <button class="sidebar-btn" onclick="createEdge()" style="width:100%;justify-content:center;margin-top:4px;">＋ Adicionar Relação</button>
+    </div>
+    <div class="sidebar-section">
+      <h3>Legenda</h3>
+      <div id="legendContainer"></div>
+    </div>
+    <div class="sidebar-section">
+      <h3>🔍 Modo Foco</h3>
+      <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:8px;">Clique em um nó e depois isole</div>
+      <div class="tool-grid">
+        <button class="sidebar-btn" id="focusBtn" onclick="focusOnSelected()" disabled>🔍 Isolar Nó</button>
+        <button class="sidebar-btn" onclick="exitFocus()">🔄 Visão Geral</button>
+      </div>
+      <h3 style="margin-top:12px;">📐 Profundidade</h3>
+      <div class="depth-controls">
+        <button class="depth-btn active" onclick="setDepth(1)" id="depth1">1 hop</button>
+        <button class="depth-btn" onclick="setDepth(2)" id="depth2">2 hops</button>
+        <button class="depth-btn" onclick="setDepth(0)" id="depthAll">Tudo</button>
+      </div>
+      <h3 style="margin-top:12px;">⭐ Importância mín.</h3>
+      <input type="range" class="importance-slider" id="importanceSlider" min="0" max="100" value="0" oninput="filterByImportance(this.value)">
+      <div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">Threshold: <span id="importanceValue">0</span>%</div>
+    </div>
+  </div>
+
+  <!-- Main: Graph -->
+  <div id="main">
+    <div id="topbar">
+      <button onclick="toggleLeft()" title="Toggle controls">◀▶</button>
+      <button onclick="openCreateNodeModal()">➕ Novo Nó</button>
+      <a href="/memory-review" style="text-decoration:none;"><button>📋 Revisão</button></a>
+      <button onclick="zoomIn()">➕</button>
+      <button onclick="zoomOut()">➖</button>
+      <button onclick="toggleCluster()" title="Agrupar por tipo" id="clusterBtn">🗂️</button>
+      <button onclick="findPath()" title="Encontrar caminho entre 2 nós">🛤️</button>
+      <button onclick="toggleAnalytics()" title="Métricas analíticas">📊</button>
+      <button onclick="toggleSearch()" title="Busca semântica">🔍</button>
+      <div style="position:relative;display:inline-flex;align-items:center;">
+        <input type="text" id="searchNodes" placeholder="Buscar nó por nome/conteúdo..." style="font-size:0.75rem;width:220px;padding:4px 8px 4px 28px;background:var(--bg-muted);border:1px solid var(--border-color);border-radius:8px;color:var(--text-main);" oninput="onSearchNodes(this.value)" onfocus="onSearchNodes(this.value)" onblur="setTimeout(()=>document.getElementById('searchDropdown').style.display='none',200)">
+        <span style="position:absolute;left:8px;font-size:0.75rem;color:var(--text-muted);pointer-events:none;">🔎</span>
+        <div id="searchDropdown" class="search-dropdown" style="left:0;right:0;top:100%;"></div>
+      </div>
+      <button onclick="clearNodeSearch()" title="Limpar busca" style="font-size:0.7rem;">✖</button>
+      <span style="font-size:0.7rem;color:var(--text-muted);margin:0 4px;">De:</span><input type="date" id="dateFrom" style="font-size:0.7rem;width:120px;" onchange="applyDateFilter()">
+      <span style="font-size:0.7rem;color:var(--text-muted);margin:0 4px;">Até:</span><input type="date" id="dateTo" style="font-size:0.7rem;width:120px;" onchange="applyDateFilter()">
+      <button onclick="clearDateFilter()" title="Limpar filtro de data">✖</button>
+      <span class="node-count" id="nodeCount">—</span>
+      <button onclick="toggleRight()" title="Toggle details">◀▶</button>
+    </div>
+    <div id="cy"></div>
+  </div>
+
+    <!-- Right Sidebar: Details -->
+    <div id="rightSidebar" class="collapsed glass-sidebar">
+      <div class="sidebar-header">
+        <h2>📋 Detalhes</h2>
+        <button class="sidebar-toggle" onclick="toggleRight()" title="Close">❯</button>
+      </div>
+      <div id="rightContent" style="padding:12px 14px;">
+        <p style="color:var(--text-muted);font-size:0.8rem;">Clique em um nó para ver detalhes.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Relation Modal -->
+  <div id="relationModal" class="premium-modal">
+    <div class="modal-box">
+      <h3>🔗 Criar Relação</h3>
+      <div id="modalNodeInfo" style="margin-bottom:10px;font-size:0.85rem;color:var(--text-main)"></div>
+      <label style="font-size:0.72rem;color:var(--text-muted);display:block;margin-bottom:3px;">Tipo de relação:</label>
+      <select id="modalRelation"></select>
+      <div id="modalCustomRow" style="display:none;margin-top:6px;"><input id="modalCustomRelation" placeholder="Nome da relação..." style="width:100%;background:var(--bg-input);border:1px solid var(--border-color);border-radius:5px;padding:6px;color:var(--text-main);font-size:0.85rem;"></div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
+          <button class="btn-confirm" onclick="confirmModal()">Criar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="nodeModal" class="premium-modal">
+    <div class="modal-box">
+      <h3>➕ Novo Nó</h3>
+      <div class="input-group">
+        <label>Nome:</label>
+        <input id="newNodeName" placeholder="Nome do nó">
+      </div>
+      <div class="input-group">
+        <label>Tipo:</label>
+        <select id="newNodeType">
+          <option value="identity">identity</option>
+          <option value="preference">preference</option>
+          <option value="project">project</option>
+          <option value="context">context</option>
+          <option value="fact" selected>fact</option>
+          <option value="skill">skill</option>
+        </select>
+      </div>
+      <div class="input-group">
+        <label>Conteúdo:</label>
+        <input id="newNodeContent" placeholder="Resumo curto do nó">
+      </div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeCreateNodeModal()">Cancelar</button>
+        <button class="btn-confirm" onclick="createNode()">Criar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <!-- Search Modal -->
+  <div id="searchModal" class="premium-modal">
+    <div class="modal-box" style="max-width:560px;">
+      <h3>🔍 Busca Semântica</h3>
+      <input id="semanticSearch" type="text" placeholder="Buscar por conteúdo, tipo ou relação..." class="detail-input" style="font-size:0.9rem;padding:12px;" oninput="semanticSearchHandler()">
+      <div id="searchResults" style="margin-top:16px;max-height:400px;overflow-y:auto;"></div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeSearchModal()">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Analytics Modal -->
+  <script src="/shared.js"></script>
+  <script>
+    document.getElementById('header-root').innerHTML = newclawHeader('memory-graph');
+    newclawInitTheme();
+
+    const TYPE_COLORS = { identity:'#a855f7', preference:'#fbbf24', project:'#60a5fa', context:'#4ade80', fact:'#f87171', skill:'#38bdf8' };
+    const TYPE_BG = { identity:'rgba(168,85,247,0.15)', preference:'rgba(251,191,36,0.15)', project:'rgba(96,165,250,0.15)', context:'rgba(74,222,128,0.15)', fact:'rgba(248,113,113,0.15)', skill:'rgba(56,189,248,0.15)' };
+    const TYPE_LABELS = { identity:'Identidade', preference:'Preferência', project:'Projeto', context:'Contexto', fact:'Fato', skill:'Habilidade' };
+    const ONTOLOGY_GROUPS = { 'Pertencimento':['belongs_to','owns','prefers'], 'Trabalho':['works_on','uses','depends_on'], 'Estrutura':['contains','created','runs_on'], 'Dados':['reads','writes'], 'Comum':['references','related_to'] };
+    const REL_LABELS = { belongs_to:'pertence a',owns:'possui',prefers:'prefere',works_on:'trabalha em',uses:'usa',runs_on:'executa em',references:'referencia',related_to:'relacionado',depends_on:'depende de',contains:'contém',created:'criou',preferred_by:'preferido por',has_contributor:'tem contribuidor',hosts:'hospeda',has_member:'tem membro',owned_by:'possuído por',used_by:'usado por',required_by:'exigido por',contained_in:'contido em',created_by:'criado por',read_by:'lido por',written_by:'escrito por' };
+    const ONTOLOGY_SUGGESTIONS = {
+      identity:{ identity:['related_to','belongs_to'], preference:['prefers','owns'], project:['works_on','owns'], skill:['uses','owns'], context:['uses','owns'], fact:['references','created'] },
+      preference:{ identity:['belongs_to'], project:['related_to'], skill:['related_to'] },
+      project:{ identity:['has_contributor'], project:['depends_on','related_to'], skill:['uses','depends_on'], context:['runs_on','contains'], fact:['references'] },
+      skill:{ identity:['used_by'], project:['related_to','used_by'], skill:['depends_on','related_to'], context:['runs_on','depends_on'] },
+      context:{ identity:['related_to'], project:['hosts','contains'], skill:['hosts','contains'] },
+      fact:{ identity:['related_to'], project:['related_to'], fact:['references','related_to'] }
+    };
+
+    let cy = null, allNodes = [], allEdges = [], showLabels = true;
+    let activeTypes = new Set(Object.keys(TYPE_COLORS));
+    let connectMode = false, connectSource = null, selectedNodeId = null;
+          document.getElementById('focusBtn').disabled = true;
+    let allNodesList = [], modalFrom = null, modalTo = null;
+    let dateFilter = { start: null, end: null };
+
+    function showToast(msg) { const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',3000); }
+    function esc(s) { const d=document.createElement('div'); d.textContent=String(s||''); return d.innerHTML; }
+
+    function toggleLeft() {
+      const sb = document.getElementById('leftSidebar');
+      const btn = document.getElementById('reopenLeft');
+      sb.classList.toggle('collapsed');
+      btn.style.display = sb.classList.contains('collapsed') ? 'flex' : 'none';
+      if (cy) setTimeout(() => cy.resize(), 300);
+    }
+    function toggleRight() {
+      const sb = document.getElementById('rightSidebar');
+      const btn = document.getElementById('reopenRight');
+      sb.classList.toggle('collapsed');
+      btn.style.display = sb.classList.contains('collapsed') ? 'flex' : 'none';
+      if (cy) setTimeout(() => cy.resize(), 300);
+    }
+
+    function populateRelations(id) {
+      const sel = document.getElementById(id);
+      sel.innerHTML = '<option value="">Selecionar...</option>';
+      for (const [g, rels] of Object.entries(ONTOLOGY_GROUPS)) {
+        const og = document.createElement('optgroup'); og.label = g;
+        for (const r of rels) { const o = document.createElement('option'); o.value = r; o.textContent = `${r} (${REL_LABELS[r]||r})`; og.appendChild(o); }
+        sel.appendChild(og);
+      }
+      const c = document.createElement('option'); c.value = 'custom'; c.textContent = '✏️ Customizado...'; sel.appendChild(c);
+    }
+    populateRelations('edgeRelation');
+    populateRelations('modalRelation');
+
+    function onRelationChange() {
+      document.getElementById('customRelationRow').style.display = document.getElementById('edgeRelation').value === 'custom' ? 'block' : 'none';
+    }
+
+    async function loadAllNodes() {
+      try { const r = await fetch('/api/memory/nodes?limit=200'); const d = await r.json(); if (d.success) allNodesList = d.nodes; } catch(e) {}
+    }
+    loadAllNodes();
+
+    function nodeLabelById(id) {
+      const node = allNodesList.find(n => n.id === id) || allNodes.find(n => n.id === id);
+      return node ? (node.name || node.id) : id;
+    }
+
+    function makeNodeId(name) {
+      const base = String(name || 'node')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 40) || 'node';
+      const candidate = `${base}_${Date.now().toString(36)}`;
+      return allNodesList.some(n => n.id === candidate) ? `${candidate}_${Math.floor(Math.random() * 999)}` : candidate;
+    }
+
+    function setMainEdgeDraft(fromId, toId) {
+      const fromNode = allNodesList.find(n => n.id === fromId);
+      const toNode = allNodesList.find(n => n.id === toId);
+      if (fromNode) {
+        document.getElementById('edgeFrom').value = fromNode.id;
+        document.getElementById('edgeFromSearch').value = `${fromNode.name || fromNode.id} (${fromNode.type})`;
+      }
+      if (toNode) {
+        document.getElementById('edgeTo').value = toNode.id;
+        document.getElementById('edgeToSearch').value = `${toNode.name || toNode.id} (${toNode.type})`;
+      }
+    }
+
+    function ensureRightSidebarOpen() {
+      const rsb = document.getElementById('rightSidebar');
+      rsb.classList.remove('collapsed');
+      document.getElementById('reopenRight').style.display = 'none';
+      if (cy) setTimeout(() => cy.resize(), 300);
+    }
+
+    function searchNodeFor(field) {
+      const input = document.getElementById(field === 'from' ? 'edgeFromSearch' : 'edgeToSearch');
+      const dropdown = document.getElementById(field === 'from' ? 'fromDropdown' : 'toDropdown');
+      const q = input.value.toLowerCase();
+      const filtered = allNodesList.filter(n => (n.name||'').toLowerCase().includes(q) || (n.id||'').toLowerCase().includes(q));
+      dropdown.innerHTML = filtered.slice(0,15).map(n =>
+        `<div onclick="selectNodeFor('${field}','${esc(n.id)}','${esc(n.name||n.id)}','${n.type}')" onmouseover="this.style.background='var(--accent-bg)'" onmouseout="this.style.background='transparent'">
+          <span style="color:var(--text-main);font-weight:500">${esc(n.name||n.id)}</span>
+          <span class="type-badge" style="background:${TYPE_BG[n.type]||'rgba(148,163,184,0.15)'};color:${TYPE_COLORS[n.type]||'#64748b'}">${n.type}</span>
+        </div>`
+      ).join('');
+      if (!filtered.length) dropdown.innerHTML = '<div style="color:var(--text-soft)">Nenhum nó</div>';
+      dropdown.style.display = 'block';
+    }
+    function selectNodeFor(field, id, name, type) {
+      document.getElementById(field === 'from' ? 'edgeFromSearch' : 'edgeToSearch').value = `${name} (${type})`;
+      document.getElementById(field === 'from' ? 'edgeFrom' : 'edgeTo').value = id;
+      document.getElementById(field === 'from' ? 'fromDropdown' : 'toDropdown').style.display = 'none';
+    }
+
+    function toggleDetailCustomRelation() {
+      const sel = document.getElementById('detailEdgeRelation');
+      const input = document.getElementById('detailEdgeRelationCustom');
+      const row = document.getElementById('detailCustomRelationRow');
+      if (!sel || !input || !row) return;
+      if (sel.value === 'custom') {
+        row.style.display = 'block';
+        input.focus();
+      } else {
+        row.style.display = 'none';
+        input.value = '';
+      }
+    }
+
+    function searchDetailEdgeTarget() {
+      const input = document.getElementById('detailEdgeToSearch');
+      const dropdown = document.getElementById('detailEdgeDropdown');
+      if (!input || !dropdown) return;
+      const q = input.value.toLowerCase();
+      const filtered = allNodesList.filter(n => (n.name || '').toLowerCase().includes(q) || (n.id || '').toLowerCase().includes(q));
+      dropdown.innerHTML = filtered.slice(0, 20).map(n =>
+        `<div class="edge-opt" onclick="selectDetailEdgeTarget('${esc(n.id)}','${esc(n.name || n.id)}','${n.type}')">
+          <span style="color:var(--text-main);font-weight:500;">${esc(n.name || n.id)}</span>
+          <span class="type-badge" style="margin-left:6px;background:${TYPE_BG[n.type] || 'rgba(148,163,184,0.15)'};color:${TYPE_COLORS[n.type] || '#64748b'}">${n.type}</span>
+          <span style="margin-left:4px;font-size:0.68rem;color:var(--text-soft)">${esc(n.id)}</span>
+        </div>`
+      ).join('');
+      if (!filtered.length) dropdown.innerHTML = '<div class="edge-opt" style="cursor:default;color:var(--text-soft)">Nenhum nó encontrado</div>';
+      dropdown.style.display = 'block';
+    }
+
+    function selectDetailEdgeTarget(id, name, type) {
+      const input = document.getElementById('detailEdgeToSearch');
+      const hidden = document.getElementById('detailEdgeTo');
+      const dropdown = document.getElementById('detailEdgeDropdown');
+      if (input) input.value = `${name} (${type})`;
+      if (hidden) hidden.value = id;
+      if (dropdown) dropdown.style.display = 'none';
+    }
+
+    function buildDetailRelations(id, edges) {
+      if (!edges.length) return '<span style="color:var(--text-muted);font-size:0.75rem;">Sem relações</span>';
+      return edges.map(e => {
+        const otherId = e.from_node === id ? e.to_node : e.from_node;
+        const dir = e.from_node === id ? '&rarr;' : '&larr;';
+        return '<div class="edge-item">' + dir +
+          ' <span class="edge-relation">' + esc(e.relation) + '</span> ' +
+          (dir === '&rarr;' ? '&rarr;' : '&larr;') +
+          ' <a href="#" onclick="selectGraphNode(\'' + esc(otherId) + '\');return false;">' + esc(otherId) + '</a>' +
+          ' <button onclick="deleteEdge(\'' + esc(e.from_node) + '\',\'' + esc(e.to_node) + '\',\'' + esc(e.relation) + '\')">✕</button></div>';
+      }).join('');
+    }
+
+    function toggleRelatedCustomRelation() {
+      const sel = document.getElementById('relatedNodeRelation');
+      const row = document.getElementById('relatedCustomRelationRow');
+      const input = document.getElementById('relatedNodeRelationCustom');
+      if (!sel || !row || !input) return;
+      if (sel.value === 'custom') {
+        row.style.display = 'block';
+        input.focus();
+      } else {
+        row.style.display = 'none';
+        input.value = '';
+      }
+    }
+
+    async function renderNodeDetails(id) {
+      ensureRightSidebarOpen();
+      const rc = document.getElementById('rightContent');
+      rc.innerHTML = '<div style="color:var(--text-muted);font-size:0.85rem;text-align:center;padding:20px;">Carregando detalhes...</div>';
+      try {
+        const r = await fetch('/api/memory/nodes/' + encodeURIComponent(id));
+        const contentType = r.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+           rc.innerHTML = `<div style="color:var(--text-error);padding:15px;background:var(--bg-error-light);border-radius:6px;font-size:0.85rem;">Erro Fatal: Resposta do servidor não foi em JSON. (Status: ${r.status})</div>`;
+           return;
+        }
+        
+        const d = await r.json();
+        if (!d.success) {
+           rc.innerHTML = `<div style="color:var(--text-error);padding:15px;background:var(--bg-error-light);border-radius:6px;font-size:0.85rem;">⚠️ Falha na API: ${esc(d.error || 'Erro desconhecido')}</div>`;
+           return;
+        }
+        const n = d.node;
+        const edges = d.edges || [];
+        const type = n.type || 'fact';
+        document.getElementById('rightContent').innerHTML =
+          `<div id="detailPanel" class="detail-form">
+            <div class="detail-id">${esc(n.id)} <span class="node-type ${type}" style="margin-left:8px">${type}</span></div>
+            <input id="editName" class="detail-input" value="${esc(n.name || '')}" placeholder="Nome do nó">
+            <select id="editType" class="detail-select">
+              ${['identity','preference','project','context','fact','skill'].map(t => `<option value="${t}" ${t === type ? 'selected' : ''}>${t}</option>`).join('')}
+            </select>
+            <textarea id="editContent" class="detail-textarea" placeholder="Conteúdo do nó">${esc(n.content || '')}</textarea>
+            <div class="detail-actions">
+              <button class="detail-btn" onclick="saveNode('${esc(n.id)}')">Salvar</button>
+              <button class="detail-btn" onclick="exportNodeDetails('${esc(n.id)}')">📄 Exportar</button>
+              <button class="detail-btn danger" onclick="deleteNode('${esc(n.id)}')">Deletar</button>
+            </div>
+            ${n.metadata ? `<div class="detail-meta">Meta: ${esc(typeof n.metadata === 'string' ? n.metadata : JSON.stringify(n.metadata))}</div>` : ''}
+            <div class="edge-list">
+              <div class="detail-section-title">Relações (${edges.length})</div>
+              ${buildDetailRelations(n.id, edges)}
+            </div>
+            <div class="edge-list">
+              <div class="detail-section-title">Adicionar relação</div>
+              <div class="input-group">
+                <label>De:</label>
+                <input class="detail-input" value="${esc(n.name || n.id)} (${type})" disabled>
+              </div>
+              <div class="input-group">
+                <label>Tipo:</label>
+                <select id="detailEdgeRelation" class="detail-select" onchange="toggleDetailCustomRelation()"></select>
+              </div>
+              <div class="input-group" id="detailCustomRelationRow" style="display:none;">
+                <input id="detailEdgeRelationCustom" class="detail-input" placeholder="Relação customizada...">
+              </div>
+              <div class="input-group" style="position:relative;">
+                <label>Para:</label>
+                <input id="detailEdgeToSearch" class="detail-input" placeholder="Buscar nó..." autocomplete="off" oninput="searchDetailEdgeTarget()" onfocus="searchDetailEdgeTarget()">
+                <input type="hidden" id="detailEdgeTo">
+                <div id="detailEdgeDropdown" class="search-dropdown"></div>
+              </div>
+              <button class="detail-btn" onclick="addDetailEdge('${esc(n.id)}')">Adicionar Relação</button>
+            </div>
+            <div class="edge-list">
+              <div class="detail-section-title">Criar no relacionado</div>
+              <div class="input-group">
+                <label>Nome:</label>
+                <input id="relatedNodeName" class="detail-input" placeholder="Ex.: API de pagamento">
+              </div>
+              <div class="input-group">
+                <label>Tipo:</label>
+                <select id="relatedNodeType" class="detail-select">
+                  ${['identity','preference','project','context','fact','skill'].map(t => `<option value="${t}" ${t === type ? 'selected' : ''}>${t}</option>`).join('')}
+                </select>
+              </div>
+              <div class="input-group">
+                <label>Relacao:</label>
+                <select id="relatedNodeRelation" class="detail-select"></select>
+              </div>
+              <div class="input-group" id="relatedCustomRelationRow" style="display:none;">
+                <input id="relatedNodeRelationCustom" class="detail-input" placeholder="Relacao customizada...">
+              </div>
+              <div class="input-group">
+                <label>Conteudo:</label>
+                <textarea id="relatedNodeContent" class="detail-textarea" style="min-height:110px;" placeholder="Resumo curto do novo no"></textarea>
+              </div>
+              <button class="detail-btn" onclick="createRelatedNode('${esc(n.id)}')">Criar e conectar</button>
+            </div>
+          </div>`;
+        populateRelations('detailEdgeRelation');
+        populateRelations('relatedNodeRelation');
+        document.getElementById('relatedNodeRelation').value = 'related_to';
+        document.getElementById('relatedNodeRelation').addEventListener('change', toggleRelatedCustomRelation);
+      } catch (e) {
+        console.error(e);
+        document.getElementById('rightContent').innerHTML = `<div style="color:var(--text-error);padding:15px;background:var(--bg-error-light);border-radius:6px;font-size:0.85rem;">⚠️ Erro JavaScript ao renderizar: ${esc(e.message)}</div>`;
+      }
+    }
+    document.addEventListener('click', e => {
+      ['from','to'].forEach(f => {
+        const dd = document.getElementById(f === 'from' ? 'fromDropdown' : 'toDropdown');
+        const inp = document.getElementById(f === 'from' ? 'edgeFromSearch' : 'edgeToSearch');
+        if (dd && inp && !dd.contains(e.target) && e.target !== inp) dd.style.display = 'none';
+      });
+      const detailDropdown = document.getElementById('detailEdgeDropdown');
+      const detailInput = document.getElementById('detailEdgeToSearch');
+      if (detailDropdown && detailInput && !detailDropdown.contains(e.target) && e.target !== detailInput) {
+        detailDropdown.style.display = 'none';
+      }
+    });
+
+    async function createEdge() {
+      const from = document.getElementById('edgeFrom').value;
+      const to = document.getElementById('edgeTo').value;
+      const sel = document.getElementById('edgeRelation');
+      let relation = sel.value === 'custom' ? document.getElementById('customRelation').value.trim() : sel.value;
+      if (!from || !to) { showToast('Selecione os nós De e Para'); return; }
+      if (!relation) { showToast('Selecione o tipo de relação'); return; }
+      try {
+        const r = await fetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from,to,relation}) });
+        const d = await r.json();
+        if (d.success) { loadGraph(); showToast('✅ Relação criada!'); } else showToast('❌ ' + d.error);
+      } catch(e) { showToast('❌ ' + e.message); }
+    }
+
+    function toggleConnect() {
+      connectMode = !connectMode; connectSource = null;
+      const btn = document.getElementById('connectBtn');
+      if (connectMode) { btn.classList.add('active'); btn.textContent = '✖ Cancelar'; cy.nodes().addClass('connecting'); showToast('🔗 Clique no nó de ORIGEM'); }
+      else { exitConnectMode(); }
+    }
+    function exitConnectMode() {
+      connectMode = false; connectSource = null;
+      cy.nodes().removeClass('connecting connect-source');
+      const btn = document.getElementById('connectBtn');
+      btn.classList.remove('active'); btn.textContent = '🔗 Conectar';
+    }
+
+    function getSuggestions(fromType, toType) { const m = ONTOLOGY_SUGGESTIONS[fromType] || {}; return m[toType] || ['related_to','references']; }
+
+    function showRelationModal(fromId, fromType, toId, toType) {
+      const fromName = cy.getElementById(fromId).data('name') || fromId;
+      const toName = cy.getElementById(toId).data('name') || toId;
+      modalFrom = fromId; modalTo = toId;
+      const suggestions = getSuggestions(fromType, toType);
+      const sel = document.getElementById('modalRelation');
+      sel.innerHTML = suggestions.map(r => `<option value="${r}">⭐ ${r} (${REL_LABELS[r]||r})</option>`).join('') +
+        '<option disabled>──────────</option>' +
+        Object.keys(REL_LABELS).filter(r => !suggestions.includes(r)).map(r => `<option value="${r}">${r} (${REL_LABELS[r]||r})</option>`).join('') +
+        '<option value="__custom">✏️ Customizado...</option>';
+      sel.onchange = () => { document.getElementById('modalCustomRow').style.display = sel.value === '__custom' ? 'block' : 'none'; };
+      document.getElementById('modalNodeInfo').innerHTML =
+        `<span style="font-weight:600">${esc(fromName)}</span> <span class="type-badge" style="background:${TYPE_BG[fromType]};color:${TYPE_COLORS[fromType]}">${fromType}</span> → <span style="font-weight:600">${esc(toName)}</span> <span class="type-badge" style="background:${TYPE_BG[toType]};color:${TYPE_COLORS[toType]}">${toType}</span>`;
+      document.getElementById('relationModal').style.display = 'flex';
+      document.getElementById('modalCustomRow').style.display = 'none';
+    }
+    function closeModal() { document.getElementById('relationModal').style.display = 'none'; modalFrom=null; modalTo=null; }
+    async function confirmModal() {
+      let rel = document.getElementById('modalRelation').value;
+      if (rel === '__custom') { rel = document.getElementById('modalCustomRelation').value.trim(); if (!rel) { showToast('Digite a relação'); return; } }
+      try {
+        const r = await fetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:modalFrom,to:modalTo,relation:rel}) });
+        const d = await r.json();
+        if (d.success) { loadGraph(); closeModal(); showToast('✅ Relação criada!'); } else showToast('❌ ' + d.error);
+      } catch(e) { showToast('❌ ' + e.message); }
+    }
+
+    function renderLegend() {
+      document.getElementById('legendContainer').innerHTML = Object.entries(TYPE_COLORS).map(([type,color]) =>
+        `<span class="legend-item ${activeTypes.has(type)?'':'inactive'}" onclick="toggleType('${type}')">
+          <span class="legend-dot" style="background:${color}"></span>${TYPE_LABELS[type]||type}</span>`
+      ).join('');
+    }
+    function toggleType(type) { if (activeTypes.has(type)) activeTypes.delete(type); else activeTypes.add(type); renderLegend(); renderGraph(allNodes, allEdges); }
+
+    function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+    // ── Node Search ──
+    function onSearchNodes(query) {
+      const dd = document.getElementById('searchDropdown');
+      if (!query || query.length < 2) { dd.style.display = 'none'; return; }
+      const q = query.toLowerCase();
+      const matches = allNodes.filter(n => n.name.toLowerCase().includes(q) || (n.content||'').toLowerCase().includes(q) || (n.id||'').toLowerCase().includes(q)).slice(0, 15);
+      if (!matches.length) { dd.innerHTML = '<div style="padding:8px;color:var(--text-muted);font-size:0.75rem;">Nenhum resultado</div>'; dd.style.display = 'block'; return; }
+      dd.innerHTML = matches.map(n => {
+        const color = TYPE_COLORS[n.type] || '#64748b';
+        return `<div onmousedown="jumpToNode('${n.id}')" style="display:flex;align-items:center;gap:6px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0;"></span>
+          <span style="font-weight:600;color:var(--text-main);font-size:0.78rem;">${escHtml(n.name)}</span>
+          <span style="color:var(--text-soft);font-size:0.65rem;">${TYPE_LABELS[n.type]||n.type}</span>
+        </div>`;
+      }).join('');
+      dd.style.display = 'block';
+    }
+    function jumpToNode(id) {
+      document.getElementById('searchDropdown').style.display = 'none';
+      if (!cy) return;
+      const node = cy.getElementById(id);
+      if (!node || !node.length) return;
+      cy.animate({ fit: { eles: node, padding: 80 } }, { duration: 400 });
+      node.addClass('highlighted');
+      setTimeout(() => node.removeClass('highlighted'), 2500);
+      selectGraphNode(id);
+    }
+    function clearNodeSearch() {
+      document.getElementById('searchNodes').value = '';
+      document.getElementById('searchDropdown').style.display = 'none';
+    }
+
+    async function loadGraph() {
+      try {
+        const r = await fetch('/api/memory/graph');
+        const d = await r.json();
+        if (!d.success) return;
+        allNodes = d.nodes;
+        allEdges = d.edges;
+        renderGraph(allNodes, allEdges);
+        loadAllNodes();
+      } catch(e) { console.error(e); }
+    }
+
+    function renderGraph(nodes, edges) {
+      const nodeIds = new Set(nodes.map(n => n.id));
+      const validEdges = edges.filter(e => nodeIds.has(e.from_node) && nodeIds.has(e.to_node));
+      const fNodes = nodes.filter(n => activeTypes.has(n.type) && (!dateFilter.start || (n.created_at && new Date(n.created_at) >= dateFilter.start)) && (!dateFilter.end || (n.created_at && new Date(n.created_at) <= dateFilter.end)));
+      const fEdges = validEdges.filter(e => activeTypes.has(nodes.find(n=>n.id===e.from_node)?.type) && activeTypes.has(nodes.find(n=>n.id===e.to_node)?.type));
+
+      // Compute degree centrality for node sizing
+      const degreeMap = {};
+      fNodes.forEach(n => degreeMap[n.id] = 0);
+      fEdges.forEach(e => { degreeMap[e.from_node] = (degreeMap[e.from_node]||0)+1; degreeMap[e.to_node] = (degreeMap[e.to_node]||0)+1; });
+      const maxDegree = Math.max(1, ...Object.values(degreeMap));
+
+      // Compute PageRank for importance-based sizing
+      let pageRankScores = {};
+      try {
+        const tempCy = cytoscape({ elements: [...fNodes.map(n => ({ data: { id: n.id } })), ...fEdges.map((e,i) => ({ data: { id: 'te'+i, source: e.from_node, target: e.to_node } }))] });
+        const pr = tempCy.elements().pageRank({ dampingFactor: 0.85, precision: 1e-6 });
+        fNodes.forEach(n => pageRankScores[n.id] = pr.rank(tempCy.getElementById(n.id)) || 0);
+        tempCy.destroy();
+      } catch(e) { fNodes.forEach(n => pageRankScores[n.id] = 0); }
+      const maxPR = Math.max(0.001, ...Object.values(pageRankScores));
+      const minSize = 28, maxSize = 56;
+
+      document.getElementById('nodeCount').textContent = `${fNodes.length} nós, ${fEdges.length} arestas`;
+      const els = [
+        ...fNodes.map(n => {
+          const deg = degreeMap[n.id] || 0;
+          const pr = pageRankScores[n.id] || 0;
+          const importance = (deg / maxDegree) * 0.4 + (pr / maxPR) * 0.6;
+          const size = minSize + importance * (maxSize - minSize);
+          const color = TYPE_COLORS[n.type] || '#64748b';
+          return { data: { id: n.id, label: n.name||n.id, type: n.type, name: n.name||n.id, content: n.content||'', degree: deg, pagerank: pr.toFixed(4), size: size, nodeColor: color, weight: 1 }, classes: 'type-'+n.type };
+        }),
+        ...fEdges.map((e,i) => {
+          const w = e.weight||1;
+          return { data: { id: 'e'+i, source: e.from_node, target: e.to_node, relation: e.relation, weight: w, edgeWidth: Math.max(2, Math.min(8, w*1.5)), edgeOpacity: Math.max(0.3, Math.min(0.8, w*0.3)) } };
+        })
+      ];
+      if (cy) cy.destroy();
+
+      // Build static stylesheet — no mapper functions to avoid style bypass warnings
+      const typeStyles = Object.entries(TYPE_COLORS).map(([type, color]) => ({
+        selector: '.type-'+type, style: { 'background-color': color, 'border-color': color }
+      }));
+
+      cy = cytoscape({
+        container: document.getElementById('cy'), elements: els,
+        style: [
+          { selector:'node', style:{ 'label':showLabels?'data(label)':'', 'text-wrap':'wrap','text-max-width':'120px','font-size':10,'font-family':'var(--font-family)','font-weight':600,'color':'#fff','text-outline-color':'rgba(10, 18, 33, 0.8)','text-outline-width':2,'text-valign':'center','text-halign':'center','width':'data(size)','height':'data(size)','background-color':'data(nodeColor)','border-width':2,'border-color':'#fff','border-opacity':0.3 } },
+          { selector:'edge', style:{ 'width':'data(edgeWidth)','line-color':'rgba(148,163,184,0.3)','curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'rgba(148,163,184,0.3)','label':showLabels?'data(relation)':'','font-size':8,'font-family':'var(--font-family)','font-weight':500,'color':'var(--text-soft)','text-rotation':'autorotate','text-margin-y':-6,'text-outline-color':'var(--bg-base)','text-outline-width':2,'text-opacity':showLabels?0.8:0 } },
+          ...typeStyles,
+          { selector:'.faded', style:{'opacity':0.1,'filter':'grayscale(1)'} },
+          { selector:'.highlighted', style:{'border-width':3,'border-color':'var(--accent)','border-opacity':1,'opacity':1,'z-index':999} },
+          { selector:'.connecting', style:{'border-width':3,'border-color':'var(--accent)','border-opacity':0.8,'opacity':1} },
+          { selector:'.connect-source', style:{'border-width':4,'border-color':'var(--accent)','border-opacity':1,'opacity':1,'background-color':'var(--accent)'} },
+          { selector:'.hovered', style:{'border-width':3,'border-color':'#fff','border-opacity':0.8} }
+        ],
+        layout: { name:'cose', animate:true, animationDuration:500, nodeRepulsion:8000, idealEdgeLength:100, gravity:0.3 },
+        autoungrabify: false, userZoomingEnabled: true, userPanningEnabled: true, minZoom: 0.3, maxZoom: 3
+      });
+
+      cy.on('mouseover','node',e=>{
+        const n = e.target;
+        n.addClass('hovered');
+      });
+      cy.on('mouseout','node',e=>{ e.target.removeClass('hovered'); });
+
+      cy.on('tap','node', async evt => {
+        const node = evt.target, id = node.id(), type = node.data('type');
+        if (connectMode) {
+          if (!connectSource) { connectSource=node; node.addClass('connect-source'); showToast('🔗 Clique no DESTINO'); }
+          else if (connectSource.id()!==id) { showRelationModal(connectSource.id(),connectSource.data('type')||'fact',id,type||'fact'); exitConnectMode(); }
+          return;
+        }
+        // Show details in right sidebar
+        cy.elements().addClass('faded'); node.removeClass('faded');
+        node.connectedEdges().removeClass('faded'); node.connectedEdges().connectedNodes().removeClass('faded');
+        // Auto-focus: zoom to selected node
+        cy.animate({ center: { eles: node }, zoom: Math.max(cy.zoom(), 1.5) }, { duration: 400 });
+        node.addClass('highlighted'); node.connectedEdges().connectedNodes().addClass('highlighted');
+        selectedNodeId = id;
+        document.getElementById('focusBtn').disabled = false;
+        ensureRightSidebarOpen();
+        await renderNodeDetails(id);
+      });
+
+      cy.on('tap', evt => {
+        if (evt.target===cy) {
+          if (connectMode) { exitConnectMode(); return; }
+          cy.elements().removeClass('faded highlighted');
+          document.getElementById('rightSidebar').classList.add('collapsed');
+          document.getElementById('reopenRight').style.display = 'flex';
+          setTimeout(() => cy.resize(), 300);
+          selectedNodeId = null;
+          document.getElementById('focusBtn').disabled = true;
+        }
+      });
+
+      cy.on('cxttap','edge', evt => {
+        const edge = evt.target, relation = edge.data('relation')||'related_to';
+        if (confirm(`Remover relação "${relation}"?`)) {
+          fetch('/api/memory/edges',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({from:edge.data('source'),to:edge.data('target'),relation})})
+          .then(r=>r.json()).then(d=>{if(d.success)cy.remove(edge);});
+        }
+      });
+
+      renderLegend();
+    }
+
+    function selectGraphNode(id) { if(cy) { const n = cy.getElementById(id); if(n.length) cy.emit('tap',{target:n}); } }
+    async function saveNode(id) {
+      const name = document.getElementById('editName')?.value || '';
+      const type = document.getElementById('editType')?.value || 'fact';
+      const content = document.getElementById('editContent')?.value || '';
+      try {
+        const r = await fetch('/api/memory/nodes/' + encodeURIComponent(id), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, type, content })
+        });
+        const d = await r.json();
+        if (!d.success) {
+          showToast('Erro ao salvar: ' + (d.error || 'falha desconhecida'));
+          return;
+        }
+        await loadAllNodes();
+        await loadGraph();
+        showToast('No salvo');
+        selectedNodeId = id;
+        selectGraphNode(id);
+      } catch (e) {
+        showToast('Erro ao salvar: ' + e.message);
+      }
+    }
+
+    async function deleteNode(id) {
+      if (!confirm('Deletar no "' + id + '" e todas as relacoes?')) return;
+      try {
+        const r = await fetch('/api/memory/nodes/' + encodeURIComponent(id), { method: 'DELETE' });
+        const d = await r.json();
+        if (!d.success) {
+          showToast('Erro ao deletar: ' + (d.error || 'falha desconhecida'));
+          return;
+        }
+        selectedNodeId = null;
+        document.getElementById('rightSidebar').classList.add('collapsed');
+        document.getElementById('reopenRight').style.display = 'flex';
+        document.getElementById('rightContent').innerHTML = '<p style="color:var(--text-muted);font-size:0.8rem;">Clique em um no para ver detalhes.</p>';
+        await loadAllNodes();
+        await loadGraph();
+        showToast('No deletado');
+      } catch (e) {
+        showToast('Erro ao deletar: ' + e.message);
+      }
+    }
+
+    async function addDetailEdge(fromId) {
+      const to = document.getElementById('detailEdgeTo')?.value;
+      const sel = document.getElementById('detailEdgeRelation');
+      let relation = sel?.value === 'custom'
+        ? document.getElementById('detailEdgeRelationCustom')?.value.trim()
+        : sel?.value;
+      if (!to) { showToast('Selecione o no de destino'); return; }
+      if (!relation) { showToast('Selecione o tipo de relacao'); return; }
+      try {
+        const r = await fetch('/api/memory/edges', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: fromId, to, relation })
+        });
+        const d = await r.json();
+        if (!d.success) {
+          showToast('Erro ao criar relacao: ' + (d.error || 'falha desconhecida'));
+          return;
+        }
+        await loadGraph();
+        showToast('Relacao criada');
+        selectGraphNode(fromId);
+      } catch (e) {
+        showToast('Erro ao criar relacao: ' + e.message);
+      }
+    }
+
+    async function createRelatedNode(fromId) {
+      const name = document.getElementById('relatedNodeName')?.value.trim();
+      const type = document.getElementById('relatedNodeType')?.value || 'fact';
+      const relationSel = document.getElementById('relatedNodeRelation');
+      const content = document.getElementById('relatedNodeContent')?.value.trim() || '';
+      const relation = relationSel?.value === 'custom'
+        ? document.getElementById('relatedNodeRelationCustom')?.value.trim()
+        : relationSel?.value;
+      if (!name) { showToast('Digite o nome do novo no'); return; }
+      if (!relation) { showToast('Selecione a relacao'); return; }
+
+      const id = makeNodeId(name);
+      try {
+        const createRes = await fetch('/api/memory/nodes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, type, name, content })
+        });
+        const createData = await createRes.json();
+        if (!createData.success) {
+          showToast('Erro ao criar no: ' + (createData.error || 'falha desconhecida'));
+          return;
+        }
+
+        const edgeRes = await fetch('/api/memory/edges', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: fromId, to: id, relation })
+        });
+        const edgeData = await edgeRes.json();
+        if (!edgeData.success) {
+          showToast('No criado, mas houve erro ao conectar: ' + (edgeData.error || 'falha desconhecida'));
+          return;
+        }
+
+        await loadAllNodes();
+        await loadGraph();
+        showToast('No relacionado criado');
+        selectGraphNode(id);
+      } catch (e) {
+        showToast('Erro ao criar no relacionado: ' + e.message);
+      }
+    }
+
+    function openCreateNodeModal() {
+      document.getElementById('newNodeName').value = '';
+      document.getElementById('newNodeContent').value = '';
+      document.getElementById('newNodeType').value = 'fact';
+      document.getElementById('nodeModal').style.display = 'flex';
+    }
+
+    function closeCreateNodeModal() {
+      document.getElementById('nodeModal').style.display = 'none';
+    }
+
+    async function createNode() {
+      const name = document.getElementById('newNodeName')?.value.trim();
+      const type = document.getElementById('newNodeType')?.value || 'fact';
+      const content = document.getElementById('newNodeContent')?.value.trim() || '';
+      if (!name) { showToast('Digite o nome do nó'); return; }
+      const id = makeNodeId(name);
+      try {
+        const r = await fetch('/api/memory/nodes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, type, name, content })
+        });
+        const d = await r.json();
+        if (!d.success) {
+          showToast('Erro ao criar nó: ' + (d.error || 'falha desconhecida'));
+          return;
+        }
+        closeCreateNodeModal();
+        await loadAllNodes();
+        await loadGraph();
+        showToast('Nó criado');
+        selectGraphNode(id);
+      } catch (e) {
+        showToast('Erro ao criar nó: ' + e.message);
+      }
+    }
+
+    async function deleteEdge(from,to,relation) {
+      if (!confirm(`Remover relação ${from} —${relation}→ ${to}?`)) return;
+      try { const r = await fetch('/api/memory/edges',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({from,to,relation})}); const d = await r.json();
+        if (d.success && selectedNodeId) { loadGraph().then(() => selectGraphNode(selectedNodeId)); } else if (d.error) showToast('❌ '+d.error);
+      } catch(e) { showToast('❌ '+e.message); }
+    }
+
+    function resetLayout() { if(cy) cy.layout({name:'cose',animate:true,animationDuration:500}).run(); }
+    function toggleLabels() { showLabels=!showLabels; renderGraph(allNodes,allEdges); }
+    function zoomIn() { if(cy) cy.zoom(cy.zoom()*1.3); }
+    function zoomOut() { if(cy) cy.zoom(cy.zoom()/1.3); }
+
+    function applyDateFilter() {
+      const from = document.getElementById('dateFrom').value;
+      const to = document.getElementById('dateTo').value;
+      dateFilter.start = from ? new Date(from) : null;
+      dateFilter.end = to ? new Date(to + 'T23:59:59') : null;
+      renderGraph(allNodes, allEdges);
+    }
+    function clearDateFilter() {
+      document.getElementById('dateFrom').value = '';
+      document.getElementById('dateTo').value = '';
+      dateFilter = { start: null, end: null };
+      renderGraph(allNodes, allEdges);
+    }
+
+    // ── Semantic Search ──
+    function toggleSearch() {
+      const m = document.getElementById('searchModal');
+      m.style.display = m.style.display === 'flex' ? 'none' : 'flex';
+      if (m.style.display === 'flex') document.getElementById('semanticSearch').focus();
+    }
+    function closeSearchModal() { document.getElementById('searchModal').style.display = 'none'; }
+
+    async function semanticSearchHandler() {
+      const q = document.getElementById('semanticSearch').value.toLowerCase().trim();
+      const results = document.getElementById('searchResults');
+      if (!q) { results.innerHTML = '<span style="color:var(--text-muted)">Digite para buscar...</span>'; return; }
+
+      // Fuzzy search: name, content, type, id
+      const nodeResults = allNodesList.filter(n =>
+        (n.name||'').toLowerCase().includes(q) ||
+        (n.content||'').toLowerCase().includes(q) ||
+        (n.type||'').toLowerCase().includes(q) ||
+        (n.id||'').toLowerCase().includes(q)
+      ).slice(0, 20);
+
+      // Also search edges by relation
+      const edgeResults = allEdges.filter(e => (e.relation||'').toLowerCase().includes(q)).slice(0, 10);
+
+      let html = '';
+      if (nodeResults.length > 0) {
+        html += `<div style="font-size:0.72rem;color:var(--accent);font-weight:600;margin-bottom:4px;">NÓS (${nodeResults.length})</div>`;
+        nodeResults.forEach(n => {
+          const color = TYPE_COLORS[n.type] || '#64748b';
+          html += `<div onclick="selectGraphNode('${esc(n.id)}');closeSearchModal();" style="padding:8px;margin:2px 0;border-radius:6px;cursor:pointer;background:var(--bg-input);border:1px solid var(--border-color);">
+            <span style="color:${color};font-weight:600;">${esc(n.name||n.id)}</span>
+            <span style="font-size:0.65rem;color:var(--text-muted);margin-left:6px;">${n.type}</span>
+            <div style="font-size:0.7rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc((n.content||'').slice(0,80))}</div>
+          </div>`;
+        });
+      }
+      if (edgeResults.length > 0) {
+        html += `<div style="font-size:0.72rem;color:var(--accent);font-weight:600;margin:8px 0 4px;">ARESTAS (${edgeResults.length})</div>`;
+        edgeResults.forEach(e => {
+          html += `<div style="padding:4px 8px;font-size:0.75rem;color:var(--text-muted);">${esc(e.from_node)} → <span style="color:var(--accent)">${esc(e.relation)}</span> → ${esc(e.to_node)}</div>`;
+        });
+      }
+      if (!html) html = '<span style="color:var(--text-muted)">Nenhum resultado</span>';
+      results.innerHTML = html;
+    }
+
+    function selectGraphNode(id) {
+      if (!cy) return;
+      const node = cy.getElementById(id);
+      if (node.length) {
+        cy.elements().removeClass('highlighted faded');
+        cy.animate({ center: { eles: node }, zoom: Math.max(cy.zoom(), 1.5) }, { duration: 400 });
+        renderNodeDetails(id);
+      }
+    }
+
+    // ── Analytics Modal ──
+    function toggleAnalytics() {
+      const m = document.getElementById('analyticsModal');
+      m.style.display = m.style.display === 'none' ? 'block' : 'none';
+      if (m.style.display === 'block') openAnalytics();
+    }
+    function closeAnalyticsModal() { document.getElementById('analyticsModal').style.display = 'none'; }
+
+    // Analytics now uses openAnalytics() from the modal
+
+    let clustered = false;
+    function toggleCluster() {
+      if (!cy) return;
+      clustered = !clustered;
+      const btn = document.getElementById('clusterBtn');
+      if (clustered) {
+        btn.textContent = '📌'; btn.title = 'Desagrupar';
+        cy.nodes().forEach(n => {
+          const type = n.data('type');
+          n.style('parent', 'cluster_' + type);
+        });
+        // Create compound nodes for each type
+        const clusterNodes = [];
+        Object.keys(TYPE_LABELS).forEach(type => {
+          if (activeTypes.has(type)) {
+            clusterNodes.push({ data: { id: 'cluster_' + type, label: TYPE_LABELS[type], type: type } });
+          }
+        });
+        // Remove existing cluster nodes first
+        cy.remove(cy.nodes().filter(n => n.id().startsWith('cluster_')));
+        cy.add(clusterNodes);
+        // Re-add parent references
+        cy.nodes().filter(n => !n.id().startsWith('cluster_')).forEach(n => {
+          n.move({ parent: 'cluster_' + n.data('type') });
+        });
+        cy.layout({ name: 'cose', animate: true, animationDuration: 500 }).run();
+        showToast('🗂️ Agrupado por tipo');
+      } else {
+        btn.textContent = '🗂️'; btn.title = 'Agrupar por tipo';
+        cy.nodes().forEach(n => { try { n.move({ parent: null }); } catch(e) {} });
+        cy.remove(cy.nodes().filter(n => n.id().startsWith('cluster_')));
+        cy.layout({ name: 'cose', animate: true, animationDuration: 500 }).run();
+        showToast('📌 Desagrupado');
+      }
+    }
+
+    function findPath() {
+      if (!cy) return;
+      const fromId = prompt('Nó de origem (ID ou nome):');
+      if (!fromId) return;
+      const toId = prompt('Nó de destino (ID ou nome):');
+      if (!toId) return;
+      const fromNode = cy.nodes().find(n => n.id() === fromId || (n.data('name')||'').toLowerCase().includes(fromId.toLowerCase()));
+      const toNode = cy.nodes().find(n => n.id() === toId || (n.data('name')||'').toLowerCase().includes(toId.toLowerCase()));
+      if (!fromNode || !toNode) { showToast('❌ Nó não encontrado'); return; }
+      const dijkstra = cy.elements().dijkstra(fromNode, () => 1);
+      const path = dijkstra.pathTo(toNode);
+      if (path && path.length > 0) {
+        cy.elements().addClass('faded');
+        path.forEach(el => el.removeClass('faded').addClass('highlighted'));
+        cy.animate({ center: { eles: path }, zoom: 1.2 }, { duration: 400 });
+        showToast(`🛤️ Caminho encontrado: ${path.filter(e => e.isNode()).map(e => e.data('name')).join(' → ')}`);
+      } else {
+        showToast('❌ Nenhum caminho encontrado');
+      }
+    }
+    function exportPNG(scale) {
+      if(!cy) return;
+      const s = scale || 2;
+      showToast(`Gerando PNG ${s}x...`);
+      const dataUrl=cy.png({output:'base64uri',bg:'#0f172a',full:true,scale:s});
+      const a=document.createElement('a');
+      a.href=dataUrl;
+      a.download=`newclaw-graph-${s}x.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+    function exportJSON() { if(!cy) return; const a=document.createElement('a'); a.href='data:application/json,'+encodeURIComponent(JSON.stringify({nodes:allNodes,edges:allEdges},null,2)); a.download='newclaw-graph.json'; a.click(); }
+    function exportSVG() {
+      if(!cy) return;
+      showToast('Gerando SVG fiel...');
+      const bb = cy.elements().boundingBox();
+      const pad = 80;
+      const vw = bb.w + pad*2, vh = bb.h + pad*2;
+      const bg = '#0f172a';
+
+      let svg = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n`;
+      svg += `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${bb.x1 - pad} ${bb.y1 - pad} ${vw} ${vh}" width="${vw}" height="${vh}">\n`;
+      svg += `<rect x="${bb.x1 - pad}" y="${bb.y1 - pad}" width="${vw}" height="${vh}" fill="${bg}"/>\n`;
+
+      // Edges first
+      cy.edges().forEach(e => {
+        const sPos = e.source().position(), tPos = e.target().position();
+        svg += `  <line x1="${sPos.x}" y1="${sPos.y}" x2="${tPos.x}" y2="${tPos.y}" stroke="rgba(148,163,184,0.4)" stroke-width="${e.data('edgeWidth')||2}" stroke-linecap="round"/>\n`;
+        // Simple arrow head
+        const angle = Math.atan2(tPos.y - sPos.y, tPos.x - sPos.x);
+        const arrowLen = 10, arrowSide = 0.5;
+        const ax1 = tPos.x - arrowLen * Math.cos(angle - arrowSide);
+        const ay1 = tPos.y - arrowLen * Math.sin(angle - arrowSide);
+        const ax2 = tPos.x - arrowLen * Math.cos(angle + arrowSide);
+        const ay2 = tPos.y - arrowLen * Math.sin(angle + arrowSide);
+        svg += `  <path d="M ${tPos.x} ${tPos.y} L ${ax1} ${ay1} L ${ax2} ${ay2} Z" fill="rgba(148,163,184,0.4)"/>\n`;
+      });
+
+      // Nodes
+      cy.nodes().forEach(n => {
+        if (n.id().startsWith('cluster_')) return;
+        const pos = n.position(), size = n.data('size') || 36, color = n.data('nodeColor') || '#64748b';
+        svg += `  <circle cx="${pos.x}" cy="${pos.y}" r="${size/2}" fill="${color}" stroke="#fff" stroke-width="2" stroke-opacity="0.3"/>\n`;
+        if (showLabels) {
+          svg += `  <text x="${pos.x}" y="${pos.y + 4}" text-anchor="middle" fill="#fff" font-family="Inter, sans-serif" font-size="10" font-weight="600" style="text-shadow: 0 1px 4px rgba(0,0,0,0.8)">${esc(n.data('name'))}</text>\n`;
+        }
+      });
+
+      svg += `</svg>`;
+      const a = document.createElement('a');
+      a.href = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+      a.download = 'newclaw-graph.svg';
+      a.click();
+    }
+
+    async function exportNodeDetails(id) {
+      try {
+        const r = await fetch('/api/memory/nodes/' + encodeURIComponent(id));
+        const d = await r.json();
+        if (!d.success) return;
+        const n = d.node;
+        const edges = d.edges || [];
+        let md = `# Nó: ${n.name || n.id}\n\n`;
+        md += `**ID:** \`${n.id}\`  \n`;
+        md += `**Tipo:** ${n.type}  \n`;
+        md += `**Criado em:** ${n.created_at || 'N/A'}  \n\n`;
+        md += `## Conteúdo\n${n.content || '_Sem conteúdo_'}\n\n`;
+        md += `## Relações (${edges.length})\n`;
+        edges.forEach(e => {
+          const other = e.from_node === n.id ? e.to_node : e.from_node;
+          md += `- **${e.relation}** ${e.from_node === n.id ? '→' : '←'} \`${other}\`\n`;
+        });
+        const a = document.createElement('a');
+        a.href = 'data:text/markdown;charset=utf-8,' + encodeURIComponent(md);
+        a.download = `node-${id}.md`;
+        a.click();
+        showToast('📄 Markdown exportado!');
+      } catch(e) { showToast('Erro ao exportar detalhes'); }
+    }
+
+    loadGraph(); renderLegend();
+  </script>
+
+  <!-- Analytics Dashboard Modal -->
+  <div id="analyticsModal" class="premium-modal">
+    <div class="modal-box" style="max-width: 900px; width: 90vw; max-height: 90vh;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+        <h3 style="margin:0;">📊 Analytics Dashboard</h3>
+        <button class="sidebar-toggle" onclick="document.getElementById('analyticsModal').style.display='none'">✕</button>
+      </div>
+      <div style="display:grid;grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px;">
+        <div style="background:rgba(148, 163, 184, 0.05); border: 1px solid var(--border-color); border-radius:16px; padding:16px;">
+          <h4 style="font-size:0.75rem; margin:0 0 12px; color:var(--accent); text-transform:uppercase; letter-spacing:0.05em;">Top Nodes (PageRank)</h4>
+          <canvas id="topNodesChart" width="400" height="220"></canvas>
+        </div>
+        <div style="background:rgba(148, 163, 184, 0.05); border: 1px solid var(--border-color); border-radius:16px; padding:16px;">
+          <h4 style="font-size:0.75rem; margin:0 0 12px; color:var(--accent); text-transform:uppercase; letter-spacing:0.05em;">Comunidades</h4>
+          <div id="communitiesList" style="font-size:0.75rem; line-height:1.6;"></div>
+        </div>
+        <div style="background:rgba(148, 163, 184, 0.05); border: 1px solid var(--border-color); border-radius:16px; padding:16px;">
+          <h4 style="font-size:0.75rem; margin:0 0 12px; color:var(--accent); text-transform:uppercase; letter-spacing:0.05em;">Estatísticas de Rede</h4>
+          <div id="densityInfo" style="font-size:0.8rem; display:grid; grid-template-columns: 1fr 1fr; gap:10px;"></div>
+        </div>
+        <div style="background:rgba(148, 163, 184, 0.05); border: 1px solid var(--border-color); border-radius:16px; padding:16px;">
+          <h4 style="font-size:0.75rem; margin:0 0 12px; color:var(--accent); text-transform:uppercase; letter-spacing:0.05em;">Busca Rápida</h4>
+          <div style="display:flex; gap:8px; margin-bottom:12px;">
+            <input id="analyticSearch" placeholder="Filtro rápido..." class="detail-input" style="flex:1;">
+            <button onclick="doSemanticSearch()" class="sidebar-btn" style="width:auto; padding:0 12px;">🔍</button>
+          </div>
+          <div id="analyticSearchResults" style="font-size:0.75rem; max-height:140px; overflow-y:auto;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  async function openAnalytics() {
+    document.getElementById('analyticsModal').style.display = 'block';
+    await loadTopNodes();
+    await loadCommunities();
+    await loadDensity();
+  }
+
+  async function loadTopNodes() {
+    const res = await fetch('/api/memory/dashboard/top-nodes?metric=pagerank&limit=8');
+    const data = await res.json();
+    const canvas = document.getElementById('topNodesChart');
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!data.nodes || !data.nodes.length) return;
+    const maxPR = Math.max(...data.nodes.map(n => n.pagerank || 0));
+    const barH = 20, gap = 4, startX = 120;
+    data.nodes.forEach((n, i) => {
+      const y = i * (barH + gap);
+      const w = maxPR > 0 ? ((n.pagerank || 0) / maxPR) * (canvas.width - startX - 20) : 0;
+      ctx.fillStyle = '#533483'; ctx.fillRect(startX, y, w, barH);
+      ctx.fillStyle = '#aaa'; ctx.font = '11px system-ui'; ctx.textAlign = 'right';
+      ctx.fillText(n.name?.substring(0, 15), startX - 6, y + 14);
+      ctx.fillStyle = '#e0e0e0'; ctx.textAlign = 'left';
+      ctx.fillText((n.pagerank || 0).toFixed(4), startX + w + 4, y + 14);
+    });
+  }
+
+  async function loadCommunities() {
+    const res = await fetch('/api/memory/dashboard/communities');
+    const data = await res.json();
+    const el = document.getElementById('communitiesList');
+    if (!data.communities) { el.innerHTML = 'Sem dados'; return; }
+    const colors = ['#533483','#e94560','#0f3460','#16a085','#f39c12','#e74c3c'];
+    el.innerHTML = data.communities.slice(0, 6).map((c, i) =>
+      `<div style="margin-bottom:6px;"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${colors[i%colors.length]};margin-right:6px;"></span>C${c.community_id}: ${c.node_count} nós</div>`
+    ).join('');
+  }
+
+  async function loadDensity() {
+    const res = await fetch('/api/memory/dashboard/density');
+    const data = await res.json();
+    const el = document.getElementById('densityInfo');
+    el.innerHTML = `<div style="margin-bottom:4px;">Nós: <b>${data.nodeCount}</b></div>
+      <div style="margin-bottom:4px;">Arestas: <b>${data.edgeCount}</b></div>
+      <div style="margin-bottom:4px;">Densidade: <b>${data.density}</b></div>
+      <div style="margin-bottom:4px;">Grau Médio: <b>${data.avgDegree}</b></div>
+      <div>Peso Médio: <b>${data.avgWeight}</b></div>`;
+  }
+
+  async function doSemanticSearch() {
+    const q = document.getElementById('semanticSearch').value;
+    if (!q) return;
+    const res = await fetch(`/api/memory/search?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    const el = document.getElementById('searchResults');
+    el.innerHTML = data.nodes?.slice(0, 8).map(n =>
+      `<div style="padding:2px 0;border-bottom:1px solid #333;">${n.name} <span style="color:#7f8c8d;">(${n.type})</span>${n.score ? ` <span style="color:#533483;">${n.score.toFixed(3)}</span>` : ''}</div>`
+    ).join('') || 'Sem resultados';
+  }
+  
+    // ── Focus Mode ──────────────────────────────────────────
+    let focusDepth = 1;
+    let focusActive = false;
+    let importanceThreshold = 0;
+
+    function setDepth(d) {
+      focusDepth = d;
+      document.querySelectorAll('.depth-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById(d === 0 ? 'depthAll' : d === 1 ? 'depth1' : 'depth2').classList.add('active');
+      if (focusActive && selectedNodeId) focusOnNode(selectedNodeId);
+    }
+
+    function focusOnSelected() {
+      if (!selectedNodeId) { showToast('Selecione um nó primeiro'); return; }
+      focusOnNode(selectedNodeId);
+    }
+
+    function focusOnNode(nodeId) {
+      if (!cy) return;
+      focusActive = true;
+      const node = cy.getElementById(nodeId);
+      if (node.empty()) return;
+
+      let neighborhood;
+      if (focusDepth === 0) {
+        neighborhood = cy.elements();
+      } else {
+        neighborhood = node;
+        let current = node;
+        for (let i = 0; i < focusDepth; i++) {
+          const hop = current.neighborhood();
+          neighborhood = neighborhood.union(hop);
+          current = hop;
+        }
+      }
+
+      cy.elements().addClass('faded');
+      neighborhood.removeClass('faded').removeClass('highlighted');
+      node.removeClass('faded').addClass('highlighted');
+
+      document.getElementById('focusBanner').style.display = 'flex';
+      document.getElementById('focusNodeName').textContent = node.data('name') || nodeId;
+
+      cy.animate({
+        fit: { eles: neighborhood, padding: 80 },
+        duration: 400,
+        easing: 'ease-in-out-cubic'
+      });
+
+      showToast('\U0001f50d Foco em: ' + (node.data('name') || nodeId));
+    }
+
+    function exitFocus() {
+      if (!cy) return;
+      focusActive = false;
+      cy.elements().removeClass('faded highlighted');
+      document.getElementById('focusBanner').style.display = 'none';
+      cy.animate({
+        fit: { eles: cy.elements(), padding: 40 },
+        duration: 400,
+        easing: 'ease-in-out-cubic'
+      });
+      showToast('\U0001f504 Visão geral restaurada');
+    }
+
+    function filterByImportance(value) {
+      importanceThreshold = parseInt(value);
+      document.getElementById('importanceValue').textContent = value;
+      if (!cy) return;
+
+      const allPR = cy.nodes().map(n => parseFloat(n.data('pagerank')) || 0);
+      const maxPR = Math.max(0.001, ...allPR);
+
+      cy.nodes().forEach(n => {
+        const pr = parseFloat(n.data('pagerank')) || 0;
+        const deg = n.data('degree') || 0;
+        const normalized = (pr / maxPR * 70 + Math.min(deg, 20) / 20 * 30);
+        if (normalized < importanceThreshold) {
+          n.addClass('faded');
+        } else {
+          n.removeClass('faded');
+        }
+      });
+    }
+</script>
+</body>
+</html>
+

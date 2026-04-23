@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NewClaw — Memory</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/shared.css">
+  <style>
+    .main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .section { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius); padding: 20px; margin-bottom: 20px; }
+    .section-title { font-size: 0.9rem; font-weight: 600; color: var(--accent); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+    .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .stat-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius); padding: 14px; }
+    .stat-label { font-size: 0.7rem; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-value { font-size: 1.3rem; font-weight: 700; margin-top: 4px; color: var(--accent); }
+    .search-row { display: flex; gap: 8px; margin-bottom: 16px; }
+    .search-row input { flex: 1; background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 14px; color: var(--text-main); font-size: 0.88rem; outline: none; }
+    .search-row input:focus { border-color: var(--accent); }
+    .search-row button { padding: 10px 20px; border-radius: 8px; border: none; background: var(--accent-bg); color: var(--accent); font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    .search-row button:hover { background: var(--accent); color: var(--bg-base); }
+    .filter-tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+    .filter-tab { padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-input); color: var(--text-muted); font-size: 0.78rem; cursor: pointer; transition: all 0.2s; }
+    .filter-tab:hover { border-color: var(--accent); color: var(--accent); }
+    .filter-tab.active { background: var(--accent-bg); color: var(--accent); border-color: var(--accent); font-weight: 500; }
+    .node-list { display: flex; flex-direction: column; gap: 8px; max-height: 500px; overflow-y: auto; }
+    .node-card { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; cursor: pointer; transition: all 0.2s; }
+    .node-card:hover { border-color: var(--accent); }
+    .node-card.active { border-color: var(--accent); background: var(--accent-bg); }
+    .node-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .node-id { font-size: 0.72rem; color: var(--text-soft); font-family: monospace; }
+    .node-type { font-size: 0.68rem; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+    .node-type.identity { background: rgba(168,85,247,0.15); color: #a855f7; }
+    .node-type.preference { background: rgba(251,191,36,0.15); color: var(--warning); }
+    .node-type.project { background: rgba(96,165,250,0.15); color: var(--accent); }
+    .node-type.context { background: rgba(74,222,128,0.15); color: var(--success); }
+    .node-type.fact { background: rgba(248,113,113,0.15); color: var(--danger); }
+    .node-type.skill { background: rgba(14,165,233,0.15); color: var(--accent); }
+    .node-name { font-size: 0.85rem; font-weight: 500; margin-bottom: 4px; }
+    .node-content { font-size: 0.78rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-height: 40px; }
+    .node-meta { font-size: 0.68rem; color: var(--text-soft); margin-top: 4px; }
+    .detail-panel { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 10px; padding: 16px; }
+    .detail-id { font-family: monospace; font-size: 0.82rem; color: var(--accent); margin-bottom: 8px; }
+    .detail-content { font-size: 0.82rem; color: var(--text-muted); white-space: pre-wrap; max-height: 300px; overflow-y: auto; line-height: 1.5; background: rgba(0,0,0,0.15); padding: 12px; border-radius: 8px; }
+    .edge-list { margin-top: 12px; }
+    .edge-item { font-size: 0.78rem; color: var(--text-muted); padding: 4px 0; border-bottom: 1px solid var(--border-color); }
+    .edge-relation { color: var(--accent); font-weight: 500; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+    .empty-state { text-align: center; padding: 40px; color: var(--text-soft); }
+  </style>
+</head>
+<body>
+  <div id="header-root"></div>
+  <div class="main">
+    <div class="stats-row" id="statsRow"></div>
+    <div class="section">
+      <div class="section-title" data-i18n="memory_search_title">🔍 Buscar na Memória</div>
+      <div class="search-row">
+        <input type="text" id="searchInput" data-i18n-placeholder="memory_search_placeholder" placeholder="Buscar nós por nome ou conteúdo...">
+        <button onclick="searchNodes()" data-i18n="search">Buscar</button>
+      </div>
+      <div class="filter-tabs" id="filterTabs"></div>
+    </div>
+    <div class="two-col">
+      <div class="section">
+        <div class="section-title">📋 Nós <span id="nodeCount" style="font-size:0.75rem;color:var(--text-soft)"></span></div>
+        <div class="node-list" id="nodeList"></div>
+      </div>
+      <div class="section">
+        <div class="section-title"><span data-i18n="detail_title">📄 Detalhe</span></div>
+        <div id="detailPanel"><div class="empty-state" data-i18n="select_node_detail">Selecione um nó para ver detalhes</div></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/shared.js"></script>
+  <script>
+    document.getElementById('header-root').innerHTML = newclawHeader('memory') + '<a href="/memory" style="display:none"></a>';
+    // Fix nav to add memory link
+    document.querySelectorAll('.newclaw-nav').forEach(nav => {
+      if (!nav.querySelector('a[href="/memory"]')) {
+        const helpLink = nav.querySelector('a[href="/help"]');
+        if (helpLink) {
+          const memLink = document.createElement('a');
+          memLink.href = '/memory';
+          memLink.textContent = '🧠 Memory';
+          if (location.pathname === '/memory') memLink.className = 'active';
+          nav.insertBefore(memLink, helpLink);
+        }
+      }
+    });
+    newclawInitTheme();
+    newclawApplyI18n();
+
+    const TYPE_COLORS = {
+      identity: '#a855f7', preference: '#fbbf24', project: '#60a5fa',
+      context: '#4ade80', fact: '#f87171', skill: '#38bdf8'
+    };
+    const TYPE_BG = {
+      identity: 'rgba(168,85,247,0.15)', preference: 'rgba(251,191,36,0.15)',
+      project: 'rgba(96,165,250,0.15)', context: 'rgba(74,222,128,0.15)',
+      fact: 'rgba(248,113,113,0.15)', skill: 'rgba(56,189,248,0.15)'
+    };
+
+    let nodes = [], currentFilter = '', selectedNodeId = null;
+
+    const ONTOLOGY_GROUPS = {
+      'Pertencimento': ['belongs_to', 'owns', 'prefers'],
+      'Trabalho': ['works_on', 'uses', 'depends_on'],
+      'Estrutura': ['contains', 'created', 'runs_on'],
+      'Dados': ['reads', 'writes'],
+      'Comum': ['references', 'related_to']
+    };
+    const ONTOLOGY_LABELS = {
+      belongs_to: 'pertence a', owns: 'possui', prefers: 'prefere',
+      works_on: 'trabalha em', uses: 'usa', depends_on: 'depende de',
+      contains: 'contém', created: 'criou', runs_on: 'executa em',
+      reads: 'lê', writes: 'escreve',
+      references: 'referencia', related_to: 'relacionado'
+    };
+
+    function populateRelations() {
+      const sel = document.getElementById('edgeRelation');
+      sel.innerHTML = '<option value="">Selecionar...</option>';
+      for (const [group, rels] of Object.entries(ONTOLOGY_GROUPS)) {
+        const og = document.createElement('optgroup');
+        og.label = group;
+        for (const r of rels) {
+          const opt = document.createElement('option');
+          opt.value = r;
+          opt.textContent = `${r} (${ONTOLOGY_LABELS[r] || r})`;
+          og.appendChild(opt);
+        }
+        sel.appendChild(og);
+      }
+      const customOpt = document.createElement('option');
+      customOpt.value = 'custom';
+      customOpt.textContent = '✏️ Customizado...';
+      sel.appendChild(customOpt);
+    }
+    // populateRelations is called inside selectNode() when the select exists in DOM
+
+    async function loadStats() {
+      try {
+        const r = await fetch('/api/memory/stats'); const d = await r.json();
+        if (d.success) {
+          const s = d.stats;
+          document.getElementById('statsRow').innerHTML = `
+            <div class="stat-card"><div class="stat-label">Nós</div><div class="stat-value">${s.totalNodes}</div></div>
+            <div class="stat-card"><div class="stat-label">Arestas</div><div class="stat-value">${s.totalEdges}</div></div>
+            <div class="stat-card"><div class="stat-label">Mensagens</div><div class="stat-value">${s.totalMessages}</div></div>
+            <div class="stat-card"><div class="stat-label">Conversas</div><div class="stat-value">${s.totalConversations}</div></div>
+          `;
+          // Build filter tabs
+          const tabs = document.getElementById('filterTabs');
+          tabs.innerHTML = `<span class="filter-tab ${currentFilter===''?'active':''}" onclick="filterByType('')">Todos</span>` +
+            Object.entries(s.nodesByType).map(([t,c]) => `<span class="filter-tab ${currentFilter===t?'active':''}" onclick="filterByType('${t}')">${t} (${c})</span>`).join('');
+        }
+      } catch {}
+    }
+
+    async function searchNodes() {
+      const q = document.getElementById('searchInput').value.trim();
+      try {
+        const url = q ? `/api/memory/search?q=${encodeURIComponent(q)}` : '/api/memory/nodes';
+        const r = await fetch(url); const d = await r.json();
+        if (d.success) { nodes = d.nodes || []; renderNodes(); }
+      } catch {}
+    }
+
+    async function filterByType(type) {
+      currentFilter = type;
+      try {
+        const url = type ? `/api/memory/nodes?type=${type}` : '/api/memory/nodes';
+        const r = await fetch(url); const d = await r.json();
+        if (d.success) { nodes = d.nodes || []; renderNodes(); loadStats(); }
+      } catch {}
+    }
+
+    function renderNodes() {
+      const list = document.getElementById('nodeList');
+      document.getElementById('nodeCount').textContent = `(${nodes.length})`;
+      if (!nodes.length) { list.innerHTML = '<div class="empty-state">Nenhum nó encontrado</div>'; return; }
+      list.innerHTML = nodes.map(n => `
+        <div class="node-card ${n.id===selectedNodeId?'active':''}" onclick="selectNode('${n.id}')">
+          <div class="node-header">
+            <span class="node-id">${esc(n.id)}</span>
+            <span class="node-type ${n.type}">${n.type}</span>
+          </div>
+          <div class="node-name">${esc(n.name || '')}</div>
+          <div class="node-content">${esc((n.content||'').slice(0,120))}</div>
+          <div class="node-meta">${n.updated_at || ''}</div>
+        </div>
+      `).join('');
+    }
+
+    async function selectNode(id) {
+      selectedNodeId = id;
+      renderNodes();
+      try {
+        const r = await fetch(`/api/memory/nodes/${encodeURIComponent(id)}`); const d = await r.json();
+        if (!d.success) return;
+        const n = d.node;
+        const edges = d.edges || [];
+        const panel = document.getElementById('detailPanel');
+        let edgesHtml = '';
+        if (edges.length) {
+          edgesHtml = `<div class="edge-list"><strong style="font-size:0.78rem;">Relações (${edges.length}):</strong>` +
+            edges.map(e => {
+              const dir = e.from_node === n.id ? '→' : '←';
+              const otherNode = e.from_node === n.id ? (e.to || e.to_node) : e.from_node;
+              return `<div class="edge-item">${dir} <span class="edge-relation">${esc(e.relation)}</span> ${dir === '→' ? '→' : '←'} <a href="#" onclick="selectNode('${esc(otherNode)}');return false;" style="color:var(--accent);text-decoration:none;">${esc(otherNode)}</a> <button onclick="deleteEdge('${esc(e.from_node)}','${esc(e.to_node)}','${esc(e.relation)}')" style="margin-left:8px;font-size:0.68rem;padding:2px 6px;border-radius:4px;border:1px solid var(--danger);color:var(--danger);background:transparent;cursor:pointer;" title="Remover relação">✕</button></div>`;
+            }).join('') +
+            '</div>';
+        }
+
+        // Fetch all nodes for the "To" dropdown
+        const allNodesRes = await fetch('/api/memory/nodes?limit=200');
+        const allNodesData = await allNodesRes.json();
+        const allNodesList = allNodesData.success ? allNodesData.nodes : [];
+        const toOptions = allNodesList.filter(n => n.id !== n.id).map(n => `<option value="${esc(n.id)}">${esc(n.name || n.id)} (${n.type})</option>`).join('');
+
+        panel.innerHTML = `
+          <div class="detail-id">${esc(n.id)} <span class="node-type ${n.type}" style="margin-left:8px">${n.type}</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <input id="editName" value="${esc(n.name || '')}" style="flex:1;font-weight:600;font-size:0.95rem;background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;padding:6px 10px;color:var(--text-main);">
+            <div style="display:flex;gap:6px;margin-left:10px;">
+              <button onclick="saveNode('${esc(n.id)}')" style="padding:4px 12px;border-radius:6px;border:none;background:var(--accent-bg);color:var(--accent);cursor:pointer;font-size:0.78rem;">💾 Salvar</button>
+              <button onclick="deleteNode('${esc(n.id)}')" style="padding:4px 12px;border-radius:6px;border:none;background:rgba(248,113,113,0.15);color:var(--danger);cursor:pointer;font-size:0.78rem;">🗑️ Deletar</button>
+            </div>
+          </div>
+          <select id="editType" style="margin-bottom:8px;background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;padding:4px 8px;color:var(--text-main);font-size:0.78rem;">
+            ${['identity','preference','project','context','fact','skill'].map(t => `<option value="${t}" ${t===n.type?'selected':''}>${t}</option>`).join('')}
+          </select>
+          <textarea id="editContent" style="width:100%;min-height:200px;background:rgba(0,0,0,0.15);padding:12px;border-radius:8px;color:var(--text-main);font-size:0.82rem;line-height:1.5;border:1px solid var(--border-color);resize:vertical;">${esc(n.content || '')}</textarea>
+          ${n.metadata ? `<div style="margin-top:8px;font-size:0.72rem;color:var(--text-soft);">Meta: ${esc(typeof n.metadata === 'string' ? n.metadata : JSON.stringify(n.metadata))}</div>` : ''}
+          ${edgesHtml}
+          <div style="margin-top:16px;border-top:1px solid var(--border-color);padding-top:12px;">
+            <strong style="font-size:0.78rem;color:var(--accent);">+ Adicionar Relação</strong>
+            <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">
+              <div style="display:flex;gap:6px;align-items:center;">
+                <span style="font-size:0.75rem;color:var(--text-muted);min-width:30px;">De:</span>
+                <span style="font-size:0.82rem;font-weight:600;color:var(--accent);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(n.id)}">${esc(n.name || n.id)}</span>
+              </div>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <span style="font-size:0.75rem;color:var(--text-muted);min-width:30px;">Tipo:</span>
+                <select id="edgeRelation" onchange="toggleCustomRelation()" style="flex:1;background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;padding:6px 10px;color:var(--text-main);font-size:0.78rem;">
+                  <option value="">Selecionar...</option>
+                </select>
+              </div>
+              <input id="edgeRelationCustom" placeholder="Relação customizada..." style="display:none;background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;padding:6px 10px;color:var(--text-main);font-size:0.78rem;">
+              <div style="display:flex;gap:6px;align-items:center;position:relative;">
+                <span style="font-size:0.75rem;color:var(--text-muted);min-width:30px;">Para:</span>
+                <input id="edgeToSearch" placeholder="🔍 Buscar nó por nome..." autocomplete="off" oninput="searchEdgeTarget()" onfocus="showEdgeDropdown()" style="flex:1;background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;padding:6px 10px;color:var(--text-main);font-size:0.78rem;">
+                <input type="hidden" id="edgeTo">
+                <div id="edgeDropdown" style="display:none;position:absolute;left:30px;right:0;top:100%;max-height:200px;overflow-y:auto;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:0 0 6px 6px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
+              </div>
+              <button onclick="addEdge('${esc(n.id)}')" style="padding:6px 16px;border-radius:6px;border:none;background:var(--accent-bg);color:var(--accent);cursor:pointer;font-size:0.82rem;font-weight:600;">+ Adicionar Relação</button>
+            </div>
+          </div>
+        `;
+
+        // Setup custom relation toggle + populate ontology options
+        populateRelations();
+        document.getElementById('edgeRelation').addEventListener('change', toggleCustomRelation);
+      } catch(e) { console.error(e); }
+    }
+
+    function esc(t) { const d=document.createElement('div'); d.textContent=String(t||''); return d.innerHTML; }
+
+    async function saveNode(id) {
+      const name = document.getElementById('editName').value;
+      const type = document.getElementById('editType').value;
+      const content = document.getElementById('editContent').value;
+      try {
+        const r = await fetch(`/api/memory/nodes/${encodeURIComponent(id)}`, {
+          method: 'PUT', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ name, type, content })
+        });
+        const d = await r.json();
+        if (d.success) { alert('✅ Salvo!'); loadStats(); searchNodes(); }
+        else alert('❌ Erro: ' + d.error);
+      } catch(e) { alert('❌ Erro: ' + e.message); }
+    }
+
+    async function deleteNode(id) {
+      if (!confirm('Deletar nó "' + id + '" e todas as relações?')) return;
+      try {
+        const r = await fetch(`/api/memory/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        const d = await r.json();
+        if (d.success) { selectedNodeId = null; loadStats(); searchNodes(); document.getElementById('detailPanel').innerHTML = '<div class="empty-state">Nó deletado</div>'; }
+        else alert('❌ Erro: ' + d.error);
+      } catch(e) { alert('❌ Erro: ' + e.message); }
+    }
+
+    function toggleCustomRelation() {
+      const sel = document.getElementById('edgeRelation');
+      const custom = document.getElementById('edgeRelationCustom');
+      if (sel.value === 'custom') {
+        custom.style.display = 'block';
+        custom.focus();
+      } else {
+        custom.style.display = 'none';
+        custom.value = '';
+      }
+    }
+
+    let allNodesForEdge = [];
+    
+    async function loadAllNodesForEdge() {
+      try {
+        const r = await fetch('/api/memory/nodes?limit=200'); const d = await r.json();
+        if (d.success) allNodesForEdge = d.nodes;
+      } catch(e) {}
+    }
+
+    function searchEdgeTarget() {
+      const q = document.getElementById('edgeToSearch').value.toLowerCase();
+      const dropdown = document.getElementById('edgeDropdown');
+      const filtered = allNodesForEdge.filter(n => (n.name||'').toLowerCase().includes(q) || (n.id||'').toLowerCase().includes(q));
+      dropdown.innerHTML = filtered.slice(0, 20).map(n =>
+        `<div onclick="selectEdgeTarget('${esc(n.id)}','${esc(n.name || n.id)}','${n.type}')" style="padding:6px 10px;cursor:pointer;font-size:0.78rem;color:var(--text-muted);border-bottom:1px solid var(--border-color);" onmouseover="this.style.background='var(--accent-bg)'" onmouseout="this.style.background='transparent'">
+          <span style="color:var(--text-main);font-weight:500;">${esc(n.name || n.id)}</span>
+          <span style="margin-left:6px;font-size:0.68rem;padding:1px 6px;border-radius:3px;background:${TYPE_BG[n.type]||'rgba(148,163,184,0.15)'};color:${TYPE_COLORS[n.type]||'#64748b'}">${n.type}</span>
+          <span style="margin-left:4px;font-size:0.68rem;color:var(--text-soft)">${esc(n.id)}</span>
+        </div>`
+      ).join('');
+      if (!filtered.length) dropdown.innerHTML = '<div style="padding:8px;font-size:0.78rem;color:var(--text-soft)">Nenhum nó encontrado</div>';
+      dropdown.style.display = 'block';
+    }
+
+    function showEdgeDropdown() {
+      if (!allNodesForEdge.length) loadAllNodesForEdge();
+      searchEdgeTarget();
+    }
+
+    function selectEdgeTarget(id, name, type) {
+      document.getElementById('edgeToSearch').value = `${name} (${type})`;
+      document.getElementById('edgeTo').value = id;
+      document.getElementById('edgeDropdown').style.display = 'none';
+    }
+
+    // Close dropdown on outside click
+    document.addEventListener('click', (e) => {
+      const dropdown = document.getElementById('edgeDropdown');
+      const input = document.getElementById('edgeToSearch');
+      if (dropdown && input && !dropdown.contains(e.target) && e.target !== input) {
+        dropdown.style.display = 'none';
+      }
+    });
+
+    async function deleteEdge(from, to, relation) {
+      if (!confirm(`Remover relação: ${from} —${relation}→ ${to}?`)) return;
+      try {
+        const r = await fetch('/api/memory/edges', {
+          method: 'DELETE', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ from, to, relation })
+        });
+        const d = await r.json();
+        if (d.success) { selectNode(selectedNodeId || from); }
+        else alert('❌ Erro: ' + d.error);
+      } catch(e) { alert('❌ Erro: ' + e.message); }
+    }
+
+    async function addEdge(fromId) {
+      const to = document.getElementById('edgeTo').value;
+      const sel = document.getElementById('edgeRelation');
+      let relation = sel.value === 'custom' ? document.getElementById('edgeRelationCustom').value.trim() : sel.value;
+      if (!to) { alert('Selecione o nó de destino (use a busca)'); return; }
+      if (!relation) { alert('Selecione o tipo de relação'); return; }
+      try {
+        const r = await fetch('/api/memory/edges', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ from: fromId, to, relation })
+        });
+        const d = await r.json();
+        if (d.success) { selectNode(fromId); }
+        else alert('❌ Erro: ' + d.error);
+      } catch(e) { alert('❌ Erro: ' + e.message); }
+    }
+
+    loadStats(); filterByType(''); loadAllNodesForEdge();
+    document.getElementById('searchInput').addEventListener('keydown', e => { if (e.key==='Enter') searchNodes(); });
+  </script>
+</body>
+</html>

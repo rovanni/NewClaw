@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NewClaw — Config</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/shared.css">
+  <style>
+    .main { max-width: 860px; margin: 0 auto; padding: 32px 24px; }
+    .section {
+      background: var(--bg-surface); border: 1px solid var(--border-color);
+      border-radius: var(--radius); padding: 24px; margin-bottom: 20px;
+    }
+    .section-title {
+      font-size: 1rem; font-weight: 600; margin-bottom: 16px;
+      display: flex; align-items: center; gap: 8px; color: var(--accent);
+    }
+    .form-group { margin-bottom: 16px; }
+    .form-group:last-child { margin-bottom: 0; }
+    .form-label { display: block; font-size: 0.82rem; color: var(--text-muted); margin-bottom: 6px; font-weight: 500; }
+    .form-hint { font-size: 0.72rem; color: var(--text-soft); margin-top: 4px; }
+    .form-input, .form-select, .form-textarea {
+      width: 100%; background: var(--bg-input); border: 1px solid var(--border-color);
+      border-radius: 8px; padding: 10px 14px; color: var(--text-main);
+      font-family: var(--font-family); font-size: 0.88rem; outline: none; transition: border-color 0.2s;
+    }
+    .form-input:focus, .form-select:focus, .form-textarea:focus { border-color: var(--accent); }
+    .form-textarea { min-height: 100px; resize: vertical; line-height: 1.5; }
+    .form-select {
+      cursor: pointer; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2398a8c2' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px;
+    }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .btn {
+      padding: 10px 24px; border-radius: 8px; font-weight: 600;
+      font-size: 0.88rem; cursor: pointer; border: none; transition: all 0.2s;
+    }
+    .btn-primary { background: var(--accent-bg); color: var(--accent); border: 1px solid var(--accent); }
+    .btn-primary:hover { background: var(--accent); color: var(--bg-base); }
+    .btn-danger { background: rgba(248,113,113,0.15); color: var(--danger); border: 1px solid var(--danger); }
+    .btn-danger:hover { background: var(--danger); color: var(--bg-base); }
+    .btn-group { display: flex; gap: 10px; margin-top: 20px; }
+    .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+    .status-card { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 10px; padding: 14px; }
+    .status-card .label { font-size: 0.72rem; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.05em; }
+    .status-card .value { font-size: 1.1rem; font-weight: 600; margin-top: 4px; }
+    .status-card .value.online { color: var(--success); }
+    .status-card .value.offline { color: var(--danger); }
+    .tools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+    .tool-card {
+      background: var(--bg-input); border: 1px solid var(--border-color);
+      border-radius: 10px; padding: 12px; display: flex; align-items: center; gap: 10px;
+    }
+    .tool-card .tool-icon {
+      width: 36px; height: 36px; background: var(--accent-bg);
+      border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1rem;
+    }
+    .tool-card .tool-name { font-weight: 500; font-size: 0.85rem; }
+    .tool-card .tool-desc { font-size: 0.72rem; color: var(--text-soft); }
+    .tool-toggle {
+      padding: 4px 10px; border-radius: 6px; font-size: 0.72rem;
+      cursor: pointer; border: none; font-weight: 600; transition: all 0.2s;
+    }
+    .tool-toggle.on { background: rgba(248,113,113,0.15); color: var(--danger); }
+    .tool-toggle.off { background: rgba(74,222,128,0.15); color: var(--success); }
+    .insight-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .insight-card {
+      background: var(--bg-input); border: 1px solid var(--border-color);
+      border-radius: 10px; padding: 14px; min-height: 180px;
+    }
+    .insight-card h3 { font-size: 0.86rem; color: var(--text-main); margin: 0 0 10px; }
+    .insight-list { display: flex; flex-direction: column; gap: 8px; }
+    .insight-item {
+      background: var(--bg-surface); border: 1px solid var(--border-color);
+      border-radius: 8px; padding: 10px;
+    }
+    .insight-item .title { font-size: 0.82rem; font-weight: 600; color: var(--text-main); }
+    .insight-item .meta { font-size: 0.72rem; color: var(--text-soft); margin-top: 4px; }
+    .insight-actions { display: flex; gap: 8px; margin-top: 8px; }
+    .mini-btn {
+      padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border-color);
+      background: var(--bg-input); color: var(--text-muted); font-size: 0.72rem; cursor: pointer;
+    }
+    .mini-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .mini-btn.approve { background: rgba(74,222,128,0.15); color: var(--success); border-color: rgba(74,222,128,0.3); }
+    .mini-btn.reject { background: rgba(248,113,113,0.15); color: var(--danger); border-color: rgba(248,113,113,0.3); }
+    .empty-note { font-size: 0.8rem; color: var(--text-soft); }
+    .badge {
+      display: inline-block; font-size: 0.65rem; padding: 1px 6px;
+      border-radius: 4px; font-weight: 600; margin-left: 6px; vertical-align: middle;
+    }
+    .badge-cloud { background: rgba(96,165,250,0.15); color: var(--accent); }
+    .badge-local { background: rgba(74,222,128,0.15); color: var(--success); }
+    .badge-active { background: rgba(74,222,128,0.15); color: var(--success); }
+    .badge-proposed { background: rgba(251,191,36,0.15); color: var(--warning); }
+    .badge-rejected { background: rgba(248,113,113,0.15); color: var(--danger); }
+    .api-key-group { display: flex; gap: 8px; align-items: center; }
+    .api-key-group .form-input { flex: 1; }
+    .api-key-status { font-size: 0.78rem; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
+    .api-key-status.configured { background: rgba(74,222,128,0.15); color: var(--success); }
+    .api-key-status.missing { background: rgba(248,113,113,0.15); color: var(--danger); }
+    .toast {
+      position: fixed; bottom: 24px; right: 24px; padding: 12px 20px;
+      border-radius: 10px; font-size: 0.85rem; font-weight: 500;
+      transform: translateY(100px); opacity: 0; transition: all 0.3s; z-index: 1000;
+    }
+    .toast.show { transform: translateY(0); opacity: 1; }
+    .toast.success { background: rgba(74,222,128,0.15); color: var(--success); border: 1px solid var(--success); }
+    .toast.error { background: rgba(248,113,113,0.15); color: var(--danger); border: 1px solid var(--danger); }
+
+    /* Custom Dropdown CSS */
+    .model-select-container { position: relative; width: 100%; }
+    .model-select-input {
+      width: 100%; background: var(--bg-input); border: 1px solid var(--border-color);
+      border-radius: 8px; padding: 10px 14px; padding-right: 36px; color: var(--text-main);
+      font-family: var(--font-family); font-size: 0.88rem; outline: none; transition: border-color 0.2s;
+      cursor: text;
+    }
+    .model-select-input:focus { border-color: var(--accent); }
+    .model-select-arrow {
+      position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+      pointer-events: none; opacity: 0.6;
+    }
+    .model-dropdown {
+      position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+      background: var(--bg-surface); border: 1px solid var(--border-color);
+      border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 1000;
+      max-height: 250px; overflow-y: auto; display: none;
+    }
+    .model-dropdown.show { display: block; }
+    .model-dropdown-group {
+      padding: 6px 12px; font-size: 0.70rem; font-weight: 600; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.05em; background: var(--bg-muted);
+    }
+    .model-item {
+      padding: 10px 12px; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--border-color); font-size: 0.85rem; transition: background 0.2s;
+    }
+    .model-item:last-child { border-bottom: none; }
+    .model-item:hover { background: var(--accent-bg); }
+    .model-item .model-name { font-weight: 500; }
+    .model-item-pull {
+      padding: 10px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px;
+      color: var(--accent); font-weight: 600; font-size: 0.85rem; transition: background 0.2s;
+    }
+    .model-item-pull:hover { background: var(--accent-bg); }
+  </style>
+</head>
+<body>
+  <div id="header-root"></div>
+  <div class="main">
+    <div class="section">
+      <div class="section-title" data-i18n="status_title">📊 Status</div>
+      <div class="status-grid" id="statusGrid">
+        <div class="status-card"><div class="label">Status</div><div class="value" id="sysStatus">—</div></div>
+        <div class="status-card"><div class="label">Uptime</div><div class="value" id="sysUptime">—</div></div>
+        <div class="status-card"><div class="label">Memória</div><div class="value" id="sysMemory">—</div></div>
+        <div class="status-card"><div class="label">Modelo</div><div class="value" id="sysModel">—</div></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title" data-i18n="model_title">🤖 Modelo LLM</div>
+      <div class="form-group">
+        <label class="form-label" data-i18n="provider_label">Provider</label>
+        <select class="form-select" id="defaultProvider">
+          <option value="ollama">Ollama (Local/Cloud)</option>
+          <option value="gemini">Google Gemini</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="groq">Groq</option>
+        </select>
+      </div>
+      <div id="ollamaSection">
+        <div class="form-group">
+          <label class="form-label" data-i18n="ollama_model_label">Modelo Ollama <span class="badge badge-cloud">cloud</span> <span class="badge badge-local">local</span></label>
+          <div class="model-select-container" id="container-ollamaModel">
+            <input type="text" class="model-select-input" autocomplete="off" id="ollamaModel" value="glm-5.1:cloud" placeholder="glm-5.1:cloud, gemma4:31b-cloud, llama3.2...">
+            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+            <div class="model-dropdown" id="dropdown-ollamaModel"></div>
+          </div>
+          <div class="form-hint">Cloud: glm-5.1:cloud, gemma4:31b-cloud | Local: llama3.2, mistral, codellama</div>
+        </div>
+        
+        <div class="form-group">
+          <label class="form-label" data-i18n="ollama_pull_label">Baixar Modelo</label>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn-primary" style="padding:4px 10px;font-size:0.72rem;border-radius:6px;cursor:pointer;border:none;" onclick="pullModel('qwen2.5:7b')">qwen2.5:7b</button>
+            <button class="btn-primary" style="padding:4px 10px;font-size:0.72rem;border-radius:6px;cursor:pointer;border:none;" onclick="pullModel('llama3.1:8b')">llama3.1:8b</button>
+            <button class="btn-primary" style="padding:4px 10px;font-size:0.72rem;border-radius:6px;cursor:pointer;border:none;" onclick="pullModel('gemma4:31b-cloud')">gemma4:31b-cloud</button>
+            <button class="btn-primary" style="padding:4px 10px;font-size:0.72rem;border-radius:6px;cursor:pointer;border:none;" onclick="pullModel('mistral:7b')">mistral:7b</button>
+            <button class="btn-primary" style="padding:4px 10px;font-size:0.72rem;border-radius:6px;cursor:pointer;border:none;" onclick="pullModel('deepseek-coder-v2:16b')">deepseek-coder-v2:16b</button>
+            <input type="text" id="customModelPull" placeholder="modelo:tag" style="width:120px;padding:4px 8px;font-size:0.72rem;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-input);color:var(--text-main);">
+            <button class="btn-primary" style="padding:4px 10px;font-size:0.72rem;border-radius:6px;cursor:pointer;border:none;" onclick="pullModel(document.getElementById('customModelPull').value)">⬇️ Pull</button>
+          </div>
+          <div class="form-hint">Clique para baixar. Modelos cloud são instantâneos, locais dependem do tamanho.</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-i18n="ollama_url_label">Ollama URL</label>
+          <input type="text" class="form-input" id="ollamaUrl" value="" placeholder="http://localhost:11434">
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-i18n="ollama_key_label">Ollama API Key (cloud)</label>
+          <div class="api-key-group">
+            <input type="password" class="form-input" id="ollamaApiKey" placeholder="Opcional para modelos cloud">
+            <span class="api-key-status" id="ollamaKeyStatus">—</span>
+          </div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label" data-i18n="lang_label">Idioma</label>
+          <select class="form-select" id="language"><option value="pt-BR">Português</option><option value="en-US">English</option><option value="es">Español</option></select></div>
+        <div class="form-group"><label class="form-label" data-i18n="iterations_label">Iterações Máximas</label>
+          <input type="number" class="form-input" id="maxIterations" min="1" max="20" value="5"></div>
+      </div>
+      <div class="form-group"><label class="form-label" data-i18n="memory_window_label">Janela de Memória</label>
+        <input type="number" class="form-input" id="memoryWindowSize" min="5" max="100" value="20"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title" data-i18n="keys_title">🔑 Outros Providers</div>
+      <div class="form-group"><label class="form-label">Gemini API Key</label>
+        <div class="api-key-group"><input type="password" class="form-input" id="geminiKey" placeholder="AIza..."><span class="api-key-status" id="geminiStatus">—</span></div></div>
+      <div class="form-group"><label class="form-label">DeepSeek API Key</label>
+        <div class="api-key-group"><input type="password" class="form-input" id="deepseekKey" placeholder="sk-..."><span class="api-key-status" id="deepseekStatus">—</span></div></div>
+      <div class="form-group"><label class="form-label">Groq API Key</label>
+        <div class="api-key-group"><input type="password" class="form-input" id="groqKey" placeholder="gsk_..."><span class="api-key-status" id="groqStatus">—</span></div></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">🧠 Roteamento de Modelos (ModelRouter)</div>
+      <p style="font-size:0.85rem;color:var(--text-soft);margin-bottom:12px;">O NewClaw escolhe automaticamente o melhor modelo para cada tipo de tarefa. Configure abaixo.</p>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">💬 Chat (conversa geral)</label>
+          <div class="model-select-container" id="container-modelChat">
+            <input type="text" class="model-select-input" autocomplete="off" id="modelChat" placeholder="glm-5.1:cloud">
+            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+            <div class="model-dropdown" id="dropdown-modelChat"></div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">💻 Código (programação)</label>
+          <div class="model-select-container" id="container-modelCode">
+            <input type="text" class="model-select-input" autocomplete="off" id="modelCode" placeholder="gemma4:e4b">
+            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+            <div class="model-dropdown" id="dropdown-modelCode"></div>
+          </div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">👁️ Visão (imagens/OCR)</label>
+          <div class="model-select-container" id="container-modelVision">
+            <input type="text" class="model-select-input" autocomplete="off" id="modelVision" placeholder="gemma4:e4b">
+            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+            <div class="model-dropdown" id="dropdown-modelVision"></div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">⚡ Leve (respostas curtas)</label>
+          <div class="model-select-container" id="container-modelLight">
+            <input type="text" class="model-select-input" autocomplete="off" id="modelLight" placeholder="gemma4:e4b">
+            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+            <div class="model-dropdown" id="dropdown-modelLight"></div>
+          </div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">📊 Análise (cripto/mercado)</label>
+          <div class="model-select-container" id="container-modelAnalysis">
+            <input type="text" class="model-select-input" autocomplete="off" id="modelAnalysis" placeholder="glm-5:cloud">
+            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+            <div class="model-dropdown" id="dropdown-modelAnalysis"></div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Servidor Visão (URL)</label>
+          <input type="text" class="form-input" id="visionServer" placeholder="http://localhost:11434">
+        </div>
+      </div>
+      <div id="routerStats" style="font-size:0.82rem;color:var(--text-soft);padding:8px;background:var(--bg-input);border-radius:8px;margin-top:8px;">Carregando estatísticas...</div>
+    </div>
+
+    <div class="section">
+      <div class="section-title" data-i18n="system_prompt_title">💬 System Prompt</div>
+      <div class="form-group"><label class="form-label" data-i18n="system_prompt_label">Instruções do Sistema</label>
+        <textarea class="form-textarea" id="systemPrompt" placeholder="Defina o comportamento..."></textarea>
+        <div class="form-hint">Deixe vazio para usar o prompt padrão.</div></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title" data-i18n="tools_title">🛠️ Ferramentas</div>
+      <div class="tools-grid" id="toolsGrid"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">🧠 SkillLearner</div>
+      <div class="form-hint" style="margin-bottom:14px;">O SkillLearner agora gera propostas a partir de padrões fortes. Apenas skills aprovadas entram no prompt do agente.</div>
+      <div class="insight-grid">
+        <div class="insight-card">
+          <h3>Propostas e skills aprovadas</h3>
+          <div class="insight-list" id="autoSkillsList"><div class="empty-note">Carregando...</div></div>
+        </div>
+        <div class="insight-card">
+          <h3>Padrões observados</h3>
+          <div class="insight-list" id="skillPatternsList"><div class="empty-note">Carregando...</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="saveConfig()" data-i18n="save_btn">💾 Salvar</button>
+      <button class="btn btn-primary" onclick="saveAndRestart()" style="background:rgba(251,191,36,0.15);color:var(--warning);border-color:var(--warning)" data-i18n="restart_btn">🔄 Salvar & Reiniciar</button>
+      <button class="btn btn-danger" onclick="resetConfig()" data-i18n="reset_btn">🔄 Resetar</button>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script src="/shared.js"></script>
+  <script>
+    document.getElementById('header-root').innerHTML = newclawHeader('config');
+    newclawInitTheme();
+    newclawApplyI18n();
+
+    const toolIcons = { exec_command:'💻', web_search:'🔍', file_ops:'📁', crypto_report:'📊', send_audio:'🔊' };
+
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/config'); const data = await res.json();
+        if (data.success) {
+          document.getElementById('defaultProvider').value = data.config.defaultProvider;
+          document.getElementById('language').value = data.config.language;
+          document.getElementById('maxIterations').value = data.config.maxIterations;
+          document.getElementById('memoryWindowSize').value = data.config.memoryWindowSize;
+          document.getElementById('systemPrompt').value = data.config.systemPrompt || '';
+          document.getElementById('ollamaUrl').value = data.config.ollamaUrl || 'http://localhost:11434';
+          document.getElementById('ollamaModel').value = data.config.ollamaModel || 'glm-5.1:cloud';
+          document.getElementById('sysModel').textContent = data.config.currentModel || data.config.ollamaModel;
+          setKS('geminiStatus', data.config.hasGeminiKey); setKS('deepseekStatus', data.config.hasDeepseekKey);
+          setKS('groqStatus', data.config.hasGroqKey); setKS('ollamaKeyStatus', data.config.hasOllamaApiKey);
+          toggleOllama(data.config.defaultProvider);
+          // Load ModelRouter config
+          if (data.config.modelRouter) {
+            document.getElementById('modelChat').value = data.config.modelRouter.chat || 'glm-5.1:cloud';
+            document.getElementById('modelCode').value = data.config.modelRouter.code || 'gemma4:e4b';
+            document.getElementById('modelVision').value = data.config.modelRouter.vision || 'gemma4:e4b';
+            document.getElementById('modelLight').value = data.config.modelRouter.light || 'gemma4:e4b';
+            document.getElementById('modelAnalysis').value = data.config.modelRouter.analysis || 'glm-5:cloud';
+            document.getElementById('visionServer').value = data.config.modelRouter.visionServer || 'http://localhost:11434';
+          }
+        }
+      } catch (e) { showToast('Erro: ' + e.message, 'error'); }
+    }
+    async function loadProviders() {
+      try {
+        const res = await fetch('/api/providers'); const data = await res.json();
+        if (data.success && data.providers.ollama?.models) {
+          availableModelsList = data.providers.ollama.models;
+          initModelDropdowns();
+        }
+      } catch {}
+    }
+    function toggleOllama(p) { document.getElementById('ollamaSection').style.display = p === 'ollama' ? 'block' : 'none'; }
+    document.getElementById('defaultProvider').addEventListener('change', e => toggleOllama(e.target.value));
+    function setKS(id, v) { const e=document.getElementById(id); e.textContent=v?'✓ Configurado':'✗ Ausente'; e.className='api-key-status '+(v?'configured':'missing'); }
+    async function loadStatus() {
+      try {
+        const res = await fetch('/api/status'); const data = await res.json();
+        if (data.success) {
+          document.getElementById('sysStatus').textContent='Online'; document.getElementById('sysStatus').className='value online';
+          document.getElementById('sysUptime').textContent=data.status.uptimeHuman;
+          document.getElementById('sysMemory').textContent=data.status.memory.heapUsed;
+        }
+      } catch { document.getElementById('sysStatus').textContent='Offline'; document.getElementById('sysStatus').className='value offline'; }
+    }
+    async function loadTools() {
+      try {
+        const res = await fetch('/api/tools/status'); const data = await res.json();
+        if (data.success) {
+          document.getElementById('toolsGrid').innerHTML = data.tools.map(t => {
+            const icon = toolIcons[t.name]||'🔧';
+            const badges = (t.enabled?'<span class="badge badge-active">ON</span>':'<span class="badge" style="background:rgba(248,113,113,0.15);color:var(--danger)">OFF</span>')+(t.dangerous?'<span class="badge" style="background:rgba(251,191,36,0.15);color:var(--warning)">⚠️</span>':'');
+            const btn = t.enabled?`<button class="tool-toggle on" onclick="toggleTool('${t.name}',false)">Disable</button>`:`<button class="tool-toggle off" onclick="toggleTool('${t.name}',true)">Enable</button>`;
+            return `<div class="tool-card"><div class="tool-icon">${icon}</div><div style="flex:1"><div class="tool-name">${t.name} ${badges}</div><div class="tool-desc">${t.description}</div></div>${btn}</div>`;
+          }).join('');
+        }
+      } catch {}
+    }
+    async function loadSkillLearnerInsights() {
+      try {
+        const [skillsRes, patternsRes] = await Promise.all([
+          fetch('/api/skills/auto'),
+          fetch('/api/skills/patterns')
+        ]);
+        const skillsData = await skillsRes.json();
+        const patternsData = await patternsRes.json();
+
+        const autoSkills = skillsData.success ? skillsData.skills : [];
+        const patterns = patternsData.success ? patternsData.patterns : [];
+
+        document.getElementById('autoSkillsList').innerHTML = autoSkills.length
+          ? autoSkills.slice(0, 6).map(skill => `
+              <div class="insight-item">
+                <div class="title">${skill.name} ${statusBadge(skill.status)}</div>
+                <div class="meta">prioridade ${skill.priority} · hits ${skill.hits} · tools ${safeJsonList(skill.tool_sequence)}</div>
+                <div class="meta">origem: ${skill.source_pattern || 'manual'} → ${skill.source_tool || '—'}</div>
+                <div class="meta">${skill.description}</div>
+                ${skill.status === 'proposed' ? `
+                  <div class="insight-actions">
+                    <button class="mini-btn approve" onclick="reviewAutoSkill('${skill.id}','approve')">Aprovar</button>
+                    <button class="mini-btn reject" onclick="reviewAutoSkill('${skill.id}','reject')">Rejeitar</button>
+                  </div>` : ''}
+              </div>`).join('')
+          : '<div class="empty-note">Nenhuma proposta gerada ainda.</div>';
+
+        document.getElementById('skillPatternsList').innerHTML = patterns.length
+          ? patterns.slice(0, 8).map(pattern => `
+              <div class="insight-item">
+                <div class="title">${pattern.pattern} → ${pattern.tool_name}</div>
+                <div class="meta">sucesso ${pattern.success_count} · falha ${pattern.fail_count} · latência média ${pattern.avg_latency_ms}ms</div>
+                <div class="meta">último uso: ${pattern.last_seen || '—'}</div>
+              </div>`).join('')
+          : '<div class="empty-note">Ainda não há padrões suficientes registrados.</div>';
+      } catch (e) {
+        document.getElementById('autoSkillsList').innerHTML = '<div class="empty-note">Falha ao carregar auto-skills.</div>';
+        document.getElementById('skillPatternsList').innerHTML = '<div class="empty-note">Falha ao carregar padrões.</div>';
+      }
+    }
+    async function reviewAutoSkill(id, action) {
+      try {
+        const res = await fetch(`/api/skills/auto/${id}/${action}`, { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'falha ao revisar skill');
+        showToast(action === 'approve' ? '✅ Skill aprovada.' : '🛑 Skill rejeitada.', 'success');
+        loadSkillLearnerInsights();
+      } catch (e) {
+        showToast('❌ ' + e.message, 'error');
+      }
+    }
+    async function toggleTool(name, enable) {
+      const action = enable?'enable':'disable';
+      try { await fetch(`/api/tools/${name}/${action}`,{method:'POST'}); loadTools(); } catch {}
+    }
+    function statusBadge(status) {
+      if (status === 'active') return '<span class="badge badge-active">ACTIVE</span>';
+      if (status === 'rejected') return '<span class="badge badge-rejected">REJECTED</span>';
+      return '<span class="badge badge-proposed">PROPOSED</span>';
+    }
+    function safeJsonList(value) {
+      try {
+        const parsed = JSON.parse(value || '[]');
+        return Array.isArray(parsed) && parsed.length ? parsed.join(', ') : '—';
+      } catch {
+        return '—';
+      }
+    }
+    async function pullModel(name) {
+      if (!name) return;
+      showToast('⬇️ Baixando "' + name + '"... Isso pode demorar.', 'success');
+      try {
+        const res = await fetch('/api/ollama/pull', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:name})});
+        const data = await res.json();
+        if (data.success) { showToast('✅ "'+name+'" baixado!', 'success'); document.getElementById('ollamaModel').value=name; loadProviders(); }
+        else showToast('❌ Falha: '+(data.error||'desconhecido'), 'error');
+      } catch(e) { showToast('❌ Erro: '+e.message, 'error'); }
+    }
+
+    async function saveConfig() {
+      const config = { defaultProvider:document.getElementById('defaultProvider').value, language:document.getElementById('language').value,
+        maxIterations:parseInt(document.getElementById('maxIterations').value), memoryWindowSize:parseInt(document.getElementById('memoryWindowSize').value),
+        systemPrompt:document.getElementById('systemPrompt').value, ollamaUrl:document.getElementById('ollamaUrl').value, ollamaModel:document.getElementById('ollamaModel').value,
+        ollamaApiKey:document.getElementById('ollamaApiKey').value||undefined,
+        modelRouter: { chat:document.getElementById('modelChat').value, code:document.getElementById('modelCode').value,
+          vision:document.getElementById('modelVision').value, light:document.getElementById('modelLight').value,
+          analysis:document.getElementById('modelAnalysis').value, visionServer:document.getElementById('visionServer').value } };
+
+      // Check if model exists first
+      const model = config.ollamaModel;
+      if (model && config.defaultProvider === 'ollama') {
+        try {
+          const checkRes = await fetch('/api/ollama/exists/' + encodeURIComponent(model));
+          const checkData = await checkRes.json();
+          if (checkData.success && !checkData.exists) {
+            showToast('⬇️ Modelo "' + model + '" não encontrado. Baixando...', 'success');
+            // Pull the model
+            const pullRes = await fetch('/api/ollama/pull', {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ model })
+            });
+            const pullData = await pullRes.json();
+            if (pullData.success) {
+              showToast('✅ Modelo "' + model + '" baixado!', 'success');
+              loadProviders(); // Refresh model list
+            } else {
+              showToast('⚠️ Falha ao baixar: ' + (pullData.error || 'desconhecido'), 'error');
+            }
+          }
+        } catch (e) { /* skip check if API fails */ }
+      }
+
+      try {
+        const res = await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});
+        const data = await res.json();
+        if (data.success) { showToast('✅ Salvo! Modelo: '+config.ollamaModel,'success'); document.getElementById('sysModel').textContent=config.ollamaModel; }
+        else showToast('❌ Erro: '+(data.error||'desconhecido'),'error');
+      } catch(e) { showToast('❌ Conexão: '+e.message,'error'); }
+    }
+    async function saveAndRestart() {
+      await saveConfig();
+      if (!confirm('Reiniciar o NewClaw? O processo será reiniciado.')) return;
+      try {
+        await fetch('/api/restart',{method:'POST'});
+        showToast('🔄 Reiniciando... Aguarde.','success');
+        // Wait for server to come back
+        let tries = 0;
+        const check = async () => {
+          try {
+            const r = await fetch('/api/status');
+            if (r.ok) { location.reload(); return; }
+          } catch {}
+          tries++;
+          if (tries < 30) setTimeout(check, 2000); // retry every 2s, max 60s
+          else location.reload();
+        };
+        setTimeout(check, 5000); // start checking after 5s
+      } catch(e) { showToast('⚠️ Reiniciando...','error'); setTimeout(()=>location.reload(),8000); }
+    }
+    function resetConfig() {
+      if(!confirm('Resetar?')) return;
+      document.getElementById('defaultProvider').value='ollama'; document.getElementById('language').value='pt-BR';
+      document.getElementById('maxIterations').value=5; document.getElementById('memoryWindowSize').value=20;
+      document.getElementById('systemPrompt').value=''; document.getElementById('ollamaModel').value='glm-5.1:cloud';
+      showToast('🔄 Resetado. Clique Salvar para aplicar.','success');
+    }
+    function showToast(msg,type) { const t=document.getElementById('toast'); t.textContent=msg; t.className=`toast ${type}`; setTimeout(()=>t.classList.add('show'),10); setTimeout(()=>t.classList.remove('show'),3000); }
+
+    
+    let availableModelsList = [];
+    
+    function initModelDropdowns() {
+      if (window.isDropdownsInit) return; window.isDropdownsInit = true;
+      const inputs = ['ollamaModel', 'modelChat', 'modelCode', 'modelVision', 'modelLight', 'modelAnalysis'];
+      inputs.forEach(id => {
+        const input = document.getElementById(id);
+        const dropdown = document.getElementById(`dropdown-${id}`);
+        const container = document.getElementById(`container-${id}`);
+        if (!input || !dropdown) return;
+        
+        const showDropdown = () => { renderDropdown(id); dropdown.classList.add('show'); };
+        
+        input.addEventListener('focus', showDropdown);
+        input.addEventListener('click', showDropdown);
+        input.addEventListener('input', showDropdown);
+        
+        document.addEventListener('click', (e) => {
+          if (container && !container.contains(e.target)) {
+            dropdown.classList.remove('show');
+          }
+        });
+      });
+    }
+
+    function renderDropdown(inputId) {
+      const input = document.getElementById(inputId);
+      const dropdown = document.getElementById(`dropdown-${inputId}`);
+      const filter = input.value.toLowerCase().trim();
+      
+      const clouds = availableModelsList.filter(m => m.includes('cloud') || m.includes('groq') || m.includes('gemini'));
+      const locals = availableModelsList.filter(m => !clouds.includes(m));
+      
+      const filterList = (list) => filter ? list.filter(m => m.toLowerCase().includes(filter)) : list;
+      const filteredClouds = filterList(clouds);
+      const filteredLocals = filterList(locals);
+      
+      let html = '';
+      
+      if (filteredClouds.length > 0) {
+        html += `<div class="model-dropdown-group">Cloud Models</div>`;
+        filteredClouds.forEach(m => {
+          html += `<div class="model-item" onclick="selectDropdownModel('${inputId}', '${m}')">
+                     <span class="model-name">${m}</span>
+                     <span class="badge badge-cloud">cloud</span>
+                   </div>`;
+        });
+      }
+      
+      if (filteredLocals.length > 0) {
+        html += `<div class="model-dropdown-group">Local Models</div>`;
+        filteredLocals.forEach(m => {
+          html += `<div class="model-item" onclick="selectDropdownModel('${inputId}', '${m}')">
+                     <span class="model-name">${m}</span>
+                     <span class="badge badge-local">local</span>
+                   </div>`;
+        });
+      }
+      
+      if (filter && filteredClouds.length === 0 && filteredLocals.length === 0) {
+        html += `<div class="model-item-pull" onclick="pullAndSelect('${inputId}', '${filter}')">
+                   ⬇️ Baixar modelo "${filter}"...
+                 </div>`;
+      }
+      
+      dropdown.innerHTML = html || `<div style="padding:10px;font-size:0.8rem;color:var(--text-soft);text-align:center;">Nenhum modelo disponível</div>`;
+    }
+
+    window.selectDropdownModel = function(inputId, modelName) {
+      document.getElementById(inputId).value = modelName;
+      document.getElementById(`dropdown-${inputId}`).classList.remove('show');
+    };
+
+    window.pullAndSelect = function(inputId, modelName) {
+      document.getElementById(inputId).value = modelName;
+      document.getElementById(`dropdown-${inputId}`).classList.remove('show');
+      pullModel(modelName);
+    };
+
+    // Replace the loadProviders logic
+
+    loadConfig(); loadStatus(); loadTools(); loadProviders(); loadSkillLearnerInsights();
+    setInterval(loadStatus, 30000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NewClaw - Memory Review</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/shared.css">
+  <style>
+    .main { max-width: 1280px; margin: 0 auto; padding: 24px; }
+    .hero { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 20px; }
+    .hero h1 { font-size: 1.4rem; color: var(--text-main); }
+    .hero p { color: var(--text-muted); margin-top: 6px; }
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn {
+      padding: 10px 14px; border-radius: 6px; border: 1px solid var(--border-color);
+      background: var(--bg-input); color: var(--text-main); cursor: pointer; font-size: 0.84rem;
+    }
+    .btn:hover { border-color: var(--accent); color: var(--accent); }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; }
+    .stat-label { font-size: 0.72rem; color: var(--text-soft); text-transform: uppercase; }
+    .stat-value { font-size: 1.35rem; font-weight: 700; color: var(--accent); margin-top: 4px; }
+    .grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 20px; }
+    .section-title { font-size: 0.94rem; color: var(--accent); font-weight: 700; margin-bottom: 12px; }
+    .list { display: flex; flex-direction: column; gap: 10px; }
+    .item { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; }
+    .item-title { font-size: 0.82rem; color: var(--text-main); font-weight: 600; }
+    .item-detail { font-size: 0.74rem; color: var(--text-soft); margin-top: 4px; }
+    .pill { display: inline-block; font-size: 0.66rem; color: var(--accent); background: var(--accent-bg); border-radius: 999px; padding: 2px 6px; margin-left: 8px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .empty { color: var(--text-soft); padding: 18px 0; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .hero { flex-direction: column; align-items: flex-start; } }
+  </style>
+</head>
+<body>
+  <div id="header-root"></div>
+  <div class="main">
+    <div class="hero">
+      <div>
+        <h1>Revisão da Memória</h1>
+        <p>Fila de manutenção para órfãos, duplicatas e nós que pedem mais contexto.</p>
+      </div>
+      <div class="btn-row">
+        <button class="btn" onclick="loadReview()">Atualizar</button>
+        <button class="btn" onclick="linkSequentialDates()">Interligar Datas (Sequencial)</button>
+        <a class="btn" href="/memory-graph" style="text-decoration:none;">Abrir Grafo</a>
+      </div>
+    </div>
+
+    <div class="stats" id="statsRow"></div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="section-title">Fila de Revisão</div>
+        <div class="list" id="issuesList"></div>
+      </div>
+      <div class="card">
+        <div class="section-title">Possíveis Duplicatas</div>
+        <div class="list" id="duplicatesList"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/shared.js"></script>
+  <script>
+    document.getElementById('header-root').innerHTML = newclawHeader('memory-review');
+    newclawInitTheme();
+
+    let reviewData = null;
+
+    function esc(t) { const d = document.createElement('div'); d.textContent = String(t || ''); return d.innerHTML; }
+
+    function qualityText(score) {
+      if (score >= 80) return 'Memória conectada';
+      if (score >= 60) return 'Boa base com alguns ajustes';
+      if (score >= 40) return 'Precisa de manutenção';
+      return 'Muita memória solta';
+    }
+
+    async function loadReview() {
+      try {
+        const r = await fetch('/api/memory/review');
+        const d = await r.json();
+        if (!d.success) return;
+        reviewData = d.review;
+        renderReview();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function renderReview() {
+      if (!reviewData) return;
+      const s = reviewData.summary;
+      document.getElementById('statsRow').innerHTML = `
+        <div class="card"><div class="stat-label">Score</div><div class="stat-value">${s.qualityScore}</div><div class="item-detail">${qualityText(s.qualityScore)}</div></div>
+        <div class="card"><div class="stat-label">Nós órfãos</div><div class="stat-value">${s.orphanCount}</div></div>
+        <div class="card"><div class="stat-label">Nós fracos</div><div class="stat-value">${s.sparseCount}</div></div>
+        <div class="card"><div class="stat-label">Duplicatas</div><div class="stat-value">${s.duplicateCount}</div></div>
+      `;
+
+      const issues = reviewData.issues || [];
+      document.getElementById('issuesList').innerHTML = issues.length ? issues.map(issue => `
+        <div class="item">
+          <div class="item-title">${esc(issue.title)} <span class="pill">${esc(issue.kind)}</span></div>
+          <div class="item-detail">${esc(issue.detail)}</div>
+          <div class="actions">
+            <a class="btn" href="/memory-graph" style="text-decoration:none;">Abrir no grafo</a>
+          </div>
+        </div>
+      `).join('') : '<div class="empty">Nada urgente agora.</div>';
+
+      const duplicates = reviewData.duplicateCandidates || [];
+      document.getElementById('duplicatesList').innerHTML = duplicates.length ? duplicates.map((pair, index) => `
+        <div class="item">
+          <div class="item-title">${esc(pair.left.name || pair.left.id)} / ${esc(pair.right.name || pair.right.id)}</div>
+          <div class="item-detail">Similaridade ${Math.round(pair.similarity * 100)}% • ${esc(pair.left.type)} / ${esc(pair.right.type)}</div>
+          <div class="actions">
+            <button class="btn" onclick="mergePair(${index}, 'left')">Mesclar em ${esc(pair.left.name || pair.left.id)}</button>
+            <button class="btn" onclick="mergePair(${index}, 'right')">Mesclar em ${esc(pair.right.name || pair.right.id)}</button>
+          </div>
+        </div>
+      `).join('') : '<div class="empty">Sem pares duplicados fortes no momento.</div>';
+    }
+
+    async function mergePair(index, keepSide) {
+      const pair = reviewData?.duplicateCandidates?.[index];
+      if (!pair) return;
+      const keepId = keepSide === 'left' ? pair.left.id : pair.right.id;
+      const mergeId = keepSide === 'left' ? pair.right.id : pair.left.id;
+      const keepLabel = keepSide === 'left' ? (pair.left.name || pair.left.id) : (pair.right.name || pair.right.id);
+      const mergeLabel = keepSide === 'left' ? (pair.right.name || pair.right.id) : (pair.left.name || pair.left.id);
+      if (!confirm(`Mesclar "${mergeLabel}" em "${keepLabel}"?\n\nUm snapshot será criado antes da operação.`)) return;
+      try {
+        const r = await fetch('/api/memory/merge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keepId, mergeId })
+        });
+        const d = await r.json();
+        if (!d.success) {
+          alert('Erro ao mesclar: ' + (d.error || 'falha desconhecida'));
+          return;
+        }
+        await loadReview();
+        alert('Mescla concluída. Snapshot: ' + (d.snapshotId || 'criado'));
+      } catch (e) {
+        alert('Erro ao mesclar: ' + e.message);
+      }
+    }
+
+    async function linkSequentialDates() {
+      if (!confirm("Interligar todas as memórias de datas (ex: 2026-02-10) em sequência cronológica?")) return;
+      try {
+        const r = await fetch('/api/memory/nodes?limit=2000');
+        const d = await r.json();
+        if (!d.success) return alert('Erro ao carregar nós: ' + (d.error || 'Erro desconhecido'));
+        
+        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        const dateNodes = d.nodes.filter(n => dateRegex.test(n.id) || dateRegex.test(n.name));
+        
+        if (dateNodes.length < 2) return alert('Não há datas ativas suficientes para interligar.');
+        
+        dateNodes.sort((a,b) => {
+          const vA = dateRegex.test(a.id) ? a.id : a.name;
+          const vB = dateRegex.test(b.id) ? b.id : b.name;
+          return vA.localeCompare(vB);
+        });
+        
+        let linkedCount = 0;
+        let errors = 0;
+        for (let i = 0; i < dateNodes.length - 1; i++) {
+          const fromId = dateNodes[i].id;
+          const toId = dateNodes[i+1].id;
+          const edgeRes = await fetch('/api/memory/edges', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ from: fromId, to: toId, relation: 'next' })
+          });
+          const edgeData = await edgeRes.json();
+          if (edgeData.success) {
+            linkedCount++;
+          } else if (edgeData.error && edgeData.error.toLowerCase().includes('already exists')) {
+             // Já existe, não conta como erro
+          } else {
+             errors++;
+          }
+        }
+        
+        alert(`Processo concluído. ${linkedCount} ligações de sequência criadas ou verificadas.` + (errors ? ` (Ignorados ${errors} itens já ligados)` : ''));
+        loadReview();
+      } catch (e) {
+        alert('Erro ao interligar datas: ' + e.message);
+      }
+    }
+
+    loadReview();
+  </script>
+</body>
+</html>

@@ -1,0 +1,333 @@
+#!/usr/bin/env node
+/**
+ * NewClaw CLI — Command-line interface for NewClaw agent
+ * Usage: node bin/newclaw <command> [options]
+ * 
+ * Commands: start, stop, restart, status, logs, update, help
+ */
+const { execSync, spawn, exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+const DIR = path.resolve(__dirname, '..');
+const PID_FILE = path.join(DIR, 'newclaw.pid');
+const LOG_FILE = '/tmp/newclaw.log';
+const ENV_FILE = fs.existsSync(path.join(DIR, 'newclaw.env')) 
+  ? path.join(DIR, 'newclaw.env') 
+  : path.join(DIR, '.env');
+
+function getPid() {
+  try {
+    const pid = fs.readFileSync(PID_FILE, 'utf8').trim();
+    if (process.kill(pid, 0)) return parseInt(pid);
+  } catch {}
+  return null;
+}
+
+function isRunning() {
+  const pid = getPid();
+  return pid !== null;
+}
+
+function readEnv() {
+  const env = {};
+  if (fs.existsSync(ENV_FILE)) {
+    fs.readFileSync(ENV_FILE, 'utf8').split('\n').forEach(line => {
+      const m = line.match(/^([^#=]+)=(.*)$/);
+      if (m) env[m[1].trim()] = m[2].trim();
+    });
+  }
+  return env;
+}
+
+function writeEnv(env) {
+  const lines = Object.entries(env).map(([k, v]) => `${k}=${v}`);
+  fs.writeFileSync(ENV_FILE, lines.join('\n') + '\n');
+}
+
+function tailLog(logDir, daemon) {
+  const logPath = path.join(logDir, 'newclaw-stdout.log');
+  
+  // Show recent
+  try {
+    const content = fs.readFileSync(logPath, 'utf8');
+    const lines = content.split(/\r?\n/).filter(Boolean);
+    const recent = lines.slice(-30);
+    if (recent.length > 0) console.log(recent.join('\n'));
+  } catch {}
+  
+  // Follow
+  let offset = 0;
+  try { offset = fs.statSync(logPath).size; } catch {}
+  
+  fs.watchFile(logPath, { interval: 400 }, () => {
+    try {
+      const stats = fs.statSync(logPath);
+      if (stats.size > offset) {
+        const stream = fs.createReadStream(logPath, { encoding: 'utf8', start: offset, end: stats.size - 1 });
+        offset = stats.size;
+        stream.on('data', chunk => process.stdout.write(chunk));
+      }
+    } catch {}
+  });
+  
+  process.on('SIGINT', () => {
+    fs.unwatchFile(logPath);
+    console.log('\n📡 Log tail stopped');
+    process.exit(0);
+  });
+}
+
+const commands = {
+  start(args) {
+    if (isRunning()) { console.log(`🟢 NewClaw already running (PID ${getPid()})`); return; }
+    const daemon = args.includes('--daemon');
+    const debug = args.includes('--debug');
+    const tail = args.includes('--tail');
+    
+    // Load .env
+    const env = readEnv();
+    if (debug) env.LOG_LEVEL = 'debug';
+    
+    // Check lang override
+    const langArg = args.find(a => a.startsWith('--lang='));
+    if (langArg) env.APP_LANG = langArg.split('=')[1];
+    
+    const envStr = Object.entries(env).map(([k,v]) => `${k}=${v}`).join(' ');
+    const logDir = path.join(DIR, 'logs');
+    
+    if (daemon) {
+      fs.mkdirSync(logDir, { recursive: true });
+      const outLog = fs.openSync(path.join(logDir, 'newclaw-stdout.log'), 'a');
+      const errLog = fs.openSync(path.join(logDir, 'newclaw-stderr.log'), 'a');
+      
+      const child = spawn('node', ['dist/index.js'], {
+        cwd: DIR,
+        stdio: ['ignore', outLog, errLog],
+        env: { ...process.env, ...env },
+        detached: true
+      });
+      
+      fs.writeFileSync(PID_FILE, child.pid.toString());
+      child.unref();
+      
+      console.log(`🚀 NewClaw started (daemon, PID ${child.pid})`);
+      console.log(`   Mode: ${debug ? 'debug' : 'normal'}`);
+      console.log(`   Logs: ${logDir}/`);
+      
+      if (tail) {
+        console.log('\n📡 Tailing logs (Ctrl+C to stop)...\n');
+        tailLog(logDir, true);
+      }
+      return;
+    }
+    
+    // Foreground with optional tail
+    if (tail) {
+      fs.mkdirSync(logDir, { recursive: true });
+      const logPath = path.join(logDir, 'newclaw-stdout.log');
+      fs.closeSync(fs.openSync(logPath, 'a'));
+      
+      const child = spawn('node', ['dist/index.js'], {
+        cwd: DIR,
+        stdio: ['inherit', 'ignore', 'ignore'],
+        env: { ...process.env, ...env }
+      });
+      
+      fs.writeFileSync(PID_FILE, child.pid.toString());
+      
+      // Show recent + follow
+      try {
+        const content = fs.readFileSync(logPath, 'utf8');
+        const lines = content.split(/\r?\n/).filter(Boolean);
+        const recent = lines.slice(-30);
+        if (recent.length > 0) console.log(recent.join('\n'));
+      } catch {}
+      
+      let offset = 0;
+      try { offset = fs.statSync(logPath).size; } catch {}
+      
+      fs.watchFile(logPath, { interval: 400 }, () => {
+        try {
+          const stats = fs.statSync(logPath);
+          if (stats.size > offset) {
+            const stream = fs.createReadStream(logPath, { encoding: 'utf8', start: offset, end: stats.size - 1 });
+            offset = stats.size;
+            stream.on('data', chunk => process.stdout.write(chunk));
+          }
+        } catch {}
+      });
+      
+      process.on('SIGINT', () => {
+        fs.unwatchFile(logPath);
+        if (!child.killed) child.kill('SIGINT');
+        process.exit(0);
+      });
+    } else {
+      const child = spawn('node', ['dist/index.js'], {
+        cwd: DIR,
+        stdio: 'inherit',
+        env: { ...process.env, ...env }
+      });
+      process.on('SIGINT', () => { child.kill('SIGINT'); process.exit(0); });
+    }
+  },
+
+  stop() {
+    const pid = getPid();
+    if (!pid) { console.log('⚪ NewClaw is not running'); return; }
+    try { process.kill(pid, 'SIGTERM'); } catch {}
+    try { fs.unlinkSync(PID_FILE); } catch {}
+    console.log('🛑 NewClaw stopped');
+  },
+
+  restart(args) {
+    commands.stop();
+    setTimeout(() => commands.start([...args, '--daemon']), 2000);
+  },
+
+  status(args) {
+    const pid = getPid();
+    const env = readEnv();
+    if (!pid) { console.log('⚪ NewClaw is not running'); return; }
+    
+    let uptime = 'unknown';
+    try {
+      const out = execSync(`ps -p ${pid} -o etimes=`).toString().trim();
+      const secs = parseInt(out);
+      const m = Math.floor(secs / 60);
+      const h = Math.floor(m / 60);
+      uptime = h > 0 ? `${h}h ${m % 60}m` : `${m}m`;
+    } catch {}
+    
+    console.log(`🟢 NewClaw running (PID ${pid}, uptime ${uptime})`);
+    console.log(`   Model: ${env.OLLAMA_MODEL || 'glm-5.1:cloud'}`);
+    console.log(`   Lang: ${env.APP_LANG || 'pt-BR'}`);
+    console.log(`   Whisper API: ${env.WHISPER_API_URL || 'localhost:8177'}`);
+    console.log(`   Dashboard: http://localhost:${env.DASHBOARD_PORT || 3090}`);
+    
+    const langArg = args?.find(a => a.startsWith('--lang='));
+    if (langArg) {
+      const lang = langArg.split('=')[1];
+      env.APP_LANG = lang;
+      writeEnv(env);
+      console.log(`   Lang updated to: ${lang}`);
+    }
+  },
+
+  lang() {
+    const env = readEnv();
+    console.log(`Current: ${env.APP_LANG || 'pt-BR'}`);
+    console.log('Usage: node bin/newclaw lang <locale>  (e.g. pt-BR, en-US)');
+  },
+
+  logs(args) {
+    const logDir = path.join(DIR, 'logs');
+    const stdoutLog = path.join(logDir, 'newclaw-stdout.log');
+    const follow = args?.includes('--follow') || args?.includes('-f');
+    
+    if (!fs.existsSync(stdoutLog)) {
+      // Fallback to old log location
+      if (fs.existsSync(LOG_FILE)) {
+        if (follow) {
+          const child = spawn('tail', ['-f', LOG_FILE], { stdio: 'inherit' });
+          process.on('SIGINT', () => { child.kill(); process.exit(0); });
+        } else {
+          try {
+            const out = execSync(`tail -50 ${LOG_FILE}`).toString();
+            console.log(out);
+          } catch { console.log('No logs found'); }
+        }
+      } else {
+        console.log('No logs found. Start NewClaw first.');
+      }
+      return;
+    }
+    
+    if (follow) {
+      tailLog(logDir, false);
+    } else {
+      try {
+        const out = execSync(`tail -50 ${stdoutLog}`).toString();
+        console.log(out);
+      } catch { console.log('No logs found'); }
+    }
+  },
+
+  update(args) {
+    const restart = args?.includes('restart') || args?.includes('-r');
+    console.log('🔄 Updating NewClaw...');
+    try {
+      execSync('git fetch origin main', { cwd: DIR, stdio: 'inherit' });
+      const local = execSync('git rev-parse HEAD', { cwd: DIR }).toString().trim();
+      const remote = execSync('git rev-parse origin/main', { cwd: DIR }).toString().trim();
+      
+      if (local === remote) {
+        console.log('✅ Already up to date');
+        return;
+      }
+      
+      console.log('📥 Pulling...');
+      execSync('git pull origin main', { cwd: DIR, stdio: 'inherit' });
+      console.log('🔧 Building...');
+      execSync('npm run build', { cwd: DIR, stdio: 'inherit' });
+      
+      if (restart) {
+        console.log('🔄 Restarting...');
+        commands.restart(['--daemon']);
+      } else {
+        console.log('⚠️  Build complete. Run "node bin/newclaw update restart" to apply.');
+      }
+      console.log('✅ Done!');
+    } catch (e) {
+      console.error('❌ Update failed:', e.message);
+    }
+  },
+
+  help() {
+    console.log(`
+🪐 NewClaw CLI — Command Reference
+
+  node bin/newclaw start [--daemon] [--debug] [--tail] [--lang=xx]
+      Start NewClaw agent
+      --daemon    Run in background
+      --debug     Enable debug logging (LOG_LEVEL=debug)
+      --tail      Debug + live log stream (like tail -f)
+      --lang=xx   Override language (e.g. pt-BR, en-US)
+
+  node bin/newclaw stop           Stop the agent
+  node bin/newclaw restart        Restart (stop + start --daemon)
+  node bin/newclaw status [--lang=xx]  Show PID, uptime, config
+  node bin/newclaw logs [--follow|-f]  View logs (tail -f)
+  node bin/newclaw lang           Show current language
+  node bin/newclaw lang <locale>  Set language persistently
+  node bin/newclaw update [restart]   Pull from GitHub, build, optionally restart
+  node bin/newclaw help           Show this help
+
+Examples:
+  node bin/newclaw start --daemon
+  node bin/newclaw start --debug --daemon --tail
+  node bin/newclaw start --debug --tail
+  node bin/newclaw status --lang=pt-BR
+  node bin/newclaw update restart
+  node bin/newclaw logs -f
+
+Debug Tips:
+  Set LOG_LEVEL=debug in .env for persistent debug logging
+  Use --tail to watch logs in real-time while running as daemon
+  Logs are stored in: ./logs/newclaw-stdout.log
+`);
+  }
+};
+
+// Parse args
+const args = process.argv.slice(2);
+const command = args[0] || 'help';
+const rest = args.slice(1);
+
+if (commands[command]) {
+  commands[command](rest);
+} else {
+  console.log(`❌ Unknown command: ${command}`);
+  commands.help();
+}
