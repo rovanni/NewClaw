@@ -92,9 +92,8 @@ export class AgentLoop {
         return this.stateManager;
     }
 
-    updateConfig(updates: Partial<AgentLoopConfig>): void {
-        this.config = { ...this.config, ...updates };
-    }
+
+
 
     constructor(
         providerFactory: ProviderFactory,
