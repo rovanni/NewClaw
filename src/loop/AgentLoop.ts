@@ -104,12 +104,12 @@ export class AgentLoop {
 - Relevância Semântica: Filtre o ruído. Ignore resultados de ferramentas que não respondem à pergunta ou tarefa.
 - Hierarquia de Evidência: Dados de ferramentas estruturadas (crypto/memória local) são soberanos sobre buscas web genéricas.
 - Adaptação a Falhas: Se uma ferramenta falhar ou retornar erro, NÃO repita a mesma ação com os mesmos parâmetros. Mude a estratégia, tente outra ferramenta ou finalize com a melhor informação disponível.
-- Fallback Cognitivo: Se dados externos não estiverem disponíveis, use seu conhecimento interno para fornecer uma análise geral, identificando tendências prováveis. Use linguagem probabilística (ex: "tende a", "sinaliza", "provavelmente"). NUNCA deixe de responder.
+- Fallback Cognitivo: Quando não houver dados externos confiáveis, declare claramente a limitação de dados e mantenha total transparência. NÃO infira tendências sem base, NÃO use linguagem probabilística vaga ("tende a", "sinaliza") e NÃO inventar conclusões. Ofereça uma alternativa útil ao usuário. Priorize honestidade sobre completude.
 - Não Repetição: Se você já obteve uma informação ou executou uma ação, não a repita a menos que haja uma mudança clara de contexto.
 
 ## ✍️ ARQUITETURA DA RESPOSTA FINAL
 - Prioridade de Resposta: Sempre apresente sua conclusão/resposta direta ANTES de listar dados de suporte ou tabelas.
-- Conclusão Decisiva: Identifique tendências e padrões. Se o usuário pedir uma análise, decida por um posicionamento (alta/baixa/lateral), não seja excessivamente neutro.
+- Conclusão Transparente: Identifique tendências apenas quando houver evidência clara. Se os dados forem insuficientes, admita a limitação de forma honesta em vez de forçar um posicionamento. Nunca apresente inferência como fato sem evidência mínima.
 - Qualidade vs Quantidade: Mostre apenas o essencial. Evite dumps de dados brutos sem explicação.
 - Resposta ao Usuário: Suas mensagens são destinadas a um ser humano. Use tom profissional e prestativo. NUNCA responda com mensagens puramente técnicas.
 
@@ -223,7 +223,7 @@ ${userText}`;
             if (toolFailureCount >= 2) {
                 loopMessages.push({ 
                     role: 'system', 
-                    content: '[CRÍTICO] Múltiplas ferramentas falharam. PARE de tentar ferramentas. Responda AGORA usando seu conhecimento interno e o contexto disponível. Sua resposta deve ser útil ao usuário, mesmo sem dados externos.' 
+                    content: '[CRÍTICO] Múltiplas ferramentas falharam. PARE de tentar ferramentas. Responda AGORA declarando claramente a limitação de dados. Seja honesto e transparente: não invente tendências e não use linguagem vaga. Ofereça uma alternativa útil com base no que já sabemos.' 
                 });
             }
 
@@ -336,7 +336,7 @@ ${userText}`;
         console.log(`[${this.ts()}] [FALLBACK] Generating final synthesis...`);
         loopMessages.push({ 
             role: 'system', 
-            content: 'FINALIZAÇÃO OBRIGATÓRIA: Forneça uma resposta útil ao usuário agora, baseada em todo o contexto anterior e no seu conhecimento. Não use ferramentas. Use linguagem probabilística se necessário.' 
+            content: 'FINALIZAÇÃO OBRIGATÓRIA: Forneça uma resposta honesta agora. Se não obteve dados suficientes, admita a limitação claramente. Não invente conclusões e não use linguagem vaga. Foque em ser útil e transparente.' 
         });
         
         const finalResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile);
