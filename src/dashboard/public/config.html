@@ -507,21 +507,43 @@
           analysis:document.getElementById('modelAnalysis').value, execution:document.getElementById('modelExecution').value, 
           visionServer:document.getElementById('visionServer').value } };
 
-      // Check if model exists first
-      const model = config.ollamaModel;
-      if (model && config.defaultProvider === 'ollama') {
+      // Check if models exist first (Main model + Router models)
+      const modelsToValidate = new Set();
+      if (config.ollamaModel && config.defaultProvider === 'ollama') modelsToValidate.add(config.ollamaModel);
+      
+      if (config.modelRouter) {
+        ['chat', 'code', 'vision', 'light', 'analysis', 'execution'].forEach(key => {
+          const m = config.modelRouter[key];
+          if (m && m.trim()) modelsToValidate.add(m.trim());
+        });
+      }
+
+      for (const model of modelsToValidate) {
+        // Skip direct API providers (Groq, Gemini, DeepSeek) as they don't use Ollama pull
+        const isExternalApi = model.includes('groq') || model.includes('gemini') || model.includes('deepseek');
+        if (isExternalApi) continue;
+
         try {
           const checkRes = await fetch('/api/ollama/exists/' + encodeURIComponent(model));
           const checkData = await checkRes.json();
           if (checkData.success && !checkData.exists) {
-            showToast('⬇️ Modelo "' + model + '" não encontrado. Baixando...', 'success');
-            const pullRes = await fetch('/api/ollama/pull', {
+            // For :cloud models, it's an instant registration. For others, it's a real download.
+            const isCloud = model.includes(':cloud');
+            const msg = isCloud ? '✨ Registrando modelo cloud "' + model + '"...' : '⬇️ Modelo "' + model + '" não encontrado. Baixando...';
+            
+            showToast(msg, 'success');
+            
+            fetch('/api/ollama/pull', {
               method: 'POST', headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({ model })
-            });
-            const pullData = await pullRes.json();
-            if (pullData.success) { showToast('✅ Modelo "' + model + '" baixado!', 'success'); loadProviders(); }
-            else { showToast('⚠️ Falha ao baixar: ' + (pullData.error || 'desconhecido'), 'error'); }
+            }).then(r => r.json()).then(data => {
+              if (data.success) { 
+                showToast('✅ Modelo "' + model + '" pronto!', 'success'); 
+                loadProviders(); 
+              } else {
+                showToast('⚠️ Falha ao registrar "' + model + '": ' + (data.error || 'desconhecido'), 'error');
+              }
+            }).catch(() => {});
           }
         } catch (e) { }
       }
