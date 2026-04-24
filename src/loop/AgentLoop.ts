@@ -65,7 +65,7 @@ export class AgentLoop {
     private memory: MemoryManager;
     private tools: Map<string, ToolExecutor> = new Map();
     private config: AgentLoopConfig;
-    private maxIterations: number = 5;
+    private maxIterations: number = 2;
     private compressor: ContextCompressor;
     private contextBuilder: ContextBuilder;
     private responseBuilder: ResponseBuilder;
@@ -155,9 +155,35 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
         return this.runWithTools(conversationId, userText, 0, userId);
     }
 
+    private parseLLMResponse(content: string): any | null {
+        if (!content) return null;
+        
+        const clean = sanitizeContent(content);
+        try {
+            // Tentativa 1: Parse direto
+            return JSON.parse(clean);
+        } catch (e) {
+            try {
+                // Tentativa 2: Extração via Regex
+                const match = clean.match(/\{[\s\S]*\}/);
+                if (match) {
+                    let jsonStr = match[0];
+                    // Correções simples
+                    jsonStr = jsonStr.replace(/,\s*([\}\]])/g, '$1'); // Remove vírgulas finais
+                    jsonStr = jsonStr.replace(/'/g, '"'); // Aspas simples para duplas (perigoso, mas útil em fallbacks)
+                    return JSON.parse(jsonStr);
+                }
+            } catch (e2) {
+                return null;
+            }
+        }
+        return null;
+    }
+
     private async runWithTools(conversationId: string, userText: string, iteration: number, userId?: string): Promise<string> {
-        if (iteration >= this.maxIterations) {
-            return 'Não consegui completar a tarefa após várias tentativas.';
+        // Limite estrito de 2 ciclos totais (iteração 0 e 1)
+        if (iteration >= 2) {
+            return 'Não consegui completar a tarefa no tempo previsto.';
         }
 
         console.log(`[${this.ts()}] [LOOP] Atomic Cognition Cycle ${iteration + 1}`);
@@ -188,28 +214,36 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
             { role: 'user', content: userText }
         ];
 
-        let chatProfile = this.modelRouter.route(userText);
-        let currentIteration = 0;
+        // Roteamento determinístico e instantâneo
+        const chatProfile = await this.modelRouter.route(userText);
+        let stepCount = 0;
+        const maxSteps = 4; // Limite de passos dentro do ciclo
 
-        while (currentIteration < this.maxIterations) {
-            currentIteration++;
-            console.log(`[${this.ts()}] [COGNITION] Step ${currentIteration}...`);
+        while (stepCount < maxSteps) {
+            stepCount++;
+            console.log(`[${this.ts()}] [COGNITION] Step ${stepCount}...`);
 
-            const response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
-            const content = sanitizeContent(response.content || '');
-            
-            let atomicData: any = { thought: '', action: { type: 'final_answer', content: content }, evaluation: { is_complete: true } };
-            try {
-                const jsonStr = content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1);
-                atomicData = JSON.parse(jsonStr);
-                console.log(`[${this.ts()}] [ATOMIC] Thought: ${atomicData.thought?.slice(0, 100)}...`);
-                console.log(`[${this.ts()}] [ATOMIC] Evaluation: ${atomicData.evaluation?.is_complete ? 'COMPLETE' : 'INCOMPLETE'} (${atomicData.evaluation?.confidence})`);
-            } catch (e) {
-                console.log(`[${this.ts()}] [ATOMIC] LLM did not provide valid JSON. Proceeding with raw content.`);
+            let response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
+            let atomicData = this.parseLLMResponse(response.content || '');
+
+            // Retry Lógica (Máx 1x)
+            if (!atomicData && !response.toolCalls?.length) {
+                console.warn(`[${this.ts()}] [ATOMIC] Invalid JSON. Retrying (1/1)...`);
+                loopMessages.push({ role: 'assistant', content: response.content || 'Erro de formato' });
+                loopMessages.push({ role: 'user', content: 'Sua resposta anterior não estava em JSON válido. Responda novamente APENAS no formato JSON exigido.' });
+                
+                response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
+                atomicData = this.parseLLMResponse(response.content || '');
+                
+                if (!atomicData) {
+                    console.error(`[${this.ts()}] [ATOMIC] JSON failure after retry. Aborting loop.`);
+                    return 'Houve um erro de processamento. Por favor, tente reformular sua pergunta.';
+                }
             }
 
             loopMessages.push({ role: 'assistant', content: response.content, toolCalls: response.toolCalls });
 
+            // 1. Native toolCalls
             if (response.toolCalls && response.toolCalls.length > 0) {
                 for (const toolCall of response.toolCalls) {
                     const tool = this.tools.get(toolCall.name);
@@ -217,12 +251,15 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
                         const result = await tool.execute(toolCall.arguments);
                         console.log(`[${this.ts()}] [TOOL] ${toolCall.name} -> ${result.success ? '✓' : '✗'}`);
                         loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
+                        
+                        if (toolCall.name === 'send_audio' || toolCall.name === 'send_document') return result.output;
                     }
                 }
                 continue; 
             }
 
-            if (atomicData.action?.type === 'tool' && atomicData.action.name) {
+            // 2. Atomic Action
+            if (atomicData?.action?.type === 'tool' && atomicData.action.name) {
                 const tool = this.tools.get(atomicData.action.name);
                 if (tool) {
                     const result = await tool.execute(atomicData.action.input || {});
@@ -232,14 +269,20 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
                 }
             }
 
-            if (atomicData.evaluation?.is_complete || atomicData.evaluation?.confidence === 'high' || currentIteration >= 4) {
-                return atomicData.action?.content || content || 'Tarefa concluída.';
+            // 3. Early Stop (Prioridade Total)
+            if (atomicData?.evaluation?.is_complete === true) {
+                console.log(`[${this.ts()}] [ATOMIC] Task marked as COMPLETE. Stopping.`);
+                return atomicData.action?.content || sanitizeContent(response.content || '') || 'Tarefa concluída.';
+            }
+
+            if (atomicData?.evaluation?.confidence === 'high' || stepCount >= maxSteps) {
+                return atomicData?.action?.content || sanitizeContent(response.content || '') || 'Tarefa concluída.';
             }
 
             loopMessages.push({ role: 'user', content: '[SISTEMA] Continue sua execução ou finalize se já for suficiente.' });
         }
 
-        return 'Limite de iterações atingido.';
+        return 'Limite de passos atingido.';
     }
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<any> {

@@ -114,45 +114,20 @@ export class ModelRouter {
     }
 
     /**
-     * Roteamento principal: LLM classifica, fallback determinístico.
+     * Roteamento principal: Puramente determinístico (rápido).
      */
     async route(query: string): Promise<ModelProfile> {
-        // 1. Cache check
-        const cached = classificationCache.get(query);
-        if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-            const profile = this.getProfileByCategory(cached.category);
-            if (profile) {
-                console.log(`[MODEL_ROUTER] Cache hit: ${cached.category} → ${profile.model}`);
-                return profile;
-            }
-        }
-
-        // 2. LLM classification
-        try {
-            const category = await this.llmClassify(query);
-            classificationCache.set(query, { category, timestamp: Date.now() });
-            const profile = this.getProfileByCategory(category);
-            if (profile) {
-                this.logUsage(profile.id);
-                console.log(`[MODEL_ROUTER] LLM classified: ${category} → ${profile.model}`);
-                return profile;
-            }
-        } catch (e) {
-            console.log(`[MODEL_ROUTER] LLM classification failed, using fallback: ${e}`);
-        }
-
-        // 3. Deterministic fallback
-        const fallbackCategory = this.fallbackClassify(query);
-        const profile = this.getProfileByCategory(fallbackCategory);
+        // Deterministic classification
+        const category = this.fallbackClassify(query);
+        const profile = this.getProfileByCategory(category);
+        
         if (profile) {
             this.logUsage(profile.id);
-            console.log(`[MODEL_ROUTER] Fallback: ${fallbackCategory} → ${profile.model}`);
+            console.log(`[MODEL_ROUTER] Deterministic routing: ${category} → ${profile.model}`);
             return profile;
         }
 
-        // 4. Default
-        const defaultProfile = this.config.profiles.find(p => p.id === this.config.defaultProfile);
-        return defaultProfile || this.config.profiles[0];
+        return this.getProfileByCategory('chat')!;
     }
 
     /**
