@@ -12,7 +12,7 @@ export interface ModelProfile {
     id: string;           // Identificador único
     model: string;       // Nome no Ollama
     server: string;      // URL do servidor Ollama
-    category: 'chat' | 'code' | 'vision' | 'light' | 'analysis';
+    category: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution';
     description: string; // Descrição humana
     maxTokens?: number;  // Limite de contexto (opcional)
 }
@@ -32,7 +32,7 @@ export interface FallbackRule {
 }
 
 // Categorias válidas
-const VALID_CATEGORIES = ['chat', 'code', 'vision', 'light', 'analysis'] as const;
+const VALID_CATEGORIES = ['chat', 'code', 'vision', 'light', 'analysis', 'execution'] as const;
 type Category = typeof VALID_CATEGORIES[number];
 
 // ── Intent-based descriptions ──────────────────────────────────────
@@ -42,7 +42,8 @@ const CATEGORY_DESCRIPTIONS: Record<Category, string> = {
     code: 'The user wants to CREATE, BUILD, GENERATE, EDIT, or FIX something — any file, document, page, script, app, or artifact',
     vision: 'Image analysis, photos, screenshots, OCR',
     light: 'Short greetings or acknowledgements: hi, ok, thanks, bye',
-    analysis: 'Data analysis, financial markets, crypto prices, statistics'
+    analysis: 'Data analysis, financial markets, crypto prices, statistics',
+    execution: 'Complex tasks, tool loops, multi-step agent execution and reasoning'
 };
 
 const DEFAULT_CONFIG: RouterConfig = {
@@ -55,6 +56,7 @@ const DEFAULT_CONFIG: RouterConfig = {
         { id: 'light-chat', model: 'glm-5.1:cloud', server: 'http://localhost:11434', category: 'light', description: 'Conversa leve e rápida' },
         { id: 'vision-primary', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'vision', description: 'Análise de imagens e OCR' },
         { id: 'analysis-primary', model: 'glm-5:cloud', server: 'http://localhost:11434', category: 'analysis', description: 'Análise profunda e cripto' },
+        { id: 'execution-primary', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'execution', description: 'Execução de ferramentas e tarefas complexas' },
     ],
     fallbackRules: [
         // ── code: detect ACTION VERBS (imperative/creation intent) ──
@@ -284,5 +286,29 @@ Category:`;
 
     private logUsage(profileId: string): void {
         this.usageLog.set(profileId, (this.usageLog.get(profileId) || 0) + 1);
+    }
+
+    /**
+     * Retorna o modelo configurado para EXECUÇÃO (Agent Loop).
+     * Se não configurado explicitamente, faz fallback para o modelo de CHAT.
+     */
+    getExecutionModel(): string {
+        const profile = this.getProfileByCategory('execution');
+        if (profile) return profile.model;
+
+        // Fallback para chat
+        const chatProfile = this.getProfileByCategory('chat');
+        return chatProfile?.model || this.config.profiles[0].model;
+    }
+
+    /**
+     * Retorna o perfil completo de EXECUÇÃO.
+     */
+    getExecutionProfile(): ModelProfile {
+        const profile = this.getProfileByCategory('execution');
+        if (profile) return profile;
+
+        const chatProfile = this.getProfileByCategory('chat');
+        return chatProfile || this.config.profiles[0];
     }
 }

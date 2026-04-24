@@ -116,13 +116,14 @@ export class DashboardServer {
                     hasDeepseekKey: !!this.config.deepseekApiKey,
                     hasGroqKey: !!this.config.groqApiKey,
                     hasOllamaApiKey: !!this.config.ollamaApiKey,
+                    modelRouter: this.config.modelRouter || {}
                 }
             });
         });
 
         // Update config (runtime)
         this.app.post('/api/config', (req: Request, res: Response) => {
-            const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl, telegramAllowedUserIds } = req.body;
+            const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl, telegramAllowedUserIds, modelRouter } = req.body;
 
             console.log(`[CONFIG] POST /api/config — ollamaModel="${ollamaModel}" provider="${defaultProvider}"`);
 
@@ -177,6 +178,11 @@ export class DashboardServer {
                 this.config.ollamaApiKey = ollamaApiKey;
             }
 
+            if (modelRouter) {
+                this.config.modelRouter = { ...(this.config.modelRouter || {}), ...modelRouter };
+                console.log(`[CONFIG] ModelRouter updated: ${JSON.stringify(this.config.modelRouter)}`);
+            }
+
             // Persist relevant config to .env so restart keeps the values
             this.persistConfigToEnv();
 
@@ -186,7 +192,8 @@ export class DashboardServer {
                 if (loop && typeof loop.updateConfig === 'function') {
                     loop.updateConfig({
                         maxIterations: this.config.maxIterations,
-                        systemPrompt: this.config.systemPrompt || ''
+                        systemPrompt: this.config.systemPrompt || '',
+                        modelRouter: this.config.modelRouter
                     });
                 }
             }
@@ -209,6 +216,7 @@ export class DashboardServer {
                 hasDeepseekKey: !!this.config.deepseekApiKey,
                 hasGroqKey: !!this.config.groqApiKey,
                 hasOllamaApiKey: !!this.config.ollamaApiKey,
+                modelRouter: this.config.modelRouter || {}
             };
             res.json({ success: true, config: safeConfig });
         });
@@ -1349,6 +1357,13 @@ export class DashboardServer {
                 'MAX_ITERATIONS': String(this.config.maxIterations),
                 'MEMORY_WINDOW_SIZE': String(this.config.memoryWindowSize),
                 'TELEGRAM_ALLOWED_USER_IDS': this.config.telegramAllowedUserIds.join(','),
+                'MODEL_CHAT': this.config.modelRouter?.chat || '',
+                'MODEL_CODE': this.config.modelRouter?.code || '',
+                'MODEL_VISION': this.config.modelRouter?.vision || '',
+                'MODEL_LIGHT': this.config.modelRouter?.light || '',
+                'MODEL_ANALYSIS': this.config.modelRouter?.analysis || '',
+                'MODEL_EXECUTION': this.config.modelRouter?.execution || '',
+                'VISION_SERVER': this.config.modelRouter?.visionServer || '',
             };
 
             // Only write OLLAMA_API_KEY if provided (don't overwrite with empty)

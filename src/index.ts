@@ -31,6 +31,15 @@ const config = {
     tmpDir: process.env.TMP_DIR || './tmp',
     whisperPath: process.env.WHISPER_PATH || '/usr/local/bin/whisper',
     dashboardPort: parseInt(process.env.DASHBOARD_PORT || '3090'),
+    modelRouter: {
+        chat: process.env.MODEL_CHAT,
+        code: process.env.MODEL_CODE,
+        vision: process.env.MODEL_VISION,
+        light: process.env.MODEL_LIGHT,
+        analysis: process.env.MODEL_ANALYSIS,
+        execution: process.env.MODEL_EXECUTION,
+        visionServer: process.env.VISION_SERVER
+    }
 };
 
 async function main() {

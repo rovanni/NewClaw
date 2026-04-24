@@ -43,6 +43,15 @@ export interface NewClawConfig {
     whisperPath: string;
     dashboardPort?: number;
     systemPrompt?: string;
+    modelRouter?: {
+        chat?: string;
+        code?: string;
+        vision?: string;
+        light?: string;
+        analysis?: string;
+        execution?: string;
+        visionServer?: string;
+    };
 }
 
 export class AgentController {
@@ -85,7 +94,8 @@ export class AgentController {
             this.memory,
             {
                 languageDirective,
-                systemPrompt
+                systemPrompt,
+                modelRouter: config.modelRouter
             },
             this.skillLearner
         );

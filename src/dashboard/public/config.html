@@ -286,9 +286,20 @@
           </div>
         </div>
         <div class="form-group">
+          <label class="form-label">🧠 Execução (tools / tarefas complexas)</label>
+          <div class="model-select-container" id="container-modelExecution">
+            <input type="text" class="model-select-input" autocomplete="off" id="modelExecution" placeholder="kimi-k2.6:cloud">
+            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+            <div class="model-dropdown" id="dropdown-modelExecution"></div>
+          </div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
           <label class="form-label">Servidor Visão (URL)</label>
           <input type="text" class="form-input" id="visionServer" placeholder="http://localhost:11434">
         </div>
+        <div class="form-group"></div>
       </div>
       <div id="routerStats" style="font-size:0.82rem;color:var(--text-soft);padding:8px;background:var(--bg-input);border-radius:8px;margin-top:8px;">Carregando estatísticas...</div>
     </div>
@@ -359,6 +370,7 @@
             document.getElementById('modelVision').value = data.config.modelRouter.vision || 'gemma4:e4b';
             document.getElementById('modelLight').value = data.config.modelRouter.light || 'gemma4:e4b';
             document.getElementById('modelAnalysis').value = data.config.modelRouter.analysis || 'glm-5:cloud';
+            document.getElementById('modelExecution').value = data.config.modelRouter.execution || 'kimi-k2.6:cloud';
             document.getElementById('visionServer').value = data.config.modelRouter.visionServer || 'http://localhost:11434';
           }
         }
@@ -486,7 +498,8 @@
         ollamaApiKey:document.getElementById('ollamaApiKey').value||undefined,
         modelRouter: { chat:document.getElementById('modelChat').value, code:document.getElementById('modelCode').value,
           vision:document.getElementById('modelVision').value, light:document.getElementById('modelLight').value,
-          analysis:document.getElementById('modelAnalysis').value, visionServer:document.getElementById('visionServer').value } };
+          analysis:document.getElementById('modelAnalysis').value, execution:document.getElementById('modelExecution').value, 
+          visionServer:document.getElementById('visionServer').value } };
 
       // Check if model exists first
       const model = config.ollamaModel;
@@ -546,7 +559,7 @@
     let availableModelsList = [];
     function initModelDropdowns() {
       if (window.isDropdownsInit) return; window.isDropdownsInit = true;
-      const inputs = ['ollamaModel', 'modelChat', 'modelCode', 'modelVision', 'modelLight', 'modelAnalysis'];
+      const inputs = ['ollamaModel', 'modelChat', 'modelCode', 'modelVision', 'modelLight', 'modelAnalysis', 'modelExecution'];
       inputs.forEach(id => {
         const input = document.getElementById(id);
         const dropdown = document.getElementById(`dropdown-${id}`);

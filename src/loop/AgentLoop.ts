@@ -38,6 +38,15 @@ export interface ToolExecutor {
 export interface AgentLoopConfig {
     languageDirective: string;
     systemPrompt: string;
+    modelRouter?: {
+        chat?: string;
+        code?: string;
+        vision?: string;
+        light?: string;
+        analysis?: string;
+        execution?: string;
+        visionServer?: string;
+    };
 }
 
 const llmQueue = new PQueue({ concurrency: 1 });
@@ -108,12 +117,37 @@ export class AgentLoop {
         this.postProcessor = new DecisionPostProcessor();
         this.config = {
             languageDirective: config?.languageDirective || 'Responda SEMPRE em português brasileiro. Seja direto e conciso.',
-            systemPrompt: config?.systemPrompt || 'Voce e o NewClaw, um agente cognitivo local. Ao usar ferramentas (tools), seja extremamente preciso com nomes de arquivos e caminhos. NUNCA mostre codigo tecnico ou saida de comandos ao usuario. Sempre formate a resposta de forma natural e amigavel. IMPORTANTE: Voce tem acesso ao historico completo da conversa — quando o usuario se referir a algo mencionado antes (ex: "esses valores", "aquele arquivo", "o que acabamos de falar"), USE as informacoes do contexto anterior relevante que esta disponivel. NUNCA diga que nao se lembra ou que nao tem acesso ao historico. EDICAO DE ARQUIVOS: Para modificar um arquivo existente, use file_ops com uma destas acoes: (1) action=replace — troca texto exato (target e replacement). (2) action=patch — troca por numero de linha (startLine, endLine, content). (3) action=append — adiciona conteudo ao final do arquivo. NUNCA recrie o arquivo inteiro com action=create se ele ja existe — isso apaga todo o conteudo original. Para edicoes grandes em HTML/CSS/JS, prefira action=patch com numeros de linha.'
+            systemPrompt: config?.systemPrompt || 'Voce e o NewClaw, um agente cognitivo local...',
+            modelRouter: config?.modelRouter
         };
+
+        if (this.config.modelRouter) {
+            this.applyModelRouterConfig(this.config.modelRouter);
+        }
+    }
+
+    private applyModelRouterConfig(routerConfig: any): void {
+        const profiles = (this.modelRouter as any).config.profiles;
+        if (routerConfig.chat) { const p = profiles.find((p: any) => p.category === 'chat'); if (p) p.model = routerConfig.chat; }
+        if (routerConfig.code) { const p = profiles.find((p: any) => p.category === 'code'); if (p) p.model = routerConfig.code; }
+        if (routerConfig.vision) { const p = profiles.find((p: any) => p.category === 'vision'); if (p) p.model = routerConfig.vision; }
+        if (routerConfig.light) { const p = profiles.find((p: any) => p.category === 'light'); if (p) p.model = routerConfig.light; }
+        if (routerConfig.analysis) { const p = profiles.find((p: any) => p.category === 'analysis'); if (p) p.model = routerConfig.analysis; }
+        if (routerConfig.execution) { const p = profiles.find((p: any) => p.category === 'execution'); if (p) p.model = routerConfig.execution; }
+        if (routerConfig.visionServer) (this.modelRouter as any).config.classifierServer = routerConfig.visionServer;
     }
 
     registerTool(tool: ToolExecutor): void {
         this.tools.set(tool.name, tool);
+    }
+
+    public updateConfig(newConfig: Partial<AgentLoopConfig>): void {
+        if (newConfig.languageDirective) this.config.languageDirective = newConfig.languageDirective;
+        if (newConfig.systemPrompt) this.config.systemPrompt = newConfig.systemPrompt;
+        if (newConfig.modelRouter) {
+            this.config.modelRouter = { ...(this.config.modelRouter || {}), ...newConfig.modelRouter };
+            this.applyModelRouterConfig(this.config.modelRouter);
+        }
     }
 
     setTelegramContext(chatId: string, botToken: string): void {
@@ -289,6 +323,83 @@ export class AgentLoop {
     private ts(): string { return new Date().toLocaleTimeString('pt-BR', { hour12: false }); }
 
     /**
+     * Valida se a tarefa foi realmente concluída usando o LLM.
+     */
+    private async validateCompletion(
+        userText: string,
+        loopMessages: LLMMessage[],
+        partialResult: string,
+        startIndex: number
+    ): Promise<{ isComplete: boolean, reason?: string }> {
+        // Extrai apenas as ações executadas nesta sessão (desde o startIndex)
+        const sessionMessages = loopMessages.slice(startIndex);
+        const actionsSummary = sessionMessages
+            .filter(m => m.role === 'tool')
+            .map((m, i) => {
+                const idx = sessionMessages.indexOf(m);
+                const assistantMsg = sessionMessages[idx - 1];
+                const toolName = assistantMsg?.toolCalls?.[0]?.name || 'tool';
+                const output = m.content?.slice(0, 150).replace(/\n/g, ' ') || '';
+                const status = output.includes('Erro:') ? '❌ FALHA' : '✅ SUCESSO';
+                return `${i + 1}. ${status} [${toolName}]: ${output}...`;
+            })
+            .join('\n');
+
+        const validationPrompt = `Você concluiu completamente a tarefa do usuário?
+
+[OBJETIVO ORIGINAL]
+${userText}
+
+[AÇÕES EXECUTADAS NESTA SESSÃO]
+${actionsSummary || 'Nenhuma ferramenta foi utilizada nesta etapa.'}
+
+[RESPOSTA FINAL PROPOSTA]
+${partialResult || '(Sem resposta textual)'}
+
+---
+REGRAS DE VALIDAÇÃO:
+1. Todas as informações solicitadas foram encontradas?
+2. Todas as ações foram executadas com SUCESSO? (Falhas em ferramentas críticas tornam a tarefa INCOMPLETA)
+3. Existe alguma pendência ou passo lógico faltando?
+4. Se o usuário pediu para REALIZAR uma ação (ex: criar arquivo, enviar mensagem) e você apenas EXPLICOU como fazer, a tarefa está INCOMPLETA.
+5. Se houver erro técnico que impeça a conclusão, explique o motivo no INCOMPLETE.
+
+Responda APENAS:
+- "COMPLETE" (se tudo estiver 100% feito)
+ou
+- "INCOMPLETE: <motivo detalhado do que falta ou falhou>"`;
+
+        try {
+            console.log(`[${this.ts()}] [VALIDATION] Asking LLM for completion check...`);
+            const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
+                { role: 'system', content: 'Você é um supervisor de tarefas rigoroso. Não aceite respostas parciais ou falhas não resolvidas.' },
+                { role: 'user', content: validationPrompt }
+            ], []));
+
+            const content = (response.content || '').trim();
+            console.log(`[${this.ts()}] [VALIDATION] Result: ${content.slice(0, 100)}`);
+
+            if (content.toUpperCase().startsWith('COMPLETE')) {
+                return { isComplete: true };
+            }
+            
+            if (content.toUpperCase().startsWith('INCOMPLETE:')) {
+                return { isComplete: false, reason: content.substring(11).trim() };
+            }
+
+            // Fallback para formatos inesperados
+            if (content.toLowerCase().includes('incompleto') || content.toLowerCase().includes('pendente')) {
+                return { isComplete: false, reason: content };
+            }
+
+            return { isComplete: true };
+        } catch (err) {
+            console.error(`[${this.ts()}] [VALIDATION] Error:`, err);
+            return { isComplete: true }; // Falha na validação não deve travar o sistema
+        }
+    }
+
+    /**
      * Main loop — native tool calling (like OpenClaw)
      * 
      * Tool results are ALWAYS fed back to the LLM.
@@ -372,63 +483,73 @@ export class AgentLoop {
         const toolDefsSize = JSON.stringify(toolDefs).length;
         
         // Route to best model for this query (async LLM classification)
-        const userProfile = await this.modelRouter.route(userText);
+        const chatProfile = await this.modelRouter.route(userText);
+        const executionProfile = this.modelRouter.getExecutionProfile();
+        
+        // Determinar modelo inicial: tarefas complexas usam execução desde o início
+        const needsExecutionModel = chatProfile.category === 'code' || 
+                                   chatProfile.category === 'analysis' || 
+                                   chatProfile.category === 'execution' ||
+                                   userText.length > 500; // Queries muito longas
+
+        const activeProfile = needsExecutionModel ? executionProfile : chatProfile;
+
         const ollama = this.providerFactory.getOllamaProvider();
         if (ollama) {
             const currentModel = ollama.getModel();
-            if (currentModel !== userProfile.model) {
-                ollama.setModel(userProfile.model);
-                if (userProfile.server && ollama.getBaseUrl() !== userProfile.server) {
-                    ollama.setBaseUrl(userProfile.server);
+            if (currentModel !== activeProfile.model) {
+                ollama.setModel(activeProfile.model);
+                if (activeProfile.server && ollama.getBaseUrl() !== activeProfile.server) {
+                    ollama.setBaseUrl(activeProfile.server);
                 }
-                console.log(`[${this.ts()}] [MODEL_ROUTER] Switched: ${currentModel} → ${userProfile.model} (${userProfile.category})`);
+                console.log(`[${this.ts()}] [MODEL_ROUTER] ${needsExecutionModel ? 'Execution Mode' : 'Chat Mode'}: ${activeProfile.model} (cat: ${chatProfile.category})`);
             }
         }
         
-        console.log(`[${this.ts()}] [LLM] Calling with ${toolDefs.length} tools (iteration ${iteration}) | context: ${contextSize} chars | tools: ${toolDefsSize} chars | total: ${contextSize + toolDefsSize} chars | model: ${userProfile.model}`);
+        console.log(`[${this.ts()}] [LLM] Calling (iteration ${iteration}) | context: ${contextSize} chars | model: ${activeProfile.model}`);
         const llmStartTime = Date.now();
 
         const response = await llmQueue.add(() => this.providerFactory.chatWithFallback(compressedMessages, toolDefs));
 
         const llmDuration = ((Date.now() - llmStartTime) / 1000).toFixed(1);
         const tokensInfo = response.usage ? ` | in:${response.usage.prompt_tokens} out:${response.usage.completion_tokens}` : '';
-        console.log(`[${this.ts()}] [LLM] Response in ${llmDuration}s | model: ${userProfile.model}${tokensInfo}`);
+        console.log(`[${this.ts()}] [LLM] Response in ${llmDuration}s | model: ${activeProfile.model}${tokensInfo}`);
 
-        // ── ITERATIVE TOOL LOOP (max 3 steps) ──────────────────────────
-        // LLM decides tool → execute → LLM decides next action or final response
-        if (response.toolCalls && response.toolCalls.length > 0) {
-            let currentToolDefs = toolDefs;
-            let loopMessages: LLMMessage[] = [...compressedMessages];
-            // Track executed actions to avoid repeats
-            const executedActions: string[] = [];
-            
-            let currentLLMResponse = response;
-            for (let step = 0; step < 6; step++) {
-                // Call LLM for next steps
-                if (step > 0) {
-                    currentLLMResponse = await llmQueue.add(() => this.providerFactory.chatWithFallback(loopMessages, currentToolDefs));
-                }
-                
-                const currentToolCall = currentLLMResponse.toolCalls?.[0];
-                
-                if (!currentToolCall) {
-                    // LLM returned text instead of tool call — return it
-                    const textResponse = sanitizeContent(currentLLMResponse.content || '');
-                    return textResponse || 'Ação concluída.';
-                }
-                
+        // ── UNIFIED TOOL & VALIDATION LOOP ──────────────────────────
+        let loopMessages: LLMMessage[] = [...compressedMessages];
+        let currentLLMResponse = response;
+        let validationCount = 0;
+        const maxValidations = 2; // Até 2 ciclos extras de validação
+        const maxSteps = 12; // Limite total de passos (ferramentas + respostas)
+        const startIndex = loopMessages.length; // Para o resumo de ações na validação
+
+        for (let step = 0; step < maxSteps; step++) {
+            const currentToolCall = currentLLMResponse.toolCalls?.[0];
+
+            if (currentToolCall) {
+                // --- EXECUÇÃO DE FERRAMENTA ---
                 const toolName = currentToolCall.name;
                 const toolParams = currentToolCall.arguments;
-                const actionKey = `${toolName}:${toolParams.action || toolParams.path || ''}`;
                 
-                executedActions.push(actionKey);
-                
-                console.log(`[${this.ts()}] [LOOP] Step ${step + 1}/6: ${toolName}(${JSON.stringify(toolParams).slice(0, 80)}) | model: ${ollama?.getModel() || userProfile.model}`);
+                // GARANTIR MODELO DE EXECUÇÃO: Se houve tool call, as próximas decisões DEVEM ser feitas pelo execution model
+                if (ollama && ollama.getModel() !== executionProfile.model) {
+                    console.log(`[${this.ts()}] [LOOP] Switching to Execution Model for tool loop: ${executionProfile.model}`);
+                    ollama.setModel(executionProfile.model);
+                    if (executionProfile.server) ollama.setBaseUrl(executionProfile.server);
+                }
+
+                console.log(`[${this.ts()}] [LOOP] Step ${step + 1}: ${toolName}(${JSON.stringify(toolParams).slice(0, 80)})`);
                 
                 const tool = this.tools.get(toolName);
-                if (!tool) break;
+                if (!tool) {
+                    loopMessages.push(
+                        { role: 'assistant', content: currentLLMResponse.content || '', toolCalls: [currentToolCall] },
+                        { role: 'tool', content: `Erro: Ferramenta '${toolName}' não encontrada.` }
+                    );
+                    currentLLMResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
+                    continue;
+                }
                 
-                // Execute tool
                 const startTime = Date.now();
                 let toolResult: ToolResult;
                 try {
@@ -437,83 +558,66 @@ export class AgentLoop {
                     toolResult = { success: false, output: '', error: error.message };
                 }
                 const elapsed = Date.now() - startTime;
-                console.log(`[${this.ts()}] [LOOP] ${toolName} ${toolResult.success ? '✓' : '✗'} in ${elapsed}ms | model: ${ollama?.getModel() || userProfile.model}`);
+                console.log(`[${this.ts()}] [LOOP] ${toolName} ${toolResult.success ? '✓' : '✗'} in ${elapsed}ms`);
                 
                 try { this.skillLearner.recordPattern(userText, toolName, toolResult.success, elapsed); } catch {}
                 
-                // ── Immediate returns (no more LLM calls needed) ──
+                // Retornos imediatos (Telegram)
                 if (toolResult.success && (toolName === 'send_document' || toolName === 'send_audio')) {
                     return toolResult.output || (toolName === 'send_document' ? '📄 Documento enviado!' : '🔊 Áudio enviado!');
                 }
                 
-                // ── Direct returns ONLY for truly final actions ──
-                // file_ops(create) is NOT final — needs send_document after
-                const isTrulyFinal = false;
-                if (toolResult.success && isTrulyFinal) {
-                    const directResponse = this.responseBuilder.buildResponse(toolName, toolParams, toolResult);
-                    if (directResponse) {
-                        console.log(`[${this.ts()}] [LOOP] ${toolName} → direct response (no LLM)`);
-                        return directResponse;
-                    }
-                }
-                
-                // ── Prepare context for next iteration ──
+                // Prepara output para o próximo passo
                 const maxOutput = 2000;
                 let toolOutput = (toolResult.success ? toolResult.output : `Erro: ${toolResult.error || 'desconhecido'}`) || '';
                 if (toolOutput.length > maxOutput) {
                     toolOutput = toolOutput.slice(0, maxOutput) + '\n\n[... conteúdo truncado]';
                 }
                 
-                if (toolResult.success && toolName === 'memory_write') {
-                    // Cognitive Regulation: Calibrate confidence after write
-                    if (toolParams.id) this.scoringEngine.calibrate(toolParams.id, 'consistent');
-                    
-                    toolOutput += '\n\n[UX] Responda ao usuario de forma educada e natural. Confirme o que voce entendeu e, quando fizer sentido, diga que isso foi salvo na memoria. Nao responda apenas com texto tecnico.';
+                if (toolResult.success && toolName === 'memory_write' && toolParams.id) {
+                    this.scoringEngine.calibrate(toolParams.id, 'consistent');
+                    toolOutput += '\n\n[UX] Confirme a gravação na memória de forma amigável.';
                 }
-                // Keep context growing so the LLM remembers executed steps
+
                 loopMessages.push(
                     { role: 'assistant', content: currentLLMResponse.content || '', toolCalls: [currentToolCall] },
                     { role: 'tool', content: toolOutput }
                 );
                 
-                currentToolDefs = toolDefs;
-            }
-            
-            // Max iterations reached — ask LLM for final response
-            try {
-                console.log(`[${this.ts()}] [LOOP] Final LLM call after 6 tool steps...`);
-                const finalResponse = await llmQueue.add(() => this.providerFactory.chatWithFallback(loopMessages, []));
-                const finalContent = sanitizeContent(finalResponse.content || '');
-                console.log(`[${this.ts()}] [LOOP] Final response: ${finalContent.slice(0, 100)}${finalContent.length > 100 ? '...' : ''} (${finalContent.length} chars)`);
-                return finalContent || 'Concluí as ações, mas não consegui gerar uma resposta detalhada. Pode perguntar de novo?';
-            } catch (err) {
-                console.log(`[${this.ts()}] [LOOP] Final LLM call FAILED: ${err}`);
-                return 'Concluí as ações solicitadas, mas tive dificuldade ao gerar a resposta final. Pode me perguntar o resultado?';
-            }
-        }
-
-            // No tool calls — pure text response
-        const content = sanitizeContent(response.content || '');
-        if (content) return content;
-
-        // Empty response — retry with simpler prompt and fallback model
-        const currentModel = this.providerFactory.getOllamaProvider()?.getModel() || 'unknown';
-        if (iteration < 1) {
-            // Try fallback model for empty response
-            const fallbackProfiles = this.modelRouter.getProfiles().filter((p: any) => p.model !== currentModel);
-            if (fallbackProfiles.length > 0) {
-                const profile = fallbackProfiles[0];
-                const ollama = this.providerFactory.getOllamaProvider();
-                if (ollama) {
-                    ollama.setModel(profile.model);
-                    console.log(`[AGENT] Empty response from ${currentModel}, retrying with ${profile.model}`);
+                // Próxima decisão do LLM (sempre usando o modelo ativo, que agora é o de execução)
+                currentLLMResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
+            } else {
+                // --- RESPOSTA DE TEXTO / VALIDAÇÃO ---
+                const textResponse = sanitizeContent(currentLLMResponse.content || '');
+                
+                // Valida se terminou mesmo
+                const validation = await this.validateCompletion(userText, loopMessages, textResponse, startIndex);
+                
+                if (validation.isComplete) {
+                    return textResponse || 'Tarefa concluída com sucesso.';
                 }
-            }
-            return this.runWithTools(conversationId, 'Responda a mensagem anterior de forma simples.', iteration + 1);
-        }
-        console.error(`[AGENT] Empty response from model ${currentModel} after retry`);
-        return 'Não consegui gerar uma resposta. Tente novamente.';
 
+                // Tarefa incompleta
+                if (validationCount >= maxValidations) {
+                    console.log(`[${this.ts()}] [VALIDATION] Max validations reached. Returning best effort.`);
+                    return (textResponse || '') + `\n\n(Aviso: A tarefa pode estar incompleta: ${validation.reason})`;
+                }
+
+                console.log(`[${this.ts()}] [VALIDATION] Task INCOMPLETE: ${validation.reason}. Retrying cycle ${validationCount + 1}...`);
+                validationCount++;
+                
+                loopMessages.push({ 
+                    role: 'user', 
+                    content: `[SISTEMA: VALIDAÇÃO DE COMPLETUDE]\nA tarefa ainda não foi concluída totalmente.\nPENDÊNCIA: ${validation.reason}\n\nPor favor, execute as ações necessárias ou encontre as informações que faltam. Use as ferramentas disponíveis se precisar.` 
+                });
+
+                // Tenta novamente com o contexto atualizado
+                currentLLMResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
+            }
+        }
+
+        // Fim dos passos sem conclusão definitiva
+        return sanitizeContent(currentLLMResponse.content || '') || 'Não consegui concluir todas as etapas a tempo.';
     }
 
     /**
@@ -535,5 +639,25 @@ export class AgentLoop {
                 body: JSON.stringify({ chat_id: this.currentChatId, text: '\u23f3 Tentando novamente...' })
             });
         } catch { /* ignore */ }
+    }
+
+    /**
+     * Auxiliar para chamadas do LLM com fallback inteligente.
+     * Se o modelo de execução falhar, tenta o modelo de chat como último recurso.
+     */
+    private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<any> {
+        try {
+            return await llmQueue.add(() => this.providerFactory.chatWithFallback(messages, toolDefs));
+        } catch (error: any) {
+            console.warn(`[AGENT] Model execution failed: ${error.message}. Attempting smart fallback to Chat model.`);
+            
+            const ollama = this.providerFactory.getOllamaProvider();
+            if (ollama) {
+                ollama.setModel(chatProfile.model);
+                if (chatProfile.server) ollama.setBaseUrl(chatProfile.server);
+            }
+            
+            return await llmQueue.add(() => this.providerFactory.chatWithFallback(messages, toolDefs));
+        }
     }
 }
