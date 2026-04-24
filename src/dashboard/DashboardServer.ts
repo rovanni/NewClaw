@@ -230,33 +230,8 @@ export class DashboardServer {
 
         // Get available providers and models
         this.app.get('/api/providers', async (_req: Request, res: Response) => {
-            let ollamaModels = [];
-            try {
-                const ollamaUrl = this.config.ollamaUrl || 'http://localhost:11434';
-                const resp = await fetch(`${ollamaUrl}/api/tags`);
-                if (resp.ok) {
-                    const data = await resp.json() as any;
-                    ollamaModels = (data.models || []).map((m: any) => m.name);
-                }
-            } catch {} // Ollama might not be reachable
+            // Invalid placeholder replaced
 
-            res.json({
-                success: true,
-                providers: {
-                    gemini: { available: !!this.config.geminiApiKey, name: 'Google Gemini' },
-                    deepseek: { available: !!this.config.deepseekApiKey, name: 'DeepSeek' },
-                    groq: { available: !!this.config.groqApiKey, name: 'Groq' },
-                    ollama: { available: true, name: 'Ollama (Local/Cloud)', url: this.config.ollamaUrl, models: ollamaModels },
-                },
-                currentProvider: this.config.defaultProvider,
-                currentModel: this.providerFactory?.getCurrentModel() || this.config.ollamaModel || 'unknown'
-            });
-        });
-
-        // Pull a model from Ollama
-        this.app.post('/api/ollama/pull', async (req: Request, res: Response) => {
-            const { model } = req.body;
-            if (!model) return res.status(400).json({ error: 'Model name required' });
 
             const ollamaUrl = this.config.ollamaUrl || 'http://localhost:11434';
             try {
