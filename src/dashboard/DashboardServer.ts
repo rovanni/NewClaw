@@ -230,7 +230,93 @@ export class DashboardServer {
 
         // Get available providers and models
         this.app.get('/api/providers', async (_req: Request, res: Response) => {
-            // Invalid placeholder replaced
+            let ollamaModels: string[] = [];
+            try {
+                const ollamaUrl = this.config.ollamaUrl || 'http://localhost:11434';
+                const resp = await fetch(`${ollamaUrl}/api/tags`);
+                if (resp.ok) {
+                    const data = await resp.json() as any;
+                    ollamaModels = (data.models || []).map((m: any) => m.name);
+                }
+            } catch {}
+
+            const knownCloudModels = [
+                'glm-5:cloud', 'glm-5.1:cloud', 'glm-4:cloud',
+                'kimi-k2:cloud', 'kimi-k2.6:cloud',
+                'deepseek-r1:cloud', 'deepseek-v3:cloud',
+                'qwen3:cloud', 'qwen3-235b:cloud',
+                'gemma4:cloud', 'gemma4:e4b',
+                'llama4:cloud', 'llama4-maverick:cloud',
+                'phi-4:cloud',
+            ];
+
+            const userModels: string[] = [];
+            if (this.config.modelRouter) {
+                const mr = this.config.modelRouter;
+                [mr.chat, mr.code, mr.vision, mr.light, mr.analysis, mr.execution].forEach(m => {
+                    if (m && m.trim()) userModels.push(m.trim());
+                });
+            }
+
+            const currentModel = this.providerFactory?.getCurrentModel() || this.config.ollamaModel;
+            if (currentModel) userModels.push(currentModel);
+
+            const customModels: string[] = (this.config as any).customModels || [];
+
+            const allModels = [...new Set([
+                ...ollamaModels,
+                ...knownCloudModels,
+                ...userModels,
+                ...customModels
+            ])].sort();
+
+            res.json({
+                success: true,
+                providers: {
+                    gemini: { available: !!this.config.geminiApiKey, name: 'Google Gemini' },
+                    deepseek: { available: !!this.config.deepseekApiKey, name: 'DeepSeek' },
+                    groq: { available: !!this.config.groqApiKey, name: 'Groq' },
+                    ollama: { available: true, name: 'Ollama (Local/Cloud)', url: this.config.ollamaUrl, models: allModels },
+                },
+                currentProvider: this.config.defaultProvider,
+                currentModel: currentModel || 'unknown'
+            });
+        });
+
+        // Add a custom model to the list
+        this.app.post('/api/models/add', (req: Request, res: Response) => {
+            const { model } = req.body;
+            if (!model || !model.trim()) return res.status(400).json({ error: 'Model name required' });
+            const customModels: string[] = (this.config as any).customModels || [];
+            const name = model.trim();
+            if (!customModels.includes(name)) {
+                customModels.push(name);
+                (this.config as any).customModels = customModels;
+            }
+            res.json({ success: true, message: `Model "${name}" added to list` });
+        });
+
+        // Pull a model from Ollama
+        this.app.post('/api/ollama/pull', async (req: Request, res: Response) => {
+            const { model } = req.body;
+            if (!model) return res.status(400).json({ error: 'Model name required' });
+
+            const ollamaUrl = this.config.ollamaUrl || 'http://localhost:11434';
+            try {
+                const pullRes = await fetch(`${ollamaUrl}/api/pull`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: model, stream: false })
+                });
+                if (pullRes.ok) {
+                    res.json({ success: true, message: `Model "${model}" pulled successfully` });
+                } else {
+                    const errText = await pullRes.text();
+                    res.status(500).json({ success: false, error: `Pull failed: ${errText.slice(0, 200)}` });
+                }
+            } catch (err: any) {
+                res.status(500).json({ success: false, error: err.message });
+            }
 
 
             const ollamaUrl = this.config.ollamaUrl || 'http://localhost:11434';
