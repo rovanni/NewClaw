@@ -549,7 +549,7 @@ Responda APENAS com um JSON:
         }
 
         // Classificação inicial da tarefa para adaptar o loop
-        const taskType = await this.classifyTask(userText);
+        let taskType = await this.classifyTask(userText);
         console.log(`[${this.ts()}] [CLASSIFIER] Task Type: ${taskType}`);
 
         // Update attention context with current interaction

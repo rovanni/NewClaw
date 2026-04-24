@@ -12,19 +12,19 @@ NewClaw is a local-first cognitive system built with Node.js and TypeScript. It 
 Instead of acting like a simple reactive bot, NewClaw maintains an evolving world model with identities, preferences, projects, facts, and infrastructure represented as a semantic graph. That allows the agent to respond with more continuity, make better decisions, and reuse context over time.
 
 Inspired by [Hermes Agent](https://github.com/NousResearch/Hermes-Agent) and [OpenClaw](https://github.com/openclaw/openclaw).
-15: 
-16: ## 🧠 Meta-cognition: Strategic Reasoning Loop
-17: 
-18: What makes NewClaw unique is its **Unified Cognitive Loop**. Instead of a linear execution, the agent performs a constant cycle of self-reflection before every response:
-19: 
-20: 1.  **Execute**: Runs tools with surgical precision.
-21: 2.  **Validate**: Verifies if the goal was met using strict strategic criteria.
-22: 3.  **Reassess**: Dynamically re-evaluates the task type and strategy mid-loop.
-23: 4.  **Confidence Scoring**: Measures certainty (Low/Med/High) and forces more research if evidence is weak.
-24: 5.  **Internal Critic**: Performs a meta-loop pass to review and refine the response for clarity and utility.
-25: 6.  **Decide**: Chooses to stop only when a high-value, evidence-based answer is ready.
-26: 
-27: This ensures the agent **thinks twice**, avoids hallucinations, and adapts its strategy autonomously to solve complex investigative or executive tasks.
+
+## 🧠 Meta-cognition: Strategic Reasoning Loop
+
+What makes NewClaw unique is its **Unified Cognitive Loop**. Instead of a linear execution, the agent performs a constant cycle of self-reflection before every response:
+
+1.  **Execute**: Runs tools with surgical precision.
+2.  **Validate**: Verifies if the goal was met using strict strategic criteria.
+3.  **Reassess**: Dynamically re-evaluates the task type and strategy mid-loop.
+4.  **Confidence Scoring**: Measures certainty (Low/Med/High) and forces more research if evidence is weak.
+5.  **Internal Critic**: Performs a meta-loop pass to review and refine the response for clarity and utility.
+6.  **Decide**: Chooses to stop only when a high-value, evidence-based answer is ready.
+
+This ensures the agent **thinks twice**, avoids hallucinations, and adapts its strategy autonomously to solve complex investigative or executive tasks.
 
 ## 🚀 The NewClaw Edge
 
@@ -344,19 +344,19 @@ Backups are saved to `~/newclaw-backups/` with a timestamp.
 ![NewClaw Logo Banner](docs/assets/banner.png)
 
 O NewClaw é um **Agente Cognitivo Avançado** (100% local e privado), desenvolvido em Node.js (TypeScript). Ele é especializado na execução autônoma de tarefas através de chamadas de ferramentas nativas e gerenciamento de memória semântica de longo prazo.
-334: 
-335: ## 🧠 Meta-cognição: Loop de Raciocínio Estratégico
-336: 
-337: O grande diferencial do NewClaw é o seu **Loop Cognitivo Unificado**. Em vez de uma execução linear, o agente realiza um ciclo constante de autorreflexão:
-338: 
-339: 1.  **Executar**: Roda as ferramentas com precisão cirúrgica.
-340: 2.  **Validar**: Verifica se o objetivo foi atingido com critérios estratégicos.
-341: 3.  **Reavaliar**: Reavalia dinamicamente o tipo de tarefa e a estratégia no meio do processo.
-342: 4.  **Medir Confiança**: Atribui um score (Baixo/Médio/Alto) e força mais busca se a evidência for fraca.
-343: 5.  **Criticar (Meta-loop)**: Revisa a própria resposta para garantir clareza e utilidade antes de enviar.
-344: 6.  **Decidir**: Só para quando tem uma resposta de alto valor e baseada em dados reais.
-345: 
-346: Isso garante que o agente **pense antes de responder**, evite alucinações e mude de estratégia automaticamente para resolver problemas complexos.
+
+## 🧠 Meta-cognição: Loop de Raciocínio Estratégico
+
+O grande diferencial do NewClaw é o seu **Loop Cognitivo Unificado**. Em vez de uma execução linear, o agente realiza um ciclo constante de autorreflexão:
+
+1.  **Executar**: Roda as ferramentas com precisão cirúrgica.
+2.  **Validar**: Verifica se o objetivo foi atingido com critérios estratégicos.
+3.  **Reavaliar**: Reavalia dinamicamente o tipo de tarefa e a estratégia no meio do processo.
+4.  **Medir Confiança**: Atribui um score (Baixo/Médio/Alto) e força mais busca se a evidência for fraca.
+5.  **Criticar (Meta-loop)**: Revisa a própria resposta para garantir clareza e utilidade antes de enviar.
+6.  **Decidir**: Só para quando tem uma resposta de alto valor e baseada em dados reais.
+
+Isso garante que o agente **pense antes de responder**, evite alucinações e mude de estratégia automaticamente para resolver problemas complexos.
 
 ## 🚀 O Diferencial NewClaw
 
