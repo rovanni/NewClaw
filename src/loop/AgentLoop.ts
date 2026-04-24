@@ -322,6 +322,35 @@ export class AgentLoop {
     private ts(): string { return new Date().toLocaleTimeString('pt-BR', { hour12: false }); }
 
     /**
+     * Classifica o tipo de tarefa do usuário para adaptar o comportamento do loop.
+     */
+    private async classifyTask(userText: string): Promise<'INFORMACIONAL' | 'INVESTIGATIVA' | 'EXECUTIVA'> {
+        try {
+            const prompt = `Classifique a tarefa do usuário em uma destas 3 categorias:
+- INFORMACIONAL: Perguntas simples, conversas ou solicitações de explicação baseada em conhecimento geral.
+- INVESTIGATIVA: Busca de dados, pesquisa na web, análise de arquivos ou cruzamento de informações. Requer evidências.
+- EXECUTIVA: Criação de arquivos, execução de comandos, envio de áudios/documentos ou modificação de sistema.
+
+[TAREFA]
+${userText}
+
+Responda APENAS com o tipo (INFORMACIONAL, INVESTIGATIVA ou EXECUTIVA).`;
+
+            const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
+                { role: 'system', content: 'Você é um classificador de intenções rápido e preciso.' },
+                { role: 'user', content: prompt }
+            ], []));
+
+            const type = (response.content || '').toUpperCase();
+            if (type.includes('INVESTIGATIVA')) return 'INVESTIGATIVA';
+            if (type.includes('EXECUTIVA')) return 'EXECUTIVA';
+            return 'INFORMACIONAL';
+        } catch {
+            return 'INFORMACIONAL';
+        }
+    }
+
+    /**
      * Valida se a tarefa foi realmente concluída usando o LLM.
      * Equilibra completude, eficiência e relevância para evitar over-execution.
      */
@@ -329,7 +358,8 @@ export class AgentLoop {
         userText: string,
         loopMessages: LLMMessage[],
         partialResult: string,
-        startIndex: number
+        startIndex: number,
+        taskType: 'INFORMACIONAL' | 'INVESTIGATIVA' | 'EXECUTIVA'
     ): Promise<{ isComplete: boolean, reason?: string }> {
         // Extrai apenas as ações executadas nesta sessão (desde o startIndex)
         const sessionMessages = loopMessages.slice(startIndex);
@@ -345,7 +375,10 @@ export class AgentLoop {
             })
             .join('\n');
 
-        const validationPrompt = `Avalie se devemos finalizar a tarefa e responder agora ou se precisamos de mais ações.
+        const validationPrompt = `Avalie estrategicamente se devemos finalizar a tarefa agora.
+
+[TIPO DE TAREFA]
+${taskType}
 
 [OBJETIVO ORIGINAL]
 ${userText}
@@ -357,22 +390,22 @@ ${actionsSummary || 'Nenhuma ferramenta utilizada nesta etapa.'}
 ${partialResult || '(Sem resposta textual)'}
 
 ---
-CRITÉRIOS DE DECISÃO:
-1. TENHO INFORMAÇÃO SUFICIENTE? Se já puder responder de forma útil e clara, FINALIZE.
-2. GANHO MARGINAL: Novas ações trariam informações CRÍTICAS ou apenas detalhes irrelevantes? Se o ganho for baixo, FINALIZE.
-3. EFICIÊNCIA: Evite perfeccionismo. Prefira uma resposta útil agora do que 10 iterações tentando a perfeição.
-4. FOCO NO USUÁRIO: A execução técnica adicional melhora DIRETAMENTE a resposta ao usuário? Se não, FINALIZE.
-5. SUCESSO CRÍTICO: Se uma ação essencial falhou e impede QUALQUER resposta, marque como INCOMPLETE.
+CRITÉRIOS DE VALIDAÇÃO (OBRIGATÓRIOS):
+1. EVIDÊNCIA (Somente para INVESTIGATIVA): A resposta é baseada em dados REAIS obtidos pelas ferramentas ou em suposições? Se for suposição e a tarefa pedir dados, marque como INCOMPLETE.
+2. UTILIDADE REAL: A resposta resolve DIRETAMENTE o problema do usuário? Respostas como "vou verificar", "estou analisando" ou "posso fazer isso" são INACEITÁVEIS para finalizar.
+3. COMPLETUDE EXECUTIVA (Somente para EXECUTIVA): A ação foi concluída com sucesso? Se o usuário pediu para criar algo e você apenas explicou como, marque como INCOMPLETE.
+4. GANHO MARGINAL: Novas ações trariam informações CRÍTICAS? Se o ganho for baixo e a utilidade já for alta, pode marcar como COMPLETE.
+5. ADAPTAÇÃO: Se a pergunta for simples, priorize rapidez. Se exigir precisão (dados/código), priorize completude.
 
 Responda APENAS:
-- "COMPLETE" (se já for possível dar uma resposta satisfatória e útil)
+- "COMPLETE" (se houver evidência/utilidade suficiente e a tarefa estiver resolvida)
 ou
-- "INCOMPLETE: <motivo do que é ESSENCIAL e ainda falta>"`;
+- "INCOMPLETE: <motivo detalhado do que falta ou falhou>"`;
 
         try {
-            console.log(`[${this.ts()}] [VALIDATION] Asking LLM for strategic completion check...`);
+            console.log(`[${this.ts()}] [VALIDATION] Asking LLM for strategic completion check (${taskType})...`);
             const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
-                { role: 'system', content: 'Você é um estrategista de IA focado em utilidade, clareza e eficiência. Seu objetivo é resolver a tarefa com o menor número de ações necessárias, sem over-execution.' },
+                { role: 'system', content: 'Você é um estrategista de IA focado em utilidade, evidência e eficiência. Não aceite respostas vazias ou baseadas em suposições para tarefas investigativas.' },
                 { role: 'user', content: validationPrompt }
             ], []));
 
@@ -380,16 +413,16 @@ ou
             console.log(`[${this.ts()}] [VALIDATION] Result: ${content.slice(0, 100)}`);
 
             if (content.toUpperCase().startsWith('COMPLETE')) {
+                // Proteção extra contra respostas de "vou verificar" que o LLM de validação possa ter deixado passar
+                const lowContent = partialResult.toLowerCase();
+                if (lowContent.length < 30 && (lowContent.includes('vou') || lowContent.includes('analisando') || lowContent.includes('verificar'))) {
+                    return { isComplete: false, reason: 'Resposta muito curta ou evasiva.' };
+                }
                 return { isComplete: true };
             }
             
             if (content.toUpperCase().startsWith('INCOMPLETE:')) {
                 return { isComplete: false, reason: content.substring(11).trim() };
-            }
-
-            // Fallback: se mencionar que está pronto ou completo
-            if (content.toLowerCase().includes('completo') || content.toLowerCase().includes('satisfatório')) {
-                return { isComplete: true };
             }
 
             return { isComplete: true };
@@ -410,6 +443,10 @@ ou
         if (iteration >= this.maxIterations) {
             return 'Nao consegui completar a tarefa apos varias tentativas.';
         }
+
+        // Classificação inicial da tarefa para adaptar o loop
+        const taskType = await this.classifyTask(userText);
+        console.log(`[${this.ts()}] [CLASSIFIER] Task Type: ${taskType}`);
 
         // Update attention context with current interaction
         const attentionLayer = this.memory.getAttentionLayer();
@@ -630,7 +667,7 @@ ou
                 const textResponse = sanitizeContent(currentLLMResponse.content || '');
                 
                 // Valida se terminou mesmo
-                const validation = await this.validateCompletion(userText, loopMessages, textResponse, startIndex);
+                const validation = await this.validateCompletion(userText, loopMessages, textResponse, startIndex, taskType);
                 
                 if (validation.isComplete) {
                     return textResponse || 'Tarefa concluída com sucesso.';
