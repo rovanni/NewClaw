@@ -328,25 +328,64 @@ function Step-InstallNewClaw {
 
     if (Test-Path $Dir) {
         Write-Warn "Pasta $Dir já existe!"
-        if (Read-YesNo "Atualizar com git pull?" "y") {
+        if (Read-YesNo "Atualizar código do GitHub?" "y") {
             Push-Location $Dir
-            try {
-                $pullResult = git pull origin main 2>&1
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Warn "Conflito detectado: Você tem mudanças locais que impedem a atualização."
-                    if (Read-YesNo "Deseja descartar suas mudanças locais e forçar a atualização?" "n") {
-                        Invoke-Step "git reset --hard HEAD"
-                        Invoke-Step "git pull origin main"
-                        Write-Ok "Código atualizado (mudanças locais descartadas)!"
-                    } else {
-                        Write-Info "Mantendo versão local para preservar suas alterações."
-                    }
-                } else {
-                    Write-Ok "Código atualizado!"
-                }
-            } catch {
-                Write-Warn "Erro ao atualizar: $_"
+
+            # 1. Backup .env (always protected)
+            $envPath = Join-Path $Dir ".env"
+            $envBackup = Join-Path $Dir ".env.update-backup"
+            if (Test-Path $envPath) {
+                Copy-Item $envPath $envBackup -Force
             }
+
+            # 2. Fetch remote
+            git fetch origin main 2>&1 | Out-Null
+
+            # 3. Stash local changes
+            $hasStash = $false
+            try {
+                $stashOut = git stash --include-untracked 2>&1
+                if ($stashOut -notmatch "No local changes") {
+                    $hasStash = $true
+                    Write-Info "Alterações locais salvas (git stash)"
+                }
+            } catch {}
+
+            # 4. Pull with rebase
+            $pullOk = $false
+            try {
+                git pull --rebase origin main 2>&1 | Out-Null
+                if ($LASTEXITCODE -eq 0) { $pullOk = $true }
+            } catch {}
+
+            if (-not $pullOk) {
+                Write-Warn "Pull falhou, fazendo sync forçado..."
+                try { git rebase --abort 2>&1 | Out-Null } catch {}
+                git reset --hard origin/main 2>&1 | Out-Null
+            }
+
+            # 5. Restore stash
+            if ($hasStash) {
+                try {
+                    git stash pop 2>&1 | Out-Null
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Info "Alterações locais restauradas"
+                    } else {
+                        Write-Warn "Conflitos ao restaurar alterações locais (salvas em 'git stash list')"
+                    }
+                } catch {
+                    Write-Warn "Conflitos ao restaurar alterações locais (salvas em 'git stash list')"
+                }
+            }
+
+            # 6. Always restore .env
+            if (Test-Path $envBackup) {
+                Copy-Item $envBackup $envPath -Force
+                Remove-Item $envBackup -Force
+                Write-Info ".env restaurado com sucesso"
+            }
+
+            Write-Ok "Código atualizado!"
             Pop-Location
         } else {
             Write-Info "Mantendo código existente"
@@ -389,19 +428,18 @@ function Step-CheckForBackups {
     if ($Backups.Count -gt 0) {
         Write-Step "Bônus: Backups encontrados!"
         Write-Info "Detectamos $($Backups.Count) backup(s) disponível(is)."
-            
-            if (Read-YesNo "Deseja restaurar um backup agora em vez de fazer uma configuração limpa?" "n") {
-                $RestoreScript = Join-Path $Dir "scripts\restore.ps1"
-                if (Test-Path $RestoreScript) {
-                    & $RestoreScript
-                    # Se restaurou, podemos pular a configuração manual se o .env existir
-                    if (Test-Path (Join-Path $Dir ".env")) {
-                        Write-Ok "Backup restaurado com sucesso. Pulando configuração manual."
-                        $script:NoOnboard = $true
-                    }
-                } else {
-                    Write-Warn "Script de restauração não encontrado em $RestoreScript"
+
+        if (Read-YesNo "Deseja restaurar um backup agora em vez de fazer uma configuração limpa?" "n") {
+            $RestoreScript = Join-Path $Dir "scripts\restore.ps1"
+            if (Test-Path $RestoreScript) {
+                & $RestoreScript
+                # Se restaurou, podemos pular a configuração manual se o .env existir
+                if (Test-Path (Join-Path $Dir ".env")) {
+                    Write-Ok "Backup restaurado com sucesso. Pulando configuração manual."
+                    $script:NoOnboard = $true
                 }
+            } else {
+                Write-Warn "Script de restauração não encontrado em $RestoreScript"
             }
         }
     }
@@ -552,8 +590,8 @@ function Step-SetupWindowsService {
             return
         }
 
-        $nodePath = (Get-Command node -ErrorAction SilentlyContinue)?.Source
-        if (-not $nodePath) { $nodePath = "node" }
+        $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+        $nodePath = if ($nodeCmd) { $nodeCmd.Source } else { "node" }
 
         $svcName = "NewClaw"
         $existing = Get-Service -Name $svcName -ErrorAction SilentlyContinue

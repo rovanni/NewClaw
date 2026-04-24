@@ -478,23 +478,22 @@ check_for_backups() {
     backup_path="/home/venus/backups"
     backup_count=$(find "$backup_path" -maxdepth 1 \( -type d -name "newclaw_*" -o -type f -name "newclaw_*.db" \) 2>/dev/null | wc -l)
   fi
-    
+
   if [ "$backup_count" -gt 0 ]; then
     echo ""
     step "Bônus: Backups encontrados!"
     info "Detectamos ${backup_count} backup(s) em ${backup_path}"
-      
-      if ask_yes "Deseja restaurar um backup agora em vez de fazer uma configuração limpa?" "n"; then
-        if [ -f "${NEWCLAW_DIR}/scripts/restore.sh" ]; then
-          bash "${NEWCLAW_DIR}/scripts/restore.sh"
-          # Se restaurou, podemos pular a configuração manual do .env se ele já existir
-          if [ -f "${NEWCLAW_DIR}/.env" ]; then
-            ok "Backup restaurado com sucesso. Pulando configuração manual."
-            NO_ONBOARD=1
-          fi
-        else
-          warn "Script de restauração não encontrado. Por favor, restaure manualmente depois."
+
+    if ask_yes "Deseja restaurar um backup agora em vez de fazer uma configuração limpa?" "n"; then
+      if [ -f "${NEWCLAW_DIR}/scripts/restore.sh" ]; then
+        bash "${NEWCLAW_DIR}/scripts/restore.sh"
+        # Se restaurou, podemos pular a configuração manual do .env se ele já existir
+        if [ -f "${NEWCLAW_DIR}/.env" ]; then
+          ok "Backup restaurado com sucesso. Pulando configuração manual."
+          NO_ONBOARD=1
         fi
+      else
+        warn "Script de restauração não encontrado. Por favor, restaure manualmente depois."
       fi
     fi
   fi

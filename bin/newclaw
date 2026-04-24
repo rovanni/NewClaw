@@ -256,8 +256,10 @@ const commands = {
 
   update(args) {
     const restart = args?.includes('restart') || args?.includes('-r');
+    const force = args?.includes('--force') || args?.includes('-f');
     console.log('🔄 Atualizando NewClaw...');
     try {
+      // 1. Fetch remote
       execSync('git fetch origin main', { cwd: DIR, stdio: 'inherit' });
       const local = execSync('git rev-parse HEAD', { cwd: DIR }).toString().trim();
       const remote = execSync('git rev-parse origin/main', { cwd: DIR }).toString().trim();
@@ -266,9 +268,68 @@ const commands = {
         console.log('✅ Sistema já está na versão mais recente.');
         return;
       }
-      
-      console.log('📥 Baixando atualizações...');
-      execSync('git pull origin main', { cwd: DIR, stdio: 'inherit' });
+
+      console.log(`📥 Atualizando: ${local.slice(0,7)} → ${remote.slice(0,7)}`);
+
+      // 2. Protect user files: backup .env and critical dirs
+      const protectedFiles = [];
+      const envBackup = path.join(DIR, '.env.update-backup');
+      if (fs.existsSync(ENV_FILE)) {
+        fs.copyFileSync(ENV_FILE, envBackup);
+        protectedFiles.push('.env');
+      }
+
+      // 3. Stash any local changes (safe — won't lose anything)
+      let hasStash = false;
+      try {
+        const stashOut = execSync('git stash --include-untracked', { cwd: DIR }).toString();
+        hasStash = !stashOut.includes('No local changes');
+        if (hasStash) console.log('📦 Alterações locais salvas (git stash)');
+      } catch { /* no changes to stash — fine */ }
+
+      // 4. Pull with rebase (cleanest merge)
+      let pullOk = false;
+      try {
+        execSync('git pull --rebase origin main', { cwd: DIR, stdio: 'inherit' });
+        pullOk = true;
+      } catch {
+        // 5. Fallback: hard reset (guaranteed to work)
+        console.log('⚠️  Pull falhou, fazendo sync forçado...');
+        try {
+          execSync('git rebase --abort', { cwd: DIR, stdio: 'ignore' });
+        } catch { /* no rebase in progress */ }
+        execSync('git reset --hard origin/main', { cwd: DIR, stdio: 'inherit' });
+        pullOk = true;
+      }
+
+      // 6. Try to restore stashed changes (non-critical files)
+      if (hasStash) {
+        try {
+          execSync('git stash pop', { cwd: DIR, stdio: 'ignore' });
+          console.log('📦 Alterações locais restauradas');
+        } catch {
+          // Conflicts — keep stash, user can recover with `git stash list`
+          console.log('⚠️  Conflitos ao restaurar alterações locais (salvas em `git stash list`)');
+        }
+      }
+
+      // 7. Always restore .env (most critical user file)
+      if (fs.existsSync(envBackup)) {
+        fs.copyFileSync(envBackup, ENV_FILE);
+        fs.unlinkSync(envBackup);
+        console.log('🔒 .env restaurado com sucesso');
+      }
+
+      // 8. Install deps if package.json changed
+      try {
+        const diff = execSync(`git diff ${local}..${remote} --name-only`, { cwd: DIR }).toString();
+        if (diff.includes('package.json') || diff.includes('package-lock.json')) {
+          console.log('📦 Dependências alteradas, instalando...');
+          execSync('npm install --production', { cwd: DIR, stdio: 'inherit' });
+        }
+      } catch { /* ignore */ }
+
+      // 9. Build
       console.log('🔧 Compilando projeto...');
       execSync('npm run build', { cwd: DIR, stdio: 'inherit' });
       
@@ -278,9 +339,15 @@ const commands = {
       } else {
         console.log('⚠️  Build concluído. Execute "newclaw update restart" para aplicar as mudanças.');
       }
-      console.log('✅ Concluído!');
+      console.log('✅ Atualização concluída!');
     } catch (e) {
+      // Emergency: restore .env if it was backed up
+      const envBackup = path.join(DIR, '.env.update-backup');
+      if (fs.existsSync(envBackup)) {
+        try { fs.copyFileSync(envBackup, ENV_FILE); fs.unlinkSync(envBackup); } catch {}
+      }
       console.error('❌ Falha na atualização:', e.message);
+      console.log('💡 Tente: newclaw update --force');
     }
   },
 
@@ -332,6 +399,7 @@ newclaw stop            Encerra o serviço graciosamente
 newclaw status          Mostra o status, PID, uptime e configurações
 newclaw logs -f         Visualiza os logs em tempo real
 newclaw update          Atualiza o código do GitHub e recompila o projeto
+newclaw update restart  Atualiza e reinicia automaticamente
 newclaw restore         Abre o assistente de restauração de backups
 newclaw uninstall       Remove o NewClaw e limpa o sistema
 newclaw help            Mostra esta tela de ajuda
