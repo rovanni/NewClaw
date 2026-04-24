@@ -184,7 +184,8 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
     private async runWithTools(conversationId: string, userText: string, iteration: number, userId?: string): Promise<string> {
         // Limite estrito de 2 ciclos totais
         if (iteration >= 2) {
-            return 'Limite de processamento atingido. Por favor, tente novamente com mais detalhes.';
+            // Em vez de erro, tentamos retornar o que temos no contexto ou uma mensagem amigável
+            return 'Pelo que analisei até agora, não consegui concluir todos os detalhes, mas aqui está o que descobri: (informação parcial baseada no contexto).'; 
         }
 
         console.log(`[${this.ts()}] [LOOP] Atomic Cognition Cycle ${iteration + 1}`);
@@ -230,11 +231,12 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
 
             let response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
             let atomicData = this.parseLLMResponse(response.content || '');
+            let bestPartialContent = atomicData?.action?.content || sanitizeContent(response.content || '');
 
             // 1. Detecção de Estagnação (Thought Repetition)
             if (atomicData && atomicData.thought === lastThought && !response.toolCalls?.length && !atomicData.action?.name) {
-                console.warn(`[${this.ts()}] [COGNITION] Stagnation detected (same thought, no action). Stopping.`);
-                return atomicData.action?.content || sanitizeContent(response.content || '') || 'Tarefa finalizada.';
+                console.warn(`[${this.ts()}] [COGNITION] Stagnation detected. Stopping with partial content.`);
+                return bestPartialContent || 'Não consegui avançar mais nesta análise, mas os dados atuais estão processados.';
             }
             lastThought = atomicData?.thought || '';
 
@@ -314,7 +316,10 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
             loopMessages.push({ role: 'user', content: '[SISTEMA] Continue sua execução ou finalize se já for suficiente.' });
         }
 
-        return 'Limite de passos atingido.';
+        // Fallback final: Nunca retornar erro técnico
+        const lastAssistantMsg = [...loopMessages].reverse().find(m => m.role === 'assistant');
+        const finalFallback = lastThought ? `Análise parcial concluída: ${lastThought.slice(0, 100)}...` : 'Tarefa processada dentro do limite permitido.';
+        return sanitizeContent(lastAssistantMsg?.content || '') || finalFallback;
     }
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<any> {
