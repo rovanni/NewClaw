@@ -522,7 +522,25 @@ ou
         const maxSteps = 12; // Limite total de passos (ferramentas + respostas)
         const startIndex = loopMessages.length; // Para o resumo de ações na validação
 
+        const executionHistory = new Map<string, { successCount: number, failCount: number, lastError?: string }>();
+
         for (let step = 0; step < maxSteps; step++) {
+            // Build history summary to help LLM avoid loops
+            let historySummary = '';
+            if (executionHistory.size > 0) {
+                historySummary = '\n\n[HISTÓRICO RECENTE DE EXECUÇÃO]\n';
+                executionHistory.forEach((stats, toolName) => {
+                    const status = stats.failCount > 0 
+                        ? `falhou ${stats.failCount} vez(es)${stats.successCount > 0 ? ' (e funcionou em outras)' : ''}` 
+                        : 'funcionando normalmente';
+                    historySummary += `- Tool: ${toolName}\n  Status: ${status}\n`;
+                    if (stats.lastError && stats.failCount > 0) {
+                        historySummary += `  Último Erro: ${stats.lastError.slice(0, 150)}\n`;
+                    }
+                });
+                historySummary += '\nInstrução:\nSe uma ferramenta falhou repetidamente, não tente a mesma coisa. Escolha uma nova abordagem para resolver o problema.';
+            }
+
             const currentToolCall = currentLLMResponse.toolCalls?.[0];
 
             if (currentToolCall) {
@@ -541,11 +559,20 @@ ou
                 
                 const tool = this.tools.get(toolName);
                 if (!tool) {
+                    const errorMsg = `Erro: Ferramenta '${toolName}' não encontrada.`;
+                    const stats = executionHistory.get(toolName) || { successCount: 0, failCount: 0 };
+                    executionHistory.set(toolName, { ...stats, failCount: stats.failCount + 1, lastError: errorMsg });
+
                     loopMessages.push(
                         { role: 'assistant', content: currentLLMResponse.content || '', toolCalls: [currentToolCall] },
-                        { role: 'tool', content: `Erro: Ferramenta '${toolName}' não encontrada.` }
+                        { role: 'tool', content: errorMsg }
                     );
-                    currentLLMResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
+                    
+                    // Inject history into the prompt
+                    const tempMessages = [...loopMessages];
+                    if (historySummary) tempMessages.push({ role: 'user', content: historySummary });
+
+                    currentLLMResponse = await this.callLLMWithFallback(tempMessages, toolDefs, chatProfile);
                     continue;
                 }
                 
@@ -559,6 +586,14 @@ ou
                 const elapsed = Date.now() - startTime;
                 console.log(`[${this.ts()}] [LOOP] ${toolName} ${toolResult.success ? '✓' : '✗'} in ${elapsed}ms`);
                 
+                // Update Execution History
+                const stats = executionHistory.get(toolName) || { successCount: 0, failCount: 0 };
+                if (toolResult.success) {
+                    executionHistory.set(toolName, { ...stats, successCount: stats.successCount + 1 });
+                } else {
+                    executionHistory.set(toolName, { ...stats, failCount: stats.failCount + 1, lastError: toolResult.error });
+                }
+
                 try { this.skillLearner.recordPattern(userText, toolName, toolResult.success, elapsed); } catch {}
                 
                 // Retornos imediatos (Telegram)
@@ -584,7 +619,11 @@ ou
                 );
                 
                 // Próxima decisão do LLM (sempre usando o modelo ativo, que agora é o de execução)
-                currentLLMResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
+                // Inject history into the prompt
+                const tempMessages = [...loopMessages];
+                if (historySummary) tempMessages.push({ role: 'user', content: historySummary });
+
+                currentLLMResponse = await this.callLLMWithFallback(tempMessages, toolDefs, chatProfile);
             } else {
                 // --- RESPOSTA DE TEXTO / VALIDAÇÃO ---
                 const textResponse = sanitizeContent(currentLLMResponse.content || '');
@@ -609,9 +648,13 @@ ou
                     role: 'user', 
                     content: `[SISTEMA: VALIDAÇÃO DE COMPLETUDE]\nA tarefa ainda não foi concluída totalmente.\nPENDÊNCIA: ${validation.reason}\n\nPor favor, execute as ações necessárias ou encontre as informações que faltam. Use as ferramentas disponíveis se precisar.` 
                 });
+                
+                // Inject history into the prompt
+                const tempMessages = [...loopMessages];
+                if (historySummary) tempMessages.push({ role: 'user', content: historySummary });
 
                 // Tenta novamente com o contexto atualizado
-                currentLLMResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
+                currentLLMResponse = await this.callLLMWithFallback(tempMessages, toolDefs, chatProfile);
             }
         }
 
