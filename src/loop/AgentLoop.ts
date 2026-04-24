@@ -182,12 +182,16 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
     }
 
     private async runWithTools(conversationId: string, userText: string, iteration: number, userId?: string): Promise<string> {
-        // Limite estrito de 2 ciclos totais (iteração 0 e 1)
+        // Limite estrito de 2 ciclos totais
         if (iteration >= 2) {
-            return 'Não consegui completar a tarefa no tempo previsto.';
+            return 'Limite de processamento atingido. Por favor, tente novamente com mais detalhes.';
         }
 
         console.log(`[${this.ts()}] [LOOP] Atomic Cognition Cycle ${iteration + 1}`);
+
+        // Memória local do ciclo para detectar repetição e estagnação
+        const cycleHistory: Array<{ tool: string, input: string, status: string }> = [];
+        let lastThought = '';
 
         const recentMessages = this.memory.getRecentMessages(conversationId, 6);
         const context = await this.contextBuilder.buildContext(userText);
@@ -227,7 +231,14 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
             let response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
             let atomicData = this.parseLLMResponse(response.content || '');
 
-            // Retry Lógica (Máx 1x)
+            // 1. Detecção de Estagnação (Thought Repetition)
+            if (atomicData && atomicData.thought === lastThought && !response.toolCalls?.length && !atomicData.action?.name) {
+                console.warn(`[${this.ts()}] [COGNITION] Stagnation detected (same thought, no action). Stopping.`);
+                return atomicData.action?.content || sanitizeContent(response.content || '') || 'Tarefa finalizada.';
+            }
+            lastThought = atomicData?.thought || '';
+
+            // 2. Retry Lógica (Máx 1x)
             if (!atomicData && !response.toolCalls?.length) {
                 console.warn(`[${this.ts()}] [ATOMIC] Invalid JSON. Retrying (1/1)...`);
                 loopMessages.push({ role: 'assistant', content: response.content || 'Erro de formato' });
@@ -236,46 +247,66 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
                 response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
                 atomicData = this.parseLLMResponse(response.content || '');
                 
-                if (!atomicData) {
-                    console.error(`[${this.ts()}] [ATOMIC] JSON failure after retry. Aborting loop.`);
-                    return 'Houve um erro de processamento. Por favor, tente reformular sua pergunta.';
-                }
+                if (!atomicData) return 'Houve um erro de processamento estrutural. Tente reformular.';
             }
 
             loopMessages.push({ role: 'assistant', content: response.content, toolCalls: response.toolCalls });
 
-            // 1. Native toolCalls
+            // 3. Early Stop Imediato (Prioridade Máxima)
+            if (atomicData?.evaluation?.is_complete === true) {
+                console.log(`[${this.ts()}] [ATOMIC] Task COMPLETE. Returning immediately.`);
+                return atomicData.action?.content || sanitizeContent(response.content || '') || 'Tarefa concluída.';
+            }
+
+            // 4. Native toolCalls com Anti-Repetição
             if (response.toolCalls && response.toolCalls.length > 0) {
                 for (const toolCall of response.toolCalls) {
-                    const tool = this.tools.get(toolCall.name);
+                    const toolName = toolCall.name;
+                    const toolInput = JSON.stringify(toolCall.arguments);
+                    
+                    // Verifica se já falhou com esse input neste ciclo
+                    const previousFailure = cycleHistory.find(h => h.tool === toolName && h.input === toolInput && h.status === 'error');
+                    if (previousFailure) {
+                        console.warn(`[${this.ts()}] [TOOL] Blocking repetitive failure for ${toolName}.`);
+                        loopMessages.push({ role: 'tool', content: `Erro: Ação repetitiva detectada. Você já tentou ${toolName} com esses parâmetros e falhou. Mude sua estratégia.`, tool_call_id: toolCall.id });
+                        continue;
+                    }
+
+                    const tool = this.tools.get(toolName);
                     if (tool) {
                         const result = await tool.execute(toolCall.arguments);
-                        console.log(`[${this.ts()}] [TOOL] ${toolCall.name} -> ${result.success ? '✓' : '✗'}`);
+                        console.log(`[${this.ts()}] [TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`);
+                        cycleHistory.push({ tool: toolName, input: toolInput, status: result.success ? 'success' : 'error' });
                         loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
                         
-                        if (toolCall.name === 'send_audio' || toolCall.name === 'send_document') return result.output;
+                        if (toolName === 'send_audio' || toolName === 'send_document') return result.output;
                     }
                 }
                 continue; 
             }
 
-            // 2. Atomic Action
+            // 5. Atomic Action com Anti-Repetição
             if (atomicData?.action?.type === 'tool' && atomicData.action.name) {
-                const tool = this.tools.get(atomicData.action.name);
+                const toolName = atomicData.action.name;
+                const toolInput = JSON.stringify(atomicData.action.input || {});
+
+                const previousFailure = cycleHistory.find(h => h.tool === toolName && h.input === toolInput && h.status === 'error');
+                if (previousFailure) {
+                    loopMessages.push({ role: 'tool', content: `Erro: Falha repetitiva bloqueada para ${toolName}. Tente outra abordagem.` });
+                    continue;
+                }
+
+                const tool = this.tools.get(toolName);
                 if (tool) {
                     const result = await tool.execute(atomicData.action.input || {});
-                    console.log(`[${this.ts()}] [ATOMIC-TOOL] ${atomicData.action.name} -> ${result.success ? '✓' : '✗'}`);
+                    console.log(`[${this.ts()}] [ATOMIC-TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`);
+                    cycleHistory.push({ tool: toolName, input: toolInput, status: result.success ? 'success' : 'error' });
                     loopMessages.push({ role: 'tool', content: result.output });
                     continue;
                 }
             }
 
-            // 3. Early Stop (Prioridade Total)
-            if (atomicData?.evaluation?.is_complete === true) {
-                console.log(`[${this.ts()}] [ATOMIC] Task marked as COMPLETE. Stopping.`);
-                return atomicData.action?.content || sanitizeContent(response.content || '') || 'Tarefa concluída.';
-            }
-
+            // 6. Parada por Confiança ou Limite de Passos
             if (atomicData?.evaluation?.confidence === 'high' || stepCount >= maxSteps) {
                 return atomicData?.action?.content || sanitizeContent(response.content || '') || 'Tarefa concluída.';
             }
@@ -287,11 +318,17 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
     }
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<any> {
+        const timeoutMs = 8000; // Timeout agressivo para eficiência (8s)
         try {
-            return await llmQueue.add(() => this.providerFactory.chatWithFallback(messages, toolDefs));
+            return await llmQueue.add(() => this.providerFactory.chatWithFallback(
+                messages, 
+                toolDefs, 
+                chatProfile?.id, 
+                timeoutMs
+            ));
         } catch (error: any) {
-            console.warn(`[AGENT] Model execution failed: ${error.message}.`);
-            return await llmQueue.add(() => this.providerFactory.chatWithFallback(messages, toolDefs));
+            console.warn(`[AGENT] Critical failure: ${error.message}.`);
+            throw error; // Não retenta aqui, deixa o loop decidir
         }
     }
 }

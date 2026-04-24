@@ -340,7 +340,7 @@ export class ProviderFactory {
     }
 
     /** Chat with automatic fallback — tries next provider if current fails */
-    async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string): Promise<LLMResponse> {
+    async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number): Promise<LLMResponse> {
         const providerOrder = this.getFallbackOrder(preferredProvider);
         const errors: string[] = [];
 
@@ -348,8 +348,21 @@ export class ProviderFactory {
             try {
                 const provider = this.providers.get(providerName);
                 if (!provider) continue;
-                console.log(`[PROVIDER] Trying ${providerName}...`);
-                const result = await provider.chat(messages, tools);
+                console.log(`[PROVIDER] Trying ${providerName}...${timeoutMs ? ` (timeout: ${timeoutMs}ms)` : ''}`);
+                
+                // Wrap chat call with optional timeout
+                const chatPromise = provider.chat(messages, tools);
+                let result: LLMResponse;
+
+                if (timeoutMs) {
+                    result = await Promise.race([
+                        chatPromise,
+                        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeoutMs))
+                    ]);
+                } else {
+                    result = await chatPromise;
+                }
+
                 // Check for leaked tool calls
                 if (!result.toolCalls || result.toolCalls.length === 0) {
                     const extractedCalls = this.extractLeakedToolCalls(result.content);
@@ -366,7 +379,7 @@ export class ProviderFactory {
                 // Empty response — try next
                 errors.push(`${providerName}: empty response`);
             } catch (error: any) {
-                console.error(`[PROVIDER] ${providerName} failed: ${error.message}`);
+                console.warn(`[PROVIDER] ${providerName} failed or timed out: ${error.message}`);
                 errors.push(`${providerName}: ${error.message}`);
                 continue;
             }
