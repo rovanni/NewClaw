@@ -557,25 +557,16 @@ export class TelegramInputHandler {
     }
 
     private async transcribeWithWhisper(wavPath: string): Promise<string> {
-        const whisperPath = this.config.whisperPath || '/usr/local/bin/whisper';
-        const modelPath = process.env.WHISPER_MODEL || '/usr/local/share/whisper/ggml-base.bin';
-        
-        // Check if whisper binary exists
-        try { fs.accessSync(whisperPath, fs.constants.X_OK); } catch {
-            console.error('[WHISPER] Binary not found:', whisperPath);
-            return '[Áudio recebido - Whisper não instalado no servidor. Instale com: cd ~/whisper.cpp && make]';
-        }
-        // Check if model exists
-        if (!fs.existsSync(modelPath)) {
-            console.error('[WHISPER] Model not found:', modelPath);
-            return '[Áudio recebido - Modelo Whisper não encontrado. Baixe com: ~/whisper.cpp/models/download-ggml-model.sh base]';
-        }
+        // Try Python openai-whisper first (pip install openai-whisper)
+        const pythonWhisper = this.config.whisperPath || process.env.WHISPER_PATH || 'whisper';
+        const model = process.env.WHISPER_MODEL || 'tiny';
         
         return new Promise((resolve) => {
-            const command = `${whisperPath} -m ${modelPath} -f ${wavPath} -l pt --no-timestamps`;
-            execFile('sh', ['-c', command], (error, stdout) => {
-                if (error) {
-                    console.error('[WHISPER] Erro:', error);
+            const outDir = '/tmp/whisper_out';
+            const command = `mkdir -p ${outDir} && ${pythonWhisper} "${wavPath}" --model ${model} --language pt --output_format txt --output_dir ${outDir} 2>/dev/null && cat ${outDir}/$(basename "${wavPath}").txt 2>/dev/null`;
+            execFile('sh', ['-c', command], { timeout: 120000 }, (error, stdout) => {
+                if (error || !stdout?.trim()) {
+                    console.error('[WHISPER] Local transcription failed:', error?.message);
                     resolve('');
                     return;
                 }
