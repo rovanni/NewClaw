@@ -346,7 +346,7 @@ ${userText}`;
     }
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<any> {
-        const timeoutMs = 60000; // 60s — cloud models need more time
+        const timeoutMs = 180000; // 3min — cloud models can be slow for complex tasks
 
         // Apply routed model to OllamaProvider before calling
         if (chatProfile?.model) {
