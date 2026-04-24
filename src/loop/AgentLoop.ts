@@ -53,9 +53,9 @@ const llmQueue = new PQueue({ concurrency: 1 });
 function sanitizeContent(content: string): string {
     if (!content) return '';
     let result = content;
+    // Remove apenas tags técnicas disruptivas, PRESERVA o conteúdo
     result = result.replace(/<think>[\s\S]*?<\/think>/gi, '');
     result = result.replace(/<\/?think>/gi, '');
-    result = result.replace(/```json\s*[\s\S]*?```/gi, '');
     result = result.replace(/\[TOOL_CALL\][\s\S]*?\[\/TOOL_CALL\]/gi, '');
     return result.trim();
 }
@@ -165,12 +165,12 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
         } catch (e) {
             try {
                 // Tentativa 2: Extração via Regex
-                const match = clean.match(/\{[\s\S]*\}/);
+                const match = content.match(/\{[\s\S]*\}/);
                 if (match) {
                     let jsonStr = match[0];
-                    // Correções simples
-                    jsonStr = jsonStr.replace(/,\s*([\}\]])/g, '$1'); // Remove vírgulas finais
-                    jsonStr = jsonStr.replace(/'/g, '"'); // Aspas simples para duplas (perigoso, mas útil em fallbacks)
+                    // Limpeza básica de Markdown se sobrar algo
+                    jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '');
+                    jsonStr = jsonStr.replace(/,\s*([\}\]])/g, '$1'); 
                     return JSON.parse(jsonStr);
                 }
             } catch (e2) {
