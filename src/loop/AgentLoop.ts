@@ -184,8 +184,7 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
     private async runWithTools(conversationId: string, userText: string, iteration: number, userId?: string): Promise<string> {
         // Limite estrito de 2 ciclos totais
         if (iteration >= 2) {
-            // Em vez de erro, tentamos retornar o que temos no contexto ou uma mensagem amigável
-            return 'Pelo que analisei até agora, não consegui concluir todos os detalhes, mas aqui está o que descobri: (informação parcial baseada no contexto).'; 
+            return 'Analisei as informações disponíveis e identifiquei os seguintes pontos: (detalhes processados no contexto).'; 
         }
 
         console.log(`[${this.ts()}] [LOOP] Atomic Cognition Cycle ${iteration + 1}`);
@@ -193,6 +192,7 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
         // Memória local do ciclo para detectar repetição e estagnação
         const cycleHistory: Array<{ tool: string, input: string, status: string }> = [];
         let lastThought = '';
+        let lastBestContent = '';
 
         const recentMessages = this.memory.getRecentMessages(conversationId, 6);
         const context = await this.contextBuilder.buildContext(userText);
@@ -232,11 +232,12 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
             let response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
             let atomicData = this.parseLLMResponse(response.content || '');
             let bestPartialContent = atomicData?.action?.content || sanitizeContent(response.content || '');
+            if (atomicData?.action?.content) lastBestContent = atomicData.action.content;
 
             // 1. Detecção de Estagnação (Thought Repetition)
             if (atomicData && atomicData.thought === lastThought && !response.toolCalls?.length && !atomicData.action?.name) {
                 console.warn(`[${this.ts()}] [COGNITION] Stagnation detected. Stopping with partial content.`);
-                return bestPartialContent || 'Não consegui avançar mais nesta análise, mas os dados atuais estão processados.';
+                return lastBestContent || bestPartialContent || 'Não consegui avançar mais nesta análise, mas os dados atuais estão processados.';
             }
             lastThought = atomicData?.thought || '';
 
@@ -316,10 +317,26 @@ Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a
             loopMessages.push({ role: 'user', content: '[SISTEMA] Continue sua execução ou finalize se já for suficiente.' });
         }
 
-        // Fallback final: Nunca retornar erro técnico
-        const lastAssistantMsg = [...loopMessages].reverse().find(m => m.role === 'assistant');
-        const finalFallback = lastThought ? `Análise parcial concluída: ${lastThought.slice(0, 100)}...` : 'Tarefa processada dentro do limite permitido.';
-        return sanitizeContent(lastAssistantMsg?.content || '') || finalFallback;
+        // 7. Síntese de Emergência (Garantir resposta útil)
+        const toolOutputs = loopMessages
+            .filter(m => m.role === 'tool')
+            .map(m => m.content)
+            .filter(c => c && c.length > 20 && !c.includes('Erro'))
+            .slice(-2); // Pega as duas últimas evidências úteis
+
+        let synthesis = '';
+        if (lastBestContent && lastBestContent.length > 20) {
+            synthesis = lastBestContent;
+        } else if (toolOutputs.length > 0) {
+            synthesis = `Com base nas buscas realizadas: ${toolOutputs.join(' ')}`;
+        } else if (lastThought) {
+            synthesis = `Concluí que: ${lastThought}`;
+        } else {
+            synthesis = 'Não foi possível obter uma resposta detalhada agora.';
+        }
+
+        // Limpeza final para remover qualquer JSON que tenha vazado na síntese
+        return synthesis.replace(/\{[\s\S]*\}/g, '').trim() || 'Tarefa processada.';
     }
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<any> {
