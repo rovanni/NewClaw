@@ -267,6 +267,10 @@ ${userText}`;
                     
                     const tool = this.tools.get(toolName);
                     if (tool) {
+                        // Inject Telegram context for tools that need it
+                        if (typeof (tool as any).setContext === 'function') {
+                            (tool as any).setContext((this as any).currentChatId || '', (this as any).currentBotToken || '');
+                        }
                         const result = await tool.execute(toolCall.arguments);
                         console.log(`[${this.ts()}] [TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`);
                         
@@ -305,6 +309,10 @@ ${userText}`;
 
                 const tool = this.tools.get(toolName);
                 if (tool) {
+                    // Inject Telegram context for tools that need it
+                    if (typeof (tool as any).setContext === 'function') {
+                        (tool as any).setContext((this as any).currentChatId || '', (this as any).currentBotToken || '');
+                    }
                     const result = await tool.execute(atomicData.action.input || {});
                     console.log(`[${this.ts()}] [ATOMIC-TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`);
                     
