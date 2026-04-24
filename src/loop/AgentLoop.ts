@@ -323,6 +323,7 @@ export class AgentLoop {
 
     /**
      * Valida se a tarefa foi realmente concluída usando o LLM.
+     * Equilibra completude, eficiência e relevância para evitar over-execution.
      */
     private async validateCompletion(
         userText: string,
@@ -344,34 +345,34 @@ export class AgentLoop {
             })
             .join('\n');
 
-        const validationPrompt = `Você concluiu completamente a tarefa do usuário?
+        const validationPrompt = `Avalie se devemos finalizar a tarefa e responder agora ou se precisamos de mais ações.
 
 [OBJETIVO ORIGINAL]
 ${userText}
 
-[AÇÕES EXECUTADAS NESTA SESSÃO]
-${actionsSummary || 'Nenhuma ferramenta foi utilizada nesta etapa.'}
+[AÇÕES EXECUTADAS]
+${actionsSummary || 'Nenhuma ferramenta utilizada nesta etapa.'}
 
 [RESPOSTA FINAL PROPOSTA]
 ${partialResult || '(Sem resposta textual)'}
 
 ---
-REGRAS DE VALIDAÇÃO:
-1. Todas as informações solicitadas foram encontradas?
-2. Todas as ações foram executadas com SUCESSO? (Falhas em ferramentas críticas tornam a tarefa INCOMPLETA)
-3. Existe alguma pendência ou passo lógico faltando?
-4. Se o usuário pediu para REALIZAR uma ação (ex: criar arquivo, enviar mensagem) e você apenas EXPLICOU como fazer, a tarefa está INCOMPLETA.
-5. Se houver erro técnico que impeça a conclusão, explique o motivo no INCOMPLETE.
+CRITÉRIOS DE DECISÃO:
+1. TENHO INFORMAÇÃO SUFICIENTE? Se já puder responder de forma útil e clara, FINALIZE.
+2. GANHO MARGINAL: Novas ações trariam informações CRÍTICAS ou apenas detalhes irrelevantes? Se o ganho for baixo, FINALIZE.
+3. EFICIÊNCIA: Evite perfeccionismo. Prefira uma resposta útil agora do que 10 iterações tentando a perfeição.
+4. FOCO NO USUÁRIO: A execução técnica adicional melhora DIRETAMENTE a resposta ao usuário? Se não, FINALIZE.
+5. SUCESSO CRÍTICO: Se uma ação essencial falhou e impede QUALQUER resposta, marque como INCOMPLETE.
 
 Responda APENAS:
-- "COMPLETE" (se tudo estiver 100% feito)
+- "COMPLETE" (se já for possível dar uma resposta satisfatória e útil)
 ou
-- "INCOMPLETE: <motivo detalhado do que falta ou falhou>"`;
+- "INCOMPLETE: <motivo do que é ESSENCIAL e ainda falta>"`;
 
         try {
-            console.log(`[${this.ts()}] [VALIDATION] Asking LLM for completion check...`);
+            console.log(`[${this.ts()}] [VALIDATION] Asking LLM for strategic completion check...`);
             const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
-                { role: 'system', content: 'Você é um supervisor de tarefas rigoroso. Não aceite respostas parciais ou falhas não resolvidas.' },
+                { role: 'system', content: 'Você é um estrategista de IA focado em utilidade, clareza e eficiência. Seu objetivo é resolver a tarefa com o menor número de ações necessárias, sem over-execution.' },
                 { role: 'user', content: validationPrompt }
             ], []));
 
@@ -386,15 +387,15 @@ ou
                 return { isComplete: false, reason: content.substring(11).trim() };
             }
 
-            // Fallback para formatos inesperados
-            if (content.toLowerCase().includes('incompleto') || content.toLowerCase().includes('pendente')) {
-                return { isComplete: false, reason: content };
+            // Fallback: se mencionar que está pronto ou completo
+            if (content.toLowerCase().includes('completo') || content.toLowerCase().includes('satisfatório')) {
+                return { isComplete: true };
             }
 
             return { isComplete: true };
         } catch (err) {
             console.error(`[${this.ts()}] [VALIDATION] Error:`, err);
-            return { isComplete: true }; // Falha na validação não deve travar o sistema
+            return { isComplete: true };
         }
     }
 
