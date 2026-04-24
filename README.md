@@ -278,6 +278,15 @@ irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
 
 Ubuntu/Debian users get the best navigation experience because the installer adds `w3m` automatically.
 
+## 🗺️ Roadmap v1.x
+- [x] **Model Router**: Intelligent intent-based model selection. ✅
+- [ ] **Multimodal Vision**: Native image and screenshot processing.
+- [ ] **Autonomous Navigation**: Real-time web exploration with deep interaction.
+- [ ] **Python Sandbox**: Secure execution environment for data analysis.
+- [ ] **Collaborative Graphs**: Multi-agent memory synchronization.
+
+---
+
 ## 📱 CLI Reference
 
 | Command | Description |
@@ -368,27 +377,130 @@ O agente atua em quatro modos distintos dependendo da complexidade da tarefa:
 
 ## 🏗️ Arquitetura
 
-### Fluxo de Mensagem
+### Message Flow
 
-O NewClaw utiliza um loop contínuo onde o **AgentLoop** coordena a compressão de contexto, montagem de prompt e execução de ferramentas.
+```mermaid
+flowchart LR
+    U["👤 Usuário"] --> T["📨 Telegram Bot"]
+    T --> A["🧠 AgentLoop"]
 
-### Model Router — Roteamento de Modelos
+    subgraph AgentLoop
+        A1["🗜️ ContextCompressor"]
+        A2["📝 Montagem de Prompt"]
+        A3["🤖 LLM — Tool Calling"]
+        A4["🎓 SkillLearner"]
+        A1 --> A2 --> A3 --> A4
+    end
 
-O sistema analisa a intenção do usuário e seleciona o modelo mais adequado:
+    A3 -->|"tool_calls"| S["🛠️ Ferramentas"]
+    A3 -->|"resposta"| U
 
-| Categoria | Uso | Modelo Recomendado |
-|----------|-----|--------|
-| 💬 **Chat** | Conversa geral, raciocínio | `glm-5.1:cloud` |
-| 💻 **Code** | Programação e scripts | `gemma4:31b-cloud` |
-| 👁️ **Vision** | Análise de imagens e OCR | `gemma4:31b-cloud` |
-| ⚡ **Light** | Respostas curtas e saudações | `glm-5.1:cloud` |
-| 📊 **Analysis** | Dados de mercado e pesquisa | `glm-5:cloud` |
+    subgraph Tools
+        S1["🌐 web_search"]
+        S2["🧠 memory_search"]
+        S3["✏️ memory_write"]
+        S4["🔊 send_audio"]
+        S5["⚡ exec_command"]
+        S6["📄 file_ops"]
+    end
 
-### Grafo de Memória
+    S --> S1
+    S --> S2
+    S --> S3
+    S --> S4
+    S --> S5
+    S --> S6
+    S -->|"resultado"| A3
+
+    A <--> M["💾 Memória — SQLite"]
+    A <--> D["🖥️ Dashboard"]
+```
+
+### Fluxo de Chamada de Ferramentas (Tool Calling)
+
+```mermaid
+flowchart TD
+    A["Usuário envia mensagem"] --> B["ContextCompressor"]
+    B --> C["Montagem de Prompt — ALMA + USUÁRIO + MEMÓRIA"]
+    C --> D["LLM recebe mensagem + definições de ferramentas"]
+    D --> E{"LLM decide"}
+    E -->|"Resposta direta"| F["Formatar e enviar ao usuário"]
+    E -->|"Uso de ferramenta"| G["Executar ferramenta"]
+    G --> H["Resultado → volta para o LLM"]
+    H --> D
+    F --> I["✅ Usuário recebe resposta natural"]
+```
+
+### Cadeia de Fallback de Provedores
+
+```mermaid
+flowchart LR
+    A["🤖 Requisição LLM"] --> B{"Ollama"}
+    B -->|"✅ Sucesso"| Z["Resposta"]
+    B -->|"❌ Falha"| C{"Gemini"}
+    C -->|"✅ Sucesso"| Z
+    C -->|"❌ Falha"| D{"DeepSeek"}
+    D -->|"✅ Sucesso"| Z
+    D -->|"❌ Falha"| E{"Groq"}
+    E -->|"✅ Sucesso"| Z
+    E -->|"❌ Falha"| F["⚠️ Todos falharam"]
+```
+
+### Model Router — Roteamento Inteligente de Modelos
+
+```mermaid
+flowchart TD
+    A["👤 Mensagem do usuário"] --> B["🧭 ModelRouter"]
+    B --> C["🤖 Classificador LLM"]
+    C --> D{"Categoria?"}
+    D -->|"💬 chat"| M1["glm-5.1:cloud"]
+    D -->|"💻 code"| M2["gemma4:31b-cloud"]
+    D -->|"👁️ vision"| M3["gemma4:31b-cloud"]
+    D -->|"⚡ light"| M4["glm-5.1:cloud"]
+    D -->|"📊 analysis"| M5["glm-5:cloud"]
+    C -->|"❌ Fallback"| M1
+    M1 --> E["🧠 AgentLoop com modelo selecionado"]
+    M2 --> E
+    M3 --> E
+    M4 --> E
+    M5 --> E
+    E -->|"❌ Erro"| F["🔄 Auto-fallback para próximo modelo"]
+    F --> E
+```
+
+O ModelRouter usa um LLM leve para classificar cada mensagem em 5 categorias e selecionar o melhor modelo para a tarefa. Se o classificador falhar, usa busca por palavras-chave. Em caso de erro no modelo selecionado, ele tenta automaticamente o próximo da lista de fallback.
+
+| Categoria | Caso de Uso | Modelo Recomendado |
+|----------|----------|-------|
+| 💬 **chat** | Conversa geral, raciocínio | `glm-5.1:cloud` |
+| 💻 **code** | Programação, edição de arquivos, scripts | `gemma4:31b-cloud` |
+| 👁️ **vision** | Análise de imagens, OCR, screenshots | `gemma4:31b-cloud` |
+| ⚡ **light** | Respostas curtas (oi, ok, valeu) | `glm-5.1:cloud` |
+| 📊 **analysis** | Cripto, dados de mercado, estatísticas | `glm-5:cloud` |
+| 🧠 **execution** | Loop de ferramentas / Tarefas complexas | `kimi-k2.6:cloud` |
+
+### Grafo de Memória Semântica
+
+```mermaid
+flowchart TD
+    U["👤 core_user"] -->|"prefers"| P1["📊 pref_crypto"]
+    U -->|"works_on"| P2["💻 proj_newclaw"]
+    U -->|"runs_on"| I1["🖥️ infra_venus"]
+
+    P2 -->|"uses"| S1["🧠 semantic_search"]
+    P2 -->|"depends_on"| I2["🗄️ infra_timescaledb"]
+
+    style U fill:#00d4aa,color:#000
+    style P1 fill:#a78bfa,color:#000
+    style P2 fill:#38bdf8,color:#000
+    style I1 fill:#fb923c,color:#000
+    style I2 fill:#fb923c,color:#000
+    style S1 fill:#f472b6,color:#000
+```
 
 **7 Tipos de Nó:** identity, preference, project, skill, context, fact, infrastructure.
 
-**14+ Tipos de Relação:** prefers, works_on, runs_on, uses, depends_on, contains, references, related_to, belongs_to, owns, created, reads, writes, hosts.
+**14+ Tipos de Relação:** prefers, works_on, runs_on, uses, depends_on, contains, references, related_to, belongs_to, owns, created, reads, writes, hosts (com links inversos automáticos).
 
 ## 🚀 Instalação
 
