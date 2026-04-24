@@ -13,18 +13,17 @@ Instead of acting like a simple reactive bot, NewClaw maintains an evolving worl
 
 Inspired by [Hermes Agent](https://github.com/NousResearch/Hermes-Agent) and [OpenClaw](https://github.com/openclaw/openclaw).
 
-## 🧠 Meta-cognition: Strategic Reasoning Loop
+## 🧠 Atomic Cognition: Unified Decision Core
 
-What makes NewClaw unique is its **Unified Cognitive Loop**. Instead of a linear execution, the agent performs a constant cycle of self-reflection before every response:
+The core of NewClaw is its **Atomic Cognition Architecture**. Unlike traditional agents that follow a slow, linear chain of separate validation and critic steps, NewClaw processes all strategic intelligence in a single, unified atomic turn:
 
-1.  **Execute**: Runs tools with surgical precision.
-2.  **Validate**: Verifies if the goal was met using strict strategic criteria.
-3.  **Reassess**: Dynamically re-evaluates the task type and strategy mid-loop.
-4.  **Confidence Scoring**: Measures certainty (Low/Med/High) and forces more research if evidence is weak.
-5.  **Internal Critic**: Performs a meta-loop pass to review and refine the response for clarity and utility.
-6.  **Decide**: Chooses to stop only when a high-value, evidence-based answer is ready.
+1.  **Unified Reasoning**: The agent thinks, decides on an action, and evaluates its own completion status in a single structured JSON response.
+2.  **Extreme Efficiency**: Eliminates the latency of multiple sequential LLM calls, typically resolving tasks in just 1 or 2 high-value decision cycles.
+3.  **Internal Self-Evaluation**: Confidence scoring and goal validation happen naturally within the model's internal reasoning, rather than through external supervisors.
+4.  **Robust & Resilient**: Features advanced JSON parsing with automatic recovery from formatting errors and markdown leaks.
+5.  **Clean & Direct**: Prioritizes useful, evidence-based answers over aesthetic perfection or over-execution.
 
-This ensures the agent **thinks twice**, avoids hallucinations, and adapts its strategy autonomously to solve complex investigative or executive tasks.
+This ensures the agent **"thinks once, but thinks deep,"** providing professional-grade autonomy with minimal latency.
 
 ## 🚀 The NewClaw Edge
 
@@ -345,18 +344,17 @@ Backups are saved to `~/newclaw-backups/` with a timestamp.
 
 O NewClaw é um **Agente Cognitivo Avançado** (100% local e privado), desenvolvido em Node.js (TypeScript). Ele é especializado na execução autônoma de tarefas através de chamadas de ferramentas nativas e gerenciamento de memória semântica de longo prazo.
 
-## 🧠 Meta-cognição: Loop de Raciocínio Estratégico
+## 🧠 Cognição Atômica: Núcleo de Decisão Unificado
 
-O grande diferencial do NewClaw é o seu **Loop Cognitivo Unificado**. Em vez de uma execução linear, o agente realiza um ciclo constante de autorreflexão:
+O diferencial do NewClaw é a sua **Arquitetura de Cognição Atômica**. Diferente de agentes tradicionais que seguem uma cadeia lenta e linear de etapas separadas, o NewClaw processa toda a inteligência estratégica em um único turno atômico unificado:
 
-1.  **Executar**: Roda as ferramentas com precisão cirúrgica.
-2.  **Validar**: Verifica se o objetivo foi atingido com critérios estratégicos.
-3.  **Reavaliar**: Reavalia dinamicamente o tipo de tarefa e a estratégia no meio do processo.
-4.  **Medir Confiança**: Atribui um score (Baixo/Médio/Alto) e força mais busca se a evidência for fraca.
-5.  **Criticar (Meta-loop)**: Revisa a própria resposta para garantir clareza e utilidade antes de enviar.
-6.  **Decidir**: Só para quando tem uma resposta de alto valor e baseada em dados reais.
+1.  **Raciocínio Unificado**: O agente pensa, decide a ação e avalia sua própria completude em uma única resposta JSON estruturada.
+2.  **Eficiência Extrema**: Elimina a latência de múltiplas chamadas LLM sequenciais, resolvendo tarefas em apenas 1 ou 2 ciclos de decisão de alto valor.
+3.  **Auto-Avaliação Nativa**: O cálculo de confiança e a validação de objetivos acontecem naturalmente dentro do raciocínio interno do modelo, sem supervisores externos.
+4.  **Robusto e Resiliente**: Possui parsing avançado de JSON com recuperação automática de erros de formatação e vazamentos de markdown.
+5.  **Limpo e Direto**: Prioriza respostas úteis e baseadas em evidências sobre perfeccionismo estético ou execução excessiva.
 
-Isso garante que o agente **pense antes de responder**, evite alucinações e mude de estratégia automaticamente para resolver problemas complexos.
+Isso garante que o agente **"pense uma vez, mas pense profundo"**, oferecendo autonomia de nível profissional com o mínimo de latência.
 
 ## 🚀 O Diferencial NewClaw
 
