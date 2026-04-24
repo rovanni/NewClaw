@@ -52,7 +52,7 @@ const DEFAULT_CONFIG: RouterConfig = {
     classifierServer: 'http://localhost:11434',
     profiles: [
         { id: 'chat-primary', model: 'glm-5.1:cloud', server: 'http://localhost:11434', category: 'chat', description: 'Conversa geral e raciocínio' },
-        { id: 'code-primary', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'code', description: 'Programação, criação de conteúdo e edição' },
+        { id: 'code-primary', model: 'glm-5:cloud', server: 'http://localhost:11434', category: 'code', description: 'Programação e criação de conteúdo' },
         { id: 'light-chat', model: 'glm-5.1:cloud', server: 'http://localhost:11434', category: 'light', description: 'Conversa leve e rápida' },
         { id: 'vision-primary', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'vision', description: 'Análise de imagens e OCR' },
         { id: 'analysis-primary', model: 'glm-5:cloud', server: 'http://localhost:11434', category: 'analysis', description: 'Análise profunda e cripto' },
