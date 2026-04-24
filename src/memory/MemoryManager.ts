@@ -347,6 +347,7 @@ export class MemoryManager {
         tryAddColumn('memory_nodes', 'weight', 'REAL DEFAULT 1.0');
         tryAddColumn('memory_nodes', 'confidence', 'REAL DEFAULT 1.0');
         tryAddColumn('memory_nodes', 'last_updated', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
+        tryAddColumn('memory_nodes', 'domain', 'TEXT');
     }
 
     private incrementBootCount(): void {

@@ -167,7 +167,7 @@ export class MemoryCurator {
         let invalidCount = 0;
 
         // 1. Find identity nodes that look like free text
-        const identityNodes = db.prepare('SELECT id, name, content FROM memory_nodes WHERE type = "identity"').all();
+        const identityNodes = db.prepare(`SELECT id, name, content FROM memory_nodes WHERE type = 'identity'`).all();
         const forbiddenPatterns = [/se chama/i, /é o/i, /é a/i, /chamado/i, /meu nome/i, /nome é/i];
 
         for (const node of identityNodes) {
