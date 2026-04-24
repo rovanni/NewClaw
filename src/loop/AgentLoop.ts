@@ -269,7 +269,6 @@ export class AgentLoop {
                 }
             }
             
-            await this.notifyRetry();
             try {
                 result = await this.runWithTools(conversationId, text, 0);
             } catch (retryError: any) {
@@ -710,16 +709,6 @@ ou
         return true;
     }
 
-    private async notifyRetry(): Promise<void> {
-        if (!this.currentChatId || !this.currentBotToken) return;
-        try {
-            await fetch(`https://api.telegram.org/bot${this.currentBotToken}/sendMessage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chat_id: this.currentChatId, text: '\u23f3 Tentando novamente...' })
-            });
-        } catch { /* ignore */ }
-    }
 
     /**
      * Auxiliar para chamadas do LLM com fallback inteligente.
