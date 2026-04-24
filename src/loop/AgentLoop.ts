@@ -389,17 +389,16 @@ ${actionsSummary || 'Nenhuma ferramenta utilizada nesta etapa.'}
 ${partialResult || '(Sem resposta textual)'}
 
 ---
-CRITÉRIOS DE VALIDAÇÃO (OBRIGATÓRIOS):
-1. EVIDÊNCIA (Somente para INVESTIGATIVA): A resposta é baseada em dados REAIS obtidos pelas ferramentas ou em suposições? Se for suposição e a tarefa pedir dados, marque como INCOMPLETE.
-2. UTILIDADE REAL: A resposta resolve DIRETAMENTE o problema do usuário? Respostas como "vou verificar", "estou analisando" ou "posso fazer isso" são INACEITÁVEIS para finalizar.
-3. COMPLETUDE EXECUTIVA (Somente para EXECUTIVA): A ação foi concluída com sucesso? Se o usuário pediu para criar algo e você apenas explicou como, marque como INCOMPLETE.
-4. GANHO MARGINAL: Novas ações trariam informações CRÍTICAS? Se o ganho for baixo e a utilidade já for alta, pode marcar como COMPLETE.
-5. ADAPTAÇÃO: Se a pergunta for simples, priorize rapidez. Se exigir precisão (dados/código), priorize completude.
+CRITÉRIOS DE VALIDAÇÃO (EFICIÊNCIA):
+1. BOM O SUFICIENTE: Se a resposta já está correta, útil e compreensível, marque como COMPLETE. Não busque perfeição absoluta.
+2. EVIDÊNCIA: A resposta usa dados reais? Se sim, priorize finalizar.
+3. UTILIDADE: Resolve o problema do usuário? Se sim, FINALIZE.
+4. PRIORIDADE: Responder rápido é melhor que responder perfeitamente após 5 minutos.
 
 Responda APENAS:
-- "COMPLETE" (se houver evidência/utilidade suficiente e a tarefa estiver resolvida)
+- "COMPLETE" (se for útil e suficiente)
 ou
-- "INCOMPLETE: <motivo detalhado do que falta ou falhou>"`;
+- "INCOMPLETE: <somente se faltar algo CRÍTICO e ESSENCIAL>"`;
 
         try {
             console.log(`[${this.ts()}] [VALIDATION] Asking LLM for strategic completion check (${taskType})...`);
@@ -488,7 +487,7 @@ Responda APENAS com um JSON:
   "risk": "breve descrição do risco se houver"
 }`;
             const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
-                { role: 'system', content: 'Você é um avaliador de confiança rigoroso.' },
+                { role: 'system', content: 'Você é um avaliador de confiança focado em utilidade prática. Valorize evidências sobre perfeccionismo.' },
                 { role: 'user', content: prompt }
             ], []));
 
@@ -515,13 +514,13 @@ ${result}
 
 CRITÉRIOS:
 - Responde diretamente o usuário?
-- Está baseada em evidência suficiente?
-- Há algo importante faltando ou desnecessário?
+- É "boa o suficiente" (útil e clara)?
+- Evite sugerir mudanças puramente estéticas ou menores.
 
 Responda APENAS com um JSON:
 {
   "ok": true | false,
-  "improvements": "sugestões de melhoria se ok=false"
+  "improvements": "sugestões de melhoria APENAS se houver erro ou falta grave"
 }`;
             const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
                 { role: 'system', content: 'Você é um crítico interno que busca clareza e utilidade.' },
@@ -776,19 +775,19 @@ Responda APENAS com um JSON:
                     const confidence = await this.evaluateConfidence(userText, textResponse);
                     console.log(`[${this.ts()}] [COGNITION] Confidence: ${confidence.level.toUpperCase()} (${confidence.basis})`);
 
-                    if (confidence.level === 'baixo' && taskType !== 'INFORMACIONAL') {
-                        console.log(`[${this.ts()}] [COGNITION] Low confidence detected. Forcing more evidence search.`);
-                        validation = { isComplete: false, reason: `Confiança baixa: ${confidence.risk || 'necessário mais evidências reais'}.` };
+                    if (confidence.level === 'baixo' && taskType !== 'INFORMACIONAL' && confidence.basis !== 'dados reais') {
+                        console.log(`[${this.ts()}] [COGNITION] Low confidence (no evidence). Forcing research.`);
+                        validation = { isComplete: false, reason: `Confiança baixa e sem evidências reais: ${confidence.risk}` };
                     } else {
                         const critic = await this.internalCritic(userText, textResponse);
                         if (!critic.ok) {
-                            console.log(`[${this.ts()}] [COGNITION] Critic suggested improvements. Refining response.`);
+                            console.log(`[${this.ts()}] [COGNITION] Critic refinement (1-cycle limit).`);
                             loopMessages.push({ 
                                 role: 'user', 
-                                content: `[SISTEMA: CRÍTICA INTERNA]\nMelhore sua resposta final com base nestas sugestões: ${critic.improvements}\n\nMantenha o que está bom, mas corrija os pontos acima.` 
+                                content: `[SISTEMA: REFINAMENTO FINAL]\nMelhore sua resposta com base nisto: ${critic.improvements}\nResponda agora de forma definitiva.` 
                             });
-                            currentLLMResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
-                            continue; // Volta para o loop para aplicar a melhoria
+                            const finalLLMResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
+                            return sanitizeContent(finalLLMResponse.content || '') || textResponse;
                         }
                         return textResponse || 'Tarefa concluída com sucesso.';
                     }
