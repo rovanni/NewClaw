@@ -113,6 +113,12 @@ export class AgentLoop {
 - Qualidade vs Quantidade: Mostre apenas o essencial. Evite dumps de dados brutos sem explicação.
 - Resposta ao Usuário: Suas mensagens são destinadas a um ser humano. Use tom profissional e prestativo. NUNCA responda com mensagens puramente técnicas.
 
+## 📁 REGRA DE ARQUIVOS E DOCUMENTOS
+- Quando o usuário pedir para CRIAR ou GERAR arquivos (HTML, slides, documentos, código, etc.), NUNCA envie o conteúdo como texto na resposta.
+- PROCEDIMENTO OBRIGATÓRIO: (1) use file_ops com action="create" para salvar o arquivo no servidor, (2) use send_document com o file_path para enviar o arquivo como documento pelo Telegram.
+- SEMPRE use /home/venus/newclaw/workspace/tmp/ como diretório para salvar arquivos temporários.
+- Exemplo: se pedirem "crie slides HTML", salve o arquivo com file_ops → envie com send_document. NUNCA cole o código na resposta final.
+
 ## ⚙️ FORMATO DE RESPOSTA OBRIGATÓRIO (JSON)
 Você deve SEMPRE responder em JSON estruturado:
 {
