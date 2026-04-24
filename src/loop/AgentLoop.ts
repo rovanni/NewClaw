@@ -104,6 +104,7 @@ export class AgentLoop {
 - Relevância Semântica: Filtre o ruído. Ignore resultados de ferramentas que não respondem à pergunta ou tarefa.
 - Hierarquia de Evidência: Dados de ferramentas estruturadas (crypto/memória local) são soberanos sobre buscas web genéricas.
 - Adaptação a Falhas: Se uma ferramenta falhar ou retornar erro, NÃO repita a mesma ação com os mesmos parâmetros. Mude a estratégia, tente outra ferramenta ou finalize com a melhor informação disponível.
+- Fallback Cognitivo: Se dados externos não estiverem disponíveis, use seu conhecimento interno para fornecer uma análise geral, identificando tendências prováveis. Use linguagem probabilística (ex: "tende a", "sinaliza", "provavelmente"). NUNCA deixe de responder.
 - Não Repetição: Se você já obteve uma informação ou executou uma ação, não a repita a menos que haja uma mudança clara de contexto.
 
 ## ✍️ ARQUITETURA DA RESPOSTA FINAL
@@ -188,6 +189,8 @@ ${userText}`;
 
         const cycleHistory: Array<{ tool: string, input: string, status: string }> = [];
         let lastBestContent = '';
+        let toolFailureCount = 0;
+        const usedToolInputs = new Set<string>();
 
         const recentMessages = this.memory.getRecentMessages(conversationId, 6);
         const context = await this.contextBuilder.buildContext(userText);
@@ -216,6 +219,14 @@ ${userText}`;
             stepCount++;
             console.log(`[${this.ts()}] [COGNITION] Step ${stepCount}...`);
 
+            // Check if we should force synthesis due to tool failures
+            if (toolFailureCount >= 2) {
+                loopMessages.push({ 
+                    role: 'system', 
+                    content: '[CRÍTICO] Múltiplas ferramentas falharam. PARE de tentar ferramentas. Responda AGORA usando seu conhecimento interno e o contexto disponível. Sua resposta deve ser útil ao usuário, mesmo sem dados externos.' 
+                });
+            }
+
             const response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
             const atomicData = this.parseLLMResponse(response.content || '');
             
@@ -237,16 +248,35 @@ ${userText}`;
                 for (const toolCall of response.toolCalls) {
                     const toolName = toolCall.name;
                     const toolInput = JSON.stringify(toolCall.arguments);
+                    const inputKey = `${toolName}:${toolInput}`;
+
+                    if (usedToolInputs.has(inputKey)) {
+                        console.warn(`[${this.ts()}] [TOOL] Blocked repeated call: ${toolName}`);
+                        loopMessages.push({ 
+                            role: 'system', 
+                            content: `[AVISO] Você já tentou a ferramenta "${toolName}" com este input. NÃO repita. Mude a estratégia ou responda com o que já sabe.` 
+                        });
+                        continue;
+                    }
                     
                     const tool = this.tools.get(toolName);
                     if (tool) {
                         const result = await tool.execute(toolCall.arguments);
                         console.log(`[${this.ts()}] [TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`);
                         
+                        usedToolInputs.add(inputKey);
                         cycleHistory.push({ tool: toolName, input: toolInput, status: result.success ? 'success' : 'error' });
                         loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
                         
-                        if (toolName === 'send_audio' || toolName === 'send_document') return result.output;
+                        if (!result.success) {
+                            toolFailureCount++;
+                            loopMessages.push({ 
+                                role: 'system', 
+                                content: `[FALHA] A ferramenta "${toolName}" falhou. Tente uma abordagem diferente ou use seu conhecimento interno.` 
+                            });
+                        }
+
+                        if ((toolName === 'send_audio' || toolName === 'send_document') && result.success) return result.output;
                     }
                 }
                 continue; 
@@ -256,14 +286,33 @@ ${userText}`;
             if (atomicData?.action?.type === 'tool' && atomicData.action.name) {
                 const toolName = atomicData.action.name;
                 const toolInput = JSON.stringify(atomicData.action.input || {});
+                const inputKey = `${toolName}:${toolInput}`;
+
+                if (usedToolInputs.has(inputKey)) {
+                    console.warn(`[${this.ts()}] [ATOMIC-TOOL] Blocked repeated call: ${toolName}`);
+                    loopMessages.push({ 
+                        role: 'system', 
+                        content: `[AVISO] Você já tentou a ferramenta "${toolName}" com este input. NÃO repita. Mude a estratégia ou responda com o que já sabe.` 
+                    });
+                    continue;
+                }
 
                 const tool = this.tools.get(toolName);
                 if (tool) {
                     const result = await tool.execute(atomicData.action.input || {});
                     console.log(`[${this.ts()}] [ATOMIC-TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`);
                     
+                    usedToolInputs.add(inputKey);
                     cycleHistory.push({ tool: toolName, input: toolInput, status: result.success ? 'success' : 'error' });
                     loopMessages.push({ role: 'tool', content: result.output });
+
+                    if (!result.success) {
+                        toolFailureCount++;
+                        loopMessages.push({ 
+                            role: 'system', 
+                            content: `[FALHA] A ferramenta "${toolName}" falhou. Tente uma abordagem diferente ou use seu conhecimento interno.` 
+                        });
+                    }
                     continue;
                 }
             }
@@ -281,7 +330,19 @@ ${userText}`;
         }
 
         // Síntese de segurança se o loop terminar sem final_answer explícito
-        return lastBestContent || 'Tarefa processada. Por favor, verifique os detalhes acima.';
+        if (lastBestContent) return lastBestContent;
+
+        // Se chegamos aqui sem conteúdo útil, forçar uma síntese final do modelo
+        console.log(`[${this.ts()}] [FALLBACK] Generating final synthesis...`);
+        loopMessages.push({ 
+            role: 'system', 
+            content: 'FINALIZAÇÃO OBRIGATÓRIA: Forneça uma resposta útil ao usuário agora, baseada em todo o contexto anterior e no seu conhecimento. Não use ferramentas. Use linguagem probabilística se necessário.' 
+        });
+        
+        const finalResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile);
+        const finalAtomic = this.parseLLMResponse(finalResponse.content || '');
+        
+        return finalAtomic?.action?.content || sanitizeContent(finalResponse.content || '') || 'Desculpe, não consegui obter dados externos, mas com base no que sei...';
     }
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<any> {
