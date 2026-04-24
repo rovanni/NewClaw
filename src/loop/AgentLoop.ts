@@ -346,7 +346,7 @@ ${userText}`;
     }
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<any> {
-        const timeoutMs = 12000; 
+        const timeoutMs = 60000; // 60s — cloud models need more time 
         try {
             return await llmQueue.add(() => this.providerFactory.chatWithFallback(
                 messages, 
