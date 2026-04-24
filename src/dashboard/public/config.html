@@ -146,6 +146,12 @@
       color: var(--accent); font-weight: 600; font-size: 0.85rem; transition: background 0.2s;
     }
     .model-item-pull:hover { background: var(--accent-bg); }
+    .model-item-add {
+      padding: 10px 12px; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+      color: var(--accent); font-weight: 600; font-size: 0.85rem; transition: background 0.2s;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .model-item-add:hover { background: var(--accent-bg); }
   </style>
 </head>
 <body>
@@ -576,13 +582,25 @@
     function renderDropdown(inputId) {
       const input = document.getElementById(inputId);
       const dropdown = document.getElementById(`dropdown-${inputId}`);
-      const filter = input.value.toLowerCase().trim();
+      const filter = input.value.trim();
+      const filterLow = filter.toLowerCase();
+      
       const clouds = availableModelsList.filter(m => m.includes('cloud') || m.includes('groq') || m.includes('gemini'));
       const locals = availableModelsList.filter(m => !clouds.includes(m));
-      const filterList = (list) => filter ? list.filter(m => m.toLowerCase().includes(filter)) : list;
+      const filterList = (list) => filterLow ? list.filter(m => m.toLowerCase().includes(filterLow)) : list;
       const filteredClouds = filterList(clouds);
       const filteredLocals = filterList(locals);
+      
       let html = '';
+      
+      // 1. Always show option to use whatever is typed if it's not in the list
+      if (filter && !availableModelsList.includes(filter)) {
+        html += `<div class="model-item-add" onclick="addAndSelect('${inputId}', '${filter}')">
+                   <span class="model-name">✨ Usar "${filter}"</span><span class="badge" style="background:#5c6bc0;color:#fff;">custom</span>
+                 </div>`;
+        html += `<div style="border-bottom:1px solid var(--border-color);margin:4px 0;"></div>`;
+      }
+
       if (filteredClouds.length > 0) {
         html += `<div class="model-dropdown-group">Cloud Models</div>`;
         filteredClouds.forEach(m => {
@@ -599,14 +617,36 @@
                    </div>`;
         });
       }
-      if (filter && filteredClouds.length === 0 && filteredLocals.length === 0) {
-        html += `<div class="model-item-pull" onclick="pullAndSelect('${inputId}', '${filter}')">⬇️ Baixar modelo "${filter}"...</div>`;
+      if (filterLow && filteredClouds.length === 0 && filteredLocals.length === 0 && !availableModelsList.includes(filter)) {
+        html += `<div class="model-item-pull" onclick="pullAndSelect('${inputId}', '${filter}')">⬇️ Baixar modelo local "${filter}"...</div>`;
       }
       dropdown.innerHTML = html || `<div style="padding:10px;font-size:0.8rem;color:var(--text-soft);text-align:center;">Nenhum modelo</div>`;
     }
 
-    window.selectDropdownModel = function(inputId, modelName) { document.getElementById(inputId).value = modelName; document.getElementById(`dropdown-${inputId}`).classList.remove('show'); };
-    window.pullAndSelect = function(inputId, modelName) { document.getElementById(inputId).value = modelName; document.getElementById(`dropdown-${inputId}`).classList.remove('show'); pullModel(modelName); };
+    window.selectDropdownModel = function(inputId, modelName) { 
+      document.getElementById(inputId).value = modelName; 
+      document.getElementById(`dropdown-${inputId}`).classList.remove('show'); 
+    };
+    
+    window.addAndSelect = async function(inputId, modelName) {
+      document.getElementById(inputId).value = modelName;
+      document.getElementById(`dropdown-${inputId}`).classList.remove('show');
+      try {
+        await fetch('/api/models/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: modelName })
+        });
+        // Reload list in background
+        loadProviders();
+      } catch(e) {}
+    };
+
+    window.pullAndSelect = function(inputId, modelName) { 
+      document.getElementById(inputId).value = modelName; 
+      document.getElementById(`dropdown-${inputId}`).classList.remove('show'); 
+      pullModel(modelName); 
+    };
 
     loadConfig(); loadStatus(); loadTools(); loadProviders(); loadSkillLearnerInsights();
     setInterval(loadStatus, 30000);

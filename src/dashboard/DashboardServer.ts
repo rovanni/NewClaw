@@ -1,5 +1,5 @@
-/**
- * NewClaw DashboardServer — Web Dashboard para o NewClaw
+﻿/**
+ * NewClaw DashboardServer â€” Web Dashboard para o NewClaw
  * Adaptado do IALClaw Dashboard
  * 
  * Features:
@@ -109,7 +109,7 @@ export class DashboardServer {
                     whisperPath: this.config.whisperPath,
                     ollamaUrl: this.config.ollamaUrl,
                     ollamaModel: this.config.ollamaModel || ollama?.getModel() || 'glm-5.1:cloud',
-                    ollamaApiKey: this.config.ollamaApiKey ? '••••' : '',
+                    ollamaApiKey: this.config.ollamaApiKey ? 'â€¢â€¢â€¢â€¢' : '',
                     systemPrompt: this.config.systemPrompt || '',
                     telegramAllowedUserIds: this.config.telegramAllowedUserIds.join(','),
                     hasGeminiKey: !!this.config.geminiApiKey,
@@ -125,7 +125,7 @@ export class DashboardServer {
         this.app.post('/api/config', (req: Request, res: Response) => {
             const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl, telegramAllowedUserIds, modelRouter } = req.body;
 
-            console.log(`[CONFIG] POST /api/config — ollamaModel="${ollamaModel}" provider="${defaultProvider}"`);
+            console.log(`[CONFIG] POST /api/config â€” ollamaModel="${ollamaModel}" provider="${defaultProvider}"`);
 
             if (language) this.config.language = language;
             if (systemPrompt !== undefined) this.config.systemPrompt = systemPrompt;
@@ -136,7 +136,7 @@ export class DashboardServer {
             if (telegramAllowedUserIds !== undefined) {
                 this.config.telegramAllowedUserIds = String(telegramAllowedUserIds).split(',').map(id => id.trim()).filter(id => id);
                 console.log(`[CONFIG] Telegram whitelist updated: ${this.config.telegramAllowedUserIds.join(', ')}`);
-                console.log(`💡 Para gerenciar usuários autorizados e outras configurações, acesse o Dashboard em: http://localhost:${this.config.dashboardPort || 3090}/config`);
+                console.log(`ðŸ’¡ Para gerenciar usuÃ¡rios autorizados e outras configuraÃ§Ãµes, acesse o Dashboard em: http://localhost:${this.config.dashboardPort || 3090}/config`);
             }
 
             // Provider switch
@@ -158,7 +158,7 @@ export class DashboardServer {
                 const ollama = this.providerFactory?.getOllamaProvider();
                 if (ollama) {
                     ollama.setModel(ollamaModel);
-                    console.log(`[CONFIG] Ollama model switched: ${previousModel} → ${ollamaModel}`);
+                    console.log(`[CONFIG] Ollama model switched: ${previousModel} â†’ ${ollamaModel}`);
                 } else {
                     console.warn(`[CONFIG] Ollama provider not available for model switch`);
                 }
@@ -223,7 +223,7 @@ export class DashboardServer {
 
         // Restart route
         this.app.post('/api/restart', (_req: Request, res: Response) => {
-            console.log('🔄 Restart requested via Dashboard...');
+            console.log('ðŸ”„ Restart requested via Dashboard...');
             res.json({ success: true, message: 'Restarting NewClaw...' });
             setTimeout(() => { process.exit(0); }, 1000);
         });
@@ -319,25 +319,8 @@ export class DashboardServer {
             }
 
 
-            const ollamaUrl = this.config.ollamaUrl || 'http://localhost:11434';
-            try {
-                const pullRes = await fetch(`${ollamaUrl}/api/pull`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: model, stream: false })
-                });
-                if (pullRes.ok) {
-                    res.json({ success: true, message: `Model "${model}" pulled successfully` });
-                } else {
-                    const errText = await pullRes.text();
-                    res.status(500).json({ success: false, error: `Pull failed: ${errText.slice(0, 200)}` });
-                }
-            } catch (err: any) {
-                res.status(500).json({ success: false, error: err.message });
-            }
-        });
+            });
 
-        // Check if model exists locally
         this.app.get('/api/ollama/exists/:model', async (req: Request, res: Response) => {
             const model = String(req.params.model);
             const ollamaUrl = this.config.ollamaUrl || 'http://localhost:11434';
@@ -668,7 +651,7 @@ export class DashboardServer {
             }
         });
 
-        // ── Ontologia do grafo ──
+        // â”€â”€ Ontologia do grafo â”€â”€
         this.app.get('/api/memory/ontology', (_req: Request, res: Response) => {
             res.json({
                 success: true,
@@ -685,7 +668,7 @@ export class DashboardServer {
             });
         });
 
-        // ── Graph snapshots ──
+        // â”€â”€ Graph snapshots â”€â”€
         this.app.get('/api/memory/snapshots', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
@@ -908,7 +891,7 @@ export class DashboardServer {
             }
         });
 
-        // Analytics endpoint — metrics and graph density (O(1) with backend persistence)
+        // Analytics endpoint â€” metrics and graph density (O(1) with backend persistence)
         this.app.get('/api/memory/analytics', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
@@ -1114,7 +1097,7 @@ export class DashboardServer {
             }
         });
 
-        // ── Dashboard Analytics (Bloco 4) ──
+        // â”€â”€ Dashboard Analytics (Bloco 4) â”€â”€
 
         // Top nodes by metric
         this.app.get('/api/memory/dashboard/top-nodes', (req: Request, res: Response) => {
@@ -1226,7 +1209,7 @@ export class DashboardServer {
             }
         });
 
-        // ── Classification Memory & Decision Memory endpoints ──
+        // â”€â”€ Classification Memory & Decision Memory endpoints â”€â”€
 
         // Get classification stats
         this.app.get('/api/memory/classifications', (_req: Request, res: Response) => {
@@ -1263,7 +1246,7 @@ export class DashboardServer {
             }
         });
 
-        // ── Skill Installer endpoints ──
+        // â”€â”€ Skill Installer endpoints â”€â”€
 
         // Install a skill
         this.app.post('/api/skills/install', async (req: Request, res: Response) => {
@@ -1298,7 +1281,7 @@ export class DashboardServer {
             }
         });
 
-        // Conversations API — sync dashboard with DB
+        // Conversations API â€” sync dashboard with DB
         this.app.get('/api/conversations', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
@@ -1463,7 +1446,7 @@ export class DashboardServer {
         if (this.server) return;
 
         this.server = this.app.listen(port, () => {
-            console.log(`📊 NewClaw Dashboard rodando em http://localhost:${port}`);
+            console.log(`ðŸ“Š NewClaw Dashboard rodando em http://localhost:${port}`);
         });
     }
 
@@ -1672,3 +1655,4 @@ function formatBytes(bytes: number): string {
     }
     return `${size.toFixed(1)} ${units[i]}`;
 }
+
