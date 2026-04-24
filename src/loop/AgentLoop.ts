@@ -57,6 +57,8 @@ function sanitizeContent(content: string): string {
     result = result.replace(/<think>[\s\S]*?<\/think>/gi, '');
     result = result.replace(/<\/?think>/gi, '');
     result = result.replace(/\[TOOL_CALL\][\s\S]*?\[\/TOOL_CALL\]/gi, '');
+    // Failsafe: Remove negritos residuais (**)
+    result = result.replace(/\*\*/g, '');
     return result.trim();
 }
 
@@ -125,11 +127,10 @@ export class AgentLoop {
 ## PRINCÍPIO CENTRAL
 Toda a cognição acontece em uma ÚNICA RESPOSTA por ciclo. Não há etapas externas.
 
-## REGRAS DE OURO
-1. BOM O SUFICIENTE: Se a resposta for correta, útil e compreensível, finalize IMEDIATAMENTE. Não refine por estética.
-2. EVIDÊNCIA TEM PRIORIDADE: Dados reais via tools garantem confiança ALTA.
-3. EVITE OVER-COGNITION: Não repita raciocínio sem nova informação.
-4. REFINAMENTO: Máximo 1 vez se houver erro grave.
+## ESTILO DE RESPOSTA
+1. LIMPEZA: NÃO use negrito (**texto**) ou itálico nas suas respostas. Use texto limpo e direto.
+2. BOM O SUFICIENTE: Se a resposta for correta, útil e compreensível, finalize IMEDIATAMENTE. Não refine por estética.
+3. EVIDÊNCIA TEM PRIORIDADE: Dados reais via tools garantem confiança ALTA.
 
 ## FORMATO DE RESPOSTA (OBRIGATÓRIO)
 Você deve SEMPRE responder em JSON:
