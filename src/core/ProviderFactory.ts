@@ -12,6 +12,7 @@ export interface LLMMessage {
     role: 'user' | 'assistant' | 'system' | 'tool';
     content: string;
     toolCalls?: ToolCall[];
+    tool_call_id?: string;
 }
 
 export interface LLMResponse {
