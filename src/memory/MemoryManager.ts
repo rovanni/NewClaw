@@ -348,6 +348,9 @@ export class MemoryManager {
         tryAddColumn('memory_nodes', 'confidence', 'REAL DEFAULT 1.0');
         tryAddColumn('memory_nodes', 'last_updated', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
         tryAddColumn('memory_nodes', 'domain', 'TEXT');
+        tryAddColumn('memory_edges', 'last_accessed', 'DATETIME');
+        tryAddColumn('memory_edges', 'domain', 'TEXT');
+        tryAddColumn('node_metrics', 'last_accessed', 'DATETIME');
     }
 
     private incrementBootCount(): void {

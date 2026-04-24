@@ -346,12 +346,21 @@ ${userText}`;
     }
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<any> {
-        const timeoutMs = 60000; // 60s — cloud models need more time 
+        const timeoutMs = 60000; // 60s — cloud models need more time
+
+        // Apply routed model to OllamaProvider before calling
+        if (chatProfile?.model) {
+            const ollamaProvider = this.providerFactory.getOllamaProvider();
+            if (ollamaProvider) {
+                ollamaProvider.setModel(chatProfile.model);
+            }
+        }
+
         try {
             return await llmQueue.add(() => this.providerFactory.chatWithFallback(
                 messages, 
                 toolDefs, 
-                chatProfile?.id, 
+                undefined, // Always use ollama (single provider), model already set above
                 timeoutMs
             ));
         } catch (error: any) {
