@@ -432,6 +432,111 @@ ou
     }
 
     /**
+     * Reavalia dinamicamente o tipo e o estado da tarefa durante o loop.
+     */
+    private async reassessTask(userText: string, actionsSummary: string, taskType: string): Promise<{ type: string, status: string, recommendation: string }> {
+        try {
+            const prompt = `Reavalie o estado atual da tarefa do usuário:
+- TIPO ATUAL: ${taskType}
+- AÇÕES JÁ REALIZADAS:
+${actionsSummary || 'Nenhuma'}
+
+[OBJETIVO ORIGINAL]
+${userText}
+
+Sua estratégia atual ainda faz sentido? O tipo de tarefa mudou?
+Responda APENAS com um JSON:
+{
+  "type": "INFORMACIONAL | INVESTIGATIVA | EXECUTIVA",
+  "status": "progredindo | travado | concluível",
+  "recommendation": "continuar | mudar estratégia | responder"
+}`;
+            const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
+                { role: 'system', content: 'Você é um estrategista de reavaliação de tarefas.' },
+                { role: 'user', content: prompt }
+            ], []));
+
+            const content = (response.content || '').trim();
+            const json = JSON.parse(content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1));
+            return {
+                type: json.type || taskType,
+                status: json.status || 'progredindo',
+                recommendation: json.recommendation || 'continuar'
+            };
+        } catch {
+            return { type: taskType, status: 'progredindo', recommendation: 'continuar' };
+        }
+    }
+
+    /**
+     * Avalia o nível de confiança na resposta gerada.
+     */
+    private async evaluateConfidence(userText: string, result: string): Promise<{ level: 'baixo' | 'médio' | 'alto', basis: string, risk?: string }> {
+        try {
+            const prompt = `Avalie seu nível de confiança na resposta final:
+
+[TAREFA]
+${userText}
+
+[RESPOSTA]
+${result}
+
+Responda APENAS com um JSON:
+{
+  "level": "baixo | médio | alto",
+  "basis": "dados reais | inferência | suposição",
+  "risk": "breve descrição do risco se houver"
+}`;
+            const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
+                { role: 'system', content: 'Você é um avaliador de confiança rigoroso.' },
+                { role: 'user', content: prompt }
+            ], []));
+
+            const content = (response.content || '').trim();
+            const json = JSON.parse(content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1));
+            return json;
+        } catch {
+            return { level: 'médio', basis: 'inferência' };
+        }
+    }
+
+    /**
+     * Meta-loop: Critica a própria resposta antes de enviar.
+     */
+    private async internalCritic(userText: string, result: string): Promise<{ ok: boolean, improvements?: string }> {
+        try {
+            const prompt = `Revise sua própria resposta antes de enviar ao usuário:
+
+[PERGUNTA]
+${userText}
+
+[SUA RESPOSTA]
+${result}
+
+CRITÉRIOS:
+- Responde diretamente o usuário?
+- Está baseada em evidência suficiente?
+- Há algo importante faltando ou desnecessário?
+
+Responda APENAS com um JSON:
+{
+  "ok": true | false,
+  "improvements": "sugestões de melhoria se ok=false"
+}`;
+            const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
+                { role: 'system', content: 'Você é um crítico interno que busca clareza e utilidade.' },
+                { role: 'user', content: prompt }
+            ], []));
+
+            const content = (response.content || '').trim();
+            const json = JSON.parse(content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1));
+            return json;
+        } catch {
+            return { ok: true };
+        }
+    }
+
+    /**
      * Main loop — native tool calling (like OpenClaw)
      * 
      * Tool results are ALWAYS fed back to the LLM.
@@ -662,14 +767,47 @@ ou
 
                 currentLLMResponse = await this.callLLMWithFallback(tempMessages, toolDefs, chatProfile);
             } else {
-                // --- RESPOSTA DE TEXTO / VALIDAÇÃO ---
-                const textResponse = sanitizeContent(currentLLMResponse.content || '');
-                
                 // Valida se terminou mesmo
-                const validation = await this.validateCompletion(userText, loopMessages, textResponse, startIndex, taskType);
+                const textResponse = sanitizeContent(currentLLMResponse.content || '');
+                let validation = await this.validateCompletion(userText, loopMessages, textResponse, startIndex, taskType);
                 
                 if (validation.isComplete) {
-                    return textResponse || 'Tarefa concluída com sucesso.';
+                    // --- ETAPA COGNITIVA FINAL: CONFIANÇA E CRÍTICA ---
+                    const confidence = await this.evaluateConfidence(userText, textResponse);
+                    console.log(`[${this.ts()}] [COGNITION] Confidence: ${confidence.level.toUpperCase()} (${confidence.basis})`);
+
+                    if (confidence.level === 'baixo' && taskType !== 'INFORMACIONAL') {
+                        console.log(`[${this.ts()}] [COGNITION] Low confidence detected. Forcing more evidence search.`);
+                        validation = { isComplete: false, reason: `Confiança baixa: ${confidence.risk || 'necessário mais evidências reais'}.` };
+                    } else {
+                        const critic = await this.internalCritic(userText, textResponse);
+                        if (!critic.ok) {
+                            console.log(`[${this.ts()}] [COGNITION] Critic suggested improvements. Refining response.`);
+                            loopMessages.push({ 
+                                role: 'user', 
+                                content: `[SISTEMA: CRÍTICA INTERNA]\nMelhore sua resposta final com base nestas sugestões: ${critic.improvements}\n\nMantenha o que está bom, mas corrija os pontos acima.` 
+                            });
+                            currentLLMResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
+                            continue; // Volta para o loop para aplicar a melhoria
+                        }
+                        return textResponse || 'Tarefa concluída com sucesso.';
+                    }
+                }
+
+                // --- REAVALIAÇÃO DINÂMICA DE ESTRATÉGIA ---
+                const actionsSoFar = loopMessages.slice(startIndex)
+                    .filter(m => m.role === 'tool')
+                    .map(m => `- Tool: ${m.content?.slice(0, 50)}...`).join('\n');
+                
+                const reassessment = await this.reassessTask(userText, actionsSoFar, taskType);
+                if (reassessment.type !== taskType) {
+                    console.log(`[${this.ts()}] [COGNITION] Task Reclassified: ${taskType} → ${reassessment.type}`);
+                    taskType = reassessment.type as any;
+                }
+
+                if (reassessment.recommendation === 'mudar estratégia') {
+                    console.log(`[${this.ts()}] [COGNITION] Strategy change recommended: ${reassessment.status}`);
+                    loopMessages.push({ role: 'system', content: `[ESTRATÉGIA] O sistema detectou que você está ${reassessment.status}. Tente uma nova abordagem.` });
                 }
 
                 // Tarefa incompleta
