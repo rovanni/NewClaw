@@ -320,219 +320,36 @@ export class AgentLoop {
 
     private ts(): string { return new Date().toLocaleTimeString('pt-BR', { hour12: false }); }
 
-    /**
-     * Classifica o tipo de tarefa do usuário para adaptar o comportamento do loop.
-     */
-    private async classifyTask(userText: string): Promise<'INFORMACIONAL' | 'INVESTIGATIVA' | 'EXECUTIVA'> {
-        try {
-            const prompt = `Classifique a tarefa do usuário em uma destas 3 categorias:
-- INFORMACIONAL: Perguntas simples, conversas ou solicitações de explicação baseada em conhecimento geral.
-- INVESTIGATIVA: Busca de dados, pesquisa na web, análise de arquivos ou cruzamento de informações. Requer evidências.
-- EXECUTIVA: Criação de arquivos, execução de comandos, envio de áudios/documentos ou modificação de sistema.
+    private buildAtomicPrompt(): string {
+        return `Você é o núcleo cognitivo do agente NewClaw. Resolva a tarefa com eficiência máxima.
 
-[TAREFA]
-${userText}
+## PRINCÍPIO CENTRAL
+Toda a cognição acontece em uma ÚNICA RESPOSTA por ciclo. Não há etapas externas.
 
-Responda APENAS com o tipo (INFORMACIONAL, INVESTIGATIVA ou EXECUTIVA).`;
+## REGRAS DE OURO
+1. BOM O SUFICIENTE: Se a resposta for correta, útil e compreensível, finalize IMEDIATAMENTE. Não refine por estética.
+2. EVIDÊNCIA TEM PRIORIDADE: Dados reais via tools garantem confiança ALTA.
+3. EVITE OVER-COGNITION: Não repita raciocínio sem nova informação.
+4. REFINAMENTO: Máximo 1 vez se houver erro grave.
 
-            const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
-                { role: 'system', content: 'Você é um classificador de intenções rápido e preciso.' },
-                { role: 'user', content: prompt }
-            ], []));
-
-            const type = (response.content || '').toUpperCase();
-            if (type.includes('INVESTIGATIVA')) return 'INVESTIGATIVA';
-            if (type.includes('EXECUTIVA')) return 'EXECUTIVA';
-            return 'INFORMACIONAL';
-        } catch {
-            return 'INFORMACIONAL';
-        }
-    }
-
-    /**
-     * Valida se a tarefa foi realmente concluída usando o LLM.
-     * Equilibra completude, eficiência e relevância para evitar over-execution.
-     */
-    private async validateCompletion(
-        userText: string,
-        loopMessages: LLMMessage[],
-        partialResult: string,
-        startIndex: number,
-        taskType: 'INFORMACIONAL' | 'INVESTIGATIVA' | 'EXECUTIVA'
-    ): Promise<{ isComplete: boolean, reason?: string }> {
-        // Extrai apenas as ações executadas nesta sessão (desde o startIndex)
-        const sessionMessages = loopMessages.slice(startIndex);
-        const actionsSummary = sessionMessages
-            .filter(m => m.role === 'tool')
-            .map((m, i) => {
-                const idx = sessionMessages.indexOf(m);
-                const assistantMsg = sessionMessages[idx - 1];
-                const toolName = assistantMsg?.toolCalls?.[0]?.name || 'tool';
-                const output = m.content?.slice(0, 150).replace(/\n/g, ' ') || '';
-                const status = output.includes('Erro:') ? '❌ FALHA' : '✅ SUCESSO';
-                return `${i + 1}. ${status} [${toolName}]: ${output}...`;
-            })
-            .join('\n');
-
-        const validationPrompt = `Avalie estrategicamente se devemos finalizar a tarefa agora.
-
-[TIPO DE TAREFA]
-${taskType}
-
-[OBJETIVO ORIGINAL]
-${userText}
-
-[AÇÕES EXECUTADAS]
-${actionsSummary || 'Nenhuma ferramenta utilizada nesta etapa.'}
-
-[RESPOSTA FINAL PROPOSTA]
-${partialResult || '(Sem resposta textual)'}
-
----
-CRITÉRIOS DE VALIDAÇÃO (EFICIÊNCIA):
-1. BOM O SUFICIENTE: Se a resposta já está correta, útil e compreensível, marque como COMPLETE. Não busque perfeição absoluta.
-2. EVIDÊNCIA: A resposta usa dados reais? Se sim, priorize finalizar.
-3. UTILIDADE: Resolve o problema do usuário? Se sim, FINALIZE.
-4. PRIORIDADE: Responder rápido é melhor que responder perfeitamente após 5 minutos.
-
-Responda APENAS:
-- "COMPLETE" (se for útil e suficiente)
-ou
-- "INCOMPLETE: <somente se faltar algo CRÍTICO e ESSENCIAL>"`;
-
-        try {
-            console.log(`[${this.ts()}] [VALIDATION] Asking LLM for strategic completion check (${taskType})...`);
-            const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
-                { role: 'system', content: 'Você é um estrategista de IA focado em utilidade, evidência e eficiência. Não aceite respostas vazias ou baseadas em suposições para tarefas investigativas.' },
-                { role: 'user', content: validationPrompt }
-            ], []));
-
-            const content = (response.content || '').trim();
-            console.log(`[${this.ts()}] [VALIDATION] Result: ${content.slice(0, 100)}`);
-
-            if (content.toUpperCase().startsWith('COMPLETE')) {
-                // Proteção extra contra respostas de "vou verificar" que o LLM de validação possa ter deixado passar
-                const lowContent = partialResult.toLowerCase();
-                if (lowContent.length < 30 && (lowContent.includes('vou') || lowContent.includes('analisando') || lowContent.includes('verificar'))) {
-                    return { isComplete: false, reason: 'Resposta muito curta ou evasiva.' };
-                }
-                return { isComplete: true };
-            }
-            
-            if (content.toUpperCase().startsWith('INCOMPLETE:')) {
-                return { isComplete: false, reason: content.substring(11).trim() };
-            }
-
-            return { isComplete: true };
-        } catch (err) {
-            console.error(`[${this.ts()}] [VALIDATION] Error:`, err);
-            return { isComplete: true };
-        }
-    }
-
-    /**
-     * Reavalia dinamicamente o tipo e o estado da tarefa durante o loop.
-     */
-    private async reassessTask(userText: string, actionsSummary: string, taskType: string): Promise<{ type: string, status: string, recommendation: string }> {
-        try {
-            const prompt = `Reavalie o estado atual da tarefa do usuário:
-- TIPO ATUAL: ${taskType}
-- AÇÕES JÁ REALIZADAS:
-${actionsSummary || 'Nenhuma'}
-
-[OBJETIVO ORIGINAL]
-${userText}
-
-Sua estratégia atual ainda faz sentido? O tipo de tarefa mudou?
-Responda APENAS com um JSON:
+## FORMATO DE RESPOSTA (OBRIGATÓRIO)
+Você deve SEMPRE responder em JSON:
 {
-  "type": "INFORMACIONAL | INVESTIGATIVA | EXECUTIVA",
-  "status": "progredindo | travado | concluível",
-  "recommendation": "continuar | mudar estratégia | responder"
-}`;
-            const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
-                { role: 'system', content: 'Você é um estrategista de reavaliação de tarefas.' },
-                { role: 'user', content: prompt }
-            ], []));
+  "thought": "Seu raciocínio estratégico resumido",
+  "action": {
+    "type": "tool" | "final_answer",
+    "name": "nome_da_tool (se houver)",
+    "input": { "param": "valor" },
+    "content": "resposta final ao usuário (se type = final_answer)"
+  },
+  "evaluation": {
+    "is_complete": true | false,
+    "confidence": "low" | "medium" | "high",
+    "reason": "Justificativa objetiva"
+  }
+}
 
-            const content = (response.content || '').trim();
-            const json = JSON.parse(content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1));
-            return {
-                type: json.type || taskType,
-                status: json.status || 'progredindo',
-                recommendation: json.recommendation || 'continuar'
-            };
-        } catch {
-            return { type: taskType, status: 'progredindo', recommendation: 'continuar' };
-        }
-    }
-
-    /**
-     * Avalia o nível de confiança na resposta gerada.
-     */
-    private async evaluateConfidence(userText: string, result: string): Promise<{ level: 'baixo' | 'médio' | 'alto', basis: string, risk?: string }> {
-        try {
-            const prompt = `Avalie seu nível de confiança na resposta final:
-
-[TAREFA]
-${userText}
-
-[RESPOSTA]
-${result}
-
-Responda APENAS com um JSON:
-{
-  "level": "baixo | médio | alto",
-  "basis": "dados reais | inferência | suposição",
-  "risk": "breve descrição do risco se houver"
-}`;
-            const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
-                { role: 'system', content: 'Você é um avaliador de confiança focado em utilidade prática. Valorize evidências sobre perfeccionismo.' },
-                { role: 'user', content: prompt }
-            ], []));
-
-            const content = (response.content || '').trim();
-            const json = JSON.parse(content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1));
-            return json;
-        } catch {
-            return { level: 'médio', basis: 'inferência' };
-        }
-    }
-
-    /**
-     * Meta-loop: Critica a própria resposta antes de enviar.
-     */
-    private async internalCritic(userText: string, result: string): Promise<{ ok: boolean, improvements?: string }> {
-        try {
-            const prompt = `Revise sua própria resposta antes de enviar ao usuário:
-
-[PERGUNTA]
-${userText}
-
-[SUA RESPOSTA]
-${result}
-
-CRITÉRIOS:
-- Responde diretamente o usuário?
-- É "boa o suficiente" (útil e clara)?
-- Evite sugerir mudanças puramente estéticas ou menores.
-
-Responda APENAS com um JSON:
-{
-  "ok": true | false,
-  "improvements": "sugestões de melhoria APENAS se houver erro ou falta grave"
-}`;
-            const response = await llmQueue.add(() => this.providerFactory.chatWithFallback([
-                { role: 'system', content: 'Você é um crítico interno que busca clareza e utilidade.' },
-                { role: 'user', content: prompt }
-            ], []));
-
-            const content = (response.content || '').trim();
-            const json = JSON.parse(content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1));
-            return json;
-        } catch {
-            return { ok: true };
-        }
+Importante: Use as ferramentas APENAS se precisar de dados reais. Se já tiver a resposta, finalize.`;
     }
 
     /**
