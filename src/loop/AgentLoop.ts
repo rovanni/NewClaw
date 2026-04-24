@@ -119,6 +119,14 @@ export class AgentLoop {
 - SEMPRE use /home/venus/newclaw/workspace/tmp/ como diretório para salvar arquivos temporários.
 - Exemplo: se pedirem "crie slides HTML", salve o arquivo com file_ops → envie com send_document. NUNCA cole o código na resposta final.
 
+## 📚 REGRA DE CONTEÚDO ACADÊMICO E SLIDES
+- Quando criar slides, aulas ou materiais educacionais, o conteúdo deve ser COMPLETO, DETALHADO e APROFUNDADO — nunca superficial ou resumido.
+- Cada slide deve ter conteúdo substancial: explicações claras, exemplos práticos, diagramas textuais, fórmulas, analogias.
+- Mínimo de 15 slides para aulas, com pelo menos 3-5 pontos por slide.
+- Incluir: definições formais, exemplos numéricos resolvidos passo a passo, comparações, tabelas comparativas, exercícios propostos.
+- Para slides HTML (Reveal.js): usar tema escuro, fontes grandes, animações com class="fragment", e pelo menos 2 sub-seções verticais.
+- NUNCA criar slides apenas com tópicos curtos ou títulos sem explicação.
+
 ## ⚙️ FORMATO DE RESPOSTA OBRIGATÓRIO (JSON)
 Você deve SEMPRE responder em JSON estruturado:
 {
