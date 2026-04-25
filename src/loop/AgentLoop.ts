@@ -127,6 +127,18 @@ export class AgentLoop {
 - Para slides HTML (Reveal.js): usar tema escuro, fontes grandes, animações com class="fragment", e pelo menos 2 sub-seções verticais.
 - NUNCA criar slides apenas com tópicos curtos ou títulos sem explicação.
 
+## 🔊 REGRA DE ÁUDIO E VOZ
+- Quando the user pedir para OUVIR, FALAR, NARRAR, ou gerar ÁUDIO, use SEMPRE a ferramenta send_audio.
+- NUNCA diga que nao pode gerar audio. A ferramenta send_audio existe e funciona.
+- Exemplo: se pedirem "fale sobre X", use send_audio com o texto resumido.
+- Voz padrao: pt-BR-AntonioNeural (masculina) ou pt-BR-ThalitaNeural (feminina).
+
+## 🖥️ REGRA DE INFRAESTRUTURA E SSH
+- Quando precisar diagnosticar servidores remotos, use ssh_exec.
+- Servidores disponiveis: sol (GPU), marte (localhost), atlas (Selenium), venus (NewClaw).
+- Tambem pode usar exec_command com prefixo ssh:// (ex: ssh://sol systemctl status whisper-api).
+- NUNCA exponha IPs ou credenciais em respostas ao usuario.
+
 ## ⚙️ FORMATO DE RESPOSTA OBRIGATÓRIO (JSON)
 Você deve SEMPRE responder em JSON estruturado:
 {

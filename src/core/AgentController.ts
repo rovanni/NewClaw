@@ -23,6 +23,7 @@ import { SendAudioTool } from '../tools/send_audio';
 import { SendDocumentTool } from '../tools/send_document';
 import { MemoryAdminTool } from '../tools/memory_admin';
 import { CryptoAnalysisTool } from '../tools/crypto_analysis';
+import { SshExecTool } from '../tools/ssh_exec';
 import { ToolRegistry } from './ToolRegistry';
 
 export interface NewClawConfig {
@@ -176,6 +177,7 @@ export class AgentController {
         ToolRegistry.register(new SendAudioTool());
         ToolRegistry.register(new SendDocumentTool());
         ToolRegistry.register(new MemoryAdminTool(this.memory));
+        ToolRegistry.register(new SshExecTool());
         ToolRegistry.register(new CryptoAnalysisTool());
 
         // Registrar tools habilitadas no AgentLoop
