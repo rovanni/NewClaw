@@ -522,37 +522,49 @@ export class TelegramInputHandler {
      */
     private async transcribeWithWhisperAPI(wavPath: string): Promise<string> {
         const whisperApiUrl = process.env.WHISPER_API_URL || 'http://localhost:8177';
-        
-        try {
-            const fileBuffer = fs.readFileSync(wavPath);
-            const blob = new Blob([fileBuffer], { type: 'audio/wav' });
-            const formData = new FormData();
-            formData.append('file', blob, 'audio.wav');
-            formData.append('language', 'pt');
+        const whisperFallbackUrl = process.env.WHISPER_API_FALLBACK || '';
 
-            const response = await fetch(`${whisperApiUrl}/inference`, {
-                method: 'POST',
-                body: formData,
-                signal: AbortSignal.timeout(120000)
-            });
+        // Try primary then fallback server
+        const endpoints = [
+            { url: whisperApiUrl, name: 'Primary Whisper' },
+            { url: whisperFallbackUrl, name: 'Fallback Whisper' }
+        ];
 
-            if (!response.ok) {
-                const errText = await response.text();
-                throw new Error(`Whisper API ${response.status}: ${errText}`);
+        const activeEndpoints = endpoints.filter(e => e.url && e.url.trim() !== '');
+        for (const endpoint of activeEndpoints) {
+            try {
+                const fileBuffer = fs.readFileSync(wavPath);
+                const blob = new Blob([fileBuffer], { type: 'audio/wav' });
+                const formData = new FormData();
+                formData.append('file', blob, 'audio.wav');
+                formData.append('language', 'pt');
+
+                const inferenceUrl = endpoint.url + '/inference';
+                const response = await fetch(inferenceUrl, {
+                    method: 'POST',
+                    body: formData,
+                    signal: AbortSignal.timeout(120000)
+                });
+
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error('Whisper API ' + response.status + ': ' + errText);
+                }
+
+                const data = await response.json() as any;
+                const text = data.text || data.transcription || '';
+
+                if (text.trim()) {
+                    console.log('[WHISPER-API] Transcription OK via ' + endpoint.name + ' (' + text.length + ' chars)');
+                    return text.trim();
+                }
+            } catch (error: any) {
+                console.error('[WHISPER-API] ' + endpoint.name + ' failed: ' + error.message);
             }
-
-            const data = await response.json() as any;
-            const text = data.text || data.transcription || '';
-            
-            if (text.trim()) {
-                console.log(`[WHISPER-API] Transcrição OK (${text.length} chars)`);
-                return text.trim();
-            }
-        } catch (error: any) {
-            console.error('[WHISPER-API] Erro, tentando local:', error.message);
         }
 
         // Fallback: whisper-cli local
+        console.log('[WHISPER-API] All endpoints failed, trying local whisper');
         return this.transcribeWithWhisper(wavPath);
     }
 
