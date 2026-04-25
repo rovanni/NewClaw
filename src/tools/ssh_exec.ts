@@ -1,10 +1,11 @@
 /**
  * ssh_exec — Execute commands on remote servers via SSH
- * Supports the Home Lab infrastructure (Sol, Marte, Atlas, Venus)
+ * Uses centralized server_config for host resolution and safety checks
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { exec } from 'child_process';
+import { resolveHost, isDestructive } from './server_config';
 
 export class SshExecTool implements ToolExecutor {
     name = 'ssh_exec';
@@ -28,13 +29,6 @@ export class SshExecTool implements ToolExecutor {
         required: ['host', 'command']
     };
 
-    private readonly hostMap: Record<string, string> = {
-        sol: 'admin@server1',
-        marte: 'user@localhost',
-        atlas: 'user@server3',
-        venus: 'user@server4'
-    };
-
     async execute(args: Record<string, any>): Promise<ToolResult> {
         const hostAlias = args.host as string;
         const command = args.command as string;
@@ -44,14 +38,13 @@ export class SshExecTool implements ToolExecutor {
             return { success: false, output: '', error: 'Parameters "host" and "command" are required' };
         }
 
-        // Block destructive commands
-        const destructive = ['rm -rf /', 'mkfs', 'dd if=', ':(){:|:&};:', 'shutdown', 'reboot'];
-        if (destructive.some(d => command.includes(d))) {
+        // Block destructive commands (centralized list)
+        if (isDestructive(command)) {
             return { success: false, output: '', error: 'Destructive command blocked for safety' };
         }
 
-        // Resolve host alias to SSH target
-        const sshTarget = this.hostMap[hostAlias] || hostAlias;
+        // Resolve host alias to SSH target (centralized)
+        const sshTarget = resolveHost(hostAlias);
 
         // Build SSH command
         const sshCommand = `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no ${sshTarget} "${command.replace(/"/g, '\\"')}"`;
@@ -60,7 +53,12 @@ export class SshExecTool implements ToolExecutor {
             const output = await new Promise<string>((resolve, reject) => {
                 exec(sshCommand, { timeout }, (error, stdout, stderr) => {
                     if (error) {
-                        reject(error);
+                        const partial = (stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : '');
+                        if (partial.trim()) {
+                            resolve(partial + '\n[exit code: ' + (error.code || 'unknown') + ']');
+                        } else {
+                            reject(error);
+                        }
                     } else {
                         resolve(stdout + (stderr ? '\n' + stderr : ''));
                     }

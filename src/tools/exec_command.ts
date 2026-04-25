@@ -1,9 +1,10 @@
 /**
- * exec_command — Executar comandos shell
+ * exec_command — Execute shell commands locally or remotely via ssh:// prefix
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { exec } from 'child_process';
+import { resolveHost, isDestructive } from './server_config';
 
 export class ExecCommandTool implements ToolExecutor {
     name = 'exec_command';
@@ -18,13 +19,6 @@ export class ExecCommandTool implements ToolExecutor {
         required: ['command']
     };
 
-    private readonly hostMap: Record<string, string> = {
-        sol: 'admin@server1',
-        marte: 'user@localhost',
-        atlas: 'user@server3',
-        venus: 'user@server4'
-    };
-
     async execute(args: Record<string, any>): Promise<ToolResult> {
         let command = args.command as string;
         const timeout = (args.timeout as number) || 30000;
@@ -34,9 +28,8 @@ export class ExecCommandTool implements ToolExecutor {
             return { success: false, output: '', error: 'Command not provided' };
         }
 
-        // Block destructive commands
-        const destructive = ['rm -rf /', 'mkfs', 'dd if=', ':(){:|:&};:'];
-        if (destructive.some(d => command.includes(d))) {
+        // Block destructive commands (centralized list)
+        if (isDestructive(command)) {
             return { success: false, output: '', error: 'Destructive command blocked for safety' };
         }
 
@@ -48,7 +41,7 @@ export class ExecCommandTool implements ToolExecutor {
             }
             const hostAlias = match[1];
             const remoteCmd = match[2];
-            const sshTarget = this.hostMap[hostAlias] || hostAlias;
+            const sshTarget = resolveHost(hostAlias);
             command = `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no ${sshTarget} "${remoteCmd.replace(/"/g, '\\"')}"`;
         }
 
@@ -61,7 +54,6 @@ export class ExecCommandTool implements ToolExecutor {
             const output = await new Promise<string>((resolve, reject) => {
                 exec(command, execOptions, (error, stdout, stderr) => {
                     if (error) {
-                        // Include partial output even on error
                         const partialOutput = (stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : '');
                         if (partialOutput.trim()) {
                             resolve(partialOutput + '\n[exit code: ' + (error.code || 'unknown') + ']');
