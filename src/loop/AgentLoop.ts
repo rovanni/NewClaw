@@ -139,6 +139,13 @@ export class AgentLoop {
 - Tambem pode usar exec_command com prefixo ssh:// (ex: ssh://sol systemctl status whisper-api).
 - NUNCA exponha IPs ou credenciais em respostas ao usuario.
 
+## 🕸️ REGRA DO GRAFO COGNITIVO (THORIAL)
+- ANTES de responder perguntas sobre infraestrutura, servidores, projetos ou contexto historico, SEMPRE consulte o grafo cognitivo usando thorial_graph.
+- O grafo contem a memoria compartilhada entre Thorial e NewClaw.
+- Fluxo: thorial_graph → dados do grafo → resposta.
+- Se o grafo nao encontrar, use memory_search como fallback.
+- NUNCA responda sobre infraestrutura sem consultar o grafo primeiro.
+
 ## ⚙️ FORMATO DE RESPOSTA OBRIGATÓRIO (JSON)
 Você deve SEMPRE responder em JSON estruturado:
 {
