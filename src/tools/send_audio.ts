@@ -71,27 +71,44 @@ export class SendAudioTool implements ToolExecutor {
             });
 
             // Send via Telegram using curl (most reliable)
-            if (this.chatId && this.botToken) {
-                try {
-                    execSync(`curl -s -F "chat_id=${this.chatId}" -F "voice=@${oggFile}" "https://api.telegram.org/bot${this.botToken}/sendVoice"`, {
-                        timeout: 30000,
-                        stdio: 'pipe'
-                    });
-                } catch (curlError: any) {
-                    // Fallback: try as audio instead of voice
+            if (!this.chatId || !this.botToken) {
+                console.error('[SEND_AUDIO] Missing Telegram context: chatId=' + this.chatId + ' botToken=' + (this.botToken ? 'SET' : 'NULL'));
+                // Still cleanup
+                try { execSync(`rm -f "${mp3File}" "${oggFile}"`); } catch { /* ignore */ }
+                return { success: false, output: '', error: 'Contexto Telegram não configurado. Não foi possível enviar o áudio.' };
+            }
+
+            try {
+                const curlResult = execSync(`curl -s --max-time 30 -F "chat_id=${this.chatId}" -F "voice=@${oggFile}" "https://api.telegram.org/bot${this.botToken}/sendVoice"`, {
+                    timeout: 35000,
+                    encoding: 'utf-8'
+                });
+                const parsed = JSON.parse(curlResult);
+                if (!parsed.ok) {
+                    console.error('[SEND_AUDIO] Telegram API error:', JSON.stringify(parsed));
+                    // Fallback: try as audio
                     try {
-                        execSync(`curl -s -F "chat_id=${this.chatId}" -F "audio=@${oggFile}" "https://api.telegram.org/bot${this.botToken}/sendAudio"`, {
-                            timeout: 30000,
-                            stdio: 'pipe'
+                        const fallbackResult = execSync(`curl -s --max-time 30 -F "chat_id=${this.chatId}" -F "audio=@${oggFile}" "https://api.telegram.org/bot${this.botToken}/sendAudio"`, {
+                            timeout: 35000,
+                            encoding: 'utf-8'
                         });
+                        const fallbackParsed = JSON.parse(fallbackResult);
+                        if (!fallbackParsed.ok) {
+                            return { success: false, output: '', error: `Telegram sendVoice/sendAudio failed: ${JSON.stringify(fallbackParsed)}` };
+                        }
                     } catch (audioError: any) {
                         return { success: false, output: '', error: `Telegram send failed: ${audioError.message}` };
                     }
+                } else {
+                    console.log('[SEND_AUDIO] Voice sent OK, duration:', parsed.result?.voice?.duration || '?', 's');
                 }
+            } catch (curlError: any) {
+                console.error('[SEND_AUDIO] curl error:', curlError.message);
+                return { success: false, output: '', error: `curl failed: ${curlError.message}` };
             }
 
             // Cleanup
-            try { execSync(`rm -f "${mp3File}"`); } catch { /* ignore */ }
+            try { execSync(`rm -f "${mp3File}" "${oggFile}"`); } catch { /* ignore */ }
 
             return { success: true, output: '🔊 Áudio enviado com sucesso!' };
         } catch (error: any) {
