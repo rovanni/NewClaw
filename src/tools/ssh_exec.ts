@@ -9,7 +9,7 @@ import { resolveHost, isDestructive } from './server_config';
 
 export class SshExecTool implements ToolExecutor {
     name = 'ssh_exec';
-    description = 'Execute a command on a remote server via SSH. Available servers: sol (192.168.1.1, GPU), marte (localhost), atlas (192.168.1.9, Selenium), venus (192.168.1.10). Use for remote diagnostics, service management, and infrastructure tasks.';
+    description = 'Execute a command on a remote server via SSH. Configure servers via NEWCLAW_SSH_HOSTS env var (e.g. "prod:admin@host"). Use alias or user@host directly.';
     parameters = {
         type: 'object',
         properties: {

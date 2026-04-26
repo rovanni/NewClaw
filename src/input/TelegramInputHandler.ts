@@ -635,7 +635,7 @@ export class TelegramInputHandler {
      * Transcreve áudio com Whisper local
      */
     /**
-     * Transcreve áudio via Whisper API server (Marte:8177)
+     * Transcreve áudio via Whisper API server
      * Fallback para whisper-cli local se API indisponível
      */
     private async transcribeWithWhisperAPI(wavPath: string): Promise<string> {

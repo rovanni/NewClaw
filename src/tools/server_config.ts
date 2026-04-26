@@ -1,12 +1,12 @@
 /**
  * ServerConfig — Centralized server mapping and safety rules
  * 
- * For public/self-hosted use: configure hosts via environment variables.
- * Home Lab defaults are provided as examples but NOT hardcoded.
+ * Configure hosts via environment variables. NO built-in defaults
+ * to avoid leaking private infrastructure details in public repos.
  * 
  * Env vars:
- *   NEWCLAW_SSH_HOSTS = "sol:admin@server1,marte:user@localhost,atlas:user@server3"
- *   NEWCLAW_SSH_DEFAULTS = "true"  (set to "false" to disable built-in defaults)
+ *   NEWCLAW_SSH_HOSTS = "alias:user@host,alias2:user@host2"
+ *   Example: NEWCLAW_SSH_HOSTS="prod:admin@192.168.1.10,staging:dev@192.168.1.20"
  */
 
 export const DESTRUCTIVE_COMMANDS = [
@@ -32,19 +32,8 @@ function parseEnvHosts(): Record<string, string> {
     return map;
 }
 
-/** Built-in defaults — only active if NEWCLAW_SSH_DEFAULTS !== "false" */
-const BUILTIN_HOSTS: Record<string, string> = {
-    sol: 'admin@server1',
-    marte: 'user@localhost',
-    atlas: 'user@server3',
-    venus: 'user@server4'
-};
-
-/** Merged host map: env vars override built-in defaults */
-export const SERVER_MAP: Record<string, string> = {
-    ...((process.env.NEWCLAW_SSH_DEFAULTS !== 'false') ? BUILTIN_HOSTS : {}),
-    ...parseEnvHosts()
-};
+/** Host map: populated exclusively from environment variables */
+export const SERVER_MAP: Record<string, string> = parseEnvHosts();
 
 export function resolveHost(alias: string): string {
     return SERVER_MAP[alias] || alias;
