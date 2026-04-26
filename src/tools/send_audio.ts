@@ -10,7 +10,7 @@ import path from 'path';
 
 export class SendAudioTool implements ToolExecutor {
     name = 'send_audio';
-    description = 'Gera áudio TTS em português e envia via Telegram. Use quando o usuário pedir para ouvir, falar, narrar ou gerar áudio.';
+    description = 'Gera áudio TTS em português e envia via Telegram. Use quando o usuário pedir para ouvir, falar, narrar ou gerar áudio. NÃO chame esta ferramenta mais de uma vez por pedido.';
     parameters = {
         type: 'object',
         properties: {
@@ -22,6 +22,8 @@ export class SendAudioTool implements ToolExecutor {
 
     private chatId: string | null = null;
     private botToken: string | null = null;
+    private lastSendTime: number = 0;
+    private static readonly MIN_INTERVAL_MS = 10000; // 10s debounce
 
     setContext(chatId: string, botToken: string): void {
         this.chatId = chatId;
@@ -29,6 +31,13 @@ export class SendAudioTool implements ToolExecutor {
     }
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
+        // Debounce: prevent duplicate sends within 10 seconds
+        const now = Date.now();
+        if (now - this.lastSendTime < SendAudioTool.MIN_INTERVAL_MS) {
+            console.log('[SEND_AUDIO] Debounced — audio already sent recently, skipping.');
+            return { success: true, output: '🔊 Áudio já enviado recentemente.' };
+        }
+        this.lastSendTime = now;
         let text = args.text as string;
         const voice = (args.voice as string) || 'pt-BR-AntonioNeural';
         if (!text) return { success: false, output: '', error: 'Texto não fornecido.' };

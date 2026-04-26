@@ -177,16 +177,22 @@ export class TelegramInputHandler {
         try {
             const response = await this.agentLoop.process(userId, text);
             if (response && response.trim()) {
-                // Telegram limit: 4096 chars. Split if needed.
-                const maxLen = 4000;
-                if (response.length > maxLen) {
-                    // Split into chunks
-                    for (let i = 0; i < response.length; i += maxLen) {
-                        const chunk = response.slice(i, i + maxLen);
-                        await ctx.reply(chunk);
-                    }
+                // Skip confirmation messages from send_audio/send_document — the media was already sent
+                const isMediaConfirmation = /^🔊 (Áudio|Arquivo|Documento) enviado/i.test(response.trim());
+                if (isMediaConfirmation) {
+                    console.log(`[INPUT] Skipping text reply for media confirmation: ${response.trim().slice(0, 50)}`);
                 } else {
-                    await ctx.reply(response);
+                    // Telegram limit: 4096 chars. Split if needed.
+                    const maxLen = 4000;
+                    if (response.length > maxLen) {
+                        // Split into chunks
+                        for (let i = 0; i < response.length; i += maxLen) {
+                            const chunk = response.slice(i, i + maxLen);
+                            await ctx.reply(chunk);
+                        }
+                    } else {
+                        await ctx.reply(response);
+                    }
                 }
             } else {
                 await ctx.reply('⚠️ Resposta vazia do modelo. Tente novamente.');
