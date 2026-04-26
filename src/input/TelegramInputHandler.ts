@@ -98,6 +98,11 @@ export class TelegramInputHandler {
         this.bot.on('message:document', async (ctx) => {
             await this.handleDocument(ctx);
         });
+        // Fotos/Imagens - Análise via modelo de visão
+        this.bot.on('message:photo', async (ctx) => {
+            await this.handlePhoto(ctx);
+        });
+
 
         console.log('✅ TelegramInputHandler started');
         await this.bot.start({
@@ -359,6 +364,119 @@ export class TelegramInputHandler {
             );
         } catch (error: any) {
             await ctx.reply(`⚠️ Erro ao revisar skill: ${error.message}`);
+        }
+    }
+
+    /**
+     * Processa fotos/imagens via modelo de visão (Ollama)
+     */
+    private async handlePhoto(ctx: Context): Promise<void> {
+        const userId = ctx.from!.id.toString();
+        const photos = (ctx.message as any)?.photo;
+        
+        if (!photos || !Array.isArray(photos) || photos.length === 0) {
+            await ctx.reply('⚠️ Não consegui processar a imagem.');
+            return;
+        }
+
+        // Get the largest photo (highest resolution)
+        const photo = photos[photos.length - 1];
+        const fileId = photo.file_id;
+        const caption = (ctx.message as any)?.caption || '';
+        
+        console.log(`[INPUT] Foto de ${userId}, tamanho: ${photo.width}x${photo.height}`);
+        await ctx.replyWithChatAction('typing');
+        const actionInterval = setInterval(() => {
+            ctx.replyWithChatAction('typing').catch(() => {});
+        }, 4000);
+
+        try {
+            // Download photo from Telegram
+            const file = await ctx.api.getFile(fileId);
+            const fileUrl = `https://api.telegram.org/file/bot${this.config.botToken}/${file.file_path}`;
+            
+            console.log(`[PHOTO] Baixando imagem: ${file.file_path}`);
+            const imgResponse = await fetch(fileUrl);
+            if (!imgResponse.ok) {
+                throw new Error(`Falha ao baixar imagem: ${imgResponse.status}`);
+            }
+            const arrayBuffer = await imgResponse.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            
+            // Convert to base64
+            const base64Image = buffer.toString('base64');
+            
+            // Build vision prompt
+            const userPrompt = caption 
+                ? `Analise esta imagem. O usuário disse: "${caption}"\n\nDescreva detalhadamente o que você vê, incluindo texto visível, dados numéricos, gráficos, e qualquer informação relevante. Se for um screenshot de criptomoeda ou trading, extraia todos os dados numéricos visíveis.`
+                : `Analise esta imagem em detalhes. Descreva tudo que você vê, incluindo texto, números, gráficos, e qualquer informação relevante. Responda em português do Brasil.`;
+
+            // Call Ollama vision model
+            const visionServer = process.env.VISION_SERVER || 'http://localhost:11434';
+            const visionModel = process.env.MODEL_VISION || 'gemma4:31b-cloud';
+            
+            console.log(`[PHOTO] Enviando para modelo de visão: ${visionModel} @ ${visionServer}`);
+            
+            const visionResponse = await fetch(`${visionServer}/api/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: visionModel,
+                    messages: [{
+                        role: 'user',
+                        content: userPrompt,
+                        images: [base64Image]
+                    }],
+                    stream: false
+                }),
+                signal: AbortSignal.timeout(120000) // 2 min timeout for vision
+            });
+
+            if (!visionResponse.ok) {
+                const errText = await visionResponse.text();
+                throw new Error(`Vision API error ${visionResponse.status}: ${errText.slice(0, 200)}`);
+            }
+
+            const visionData = await visionResponse.json() as any;
+            const analysis = visionData?.message?.content || visionData?.response || '';
+            
+            if (!analysis || analysis.trim() === '') {
+                await ctx.reply('⚠️ O modelo de visão não retornou análise. Tente novamente.');
+                return;
+            }
+
+            console.log(`[PHOTO] Análise recebida: ${analysis.length} chars`);
+
+            // If there's a caption, process through agent loop for richer response
+            if (caption) {
+                this.agentLoop.setTelegramContext(userId, this.config.botToken);
+                const enrichedPrompt = `O usuário enviou uma imagem com a mensagem: "${caption}"\n\nAnálise da imagem:\n${analysis}\n\nResponda de forma útil e contextualizada em português do Brasil.`;
+                const finalResponse = await this.agentLoop.process(userId, enrichedPrompt);
+                const maxLen = 4000;
+                if (finalResponse.length > maxLen) {
+                    for (let i = 0; i < finalResponse.length; i += maxLen) {
+                        await ctx.reply(finalResponse.slice(i, i + maxLen));
+                    }
+                } else {
+                    await ctx.reply(finalResponse);
+                }
+            } else {
+                // Send analysis directly
+                const maxLen = 4000;
+                if (analysis.length > maxLen) {
+                    for (let i = 0; i < analysis.length; i += maxLen) {
+                        await ctx.reply(analysis.slice(i, i + maxLen));
+                    }
+                } else {
+                    await ctx.reply(analysis);
+                }
+            }
+
+        } catch (error: any) {
+            console.error('[PHOTO] Erro:', error);
+            await ctx.reply(`⚠️ Erro ao processar imagem: ${error.message?.slice(0, 200) || 'desconhecido'}`);
+        } finally {
+            clearInterval(actionInterval);
         }
     }
 
