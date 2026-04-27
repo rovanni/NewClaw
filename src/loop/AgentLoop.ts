@@ -169,6 +169,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                 break;
             case 'chat':
                 prompt += components.RESPONSE_ARCH + "\n\n";
+                prompt += components.AUDIO + "\n\n";
                 break;
             case 'code':
                 prompt += components.RESPONSE_ARCH + "\n\n";
@@ -178,6 +179,8 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             case 'analysis':
                 prompt += components.RESPONSE_ARCH + "\n\n";
                 prompt += components.ANALYSIS + "\n\n";
+                prompt += components.FILE_OPS + "\n\n";
+                prompt += components.AUDIO + "\n\n";
                 break;
             case 'execution':
                 // Full capabilities
