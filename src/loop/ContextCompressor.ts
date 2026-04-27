@@ -1,6 +1,11 @@
 /**
- * ContextCompressor — Summarize long conversations to fit context window
- * Inspired by Hermes Agent's context compression
+ * ContextCompressor — DEPRECATED: Compression is now handled by SessionManager.maybeCompress()
+ * 
+ * This class is kept as a utility for SessionManager, which delegates LLM-based
+ * summarization to this compressor while managing checkpoints and transcripts
+ * independently.
+ * 
+ * DO NOT use this class directly in AgentLoop — use SessionContext instead.
  */
 
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';

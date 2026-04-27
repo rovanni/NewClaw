@@ -390,6 +390,7 @@ export class TelegramInputHandler {
      */
     private async handlePhoto(ctx: Context): Promise<void> {
         const userId = ctx.from!.id.toString();
+        const sessionKey: SessionKey = { channel: 'telegram', userId };
         const photos = (ctx.message as any)?.photo;
         
         if (!photos || !Array.isArray(photos) || photos.length === 0) {
@@ -469,7 +470,11 @@ export class TelegramInputHandler {
             if (caption) {
                 this.agentLoop.setTelegramContext(userId, this.config.botToken);
                 const enrichedPrompt = `O usuário enviou uma imagem com a mensagem: "${caption}"\n\nAnálise da imagem:\n${analysis}\n\nResponda de forma útil e contextualizada em português do Brasil.`;
+                // Record photo message in session transcript
+                await this.sessionManager.recordUserMessage(sessionKey, `[Foto: ${caption}]`);
                 const finalResponse = await this.agentLoop.process(userId, enrichedPrompt);
+                // Record assistant response in session transcript
+                await this.sessionManager.recordAssistantMessage(sessionKey, finalResponse || '', { model: 'newclaw' });
                 const maxLen = 4000;
                 if (finalResponse.length > maxLen) {
                     for (let i = 0; i < finalResponse.length; i += maxLen) {
@@ -486,7 +491,10 @@ export class TelegramInputHandler {
                         await ctx.reply(analysis.slice(i, i + maxLen));
                     }
                 } else {
-                    await ctx.reply(analysis);
+                    // Record photo analysis in session transcript
+                await this.sessionManager.recordUserMessage(sessionKey, '[Foto sem legenda]');
+                await this.sessionManager.recordAssistantMessage(sessionKey, analysis.slice(0, 200), { model: 'vision' });
+                await ctx.reply(analysis);
                 }
             }
 
