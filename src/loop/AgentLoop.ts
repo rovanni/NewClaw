@@ -128,17 +128,19 @@ export class AgentLoop {
 
         AUDIO: `## 🔊 REGRA DE ÁUDIO E VOZ
 - Quando o usuário pedir para OUVIR, FALAR, NARRAR, ou gerar ÁUDIO, use SEMPRE a ferramenta send_audio.
-- NUNCA diga que nao pode gerar audio. A ferramenta send_audio existe e funciona.
-- Voz padrao: pt-BR-AntonioNeural (masculina) ou pt-BR-ThalitaNeural (feminina).`,
+- NUNCA diga que não pode gerar áudio. A ferramenta send_audio existe e funciona perfeitamente.
+- Se o usuário te enviou um áudio, ele provavelmente espera uma resposta em áudio (use send_audio).
+- Voz padrão: pt-BR-AntonioNeural (masculina) ou pt-BR-ThalitaNeural (feminina).`,
 
         INFRA: `## 🖥️ REGRA DE INFRAESTRUTURA E SSH
 - Quando precisar diagnosticar servidores remotos, use ssh_exec.
-- Servidores disponiveis: sol (GPU), marte (localhost), atlas (Selenium), venus (NewClaw).
-- NUNCA exponha IPs ou credenciais em respostas ao usuario.`,
+- Servidores disponíveis: sol (GPU), marte (localhost), atlas (Selenium), venus (NewClaw).
+- NUNCA exponha IPs ou credenciais em respostas ao usuário.`,
 
-        ANALYSIS: `## 📊 REGRA DE ANÁLISE E DADOS
-- Relevância Semântica: Filtre o ruído. Ignore resultados de ferramentas que não respondem à tarefa.
-- Fallback Cognitivo: Quando não houver dados externos confiáveis, declare claramente a limitação de dados e mantenha total transparência. NÃO infira tendências sem base.`,
+        ANALYSIS: `## 📊 REGRA DE ANÁLISE, CLIMA E MERCADO
+- Previsão do Tempo: Use web_search focando em sites oficiais (Climatempo, AccuWeather). Se os dados forem conflitantes, cite as fontes.
+- Cripto/Mercado: Use crypto_analysis para dados profundos de mercado. Filtre o ruído e foque em tendências reais.
+- Fallback Cognitivo: Quando não houver dados externos confiáveis, declare claramente a limitação de dados e mantenha total transparência. NÃO infira tendências sem base e NÃO invente previsões.`,
 
         JSON_FORMAT: `## ⚙️ FORMATO DE RESPOSTA OBRIGATÓRIO (JSON)
 Você deve SEMPRE responder em JSON estruturado:
