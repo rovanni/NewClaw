@@ -9,6 +9,26 @@
 
 import { MemoryManager } from '../memory/MemoryManager';
 
+// ── Relevance Gate ───────────────────────────────────────────
+// Short greetings and social messages should NOT trigger semantic context injection.
+// This prevents the LLM from responding with stale context (e.g. crypto prices)
+// when the user just says "Oi", "Olá", "Bom dia", etc.
+
+const GREETING_PATTERNS: RegExp[] = [
+    /^(oi|olá|ola|eai|eae|fala|opa|hey|hello|hi|bom dia|boa tarde|boa noite|salve|coé|coe)[\s!.?]*$/i,
+    /^(tchau|bye|até|ate|flw|falou)[\s!.?]*$/i,
+    /^(valeu|obrigad[oa]?|vlw)[\s!.?]*$/i,
+    /^(kk+|haha+|rsrs?|👍|🤣|😂)[\s!.?]*$/i,
+];
+
+const MIN_QUERY_LENGTH = 4; // queries shorter than this are likely social
+
+function isSocialOrGreeting(query: string): boolean {
+    const trimmed = query.trim().toLowerCase();
+    if (trimmed.length < MIN_QUERY_LENGTH) return true;
+    return GREETING_PATTERNS.some(p => p.test(trimmed));
+}
+
 interface RankedNode {
     id: string;
     name: string;
@@ -38,6 +58,13 @@ export class ContextBuilder {
      * Returns a string of ~500-800 chars with the most relevant information.
      */
     async buildContext(query: string): Promise<string> {
+        // ── Relevance Gate ──
+        // Skip semantic context for social messages/greetings.
+        // Prevents stale context (e.g. crypto prices) from hijacking simple interactions.
+        if (isSocialOrGreeting(query)) {
+            return ''; // No context injection for greetings
+        }
+
         try {
             const ranked = await this.rankAndSelect(query);
             if (ranked.length === 0) {
