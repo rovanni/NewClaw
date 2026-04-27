@@ -38,7 +38,9 @@ const config = {
         light: process.env.MODEL_LIGHT,
         analysis: process.env.MODEL_ANALYSIS,
         execution: process.env.MODEL_EXECUTION,
-        visionServer: process.env.VISION_SERVER
+        visionServer: process.env.VISION_SERVER,
+        classifierModel: process.env.CLASSIFIER_MODEL,
+        classifierServer: process.env.CLASSIFIER_SERVER
     }
 };
 

@@ -302,6 +302,21 @@
       </div>
       <div class="form-row">
         <div class="form-group">
+          <label class="form-label">🧠 Classificador (LLM que decide a categoria)</label>
+          <div class="model-select-container" id="container-classifierModel">
+            <input type="text" class="model-select-input" autocomplete="off" id="classifierModel" placeholder="gemma4:31b-cloud">
+            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+            <div class="model-dropdown" id="dropdown-classifierModel"></div>
+          </div>
+          <div class="form-hint">Modelo leve usado para roteamento e montagem de prompt dinâmico.</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Servidor Classificador (URL)</label>
+          <input type="text" class="form-input" id="classifierServer" placeholder="http://localhost:11434">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
           <label class="form-label">Servidor Visão (URL)</label>
           <input type="text" class="form-input" id="visionServer" placeholder="http://localhost:11434">
         </div>
@@ -377,6 +392,8 @@
             document.getElementById('modelLight').value = data.config.modelRouter.light || 'gemma4:e4b';
             document.getElementById('modelAnalysis').value = data.config.modelRouter.analysis || 'glm-5:cloud';
             document.getElementById('modelExecution').value = data.config.modelRouter.execution || 'kimi-k2.6:cloud';
+            document.getElementById('classifierModel').value = data.config.modelRouter.classifierModel || 'gemma4:31b-cloud';
+            document.getElementById('classifierServer').value = data.config.modelRouter.classifierServer || 'http://localhost:11434';
             document.getElementById('visionServer').value = data.config.modelRouter.visionServer || 'http://localhost:11434';
           }
         }
@@ -505,6 +522,7 @@
         modelRouter: { chat:document.getElementById('modelChat').value, code:document.getElementById('modelCode').value,
           vision:document.getElementById('modelVision').value, light:document.getElementById('modelLight').value,
           analysis:document.getElementById('modelAnalysis').value, execution:document.getElementById('modelExecution').value, 
+          classifierModel:document.getElementById('classifierModel').value, classifierServer:document.getElementById('classifierServer').value,
           visionServer:document.getElementById('visionServer').value } };
 
       // Check if models exist first (Main model + Router models)
@@ -587,7 +605,7 @@
     let availableModelsList = [];
     function initModelDropdowns() {
       if (window.isDropdownsInit) return; window.isDropdownsInit = true;
-      const inputs = ['ollamaModel', 'modelChat', 'modelCode', 'modelVision', 'modelLight', 'modelAnalysis', 'modelExecution'];
+      const inputs = ['ollamaModel', 'modelChat', 'modelCode', 'modelVision', 'modelLight', 'modelAnalysis', 'modelExecution', 'classifierModel'];
       inputs.forEach(id => {
         const input = document.getElementById(id);
         const dropdown = document.getElementById(`dropdown-${id}`);

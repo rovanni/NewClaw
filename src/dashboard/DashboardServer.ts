@@ -1408,6 +1408,8 @@ export class DashboardServer {
                 'MODEL_ANALYSIS': this.config.modelRouter?.analysis || '',
                 'MODEL_EXECUTION': this.config.modelRouter?.execution || '',
                 'VISION_SERVER': this.config.modelRouter?.visionServer || '',
+                'CLASSIFIER_MODEL': this.config.modelRouter?.classifierModel || '',
+                'CLASSIFIER_SERVER': this.config.modelRouter?.classifierServer || '',
             };
 
             // Only write OLLAMA_API_KEY if provided (don't overwrite with empty)
