@@ -98,6 +98,8 @@ export class SessionManager {
         const transcript = new SessionTranscript(this.config.transcriptDir, sid);
         await transcript.init();
         this.sessions.set(sid, transcript);
+        // Ensure conversation exists in DB before any addMessage calls
+        this.ensureConversation(key);
         return transcript;
     }
 
@@ -363,4 +365,22 @@ export class SessionManager {
 
     getMemory(): MemoryManager { return this.memory; }
     getConfig(): SessionConfig { return { ...this.config }; }
+
+    /**
+     * Ensure conversation exists in MemoryManager DB.
+     * addMessage has a FOREIGN KEY constraint — conversation_id must exist first.
+     */    private ensureConversation(key: SessionKey): void {
+        const convId = this.conversationId(key);
+        try {
+            const db = (this.memory as any).db;
+            const existing = db.prepare('SELECT id FROM conversations WHERE id = ?').get(convId);
+            if (!existing) {
+                db.prepare('INSERT INTO conversations (id, user_id, provider) VALUES (?, ?, ?)').run(convId, key.userId, key.channel);
+                console.log(`[SESSION] Created conversation: ${convId}`);
+            }
+        } catch (err) {
+            // Conversation may already exist or table has different schema
+            console.warn(`[SESSION] ensureConversation failed for ${convId}:`, (err as Error).message);
+        }
+    }
 }
