@@ -570,6 +570,9 @@ export class TelegramInputHandler {
             // Record voice message in session transcript
             await this.sessionManager.recordUserMessage(sessionKey, `[Áudio: ${transcript.slice(0, 100)}]`);
 
+            // Passar contexto do Telegram para envio de áudio
+            this.agentLoop.setTelegramContext(userId, this.config.botToken);
+
             // Processar como texto, sinalizando que foi áudio
             const response = await this.agentLoop.process(userId, transcript);
             
@@ -655,6 +658,7 @@ export class TelegramInputHandler {
                 const contentPreview = content.slice(0, 500);
                 const fullText = caption ? `Arquivo recebido e salvo em: ${savedPath}\nInstrução do usuário: ${caption}\nConteúdo resumido: ${contentPreview}` : `Arquivo recebido e salvo em: ${savedPath}. Conteúdo resumido: ${contentPreview}`;
                 // Record document in session transcript
+                this.agentLoop.setTelegramContext(userId, this.config.botToken);
                 await this.sessionManager.recordUserMessage(sessionKey, `[Documento: ${fileName}] ${caption || ''}`);
                 const response = await this.agentLoop.process(userId, fullText);
                 await this.sessionManager.recordAssistantMessage(sessionKey, response || '', { model: 'newclaw' });
@@ -673,6 +677,7 @@ export class TelegramInputHandler {
                 const fullText = caption ? `${caption}\n\n${content}` : content;
                 // Record document in session transcript
                 await this.sessionManager.recordUserMessage(sessionKey, `[Documento: ${fileName}] ${caption || ''}`);
+                this.agentLoop.setTelegramContext(userId, this.config.botToken);
                 const response = await this.agentLoop.process(userId, fullText);
                 await this.sessionManager.recordAssistantMessage(sessionKey, response || '', { model: 'newclaw' });
                 await ctx.reply(response);
