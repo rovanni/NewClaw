@@ -370,7 +370,18 @@ ${userText}`;
                 continue; 
             }
 
-            // 3. Execução de Ferramentas (Via JSON Action)
+            // 3. Parse falhou E sem tool calls → resposta direta do LLM
+            // Se o modelo não segue o formato JSON, seu texto bruto É a resposta.
+            // Não faz sentido loopar 5x aguardando JSON que nunca vem.
+            if (!atomicData && !response.toolCalls?.length) {
+                const rawText = sanitizeContent(response.content || '');
+                if (rawText.length > 0) {
+                    console.log(`[${this.ts()}] [EARLY-EXIT] No JSON parse + no tool calls → returning raw LLM text (step ${stepCount})`);
+                    return rawText;
+                }
+            }
+
+            // 4. Execução de Ferramentas (Via JSON Action)
             if (atomicData?.action?.type === 'tool' && atomicData.action.name) {
                 const toolName = atomicData.action.name;
                 const toolInput = JSON.stringify(atomicData.action.input || {});
@@ -409,15 +420,10 @@ ${userText}`;
                 }
             }
 
-            // 4. Limite de passos atingido - Solicitar síntese final se necessário
+            // 5. Limite de passos atingido
             if (stepCount >= maxSteps) {
                 console.warn(`[${this.ts()}] [LOOP] Step limit reached. Finalizing...`);
                 break;
-            }
-
-            // Feedback técnico para o próximo passo se não houver ação clara
-            if (!response.toolCalls?.length && atomicData?.action?.type !== 'tool') {
-                loopMessages.push({ role: 'user', content: '[SISTEMA] Sua resposta não conteve uma ação clara ou conclusão. Por favor, prossiga com a tarefa ou finalize se já obteve o necessário.' });
             }
         }
 
