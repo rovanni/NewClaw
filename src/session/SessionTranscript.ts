@@ -12,10 +12,12 @@ import fs from 'fs';
 import path from 'path';
 import { mkdirSync, existsSync } from 'fs';
 
+export type SessionEventType = 'user' | 'assistant' | 'system' | 'tool_call' | 'tool_result' | 'checkpoint';
+
 export interface TranscriptEntry {
     ts: string;         // ISO8601 timestamp
     seq: number;        // monotonically increasing sequence number
-    role: 'user' | 'assistant' | 'system' | 'tool';
+    role: SessionEventType;
     content: string;
     meta?: {
         model?: string;
@@ -24,6 +26,9 @@ export interface TranscriptEntry {
         duration_ms?: number;
         checkpoint?: boolean;  // marks a compression checkpoint
         compressed_up_to?: number; // seq number this summary covers
+        tool_name?: string;    // for tool_call/tool_result events
+        tool_input?: string;   // for tool_call events
+        tool_success?: boolean; // for tool_result events
     };
 }
 
@@ -127,10 +132,12 @@ export class SessionTranscript {
     }
 
     /**
-     * Replay only messages (user + assistant), excluding system and tool noise.
-     */
-    replayMessages(from?: number, to?: number): TranscriptEntry[] {
-        return this.replay(from, to).filter(e => e.role === 'user' || e.role === 'assistant');
+     * Replay conversation messages (user + assistant + tool_call + tool_result),
+     * excluding system noise but preserving tool context.
+     */    replayMessages(from?: number, to?: number): TranscriptEntry[] {
+        return this.replay(from, to).filter(e =>
+            e.role === 'user' || e.role === 'assistant' || e.role === 'tool_call' || e.role === 'tool_result'
+        );
     }
 
     /**

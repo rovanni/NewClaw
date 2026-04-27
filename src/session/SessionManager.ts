@@ -10,7 +10,7 @@
  */
 
 import { MemoryManager } from '../memory/MemoryManager';
-import { SessionTranscript, TranscriptEntry } from './SessionTranscript';
+import { SessionTranscript, TranscriptEntry, SessionEventType } from './SessionTranscript';
 import { ContextCompressor } from '../loop/ContextCompressor';
 import { ProviderFactory } from '../core/ProviderFactory';
 import path from 'path';
@@ -147,7 +147,7 @@ export class SessionManager {
      */
     async recordToolMessage(key: SessionKey, content: string, meta?: TranscriptEntry['meta']): Promise<number> {
         const transcript = await this.getOrCreateSession(key);
-        const seq = transcript.append('tool', content, meta);
+        const seq = transcript.append('tool_result', content, meta);
         return seq;
     }
 
@@ -407,9 +407,23 @@ export class SessionManager {
     }
 
     /**
+     * Record a tool call in the transcript.
+     */    async recordToolCall(key: SessionKey, toolName: string, input: string, meta?: TranscriptEntry['meta']): Promise<number> {
+        const transcript = await this.getOrCreateSession(key);
+        const seq = transcript.append('tool_call', `Tool: ${toolName}`, { ...meta, tool_name: toolName, tool_input: input });
+        return seq;
+    }
+
+    /**
+     * Record a tool result in the transcript.
+     */    async recordToolResult(key: SessionKey, toolName: string, result: string, success: boolean, meta?: TranscriptEntry['meta']): Promise<number> {
+        const transcript = await this.getOrCreateSession(key);
+        const seq = transcript.append('tool_result', result, { ...meta, tool_name: toolName, tool_success: success });
+        return seq;
+    }
+    /**
      * Get the MemoryManager instance (for AgentLoop compatibility).
-     */
-    getMemory(): MemoryManager {
+     */    getMemory(): MemoryManager {
         return this.memory;
     }
 

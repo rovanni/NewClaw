@@ -119,6 +119,10 @@ export class AgentController {
             this.providerFactory
         );
 
+        // Conectar SessionContext ao AgentLoop (pipeline híbrido: checkpoint + recent + semântico)
+        const sessionContext = new SessionContext(this.sessionManager, this.memory);
+        this.agentLoop.setSessionContext(sessionContext);
+
         // Inicializar handlers
         this.inputHandler = new TelegramInputHandler(
             {

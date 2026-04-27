@@ -8,6 +8,8 @@ import { ProviderFactory, LLMMessage, ToolDefinition } from '../core/ProviderFac
 import type { Message } from '../memory/MemoryManager';
 import { ContextBuilder } from './ContextBuilder';
 import { ResponseBuilder } from './ResponseBuilder';
+import { SessionContext } from '../session/SessionContext';
+import type { SessionKey } from '../session/SessionManager';
 import { ModelRouter } from './ModelRouter';
 import PQueue from 'p-queue';
 import { MemoryManager } from '../memory/MemoryManager';
@@ -65,6 +67,7 @@ export class AgentLoop {
     private skillLearner: SkillLearner;
     private modelRouter: ModelRouter;
     private stateManager: AgentStateManager;
+    private sessionContext: SessionContext | null = null;
 
     constructor(providerFactory: ProviderFactory, memory: MemoryManager, config: AgentLoopConfig, skillLearner?: SkillLearner) {
         this.providerFactory = providerFactory;
@@ -84,6 +87,13 @@ export class AgentLoop {
         // Para ferramentas que precisam enviar mensagens diretas
         (this as any).currentChatId = chatId;
         (this as any).currentBotToken = botToken;
+    }
+
+    /**
+     * Set session context for hybrid context building (checkpoint + recent + semantic).
+     * If not set, falls back to getRecentMessages (legacy behavior).
+     */    public setSessionContext(sessionContext: SessionContext): void {
+        this.sessionContext = sessionContext;
     }
 
     private readonly MASTER_SYSTEM_PROMPT = `Você é o núcleo cognitivo do sistema NewClaw: um analista profissional, eficiente e seguro.
@@ -218,7 +228,11 @@ ${userText}`;
         let toolFailureCount = 0;
         const usedToolInputs = new Set<string>();
 
-        const recentMessages = this.memory.getRecentMessages(conversationId, 6);
+        // ── Hybrid Context Pipeline ──
+        // 1. Session transcript (checkpoint summary + recent messages)
+        // 2. Semantic memory graph
+        // 3. Skill context
+        // Fallback: getRecentMessages if sessionContext not set
         const context = await this.contextBuilder.buildContext(userText);
         const skillResult = this.skillLearner.buildSkillContext(userText, 2);
         const skillContext = skillResult && skillResult.confidence >= 0.7 ? skillResult.text : '';
@@ -231,11 +245,27 @@ ${userText}`;
 
         const dynamicContext = this.buildContextBlock(userText, context, skillContext);
 
-        const loopMessages: LLMMessage[] = [
-            { role: 'system', content: this.MASTER_SYSTEM_PROMPT },
-            { role: 'system', content: dynamicContext },
-            ...recentMessages.map(m => ({ role: m.role as LLMMessage['role'], content: m.content }))
-        ];
+        let loopMessages: LLMMessage[];
+
+        if (this.sessionContext) {
+            // ✅ NEW: Session-based context (checkpoint + recent + semantic)
+            const sessionKey: SessionKey = { channel: 'telegram', userId: conversationId };
+            const { messages: sessionMessages, stats } = await this.sessionContext.buildLLMMessages(
+                sessionKey,
+                dynamicContext,  // includes system prompt + semantic memory
+                userText
+            );
+            loopMessages = sessionMessages;
+            console.log(`[SESSION] Context: checkpoint=${stats.fromCheckpoint}, recent=${stats.recentMessages}, semantic=${stats.semanticContextUsed}`);
+        } else {
+            // ⚠️ FALLBACK: Legacy getRecentMessages (no checkpoint, no replay)
+            const recentMessages = this.memory.getRecentMessages(conversationId, 6);
+            loopMessages = [
+                { role: 'system', content: this.MASTER_SYSTEM_PROMPT },
+                { role: 'system', content: dynamicContext },
+                ...recentMessages.map(m => ({ role: m.role as LLMMessage['role'], content: m.content }))
+            ];
+        }
 
         const chatProfile = await this.modelRouter.route(userText);
         let stepCount = 0;
