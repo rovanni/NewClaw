@@ -24,6 +24,7 @@ import { SendDocumentTool } from '../tools/send_document';
 import { MemoryAdminTool } from '../tools/memory_admin';
 import { CryptoAnalysisTool } from '../tools/crypto_analysis';
 import { SshExecTool } from '../tools/ssh_exec';
+import { WeatherTool } from '../tools/weather';
 import { ToolRegistry } from './ToolRegistry';
 import { SessionManager } from '../session/SessionManager';
 import { SessionContext } from '../session/SessionContext';
@@ -239,6 +240,7 @@ export class AgentController {
         ToolRegistry.register(new MemoryAdminTool(this.memory));
         ToolRegistry.register(new SshExecTool());
         ToolRegistry.register(new CryptoAnalysisTool());
+        ToolRegistry.register(new WeatherTool());
 
         // Registrar tools habilitadas no AgentLoop
         for (const tool of ToolRegistry.getEnabled()) {
