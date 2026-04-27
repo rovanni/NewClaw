@@ -354,11 +354,16 @@ ${userText}`;
             loopMessages.push({ role: 'assistant', content: response.content, toolCalls: response.toolCalls });
 
             // 1. Verificação de Conclusão (Cognitiva ou Heurística)
+            // CRITICAL: If action.type === 'tool', we MUST execute the tool first,
+            // even if is_complete is true. The LLM sometimes sets is_complete
+            // prematurely before the tool has run.
+            const wantsTool = atomicData?.action?.type === 'tool' && atomicData?.action?.name;
+            const hasNativeToolCalls = response.toolCalls && response.toolCalls.length > 0;
             const isFinalAnswer = atomicData?.action?.type === 'final_answer';
             const isMarkedComplete = atomicData?.evaluation?.is_complete === true;
-            const hasContentNoTool = atomicData?.action?.content && !atomicData?.action?.name && (!response.toolCalls || response.toolCalls.length === 0);
+            const hasContentNoTool = atomicData?.action?.content && !wantsTool && !hasNativeToolCalls;
 
-            if (isFinalAnswer || isMarkedComplete || hasContentNoTool) {
+            if ((isFinalAnswer || isMarkedComplete || hasContentNoTool) && !wantsTool && !hasNativeToolCalls) {
                 console.log(`[${this.ts()}] [ATOMIC] Task marked as COMPLETE (reason: ${isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool'}).`);
                 return atomicData?.action?.content || lastBestContent || sanitizeContent(response.content || '');
             }
