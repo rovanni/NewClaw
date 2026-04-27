@@ -28,6 +28,7 @@ import { ToolRegistry } from './ToolRegistry';
 import { SessionManager } from '../session/SessionManager';
 import { SessionContext } from '../session/SessionContext';
 import { SessionLearner } from '../session/SessionLearner';
+import { MemoryGovernor } from '../memory/MemoryGovernor';
 
 export interface NewClawConfig {
     telegramBotToken: string;
@@ -66,6 +67,7 @@ export class AgentController {
     private memory: MemoryManager;
     public getMemory(): MemoryManager { return this.memory; }
     public getSessionLearner(): SessionLearner { return this.sessionLearner; }
+    public getMemoryGovernor(): MemoryGovernor { return this.memoryGovernor; }
     private skillLoader: SkillLoader;
     private skillLearner: SkillLearner;
     private inputHandler: TelegramInputHandler;
@@ -73,6 +75,7 @@ export class AgentController {
     private onboardingService: OnboardingService;
     private sessionManager: SessionManager;
     private sessionLearner: SessionLearner;
+    private memoryGovernor: MemoryGovernor;
 
     constructor(config: NewClawConfig) {
         this.config = config;
@@ -129,6 +132,15 @@ export class AgentController {
         // Inicializar SessionLearner (extração de fatos → grafo cognitivo)
         this.sessionLearner = new SessionLearner(this.sessionManager, this.memory);
 
+        // Inicializar MemoryGovernor (decay, conflitos, GC)
+        this.memoryGovernor = new MemoryGovernor(this.memory, {
+            decayFactor: 0.98,
+            minConfidence: 0.3,
+            staleAfterDays: 7,
+            usefulBoost: 0.05,
+            notUsefulPenalty: 0.02
+        });
+
         // Inicializar handlers
         this.inputHandler = new TelegramInputHandler(
             {
@@ -164,6 +176,24 @@ export class AgentController {
         console.log(`   Available: ${this.providerFactory.getAvailableProviders().join(', ')}`);
         console.log(`   Language: ${this.config.language}`);
         console.log(`   Skills: ${this.skillLoader.getSkillNames().join(', ') || 'none'}`);
+
+        // Run governance cycle on boot (decay + conflict + GC)
+        try {
+            const stats = this.memoryGovernor.runGovernanceCycle();
+            console.log(`[GOVERNOR] Boot cycle: ${stats.nodesDecayed} decayed, ${stats.conflictsDetected} conflicts, ${stats.nodesGarbageCollected} GC'd`);
+        } catch (err) {
+            console.warn('[GOVERNOR] Boot cycle failed:', (err as Error).message);
+        }
+
+        // Schedule governance cycle every 24 hours
+        setInterval(() => {
+            try {
+                const stats = this.memoryGovernor.runGovernanceCycle();
+                console.log(`[GOVERNOR] Daily cycle: ${JSON.stringify(stats)}`);
+            } catch (err) {
+                console.warn('[GOVERNOR] Daily cycle failed:', (err as Error).message);
+            }
+        }, 24 * 60 * 60 * 1000);
 
         await this.inputHandler.start();
     }

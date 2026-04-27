@@ -21,6 +21,7 @@ export interface ExtractedFact {
     confidence: number;
     source: string;    // session key where it was extracted
     sourceSeq: number; // sequence number in transcript
+    sourceType?: 'explicit' | 'inferred' | 'system'; // classification
 }
 
 export interface SessionLearningResult {
@@ -97,7 +98,7 @@ export class SessionLearner {
         const facts: ExtractedFact[] = [];
         const content = event.content.toLowerCase();
 
-        // Pattern: User mentions a name
+        // Pattern: User mentions a name (EXPLICIT)
         const nameMatch = content.match(/(?:meu nome é|eu sou o|eu sou a|chamo-me|me cham[ao])\s+(\w+)/i);
         if (nameMatch) {
             facts.push({
@@ -106,7 +107,8 @@ export class SessionLearner {
                 content: `Nome do usuário: ${nameMatch[1]}`,
                 confidence: 0.9,
                 source,
-                sourceSeq: event.seq
+                sourceSeq: event.seq,
+                sourceType: 'explicit' // Directly stated by user
             });
         }
 
@@ -231,7 +233,8 @@ export class SessionLearner {
                 content: fact.content,
                 confidence: fact.confidence,
                 weight: 1.0,
-                last_updated: new Date().toISOString()
+                last_updated: new Date().toISOString(),
+                metadata: { source: fact.sourceType || 'inferred' }
             });
 
             // Create edge from user identity to this fact
