@@ -4,8 +4,8 @@
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
-import { execSync } from 'child_process';
-import { mkdirSync, existsSync } from 'fs';
+import { execSync, execFileSync } from 'child_process';
+import { mkdirSync, existsSync, unlinkSync } from 'fs';
 import path from 'path';
 
 export class SendAudioTool implements ToolExecutor {
@@ -66,29 +66,54 @@ export class SendAudioTool implements ToolExecutor {
         const oggFile = path.join(audioDir, `tts_${timestamp}.ogg`);
 
         try {
-            // Generate audio with edge-tts (use full path)
+            // Generate audio with edge-tts
             const edgeTtsPath = process.env.EDGE_TTS_PATH || 'edge-tts';
-            execSync(`"${edgeTtsPath}" --voice "${voice}" --text "${text.replace(/"/g, '\\"')}" --write-media "${mp3File}"`, {
-                timeout: 30000,
-                stdio: 'pipe'
-            });
+            
+            console.log(`[SEND_AUDIO] Generating MP3 with voice=${voice}...`);
+            try {
+                execFileSync(edgeTtsPath, [
+                    '--voice', voice,
+                    '--text', text,
+                    '--write-media', mp3File
+                ], { timeout: 30000 });
+            } catch (ttsErr: any) {
+                console.error(`[SEND_AUDIO] edge-tts failed with voice ${voice}:`, ttsErr.message);
+                if (voice !== 'pt-BR-AntonioNeural') {
+                    console.log('[SEND_AUDIO] Falling back to pt-BR-AntonioNeural...');
+                    execFileSync(edgeTtsPath, [
+                        '--voice', 'pt-BR-AntonioNeural',
+                        '--text', text,
+                        '--write-media', mp3File
+                    ], { timeout: 30000 });
+                } else {
+                    throw ttsErr;
+                }
+            }
 
-            // Convert to ogg/opus for Telegram voice message
-            execSync(`ffmpeg -y -i "${mp3File}" -c:a libopus -b:a 48k -ar 48000 -ac 1 "${oggFile}"`, {
-                timeout: 15000,
-                stdio: 'pipe'
-            });
+            console.log(`[SEND_AUDIO] Converting to OGG...`);
+            execFileSync('ffmpeg', [
+                '-y',
+                '-i', mp3File,
+                '-c:a', 'libopus',
+                '-b:a', '48k',
+                '-ar', '48000',
+                '-ac', '1',
+                oggFile
+            ], { timeout: 15000 });
 
             // Send via Telegram using curl (most reliable)
             if (!this.chatId || !this.botToken) {
                 console.error('[SEND_AUDIO] Missing Telegram context: chatId=' + this.chatId + ' botToken=' + (this.botToken ? 'SET' : 'NULL'));
                 // Still cleanup
-                try { execSync(`rm -f "${mp3File}" "${oggFile}"`); } catch { /* ignore */ }
+                this.cleanupFiles([mp3File, oggFile]);
                 return { success: false, output: '', error: 'Contexto Telegram não configurado. Não foi possível enviar o áudio.' };
             }
 
             try {
-                const curlResult = execSync(`curl -s --max-time 30 -F "chat_id=${this.chatId}" -F "voice=@${oggFile}" "https://api.telegram.org/bot${this.botToken}/sendVoice"`, {
+                console.log(`[SEND_AUDIO] Uploading to Telegram via curl...`);
+                // Use forward slashes for curl file path (more reliable on Windows)
+                const curlPath = oggFile.replace(/\\/g, '/');
+                const curlResult = execSync(`curl -s --max-time 30 -F "chat_id=${this.chatId}" -F "voice=@${curlPath}" "https://api.telegram.org/bot${this.botToken}/sendVoice"`, {
                     timeout: 35000,
                     encoding: 'utf-8'
                 });
@@ -96,8 +121,9 @@ export class SendAudioTool implements ToolExecutor {
                 if (!parsed.ok) {
                     console.error('[SEND_AUDIO] Telegram API error:', JSON.stringify(parsed));
                     // Fallback: try as audio
+                    console.log('[SEND_AUDIO] sendVoice failed, trying sendAudio fallback...');
                     try {
-                        const fallbackResult = execSync(`curl -s --max-time 30 -F "chat_id=${this.chatId}" -F "audio=@${oggFile}" "https://api.telegram.org/bot${this.botToken}/sendAudio"`, {
+                        const fallbackResult = execSync(`curl -s --max-time 30 -F "chat_id=${this.chatId}" -F "audio=@${curlPath}" "https://api.telegram.org/bot${this.botToken}/sendAudio"`, {
                             timeout: 35000,
                             encoding: 'utf-8'
                         });
@@ -112,18 +138,28 @@ export class SendAudioTool implements ToolExecutor {
                     console.log('[SEND_AUDIO] Voice sent OK, duration:', parsed.result?.voice?.duration || '?', 's');
                 }
             } catch (curlError: any) {
-                console.error('[SEND_AUDIO] curl error:', curlError.message);
+                console.error('[SEND_AUDIO] curl execution error:', curlError.message);
                 return { success: false, output: '', error: `curl failed: ${curlError.message}` };
             }
 
             // Cleanup
-            try { execSync(`rm -f "${mp3File}" "${oggFile}"`); } catch { /* ignore */ }
+            this.cleanupFiles([mp3File, oggFile]);
 
             return { success: true, output: '🔊 Áudio enviado com sucesso!' };
         } catch (error: any) {
             // Cleanup on error
-            try { execSync(`rm -f "${mp3File}" "${oggFile}"`); } catch { /* ignore */ }
+            this.cleanupFiles([mp3File, oggFile]);
             return { success: false, output: '', error: `Erro ao gerar áudio: ${error.message}` };
+        }
+    }
+
+    private cleanupFiles(files: string[]): void {
+        for (const file of files) {
+            try {
+                if (existsSync(file)) unlinkSync(file);
+            } catch (err) {
+                console.error(`[SEND_AUDIO] Cleanup failed for ${file}:`, (err as Error).message);
+            }
         }
     }
 }
