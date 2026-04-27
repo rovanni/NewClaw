@@ -1,51 +1,55 @@
 /**
- * SessionManager — Manages isolated sessions per channel + user
+ * SessionManager — Manages isolated sessions per channel + user (v2)
  * 
- * Provides:
- * - Session creation/retrieval by channel+userId composite key
- * - Session isolation (each channel/user gets independent context)
- * - Session transcript (JSONL append-only log)
- * - History compression with summarization checkpoints
- * - Linear replay for context reconstruction
+ * Production-grade session management with:
+ * - Mutex per session (prevents concurrent JSONL corruption)
+ * - Hybrid compression (message count OR token estimate)
+ * - Checkpoint as structured system role (not loose text)
+ * - /clear creates new session instead of destroying history
+ * - Observability logging
  */
 
 import { MemoryManager } from '../memory/MemoryManager';
-import { SessionTranscript, TranscriptEntry, SessionEventType } from './SessionTranscript';
+import { SessionTranscript, TranscriptEntry, TranscriptMeta, SessionEventType } from './SessionTranscript';
 import { ContextCompressor } from '../loop/ContextCompressor';
 import { ProviderFactory } from '../core/ProviderFactory';
-import path from 'path';
 import fs from 'fs';
 
 export interface SessionKey {
-    channel: string;   // 'telegram', 'discord', 'web', etc.
-    userId: string;    // user identifier within the channel
+    channel: string;
+    userId: string;
 }
 
 export interface SessionConfig {
-    transcriptDir: string;          // Directory for JSONL files
-    maxUncompressedMessages: number; // Messages before triggering compression
-    maxContextMessages: number;       // Messages to keep after compression
-    compressionModel?: string;        // Model for summarization
+    transcriptDir: string;
+    maxUncompressedMessages: number;
+    maxContextMessages: number;
+    compressionModel?: string;
+    /** Token estimate threshold for compression (char count / 4) */
+    maxUncompressedTokens: number;
 }
 
 export interface CompressionCheckpoint {
-    seq: number;                    // Sequence number of the checkpoint
-    summary: string;                // Summarized content
-    originalCount: number;         // Number of messages compressed
-    compressedAt: string;          // ISO8601 timestamp
-    model?: string;                 // Model used for compression
+    seq: number;
+    summary: string;
+    originalCount: number;
+    compressedAt: string;
+    model?: string;
+    tokenEstimate: number;
 }
 
 const DEFAULT_CONFIG: SessionConfig = {
     transcriptDir: './data/sessions',
     maxUncompressedMessages: 20,
     maxContextMessages: 6,
+    maxUncompressedTokens: 3000, // ~3000 tokens ≈ ~12000 chars
 };
 
 export class SessionManager {
     private config: SessionConfig;
     private memory: MemoryManager;
     private sessions: Map<string, SessionTranscript> = new Map();
+    private sessionMutexes: Map<string, Promise<void>> = new Map();
     private compressionCheckpoints: Map<string, CompressionCheckpoint> = new Map();
     private contextCompressor: ContextCompressor | null = null;
 
@@ -53,133 +57,118 @@ export class SessionManager {
         this.config = { ...DEFAULT_CONFIG, ...config };
         this.memory = memory;
 
-        // Ensure transcript directory exists
         fs.mkdirSync(this.config.transcriptDir, { recursive: true });
-
-        // Load existing compression checkpoints from DB
         this.loadCheckpoints();
 
-        // Initialize context compressor if provider available
         if (providerFactory) {
             this.contextCompressor = new ContextCompressor(providerFactory);
         }
     }
 
     /**
-     * Generate a composite session key from channel + userId.
-     * Format: channel:userId (e.g., "telegram:8071707790")
+     * Mutex-protected operation per session key.
+     * Prevents concurrent writes to the same JSONL.
      */
+    private async withMutex<T>(sid: string, fn: () => Promise<T>): Promise<T> {
+        const current = this.sessionMutexes.get(sid) || Promise.resolve();
+        let resolve: () => void;
+        const next = new Promise<void>(r => { resolve = r; });
+        this.sessionMutexes.set(sid, next);
+
+        await current;
+        try {
+            return await fn();
+        } finally {
+            resolve!();
+        }
+    }
+
     private sessionKey(key: SessionKey): string {
         return `${key.channel}:${key.userId}`;
     }
 
-    /**
-     * Generate a conversation_id compatible with MemoryManager.
-     */
     private conversationId(key: SessionKey): string {
         return this.sessionKey(key);
     }
 
-    /**
-     * Get or create a session transcript for a channel+user.
-     */
     async getOrCreateSession(key: SessionKey): Promise<SessionTranscript> {
         const sid = this.sessionKey(key);
-
-        if (this.sessions.has(sid)) {
-            return this.sessions.get(sid)!;
-        }
+        if (this.sessions.has(sid)) return this.sessions.get(sid)!;
 
         const transcript = new SessionTranscript(this.config.transcriptDir, sid);
         await transcript.init();
         this.sessions.set(sid, transcript);
-
-        // Ensure conversation exists in DB
-        this.ensureConversation(key);
-
         return transcript;
     }
 
-    /**
-     * Record a user message in both transcript and DB.
-     */
-    async recordUserMessage(key: SessionKey, content: string, meta?: TranscriptEntry['meta']): Promise<number> {
+    async recordUserMessage(key: SessionKey, content: string, meta?: TranscriptMeta): Promise<number> {
+        const sid = this.sessionKey(key);
+        return this.withMutex(sid, async () => {
+            const transcript = await this.getOrCreateSession(key);
+            const seq = transcript.append('user', content, meta);
+            this.memory.addMessage(this.conversationId(key), 'user', content);
+            await this.maybeCompress(key);
+            console.log(`[SESSION] ${sid} user seq=${seq} len=${content.length}`);
+            return seq;
+        });
+    }
+
+    async recordAssistantMessage(key: SessionKey, content: string, meta?: TranscriptMeta): Promise<number> {
+        const sid = this.sessionKey(key);
+        return this.withMutex(sid, async () => {
+            const transcript = await this.getOrCreateSession(key);
+            const seq = transcript.append('assistant', content, meta);
+            this.memory.addMessage(this.conversationId(key), 'assistant', content);
+            console.log(`[SESSION] ${sid} assistant seq=${seq} len=${content.length} tokens≈${Math.round(content.length / 4)}`);
+            return seq;
+        });
+    }
+
+    async recordSystemMessage(key: SessionKey, content: string, meta?: TranscriptMeta): Promise<number> {
         const transcript = await this.getOrCreateSession(key);
-        const seq = transcript.append('user', content, meta);
+        return transcript.append('system', content, meta);
+    }
 
-        // Also record in MemoryManager for persistence
-        const convId = this.conversationId(key);
-        this.memory.addMessage(convId, 'user', content);
+    async recordToolMessage(key: SessionKey, content: string, meta?: TranscriptMeta): Promise<number> {
+        const transcript = await this.getOrCreateSession(key);
+        return transcript.append('tool_result', content, meta);
+    }
 
-        // Check if compression is needed
-        await this.maybeCompress(key);
+    async recordToolCall(key: SessionKey, toolName: string, input: string, meta?: TranscriptMeta): Promise<number> {
+        const transcript = await this.getOrCreateSession(key);
+        return transcript.append('tool_call', `Tool: ${toolName}`, { ...meta, tool_name: toolName, tool_input: input });
+    }
 
-        return seq;
+    async recordToolResult(key: SessionKey, toolName: string, result: string, success: boolean, durationMs?: number, meta?: TranscriptMeta): Promise<number> {
+        const transcript = await this.getOrCreateSession(key);
+        return transcript.append('tool_result', result, {
+            ...meta,
+            tool_name: toolName,
+            tool_success: success,
+            tool_duration_ms: durationMs,
+            status: success ? 'success' : 'error'
+        });
     }
 
     /**
-     * Record an assistant message in both transcript and DB.
-     */
-    async recordAssistantMessage(key: SessionKey, content: string, meta?: TranscriptEntry['meta']): Promise<number> {
-        const transcript = await this.getOrCreateSession(key);
-        const seq = transcript.append('assistant', content, meta);
-
-        // Also record in MemoryManager
-        const convId = this.conversationId(key);
-        this.memory.addMessage(convId, 'assistant', content);
-
-        return seq;
-    }
-
-    /**
-     * Record a system message.
-     */
-    async recordSystemMessage(key: SessionKey, content: string, meta?: TranscriptEntry['meta']): Promise<number> {
-        const transcript = await this.getOrCreateSession(key);
-        const seq = transcript.append('system', content, meta);
-
-        // System messages are NOT recorded in DB (they're transient)
-        return seq;
-    }
-
-    /**
-     * Record a tool call/result.
-     */
-    async recordToolMessage(key: SessionKey, content: string, meta?: TranscriptEntry['meta']): Promise<number> {
-        const transcript = await this.getOrCreateSession(key);
-        const seq = transcript.append('tool_result', content, meta);
-        return seq;
-    }
-
-    /**
-     * Build context for LLM: system prompt + checkpoint summary + recent messages.
-     * 
-     * This is the key method that replaces the naive "keep last N" approach.
-     * Pipeline:
-     * 1. Check for compression checkpoint
-     * 2. If checkpoint exists, use its summary as context prefix
-     * 3. Append messages since checkpoint as recent context
-     * 4. If no checkpoint, use all messages (up to limit)
+     * Build context for LLM: checkpoint (structured) + recent messages.
+     * Checkpoint is always injected as a system role message.
      */
     async buildContext(key: SessionKey, systemPrompt: string): Promise<{ messages: TranscriptEntry[]; contextString: string }> {
         const transcript = await this.getOrCreateSession(key);
         const sid = this.sessionKey(key);
-
-        // Get checkpoint for this session
         const checkpoint = this.compressionCheckpoints.get(sid);
 
         let contextString = systemPrompt;
         let messages: TranscriptEntry[];
 
         if (checkpoint) {
-            // Reconstruct from checkpoint summary + recent messages
-            const recentEntries = transcript.getSinceCheckpoint();
-            messages = recentEntries.entries;
-
-            // Prepend checkpoint summary
-            contextString = `${systemPrompt}\n\n[Resumo da conversa anterior]\n${checkpoint.summary}`;
+            const { entries } = transcript.getSinceCheckpoint();
+            messages = entries;
+            // Checkpoint as STRUCTURED system role — not loose text
+            contextString = systemPrompt;
+            // Checkpoint summary will be injected as a system message in SessionContext
         } else {
-            // No checkpoint: use all messages
             const stats = transcript.getStats();
             messages = transcript.replayMessages(
                 Math.max(1, stats.totalEntries - this.config.maxUncompressedMessages)
@@ -190,40 +179,37 @@ export class SessionManager {
     }
 
     /**
-     * Compress history if the number of uncompressed messages exceeds the threshold.
-     * Creates a summarization checkpoint and marks it in the transcript.
+     * Hybrid compression: triggers on message count OR token estimate.
      */
     private async maybeCompress(key: SessionKey): Promise<void> {
         const transcript = await this.getOrCreateSession(key);
         const sid = this.sessionKey(key);
 
-        // Check message count since last checkpoint
-        const { entries, lastCheckpointSeq } = transcript.getSinceCheckpoint();
-        const uncompressedCount = entries.filter(e => e.role === 'user' || e.role === 'assistant').length;
+        const { entries } = transcript.getSinceCheckpoint();
+        const userAssistantMessages = entries.filter(e => e.role === 'user' || e.role === 'assistant');
 
-        if (uncompressedCount < this.config.maxUncompressedMessages) {
-            return; // Not enough messages to compress
-        }
+        // Hybrid trigger: message count OR token estimate
+        const messageThreshold = userAssistantMessages.length >= this.config.maxUncompressedMessages;
+        const tokenEstimate = userAssistantMessages.reduce((sum, e) => sum + Math.ceil(e.content.length / 4), 0);
+        const tokenThreshold = tokenEstimate >= this.config.maxUncompressedTokens;
 
-        console.log(`[SESSION] Compressing ${uncompressedCount} messages for session ${sid}`);
+        if (!messageThreshold && !tokenThreshold) return;
 
-        // Get messages to compress (everything except last maxContextMessages)
-        const messagesToCompress = entries.slice(0, -this.config.maxContextMessages);
-        const keepMessages = entries.slice(-this.config.maxContextMessages);
+        const compressCount = userAssistantMessages.length - this.config.maxContextMessages;
+        if (compressCount <= 0) return;
 
-        if (messagesToCompress.length === 0) return;
+        console.log(`[SESSION] Compressing ${userAssistantMessages.length} messages (${tokenEstimate} tokens) for ${sid}`);
 
-        // Create summary using ContextCompressor or fallback
+        const messagesToCompress = entries.slice(0, compressCount);
+
         let summary: string;
         if (this.contextCompressor) {
             try {
-                const llmMessages = messagesToCompress.map(e => ({
-                    role: e.role as 'user' | 'assistant' | 'system',
-                    content: e.content
-                }));
+                const llmMessages = messagesToCompress
+                    .filter(e => e.role === 'user' || e.role === 'assistant')
+                    .map(e => ({ role: e.role as 'user' | 'assistant', content: e.content }));
                 const compressed = await this.contextCompressor.compress(llmMessages);
-                // Extract summary from compressed messages
-                const summaryMsg = compressed.find(m => m.role === 'system' && m.content?.includes('[Resumo'));
+                const summaryMsg = compressed.find(m => m.role === 'system');
                 summary = summaryMsg?.content || this.fallbackSummary(messagesToCompress);
             } catch (err) {
                 console.warn('[SESSION] Compression failed, using fallback:', err);
@@ -233,59 +219,43 @@ export class SessionManager {
             summary = this.fallbackSummary(messagesToCompress);
         }
 
-        // Create checkpoint
         const checkpoint: CompressionCheckpoint = {
             seq: transcript.getSeq(),
             summary,
             originalCount: messagesToCompress.length,
             compressedAt: new Date().toISOString(),
-            model: this.config.compressionModel
+            model: this.config.compressionModel,
+            tokenEstimate
         };
 
-        // Store checkpoint in memory and local cache
         this.compressionCheckpoints.set(sid, checkpoint);
         this.saveCheckpoint(sid, checkpoint);
 
-        // Mark checkpoint in transcript
-        transcript.append('system', `[CHECKPOINT] Compressão: ${messagesToCompress.length} mensagens → resumo. Contexto preservado.`, {
+        // Mark checkpoint in transcript as STRUCTURED system event
+        transcript.append('checkpoint', summary, {
             checkpoint: true,
             compressed_up_to: checkpoint.seq
         });
 
-        console.log(`[SESSION] Checkpoint created: ${checkpoint.seq} (${messagesToCompress.length} messages compressed)`);
+        console.log(`[SESSION] Checkpoint: seq=${checkpoint.seq} compressed=${messagesToCompress.length} tokens≈${tokenEstimate}`);
     }
 
-    /**
-     * Fallback summary when LLM is unavailable.
-     * Extracts key points from user messages.
-     */
     private fallbackSummary(messages: TranscriptEntry[]): string {
-        const userMessages = messages
-            .filter(m => m.role === 'user')
-            .slice(-8) // Keep last 8 user messages as key points
-            .map(m => `- ${m.content.slice(0, 150)}`)
-            .join('\n');
-
-        const assistantMessages = messages
-            .filter(m => m.role === 'assistant')
-            .length;
-
-        return `Conversa anterior (${messages.length} mensações, ${assistantMessages} respostas):\n${userMessages}`;
+        const userMsgs = messages.filter(m => m.role === 'user').slice(-8)
+            .map(m => `- ${m.content.slice(0, 150)}`).join('\n');
+        const assistantCount = messages.filter(m => m.role === 'assistant').length;
+        return `Conversa anterior (${messages.length} msgs, ${assistantCount} respostas):\n${userMsgs}`;
     }
 
-    /**
-     * Save checkpoint to SQLite for persistence.
-     */
     private saveCheckpoint(sid: string, checkpoint: CompressionCheckpoint): void {
         try {
             const db = (this.memory as any).db;
             db.prepare(`
                 INSERT OR REPLACE INTO session_checkpoints 
-                (session_id, seq, summary, original_count, compressed_at, model)
-                VALUES (?, ?, ?, ?, ?, ?)
-            `).run(sid, checkpoint.seq, checkpoint.summary, checkpoint.originalCount, checkpoint.compressedAt, checkpoint.model || null);
-        } catch (err) {
-            // Table might not exist yet — create it
+                (session_id, seq, summary, original_count, compressed_at, model, token_estimate)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).run(sid, checkpoint.seq, checkpoint.summary, checkpoint.originalCount, checkpoint.compressedAt, checkpoint.model || null, checkpoint.tokenEstimate);
+        } catch {
             try {
                 const db = (this.memory as any).db;
                 db.exec(`
@@ -296,27 +266,24 @@ export class SessionManager {
                         original_count INTEGER NOT NULL,
                         compressed_at TEXT NOT NULL,
                         model TEXT,
+                        token_estimate REAL,
                         PRIMARY KEY (session_id)
                     )
                 `);
                 db.prepare(`
                     INSERT OR REPLACE INTO session_checkpoints 
-                    (session_id, seq, summary, original_count, compressed_at, model)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                `).run(sid, checkpoint.seq, checkpoint.summary, checkpoint.originalCount, checkpoint.compressedAt, checkpoint.model || null);
+                    (session_id, seq, summary, original_count, compressed_at, model, token_estimate)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                `).run(sid, checkpoint.seq, checkpoint.summary, checkpoint.originalCount, checkpoint.compressedAt, checkpoint.model || null, checkpoint.tokenEstimate);
             } catch (err2) {
                 console.warn('[SESSION] Failed to save checkpoint:', err2);
             }
         }
     }
 
-    /**
-     * Load existing checkpoints from SQLite.
-     */
     private loadCheckpoints(): void {
         try {
             const db = (this.memory as any).db;
-            // Ensure table exists
             db.exec(`
                 CREATE TABLE IF NOT EXISTS session_checkpoints (
                     session_id TEXT NOT NULL,
@@ -325,6 +292,7 @@ export class SessionManager {
                     original_count INTEGER NOT NULL,
                     compressed_at TEXT NOT NULL,
                     model TEXT,
+                    token_estimate REAL,
                     PRIMARY KEY (session_id)
                 )
             `);
@@ -335,38 +303,21 @@ export class SessionManager {
                     summary: row.summary,
                     originalCount: row.original_count,
                     compressedAt: row.compressed_at,
-                    model: row.model
+                    model: row.model,
+                    tokenEstimate: row.token_estimate || 0
                 });
             }
-            console.log(`[SESSION] Loaded ${rows.length} compression checkpoints`);
+            console.log(`[SESSION] Loaded ${rows.length} checkpoints, ${this.sessions.size} active sessions`);
         } catch (err) {
-            console.warn('[SESSION] Failed to load checkpoints (will create on first compress):', err);
+            console.warn('[SESSION] Checkpoints will be created on first compress:', (err as Error).message);
         }
     }
 
-    /**
-     * Ensure a conversation exists in MemoryManager.
-     */
-    private ensureConversation(key: SessionKey): void {
-        const convId = this.conversationId(key);
-        try {
-            const existing = this.memory.getRecentMessages(convId, 1);
-            // Conversation is created implicitly by addMessage
-            // No explicit creation needed
-        } catch {
-            // Conversation may already exist
-        }
-    }
+    getActiveSessions(): string[] { return Array.from(this.sessions.keys()); }
 
     /**
-     * Get all active sessions.
-     */
-    getActiveSessions(): string[] {
-        return Array.from(this.sessions.keys());
-    }
-
-    /**
-     * Close a session and flush its transcript.
+     * Close session — creates new session on next message (preserves history).
+     * /clear now creates a new session file instead of destroying history.
      */
     async closeSession(key: SessionKey): Promise<void> {
         const sid = this.sessionKey(key);
@@ -375,11 +326,9 @@ export class SessionManager {
             await transcript.close();
             this.sessions.delete(sid);
         }
+        this.compressionCheckpoints.delete(sid);
     }
 
-    /**
-     * Close all sessions.
-     */
     async closeAll(): Promise<void> {
         for (const transcript of this.sessions.values()) {
             await transcript.close();
@@ -387,10 +336,7 @@ export class SessionManager {
         this.sessions.clear();
     }
 
-    /**
-     * Get session statistics.
-     */
-    getSessionStats(key: SessionKey): { transcriptEntries: number; transcriptBytes: number; hasCheckpoint: boolean; lastActivity: string | null } | null {
+    getSessionStats(key: SessionKey): { transcriptEntries: number; transcriptBytes: number; hasCheckpoint: boolean; lastActivity: string | null; checkpointCount: number } | null {
         const sid = this.sessionKey(key);
         const transcript = this.sessions.get(sid);
         if (!transcript) return null;
@@ -402,35 +348,19 @@ export class SessionManager {
             transcriptEntries: stats.totalEntries,
             transcriptBytes: stats.totalBytes,
             hasCheckpoint: !!checkpoint,
-            lastActivity: stats.lastTs
+            lastActivity: stats.lastTs,
+            checkpointCount: stats.checkpointCount
         };
     }
 
     /**
-     * Record a tool call in the transcript.
-     */    async recordToolCall(key: SessionKey, toolName: string, input: string, meta?: TranscriptEntry['meta']): Promise<number> {
-        const transcript = await this.getOrCreateSession(key);
-        const seq = transcript.append('tool_call', `Tool: ${toolName}`, { ...meta, tool_name: toolName, tool_input: input });
-        return seq;
-    }
-
-    /**
-     * Record a tool result in the transcript.
-     */    async recordToolResult(key: SessionKey, toolName: string, result: string, success: boolean, meta?: TranscriptEntry['meta']): Promise<number> {
-        const transcript = await this.getOrCreateSession(key);
-        const seq = transcript.append('tool_result', result, { ...meta, tool_name: toolName, tool_success: success });
-        return seq;
-    }
-    /**
-     * Get the MemoryManager instance (for AgentLoop compatibility).
-     */    getMemory(): MemoryManager {
-        return this.memory;
-    }
-
-    /**
-     * Get the configuration.
+     * Get checkpoint summary for a session (used by SessionContext to inject as system role).
      */
-    getConfig(): SessionConfig {
-        return { ...this.config };
+    getCheckpointSummary(key: SessionKey): string | null {
+        const sid = this.sessionKey(key);
+        return this.compressionCheckpoints.get(sid)?.summary || null;
     }
+
+    getMemory(): MemoryManager { return this.memory; }
+    getConfig(): SessionConfig { return { ...this.config }; }
 }

@@ -1,8 +1,8 @@
 /**
- * session/index.ts — Barrel export for session module
+ * session/index.ts — Barrel export for session module (v2)
  */
 
-export { SessionTranscript, TranscriptEntry, SessionEventType } from './SessionTranscript';
+export { SessionTranscript, TranscriptEntry, TranscriptMeta, SessionEventType, SessionIndex } from './SessionTranscript';
 export { SessionManager } from './SessionManager';
 export type { SessionKey, SessionConfig, CompressionCheckpoint } from './SessionManager';
 export { SessionContext } from './SessionContext';

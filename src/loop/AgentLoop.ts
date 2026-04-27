@@ -228,11 +228,11 @@ ${userText}`;
         let toolFailureCount = 0;
         const usedToolInputs = new Set<string>();
 
-        // ── Hybrid Context Pipeline ──
-        // 1. Session transcript (checkpoint summary + recent messages)
-        // 2. Semantic memory graph
-        // 3. Skill context
-        // Fallback: getRecentMessages if sessionContext not set
+        // ── Session Context Pipeline (mandatory) ──
+        // 1. Checkpoint summary (structured system role)
+        // 2. Recent transcript messages (linear replay)
+        // 3. Semantic memory graph
+        // 4. Skill context
         const context = await this.contextBuilder.buildContext(userText);
         const skillResult = this.skillLearner.buildSkillContext(userText, 2);
         const skillContext = skillResult && skillResult.confidence >= 0.7 ? skillResult.text : '';
@@ -245,27 +245,19 @@ ${userText}`;
 
         const dynamicContext = this.buildContextBlock(userText, context, skillContext);
 
-        let loopMessages: LLMMessage[];
-
-        if (this.sessionContext) {
-            // ✅ NEW: Session-based context (checkpoint + recent + semantic)
-            const sessionKey: SessionKey = { channel: 'telegram', userId: conversationId };
-            const { messages: sessionMessages, stats } = await this.sessionContext.buildLLMMessages(
-                sessionKey,
-                dynamicContext,  // includes system prompt + semantic memory
-                userText
-            );
-            loopMessages = sessionMessages;
-            console.log(`[SESSION] Context: checkpoint=${stats.fromCheckpoint}, recent=${stats.recentMessages}, semantic=${stats.semanticContextUsed}`);
-        } else {
-            // ⚠️ FALLBACK: Legacy getRecentMessages (no checkpoint, no replay)
-            const recentMessages = this.memory.getRecentMessages(conversationId, 6);
-            loopMessages = [
-                { role: 'system', content: this.MASTER_SYSTEM_PROMPT },
-                { role: 'system', content: dynamicContext },
-                ...recentMessages.map(m => ({ role: m.role as LLMMessage['role'], content: m.content }))
-            ];
+        if (!this.sessionContext) {
+            console.error('[SESSION] sessionContext not set — session pipeline is mandatory. Throwing.');
+            throw new Error('SessionContext is required. Set via AgentLoop.setSessionContext() before processing.');
         }
+
+        const sessionKey: SessionKey = { channel: 'telegram', userId: conversationId };
+        const { messages: sessionMessages, stats } = await this.sessionContext.buildLLMMessages(
+            sessionKey,
+            dynamicContext,
+            userText
+        );
+        const loopMessages = sessionMessages;
+        console.log(`[SESSION] key=${sessionKey.channel}:${sessionKey.userId} checkpoint=${stats.fromCheckpoint} recent=${stats.recentMessages} tokens≈${stats.tokenEstimate} semantic=${stats.semanticContextUsed}`);
 
         const chatProfile = await this.modelRouter.route(userText);
         let stepCount = 0;

@@ -1,16 +1,14 @@
 /**
- * SessionContext — Builds LLM context from session transcript + memory
+ * SessionContext — Builds LLM context from session transcript + memory (v2)
  * 
- * Replaces the naive "keep last N messages" approach with:
- * 1. Compression checkpoint (summary of older messages)
- * 2. Recent transcript messages (linear replay)
- * 3. Semantic memory context (from MemoryManager graph)
- * 4. System prompt with identity + skills
+ * Pipeline (order matters!):
+ * 1. System prompt (identity + skills)
+ * 2. Checkpoint summary (STRUCTURED system role — not loose text)
+ * 3. Recent transcript messages (linear replay)
+ * 4. Semantic memory context (from MemoryManager graph)
+ * 5. Current user message
  * 
- * This ensures:
- * - No conversation is ever lost (JSONL = full replay)
- * - Context window is used efficiently (summary + recent)
- * - Semantic memory enriches context beyond just transcript
+ * If sessionContext is not set, AgentLoop throws (no silent fallback).
  */
 
 import { SessionManager, SessionKey } from './SessionManager';
@@ -26,6 +24,7 @@ export interface SessionContextResult {
         recentMessages: number;
         totalTranscriptEntries: number;
         semanticContextUsed: boolean;
+        tokenEstimate: number;
     };
 }
 
@@ -43,58 +42,63 @@ export class SessionContext {
     /**
      * Build the complete context for an LLM call.
      * 
-     * Pipeline:
-     * 1. Get session transcript + checkpoint
-     * 2. Get semantic memory context
-     * 3. Compose final messages array
+     * Checkpoint is ALWAYS injected as a structured system role message,
+     * never as loose text mixed with other context.
      */
     async buildLLMMessages(
         key: SessionKey,
         systemPrompt: string,
         currentMessage: string
     ): Promise<SessionContextResult> {
-        const sessionKey = `${key.channel}:${key.userId}`;
         const stats = {
             fromCheckpoint: false,
             checkpointSeq: undefined as number | undefined,
             recentMessages: 0,
             totalTranscriptEntries: 0,
-            semanticContextUsed: false
+            semanticContextUsed: false,
+            tokenEstimate: 0
         };
 
-        // 1. Get session context (checkpoint summary + recent messages)
-        const { messages: transcriptMessages, contextString } = await this.sessionManager.buildContext(key, systemPrompt);
+        // 1. Get session transcript + checkpoint
+        const { messages: transcriptMessages } = await this.sessionManager.buildContext(key, systemPrompt);
         const transcript = await this.sessionManager.getOrCreateSession(key);
         const transcriptStats = transcript.getStats();
         stats.totalTranscriptEntries = transcriptStats.totalEntries;
 
-        // Check if context came from a checkpoint
-        const checkpoint = this.sessionManager.getSessionStats(key);
-        if (checkpoint?.hasCheckpoint) {
+        // 2. Get checkpoint summary (structured, not loose)
+        const checkpointSummary = this.sessionManager.getCheckpointSummary(key);
+        if (checkpointSummary) {
             stats.fromCheckpoint = true;
-            stats.checkpointSeq = checkpoint.lastActivity ? undefined : undefined; // will be set by checkpoint data
         }
 
-        // 2. Get semantic memory context
+        // 3. Get semantic memory context
         let semanticContext = '';
         try {
             semanticContext = await this.contextBuilder.buildContext(currentMessage);
             stats.semanticContextUsed = semanticContext.length > 0;
         } catch {
-            // Semantic search may fail, continue without it
+            // Continue without semantic context
         }
 
-        // 3. Build LLM messages array
+        // 4. Build LLM messages array
         const llmMessages: LLMMessage[] = [];
 
-        // System message with checkpoint summary + semantic context
-        let systemContent = contextString;
+        // System prompt (identity + skills)
+        let systemContent = systemPrompt;
         if (semanticContext) {
             systemContent += `\n\n[Memória Semântica]\n${semanticContext}`;
         }
         llmMessages.push({ role: 'system', content: systemContent });
 
-        // Recent transcript messages (after checkpoint)
+        // Checkpoint as STRUCTURED system role (always separate, never mixed)
+        if (checkpointSummary) {
+            llmMessages.push({
+                role: 'system',
+                content: `[RESUMO DA CONVERSA ANTERIOR]\n${checkpointSummary}\n[Use este resumo como contexto para continuar a conversa. Os detalhes foram comprimidos mas as informações essenciais estão preservadas.]`
+            });
+        }
+
+        // Recent transcript messages
         for (const entry of transcriptMessages) {
             if (entry.role === 'user' || entry.role === 'assistant') {
                 llmMessages.push({
@@ -102,6 +106,7 @@ export class SessionContext {
                     content: entry.content
                 });
                 stats.recentMessages++;
+                stats.tokenEstimate += Math.ceil(entry.content.length / 4);
             }
         }
 
@@ -112,6 +117,7 @@ export class SessionContext {
         if (!lastUserMsg || lastUserMsg.content !== currentMessage) {
             llmMessages.push({ role: 'user', content: currentMessage });
             stats.recentMessages++;
+            stats.tokenEstimate += Math.ceil(currentMessage.length / 4);
         }
 
         return { messages: llmMessages, stats };
@@ -119,7 +125,6 @@ export class SessionContext {
 
     /**
      * Record a complete interaction cycle in the transcript.
-     * Call this after each user-assistant exchange.
      */
     async recordExchange(
         key: SessionKey,
