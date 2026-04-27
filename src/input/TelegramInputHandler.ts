@@ -511,6 +511,7 @@ export class TelegramInputHandler {
      */
     private async handleAudio(ctx: Context, isVoiceNote: boolean): Promise<void> {
         const userId = ctx.from!.id.toString();
+        const sessionKey: SessionKey = { channel: 'telegram', userId };
         const fileId = isVoiceNote ? ctx.message?.voice?.file_id : (ctx.message as any)?.audio?.file_id;
         
         if (!fileId) {
@@ -551,8 +552,14 @@ export class TelegramInputHandler {
 
             console.log(`[INPUT] Transcrição: "${transcript.slice(0, 50)}"`);
 
+            // Record voice message in session transcript
+            await this.sessionManager.recordUserMessage(sessionKey, `[Áudio: ${transcript.slice(0, 100)}]`);
+
             // Processar como texto, sinalizando que foi áudio
             const response = await this.agentLoop.process(userId, transcript);
+            
+            // Record assistant response in session transcript
+            await this.sessionManager.recordAssistantMessage(sessionKey, response || '', { model: 'newclaw' });
             
             // Se o input foi áudio, marcar para resposta em áudio
             if (isVoiceNote) {
@@ -575,6 +582,7 @@ export class TelegramInputHandler {
      */
     private async handleDocument(ctx: Context): Promise<void> {
         const userId = ctx.from!.id.toString();
+        const sessionKey: SessionKey = { channel: 'telegram', userId };
         const doc = (ctx.message as any)?.document;
         
         if (!doc) return;
@@ -631,7 +639,10 @@ export class TelegramInputHandler {
                 const caption = (ctx.message as any)?.caption || '';
                 const contentPreview = content.slice(0, 500);
                 const fullText = caption ? `Arquivo recebido e salvo em: ${savedPath}\nInstrução do usuário: ${caption}\nConteúdo resumido: ${contentPreview}` : `Arquivo recebido e salvo em: ${savedPath}. Conteúdo resumido: ${contentPreview}`;
+                // Record document in session transcript
+                await this.sessionManager.recordUserMessage(sessionKey, `[Documento: ${fileName}] ${caption || ''}`);
                 const response = await this.agentLoop.process(userId, fullText);
+                await this.sessionManager.recordAssistantMessage(sessionKey, response || '', { model: 'newclaw' });
                 await ctx.reply(response);
             } else {
                 // Limpar arquivo temporário
@@ -645,7 +656,10 @@ export class TelegramInputHandler {
                 // Processar com contexto do documento
                 const caption = (ctx.message as any)?.caption || '';
                 const fullText = caption ? `${caption}\n\n${content}` : content;
+                // Record document in session transcript
+                await this.sessionManager.recordUserMessage(sessionKey, `[Documento: ${fileName}] ${caption || ''}`);
                 const response = await this.agentLoop.process(userId, fullText);
+                await this.sessionManager.recordAssistantMessage(sessionKey, response || '', { model: 'newclaw' });
                 await ctx.reply(response);
             }
 
