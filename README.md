@@ -364,12 +364,9 @@ irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
 
 Ubuntu/Debian users get the best navigation experience because the installer adds `w3m` automatically.
 
-## 🗺️ Roadmap v1.x
-- [x] **Model Router**: Intelligent intent-based model selection. ✅
-- [ ] **Multimodal Vision**: Native image and screenshot processing.
-- [ ] **Autonomous Navigation**: Real-time web exploration with deep interaction.
-- [ ] **Python Sandbox**: Secure execution environment for data analysis.
-- [ ] **Collaborative Graphs**: Multi-agent memory synchronization.
+## 🗺️ Roadmap
+Detailed project roadmap and future vision can be found in [docs/ROADMAP.md](docs/ROADMAP.md).
+
 
 ---
 
@@ -697,12 +694,9 @@ Backups são salvos em `~/newclaw-backups/` com timestamp.
 
 ---
 
-## 🗺️ Roadmap v1.x
-- [x] **Model Router**: Roteamento inteligente de modelos. ✅
-- [ ] **Visão Multimodal**: Processamento nativo de imagens.
-- [ ] **Navegação Autônoma**: Exploração web em tempo real.
-- [ ] **Python Sandbox**: Execução segura para análise de dados.
-- [ ] **Grafos Colaborativos**: Sincronização de memória multi-agente.
+## 🗺️ Roadmap
+O roadmap detalhado do projeto e a visão de futuro podem ser encontrados em [docs/ROADMAP.md](docs/ROADMAP.md).
+
 
 ---
 
