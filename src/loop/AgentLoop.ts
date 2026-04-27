@@ -142,6 +142,12 @@ export class AgentLoop {
 - Cripto/Mercado: Use crypto_analysis para dados profundos de mercado. Filtre o ruído e foque em tendências reais.
 - Fallback Cognitivo: Quando não houver dados externos confiáveis, declare claramente a limitação de dados e mantenha total transparência. NÃO infira tendências sem base e NÃO invente previsões.`,
 
+        VISION: `## 👁️ REGRA DE VISÃO E IMAGENS
+- Você receberá descrições de imagens processadas por um modelo de visão especializado.
+- Seu papel é traduzir essa descrição técnica em uma resposta contextualizada e útil.
+- Se houver texto extraído (OCR), use-o para fundamentar sua análise.
+- Caso a imagem contenha gráficos ou tabelas, ajude o usuário a interpretar os dados e tendências.`,
+
         JSON_FORMAT: `## ⚙️ FORMATO DE RESPOSTA OBRIGATÓRIO (JSON)
 Você deve SEMPRE responder em JSON estruturado:
 {
@@ -183,6 +189,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                 prompt += components.ANALYSIS + "\n\n";
                 prompt += components.FILE_OPS + "\n\n";
                 prompt += components.AUDIO + "\n\n";
+                prompt += components.VISION + "\n\n";
                 break;
             case 'execution':
                 // Full capabilities
@@ -192,6 +199,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                 prompt += components.AUDIO + "\n\n";
                 prompt += components.INFRA + "\n\n";
                 prompt += components.ANALYSIS + "\n\n";
+                prompt += components.VISION + "\n\n";
                 break;
             default:
                 prompt += components.RESPONSE_ARCH + "\n\n";
