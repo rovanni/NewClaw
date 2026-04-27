@@ -7,6 +7,7 @@ import { Bot, Context, GrammyError } from 'grammy';
 import { AgentLoop } from '../loop/AgentLoop';
 import { MemoryManager } from '../memory/MemoryManager';
 import { SessionManager, SessionKey } from '../session/SessionManager';
+import { SessionLearner } from '../session/SessionLearner';
 import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -25,6 +26,7 @@ export class TelegramInputHandler {
     private config: Required<TelegramInputConfig>;
     private onboardingService?: any;
     private sessionManager: SessionManager;
+    private sessionLearner: SessionLearner | null = null;
     private processedMessages: Set<number> = new Set();
 
     constructor(config: TelegramInputConfig, agentLoop: AgentLoop, memory: MemoryManager, onboardingService?: any, sessionManager?: SessionManager) {
@@ -38,11 +40,18 @@ export class TelegramInputHandler {
         this.memory = memory;
         this.onboardingService = onboardingService;
         this.sessionManager = sessionManager || new SessionManager({ transcriptDir: './data/sessions' }, memory);
+        this.sessionLearner = null; // Will be set via setSessionLearner()
 
         // Criar diretório tmp
         if (!fs.existsSync(this.config.tmpDir)) {
             fs.mkdirSync(this.config.tmpDir, { recursive: true });
         }
+    }
+
+    /**
+     * Set SessionLearner for extracting facts from conversations into the cognitive graph.
+     */    setSessionLearner(learner: SessionLearner): void {
+        this.sessionLearner = learner;
     }
 
     /**
@@ -188,6 +197,12 @@ export class TelegramInputHandler {
             const response = await this.agentLoop.process(userId, text);
             // Record assistant response in session transcript
             await this.sessionManager.recordAssistantMessage(sessionKey, response || '', { model: 'newclaw' });
+            // Learn from this exchange: extract facts into cognitive graph
+            if (this.sessionLearner) {
+                this.sessionLearner.learnFromSession(sessionKey).catch(err => {
+                    console.warn('[INPUT] SessionLearner failed:', (err as Error).message);
+                });
+            }
             if (response && response.trim()) {
                 // Skip confirmation messages from send_audio/send_document — the media was already sent
                 const isMediaConfirmation = /^🔊 (Áudio|Arquivo|Documento) enviado/i.test(response.trim());

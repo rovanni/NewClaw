@@ -27,6 +27,7 @@ import { SshExecTool } from '../tools/ssh_exec';
 import { ToolRegistry } from './ToolRegistry';
 import { SessionManager } from '../session/SessionManager';
 import { SessionContext } from '../session/SessionContext';
+import { SessionLearner } from '../session/SessionLearner';
 
 export interface NewClawConfig {
     telegramBotToken: string;
@@ -64,12 +65,14 @@ export class AgentController {
     public getProviderFactory(): ProviderFactory { return this.providerFactory; }
     private memory: MemoryManager;
     public getMemory(): MemoryManager { return this.memory; }
+    public getSessionLearner(): SessionLearner { return this.sessionLearner; }
     private skillLoader: SkillLoader;
     private skillLearner: SkillLearner;
     private inputHandler: TelegramInputHandler;
     private outputHandler: TelegramOutputHandler;
     private onboardingService: OnboardingService;
     private sessionManager: SessionManager;
+    private sessionLearner: SessionLearner;
 
     constructor(config: NewClawConfig) {
         this.config = config;
@@ -123,6 +126,9 @@ export class AgentController {
         const sessionContext = new SessionContext(this.sessionManager, this.memory);
         this.agentLoop.setSessionContext(sessionContext);
 
+        // Inicializar SessionLearner (extração de fatos → grafo cognitivo)
+        this.sessionLearner = new SessionLearner(this.sessionManager, this.memory);
+
         // Inicializar handlers
         this.inputHandler = new TelegramInputHandler(
             {
@@ -136,6 +142,9 @@ export class AgentController {
             this.onboardingService,
             this.sessionManager
         );
+
+        // Conectar SessionLearner ao TelegramInputHandler
+        this.inputHandler.setSessionLearner(this.sessionLearner);
 
         this.outputHandler = new TelegramOutputHandler({
             audioVoice: config.language === 'pt-BR' ? 'pt-BR-ThalitaNeural' : 'en-US-AriaNeural',
