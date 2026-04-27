@@ -309,7 +309,10 @@ ${userText}`;
             }
 
             const response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
+            const rawContent = (response.content || '').slice(0, 300);
+            console.log(`[${this.ts()}] [LLM-RAW] step=${stepCount} content=${JSON.stringify(rawContent)}`);
             const atomicData = this.parseLLMResponse(response.content || '');
+            console.log(`[${this.ts()}] [PARSE] step=${stepCount} parsed=${atomicData ? 'YES' : 'NO'} is_complete=${atomicData?.evaluation?.is_complete} action_type=${atomicData?.action?.type}`);
             
             if (atomicData?.action?.content) {
                 lastBestContent = atomicData.action.content;
