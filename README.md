@@ -196,6 +196,80 @@ flowchart TD
 
 **14+ Relationship Types:** prefers, works_on, runs_on, uses, depends_on, contains, references, related_to, belongs_to, owns, created, reads, writes, hosts, plus automatic inverse links.
 
+### Session System (v2)
+
+NewClaw uses an **event-sourced session architecture** for full conversational continuity:
+
+```
+data/sessions/
+├── telegram:8071707790.jsonl     # Append-only transcript (source of truth)
+└── telegram:8071707790.idx.json  # Seek index for fast replay
+```
+
+| Component | Purpose |
+|-----------|---------|
+| **SessionTranscript** | JSONL append-only log, every event recorded with sequence number and metadata |
+| **SessionManager** | Mutex per session, hybrid compression (20 msgs OR 3000 tokens), checkpoint as structured system role |
+| **SessionContext** | Builds LLM context: system prompt → checkpoint → recent messages → semantic memory |
+| **SessionLearner** | Extracts facts from conversations into the cognitive graph (names, preferences, projects, skills) |
+| **EventRanker** | Scores events by importance (role weight, recency, question/decision detection) |
+
+**Token Estimation:** pt-BR aware — 3.5 chars/token for text, 3 chars/token for code/JSON.
+
+**Compaction:** `compactSession()` physically rewrites JSONL (checkpoint + recent events), with `.bak` backup.
+
+**`/clear` command:** Creates a new session (preserves old transcript).
+
+### Memory Governance
+
+NewClaw's memory is **self-regulating** — it learns AND unlearns:
+
+```mermaid
+flowchart TD
+    A["💬 Conversation"] -->|"SessionLearner"| B["🧠 Cognitive Graph"]
+    B -->|"MemoryGovernor"| C{"Governance Cycle"}
+    C -->|"decay"| D["📉 Confidence -2%/day"]
+    C -->|"conflict"| E["⚖️ Detect & Resolve"]
+    C -->|"gc"| F["🗑️ Archive (not delete)"]
+    C -->|"feedback"| G["🔁 Reinforce/Decay"]
+    D --> B
+    E --> B
+    F --> H["📦 Archived nodes"]
+    G --> B
+```
+
+| Mechanism | Rule |
+|-----------|------|
+| **Confidence Decay** | 2%/day (inferred facts decay 5% faster). Protected nodes never decay. |
+| **Conflict Detection** | Contradictions (same domain, different values), duplicates (>85% Jaccard similarity) |
+| **Conflict Classification** | `coexist` (both explicit), `replace` (explicit beats inferred), `uncertain` (reduce both) |
+| **Garbage Collection** | Archive instead of delete. `metadata.archived=true`, `original_type` preserved for recovery. |
+| **Anti-Reinforcement Loop** | Confidence ceiling at 0.95. Diminishing returns: each boost gives 75% of previous (0.75^n). |
+| **Usage Feedback** | Helpful facts: +0.05 confidence. Unhelpful: -0.02. Weighted by access count. |
+| **Source Classification** | `explicit` (user stated directly) → strong. `inferred` (extracted) → decays faster. |
+| **Protected Nodes** | `core_user`, `user_identity`, and all `identity` type nodes never decay or get GC'd. |
+
+**Governance cycle** runs automatically on boot + every 24 hours.
+
+#### Archived Memory Recovery
+
+Archived nodes can be revived if the same fact appears again:
+
+```typescript
+// Automatic revival in SessionLearner
+if (existingNode.metadata?.archived === 'true') {
+    // Revive: restore original type, boost confidence
+    memory.addNode({
+        ...existingNode,
+        type: existingNode.metadata.original_type,
+        confidence: Math.min(0.95, (existingNode.confidence || 0.1) + 0.2),
+        metadata: { ...existingNode.metadata, archived: undefined }
+    });
+}
+```
+
+> **Result:** Memory with reversible forgetting — old knowledge can come back when relevant again.
+
 ## 🚀 Setup
 
 ### Install Flow
