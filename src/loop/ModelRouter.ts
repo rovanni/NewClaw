@@ -48,56 +48,32 @@ const CATEGORY_DESCRIPTIONS: Record<Category, string> = {
 
 const DEFAULT_CONFIG: RouterConfig = {
     defaultProfile: 'chat-primary',
-    classifierModel: "glm-5.1:cloud",
+    classifierModel: "gemma4:31b-cloud",
     classifierServer: 'http://localhost:11434',
     profiles: [
-        { id: 'chat-primary', model: 'glm-5.1:cloud', server: 'http://localhost:11434', category: 'chat', description: 'Conversa geral e raciocínio' },
-        { id: 'code-primary', model: 'glm-5:cloud', server: 'http://localhost:11434', category: 'code', description: 'Programação e criação de conteúdo' },
-        { id: 'light-chat', model: 'glm-5.1:cloud', server: 'http://localhost:11434', category: 'light', description: 'Conversa leve e rápida' },
+        { id: 'chat-primary', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'chat', description: 'Conversa geral e raciocínio' },
+        { id: 'code-primary', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'code', description: 'Programação e criação de conteúdo' },
+        { id: 'light-chat', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'light', description: 'Conversa leve e rápida' },
         { id: 'vision-primary', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'vision', description: 'Análise de imagens e OCR' },
-        { id: 'analysis-primary', model: 'glm-5:cloud', server: 'http://localhost:11434', category: 'analysis', description: 'Análise profunda e cripto' },
+        { id: 'analysis-primary', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'analysis', description: 'Análise profunda e cripto' },
         { id: 'execution-primary', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'execution', description: 'Execução de ferramentas e tarefas complexas' },
     ],
     fallbackRules: [
-        // ── code: detect ACTION VERBS (imperative/creation intent) ──
-        // Works for any language topic: "create a lesson", "build a game", "write a poem page"
         {
             category: 'code',
-            keywords: [
-                // Programming-specific (PT + EN)
-                'código', 'programar', 'html', 'css', 'javascript', 'python', 'script',
-                'bug', 'debug', 'patch', 'deploy', 'commit', 'api', 'json', 'sql',
-                'function', 'class', 'module', 'component', 'endpoint',
-                // File operations
-                'arquivo', 'file', 'pasta', 'folder', 'diretório', 'directory',
-            ],
-            patterns: [
-                // Programming terms
-                /\b(cod|prog|html|css|js|python|script|bug|debug|edit|modify|patch|function|class)\w*\b/i,
-                // PT: Action verbs (imperative) — "crie X", "faça X", "monte X", etc.
-                /\b(cri[ae]r?|fa[cç]a|mont[ae]r?|ger[ae]r?|constru[aí]r?|desenvolv[ae]r?|escrev[ae]r?|produz[ai]r?|implement[ae]r?|codifiqu[ae]|edit[ae]r?|modifiqu[ae]|alter[ae]r?|corrij[ae]|atualiz[ae]r?|refator[ae]r?|configur[ae]r?|instal[ae]r?|prepar[ae]r?)\b/i,
-                // EN: Action verbs — "create X", "build X", "make X", etc.
-                /\b(create|make|build|write|generate|develop|implement|fix|update|refactor|setup|install|configure|deploy)\b/i,
-            ]
+            keywords: ['código', 'programar', 'html', 'css', 'js', 'python', 'script', 'bug', 'debug', 'arquivo', 'file'],
+            patterns: [/\b(cod|prog|html|css|js|python|script|bug|debug|edit|modify|patch)\w*\b/i]
         },
-        // ── vision ──
         {
             category: 'vision',
             keywords: ['imagem', 'foto', 'screenshot', 'print', 'ocr'],
-            patterns: [/\b(imag|foto|screenshot|print|ocr|vis[uã]|picture|photo)\w*\b/i]
+            patterns: [/\b(imag|foto|screenshot|print|ocr|vis[uã])\w*\b/i]
         },
-        // ── light: only matches very short, standalone greetings ──
-        {
-            category: 'light',
-            keywords: [],
-            patterns: [/^[\s]*(sim|s|nao|não|n|ok|obrigad[oa]|valeu|tchau|oi|olá|hey|eai|blz|hi|hello|thanks?|bye|yes|no|yep|nope)[\s!.?]*$/i]
-        },
-        // ── analysis ──
         {
             category: 'analysis',
-            keywords: ['preço', 'price', 'mercado', 'market', 'trending', 'portfolio'],
-            patterns: [/\b(analis|analy[sz]|pre[cç]o|price|cripto|crypto|mercado|market|trend|portfolio|invest|trade|token|coin)\w*\b/i]
-        },
+            keywords: ['preço', 'price', 'mercado', 'market', 'trending', 'cripto', 'crypto'],
+            patterns: [/\b(analis|analy[sz]|pre[cç]o|price|cripto|crypto|mercado|market|token|coin)\w*\b/i]
+        }
     ]
 };
 
@@ -109,15 +85,46 @@ export class ModelRouter {
     private config: RouterConfig;
     private usageLog: Map<string, number> = new Map();
 
-    constructor(config?: Partial<RouterConfig>) {
-        this.config = { ...DEFAULT_CONFIG, ...config };
+    constructor(config?: any) {
+        this.config = { ...DEFAULT_CONFIG };
+        
+        if (config) {
+            // Se vier do Dashboard/Env, mapeia os modelos individuais para os perfis
+            const categories: Array<Category> = ['chat', 'code', 'vision', 'light', 'analysis', 'execution'];
+            for (const cat of categories) {
+                if (config[cat]) {
+                    const profile = this.config.profiles.find(p => p.category === cat);
+                    if (profile) {
+                        console.log(`[MODEL_ROUTER] Overriding ${cat} model with: ${config[cat]}`);
+                        profile.model = config[cat];
+                    }
+                }
+            }
+
+            // Outras configs
+            if (config.classifierModel) this.config.classifierModel = config.classifierModel;
+            if (config.classifierServer) this.config.classifierServer = config.classifierServer;
+        }
     }
 
     /**
      * Roteamento principal: Puramente determinístico (rápido).
      */
     async route(query: string): Promise<ModelProfile> {
-        // Deterministic classification
+        try {
+            // Primary: LLM classification
+            const category = await this.llmClassify(query);
+            const profile = this.getProfileByCategory(category);
+            if (profile) {
+                console.log(`[MODEL_ROUTER] LLM routing: ${category} → ${profile.model}`);
+                this.logUsage(profile.id);
+                return profile;
+            }
+        } catch (err) {
+            console.warn(`[MODEL_ROUTER] LLM classification failed: ${(err as Error).message}. Falling back to deterministic.`);
+        }
+
+        // Fallback: Deterministic classification
         const category = this.fallbackClassify(query);
         const profile = this.getProfileByCategory(category);
         
