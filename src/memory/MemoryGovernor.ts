@@ -22,17 +22,28 @@ export interface GovernorConfig {
     usefulBoost: number;
     /** Confidence penalty when a fact is retrieved but not helpful */
     notUsefulPenalty: number;
+    /** Maximum confidence ceiling — prevents runaway reinforcement loops */
+    maxConfidence: number;
+    /** Diminishing returns: each subsequent reinforcement gives less boost */
+    diminishingReturns: boolean;
     /** Source types that are stronger */
     sourceWeights: Record<FactSource, number>;
+    /** Node IDs that are protected from decay and GC */
+    protectedNodes: string[];
+    /** Archive instead of delete */
+    archiveEnabled: boolean;
 }
 
 export type FactSource = 'explicit' | 'inferred' | 'system';
+
+export type ConflictType = 'replace' | 'coexist' | 'uncertain';
 
 export interface ConflictResult {
     nodeA: MemoryNode;
     nodeB: MemoryNode;
     conflictType: 'contradiction' | 'overlap' | 'duplicate';
-    resolution: 'replace' | 'reduce_confidence' | 'keep_both' | 'merge';
+    classification: ConflictType;
+    resolution: 'replace' | 'reduce_confidence' | 'keep_both' | 'merge' | 'archive_older' | 'flag_uncertain';
     message: string;
 }
 
@@ -40,6 +51,7 @@ export interface GovernorStats {
     nodesInspected: number;
     nodesDecayed: number;
     nodesGarbageCollected: number;
+    nodesArchived: number;
     conflictsDetected: number;
     conflictsResolved: number;
     factsReinforced: number;
@@ -52,11 +64,15 @@ const DEFAULT_CONFIG: GovernorConfig = {
     staleAfterDays: 7,
     usefulBoost: 0.05,
     notUsefulPenalty: 0.02,
+    maxConfidence: 0.95,
+    diminishingReturns: true,
     sourceWeights: {
         explicit: 1.0,
         inferred: 0.6,
         system: 0.8
-    }
+    },
+    protectedNodes: ['core_user', 'user_identity'],
+    archiveEnabled: true
 };
 
 export class MemoryGovernor {
@@ -90,8 +106,8 @@ export class MemoryGovernor {
         const total = allNodes.length;
 
         for (const node of allNodes) {
-            // Skip core identity nodes
-            if (node.type === 'identity' && node.id === 'core_user') continue;
+            // Skip protected nodes
+            if (node.type === 'identity' || this.config.protectedNodes.includes(node.id)) continue;
 
             const lastUpdated = node.last_updated ? new Date(node.last_updated) : (node.created_at ? new Date(node.created_at) : now);
             const daysSinceUpdate = Math.max(0, (now.getTime() - lastUpdated.getTime()) / (1000 * 60 * 60 * 24));
@@ -196,27 +212,45 @@ export class MemoryGovernor {
                 const valueA = this.extractValue(a.content);
                 const valueB = this.extractValue(b.content);
                 if (valueA && valueB && valueA !== valueB) {
-                    // Determine resolution
+                    // Classify conflict
                     const sourceA = (a.metadata?.source as FactSource) || 'inferred';
                     const sourceB = (b.metadata?.source as FactSource) || 'inferred';
                     const confA = a.confidence || 0.5;
                     const confB = b.confidence || 0.5;
+                    const timeA = a.last_updated || a.created_at || '';
+                    const timeB = b.last_updated || b.created_at || '';
 
+                    let classification: ConflictType;
                     let resolution: ConflictResult['resolution'];
+
+                    // Both explicit = genuine preference change → coexist
                     if (sourceA === 'explicit' && sourceB === 'explicit') {
-                        resolution = 'keep_both'; // Both explicit — user might have changed preference
-                    } else if (confA > confB + 0.2) {
-                        resolution = 'replace'; // A is significantly more confident
-                    } else {
-                        resolution = 'reduce_confidence'; // Reduce both
+                        classification = 'coexist';
+                        resolution = 'keep_both';
+                    }
+                    // One explicit, one inferred = replace the inferred
+                    else if (sourceA === 'explicit' || sourceB === 'explicit') {
+                        classification = 'replace';
+                        resolution = 'replace';
+                    }
+                    // Both inferred, similar confidence = uncertain
+                    else if (Math.abs(confA - confB) < 0.2) {
+                        classification = 'uncertain';
+                        resolution = 'reduce_confidence';
+                    }
+                    // One clearly stronger = replace
+                    else {
+                        classification = 'replace';
+                        resolution = 'replace';
                     }
 
                     return {
                         nodeA: a,
                         nodeB: b,
                         conflictType: 'contradiction',
+                        classification,
                         resolution,
-                        message: `Conflito de preferência: "${a.content}" vs "${b.content}" (${domainA})`
+                        message: `Conflito de preferência: "${a.content}" vs "${b.content}" (${domainA}) [${classification}]`
                     };
                 }
             }
@@ -228,6 +262,7 @@ export class MemoryGovernor {
                 nodeA: a,
                 nodeB: b,
                 conflictType: 'duplicate',
+                classification: 'replace',
                 resolution: 'merge',
                 message: `Duplicata: "${a.name}" ≈ "${b.name}"`
             };
@@ -265,23 +300,38 @@ export class MemoryGovernor {
     /**
      * Resolve detected conflicts automatically.
      */
-    resolveConflicts(conflicts: ConflictResult[]): { resolved: number; unresolved: number } {
+    resolveConflicts(conflicts: ConflictResult[]): { resolved: number; unresolved: number; archived: number } {
         let resolved = 0;
         let unresolved = 0;
+        let archived = 0;
 
         for (const conflict of conflicts) {
             switch (conflict.resolution) {
                 case 'replace': {
-                    // Keep the higher-confidence one, reduce the other
-                    const [keep, reduce] = (conflict.nodeA.confidence || 0) >= (conflict.nodeB.confidence || 0)
+                    // Keep the higher-confidence one, archive the other
+                    const [keep, remove] = (conflict.nodeA.confidence || 0) >= (conflict.nodeB.confidence || 0)
                         ? [conflict.nodeA, conflict.nodeB]
                         : [conflict.nodeB, conflict.nodeA];
+                    
+                    if (this.config.archiveEnabled) {
+                        // Archive instead of delete
+                        this.archiveNode(remove);
+                        archived++;
+                    } else {
+                        // Just reduce confidence
+                        this.memory.addNode({
+                            ...remove,
+                            confidence: Math.max(this.config.minConfidence, (remove.confidence || 0.5) * 0.5),
+                            weight: (remove.weight || 1.0) * 0.5,
+                            last_updated: new Date().toISOString(),
+                            metadata: { ...remove.metadata, conflict_reduced: 'true' }
+                        });
+                    }
+                    // Boost the kept one
                     this.memory.addNode({
-                        ...reduce,
-                        confidence: Math.max(this.config.minConfidence, (reduce.confidence || 0.5) * 0.5),
-                        weight: (reduce.weight || 1.0) * 0.5,
-                        last_updated: new Date().toISOString(),
-                        metadata: { ...reduce.metadata, conflict_reduced: 'true' }
+                        ...keep,
+                        confidence: Math.min(this.config.maxConfidence, (keep.confidence || 0.5) + 0.05),
+                        last_updated: new Date().toISOString()
                     });
                     resolved++;
                     break;
@@ -301,44 +351,59 @@ export class MemoryGovernor {
                     break;
                 }
                 case 'merge': {
-                    // Keep the one with higher confidence, remove the other
+                    // Keep the one with higher confidence, archive the other
                     const [keep, remove] = (conflict.nodeA.confidence || 0) >= (conflict.nodeB.confidence || 0)
                         ? [conflict.nodeA, conflict.nodeB]
                         : [conflict.nodeB, conflict.nodeA];
                     // Boost the kept one
                     this.memory.addNode({
                         ...keep,
-                        confidence: Math.min(1.0, (keep.confidence || 0.5) + 0.1),
+                        confidence: Math.min(this.config.maxConfidence, (keep.confidence || 0.5) + 0.1),
                         weight: (keep.weight || 1.0) + 0.1,
                         last_updated: new Date().toISOString()
                     });
-                    // Delete the duplicate (confidence below threshold = GC will clean it)
-                    this.memory.addNode({
-                        ...remove,
-                        confidence: 0.1,
-                        weight: 0.1,
-                        metadata: { ...remove.metadata, merged_into: keep.id }
-                    });
+                    // Archive the duplicate
+                    this.archiveNode(remove);
+                    archived++;
                     resolved++;
                     break;
                 }
                 case 'keep_both':
-                    // Both are explicit — user may have genuinely changed preference
-                    // Reduce confidence slightly on both
+                    // Both explicit — genuine preference change, coexist
+                    // Slightly reduce both to signal uncertainty
                     for (const node of [conflict.nodeA, conflict.nodeB]) {
                         this.memory.addNode({
                             ...node,
                             confidence: Math.max(this.config.minConfidence, (node.confidence || 0.5) * 0.95),
-                            metadata: { ...node.metadata, conflict_flag: 'explicit_both' }
+                            metadata: { ...node.metadata, conflict_flag: 'explicit_both', coexists_with: conflict.nodeA.id === node.id ? conflict.nodeB.id : conflict.nodeA.id }
                         });
                     }
                     unresolved++;
                     break;
+                case 'flag_uncertain':
+                    // Both inferred with similar confidence — flag for review
+                    for (const node of [conflict.nodeA, conflict.nodeB]) {
+                        this.memory.addNode({
+                            ...node,
+                            metadata: { ...node.metadata, conflict_flag: 'uncertain', needs_review: 'true' }
+                        });
+                    }
+                    unresolved++;
+                    break;
+                case 'archive_older':
+                    // Archive the older one
+                    const [newer, older] = (conflict.nodeA.last_updated || '') >= (conflict.nodeB.last_updated || '')
+                        ? [conflict.nodeA, conflict.nodeB]
+                        : [conflict.nodeB, conflict.nodeA];
+                    this.archiveNode(older);
+                    archived++;
+                    resolved++;
+                    break;
             }
         }
 
-        console.log(`[GOVERNOR] Conflict resolution: ${resolved} resolved, ${unresolved} unresolved (keep_both)`);
-        return { resolved, unresolved };
+        console.log(`[GOVERNOR] Conflict resolution: ${resolved} resolved, ${unresolved} unresolved, ${archived} archived`);
+        return { resolved, unresolved, archived };
     }
 
     // ========================================================================
@@ -348,45 +413,61 @@ export class MemoryGovernor {
     /**
      * Remove nodes below minimum confidence, never accessed, or redundant.
      */
-    garbageCollect(): { removed: number; inspected: number } {
+    garbageCollect(): { removed: number; archived: number; inspected: number } {
         const allNodes = this.getAllNodes();
         let removed = 0;
+        let archived = 0;
         const now = new Date();
 
         for (const node of allNodes) {
-            // Never garbage collect core identity nodes
-            if (node.id === 'core_user' || node.id === 'user_identity' || node.type === 'identity') continue;
+            // Never garbage collect protected nodes
+            if (node.type === 'identity' || this.config.protectedNodes.includes(node.id)) continue;
 
             const confidence = node.confidence ?? 1.0;
             const weight = node.weight ?? 1.0;
             const lastUpdated = node.last_updated ? new Date(node.last_updated) : new Date(node.created_at || now);
 
-            // Rule 1: Below minimum confidence → GC
+            // Rule 1: Below minimum confidence
             if (confidence < this.config.minConfidence) {
-                this.removeNode(node.id);
-                removed++;
+                if (this.config.archiveEnabled) {
+                    this.archiveNode(node);
+                    archived++;
+                } else {
+                    this.removeNode(node.id);
+                    removed++;
+                }
                 continue;
             }
 
-            // Rule 2: Weight below 0.1 and stale → GC
+            // Rule 2: Weight below 0.1 and stale
             const daysSinceUpdate = (now.getTime() - lastUpdated.getTime()) / (1000 * 60 * 60 * 24);
             if (weight < 0.1 && daysSinceUpdate > 30) {
-                this.removeNode(node.id);
-                removed++;
+                if (this.config.archiveEnabled) {
+                    this.archiveNode(node);
+                    archived++;
+                } else {
+                    this.removeNode(node.id);
+                    removed++;
+                }
                 continue;
             }
 
-            // Rule 3: Confidence below 0.5 AND never accessed AND old → GC
+            // Rule 3: Confidence below 0.5 AND never accessed AND old
             const accessInfo = this.accessLog.get(node.id);
             if (confidence < 0.5 && !accessInfo && daysSinceUpdate > 14) {
-                this.removeNode(node.id);
-                removed++;
+                if (this.config.archiveEnabled) {
+                    this.archiveNode(node);
+                    archived++;
+                } else {
+                    this.removeNode(node.id);
+                    removed++;
+                }
                 continue;
             }
         }
 
-        console.log(`[GOVERNOR] Garbage collection: ${removed}/${allNodes.length} nodes removed`);
-        return { removed, inspected: allNodes.length };
+        console.log(`[GOVERNOR] Garbage collection: ${removed} removed, ${archived} archived, ${allNodes.length} inspected`);
+        return { removed, archived, inspected: allNodes.length };
     }
 
     // ========================================================================
@@ -408,10 +489,20 @@ export class MemoryGovernor {
         const node = this.memory.getNode(nodeId);
         if (!node) return;
 
+        // Skip protected nodes — they stay at max
+        if (this.config.protectedNodes.includes(node.id)) return;
+
         if (wasHelpful) {
-            // Boost confidence and weight
-            const newConfidence = Math.min(1.0, (node.confidence || 0.5) + this.config.usefulBoost);
-            const newWeight = (node.weight || 1.0) + 0.1;
+            // Anti-loop: diminishing returns on reinforcement
+            // 1st boost: 100%, 2nd: 75%, 3rd: 56%, 4th: 42%, etc.
+            const boostMultiplier = this.config.diminishingReturns
+                ? Math.pow(0.75, Math.min(existing.count - 1, 10))
+                : 1.0;
+            const boost = this.config.usefulBoost * boostMultiplier;
+
+            // Anti-loop: cap at maxConfidence ceiling
+            const newConfidence = Math.min(this.config.maxConfidence, (node.confidence || 0.5) + boost);
+            const newWeight = Math.min(3.0, (node.weight || 1.0) + 0.1 * boostMultiplier);
             this.memory.addNode({
                 ...node,
                 confidence: newConfidence,
@@ -485,6 +576,7 @@ export class MemoryGovernor {
             nodesInspected: decayResult.total,
             nodesDecayed: decayResult.decayed,
             nodesGarbageCollected: gcResult.removed,
+            nodesArchived: gcResult.archived,
             conflictsDetected: conflicts.length,
             conflictsResolved: resolution.resolved,
             factsReinforced: Array.from(this.accessLog.values()).filter(a => a.wasHelpful).length,
@@ -556,6 +648,26 @@ export class MemoryGovernor {
             db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(nodeId);
         } catch (err) {
             console.warn(`[GOVERNOR] Failed to remove node ${nodeId}:`, (err as Error).message);
+        }
+    }
+
+    /**
+     * Archive a node instead of deleting it.
+     * Moves to memory_nodes with type='archived' and very low confidence.
+     * Preserves the data for potential future recovery.
+     */    private archiveNode(node: MemoryNode): void {
+        try {
+            this.memory.addNode({
+                ...node,
+                type: 'context', // Keep as context type (archived)
+                confidence: 0.1, // Minimum confidence
+                weight: 0.1, // Minimum weight
+                metadata: { ...node.metadata, archived: 'true', archived_at: new Date().toISOString(), original_type: node.type },
+                last_updated: new Date().toISOString()
+            });
+            console.log(`[GOVERNOR] Archived node: ${node.id} (was ${node.type}, confidence was ${node.confidence})`);
+        } catch (err) {
+            console.warn(`[GOVERNOR] Failed to archive node ${node.id}:`, (err as Error).message);
         }
     }
 }

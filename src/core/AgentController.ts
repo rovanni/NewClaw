@@ -138,7 +138,11 @@ export class AgentController {
             minConfidence: 0.3,
             staleAfterDays: 7,
             usefulBoost: 0.05,
-            notUsefulPenalty: 0.02
+            notUsefulPenalty: 0.02,
+            maxConfidence: 0.95,
+            diminishingReturns: true,
+            protectedNodes: ['core_user', 'user_identity'],
+            archiveEnabled: true
         });
 
         // Inicializar handlers
