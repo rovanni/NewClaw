@@ -15,6 +15,22 @@ import { ContextCompressor } from '../loop/ContextCompressor';
 import { ProviderFactory } from '../core/ProviderFactory';
 import fs from 'fs';
 
+/**
+ * Estimate token count for a string.
+ * Portuguese text uses more tokens than English (accents, longer words).
+ * Code/JSON has higher token density due to punctuation.
+ * Heuristic: ~3.5 chars/token for pt-BR text, ~3 for code/JSON.
+ */
+export function estimateTokens(text: string): number {
+    if (!text) return 0;
+    const codeRatio = (text.match(/[{}()[\]:;,=<>\/]/g) || []).length / text.length;
+    // Code-heavy content: ~3 chars/token
+    // Pure text (pt-BR): ~3.5 chars/token
+    // Mixed: interpolate
+    const charsPerToken = 3 + (1 - codeRatio) * 0.5;
+    return Math.ceil(text.length / charsPerToken);
+}
+
 export interface SessionKey {
     channel: string;
     userId: string;
@@ -68,6 +84,7 @@ export class SessionManager {
     /**
      * Mutex-protected operation per session key.
      * Prevents concurrent writes to the same JSONL.
+     * Includes timeout protection against deadlocks (30s).
      */
     private async withMutex<T>(sid: string, fn: () => Promise<T>): Promise<T> {
         const current = this.sessionMutexes.get(sid) || Promise.resolve();
@@ -75,11 +92,27 @@ export class SessionManager {
         const next = new Promise<void>(r => { resolve = r; });
         this.sessionMutexes.set(sid, next);
 
-        await current;
+        // Timeout protection: if mutex takes > 30s, log warning and proceed
+        const mutexTimeout = new Promise<void>((_, reject) => {
+            setTimeout(() => reject(new Error(`Mutex timeout for ${sid} after 30s`)), 30_000);
+        });
+
+        try {
+            await Promise.race([current, mutexTimeout]);
+        } catch (err) {
+            console.error(`[SESSION] Mutex wait timeout for ${sid}, proceeding anyway:`, (err as Error).message);
+        }
+
         try {
             return await fn();
         } finally {
             resolve!();
+            // Clean up stale mutexes after 60s
+            setTimeout(() => {
+                if (this.sessionMutexes.get(sid) === next) {
+                    this.sessionMutexes.delete(sid);
+                }
+            }, 60_000);
         }
     }
 
@@ -121,7 +154,7 @@ export class SessionManager {
             const transcript = await this.getOrCreateSession(key);
             const seq = transcript.append('assistant', content, meta);
             this.memory.addMessage(this.conversationId(key), 'assistant', content);
-            console.log(`[SESSION] ${sid} assistant seq=${seq} len=${content.length} tokens≈${Math.round(content.length / 4)}`);
+            console.log(`[SESSION] ${sid} assistant seq=${seq} len=${content.length} tokens≈${Math.round(estimateTokens(content))}`);
             return seq;
         });
     }
@@ -192,7 +225,7 @@ export class SessionManager {
 
         // Hybrid trigger: message count OR token estimate
         const messageThreshold = userAssistantMessages.length >= this.config.maxUncompressedMessages;
-        const tokenEstimate = userAssistantMessages.reduce((sum, e) => sum + Math.ceil(e.content.length / 4), 0);
+        const tokenEstimate = userAssistantMessages.reduce((sum, e) => sum + estimateTokens(e.content), 0);
         const tokenThreshold = tokenEstimate >= this.config.maxUncompressedTokens;
 
         if (!messageThreshold && !tokenThreshold) return;
@@ -365,6 +398,73 @@ export class SessionManager {
 
     getMemory(): MemoryManager { return this.memory; }
     getConfig(): SessionConfig { return { ...this.config }; }
+
+    /**
+     * Compact a session's JSONL by keeping only checkpoint + recent messages.
+     * Writes a new .jsonl file and replaces the old one.
+     * The old file is backed up as .jsonl.bak before compaction.
+     * 
+     * This prevents unbounded JSONL growth over time.
+     */    async compactSession(key: SessionKey): Promise<{ before: number; after: number; saved: number }> {
+        const sid = this.sessionKey(key);
+        const transcript = await this.getOrCreateSession(key);
+        const stats = transcript.getStats();
+        const before = stats.totalBytes;
+
+        // Get checkpoint and recent messages to preserve
+        const checkpoint = this.compressionCheckpoints.get(sid);
+        const { entries } = transcript.getSinceCheckpoint();
+
+        if (!checkpoint && entries.length === 0) {
+            return { before, after: before, saved: 0 };
+        }
+
+        // Build compact entries: checkpoint summary + recent messages
+        const compactEntries: TranscriptEntry[] = [];
+        if (checkpoint) {
+            compactEntries.push({
+                ts: checkpoint.compressedAt,
+                seq: 1,
+                role: 'checkpoint',
+                content: checkpoint.summary,
+                meta: { checkpoint: true, compressed_up_to: checkpoint.seq }
+            });
+        }
+        for (const entry of entries) {
+            compactEntries.push({ ...entry, seq: compactEntries.length + 1 });
+        }
+
+        // Close current transcript, write compact, reinit
+        await transcript.close();
+
+        // Backup old file
+        const fs = await import('fs');
+        const oldPath = transcript.getFilePath();
+        const bakPath = oldPath + '.bak';
+        if (fs.existsSync(oldPath)) {
+            fs.copyFileSync(oldPath, bakPath);
+        }
+
+        // Write compact JSONL
+        const lines = compactEntries.map(e => JSON.stringify(e)).join('\n') + '\n';
+        fs.writeFileSync(oldPath, lines, 'utf-8');
+
+        // Delete index (will rebuild on next init)
+        const idxPath = oldPath.replace('.jsonl', '.idx.json');
+        if (fs.existsSync(idxPath)) {
+            fs.unlinkSync(idxPath);
+        }
+
+        // Reinit transcript
+        const newTranscript = new SessionTranscript(this.config.transcriptDir, sid);
+        await newTranscript.init();
+        this.sessions.set(sid, newTranscript);
+
+        const afterStats = newTranscript.getStats();
+        console.log(`[SESSION] Compacted ${sid}: ${before} -> ${afterStats.totalBytes} bytes (saved ${before - afterStats.totalBytes})`);
+
+        return { before, after: afterStats.totalBytes, saved: before - afterStats.totalBytes };
+    }
 
     /**
      * Ensure conversation exists in MemoryManager DB.

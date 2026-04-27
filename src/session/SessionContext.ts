@@ -11,7 +11,7 @@
  * If sessionContext is not set, AgentLoop throws (no silent fallback).
  */
 
-import { SessionManager, SessionKey } from './SessionManager';
+import { SessionManager, SessionKey, estimateTokens } from './SessionManager';
 import { ContextBuilder } from '../loop/ContextBuilder';
 import { MemoryManager } from '../memory/MemoryManager';
 import { LLMMessage } from '../core/ProviderFactory';
@@ -106,7 +106,7 @@ export class SessionContext {
                     content: entry.content
                 });
                 stats.recentMessages++;
-                stats.tokenEstimate += Math.ceil(entry.content.length / 4);
+                stats.tokenEstimate += estimateTokens(entry.content);
             }
         }
 
@@ -117,7 +117,7 @@ export class SessionContext {
         if (!lastUserMsg || lastUserMsg.content !== currentMessage) {
             llmMessages.push({ role: 'user', content: currentMessage });
             stats.recentMessages++;
-            stats.tokenEstimate += Math.ceil(currentMessage.length / 4);
+            stats.tokenEstimate += estimateTokens(currentMessage);
         }
 
         return { messages: llmMessages, stats };
