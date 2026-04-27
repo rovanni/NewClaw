@@ -6,6 +6,7 @@
 import { Bot, Context, GrammyError } from 'grammy';
 import { AgentLoop } from '../loop/AgentLoop';
 import { MemoryManager } from '../memory/MemoryManager';
+import { SessionManager, SessionKey } from '../session/SessionManager';
 import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -23,9 +24,10 @@ export class TelegramInputHandler {
     private memory: MemoryManager;
     private config: Required<TelegramInputConfig>;
     private onboardingService?: any;
+    private sessionManager: SessionManager;
     private processedMessages: Set<number> = new Set();
 
-    constructor(config: TelegramInputConfig, agentLoop: AgentLoop, memory: MemoryManager, onboardingService?: any) {
+    constructor(config: TelegramInputConfig, agentLoop: AgentLoop, memory: MemoryManager, onboardingService?: any, sessionManager?: SessionManager) {
         this.config = {
             whisperPath: '/usr/local/bin/whisper',
             tmpDir: './tmp',
@@ -35,6 +37,7 @@ export class TelegramInputHandler {
         this.agentLoop = agentLoop;
         this.memory = memory;
         this.onboardingService = onboardingService;
+        this.sessionManager = sessionManager || new SessionManager({ transcriptDir: './data/sessions' }, memory);
 
         // Criar diretório tmp
         if (!fs.existsSync(this.config.tmpDir)) {
@@ -61,7 +64,10 @@ export class TelegramInputHandler {
             const userId = ctx.from?.id.toString();
             if (userId) {
                 this.memory.createNewConversation(userId);
-                await ctx.reply('🧹 Contexto limpo! A IA encerrou a linha de raciocínio anterior e começará uma nova sessão (Mas seus gráficos de memória de longo prazo continuam salvos!).');
+                // Also close and recreate session transcript
+                const sessionKey: SessionKey = { channel: 'telegram', userId };
+                await this.sessionManager.closeSession(sessionKey);
+                await ctx.reply('🧹 Sessão limpa! Contexto anterior comprimido. Nova sessão iniciada.');
             }
         });
 
@@ -131,7 +137,11 @@ export class TelegramInputHandler {
         }
 
         const userId = ctx.from!.id.toString();
+        const sessionKey: SessionKey = { channel: 'telegram', userId };
         console.log(`[TELEGRAM-INPUT] Texto de ${userId}: "${text.slice(0, 50)}"`);
+
+        // Record user message in session transcript
+        await this.sessionManager.recordUserMessage(sessionKey, text);
 
         const handledSkillReview = await this.tryHandleNaturalSkillReview(ctx, text);
         if (handledSkillReview) return;
@@ -176,6 +186,8 @@ export class TelegramInputHandler {
 
         try {
             const response = await this.agentLoop.process(userId, text);
+            // Record assistant response in session transcript
+            await this.sessionManager.recordAssistantMessage(sessionKey, response || '', { model: 'newclaw' });
             if (response && response.trim()) {
                 // Skip confirmation messages from send_audio/send_document — the media was already sent
                 const isMediaConfirmation = /^🔊 (Áudio|Arquivo|Documento) enviado/i.test(response.trim());

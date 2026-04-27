@@ -25,6 +25,8 @@ import { MemoryAdminTool } from '../tools/memory_admin';
 import { CryptoAnalysisTool } from '../tools/crypto_analysis';
 import { SshExecTool } from '../tools/ssh_exec';
 import { ToolRegistry } from './ToolRegistry';
+import { SessionManager } from '../session/SessionManager';
+import { SessionContext } from '../session/SessionContext';
 
 export interface NewClawConfig {
     telegramBotToken: string;
@@ -67,6 +69,7 @@ export class AgentController {
     private inputHandler: TelegramInputHandler;
     private outputHandler: TelegramOutputHandler;
     private onboardingService: OnboardingService;
+    private sessionManager: SessionManager;
 
     constructor(config: NewClawConfig) {
         this.config = config;
@@ -109,6 +112,13 @@ export class AgentController {
             this.agentLoop.getStateManager()
         );
 
+        // Inicializar SessionManager (persistência conversacional)
+        this.sessionManager = new SessionManager(
+            { transcriptDir: './data/sessions' },
+            this.memory,
+            this.providerFactory
+        );
+
         // Inicializar handlers
         this.inputHandler = new TelegramInputHandler(
             {
@@ -119,7 +129,8 @@ export class AgentController {
             },
             this.agentLoop,
             this.memory,
-            this.onboardingService
+            this.onboardingService,
+            this.sessionManager
         );
 
         this.outputHandler = new TelegramOutputHandler({
