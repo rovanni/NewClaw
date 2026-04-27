@@ -220,10 +220,43 @@ ${userText}`;
         return null;
     }
 
+    // ── Greeting fast-path: respond instantly without LLM for simple social messages ──
+    private static readonly GREETING_PATTERNS: RegExp[] = [
+        /^(oi|olá|ola|eai|eae|fala|opa|hey|hello|hi|bom dia|boa tarde|boa noite|salve|coé|coe)[\s!.?]*$/i,
+        /^(tchau|bye|até|ate|flw|falou)[\s!.?]*$/i,
+        /^(valeu|obrigad[oa]?|vlw)[\s!.?]*$/i,
+    ];
+
+    private static isSimpleGreeting(text: string): boolean {
+        const trimmed = text.trim().toLowerCase();
+        if (trimmed.length < 3 || trimmed.length > 40) return false;
+        return AgentLoop.GREETING_PATTERNS.some(p => p.test(trimmed));
+    }
+
+    private static readonly GREETING_RESPONSES: string[] = [
+        "Oi! Tô por aqui, pode falar! 👋",
+        "E aí! Como posso te ajudar? 😊",
+        "Olá! No que posso te ajudar hoje?",
+        "Fala! Tô pronto pra ação 🚀",
+        "Opa! Bora lá! 💪",
+    ];
+
     private async runWithTools(conversationId: string, userText: string, iteration: number, userId?: string): Promise<string> {
+        // ── Fast-path: respond to greetings instantly without LLM ──
+        if (AgentLoop.isSimpleGreeting(userText)) {
+            console.log(`[${this.ts()}] [FAST-PATH] Greeting detected: "${userText}" — skipping LLM`);
+            const response = AgentLoop.GREETING_RESPONSES[Math.floor(Math.random() * AgentLoop.GREETING_RESPONSES.length)];
+            // Still record the exchange in session
+            if (this.sessionContext) {
+                const key: SessionKey = { channel: 'telegram', userId: conversationId };
+                await this.sessionContext.recordExchange(key, userText, response);
+            }
+            return response;
+        }
+
         console.log(`[${this.ts()}] [LOOP] Atomic Cognition Cycle ${iteration + 1}`);
 
-        const cycleHistory: Array<{ tool: string, input: string, status: string }> = [];
+        const cycleHistory: Array<{ tool: string, input: string, status: string }> = []
         let lastBestContent = '';
         let toolFailureCount = 0;
         const usedToolInputs = new Set<string>();
