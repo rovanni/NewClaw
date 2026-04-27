@@ -56,6 +56,8 @@ export interface NewClawConfig {
         analysis?: string;
         execution?: string;
         visionServer?: string;
+        classifierModel?: string;
+        classifierServer?: string;
     };
 }
 
