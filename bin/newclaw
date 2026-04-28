@@ -387,12 +387,79 @@ const commands = {
     }
   },
 
+  onboard() {
+    const readline = require('readline').createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    const env = readEnv();
+    console.log('\n🪐 NewClaw Onboarding — Assistente de Configuração');
+    console.log('Este assistente ajudará você a configurar seus provedores de IA.\n');
+
+    const providers = ['OpenRouter', 'Gemini', 'DeepSeek', 'Groq', 'Ollama'];
+    console.log('Escolha um provedor de IA:');
+    providers.forEach((p, i) => console.log(`${i + 1}. ${p}`));
+
+    readline.question('\nOpção (1-5): ', (choice) => {
+      const idx = parseInt(choice) - 1;
+      if (idx < 0 || idx >= providers.length) {
+        console.log('❌ Opção inválida.');
+        readline.close();
+        return;
+      }
+
+      const provider = providers[idx].toLowerCase();
+      env.DEFAULT_PROVIDER = provider;
+
+      if (provider === 'ollama') {
+        readline.question('URL do Ollama (default: http://localhost:11434): ', (url) => {
+          env.OLLAMA_URL = url || 'http://localhost:11434';
+          readline.question('Modelo do Ollama (ex: glm-5.1:cloud): ', (model) => {
+            env.OLLAMA_MODEL = model || 'glm-5.1:cloud';
+            writeEnv(env);
+            console.log('\n✅ Configuração do Ollama salva!');
+            readline.close();
+          });
+        });
+      } else {
+        const keyMap = {
+          openrouter: 'OPENROUTER_API_KEY',
+          gemini: 'GEMINI_API_KEY',
+          deepseek: 'DEEPSEEK_API_KEY',
+          groq: 'GROQ_API_KEY'
+        };
+        const envKey = keyMap[provider];
+        readline.question(`Insira sua API Key do ${providers[idx]}: `, (key) => {
+          if (key) env[envKey] = key;
+          
+          let defaultModel = 'anthropic/claude-3.5-sonnet';
+          if (provider === 'gemini') defaultModel = 'gemini-2.0-flash';
+          if (provider === 'deepseek') defaultModel = 'deepseek-chat';
+          if (provider === 'groq') defaultModel = 'llama-3.3-70b-versatile';
+
+          readline.question(`Modelo preferido (default: ${defaultModel}): `, (model) => {
+            const finalModel = model || defaultModel;
+            if (provider === 'openrouter') env.MODEL_CHAT = finalModel;
+            else if (provider === 'ollama') env.OLLAMA_MODEL = finalModel;
+            
+            writeEnv(env);
+            console.log(`\n✅ Configuração do ${providers[idx]} salva em .env!`);
+            console.log(`💡 Provedor padrão definido como: ${provider}`);
+            readline.close();
+          });
+        });
+      }
+    });
+  },
+
   help() {
     console.log(`
 🪐 NewClaw CLI — Referência de Comandos
 
 Comando                 Descrição
 ----------------------- ----------------------------------------------------
+newclaw onboard         Configura provedores e chaves de API (OpenRouter, etc)
 newclaw start           Inicia o agente (foreground)
 newclaw start --daemon  Inicia em segundo plano (ideal para VPS)
 newclaw stop            Encerra o serviço graciosamente
@@ -405,6 +472,7 @@ newclaw uninstall       Remove o NewClaw e limpa o sistema
 newclaw help            Mostra esta tela de ajuda
 
 Exemplos:
+  newclaw onboard
   newclaw start --daemon --tail
   newclaw status --lang=pt-BR
   newclaw update restart

@@ -84,9 +84,11 @@ const CACHE_TTL = 300000; // 5 minutos
 export class ModelRouter {
     private config: RouterConfig;
     private usageLog: Map<string, number> = new Map();
+    private providerFactory?: any; // Avoiding circular dependency by using any
 
-    constructor(config?: any) {
+    constructor(config?: any, providerFactory?: any) {
         this.config = { ...DEFAULT_CONFIG };
+        this.providerFactory = providerFactory;
         
         if (config) {
             // Se vier do Dashboard/Env, mapeia os modelos individuais para os perfis
@@ -168,10 +170,25 @@ Message: "${query.slice(0, 200)}"
 
 Category:`;
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
-
         try {
+            // Use ProviderFactory for classification if available, otherwise fallback to fetch
+            if ((this as any).providerFactory) {
+                const factory = (this as any).providerFactory as ProviderFactory;
+                const response = await factory.chatWithFallback([
+                    { role: 'user', content: prompt }
+                ], [], undefined, 15000);
+                
+                const content = (response.content || '').trim().toLowerCase();
+                for (const cat of VALID_CATEGORIES) {
+                    if (content.includes(cat)) return cat;
+                }
+                const firstWord = content.split(/\s+/)[0].replace(/[^a-z]/g, '');
+                if (VALID_CATEGORIES.includes(firstWord as Category)) return firstWord as Category;
+            }
+
+            // Legacy fetch fallback (Ollama only)
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 15000);
             const response = await fetch(`${this.config.classifierServer}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -180,7 +197,7 @@ Category:`;
                     model: this.config.classifierModel,
                     messages: [{ role: 'user', content: prompt }],
                     stream: false,
-                    options: { temperature: 0.1, num_predict: 10 } // Máximo 10 tokens
+                    options: { temperature: 0.1, num_predict: 10 }
                 })
             });
             clearTimeout(timeout);
@@ -190,22 +207,17 @@ Category:`;
             const data = await response.json() as any;
             const content = (data.message?.content || '').trim().toLowerCase();
 
-            // Parse: extrair categoria da resposta
             for (const cat of VALID_CATEGORIES) {
-                if (content.includes(cat)) {
-                    return cat;
-                }
+                if (content.includes(cat)) return cat;
             }
 
-            // Se não encontrou, tentar parsear a primeira palavra
             const firstWord = content.split(/\s+/)[0].replace(/[^a-z]/g, '');
-            if (VALID_CATEGORIES.includes(firstWord as Category)) {
-                return firstWord as Category;
-            }
+            if (VALID_CATEGORIES.includes(firstWord as Category)) return firstWord as Category;
 
             throw new Error(`Invalid classification: "${content}"`);
-        } finally {
-            clearTimeout(timeout);
+        } catch (err) {
+            console.warn(`[MODEL_ROUTER] LLM classification error: ${(err as Error).message}`);
+            throw err;
         }
     }
 

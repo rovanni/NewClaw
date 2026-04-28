@@ -36,6 +36,7 @@ export interface ToolDefinition {
 export interface ILLMProvider {
     name: string;
     chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse>;
+    setModel(model: string): void;
 }
 
 // === Gemini Provider ===
@@ -48,6 +49,8 @@ export class GeminiProvider implements ILLMProvider {
         this.apiKey = apiKey;
         this.model = model;
     }
+
+    setModel(model: string): void { this.model = model; }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
         const response = await fetch(
@@ -104,6 +107,8 @@ export class DeepSeekProvider implements ILLMProvider {
         this.model = model;
     }
 
+    setModel(model: string): void { this.model = model; }
+
     async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
         const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
             method: 'POST',
@@ -153,6 +158,8 @@ export class GroqProvider implements ILLMProvider {
         this.apiKey = apiKey;
         this.model = model;
     }
+
+    setModel(model: string): void { this.model = model; }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -276,6 +283,74 @@ export class OllamaProvider implements ILLMProvider {
     }
 }
 
+// === OpenAI Provider (Generic) ===
+export class OpenAIProvider implements ILLMProvider {
+    name = 'openai';
+    private apiKey: string;
+    private model: string;
+    private baseUrl: string;
+
+    constructor(apiKey: string, model: string = 'gpt-4o', baseUrl: string = 'https://api.openai.com/v1') {
+        this.apiKey = apiKey;
+        this.model = model;
+        this.baseUrl = baseUrl;
+    }
+
+    setModel(model: string): void { this.model = model; }
+
+    async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
+        const response = await fetch(`${this.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.apiKey}`
+            },
+            body: JSON.stringify({
+                model: this.model,
+                messages,
+                tools: tools ? tools.map(t => ({
+                    type: 'function',
+                    function: { name: t.name, description: t.description, parameters: t.parameters }
+                })) : undefined
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`${this.name} API error (${response.status}): ${error}`);
+        }
+
+        const data = await response.json() as any;
+        const message = data.choices?.[0]?.message;
+
+        return {
+            content: message?.content || '',
+            toolCalls: message?.tool_calls?.map((tc: any) => ({
+                id: tc.id,
+                name: tc.function.name,
+                arguments: JSON.parse(tc.function.arguments || '{}')
+            })),
+            usage: data.usage ? {
+                prompt_tokens: data.usage.prompt_tokens || 0,
+                completion_tokens: data.usage.completion_tokens || 0
+            } : undefined
+        };
+    }
+}
+
+// === OpenRouter Provider ===
+export class OpenRouterProvider extends OpenAIProvider {
+    constructor(apiKey: string, model: string = 'anthropic/claude-3.5-sonnet') {
+        super(apiKey, model, 'https://openrouter.ai/api/v1');
+        this.name = 'openrouter';
+    }
+
+    async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
+        // OpenRouter specific headers can be added here if needed (e.g., HTTP-Referer)
+        return super.chat(messages, tools);
+    }
+}
+
 // === Factory ===
 export class ProviderFactory {
     private providers: Map<string, ILLMProvider> = new Map();
@@ -285,6 +360,7 @@ export class ProviderFactory {
         geminiKey?: string;
         deepseekKey?: string;
         groqKey?: string;
+        openrouterKey?: string;
         ollamaUrl?: string;
         ollamaModel?: string;
         ollamaApiKey?: string;
@@ -295,6 +371,8 @@ export class ProviderFactory {
         if (config.geminiKey) this.providers.set('gemini', new GeminiProvider(config.geminiKey));
         if (config.deepseekKey) this.providers.set('deepseek', new DeepSeekProvider(config.deepseekKey));
         if (config.groqKey) this.providers.set('groq', new GroqProvider(config.groqKey));
+        if (config.openrouterKey) this.providers.set('openrouter', new OpenRouterProvider(config.openrouterKey));
+        
         this.providers.set('ollama', new OllamaProvider(
             config.ollamaUrl || 'http://localhost:11434',
             config.ollamaModel || 'glm-5.1:cloud',
@@ -426,7 +504,7 @@ export class ProviderFactory {
             return [preferred, ...rest];
         }
         // Default order: ollama first (local), then cloud providers
-        const order = ['ollama', 'gemini', 'deepseek', 'groq'];
+        const order = ['ollama', 'openrouter', 'gemini', 'deepseek', 'groq'];
         const sorted = order.filter(p => this.providers.has(p));
         const remaining = all.filter(p => !sorted.includes(p));
         return [...sorted, ...remaining];

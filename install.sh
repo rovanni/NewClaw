@@ -559,6 +559,26 @@ configure() {
     done
   fi
 
+  # Escolha de Provider
+  local provider="ollama"
+  local or_key=""
+  if [ "$NO_PROMPT" -eq 0 ]; then
+    echo ""
+    echo -e "  ${BOLD}Escolha o provedor de IA padrão:${NC}"
+    echo -e "  ${CYAN}1)${NC} Ollama (Local)      — 100% privado, roda na sua máquina"
+    echo -e "  ${CYAN}2)${NC} OpenRouter (Nuvem)  — Suporte a Claude, GPT-4, etc (requer chave)"
+    local p_choice
+    ask "Opção (1-2)" p_choice "1"
+    [ "$p_choice" = "2" ] && provider="openrouter"
+  fi
+
+  if [ "$provider" = "openrouter" ]; then
+    while [ -z "$or_key" ]; do
+      ask "Cole sua API Key do OpenRouter (sk-or-...)" or_key
+      [ -z "$or_key" ] && warn "API Key é necessária para OpenRouter!"
+    done
+  fi
+
   # Escrever .env
   if [ "$DRY_RUN" -eq 0 ]; then
     cat > "$ENV_FILE" << EOF
@@ -572,12 +592,13 @@ TELEGRAM_ALLOWED_USER_IDS=${USER_ID}
 APP_LANG=pt-BR
 
 # Provider padrão
-DEFAULT_PROVIDER=ollama
+DEFAULT_PROVIDER=${provider}
 
 # API Keys (opcional — preencha depois se quiser usar outros providers)
 GEMINI_API_KEY=
 DEEPSEEK_API_KEY=
 GROQ_API_KEY=
+OPENROUTER_API_KEY=${or_key}
 
 # Ollama
 OLLAMA_URL=http://localhost:11434
@@ -598,7 +619,7 @@ WHISPER_API_URL=
 WHISPER_PATH=
 EOF
   else
-    dry "criar ${ENV_FILE} com token=${BOT_TOKEN:0:10}... user_id=${USER_ID} model=${OLLAMA_MODEL}"
+    dry "criar ${ENV_FILE} com token=${BOT_TOKEN:0:10}... user_id=${USER_ID} provider=${provider}"
   fi
 
   ok "Arquivo .env configurado!"

@@ -75,7 +75,7 @@ export class AgentLoop {
         this.config = config;
         this.contextBuilder = new ContextBuilder(memory);
         this.skillLearner = skillLearner || new SkillLearner((memory as any).db || (memory as any)._db);
-        this.modelRouter = new ModelRouter(config.modelRouter as any);
+        this.modelRouter = new ModelRouter(config.modelRouter as any, providerFactory);
         this.stateManager = new AgentStateManager(memory);
     }
 
@@ -489,11 +489,12 @@ ${userText}`;
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<any> {
         const timeoutMs = 180000; // 3min — cloud models can be slow for complex tasks
 
-        // Apply routed model to OllamaProvider before calling
+        // Apply routed model to the default provider before calling
         if (chatProfile?.model) {
-            const ollamaProvider = this.providerFactory.getOllamaProvider();
-            if (ollamaProvider) {
-                ollamaProvider.setModel(chatProfile.model);
+            const provider = this.providerFactory.getProvider();
+            if (provider) {
+                console.log(`[AGENT] Setting model ${chatProfile.model} on provider ${provider.name}`);
+                provider.setModel(chatProfile.model);
             }
         }
 

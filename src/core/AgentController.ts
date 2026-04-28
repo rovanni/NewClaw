@@ -39,6 +39,7 @@ export interface NewClawConfig {
     geminiApiKey?: string;
     deepseekApiKey?: string;
     groqApiKey?: string;
+    openrouterApiKey?: string;
     ollamaUrl?: string;
     ollamaModel?: string;
     ollamaApiKey?: string;
@@ -89,6 +90,7 @@ export class AgentController {
             geminiKey: config.geminiApiKey,
             deepseekKey: config.deepseekApiKey,
             groqKey: config.groqApiKey,
+            openrouterKey: config.openrouterApiKey,
             ollamaUrl: config.ollamaUrl,
             ollamaModel: config.ollamaModel,
             ollamaApiKey: config.ollamaApiKey,

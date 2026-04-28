@@ -499,6 +499,25 @@ function Step-Configure {
         }
     }
 
+    # Escolha de Provider
+    $Provider = "ollama"
+    if (-not $NoPrompt) {
+        Write-Host ""
+        Write-Host "    Escolha o provedor de IA padrão:" -ForegroundColor White
+        Write-Host "    1) Ollama (Local)      — 100% privado, roda na sua máquina" -ForegroundColor Cyan
+        Write-Host "    2) OpenRouter (Nuvem)  — Suporte a Claude, GPT-4, etc (requer chave)" -ForegroundColor Cyan
+        $pChoice = Read-Answer "Opção (1-2)" "1"
+        if ($pChoice -eq "2") { $Provider = "openrouter" }
+    }
+
+    $OR_Key = ""
+    if ($Provider -eq "openrouter") {
+        while ([string]::IsNullOrWhiteSpace($OR_Key)) {
+            $OR_Key = Read-Answer "Cole sua API Key do OpenRouter (sk-or-...)" ""
+            if ([string]::IsNullOrWhiteSpace($OR_Key)) { Write-Fail "API Key é necessária para OpenRouter!" }
+        }
+    }
+
     $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
     $envContent = @"
 # NewClaw — Gerado pelo instalador em $timestamp
@@ -511,12 +530,13 @@ TELEGRAM_ALLOWED_USER_IDS=$UserId
 APP_LANG=pt-BR
 
 # Provider padrão
-DEFAULT_PROVIDER=ollama
+DEFAULT_PROVIDER=$Provider
 
 # API Keys (opcional)
 GEMINI_API_KEY=
 DEEPSEEK_API_KEY=
 GROQ_API_KEY=
+OPENROUTER_API_KEY=$OR_Key
 
 # Ollama
 OLLAMA_URL=http://localhost:11434
