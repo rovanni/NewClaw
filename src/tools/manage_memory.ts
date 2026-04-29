@@ -26,13 +26,22 @@ export class ManageMemoryTool implements ToolExecutor {
         this.memoryManager = memoryManager;
     }
 
+    // Relation mapping for auto-connect
+    private static readonly AUTO_RELATIONS: Record<string, string> = {
+        preference: 'prefers',
+        project: 'works_on',
+        skill: 'uses',
+        context: 'belongs_to',
+        fact: 'has_trait',
+        infrastructure: 'uses',
+    };
+
     async execute(args: Record<string, any>): Promise<ToolResult> {
         try {
             const action = args.action;
 
             if (action === 'search') {
                 if (!args.query) return { success: false, error: 'Ação search exige parâmetro "query".', output: '' };
-                // Try semantic search first, fallback to FTS5/LIKE
                 const results = await this.memoryManager.semanticSearch(args.query, 10);
                 if (results.length === 0) return { success: true, output: 'Nenhum nó encontrado para essa busca.' };
                 const output = results.map((n: any) => 
@@ -46,20 +55,16 @@ export class ManageMemoryTool implements ToolExecutor {
                     return { success: false, error: 'upsert_node exige: node_id, node_type, node_name, e node_content.', output: '' };
                 }
 
-                // Verifica se já existe
                 const existing = this.memoryManager.getNode(args.node_id);
                 if (existing) {
-                    // Update
                     existing.name = args.node_name;
                     existing.type = args.node_type as any;
-                    // Merge content intelligently (or just append)
                     if (!existing.content.includes(args.node_content)) {
                         existing.content += '\n' + args.node_content;
                     }
                     this.memoryManager.addNode(existing);
                     return { success: true, output: `✅ Nó "${args.node_id}" atualizado com sucesso.` };
                 } else {
-                    // Create
                     this.memoryManager.addNode({
                         id: args.node_id,
                         type: args.node_type as any,
@@ -68,23 +73,18 @@ export class ManageMemoryTool implements ToolExecutor {
                     });
 
                     // Auto-connect to user_identity to prevent orphan nodes
-                    const userIdentity = this.memoryManager.getNode('user_identity');
-                    if (userIdentity && args.node_id !== 'user_identity' && args.node_id !== 'core_user') {
-                        const autoRelation: Record<string, string> = {
-                            preference: 'prefers',
-                            project: 'works_on',
-                            skill: 'uses',
-                            context: 'belongs_to',
-                            fact: 'has_trait',
-                            infrastructure: 'uses',
-                        };
-                        const relation = autoRelation[args.node_type as string] || 'related_to';
-                        try {
-                            this.memoryManager.addEdge('user_identity', args.node_id, relation);
-                        } catch (e) { /* ignore if already connected */ }
+                    let connectedRelation = 'related_to';
+                    if (args.node_id !== 'user_identity' && args.node_id !== 'core_user') {
+                        const userIdentity = this.memoryManager.getNode('user_identity');
+                        if (userIdentity) {
+                            connectedRelation = ManageMemoryTool.AUTO_RELATIONS[args.node_type as string] || 'related_to';
+                            try {
+                                this.memoryManager.addEdge('user_identity', args.node_id, connectedRelation);
+                            } catch (e) { /* ignore if already connected */ }
+                        }
                     }
 
-                    return { success: true, output: `✅ Nó "${args.node_id}" criado e conectado ao user_identity via "${autoRelation[args.node_type as string] || 'related_to'}". Use connect_nodes para conexões adicionais.` };
+                    return { success: true, output: `✅ Nó "${args.node_id}" criado e auto-conectado ao user_identity via "${connectedRelation}". Use connect_nodes para conexões adicionais.` };
                 }
             }
 
@@ -103,7 +103,6 @@ export class ManageMemoryTool implements ToolExecutor {
             
             if (action === 'delete_node') {
                 if (!args.node_id) return { success: false, error: 'delete_node exige node_id', output: '' };
-                // Using internal DB handle as delete is not exposed safely in facade
                 const db = (this.memoryManager as any).db;
                 db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(args.node_id, args.node_id);
                 db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(args.node_id);
