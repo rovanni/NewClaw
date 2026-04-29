@@ -15,7 +15,7 @@ import { MemoryManager } from '../memory/MemoryManager';
 
 export class MemoryWriteTool implements ToolExecutor {
     name = 'memory_write';
-    description = 'Criar, atualizar, conectar, deletar ou mesclar nós na memória. Busque antes para evitar duplicatas, mas se não encontrar, USE action=create para criar um novo nó imediatamente. Não fique preso em loops de busca e não é estritamente obrigatório conectar a um nó existente.';
+    description = 'Criar, atualizar, conectar, deletar ou mesclar nós na memória. REGRAS OBRIGATÓRIAS: (1) SEMPRE busque antes para evitar duplicatas. (2) SEMPRE conecte o novo nó a um nó existente no grafo (use action=connect após create, ou inclua from/relation na mesma chamada). (3) NÓS SEM CONEXÃO = GRAFO QUEBRADO. Tipos de nó: identity, preference, project, context, fact, skill, infrastructure. Relações válidas: belongs_to, owns, prefers, works_on, uses, runs_on, depends_on, contains, created, hosts. Para fatos sobre o usuário, conectar a user_identity com relação "has_trait" ou "created". Para projetos, usar tipo "project" e conectar a user_identity com "works_on" ou "owns". Para infraestrutura, usar tipo "infrastructure" e conectar a user_identity com "uses" ou ao servidor com "runs_on".';
     parameters = {
         type: 'object',
         properties: {
@@ -122,6 +122,30 @@ export class MemoryWriteTool implements ToolExecutor {
             try {
                 this.memoryManager.addEdge('core_user', id, 'has_identity');
             } catch (e) { /* ignore if already connected or relation failed */ }
+        }
+
+        // Auto-connect non-identity nodes to user_identity to prevent orphan nodes
+        if (type !== 'identity' && id !== 'core_user' && id !== 'user_identity') {
+            const userIdentity = this.memoryManager.getNode('user_identity');
+            if (userIdentity) {
+                // Determine relation based on type
+                const autoRelation: Record<string, string> = {
+                    preference: 'prefers',
+                    project: 'works_on',
+                    skill: 'uses',
+                    context: 'belongs_to',
+                    fact: 'has_trait',
+                    infrastructure: 'uses',
+                    trait: 'has_trait',
+                    rule: 'belongs_to',
+                    strategy: 'belongs_to',
+                    knowledge: 'belongs_to',
+                };
+                const relation = autoRelation[type] || 'related_to';
+                try {
+                    this.memoryManager.addEdge('user_identity', id, relation);
+                } catch (e) { /* ignore if already connected */ }
+            }
         }
 
         // Set domain if provided
