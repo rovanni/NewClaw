@@ -3,7 +3,7 @@ import { MemoryManager } from '../memory/MemoryManager';
 
 export class ManageMemoryTool implements ToolExecutor {
     name = 'manage_memory';
-    description = 'Ferramenta oficial para o NewClaw pensar e interagir com o cérebro (grafo de memória). Use para buscar contexto passado, criar memórias ou conectar informações.';
+    description = 'Ferramenta oficial para o NewClaw interagir com o grafo de memória. REGRAS: (1) SEMPRE conecte novos nós ao grafo — use connect_nodes após upsert_node se necessário. (2) NÓS ÓRFÃOS = GRAFO QUEBRADO. (3) Conecte fatos/skills a user_identity. (4) Busque antes de criar para evitar duplicatas. Ações: search, upsert_node, connect_nodes, delete_node.';
     parameters = {
         type: 'object',
         properties: {
@@ -57,7 +57,7 @@ export class ManageMemoryTool implements ToolExecutor {
                         existing.content += '\n' + args.node_content;
                     }
                     this.memoryManager.addNode(existing);
-                    return { success: true, output: `✅ Nó "${args.node_id}" foi atualizado com sucesso. Lembre-se de conectar a outro nó se houver contexto!` };
+                    return { success: true, output: `✅ Nó "${args.node_id}" atualizado com sucesso.` };
                 } else {
                     // Create
                     this.memoryManager.addNode({
@@ -66,7 +66,25 @@ export class ManageMemoryTool implements ToolExecutor {
                         name: args.node_name,
                         content: args.node_content
                     });
-                    return { success: true, output: `✅ Nó "${args.node_id}" foi CRIADO com sucesso! **ATENÇÃO:** O nó está ÓRFÃO! Você DEVE usar a ação "connect_nodes" agora para ligá-lo a um nó relevante (ex: "identity" ou outro projeto).` };
+
+                    // Auto-connect to user_identity to prevent orphan nodes
+                    const userIdentity = this.memoryManager.getNode('user_identity');
+                    if (userIdentity && args.node_id !== 'user_identity' && args.node_id !== 'core_user') {
+                        const autoRelation: Record<string, string> = {
+                            preference: 'prefers',
+                            project: 'works_on',
+                            skill: 'uses',
+                            context: 'belongs_to',
+                            fact: 'has_trait',
+                            infrastructure: 'uses',
+                        };
+                        const relation = autoRelation[args.node_type as string] || 'related_to';
+                        try {
+                            this.memoryManager.addEdge('user_identity', args.node_id, relation);
+                        } catch (e) { /* ignore if already connected */ }
+                    }
+
+                    return { success: true, output: `✅ Nó "${args.node_id}" criado e conectado ao user_identity via "${autoRelation[args.node_type as string] || 'related_to'}". Use connect_nodes para conexões adicionais.` };
                 }
             }
 
