@@ -369,14 +369,14 @@
   <!-- Relation Modal -->
   <div id="relationModal" class="premium-modal">
     <div class="modal-box">
-      <h3>🔗 Criar Relação</h3>
+      <h3 id="relationModalTitle">🔗 Criar Relação</h3>
       <div id="modalNodeInfo" style="margin-bottom:10px;font-size:0.85rem;color:var(--text-main)"></div>
       <label style="font-size:0.72rem;color:var(--text-muted);display:block;margin-bottom:3px;">Tipo de relação:</label>
       <select id="modalRelation"></select>
       <div id="modalCustomRow" style="display:none;margin-top:6px;"><input id="modalCustomRelation" placeholder="Nome da relação..." style="width:100%;background:var(--bg-input);border:1px solid var(--border-color);border-radius:5px;padding:6px;color:var(--text-main);font-size:0.85rem;"></div>
       <div class="modal-actions">
         <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
-          <button class="btn-confirm" onclick="confirmModal()">Criar</button>
+          <button class="btn-confirm" id="relationModalConfirm" onclick="confirmModal()">Criar</button>
       </div>
     </div>
   </div>
@@ -610,11 +610,11 @@
         const dir = e.from_node === id ? '&rarr;' : '&larr;';
         const edgeId = 'edge_' + esc(e.from_node) + '_' + esc(e.to_node) + '_' + esc(e.relation).replace(/[^a-z0-9_]/gi, '_');
         return '<div class="edge-item" id="' + edgeId + '">' + dir +
-          ' <span class="edge-relation" id="' + edgeId + '_rel">' + esc(e.relation) + '</span> ' +
+          ' <span class="edge-relation" id="' + edgeId + '_rel" style="cursor:pointer; border-bottom: 1px dashed var(--accent); padding-bottom: 1px;" title="Clique para editar" onclick="editEdgeRelation(\'' + esc(e.from_node) + '\',\'' + esc(e.to_node) + '\',\'' + esc(e.relation) + '\',\'' + esc(id) + '\')">' + esc(e.relation) + '</span> ' +
           (dir === '&rarr;' ? '&rarr;' : '&larr;') +
           ' <a href="#" onclick="selectGraphNode(\'' + esc(otherId) + '\');return false;">' + esc(otherId) + '</a>' +
-          ' <button class="btn-edit" onclick="editEdgeRelation(\'' + esc(e.from_node) + '\',\'' + esc(e.to_node) + '\',\'' + esc(e.relation) + '\',\'' + esc(id) + '\')">✏️</button>' +
-          ' <button onclick="deleteEdge(\'' + esc(e.from_node) + '\',\'' + esc(e.to_node) + '\',\'' + esc(e.relation) + '\')">✕</button></div>';
+          ' <button class="btn-edit" title="Editar Relação" onclick="editEdgeRelation(\'' + esc(e.from_node) + '\',\'' + esc(e.to_node) + '\',\'' + esc(e.relation) + '\',\'' + esc(id) + '\')">✏️</button>' +
+          ' <button onclick="deleteEdge(\'' + esc(e.from_node) + '\',\'' + esc(e.to_node) + '\',\'' + esc(e.relation) + '\')" title="Remover relação">✕</button></div>';
       }).join('');
     }
 
@@ -768,30 +768,62 @@
 
     function getSuggestions(fromType, toType) { const m = ONTOLOGY_SUGGESTIONS[fromType] || {}; return m[toType] || ['related_to','references']; }
 
-    function showRelationModal(fromId, fromType, toId, toType) {
+    let modalOldRel = null;
+
+    function showRelationModal(fromId, fromType, toId, toType, oldRelation = null) {
       const fromName = cy.getElementById(fromId).data('name') || fromId;
       const toName = cy.getElementById(toId).data('name') || toId;
-      modalFrom = fromId; modalTo = toId;
+      modalFrom = fromId; modalTo = toId; modalOldRel = oldRelation;
       const suggestions = getSuggestions(fromType, toType);
       const sel = document.getElementById('modalRelation');
+      
+      const isCustom = oldRelation && !suggestions.includes(oldRelation) && !Object.keys(REL_LABELS).includes(oldRelation);
+      
       sel.innerHTML = suggestions.map(r => `<option value="${r}">⭐ ${r} (${REL_LABELS[r]||r})</option>`).join('') +
         '<option disabled>──────────</option>' +
         Object.keys(REL_LABELS).filter(r => !suggestions.includes(r)).map(r => `<option value="${r}">${r} (${REL_LABELS[r]||r})</option>`).join('') +
         '<option value="__custom">✏️ Customizado...</option>';
+        
+      if (isCustom) {
+        sel.value = '__custom';
+        document.getElementById('modalCustomRelation').value = oldRelation;
+        document.getElementById('modalCustomRow').style.display = 'block';
+      } else if (oldRelation) {
+        sel.value = oldRelation;
+        document.getElementById('modalCustomRow').style.display = 'none';
+      } else {
+        document.getElementById('modalCustomRow').style.display = 'none';
+      }
+
       sel.onchange = () => { document.getElementById('modalCustomRow').style.display = sel.value === '__custom' ? 'block' : 'none'; };
       document.getElementById('modalNodeInfo').innerHTML =
         `<span style="font-weight:600">${esc(fromName)}</span> <span class="type-badge" style="background:${TYPE_BG[fromType]};color:${TYPE_COLORS[fromType]}">${fromType}</span> → <span style="font-weight:600">${esc(toName)}</span> <span class="type-badge" style="background:${TYPE_BG[toType]};color:${TYPE_COLORS[toType]}">${toType}</span>`;
+      
+      const titleEl = document.getElementById('relationModalTitle');
+      if (titleEl) titleEl.textContent = oldRelation ? '✏️ Editar Relação' : '🔗 Criar Relação';
+      
+      const confirmBtn = document.getElementById('relationModalConfirm');
+      if (confirmBtn) confirmBtn.textContent = oldRelation ? 'Salvar' : 'Criar';
+      
       document.getElementById('relationModal').style.display = 'flex';
-      document.getElementById('modalCustomRow').style.display = 'none';
     }
-    function closeModal() { document.getElementById('relationModal').style.display = 'none'; modalFrom=null; modalTo=null; }
+
+    function closeModal() { document.getElementById('relationModal').style.display = 'none'; modalFrom=null; modalTo=null; modalOldRel=null; }
+
     async function confirmModal() {
       let rel = document.getElementById('modalRelation').value;
       if (rel === '__custom') { rel = inferRelation(document.getElementById('modalCustomRelation').value.trim()); if (!rel) { showToast('Digite a relação'); return; } }
       try {
-        const r = await fetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:modalFrom,to:modalTo,relation:rel}) });
+        let r;
+        if (modalOldRel && modalOldRel !== rel) {
+          r = await fetch('/api/memory/edges', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:modalFrom,to:modalTo,old_relation:modalOldRel,new_relation:rel}) });
+        } else if (!modalOldRel) {
+          r = await fetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:modalFrom,to:modalTo,relation:rel}) });
+        } else {
+          closeModal(); return; // unchanged
+        }
         const d = await r.json();
-        if (d.success) { loadGraph(); closeModal(); showToast('✅ Relação criada!'); } else showToast('❌ ' + d.error);
+        if (d.success) { loadGraph(); closeModal(); showToast(modalOldRel ? '✅ Relação atualizada!' : '✅ Relação criada!'); } else showToast('❌ ' + d.error);
       } catch(e) { showToast('❌ ' + e.message); }
     }
 
@@ -910,10 +942,36 @@
       });
 
       cy.on('mouseover','node',e=>{
-        const n = e.target;
-        n.addClass('hovered');
+        document.getElementById('cy').style.cursor = 'pointer';
+        e.target.addClass('hovered');
       });
-      cy.on('mouseout','node',e=>{ e.target.removeClass('hovered'); });
+      cy.on('mouseout','node',e=>{ 
+        document.getElementById('cy').style.cursor = '';
+        e.target.removeClass('hovered'); 
+      });
+
+      cy.on('mouseover','edge',e=>{
+        document.getElementById('cy').style.cursor = 'pointer';
+        e.target.addClass('hovered-edge');
+      });
+      cy.on('mouseout','edge',e=>{
+        document.getElementById('cy').style.cursor = '';
+        e.target.removeClass('hovered-edge');
+      });
+
+      cy.on('tap','edge', evt => {
+        const edge = evt.target;
+        const from = edge.data('source');
+        const to = edge.data('target');
+        const oldRelation = edge.data('relation');
+        
+        const fromNode = allNodes.find(n => n.id === from);
+        const toNode = allNodes.find(n => n.id === to);
+        const fromType = fromNode ? fromNode.type : 'fact';
+        const toType = toNode ? toNode.type : 'fact';
+        
+        showRelationModal(from, fromType, to, toType, oldRelation);
+      });
 
       cy.on('tap','node', async evt => {
         const node = evt.target, id = node.id(), type = node.data('type');
@@ -1114,66 +1172,11 @@
     }
 
     function editEdgeRelation(from, to, oldRelation, nodeId) {
-      // Replace the relation span with a dropdown
-      const safeId = 'edge_' + from + '_' + to + '_' + oldRelation.replace(/[^a-z0-9_]/gi, '_');
-      const relSpan = document.getElementById(safeId + '_rel');
-      if (!relSpan) return;
-
-      // Get node types for suggestions
       const fromNode = allNodes.find(n => n.id === from);
       const toNode = allNodes.find(n => n.id === to);
       const fromType = fromNode ? fromNode.type : 'fact';
       const toType = toNode ? toNode.type : 'fact';
-      const suggestions = getSuggestions(fromType, toType);
-
-      // Build select with suggestions first, then all other relations
-      const select = document.createElement('select');
-      select.className = 'edge-relation-select';
-      select.innerHTML = suggestions.map(r => '<option value="' + r + '"' + (r === oldRelation ? ' selected' : '') + '>' + r + ' (' + (REL_LABELS[r]||r) + ')</option>').join('') +
-        '<option disabled>──────────</option>' +
-        Object.keys(REL_LABELS).filter(r => !suggestions.includes(r)).map(r => '<option value="' + r + '"' + (r === oldRelation ? ' selected' : '') + '>' + r + ' (' + (REL_LABELS[r]||r) + ')</option>').join('') +
-        '<option value="__custom">✏️ Customizado...</option>';
-
-      select.onchange = async function() {
-        let newRel = select.value;
-        if (newRel === '__custom') {
-          const custom = prompt('Nome da relação:');
-          if (!custom) { select.value = oldRelation; relSpan.textContent = oldRelation; return; }
-          newRel = inferRelation(custom);
-        }
-        if (newRel === oldRelation) { relSpan.textContent = oldRelation; return; }
-
-        try {
-          const r = await fetch('/api/memory/edges', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ from, to, old_relation: oldRelation, new_relation: newRel })
-          });
-          const d = await r.json();
-          if (d.success) {
-            showToast('✅ Relação atualizada: ' + oldRelation + ' → ' + newRel);
-            loadGraph();
-            renderNodeDetails(nodeId);
-          } else {
-            showToast('❌ ' + d.error);
-            relSpan.textContent = oldRelation;
-          }
-        } catch(e) {
-          showToast('❌ ' + e.message);
-          relSpan.textContent = oldRelation;
-        }
-      };
-
-      select.onblur = function() {
-        if (select.value === oldRelation || select.value === '__custom') {
-          relSpan.textContent = oldRelation;
-        }
-      };
-
-      relSpan.textContent = '';
-      relSpan.appendChild(select);
-      select.focus();
-      select.size = 1;
+      showRelationModal(from, fromType, to, toType, oldRelation);
     }
 
     async function deleteEdge(from,to,relation) {
