@@ -928,13 +928,13 @@
       cy = cytoscape({
         container: document.getElementById('cy'), elements: els,
         style: [
-          { selector:'node', style:{ 'label':showLabels?'data(label)':'', 'text-wrap':'wrap','text-max-width':'120px','font-size':10,'font-family':'var(--font-family)','font-weight':600,'color':'#fff','text-outline-color':'rgba(10, 18, 33, 0.8)','text-outline-width':2,'text-valign':'center','text-halign':'center','width':'data(size)','height':'data(size)','background-color':'data(nodeColor)','border-width':2,'border-color':'#fff','border-opacity':0.3 } },
-          { selector:'edge', style:{ 'width':'data(edgeWidth)','line-color':'rgba(148, 163, 184, 0.45)','curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'rgba(148, 163, 184, 0.45)','label':showLabels?'data(relation)':'','font-size':9,'font-family':'var(--font-family)','font-weight':600,'color':'#fff','text-rotation':'autorotate','text-margin-y':-8,'text-outline-color':'#0a1221','text-outline-width':3,'text-outline-opacity':1,'text-opacity':showLabels?1:0 } },
+          { selector:'node', style:{ 'label':showLabels?'data(label)':'', 'text-wrap':'wrap','text-max-width':'120px','font-size':10,'font-family':'Inter, system-ui, sans-serif','font-weight':600,'color':'#fff','text-outline-color':'rgba(10, 18, 33, 0.8)','text-outline-width':2,'text-valign':'center','text-halign':'center','width':'data(size)','height':'data(size)','background-color':'data(nodeColor)','border-width':2,'border-color':'#fff','border-opacity':0.3 } },
+          { selector:'edge', style:{ 'width':'data(edgeWidth)','line-color':'rgba(148, 163, 184, 0.45)','curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'rgba(148, 163, 184, 0.45)','label':showLabels?'data(relation)':'','font-size':9,'font-family':'Inter, system-ui, sans-serif','font-weight':600,'color':'#fff','text-rotation':'autorotate','text-margin-y':-8,'text-outline-color':'#0a1221','text-outline-width':3,'text-outline-opacity':1,'text-opacity':showLabels?1:0 } },
           ...typeStyles,
-          { selector:'.faded', style:{'opacity':0.1,'filter':'grayscale(1)'} },
-          { selector:'.highlighted', style:{'border-width':3,'border-color':'var(--accent)','border-opacity':1,'opacity':1,'z-index':999} },
-          { selector:'.connecting', style:{'border-width':3,'border-color':'var(--accent)','border-opacity':0.8,'opacity':1} },
-          { selector:'.connect-source', style:{'border-width':4,'border-color':'var(--accent)','border-opacity':1,'opacity':1,'background-color':'var(--accent)'} },
+          { selector:'.faded', style:{'opacity':0.1} },
+          { selector:'.highlighted', style:{'border-width':3,'border-color':'#38bdf8','border-opacity':1,'opacity':1,'z-index':999} },
+          { selector:'.connecting', style:{'border-width':3,'border-color':'#38bdf8','border-opacity':0.8,'opacity':1} },
+          { selector:'.connect-source', style:{'border-width':4,'border-color':'#38bdf8','border-opacity':1,'opacity':1,'background-color':'#38bdf8'} },
           { selector:'.hovered', style:{'border-width':3,'border-color':'#fff','border-opacity':0.8} }
         ],
         layout: { name:'cose', animate:true, animationDuration:500, nodeRepulsion:8000, idealEdgeLength:100, gravity:0.3 },
