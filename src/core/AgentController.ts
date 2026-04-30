@@ -28,6 +28,8 @@ import { WeatherTool } from '../tools/weather';
 import { ToolRegistry } from './ToolRegistry';
 import { SessionManager } from '../session/SessionManager';
 import { SessionContext } from '../session/SessionContext';
+import { SchedulerService } from '../services/SchedulerService';
+import { ScheduleTool } from '../tools/schedule_tool';
 import { SessionLearner } from '../session/SessionLearner';
 import { MemoryGovernor } from '../memory/MemoryGovernor';
 
@@ -80,6 +82,7 @@ export class AgentController {
     private sessionManager: SessionManager;
     private sessionLearner: SessionLearner;
     private memoryGovernor: MemoryGovernor;
+    private scheduler: SchedulerService;
 
     constructor(config: NewClawConfig) {
         this.config = config;
@@ -138,6 +141,9 @@ export class AgentController {
         this.sessionLearner = new SessionLearner(this.sessionManager, this.memory);
 
         // Inicializar MemoryGovernor (decay, conflitos, GC)
+        // Inicializar Scheduler
+        this.scheduler = new SchedulerService('./data/newclaw.db', (this.memory as any).db || (this.memory as any)._db);
+
         this.memoryGovernor = new MemoryGovernor(this.memory, {
             decayFactor: 0.98,
             minConfidence: 0.3,
@@ -149,6 +155,38 @@ export class AgentController {
             protectedNodes: ['core_user', 'user_identity'],
             archiveEnabled: true
         });
+
+        // Configurar scheduler trigger — envia mensagem processada pelo AgentLoop
+        this.scheduler.setTriggerHandler(async (task) => {
+            try {
+                const chatId = task.chat_id;
+                let prompt = '';
+                if (task.action_type === 'weather') {
+                    const params = JSON.parse(task.action_params || '{}');
+                    const city = params.city || 'Cornélio Procópio';
+                    prompt = `[AGENDADO] Envie a previsão do tempo para ${city}. Seja conciso.`;
+                } else if (task.action_type === 'crypto') {
+                    prompt = `[AGENDADO] Envie cotações atuais de criptomoedas (BTC e ETH). Preço em USD + variação 24h. Seja conciso.`;
+                } else {
+                    const params = JSON.parse(task.action_params || '{}');
+                    prompt = `[AGENDADO] ${params.message || task.label}`;
+                }
+                console.log(`[Scheduler] Triggering task #${task.id}: ${task.label} → chat ${chatId}`);
+                const result = await this.agentLoop.process(chatId, prompt);
+                // Send result via Telegram bot
+                if (this.inputHandler && (this.inputHandler as any).bot) {
+                    const bot = (this.inputHandler as any).bot;
+                    await bot.api.sendMessage(chatId, result, { parse_mode: 'Markdown' }).catch(() => {
+                        bot.api.sendMessage(chatId, result);
+                    });
+                }
+            } catch (e) {
+                console.error(`[Scheduler] Failed to send scheduled message:`, e);
+            }
+        });
+
+        // Iniciar scheduler after bot is ready
+        setTimeout(() => this.scheduler.startAll(), 5000);
 
         // Inicializar handlers
         this.inputHandler = new TelegramInputHandler(
@@ -243,6 +281,7 @@ export class AgentController {
         ToolRegistry.register(new SshExecTool());
         ToolRegistry.register(new CryptoAnalysisTool());
         ToolRegistry.register(new WeatherTool());
+        ToolRegistry.register(new ScheduleTool(this.scheduler));
 
         // Registrar tools habilitadas no AgentLoop
         for (const tool of ToolRegistry.getEnabled()) {
