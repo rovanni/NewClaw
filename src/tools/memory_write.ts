@@ -419,4 +419,56 @@ export class MemoryWriteTool implements ToolExecutor {
         for (const w of wordsA) { if (wordsB.has(w)) intersection++; }
         return intersection / Math.max(wordsA.size, wordsB.size);
     }
+
+    /**
+     * Smart relation inference based on node type + content analysis.
+     * Instead of mapping fact→has_trait always, it analyzes:
+     * - Projects created by user → 'created'
+     * - Infrastructure/services → 'uses'  
+     * - Facts about preferences → 'prefers'
+     * - Facts about goals → 'has_goal'
+     * - Facts about traits → 'has_trait'
+     * - Context/knowledge → 'belongs_to'
+     */
+    private inferRelation(type: string, name: string, content: string): string {
+        const text = ((name || '') + ' ' + (content || '')).toLowerCase();
+        
+        // Ontology: identity→{project,fact} uses 'created' for authorship
+        // Ontology: identity→{skill,context,infrastructure} uses 'uses'
+        // Ontology: identity→{preference} uses 'prefers'
+        // Ontology: identity→{project} uses 'works_on'
+        // Ontology: identity→{fact,preference} uses 'has_trait'
+        // Ontology: identity→{project,fact} uses 'has_goal'
+        
+        switch (type) {
+            case 'preference':
+                return 'prefers';
+            case 'project':
+                // Projects the user created → 'created', projects they work on → 'works_on'
+                if (text.match(/criei|criou|desenvolvi|autor|meu projeto|minha/i)) return 'created';
+                return 'works_on';
+            case 'skill':
+                return 'uses';
+            case 'infrastructure':
+                return 'uses';
+            case 'context':
+                return 'belongs_to';
+            case 'fact':
+                // Smart: analyze what kind of fact
+                if (text.match(/criei|criou|desenvolvi|autor|built|made|fiz|construí/i)) return 'created';
+                if (text.match(/prefiro|gosto|adoro|amo|favorit/i)) return 'prefers';
+                if (text.match(/objetivo|meta|goal|plano|planejo/i)) return 'has_goal';
+                if (text.match(/traço|característica|habilidade|skill|trait/i)) return 'has_trait';
+                // Default for facts: has_trait is valid (identity→fact)
+                return 'has_trait';
+            case 'trait':
+                return 'has_trait';
+            case 'rule':
+            case 'strategy':
+            case 'knowledge':
+                return 'belongs_to';
+            default:
+                return 'related_to';
+        }
+    }
 }

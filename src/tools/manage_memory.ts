@@ -26,15 +26,42 @@ export class ManageMemoryTool implements ToolExecutor {
         this.memoryManager = memoryManager;
     }
 
-    // Relation mapping for auto-connect
-    private static readonly AUTO_RELATIONS: Record<string, string> = {
-        preference: 'prefers',
-        project: 'works_on',
-        skill: 'uses',
-        context: 'belongs_to',
-        fact: 'has_trait',
-        infrastructure: 'uses',
-    };
+    /**
+     * Smart relation inference based on node type + content analysis.
+     * Uses the ontology (identity→project='created', identity→fact='has_trait', etc.)
+     * and content keywords to pick the best relation.
+     */
+    private inferRelation(nodeType: string, nodeName: string, nodeContent: string): string {
+        const text = ((nodeName || '') + ' ' + (nodeContent || '')).toLowerCase();
+
+        switch (nodeType) {
+            case 'preference':
+                return 'prefers';
+            case 'project':
+                if (text.match(/criei|criou|desenvolvi|autor|meu projeto|minha/i)) return 'created';
+                return 'works_on';
+            case 'skill':
+                return 'uses';
+            case 'infrastructure':
+                return 'uses';
+            case 'context':
+                return 'belongs_to';
+            case 'fact':
+                if (text.match(/criei|criou|desenvolvi|autor|built|made|fiz|construí/i)) return 'created';
+                if (text.match(/prefiro|gosto|adoro|amo|favorit/i)) return 'prefers';
+                if (text.match(/objetivo|meta|goal|plano|planejo/i)) return 'has_goal';
+                if (text.match(/traço|característica|habilidade|skill|trait/i)) return 'has_trait';
+                return 'has_trait';
+            case 'trait':
+                return 'has_trait';
+            case 'rule':
+            case 'strategy':
+            case 'knowledge':
+                return 'belongs_to';
+            default:
+                return 'related_to';
+        }
+    }
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
         try {
@@ -72,19 +99,19 @@ export class ManageMemoryTool implements ToolExecutor {
                         content: args.node_content
                     });
 
-                    // Auto-connect to user_identity to prevent orphan nodes
+                    // Auto-connect to user_identity with smart relation
                     let connectedRelation = 'related_to';
                     if (args.node_id !== 'user_identity' && args.node_id !== 'core_user') {
                         const userIdentity = this.memoryManager.getNode('user_identity');
                         if (userIdentity) {
-                            connectedRelation = ManageMemoryTool.AUTO_RELATIONS[args.node_type as string] || 'related_to';
+                            connectedRelation = this.inferRelation(args.node_type, args.node_name, args.node_content);
                             try {
                                 this.memoryManager.addEdge('user_identity', args.node_id, connectedRelation);
                             } catch (e) { /* ignore if already connected */ }
                         }
                     }
 
-                    return { success: true, output: `✅ Nó "${args.node_id}" criado e auto-conectado ao user_identity via "${connectedRelation}". Use connect_nodes para conexões adicionais.` };
+                    return { success: true, output: `✅ Nó "${args.node_id}" criado e conectado ao user_identity via "${connectedRelation}". Use connect_nodes para conexões adicionais.` };
                 }
             }
 
