@@ -834,7 +834,17 @@ export class MemoryManager {
         const toNode = this.getNode(to);
         if (fromNode && toNode) {
             if (!this.validateRelation(fromNode.type, relation, toNode.type)) {
-                throw new Error(`Invalid relation: ${fromNode.type} --${relation}--> ${toNode.type}. Check allowed types in ontology.`);
+                // Fallback: try 'related_to' which accepts all types
+                if (this.validateRelation(fromNode.type, 'related_to', toNode.type)) {
+                    console.warn(`[MemoryManager] Relation "${relation}" invalid for ${fromNode.type}->${toNode.type}. Falling back to "related_to".`);
+                    relation = 'related_to';
+                } else if (this.validateRelation(fromNode.type, 'has_trait', toNode.type)) {
+                    console.warn(`[MemoryManager] Relation "${relation}" invalid for ${fromNode.type}->${toNode.type}. Falling back to "has_trait".`);
+                    relation = 'has_trait';
+                } else {
+                    console.warn(`[MemoryManager] No valid relation for ${fromNode.type}->${toNode.type}. Using "related_to" as last resort.`);
+                    relation = 'related_to';
+                }
             }
         }
         this.db.prepare(`
