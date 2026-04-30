@@ -434,7 +434,22 @@
     const TYPE_BG = { identity:'rgba(168,85,247,0.15)', preference:'rgba(251,191,36,0.15)', project:'rgba(96,165,250,0.15)', context:'rgba(74,222,128,0.15)', fact:'rgba(248,113,113,0.15)', skill:'rgba(56,189,248,0.15)' };
     const TYPE_LABELS = { identity:'Identidade', preference:'Preferência', project:'Projeto', context:'Contexto', fact:'Fato', skill:'Habilidade' };
     const ONTOLOGY_GROUPS = { 'Pertencimento':['belongs_to','owns','prefers'], 'Trabalho':['works_on','uses','depends_on'], 'Estrutura':['contains','created','runs_on'], 'Dados':['reads','writes'], 'Comum':['references','related_to'] };
-    const REL_LABELS = { belongs_to:'pertence a',owns:'possui',prefers:'prefere',works_on:'trabalha em',uses:'usa',runs_on:'executa em',references:'referencia',related_to:'relacionado',depends_on:'depende de',contains:'contém',created:'criou',preferred_by:'preferido por',has_contributor:'tem contribuidor',hosts:'hospeda',has_member:'tem membro',owned_by:'possuído por',used_by:'usado por',required_by:'exigido por',contained_in:'contido em',created_by:'criado por',read_by:'lido por',written_by:'escrito por' };
+    const REL_LABELS = { belongs_to:'pertence a',owns:'possui',prefers:'prefere',works_on:'trabalha em',uses:'usa',runs_on:'executa em',references:'referencia',related_to:'relacionado',depends_on:'depende de',contains:'contém',created:'criou',preferred_by:'preferido por',has_contributor:'tem contribuidor',hosts:'hospeda',has_member:'tem membro',owned_by:'possuído por',used_by:'usado por',required_by:'exigido por',contained_in:'contido em',created_by:'criado por',read_by:'lido por',written_by:'escrito por',has_goal:'tem objetivo' };
+
+    function inferRelation(rel) {
+      if (!rel) return rel;
+      const lower = rel.toLowerCase().trim();
+      const INFERENCE_MAP = {
+        'criei': 'created',
+        'desenvolvi': 'created',
+        'prefiro': 'prefers',
+        'gosto': 'prefers',
+        'objetivo': 'has_goal',
+        'meta': 'has_goal',
+        'infrastructure': 'uses'
+      };
+      return INFERENCE_MAP[lower] || rel.trim();
+    }
     const ONTOLOGY_SUGGESTIONS = {
       identity:{ identity:['related_to','belongs_to'], preference:['prefers','owns'], project:['works_on','owns'], skill:['uses','owns'], context:['uses','owns'], fact:['references','created'] },
       preference:{ identity:['belongs_to'], project:['related_to'], skill:['related_to'] },
@@ -728,7 +743,7 @@
       const from = document.getElementById('edgeFrom').value;
       const to = document.getElementById('edgeTo').value;
       const sel = document.getElementById('edgeRelation');
-      let relation = sel.value === 'custom' ? document.getElementById('customRelation').value.trim() : sel.value;
+      let relation = sel.value === 'custom' ? inferRelation(document.getElementById('customRelation').value.trim()) : sel.value;
       if (!from || !to) { showToast('Selecione os nós De e Para'); return; }
       if (!relation) { showToast('Selecione o tipo de relação'); return; }
       try {
@@ -772,7 +787,7 @@
     function closeModal() { document.getElementById('relationModal').style.display = 'none'; modalFrom=null; modalTo=null; }
     async function confirmModal() {
       let rel = document.getElementById('modalRelation').value;
-      if (rel === '__custom') { rel = document.getElementById('modalCustomRelation').value.trim(); if (!rel) { showToast('Digite a relação'); return; } }
+      if (rel === '__custom') { rel = inferRelation(document.getElementById('modalCustomRelation').value.trim()); if (!rel) { showToast('Digite a relação'); return; } }
       try {
         const r = await fetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:modalFrom,to:modalTo,relation:rel}) });
         const d = await r.json();
@@ -993,7 +1008,7 @@
       const to = document.getElementById('detailEdgeTo')?.value;
       const sel = document.getElementById('detailEdgeRelation');
       let relation = sel?.value === 'custom'
-        ? document.getElementById('detailEdgeRelationCustom')?.value.trim()
+        ? inferRelation(document.getElementById('detailEdgeRelationCustom')?.value.trim())
         : sel?.value;
       if (!to) { showToast('Selecione o no de destino'); return; }
       if (!relation) { showToast('Selecione o tipo de relacao'); return; }
@@ -1022,7 +1037,7 @@
       const relationSel = document.getElementById('relatedNodeRelation');
       const content = document.getElementById('relatedNodeContent')?.value.trim() || '';
       const relation = relationSel?.value === 'custom'
-        ? document.getElementById('relatedNodeRelationCustom')?.value.trim()
+        ? inferRelation(document.getElementById('relatedNodeRelationCustom')?.value.trim())
         : relationSel?.value;
       if (!name) { showToast('Digite o nome do novo no'); return; }
       if (!relation) { showToast('Selecione a relacao'); return; }
@@ -1123,8 +1138,8 @@
         let newRel = select.value;
         if (newRel === '__custom') {
           const custom = prompt('Nome da relação:');
-          if (!custom) { select.value = oldRelation; return; }
-          newRel = custom;
+          if (!custom) { select.value = oldRelation; relSpan.textContent = oldRelation; return; }
+          newRel = inferRelation(custom);
         }
         if (newRel === oldRelation) { relSpan.textContent = oldRelation; return; }
 
@@ -1138,13 +1153,19 @@
           if (d.success) {
             showToast('✅ Relação atualizada: ' + oldRelation + ' → ' + newRel);
             loadGraph();
-            selectNode(nodeId);
+            renderNodeDetails(nodeId);
           } else {
             showToast('❌ ' + d.error);
             relSpan.textContent = oldRelation;
           }
         } catch(e) {
           showToast('❌ ' + e.message);
+          relSpan.textContent = oldRelation;
+        }
+      };
+
+      select.onblur = function() {
+        if (select.value === oldRelation || select.value === '__custom') {
           relSpan.textContent = oldRelation;
         }
       };
