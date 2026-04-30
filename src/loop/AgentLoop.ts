@@ -446,7 +446,7 @@ ${userText}`;
                         (tool as any).setContext((this as any).currentChatId || '', (this as any).currentBotToken || '');
                     }
                     const result = await tool.execute(atomicData.action.input || {});
-                    console.log(`[${this.ts()}] [ATOMIC-TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`);
+                    console.log(`[${this.ts()}] [ATOMIC-TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
                     
                     usedToolInputs.add(inputKey);
                     cycleHistory.push({ tool: toolName, input: toolInput, status: result.success ? 'success' : 'error' });
