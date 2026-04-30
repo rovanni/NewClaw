@@ -7,6 +7,8 @@
  * Fluxo: LLM classifica → fallback determinístico → default.
  */
 
+import { ProviderFactory } from '../core/ProviderFactory';
+
 // Perfil de modelos por categoria
 export interface ModelProfile {
     id: string;           // Identificador único
