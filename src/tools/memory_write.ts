@@ -146,20 +146,8 @@ export class MemoryWriteTool implements ToolExecutor {
         if (type !== 'identity' && id !== 'core_user' && id !== 'user_identity') {
             const userIdentity = this.memoryManager.getNode('user_identity');
             if (userIdentity) {
-                // Determine relation based on type
-                const autoRelation: Record<string, string> = {
-                    preference: 'prefers',
-                    project: 'works_on',
-                    skill: 'uses',
-                    context: 'belongs_to',
-                    fact: 'has_trait',
-                    infrastructure: 'uses',
-                    trait: 'has_trait',
-                    rule: 'belongs_to',
-                    strategy: 'belongs_to',
-                    knowledge: 'belongs_to',
-                };
-                const relation = autoRelation[type] || 'related_to';
+                // Smart relation: choose best relation based on type + content
+                const relation = this.inferRelation(type, name, content);
                 try {
                     this.memoryManager.addEdge('user_identity', id, relation);
                 } catch (e) { /* ignore if already connected */ }
