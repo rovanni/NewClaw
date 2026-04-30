@@ -95,9 +95,27 @@ export class MemoryWriteTool implements ToolExecutor {
     // ── CREATE ────────────────────────────────────────────────
 
     private async create(args: Record<string, any>): Promise<ToolResult> {
-        const { id, type, name, content, domain } = args;
-        if (!id || !type || !name || !content) {
-            return { success: false, output: '', error: 'create exige: id, type, name, content.' };
+        // Auto-fill missing fields to prevent LLM errors
+        let { id, type, name, content, domain } = args;
+        
+        if (!content && args.action === 'create') {
+            return { success: false, output: '', error: 'create exige pelo menos "content" para criar um nó.' };
+        }
+        
+        // Auto-generate id if missing
+        if (!id) {
+            const slug = (name || content || 'node').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30);
+            id = `${slug}_${Date.now()}`;
+        }
+        
+        // Auto-assign type if missing
+        if (!type) {
+            type = 'fact';
+        }
+        
+        // Auto-assign name if missing
+        if (!name) {
+            name = (content as string).slice(0, 50);
         }
 
         const existing = this.memoryManager.getNode(id);
@@ -153,7 +171,7 @@ export class MemoryWriteTool implements ToolExecutor {
             this.getDb()?.prepare('UPDATE memory_nodes SET domain = ? WHERE id = ?').run(domain, id);
         }
 
-        return { success: true, output: `✅ Nó "${id}" criado e conectado ao core_user (se identity). Use action=connect para outras ligações.` };
+        return { success: true, output: `✅ Nó "${id}" (${type}) criado e auto-conectado ao grafo. Use action=connect para ligações adicionais.` };
     }
 
     // ── UPDATE ────────────────────────────────────────────────
