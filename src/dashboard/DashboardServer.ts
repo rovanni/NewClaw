@@ -1073,6 +1073,34 @@ export class DashboardServer {
             }
         });
 
+
+        // Update edge relation
+        this.app.put('/api/memory/edges', (req: Request, res: Response) => {
+            if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+            try {
+                const mm = this.memoryManager as any;
+                const db = mm.db || mm._db;
+                if (!db) return res.status(500).json({ error: 'DB not available' });
+
+                const { from, to, old_relation, new_relation } = req.body;
+                if (!from || !to || !old_relation || !new_relation) {
+                    return res.status(400).json({ error: 'from, to, old_relation, new_relation required' });
+                }
+
+                const result = db.prepare('UPDATE memory_edges SET relation = ? WHERE from_node = ? AND to_node = ? AND relation = ?')
+                    .run(new_relation, from, to, old_relation);
+
+                if (result.changes === 0) {
+                    return res.status(404).json({ error: 'Edge not found' });
+                }
+
+                console.log(`[MEMORY] Edge updated: ${from} -${old_relation}-> ${to} => ${from} -${new_relation}-> ${to}`);
+                res.json({ success: true, changes: result.changes });
+            } catch (err: any) {
+                res.status(500).json({ error: err.message });
+            }
+        });
+
         // Manual curation endpoint
         this.app.post('/api/memory/curate', async (_req: Request, res: Response) => {
             if (!this.memoryCurator) return res.status(500).json({ error: 'Curator not available' });

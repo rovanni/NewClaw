@@ -121,6 +121,9 @@
       display: flex; align-items: center; justify-content: center; font-size: 0.7rem; transition: all 0.2s;
     }
     .edge-item button:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
+    .edge-item .btn-edit { background: transparent; border: 1px solid var(--border-color); color: var(--text-muted); font-size: 0.65rem; padding: 2px 5px; border-radius: 3px; cursor: pointer; margin-right: 3px; }
+    .edge-item .btn-edit:hover { background: var(--accent-bg); color: var(--accent); border-color: var(--accent); }
+    .edge-relation-select { background: var(--bg-input); color: var(--text-main); border: 1px solid var(--accent); border-radius: 4px; font-size: 0.72rem; padding: 2px 4px; }
 
     /* ── Main Layout ── */
     #main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
@@ -590,10 +593,12 @@
       return edges.map(e => {
         const otherId = e.from_node === id ? e.to_node : e.from_node;
         const dir = e.from_node === id ? '&rarr;' : '&larr;';
-        return '<div class="edge-item">' + dir +
-          ' <span class="edge-relation">' + esc(e.relation) + '</span> ' +
+        const edgeId = 'edge_' + esc(e.from_node) + '_' + esc(e.to_node) + '_' + esc(e.relation).replace(/[^a-z0-9_]/gi, '_');
+        return '<div class="edge-item" id="' + edgeId + '">' + dir +
+          ' <span class="edge-relation" id="' + edgeId + '_rel">' + esc(e.relation) + '</span> ' +
           (dir === '&rarr;' ? '&rarr;' : '&larr;') +
           ' <a href="#" onclick="selectGraphNode(\'' + esc(otherId) + '\');return false;">' + esc(otherId) + '</a>' +
+          ' <button class="btn-edit" onclick="editEdgeRelation(\'' + esc(e.from_node) + '\',\'' + esc(e.to_node) + '\',\'' + esc(e.relation) + '\',\'' + esc(id) + '\')">✏️</button>' +
           ' <button onclick="deleteEdge(\'' + esc(e.from_node) + '\',\'' + esc(e.to_node) + '\',\'' + esc(e.relation) + '\')">✕</button></div>';
       }).join('');
     }
@@ -1091,6 +1096,63 @@
       } catch (e) {
         showToast('Erro ao criar nó: ' + e.message);
       }
+    }
+
+    function editEdgeRelation(from, to, oldRelation, nodeId) {
+      // Replace the relation span with a dropdown
+      const safeId = 'edge_' + from + '_' + to + '_' + oldRelation.replace(/[^a-z0-9_]/gi, '_');
+      const relSpan = document.getElementById(safeId + '_rel');
+      if (!relSpan) return;
+
+      // Get node types for suggestions
+      const fromNode = allNodes.find(n => n.id === from);
+      const toNode = allNodes.find(n => n.id === to);
+      const fromType = fromNode ? fromNode.type : 'fact';
+      const toType = toNode ? toNode.type : 'fact';
+      const suggestions = getSuggestions(fromType, toType);
+
+      // Build select with suggestions first, then all other relations
+      const select = document.createElement('select');
+      select.className = 'edge-relation-select';
+      select.innerHTML = suggestions.map(r => '<option value="' + r + '"' + (r === oldRelation ? ' selected' : '') + '>' + r + ' (' + (REL_LABELS[r]||r) + ')</option>').join('') +
+        '<option disabled>──────────</option>' +
+        Object.keys(REL_LABELS).filter(r => !suggestions.includes(r)).map(r => '<option value="' + r + '"' + (r === oldRelation ? ' selected' : '') + '>' + r + ' (' + (REL_LABELS[r]||r) + ')</option>').join('') +
+        '<option value="__custom">✏️ Customizado...</option>';
+
+      select.onchange = async function() {
+        let newRel = select.value;
+        if (newRel === '__custom') {
+          const custom = prompt('Nome da relação:');
+          if (!custom) { select.value = oldRelation; return; }
+          newRel = custom;
+        }
+        if (newRel === oldRelation) { relSpan.textContent = oldRelation; return; }
+
+        try {
+          const r = await fetch('/api/memory/edges', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ from, to, old_relation: oldRelation, new_relation: newRel })
+          });
+          const d = await r.json();
+          if (d.success) {
+            showToast('✅ Relação atualizada: ' + oldRelation + ' → ' + newRel);
+            loadGraph();
+            selectNode(nodeId);
+          } else {
+            showToast('❌ ' + d.error);
+            relSpan.textContent = oldRelation;
+          }
+        } catch(e) {
+          showToast('❌ ' + e.message);
+          relSpan.textContent = oldRelation;
+        }
+      };
+
+      relSpan.textContent = '';
+      relSpan.appendChild(select);
+      select.focus();
+      select.size = 1;
     }
 
     async function deleteEdge(from,to,relation) {
