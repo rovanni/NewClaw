@@ -8,6 +8,14 @@
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 
+interface CacheEntry {
+    data: any;
+    timestamp: number;
+}
+
+const cache = new Map<string, CacheEntry>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 export class CryptoAnalysisTool implements ToolExecutor {
     name = 'crypto_analysis';
     description = 'Ferramenta definitiva para buscar DADOS REAIS e PREÇOS de QUALQUER criptomoeda (mesmo pequenas ou fora do top 100). Traz preço atual, market cap, variações e análise de mercado (sangrando, gainers, losers). USE SEMPRE esta ferramenta no lugar de web_search para pesquisar o valor ou dados de um token crypto!';
@@ -52,16 +60,26 @@ export class CryptoAnalysisTool implements ToolExecutor {
 
     private async fetchMarkets(perPage: number = 100): Promise<any[]> {
         const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${perPage}&page=1&sparkline=false&price_change_percentage=1h%2C24h%2C7d`;
-        const response = await fetch(url);
+        
+        const cached = cache.get(url);
+        if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+            return cached.data;
+        }
+
+        let response = await fetch(url);
         if (!response.ok) {
+            if (response.status === 429) throw new Error('CoinGecko API limit reached (429)');
             const fallbackUrl = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${perPage}&page=1`;
-            const fallbackResponse = await fetch(fallbackUrl);
-            if (!fallbackResponse.ok) {
+            response = await fetch(fallbackUrl);
+            if (!response.ok) {
+                if (response.status === 429) throw new Error('CoinGecko API limit reached (429)');
                 throw new Error(`CoinGecko API error: ${response.status}`);
             }
-            return await fallbackResponse.json() as any[];
         }
-        return await response.json() as any[];
+        
+        const data = await response.json() as any[];
+        cache.set(url, { data, timestamp: Date.now() });
+        return data;
     }
 
     private async analiseSangrando(limit: number): Promise<ToolResult> {
@@ -176,11 +194,20 @@ export class CryptoAnalysisTool implements ToolExecutor {
         const coinId = coinMap[symbol] || symbol;
 
         const url = `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false`;
-        const response = await fetch(url);
-        if (!response.ok) {
-            return { success: false, output: '', error: `Moeda "${symbol}" não encontrada` };
+        
+        let data: any;
+        const cached = cache.get(url);
+        if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+            data = cached.data;
+        } else {
+            const response = await fetch(url);
+            if (!response.ok) {
+                if (response.status === 429) return { success: false, output: '', error: 'CoinGecko API limit reached (429)' };
+                return { success: false, output: '', error: `Moeda "${symbol}" não encontrada` };
+            }
+            data = await response.json() as any;
+            cache.set(url, { data, timestamp: Date.now() });
         }
-        const data = await response.json() as any;
 
         const md = data.market_data;
         let report = `🔍 **${data.name} (${data.symbol?.toUpperCase()})**\n\n`;

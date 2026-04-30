@@ -123,7 +123,7 @@ export class WebSearchTool implements ToolExecutor {
     private async searchRound(query: string, maxResults: number): Promise<SearchRoundResult> {
         const notes: string[] = [];
         const providers = await Promise.allSettled([
-            this.bingW3m(query, maxResults),
+            this.bingNewsRss(query, maxResults),
             this.duckDuckGo(query, maxResults),
             this.wikipediaSearch(query, maxResults),
             this.googleSearch(query, maxResults),
@@ -143,33 +143,31 @@ export class WebSearchTool implements ToolExecutor {
     }
 
 
-    private async bingW3m(query: string, maxResults: number): Promise<SearchCandidate[]> {
+    private async bingNewsRss(query: string, maxResults: number): Promise<SearchCandidate[]> {
         try {
-            const searchUrl = "https://www.bing.com/search?q=" + encodeURIComponent(query);
-            const { stdout } = await execFileAsync("w3m", ["-dump", searchUrl], { timeout: 15000, maxBuffer: 1024 * 1024 });
-            const text = (stdout || "").replace(/\r/g, "");
+            const searchUrl = "https://www.bing.com/news/search?q=" + encodeURIComponent(query) + "&format=rss";
+            const resp = await fetch(searchUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+            if (!resp.ok) return [];
+            
+            const xml = await resp.text();
             const results: SearchCandidate[] = [];
-            const lines = text.split("\n");
-            let i = 0;
-            while (i < lines.length && results.length < maxResults) {
-                const line = lines[i].trim();
-                const numMatch = line.match(/^\s*\d+\.\s+(.+)/);
-                if (numMatch && numMatch[1].length > 15) {
-                    const title = numMatch[1].trim();
-                    let url = "";
-                    for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
-                        const urlMatch = lines[j].match(/https?:\/\/[^\s]+/);
-                        if (urlMatch) {
-                            url = urlMatch[0].replace(/[.,;:)]+$/, "");
-                            break;
-                        }
-                    }
-                    if (url && title) {
-                        const snippet = lines.slice(i + 1, i + 4).map((l: string) => l.trim()).filter((l: string) => l.length > 20).join(" ").substring(0, 200);
-                        results.push({ title, url, snippet, source: "Bing", score: 0.9 });
-                    }
+            const items = xml.split('<item>');
+            
+            for (let i = 1; i < items.length && results.length < maxResults; i++) {
+                const item = items[i];
+                const titleMatch = item.match(/<title>(.*?)<\/title>/i);
+                const linkMatch = item.match(/<link>(.*?)<\/link>/i);
+                const descMatch = item.match(/<description>(.*?)<\/description>/i);
+                
+                if (titleMatch && linkMatch) {
+                    results.push({
+                        title: this.cleanText(titleMatch[1]),
+                        url: linkMatch[1],
+                        snippet: descMatch ? this.cleanText(descMatch[1]) : '',
+                        source: 'Bing News',
+                        score: 1.0
+                    });
                 }
-                i++;
             }
             return results;
         } catch {
