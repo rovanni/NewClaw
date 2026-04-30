@@ -492,7 +492,10 @@ export class MemoryManager {
         ];
 
         for (const node of nodes) {
-            this.addNode(node);
+            const existing = this.db.prepare('SELECT 1 FROM memory_nodes WHERE id = ?').get(node.id);
+            if (!existing) {
+                this.addNode(node);
+            }
         }
 
         const existingUserPref = this.getNode('pref_workspace');
@@ -527,7 +530,10 @@ export class MemoryManager {
 
         for (const [from, to, relation] of baseEdges) {
             try {
-                this.addEdge(from, to, relation);
+                const hasEdge = this.db.prepare('SELECT 1 FROM memory_edges WHERE from_node = ? AND to_node = ? LIMIT 1').get(from, to);
+                if (!hasEdge) {
+                    this.addEdge(from, to, relation);
+                }
             } catch {
                 // Keep bootstrap resilient across ontology changes.
             }
