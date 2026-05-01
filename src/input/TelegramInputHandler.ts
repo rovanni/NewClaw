@@ -12,6 +12,7 @@ import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { createLogger } from '../shared/AppLogger';
+import { mdToTelegramHTML, safeReply, safeSendMessage } from '../shared/TelegramFormatter';
 const log = createLogger('Telegraminputhandler');
 
 export interface TelegramInputConfig {
@@ -161,7 +162,7 @@ export class TelegramInputHandler {
         // Check onboarding first
         if (this.onboardingService && this.onboardingService.isOnboardingRequired(userId)) {
             const res = await this.onboardingService.handle(userId, text);
-            await ctx.reply(res.response, { parse_mode: 'Markdown' });
+            await safeReply(ctx, res.response);
             return;
         }
         if (false) {
@@ -170,18 +171,18 @@ export class TelegramInputHandler {
                 // Start onboarding
                 const first = this.onboardingService.startOnboarding(userId);
                 if (first) {
-                    await ctx.reply(first.question, { parse_mode: 'Markdown' });
+                    await safeReply(ctx, first.question);
                     return;
                 }
             } else {
                 // Process answer
                 const result = await this.onboardingService.processAnswer(userId, text);
                 if (result?.completed) {
-                    await ctx.reply(result.welcomeMessage!, { parse_mode: 'Markdown' });
+                    await safeReply(ctx, result.welcomeMessage!);
                     return;
                 }
                 if (result?.question) {
-                    await ctx.reply(result.question, { parse_mode: 'Markdown' });
+                    await safeReply(ctx, result.question);
                     return;
                 }
             }
@@ -288,7 +289,7 @@ export class TelegramInputHandler {
                 '`/skill_reject <id_curto>`'
             ];
 
-            await ctx.reply(lines.join('\n\n'), { parse_mode: 'Markdown' });
+            await safeReply(ctx, lines.join('\n\n'));
         } catch (error: any) {
             await ctx.reply(`⚠️ Erro ao listar skills: ${error.message}`);
         }

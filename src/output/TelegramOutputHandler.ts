@@ -8,6 +8,7 @@ import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { createLogger } from '../shared/AppLogger';
+import { mdToTelegramHTML } from '../shared/TelegramFormatter';
 const log = createLogger('Telegramoutputhandler');
 
 export interface OutputConfig {
@@ -48,7 +49,11 @@ export class TelegramOutputHandler {
 
     private async sendText(ctx: Context, content: string): Promise<void> {
         try {
-            await ctx.reply(content, { parse_mode: 'Markdown' });
+        try {
+                await ctx.reply(mdToTelegramHTML(content), { parse_mode: 'HTML' });
+            } catch {
+                await ctx.reply(content);
+            }
         } catch {
             await ctx.reply(content);
         }
@@ -58,7 +63,11 @@ export class TelegramOutputHandler {
         const chunks = this.splitIntoChunks(content, this.config.maxMessageLength);
         for (const chunk of chunks) {
             try {
-                await ctx.reply(chunk, { parse_mode: 'Markdown' });
+            try {
+                await ctx.reply(mdToTelegramHTML(chunk), { parse_mode: 'HTML' });
+            } catch {
+                await ctx.reply(chunk);
+            }
             } catch {
                 await ctx.reply(chunk);
             }

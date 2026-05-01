@@ -178,7 +178,8 @@ export class AgentController {
                 // Send result via Telegram bot
                 if (this.inputHandler && (this.inputHandler as any).bot) {
                     const bot = (this.inputHandler as any).bot;
-                    await bot.api.sendMessage(chatId, result, { parse_mode: 'Markdown' }).catch(() => {
+                const { safeSendMessage } = require('../shared/TelegramFormatter');
+                    await safeSendMessage(bot.api, chatId, result).catch(() => {
                         bot.api.sendMessage(chatId, result);
                     });
                 }
