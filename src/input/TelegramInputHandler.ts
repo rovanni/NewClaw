@@ -524,6 +524,101 @@ export class TelegramInputHandler {
     }
 
     /**
+     * Processa imagem enviada como documento (rota para visão)
+     */
+    private async handlePhotoFromDocument(ctx: Context, doc: any): Promise<void> {
+        const userId = ctx.from!.id.toString();
+        const sessionKey: SessionKey = { channel: 'telegram', userId };
+        const fileId = doc.file_id;
+        const caption = (ctx.message as any)?.caption || '';
+
+        await ctx.replyWithChatAction('typing');
+        const actionInterval = setInterval(() => {
+            ctx.replyWithChatAction('typing').catch(() => {});
+        }, 4000);
+
+        try {
+            const file = await ctx.api.getFile(fileId);
+            const fileUrl = `https://api.telegram.org/file/bot${this.config.botToken}/${file.file_path}`;
+
+            log.info('Baixando imagem', undefined, { source: 'document' });
+            const imgResponse = await fetch(fileUrl);
+            if (!imgResponse.ok) {
+                throw new Error(`Falha ao baixar imagem: ${imgResponse.status}`);
+            }
+            const buffer = Buffer.from(await imgResponse.arrayBuffer());
+            const base64Image = buffer.toString('base64');
+
+            const userPrompt = caption
+                ? `Analise esta imagem. O usuário disse: "${caption}"\n\nDescreva detalhadamente o que você vê, incluindo texto visível, dados numéricos, gráficos, e qualquer informação relevante. Se for um screenshot de criptomoeda ou trading, extraia todos os dados numéricos visíveis.`
+                : `Analise esta imagem em detalhes. Descreva tudo que você vê, incluindo texto, números, gráficos, e qualquer informação relevante. Responda em português do Brasil.`;
+
+            const visionServer = process.env.VISION_SERVER || 'http://localhost:11434';
+            const visionModel = process.env.MODEL_VISION || 'gemma4:31b-cloud';
+
+            log.info('Enviando para modelo de visão', undefined, { model: visionModel });
+
+            const visionResponse = await fetch(`${visionServer}/api/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: visionModel,
+                    messages: [{ role: 'user', content: userPrompt, images: [base64Image] }],
+                    stream: false
+                }),
+                signal: AbortSignal.timeout(120000)
+            });
+
+            if (!visionResponse.ok) {
+                const errText = await visionResponse.text();
+                throw new Error(`Vision API error ${visionResponse.status}: ${errText.slice(0, 200)}`);
+            }
+
+            const visionData = await visionResponse.json() as any;
+            const analysis = visionData?.message?.content || visionData?.response || '';
+
+            if (!analysis || analysis.trim() === '') {
+                await ctx.reply('⚠️ O modelo de visão não retornou análise. Tente novamente.');
+                return;
+            }
+
+            log.info('Analise recebida', undefined, { chars: analysis.length });
+
+            if (caption) {
+                this.agentLoop.setTelegramContext(userId, this.config.botToken);
+                const enrichedPrompt = `O usuário enviou uma imagem com a mensagem: "${caption}"\n\nAnálise da imagem:\n${analysis}\n\nResponda de forma útil e contextualizada em português do Brasil.`;
+                await this.sessionManager.recordUserMessage(sessionKey, `[Imagem: ${caption}]`);
+                const finalResponse = await this.agentLoop.process(userId, enrichedPrompt);
+                await this.sessionManager.recordAssistantMessage(sessionKey, finalResponse || '', { model: 'newclaw' });
+                const maxLen = 4000;
+                if (finalResponse.length > maxLen) {
+                    for (let i = 0; i < finalResponse.length; i += maxLen) {
+                        await ctx.reply(finalResponse.slice(i, i + maxLen));
+                    }
+                } else {
+                    await ctx.reply(finalResponse);
+                }
+            } else {
+                const maxLen = 4000;
+                await this.sessionManager.recordUserMessage(sessionKey, '[Imagem sem legenda]');
+                await this.sessionManager.recordAssistantMessage(sessionKey, analysis.slice(0, 200), { model: 'vision' });
+                if (analysis.length > maxLen) {
+                    for (let i = 0; i < analysis.length; i += maxLen) {
+                        await ctx.reply(analysis.slice(i, i + maxLen));
+                    }
+                } else {
+                    await ctx.reply(analysis);
+                }
+            }
+        } catch (error: any) {
+            log.error('Erro ao processar imagem-documento', error);
+            await ctx.reply(`⚠️ Erro ao processar imagem: ${error.message?.slice(0, 200) || 'desconhecido'}`);
+        } finally {
+            clearInterval(actionInterval);
+        }
+    }
+
+    /**
      * Processa áudio/voz via Whisper
      */
     private async handleAudio(ctx: Context, isVoiceNote: boolean): Promise<void> {
@@ -613,8 +708,16 @@ export class TelegramInputHandler {
 
         log.info(`Documento de ${userId}: ${fileName} (${mimeType})`);
 
+        // Check if document is an image — route to vision handler instead
+        const isImage = mimeType.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp|bmp|tiff?)$/i.test(fileName);
+        if (isImage) {
+            log.info('image_via_document', 'Routing image document to vision handler');
+            await this.handlePhotoFromDocument(ctx, doc);
+            return;
+        }
+
         if (!mimeType.includes('pdf') && !mimeType.includes('html') && !fileName.endsWith('.md') && !fileName.endsWith('.txt') && !fileName.endsWith('.html') && !fileName.endsWith('.css') && !fileName.endsWith('.js') && !fileName.endsWith('.json')) {
-            await ctx.reply('⚠️ No momento só consigo processar PDF, Markdown e texto.');
+            await ctx.reply('⚠️ No momento só consigo processar PDF, Markdown, texto e imagens.');
             return;
         }
 

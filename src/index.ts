@@ -50,10 +50,10 @@ const config = {
 async function main() {
     // Global error handlers to prevent silent crashes
     process.on('unhandledRejection', (reason, promise) => {
-        log.error('Unhandled Rejection:', reason);
+        log.error('unhandled_rejection', reason instanceof Error ? reason : undefined, String(reason));
     });
     process.on('uncaughtException', (error) => {
-        log.error('Uncaught Exception:', error);
+        log.error('uncaught_exception', error);
     });
 
     log.info('🚀 NewClaw v0.1.0 starting...');
@@ -83,4 +83,4 @@ async function main() {
     await controller.start();
 }
 
-main().catch(log.error);
+main().catch(err => log.error('fatal', err instanceof Error ? err : undefined, String(err)));
