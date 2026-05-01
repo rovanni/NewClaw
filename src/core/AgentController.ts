@@ -33,6 +33,9 @@ import { ScheduleTool } from '../tools/schedule_tool';
 import { SessionLearner } from '../session/SessionLearner';
 import { MemoryGovernor } from '../memory/MemoryGovernor';
 import { createLogger } from '../shared/AppLogger';
+import { MessageBus } from '../channels/MessageBus';
+import { TelegramAdapter } from '../channels/TelegramAdapter';
+import { DiscordAdapter } from '../channels/DiscordAdapter';
 const log = createLogger('Agentcontroller');
 
 export interface NewClawConfig {
@@ -85,6 +88,10 @@ export class AgentController {
     private sessionLearner: SessionLearner;
     private memoryGovernor: MemoryGovernor;
     private scheduler: SchedulerService;
+    private messageBus: MessageBus | null = null;
+
+    /** Get the MessageBus (for adding channels dynamically) */
+    public getMessageBus(): MessageBus | null { return this.messageBus; }
 
     constructor(config: NewClawConfig) {
         this.config = config;
@@ -246,6 +253,19 @@ export class AgentController {
         }, 24 * 60 * 60 * 1000);
 
         await this.inputHandler.start();
+
+        // Initialize MessageBus for multi-channel support
+        this.messageBus = new MessageBus(this.agentLoop, this.sessionManager);
+
+        // Register Telegram via MessageBus (optional — duplicates TelegramInputHandler)
+        // The TelegramInputHandler stays as primary for now
+        // New channels (Discord, Signal, etc.) will go through the MessageBus
+
+        // Discord adapter (stub — enable when ready)
+        // const discordAdapter = new DiscordAdapter({ enabled: false, botToken: '' });
+        // this.messageBus.registerAdapter(discordAdapter);
+
+        log.info('MessageBus initialized — multi-channel ready');
     }
 
     /**
