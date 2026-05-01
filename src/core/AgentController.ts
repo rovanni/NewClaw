@@ -1,18 +1,16 @@
 /**
  * AgentController — Facade principal do NewClaw
  * 
- * Orquestra: Input → AgentLoop → Output
- * Arquitetura simplificada: LLM decide tudo (como OpenClaw)
+ * Orquestra: ChannelAdapter → MessageBus → AgentLoop → ChannelAdapter
+ * Arquitetura multi-canal: Telegram ✅, Discord 🟡, Web
  */
 
 import { ProviderFactory, ILLMProvider } from './ProviderFactory';
 import { AgentLoop } from '../loop/AgentLoop';
 import { MemoryManager } from '../memory/MemoryManager';
 import { SkillLoader } from '../skills/SkillLoader';
-import { TelegramInputHandler } from '../input/TelegramInputHandler';
 import { OnboardingService } from '../services/OnboardingService';
 import { SkillLearner } from '../loop/SkillLearner';
-import { TelegramOutputHandler } from '../output/TelegramOutputHandler';
 import { ExecCommandTool } from '../tools/exec_command';
 import { WebSearchTool } from '../tools/web_search';
 import { WebNavigateTool } from '../tools/web_navigate';
@@ -34,13 +32,20 @@ import { SessionLearner } from '../session/SessionLearner';
 import { MemoryGovernor } from '../memory/MemoryGovernor';
 import { createLogger } from '../shared/AppLogger';
 import { MessageBus } from '../channels/MessageBus';
-import { TelegramAdapter } from '../channels/TelegramAdapter';
-import { DiscordAdapter } from '../channels/DiscordAdapter';
-const log = createLogger('Agentcontroller');
+import { TelegramAdapter, type TelegramConfig } from '../channels/TelegramAdapter';
+import { DiscordAdapter, type DiscordConfig } from '../channels/DiscordAdapter';
+import { NormalizedMessage } from '../channels/ChannelAdapter';
+const log = createLogger('AgentController');
 
 export interface NewClawConfig {
     telegramBotToken: string;
     telegramAllowedUserIds: string[];
+    /** Discord bot token (optional) */
+    discordBotToken?: string;
+    /** Discord allowed guild IDs (optional) */
+    discordAllowedGuildIds?: string[];
+    /** Discord allowed user IDs (optional) */
+    discordAllowedUserIds?: string[];
     language: string;
     defaultProvider: string;
     geminiApiKey?: string;
@@ -81,17 +86,21 @@ export class AgentController {
     public getMemoryGovernor(): MemoryGovernor { return this.memoryGovernor; }
     private skillLoader: SkillLoader;
     private skillLearner: SkillLearner;
-    private inputHandler: TelegramInputHandler;
-    private outputHandler: TelegramOutputHandler;
     private onboardingService: OnboardingService;
     private sessionManager: SessionManager;
     private sessionLearner: SessionLearner;
     private memoryGovernor: MemoryGovernor;
     private scheduler: SchedulerService;
-    private messageBus: MessageBus | null = null;
+    private messageBus: MessageBus;
+    private telegramAdapter: TelegramAdapter;
+    private discordAdapter: DiscordAdapter | null = null;
 
-    /** Get the MessageBus (for adding channels dynamically) */
-    public getMessageBus(): MessageBus | null { return this.messageBus; }
+    /** Get the MessageBus */
+    public getMessageBus(): MessageBus { return this.messageBus; }
+    /** Get the TelegramAdapter */
+    public getTelegramAdapter(): TelegramAdapter { return this.telegramAdapter; }
+    /** Get the DiscordAdapter (if enabled) */
+    public getDiscordAdapter(): DiscordAdapter | null { return this.discordAdapter; }
 
     constructor(config: NewClawConfig) {
         this.config = config;
@@ -135,24 +144,23 @@ export class AgentController {
             this.agentLoop.getStateManager()
         );
 
-        // Inicializar SessionManager (persistência conversacional)
+        // Inicializar SessionManager
         this.sessionManager = new SessionManager(
             { transcriptDir: './data/sessions' },
             this.memory,
             this.providerFactory
         );
 
-        // Conectar SessionContext ao AgentLoop (pipeline híbrido: checkpoint + recent + semântico)
         const sessionContext = new SessionContext(this.sessionManager, this.memory);
         this.agentLoop.setSessionContext(sessionContext);
 
-        // Inicializar SessionLearner (extração de fatos → grafo cognitivo)
+        // Inicializar SessionLearner
         this.sessionLearner = new SessionLearner(this.sessionManager, this.memory);
 
-        // Inicializar MemoryGovernor (decay, conflitos, GC)
         // Inicializar Scheduler
         this.scheduler = new SchedulerService('./data/newclaw.db', (this.memory as any).db || (this.memory as any)._db);
 
+        // Inicializar MemoryGovernor
         this.memoryGovernor = new MemoryGovernor(this.memory, {
             decayFactor: 0.98,
             minConfidence: 0.3,
@@ -165,7 +173,38 @@ export class AgentController {
             archiveEnabled: true
         });
 
-        // Configurar scheduler trigger — envia mensagem processada pelo AgentLoop
+        // ─── MessageBus + Adapters ────────────────────────────
+
+        // MessageBus is the central pipeline
+        this.messageBus = new MessageBus(this.agentLoop, this.sessionManager);
+
+        // Register commands on the MessageBus
+        this.registerCommands();
+
+        // Telegram adapter (primary)
+        this.telegramAdapter = new TelegramAdapter({
+            enabled: true,
+            botToken: config.telegramBotToken,
+            allowedUserIds: config.telegramAllowedUserIds,
+            tmpDir: config.tmpDir,
+        });
+        this.telegramAdapter.setBus(this.messageBus);
+        this.messageBus.registerAdapter(this.telegramAdapter);
+
+        // Discord adapter (optional)
+        if (config.discordBotToken) {
+            this.discordAdapter = new DiscordAdapter({
+                enabled: true,
+                botToken: config.discordBotToken,
+                allowedGuildIds: config.discordAllowedGuildIds,
+                allowedUserIds: config.discordAllowedUserIds,
+            });
+            this.discordAdapter.setBus(this.messageBus);
+            this.messageBus.registerAdapter(this.discordAdapter);
+            log.info('Discord adapter registered');
+        }
+
+        // Scheduler trigger — sends via TelegramAdapter
         this.scheduler.setTriggerHandler(async (task) => {
             try {
                 const chatId = task.chat_id;
@@ -182,45 +221,20 @@ export class AgentController {
                 }
                 log.info(`[Scheduler] Triggering task #${task.id}: ${task.label} → chat ${chatId}`);
                 const result = await this.agentLoop.process(chatId, prompt);
-                // Send result via Telegram bot
-                if (this.inputHandler && (this.inputHandler as any).bot) {
-                    const bot = (this.inputHandler as any).bot;
-                const { safeSendMessage } = require('../shared/TelegramFormatter');
-                    await safeSendMessage(bot.api, chatId, result).catch(() => {
-                        bot.api.sendMessage(chatId, result);
-                    });
-                }
+                // Send result via TelegramAdapter
+                await this.telegramAdapter.sendToChat(chatId, {
+                    text: result,
+                    format: 'markdown'
+                });
             } catch (e) {
                 log.error(`[Scheduler] Failed to send scheduled message:`, e);
             }
         });
 
-        // Iniciar scheduler after bot is ready
+        // Start scheduler after bot is ready
         setTimeout(() => this.scheduler.startAll(), 5000);
 
-        // Inicializar handlers
-        this.inputHandler = new TelegramInputHandler(
-            {
-                botToken: config.telegramBotToken,
-                allowedUserIds: config.telegramAllowedUserIds,
-                whisperPath: config.whisperPath,
-                tmpDir: config.tmpDir
-            },
-            this.agentLoop,
-            this.memory,
-            this.onboardingService,
-            this.sessionManager
-        );
-
-        // Conectar SessionLearner ao TelegramInputHandler
-        this.inputHandler.setSessionLearner(this.sessionLearner);
-
-        this.outputHandler = new TelegramOutputHandler({
-            audioVoice: config.language === 'pt-BR' ? 'pt-BR-ThalitaNeural' : 'en-US-AriaNeural',
-            tmpDir: config.tmpDir
-        });
-
-        // Registrar skills
+        // Registrar skills/tools
         this.registerSkills();
     }
 
@@ -234,7 +248,13 @@ export class AgentController {
         log.info(`   Language: ${this.config.language}`);
         log.info(`   Skills: ${this.skillLoader.getSkillNames().join(', ') || 'none'}`);
 
-        // Run governance cycle on boot (decay + conflict + GC)
+        // Channels status
+        const channels = this.messageBus.listAdapters();
+        for (const ch of channels) {
+            log.info(`   Channel: ${ch.name} (${ch.connected ? 'connected' : 'not connected'})`);
+        }
+
+        // Run governance cycle on boot
         try {
             const stats = this.memoryGovernor.runGovernanceCycle();
             log.info(`Boot cycle: ${stats.nodesDecayed} decayed, ${stats.conflictsDetected} conflicts, ${stats.nodesGarbageCollected} GC'd`);
@@ -252,20 +272,10 @@ export class AgentController {
             }
         }, 24 * 60 * 60 * 1000);
 
-        await this.inputHandler.start();
+        // Start all channel adapters via MessageBus
+        await this.messageBus.startAll();
 
-        // Initialize MessageBus for multi-channel support
-        this.messageBus = new MessageBus(this.agentLoop, this.sessionManager);
-
-        // Register Telegram via MessageBus (optional — duplicates TelegramInputHandler)
-        // The TelegramInputHandler stays as primary for now
-        // New channels (Discord, Signal, etc.) will go through the MessageBus
-
-        // Discord adapter (stub — enable when ready)
-        // const discordAdapter = new DiscordAdapter({ enabled: false, botToken: '' });
-        // this.messageBus.registerAdapter(discordAdapter);
-
-        log.info('MessageBus initialized — multi-channel ready');
+        log.info('✅ NewClaw running — multi-channel pipeline active');
     }
 
     /**
@@ -286,12 +296,95 @@ export class AgentController {
     }
 
     /**
+     * Register command handlers on the MessageBus
+     */
+    private registerCommands(): void {
+        // /clear — limpar contexto
+        this.messageBus.registerCommand('/clear', async (msg) => {
+            this.memory.createNewConversation(msg.userId);
+            const sessionKey = { channel: msg.channel, userId: msg.userId };
+            await this.sessionManager.closeSession(sessionKey);
+            return '🧹 Sessão limpa! Contexto anterior comprimido. Nova sessão iniciada.';
+        });
+
+        // /skills — listar skills
+        this.messageBus.registerCommand('/skills', async (msg) => {
+            try {
+                const db = (this.memory as any).db || (this.memory as any)._db;
+                if (!db) return '⚠️ Banco de dados não disponível para revisar skills.';
+
+                const skills = db.prepare(
+                    `SELECT id, name, status, priority, source_pattern, source_tool, updated_at
+                     FROM auto_skills
+                     ORDER BY
+                        CASE status WHEN 'proposed' THEN 0 WHEN 'active' THEN 1 ELSE 2 END,
+                        priority DESC,
+                        updated_at DESC
+                     LIMIT 10`
+                ).all() as Array<{
+                    id: string; name: string; status: string; priority: number;
+                    source_pattern?: string; source_tool?: string;
+                }>;
+
+                if (skills.length === 0) return 'Nenhuma skill automática cadastrada ainda.';
+
+                const lines = skills.map(skill => {
+                    const shortId = skill.id.slice(-8);
+                    const status = skill.status === 'proposed' ? 'PROPOSED' : skill.status === 'active' ? 'ACTIVE' : 'REJECTED';
+                    return `• **${skill.name}** [${status}]\n  id: \`${shortId}\` | origem: ${skill.source_pattern || 'manual'} → ${skill.source_tool || '—'} | pri: ${skill.priority}`;
+                });
+
+                return `🧠 **SkillLearner**\n\n${lines.join('\n\n')}\n\nAções:\n\`/skill_approve <id>\` / \`/skill_reject <id>\``;
+            } catch (e: any) {
+                return `⚠️ Erro ao listar skills: ${e.message}`;
+            }
+        });
+
+        // /skill_approve
+        this.messageBus.registerCommand('/skill_approve', async (msg) => {
+            const parts = msg.text.trim().split(/\s+/);
+            const rawId = parts[1];
+            if (!rawId) return 'Use /skill_approve <id_curto>. Veja os IDs com /skills';
+
+            try {
+                const db = (this.memory as any).db || (this.memory as any)._db;
+                const rows = db.prepare('SELECT id FROM auto_skills').all() as Array<{ id: string }>;
+                const match = rows.find(r => r.id.endsWith(rawId));
+                if (!match) return `Skill com ID curto "${rawId}" não encontrada.`;
+
+                db.prepare('UPDATE auto_skills SET status = ? WHERE id = ?').run('active', match.id);
+                return `✅ Skill aprovada: ${match.id}`;
+            } catch (e: any) {
+                return `⚠️ Erro: ${e.message}`;
+            }
+        });
+
+        // /skill_reject
+        this.messageBus.registerCommand('/skill_reject', async (msg) => {
+            const parts = msg.text.trim().split(/\s+/);
+            const rawId = parts[1];
+            if (!rawId) return 'Use /skill_reject <id_curto>. Veja os IDs com /skills';
+
+            try {
+                const db = (this.memory as any).db || (this.memory as any)._db;
+                const rows = db.prepare('SELECT id FROM auto_skills').all() as Array<{ id: string }>;
+                const match = rows.find(r => r.id.endsWith(rawId));
+                if (!match) return `Skill com ID curto "${rawId}" não encontrada.`;
+
+                db.prepare('UPDATE auto_skills SET status = ? WHERE id = ?').run('rejected', match.id);
+                return `❌ Skill rejeitada: ${match.id}`;
+            } catch (e: any) {
+                return `⚠️ Erro: ${e.message}`;
+            }
+        });
+    }
+
+    /**
      * Registra tools no AgentLoop
      */
     private registerSkills(): void {
         const skills = this.skillLoader.loadAll();
 
-        // Registrar tools padrão via ToolRegistry
         ToolRegistry.register(new ExecCommandTool(), { dangerous: true });
         ToolRegistry.register(new WebSearchTool());
         ToolRegistry.register(new WebNavigateTool());
@@ -306,7 +399,6 @@ export class AgentController {
         ToolRegistry.register(new WeatherTool());
         ToolRegistry.register(new ScheduleTool(this.scheduler));
 
-        // Registrar tools habilitadas no AgentLoop
         for (const tool of ToolRegistry.getEnabled()) {
             this.agentLoop.registerTool(tool);
         }
@@ -315,7 +407,7 @@ export class AgentController {
     }
 
     /**
-     * Constroi diretiva de idioma baseada na configuração
+     * Constroi diretiva de idioma
      */
     private buildLanguageDirective(lang: string): string {
         const languages: Record<string, string> = {
@@ -323,7 +415,6 @@ export class AgentController {
             'en-US': 'You MUST respond in American English. When using tools, translate any non-English content to English.',
             'es-ES': 'Debes responder SIEMPRE en español. Quando uses ferramentas, traduce todo el contenido al español.',
         };
-
         return languages[lang] || languages['pt-BR'];
     }
 

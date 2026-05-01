@@ -4,6 +4,8 @@
  * Recebe mensagens normalizadas de qualquer ChannelAdapter,
  * roteia para o AgentLoop, e devolve a resposta ao canal de origem.
  * 
+ * Suporta: text, photo, voice, audio, document, command
+ * 
  * Funciona como o Gateway do OpenClaw, mas integrado ao NewClaw.
  */
 
@@ -17,7 +19,6 @@ import {
     ChannelSession,
     ChannelAttachment
 } from './ChannelAdapter';
-import { mdToTelegramHTML } from '../shared/TelegramFormatter';
 import { createLogger } from '../shared/AppLogger';
 
 const log = createLogger('MessageBus');
@@ -27,6 +28,10 @@ export class MessageBus {
     private agentLoop: AgentLoop;
     private sessionManager: SessionManager;
     private started: boolean = false;
+    /** Custom command handlers (e.g., /clear, /skills) */
+    private commandHandlers: Map<string, (msg: NormalizedMessage) => Promise<string | null>> = new Map();
+    /** Custom media handlers */
+    private mediaHandlers: Map<string, (msg: NormalizedMessage, attachment: ChannelAttachment) => Promise<string | null>> = new Map();
 
     constructor(agentLoop: AgentLoop, sessionManager: SessionManager) {
         this.agentLoop = agentLoop;
@@ -44,18 +49,24 @@ export class MessageBus {
         this.adapters.delete(channelType);
     }
 
+    /** Registrar handler de comando (ex: /clear, /skills) */
+    registerCommand(command: string, handler: (msg: NormalizedMessage) => Promise<string | null>): void {
+        this.commandHandlers.set(command, handler);
+    }
+
+    /** Registrar handler de mídia (ex: photo → vision, voice → whisper) */
+    registerMediaHandler(type: string, handler: (msg: NormalizedMessage, attachment: ChannelAttachment) => Promise<string | null>): void {
+        this.mediaHandlers.set(type, handler);
+    }
+
     /** Iniciar todos os canais */
     async startAll(): Promise<void> {
         if (this.started) return;
 
         for (const [type, adapter] of this.adapters) {
             try {
-                if (adapter.isConnected) {
-                    await adapter.start();
-                    log.info('adapter_started', `${adapter.displayName} started`);
-                } else {
-                    log.warn('adapter_skipped', `${adapter.displayName} not connected, skipping`);
-                }
+                await adapter.start();
+                log.info('adapter_started', `${adapter.displayName} started`);
             } catch (error: any) {
                 log.error('adapter_start_failed', error, `${type} failed to start`);
             }
@@ -92,23 +103,51 @@ export class MessageBus {
         });
 
         try {
-            // 1. Handle attachments (photos, audio, documents)
-            if (msg.type !== 'text' && msg.attachments && msg.attachments.length > 0) {
-                await this.processAttachments(msg, sessionKey);
-                return;
+            // 1. Handle commands
+            if (msg.type === 'command' || msg.text.startsWith('/')) {
+                const commandName = msg.text.split(' ')[0].toLowerCase();
+                const handler = this.commandHandlers.get(commandName);
+                if (handler) {
+                    const result = await handler(msg);
+                    if (result !== null) {
+                        const adapter = this.adapters.get(msg.channel);
+                        if (adapter) {
+                            await adapter.send({ text: result, format: 'markdown' }, msg.rawContext);
+                        }
+                        return;
+                    }
+                }
+                // If no handler, fall through to AgentLoop
             }
 
-            // 2. Text processing through AgentLoop
-            this.agentLoop.setTelegramContext(
-                msg.userId,
-                (msg.metadata?.botToken as string) || ''
-            );
+            // 2. Handle media attachments (photo, voice, audio, document)
+            if (msg.attachments && msg.attachments.length > 0) {
+                const mediaResult = await this.processAttachments(msg, sessionKey);
+                if (mediaResult) {
+                    const adapter = this.adapters.get(msg.channel);
+                    if (adapter) {
+                        await adapter.send(
+                            { text: mediaResult, format: 'markdown' },
+                            msg.rawContext
+                        );
+                    }
+                    return;
+                }
+            }
+
+            // 3. Text processing through AgentLoop
+            this.agentLoop.setChannelContext({
+                channel: msg.channel,
+                userId: msg.userId,
+                chatId: msg.chatId || msg.userId,
+                metadata: msg.metadata,
+            });
 
             await this.sessionManager.recordUserMessage(sessionKey, msg.text);
             const response = await this.agentLoop.process(msg.userId, msg.text);
             await this.sessionManager.recordAssistantMessage(sessionKey, response || '', { model: 'newclaw' });
 
-            // 3. Send response back through the originating channel
+            // 4. Send response back through the originating channel
             const adapter = this.adapters.get(msg.channel);
             if (adapter) {
                 const normalizedResponse: NormalizedResponse = {
@@ -120,7 +159,6 @@ export class MessageBus {
 
         } catch (error: any) {
             log.error('message_processing_failed', error, msg.text.slice(0, 50));
-            // Try to send error to user
             const adapter = this.adapters.get(msg.channel);
             if (adapter) {
                 await adapter.send(
@@ -131,55 +169,23 @@ export class MessageBus {
         }
     }
 
-    /** Process attachments based on type */
-    private async processAttachments(msg: NormalizedMessage, sessionKey: SessionKey): Promise<void> {
-        const adapter = this.adapters.get(msg.channel);
-        if (!adapter) return;
-
+    /** Process attachments via registered handlers */
+    private async processAttachments(msg: NormalizedMessage, sessionKey: SessionKey): Promise<string | null> {
         for (const attachment of msg.attachments || []) {
-            switch (attachment.type) {
-                case 'photo':
-                    await this.processPhoto(msg, attachment, sessionKey, adapter);
-                    break;
-                case 'voice':
-                case 'audio':
-                    await this.processAudio(msg, attachment, sessionKey, adapter);
-                    break;
-                case 'document':
-                    await this.processDocument(msg, attachment, sessionKey, adapter);
-                    break;
-                default:
-                    await adapter.send(
-                        { text: `⚠️ Tipo de anexo não suportado: ${attachment.type}`, format: 'plain' },
-                        msg.rawContext
-                    );
+            const handler = this.mediaHandlers.get(attachment.type);
+            if (handler) {
+                const result = await handler(msg, attachment);
+                if (result !== null) return result;
             }
         }
-    }
 
-    private async processPhoto(msg: NormalizedMessage, attachment: ChannelAttachment, sessionKey: SessionKey, adapter: ChannelAdapter): Promise<void> {
-        // Delegate to channel-specific vision handler via metadata
-        if (msg.metadata?.handlePhoto) {
-            await msg.metadata.handlePhoto(msg.rawContext, attachment);
-            return;
+        // No handler registered — return generic message
+        if (msg.attachments && msg.attachments.length > 0) {
+            const types = msg.attachments.map(a => a.type).join(', ');
+            return `📎 Anexo recebido (${types}). Processamento de mídia não configurado para este canal.`;
         }
-        await adapter.send({ text: '⚠️ Processamento de imagem não disponível neste canal.', format: 'plain' }, msg.rawContext);
-    }
 
-    private async processAudio(msg: NormalizedMessage, attachment: ChannelAttachment, sessionKey: SessionKey, adapter: ChannelAdapter): Promise<void> {
-        if (msg.metadata?.handleAudio) {
-            await msg.metadata.handleAudio(msg.rawContext, attachment);
-            return;
-        }
-        await adapter.send({ text: '⚠️ Processamento de áudio não disponível neste canal.', format: 'plain' }, msg.rawContext);
-    }
-
-    private async processDocument(msg: NormalizedMessage, attachment: ChannelAttachment, sessionKey: SessionKey, adapter: ChannelAdapter): Promise<void> {
-        if (msg.metadata?.handleDocument) {
-            await msg.metadata.handleDocument(msg.rawContext, attachment);
-            return;
-        }
-        await adapter.send({ text: '⚠️ Processamento de documento não disponível neste canal.', format: 'plain' }, msg.rawContext);
+        return null;
     }
 
     /** Health check de todos os canais */

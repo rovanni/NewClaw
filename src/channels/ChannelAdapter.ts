@@ -20,7 +20,7 @@ export interface NormalizedMessage {
     /** Nome do usuário (se disponível) */
     userName?: string;
     /** Tipo de conteúdo */
-    type: 'text' | 'photo' | 'audio' | 'voice' | 'document' | 'video';
+    type: 'text' | 'photo' | 'audio' | 'voice' | 'document' | 'video' | 'command';
     /** Texto da mensagem ou legenda */
     text: string;
     /** Anexos (fotos, áudio, etc.) */
@@ -31,6 +31,8 @@ export interface NormalizedMessage {
     replyToId?: string;
     /** Contexto do canal (ctx original) para responder */
     rawContext?: any;
+    /** Chat ID para responder (usado por Discord e canais com múltiplos canais) */
+    chatId?: string;
 }
 
 export interface ChannelAttachment {
@@ -43,6 +45,8 @@ export interface ChannelAttachment {
     duration?: number;
     /** Base64 content (populado após download) */
     data?: string;
+    /** URL para download direto (Discord usa isso) */
+    url?: string;
 }
 
 /** Resposta normalizada do agente para qualquer canal */

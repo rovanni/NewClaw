@@ -1,6 +1,6 @@
 /**
  * NewClaw — Entry Point
- * Agente pessoal de IA 100% local com Telegram
+ * Agente pessoal de IA multi-canal (Telegram, Discord, Web)
  */
 
 import dotenv from 'dotenv';
@@ -19,6 +19,9 @@ dotenv.config();
 const config = {
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
     telegramAllowedUserIds: (process.env.TELEGRAM_ALLOWED_USER_IDS || '').split(',').map(id => id.trim()).filter(id => id.length > 0),
+    discordBotToken: process.env.DISCORD_BOT_TOKEN || '',
+    discordAllowedGuildIds: (process.env.DISCORD_ALLOWED_GUILD_IDS || '').split(',').map(id => id.trim()).filter(id => id.length > 0),
+    discordAllowedUserIds: (process.env.DISCORD_ALLOWED_USER_IDS || '').split(',').map(id => id.trim()).filter(id => id.length > 0),
     language: process.env.APP_LANG || 'pt-BR',
     defaultProvider: process.env.DEFAULT_PROVIDER || 'gemini',
     geminiApiKey: process.env.GEMINI_API_KEY,
@@ -56,18 +59,17 @@ async function main() {
         log.error('uncaught_exception', error);
     });
 
-    log.info('🚀 NewClaw v0.1.0 starting...');
+    log.info('🚀 NewClaw v0.2.0 starting...');
     log.info(`   Language: ${config.language}`);
     log.info(`   Provider: ${config.defaultProvider}`);
 
-    if (!config.telegramBotToken) {
-        log.error('❌ TELEGRAM_BOT_TOKEN não configurado!');
+    if (!config.telegramBotToken && !config.discordBotToken) {
+        log.error('❌ Nenhum canal configurado! Configure TELEGRAM_BOT_TOKEN ou DISCORD_BOT_TOKEN');
         process.exit(1);
     }
 
-    if (config.telegramAllowedUserIds.length === 0 || config.telegramAllowedUserIds[0] === '') {
-        log.error('❌ TELEGRAM_ALLOWED_USER_IDS não configurado!');
-        process.exit(1);
+    if (config.telegramBotToken && config.telegramAllowedUserIds.length === 0) {
+        log.warn('⚠️ TELEGRAM_ALLOWED_USER_IDS vazio — nenhum usuário autorizado no Telegram');
     }
 
     const controller = new AgentController(config);

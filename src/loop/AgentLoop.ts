@@ -85,10 +85,20 @@ export class AgentLoop {
         return this.stateManager;
     }
 
+    /** Set Telegram context (legacy — for tools like send_audio/send_document) */
     public setTelegramContext(chatId: string, botToken: string) {
-        // Para ferramentas que precisam enviar mensagens diretas
         (this as any).currentChatId = chatId;
         (this as any).currentBotToken = botToken;
+    }
+
+    /** Set channel context (multi-canal — channel type + metadata) */
+    public setChannelContext(context: { channel: string; userId: string; chatId?: string; metadata?: Record<string, any> }) {
+        (this as any).currentChannel = context.channel;
+        (this as any).currentChatId = context.chatId || context.userId;
+        // Para Telegram, ainda precisamos do botToken via metadata
+        if (context.metadata?.botToken) {
+            (this as any).currentBotToken = context.metadata.botToken;
+        }
     }
 
     /**
