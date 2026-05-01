@@ -1,4 +1,6 @@
 import { AgentStateManager, AgentState } from './AgentStateManager';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Statestabilityguard');
 
 /**
  * StateStabilityGuard — Prevents erratic state changes.
@@ -41,7 +43,7 @@ export class StateStabilityGuard {
                 this.changeBuffer.delete('current_focus');
             } else {
                 shouldApplyNow = false;
-                console.log(`[GUARD] Focus change to ${updates.current_focus} buffered (stability: ${currentState.meta.stability})`);
+                log.info(`Focus change to ${updates.current_focus} buffered (stability: ${currentState.meta.stability})`);
             }
         }
 

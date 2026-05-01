@@ -5,6 +5,8 @@
  */
 
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Observervalidator');
 
 export interface ValidationResult {
     approved: boolean;
@@ -75,12 +77,12 @@ export class ObserverValidator {
             // Extract JSON from response
             const jsonMatch = content.match(/\{[^}]*"approved"[^}]*\}/s);
             if (!jsonMatch) {
-                console.log(`[OBSERVER] No JSON found in response, assuming approved. Elapsed: ${elapsed}ms`);
+                log.info(`No JSON found in response, assuming approved. Elapsed: ${elapsed}ms`);
                 return { approved: true, reason: 'Observer returned non-JSON, assuming OK', confidence: 0.5 };
             }
 
             const result = JSON.parse(jsonMatch[0]);
-            console.log(`[OBSERVER] ${result.approved ? '✅' : '❌'} approved=${result.approved} confidence=${result.confidence} reason="${result.reason}" elapsed=${elapsed}ms`);
+            log.info(`${result.approved ? '✅' : '❌'} approved=${result.approved} confidence=${result.confidence} reason="${result.reason}" elapsed=${elapsed}ms`);
 
             return {
                 approved: !!result.approved,
@@ -89,7 +91,7 @@ export class ObserverValidator {
                 suggestedFix: result.suggested_fix || result.suggestedFix || undefined
             };
         } catch (error: any) {
-            console.log(`[OBSERVER] Error: ${error.message}, assuming approved`);
+            log.info(`Error: ${error.message}, assuming approved`);
             return { approved: true, reason: 'Observer failed, assuming OK', confidence: 0.3 };
         }
     }

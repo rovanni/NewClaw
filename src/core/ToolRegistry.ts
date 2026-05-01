@@ -3,6 +3,8 @@
  */
 
 import { ToolExecutor } from '../loop/AgentLoop';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Toolregistry');
 
 interface ToolEntry {
     tool: ToolExecutor;
@@ -15,7 +17,7 @@ export class ToolRegistryClass {
 
     register(tool: ToolExecutor, options?: { dangerous?: boolean }): void {
         if (this.tools.has(tool.name)) {
-            console.warn(`[TOOL_REGISTRY] Tool "${tool.name}" already registered, skipping duplicate.`);
+            log.warn(`Tool "${tool.name}" already registered, skipping duplicate.`);
             return;
         }
         this.tools.set(tool.name, {

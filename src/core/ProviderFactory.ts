@@ -4,6 +4,8 @@
  */
 
 import PQueue from 'p-queue';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Providerfactory');
 
 // Global queue to prevent concurrent Ollama requests (avoids 503)
 const ollamaQueue = new PQueue({ concurrency: 1 });
@@ -224,7 +226,7 @@ export class OllamaProvider implements ILLMProvider {
         } catch (error: any) {
             // 1 retry after 10s on timeout/abort/network errors
             if (error.message?.includes('abort') || error.message?.includes('timeout') || error.message?.includes('ECONNRESET') || error.message?.includes('fetch failed')) {
-                console.log(`[OLLAMA] Retry after: ${error.message}, waiting 10s...`);
+                log.info(`Retry after: ${error.message}, waiting 10s...`);
                 await new Promise(r => setTimeout(r, 10000));
                 return await ollamaQueue.add(() => this._chatOnce(messages, tools));
             }
@@ -426,7 +428,7 @@ export class ProviderFactory {
             try {
                 const provider = this.providers.get(providerName);
                 if (!provider) continue;
-                console.log(`[PROVIDER] Trying ${providerName}...${timeoutMs ? ` (timeout: ${timeoutMs}ms)` : ''}`);
+                log.info(`Trying ${providerName}...${timeoutMs ? ` (timeout: ${timeoutMs}ms)` : ''}`);
                 
                 // Wrap chat call with optional timeout
                 const chatPromise = provider.chat(messages, tools);
@@ -445,7 +447,7 @@ export class ProviderFactory {
                 if (!result.toolCalls || result.toolCalls.length === 0) {
                     const extractedCalls = this.extractLeakedToolCalls(result.content);
                     if (extractedCalls) {
-                        console.log(`[PROVIDER] Extracted leaked tool call: ${extractedCalls[0].name}`);
+                        log.info(`Extracted leaked tool call: ${extractedCalls[0].name}`);
                         result.toolCalls = extractedCalls;
                     }
                 }
@@ -457,7 +459,7 @@ export class ProviderFactory {
                 // Empty response — try next
                 errors.push(`${providerName}: empty response`);
             } catch (error: any) {
-                console.warn(`[PROVIDER] ${providerName} failed or timed out: ${error.message}`);
+                log.warn(`${providerName} failed or timed out: ${error.message}`);
                 errors.push(`${providerName}: ${error.message}`);
                 continue;
             }
@@ -491,7 +493,7 @@ export class ProviderFactory {
                 }
             }
         } catch (e) {
-            console.log(`[PROVIDER] Failed to parse leaked tool call: ${e}`);
+            log.info(`Failed to parse leaked tool call: ${e}`);
         }
         return undefined;
     }

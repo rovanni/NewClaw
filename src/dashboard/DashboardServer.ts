@@ -25,6 +25,8 @@ import { EmbeddingService } from '../memory/EmbeddingService';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
 import { SkillInstaller } from '../skills/SkillInstaller';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Dashboardserver');
 
 // Simple token auth
 const API_TOKENS: Set<string> = new Set();
@@ -125,7 +127,7 @@ export class DashboardServer {
         this.app.post('/api/config', (req: Request, res: Response) => {
             const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl, telegramAllowedUserIds, modelRouter } = req.body;
 
-            console.log(`[CONFIG] POST /api/config — ollamaModel="${ollamaModel}" provider="${defaultProvider}"`);
+            log.info(`POST /api/config — ollamaModel="${ollamaModel}" provider="${defaultProvider}"`);
 
             if (language) this.config.language = language;
             if (systemPrompt !== undefined) this.config.systemPrompt = systemPrompt;
@@ -135,8 +137,8 @@ export class DashboardServer {
             // Update Telegram Whitelist
             if (telegramAllowedUserIds !== undefined) {
                 this.config.telegramAllowedUserIds = String(telegramAllowedUserIds).split(',').map(id => id.trim()).filter(id => id);
-                console.log(`[CONFIG] Telegram whitelist updated: ${this.config.telegramAllowedUserIds.join(', ')}`);
-                console.log(`💡 Para gerenciar usuários autorizados e outras configurações, acesse o Dashboard em: http://localhost:${this.config.dashboardPort || 3090}/config`);
+                log.info(`Telegram whitelist updated: ${this.config.telegramAllowedUserIds.join(', ')}`);
+                log.info(`💡 Para gerenciar usuários autorizados e outras configurações, acesse o Dashboard em: http://localhost:${this.config.dashboardPort || 3090}/config`);
             }
 
             // Provider switch
@@ -144,9 +146,9 @@ export class DashboardServer {
                 try {
                     this.providerFactory?.setDefaultProvider(defaultProvider);
                     this.config.defaultProvider = defaultProvider;
-                    console.log(`[CONFIG] Provider switched to: ${defaultProvider}`);
+                    log.info(`Provider switched to: ${defaultProvider}`);
                 } catch (err: any) {
-                    console.error(`[CONFIG] Provider switch failed: ${err.message}`);
+                    log.error(`Provider switch failed: ${err.message}`);
                     return res.status(400).json({ success: false, error: err.message });
                 }
             }
@@ -158,9 +160,9 @@ export class DashboardServer {
                 const ollama = this.providerFactory?.getOllamaProvider();
                 if (ollama) {
                     ollama.setModel(ollamaModel);
-                    console.log(`[CONFIG] Ollama model switched: ${previousModel} → ${ollamaModel}`);
+                    log.info(`Ollama model switched: ${previousModel} → ${ollamaModel}`);
                 } else {
-                    console.warn(`[CONFIG] Ollama provider not available for model switch`);
+                    log.warn(`Ollama provider not available for model switch`);
                 }
             }
 
@@ -168,7 +170,7 @@ export class DashboardServer {
             // Ollama URL update
             if (ollamaUrl) {
                 this.config.ollamaUrl = ollamaUrl;
-                console.log(`[CONFIG] Ollama URL changed: ${ollamaUrl}`);
+                log.info(`Ollama URL changed: ${ollamaUrl}`);
                 // Update provider factory URL
                 const ollama = this.providerFactory?.getOllamaProvider();
                 if (ollama) ollama.setBaseUrl(ollamaUrl);
@@ -180,7 +182,7 @@ export class DashboardServer {
 
             if (modelRouter) {
                 this.config.modelRouter = { ...(this.config.modelRouter || {}), ...modelRouter };
-                console.log(`[CONFIG] ModelRouter updated: ${JSON.stringify(this.config.modelRouter)}`);
+                log.info(`ModelRouter updated: ${JSON.stringify(this.config.modelRouter)}`);
             }
 
             // Persist relevant config to .env so restart keeps the values
@@ -223,7 +225,7 @@ export class DashboardServer {
 
         // Restart route
         this.app.post('/api/restart', (_req: Request, res: Response) => {
-            console.log('🔄 Restart requested via Dashboard...');
+            log.info('🔄 Restart requested via Dashboard...');
             res.json({ success: true, message: 'Restarting NewClaw...' });
             setTimeout(() => { process.exit(0); }, 1000);
         });
@@ -551,7 +553,7 @@ export class DashboardServer {
             // Use the start.sh script which manages PID and restarts
             const { exec } = require('child_process');
             exec('bash ./start.sh restart', (err: any) => {
-                if (err) console.error('Restart error:', err.message);
+                if (err) log.error('Restart error:', err.message);
             });
         });
 
@@ -807,7 +809,7 @@ export class DashboardServer {
                 db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(mergeId, mergeId);
                 db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(mergeId);
 
-                console.log(`[MEMORY] Nodes merged: keep=${keepId}, removed=${mergeId}`);
+                log.info(`Nodes merged: keep=${keepId}, removed=${mergeId}`);
                 res.json({ success: true, snapshotId, keptNodeId: keepId, removedNodeId: mergeId });
             } catch (err: any) {
                 res.status(500).json({ error: err.message });
@@ -980,7 +982,7 @@ export class DashboardServer {
                 if (content !== undefined) db.prepare('UPDATE memory_nodes SET content = ? WHERE id = ?').run(content, id);
                 db.prepare('UPDATE memory_nodes SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
 
-                console.log(`[MEMORY] Node updated: ${id}`);
+                log.info(`Node updated: ${id}`);
                 res.json({ success: true });
             } catch (err: any) {
                 res.status(500).json({ error: err.message });
@@ -1003,7 +1005,7 @@ export class DashboardServer {
                 db.prepare('INSERT OR REPLACE INTO memory_nodes (id, type, name, content, metadata, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)')
                     .run(id, type, name, content, '{}');
 
-                console.log(`[MEMORY] Node created: ${id} (${type})`);
+                log.info(`Node created: ${id} (${type})`);
                 res.json({ success: true });
             } catch (err: any) {
                 res.status(500).json({ error: err.message });
@@ -1024,7 +1026,7 @@ export class DashboardServer {
                 db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(id, id);
                 db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(id);
 
-                console.log(`[MEMORY] Node deleted: ${id}`);
+                log.info(`Node deleted: ${id}`);
                 res.json({ success: true });
             } catch (err: any) {
                 res.status(500).json({ error: err.message });
@@ -1047,7 +1049,7 @@ export class DashboardServer {
                 db.prepare('INSERT OR REPLACE INTO memory_edges (from_node, to_node, relation, weight) VALUES (?, ?, ?, ?)')
                     .run(from, to, relation, weight || 1.0);
 
-                console.log(`[MEMORY] Edge created: ${from} -${relation}-> ${to}`);
+                log.info(`Edge created: ${from} -${relation}-> ${to}`);
                 res.json({ success: true });
             } catch (err: any) {
                 res.status(500).json({ error: err.message });
@@ -1066,7 +1068,7 @@ export class DashboardServer {
                 db.prepare('DELETE FROM memory_edges WHERE from_node = ? AND to_node = ? AND relation = ?')
                     .run(from, to, relation);
 
-                console.log(`[MEMORY] Edge deleted: ${from} -${relation}-> ${to}`);
+                log.info(`Edge deleted: ${from} -${relation}-> ${to}`);
                 res.json({ success: true });
             } catch (err: any) {
                 res.status(500).json({ error: err.message });
@@ -1094,7 +1096,7 @@ export class DashboardServer {
                     return res.status(404).json({ error: 'Edge not found' });
                 }
 
-                console.log(`[MEMORY] Edge updated: ${from} -${old_relation}-> ${to} => ${from} -${new_relation}-> ${to}`);
+                log.info(`Edge updated: ${from} -${old_relation}-> ${to} => ${from} -${new_relation}-> ${to}`);
                 res.json({ success: true, changes: result.changes });
             } catch (err: any) {
                 res.status(500).json({ error: err.message });
@@ -1466,9 +1468,9 @@ export class DashboardServer {
             }
 
             fs.writeFileSync(envPath, envContent.trim() + '\n');
-            console.log(`[CONFIG] Persisted to .env: ${Object.keys(updates).join(', ')}`);
+            log.info(`Persisted to .env: ${Object.keys(updates).join(', ')}`);
         } catch (error: any) {
-            console.error(`[CONFIG] Failed to persist .env: ${error.message}`);
+            log.error(`Failed to persist .env: ${error.message}`);
         }
     }
 
@@ -1476,7 +1478,7 @@ export class DashboardServer {
         if (this.server) return;
 
         this.server = this.app.listen(port, () => {
-            console.log(`[DASHBOARD] NewClaw Dashboard rodando em http://localhost:${port}`);
+            log.info(`NewClaw Dashboard rodando em http://localhost:${port}`);
         });
     }
 

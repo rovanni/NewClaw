@@ -15,6 +15,8 @@ import PQueue from 'p-queue';
 import { MemoryManager } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Agentloop');
 
 export interface ToolResult {
     success: boolean;
@@ -284,7 +286,7 @@ ${userText}`;
     ];
 
     private async runWithTools(conversationId: string, userText: string, iteration: number, userId?: string): Promise<string> {
-        console.log(`[${this.ts()}] [LOOP] Atomic Cognition Cycle ${iteration + 1}`);
+        log.info(`[${this.ts()}] [LOOP] Atomic Cognition Cycle ${iteration + 1}`);
 
         const cycleHistory: Array<{ tool: string, input: string, status: string }> = []
         let lastBestContent = '';
@@ -314,7 +316,7 @@ ${userText}`;
         const dynamicContext = this.buildContextBlock(userText, context, skillContext, dynamicMasterPrompt);
         
         if (!this.sessionContext) {
-            console.error('[SESSION] sessionContext not set — session pipeline is mandatory. Throwing.');
+            log.error('sessionContext not set — session pipeline is mandatory. Throwing.');
             throw new Error('SessionContext is required. Set via AgentLoop.setSessionContext() before processing.');
         }
 
@@ -330,7 +332,7 @@ ${userText}`;
 
         while (stepCount < maxSteps) {
             stepCount++;
-            console.log(`[${this.ts()}] [COGNITION] Step ${stepCount}...`);
+            log.info(`[${this.ts()}] [COGNITION] Step ${stepCount}...`);
 
             // Check if we should force synthesis due to tool failures
             if (toolFailureCount >= 2) {
@@ -342,9 +344,9 @@ ${userText}`;
 
             const response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
             const rawContent = (response.content || '').slice(0, 300);
-            console.log(`[${this.ts()}] [LLM-RAW] step=${stepCount} content=${JSON.stringify(rawContent)}`);
+            log.info(`[${this.ts()}] [LLM-RAW] step=${stepCount} content=${JSON.stringify(rawContent)}`);
             const atomicData = this.parseLLMResponse(response.content || '');
-            console.log(`[${this.ts()}] [PARSE] step=${stepCount} parsed=${atomicData ? 'YES' : 'NO'} is_complete=${atomicData?.evaluation?.is_complete} action_type=${atomicData?.action?.type}`);
+            log.info(`[${this.ts()}] [PARSE] step=${stepCount} parsed=${atomicData ? 'YES' : 'NO'} is_complete=${atomicData?.evaluation?.is_complete} action_type=${atomicData?.action?.type}`);
             
             if (atomicData?.action?.content) {
                 lastBestContent = atomicData.action.content;
@@ -364,7 +366,7 @@ ${userText}`;
             const hasContentNoTool = atomicData?.action?.content && !wantsTool && !hasNativeToolCalls;
 
             if ((isFinalAnswer || isMarkedComplete || hasContentNoTool) && !wantsTool && !hasNativeToolCalls) {
-                console.log(`[${this.ts()}] [ATOMIC] Task marked as COMPLETE (reason: ${isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool'}).`);
+                log.info(`[${this.ts()}] [ATOMIC] Task marked as COMPLETE (reason: ${isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool'}).`);
                 return atomicData?.action?.content || lastBestContent || sanitizeContent(response.content || '');
             }
 
@@ -376,7 +378,7 @@ ${userText}`;
                     const inputKey = `${toolName}:${toolInput}`;
 
                     if (usedToolInputs.has(inputKey)) {
-                        console.warn(`[${this.ts()}] [TOOL] Blocked repeated call: ${toolName}`);
+                        log.warn(`[${this.ts()}] [TOOL] Blocked repeated call: ${toolName}`);
                         loopMessages.push({ 
                             role: 'system', 
                             content: `[AVISO] Você já tentou a ferramenta "${toolName}" com este input. NÃO repita. Mude a estratégia ou responda com o que já sabe.` 
@@ -391,7 +393,7 @@ ${userText}`;
                             (tool as any).setContext((this as any).currentChatId || '', (this as any).currentBotToken || '');
                         }
                         const result = await tool.execute(toolCall.arguments);
-                        console.log(`[${this.ts()}] [TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`);
+                        log.info(`[${this.ts()}] [TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`);
                         
                         usedToolInputs.add(inputKey);
                         cycleHistory.push({ tool: toolName, input: toolInput, status: result.success ? 'success' : 'error' });
@@ -419,7 +421,7 @@ ${userText}`;
             if (hasNoToolsRequested) {
                 const finalContent = atomicData?.action?.content || lastBestContent || sanitizeContent(response.content || '');
                 if (finalContent.length > 0) {
-                    console.log(`[${this.ts()}] [EARLY-EXIT] No tool calls requested → returning content (step ${stepCount})`);
+                    log.info(`[${this.ts()}] [EARLY-EXIT] No tool calls requested → returning content (step ${stepCount})`);
                     return finalContent;
                 }
             }
@@ -431,7 +433,7 @@ ${userText}`;
                 const inputKey = `${toolName}:${toolInput}`;
 
                 if (usedToolInputs.has(inputKey)) {
-                    console.warn(`[${this.ts()}] [ATOMIC-TOOL] Blocked repeated call: ${toolName}`);
+                    log.warn(`[${this.ts()}] [ATOMIC-TOOL] Blocked repeated call: ${toolName}`);
                     loopMessages.push({ 
                         role: 'system', 
                         content: `[AVISO] Você já tentou a ferramenta "${toolName}" com este input. NÃO repita. Mude a estratégia ou responda com o que já sabe.` 
@@ -446,7 +448,7 @@ ${userText}`;
                         (tool as any).setContext((this as any).currentChatId || '', (this as any).currentBotToken || '');
                     }
                     const result = await tool.execute(atomicData.action.input || {});
-                    console.log(`[${this.ts()}] [ATOMIC-TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
+                    log.info(`[${this.ts()}] [ATOMIC-TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
                     
                     usedToolInputs.add(inputKey);
                     cycleHistory.push({ tool: toolName, input: toolInput, status: result.success ? 'success' : 'error' });
@@ -465,7 +467,7 @@ ${userText}`;
 
             // 5. Limite de passos atingido
             if (stepCount >= maxSteps) {
-                console.warn(`[${this.ts()}] [LOOP] Step limit reached. Finalizing...`);
+                log.warn(`[${this.ts()}] [LOOP] Step limit reached. Finalizing...`);
                 break;
             }
         }
@@ -474,7 +476,7 @@ ${userText}`;
         if (lastBestContent) return lastBestContent;
 
         // Se chegamos aqui sem conteúdo útil, forçar uma síntese final do modelo
-        console.log(`[${this.ts()}] [FALLBACK] Generating final synthesis...`);
+        log.info(`[${this.ts()}] [FALLBACK] Generating final synthesis...`);
         loopMessages.push({ 
             role: 'system', 
             content: 'FINALIZAÇÃO OBRIGATÓRIA: Forneça uma resposta honesta agora. Se não obteve dados suficientes, admita a limitação claramente. Não invente conclusões e não use linguagem vaga. Foque em ser útil e transparente.' 
@@ -493,7 +495,7 @@ ${userText}`;
         if (chatProfile?.model) {
             const provider = this.providerFactory.getProvider();
             if (provider) {
-                console.log(`[AGENT] Setting model ${chatProfile.model} on provider ${provider.name}`);
+                log.info(`Setting model ${chatProfile.model} on provider ${provider.name}`);
                 provider.setModel(chatProfile.model);
             }
         }
@@ -506,7 +508,7 @@ ${userText}`;
                 timeoutMs
             ));
         } catch (error: any) {
-            console.error(`[AGENT] Critical failure: ${error.message}.`);
+            log.error(`Critical failure: ${error.message}.`);
             throw error;
         }
     }

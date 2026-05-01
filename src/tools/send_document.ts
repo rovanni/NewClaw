@@ -9,6 +9,8 @@ import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('SendDocument');
 
 export class SendDocumentTool implements ToolExecutor {
     name = 'send_document';
@@ -63,7 +65,7 @@ export class SendDocumentTool implements ToolExecutor {
         }
 
         if (!this.chatId || !this.botToken) {
-            console.log(`[send_document] ERRO: contexto não configurado. chatId=${this.chatId}, botToken=${this.botToken ? "SET" : "EMPTY"}`);
+            log.info(`[send_document] ERRO: contexto não configurado. chatId=${this.chatId}, botToken=${this.botToken ? "SET" : "EMPTY"}`);
             return { success: false, output: '', error: 'Contexto do Telegram não configurado.' };
         }
 

@@ -1,6 +1,8 @@
 import { MemoryManager } from './MemoryManager';
 import { GraphAnalytics } from './GraphAnalytics';
 import { EmbeddingService } from './EmbeddingService';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Memorycurator');
 
 interface CuratorResult {
     orphansFixed: number;
@@ -227,12 +229,12 @@ export class MemoryCurator {
             `).run();
 
             if (result.changes > 0) {
-                console.log(`[TemporalDecay] ${result.changes} edges decayed (×0.98)`);
+                log.info(`[TemporalDecay] ${result.changes} edges decayed (×0.98)`);
             }
 
             return { decayed: result.changes };
         } catch (error: any) {
-            console.error('[TemporalDecay] Error:', error.message);
+            log.error('[TemporalDecay] Error:', error.message);
             return { decayed: 0 };
         }
     }
@@ -256,24 +258,24 @@ export class MemoryCurator {
                     const available = await this.embeddingService.isAvailable();
                     if (available) {
                         const embedded = await this.embeddingService.embedMissing(10);
-                        if (embedded > 0) console.log(`[MemoryCurator] Embedded ${embedded} new nodes`);
+                        if (embedded > 0) log.info(`[MemoryCurator] Embedded ${embedded} new nodes`);
                     }
                 }
                 
                 if (result.orphansFixed > 0) {
-                    console.log(`[MemoryCurator] Auto-curated: ${result.details.join('; ')}`);
+                    log.info(`[MemoryCurator] Auto-curated: ${result.details.join('; ')}`);
                 }
             } catch (err) {
-                console.error('[MemoryCurator] Auto-curation error:', err);
+                log.error('[MemoryCurator] Auto-curation error:', err);
             }
         }, intervalMs);
         
         // Initial run
         this.curate().then(async r => {
             await this.analytics.updateMetrics();
-            if (r.orphansFixed > 0) console.log(`[MemoryCurator] Initial: ${r.details.join('; ')}`);
-            else console.log('[MemoryCurator] Initial: graph clean, metrics updated.');
-        }).catch(e => console.error('[MemoryCurator] Initial error:', e));
+            if (r.orphansFixed > 0) log.info(`[MemoryCurator] Initial: ${r.details.join('; ')}`);
+            else log.info('[MemoryCurator] Initial: graph clean, metrics updated.');
+        }).catch(e => log.error('[MemoryCurator] Initial error:', e));
     }
 
     stopAutoCurate(): void {

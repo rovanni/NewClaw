@@ -11,6 +11,8 @@ import { SessionLearner } from '../session/SessionLearner';
 import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Telegraminputhandler');
 
 export interface TelegramInputConfig {
     botToken: string;
@@ -62,7 +64,7 @@ export class TelegramInputHandler {
         this.bot.use(async (ctx, next) => {
             const userId = ctx.from?.id.toString();
             if (!userId || !this.config.allowedUserIds.includes(userId)) {
-                console.log(`[INPUT] Usuário não autorizado: ${userId}`);
+                log.info(`Usuário não autorizado: ${userId}`);
                 return;
             }
             return next();
@@ -119,9 +121,9 @@ export class TelegramInputHandler {
         });
 
 
-        console.log('✅ TelegramInputHandler started');
+        log.info('✅ TelegramInputHandler started');
         await this.bot.start({
-            onStart: () => console.log('🤖 Bot rodando!'),
+            onStart: () => log.info('🤖 Bot rodando!'),
             allowed_updates: ['message']
         });
     }
@@ -147,7 +149,7 @@ export class TelegramInputHandler {
 
         const userId = ctx.from!.id.toString();
         const sessionKey: SessionKey = { channel: 'telegram', userId };
-        console.log(`[TELEGRAM-INPUT] Texto de ${userId}: "${text.slice(0, 50)}"`);
+        log.info(`Texto de ${userId}: "${text.slice(0, 50)}"`);
 
         // Record user message in session transcript
         await this.sessionManager.recordUserMessage(sessionKey, text);
@@ -200,14 +202,14 @@ export class TelegramInputHandler {
             // Learn from this exchange: extract facts into cognitive graph
             if (this.sessionLearner) {
                 this.sessionLearner.learnFromSession(sessionKey).catch(err => {
-                    console.warn('[INPUT] SessionLearner failed:', (err as Error).message);
+                    log.warn('SessionLearner failed:', (err as Error).message);
                 });
             }
             if (response && response.trim()) {
                 // Skip confirmation messages from send_audio/send_document — the media was already sent
                 const isMediaConfirmation = /^🔊 (Áudio|Arquivo|Documento) enviado/i.test(response.trim());
                 if (isMediaConfirmation) {
-                    console.log(`[INPUT] Skipping text reply for media confirmation: ${response.trim().slice(0, 50)}`);
+                    log.info(`Skipping text reply for media confirmation: ${response.trim().slice(0, 50)}`);
                 } else {
                     // Telegram limit: 4096 chars. Split if needed.
                     const maxLen = 4000;
@@ -225,7 +227,7 @@ export class TelegramInputHandler {
                 await ctx.reply('⚠️ Resposta vazia do modelo. Tente novamente.');
             }
         } catch (error: any) {
-            console.error('[INPUT] Erro:', error);
+            log.error('Erro:', error);
             await ctx.reply(`⚠️ Erro ao processar: ${error.message}`);
         } finally {
             clearInterval(actionInterval);
@@ -418,7 +420,7 @@ export class TelegramInputHandler {
         const fileId = photo.file_id;
         const caption = (ctx.message as any)?.caption || '';
         
-        console.log(`[INPUT] Foto de ${userId}, tamanho: ${photo.width}x${photo.height}`);
+        log.info(`Foto de ${userId}, tamanho: ${photo.width}x${photo.height}`);
         await ctx.replyWithChatAction('typing');
         const actionInterval = setInterval(() => {
             ctx.replyWithChatAction('typing').catch(() => {});
@@ -429,7 +431,7 @@ export class TelegramInputHandler {
             const file = await ctx.api.getFile(fileId);
             const fileUrl = `https://api.telegram.org/file/bot${this.config.botToken}/${file.file_path}`;
             
-            console.log(`[PHOTO] Baixando imagem: ${file.file_path}`);
+            log.info(`Baixando imagem: ${file.file_path}`);
             const imgResponse = await fetch(fileUrl);
             if (!imgResponse.ok) {
                 throw new Error(`Falha ao baixar imagem: ${imgResponse.status}`);
@@ -449,7 +451,7 @@ export class TelegramInputHandler {
             const visionServer = process.env.VISION_SERVER || 'http://localhost:11434';
             const visionModel = process.env.MODEL_VISION || 'gemma4:31b-cloud';
             
-            console.log(`[PHOTO] Enviando para modelo de visão: ${visionModel} @ ${visionServer}`);
+            log.info(`Enviando para modelo de visão: ${visionModel} @ ${visionServer}`);
             
             const visionResponse = await fetch(`${visionServer}/api/chat`, {
                 method: 'POST',
@@ -479,7 +481,7 @@ export class TelegramInputHandler {
                 return;
             }
 
-            console.log(`[PHOTO] Análise recebida: ${analysis.length} chars`);
+            log.info(`Análise recebida: ${analysis.length} chars`);
 
             // If there's a caption, process through agent loop for richer response
             if (caption) {
@@ -514,7 +516,7 @@ export class TelegramInputHandler {
             }
 
         } catch (error: any) {
-            console.error('[PHOTO] Erro:', error);
+            log.error('Erro:', error);
             await ctx.reply(`⚠️ Erro ao processar imagem: ${error.message?.slice(0, 200) || 'desconhecido'}`);
         } finally {
             clearInterval(actionInterval);
@@ -534,7 +536,7 @@ export class TelegramInputHandler {
             return;
         }
 
-        console.log(`[INPUT] Áudio de ${userId} (voice=${isVoiceNote})`);
+        log.info(`Áudio de ${userId} (voice=${isVoiceNote})`);
         await ctx.replyWithChatAction('record_voice');
         const actionInterval = setInterval(() => {
             ctx.replyWithChatAction('record_voice').catch(() => {});
@@ -565,7 +567,7 @@ export class TelegramInputHandler {
                 return;
             }
 
-            console.log(`[INPUT] Transcrição: "${transcript.slice(0, 50)}"`);
+            log.info(`Transcrição: "${transcript.slice(0, 50)}"`);
 
             // Record voice message in session transcript
             await this.sessionManager.recordUserMessage(sessionKey, `[Áudio: ${transcript.slice(0, 100)}]`);
@@ -588,7 +590,7 @@ export class TelegramInputHandler {
             }
 
         } catch (error: any) {
-            console.error('[INPUT] Erro no áudio:', error);
+            log.error('Erro no áudio:', error);
             await ctx.reply(`⚠️ Erro ao processar áudio: ${error.message}`);
         } finally {
             clearInterval(actionInterval);
@@ -609,7 +611,7 @@ export class TelegramInputHandler {
         const fileName = doc.file_name || '';
         const fileId = doc.file_id;
 
-        console.log(`[INPUT] Documento de ${userId}: ${fileName} (${mimeType})`);
+        log.info(`Documento de ${userId}: ${fileName} (${mimeType})`);
 
         if (!mimeType.includes('pdf') && !mimeType.includes('html') && !fileName.endsWith('.md') && !fileName.endsWith('.txt') && !fileName.endsWith('.html') && !fileName.endsWith('.css') && !fileName.endsWith('.js') && !fileName.endsWith('.json')) {
             await ctx.reply('⚠️ No momento só consigo processar PDF, Markdown e texto.');
@@ -648,7 +650,7 @@ export class TelegramInputHandler {
                 }
                 // Copy from tmp to workspace
                 fs.copyFileSync(filePath, savedPath);
-                console.log(`[INPUT] Arquivo web salvo: ${savedPath}`);
+                log.info(`Arquivo web salvo: ${savedPath}`);
                 
                 // Clean tmp file
                 fs.unlinkSync(filePath);
@@ -684,7 +686,7 @@ export class TelegramInputHandler {
             }
 
         } catch (error: any) {
-            console.error('[INPUT] Erro no documento:', error);
+            log.error('Erro no documento:', error);
             await ctx.reply(`⚠️ Erro ao processar documento: ${error.message}`);
         } finally {
             clearInterval(actionInterval);
@@ -733,16 +735,16 @@ export class TelegramInputHandler {
                 const text = data.text || data.transcription || '';
 
                 if (text.trim()) {
-                    console.log('[WHISPER-API] Transcription OK via ' + endpoint.name + ' (' + text.length + ' chars)');
+                    log.info('Transcription OK via ' + endpoint.name + ' (' + text.length + ' chars)');
                     return text.trim();
                 }
             } catch (error: any) {
-                console.error('[WHISPER-API] ' + endpoint.name + ' failed: ' + error.message);
+                log.error('' + endpoint.name + ' failed: ' + error.message);
             }
         }
 
         // Fallback: whisper-cli local
-        console.log('[WHISPER-API] All endpoints failed, trying local whisper');
+        log.info('All endpoints failed, trying local whisper');
         return this.transcribeWithWhisper(wavPath);
     }
 
@@ -756,7 +758,7 @@ export class TelegramInputHandler {
             const command = `mkdir -p ${outDir} && ${pythonWhisper} "${wavPath}" --model ${model} --language pt --output_format txt --output_dir ${outDir} 2>/dev/null && cat ${outDir}/$(basename "${wavPath}").txt 2>/dev/null`;
             execFile('sh', ['-c', command], { timeout: 120000 }, (error, stdout) => {
                 if (error || !stdout?.trim()) {
-                    console.error('[WHISPER] Local transcription failed:', error?.message);
+                    log.error('Local transcription failed:', error?.message);
                     resolve('');
                     return;
                 }

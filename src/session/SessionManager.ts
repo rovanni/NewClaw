@@ -14,6 +14,8 @@ import { SessionTranscript, TranscriptEntry, TranscriptMeta, SessionEventType } 
 import { ContextCompressor } from '../loop/ContextCompressor';
 import { ProviderFactory } from '../core/ProviderFactory';
 import fs from 'fs';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Sessionmanager');
 
 /**
  * Estimate token count for a string.
@@ -100,7 +102,7 @@ export class SessionManager {
         try {
             await Promise.race([current, mutexTimeout]);
         } catch (err) {
-            console.error(`[SESSION] Mutex wait timeout for ${sid}, proceeding anyway:`, (err as Error).message);
+            log.error(`Mutex wait timeout for ${sid}, proceeding anyway:`, (err as Error).message);
         }
 
         try {
@@ -143,7 +145,7 @@ export class SessionManager {
             const seq = transcript.append('user', content, meta);
             this.memory.addMessage(this.conversationId(key), 'user', content);
             await this.maybeCompress(key);
-            console.log(`[SESSION] ${sid} user seq=${seq} len=${content.length}`);
+            log.info(`${sid} user seq=${seq} len=${content.length}`);
             return seq;
         });
     }
@@ -154,7 +156,7 @@ export class SessionManager {
             const transcript = await this.getOrCreateSession(key);
             const seq = transcript.append('assistant', content, meta);
             this.memory.addMessage(this.conversationId(key), 'assistant', content);
-            console.log(`[SESSION] ${sid} assistant seq=${seq} len=${content.length} tokens≈${Math.round(estimateTokens(content))}`);
+            log.info(`${sid} assistant seq=${seq} len=${content.length} tokens≈${Math.round(estimateTokens(content))}`);
             return seq;
         });
     }
@@ -233,7 +235,7 @@ export class SessionManager {
         const compressCount = userAssistantMessages.length - this.config.maxContextMessages;
         if (compressCount <= 0) return;
 
-        console.log(`[SESSION] Compressing ${userAssistantMessages.length} messages (${tokenEstimate} tokens) for ${sid}`);
+        log.info(`Compressing ${userAssistantMessages.length} messages (${tokenEstimate} tokens) for ${sid}`);
 
         const messagesToCompress = entries.slice(0, compressCount);
 
@@ -247,7 +249,7 @@ export class SessionManager {
                 const summaryMsg = compressed.find(m => m.role === 'system');
                 summary = summaryMsg?.content || this.fallbackSummary(messagesToCompress);
             } catch (err) {
-                console.warn('[SESSION] Compression failed, using fallback:', err);
+                log.warn('compression_failed', 'Compression failed, using fallback', { error: String(err) });
                 summary = this.fallbackSummary(messagesToCompress);
             }
         } else {
@@ -272,7 +274,7 @@ export class SessionManager {
             compressed_up_to: checkpoint.seq
         });
 
-        console.log(`[SESSION] Checkpoint: seq=${checkpoint.seq} compressed=${messagesToCompress.length} tokens≈${tokenEstimate}`);
+        log.info(`Checkpoint: seq=${checkpoint.seq} compressed=${messagesToCompress.length} tokens≈${tokenEstimate}`);
     }
 
     private fallbackSummary(messages: TranscriptEntry[]): string {
@@ -311,7 +313,7 @@ export class SessionManager {
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 `).run(sid, checkpoint.seq, checkpoint.summary, checkpoint.originalCount, checkpoint.compressedAt, checkpoint.model || null, checkpoint.tokenEstimate);
             } catch (err2) {
-                console.warn('[SESSION] Failed to save checkpoint:', err2);
+                log.warn('checkpoint_save_failed', 'Failed to save checkpoint', { error: String(err2) });
             }
         }
     }
@@ -342,9 +344,9 @@ export class SessionManager {
                     tokenEstimate: row.token_estimate || 0
                 });
             }
-            console.log(`[SESSION] Loaded ${rows.length} checkpoints, ${this.sessions.size} active sessions`);
+            log.info(`Loaded ${rows.length} checkpoints, ${this.sessions.size} active sessions`);
         } catch (err) {
-            console.warn('[SESSION] Checkpoints will be created on first compress:', (err as Error).message);
+            log.warn('Checkpoints will be created on first compress:', (err as Error).message);
         }
     }
 
@@ -461,7 +463,7 @@ export class SessionManager {
         this.sessions.set(sid, newTranscript);
 
         const afterStats = newTranscript.getStats();
-        console.log(`[SESSION] Compacted ${sid}: ${before} -> ${afterStats.totalBytes} bytes (saved ${before - afterStats.totalBytes})`);
+        log.info(`Compacted ${sid}: ${before} -> ${afterStats.totalBytes} bytes (saved ${before - afterStats.totalBytes})`);
 
         return { before, after: afterStats.totalBytes, saved: before - afterStats.totalBytes };
     }
@@ -476,11 +478,11 @@ export class SessionManager {
             const existing = db.prepare('SELECT id FROM conversations WHERE id = ?').get(convId);
             if (!existing) {
                 db.prepare('INSERT INTO conversations (id, user_id, provider) VALUES (?, ?, ?)').run(convId, key.userId, key.channel);
-                console.log(`[SESSION] Created conversation: ${convId}`);
+                log.info(`Created conversation: ${convId}`);
             }
         } catch (err) {
             // Conversation may already exist or table has different schema
-            console.warn(`[SESSION] ensureConversation failed for ${convId}:`, (err as Error).message);
+            log.warn(`ensureConversation failed for ${convId}:`, (err as Error).message);
         }
     }
 }

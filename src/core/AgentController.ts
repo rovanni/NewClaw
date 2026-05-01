@@ -32,6 +32,8 @@ import { SchedulerService } from '../services/SchedulerService';
 import { ScheduleTool } from '../tools/schedule_tool';
 import { SessionLearner } from '../session/SessionLearner';
 import { MemoryGovernor } from '../memory/MemoryGovernor';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Agentcontroller');
 
 export interface NewClawConfig {
     telegramBotToken: string;
@@ -171,7 +173,7 @@ export class AgentController {
                     const params = JSON.parse(task.action_params || '{}');
                     prompt = `[AGENDADO] ${params.message || task.label}`;
                 }
-                console.log(`[Scheduler] Triggering task #${task.id}: ${task.label} → chat ${chatId}`);
+                log.info(`[Scheduler] Triggering task #${task.id}: ${task.label} → chat ${chatId}`);
                 const result = await this.agentLoop.process(chatId, prompt);
                 // Send result via Telegram bot
                 if (this.inputHandler && (this.inputHandler as any).bot) {
@@ -181,7 +183,7 @@ export class AgentController {
                     });
                 }
             } catch (e) {
-                console.error(`[Scheduler] Failed to send scheduled message:`, e);
+                log.error(`[Scheduler] Failed to send scheduled message:`, e);
             }
         });
 
@@ -218,27 +220,27 @@ export class AgentController {
      * Inicia o NewClaw
      */
     async start(): Promise<void> {
-        console.log('🚀 NewClaw starting...');
-        console.log(`   Provider: ${this.providerFactory.getDefaultProvider()}`);
-        console.log(`   Available: ${this.providerFactory.getAvailableProviders().join(', ')}`);
-        console.log(`   Language: ${this.config.language}`);
-        console.log(`   Skills: ${this.skillLoader.getSkillNames().join(', ') || 'none'}`);
+        log.info('🚀 NewClaw starting...');
+        log.info(`   Provider: ${this.providerFactory.getDefaultProvider()}`);
+        log.info(`   Available: ${this.providerFactory.getAvailableProviders().join(', ')}`);
+        log.info(`   Language: ${this.config.language}`);
+        log.info(`   Skills: ${this.skillLoader.getSkillNames().join(', ') || 'none'}`);
 
         // Run governance cycle on boot (decay + conflict + GC)
         try {
             const stats = this.memoryGovernor.runGovernanceCycle();
-            console.log(`[GOVERNOR] Boot cycle: ${stats.nodesDecayed} decayed, ${stats.conflictsDetected} conflicts, ${stats.nodesGarbageCollected} GC'd`);
+            log.info(`Boot cycle: ${stats.nodesDecayed} decayed, ${stats.conflictsDetected} conflicts, ${stats.nodesGarbageCollected} GC'd`);
         } catch (err) {
-            console.warn('[GOVERNOR] Boot cycle failed:', (err as Error).message);
+            log.warn('Boot cycle failed:', (err as Error).message);
         }
 
         // Schedule governance cycle every 24 hours
         setInterval(() => {
             try {
                 const stats = this.memoryGovernor.runGovernanceCycle();
-                console.log(`[GOVERNOR] Daily cycle: ${JSON.stringify(stats)}`);
+                log.info(`Daily cycle: ${JSON.stringify(stats)}`);
             } catch (err) {
-                console.warn('[GOVERNOR] Daily cycle failed:', (err as Error).message);
+                log.warn('Daily cycle failed:', (err as Error).message);
             }
         }, 24 * 60 * 60 * 1000);
 
@@ -257,7 +259,7 @@ export class AgentController {
             const result = await this.agentLoop.process(sessionId, message);
             return result;
         } catch (err: any) {
-            console.error('Web message error:', err.message);
+            log.error('Web message error:', err.message);
             return `Erro: ${err.message}`;
         }
     }
@@ -288,7 +290,7 @@ export class AgentController {
             this.agentLoop.registerTool(tool);
         }
 
-        console.log(`   Tools: ${ToolRegistry.getStatus().map(t => `${t.name}${t.dangerous ? '⚠️' : ''}${t.enabled ? '' : '❌'}`).join(', ')}`);
+        log.info(`   Tools: ${ToolRegistry.getStatus().map(t => `${t.name}${t.dangerous ? '⚠️' : ''}${t.enabled ? '' : '❌'}`).join(', ')}`);
     }
 
     /**

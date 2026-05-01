@@ -20,6 +20,8 @@
  */
 
 import Database from 'better-sqlite3';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Attentionfeedback');
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -730,15 +732,15 @@ export class AttentionFeedback {
             try {
                 const decayed = this.applyDecay();
                 if (decayed > 0) {
-                    console.log(`[AttentionFeedback] Decay: ${decayed} nodes`);
+                    log.info(`[AttentionFeedback] Decay: ${decayed} nodes`);
                 }
             } catch (e) {
-                console.error('[AttentionFeedback] Decay error:', e);
+                log.error('[AttentionFeedback] Decay error:', e);
             }
         }, DECAY_INTERVAL);
 
         this.normTimer = setInterval(() => {
-            try { this.normalize(); } catch (e) { console.error('[AttentionFeedback] Norm error:', e); }
+            try { this.normalize(); } catch (e) { log.error('[AttentionFeedback] Norm error:', e); }
         }, NORMALIZATION_INTERVAL);
 
         this.monitorTimer = setInterval(() => {
@@ -747,20 +749,20 @@ export class AttentionFeedback {
                 if (anomalies.length > 0) {
                     if (anomalies.length > 0) {
                         const types = anomalies.map((a: any) => a.type).join(', ');
-                        console.log(`[AttentionFeedback] Monitor: ${anomalies.length} anomalies — ${types}`);
+                        log.info(`[AttentionFeedback] Monitor: ${anomalies.length} anomalies — ${types}`);
                     }
                 }
-            } catch (e) { console.error('[AttentionFeedback] Monitor error:', e); }
+            } catch (e) { log.error('[AttentionFeedback] Monitor error:', e); }
         }, MONITORING_INTERVAL);
 
-        console.log('[AttentionFeedback] Background jobs started (decay=1h, norm=30min, monitor=5min)');
+        log.info('[AttentionFeedback] Background jobs started (decay=1h, norm=30min, monitor=5min)');
     }
 
     stopBackgroundJobs(): void {
         if (this.decayTimer) { clearInterval(this.decayTimer); this.decayTimer = null; }
         if (this.normTimer) { clearInterval(this.normTimer); this.normTimer = null; }
         if (this.monitorTimer) { clearInterval(this.monitorTimer); this.monitorTimer = null; }
-        console.log('[AttentionFeedback] Background jobs stopped');
+        log.info('[AttentionFeedback] Background jobs stopped');
     }
 
     // ── Stats ───────────────────────────────────────────────

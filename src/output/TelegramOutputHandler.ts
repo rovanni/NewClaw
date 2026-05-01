@@ -7,6 +7,8 @@ import { Context, InputFile } from 'grammy';
 import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Telegramoutputhandler');
 
 export interface OutputConfig {
     maxMessageLength: number;
@@ -88,7 +90,7 @@ export class TelegramOutputHandler {
             await this.convertToOgg(mp3Path, oggPath);
             await ctx.replyWithVoice(new InputFile(oggPath));
         } catch (error: any) {
-            console.error('[OUTPUT] Erro ao gerar áudio:', error);
+            log.error('Erro ao gerar áudio:', error);
             await ctx.reply(content);
         } finally {
             [mp3Path, oggPath].forEach(f => {
@@ -105,7 +107,7 @@ export class TelegramOutputHandler {
             const command = `bash ${scriptPath} "${escaped}" ${outputPath} ${this.config.audioVoice} "${this.config.audioRate}"`;
             execFile('sh', ['-c', command], (error, stdout, stderr) => {
                 if (error) {
-                    console.error('[TTS] Erro:', stderr || error.message);
+                    log.error('Erro:', stderr || error.message);
                     reject(error);
                 } else {
                     resolve();

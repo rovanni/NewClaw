@@ -7,6 +7,8 @@ import dotenv from 'dotenv';
 import { AgentController } from './core/AgentController';
 import { DashboardServer } from './dashboard/DashboardServer';
 import { Logger } from './shared/Logger';
+import { createLogger } from './shared/AppLogger';
+const log = createLogger('Index');
 
 // Inicializar Logger (adiciona timestamps ao console.log)
 Logger.hookGlobalConsole();
@@ -48,23 +50,23 @@ const config = {
 async function main() {
     // Global error handlers to prevent silent crashes
     process.on('unhandledRejection', (reason, promise) => {
-        console.error('[FATAL] Unhandled Rejection:', reason);
+        log.error('Unhandled Rejection:', reason);
     });
     process.on('uncaughtException', (error) => {
-        console.error('[FATAL] Uncaught Exception:', error);
+        log.error('Uncaught Exception:', error);
     });
 
-    console.log('🚀 NewClaw v0.1.0 starting...');
-    console.log(`   Language: ${config.language}`);
-    console.log(`   Provider: ${config.defaultProvider}`);
+    log.info('🚀 NewClaw v0.1.0 starting...');
+    log.info(`   Language: ${config.language}`);
+    log.info(`   Provider: ${config.defaultProvider}`);
 
     if (!config.telegramBotToken) {
-        console.error('❌ TELEGRAM_BOT_TOKEN não configurado!');
+        log.error('❌ TELEGRAM_BOT_TOKEN não configurado!');
         process.exit(1);
     }
 
     if (config.telegramAllowedUserIds.length === 0 || config.telegramAllowedUserIds[0] === '') {
-        console.error('❌ TELEGRAM_ALLOWED_USER_IDS não configurado!');
+        log.error('❌ TELEGRAM_ALLOWED_USER_IDS não configurado!');
         process.exit(1);
     }
 
@@ -76,9 +78,9 @@ async function main() {
     dashboard.setProviderFactory(controller.getProviderFactory());
     dashboard.setMemoryManager(controller.getMemory());
     dashboard.start(config.dashboardPort);
-    console.log(`\n⚙️  Configurações e Whitelist disponíveis em: http://localhost:${config.dashboardPort}/config\n`);
+    log.info(`\n⚙️  Configurações e Whitelist disponíveis em: http://localhost:${config.dashboardPort}/config\n`);
 
     await controller.start();
 }
 
-main().catch(console.error);
+main().catch(log.error);

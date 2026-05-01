@@ -10,6 +10,8 @@
  */
 
 import { MemoryManager, MemoryNode } from './MemoryManager';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Memorygovernor');
 
 export interface GovernorConfig {
     /** Confidence decay factor per day (e.g., 0.98 = 2% decay per day) */
@@ -154,7 +156,7 @@ export class MemoryGovernor {
         }
 
         this.lastRun = now;
-        console.log(`[GOVERNOR] Confidence decay: ${decayed}/${total} nodes affected`);
+        log.info(`Confidence decay: ${decayed}/${total} nodes affected`);
         return { decayed, total };
     }
 
@@ -198,7 +200,7 @@ export class MemoryGovernor {
             }
         }
 
-        console.log(`[GOVERNOR] Conflict detection: ${conflicts.length} conflicts found`);
+        log.info(`Conflict detection: ${conflicts.length} conflicts found`);
         return conflicts;
     }
 
@@ -402,7 +404,7 @@ export class MemoryGovernor {
             }
         }
 
-        console.log(`[GOVERNOR] Conflict resolution: ${resolved} resolved, ${unresolved} unresolved, ${archived} archived`);
+        log.info(`Conflict resolution: ${resolved} resolved, ${unresolved} unresolved, ${archived} archived`);
         return { resolved, unresolved, archived };
     }
 
@@ -466,7 +468,7 @@ export class MemoryGovernor {
             }
         }
 
-        console.log(`[GOVERNOR] Garbage collection: ${removed} removed, ${archived} archived, ${allNodes.length} inspected`);
+        log.info(`Garbage collection: ${removed} removed, ${archived} archived, ${allNodes.length} inspected`);
         return { removed, archived, inspected: allNodes.length };
     }
 
@@ -560,7 +562,7 @@ export class MemoryGovernor {
      * Should be called periodically (e.g., on boot or every 24h).
      */
     runGovernanceCycle(): GovernorStats {
-        console.log('[GOVERNOR] Starting governance cycle...');
+        log.info('Starting governance cycle...');
 
         // Step 1: Decay all confidences
         const decayResult = this.decayAllConfidences();
@@ -583,7 +585,7 @@ export class MemoryGovernor {
             factsPenalized: Array.from(this.accessLog.values()).filter(a => !a.wasHelpful).length
         };
 
-        console.log(`[GOVERNOR] Cycle complete: ${JSON.stringify(stats)}`);
+        log.info(`Cycle complete: ${JSON.stringify(stats)}`);
         return stats;
     }
 
@@ -647,7 +649,7 @@ export class MemoryGovernor {
             // Remove the node
             db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(nodeId);
         } catch (err) {
-            console.warn(`[GOVERNOR] Failed to remove node ${nodeId}:`, (err as Error).message);
+            log.warn(`Failed to remove node ${nodeId}:`, (err as Error).message);
         }
     }
 
@@ -665,9 +667,9 @@ export class MemoryGovernor {
                 metadata: { ...node.metadata, archived: 'true', archived_at: new Date().toISOString(), original_type: node.type },
                 last_updated: new Date().toISOString()
             });
-            console.log(`[GOVERNOR] Archived node: ${node.id} (was ${node.type}, confidence was ${node.confidence})`);
+            log.info(`Archived node: ${node.id} (was ${node.type}, confidence was ${node.confidence})`);
         } catch (err) {
-            console.warn(`[GOVERNOR] Failed to archive node ${node.id}:`, (err as Error).message);
+            log.warn(`Failed to archive node ${node.id}:`, (err as Error).message);
         }
     }
 }

@@ -8,6 +8,8 @@
  */
 
 import { ProviderFactory } from '../core/ProviderFactory';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Modelrouter');
 
 // Perfil de modelos por categoria
 export interface ModelProfile {
@@ -99,7 +101,7 @@ export class ModelRouter {
                 if (config[cat]) {
                     const profile = this.config.profiles.find(p => p.category === cat);
                     if (profile) {
-                        console.log(`[MODEL_ROUTER] Overriding ${cat} model with: ${config[cat]}`);
+                        log.info(`Overriding ${cat} model with: ${config[cat]}`);
                         profile.model = config[cat];
                     }
                 }
@@ -120,12 +122,12 @@ export class ModelRouter {
             const category = await this.llmClassify(query);
             const profile = this.getProfileByCategory(category);
             if (profile) {
-                console.log(`[MODEL_ROUTER] LLM routing: ${category} → ${profile.model}`);
+                log.info(`LLM routing: ${category} → ${profile.model}`);
                 this.logUsage(profile.id);
                 return profile;
             }
         } catch (err) {
-            console.warn(`[MODEL_ROUTER] LLM classification failed: ${(err as Error).message}. Falling back to deterministic.`);
+            log.warn(`LLM classification failed: ${(err as Error).message}. Falling back to deterministic.`);
         }
 
         // Fallback: Deterministic classification
@@ -134,7 +136,7 @@ export class ModelRouter {
         
         if (profile) {
             this.logUsage(profile.id);
-            console.log(`[MODEL_ROUTER] Deterministic routing: ${category} → ${profile.model}`);
+            log.info(`Deterministic routing: ${category} → ${profile.model}`);
             return profile;
         }
 
@@ -218,7 +220,7 @@ Category:`;
 
             throw new Error(`Invalid classification: "${content}"`);
         } catch (err) {
-            console.warn(`[MODEL_ROUTER] LLM classification error: ${(err as Error).message}`);
+            log.warn(`LLM classification error: ${(err as Error).message}`);
             throw err;
         }
     }

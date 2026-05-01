@@ -15,6 +15,8 @@
 import fs from 'fs';
 import path from 'path';
 import { mkdirSync, existsSync } from 'fs';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Sessiontranscript');
 
 export type SessionEventType = 'user' | 'assistant' | 'system' | 'tool_call' | 'tool_result' | 'checkpoint';
 
@@ -107,7 +109,7 @@ export class SessionTranscript {
         this.writeStream = fs.createWriteStream(this.filePath, { flags: 'a', encoding: 'utf-8' });
         this.initialized = true;
 
-        console.log(`[TRANSCRIPT] Initialized: ${this.sessionId} (seq: ${this.seqCounter}, entries: ${this.index.totalEntries}, checkpoints: ${this.index.checkpoints.length})`);
+        log.info(`Initialized: ${this.sessionId} (seq: ${this.seqCounter}, entries: ${this.index.totalEntries}, checkpoints: ${this.index.checkpoints.length})`);
     }
 
     /**
@@ -132,7 +134,7 @@ export class SessionTranscript {
 
     private appendSync(role: SessionEventType, content: string, meta?: TranscriptMeta): number {
         if (!this.initialized || !this.writeStream) {
-            console.warn('[TRANSCRIPT] Not initialized, skipping append');
+            log.warn('Not initialized, skipping append');
             return -1;
         }
 
@@ -216,7 +218,7 @@ export class SessionTranscript {
             this.index.updatedAt = new Date().toISOString();
             fs.writeFileSync(this.indexPath, JSON.stringify(this.index, null, 2), 'utf-8');
         } catch (err) {
-            console.warn('[TRANSCRIPT] Failed to save index:', err);
+            log.warn('save_index_failed', 'Failed to save index', { error: String(err) });
         }
     }
 

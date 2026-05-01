@@ -1,5 +1,8 @@
 import { MemoryManager } from './MemoryManager';
 import { LouvainDetector } from './LouvainDetector';
+import { createLogger } from '../shared/AppLogger';
+
+const log = createLogger('GraphAnalytics');
 
 export class GraphAnalytics {
     private mm: MemoryManager;
@@ -107,10 +110,54 @@ export class GraphAnalytics {
             });
 
             transaction(nodes.map(n => n.id));
-            console.log(`[GraphAnalytics] Successfully updated centralities for ${nodes.length} nodes.`);
+            // Ensure node_metrics table exists
+            try {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS node_metrics (
+                        node_id TEXT PRIMARY KEY,
+                        usage_count INTEGER DEFAULT 0,
+                        last_accessed_at DATETIME,
+                        reinforcement_score REAL DEFAULT 0.0,
+                        memory_class TEXT DEFAULT 'latent',
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                `);
+            } catch { /* table already exists */ }
+
+            // Backfill: ensure every memory_node has a row in node_metrics
+            try {
+                db.prepare(`
+                    INSERT OR IGNORE INTO node_metrics (node_id, usage_count, last_accessed_at, reinforcement_score, memory_class)
+                    SELECT id, 0, CURRENT_TIMESTAMP, 0.0, 'latent' FROM memory_nodes
+                `).run();
+            } catch (e: any) {
+                log.warn('metrics_backfill_failed', e.message);
+            }
+
+            // Update node_metrics with computed analytics
+            const metricsStmt = db.prepare(`
+                UPDATE node_metrics
+                SET memory_class = CASE
+                    WHEN ? >= 5 THEN 'core'
+                    WHEN ? >= 2 THEN 'active'
+                    ELSE 'latent'
+                    END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE node_id = ?
+            `);
+
+            const metricsTransaction = db.transaction((nodeIds: string[], degreeMap: Record<string, number>) => {
+                for (const id of nodeIds) {
+                    metricsStmt.run(degreeMap[id] || 0, degreeMap[id] || 0, id);
+                }
+            });
+            metricsTransaction(nodes.map(n => n.id), degreeTotal);
+
+            log.info('metrics_updated', undefined, { nodeCount: nodes.length });
 
         } catch (error: any) {
-            console.error(`[GraphAnalytics] Failed to update metrics:`, error.message);
+            log.error('metrics_update_failed', error);
         }
     }
 
@@ -193,10 +240,10 @@ export class GraphAnalytics {
             });
             transaction(communities);
 
-            console.log(`[Louvain] ${summary.communityCount} communities detected across ${nodes.length} nodes`);
+            log.info('communities_detected', undefined, { communityCount: summary.communityCount, nodeCount: nodes.length });
             return { communityCount: summary.communityCount, updated: nodes.length };
         } catch (error: any) {
-            console.error(`[Louvain] Failed:`, error.message);
+            log.error('community_detection_failed', error);
             return { communityCount: 0, updated: 0 };
         }
     }

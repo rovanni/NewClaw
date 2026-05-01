@@ -7,6 +7,8 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Skillinstaller');
 
 const execAsync = promisify(exec);
 const DEFAULT_TIMEOUT = 60000;
@@ -95,7 +97,7 @@ export class SkillInstaller {
 
             return { success: false, error: 'Nenhum método de instalação fornecido (git, npm, npx).' };
         } catch (err: any) {
-            console.error('[SkillInstaller] Error:', err.message);
+            log.error('[SkillInstaller] Error:', err.message);
             return { success: false, error: err.message };
         }
     }

@@ -9,6 +9,8 @@
  */
 
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Contextcompressor');
 
 const MAX_CONTEXT_CHARS = 12000; // ~3000 tokens max for context
 
@@ -31,7 +33,7 @@ export class ContextCompressor {
             return messages;
         }
 
-        console.log(`[COMPRESSION] Compressing ${messages.length} messages (${Math.round(totalChars / 4)} tokens) → keeping last 4`);
+        log.info(`Compressing ${messages.length} messages (${Math.round(totalChars / 4)} tokens) → keeping last 4`);
 
         // Keep system message + last 4 messages
         const systemMsg = messages.find(m => m.role === 'system');
@@ -56,7 +58,7 @@ export class ContextCompressor {
         compressed.push(...recentMessages);
 
         const newTotal = compressed.reduce((sum, m) => sum + (m.content?.length || 0), 0);
-        console.log(`[COMPRESSION] ${totalChars} → ${newTotal} chars (saved ${Math.round((1 - newTotal / totalChars) * 100)}%)`);
+        log.info(`${totalChars} → ${newTotal} chars (saved ${Math.round((1 - newTotal / totalChars) * 100)}%)`);
 
         return compressed;
     }

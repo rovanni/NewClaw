@@ -10,6 +10,8 @@
 
 import Database from 'better-sqlite3';
 import path from 'path';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Schedulerservice');
 
 export interface ScheduledTask {
     id: number;
@@ -172,7 +174,7 @@ export class SchedulerService {
         for (const task of tasks) {
             this.startTaskTimer(task);
         }
-        console.log(`[Scheduler] Started ${tasks.length} scheduled tasks`);
+        log.info(`[Scheduler] Started ${tasks.length} scheduled tasks`);
     }
 
     /** Stop all timers (call on shutdown) */
@@ -181,7 +183,7 @@ export class SchedulerService {
             clearTimeout(timer);
         }
         this.timers.clear();
-        console.log('[Scheduler] All timers stopped');
+        log.info('[Scheduler] All timers stopped');
     }
 
     /** Calculate milliseconds until next cron tick (simplified) */
@@ -232,7 +234,7 @@ export class SchedulerService {
                     await this.onTrigger(task);
                     this.db.prepare('UPDATE scheduled_tasks SET last_run = datetime("now") WHERE id = ?').run(task.id);
                 } catch (e) {
-                    console.error(`[Scheduler] Error running task ${task.id}:`, e);
+                    log.error(`[Scheduler] Error running task ${task.id}:`, e);
                 }
 
                 // Schedule next occurrence

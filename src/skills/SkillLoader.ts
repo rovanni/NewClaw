@@ -7,6 +7,8 @@
 
 import fs from 'fs';
 import path from 'path';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Skillloader');
 
 export interface SkillMeta {
     name: string;
@@ -38,7 +40,7 @@ export class SkillLoader {
 
         const skillsDir = this.resolveSkillsDir();
         if (!skillsDir) {
-            console.log('[SKILL] Diretório de skills não encontrado:', this.skillsDir);
+            log.info('Diretório de skills não encontrado:', this.skillsDir);
             return [];
         }
 
@@ -54,10 +56,10 @@ export class SkillLoader {
                 const skill = this.loadSkill(skillPath);
                 if (skill) {
                     this.cache.set(skill.name, skill);
-                    console.log(`[SKILL] Carregada: ${skill.name} - ${skill.description}`);
+                    log.info(`Carregada: ${skill.name} - ${skill.description}`);
                 }
             } catch (error: any) {
-                console.error(`[SKILL] Erro ao carregar ${entry.name}:`, error.message);
+                log.error(`Erro ao carregar ${entry.name}:`, error.message);
             }
         }
 
@@ -74,7 +76,7 @@ export class SkillLoader {
         const defaultDir = './skills';
 
         if (this.skillsDir === legacyDir && fs.existsSync(defaultDir)) {
-            console.log(`[SKILL] Fallback automático: usando ${defaultDir} no lugar de ${legacyDir}`);
+            log.info(`Fallback automático: usando ${defaultDir} no lugar de ${legacyDir}`);
             this.skillsDir = defaultDir;
             return this.skillsDir;
         }
@@ -90,7 +92,7 @@ export class SkillLoader {
         const meta = this.parseFrontmatter(content);
 
         if (!meta.name) {
-            console.warn(`[SKILL] SKILL.md sem nome: ${skillPath}`);
+            log.warn(`SKILL.md sem nome: ${skillPath}`);
             return null;
         }
 

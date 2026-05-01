@@ -1,4 +1,6 @@
 import { AgentState } from '../core/AgentStateManager';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Contextvalidator');
 
 export interface ValidationResult {
     quality: number; // 0.0 to 1.0
@@ -58,7 +60,7 @@ export class ContextValidator {
         }
 
         // Log distribution signal
-        console.log(`[VALIDATOR] Quality: ${quality.toFixed(2)}, Recommendation: ${recommendation}, Conflict: ${hasConflict}`);
+        log.info(`Quality: ${quality.toFixed(2)}, Recommendation: ${recommendation}, Conflict: ${hasConflict}`);
 
         return {
             quality: Math.max(0, quality),

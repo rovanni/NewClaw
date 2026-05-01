@@ -13,6 +13,8 @@
 import { SessionManager, SessionKey } from './SessionManager';
 import { MemoryManager } from '../memory/MemoryManager';
 import { TranscriptEntry } from './SessionTranscript';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Sessionlearner');
 
 export interface ExtractedFact {
     type: 'identity' | 'preference' | 'project' | 'fact' | 'skill' | 'infrastructure';
@@ -84,7 +86,7 @@ export class SessionLearner {
         }
 
         if (result.factsExtracted > 0) {
-            console.log(`[SESSION-LEARNER] ${sid}: extracted ${result.factsExtracted} facts, created ${result.nodesCreated} nodes, ${result.edgesCreated} edges`);
+            log.info(`${sid}: extracted ${result.factsExtracted} facts, created ${result.nodesCreated} nodes, ${result.edgesCreated} edges`);
         }
 
         return result;
@@ -247,7 +249,7 @@ export class SessionLearner {
 
             return 'node';
         } catch (err) {
-            console.warn(`[SESSION-LEARNER] Failed to upsert fact ${fact.name}:`, (err as Error).message);
+            log.warn(`Failed to upsert fact ${fact.name}:`, (err as Error).message);
             return 'none';
         }
     }

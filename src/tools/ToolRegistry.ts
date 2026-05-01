@@ -3,13 +3,15 @@
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Toolregistry');
 
 export class ToolRegistry {
     private tools: Map<string, ToolExecutor> = new Map();
 
     register(tool: ToolExecutor): void {
         if (this.tools.has(tool.name)) {
-            console.warn(`[TOOL_REGISTRY] Tool "${tool.name}" already registered, skipping duplicate.`);
+            log.warn(`Tool "${tool.name}" already registered, skipping duplicate.`);
             return;
         }
         this.tools.set(tool.name, tool);

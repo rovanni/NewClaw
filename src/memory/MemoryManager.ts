@@ -10,6 +10,8 @@ import { AttentionLayer } from "./AttentionLayer";
 import { AttentionFeedback } from "./AttentionFeedback";
 import path from 'path';
 import fs from 'fs';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Memorymanager');
 
 export interface Message {
     id?: number;
@@ -115,8 +117,8 @@ export class MemoryManager {
         }
         this.db = new Database(dbPath);
         this.db.pragma('journal_mode = WAL');
-        try { this.attentionLayer = new AttentionLayer(this.db); } catch (e) { console.warn('[AttentionLayer] Init failed:', e); }
-        try { this.attentionFeedback = new AttentionFeedback(this.db); } catch (e) { console.warn('[AttentionFeedback] Init failed:', e); }
+        try { this.attentionLayer = new AttentionLayer(this.db); } catch (e) { log.warn('init_failed', 'AttentionLayer init failed', { error: String(e) }); }
+        try { this.attentionFeedback = new AttentionFeedback(this.db); } catch (e) { log.warn('init_failed', 'AttentionFeedback init failed', { error: String(e) }); }
         this.initialize();
     }
 
@@ -248,7 +250,7 @@ export class MemoryManager {
             this.db.exec('DROP TABLE memory_nodes');
             this.db.exec('ALTER TABLE memory_nodes_v3 RENAME TO memory_nodes');
             this.db.pragma('foreign_keys = ON');
-            console.log('[MemoryManager] Migrated: removed fts_rowid column');
+            log.info('[MemoryManager] Migrated: removed fts_rowid column');
         }
 
         // Create FTS5 using native rowid (no content_rowid — uses SQLite's built-in rowid)
@@ -632,6 +634,16 @@ export class MemoryManager {
             node.confidence ?? 1.0,
             node.last_updated || new Date().toISOString()
         );
+
+        // Auto-register in node_metrics so the table is never empty for existing nodes
+        try {
+            this.db.prepare(`
+                INSERT OR IGNORE INTO node_metrics (node_id, usage_count, last_accessed_at, reinforcement_score, memory_class)
+                VALUES (?, 0, CURRENT_TIMESTAMP, 0.0, 'latent')
+            `).run(node.id);
+        } catch {
+            // node_metrics table may not exist in older schemas
+        }
     }
 
     getNode(id: string): MemoryNode | undefined {
@@ -842,13 +854,13 @@ export class MemoryManager {
             if (!this.validateRelation(fromNode.type, relation, toNode.type)) {
                 // Fallback: try 'related_to' which accepts all types
                 if (this.validateRelation(fromNode.type, 'related_to', toNode.type)) {
-                    console.warn(`[MemoryManager] Relation "${relation}" invalid for ${fromNode.type}->${toNode.type}. Falling back to "related_to".`);
+                    log.warn(`[MemoryManager] Relation "${relation}" invalid for ${fromNode.type}->${toNode.type}. Falling back to "related_to".`);
                     relation = 'related_to';
                 } else if (this.validateRelation(fromNode.type, 'has_trait', toNode.type)) {
-                    console.warn(`[MemoryManager] Relation "${relation}" invalid for ${fromNode.type}->${toNode.type}. Falling back to "has_trait".`);
+                    log.warn(`[MemoryManager] Relation "${relation}" invalid for ${fromNode.type}->${toNode.type}. Falling back to "has_trait".`);
                     relation = 'has_trait';
                 } else {
-                    console.warn(`[MemoryManager] No valid relation for ${fromNode.type}->${toNode.type}. Using "related_to" as last resort.`);
+                    log.warn(`[MemoryManager] No valid relation for ${fromNode.type}->${toNode.type}. Using "related_to" as last resort.`);
                     relation = 'related_to';
                 }
             }

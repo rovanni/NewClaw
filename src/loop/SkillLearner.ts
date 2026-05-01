@@ -7,6 +7,8 @@
  */
 
 import Database from 'better-sqlite3';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Skilllearner');
 
 export interface Skill {
     id: string;
@@ -135,7 +137,7 @@ export class SkillLearner {
 
             this.tryCreateSkillProposal();
         } catch (error: any) {
-            console.error(`[SKILL] Error recording pattern: ${error.message}`);
+            log.error(`Error recording pattern: ${error.message}`);
         }
     }
 
@@ -416,7 +418,7 @@ export class SkillLearner {
                 skill.updated_at
             );
 
-            console.log(`[SKILL] Proposal created: ${skill.name} (${item.pattern} -> ${item.tool_name})`);
+            log.info(`Proposal created: ${skill.name} (${item.pattern} -> ${item.tool_name})`);
         }
     }
 
@@ -497,7 +499,7 @@ export class SkillLearner {
      * Observe a meta-event or state change in the system.
      */
     observe(event: string, metadata?: any): void {
-        console.log(`[SKILL] Observed event: ${event}`, metadata || '');
+        log.info(`Observed event: ${event}`, metadata || '');
         this.db.prepare(
             'INSERT INTO skill_patterns (pattern, tool_name, success_count, fail_count, avg_latency_ms, last_seen) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(pattern, tool_name) DO UPDATE SET last_seen = CURRENT_TIMESTAMP, success_count = success_count + 1'
         ).run(`event:${event}`, 'system', 1, 0, 0);

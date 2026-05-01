@@ -7,6 +7,8 @@ import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { execSync, execFileSync } from 'child_process';
 import { mkdirSync, existsSync, unlinkSync } from 'fs';
 import path from 'path';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('SendAudio');
 
 export class SendAudioTool implements ToolExecutor {
     name = 'send_audio';
@@ -34,7 +36,7 @@ export class SendAudioTool implements ToolExecutor {
         // Debounce: prevent duplicate sends within 10 seconds
         const now = Date.now();
         if (now - this.lastSendTime < SendAudioTool.MIN_INTERVAL_MS) {
-            console.log('[SEND_AUDIO] Debounced — audio already sent recently, skipping.');
+            log.info('Debounced — audio already sent recently, skipping.');
             return { success: true, output: '🔊 Áudio já enviado recentemente.' };
         }
         this.lastSendTime = now;
@@ -69,7 +71,7 @@ export class SendAudioTool implements ToolExecutor {
             // Generate audio with edge-tts
             const edgeTtsPath = process.env.EDGE_TTS_PATH || 'edge-tts';
             
-            console.log(`[SEND_AUDIO] Generating MP3 with voice=${voice}...`);
+            log.info(`Generating MP3 with voice=${voice}...`);
             try {
                 execFileSync(edgeTtsPath, [
                     '--voice', voice,
@@ -77,9 +79,9 @@ export class SendAudioTool implements ToolExecutor {
                     '--write-media', mp3File
                 ], { timeout: 30000 });
             } catch (ttsErr: any) {
-                console.error(`[SEND_AUDIO] edge-tts failed with voice ${voice}:`, ttsErr.message);
+                log.error(`edge-tts failed with voice ${voice}:`, ttsErr.message);
                 if (voice !== 'pt-BR-AntonioNeural') {
-                    console.log('[SEND_AUDIO] Falling back to pt-BR-AntonioNeural...');
+                    log.info('Falling back to pt-BR-AntonioNeural...');
                     execFileSync(edgeTtsPath, [
                         '--voice', 'pt-BR-AntonioNeural',
                         '--text', text,
@@ -90,7 +92,7 @@ export class SendAudioTool implements ToolExecutor {
                 }
             }
 
-            console.log(`[SEND_AUDIO] Converting to OGG...`);
+            log.info(`Converting to OGG...`);
             execFileSync('ffmpeg', [
                 '-y',
                 '-i', mp3File,
@@ -103,14 +105,14 @@ export class SendAudioTool implements ToolExecutor {
 
             // Send via Telegram using curl (most reliable)
             if (!this.chatId || !this.botToken) {
-                console.error('[SEND_AUDIO] Missing Telegram context: chatId=' + this.chatId + ' botToken=' + (this.botToken ? 'SET' : 'NULL'));
+                log.error('Missing Telegram context: chatId=' + this.chatId + ' botToken=' + (this.botToken ? 'SET' : 'NULL'));
                 // Still cleanup
                 this.cleanupFiles([mp3File, oggFile]);
                 return { success: false, output: '', error: 'Contexto Telegram não configurado. Não foi possível enviar o áudio.' };
             }
 
             try {
-                console.log(`[SEND_AUDIO] Uploading to Telegram via curl...`);
+                log.info(`Uploading to Telegram via curl...`);
                 // Use forward slashes for curl file path (more reliable on Windows)
                 const curlPath = oggFile.replace(/\\/g, '/');
                 const curlResult = execSync(`curl -s --max-time 30 -F "chat_id=${this.chatId}" -F "voice=@${curlPath}" "https://api.telegram.org/bot${this.botToken}/sendVoice"`, {
@@ -119,9 +121,9 @@ export class SendAudioTool implements ToolExecutor {
                 });
                 const parsed = JSON.parse(curlResult);
                 if (!parsed.ok) {
-                    console.error('[SEND_AUDIO] Telegram API error:', JSON.stringify(parsed));
+                    log.error('Telegram API error:', JSON.stringify(parsed));
                     // Fallback: try as audio
-                    console.log('[SEND_AUDIO] sendVoice failed, trying sendAudio fallback...');
+                    log.info('sendVoice failed, trying sendAudio fallback...');
                     try {
                         const fallbackResult = execSync(`curl -s --max-time 30 -F "chat_id=${this.chatId}" -F "audio=@${curlPath}" "https://api.telegram.org/bot${this.botToken}/sendAudio"`, {
                             timeout: 35000,
@@ -135,10 +137,10 @@ export class SendAudioTool implements ToolExecutor {
                         return { success: false, output: '', error: `Telegram send failed: ${audioError.message}` };
                     }
                 } else {
-                    console.log('[SEND_AUDIO] Voice sent OK, duration:', parsed.result?.voice?.duration || '?', 's');
+                    log.info('voice_sent', 'Voice sent OK', { duration: parsed.result?.voice?.duration || '?' });
                 }
             } catch (curlError: any) {
-                console.error('[SEND_AUDIO] curl execution error:', curlError.message);
+                log.error('curl execution error:', curlError.message);
                 return { success: false, output: '', error: `curl failed: ${curlError.message}` };
             }
 
@@ -158,7 +160,7 @@ export class SendAudioTool implements ToolExecutor {
             try {
                 if (existsSync(file)) unlinkSync(file);
             } catch (err) {
-                console.error(`[SEND_AUDIO] Cleanup failed for ${file}:`, (err as Error).message);
+                log.error(`Cleanup failed for ${file}:`, (err as Error).message);
             }
         }
     }

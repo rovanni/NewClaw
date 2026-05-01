@@ -7,6 +7,8 @@ import { Database } from 'better-sqlite3';
 import { ProviderFactory } from '../core/ProviderFactory';
 import { SkillLearner } from '../loop/SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('Onboardingservice');
 
 export interface UserProfile {
     user_id: string;
@@ -118,12 +120,12 @@ export class OnboardingService {
             const profile = this.getUserProfile(userId);
             
             if (!profile) {
-                console.log(`[DEBUG-ONBOARDING] No profile found for ${userId}. Onboarding required.`);
+                log.info(`No profile found for ${userId}. Onboarding required.`);
                 return true;
             }
 
             if (profile.onboarding_completed !== 1) {
-                console.log(`[DEBUG-ONBOARDING] Profile exists but onboarding not completed for ${userId}.`);
+                log.info(`Profile exists but onboarding not completed for ${userId}.`);
                 return true;
             }
 
@@ -135,13 +137,13 @@ export class OnboardingService {
             if (!profile.autonomy_level) missingFields.push('autonomy_level');
             
             if (missingFields.length > 0) {
-                console.log(`[DEBUG-ONBOARDING] Missing essential fields for ${userId}: ${missingFields.join(', ')}. Onboarding required.`);
+                log.info(`Missing essential fields for ${userId}: ${missingFields.join(', ')}. Onboarding required.`);
                 return true;
             }
 
             return false;
         } catch (e: any) {
-            console.error(`[DEBUG-ONBOARDING] Error checking onboarding status: ${e.message}`);
+            log.error(`Error checking onboarding status: ${e.message}`);
             return true; // Safe fallback
         }
     }
@@ -320,9 +322,9 @@ JSON:`;
                 insertEdge.run('core_user', 'user_expertise', 'has_trait');
             }
 
-            console.log('[Onboarding] Memory nodes created with semantic connections');
+            log.info('[Onboarding] Memory nodes created with semantic connections');
         } catch (e: any) {
-            console.error('[Onboarding] Error creating memory nodes:', e.message);
+            log.error('[Onboarding] Error creating memory nodes:', e.message);
         }
     }
 
@@ -345,22 +347,22 @@ JSON:`;
     }
 
     async handle(userId: string, text: string): Promise<{ response: string; completed: boolean }> {
-        console.log(`[DEBUG-ONBOARDING] Handling message for ${userId}: "${text.slice(0, 20)}..."`);
+        log.info(`Handling message for ${userId}: "${text.slice(0, 20)}..."`);
         const state = this.getOnboardingState(userId);
         
         if (!state) {
-            console.log(`[DEBUG-ONBOARDING] No active state for ${userId}, starting...`);
+            log.info(`No active state for ${userId}, starting...`);
             const first = this.startOnboarding(userId);
             return { response: first?.question || 'Erro ao iniciar onboarding.', completed: false };
         }
 
         const result = await this.processAnswer(userId, text);
         if (result?.completed) {
-            console.log(`[DEBUG-ONBOARDING] Onboarding completed for ${userId}.`);
+            log.info(`Onboarding completed for ${userId}.`);
             return { response: result.welcomeMessage || 'Onboarding concluído!', completed: true };
         }
         
-        console.log(`[DEBUG-ONBOARDING] Next question for ${userId} generated.`);
+        log.info(`Next question for ${userId} generated.`);
         return { response: result?.question || 'Erro ao processar resposta.', completed: false };
     }
 }
