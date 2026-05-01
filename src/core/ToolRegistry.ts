@@ -10,10 +10,14 @@ interface ToolEntry {
     dangerous: boolean;  // ex: exec_command
 }
 
-class ToolRegistryClass {
+export class ToolRegistryClass {
     private tools: Map<string, ToolEntry> = new Map();
 
     register(tool: ToolExecutor, options?: { dangerous?: boolean }): void {
+        if (this.tools.has(tool.name)) {
+            console.warn(`[TOOL_REGISTRY] Tool "${tool.name}" already registered, skipping duplicate.`);
+            return;
+        }
         this.tools.set(tool.name, {
             tool,
             enabled: true,
@@ -27,7 +31,7 @@ class ToolRegistryClass {
     }
 
     getAll(): ToolEntry[] {
-        return Array.from(this.tools.values());
+        return Array.from(this.tools.values()).map(e => ({ ...e }));
     }
 
     getEnabled(): ToolExecutor[] {
@@ -56,6 +60,14 @@ class ToolRegistryClass {
         return this.tools.get(name)?.dangerous || false;
     }
 
+    has(name: string): boolean {
+        return this.tools.has(name);
+    }
+
+    unregister(name: string): boolean {
+        return this.tools.delete(name);
+    }
+
     getStatus(): Array<{ name: string; description: string; enabled: boolean; dangerous: boolean }> {
         return Array.from(this.tools.entries()).map(([name, entry]) => ({
             name,
@@ -67,3 +79,4 @@ class ToolRegistryClass {
 }
 
 export const ToolRegistry = new ToolRegistryClass();
+export type ToolRegistryType = InstanceType<typeof ToolRegistryClass>;

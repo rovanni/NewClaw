@@ -8,6 +8,10 @@ export class ToolRegistry {
     private tools: Map<string, ToolExecutor> = new Map();
 
     register(tool: ToolExecutor): void {
+        if (this.tools.has(tool.name)) {
+            console.warn(`[TOOL_REGISTRY] Tool "${tool.name}" already registered, skipping duplicate.`);
+            return;
+        }
         this.tools.set(tool.name, tool);
     }
 
@@ -16,7 +20,15 @@ export class ToolRegistry {
     }
 
     getAll(): ToolExecutor[] {
-        return Array.from(this.tools.values());
+        return Array.from(this.tools.values()).map(t => ({ ...t }));
+    }
+
+    has(name: string): boolean {
+        return this.tools.has(name);
+    }
+
+    unregister(name: string): boolean {
+        return this.tools.delete(name);
     }
 
     getDefinitions() {
