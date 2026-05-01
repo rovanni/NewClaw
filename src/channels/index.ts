@@ -17,3 +17,5 @@ export {
 export { MessageBus } from './MessageBus';
 export { TelegramAdapter, type TelegramConfig } from './TelegramAdapter';
 export { DiscordAdapter, type DiscordConfig } from './DiscordAdapter';
+export { WhatsAppAdapter, type WhatsAppConfig } from './WhatsAppAdapter';
+export { SignalAdapter, type SignalConfig } from './SignalAdapter';

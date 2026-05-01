@@ -10,6 +10,7 @@
     "start:debug": "node --inspect dist/index.js"
   },
   "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "better-sqlite3": "^11.0.0",
     "cors": "^2.8.6",
     "discord.js": "^14.26.4",
@@ -17,7 +18,7 @@
     "express": "^5.2.1",
     "form-data": "^4.0.5",
     "grammy": "^1.21.0",
-    "p-queue": "^9.1.2"
+    "p-queue": "^9.2.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

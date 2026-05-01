@@ -34,6 +34,8 @@ import { createLogger } from '../shared/AppLogger';
 import { MessageBus } from '../channels/MessageBus';
 import { TelegramAdapter, type TelegramConfig } from '../channels/TelegramAdapter';
 import { DiscordAdapter, type DiscordConfig } from '../channels/DiscordAdapter';
+import { WhatsAppAdapter, type WhatsAppConfig } from '../channels/WhatsAppAdapter';
+import { SignalAdapter, type SignalConfig } from '../channels/SignalAdapter';
 import { NormalizedMessage } from '../channels/ChannelAdapter';
 const log = createLogger('AgentController');
 
@@ -46,6 +48,18 @@ export interface NewClawConfig {
     discordAllowedGuildIds?: string[];
     /** Discord allowed user IDs (optional) */
     discordAllowedUserIds?: string[];
+    /** WhatsApp phone number (optional) */
+    whatsappPhoneNumber?: string;
+    /** WhatsApp allowed JIDs (optional) */
+    whatsappAllowedJids?: string[];
+    /** WhatsApp auth directory */
+    whatsappAuthDir?: string;
+    /** Signal phone number (optional) */
+    signalPhoneNumber?: string;
+    /** Signal allowed numbers (optional) */
+    signalAllowedNumbers?: string[];
+    /** Signal CLI path */
+    signalCliPath?: string;
     language: string;
     defaultProvider: string;
     geminiApiKey?: string;
@@ -94,6 +108,8 @@ export class AgentController {
     private messageBus: MessageBus;
     private telegramAdapter: TelegramAdapter;
     private discordAdapter: DiscordAdapter | null = null;
+    private whatsAppAdapter: WhatsAppAdapter | null = null;
+    private signalAdapter: SignalAdapter | null = null;
 
     /** Get the MessageBus */
     public getMessageBus(): MessageBus { return this.messageBus; }
@@ -101,6 +117,10 @@ export class AgentController {
     public getTelegramAdapter(): TelegramAdapter { return this.telegramAdapter; }
     /** Get the DiscordAdapter (if enabled) */
     public getDiscordAdapter(): DiscordAdapter | null { return this.discordAdapter; }
+    /** Get the WhatsAppAdapter (if enabled) */
+    public getWhatsAppAdapter(): WhatsAppAdapter | null { return this.whatsAppAdapter; }
+    /** Get the SignalAdapter (if enabled) */
+    public getSignalAdapter(): SignalAdapter | null { return this.signalAdapter; }
 
     constructor(config: NewClawConfig) {
         this.config = config;
@@ -202,6 +222,32 @@ export class AgentController {
             this.discordAdapter.setBus(this.messageBus);
             this.messageBus.registerAdapter(this.discordAdapter);
             log.info('Discord adapter registered');
+        }
+
+        // WhatsApp adapter (optional)
+        if (config.whatsappPhoneNumber) {
+            this.whatsAppAdapter = new WhatsAppAdapter({
+                enabled: true,
+                phoneNumber: config.whatsappPhoneNumber,
+                allowedJids: config.whatsappAllowedJids,
+                authDir: config.whatsappAuthDir || './data/whatsapp-auth',
+            });
+            this.whatsAppAdapter.setBus(this.messageBus);
+            this.messageBus.registerAdapter(this.whatsAppAdapter);
+            log.info('WhatsApp adapter registered');
+        }
+
+        // Signal adapter (optional)
+        if (config.signalPhoneNumber) {
+            this.signalAdapter = new SignalAdapter({
+                enabled: true,
+                phoneNumber: config.signalPhoneNumber,
+                allowedNumbers: config.signalAllowedNumbers,
+                signalCliPath: config.signalCliPath || 'signal-cli',
+            });
+            this.signalAdapter.setBus(this.messageBus);
+            this.messageBus.registerAdapter(this.signalAdapter);
+            log.info('Signal adapter registered');
         }
 
         // Scheduler trigger — sends via TelegramAdapter

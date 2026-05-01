@@ -1,6 +1,6 @@
 /**
  * NewClaw — Entry Point
- * Agente pessoal de IA multi-canal (Telegram, Discord, Web)
+ * Agente pessoal de IA multi-canal (Telegram, Discord, WhatsApp, Signal, Web)
  */
 
 import dotenv from 'dotenv';
@@ -22,6 +22,12 @@ const config = {
     discordBotToken: process.env.DISCORD_BOT_TOKEN || '',
     discordAllowedGuildIds: (process.env.DISCORD_ALLOWED_GUILD_IDS || '').split(',').map(id => id.trim()).filter(id => id.length > 0),
     discordAllowedUserIds: (process.env.DISCORD_ALLOWED_USER_IDS || '').split(',').map(id => id.trim()).filter(id => id.length > 0),
+    whatsappPhoneNumber: process.env.WHATSAPP_PHONE_NUMBER || '',
+    whatsappAllowedJids: (process.env.WHATSAPP_ALLOWED_JIDS || '').split(',').map(id => id.trim()).filter(id => id.length > 0),
+    whatsappAuthDir: process.env.WHATSAPP_AUTH_DIR || './data/whatsapp-auth',
+    signalPhoneNumber: process.env.SIGNAL_PHONE_NUMBER || '',
+    signalAllowedNumbers: (process.env.SIGNAL_ALLOWED_NUMBERS || '').split(',').map(id => id.trim()).filter(id => id.length > 0),
+    signalCliPath: process.env.SIGNAL_CLI_PATH || 'signal-cli',
     language: process.env.APP_LANG || 'pt-BR',
     defaultProvider: process.env.DEFAULT_PROVIDER || 'gemini',
     geminiApiKey: process.env.GEMINI_API_KEY,
@@ -63,8 +69,8 @@ async function main() {
     log.info(`   Language: ${config.language}`);
     log.info(`   Provider: ${config.defaultProvider}`);
 
-    if (!config.telegramBotToken && !config.discordBotToken) {
-        log.error('❌ Nenhum canal configurado! Configure TELEGRAM_BOT_TOKEN ou DISCORD_BOT_TOKEN');
+    if (!config.telegramBotToken && !config.discordBotToken && !config.whatsappPhoneNumber && !config.signalPhoneNumber) {
+        log.error('❌ Nenhum canal configurado! Configure TELEGRAM_BOT_TOKEN, DISCORD_BOT_TOKEN, WHATSAPP_PHONE_NUMBER ou SIGNAL_PHONE_NUMBER');
         process.exit(1);
     }
 
