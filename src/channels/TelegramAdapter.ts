@@ -28,7 +28,7 @@ const log = createLogger('TelegramAdapter');
 export interface TelegramConfig extends ChannelConfig {
     botToken: string;
     allowedUserIds: string[];
-    /** Whisper config (delegated from TelegramInputHandler) */
+    /** Whisper config for voice transcription */
     whisperApiUrl?: string;
     whisperApiFallback?: string;
     whisperPath?: string;
