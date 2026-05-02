@@ -550,7 +550,7 @@
     function escJs(s) { return String(s||'').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/`/g, '\\`'); }
 
     /* #1: Dropdown toggle */
-    function toggleDropdown(id) { const m=document.getElementById(id); document.querySelectorAll('.topbar-dropdown-menu').forEach(d={>{if(d.id!==id)d.classList.remove('show')}); m.classList.toggle('show'); }
+    function toggleDropdown(id) { const m=document.getElementById(id); document.querySelectorAll('.topbar-dropdown-menu').forEach(d=>{if(d.id!==id)d.classList.remove('show')}); m.classList.toggle('show'); }
     function closeDropdowns() { document.querySelectorAll('.topbar-dropdown-menu').forEach(d=>d.classList.remove('show')); }
     document.addEventListener('click', e=>{ if(!e.target.closest('.topbar-dropdown')) closeDropdowns(); });
 
