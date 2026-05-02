@@ -36,8 +36,12 @@ function authMiddleware(req: Request, res: Response, next: express.NextFunction)
     if (!dashboardAuth.enabled) { next(); return; }
     const token = req.headers.authorization?.replace('Bearer ', '') || req.query.token;
     if (token && API_TOKENS.has(String(token))) { next(); return; }
-    // Allow page loads
-    if (req.path.endsWith('.html') || req.path === '/' || req.path === '/config' || req.path === '/help') { next(); return; }
+    // Allow page loads and assets
+    const allowedPaths = ['/', '/config', '/help', '/traces', '/memory', '/memory-graph', '/memory-review', '/shared.js', '/shared.css', '/favicon.ico'];
+    if (allowedPaths.includes(req.path) || req.path.endsWith('.html') || req.path.endsWith('.js') || req.path.endsWith('.css')) { 
+        next(); 
+        return; 
+    }
     res.status(401).json({ error: 'Unauthorized' });
 }
 

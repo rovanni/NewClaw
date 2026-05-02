@@ -267,7 +267,7 @@
       } catch(e) { console.error(e); }
     }
 
-    function esc(t) { const d=document.createElement('div'); d.textContent=String(t||''); return d.innerHTML; }
+    function esc(t) { const d=document.createElement('div'); d.textContent=String(t||''); return d.innerHTML.replace(/`/g, '&#96;'); }
 
     async function saveNode(id) {
       const name = document.getElementById('editName').value;

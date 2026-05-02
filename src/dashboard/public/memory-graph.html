@@ -1,9 +1,8 @@
 <!DOCTYPE html>
-<html data-theme="dark">
+<html data-theme="dark" lang="pt-BR">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script>(function(){var w=console.warn;console.warn=function(){var a=arguments[0];if(a&&typeof a==='string'&&a.includes('style bypass'))return;w.apply(console,arguments)};})();</script>
   <title>NewClaw — Memory Graph</title>
   <link rel="icon" href="data:,">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -467,7 +466,7 @@
     let dateFilter = { start: null, end: null };
 
     function showToast(msg) { const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',3000); }
-    function esc(s) { const d=document.createElement('div'); d.textContent=String(s||''); return d.innerHTML; }
+    function esc(s) { const d=document.createElement('div'); d.textContent=String(s||''); return d.innerHTML.replace(/`/g, '&#96;'); }
     function escJs(s) { return String(s||'').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"'); }
 
     function toggleLeft() {

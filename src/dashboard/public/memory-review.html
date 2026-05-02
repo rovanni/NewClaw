@@ -69,7 +69,7 @@
 
     let reviewData = null;
 
-    function esc(t) { const d = document.createElement('div'); d.textContent = String(t || ''); return d.innerHTML; }
+    function esc(t) { const d = document.createElement('div'); d.textContent = String(t || ''); return d.innerHTML.replace(/`/g, '&#96;'); }
 
     function qualityText(score) {
       if (score >= 80) return 'Memória conectada';
