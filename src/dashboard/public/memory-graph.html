@@ -343,7 +343,15 @@
       <button class="sidebar-btn" onclick="createEdge()" style="width:100%;justify-content:center;margin-top:4px;" title="Criar relação entre dois nós">＋ Adicionar Relação</button>
     </div>
     <div class="sidebar-section">
-      <h3>Legenda</h3>
+      <h3>Importância</h3>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <div style="display:flex;align-items:center;gap:8px;font-size:0.72rem;"><span style="width:12px;height:12px;border-radius:50%;border:3px solid #ef4444;background:transparent;flex-shrink:0;"></span> <span style="color:var(--text-main);">Principal (PageRank alto)</span></div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:0.72rem;"><span style="width:12px;height:12px;border-radius:50%;border:3px solid #f97316;background:transparent;flex-shrink:0;"></span> <span style="color:var(--text-main);">Importante (médio)</span></div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:0.72rem;"><span style="width:12px;height:12px;border-radius:50%;border:2px solid rgba(255,255,255,0.3);background:transparent;flex-shrink:0;"></span> <span style="color:var(--text-muted);">Normal (sem anel extra)</span></div>
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <h3>Tipos</h3>
       <div id="legendContainer"></div>
     </div>
     <div class="sidebar-section">
@@ -511,6 +519,21 @@
   <script>
     document.getElementById('header-root').innerHTML = newclawHeader('memory-graph');
     newclawInitTheme();
+
+    // ── Importance tier colors (traffic-light system) ──
+    // Tier 1 (top 15% PageRank) = red ring — principais/críticos
+    // Tier 2 (next 30%) = orange ring — importantes
+    // Tier 3 (bottom 55%) = no ring — normais
+    const IMPORTANCE_TIERS = {
+      critical: { threshold: 0.70, color: '#ef4444', width: 4, label: '🔴 Principal' },  // red
+      important: { threshold: 0.40, color: '#f97316', width: 3, label: '🟠 Importante' },  // orange
+      normal:    { threshold: 0,    color: null,       width: 2, label: '⚪ Normal' }        // default (type color)
+    };
+    function getImportanceTier(importance) {
+      if (importance >= IMPORTANCE_TIERS.critical.threshold) return 'critical';
+      if (importance >= IMPORTANCE_TIERS.important.threshold) return 'important';
+      return 'normal';
+    }
 
     const TYPE_COLORS = { identity:'#a855f7', preference:'#fbbf24', project:'#60a5fa', context:'#4ade80', fact:'#f87171', skill:'#38bdf8' };
     const TYPE_BG = { identity:'rgba(168,85,247,0.15)', preference:'rgba(251,191,36,0.15)', project:'rgba(96,165,250,0.15)', context:'rgba(74,222,128,0.15)', fact:'rgba(248,113,113,0.15)', skill:'rgba(56,189,248,0.15)' };
@@ -1101,7 +1124,10 @@
           const importance = (deg / maxDegree) * 0.4 + (pr / maxPR) * 0.6;
           const size = minSize + importance * (maxSize - minSize);
           const color = TYPE_COLORS[n.type] || '#64748b';
-          return { data: { id: n.id, label: n.name||n.id, type: n.type, name: n.name||n.id, content: n.content||'', degree: deg, pagerank: pr.toFixed(4), size: size, nodeColor: color, weight: 1 }, classes: 'type-'+n.type };
+          const tier = getImportanceTier(importance);
+          const importanceColor = IMPORTANCE_TIERS[tier]?.color || null;
+          const importanceWidth = IMPORTANCE_TIERS[tier]?.width || 2;
+          return { data: { id: n.id, label: n.name||n.id, type: n.type, name: n.name||n.id, content: n.content||'', degree: deg, pagerank: pr.toFixed(4), size: size, nodeColor: color, weight: 1, importanceTier: tier, importanceBorder: importanceColor || '#fff', importanceBorderWidth: importanceWidth }, classes: 'type-'+n.type + (tier !== 'normal' ? ' importance-'+tier : '') };
         }),
         ...fEdges.map((e,i) => {
           const w = e.weight||1;
@@ -1115,12 +1141,19 @@
         selector: '.type-'+type, style: { 'background-color': color, 'border-color': color }
       }));
 
+      // Importance tier styles — traffic-light rings on top of type colors
+      const importanceStyles = [
+        { selector: '.importance-critical', style: { 'border-width': 5, 'border-color': '#ef4444', 'border-opacity': 1, 'z-index': 500 } },
+        { selector: '.importance-important', style: { 'border-width': 4, 'border-color': '#f97316', 'border-opacity': 1, 'z-index': 400 } },
+      ];
+
       cy = cytoscape({
         container: document.getElementById('cy'), elements: els,
         style: [
           { selector:'node', style:{ 'label':showLabels?'data(label)':'', 'text-wrap':'wrap','text-max-width':'120px','font-size':10,'font-family':'Inter, system-ui, sans-serif','font-weight':600,'color':'#fff','text-outline-color':'rgba(10, 18, 33, 0.8)','text-outline-width':2,'text-valign':'center','text-halign':'center','width':'data(size)','height':'data(size)','background-color':'data(nodeColor)','border-width':2,'border-color':'#fff','border-opacity':0.3 } },
           { selector:'edge', style:{ 'width':'data(edgeWidth)','line-color':'rgba(148, 163, 184, 0.45)','curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'rgba(148, 163, 184, 0.45)','label':showLabels?'data(relation)':'','font-size':9,'font-family':'Inter, system-ui, sans-serif','font-weight':600,'color':'#fff','text-rotation':'autorotate','text-margin-y':-8,'text-outline-color':'#0a1221','text-outline-width':3,'text-outline-opacity':1,'text-opacity':showLabels?1:0 } },
           ...typeStyles,
+          ...importanceStyles,
           { selector:'.faded', style:{'opacity':0.1} },
           { selector:'.highlighted', style:{'border-width':4,'border-color':'var(--accent)','border-opacity':1,'opacity':1,'z-index':999} },
           { selector:'.node-deleting', style:{'opacity':0,'transition-property':'opacity','transition-duration':'0.6s'} },
