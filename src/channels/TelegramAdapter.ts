@@ -12,6 +12,7 @@ import { Bot, Context, InputFile } from 'grammy';
 import {
     ChannelAdapter,
     ChannelType,
+    TypingAction,
     NormalizedMessage,
     NormalizedResponse,
     ChannelConfig,
@@ -199,6 +200,23 @@ export class TelegramAdapter implements ChannelAdapter {
             return { ok: true, details: `@${me.username} (${me.first_name})` };
         } catch (e: any) {
             return { ok: false, details: e.message };
+        }
+    }
+
+    /** Enviar indicador de digitação ("typing...") no Telegram */
+    async sendTypingIndicator(context: any, action: TypingAction = 'typing'): Promise<void> {
+        try {
+            const ctx = context as Context;
+            if (!ctx) return;
+            const chatAction = action === 'typing' ? 'typing'
+                : action === 'upload_photo' ? 'upload_photo'
+                : action === 'record_video' ? 'record_video'
+                : action === 'record_voice' ? 'record_voice'
+                : action === 'upload_document' ? 'upload_document'
+                : 'typing';
+            await ctx.replyWithChatAction(chatAction as any);
+        } catch {
+            // Silently fail — typing indicator is best-effort
         }
     }
 

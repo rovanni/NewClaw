@@ -69,6 +69,9 @@ export interface ResponseAttachment {
     mimeType?: string;
 }
 
+/** Tipo de ação de digitação para o canal */
+export type TypingAction = 'typing' | 'upload_photo' | 'record_video' | 'record_voice' | 'upload_document';
+
 /** Interface que cada canal deve implementar */
 export interface ChannelAdapter {
     /** Tipo do canal */
@@ -86,6 +89,8 @@ export interface ChannelAdapter {
     send(response: NormalizedResponse, context: any): Promise<void>;
     /** Verificar saúde */
     healthCheck(): Promise<{ ok: boolean; details?: string }>;
+    /** Enviar indicador de digitação ao canal (typing, recording, etc.) */
+    sendTypingIndicator?(context: any, action?: TypingAction): Promise<void>;
 }
 
 /** Configuração base para qualquer canal */

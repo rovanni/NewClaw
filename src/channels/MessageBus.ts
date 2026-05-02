@@ -14,6 +14,7 @@ import { SessionManager, type SessionKey } from '../session/SessionManager';
 import {
     ChannelAdapter,
     ChannelType,
+    TypingAction,
     NormalizedMessage,
     NormalizedResponse,
     ChannelSession,
@@ -89,18 +90,73 @@ export class MessageBus {
         log.info('bus_stopped', 'MessageBus stopped');
     }
 
+    /** Intervalo de typing indicator ativo por canal+userId */
+    private typingIntervals: Map<string, NodeJS.Timeout> = new Map();
+
+    /**
+     * Iniciar indicador de digitação para um canal.
+     * Envia imediatamente e depois a cada 4s até stopTypingIndicator().
+     */
+    private startTypingIndicator(adapter: ChannelAdapter, context: any, action: TypingAction = 'typing', key?: string): void {
+        if (!adapter.sendTypingIndicator) return;
+
+        const intervalKey = key || 'default';
+
+        // Limpar interval existente se houver
+        const existing = this.typingIntervals.get(intervalKey);
+        if (existing) clearInterval(existing);
+
+        // Enviar imediatamente
+        adapter.sendTypingIndicator(context, action).catch(() => {});
+
+        // Enviar a cada 4s (Telegram expira após ~5s)
+        const interval = setInterval(() => {
+            adapter.sendTypingIndicator!(context, action).catch(() => {});
+        }, 4000);
+
+        this.typingIntervals.set(intervalKey, interval);
+    }
+
+    /** Parar indicador de digitação */
+    private stopTypingIndicator(key?: string): void {
+        const intervalKey = key || 'default';
+        const interval = this.typingIntervals.get(intervalKey);
+        if (interval) {
+            clearInterval(interval);
+            this.typingIntervals.delete(intervalKey);
+        }
+    }
+
+    /**
+     * Determinar ação de digitação baseada no tipo de mensagem
+     */
+    private getTypingAction(msg: NormalizedMessage): TypingAction {
+        if (msg.type === 'voice' || msg.type === 'audio') return 'record_voice';
+        if (msg.type === 'photo') return 'upload_photo';
+        if (msg.type === 'document') return 'upload_document';
+        return 'typing';
+    }
+
     /**
      * Processar mensagem de qualquer canal.
      * Chamado pelos adapters quando recebem uma mensagem.
      */
     async processMessage(msg: NormalizedMessage): Promise<void> {
         const sessionKey: SessionKey = { channel: msg.channel, userId: msg.userId };
+        const typingKey = `${msg.channel}:${msg.userId}`;
 
         log.info('message_received', msg.text.slice(0, 50), {
             channel: msg.channel,
             userId: msg.userId,
             type: msg.type
         });
+
+        // Iniciar typing indicator antes do processamento
+        const adapter = this.adapters.get(msg.channel);
+        if (adapter?.sendTypingIndicator) {
+            const action = this.getTypingAction(msg);
+            this.startTypingIndicator(adapter, msg.rawContext, action, typingKey);
+        }
 
         try {
             // 1. Handle commands
@@ -110,7 +166,6 @@ export class MessageBus {
                 if (handler) {
                     const result = await handler(msg);
                     if (result !== null) {
-                        const adapter = this.adapters.get(msg.channel);
                         if (adapter) {
                             await adapter.send({ text: result, format: 'markdown' }, msg.rawContext);
                         }
@@ -124,7 +179,6 @@ export class MessageBus {
             if (msg.attachments && msg.attachments.length > 0) {
                 const mediaResult = await this.processAttachments(msg, sessionKey);
                 if (mediaResult) {
-                    const adapter = this.adapters.get(msg.channel);
                     if (adapter) {
                         await adapter.send(
                             { text: mediaResult, format: 'markdown' },
@@ -148,7 +202,6 @@ export class MessageBus {
             await this.sessionManager.recordAssistantMessage(sessionKey, response || '', { model: 'newclaw' });
 
             // 4. Send response back through the originating channel
-            const adapter = this.adapters.get(msg.channel);
             if (adapter) {
                 const normalizedResponse: NormalizedResponse = {
                     text: response || 'Desculpe, não consegui gerar uma resposta.',
@@ -159,13 +212,15 @@ export class MessageBus {
 
         } catch (error: any) {
             log.error('message_processing_failed', error, msg.text.slice(0, 50));
-            const adapter = this.adapters.get(msg.channel);
             if (adapter) {
                 await adapter.send(
                     { text: '⚠️ Erro interno ao processar mensagem. Tente novamente.', format: 'plain' },
                     msg.rawContext
                 ).catch(() => {});
             }
+        } finally {
+            // Sempre parar o typing indicator ao finalizar
+            this.stopTypingIndicator(typingKey);
         }
     }
 

@@ -7,6 +7,7 @@
 export {
     ChannelAdapter,
     type ChannelType,
+    type TypingAction,
     type NormalizedMessage,
     type NormalizedResponse,
     type ChannelAttachment,
