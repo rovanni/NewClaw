@@ -185,8 +185,6 @@ export class DashboardServer {
                 log.info(`ModelRouter updated: ${JSON.stringify(this.config.modelRouter)}`);
             }
 
-            // Persist relevant config to .env so restart keeps the values
-            this.persistConfigToEnv();
 
             // Also update AgentLoop config so system prompt and iterations take effect
             if (this.controller) {
@@ -223,12 +221,6 @@ export class DashboardServer {
             res.json({ success: true, config: safeConfig });
         });
 
-        // Restart route
-        this.app.post('/api/restart', (_req: Request, res: Response) => {
-            log.info('🔄 Restart requested via Dashboard...');
-            res.json({ success: true, message: 'Restarting NewClaw...' });
-            setTimeout(() => { process.exit(0); }, 1000);
-        });
 
         // Get available providers and models
         this.app.get('/api/providers', async (_req: Request, res: Response) => {

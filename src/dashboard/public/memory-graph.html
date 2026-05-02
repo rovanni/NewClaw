@@ -468,6 +468,7 @@
 
     function showToast(msg) { const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',3000); }
     function esc(s) { const d=document.createElement('div'); d.textContent=String(s||''); return d.innerHTML; }
+    function escJs(s) { return String(s||'').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"'); }
 
     function toggleLeft() {
       const sb = document.getElementById('leftSidebar');
@@ -610,11 +611,11 @@
         const dir = e.from_node === id ? '&rarr;' : '&larr;';
         const edgeId = 'edge_' + esc(e.from_node) + '_' + esc(e.to_node) + '_' + esc(e.relation).replace(/[^a-z0-9_]/gi, '_');
         return '<div class="edge-item" id="' + edgeId + '">' + dir +
-          ' <span class="edge-relation" id="' + edgeId + '_rel" style="cursor:pointer; border-bottom: 1px dashed var(--accent); padding-bottom: 1px;" title="Clique para editar" onclick="editEdgeRelation(\'' + esc(e.from_node) + '\',\'' + esc(e.to_node) + '\',\'' + esc(e.relation) + '\',\'' + esc(id) + '\')">' + esc(e.relation) + '</span> ' +
+          ' <span class="edge-relation" id="' + edgeId + '_rel" style="cursor:pointer; border-bottom: 1px dashed var(--accent); padding-bottom: 1px;" title="Clique para editar" onclick="editEdgeRelation(\'' + escJs(e.from_node) + '\',\'' + escJs(e.to_node) + '\',\'' + escJs(e.relation) + '\',\'' + escJs(id) + '\')">' + esc(e.relation) + '</span> ' +
           (dir === '&rarr;' ? '&rarr;' : '&larr;') +
-          ' <a href="#" onclick="selectGraphNode(\'' + esc(otherId) + '\');return false;">' + esc(otherId) + '</a>' +
-          ' <button class="btn-edit" title="Editar Relação" onclick="editEdgeRelation(\'' + esc(e.from_node) + '\',\'' + esc(e.to_node) + '\',\'' + esc(e.relation) + '\',\'' + esc(id) + '\')">✏️</button>' +
-          ' <button onclick="deleteEdge(\'' + esc(e.from_node) + '\',\'' + esc(e.to_node) + '\',\'' + esc(e.relation) + '\')" title="Remover relação">✕</button></div>';
+          ' <a href="#" onclick="selectGraphNode(\'' + escJs(otherId) + '\');return false;">' + esc(otherId) + '</a>' +
+          ' <button class="btn-edit" title="Editar Relação" onclick="editEdgeRelation(\'' + escJs(e.from_node) + '\',\'' + escJs(e.to_node) + '\',\'' + escJs(e.relation) + '\',\'' + escJs(id) + '\')">✏️</button>' +
+          ' <button onclick="deleteEdge(\'' + escJs(e.from_node) + '\',\'' + escJs(e.to_node) + '\',\'' + escJs(e.relation) + '\')" title="Remover relação">✕</button></div>';
       }).join('');
     }
 
@@ -661,9 +662,9 @@
             </select>
             <textarea id="editContent" class="detail-textarea" placeholder="Conteúdo do nó">${esc(n.content || '')}</textarea>
             <div class="detail-actions">
-              <button class="detail-btn" onclick="saveNode('${esc(n.id)}')">Salvar</button>
-              <button class="detail-btn" onclick="exportNodeDetails('${esc(n.id)}')">📄 Exportar</button>
-              <button class="detail-btn danger" onclick="deleteNode('${esc(n.id)}')">Deletar</button>
+              <button class="detail-btn" onclick="saveNode('${escJs(n.id)}')">Salvar</button>
+              <button class="detail-btn" onclick="exportNodeDetails('${escJs(n.id)}')">📄 Exportar</button>
+              <button class="detail-btn danger" onclick="deleteNode('${escJs(n.id)}')">Deletar</button>
             </div>
             ${n.metadata ? `<div class="detail-meta">Meta: ${esc(typeof n.metadata === 'string' ? n.metadata : JSON.stringify(n.metadata))}</div>` : ''}
             <div class="edge-list">
@@ -689,7 +690,7 @@
                 <input type="hidden" id="detailEdgeTo">
                 <div id="detailEdgeDropdown" class="search-dropdown"></div>
               </div>
-              <button class="detail-btn" onclick="addDetailEdge('${esc(n.id)}')">Adicionar Relação</button>
+              <button class="detail-btn" onclick="addDetailEdge('${escJs(n.id)}')">Adicionar Relação</button>
             </div>
             <div class="edge-list">
               <div class="detail-section-title">Criar no relacionado</div>
@@ -714,7 +715,7 @@
                 <label>Conteudo:</label>
                 <textarea id="relatedNodeContent" class="detail-textarea" style="min-height:110px;" placeholder="Resumo curto do novo no"></textarea>
               </div>
-              <button class="detail-btn" onclick="createRelatedNode('${esc(n.id)}')">Criar e conectar</button>
+              <button class="detail-btn" onclick="createRelatedNode('${escJs(n.id)}')">Criar e conectar</button>
             </div>
           </div>`;
         populateRelations('detailEdgeRelation');
@@ -1562,7 +1563,7 @@
         easing: 'ease-in-out-cubic'
       });
 
-      showToast('\U0001f50d Foco em: ' + (node.data('name') || nodeId));
+      showToast('🔍 Foco em: ' + (node.data('name') || nodeId));
     }
 
     function exitFocus() {
@@ -1575,7 +1576,7 @@
         duration: 400,
         easing: 'ease-in-out-cubic'
       });
-      showToast('\U0001f504 Visão geral restaurada');
+      showToast('🔄 Visão geral restaurada');
     }
 
     function filterByImportance(value) {
