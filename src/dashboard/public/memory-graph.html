@@ -239,6 +239,38 @@
     .detail-btn.danger { background: rgba(248, 113, 113, 0.15); color: var(--danger); border-color: rgba(248, 113, 113, 0.25); }
     .detail-meta { font-size: 0.72rem; color: var(--text-soft); }
     .detail-section-title { font-size: 0.74rem; color: var(--accent); font-weight: 700; margin-top: 8px; }
+
+    /* ── UX Improvements ── */
+    /* #1: Topbar groups */
+    .topbar-group { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px; }
+    .topbar-sep { width: 1px; height: 20px; background: var(--border-color); margin: 0 6px; flex-shrink: 0; }
+    .topbar-dropdown { position: relative; display: inline-flex; }
+    .topbar-dropdown-menu { position: absolute; top: 100%; left: 0; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 10px; padding: 6px; display: none; z-index: 100; box-shadow: var(--shadow-lg); min-width: 160px; margin-top: 4px; }
+    .topbar-dropdown-menu.show { display: block; }
+    .topbar-dropdown-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 12px; border: none; background: transparent; color: var(--text-main); font-size: 0.78rem; cursor: pointer; border-radius: 6px; transition: all 0.15s; }
+    .topbar-dropdown-menu button:hover { background: var(--accent-bg); color: var(--accent); }
+
+    /* #2: Selected node glow — strong visual feedback */
+    @keyframes pulseGlow { 0%,100% { filter: drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 20px var(--accent)); } 50% { filter: drop-shadow(0 0 16px var(--accent)) drop-shadow(0 0 36px var(--accent)); } }
+    @keyframes pulseRing { 0% { transform: scale(1); opacity: 0.7; } 100% { transform: scale(2.2); opacity: 0; } }
+    .cy-node-selected { animation: pulseGlow 1.8s ease-in-out infinite; z-index: 999 !important; }
+
+    /* #5: Empty sidebar stats */
+    .empty-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+    .stat-card { background: rgba(148,163,184,0.06); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; text-align: center; }
+    .stat-value { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
+    .stat-label { font-size: 0.65rem; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .recent-node { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: rgba(148,163,184,0.04); border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 4px; cursor: pointer; transition: all 0.2s; font-size: 0.72rem; }
+    .recent-node:hover { background: var(--accent-bg); border-color: var(--accent); }
+    .recent-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+    /* #6: Relation direction arrow — expressive */
+    .relation-arrow { font-size: 1.5rem; color: var(--accent); text-align: center; padding: 6px 0; font-weight: bold; text-shadow: 0 0 10px var(--accent-bg); }
+
+    /* #8: Fade-out animation — smooth deletion feedback */
+    @keyframes nodeFadeOut { 0% { opacity: 1; transform: scale(1); } 30% { opacity: 0.8; transform: scale(1.15); filter: drop-shadow(0 0 12px rgba(248,113,113,0.6)); } 100% { opacity: 0; transform: scale(0.3); filter: drop-shadow(0 0 4px rgba(248,113,113,0)); } }
+    .node-deleting { animation: nodeFadeOut 0.6s ease-out forwards; pointer-events: none; }
+    .edge-deleting { animation: nodeFadeOut 0.4s ease-out forwards; pointer-events: none; }
   
     .depth-controls { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
     .depth-btn { flex: 1; padding: 6px; background: rgba(148,163,184,0.08); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-main); font-size: 0.72rem; cursor: pointer; text-align: center; transition: all 0.2s; }
@@ -278,10 +310,13 @@
         <button class="sidebar-btn" onclick="exportSVG()" title="Exportar grafo como SVG vetor">🎨 SVG</button>
         <button class="sidebar-btn" onclick="exportJSON()" title="Exportar grafo como JSON">📄 JSON</button>
         <button class="sidebar-btn" onclick="loadGraph()" title="Recarregar dados do grafo">🔃 Atualizar</button>
+        <button class="sidebar-btn" id="undoBtn" onclick="undoLast()" disabled title="Desfazer última ação (delete nó/relação)">↩️ Desfazer</button>
       </div>
     </div>
     <div class="sidebar-section">
       <h3>Criar Relação</h3>
+      <div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:8px;padding:6px 8px;background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.15);border-radius:6px;"
+        >💡 Ctrl+clique no nó → clique no destino para arrastar</div>
       <div class="input-group" style="position:relative">
         <label>De:</label>
         <input id="edgeFromSearch" placeholder="🔍 Buscar nó..." autocomplete="off" oninput="searchNodeFor('from')" onfocus="searchNodeFor('from')">
@@ -295,6 +330,7 @@
       <div id="customRelationRow" class="input-group" style="display:none">
         <input id="customRelation" placeholder="Relação customizada...">
       </div>
+      <div class="relation-arrow">➜</div>
       <div class="input-group" style="position:relative">
         <label>Para:</label>
         <input id="edgeToSearch" placeholder="🔍 Buscar nó..." autocomplete="off" oninput="searchNodeFor('to')" onfocus="searchNodeFor('to')">
@@ -330,25 +366,60 @@
   <div id="main">
     <div id="topbar">
       <button onclick="toggleLeft()" title="Mostrar/ocultar painel de ferramentas">◀▶</button>
+      <div class="topbar-sep"></div>
+      <!-- Grupo: Criação -->
       <button onclick="openCreateNodeModal()" title="Criar novo nó de memória">➕ Novo Nó</button>
       <a href="/memory-review" style="text-decoration:none;"><button title="Revisar nós duplicados ou conflitantes">📋 Revisão</button></a>
-      <button onclick="zoomIn()" title="Aumentar zoom">➕</button>
-      <button onclick="zoomOut()" title="Diminuir zoom">➖</button>
-      <button onclick="toggleCluster()" title="Agrupar/desagrupar nós por tipo" id="clusterBtn">🗂️</button>
-      <button onclick="findPath()" title="Encontrar caminho entre 2 nós">🛤️</button>
-      <button onclick="toggleAnalytics()" title="Métricas analíticas do grafo">📊</button>
-      <button onclick="toggleSearch()" title="Busca semântica na memória">🔍</button>
-      <div style="position:relative;display:inline-flex;align-items:center;">
-        <input type="text" id="searchNodes" placeholder="Buscar nó por nome/conteúdo..." style="font-size:0.75rem;width:220px;padding:4px 8px 4px 28px;background:var(--bg-muted);border:1px solid var(--border-color);border-radius:8px;color:var(--text-main);" oninput="onSearchNodes(this.value)" onfocus="onSearchNodes(this.value)" onblur="setTimeout(()=>document.getElementById('searchDropdown').style.display='none',200)">
-        <span style="position:absolute;left:8px;font-size:0.75rem;color:var(--text-muted);pointer-events:none;">🔎</span>
+      <div class="topbar-sep"></div>
+      <!-- Grupo: Zoom (#7 ícones distintos) -->
+      <button onclick="zoomIn()" title="Aumentar zoom">🔍+</button>
+      <button onclick="zoomOut()" title="Diminuir zoom">🔍−</button>
+      <div class="topbar-sep"></div>
+      <!-- Grupo: Exportar (dropdown) -->
+      <div class="topbar-dropdown">
+        <button onclick="toggleDropdown('exportMenu')" title="Exportar grafo">📤 Exportar ▾</button>
+        <div id="exportMenu" class="topbar-dropdown-menu">
+          <button onclick="exportPNG(2);closeDropdowns()" title="Exportar como PNG (2x)">📷 PNG</button>
+          <button onclick="exportPNG(4);closeDropdowns()" title="Exportar como PNG (4x)">💎 Ultra PNG</button>
+          <button onclick="exportSVG();closeDropdowns()" title="Exportar como SVG">🎨 SVG</button>
+          <button onclick="exportJSON();closeDropdowns()" title="Exportar como JSON">📄 JSON</button>
+        </div>
+      </div>
+      <div class="topbar-sep"></div>
+      <!-- Grupo: Ferramentas -->
+      <div class="topbar-dropdown">
+        <button onclick="toggleDropdown('toolsMenu')" title="Ferramentas do grafo">🛠️ Ferramentas ▾</button>
+        <div id="toolsMenu" class="topbar-dropdown-menu">
+          <button onclick="toggleCluster();closeDropdowns()" title="Agrupar/desagrupar nós por tipo">🗂️ Agrupar por tipo</button>
+          <button onclick="findPath();closeDropdowns()" title="Encontrar caminho entre 2 nós">🛤️ Encontrar caminho</button>
+          <button onclick="toggleAnalytics();closeDropdowns()" title="Métricas analíticas">📊 Analytics</button>
+          <button onclick="toggleSearch();closeDropdowns()" title="Busca semântica">🔍 Busca semântica</button>
+        </div>
+      </div>
+      <div class="topbar-sep"></div>
+      <!-- Grupo: Data filter (collapsible) -->
+      <div class="topbar-dropdown">
+        <button onclick="toggleDropdown('dateMenu')" title="Filtro de data">📅 Datas ▾</button>
+        <div id="dateMenu" class="topbar-dropdown-menu" style="padding:12px;min-width:260px;">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+            <span style="font-size:0.72rem;color:var(--text-muted);width:32px;">De:</span>
+            <input type="date" id="dateFrom" style="font-size:0.75rem;flex:1;background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;color:var(--text-main);padding:4px 6px;" onchange="applyDateFilter()">
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+            <span style="font-size:0.72rem;color:var(--text-muted);width:32px;">Até:</span>
+            <input type="date" id="dateTo" style="font-size:0.75rem;flex:1;background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;color:var(--text-main);padding:4px 6px;" onchange="applyDateFilter()">
+          </div>
+          <button onclick="clearDateFilter();closeDropdowns()" style="width:100%;padding:6px;border:1px solid var(--border-color);border-radius:6px;background:transparent;color:var(--text-muted);font-size:0.72rem;cursor:pointer;">✖ Limpar filtro</button>
+        </div>
+      </div>
+      <!-- Search always visible -->
+      <div style="position:relative;display:inline-flex;align-items:center;flex:1;min-width:140px;max-width:260px;">
+        <input type="text" id="searchNodes" placeholder="Buscar nó..." style="font-size:0.75rem;width:100%;padding:4px 8px 4px 28px;background:var(--bg-muted);border:1px solid var(--border-color);border-radius:8px;color:var(--text-main);" oninput="onSearchNodes(this.value)" onfocus="onSearchNodes(this.value)" onblur="setTimeout(()=>document.getElementById('searchDropdown').style.display='none',200)">
+        <span style="position:absolute;left:8px;font-size:0.75rem;color:var(--text-muted);pointer-events:none;">🔍</span>
         <div id="searchDropdown" class="search-dropdown" style="left:0;right:0;top:100%;"></div>
       </div>
-      <button onclick="clearNodeSearch()" title="Limpar busca" style="font-size:0.7rem;">✖</button>
-      <span style="font-size:0.7rem;color:var(--text-muted);margin:0 4px;">De:</span><input type="date" id="dateFrom" style="font-size:0.7rem;width:120px;" onchange="applyDateFilter()">
-      <span style="font-size:0.7rem;color:var(--text-muted);margin:0 4px;">Até:</span><input type="date" id="dateTo" style="font-size:0.7rem;width:120px;" onchange="applyDateFilter()">
-      <button onclick="clearDateFilter()" title="Limpar filtro de data">✖</button>
       <span class="node-count" id="nodeCount">—</span>
-      <button onclick="toggleRight()" title="Toggle details">◀▶</button>
+      <button onclick="toggleRight()" title="Mostrar/ocultar painel de detalhes">◀▶</button>
     </div>
     <div id="cy"></div>
   </div>
@@ -360,7 +431,16 @@
         <button class="sidebar-toggle" onclick="toggleRight()" title="Close">❯</button>
       </div>
       <div id="rightContent" style="padding:12px 14px;">
-        <p style="color:var(--text-muted);font-size:0.8rem;">Clique em um nó para ver detalhes.</p>
+        <div id="emptyState">
+          <p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:12px;">Clique em um nó para ver detalhes.</p>
+          <div class="empty-stats" id="emptyStats">
+            <div class="stat-card"><div class="stat-value" id="statNodes">—</div><div class="stat-label">Nós</div></div>
+            <div class="stat-card"><div class="stat-value" id="statEdges">—</div><div class="stat-label">Arestas</div></div>
+            <div class="stat-card"><div class="stat-value" id="statCommunities">—</div><div class="stat-label">Comunidades</div></div>
+            <div class="stat-card"><div class="stat-value" id="statTypes">—</div><div class="stat-label">Tipos</div></div>
+          </div>
+          <div style="margin-top:14px;" id="recentNodes"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -468,6 +548,89 @@
     function showToast(msg) { const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',3000); }
     function esc(s) { const d=document.createElement('div'); d.textContent=String(s||''); return d.innerHTML.replace(/`/g, '&#96;'); }
     function escJs(s) { return String(s||'').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/`/g, '\\`'); }
+
+    /* #1: Dropdown toggle */
+    function toggleDropdown(id) { const m=document.getElementById(id); document.querySelectorAll('.topbar-dropdown-menu').forEach(d={>{if(d.id!==id)d.classList.remove('show')}); m.classList.toggle('show'); }
+    function closeDropdowns() { document.querySelectorAll('.topbar-dropdown-menu').forEach(d=>d.classList.remove('show')); }
+    document.addEventListener('click', e=>{ if(!e.target.closest('.topbar-dropdown')) closeDropdowns(); });
+
+    /* #4: Undo system with 10s timer */
+    const undoStack = [];
+    let undoTimer = null;
+    function pushUndo(action) {
+      action.timestamp = Date.now();
+      undoStack.push(action);
+      if(undoStack.length > 20) undoStack.shift();
+      updateUndoBtn();
+      // Auto-expire after 10s
+      clearTimeout(undoTimer);
+      undoTimer = setTimeout(() => { if(undoStack.length && (Date.now() - undoStack[undoStack.length-1].timestamp > 9500)) { undoStack.pop(); updateUndoBtn(); } }, 10000);
+      startUndoCountdown();
+    }
+    let undoCountdownInterval = null;
+    function startUndoCountdown() {
+      clearInterval(undoCountdownInterval);
+      const btn = document.getElementById('undoBtn');
+      if(!btn) return;
+      undoCountdownInterval = setInterval(() => {
+        if(!undoStack.length) { clearInterval(undoCountdownInterval); btn.textContent = '↩️ Desfazer'; return; }
+        const elapsed = (Date.now() - undoStack[undoStack.length-1].timestamp) / 1000;
+        const remaining = Math.max(0, 10 - elapsed).toFixed(0);
+        if(remaining <= 0) { clearInterval(undoCountdownInterval); undoStack.pop(); updateUndoBtn(); btn.textContent = '↩️ Desfazer'; return; }
+        btn.textContent = `↩️ Desfazer (${remaining}s)`;
+      }, 500);
+    }
+    function updateUndoBtn() { const b=document.getElementById('undoBtn'); if(b) { b.disabled = undoStack.length === 0; if(!undoStack.length) b.textContent = '↩️ Desfazer'; } }
+    async function undoLast() {
+      if(!undoStack.length) return;
+      const action = undoStack.pop();
+      try {
+        if(action.type === 'deleteNode') {
+          const r = await fetch('/api/memory/nodes', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(action.data) });
+          const d = await r.json();
+          if(d.success && action.edges) {
+            for(const e of action.edges) {
+              await fetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:e.from_node,to:e.to_node,relation:e.relation}) }).catch(()=>{});
+            }
+          }
+          await loadAllNodes(); await loadGraph();
+          showToast('↩️ Nó restaurado: ' + (action.data.name||action.data.id));
+        } else if(action.type === 'deleteEdge') {
+          await fetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:action.data.from,to:action.data.to,relation:action.data.relation}) });
+          await loadAllNodes(); await loadGraph();
+          showToast('↩️ Relação restaurada');
+        }
+      } catch(e) { showToast('❌ Erro ao desfazer: '+e.message); }
+      updateUndoBtn();
+    }
+
+    /* #5: Update empty sidebar stats + recent nodes */
+    async function updateEmptyStats() {
+      try {
+        const r = await fetch('/api/memory/stats');
+        const d = await r.json();
+        if(!d.success) return;
+        const s = d.stats;
+        document.getElementById('statNodes').textContent = s.totalNodes || 0;
+        document.getElementById('statEdges').textContent = s.totalEdges || 0;
+        const types = s.nodesByType ? Object.keys(s.nodesByType) : [];
+        document.getElementById('statTypes').textContent = types.length;
+        document.getElementById('statCommunities').textContent = new Set(Object.values(s.centrality||{}).map(n=>n.community||0)).size || '?';
+      } catch(e) {}
+      // Populate recent nodes
+      try {
+        const recentEl = document.getElementById('recentNodes');
+        if(!recentEl) return;
+        const sorted = [...allNodesList].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0)).slice(0,5);
+        if(!sorted.length) { recentEl.innerHTML = ''; return; }
+        recentEl.innerHTML = '<div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Nós recentes</div>' +
+          sorted.map(n => `<div class="recent-node" onclick="selectGraphNode('${escJs(n.id)}')">
+            <span class="recent-dot" style="background:${TYPE_COLORS[n.type]||'#64748b'}"></span>
+            <span style="color:var(--text-main);font-weight:500;">${esc(n.name||n.id)}</span>
+            <span style="color:var(--text-soft);font-size:0.62rem;margin-left:auto;">${n.type}</span>
+          </div>`).join('');
+      } catch(e) {}
+    }
 
     function toggleLeft() {
       const sb = document.getElementById('leftSidebar');
@@ -836,6 +999,30 @@
     function toggleType(type) { if (activeTypes.has(type)) activeTypes.delete(type); else activeTypes.add(type); renderLegend(); renderGraph(allNodes, allEdges); }
 
     function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+    // ── #3: Drag & Drop to create edge ──
+    let dragSourceNode = null;
+
+    function initDragToConnect() {
+      if (!cy) return;
+      // Ctrl+click starts drag-connect mode
+      cy.on('tapstart', 'node', evt => {
+        if (evt.originalEvent && (evt.originalEvent.ctrlKey || evt.originalEvent.metaKey)) {
+          dragSourceNode = evt.target;
+          evt.target.addClass('connect-source');
+          showToast('🔗 Clique no nó de destino (ou Esc para cancelar)');
+        }
+      });
+      cy.on('tap', 'node', evt => {
+        if (dragSourceNode && evt.target.id() !== dragSourceNode.id()) {
+          showRelationModal(dragSourceNode.id(), dragSourceNode.data('type')||'fact', evt.target.id(), evt.target.data('type')||'fact');
+          dragSourceNode.removeClass('connect-source');
+          dragSourceNode = null;
+          return;
+        }
+      });
+      document.addEventListener('keydown', e => { if(e.key === 'Escape' && dragSourceNode) { dragSourceNode.removeClass('connect-source'); dragSourceNode = null; showToast('❌ Cancelado'); } });
+    }
     // ── Node Search ──
     function onSearchNodes(query) {
       const dd = document.getElementById('searchDropdown');
@@ -932,7 +1119,9 @@
           { selector:'edge', style:{ 'width':'data(edgeWidth)','line-color':'rgba(148, 163, 184, 0.45)','curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'rgba(148, 163, 184, 0.45)','label':showLabels?'data(relation)':'','font-size':9,'font-family':'Inter, system-ui, sans-serif','font-weight':600,'color':'#fff','text-rotation':'autorotate','text-margin-y':-8,'text-outline-color':'#0a1221','text-outline-width':3,'text-outline-opacity':1,'text-opacity':showLabels?1:0 } },
           ...typeStyles,
           { selector:'.faded', style:{'opacity':0.1} },
-          { selector:'.highlighted', style:{'border-width':3,'border-color':'#38bdf8','border-opacity':1,'opacity':1,'z-index':999} },
+          { selector:'.highlighted', style:{'border-width':4,'border-color':'var(--accent)','border-opacity':1,'opacity':1,'z-index':999} },
+          { selector:'.node-deleting', style:{'opacity':0,'transition-property':'opacity','transition-duration':'0.6s'} },
+          { selector:'.edge-deleting', style:{'opacity':0,'transition-property':'opacity','transition-duration':'0.4s'} },
           { selector:'.connecting', style:{'border-width':3,'border-color':'#38bdf8','border-opacity':0.8,'opacity':1} },
           { selector:'.connect-source', style:{'border-width':4,'border-color':'#38bdf8','border-opacity':1,'opacity':1,'background-color':'#38bdf8'} },
           { selector:'.hovered', style:{'border-width':3,'border-color':'#fff','border-opacity':0.8} }
@@ -980,12 +1169,14 @@
           else if (connectSource.id()!==id) { showRelationModal(connectSource.id(),connectSource.data('type')||'fact',id,type||'fact'); exitConnectMode(); }
           return;
         }
-        // Show details in right sidebar
-        cy.elements().addClass('faded'); node.removeClass('faded');
-        node.connectedEdges().removeClass('faded'); node.connectedEdges().connectedNodes().removeClass('faded');
+        // #2: Strong selection feedback — glow + pulse + fade others
+        cy.elements().removeClass('faded highlighted');
+        cy.elements().not(node).not(node.connectedEdges().connectedNodes()).addClass('faded');
+        node.removeClass('faded').addClass('highlighted');
+        node.connectedEdges().removeClass('faded');
+        node.connectedEdges().connectedNodes().removeClass('faded');
         // Auto-focus: zoom to selected node
         cy.animate({ center: { eles: node }, zoom: Math.max(cy.zoom(), 1.5) }, { duration: 400 });
-        node.addClass('highlighted'); node.connectedEdges().connectedNodes().addClass('highlighted');
         selectedNodeId = id;
         document.getElementById('focusBtn').disabled = false;
         ensureRightSidebarOpen();
@@ -1015,7 +1206,7 @@
       renderLegend();
     }
 
-    function selectGraphNode(id) { if(cy) { const n = cy.getElementById(id); if(n.length) cy.emit('tap',{target:n}); } }
+    // selectGraphNode is defined below (full implementation with #2 selection glow)
     async function saveNode(id) {
       const name = document.getElementById('editName')?.value || '';
       const type = document.getElementById('editType')?.value || 'fact';
@@ -1044,18 +1235,44 @@
     async function deleteNode(id) {
       if (!confirm('Deletar no "' + id + '" e todas as relacoes?')) return;
       try {
+        // #4: Save for undo
+        let nodeData = null, nodeEdges = null;
+        try {
+          const nr = await fetch('/api/memory/nodes/' + encodeURIComponent(id));
+          const nd = await nr.json();
+          if(nd.node) nodeData = { id:nd.node.id, type:nd.node.type, name:nd.node.name, content:nd.node.content };
+          if(nd.edges) nodeEdges = nd.edges;
+        } catch(e) {}
+
         const r = await fetch('/api/memory/nodes/' + encodeURIComponent(id), { method: 'DELETE' });
         const d = await r.json();
         if (!d.success) {
           showToast('Erro ao deletar: ' + (d.error || 'falha desconhecida'));
           return;
         }
+
+        // #4: Push to undo stack
+        if(nodeData) pushUndo({ type:'deleteNode', data:nodeData, edges:nodeEdges });
+
+        // #8: Smooth fade-out animation on Cytoscape before removal
+        if(cy) {
+          const cyNode = cy.getElementById(id);
+          if(cyNode.length) {
+            const cyEdges = cyNode.connectedEdges();
+            cyNode.addClass('node-deleting');
+            cyEdges.addClass('edge-deleting');
+            // Wait for animation before reload
+            await new Promise(r => setTimeout(r, 650));
+          }
+        }
+
         selectedNodeId = null;
         document.getElementById('rightSidebar').classList.add('collapsed');
         document.getElementById('reopenRight').style.display = 'flex';
-        document.getElementById('rightContent').innerHTML = '<p style="color:var(--text-muted);font-size:0.8rem;">Clique em um no para ver detalhes.</p>';
+        document.getElementById('rightContent').innerHTML = '<div id="emptyState"><p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:12px;">Clique em um no para ver detalhes.</p><div class="empty-stats" id="emptyStats"><div class="stat-card"><div class="stat-value" id="statNodes">—</div><div class="stat-label">Nos</div></div><div class="stat-card"><div class="stat-value" id="statEdges">—</div><div class="stat-label">Arestas</div></div><div class="stat-card"><div class="stat-value" id="statCommunities">—</div><div class="stat-label">Comunidades</div></div><div class="stat-card"><div class="stat-value" id="statTypes">—</div><div class="stat-label">Tipos</div></div></div><div style="margin-top:14px;" id="recentNodes"></div></div>';
         await loadAllNodes();
         await loadGraph();
+        await updateEmptyStats();
         showToast('No deletado');
       } catch (e) {
         showToast('Erro ao deletar: ' + e.message);
@@ -1255,7 +1472,12 @@
       if (!cy) return;
       const node = cy.getElementById(id);
       if (node.length) {
-        cy.elements().removeClass('highlighted faded');
+        // #2: Strong selection feedback
+        cy.elements().removeClass('faded highlighted');
+        cy.elements().not(node).not(node.connectedEdges().connectedNodes()).addClass('faded');
+        node.removeClass('faded').addClass('highlighted');
+        node.connectedEdges().removeClass('faded');
+        node.connectedEdges().connectedNodes().removeClass('faded');
         cy.animate({ center: { eles: node }, zoom: Math.max(cy.zoom(), 1.5) }, { duration: 400 });
         renderNodeDetails(id);
       }
@@ -1422,6 +1644,10 @@
     }
 
     loadGraph(); renderLegend();
+    // #3: Initialize drag-to-connect
+    setTimeout(() => initDragToConnect(), 1000);
+    // #5: Populate empty stats on load
+    updateEmptyStats();
   </script>
 
   <!-- Analytics Dashboard Modal -->
