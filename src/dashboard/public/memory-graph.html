@@ -254,10 +254,10 @@
   <div id="header-root"></div>
 
   <!-- Reopen buttons (moved inside app-layout if needed, or kept absolute) -->
-  <div id="reopenLeft" class="reopen-btn" onclick="toggleLeft()">▶</div>
-  <div id="reopenRight" class="reopen-btn" onclick="toggleRight()">◀</div>
+  <div id="reopenLeft" class="reopen-btn" onclick="toggleLeft()" title="Reabrir painel de ferramentas">▶</div>
+  <div id="reopenRight" class="reopen-btn" onclick="toggleRight()" title="Reabrir painel de detalhes">◀</div>
 
-  <div id="focusBanner" class="focus-banner">🔍 Modo Foco: <span id="focusNodeName"></span> <button onclick="exitFocus()">✕ Sair</button></div>
+  <div id="focusBanner" class="focus-banner">🔍 Modo Foco: <span id="focusNodeName"></span> <button onclick="exitFocus()" title="Sair do modo foco">✕ Sair</button></div>
   <div class="app-layout">
     <!-- Left Sidebar: Controls -->
     <div id="leftSidebar" class="glass-sidebar">
@@ -268,16 +268,16 @@
     <div class="sidebar-section">
       <h3>Ferramentas</h3>
       <div class="tool-grid">
-        <button class="sidebar-btn" onclick="openCreateNodeModal()">➕ Novo Nó</button>
+        <button class="sidebar-btn" onclick="openCreateNodeModal()" title="Criar novo nó de memória">➕ Novo Nó</button>
         <a class="sidebar-btn" href="/memory-review" style="text-decoration:none;">📋 Revisão</a>
-        <button class="sidebar-btn" onclick="resetLayout()">🔄 Centralizar</button>
-        <button class="sidebar-btn" onclick="toggleLabels()">🏷️ Labels</button>
-        <button class="sidebar-btn" id="connectBtn" onclick="toggleConnect()">🔗 Conectar</button>
-        <button class="sidebar-btn" onclick="exportPNG(2)">📷 PNG</button>
-        <button class="sidebar-btn" onclick="exportPNG(4)">💎 Ultra PNG</button>
-        <button class="sidebar-btn" onclick="exportSVG()">🎨 SVG</button>
-        <button class="sidebar-btn" onclick="exportJSON()">📄 JSON</button>
-        <button class="sidebar-btn" onclick="loadGraph()">🔃 Atualizar</button>
+        <button class="sidebar-btn" onclick="resetLayout()" title="Centralizar o grafo na tela">🔄 Centralizar</button>
+        <button class="sidebar-btn" onclick="toggleLabels()" title="Mostrar/ocultar labels dos nós">🏷️ Labels</button>
+        <button class="sidebar-btn" id="connectBtn" onclick="toggleConnect()" title="Modo conexão: clique em 2 nós para criar relação">🔗 Conectar</button>
+        <button class="sidebar-btn" onclick="exportPNG(2)" title="Exportar grafo como PNG (2x)">📷 PNG</button>
+        <button class="sidebar-btn" onclick="exportPNG(4)" title="Exportar grafo como PNG (4x alta resolução)">💎 Ultra PNG</button>
+        <button class="sidebar-btn" onclick="exportSVG()" title="Exportar grafo como SVG vetor">🎨 SVG</button>
+        <button class="sidebar-btn" onclick="exportJSON()" title="Exportar grafo como JSON">📄 JSON</button>
+        <button class="sidebar-btn" onclick="loadGraph()" title="Recarregar dados do grafo">🔃 Atualizar</button>
       </div>
     </div>
     <div class="sidebar-section">
@@ -301,7 +301,7 @@
         <div id="toDropdown" class="search-dropdown"></div>
         <input type="hidden" id="edgeTo">
       </div>
-      <button class="sidebar-btn" onclick="createEdge()" style="width:100%;justify-content:center;margin-top:4px;">＋ Adicionar Relação</button>
+      <button class="sidebar-btn" onclick="createEdge()" style="width:100%;justify-content:center;margin-top:4px;" title="Criar relação entre dois nós">＋ Adicionar Relação</button>
     </div>
     <div class="sidebar-section">
       <h3>Legenda</h3>
@@ -311,14 +311,14 @@
       <h3>🔍 Modo Foco</h3>
       <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:8px;">Clique em um nó e depois isole</div>
       <div class="tool-grid">
-        <button class="sidebar-btn" id="focusBtn" onclick="focusOnSelected()" disabled>🔍 Isolar Nó</button>
-        <button class="sidebar-btn" onclick="exitFocus()">🔄 Visão Geral</button>
+        <button class="sidebar-btn" id="focusBtn" onclick="focusOnSelected()" disabled title="Isolar o nó selecionado e seus vizinhos">🔍 Isolar Nó</button>
+        <button class="sidebar-btn" onclick="exitFocus()" title="Voltar à visão geral do grafo">🔄 Visão Geral</button>
       </div>
       <h3 style="margin-top:12px;">📐 Profundidade</h3>
       <div class="depth-controls">
-        <button class="depth-btn active" onclick="setDepth(1)" id="depth1">1 hop</button>
-        <button class="depth-btn" onclick="setDepth(2)" id="depth2">2 hops</button>
-        <button class="depth-btn" onclick="setDepth(0)" id="depthAll">Tudo</button>
+        <button class="depth-btn active" onclick="setDepth(1)" id="depth1" title="Mostrar apenas vizinhos diretos">1 hop</button>
+        <button class="depth-btn" onclick="setDepth(2)" id="depth2" title="Mostrar vizinhos de vizinhos">2 hops</button>
+        <button class="depth-btn" onclick="setDepth(0)" id="depthAll" title="Mostrar todos os nós conectados">Tudo</button>
       </div>
       <h3 style="margin-top:12px;">⭐ Importância mín.</h3>
       <input type="range" class="importance-slider" id="importanceSlider" min="0" max="100" value="0" oninput="filterByImportance(this.value)">
@@ -329,15 +329,15 @@
   <!-- Main: Graph -->
   <div id="main">
     <div id="topbar">
-      <button onclick="toggleLeft()" title="Toggle controls">◀▶</button>
-      <button onclick="openCreateNodeModal()">➕ Novo Nó</button>
-      <a href="/memory-review" style="text-decoration:none;"><button>📋 Revisão</button></a>
-      <button onclick="zoomIn()">➕</button>
-      <button onclick="zoomOut()">➖</button>
-      <button onclick="toggleCluster()" title="Agrupar por tipo" id="clusterBtn">🗂️</button>
+      <button onclick="toggleLeft()" title="Mostrar/ocultar painel de ferramentas">◀▶</button>
+      <button onclick="openCreateNodeModal()" title="Criar novo nó de memória">➕ Novo Nó</button>
+      <a href="/memory-review" style="text-decoration:none;"><button title="Revisar nós duplicados ou conflitantes">📋 Revisão</button></a>
+      <button onclick="zoomIn()" title="Aumentar zoom">➕</button>
+      <button onclick="zoomOut()" title="Diminuir zoom">➖</button>
+      <button onclick="toggleCluster()" title="Agrupar/desagrupar nós por tipo" id="clusterBtn">🗂️</button>
       <button onclick="findPath()" title="Encontrar caminho entre 2 nós">🛤️</button>
-      <button onclick="toggleAnalytics()" title="Métricas analíticas">📊</button>
-      <button onclick="toggleSearch()" title="Busca semântica">🔍</button>
+      <button onclick="toggleAnalytics()" title="Métricas analíticas do grafo">📊</button>
+      <button onclick="toggleSearch()" title="Busca semântica na memória">🔍</button>
       <div style="position:relative;display:inline-flex;align-items:center;">
         <input type="text" id="searchNodes" placeholder="Buscar nó por nome/conteúdo..." style="font-size:0.75rem;width:220px;padding:4px 8px 4px 28px;background:var(--bg-muted);border:1px solid var(--border-color);border-radius:8px;color:var(--text-main);" oninput="onSearchNodes(this.value)" onfocus="onSearchNodes(this.value)" onblur="setTimeout(()=>document.getElementById('searchDropdown').style.display='none',200)">
         <span style="position:absolute;left:8px;font-size:0.75rem;color:var(--text-muted);pointer-events:none;">🔎</span>
@@ -374,8 +374,8 @@
       <select id="modalRelation"></select>
       <div id="modalCustomRow" style="display:none;margin-top:6px;"><input id="modalCustomRelation" placeholder="Nome da relação..." style="width:100%;background:var(--bg-input);border:1px solid var(--border-color);border-radius:5px;padding:6px;color:var(--text-main);font-size:0.85rem;"></div>
       <div class="modal-actions">
-        <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
-          <button class="btn-confirm" id="relationModalConfirm" onclick="confirmModal()">Criar</button>
+        <button class="btn-cancel" onclick="closeModal()" title="Cancelar operação">Cancelar</button>
+          <button class="btn-confirm" id="relationModalConfirm" onclick="confirmModal()" title="Confirmar criação da relação">Criar</button>
       </div>
     </div>
   </div>
@@ -403,8 +403,8 @@
         <input id="newNodeContent" placeholder="Resumo curto do nó">
       </div>
       <div class="modal-actions">
-        <button class="btn-cancel" onclick="closeCreateNodeModal()">Cancelar</button>
-        <button class="btn-confirm" onclick="createNode()">Criar</button>
+        <button class="btn-cancel" onclick="closeCreateNodeModal()" title="Cancelar">Cancelar</button>
+        <button class="btn-confirm" onclick="createNode()" title="Criar novo nó">Criar</button>
       </div>
     </div>
   </div>
@@ -418,7 +418,7 @@
       <input id="semanticSearch" type="text" placeholder="Buscar por conteúdo, tipo ou relação..." class="detail-input" style="font-size:0.9rem;padding:12px;" oninput="semanticSearchHandler()">
       <div id="searchResults" style="margin-top:16px;max-height:400px;overflow-y:auto;"></div>
       <div class="modal-actions">
-        <button class="btn-cancel" onclick="closeSearchModal()">Fechar</button>
+        <button class="btn-cancel" onclick="closeSearchModal()" title="Fechar busca">Fechar</button>
       </div>
     </div>
   </div>
@@ -467,7 +467,7 @@
 
     function showToast(msg) { const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',3000); }
     function esc(s) { const d=document.createElement('div'); d.textContent=String(s||''); return d.innerHTML.replace(/`/g, '&#96;'); }
-    function escJs(s) { return String(s||'').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"'); }
+    function escJs(s) { return String(s||'').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/`/g, '\\`'); }
 
     function toggleLeft() {
       const sb = document.getElementById('leftSidebar');
@@ -613,8 +613,8 @@
           ' <span class="edge-relation" id="' + edgeId + '_rel" style="cursor:pointer; border-bottom: 1px dashed var(--accent); padding-bottom: 1px;" title="Clique para editar" onclick="editEdgeRelation(\'' + escJs(e.from_node) + '\',\'' + escJs(e.to_node) + '\',\'' + escJs(e.relation) + '\',\'' + escJs(id) + '\')">' + esc(e.relation) + '</span> ' +
           (dir === '&rarr;' ? '&rarr;' : '&larr;') +
           ' <a href="#" onclick="selectGraphNode(\'' + escJs(otherId) + '\');return false;">' + esc(otherId) + '</a>' +
-          ' <button class="btn-edit" title="Editar Relação" onclick="editEdgeRelation(\'' + escJs(e.from_node) + '\',\'' + escJs(e.to_node) + '\',\'' + escJs(e.relation) + '\',\'' + escJs(id) + '\')">✏️</button>' +
-          ' <button onclick="deleteEdge(\'' + escJs(e.from_node) + '\',\'' + escJs(e.to_node) + '\',\'' + escJs(e.relation) + '\')" title="Remover relação">✕</button></div>';
+          ' <button class="btn-edit" title="Editar tipo da relação" onclick="editEdgeRelation(\'' + escJs(e.from_node) + '\',\'' + escJs(e.to_node) + '\',\'' + escJs(e.relation) + '\',\'' + escJs(id) + '\')">✏️</button>' +
+          ' <button onclick="deleteEdge(\'' + escJs(e.from_node) + '\',\'' + escJs(e.to_node) + '\',\'' + escJs(e.relation) + '\')" title="Remover esta relação">✕</button></div>';
       }).join('');
     }
 
@@ -661,9 +661,9 @@
             </select>
             <textarea id="editContent" class="detail-textarea" placeholder="Conteúdo do nó">${esc(n.content || '')}</textarea>
             <div class="detail-actions">
-              <button class="detail-btn" onclick="saveNode('${escJs(n.id)}')">Salvar</button>
-              <button class="detail-btn" onclick="exportNodeDetails('${escJs(n.id)}')">📄 Exportar</button>
-              <button class="detail-btn danger" onclick="deleteNode('${escJs(n.id)}')">Deletar</button>
+              <button class="detail-btn" onclick="saveNode('${escJs(n.id)}')" title="Salvar alterações do nó">Salvar</button>
+              <button class="detail-btn" onclick="exportNodeDetails('${escJs(n.id)}')" title="Exportar detalhes do nó como texto">📄 Exportar</button>
+              <button class="detail-btn danger" onclick="deleteNode('${escJs(n.id)}')" title="Deletar nó e todas as suas relações">Deletar</button>
             </div>
             ${n.metadata ? `<div class="detail-meta">Meta: ${esc(typeof n.metadata === 'string' ? n.metadata : JSON.stringify(n.metadata))}</div>` : ''}
             <div class="edge-list">
@@ -689,7 +689,7 @@
                 <input type="hidden" id="detailEdgeTo">
                 <div id="detailEdgeDropdown" class="search-dropdown"></div>
               </div>
-              <button class="detail-btn" onclick="addDetailEdge('${escJs(n.id)}')">Adicionar Relação</button>
+              <button class="detail-btn" onclick="addDetailEdge('${escJs(n.id)}')" title="Adicionar relação partindo deste nó">Adicionar Relação</button>
             </div>
             <div class="edge-list">
               <div class="detail-section-title">Criar no relacionado</div>
@@ -714,7 +714,7 @@
                 <label>Conteudo:</label>
                 <textarea id="relatedNodeContent" class="detail-textarea" style="min-height:110px;" placeholder="Resumo curto do novo no"></textarea>
               </div>
-              <button class="detail-btn" onclick="createRelatedNode('${escJs(n.id)}')">Criar e conectar</button>
+              <button class="detail-btn" onclick="createRelatedNode('${escJs(n.id)}')" title="Criar novo nó e conectar automaticamente">Criar e conectar</button>
             </div>
           </div>`;
         populateRelations('detailEdgeRelation');
@@ -1263,6 +1263,10 @@
 
     // ── Analytics Modal ──
     function toggleAnalytics() {
+      if (!selectedNodeId) {
+        showToast('⚠️ Selecione um nó primeiro para ver métricas');
+        return;
+      }
       const m = document.getElementById('analyticsModal');
       m.style.display = m.style.display === 'none' ? 'block' : 'none';
       if (m.style.display === 'block') openAnalytics();

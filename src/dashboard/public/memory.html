@@ -183,7 +183,7 @@
       document.getElementById('nodeCount').textContent = `(${nodes.length})`;
       if (!nodes.length) { list.innerHTML = '<div class="empty-state">Nenhum nó encontrado</div>'; return; }
       list.innerHTML = nodes.map(n => `
-        <div class="node-card ${n.id===selectedNodeId?'active':''}" onclick="selectNode('${n.id}')">
+        <div class="node-card ${n.id===selectedNodeId?'active':''}" onclick="selectNode('${escJsAttr(n.id)}')" title="Clique para ver detalhes">
           <div class="node-header">
             <span class="node-id">${esc(n.id)}</span>
             <span class="node-type ${n.type}">${n.type}</span>
@@ -210,7 +210,7 @@
             edges.map(e => {
               const dir = e.from_node === n.id ? '→' : '←';
               const otherNode = e.from_node === n.id ? (e.to || e.to_node) : e.from_node;
-              return `<div class="edge-item">${dir} <span class="edge-relation">${esc(e.relation)}</span> ${dir === '→' ? '→' : '←'} <a href="#" onclick="selectNode('${esc(otherNode)}');return false;" style="color:var(--accent);text-decoration:none;">${esc(otherNode)}</a> <button onclick="deleteEdge('${esc(e.from_node)}','${esc(e.to_node)}','${esc(e.relation)}')" style="margin-left:8px;font-size:0.68rem;padding:2px 6px;border-radius:4px;border:1px solid var(--danger);color:var(--danger);background:transparent;cursor:pointer;" title="Remover relação">✕</button></div>`;
+              return `<div class="edge-item">${dir} <span class="edge-relation">${esc(e.relation)}</span> ${dir === '→' ? '→' : '←'} <a href="#" onclick="selectNode('${escJsAttr(otherNode)}');return false;" style="color:var(--accent);text-decoration:none;">${esc(otherNode)}</a> <button onclick="deleteEdge('${escJsAttr(e.from_node)}','${escJsAttr(e.to_node)}','${escJsAttr(e.relation)}')" style="margin-left:8px;font-size:0.68rem;padding:2px 6px;border-radius:4px;border:1px solid var(--danger);color:var(--danger);background:transparent;cursor:pointer;" title="Remover relação">✕</button></div>`;
             }).join('') +
             '</div>';
         }
@@ -219,15 +219,15 @@
         const allNodesRes = await fetch('/api/memory/nodes?limit=200');
         const allNodesData = await allNodesRes.json();
         const allNodesList = allNodesData.success ? allNodesData.nodes : [];
-        const toOptions = allNodesList.filter(n => n.id !== n.id).map(n => `<option value="${esc(n.id)}">${esc(n.name || n.id)} (${n.type})</option>`).join('');
+        const toOptions = allNodesList.filter(n => n.id !== n.id).map(n => `<option value="${escAttr(n.id)}">${esc(n.name || n.id)} (${n.type})</option>`).join('');
 
         panel.innerHTML = `
           <div class="detail-id">${esc(n.id)} <span class="node-type ${n.type}" style="margin-left:8px">${n.type}</span></div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-            <input id="editName" value="${esc(n.name || '')}" style="flex:1;font-weight:600;font-size:0.95rem;background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;padding:6px 10px;color:var(--text-main);">
+            <input id="editName" value="${escAttr(n.name || '')}" style="flex:1;font-weight:600;font-size:0.95rem;background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;padding:6px 10px;color:var(--text-main);" title="Nome de exibição do nó">
             <div style="display:flex;gap:6px;margin-left:10px;">
-              <button onclick="saveNode('${esc(n.id)}')" style="padding:4px 12px;border-radius:6px;border:none;background:var(--accent-bg);color:var(--accent);cursor:pointer;font-size:0.78rem;">💾 Salvar</button>
-              <button onclick="deleteNode('${esc(n.id)}')" style="padding:4px 12px;border-radius:6px;border:none;background:rgba(248,113,113,0.15);color:var(--danger);cursor:pointer;font-size:0.78rem;">🗑️ Deletar</button>
+              <button onclick="saveNode('${escJsAttr(n.id)}')" style="padding:4px 12px;border-radius:6px;border:none;background:var(--accent-bg);color:var(--accent);cursor:pointer;font-size:0.78rem;" title="Salvar alterações">💾 Salvar</button>
+              <button onclick="deleteNode('${escJsAttr(n.id)}')" style="padding:4px 12px;border-radius:6px;border:none;background:rgba(248,113,113,0.15);color:var(--danger);cursor:pointer;font-size:0.78rem;" title="Deletar nó e todas as relações">🗑️ Deletar</button>
             </div>
           </div>
           <select id="editType" style="margin-bottom:8px;background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;padding:4px 8px;color:var(--text-main);font-size:0.78rem;">
@@ -256,7 +256,7 @@
                 <input type="hidden" id="edgeTo">
                 <div id="edgeDropdown" style="display:none;position:absolute;left:30px;right:0;top:100%;max-height:200px;overflow-y:auto;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:0 0 6px 6px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
               </div>
-              <button onclick="addEdge('${esc(n.id)}')" style="padding:6px 16px;border-radius:6px;border:none;background:var(--accent-bg);color:var(--accent);cursor:pointer;font-size:0.82rem;font-weight:600;">+ Adicionar Relação</button>
+              <button onclick="addEdge('${escJsAttr(n.id)}')" style="padding:6px 16px;border-radius:6px;border:none;background:var(--accent-bg);color:var(--accent);cursor:pointer;font-size:0.82rem;font-weight:600;" title="Adicionar relação partindo deste nó">+ Adicionar Relação</button>
             </div>
           </div>
         `;
@@ -268,6 +268,8 @@
     }
 
     function esc(t) { const d=document.createElement('div'); d.textContent=String(t||''); return d.innerHTML.replace(/`/g, '&#96;'); }
+    function escAttr(t) { return esc(t).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+    function escJsAttr(t) { return String(t||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"').replace(/\n/g,'\\n').replace(/\r/g,'\\r'); }
 
     async function saveNode(id) {
       const name = document.getElementById('editName').value;
@@ -320,7 +322,7 @@
       const dropdown = document.getElementById('edgeDropdown');
       const filtered = allNodesForEdge.filter(n => (n.name||'').toLowerCase().includes(q) || (n.id||'').toLowerCase().includes(q));
       dropdown.innerHTML = filtered.slice(0, 20).map(n =>
-        `<div onclick="selectEdgeTarget('${esc(n.id)}','${esc(n.name || n.id)}','${n.type}')" style="padding:6px 10px;cursor:pointer;font-size:0.78rem;color:var(--text-muted);border-bottom:1px solid var(--border-color);" onmouseover="this.style.background='var(--accent-bg)'" onmouseout="this.style.background='transparent'">
+        `<div onclick="selectEdgeTarget('${escJsAttr(n.id)}','${escJsAttr(n.name || n.id)}','${n.type}')" style="padding:6px 10px;cursor:pointer;font-size:0.78rem;color:var(--text-muted);border-bottom:1px solid var(--border-color);" onmouseover="this.style.background='var(--accent-bg)'" onmouseout="this.style.background='transparent'" title="Selecionar ${esc(n.name || n.id)}">
           <span style="color:var(--text-main);font-weight:500;">${esc(n.name || n.id)}</span>
           <span style="margin-left:6px;font-size:0.68rem;padding:1px 6px;border-radius:3px;background:${TYPE_BG[n.type]||'rgba(148,163,184,0.15)'};color:${TYPE_COLORS[n.type]||'#64748b'}">${n.type}</span>
           <span style="margin-left:4px;font-size:0.68rem;color:var(--text-soft)">${esc(n.id)}</span>
