@@ -459,7 +459,10 @@ const commands = {
 
 Comando                 Descrição
 ----------------------- ----------------------------------------------------
-newclaw onboard         Configura provedores e chaves de API (OpenRouter, etc)
+newclaw onboard         Configura provedores e chaves de API
+newclaw channels         Status dos canais (telegram, discord, whatsapp, signal)
+newclaw channels enable <canal>   Configura um canal
+newclaw channels disable <canal>  Desativa um canal
 newclaw start           Inicia o agente (foreground)
 newclaw start --daemon  Inicia em segundo plano (ideal para VPS)
 newclaw stop            Encerra o serviço graciosamente
@@ -484,6 +487,124 @@ Dicas:
   - Logs detalhados em: ./logs/newclaw-stdout.log
 `);
   }
+
+  channels(args) {
+    const env = readEnv();
+    const subcommand = args?.[0] || 'status';
+
+    switch (subcommand) {
+      case 'status': {
+        console.log('
+📡 NewClaw — Status dos Canais
+');
+        const channels = [
+          { name: 'Telegram', key: 'TELEGRAM_BOT_TOKEN', icon: '✅' },
+          { name: 'Discord', key: 'DISCORD_BOT_TOKEN', icon: '🟡' },
+          { name: 'WhatsApp', key: 'WHATSAPP_PHONE_NUMBER', icon: '🟡' },
+          { name: 'Signal', key: 'SIGNAL_PHONE_NUMBER', icon: '🟡' },
+        ];
+        for (const ch of channels) {
+          const hasCreds = !!env[ch.key];
+          const status = hasCreds ? ch.icon + ' Configurado' : '⬜️ Não configurado';
+          const detail = hasCreds ? ch.key + '=' + env[ch.key].substring(0, 10) + '...' : 'Adicione ' + ch.key + ' ao .env';
+          console.log('  ' + ch.name.padEnd(12) + ' ' + status);
+          console.log('  ' + ''.padEnd(12) + ' ' + detail);
+        }
+        console.log('');
+        console.log('  Use: newclaw channels enable <canal>  para configurar um canal');
+        console.log('  Canais: telegram, discord, whatsapp, signal');
+        break;
+      }
+
+      case 'enable': {
+        const channel = args?.[1];
+        if (!channel) {
+          console.log('❌ Use: newclaw channels enable <telegram|discord|whatsapp|signal>');
+          return;
+        }
+        const readline = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+        const configs = {
+          telegram: [
+            { key: 'TELEGRAM_BOT_TOKEN', prompt: 'Cole o Bot Token do Telegram (@BotFather)', hint: 'Ex: 123456:ABCdefGHI...' },
+            { key: 'TELEGRAM_ALLOWED_USER_IDS', prompt: 'Seu User ID (@userinfobot)', hint: 'Ex: 987654321' },
+          ],
+          discord: [
+            { key: 'DISCORD_BOT_TOKEN', prompt: 'Cole o Bot Token do Discord (Developer Portal → Bot)', hint: 'Ex: MTk4Nj...' },
+            { key: 'DISCORD_ALLOWED_GUILD_IDS', prompt: 'IDs dos servidores permitidos (vírgula, vazio = todos)', hint: 'Ex: 123456789012345678' },
+            { key: 'DISCORD_ALLOWED_USER_IDS', prompt: 'IDs de usuários permitidos (vírgula, vazio = todos)', hint: 'Ex: 123456789' },
+          ],
+          whatsapp: [
+            { key: 'WHATSAPP_PHONE_NUMBER', prompt: 'Número de telefone com código do país', hint: 'Ex: 5511999999999 (sem +)' },
+            { key: 'WHATSAPP_ALLOWED_JIDS', prompt: 'JIDs permitidos (vírgula, vazio = todos os contatos)', hint: 'Ex: 5511999999999@s.whatsapp.net' },
+          ],
+          signal: [
+            { key: 'SIGNAL_PHONE_NUMBER', prompt: 'Número de telefone com código do país', hint: 'Ex: +5511999999999' },
+            { key: 'SIGNAL_ALLOWED_NUMBERS', prompt: 'Números permitidos (vírgula, vazio = todos)', hint: 'Ex: +5511999999999' },
+          ],
+        };
+        const fields = configs[channel];
+        if (!fields) {
+          console.log('❌ Canal desconhecido: ' + channel);
+          console.log('Canais disponíveis: telegram, discord, whatsapp, signal');
+          readline.close();
+          return;
+        }
+        console.log('
+📡 Configurando ' + channel.charAt(0).toUpperCase() + channel.slice(1) + '
+');
+        let idx = 0;
+        const askField = () => {
+          if (idx >= fields.length) {
+            writeEnv(env);
+            console.log('
+✅ ' + channel.charAt(0).toUpperCase() + channel.slice(1) + ' configurado!');
+            console.log('💡 Reinicie o NewClaw para aplicar: newclaw restart');
+            readline.close();
+            return;
+          }
+          const field = fields[idx];
+          const current = env[field.key] || '';
+          const defaultHint = current ? ' [atual: ' + current.substring(0, 15) + (current.length > 15 ? '...' : '') + ']' : (field.hint ? ' (' + field.hint + ')' : '');
+          readline.question('  ' + field.prompt + defaultHint + ': ', (answer) => {
+            env[field.key] = answer || current;
+            idx++;
+            askField();
+          });
+        };
+        askField();
+        break;
+      }
+
+      case 'disable': {
+        const channel = args?.[1];
+        if (!channel) {
+          console.log('❌ Use: newclaw channels disable <telegram|discord|whatsapp|signal>');
+          return;
+        }
+        const keyMap = {
+          telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_USER_IDS'],
+          discord: ['DISCORD_BOT_TOKEN', 'DISCORD_ALLOWED_GUILD_IDS', 'DISCORD_ALLOWED_USER_IDS'],
+          whatsapp: ['WHATSAPP_PHONE_NUMBER', 'WHATSAPP_ALLOWED_JIDS', 'WHATSAPP_AUTH_DIR'],
+          signal: ['SIGNAL_PHONE_NUMBER', 'SIGNAL_ALLOWED_NUMBERS', 'SIGNAL_CLI_PATH'],
+        };
+        const keys = keyMap[channel];
+        if (!keys) {
+          console.log('❌ Canal desconhecido: ' + channel);
+          return;
+        }
+        for (const key of keys) {
+          if (env[key] !== undefined) env[key] = '';
+        }
+        writeEnv(env);
+        console.log('✅ ' + channel.charAt(0).toUpperCase() + channel.slice(1) + ' desativado!');
+        console.log('💡 Reinicie o NewClaw para aplicar: newclaw restart');
+        break;
+      }
+
+      default:
+        console.log('❌ Subcomando desconhecido. Use: status, enable, disable');
+    }
+  },
 };
 
 // Parse args

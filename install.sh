@@ -579,50 +579,131 @@ configure() {
     done
   fi
 
+  # ── Canais adicionais ──────────────────────────────────
+  local discord_token=""
+  local discord_guilds=""
+  local discord_users=""
+  local wa_phone=""
+  local wa_jids=""
+  local signal_phone=""
+  local signal_numbers=""
+
+  if [ "$NO_PROMPT" -eq 0 ]; then
+    echo ""
+    echo -e "  ${BOLD}${YELLOW}━━━ Canais Adicionais ━━━${NC}"
+    echo -e "  ${CYAN}Configure canais opcionais agora ou deixe em branco para configurar depois.${NC}"
+    echo ""
+
+    # Discord
+    if ask_yes "Configurar Discord? (precisa de bot token)" "n"; then
+      ask "  Cole o Bot Token do Discord (Discord Developer Portal → Bot)" discord_token
+      ask "  IDs dos servidores permitidos (separados por vírgula, vazio = todos)" discord_guilds
+      ask "  IDs de usuários permitidos (separados por vírgula, vazio = todos)" discord_users
+    fi
+
+    # WhatsApp
+    if ask_yes "Configurar WhatsApp? (via Baileys, precisa escanear QR)" "n"; then
+      ask "  Número de telefone com código do país (ex: 5511999999999)" wa_phone
+      ask "  JIDs permitidos (separados por vírgula, vazio = todos os contatos)" wa_jids
+    fi
+
+    # Signal
+    if ask_yes "Configurar Signal? (requer signal-cli instalado)" "n"; then
+      ask "  Número de telefone com código do país (ex: +5511999999999)" signal_phone
+      ask "  Números permitidos (separados por vírgula, vazio = todos)" signal_numbers
+    fi
+  fi
+
   # Escrever .env
   if [ "$DRY_RUN" -eq 0 ]; then
     cat > "$ENV_FILE" << EOF
 # NewClaw — Gerado pelo instalador em $(date -Iseconds)
 
-# Telegram
+# ─── Telegram (canal principal) ──────────────────────────────
 TELEGRAM_BOT_TOKEN=${BOT_TOKEN}
 TELEGRAM_ALLOWED_USER_IDS=${USER_ID}
 
-# Idioma
+# ─── Discord (opcional) ───────────────────────────────────────
+DISCORD_BOT_TOKEN=${discord_token}
+DISCORD_ALLOWED_GUILD_IDS=${discord_guilds}
+DISCORD_ALLOWED_USER_IDS=${discord_users}
+
+# ─── WhatsApp (opcional) ─────────────────────────────────────
+WHATSAPP_PHONE_NUMBER=${wa_phone}
+WHATSAPP_ALLOWED_JIDS=${wa_jids}
+WHATSAPP_AUTH_DIR=./data/whatsapp-auth
+
+# ─── Signal (opcional) ───────────────────────────────────────
+SIGNAL_PHONE_NUMBER=${signal_phone}
+SIGNAL_ALLOWED_NUMBERS=${signal_numbers}
+SIGNAL_CLI_PATH=signal-cli
+
+# ─── Idioma ───────────────────────────────────────────────────
 APP_LANG=pt-BR
 
-# Provider padrão
+# ─── Provider padrão ─────────────────────────────────────────
 DEFAULT_PROVIDER=${provider}
 
-# API Keys (opcional — preencha depois se quiser usar outros providers)
+# ─── API Keys (opcional — preencha depois se quiser usar outros providers)
 GEMINI_API_KEY=
 DEEPSEEK_API_KEY=
 GROQ_API_KEY=
 OPENROUTER_API_KEY=${or_key}
 
-# Ollama
+# ─── Ollama (local / nuvem) ─────────────────────────────────
 OLLAMA_URL=http://localhost:11434
 OLLAMA_MODEL=${OLLAMA_MODEL}
 OLLAMA_API_KEY=
 
-# Config
+# ─── Config ───────────────────────────────────────────────────
 MAX_ITERATIONS=8
 MEMORY_WINDOW_SIZE=20
 SKILLS_DIR=./skills
 TMP_DIR=./workspace/tmp
 
-# Dashboard Web
+# ─── Dashboard Web ────────────────────────────────────────────
 DASHBOARD_PORT=${DASHBOARD_PORT}
 
-# Whisper (opcional — preencha se tiver servidor Whisper)
+# ─── Whisper / TTS (opcional) ────────────────────────────────
 WHISPER_API_URL=
+WHISPER_API_FALLBACK=
 WHISPER_PATH=
+WHISPER_MODEL=tiny
 EOF
   else
     dry "criar ${ENV_FILE} com token=${BOT_TOKEN:0:10}... user_id=${USER_ID} provider=${provider}"
   fi
 
   ok "Arquivo .env configurado!"
+
+  # ── Instalar dependências de canais ─────────────────────────
+  if [ "$DRY_RUN" -eq 0 ]; then
+    cd "$NEWCLAW_DIR"
+
+    # Discord — discord.js já está no package.json
+    if [ -n "$discord_token" ]; then
+      ok "Discord: configurado (discord.js já incluído)"
+    fi
+
+    # WhatsApp — Baileys já está no package.json
+    if [ -n "$wa_phone" ]; then
+      ok "WhatsApp: configurado (${wa_phone})"
+      mkdir -p "${NEWCLAW_DIR}/data/whatsapp-auth"
+      info "Na primeira execução, escaneie o QR code no terminal"
+    fi
+
+    # Signal — verificar signal-cli
+    if [ -n "$signal_phone" ]; then
+      if command -v signal-cli &>/dev/null; then
+        ok "Signal: configurado (${signal_phone}, signal-cli encontrado)"
+      else
+        warn "Signal: signal-cli não encontrado! Instale: https://github.com/AsamK/signal-cli"
+        info "  Ubuntu/Debian: sudo apt install signal-cli"
+        info "  macOS: brew install signal-cli"
+        info "  Ou baixe de: https://github.com/AsamK/signal-cli/releases"
+      fi
+    fi
+  fi
 }
 
 # ── 8. Atalhos ───────────────────────────────────────────────
