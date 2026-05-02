@@ -443,12 +443,12 @@ Ubuntu/Debian users get the best navigation experience because the installer add
 
 NewClaw includes a built-in **Self-Diagnosis Agent** that uses the local LLM to analyze its own code, runtime behavior, and integration health.
 
-> **💡 How to use:** The `/audit` command is a **Telegram bot command** — send it directly in your Telegram chat with NewClaw. It is **owner-only** (restricted to your `TELEGRAM_ALLOWED_USER_IDS`). It does **not** work from CLI or terminal.
+> **💡 How to use:** The `/audit` command works on **any channel** — Telegram, Discord, WhatsApp, Signal, or Web Dashboard. Just send `/audit` in your chat with NewClaw. It is **owner-only** (restricted to configured user IDs). It does **not** work from CLI or terminal.
 
 ### Quick Start
 
 ```
-📱 Open your Telegram chat with NewClaw
+📱 Open your chat with NewClaw (Telegram, Discord, WhatsApp, Signal, or Web)
 
 💬 Type: /audit              ← Full audit (takes ~1-3 min)
 💬 Type: /audit integration  ← Quick check (10-30s)
@@ -456,7 +456,7 @@ NewClaw includes a built-in **Self-Diagnosis Agent** that uses the local LLM to 
 💬 Type: /audit history      ← View past reports
 ```
 
-### Commands (Owner-Only — Telegram Only)
+### Commands (Owner-Only — Any Channel)
 
 | Command | Description | Time |
 |---------|-------------|------|
@@ -954,12 +954,12 @@ Backups são salvos em `~/newclaw-backups/` com timestamp.
 
 O NewClaw inclui um **Agente de Auto-Diagnóstico** que usa o LLM local para analisar seu próprio código, comportamento em runtime e saúde das integrações.
 
-> **💡 Como usar:** O comando `/audit` é um **comando do bot no Telegram** — envie diretamente no chat do Telegram com o NewClaw. É **restrito ao proprietário** (limitado ao seu `TELEGRAM_ALLOWED_USER_IDS`). **Não** funciona via CLI ou terminal.
+> **💡 Como usar:** O comando `/audit` funciona em **qualquer canal** — Telegram, Discord, WhatsApp, Signal ou Dashboard Web. Basta enviar `/audit` no chat com o NewClaw. É **restrito ao proprietário** (limitado aos IDs configurados). **Não** funciona via CLI ou terminal.
 
 ### Início Rápido
 
 ```
-📱 Abra o chat do Telegram com o NewClaw
+📱 Abra o chat com o NewClaw (Telegram, Discord, WhatsApp, Signal ou Web)
 
 💬 Digite: /audit              ← Auditoria completa (~1-3 min)
 💬 Digite: /audit integration  ← Verificação rápida (10-30s)
@@ -967,7 +967,7 @@ O NewClaw inclui um **Agente de Auto-Diagnóstico** que usa o LLM local para ana
 💬 Digite: /audit history      ← Ver relatórios anteriores
 ```
 
-### Comandos (Owner-Only — Apenas Telegram)
+### Comandos (Owner-Only — Qualquer Canal)
 
 | Comando | Descrição | Tempo |
 |---------|-----------|-------|
