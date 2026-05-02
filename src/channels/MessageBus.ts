@@ -134,6 +134,7 @@ export class MessageBus {
         if (msg.type === 'voice' || msg.type === 'audio') return 'record_voice';
         if (msg.type === 'photo') return 'upload_photo';
         if (msg.type === 'document') return 'upload_document';
+        if (msg.type === 'video') return 'record_video';
         return 'typing';
     }
 
