@@ -367,15 +367,16 @@
     <div id="topbar">
       <button onclick="toggleLeft()" title="Mostrar/ocultar painel de ferramentas">◀▶</button>
       <div class="topbar-sep"></div>
-      <!-- Grupo: Criação -->
+      <!-- Sempre visíveis: criação + ações principais -->
       <button onclick="openCreateNodeModal()" title="Criar novo nó de memória">➕ Novo Nó</button>
+      <button onclick="toggleConnect()" id="connectBtn" title="Modo conexão: clique em 2 nós para criar relação">🔗 Conectar</button>
       <a href="/memory-review" style="text-decoration:none;"><button title="Revisar nós duplicados ou conflitantes">📋 Revisão</button></a>
       <div class="topbar-sep"></div>
-      <!-- Grupo: Zoom (#7 ícones distintos) -->
+      <!-- Zoom: sempre visíveis (#7 ícones distintos) -->
       <button onclick="zoomIn()" title="Aumentar zoom">🔍+</button>
       <button onclick="zoomOut()" title="Diminuir zoom">🔍−</button>
       <div class="topbar-sep"></div>
-      <!-- Grupo: Exportar (dropdown) -->
+      <!-- Exportar: dropdown -->
       <div class="topbar-dropdown">
         <button onclick="toggleDropdown('exportMenu')" title="Exportar grafo">📤 Exportar ▾</button>
         <div id="exportMenu" class="topbar-dropdown-menu">
@@ -385,8 +386,7 @@
           <button onclick="exportJSON();closeDropdowns()" title="Exportar como JSON">📄 JSON</button>
         </div>
       </div>
-      <div class="topbar-sep"></div>
-      <!-- Grupo: Ferramentas -->
+      <!-- Ferramentas: dropdown (menos usadas) -->
       <div class="topbar-dropdown">
         <button onclick="toggleDropdown('toolsMenu')" title="Ferramentas do grafo">🛠️ Ferramentas ▾</button>
         <div id="toolsMenu" class="topbar-dropdown-menu">
@@ -397,7 +397,7 @@
         </div>
       </div>
       <div class="topbar-sep"></div>
-      <!-- Grupo: Data filter (collapsible) -->
+      <!-- Data filter: dropdown -->
       <div class="topbar-dropdown">
         <button onclick="toggleDropdown('dateMenu')" title="Filtro de data">📅 Datas ▾</button>
         <div id="dateMenu" class="topbar-dropdown-menu" style="padding:12px;min-width:260px;">
