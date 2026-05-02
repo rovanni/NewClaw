@@ -13,6 +13,14 @@ Instead of acting like a simple reactive bot, NewClaw maintains an evolving worl
 
 Inspired by [Hermes Agent](https://github.com/NousResearch/Hermes-Agent) and [OpenClaw](https://github.com/openclaw/openclaw).
 
+## 🔀 Multi-Channel Architecture
+NewClaw features a **MessageBus-driven architecture** that decouples the cognitive core from the communication interfaces. This allows the agent to maintain a single, consistent memory and identity while interacting across multiple platforms simultaneously:
+
+*   **Unified Pipeline**: All messages are normalized into a standard format before reaching the agent.
+*   **Persistent Identity**: Whether you talk to NewClaw on Telegram or Discord, it's the same agent with the same evolving memory.
+*   **Cross-Platform Commands**: Commands like `/clear` or `/skills` work consistently across all channels.
+*   **Media-Ready**: Built-in support for text, voice, photos, and documents across all supported adapters.
+
 ## 🧠 Atomic Cognition: Unified Decision Core
 
 The core of NewClaw is its **Atomic Cognition Architecture**. Unlike traditional agents that follow a slow, linear chain of separate validation and critic steps, NewClaw processes all strategic intelligence in a single, unified atomic turn:
@@ -58,14 +66,16 @@ The agent operates in four distinct modes depending on the task complexity:
 | Feature | Description |
 |---------|-----------|
 | 🧠 **Semantic Memory** | SQLite + FTS5 + embeddings, 7 node types, 14+ relationships with advanced curation (merge/delete). |
+| 👁️ **Attention Layer** | Contextual prioritization system that re-ranks memory based on current interaction and feedback. |
+| 🔀 **Multi-Channel** | **MessageBus Architecture**: Native support for **Telegram, Discord, WhatsApp, Signal**, and **Web**. |
 | 📞 **Native Tool Calling** | Structural function calling (Ollama/Gemini) for precision without fragile text parsing. |
-| 🧭 **Model Router** | Intelligent LLM routing to specialized models (Chat, Code, Vision, Analysis) with failover. |
+| 🧭 **Model Router** | Intelligent LLM routing to specialized models (Chat, Code, Vision, Analysis, Execution) with failover. |
 | 🔄 **Provider Fallback** | Multi-provider resilience: Ollama → Gemini → DeepSeek → Groq. |
+| ⚖️ **Memory Governance** | Self-regulating memory with confidence decay, conflict resolution, and reversible archiving. |
 | 🎓 **SkillLearner** | Autonomous pattern recognition that feeds the **Learning Cycle** for user-approved efficiency. |
 | 🌐 **Web Search** | Iterative multi-source research with grounded synthesis and page reading. |
 | 🧭 **Active Exploration**| **Exploration Layer**: Terminal-style web navigation for deep site interaction (supports `w3m`). |
 | 📊 **Web Dashboard** | Real-time chat, config suite, memory curation, and interactive graph visualization. |
-| 📱 **Telegram Interface** | Full mobile control, voice support (Whisper/Edge-TTS), and natural language skill review. |
 | 📸 **Snapshots** | Graph versioning with create, restore, list, and delete operations. |
 
 ## 🏗️ Architecture
@@ -74,8 +84,23 @@ The agent operates in four distinct modes depending on the task complexity:
 
 ```mermaid
 flowchart LR
-    U["👤 User"] --> T["📨 Telegram Bot"]
-    T --> A["🧠 AgentLoop"]
+    U["👤 Users"] --> C["🌐 Channel Adapters"]
+    C --> B["🚌 MessageBus"]
+    B --> A["🧠 AgentLoop"]
+
+    subgraph Adapters
+        T["Telegram"]
+        D["Discord"]
+        W["WhatsApp"]
+        S["Signal"]
+        WB["Web Dashboard"]
+    end
+
+    T --> C
+    D --> C
+    W --> C
+    S --> C
+    WB --> C
 
     subgraph AgentLoop
         A1["🗜️ ContextCompressor"]
@@ -85,28 +110,32 @@ flowchart LR
         A1 --> A2 --> A3 --> A4
     end
 
-    A3 -->|"tool_calls"| S["🛠️ Tools"]
-    A3 -->|"response"| U
+    A3 -->|"tool_calls"| S2["🛠️ Tools"]
+    A3 -->|"response"| B
+    B --> C
+    C --> U
 
     subgraph Tools
         S1["🌐 web_search"]
-        S2["🧠 memory_search"]
+        S22["🧠 memory_search"]
         S3["✏️ memory_write"]
         S4["🔊 send_audio"]
         S5["⚡ exec_command"]
         S6["📄 file_ops"]
+        S7["🌤️ weather"]
     end
 
-    S --> S1
-    S --> S2
-    S --> S3
-    S --> S4
-    S --> S5
-    S --> S6
-    S -->|"result"| A3
+    S2 --> S1
+    S2 --> S22
+    S2 --> S3
+    S2 --> S4
+    S2 --> S5
+    S2 --> S6
+    S2 --> S7
+    S2 -->|"result"| A3
 
     A <--> M["💾 Memory — SQLite"]
-    A <--> D["🖥️ Dashboard"]
+    A <--> D2["🖥️ Dashboard"]
 ```
 
 ### Tool Calling Flow
@@ -172,6 +201,7 @@ The ModelRouter uses a lightweight LLM to classify each user message into one of
 | 👁️ vision | Image analysis, OCR, screenshots | gemma4:31b-cloud |
 | ⚡ light | Short responses (hi, ok, thanks) | glm-5.1:cloud |
 | 📊 analysis | Crypto, market data, statistics | glm-5:cloud |
+| 🧠 execution | Complex tool loops and multi-step reasoning | kimi-k2.6:cloud |
 
 ### Semantic Memory Graph
 
@@ -415,6 +445,14 @@ Backups are saved to `~/newclaw-backups/` with a timestamp.
 
 O NewClaw é um **Agente Cognitivo Avançado** (100% local e privado), desenvolvido em Node.js (TypeScript). Ele é especializado na execução autônoma de tarefas através de chamadas de ferramentas nativas e gerenciamento de memória semântica de longo prazo.
 
+## 🔀 Arquitetura Multi-Canal
+O NewClaw possui uma **arquitetura baseada em MessageBus** que desacopla o núcleo cognitivo das interfaces de comunicação. Isso permite que o agente mantenha uma única memória e identidade consistente enquanto interage em múltiplas plataformas simultaneamente:
+
+*   **Pipeline Unificado**: Todas as mensagens são normalizadas antes de chegarem ao agente.
+*   **Identidade Persistente**: O agente é o mesmo no Telegram, Discord ou qualquer outro canal.
+*   **Comandos Multi-Plataforma**: Comandos como `/clear` ou `/skills` funcionam em todos os canais.
+*   **Suporte a Mídia**: Processamento nativo de texto, voz, fotos e documentos em todos os adaptadores.
+
 ## 🧠 Cognição Atômica: Núcleo de Decisão Unificado
 
 O diferencial do NewClaw é a sua **Arquitetura de Cognição Atômica**. Diferente de agentes tradicionais que seguem uma cadeia lenta e linear de etapas separadas, o NewClaw processa toda a inteligência estratégica em um único turno atômico unificado:
@@ -460,14 +498,16 @@ O agente atua em quatro modos distintos dependendo da complexidade da tarefa:
 | Feature | Descrição |
 |---------|-----------|
 | 🧠 **Memória Semântica** | SQLite + FTS5 + embeddings, 7 tipos de nó, 14+ relações e curadoria avançada (mesclagem/deleção). |
+| 👁️ **Camada de Atenção** | Sistema de priorização contextual que reclassifica a memória com base na interação e feedback. |
+| 🔀 **Multi-Canal** | **Arquitetura MessageBus**: Suporte nativo a **Telegram, Discord, WhatsApp, Signal** e **Web**. |
 | 📞 **Tool Calling Nativo** | Chamada estrutural (Ollama/Gemini) para precisão absoluta sem parsing de texto. |
-| 🧭 **Model Router** | Roteamento inteligente para modelos especializados (Chat, Code, Vision, Analysis). |
+| 🧭 **Model Router** | Roteamento inteligente para modelos especializados (Chat, Code, Vision, Analysis, Execution). |
 | 🔄 **Provider Fallback** | Resiliência multi-provider: Ollama → Gemini → DeepSeek → Groq. |
+| ⚖️ **Governança de Memória**| Memória auto-regulada com decaimento de confiança, resolução de conflitos e arquivamento reversível. |
 | 🎓 **SkillLearner** | Reconhecimento de padrões que alimenta o **Ciclo de Aprendizado**. |
 | 🌐 **Busca Web** | Pesquisa iterativa multi-fonte com síntese e leitura de páginas. |
 | 🧭 **Exploração Ativa** | **Camada de Exploração**: Navegação web em modo terminal para interação profunda (suporte a `w3m`). |
 | 📊 **Dashboard Web** | Chat em tempo real, config, curadoria de memória e grafo interativo. |
-| 📱 **Interface Telegram** | Controle total, áudio (Whisper/Edge-TTS) e revisão de skills em linguagem natural. |
 | 📸 **Snapshots** | Versionamento do grafo: criar, restaurar, listar e deletar snapshots. |
 
 ## 🏗️ Arquitetura
@@ -476,8 +516,23 @@ O agente atua em quatro modos distintos dependendo da complexidade da tarefa:
 
 ```mermaid
 flowchart LR
-    U["👤 Usuário"] --> T["📨 Telegram Bot"]
-    T --> A["🧠 AgentLoop"]
+    U["👤 Usuários"] --> C["🌐 Channel Adapters"]
+    C --> B["🚌 MessageBus"]
+    B --> A["🧠 AgentLoop"]
+
+    subgraph Adapters
+        T["Telegram"]
+        D["Discord"]
+        W["WhatsApp"]
+        S["Signal"]
+        WB["Web Dashboard"]
+    end
+
+    T --> C
+    D --> C
+    W --> C
+    S --> C
+    WB --> C
 
     subgraph AgentLoop
         A1["🗜️ ContextCompressor"]
@@ -487,28 +542,32 @@ flowchart LR
         A1 --> A2 --> A3 --> A4
     end
 
-    A3 -->|"tool_calls"| S["🛠️ Ferramentas"]
-    A3 -->|"resposta"| U
+    A3 -->|"tool_calls"| S2["🛠️ Ferramentas"]
+    A3 -->|"resposta"| B
+    B --> C
+    C --> U
 
     subgraph Tools
         S1["🌐 web_search"]
-        S2["🧠 memory_search"]
+        S22["🧠 memory_search"]
         S3["✏️ memory_write"]
         S4["🔊 send_audio"]
         S5["⚡ exec_command"]
         S6["📄 file_ops"]
+        S7["🌤️ weather"]
     end
 
-    S --> S1
-    S --> S2
-    S --> S3
-    S --> S4
-    S --> S5
-    S --> S6
-    S -->|"resultado"| A3
+    S2 --> S1
+    S2 --> S22
+    S2 --> S3
+    S2 --> S4
+    S2 --> S5
+    S2 --> S6
+    S2 --> S7
+    S2 -->|"resultado"| A3
 
     A <--> M["💾 Memória — SQLite"]
-    A <--> D["🖥️ Dashboard"]
+    A <--> D2["🖥️ Dashboard"]
 ```
 
 ### Fluxo de Chamada de Ferramentas (Tool Calling)
@@ -572,7 +631,7 @@ O ModelRouter usa um LLM leve para classificar cada mensagem em 5 categorias e s
 | 👁️ **vision** | Análise de imagens, OCR, screenshots | `gemma4:31b-cloud` |
 | ⚡ **light** | Respostas curtas (oi, ok, valeu) | `glm-5.1:cloud` |
 | 📊 **analysis** | Cripto, dados de mercado, estatísticas | `glm-5:cloud` |
-| 🧠 **execution** | Loop de ferramentas / Tarefas complexas | `kimi-k2.6:cloud` |
+| 🧠 **execution** | Loops complexos de ferramentas e raciocínio multi-etapa | `kimi-k2.6:cloud` |
 
 ### Grafo de Memória Semântica
 
