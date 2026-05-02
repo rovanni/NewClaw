@@ -518,46 +518,120 @@ function Step-Configure {
         }
     }
 
+    # ── Canais adicionais ──────────────────────────────────
+    $DiscordToken = ""
+    $DiscordGuilds = ""
+    $DiscordUsers = ""
+    $WaPhone = ""
+    $WaJids = ""
+    $SignalPhone = ""
+    $SignalNumbers = ""
+
+    if (-not $NoPrompt) {
+        Write-Host ""
+        Write-Host "    ━━━ Canais Adicionais ━━" -ForegroundColor Yellow
+        Write-Host "    Configure canais opcionais agora ou deixe em branco para configurar depois." -ForegroundColor Cyan
+        Write-Host ""
+
+        # Discord
+        if (Read-YesNo "Configurar Discord? (precisa de bot token)" "n") {
+            $DiscordToken = Read-Answer "  Cole o Bot Token do Discord (Developer Portal → Bot)" ""
+            $DiscordGuilds = Read-Answer "  IDs dos servidores permitidos (vírgula, vazio = todos)" ""
+            $DiscordUsers = Read-Answer "  IDs de usuários permitidos (vírgula, vazio = todos)" ""
+        }
+
+        # WhatsApp
+        if (Read-YesNo "Configurar WhatsApp? (via Baileys, precisa escanear QR)" "n") {
+            $WaPhone = Read-Answer "  Número de telefone com código do país (ex: 5511999999999)" ""
+            $WaJids = Read-Answer "  JIDs permitidos (vírgula, vazio = todos os contatos)" ""
+        }
+
+        # Signal
+        if (Read-YesNo "Configurar Signal? (requer signal-cli instalado)" "n") {
+            $SignalPhone = Read-Answer "  Número de telefone com código do país (ex: +5511999999999)" ""
+            $SignalNumbers = Read-Answer "  Números permitidos (vírgula, vazio = todos)" ""
+        }
+    }
+
     $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
     $envContent = @"
 # NewClaw — Gerado pelo instalador em $timestamp
 
-# Telegram
+# ─── Telegram (canal principal) ──────────────────────────────
 TELEGRAM_BOT_TOKEN=$Token
 TELEGRAM_ALLOWED_USER_IDS=$UserId
 
-# Idioma
+# ─── Discord (opcional) ───────────────────────────────────────
+DISCORD_BOT_TOKEN=$DiscordToken
+DISCORD_ALLOWED_GUILD_IDS=$DiscordGuilds
+DISCORD_ALLOWED_USER_IDS=$DiscordUsers
+
+# ─── WhatsApp (opcional) ─────────────────────────────────────
+WHATSAPP_PHONE_NUMBER=$WaPhone
+WHATSAPP_ALLOWED_JIDS=$WaJids
+WHATSAPP_AUTH_DIR=./data/whatsapp-auth
+
+# ─── Signal (opcional) ───────────────────────────────────────
+SIGNAL_PHONE_NUMBER=$SignalPhone
+SIGNAL_ALLOWED_NUMBERS=$SignalNumbers
+SIGNAL_CLI_PATH=signal-cli
+
+# ─── Idioma ───────────────────────────────────────────────────
 APP_LANG=pt-BR
 
-# Provider padrão
+# ─── Provider padrão ─────────────────────────────────────────
 DEFAULT_PROVIDER=$Provider
 
-# API Keys (opcional)
+# ─── API Keys (opcional) ──────────────────────────────────────
 GEMINI_API_KEY=
 DEEPSEEK_API_KEY=
 GROQ_API_KEY=
 OPENROUTER_API_KEY=$OR_Key
 
-# Ollama
+# ─── Ollama (local / nuvem) ─────────────────────────────────
 OLLAMA_URL=http://localhost:11434
 OLLAMA_MODEL=$Model
 OLLAMA_API_KEY=
 
-# Config
+# ─── Config ───────────────────────────────────────────────────
 MAX_ITERATIONS=8
 MEMORY_WINDOW_SIZE=20
 SKILLS_DIR=./skills
 TMP_DIR=./workspace/tmp
 
-# Dashboard Web
+# ─── Dashboard Web ────────────────────────────────────────────
 DASHBOARD_PORT=$Port
 
-# Whisper (opcional)
+# ─── Whisper / TTS (opcional) ────────────────────────────────
 WHISPER_API_URL=
+WHISPER_API_FALLBACK=
 WHISPER_PATH=
+WHISPER_MODEL=tiny
 "@
     Set-Content -Path $envFile -Value $envContent -Encoding UTF8
     Write-Ok "Arquivo .env configurado!"
+
+    # ── Verificar dependências de canais ────────────────────────
+    if (-not $DryRun) {
+        if (-not [string]::IsNullOrWhiteSpace($DiscordToken)) {
+            Write-Ok "Discord: configurado (discord.js já incluído)"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($WaPhone)) {
+            Write-Ok "WhatsApp: configurado ($WaPhone)"
+            $waAuthDir = Join-Path $Dir "data\\whatsapp-auth"
+            if (-not (Test-Path $waAuthDir)) { New-Item -ItemType Directory -Path $waAuthDir | Out-Null }
+            Write-Info "Na primeira execução, escaneie o QR code no terminal"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($SignalPhone)) {
+            if (Test-Command "signal-cli") {
+                Write-Ok "Signal: configurado ($SignalPhone, signal-cli encontrado)"
+            } else {
+                Write-Warn "Signal: signal-cli não encontrado! Instale: https://github.com/AsamK/signal-cli"
+                Write-Info "  Chocolatey: choco install signal-cli"
+                Write-Info "  Ou baixe de: https://github.com/AsamK/signal-cli/releases"
+            }
+        }
+    }
 }
 
 # ── 8. Atalhos ───────────────────────────────────────────────
