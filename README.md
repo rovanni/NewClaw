@@ -77,6 +77,14 @@ The agent operates in four distinct modes depending on the task complexity:
 | 🧭 **Active Exploration**| **Exploration Layer**: Terminal-style web navigation for deep site interaction (supports `w3m`). |
 | 📊 **Web Dashboard** | Real-time chat, config suite, memory curation, and interactive graph visualization. |
 | 📸 **Snapshots** | Graph versioning with create, restore, list, and delete operations. |
+| 🔗 **Thorial Graph Sync** | Shared cognitive memory between Thorial (OpenClaw) and NewClaw via `thorial_graph` tool. |
+| 🖥️ **SSH Exec** | Remote command execution via SSH for multi-server infrastructure management. |
+| 📄 **Document Sharing** | Send files and documents directly through Telegram with `send_document` tool. |
+| 🔊 **Whisper Fallback Chain** | Multi-tier STT with automatic GPU → CPU fallback (`WHISPER_API_URL` + `WHISPER_API_FALLBACK`). |
+| 📊 **Crypto Analysis** | Real-time cryptocurrency analysis and report generation tools. |
+| ⚙️ **Server Config** | Self-hosted friendly configuration management tool. |
+| 🧩 **Skill Installer** | Dynamic skill installation and loading for extensible agent capabilities. |
+| 👋 **Onboarding Service** | Guided setup for new users with interactive configuration. |
 
 ## 🏗️ Architecture
 
@@ -225,6 +233,21 @@ flowchart TD
 **7 Node Types:** identity, preference, project, skill, context, fact, infrastructure.
 
 **14+ Relationship Types:** prefers, works_on, runs_on, uses, depends_on, contains, references, related_to, belongs_to, owns, created, reads, writes, hosts, plus automatic inverse links.
+
+### Advanced Memory Subsystems
+
+| Module | Description |
+|--------|------------|
+| 🧠 **AttentionFeedback v2** | Logarithmic saturation scoring (cap 5.0), co-usage validation, and decay engine. Prevents over-reinforcement of popular memories. |
+| 🎯 **AttentionLayer** | Priority-weighted attention allocation across cognitive domains with configurable decay rates. |
+| 🏷️ **ClassificationMemory** | Categorical memory organization with automatic tagging and domain assignment. |
+| 🔀 **CognitiveDomains** | Pluggable domain definitions (trading, infrastructure, academic, personal) for context-aware routing. |
+| 📋 **DecisionMemory** | Records agent decisions with confidence scoring and outcome tracking for self-improvement. |
+| 📊 **MemoryScoringEngine** | Multi-factor relevance scoring (recency, frequency, domain, attention) for precise retrieval. |
+| 🔄 **MemoryReconciliationEngine** | Detects and resolves duplicate/contradictory memories via merge or flag strategies. |
+| 🔬 **GraphAnalytics** | Structural analysis of the semantic graph: centrality, connectivity, orphan detection. |
+| 🕸️ **LouvainDetector** | Community detection using the Louvain algorithm for automatic cluster identification. |
+| 🧹 **MemoryCurator** | Automated curation: merge similar nodes, delete stale entries, enforce cardinality constraints. |
 
 ### Session System (v2)
 
@@ -394,8 +417,44 @@ irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
 
 Ubuntu/Debian users get the best navigation experience because the installer adds `w3m` automatically.
 
+## 🛠️ Tool Reference
+
+| Tool | Description |
+|------|-------------|
+| `web_search` | Multi-source iterative web research with synthesis |
+| `web_navigate` | Terminal-style web page navigation and deep interaction |
+| `memory_search` | Semantic search across the memory graph |
+| `memory_write` | Create/update nodes and relationships in the memory graph |
+| `manage_memory` | Curate, merge, and delete memory nodes |
+| `memory_admin` | Advanced admin: snapshots, statistics, bulk operations |
+| `exec_command` | Execute system commands locally with timeout and output capture |
+| `ssh_exec` | Execute commands on remote servers via SSH |
+| `file_ops` | Read, write, search, and manage files on the filesystem |
+| `send_audio` | Generate and send voice messages via Edge-TTS + Telegram |
+| `send_document` | Send files and documents through Telegram |
+| `api_request` | Make HTTP requests to external APIs |
+| `crypto_analysis` | Real-time cryptocurrency market analysis |
+| `crypto_report` | Generate formatted crypto market reports |
+| `thorial_graph` | Sync cognitive memory with Thorial (OpenClaw) shared graph |
+| `server_config` | Manage server configuration for self-hosted deployments |
+
 ## 🗺️ Roadmap
 Detailed project roadmap and future vision can be found in [docs/ROADMAP.md](docs/ROADMAP.md).
+
+**Completed in v1.x:**
+- [x] **Model Router**: Intelligent intent-based model selection ✅
+- [x] **Atomic Cognition**: Unified decision cycle (THINK → DECIDE → ACT) ✅
+- [x] **Thorial Graph Sync**: Shared cognitive memory with OpenClaw/Thorial ✅
+- [x] **SSH Exec**: Remote infrastructure management ✅
+- [x] **Advanced Memory**: Attention feedback, scoring, reconciliation, Louvain clustering ✅
+- [x] **Whisper Fallback Chain**: Multi-tier STT with GPU→CPU failover ✅
+- [x] **Crypto Analysis**: Real-time market analysis and reports ✅
+
+**Upcoming:**
+- [ ] **Multimodal Vision**: Native image and screenshot processing
+- [ ] **Autonomous Navigation**: Real-time web exploration with deep interaction
+- [ ] **Python Sandbox**: Secure execution environment for data analysis
+- [ ] **Collaborative Graphs**: Multi-agent memory synchronization
 
 
 ---
@@ -509,6 +568,14 @@ O agente atua em quatro modos distintos dependendo da complexidade da tarefa:
 | 🧭 **Exploração Ativa** | **Camada de Exploração**: Navegação web em modo terminal para interação profunda (suporte a `w3m`). |
 | 📊 **Dashboard Web** | Chat em tempo real, config, curadoria de memória e grafo interativo. |
 | 📸 **Snapshots** | Versionamento do grafo: criar, restaurar, listar e deletar snapshots. |
+| 🔗 **Thorial Graph Sync** | Memória cognitiva compartilhada entre Thorial (OpenClaw) e NewClaw via ferramenta `thorial_graph`. |
+| 🖥️ **SSH Exec** | Execução remota de comandos via SSH para gerenciamento de infraestrutura multi-servidor. |
+| 📄 **Envio de Documentos** | Envio de arquivos e documentos diretamente pelo Telegram com `send_document`. |
+| 🔊 **Whisper Fallback Chain** | STT multi-camada com failover automático GPU → CPU (`WHISPER_API_URL` + `WHISPER_API_FALLBACK`). |
+| 📊 **Crypto Analysis** | Análise de criptomoedas em tempo real e geração de relatórios. |
+| ⚙️ **Server Config** | Gerenciamento de configuração para deployments self-hosted. |
+| 🧩 **Skill Installer** | Instalação e carregamento dinâmico de skills para capacidades extensíveis. |
+| 👋 **Onboarding Service** | Setup guiado para novos usuários com configuração interativa. |
 
 ## 🏗️ Arquitetura
 
@@ -679,6 +746,21 @@ flowchart TD
 **7 Tipos de Nó:** identity, preference, project, skill, context, fact, infrastructure.
 
 **14+ Tipos de Relação:** prefers, works_on, runs_on, uses, depends_on, contains, references, related_to, belongs_to, owns, created, reads, writes, hosts (com links inversos automáticos).
+
+### Subsistemas de Memória Avançada
+
+| Módulo | Descrição |
+|--------|-----------|
+| 🧠 **AttentionFeedback v2** | Scoring com saturação logarítmica (cap 5.0), validação de co-uso e motor de decaimento. Previne sobre-reforço de memórias populares. |
+| 🎯 **AttentionLayer** | Alocação de atenção ponderada por prioridade entre domínios cognitivos com taxas de decaimento configuráveis. |
+| 🏷️ **ClassificationMemory** | Organização categórica de memórias com tagging automático e atribuição de domínio. |
+| 🔀 **CognitiveDomains** | Domínios plugáveis (trading, infraestrutura, acadêmico, pessoal) para roteamento context-aware. |
+| 📋 **DecisionMemory** | Registra decisões do agente com scoring de confiança e rastreamento de resultados para auto-melhoria. |
+| 📊 **MemoryScoringEngine** | Scoring de relevância multifator (recência, frequência, domínio, atenção) para recuperação precisa. |
+| 🔄 **MemoryReconciliationEngine** | Detecta e resolve memórias duplicadas/contraditórias via estratégias de merge ou flag. |
+| 🔬 **GraphAnalytics** | Análise estrutural do grafo semântico: centralidade, conectividade, detecção de órfãos. |
+| 🕸️ **LouvainDetector** | Detecção de comunidades usando o algoritmo Louvain para identificação automática de clusters. |
+| 🧹 **MemoryCurator** | Curadoria automatizada: mesclar nós similares, deletar entradas obsoletas, impor restrições de cardinalidade. |
 
 ## 🚀 Instalação
 

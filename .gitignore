@@ -14,3 +14,8 @@ logs/
 *.db
 workspace/sites/*.html
 workspace/space-invaders*.html
+
+# Auditor interno (acesso restrito — NÃO commitar)
+src/services/auditor/
+internal_audit/
+.audit_cache/
