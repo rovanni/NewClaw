@@ -85,6 +85,7 @@ The agent operates in four distinct modes depending on the task complexity:
 | ⚙️ **Server Config** | Self-hosted friendly configuration management tool. |
 | 🧩 **Skill Installer** | Dynamic skill installation and loading for extensible agent capabilities. |
 | 👋 **Onboarding Service** | Guided setup for new users with interactive configuration. |
+| 🛡️ **Self-Diagnosis Auditor** | Owner-only `/audit` command: code, runtime, data & multi-channel integration checks. Auto-fix pipeline with multi-agent validation and consensus-based patching. |
 
 ## 🏗️ Architecture
 
@@ -438,8 +439,63 @@ Ubuntu/Debian users get the best navigation experience because the installer add
 | `thorial_graph` | Sync cognitive memory with Thorial (OpenClaw) shared graph |
 | `server_config` | Manage server configuration for self-hosted deployments |
 
-## 🗺️ Roadmap
-Detailed project roadmap and future vision can be found in [docs/ROADMAP.md](docs/ROADMAP.md).
+## 🛡️ Self-Diagnosis Auditor
+
+NewClaw includes a built-in **Self-Diagnosis Agent** that uses the local LLM to analyze its own code, runtime behavior, and integration health.
+
+### Commands (Owner-Only)
+
+| Command | Description |
+|---------|-------------|
+| `/audit` | Full audit (code + runtime + data + integration) |
+| `/audit code` | Source code analysis via LLM |
+| `/audit runtime` | Log analysis + static pattern detection |
+| `/audit data` | SQLite consistency validation |
+| `/audit integration` | Multi-channel health check (Telegram, Discord, WhatsApp, Signal, Web, Ollama) |
+| `/audit history` | Last 10 audit reports |
+| `/audit fix` | **Auto-fix pipeline** — only applies low-risk, multi-validated fixes |
+
+### Auto-Fix Pipeline
+
+```
+/audit fix
+  │
+  ├── 1. SELECT findings WHERE auto_fixable=1 AND fixed=0 AND risk_level='low'
+  │
+  ├── 2. generatePatch(finding)      → LLM generates before/after with confidence
+  │
+  ├── 3. validatePatch(patch)         → 3 agents review: code_reviewer, bug_detector, safety_checker
+  │
+  ├── 4. buildConsensus(opinions)     → agreement ≥ 0.75 AND confidence ≥ 0.8
+  │
+  ├── 5. validatePatchSafety(patch)   → Deterministic: file exists, before found, size ok, no destructive patterns
+  │
+  ├── 6. applyPatch(patch)            → Backup .bak → replace → restore on error
+  │
+  └── 7. markFindingFixed(id)          → UPDATE audit_findings SET fixed = 1
+```
+
+**Safety rules:**
+- Only `risk_level = 'low'` findings enter the pipeline
+- LLM confidence < 0.5 → rejected at generation
+- Consensus < 0.75 → rejected
+- File doesn't exist / `before` not found → rejected
+- Destructive patterns (eval, rm -rf, removing imports) → rejected
+- Any error → automatic .bak restore
+
+### Multi-Channel Integration Check
+
+`/audit integration` verifies all 5 channels:
+
+| Channel | Check |
+|---------|-------|
+| 🟦 Telegram | Bot token validation via `getMe` API |
+| 🟣 Discord | Bot token validation via `/users/@me` API |
+| 🟢 WhatsApp | Auth directory exists (QR scan required) |
+| 🔵 Signal | `signal-cli` binary availability |
+| 🟡 Web Dashboard | HTTP response on configured port |
+| 🤖 Ollama | Model availability via `/api/tags` |
+| 💽 System | Disk usage, Node.js version, process health |
 
 **Completed in v1.x:**
 - [x] **Model Router**: Intelligent intent-based model selection ✅
@@ -576,6 +632,7 @@ O agente atua em quatro modos distintos dependendo da complexidade da tarefa:
 | ⚙️ **Server Config** | Gerenciamento de configuração para deployments self-hosted. |
 | 🧩 **Skill Installer** | Instalação e carregamento dinâmico de skills para capacidades extensíveis. |
 | 👋 **Onboarding Service** | Setup guiado para novos usuários com configuração interativa. |
+| 🛡️ **Auditor de Auto-Diagnóstico** | Comando `/audit` (owner-only): verifica código, runtime, dados e integração multi-canal. Pipeline de correção automática com validação multi-agente e consenso. |
 
 ## 🏗️ Arquitetura
 
@@ -856,6 +913,82 @@ O desinstalador faz backup dos seus dados (banco, workspace, skills) antes de re
 ```
 
 Backups são salvos em `~/newclaw-backups/` com timestamp.
+
+---
+
+## 🛠️ Referência de Ferramentas
+
+| Ferramenta | Descrição |
+|-----------|-------------|
+| `web_search` | Pesquisa web iterativa multi-fonte com síntese |
+| `web_navigate` | Navegação web em modo terminal com interação profunda |
+| `memory_search` | Busca semântica no grafo de memória |
+| `memory_write` | Criar/atualizar nós e relacionamentos no grafo |
+| `manage_memory` | Curar, mesclar e deletar nós de memória |
+| `memory_admin` | Admin: snapshots, estatísticas, operações em lote |
+| `exec_command` | Executar comandos do sistema localmente |
+| `ssh_exec` | Executar comandos em servidores remotos via SSH |
+| `file_ops` | Ler, escrever, buscar e gerenciar arquivos |
+| `send_audio` | Gerar e enviar mensagens de voz via Edge-TTS + Telegram |
+| `send_document` | Enviar arquivos e documentos pelo Telegram |
+| `api_request` | Fazer requisições HTTP para APIs externas |
+| `crypto_analysis` | Análise de mercado cripto em tempo real |
+| `crypto_report` | Gerar relatórios formatados do mercado cripto |
+| `thorial_graph` | Sincronizar memória cognitiva com grafo compartilhado Thorial/OpenClaw |
+| `server_config` | Gerenciar configuração do servidor para deployments self-hosted |
+
+## 🛡️ Auditor de Auto-Diagnóstico
+
+O NewClaw inclui um **Agente de Auto-Diagnóstico** que usa o LLM local para analisar seu próprio código, comportamento em runtime e saúde das integrações.
+
+### Comandos (Owner-Only)
+
+| Comando | Descrição |
+|---------|-------------|
+| `/audit` | Auditoria completa (código + runtime + dados + integração) |
+| `/audit code` | Análise de código fonte via LLM |
+| `/audit runtime` | Análise de logs + detecção de padrões estáticos |
+| `/audit data` | Validação de consistência do SQLite |
+| `/audit integration` | Verificação multi-canal (Telegram, Discord, WhatsApp, Signal, Web, Ollama) |
+| `/audit history` | Últimos 10 relatórios de auditoria |
+| `/audit fix` | **Pipeline de correção automática** — só aplica correções de baixo risco validadas por múltiplos agentes |
+
+### Pipeline de Correção Automática
+
+```
+/audit fix
+  │
+  ├── 1. SELECT findings WHERE auto_fixable=1 AND fixed=0 AND risk_level='low'
+  │
+  ├── 2. generatePatch(finding)      → LLM gera before/after com confiança
+  ├── 3. validatePatch(patch)         → 3 agentes revisam: code_reviewer, bug_detector, safety_checker
+  ├── 4. buildConsensus(opinions)     → agreement >= 0.75 E confidence >= 0.8
+  ├── 5. validatePatchSafety(patch)   → Validação determinística: arquivo existe, before encontrado, tamanho ok, sem padrões destrutivos
+  ├── 6. applyPatch(patch)            → Backup .bak → substitui → restaura em caso de erro
+  └── 7. markFindingFixed(id)          → UPDATE audit_findings SET fixed = 1
+```
+
+**Regras de segurança:**
+- Só `risk_level = 'low'` entra no pipeline
+- Confiança do LLM < 0.5 → rejeitado na geração
+- Consenso < 0.75 → rejeitado
+- Arquivo não existe / `before` não encontrado → rejeitado
+- Padrões destrutivos (eval, rm -rf, remoção de imports) → rejeitado
+- Qualquer erro → restauração automática do backup .bak
+
+### Verificação Multi-Canal de Integração
+
+`/audit integration` verifica todos os 5 canais:
+
+| Canal | Verificação |
+|-------|-------------|
+| 🟦 Telegram | Validação do token via API `getMe` |
+| 🟣 Discord | Validação do token via API `/users/@me` |
+| 🟢 WhatsApp | Diretório de autenticação existe (requer escaneamento QR) |
+| 🔵 Signal | Disponibilidade do binário `signal-cli` |
+| 🟡 Web Dashboard | Resposta HTTP na porta configurada |
+| 🤖 Ollama | Disponibilidade de modelos via `/api/tags` |
+| 💽 Sistema | Uso de disco, versão Node.js, saúde dos processos |
 
 ---
 
