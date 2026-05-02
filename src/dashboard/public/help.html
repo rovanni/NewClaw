@@ -3,269 +3,721 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <title>NewClaw — Ajuda</title>
+  <title>NewClaw — Guia Completo</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/shared.css?v=20260502">
+  <link rel="stylesheet" href="/shared.css">
   <style>
-    .main { max-width: 780px; margin: 0 auto; padding: 32px 24px; }
-    .card {
-      background: var(--bg-surface); border: 1px solid var(--border-color);
-      border-radius: var(--radius); padding: 24px; margin-bottom: 20px;
+    .main { max-width: 820px; margin: 0 auto; padding: 32px 24px 64px; }
+
+    /* ── Hero ────────────────────────────────────────── */
+    .hero {
+      text-align: center; padding: 40px 20px 32px; margin-bottom: 28px;
+      border-bottom: 1px solid var(--border-color);
     }
-    .card h2 { font-size: 1rem; font-weight: 600; color: var(--accent); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
-    .card p, .card li { font-size: 0.88rem; color: var(--text-muted); line-height: 1.6; }
-    .card ul { list-style: none; padding: 0; }
-    .card li { padding: 6px 0; padding-left: 20px; position: relative; }
-    .card li::before { content: '→'; position: absolute; left: 0; color: var(--accent); }
+    .hero h1 { font-size: 1.6rem; font-weight: 700; color: var(--text-main); margin-bottom: 6px; }
+    .hero p  { font-size: 0.92rem; color: var(--text-muted); max-width: 540px; margin: 0 auto; line-height: 1.55; }
+
+    /* ── Chapter nav ─────────────────────────────────── */
+    .chapter-nav {
+      display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+      margin-bottom: 36px; padding: 16px; background: var(--bg-surface);
+      border: 1px solid var(--border-color); border-radius: var(--radius-lg);
+    }
+    .chapter-nav a {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border-radius: 20px; font-size: 0.78rem; font-weight: 500;
+      background: var(--accent-bg); color: var(--accent); text-decoration: none;
+      border: 1px solid transparent; transition: all 0.2s;
+    }
+    .chapter-nav a:hover { border-color: var(--accent); }
+    .chapter-nav a .ch-num {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px; border-radius: 50%; font-size: 0.7rem;
+      font-weight: 700; background: var(--accent); color: var(--bg-base);
+    }
+
+    /* ── Chapter card ────────────────────────────────── */
+    .chapter {
+      background: var(--bg-surface); border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg); margin-bottom: 24px; overflow: hidden;
+    }
+    .chapter-header {
+      display: flex; align-items: center; gap: 14px;
+      padding: 20px 24px; cursor: pointer; user-select: none;
+      border-bottom: 1px solid var(--border-color); transition: background 0.2s;
+    }
+    .chapter-header:hover { background: var(--accent-bg); }
+    .chapter-header.open { border-bottom-color: transparent; }
+    .ch-badge {
+      display: flex; align-items: center; justify-content: center;
+      min-width: 40px; height: 40px; border-radius: 12px;
+      font-size: 1.1rem; font-weight: 700; flex-shrink: 0;
+    }
+    .ch-badge.c1 { background: rgba(74,222,128,0.15); color: #4ade80; }
+    .ch-badge.c2 { background: rgba(96,165,250,0.15); color: #60a5fa; }
+    .ch-badge.c3 { background: rgba(251,191,36,0.15); color: #fbbf24; }
+    .ch-badge.c4 { background: rgba(168,85,247,0.15); color: #a855f7; }
+    .ch-badge.c5 { background: rgba(244,114,182,0.15); color: #f472b6; }
+    .ch-badge.c6 { background: rgba(251,146,60,0.15); color: #fb923c; }
+    .ch-badge.c7 { background: rgba(45,212,191,0.15); color: #2dd4bf; }
+    .ch-info h2 { font-size: 1rem; font-weight: 600; color: var(--text-main); margin-bottom: 2px; }
+    .ch-info p  { font-size: 0.78rem; color: var(--text-soft); }
+    .ch-arrow { margin-left: auto; color: var(--text-soft); font-size: 0.8rem; transition: transform 0.3s; }
+    .chapter-header.open .ch-arrow { transform: rotate(180deg); }
+
+    .chapter-body { padding: 0 24px 24px; display: none; }
+    .chapter-body.open { display: block; }
+
+    /* ── Sections inside a chapter ───────────────────── */
+    .ch-section { margin-top: 20px; }
+    .ch-section h3 { font-size: 0.92rem; font-weight: 600; color: var(--accent); margin-bottom: 10px; }
+
+    /* ── Step walkthrough ────────────────────────────── */
+    .steps { list-style: none; padding: 0; counter-reset: step; }
+    .steps li {
+      counter-increment: step; position: relative; padding: 10px 10px 10px 44px;
+      font-size: 0.88rem; color: var(--text-muted); line-height: 1.55;
+      border-left: 2px solid var(--border-color); margin-left: 16px;
+    }
+    .steps li::before {
+      content: counter(step); position: absolute; left: -14px; top: 8px;
+      width: 26px; height: 26px; border-radius: 50%; font-size: 0.72rem;
+      font-weight: 700; display: flex; align-items: center; justify-content: center;
+      background: var(--bg-surface); border: 2px solid var(--accent); color: var(--accent);
+    }
+    .steps li:last-child { border-left-color: transparent; }
+
+    /* ── Example box ─────────────────────────────────── */
+    .example {
+      margin: 14px 0; padding: 16px; border-radius: var(--radius);
+      background: var(--code-bg); border: 1px solid var(--border-color);
+    }
+    .example-label {
+      display: inline-block; font-size: 0.68rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent);
+      margin-bottom: 8px; padding: 2px 8px; border-radius: 4px;
+      background: var(--accent-bg);
+    }
+    .example p, .example li { font-size: 0.85rem; color: var(--text-muted); line-height: 1.55; }
+    .example .chat-bubble {
+      display: inline-block; padding: 8px 14px; border-radius: 14px;
+      margin: 6px 0; font-size: 0.88rem; max-width: 85%;
+    }
+    .chat-bubble.user { background: var(--accent-bg); color: var(--accent); border-bottom-right-radius: 4px; }
+    .chat-bubble.agent { background: var(--bg-input); color: var(--text-main); border-bottom-left-radius: 4px; }
+    pre.example-code {
+      background: rgba(0,0,0,0.25); padding: 12px; border-radius: 8px;
+      overflow-x: auto; font-size: 0.82rem; color: var(--accent); margin: 8px 0;
+    }
+
+    /* ── Result callout ──────────────────────────────── */
+    .result { margin: 12px 0; padding: 12px 14px; border-radius: var(--radius-sm); }
+    .result.ok  { background: rgba(74,222,128,0.08); border-left: 3px solid #4ade80; }
+    .result.info { background: rgba(96,165,250,0.08); border-left: 3px solid #60a5fa; }
+    .result.warn { background: rgba(251,191,36,0.1); border-left: 3px solid #fbbf24; }
+    .result p { font-size: 0.84rem; color: var(--text-muted); line-height: 1.5; margin: 0; }
+    .result strong { color: var(--text-main); }
+
+    /* ── Two-column grid inside chapters ─────────────── */
+    .ch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; }
+    .ch-grid-card {
+      background: var(--bg-input); border: 1px solid var(--border-color);
+      border-radius: var(--radius); padding: 16px;
+    }
+    .ch-grid-card h4 { font-size: 0.88rem; color: var(--text-main); margin-bottom: 8px; }
+    .ch-grid-card p, .ch-grid-card li { font-size: 0.82rem; color: var(--text-muted); line-height: 1.5; }
+    .ch-grid-card ul { list-style: none; padding: 0; }
+    .ch-grid-card li { padding: 3px 0; padding-left: 16px; position: relative; }
+    .ch-grid-card li::before { content: '•'; position: absolute; left: 0; color: var(--accent); }
+
     code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.82rem; color: var(--accent); }
-    pre { background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 0.82rem; color: var(--accent); margin: 12px 0; }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    .step-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .step-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius); padding: 20px; }
-    .step-card h3 { font-size: 0.95rem; color: var(--text-main); margin: 0 0 10px; }
-    .step-card p, .step-card li { font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; }
-    .step-card ul { list-style: none; padding: 0; }
-    .step-card li { padding: 4px 0; padding-left: 18px; position: relative; }
-    .step-card li::before { content: '•'; position: absolute; left: 0; color: var(--accent); }
-    .step-num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-bg); border: 1px solid var(--accent); color: var(--accent); font-size: 0.8rem; font-weight: 700; margin-bottom: 8px; }
+
     .hint { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: rgba(96,165,250,0.08); border: 1px solid rgba(96,165,250,0.18); font-size: 0.8rem; color: var(--text-muted); }
     .hint.warn { background: rgba(251,191,36,0.1); border-color: rgba(251,191,36,0.22); }
-    .quick-links { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
-    .quick-link { display: block; padding: 10px 12px; border-radius: 10px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); text-decoration: none; transition: all 0.2s; }
-    .quick-link:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
-    .quick-link strong { display: block; font-size: 0.84rem; margin-bottom: 2px; }
-    .quick-link span { font-size: 0.76rem; color: var(--text-soft); }
-    .palette-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
-    .palette-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--bg-input); border: 1px solid var(--border-color); font-size: 0.82rem; color: var(--text-main); }
-    .palette-dot { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; border: 2px solid rgba(255,255,255,0.1); }
-    .shortcut-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
-    .shortcut-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px; background: var(--bg-input); border: 1px solid var(--border-color); font-size: 0.82rem; color: var(--text-muted); }
-    .shortcut-key { background: var(--code-bg); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 0.78rem; color: var(--accent); font-weight: 600; }
-    @media (max-width: 640px) { .step-grid, .quick-links, .palette-grid, .shortcut-grid { grid-template-columns: 1fr; } }
+
+    /* ── FAQ / env (compact) ─────────────────────────── */
+    .compact-card {
+      background: var(--bg-surface); border: 1px solid var(--border-color);
+      border-radius: var(--radius); padding: 20px 24px; margin-bottom: 20px;
+    }
+    .compact-card h2 { font-size: 1rem; font-weight: 600; color: var(--accent); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+    .compact-card p, .compact-card li { font-size: 0.85rem; color: var(--text-muted); line-height: 1.55; }
+    .compact-card ul { list-style: none; padding: 0; }
+    .compact-card li { padding: 6px 0; padding-left: 20px; position: relative; }
+    .compact-card li::before { content: '→'; position: absolute; left: 0; color: var(--accent); }
+    pre { background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 0.82rem; color: var(--accent); margin: 12px 0; }
+
+    @media (max-width: 640px) {
+      .ch-grid { grid-template-columns: 1fr; }
+      .chapter-nav { gap: 6px; }
+      .chapter-nav a { font-size: 0.72rem; padding: 5px 10px; }
+    }
   </style>
 </head>
 <body>
   <div id="header-root"></div>
   <div class="main">
 
-    <div class="card">
-      <h2>🧭 NewClaw — Guia Completo</h2>
-      <p>Tudo que você precisa para configurar, conversar, auditar e gerenciar a memória do sistema.</p>
-      <div class="quick-links">
-        <a href="/config" class="quick-link"><strong>⚙️ Config</strong><span>Provider, modelo, idioma e tools</span></a>
-        <a href="/" class="quick-link"><strong>💬 Chat</strong><span>Converse, use voz, exporte conversas</span></a>
-        <a href="/traces" class="quick-link"><strong>🧠 Traces</strong><span>Audite decisões, tools e respostas</span></a>
-        <a href="/memory-graph" class="quick-link"><strong>🕸️ Grafo</strong><span>Explore, crie, conecte e exporte</span></a>
-        <a href="/memory" class="quick-link"><strong>💾 Memória</strong><span>Navegação textual dos nós</span></a>
-        <a href="/memory-review" class="quick-link"><strong>🧪 Revisão</strong><span>Mesclar duplicatas, limpar órfãos</span></a>
-      </div>
-      <div class="hint warn">Primeira vez? Comece por <a href="/config">Config</a> antes de testar qualquer tool.</div>
+    <!-- ═══════════ HERO ═══════════ -->
+    <div class="hero">
+      <h1>📚 Guia Completo — Aprenda o NewClaw</h1>
+      <p>Siga os capítulos em ordem e domine o sistema do zero ao avançado.<br>Cada capítulo constrói sobre o anterior — pular partes pode causar confusão.</p>
     </div>
 
-    <!-- PASSO 1: CONFIG -->
-    <div class="card" id="step1">
-      <h2>🚀 Passo 1 — Configurar o Sistema</h2>
-      <p>Abra <a href="/config">Config</a> e configure:</p>
-      <ul>
-        <li><code>Provider</code> — Ollama, Gemini, DeepSeek ou Groq</li>
-        <li><code>Modelo</code> — selecione ou digite (ex: <code>glm-5.1:cloud</code>)</li>
-        <li><code>Idioma</code> — pt-BR, en-US ou es-ES</li>
-        <li><code>Tools</code> — ative/desative ferramentas</li>
-        <li><code>Salvar & Reiniciar</code> — aplique mudanças</li>
-      </ul>
+    <!-- ═══════════ CHAPTER NAV ═══════════ -->
+    <div class="chapter-nav">
+      <a href="#ch1"><span class="ch-num">1</span> Setup</a>
+      <a href="#ch2"><span class="ch-num">2</span> Primeira Conversa</a>
+      <a href="#ch3"><span class="ch-num">3</span> Traces</a>
+      <a href="#ch4"><span class="ch-num">4</span> Memória</a>
+      <a href="#ch5"><span class="ch-num">5</span> Grafo</a>
+      <a href="#ch6"><span class="ch-num">6</span> Ferramentas</a>
+      <a href="#ch7"><span class="ch-num">7</span> Avançado</a>
     </div>
 
-    <!-- PASSO 2: CHAT -->
-    <div class="card" id="step2">
-      <h2>💬 Passo 2 — Conversar no Chat</h2>
-      <p>Na tela <a href="/">Chat</a>:</p>
-      <ul>
-        <li><code>+ Nova</code> — cria conversa vazia</li>
-        <li><code>🎤</code> — reconhecimento de voz do navegador</li>
-        <li><code>🔊</code> — liga/desliga TTS automático</li>
-        <li><code>📥 / 📤</code> — exporta/importa conversas em JSON</li>
-        <li><code>📋</code> — copia resposta individual (hover na mensagem)</li>
-      </ul>
-      <div class="hint">Enter envia, Shift+Enter cria nova linha.</div>
-    </div>
-
-    <!-- PASSO 3: TRACES -->
-    <div class="card" id="step3">
-      <h2>🔍 Passo 3 — Auditar com Traces</h2>
-      <p>Na tela <a href="/traces">Traces</a>, veja o caminho de cada execução:</p>
-      <ul>
-        <li><code>Decisão</code> — como o agente classificou a intenção</li>
-        <li><code>Tool Calls</code> — quais ferramentas foram chamadas</li>
-        <li><code>Resultados</code> — o que cada tool retornou</li>
-        <li><code>Resposta Final</code> — texto enviado ao usuário</li>
-      </ul>
-      <div class="hint">Se o chat respondeu errado, olhe o trace antes de mexer no prompt.</div>
-    </div>
-
-    <!-- PASSO 4: GRAFO (detalhado) -->
-    <div class="card" id="step4">
-      <h2>🕸️ Passo 4 — Grafo de Memória</h2>
-      <p>A tela <a href="/memory-graph">Grafo</a> é a principal ferramenta de visualização e edição do conhecimento.</p>
-
-      <h3 style="font-size:0.88rem;color:var(--text-main);margin:16px 0 8px;">🎨 Paleta de Cores (Semafórica)</h3>
-      <p>Cada tipo de nó tem uma cor fixa. A cor vermelha destaca os nós de <strong>Identidade</strong> — o núcleo do sistema.</p>
-      <div class="palette-grid">
-        <div class="palette-item"><span class="palette-dot" style="background:#dc2626;"></span> Identidade</div>
-        <div class="palette-item"><span class="palette-dot" style="background:#fbbf24;"></span> Preferência</div>
-        <div class="palette-item"><span class="palette-dot" style="background:#3b82f6;"></span> Projeto</div>
-        <div class="palette-item"><span class="palette-dot" style="background:#22c55e;"></span> Contexto</div>
-        <div class="palette-item"><span class="palette-dot" style="background:#a855f7;"></span> Fato</div>
-        <div class="palette-item"><span class="palette-dot" style="background:#f97316;"></span> Habilidade</div>
-      </div>
-
-      <h3 style="font-size:0.88rem;color:var(--text-main);margin:16px 0 8px;">🔧 Topbar — Ações Principais</h3>
-      <ul>
-        <li><code>➕ Novo Nó</code> — cria nó de memória manualmente</li>
-        <li><code>🔗 Conectar</code> — modo conexão: clique em 2 nós para criar relação</li>
-        <li><code>📋 Revisão</code> — atalho para revisão de duplicatas</li>
-        <li><code>🔍+ / 🔍−</code> — zoom in/out do grafo</li>
-        <li><code>📤 Exportar ▾</code> — dropdown: PNG, Ultra PNG, SVG, JSON</li>
-        <li><code>🛠️ Ferramentas ▾</code> — dropdown: Agrupar tipo, Caminho, Analytics, Busca semântica</li>
-        <li><code>📅 Datas ▾</code> — filtro temporal (de/até)</li>
-        <li><code>🔍 Busca</code> — busca por nome ou conteúdo do nó</li>
-      </ul>
-
-      <h3 style="font-size:0.88rem;color:var(--text-main);margin:16px 0 8px;">🖱️ Interações no Grafo</h3>
-      <div class="step-grid">
-        <div class="step-card">
-          <h3>Selecionar Nó</h3>
-          <p>Clique em qualquer nó. Os outros ficam semi-transparentes, o selecionado ganha destaque com borda azul. O painel direito mostra detalhes, relações e edição.</p>
+    <!-- ═══════════════════════════════════════════════════
+         CHAPTER 1 — PRIMEIRA EXECUÇÃO (SETUP MENTAL)
+         ═══════════════════════════════════════════════════ -->
+    <div class="chapter" id="ch1">
+      <div class="chapter-header open" onclick="toggleChapter(this)">
+        <div class="ch-badge c1">🚀</div>
+        <div class="ch-info">
+          <h2>Capítulo 1 — Primeira Execução</h2>
+          <p>Tire o sistema do zero. Entenda o que é, configure e salve.</p>
         </div>
-        <div class="step-card">
-          <h3>Criar Relação</h3>
-          <p><strong>Modo Conectar:</strong> Clique <code>🔗 Conectar</code> → clique nó origem → clique nó destino.<br>
-          <strong>Ctrl+clique:</strong> Ctrl+clique no nó origem → clique no destino. Esc para cancelar.<br>
-          <strong>Manual:</strong> Preencha "De" e "Para" no sidebar esquerdo.</p>
-        </div>
-        <div class="step-card">
-          <h3>Desfazer (Undo)</h3>
-          <p>Após deletar um nó ou relação, o botão <code>↩️ Desfazer</code> aparece ativo por <strong>10 segundos</strong> com countdown. Clique para restaurar.</p>
-        </div>
-        <div class="step-card">
-          <h3>Modo Foco</h3>
-          <p>Clique <code>🔍 Isolar Nó</code> para ver apenas o nó e vizinhos. Controle profundidade (1 hop, 2 hops, tudo) e importância mínima com o slider.</p>
-        </div>
+        <span class="ch-arrow">▼</span>
       </div>
+      <div class="chapter-body open">
 
-      <h3 style="font-size:0.88rem;color:var(--text-main);margin:16px 0 8px;">⌨️ Atalhos</h3>
-      <div class="shortcut-grid">
-        <div class="shortcut-item"><span class="shortcut-key">Ctrl+Click</span> Inicia conexão drag</div>
-        <div class="shortcut-item"><span class="shortcut-key">Esc</span> Cancela conexão</div>
-        <div class="shortcut-item"><span class="shortcut-key">Scroll</span> Zoom in/out</div>
-        <div class="shortcut-item"><span class="shortcut-key">Drag</span> Mover nó</div>
-        <div class="shortcut-item"><span class="shortcut-key">Click nó</span> Selecionar + detalhes</div>
-        <div class="shortcut-item"><span class="shortcut-key">Click aresta</span> Editar relação</div>
-      </div>
+        <div class="ch-section">
+          <h3>O que é o NewClaw?</h3>
+          <p style="font-size:0.88rem;color:var(--text-muted);line-height:1.6">
+            NewClaw é um agente de IA com <strong style="color:var(--text-main)">memória persistente</strong> e
+            <strong style="color:var(--text-main)">ferramentas reais</strong>. Diferente de chatbots comuns, ele
+            <em>lembra</em> de você entre conversas e pode executar ações: buscar na web, ler e gravar arquivos,
+            administrar sua própria memória, enviar áudios e documentos.
+          </p>
+        </div>
 
-      <h3 style="font-size:0.88rem;color:var(--text-main);margin:16px 0 8px;">📊 Sidebar Esquerdo</h3>
-      <ul>
-        <li><code>➕ Novo Nó</code> / <code>🔄 Centralizar</code> / <code>🏷️ Labels</code></li>
-        <li><code>🔗 Conectar</code> — modo conexão visual</li>
-        <li><code>📷 PNG</code> / <code>💎 Ultra PNG</code> / <code>🎨 SVG</code> / <code>📄 JSON</code> — exportar</li>
-        <li><code>🔃 Atualizar</code> — recarrega dados do servidor</li>
-        <li><code>↩️ Desfazer</code> — reverte última exclusão (10s)</li>
-        <li>Legenda de tipos — clique para mostrar/ocultar tipo no grafo</li>
-      </ul>
+        <div class="ch-section">
+          <h3>O que ele faz diferente?</h3>
+          <div class="ch-grid">
+            <div class="ch-grid-card">
+              <h4>✅ O que esperar</h4>
+              <ul>
+                <li>Memória entre sessões</li>
+                <li>Execução de ferramentas reais</li>
+                <li>Auditoria completa (Traces)</li>
+                <li>Grafo cognitivo visual</li>
+              </ul>
+            </div>
+            <div class="ch-grid-card">
+              <h4>❌ O que NÃO esperar</h4>
+              <ul>
+                <li>Chat comum sem contexto</li>
+                <li>Respostas genéricas sem fundamento</li>
+                <li>"Esquecer" tudo ao recarregar</li>
+                <li>Ações sem rastreabilidade</li>
+              </ul>
+            </div>
+          </div>
+        </div>
 
-      <h3 style="font-size:0.88rem;color:var(--text-main);margin:16px 0 8px;">📋 Sidebar Direito</h3>
-      <ul>
-        <li><strong>Vazio:</strong> mostra mini-stats (total de nós, arestas, tipos, comunidades) e nós recentes</li>
-        <li><strong>Com nó selecionado:</strong> detalhes, edição de conteúdo, relações, criar nó relacionado</li>
-        <li><code>📄 Exportar</code> — exportar detalhes do nó como texto</li>
-        <li><code>Deletar</code> — remove nó com animação fade-out</li>
-      </ul>
-    </div>
+        <div class="ch-section">
+          <h3>Configuração passo a passo</h3>
+          <ol class="steps">
+            <li>Abra a tela <a href="/config">Config</a> no menu superior</li>
+            <li>No campo <code>Provider</code>, escolha seu provedor de IA (Ollama, Gemini, DeepSeek ou Groq)</li>
+            <li>No campo <code>Modelo</code>, selecione ou digite o modelo desejado (ex: <code>glm-5.1:cloud</code>)</li>
+            <li>Ajuste o <code>Idioma</code> para pt-BR</li>
+            <li>Confira as <code>Tools</code> ativas — por padrão, todas estão habilitadas</li>
+            <li>Clique <code>Salvar & Reiniciar</code> para aplicar as mudanças</li>
+          </ol>
+        </div>
 
-    <!-- PASSO 5: MEMÓRIA E REVISÃO -->
-    <div class="step-grid">
-      <div class="step-card" id="step5">
-        <div class="step-num">5</div>
-        <h3>Memória Textual</h3>
-        <p>Na tela <a href="/memory">Memória</a>:</p>
-        <ul>
-          <li><code>Buscar</code> — procura por nome ou conteúdo</li>
-          <li><code>Filtros</code> — separa por tipo</li>
-          <li><code>Salvar</code> — atualiza nó selecionado</li>
-          <li><code>Deletar</code> — remove nó e relações</li>
-          <li><code>Adicionar Relação</code> — conecta dois nós</li>
-        </ul>
-      </div>
+        <div class="result ok">
+          <p><strong>✓ Resultado:</strong> Sistema configurado e pronto para a primeira conversa. O agente já pode responder com o modelo escolhido.</p>
+        </div>
 
-      <div class="step-card" id="step6">
-        <div class="step-num">6</div>
-        <h3>Revisão de Memória</h3>
-        <p>Na tela <a href="/memory-review">Revisão</a>:</p>
-        <ul>
-          <li><code>Mesclar</code> — resolve duplicatas</li>
-          <li><code>Interligar Datas</code> — cria relações cronológicas</li>
-          <li><code>Órfãos</code> — nós sem conexões</li>
-          <li><code>Nós Fracos</code> — baixo PageRank</li>
-        </ul>
-        <div class="hint warn">Use mescla apenas quando os pares representam o mesmo conceito.</div>
+        <div class="hint warn">⚠️ Se o sistema acabou de ser instalado, comece SEMPRE por aqui. Pular este passo = respostas vazias ou erros de modelo.</div>
       </div>
     </div>
 
-    <!-- FERRAMENTAS -->
-    <div class="card" id="tools">
-      <h2>🛠️ Ferramentas do Agente (9)</h2>
-      <div class="step-grid">
-        <div class="step-card">
-          <h3>Execução & Busca</h3>
-          <ul>
-            <li><code>exec_command</code> ⚠️ — executa comandos shell</li>
-            <li><code>web_search</code> 🔍 — busca iterativa com leitura e síntese</li>
-            <li><code>web_navigate</code> 🌐 — navega em páginas web</li>
-          </ul>
+    <!-- ═══════════════════════════════════════════════════
+         CHAPTER 2 — PRIMEIRA CONVERSA ÚTIL
+         ═══════════════════════════════════════════════════ -->
+    <div class="chapter" id="ch2">
+      <div class="chapter-header" onclick="toggleChapter(this)">
+        <div class="ch-badge c2">💬</div>
+        <div class="ch-info">
+          <h2>Capítulo 2 — Primeira Conversa Útil</h2>
+          <p>Gere valor rápido. Aprenda a conversar, usar voz e exportar.</p>
         </div>
-        <div class="step-card">
-          <h3>Memória & Arquivos</h3>
-          <ul>
-            <li><code>file_ops</code> 📁 — lê, grava e lista arquivos</li>
-            <li><code>memory_search</code> 🧠 — busca semântica</li>
-            <li><code>memory_write</code> ✏️ — create, update, connect, delete, merge</li>
-            <li><code>memory_admin</code> 🔧 — diagnosticar, limpar, reindexar</li>
-          </ul>
+        <span class="ch-arrow">▼</span>
+      </div>
+      <div class="chapter-body">
+
+        <div class="ch-section">
+          <h3>Conversa guiada</h3>
+          <p style="font-size:0.88rem;color:var(--text-muted);margin-bottom:12px">
+            Vamos fazer uma conversa real para ver o sistema em ação. Abra o <a href="/">Chat</a> e siga:
+          </p>
+          <div class="example">
+            <span class="example-label">Exemplo prático</span>
+            <p>Digite no chat:</p>
+            <div class="chat-bubble user">Me ajude a organizar meus estudos desta semana</div>
+            <p style="margin-top:10px">Observe a resposta — o agente pode:</p>
+            <ul style="margin-top:6px">
+              <li>Buscar na memória informações sobre você</li>
+              <li>Usar <code>memory_search</code> para encontrar contexto anterior</li>
+              <li>Estruturar uma resposta personalizada</li>
+            </ul>
+          </div>
         </div>
-        <div class="step-card">
-          <h3>Comunicação</h3>
-          <ul>
-            <li><code>send_audio</code> 🔊 — TTS e envio de voz no Telegram</li>
-            <li><code>send_document</code> 📄 — envia arquivos (HTML, PDF, imagens)</li>
-          </ul>
+
+        <div class="ch-section">
+          <h3>Controles do Chat</h3>
+          <div class="ch-grid">
+            <div class="ch-grid-card">
+              <h4>🎤 Voz</h4>
+              <p><code>🎤</code> — Ativa reconhecimento de voz do navegador (fale e o texto aparece)<br>
+              <code>🔊</code> — Liga/desliga TTS automático (o agente lê as respostas em voz alta)</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>📂 Exportar / Importar</h4>
+              <p><code>📥</code> — Exporta a conversa em JSON<br>
+              <code>📤</code> — Importa conversa salva<br>
+              <code>📋</code> — Copia resposta individual (hover na mensagem)</p>
+            </div>
+          </div>
         </div>
-        <div class="step-card">
-          <h3>Integrações</h3>
-          <ul>
-            <li><code>ssh_exec</code> 🖥️ — executa comandos em hosts remotos</li>
-            <li><code>crypto_analysis</code> 📊 — análise de criptomoedas</li>
-            <li><code>weather</code> 🌤️ — previsão do tempo</li>
-            <li><code>schedule</code> 📅 — agendamento de tarefas</li>
-          </ul>
+
+        <div class="ch-section">
+          <h3>Gerenciar conversas</h3>
+          <ol class="steps">
+            <li>Clique <code>+ Nova</code> para criar uma conversa vazia</li>
+            <li>Digite sua mensagem e pressione <code>Enter</code></li>
+            <li>Use <code>Shift+Enter</code> para criar nova linha sem enviar</li>
+            <li>No histórico à esquerda, troque entre conversas</li>
+            <li>Para exportar: clique <code>📥</code> e salve o arquivo JSON</li>
+          </ol>
+        </div>
+
+        <div class="result info">
+          <p><strong>💡 Dica:</strong> O agente já está usando a memória! Se você disser "Meu nome é Luciano" e depois perguntar "Qual é meu nome?", ele saberá — mesmo em conversas futuras.</p>
         </div>
       </div>
     </div>
 
-    <!-- FAQ -->
-    <div class="card" id="faq">
+    <!-- ═══════════════════════════════════════════════════
+         CHAPTER 3 — ENTENDER O CÉREBRO (TRACES)
+         ═══════════════════════════════════════════════════ -->
+    <div class="chapter" id="ch3">
+      <div class="chapter-header" onclick="toggleChapter(this)">
+        <div class="ch-badge c3">🔍</div>
+        <div class="ch-info">
+          <h2>Capítulo 3 — Entender o Cérebro (Traces)</h2>
+          <p>Veja COMO o agente pensa. Decisão → Tools → Resposta.</p>
+        </div>
+        <span class="ch-arrow">▼</span>
+      </div>
+      <div class="chapter-body">
+
+        <div class="ch-section">
+          <h3>Por que Traces importam?</h3>
+          <p style="font-size:0.88rem;color:var(--text-muted);line-height:1.6">
+            Quando o agente responde, ele faz um caminho invisível: classifica a intenção, decide se usa ferramentas,
+            executa, e sintetiza a resposta. O <a href="/traces">Traces</a> revela esse caminho.
+            <strong style="color:var(--text-main)">Isso cria confiança técnica</strong> — você sabe exatamente o que aconteceu.
+          </p>
+        </div>
+
+        <div class="ch-section">
+          <h3>Como ler um Trace</h3>
+          <div class="example">
+            <span class="example-label">Estrutura de um trace</span>
+            <pre class="example-code">1. Decisão    → "O usuário quer buscar informação"
+2. Tool Call  → web_search("tendências de IA 2025")
+3. Resultado  → [3 fontes encontradas e sintetizadas]
+4. Resposta   → "As principais tendências são..."</pre>
+          </div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Passo a passo</h3>
+          <ol class="steps">
+            <li>Abra a tela <a href="/traces">Traces</a></li>
+            <li>Selecione uma conversa no dropdown</li>
+            <li>Clique em qualquer mensagem para expandir o trace</li>
+            <li>Verifique: a <code>Decisão</code> fez sentido? As <code>Tool Calls</code> foram corretas?</li>
+            <li>Se algo saiu errado, o trace mostra exatamente onde quebrou</li>
+          </ol>
+        </div>
+
+        <div class="result warn">
+          <p><strong>🔧 Troubleshooting:</strong> Se o chat respondeu errado, <strong>não mude o prompt primeiro</strong>. Abra o Traces e veja onde o agente tomou a decisão errada. Corrija a causa, não o sintoma.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════
+         CHAPTER 4 — MEMÓRIA (O DIFERENCIAL)
+         ═══════════════════════════════════════════════════ -->
+    <div class="chapter" id="ch4">
+      <div class="chapter-header" onclick="toggleChapter(this)">
+        <div class="ch-badge c4">🧠</div>
+        <div class="ch-info">
+          <h2>Capítulo 4 — Memória (O Diferencial)</h2>
+          <p>Entenda o que são nós, tipos e como editar. Aqui o sistema brilha.</p>
+        </div>
+        <span class="ch-arrow">▼</span>
+      </div>
+      <div class="chapter-body">
+
+        <div class="ch-section">
+          <h3>O que é a memória?</h3>
+          <p style="font-size:0.88rem;color:var(--text-muted);line-height:1.6">
+            A memória é um conjunto de <strong style="color:var(--text-main)">nós</strong> — unidades de conhecimento
+            que o agente armazena e consulta. Cada nó tem um tipo, um conteúdo e conexões com outros nós.
+            <strong style="color:var(--text-main)">É isso que faz o agente "lembrar" de você.</strong>
+          </p>
+        </div>
+
+        <div class="ch-section">
+          <h3>Tipos de nó</h3>
+          <div class="ch-grid">
+            <div class="ch-grid-card">
+              <h4>🆔 Identity</h4>
+              <p>Quem você é. Nome, profissão, preferências. O núcleo da memória.</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>📌 Fact</h4>
+              <p>Fatos e informações. "Luciano é professor na UTFPR."</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>⚡ Skill</h4>
+              <p>Capacidades e habilidades. "Sabe Python e Docker."</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>🔗 Relation</h4>
+              <p>Conexões entre nós. "Luciano → trabalha_em → UTFPR".</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Exemplo prático — Criar um nó</h3>
+          <div class="example">
+            <span class="example-label">Mão na massa</span>
+            <ol class="steps" style="margin-top:8px">
+              <li>Abra a tela <a href="/memory">Memória</a></li>
+              <li>Clique <code>+ Novo Nó</code> (ou use o campo de busca e depois "Adicionar")</li>
+              <li>Preencha: Tipo = <code>identity</code>, Nome = <code>Luciano</code>, Conteúdo = <code>Professor de Engenharia de Software na UTFPR</code></li>
+              <li>Clique <code>Salvar</code></li>
+            </ol>
+          </div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Teste a memória no chat</h3>
+          <div class="example">
+            <span class="example-label">Verifique se funcionou</span>
+            <div class="chat-bubble user">O que você sabe sobre mim?</div>
+            <p style="margin-top:8px;font-size:0.85rem;color:var(--text-muted)">
+              O agente deve responder incluindo a informação que você acabou de salvar.
+              Se não incluir, verifique no <a href="/traces">Traces</a> se <code>memory_search</code> foi chamado.
+            </p>
+          </div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Editar e conectar nós</h3>
+          <ol class="steps">
+            <li>Na tela <a href="/memory">Memória</a>, clique em qualquer nó para editar</li>
+            <li>Use <code>Adicionar Relação</code> para conectar dois nós (ex: "Luciano → ensina → Engenharia de Software")</li>
+            <li>Use <code>Filtros</code> para ver apenas um tipo (identity, fact, skill...)</li>
+            <li><code>Deletar</code> remove o nó e todas as suas relações</li>
+          </ol>
+        </div>
+
+        <div class="result info">
+          <p><strong>💡 Dica:</strong> Quanto mais rico o grafo de identidade, mais personalizada será cada resposta. Invista 5 minutos preenchendo seus dados — o retorno é imediato.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════
+         CHAPTER 5 — GRAFO (VISUALIZAÇÃO REAL)
+         ═══════════════════════════════════════════════════ -->
+    <div class="chapter" id="ch5">
+      <div class="chapter-header" onclick="toggleChapter(this)">
+        <div class="ch-badge c5">🌐</div>
+        <div class="ch-info">
+          <h2>Capítulo 5 — Grafo Cognitivo (Visualização)</h2>
+          <p>Navegue, isole nós, entenda relações. O mapa vivo do conhecimento.</p>
+        </div>
+        <span class="ch-arrow">▼</span>
+      </div>
+      <div class="chapter-body">
+
+        <div class="ch-section">
+          <h3>O que é o grafo?</h3>
+          <p style="font-size:0.88rem;color:var(--text-muted);line-height:1.6">
+            O <a href="/memory-graph">Grafo</a> é a representação visual de toda a memória. Cada bolha é um nó,
+            cada linha é uma relação. É como um <strong style="color:var(--text-main)">mapa mental</strong> que cresce
+            conforme você conversa com o agente.
+          </p>
+        </div>
+
+        <div class="ch-section">
+          <h3>Navegação básica</h3>
+          <ol class="steps">
+            <li>Abra a tela <a href="/memory-graph">Grafo</a></li>
+            <li>Arraste para mover, scroll para zoom, clique num nó para selecionar</li>
+            <li>O painel direito mostra detalhes: nome, tipo, conteúdo, conexões</li>
+            <li>Clique <code>➕ Novo Nó</code> para criar direto no grafo</li>
+            <li>Clique <code>🔗 Conectar</code> para ligar dois nós visualmente</li>
+          </ol>
+        </div>
+
+        <div class="ch-section">
+          <h3>Modo Foco — Navegação inteligente</h3>
+          <p style="font-size:0.88rem;color:var(--text-muted);margin-bottom:12px">
+            Quando o grafo tem centenas de nós, tudo fica amontoado. O Modo Foco resolve isso:
+          </p>
+          <div class="ch-grid">
+            <div class="ch-grid-card">
+              <h4>🔍 Isolar Nó</h4>
+              <p>Selecione um nó → clique <code>Isolar Nó</code>. Apenas ele e vizinhos ficam visíveis. O resto fica esmaecido.</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>📏 Profundidade</h4>
+              <p><code>1 hop</code> = conexões diretas (recomendado).<br>
+              <code>2 hops</code> = vizinhos dos vizinhos.<br>
+              <code>Tudo</code> = grafo completo.</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>⭐ Importância</h4>
+              <p>O slider filtra nós com PageRank baixo. Aumente para ver apenas os mais relevantes.</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>🔄 Visão Geral</h4>
+              <p>Clique <code>Visão Geral</code> ou clique no fundo do grafo para restaurar a visualização completa.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Exportar o grafo</h3>
+          <ol class="steps">
+            <li><code>📷 PNG</code> — imagem estática para compartilhar</li>
+            <li><code>📷 SVG</code> — vetor editável (illustrator, figma)</li>
+            <li><code>📄 JSON</code> — dados completos para backup ou integração</li>
+          </ol>
+        </div>
+
+        <div class="ch-section">
+          <h3>Métricas avançadas</h3>
+          <p style="font-size:0.88rem;color:var(--text-muted)">
+            Clique <code>📊 Métricas</code> para ver PageRank (importância de cada nó) e comunidades (grupos naturais
+            detectados pelo algoritmo Louvain). Nós com PageRank alto são os mais "centrais" no conhecimento.
+          </p>
+        </div>
+
+        <div class="result info">
+          <p><strong>💡 Dica:</strong> Comece com <code>1 hop</code> e slider em 0%. Ajuste conforme necessário. O objetivo é ver <strong>contexto relevante</strong>, não o grafo inteiro.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════
+         CHAPTER 6 — PODER REAL (TOOLS)
+         ═══════════════════════════════════════════════════ -->
+    <div class="chapter" id="ch6">
+      <div class="chapter-header" onclick="toggleChapter(this)">
+        <div class="ch-badge c6">🛠</div>
+        <div class="ch-info">
+          <h2>Capítulo 6 — Ferramentas (Poder Real)</h2>
+          <p>Exec_command, web_search, memory_write — com exemplos práticos.</p>
+        </div>
+        <span class="ch-arrow">▼</span>
+      </div>
+      <div class="chapter-body">
+
+        <div class="ch-section">
+          <h3>O que são as ferramentas?</h3>
+          <p style="font-size:0.88rem;color:var(--text-muted);line-height:1.6">
+            Ferramentas são <strong style="color:var(--text-main)">ações reais</strong> que o agente pode executar
+            durante uma conversa. Ele decide quando usar qual ferramenta — mas você pode solicitar explicitamente.
+          </p>
+        </div>
+
+        <div class="ch-section">
+          <h3>As 8 ferramentas</h3>
+          <div class="ch-grid">
+            <div class="ch-grid-card">
+              <h4>⚡ exec_command</h4>
+              <p>Executa comandos shell. <span style="color:var(--danger)">⚠️ Perigoso — use com cuidado.</span></p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>🔍 web_search</h4>
+              <p>Busca iterativa na web, lê páginas e sintetiza multi-fonte.</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>📁 file_ops</h4>
+              <p>Lê, grava e lista arquivos no servidor.</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>🧠 memory_search</h4>
+              <p>Busca semântica na memória do agente.</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>✏️ memory_write</h4>
+              <p>Cria, atualiza, conecta, deleta e <strong>mescla</strong> nós de memória.</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>🔊 send_audio</h4>
+              <p>Gera TTS e envia voz no Telegram.</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>📄 send_document</h4>
+              <p>Envia arquivos (HTML, PDF, imagens) pelo Telegram.</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>🔧 memory_admin</h4>
+              <p>Diagnosticar, limpar, reindexar a memória.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Exemplo 1 — Buscar e salvar</h3>
+          <div class="example">
+            <span class="example-label">Comando no chat</span>
+            <div class="chat-bubble user">Busque as tendências de IA para 2025 e salve como memória</div>
+            <p style="margin-top:10px;font-size:0.85rem;color:var(--text-muted)">
+              O agente vai: <code>web_search</code> → coletar fontes → <code>memory_write</code> → salvar nó tipo <code>fact</code><br>
+              Depois, você pode perguntar "Quais tendências de IA você conhece?" e ele vai usar a memória.
+            </p>
+          </div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Exemplo 2 — Executar e auditar</h3>
+          <div class="example">
+            <span class="example-label">Comando no chat</span>
+            <div class="chat-bubble user">Execute ls -la /home e me mostre o resultado</div>
+            <p style="margin-top:10px;font-size:0.85rem;color:var(--text-muted)">
+              O agente vai: <code>exec_command</code> → mostrar resultado.<br>
+              Depois, abra <a href="/traces">Traces</a> para ver a chamada completa e o retorno.
+            </p>
+          </div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Exemplo 3 — Criar nó via chat</h3>
+          <div class="example">
+            <span class="example-label">Comando no chat</span>
+            <div class="chat-bubble user">Salve na memória: Prefiro respostas em português e formato markdown</div>
+            <p style="margin-top:10px;font-size:0.85rem;color:var(--text-muted)">
+              O agente cria um nó tipo <code>preference</code> automaticamente e já passa a considerar isso nas próximas respostas.
+            </p>
+          </div>
+        </div>
+
+        <div class="result warn">
+          <p><strong>⚠️ Segurança:</strong> <code>exec_command</code> executa comandos reais no servidor. Ative apenas se confiar no agente e no modelo. Desative em Config → Tools se não precisar.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════
+         CHAPTER 7 — USUÁRIO AVANÇADO
+         ═══════════════════════════════════════════════════ -->
+    <div class="chapter" id="ch7">
+      <div class="chapter-header" onclick="toggleChapter(this)">
+        <div class="ch-badge c7">🧩</div>
+        <div class="ch-info">
+          <h2>Capítulo 7 — Usuário Avançado</h2>
+          <p>Revisão de memória, merge, PageRank, limpeza e manutenção.</p>
+        </div>
+        <span class="ch-arrow">▼</span>
+      </div>
+      <div class="chapter-body">
+
+        <div class="ch-section">
+          <h3>Revisão de Memória</h3>
+          <p style="font-size:0.88rem;color:var(--text-muted);line-height:1.6;margin-bottom:12px">
+            A tela <a href="/memory-review">Revisão</a> é sua ferramenta de curadoria. Com o tempo, a memória acumula
+            duplicatas, nós órfãos e informações desatualizadas. A revisão resolve isso.
+          </p>
+          <div class="ch-grid">
+            <div class="ch-grid-card">
+              <h4>🔀 Mesclar</h4>
+              <p>Resolve duplicatas. Quando dois nós representam o mesmo conceito, mescle-os em um só. O conteúdo do nó mesclado combina ambos.</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>📅 Interligar Datas</h4>
+              <p>Cria relações cronológicas automáticas entre nós que mencionam datas. Útil para reconstruir timelines.</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>👻 Órfãos</h4>
+              <p>Nós sem nenhuma conexão. Podem ser removidos com segurança ou conectados manualmente.</p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>📉 Nós Fracos</h4>
+              <p>Nós com PageRank baixo — pouco relevantes para o grafo. Candidate-se para limpeza.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Manutenção com memory_admin</h3>
+          <div class="example">
+            <span class="example-label">Comandos no chat</span>
+            <div class="chat-bubble user">Diagnostique a memória e me diga se tem problemas</div>
+            <p style="margin-top:8px;font-size:0.85rem;color:var(--text-muted)">
+              O agente usa <code>memory_admin</code> com ação <code>diagnose</code> para relatório completo.
+            </p>
+            <div class="chat-bubble user" style="margin-top:10px">Limpe a memória — remova ghosts e órfãos</div>
+            <p style="margin-top:8px;font-size:0.85rem;color:var(--text-muted)">
+              O agente usa <code>memory_admin</code> com ação <code>cleanup</code> para remover automaticamente.
+            </p>
+          </div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Fluxo de manutenção recomendado</h3>
+          <ol class="steps">
+            <li><strong>Semanalmente:</strong> Abra <a href="/memory-review">Revisão</a> → mescle duplicatas</li>
+            <li><strong>Quinzenalmente:</strong> Use <code>memory_admin cleanup</code> no chat</li>
+            <li><strong>Mensalmente:</strong> Exporte o grafo em JSON (backup) e revise nós fracos</li>
+            <li><strong>Quando necessário:</strong> Interligar datas para reconstruir timelines</li>
+          </ol>
+        </div>
+
+        <div class="result ok">
+          <p><strong>✓ Parabéns!</strong> Se você chegou até aqui, domina o NewClaw. O sistema está configurado, a memória está curada, e você sabe auditar cada decisão do agente.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════ FAQ ═══════════ -->
+    <div class="compact-card" id="faq">
       <h2>❓ Dúvidas Comuns</h2>
-      <p><strong>O chat respondeu errado.</strong> → Abra <a href="/traces">Traces</a>, verifique a decisão e tool chamada antes de mexer no prompt.</p>
-      <p><strong>Troquei o modelo e nada mudou.</strong> → Use <code>Salvar & Reiniciar</code> na tela Config.</p>
-      <p><strong>A memória está bagunçada.</strong> → Use <code>memory_admin</code> com ação <code>cleanup</code> ou acesse <a href="/memory-review">Revisão</a> para mesclar duplicatas.</p>
-      <p><strong>O grafo está poluído.</strong> → Use <strong>Modo Foco</strong> (isolar nó) + slider de importância. Clique nos tipos na legenda para ocultar categorias.</p>
-      <p><strong>Deletei um nó por engano.</strong> → Clique <code>↩️ Desfazer</code> em até 10 segundos.</p>
-      <p><strong>Como conectar dois nós rápido?</strong> → <code>Ctrl+clique</code> no nó origem → clique no destino. Ou use o botão <code>🔗 Conectar</code>.</p>
-      <p><strong>Posso usar só pelo Telegram?</strong> → Sim, mas o dashboard é essencial para config, traces e manutenção.</p>
+      <ul>
+        <li><strong>O chat respondeu errado.</strong> → Abra Traces, verifique a decisão e tool chamada antes de mexer no prompt.</li>
+        <li><strong>Troquei o modelo e nada mudou.</strong> → Use Salvar & Reiniciar na tela Config.</li>
+        <li><strong>A memória está bagunçada.</strong> → Use <code>memory_admin</code> com ação <code>cleanup</code>. No dashboard: Grafo → Modo Foco para visualizar sem ruído.</li>
+        <li><strong>Posso usar só pelo Telegram?</strong> → Sim, mas o dashboard é essencial para config, traces e manutenção.</li>
+        <li><strong>Como reverter uma mudança na memória?</strong> → Exporte o grafo em JSON regularmente. Para restaurar, importe o backup.</li>
+      </ul>
     </div>
 
-    <!-- VARIÁVEIS -->
-    <div class="card">
+    <!-- ═══════════ ENV VARS ═══════════ -->
+    <div class="compact-card">
       <h2>⚙️ Variáveis de Ambiente</h2>
       <pre>TELEGRAM_BOT_TOKEN=seu_token
 TELEGRAM_ALLOWED_USER_IDS=123456789
@@ -273,12 +725,46 @@ APP_LANG=pt-BR
 DEFAULT_PROVIDER=ollama
 OLLAMA_URL=http://localhost:11434
 OLLAMA_MODEL=glm-5.1:cloud
-DASHBOARD_PORT=3090
-WHISPER_API_URL=http://localhost:8177</pre>
+DASHBOARD_PORT=3090</pre>
     </div>
 
   </div>
-  <script src="/shared.js?v=20260502"></script>
-  <script>document.getElementById('header-root').innerHTML = newclawHeader('help'); newclawInitTheme();</script>
+
+  <script src="/shared.js"></script>
+  <script>
+    document.getElementById('header-root').innerHTML = newclawHeader('help');
+    newclawInitTheme();
+
+    function toggleChapter(header) {
+      const body = header.nextElementSibling;
+      const isOpen = header.classList.contains('open');
+
+      if (isOpen) {
+        header.classList.remove('open');
+        body.classList.remove('open');
+      } else {
+        header.classList.add('open');
+        body.classList.add('open');
+      }
+    }
+
+    // Smooth scroll for chapter nav
+    document.querySelectorAll('.chapter-nav a').forEach(link => {
+      link.addEventListener('click', e => {
+        e.preventDefault();
+        const id = link.getAttribute('href').slice(1);
+        const chapter = document.getElementById(id);
+        if (chapter) {
+          const header = chapter.querySelector('.chapter-header');
+          const body = chapter.querySelector('.chapter-body');
+          if (!header.classList.contains('open')) {
+            header.classList.add('open');
+            body.classList.add('open');
+          }
+          chapter.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+    });
+  </script>
 </body>
 </html>
