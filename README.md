@@ -496,6 +496,19 @@ NewClaw includes a built-in **Self-Diagnosis Agent** that uses the local LLM to 
 - Destructive patterns (eval, rm -rf, removing imports) → rejected
 - Any error → automatic .bak restore
 
+### Architecture: Multi-Channel `/audit`
+
+The `/audit` command uses a **dual registration** pattern:
+
+| Layer | Registration | Purpose |
+|-------|-------------|----------|
+| **MessageBus** | `registerAuditCommand(bus, auditor, ownerIds)` | Works on **all channels** (Telegram, Discord, WhatsApp, Signal, Web) via normalized messages |
+| **Grammy (Telegram)** | `registerAuditCommandTelegram(bot, auditor, ownerChatId)` | Telegram-specific extras: Markdown formatting, message chunking (4096 char limit) |
+
+When you send `/audit` on **Telegram**, both handlers are available (Grammy takes priority for richer formatting). On **other channels**, the MessageBus handler processes the command.
+
+Owner IDs are aggregated from all configured channels: `telegramAllowedUserIds + discordAllowedUserIds + whatsappAllowedJids + signalAllowedNumbers`.
+
 ### Multi-Channel Integration Check
 
 `/audit integration` verifies all 5 channels:
@@ -1001,6 +1014,19 @@ O NewClaw inclui um **Agente de Auto-Diagnóstico** que usa o LLM local para ana
 - Arquivo não existe / `before` não encontrado → rejeitado
 - Padrões destrutivos (eval, rm -rf, remoção de imports) → rejeitado
 - Qualquer erro → restauração automática do backup .bak
+
+### Arquitetura: `/audit` Multi-Canal
+
+O comando `/audit` usa um padrão de **registro duplo**:
+
+| Camada | Registro | Finalidade |
+|-------|-----------|------------|
+| **MessageBus** | `registerAuditCommand(bus, auditor, ownerIds)` | Funciona em **todos os canais** (Telegram, Discord, WhatsApp, Signal, Web) via mensagens normalizadas |
+| **Grammy (Telegram)** | `registerAuditCommandTelegram(bot, auditor, ownerChatId)` | Extras específicos do Telegram: formatação Markdown, fragmentação de mensagens (limite de 4096 chars) |
+
+Quando você envia `/audit` no **Telegram**, ambos os handlers estão disponíveis (Grammy tem prioridade para formatação rica). Em **outros canais**, o handler do MessageBus processa o comando.
+
+Os IDs de proprietário são agregados de todos os canais configurados: `telegramAllowedUserIds + discordAllowedUserIds + whatsappAllowedJids + signalAllowedNumbers`.
 
 ### Verificação Multi-Canal de Integração
 
