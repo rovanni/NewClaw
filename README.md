@@ -232,8 +232,8 @@ NewClaw uses an **event-sourced session architecture** for full conversational c
 
 ```
 data/sessions/
-├── telegram:8071707790.jsonl     # Append-only transcript (source of truth)
-└── telegram:8071707790.idx.json  # Seek index for fast replay
+├── telegram:USER_ID.jsonl     # Append-only transcript (source of truth)
+└── telegram:USER_ID.idx.json  # Seek index for fast replay
 ```
 
 | Component | Purpose |
@@ -632,6 +632,30 @@ O ModelRouter usa um LLM leve para classificar cada mensagem em 5 categorias e s
 | ⚡ **light** | Respostas curtas (oi, ok, valeu) | `glm-5.1:cloud` |
 | 📊 **analysis** | Cripto, dados de mercado, estatísticas | `glm-5:cloud` |
 | 🧠 **execution** | Loops complexos de ferramentas e raciocínio multi-etapa | `kimi-k2.6:cloud` |
+
+### Sistema de Sessões (v2)
+
+O NewClaw utiliza uma **arquitetura de sessão baseada em eventos** para garantir continuidade total na conversa:
+
+```
+data/sessions/
+├── telegram:ID_USUARIO.jsonl     # Log append-only (fonte da verdade)
+└── telegram:ID_USUARIO.idx.json  # Índice de busca para replay rápido
+```
+
+| Componente | Propósito |
+|-----------|---------|
+| **SessionTranscript** | Log JSONL append-only, cada evento gravado com número de sequência e metadados |
+| **SessionManager** | Mutex por sessão, compressão híbrida (20 msgs OU 3000 tokens), checkpoint como papel de sistema |
+| **SessionContext** | Constrói o contexto LLM: prompt de sistema → checkpoint → mensagens recentes → memória semântica |
+| **SessionLearner** | Extrai fatos das conversas para o grafo cognitivo (nomes, preferências, projetos, skills) |
+| **EventRanker** | Pontua eventos por importância (peso da role, recência, detecção de pergunta/decisão) |
+
+**Estimativa de Tokens:** pt-BR aware — 3.5 chars/token para texto, 3 chars/token para código/JSON.
+
+**Compactação:** `compactSession()` reescreve fisicamente o JSONL (checkpoint + eventos recentes), com backup `.bak`.
+
+**Comando `/clear`:** Cria uma nova sessão (preserva o transcript antigo).
 
 ### Grafo de Memória Semântica
 
