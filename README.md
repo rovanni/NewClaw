@@ -443,17 +443,30 @@ Ubuntu/Debian users get the best navigation experience because the installer add
 
 NewClaw includes a built-in **Self-Diagnosis Agent** that uses the local LLM to analyze its own code, runtime behavior, and integration health.
 
-### Commands (Owner-Only)
+> **💡 How to use:** The `/audit` command is a **Telegram bot command** — send it directly in your Telegram chat with NewClaw. It is **owner-only** (restricted to your `TELEGRAM_ALLOWED_USER_IDS`). It does **not** work from CLI or terminal.
 
-| Command | Description |
-|---------|-------------|
-| `/audit` | Full audit (code + runtime + data + integration) |
-| `/audit code` | Source code analysis via LLM |
-| `/audit runtime` | Log analysis + static pattern detection |
-| `/audit data` | SQLite consistency validation |
-| `/audit integration` | Multi-channel health check (Telegram, Discord, WhatsApp, Signal, Web, Ollama) |
-| `/audit history` | Last 10 audit reports |
-| `/audit fix` | **Auto-fix pipeline** — only applies low-risk, multi-validated fixes |
+### Quick Start
+
+```
+📱 Open your Telegram chat with NewClaw
+
+💬 Type: /audit              ← Full audit (takes ~1-3 min)
+💬 Type: /audit integration  ← Quick check (10-30s)
+💬 Type: /audit fix          ← Auto-fix low-risk issues
+💬 Type: /audit history      ← View past reports
+```
+
+### Commands (Owner-Only — Telegram Only)
+
+| Command | Description | Time |
+|---------|-------------|------|
+| `/audit` | Full audit (code + runtime + data + integration) | ~1-3 min |
+| `/audit code` | Source code analysis via LLM (up to 10 files) | ~30-90s |
+| `/audit runtime` | Log analysis + static pattern detection | ~10-30s |
+| `/audit data` | SQLite consistency validation | ~5-10s |
+| `/audit integration` | Multi-channel health check (all channels + system) | ~10-30s |
+| `/audit history` | Last 10 audit reports from database | ~1s |
+| `/audit fix` | **Auto-fix pipeline** — applies only low-risk, multi-validated fixes | ~1-5 min |
 
 ### Auto-Fix Pipeline
 
@@ -941,17 +954,30 @@ Backups são salvos em `~/newclaw-backups/` com timestamp.
 
 O NewClaw inclui um **Agente de Auto-Diagnóstico** que usa o LLM local para analisar seu próprio código, comportamento em runtime e saúde das integrações.
 
-### Comandos (Owner-Only)
+> **💡 Como usar:** O comando `/audit` é um **comando do bot no Telegram** — envie diretamente no chat do Telegram com o NewClaw. É **restrito ao proprietário** (limitado ao seu `TELEGRAM_ALLOWED_USER_IDS`). **Não** funciona via CLI ou terminal.
 
-| Comando | Descrição |
-|---------|-------------|
-| `/audit` | Auditoria completa (código + runtime + dados + integração) |
-| `/audit code` | Análise de código fonte via LLM |
-| `/audit runtime` | Análise de logs + detecção de padrões estáticos |
-| `/audit data` | Validação de consistência do SQLite |
-| `/audit integration` | Verificação multi-canal (Telegram, Discord, WhatsApp, Signal, Web, Ollama) |
-| `/audit history` | Últimos 10 relatórios de auditoria |
-| `/audit fix` | **Pipeline de correção automática** — só aplica correções de baixo risco validadas por múltiplos agentes |
+### Início Rápido
+
+```
+📱 Abra o chat do Telegram com o NewClaw
+
+💬 Digite: /audit              ← Auditoria completa (~1-3 min)
+💬 Digite: /audit integration  ← Verificação rápida (10-30s)
+💬 Digite: /audit fix          ← Corrigir problemas de baixo risco
+💬 Digite: /audit history      ← Ver relatórios anteriores
+```
+
+### Comandos (Owner-Only — Apenas Telegram)
+
+| Comando | Descrição | Tempo |
+|---------|-----------|-------|
+| `/audit` | Auditoria completa (código + runtime + dados + integração) | ~1-3 min |
+| `/audit code` | Análise de código fonte via LLM (até 10 arquivos) | ~30-90s |
+| `/audit runtime` | Análise de logs + detecção de padrões estáticos | ~10-30s |
+| `/audit data` | Validação de consistência do SQLite | ~5-10s |
+| `/audit integration` | Verificação multi-canal (todos canais + sistema) | ~10-30s |
+| `/audit history` | Últimos 10 relatórios de auditoria do banco | ~1s |
+| `/audit fix` | **Pipeline de correção automática** — só aplica correções de baixo risco validadas por múltiplos agentes | ~1-5 min |
 
 ### Pipeline de Correção Automática
 
