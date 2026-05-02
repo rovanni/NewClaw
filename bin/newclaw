@@ -486,17 +486,17 @@ Dicas:
   - Backups são armazenados em: ~/newclaw-backups (Linux) ou %USERPROFILE%\\newclaw-backups (Windows)
   - Logs detalhados em: ./logs/newclaw-stdout.log
 `);
-  }
+  },
 
   channels(args) {
     const env = readEnv();
-    const subcommand = args?.[0] || 'status';
+    const subcommand = args && args[0] ? args[0] : 'status';
 
     switch (subcommand) {
       case 'status': {
-        console.log('
-📡 NewClaw — Status dos Canais
-');
+        console.log('');
+        console.log('📡 NewClaw — Status dos Canais');
+        console.log('');
         const channels = [
           { name: 'Telegram', key: 'TELEGRAM_BOT_TOKEN', icon: '✅' },
           { name: 'Discord', key: 'DISCORD_BOT_TOKEN', icon: '🟡' },
@@ -517,7 +517,7 @@ Dicas:
       }
 
       case 'enable': {
-        const channel = args?.[1];
+        const channel = args && args[1] ? args[1] : '';
         if (!channel) {
           console.log('❌ Use: newclaw channels enable <telegram|discord|whatsapp|signal>');
           return;
@@ -549,15 +549,15 @@ Dicas:
           readline.close();
           return;
         }
-        console.log('
-📡 Configurando ' + channel.charAt(0).toUpperCase() + channel.slice(1) + '
-');
+        console.log('');
+        console.log('📡 Configurando ' + channel.charAt(0).toUpperCase() + channel.slice(1));
+        console.log('');
         let idx = 0;
         const askField = () => {
           if (idx >= fields.length) {
             writeEnv(env);
-            console.log('
-✅ ' + channel.charAt(0).toUpperCase() + channel.slice(1) + ' configurado!');
+            console.log('');
+            console.log('✅ ' + channel.charAt(0).toUpperCase() + channel.slice(1) + ' configurado!');
             console.log('💡 Reinicie o NewClaw para aplicar: newclaw restart');
             readline.close();
             return;
@@ -576,7 +576,7 @@ Dicas:
       }
 
       case 'disable': {
-        const channel = args?.[1];
+        const channel = args && args[1] ? args[1] : '';
         if (!channel) {
           console.log('❌ Use: newclaw channels disable <telegram|discord|whatsapp|signal>');
           return;
