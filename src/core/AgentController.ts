@@ -37,6 +37,8 @@ import { DiscordAdapter, type DiscordConfig } from '../channels/DiscordAdapter';
 import { WhatsAppAdapter, type WhatsAppConfig } from '../channels/WhatsAppAdapter';
 import { SignalAdapter, type SignalConfig } from '../channels/SignalAdapter';
 import { NormalizedMessage } from '../channels/ChannelAdapter';
+import { AuditorService } from '../services/auditor/AuditorService';
+import { registerAuditCommand } from '../services/auditor/auditCommand';
 const log = createLogger('AgentController');
 
 export interface NewClawConfig {
@@ -106,6 +108,7 @@ export class AgentController {
     private memoryGovernor: MemoryGovernor;
     private scheduler: SchedulerService;
     private messageBus: MessageBus;
+    private auditor: AuditorService;
     private telegramAdapter: TelegramAdapter;
     private discordAdapter: DiscordAdapter | null = null;
     private whatsAppAdapter: WhatsAppAdapter | null = null;
@@ -197,6 +200,18 @@ export class AgentController {
 
         // MessageBus is the central pipeline
         this.messageBus = new MessageBus(this.agentLoop, this.sessionManager);
+
+        // AuditorService — self-diagnosis engine
+        this.auditor = new AuditorService({
+            ollamaUrl: config.ollamaUrl || 'http://localhost:11434',
+            model: config.ollamaModel || 'glm-5.1:cloud',
+            dbPath: './data/newclaw.db',
+            srcPath: './src',
+            logsPath: './logs',
+            ownerChatId: config.telegramAllowedUserIds[0] || '',
+            maxFindingsPerCategory: 20,
+            enableAutoFix: true,
+        }, (this.memory as any).db || (this.memory as any)._db);
 
         // Register commands on the MessageBus
         this.registerCommands();
@@ -423,6 +438,15 @@ export class AgentController {
                 return `⚠️ Erro: ${e.message}`;
             }
         });
+
+        // /audit — owner-only self-diagnosis (multi-channel)
+        const ownerIds = [
+            ...this.config.telegramAllowedUserIds,
+            ...this.config.discordAllowedUserIds || [],
+            ...this.config.whatsappAllowedJids || [],
+            ...this.config.signalAllowedNumbers || [],
+        ];
+        registerAuditCommand(this.messageBus, this.auditor, ownerIds);
     }
 
     /**
