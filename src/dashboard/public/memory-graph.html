@@ -345,6 +345,7 @@
     <div class="sidebar-section">
       <h3>Importância</h3>
       <div style="display:flex;flex-direction:column;gap:4px;">
+        <div style="display:flex;align-items:center;gap:8px;font-size:0.72rem;"><span style="width:12px;height:12px;border-radius:50%;border:3px solid #ef4444;background:#a855f7;flex-shrink:0;"></span> <span style="color:var(--text-main);">Identidade (sempre principal)</span></div>
         <div style="display:flex;align-items:center;gap:8px;font-size:0.72rem;"><span style="width:12px;height:12px;border-radius:50%;border:3px solid #ef4444;background:transparent;flex-shrink:0;"></span> <span style="color:var(--text-main);">Principal (PageRank alto)</span></div>
         <div style="display:flex;align-items:center;gap:8px;font-size:0.72rem;"><span style="width:12px;height:12px;border-radius:50%;border:3px solid #f97316;background:transparent;flex-shrink:0;"></span> <span style="color:var(--text-main);">Importante (médio)</span></div>
         <div style="display:flex;align-items:center;gap:8px;font-size:0.72rem;"><span style="width:12px;height:12px;border-radius:50%;border:2px solid rgba(255,255,255,0.3);background:transparent;flex-shrink:0;"></span> <span style="color:var(--text-muted);">Normal (sem anel extra)</span></div>
@@ -525,11 +526,13 @@
     // Tier 2 (next 30%) = orange ring — importantes
     // Tier 3 (bottom 55%) = no ring — normais
     const IMPORTANCE_TIERS = {
-      critical: { threshold: 0.70, color: '#ef4444', width: 4, label: '🔴 Principal' },  // red
-      important: { threshold: 0.40, color: '#f97316', width: 3, label: '🟠 Importante' },  // orange
+      critical: { threshold: 0.70, color: '#ef4444', width: 5, label: '🔴 Principal' },  // red
+      important: { threshold: 0.40, color: '#f97316', width: 4, label: '🟠 Importante' },  // orange
       normal:    { threshold: 0,    color: null,       width: 2, label: '⚪ Normal' }        // default (type color)
     };
-    function getImportanceTier(importance) {
+    function getImportanceTier(importance, type) {
+      // Identity nodes are ALWAYS critical — they define WHO the person is
+      if (type === 'identity') return 'critical';
       if (importance >= IMPORTANCE_TIERS.critical.threshold) return 'critical';
       if (importance >= IMPORTANCE_TIERS.important.threshold) return 'important';
       return 'normal';
@@ -1124,7 +1127,7 @@
           const importance = (deg / maxDegree) * 0.4 + (pr / maxPR) * 0.6;
           const size = minSize + importance * (maxSize - minSize);
           const color = TYPE_COLORS[n.type] || '#64748b';
-          const tier = getImportanceTier(importance);
+          const tier = getImportanceTier(importance, n.type);
           const importanceColor = IMPORTANCE_TIERS[tier]?.color || null;
           const importanceWidth = IMPORTANCE_TIERS[tier]?.width || 2;
           return { data: { id: n.id, label: n.name||n.id, type: n.type, name: n.name||n.id, content: n.content||'', degree: deg, pagerank: pr.toFixed(4), size: size, nodeColor: color, weight: 1, importanceTier: tier, importanceBorder: importanceColor || '#fff', importanceBorderWidth: importanceWidth }, classes: 'type-'+n.type + (tier !== 'normal' ? ' importance-'+tier : '') };
@@ -1141,7 +1144,8 @@
         selector: '.type-'+type, style: { 'background-color': color, 'border-color': color }
       }));
 
-      // Importance tier styles — traffic-light rings on top of type colors
+      // Importance tier styles — traffic-light rings
+      // Identity = always red (quem você É)
       const importanceStyles = [
         { selector: '.importance-critical', style: { 'border-width': 5, 'border-color': '#ef4444', 'border-opacity': 1, 'z-index': 500 } },
         { selector: '.importance-important', style: { 'border-width': 4, 'border-color': '#f97316', 'border-opacity': 1, 'z-index': 400 } },
