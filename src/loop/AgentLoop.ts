@@ -148,7 +148,6 @@ export class AgentLoop {
 - Quando precisar diagnosticar servidores remotos, use ssh_exec.
 - Servidores disponíveis: sol (GPU), marte (localhost), atlas (Selenium), venus (NewClaw).
 - NUNCA exponha IPs ou credenciais em respostas ao usuário.
-- NUNCA mencione IDs internos de nós de memória (fact_123, node_456, etc) para o usuário. Use apenas nomes descritivos.
 - NUNCA use jargão técnico como "nós de memória", "embedding", "FTS5" ou "score de similaridade" em respostas ao usuário. Fale em linguagem natural.`,
 
         ANALYSIS: `## 📊 REGRA DE ANÁLISE, CLIMA E MERCADO

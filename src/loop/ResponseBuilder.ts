@@ -85,13 +85,13 @@ export class ResponseBuilder {
 
         switch (action) {
             case 'create':
-                return `✅ Informação registrada com sucesso.`;
+                return `✅ Nó criado: ${params.id || 'novo nó'}`;
             case 'update':
-                return `✅ Informação atualizada com sucesso.`;
+                return `✅ Nó atualizado: ${params.id || 'nó'}`;
             case 'connect':
-                return `✅ Conexão registrada com sucesso.`;
+                return `✅ Conexão criada: ${params.from || ''} → [${params.relation || 'related_to'}] → ${params.to || ''}`;
             case 'delete':
-                return `✅ Informação removida com sucesso.`;
+                return `✅ ${output}`;
             case 'merge':
                 return `✅ ${output}`;
             default:
