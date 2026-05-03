@@ -59,8 +59,8 @@ export class FileOpsTool implements ToolExecutor {
         }
 
         // Restrict write operations to allowed directories
-        const workspaceDir = process.env.WORKSPACE_DIR || '/newclaw/workspace';
-        const allowedWriteDirs = [workspaceDir, '/tmp/newclaw/', '/home/venus/newclaw/workspace/', path.join(projectRoot, 'workspace')];
+        const workspaceDir = process.env.WORKSPACE_DIR || path.join(projectRoot, 'workspace');
+        const allowedWriteDirs = [workspaceDir, '/tmp/newclaw/', path.join(projectRoot, 'workspace')];
         const isWriteOp = ['create', 'delete', 'move', 'replace'].includes(action);
         if (isWriteOp) {
             const isAllowed = allowedWriteDirs.some(d => filePath.startsWith(d));
