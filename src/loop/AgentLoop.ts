@@ -147,10 +147,12 @@ export class AgentLoop {
         INFRA: `## 🖥️ REGRA DE INFRAESTRUTURA E SSH
 - Quando precisar diagnosticar servidores remotos, use ssh_exec.
 - Servidores disponíveis: sol (GPU), marte (localhost), atlas (Selenium), venus (NewClaw).
-- NUNCA exponha IPs ou credenciais em respostas ao usuário.`,
+- NUNCA exponha IPs ou credenciais em respostas ao usuário.
+- NUNCA mencione IDs internos de nós de memória (fact_123, node_456, etc) para o usuário. Use apenas nomes descritivos.
+- NUNCA use jargão técnico como "nós de memória", "embedding", "FTS5" ou "score de similaridade" em respostas ao usuário. Fale em linguagem natural.`,
 
         ANALYSIS: `## 📊 REGRA DE ANÁLISE, CLIMA E MERCADO
-- Previsão do Tempo: Use web_search focando em sites oficiais (Climatempo, AccuWeather). Se os dados forem conflitantes, cite as fontes.
+- Previsão do Tempo: Use SEMPRE a ferramenta weather primeiro. Se falhar, use web_search focando em sites oficiais (Climatempo, AccuWeather). Se os dados forem conflitantes, cite as fontes.
 - Cripto/Mercado: Use crypto_analysis para dados profundos de mercado. Filtre o ruído e foque em tendências reais.
 - Fallback Cognitivo: Quando não houver dados externos confiáveis, declare claramente a limitação de dados e mantenha total transparência. NÃO infira tendências sem base e NÃO invente previsões.`,
 
