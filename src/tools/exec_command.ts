@@ -1,20 +1,25 @@
 /**
- * exec_command — Execute shell commands locally or remotely via ssh:// prefix
+ * exec_command — Execute shell commands (modelo OpenClaw)
+ * 
+ * Acesso total ao shell com workspace como cwd padrão.
+ * Bloqueia apenas comandos explicitamente destrutivos.
+ * Suporta execução remota via ssh://host/command.
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { exec } from 'child_process';
 import { resolveHost, isDestructive } from './server_config';
+import path from 'path';
 
 export class ExecCommandTool implements ToolExecutor {
     name = 'exec_command';
-    description = 'Execute a shell command and return the output. Supports local commands and remote execution via ssh://host prefix (e.g. ssh://sol ls /tmp). Timeout default: 30s.';
+    description = 'Execute shell commands. Workspace como cwd padrão. Suporta ssh://host/command para remoto. Timeout padrão: 30s.';
     parameters = {
         type: 'object',
         properties: {
-            command: { type: 'string', description: 'Shell command to execute. Use ssh://HOST/ prefix for remote execution (e.g. ssh://sol systemctl status whisper-api)' },
-            timeout: { type: 'number', description: 'Timeout in ms (default: 30000)' },
-            workdir: { type: 'string', description: 'Working directory for the command' }
+            command: { type: 'string', description: 'Shell command. Use ssh://HOST/cmd para execução remota' },
+            timeout: { type: 'number', description: 'Timeout em ms (padrão: 30000)' },
+            workdir: { type: 'string', description: 'Diretório de trabalho (padrão: workspace)' }
         },
         required: ['command']
     };
@@ -28,16 +33,16 @@ export class ExecCommandTool implements ToolExecutor {
             return { success: false, output: '', error: 'Command not provided' };
         }
 
-        // Block destructive commands (centralized list)
+        // Block destructive commands
         if (isDestructive(command)) {
-            return { success: false, output: '', error: 'Destructive command blocked for safety' };
+            return { success: false, output: '', error: 'Comando destrutivo bloqueado por segurança' };
         }
 
         // Handle SSH remote execution: ssh://host/command
         if (command.startsWith('ssh://')) {
             const match = command.match(/^ssh:\/\/([a-zA-Z0-9_-]+)\/(.*)/);
             if (!match) {
-                return { success: false, output: '', error: 'Invalid SSH format. Use: ssh://host/command' };
+                return { success: false, output: '', error: 'Formato SSH inválido. Use: ssh://host/command' };
             }
             const hostAlias = match[1];
             const remoteCmd = match[2];
@@ -45,10 +50,10 @@ export class ExecCommandTool implements ToolExecutor {
             command = `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no ${sshTarget} "${remoteCmd.replace(/"/g, '\\"')}"`;
         }
 
+        // Resolver workdir: padrão = workspace
+        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
         const execOptions: any = { timeout };
-        if (workdir) {
-            execOptions.cwd = workdir;
-        }
+        execOptions.cwd = workdir || workspaceDir;
 
         try {
             const output = await new Promise<string>((resolve, reject) => {
