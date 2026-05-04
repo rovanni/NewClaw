@@ -65,9 +65,15 @@ export function routeIntent(text: string): RouteResult {
         return { action: 'tool', tool: 'exec_command', params: { command: text } };
     }
 
-    // ── File operations (check files, HTML, create/list/read)
-    if (/(arquivo|html|css|js|p[aá]gina|site|checklist|criar|listar|ler|mover|deletar|existe|confirmar|verificar|buscar\s+(o\s+)?arquivo)/i.test(lower)) {
-        return { action: 'tool', tool: 'file_ops', params: { action: 'list', path: './workspace/sites/' } };
+    // ── File operations (create, read, edit — split tools like OpenClaw)
+    if (/(criar|novo|gerar|escrever|salvar|html|css|site|p[aá]gina)/i.test(lower)) {
+        return { action: 'tool', tool: 'write', params: { path: './workspace/sites/', content: '' } };
+    }
+    if (/(ler|ver|mostrar|listar|existe|confirmar|verificar|buscar\s+(o\s+)?arquivo)/i.test(lower)) {
+        return { action: 'tool', tool: 'read', params: { path: './workspace/sites/' } };
+    }
+    if (/(editar|mudar|alterar|substituir|mover|deletar)/i.test(lower)) {
+        return { action: 'tool', tool: 'edit', params: { path: './workspace/' } };
     }
 
     // ── Default → LLM with tools

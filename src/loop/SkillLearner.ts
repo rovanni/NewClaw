@@ -275,7 +275,7 @@ export class SkillLearner {
         if (/(Ã¡udio|audio|voz|tts|falar|narre)/.test(lower) && /(gerar|criar|enviar|manda|mande|fale)/.test(lower)) return 'audio_request';
         if (/(lembre|lembrete|guarde|salve|memorize|anote)/.test(lower)) return 'memory_write';
         if (/(lembra|o que voc[eÃª] sabe|buscar na mem)/.test(lower)) return 'memory_search';
-        if (/(arquivo|html|css|site|p[aÃ¡]gina)/.test(lower)) return 'file_ops';
+        if (/(arquivo|html|css|site|p[aáá]gina)/.test(lower)) return 'write';
 
         return null;
     }
@@ -466,12 +466,12 @@ export class SkillLearner {
                 prompt: 'Use memory_search com {"query": "termo de busca"} para encontrar informaÃ§Ãµes salvas.',
                 toolSeq: ['memory_search']
             },
-            file_ops: {
+            write: {
                 name: 'OperaÃ§Ãµes de Arquivo',
                 trigger: '(arquivo|html|css|site|p[aÃ¡]gina)',
-                description: 'Lista, cria ou verifica arquivos em caminhos de trabalho comuns.',
-                prompt: 'Use file_ops para operaÃ§Ãµes de arquivo. Liste diretÃ³rios com {"action":"list","path":"./workspace/sites/"}.',
-                toolSeq: ['file_ops']
+                description: 'Cria ou sobrescreve arquivos no workspace.',
+                prompt: 'Use write com {"path": "caminho/arquivo.html", "content": "conteudo"} para criar arquivos.',
+                toolSeq: ['write']
             }
         };
 

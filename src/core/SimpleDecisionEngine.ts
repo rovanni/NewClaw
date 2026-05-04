@@ -54,13 +54,24 @@ const TOOL_RULES: Array<{
         }
     },
     {
-        tool: 'file_ops',
-        keywords: ['criar arquivo', 'criar página', 'criar site', 'listar arquivos', 'ler arquivo', 'mover arquivo', 'deletar arquivo'],
+        tool: 'write',
+        keywords: ['criar arquivo', 'criar página', 'criar site', 'novo arquivo', 'gerar html', 'salvar'],
         extractParams: (input) => {
-            const lower = input.toLowerCase();
-            if (lower.includes('listar') || lower.includes('list')) return { action: 'list', path: './workspace/sites/' };
-            if (lower.includes('html') || lower.includes('página') || lower.includes('site')) return { action: 'create', path: './workspace/sites/', content: '' };
-            return { action: 'read', path: input };
+            return { path: './workspace/tmp/', content: '' };
+        }
+    },
+    {
+        tool: 'read',
+        keywords: ['listar arquivos', 'ler arquivo', 'ver arquivo', 'mostrar arquivo', 'listar diretório'],
+        extractParams: (input) => {
+            return { path: './workspace/sites/' };
+        }
+    },
+    {
+        tool: 'edit',
+        keywords: ['mover arquivo', 'deletar arquivo', 'editar arquivo', 'alterar arquivo', 'substituir'],
+        extractParams: (input) => {
+            return { path: './workspace/' };
         }
     },
     {

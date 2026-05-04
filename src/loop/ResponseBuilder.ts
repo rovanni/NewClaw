@@ -27,7 +27,9 @@ export class ResponseBuilder {
         }
 
         switch (toolName) {
-            case 'file_ops':
+            case 'write':
+            case 'edit':
+            case 'read':
                 return this.formatFileOps(toolParams, toolResult);
             case 'memory_search':
                 return this.formatMemorySearch(toolResult);
@@ -44,31 +46,27 @@ export class ResponseBuilder {
     }
 
     private formatFileOps(params: Record<string, any>, result: ToolResult): string {
-        const action = params.action || '';
         const output = result.output || '';
 
-        switch (action) {
-            case 'read': {
-                // Truncate long file content
-                const maxLen = 1500;
-                if (output.length > maxLen) {
-                    return `📄 Conteúdo do arquivo (truncado):\n\`\`\`\n${output.slice(0, maxLen)}\n\`\`\`\n\n*[Arquivo com ${output.length} caracteres. Use send_document para enviar o arquivo completo.]*`;
-                }
-                return `📄 Conteúdo do arquivo:\n\`\`\`\n${output}\n\`\`\``;
-            }
-            case 'create':
-                return `✅ Arquivo criado: ${params.path || 'arquivo'}\n${output.length > 0 ? output : ''}`;
-            case 'update':
-                return `✅ Arquivo atualizado: ${params.id || params.path || 'registro'}`;
-            case 'list':
-                return `📁 ${output}`;
-            case 'move':
-                return `✅ Arquivo movido: ${output}`;
-            case 'delete':
-                return `✅ ${output}`;
-            default:
-                return output.slice(0, 500) || 'Ação executada.';
+        // Write results
+        if (output.startsWith('Criado:') || output.startsWith('Sobrescrito:')) {
+            return `✅ Arquivo criado: ${params.path || 'arquivo'}\n${output}`;
         }
+        // Edit results
+        if (output.startsWith('Substituição OK:') || output.startsWith('Patch OK:') || output.startsWith('Conteúdo adicionado:') || output.startsWith('Arquivo criado:')) {
+            return `✅ ${output}`;
+        }
+        // List/directory results
+        if (output.startsWith('📁') || (output.includes('/') && output.includes('📄'))) {
+            return `📁 ${output}`;
+        }
+
+        // Read — truncate long content
+        const maxLen = 1500;
+        if (output.length > maxLen) {
+            return `📄 Conteúdo do arquivo (truncado):\n\`\`\`\n${output.slice(0, maxLen)}\n\`\`\`\n\n*[Arquivo com ${output.length} caracteres. Use send_document para enviar o arquivo completo.]*`;
+        }
+        return `📄 Conteúdo do arquivo:\n\`\`\`\n${output}\n\`\`\``;
     }
 
     private formatMemorySearch(result: ToolResult): string {

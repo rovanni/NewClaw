@@ -453,7 +453,9 @@ export class DashboardServer {
                 tools: [
                     { name: 'exec_command', description: 'Execute shell commands' },
                     { name: 'web_search', description: 'Search the web' },
-                    { name: 'file_ops', description: 'File operations (read/write/list)' },
+                    { name: 'write', description: 'Create or overwrite files' },
+                    { name: 'edit', description: 'Edit existing files (replace/patch/append)' },
+                    { name: 'read', description: 'Read files or list directories' },
                     { name: 'crypto_report', description: 'Cryptocurrency price reports (quick lookup)' },
                     { name: 'crypto_analysis', description: 'Deep crypto analysis: bleeding coins, gainers, losers, opportunities' },
                     { name: 'send_audio', description: 'Generate and send TTS audio via Telegram' },
