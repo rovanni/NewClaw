@@ -7,8 +7,10 @@ import PQueue from 'p-queue';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('Providerfactory');
 
-// Global queue to prevent concurrent Ollama requests (avoids 503)
-const ollamaQueue = new PQueue({ concurrency: 1 });
+// Separate queues: classification (fast, priority) vs generation (long tasks)
+// This prevents classification timeouts when a long generation is in progress
+const generationQueue = new PQueue({ concurrency: 1 });
+const classificationQueue = new PQueue({ concurrency: 1 });
 
 export interface LLMMessage {
     role: 'user' | 'assistant' | 'system' | 'tool';
@@ -222,26 +224,32 @@ export class OllamaProvider implements ILLMProvider {
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
         try {
-            return await ollamaQueue.add(() => this._chatOnce(messages, tools));
+            return await generationQueue.add(() => this._chatOnce(messages, tools));
         } catch (error: any) {
             // 1 retry after 10s on timeout/abort/network errors
             if (error.message?.includes('abort') || error.message?.includes('timeout') || error.message?.includes('ECONNRESET') || error.message?.includes('fetch failed')) {
                 log.info(`Retry after: ${error.message}, waiting 10s...`);
                 await new Promise(r => setTimeout(r, 10000));
-                return await ollamaQueue.add(() => this._chatOnce(messages, tools));
+                return await generationQueue.add(() => this._chatOnce(messages, tools));
             }
             throw error;
         }
     }
 
-    private async _chatOnce(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
+    /** Classification call — uses a separate queue to avoid blocking on long generations */
+    async classify(messages: LLMMessage[], timeoutMs: number = 30000): Promise<LLMResponse> {
+        return await classificationQueue.add(() => this._chatOnce(messages, undefined, timeoutMs));
+    }
+
+    private async _chatOnce(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number): Promise<LLMResponse> {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (this.apiKey) {
             headers['Authorization'] = `Bearer ${this.apiKey}`;
         }
 
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 240000); // 4 min timeout (cloud models need more time for heavy tasks)
+        const timeoutMs = customTimeoutMs || 240000; // Default 4 min, shorter for classification
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
         let response: Response;
         try {
@@ -496,6 +504,40 @@ export class ProviderFactory {
             log.info(`Failed to parse leaked tool call: ${e}`);
         }
         return undefined;
+    }
+
+    /** Classification with fallback — uses separate queue to avoid blocking on long generations */
+    async classifyWithFallback(messages: LLMMessage[], timeoutMs: number = 30000): Promise<LLMResponse> {
+        const providerOrder = this.getFallbackOrder();
+        const errors: string[] = [];
+
+        for (const providerName of providerOrder) {
+            try {
+                const provider = this.providers.get(providerName);
+                if (!provider) continue;
+
+                let result: LLMResponse;
+                // Use separate classification queue for Ollama, direct call for others
+                if (providerName === 'ollama' && provider instanceof OllamaProvider) {
+                    result = await provider.classify(messages, timeoutMs);
+                } else {
+                    result = await Promise.race([
+                        provider.chat(messages),
+                        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeoutMs))
+                    ]);
+                }
+
+                if (result.content && result.content.trim().length > 0) {
+                    return result;
+                }
+                errors.push(`${providerName}: empty response`);
+            } catch (error: any) {
+                errors.push(`${providerName}: ${error.message}`);
+                continue;
+            }
+        }
+
+        throw new Error(`Classification failed: ${errors.join('; ')}`);
     }
 
     /** Get ordered list of providers for fallback chain */

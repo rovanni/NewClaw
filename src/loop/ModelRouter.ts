@@ -175,12 +175,12 @@ Message: "${query.slice(0, 200)}"
 Category:`;
 
         try {
-            // Use ProviderFactory for classification if available, otherwise fallback to fetch
+            // Use ProviderFactory.classifyWithFallback — separate queue avoids blocking on long generations
             if ((this as any).providerFactory) {
                 const factory = (this as any).providerFactory as ProviderFactory;
-                const response = await factory.chatWithFallback([
+                const response = await factory.classifyWithFallback([
                     { role: 'user', content: prompt }
-                ], [], undefined, 15000);
+                ], 30000); // 30s timeout for classification (separate queue)
                 
                 const content = (response.content || '').trim().toLowerCase();
                 for (const cat of VALID_CATEGORIES) {
@@ -190,9 +190,9 @@ Category:`;
                 if (VALID_CATEGORIES.includes(firstWord as Category)) return firstWord as Category;
             }
 
-            // Legacy fetch fallback (Ollama only)
+            // Legacy fetch fallback (Ollama only) — direct call, bypasses generation queue
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 15000);
+            const timeout = setTimeout(() => controller.abort(), 30000); // 30s (increased from 15s)
             const response = await fetch(`${this.config.classifierServer}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
