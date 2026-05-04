@@ -247,9 +247,23 @@ export class OllamaProvider implements ILLMProvider {
             headers['Authorization'] = `Bearer ${this.apiKey}`;
         }
 
+        // num_ctx from env or default 32768
+        const numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
+
         const controller = new AbortController();
-        const timeoutMs = customTimeoutMs || 240000; // Default 4 min, shorter for classification
+        const timeoutMs = customTimeoutMs || 300000; // 5 min for streaming
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+        const requestBody: any = {
+            model: this.model,
+            messages,
+            stream: true,
+            options: { num_ctx: numCtx },
+            tools: tools ? tools.map(t => ({
+                type: 'function',
+                function: { name: t.name, description: t.description, parameters: t.parameters }
+            })) : undefined
+        };
 
         let response: Response;
         try {
@@ -257,15 +271,7 @@ export class OllamaProvider implements ILLMProvider {
                 method: 'POST',
                 headers,
                 signal: controller.signal,
-                body: JSON.stringify({
-                    model: this.model,
-                    messages,
-                    stream: false,
-                    tools: tools ? tools.map(t => ({
-                        type: 'function',
-                        function: { name: t.name, description: t.description, parameters: t.parameters }
-                    })) : undefined
-                })
+                body: JSON.stringify(requestBody)
             });
         } finally {
             clearTimeout(timeout);
@@ -275,20 +281,76 @@ export class OllamaProvider implements ILLMProvider {
             throw new Error(`Ollama API error: ${response.status}`);
         }
 
-        const data = await response.json() as any;
-        const message = data.message;
+        // ── Read SSE stream ──
+        let content = '';
+        let toolCalls: any[] = [];
+        let usage: any = undefined;
+
+        try {
+            const body = response.body;
+            if (!body) throw new Error('No response body');
+
+            const reader = body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || ''; // keep incomplete line
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed) continue;
+
+                    try {
+                        const chunk = JSON.parse(trimmed);
+                        if (chunk.message?.content) {
+                            content += chunk.message.content;
+                        }
+                        // Collect tool calls from final chunk or per-chunk
+                        if (chunk.message?.tool_calls) {
+                            for (const tc of chunk.message.tool_calls) {
+                                toolCalls.push(tc);
+                            }
+                        }
+                        if (chunk.done) {
+                            usage = {
+                                prompt_tokens: chunk.prompt_eval_count || 0,
+                                completion_tokens: chunk.eval_count || 0
+                            };
+                        }
+                    } catch {
+                        // skip malformed chunks
+                    }
+                }
+            }
+        } catch (streamErr: any) {
+            // Fallback: if streaming fails, try non-streaming
+            log.warn(`Streaming failed, falling back to non-streaming: ${streamErr.message}`);
+            const fallbackResponse = await fetch(`${this.baseUrl}/api/chat`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ ...requestBody, stream: false })
+            });
+            if (!fallbackResponse.ok) throw new Error(`Ollama fallback error: ${fallbackResponse.status}`);
+            const data = await fallbackResponse.json() as any;
+            const message = data.message;
+            content = message?.content || '';
+            toolCalls = message?.tool_calls || [];
+        }
 
         return {
-            content: message?.content || '',
-            toolCalls: message?.tool_calls?.map((tc: any) => ({
+            content,
+            toolCalls: toolCalls.length > 0 ? toolCalls.map((tc: any) => ({
                 id: tc.function?.name || `call_${Date.now()}`,
                 name: tc.function?.name || '',
                 arguments: tc.function?.arguments || {}
-            })),
-            usage: data.usage ? {
-                prompt_tokens: data.usage.prompt_tokens || 0,
-                completion_tokens: data.usage.completion_tokens || 0
-            } : undefined
+            })) : undefined,
+            usage
         };
     }
 }

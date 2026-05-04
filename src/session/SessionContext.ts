@@ -1,20 +1,26 @@
 /**
- * SessionContext — Builds LLM context from session transcript + memory (v2)
+ * SessionContext — Builds LLM context from session transcript + memory (v3)
+ * 
+ * REFACTORED: Uses ContextBudget for modular context assembly.
+ * Each context block is now a separate system message with its own budget.
+ * No more monolithic concatenation.
  * 
  * Pipeline (order matters!):
- * 1. System prompt (identity + skills)
- * 2. Checkpoint summary (STRUCTURED system role — not loose text)
- * 3. Recent transcript messages (linear replay)
- * 4. Semantic memory context (from MemoryManager graph)
- * 5. Current user message
- * 
- * If sessionContext is not set, AgentLoop throws (no silent fallback).
+ * 1. System prompt (identity + skills) — separate system message
+ * 2. State block (short system info) — separate system message
+ * 3. Memory summary (compact top-K) — separate system message
+ * 4. Checkpoint summary (structured system role)
+ * 5. Recent transcript messages (linear replay, budgeted)
+ * 6. Current user message
  */
 
-import { SessionManager, SessionKey, estimateTokens } from './SessionManager';
+import { SessionManager, SessionKey, estimateTokens as legacyEstimateTokens } from './SessionManager';
 import { ContextBuilder } from '../loop/ContextBuilder';
 import { MemoryManager } from '../memory/MemoryManager';
+import { ContextBudget, ContextBlock, DEFAULT_BUDGET, truncateToChars } from '../loop/ContextBudget';
 import { LLMMessage } from '../core/ProviderFactory';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('SessionContext');
 
 export interface SessionContextResult {
     messages: LLMMessage[];
@@ -25,6 +31,8 @@ export interface SessionContextResult {
         totalTranscriptEntries: number;
         semanticContextUsed: boolean;
         tokenEstimate: number;
+        budgetUsed: number;
+        budgetMax: number;
     };
 }
 
@@ -32,23 +40,26 @@ export class SessionContext {
     private sessionManager: SessionManager;
     private contextBuilder: ContextBuilder;
     private memory: MemoryManager;
+    private budget: ContextBudget;
 
-    constructor(sessionManager: SessionManager, memory: MemoryManager) {
+    constructor(sessionManager: SessionManager, memory: MemoryManager, budgetConfig?: Partial<typeof DEFAULT_BUDGET>) {
         this.sessionManager = sessionManager;
         this.contextBuilder = new ContextBuilder(memory);
         this.memory = memory;
+        this.budget = new ContextBudget(budgetConfig);
     }
 
     /**
-     * Build the complete context for an LLM call.
+     * Build the complete context for an LLM call using ContextBudget.
      * 
-     * Checkpoint is ALWAYS injected as a structured system role message,
-     * never as loose text mixed with other context.
+     * Each context source is a SEPARATE system message — no concatenation.
+     * Budget is enforced per-block to prevent context overflow.
      */
     async buildLLMMessages(
         key: SessionKey,
         systemPrompt: string,
-        currentMessage: string
+        currentMessage: string,
+        skillsBlock?: string
     ): Promise<SessionContextResult> {
         const stats = {
             fromCheckpoint: false,
@@ -56,74 +67,61 @@ export class SessionContext {
             recentMessages: 0,
             totalTranscriptEntries: 0,
             semanticContextUsed: false,
-            tokenEstimate: 0
+            tokenEstimate: 0,
+            budgetUsed: 0,
+            budgetMax: this.budget.maxInputTokens
         };
 
-        // 1. Get session transcript + checkpoint
+        // 1. Get session transcript
         const { messages: transcriptMessages } = await this.sessionManager.buildContext(key, systemPrompt);
         const transcript = await this.sessionManager.getOrCreateSession(key);
         const transcriptStats = transcript.getStats();
         stats.totalTranscriptEntries = transcriptStats.totalEntries;
 
-        // 2. Get checkpoint summary (structured, not loose)
+        // 2. Get checkpoint summary (compact)
         const checkpointSummary = this.sessionManager.getCheckpointSummary(key);
         if (checkpointSummary) {
             stats.fromCheckpoint = true;
         }
 
-        // 3. Get semantic memory context
-        let semanticContext = '';
+        // 3. Get semantic memory context (compact, top-K — NOT full graph)
+        let memoryContext = '';
         try {
-            semanticContext = await this.contextBuilder.buildContext(currentMessage);
-            stats.semanticContextUsed = semanticContext.length > 0;
+            memoryContext = await this.contextBuilder.buildContext(currentMessage);
+            stats.semanticContextUsed = memoryContext.length > 0;
         } catch {
             // Continue without semantic context
         }
 
-        // 4. Build LLM messages array
-        const llmMessages: LLMMessage[] = [];
+        // 4. Build state block (short, essential info)
+        const now = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'full', timeStyle: 'short' });
+        const stateBlock = `[ESTADO]\nData: ${now}`;
 
-        // System prompt (identity + skills)
-        let systemContent = systemPrompt;
-        if (semanticContext) {
-            systemContent += `\n\n[Memória Semântica]\n${semanticContext}`;
-        }
-        llmMessages.push({ role: 'system', content: systemContent });
+        // 5. Build context using ContextBudget (modular, budgeted)
+        const blocks: ContextBlock[] = this.budget.buildMessages({
+            systemPrompt,
+            stateBlock,
+            memoryBlock: memoryContext ? `[MEMÓRIA]\n${memoryContext}` : undefined,
+            skillsBlock: skillsBlock ? `[HABILIDADES]\n${skillsBlock}` : undefined,
+            checkpointBlock: checkpointSummary || undefined,
+            recentMessages: transcriptMessages
+                .filter(e => e.role === 'user' || e.role === 'assistant')
+                .map(e => ({ role: e.role, content: e.content })),
+            currentUserMessage: currentMessage
+        });
 
-        // Checkpoint as STRUCTURED system role (always separate, never mixed)
-        if (checkpointSummary) {
-            llmMessages.push({
-                role: 'system',
-                content: `[RESUMO DA CONVERSA ANTERIOR]\n${checkpointSummary}\n[Use este resumo como contexto para continuar a conversa. Os detalhes foram comprimidos mas as informações essenciais estão preservadas.]`
-            });
-        }
+        // 6. Convert to LLMMessage format
+        const llmMessages: LLMMessage[] = blocks.map(b => ({
+            role: b.role as 'system' | 'user' | 'assistant',
+            content: b.content
+        }));
 
-        // Recent transcript messages
-        for (const entry of transcriptMessages) {
-            if (entry.role === 'user' || entry.role === 'assistant') {
-                // Truncate long messages to prevent context overflow and timeouts
-                const maxChars = this.sessionManager['config']?.maxMessageChars || 1500;
-                const content = entry.content.length > maxChars
-                    ? entry.content.slice(0, maxChars) + '\n[...truncated, original: ' + entry.content.length + ' chars]'
-                    : entry.content;
-                llmMessages.push({
-                    role: entry.role as 'user' | 'assistant',
-                    content
-                });
-                stats.recentMessages++;
-                stats.tokenEstimate += estimateTokens(content);
-            }
-        }
+        // 7. Calculate stats
+        stats.recentMessages = transcriptMessages.filter(e => e.role === 'user' || e.role === 'assistant').length;
+        stats.tokenEstimate = blocks.reduce((sum, b) => sum + estimateTokens(b.content), 0);
+        stats.budgetUsed = stats.tokenEstimate;
 
-        // Current user message (if not already in transcript)
-        const lastUserMsg = transcriptMessages
-            .filter(e => e.role === 'user')
-            .pop();
-        if (!lastUserMsg || lastUserMsg.content !== currentMessage) {
-            llmMessages.push({ role: 'user', content: currentMessage });
-            stats.recentMessages++;
-            stats.tokenEstimate += estimateTokens(currentMessage);
-        }
+        log.info(`SessionContext: ${stats.tokenEstimate} tokens / ${stats.budgetMax} max, ${stats.recentMessages} recent msgs, memory=${stats.semanticContextUsed}, checkpoint=${stats.fromCheckpoint}`);
 
         return { messages: llmMessages, stats };
     }
@@ -150,4 +148,12 @@ export class SessionContext {
             duration_ms: meta.duration_ms
         } : undefined);
     }
+}
+
+// Re-export for compatibility
+function estimateTokens(text: string): number {
+    if (!text) return 0;
+    const codeRatio = (text.match(/[{}()[\]:;,=<>\/]/g) || []).length / text.length;
+    const charsPerToken = 3 + (1 - codeRatio) * 0.5;
+    return Math.ceil(text.length / charsPerToken);
 }

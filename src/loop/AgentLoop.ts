@@ -7,6 +7,7 @@
 import { ProviderFactory, LLMMessage, ToolDefinition } from '../core/ProviderFactory';
 import type { Message } from '../memory/MemoryManager';
 import { ContextBuilder } from './ContextBuilder';
+import { ContextBudget } from './ContextBudget';
 import { ResponseBuilder } from './ResponseBuilder';
 import { SessionContext } from '../session/SessionContext';
 import type { SessionKey } from '../session/SessionManager';
@@ -273,20 +274,10 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
     private ts(): string { return new Date().toLocaleTimeString('pt-BR', { hour12: false }); }
 
     private buildContextBlock(userText: string, context: string, skillContext: string, masterPrompt: string): string {
-        const now = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'full', timeStyle: 'short' });
-        return `${masterPrompt}
-
-[ESTADO DO SISTEMA]
-Data Atual: ${now}
-Instruções Customizadas: ${this.config.systemPrompt || '(nenhuma)'}
-
-[MEMÓRIA]
-${context || '(vazia)'}
-
-${skillContext ? `[HABILIDADES]\n${skillContext}\n` : ''}
-
-[USUÁRIO]
-${userText}`;
+        // DEPRECATED: This method is kept for backward compatibility but should not be used.
+        // ContextBudget in SessionContext.buildLLMMessages() now handles all context assembly.
+        // This method returns just the master prompt — all other blocks are assembled separately.
+        return masterPrompt;
     }
 
     public async run(conversationId: string, userText: string, userId?: string): Promise<string> {
@@ -371,9 +362,9 @@ ${userText}`;
         const chatProfile = await this.modelRouter.route(userText);
         
         // ── Dynamic System Prompt Assembly ──
-        // The LLM (via ModelRouter) decides which prompt components to use
         const dynamicMasterPrompt = this.buildMasterPrompt(chatProfile.category);
-        const dynamicContext = this.buildContextBlock(userText, context, skillContext, dynamicMasterPrompt);
+        // context and skillContext are now handled by SessionContext + ContextBudget
+        // No more monolithic concatenation — each block is a separate message
         
         if (!this.sessionContext) {
             log.error('sessionContext not set — session pipeline is mandatory. Throwing.');
@@ -383,8 +374,9 @@ ${userText}`;
         const sessionKey: SessionKey = { channel: 'telegram', userId: conversationId };
         const { messages: sessionMessages, stats } = await this.sessionContext.buildLLMMessages(
             sessionKey,
-            dynamicContext,
-            userText
+            dynamicMasterPrompt,  // Just the system prompt — ContextBudget handles the rest
+            userText,
+            skillContext  // Pass skills block separately — no concatenation
         );
         const loopMessages = sessionMessages;
         let stepCount = 0;
