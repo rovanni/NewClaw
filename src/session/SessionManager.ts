@@ -45,6 +45,8 @@ export interface SessionConfig {
     compressionModel?: string;
     /** Token estimate threshold for compression (char count / 4) */
     maxUncompressedTokens: number;
+    /** Max chars per message in LLM context (longer messages are truncated) */
+    maxMessageChars: number;
 }
 
 export interface CompressionCheckpoint {
@@ -58,9 +60,10 @@ export interface CompressionCheckpoint {
 
 const DEFAULT_CONFIG: SessionConfig = {
     transcriptDir: './data/sessions',
-    maxUncompressedMessages: 20,
+    maxUncompressedMessages: 10, // reduced from 20 to prevent context overflow
     maxContextMessages: 6,
-    maxUncompressedTokens: 3000, // ~3000 tokens ≈ ~12000 chars
+    maxUncompressedTokens: 2500, // ~2500 tokens ≈ ~10000 chars (reduced from 3000)
+    maxMessageChars: 1500, // truncate individual messages longer than this
 };
 
 export class SessionManager {

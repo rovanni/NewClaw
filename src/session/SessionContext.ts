@@ -101,12 +101,17 @@ export class SessionContext {
         // Recent transcript messages
         for (const entry of transcriptMessages) {
             if (entry.role === 'user' || entry.role === 'assistant') {
+                // Truncate long messages to prevent context overflow and timeouts
+                const maxChars = this.sessionManager['config']?.maxMessageChars || 1500;
+                const content = entry.content.length > maxChars
+                    ? entry.content.slice(0, maxChars) + '\n[...truncated, original: ' + entry.content.length + ' chars]'
+                    : entry.content;
                 llmMessages.push({
                     role: entry.role as 'user' | 'assistant',
-                    content: entry.content
+                    content
                 });
                 stats.recentMessages++;
-                stats.tokenEstimate += estimateTokens(entry.content);
+                stats.tokenEstimate += estimateTokens(content);
             }
         }
 
