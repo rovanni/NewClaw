@@ -199,7 +199,14 @@ export class MessageBus {
             });
 
             await this.sessionManager.recordUserMessage(sessionKey, msg.text);
+            const startTime = Date.now();
+            log.info('processing_start', `User: ${msg.text.slice(0, 80)}`, { channel: msg.channel, userId: msg.userId });
             const response = await this.agentLoop.process(msg.userId, msg.text);
+            const duration = Date.now() - startTime;
+            log.info('processing_done', `Duration: ${duration}ms`, { 
+                responseLength: response?.length || 0,
+                channel: msg.channel
+            });
             await this.sessionManager.recordAssistantMessage(sessionKey, response || '', { model: 'newclaw' });
 
             // 4. Send response back through the originating channel
@@ -213,6 +220,12 @@ export class MessageBus {
 
         } catch (error: any) {
             log.error('message_processing_failed', error, msg.text.slice(0, 50));
+            log.error('error_details', {
+                channel: msg.channel,
+                userId: msg.userId,
+                errorMessage: error?.message || 'Unknown error',
+                errorStack: error?.stack?.split('\n').slice(0, 3).join(' | ')
+            });
             if (adapter) {
                 await adapter.send(
                     { text: '⚠️ Erro interno ao processar mensagem. Tente novamente.', format: 'plain' },
