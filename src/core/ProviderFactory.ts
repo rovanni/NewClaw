@@ -265,7 +265,6 @@ export class OllamaProvider implements ILLMProvider {
         }
 
         const numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
-        const numPredict = parseInt(process.env.OLLAMA_NUM_PREDICT || '8192', 10);
         const controller = new AbortController();
         const timeoutMs = customTimeoutMs || 300000;
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -274,7 +273,7 @@ export class OllamaProvider implements ILLMProvider {
             model: this.model,
             messages,
             stream: true,
-            options: { num_ctx: numCtx, num_predict: numPredict },
+            options: { num_ctx: numCtx },
             tools: tools ? tools.map(t => ({
                 type: 'function',
                 function: { name: t.name, description: t.description, parameters: t.parameters }
@@ -417,7 +416,6 @@ export class OllamaProvider implements ILLMProvider {
      * Fallback: non-streaming request when streaming fails.
      */
     private async _fallbackNonStreaming(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number): Promise<LLMResponse> {
-        const numPredict = parseInt(process.env.OLLAMA_NUM_PREDICT || '8192', 10);
         const numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
@@ -435,7 +433,7 @@ export class OllamaProvider implements ILLMProvider {
                     model: this.model,
                     messages,
                     stream: false,
-                    options: { num_ctx: numCtx, num_predict: numPredict },
+                    options: { num_ctx: numCtx },
                     tools: tools ? tools.map(t => ({
                         type: 'function',
                         function: { name: t.name, description: t.description, parameters: t.parameters }
