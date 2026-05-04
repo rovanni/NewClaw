@@ -282,9 +282,14 @@ export class OllamaProvider implements ILLMProvider {
         }
 
         // ── Read SSE stream ──
+        // Ollama streams JSON objects separated by newlines.
+        // Each chunk: {"message":{"role":"assistant","content":"..."},"done":false}
+        // Final chunk: {"done":true,"prompt_eval_count":N,"eval_count":M}
+        // We accumulate content and tool_calls incrementally.
         let content = '';
         let toolCalls: any[] = [];
         let usage: any = undefined;
+        let streamError: string | null = null;
 
         try {
             const body = response.body;
@@ -300,7 +305,7 @@ export class OllamaProvider implements ILLMProvider {
 
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split('\n');
-                buffer = lines.pop() || ''; // keep incomplete line
+                buffer = lines.pop() || ''; // keep incomplete line for next iteration
 
                 for (const line of lines) {
                     const trimmed = line.trim();
@@ -311,7 +316,7 @@ export class OllamaProvider implements ILLMProvider {
                         if (chunk.message?.content) {
                             content += chunk.message.content;
                         }
-                        // Collect tool calls from final chunk or per-chunk
+                        // Tool calls can come in the final chunk or per-chunk
                         if (chunk.message?.tool_calls) {
                             for (const tc of chunk.message.tool_calls) {
                                 toolCalls.push(tc);
@@ -323,24 +328,64 @@ export class OllamaProvider implements ILLMProvider {
                                 completion_tokens: chunk.eval_count || 0
                             };
                         }
-                    } catch {
-                        // skip malformed chunks
+                    } catch (parseErr: any) {
+                        // Skip malformed JSON chunks — common in streaming
+                        log.warn(`SSE parse skip: ${trimmed.slice(0, 80)}...`);
                     }
                 }
             }
+
+            // Process remaining buffer (incomplete last line)
+            if (buffer.trim()) {
+                try {
+                    const chunk = JSON.parse(buffer.trim());
+                    if (chunk.message?.content) content += chunk.message.content;
+                    if (chunk.message?.tool_calls) toolCalls.push(...chunk.message.tool_calls);
+                    if (chunk.done) {
+                        usage = { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0 };
+                    }
+                } catch { /* ignore trailing incomplete JSON */ }
+            }
+
+            // If stream completed but produced no content, it's an error
+            if (!content && toolCalls.length === 0) {
+                streamError = 'Stream completed with no content and no tool calls';
+            }
         } catch (streamErr: any) {
-            // Fallback: if streaming fails, try non-streaming
-            log.warn(`Streaming failed, falling back to non-streaming: ${streamErr.message}`);
-            const fallbackResponse = await fetch(`${this.baseUrl}/api/chat`, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({ ...requestBody, stream: false })
-            });
-            if (!fallbackResponse.ok) throw new Error(`Ollama fallback error: ${fallbackResponse.status}`);
-            const data = await fallbackResponse.json() as any;
-            const message = data.message;
-            content = message?.content || '';
-            toolCalls = message?.tool_calls || [];
+            streamError = `Streaming failed: ${streamErr.message}`;
+            log.warn(streamError!);
+        }
+
+        // ── Fallback to non-streaming if streaming failed ──
+        if (streamError) {
+            log.warn(`Streaming failed, falling back to non-streaming: ${streamError}`);
+            const fallbackController = new AbortController();
+            const fallbackTimeout = setTimeout(() => fallbackController.abort(), 240000);
+            try {
+                const fallbackResponse = await fetch(`${this.baseUrl}/api/chat`, {
+                    method: 'POST',
+                    headers,
+                    signal: fallbackController.signal,
+                    body: JSON.stringify({ ...requestBody, stream: false })
+                });
+                if (!fallbackResponse.ok) throw new Error(`Ollama fallback error: ${fallbackResponse.status}`);
+                const data = await fallbackResponse.json() as any;
+                const message = data.message;
+                return {
+                    content: message?.content || '',
+                    toolCalls: message?.tool_calls?.map((tc: any) => ({
+                        id: tc.function?.name || `call_${Date.now()}`,
+                        name: tc.function?.name || '',
+                        arguments: tc.function?.arguments || {}
+                    })),
+                    usage: data.usage ? {
+                        prompt_tokens: data.usage.prompt_tokens || 0,
+                        completion_tokens: data.usage.completion_tokens || 0
+                    } : undefined
+                };
+            } finally {
+                clearTimeout(fallbackTimeout);
+            }
         }
 
         return {
