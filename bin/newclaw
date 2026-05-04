@@ -122,9 +122,11 @@ const commands = {
       return;
     }
     
-    // Foreground with optional tail
+    // Foreground: use exec to replace current process (systemd-compatible)
+    // This ensures systemd tracks the correct PID and doesn't restart in a loop
+    fs.mkdirSync(logDir, { recursive: true });
+    
     if (tail) {
-      fs.mkdirSync(logDir, { recursive: true });
       const logPath = path.join(logDir, 'newclaw-stdout.log');
       fs.closeSync(fs.openSync(logPath, 'a'));
       
@@ -164,12 +166,14 @@ const commands = {
         process.exit(0);
       });
     } else {
-      const child = spawn('node', ['dist/index.js'], {
-        cwd: DIR,
-        stdio: 'inherit',
-        env: { ...process.env, ...env }
-      });
-      process.on('SIGINT', () => { child.kill('SIGINT'); process.exit(0); });
+      // Plain foreground: exec into node process (PID preserved for systemd)
+      const envVars = Object.entries(env).map(([k,v]) => `${k}=${v}`).join(' ');
+      process.env = { ...process.env, ...env };
+      fs.writeFileSync(PID_FILE, process.pid.toString());
+      process.chdir(DIR);
+      // Use exec to replace the shell process — systemd tracks THIS pid
+      try { require('child_process').execSync('node dist/index.js', { stdio: 'inherit', env: process.env, cwd: DIR }); } 
+      catch (e) { if (e.status !== 0) process.exit(e.status || 1); }
     }
   },
 
