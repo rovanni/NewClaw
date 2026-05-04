@@ -12,6 +12,12 @@ const log = createLogger('Providerfactory');
 const generationQueue = new PQueue({ concurrency: 1 });
 const classificationQueue = new PQueue({ concurrency: 1 });
 
+// ── Streaming types ──
+export type StreamChunk =
+    | { type: 'content'; value: string }
+    | { type: 'tool_call'; value: any }
+    | { type: 'done'; value: { prompt_tokens: number; completion_tokens: number } };
+
 export interface LLMMessage {
     role: 'user' | 'assistant' | 'system' | 'tool';
     content: string;
@@ -224,13 +230,13 @@ export class OllamaProvider implements ILLMProvider {
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
         try {
-            return await generationQueue.add(() => this._chatOnce(messages, tools));
+            return await generationQueue.add(() => this._consumeStream(messages, tools));
         } catch (error: any) {
             // 1 retry after 10s on timeout/abort/network errors
             if (error.message?.includes('abort') || error.message?.includes('timeout') || error.message?.includes('ECONNRESET') || error.message?.includes('fetch failed')) {
                 log.info(`Retry after: ${error.message}, waiting 10s...`);
                 await new Promise(r => setTimeout(r, 10000));
-                return await generationQueue.add(() => this._chatOnce(messages, tools));
+                return await generationQueue.add(() => this._consumeStream(messages, tools));
             }
             throw error;
         }
@@ -238,20 +244,29 @@ export class OllamaProvider implements ILLMProvider {
 
     /** Classification call — uses a separate queue to avoid blocking on long generations */
     async classify(messages: LLMMessage[], timeoutMs: number = 30000): Promise<LLMResponse> {
-        return await classificationQueue.add(() => this._chatOnce(messages, undefined, timeoutMs));
+        return await classificationQueue.add(() => this._consumeStream(messages, undefined, timeoutMs));
     }
 
-    private async _chatOnce(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number): Promise<LLMResponse> {
+    /**
+     * Streaming generator — yields content tokens as they arrive from Ollama SSE.
+     * This is the core streaming method. Other methods consume it.
+     * 
+     * SSE format from Ollama:
+     *   {"message":{"role":"assistant","content":"Hel"},"done":false}
+     *   {"message":{"role":"assistant","content":"lo"},"done":false}
+     *   {"done":true,"prompt_eval_count":N,"eval_count":M}
+     * 
+     * Handles partial buffers (lines broken between chunks).
+     */
+    async *streamChat(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number): AsyncGenerator<StreamChunk> {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (this.apiKey) {
             headers['Authorization'] = `Bearer ${this.apiKey}`;
         }
 
-        // num_ctx from env or default 32768
         const numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
-
         const controller = new AbortController();
-        const timeoutMs = customTimeoutMs || 300000; // 5 min for streaming
+        const timeoutMs = customTimeoutMs || 300000;
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
         const requestBody: any = {
@@ -281,111 +296,109 @@ export class OllamaProvider implements ILLMProvider {
             throw new Error(`Ollama API error: ${response.status}`);
         }
 
-        // ── Read SSE stream ──
-        // Ollama streams JSON objects separated by newlines.
-        // Each chunk: {"message":{"role":"assistant","content":"..."},"done":false}
-        // Final chunk: {"done":true,"prompt_eval_count":N,"eval_count":M}
-        // We accumulate content and tool_calls incrementally.
-        let content = '';
-        let toolCalls: any[] = [];
-        let usage: any = undefined;
-        let streamError: string | null = null;
+        const body = response.body;
+        if (!body) throw new Error('No response body from Ollama');
+
+        const reader = body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
         try {
-            const body = response.body;
-            if (!body) throw new Error('No response body');
-
-            const reader = body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
 
                 buffer += decoder.decode(value, { stream: true });
+
+                // Split by newline, keep incomplete last line in buffer
                 const lines = buffer.split('\n');
-                buffer = lines.pop() || ''; // keep incomplete line for next iteration
+                buffer = lines.pop() || '';
 
                 for (const line of lines) {
                     const trimmed = line.trim();
                     if (!trimmed) continue;
 
+                    let chunk: any;
                     try {
-                        const chunk = JSON.parse(trimmed);
-                        if (chunk.message?.content) {
-                            content += chunk.message.content;
+                        chunk = JSON.parse(trimmed);
+                    } catch {
+                        // Malformed JSON — skip, don't crash
+                        continue;
+                    }
+
+                    if (chunk.message?.content) {
+                        yield { type: 'content', value: chunk.message.content };
+                    }
+
+                    if (chunk.message?.tool_calls) {
+                        for (const tc of chunk.message.tool_calls) {
+                            yield { type: 'tool_call', value: tc };
                         }
-                        // Tool calls can come in the final chunk or per-chunk
-                        if (chunk.message?.tool_calls) {
-                            for (const tc of chunk.message.tool_calls) {
-                                toolCalls.push(tc);
-                            }
-                        }
-                        if (chunk.done) {
-                            usage = {
+                    }
+
+                    if (chunk.done) {
+                        yield {
+                            type: 'done',
+                            value: {
                                 prompt_tokens: chunk.prompt_eval_count || 0,
                                 completion_tokens: chunk.eval_count || 0
-                            };
-                        }
-                    } catch (parseErr: any) {
-                        // Skip malformed JSON chunks — common in streaming
-                        log.warn(`SSE parse skip: ${trimmed.slice(0, 80)}...`);
+                            }
+                        };
+                        return; // Stream complete
                     }
                 }
             }
 
-            // Process remaining buffer (incomplete last line)
+            // Flush remaining buffer (incomplete last line)
             if (buffer.trim()) {
                 try {
                     const chunk = JSON.parse(buffer.trim());
-                    if (chunk.message?.content) content += chunk.message.content;
-                    if (chunk.message?.tool_calls) toolCalls.push(...chunk.message.tool_calls);
-                    if (chunk.done) {
-                        usage = { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0 };
+                    if (chunk.message?.content) {
+                        yield { type: 'content', value: chunk.message.content };
                     }
-                } catch { /* ignore trailing incomplete JSON */ }
+                    if (chunk.done) {
+                        yield { type: 'done', value: { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0 } };
+                    }
+                } catch { /* ignore trailing partial JSON */ }
             }
+        } finally {
+            reader.releaseLock();
+        }
+    }
 
-            // If stream completed but produced no content, it's an error
-            if (!content && toolCalls.length === 0) {
-                streamError = 'Stream completed with no content and no tool calls';
+    /**
+     * Consume the streaming generator and collect full response.
+     * This is the wrapper that chat() and classify() use.
+     */
+    private async _consumeStream(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number): Promise<LLMResponse> {
+        let content = '';
+        const toolCalls: any[] = [];
+        let usage: any = undefined;
+
+        try {
+            for await (const chunk of this.streamChat(messages, tools, customTimeoutMs)) {
+                switch (chunk.type) {
+                    case 'content':
+                        content += chunk.value;
+                        break;
+                    case 'tool_call':
+                        toolCalls.push(chunk.value);
+                        break;
+                    case 'done':
+                        usage = chunk.value;
+                        break;
+                }
             }
         } catch (streamErr: any) {
-            streamError = `Streaming failed: ${streamErr.message}`;
-            log.warn(streamError!);
+            // Fallback: non-streaming request
+            log.warn(`Stream failed, falling back to non-streaming: ${streamErr.message}`);
+            return this._fallbackNonStreaming(messages, tools, customTimeoutMs);
         }
 
-        // ── Fallback to non-streaming if streaming failed ──
-        if (streamError) {
-            log.warn(`Streaming failed, falling back to non-streaming: ${streamError}`);
-            const fallbackController = new AbortController();
-            const fallbackTimeout = setTimeout(() => fallbackController.abort(), 240000);
-            try {
-                const fallbackResponse = await fetch(`${this.baseUrl}/api/chat`, {
-                    method: 'POST',
-                    headers,
-                    signal: fallbackController.signal,
-                    body: JSON.stringify({ ...requestBody, stream: false })
-                });
-                if (!fallbackResponse.ok) throw new Error(`Ollama fallback error: ${fallbackResponse.status}`);
-                const data = await fallbackResponse.json() as any;
-                const message = data.message;
-                return {
-                    content: message?.content || '',
-                    toolCalls: message?.tool_calls?.map((tc: any) => ({
-                        id: tc.function?.name || `call_${Date.now()}`,
-                        name: tc.function?.name || '',
-                        arguments: tc.function?.arguments || {}
-                    })),
-                    usage: data.usage ? {
-                        prompt_tokens: data.usage.prompt_tokens || 0,
-                        completion_tokens: data.usage.completion_tokens || 0
-                    } : undefined
-                };
-            } finally {
-                clearTimeout(fallbackTimeout);
-            }
+        // Empty response check
+        if (!content && toolCalls.length === 0) {
+            log.warn('Stream completed with no content and no tool calls — falling back');
+            return this._fallbackNonStreaming(messages, tools, customTimeoutMs);
         }
 
         return {
@@ -397,6 +410,55 @@ export class OllamaProvider implements ILLMProvider {
             })) : undefined,
             usage
         };
+    }
+
+    /**
+     * Fallback: non-streaming request when streaming fails.
+     */
+    private async _fallbackNonStreaming(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number): Promise<LLMResponse> {
+        const numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+
+        const controller = new AbortController();
+        const timeoutMs = (customTimeoutMs || 240000);
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const response = await fetch(`${this.baseUrl}/api/chat`, {
+                method: 'POST',
+                headers,
+                signal: controller.signal,
+                body: JSON.stringify({
+                    model: this.model,
+                    messages,
+                    stream: false,
+                    options: { num_ctx: numCtx },
+                    tools: tools ? tools.map(t => ({
+                        type: 'function',
+                        function: { name: t.name, description: t.description, parameters: t.parameters }
+                    })) : undefined
+                })
+            });
+
+            if (!response.ok) throw new Error(`Ollama fallback error: ${response.status}`);
+            const data = await response.json() as any;
+            const message = data.message;
+            return {
+                content: message?.content || '',
+                toolCalls: message?.tool_calls?.map((tc: any) => ({
+                    id: tc.function?.name || `call_${Date.now()}`,
+                    name: tc.function?.name || '',
+                    arguments: tc.function?.arguments || {}
+                })),
+                usage: data.usage ? {
+                    prompt_tokens: data.usage.prompt_tokens || 0,
+                    completion_tokens: data.usage.completion_tokens || 0
+                } : undefined
+            };
+        } finally {
+            clearTimeout(timeout);
+        }
     }
 }
 
