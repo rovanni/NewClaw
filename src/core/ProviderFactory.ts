@@ -302,11 +302,17 @@ export class OllamaProvider implements ILLMProvider {
         const reader = body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let totalContentChunks = 0;
+        let totalContentChars = 0;
+        const streamStartTime = Date.now();
 
         try {
             while (true) {
                 const { done, value } = await reader.read();
-                if (done) break;
+                if (done) {
+                    log.info(`[STREAM] reader.read() done=true (stream ended by server). Chunks: ${totalContentChunks}, Chars: ${totalContentChars}, Elapsed: ${Date.now() - streamStartTime}ms`);
+                    break;
+                }
 
                 buffer += decoder.decode(value, { stream: true });
 
@@ -322,8 +328,19 @@ export class OllamaProvider implements ILLMProvider {
                     try {
                         chunk = JSON.parse(trimmed);
                     } catch {
-                        // Malformed JSON — skip, don't crash
+                        log.warn(`[STREAM] Malformed JSON (${trimmed.length} chars): ${trimmed.slice(0, 80)}...`);
                         continue;
+                    }
+
+                    // ── Diagnostic logging ──
+                    if (chunk.message?.content) {
+                        totalContentChunks++;
+                        totalContentChars += chunk.message.content.length;
+                    }
+
+                    if (chunk.done) {
+                        const doneReason = chunk.done_reason || '(not provided)';
+                        log.info(`[STREAM] DONE received. done_reason="${doneReason}" prompt_eval_count=${chunk.prompt_eval_count || 0} eval_count=${chunk.eval_count || 0} total_content_chunks=${totalContentChunks} total_content_chars=${totalContentChars} elapsed=${Date.now() - streamStartTime}ms`);
                     }
 
                     if (chunk.message?.content) {
@@ -332,6 +349,7 @@ export class OllamaProvider implements ILLMProvider {
 
                     if (chunk.message?.tool_calls) {
                         for (const tc of chunk.message.tool_calls) {
+                            log.info(`[STREAM] Tool call: ${tc.function?.name || 'unknown'}`);
                             yield { type: 'tool_call', value: tc };
                         }
                     }
@@ -351,20 +369,33 @@ export class OllamaProvider implements ILLMProvider {
 
             // Flush remaining buffer (incomplete last line)
             if (buffer.trim()) {
+                log.info(`[STREAM] Flushing remaining buffer (${buffer.trim().length} chars)`);
                 try {
                     const chunk = JSON.parse(buffer.trim());
                     if (chunk.message?.content) {
+                        totalContentChars += chunk.message.content.length;
                         yield { type: 'content', value: chunk.message.content };
                     }
                     if (chunk.done) {
+                        const doneReason = chunk.done_reason || '(not provided)';
+                        log.info(`[STREAM] DONE in buffer flush. done_reason="${doneReason}" eval_count=${chunk.eval_count || 0}`);
                         yield { type: 'done', value: { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0 } };
                     }
-                } catch { /* ignore trailing partial JSON */ }
+                } catch {
+                    log.warn(`[STREAM] Failed to parse remaining buffer: ${buffer.trim().slice(0, 80)}...`);
+                }
             }
+
+            // If we reached here without yielding 'done', log it
+            log.warn(`[STREAM] Stream ended WITHOUT explicit 'done' chunk. Total chunks: ${totalContentChunks}, Total chars: ${totalContentChars}, Elapsed: ${Date.now() - streamStartTime}ms`);
+        } catch (streamErr: any) {
+            log.error(`[STREAM] Error: ${streamErr.message}. Chunks: ${totalContentChunks}, Chars: ${totalContentChars}`);
+            throw streamErr;
         } finally {
             reader.releaseLock();
         }
     }
+
 
     /**
      * Consume the streaming generator and collect full response.
