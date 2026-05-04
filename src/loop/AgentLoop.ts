@@ -307,6 +307,15 @@ ${userText}`;
                     return JSON.parse(jsonStr);
                 }
             } catch (e2) {
+                // Fallback: extract content field from partial/malformed JSON
+                try {
+                    const contentMatch = content.match(/"content"\s*:\s*"([^"]*(?:""[^"]*)*)"/);
+                    if (contentMatch && contentMatch[1]) {
+                        return { action: { type: 'final_answer', content: contentMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"') }, evaluation: { is_complete: true, confidence: 'low', reason: 'Extracted from partial JSON' } };
+                    }
+                } catch (e3) {
+                    // Give up
+                }
                 return null;
             }
         }
