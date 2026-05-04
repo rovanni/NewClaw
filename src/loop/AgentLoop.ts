@@ -47,17 +47,55 @@ export interface AgentLoopConfig {
 
 const llmQueue = new PQueue({ concurrency: 1 });
 
+// New sanitizeContent — will replace lines 50-60 in AgentLoop.ts
+
 function sanitizeContent(content: string): string {
     if (!content) return '';
     let result = content;
-    // Remove apenas tags técnicas disruptivas, PRESERVA o conteúdo
+    // Remove tags técnicas disruptivas
     result = result.replace(/<think>[\s\S]*?<\/think>/gi, '');
     result = result.replace(/<\/?think>/gi, '');
     result = result.replace(/\[TOOL_CALL\][\s\S]*?\[\/TOOL_CALL\]/gi, '');
-    // Failsafe: Remove negritos residuais (**)
+    // Remove negritos residuais (**)
     result = result.replace(/\*\*/g, '');
+
+    // ── Anti-leak: Remove JSON/code blocks that the LLM sometimes outputs raw ──
+    const trimmed = result.trim();
+
+    // Pattern: entire response is JSON with action/thought/evaluation
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed.action?.content && typeof parsed.action.content === 'string') {
+                result = parsed.action.content;
+            } else if (parsed.content && typeof parsed.content === 'string') {
+                result = parsed.content;
+            }
+        } catch {
+            // Not valid JSON, leave as-is
+        }
+    }
+
+    // Remove code fences wrapping the entire response
+    const codeFenceMatch = result.match(/^```[\s\S]*?```\s*$/);
+    if (codeFenceMatch) {
+        const inner = result.replace(/^```\w*\n?/, '').replace(/\n?```\s*$/, '');
+        if (inner.length > 0) result = inner;
+    }
+
+    // Remove leaked system prompt fragments
+    result = result.replace(/^Você é o núcleo cognitivo[\s\S]*?(?=\n\n|\n[A-Z])/i, '');
+    result = result.replace(/^##\s*(PRINCÍPIO|ARQUITETURA|REGRA|FORMATO|PROTOCOLO)[\s\S]*?(?=\n\n[A-Z])/im, '');
+
+    // Remove leftover JSON action blocks that leaked
+    result = result.replace(/"action"\s*:\s*\{[^}]*"type"\s*:\s*"tool"[^}]*\}/g, '');
+    result = result.replace(/"evaluation"\s*:\s*\{[^}]*\}/g, '');
+    // Clean up "thought" leaks
+    result = result.replace(/"thought"\s*:\s*"[^"]*"[,\s]*/g, '');
+
     return result.trim();
 }
+
 
 export class AgentLoop {
     private providerFactory: ProviderFactory;

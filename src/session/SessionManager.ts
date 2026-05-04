@@ -284,15 +284,31 @@ export class SessionManager {
         return `Conversa anterior (${messages.length} msgs, ${assistantCount} respostas):\n${userMsgs}`;
     }
 
+    private ensureCheckpointSchema(): void {
+        try {
+            const db = (this.memory as any).db;
+            // Safe migration: add token_estimate column if missing
+            const columns = db.prepare("PRAGMA table_info(session_checkpoints)").all() as Array<{ name: string }>;
+            const hasTokenEstimate = columns.some(c => c.name === 'token_estimate');
+            if (!hasTokenEstimate) {
+                db.exec('ALTER TABLE session_checkpoints ADD COLUMN token_estimate INTEGER DEFAULT 0');
+                log.info('migration', 'Added token_estimate column to session_checkpoints');
+            }
+        } catch (err) {
+            log.warn('migration', 'Schema check failed', { error: String(err) });
+        }
+    }
+
     private saveCheckpoint(sid: string, checkpoint: CompressionCheckpoint): void {
         try {
+            this.ensureCheckpointSchema();
             const db = (this.memory as any).db;
             db.prepare(`
                 INSERT OR REPLACE INTO session_checkpoints 
                 (session_id, seq, summary, original_count, compressed_at, model, token_estimate)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             `).run(sid, checkpoint.seq, checkpoint.summary, checkpoint.originalCount, checkpoint.compressedAt, checkpoint.model || null, checkpoint.tokenEstimate);
-        } catch {
+        } catch (err1) {
             try {
                 const db = (this.memory as any).db;
                 db.exec(`
@@ -307,6 +323,7 @@ export class SessionManager {
                         PRIMARY KEY (session_id)
                     )
                 `);
+                this.ensureCheckpointSchema();
                 db.prepare(`
                     INSERT OR REPLACE INTO session_checkpoints 
                     (session_id, seq, summary, original_count, compressed_at, model, token_estimate)
