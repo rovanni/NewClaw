@@ -55,18 +55,23 @@ const DEFAULT_CONFIG: RouterConfig = {
     classifierModel: "gemma4:31b-cloud",
     classifierServer: 'http://localhost:11434',
     profiles: [
-        { id: 'chat-primary', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'chat', description: 'Conversa geral e raciocínio' },
+        { id: 'chat-primary', model: 'glm-5.1:cloud', server: 'http://localhost:11434', category: 'chat', description: 'Conversa geral e raciocínio' },
         { id: 'code-primary', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'code', description: 'Programação e criação de conteúdo' },
-        { id: 'light-chat', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'light', description: 'Conversa leve e rápida' },
+        { id: 'light-chat', model: 'glm-5.1:cloud', server: 'http://localhost:11434', category: 'light', description: 'Conversa leve e rápida' },
         { id: 'vision-primary', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'vision', description: 'Análise de imagens e OCR' },
         { id: 'analysis-primary', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'analysis', description: 'Análise profunda e cripto' },
         { id: 'execution-primary', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'execution', description: 'Execução de ferramentas e tarefas complexas' },
     ],
     fallbackRules: [
         {
+            category: 'light',
+            keywords: ['oi', 'olá', 'ola', 'hey', 'hi', 'hello', 'tchau', 'bye', 'obrigado', 'valeu', 'ok', 'valeu', 'bom dia', 'boa tarde', 'boa noite', 'thanks'],
+            patterns: [/^(oi[!.]?|ol[áa][!.]?|hey[!.]?|hi[!.]?|hello[!.]?|tchau[!.]?|bye[!.]?|obrigad[oa][!.]?|valeu[!.]?|ok[!.]?|bom dia|boa tarde|boa noite|thanks)$/i]
+        },
+        {
             category: 'code',
-            keywords: ['código', 'programar', 'html', 'css', 'js', 'python', 'script', 'bug', 'debug', 'arquivo', 'file'],
-            patterns: [/\b(cod|prog|html|css|js|python|script|bug|debug|edit|modify|patch)\w*\b/i]
+            keywords: ['código', 'programar', 'html', 'css', 'js', 'python', 'script', 'bug', 'debug', 'arquivo', 'file', 'criar', 'gerar', 'fazer', 'build'],
+            patterns: [/\b(cod|prog|html|css|js|python|script|bug|debug|edit|modify|patch|creat|generat|build|mak)\w*\b/i]
         },
         {
             category: 'vision',
@@ -114,11 +119,23 @@ export class ModelRouter {
     }
 
     /**
-     * Roteamento principal: Puramente determinístico (rápido).
+     * Roteamento principal: Determinístico primeiro (rápido), LLM como fallback.
      */
     async route(query: string): Promise<ModelProfile> {
+        // 1. Deterministic classification FIRST (0ms, instant)
+        const detCategory = this.fallbackClassify(query);
+        if (detCategory !== 'chat') {
+            // Deterministic match found (code/vision/analysis) — use it directly
+            const profile = this.getProfileByCategory(detCategory);
+            if (profile) {
+                this.logUsage(profile.id);
+                log.info(`Deterministic routing: ${detCategory} → ${profile.model}`);
+                return profile;
+            }
+        }
+
+        // 2. For ambiguous/chat/light: try LLM classification with short timeout
         try {
-            // Primary: LLM classification
             const category = await this.llmClassify(query);
             const profile = this.getProfileByCategory(category);
             if (profile) {
@@ -130,13 +147,13 @@ export class ModelRouter {
             log.warn(`LLM classification failed: ${(err as Error).message}. Falling back to deterministic.`);
         }
 
-        // Fallback: Deterministic classification
+        // 3. Final fallback
         const category = this.fallbackClassify(query);
         const profile = this.getProfileByCategory(category);
         
         if (profile) {
             this.logUsage(profile.id);
-            log.info(`Deterministic routing: ${category} → ${profile.model}`);
+            log.info(`Fallback routing: ${category} → ${profile.model}`);
             return profile;
         }
 
