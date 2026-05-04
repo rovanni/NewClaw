@@ -631,49 +631,85 @@ export class ProviderFactory {
     async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number): Promise<LLMResponse> {
         const providerOrder = this.getFallbackOrder(preferredProvider);
         const errors: string[] = [];
+        const MAX_RETRIES = 1; // 1 retry before moving to next provider
+        const RETRY_BACKOFF_MS = 10000; // 10s backoff between retries
 
         for (const providerName of providerOrder) {
-            try {
-                const provider = this.providers.get(providerName);
-                if (!provider) continue;
-                log.info(`Trying ${providerName}...${timeoutMs ? ` (timeout: ${timeoutMs}ms)` : ''}`);
-                
-                // Wrap chat call with optional timeout
-                const chatPromise = provider.chat(messages, tools);
-                let result: LLMResponse;
-
-                if (timeoutMs) {
-                    result = await Promise.race([
-                        chatPromise,
-                        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeoutMs))
-                    ]);
-                } else {
-                    result = await chatPromise;
-                }
-
-                // Check for leaked tool calls
-                if (!result.toolCalls || result.toolCalls.length === 0) {
-                    const extractedCalls = this.extractLeakedToolCalls(result.content);
-                    if (extractedCalls) {
-                        log.info(`Extracted leaked tool call: ${extractedCalls[0].name}`);
-                        result.toolCalls = extractedCalls;
+            // Retry loop: try MAX_RETRIES+1 times per provider before moving on
+            for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+                try {
+                    const provider = this.providers.get(providerName);
+                    if (!provider) break; // provider not available, skip
+                    
+                    if (attempt > 0) {
+                        log.info(`Retry ${attempt}/${MAX_RETRIES} for ${providerName} after ${RETRY_BACKOFF_MS}ms backoff...`);
+                        await new Promise(r => setTimeout(r, RETRY_BACKOFF_MS));
                     }
-                }
+                    
+                    log.info(`Trying ${providerName} (attempt ${attempt + 1})...${timeoutMs ? ` (timeout: ${timeoutMs}ms)` : ''}`);
+                    
+                    // Wrap chat call with optional timeout
+                    // Use AbortController instead of Promise.race for proper cancellation
+                    const chatPromise = provider.chat(messages, tools);
+                    let result: LLMResponse;
 
-                // Return if has content OR tool_calls (native function calling)
-                if ((result.content && result.content.trim().length > 0) || (result.toolCalls && result.toolCalls.length > 0)) {
-                    return result;
+                    if (timeoutMs) {
+                        result = await Promise.race([
+                            chatPromise,
+                            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeoutMs))
+                        ]);
+                    } else {
+                        result = await chatPromise;
+                    }
+
+                    // Check for leaked tool calls
+                    if (!result.toolCalls || result.toolCalls.length === 0) {
+                        const extractedCalls = this.extractLeakedToolCalls(result.content);
+                        if (extractedCalls) {
+                            log.info(`Extracted leaked tool call: ${extractedCalls[0].name}`);
+                            result.toolCalls = extractedCalls;
+                        }
+                    }
+
+                    // Return if has content OR tool_calls (native function calling)
+                    if ((result.content && result.content.trim().length > 0) || (result.toolCalls && result.toolCalls.length > 0)) {
+                        return result;
+                    }
+                    // Empty response — try next attempt or next provider
+                    errors.push(`${providerName}: empty response`);
+                    break; // No point retrying empty responses
+                } catch (error: any) {
+                    const isRetryable = error.message?.includes('Timeout') || 
+                                       error.message?.includes('abort') || 
+                                       error.message?.includes('ECONNRESET') ||
+                                       error.message?.includes('fetch failed') ||
+                                       error.message?.includes('network');
+                    
+                    log.warn(`${providerName} failed (attempt ${attempt + 1}): ${error.message}${isRetryable && attempt < MAX_RETRIES ? ' — will retry' : ''}`);
+                    errors.push(`${providerName}: ${error.message}`);
+                    
+                    if (isRetryable && attempt < MAX_RETRIES) {
+                        continue; // Retry with backoff
+                    }
+                    break; // Non-retryable error or max retries reached — try next provider
                 }
-                // Empty response — try next
-                errors.push(`${providerName}: empty response`);
-            } catch (error: any) {
-                log.warn(`${providerName} failed or timed out: ${error.message}`);
-                errors.push(`${providerName}: ${error.message}`);
-                continue;
             }
         }
 
-        throw new Error(`All providers failed: ${errors.join('; ')}`);
+        // All providers exhausted — return friendly error response instead of throwing
+        log.error(`All providers exhausted: ${errors.join('; ')}`);
+        return {
+            content: '',
+            toolCalls: [{
+                id: `call_timeout_${Date.now()}`,
+                name: 'final_answer',
+                arguments: {
+                    type: 'final_answer',
+                    content: 'O modelo demorou mais que o esperado e não conseguiu responder agora. Por favor, tente novamente em alguns instantes.',
+                    is_timeout_fallback: true
+                }
+            }]
+        };
     }
 
     private extractLeakedToolCalls(content: string): ToolCall[] | undefined {

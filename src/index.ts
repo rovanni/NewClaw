@@ -58,11 +58,25 @@ const config = {
 
 async function main() {
     // Global error handlers to prevent silent crashes
+    // These catch unhandled rejections/exceptions but DO NOT exit the process.
+    // The service must stay alive even if a single request fails.
     process.on('unhandledRejection', (reason, promise) => {
         log.error('unhandled_rejection', reason instanceof Error ? reason : undefined, String(reason));
+        // DO NOT exit — log and continue. One failed request should not kill the service.
     });
     process.on('uncaughtException', (error) => {
         log.error('uncaught_exception', error);
+        // DO NOT exit on transient errors (timeout, network, provider failures)
+        // Only exit on truly fatal errors (OOM, corrupt state)
+        const isFatal = error.message?.includes('ENOMEM') || 
+                        error.message?.includes('heap out of memory') ||
+                        error.message?.includes('FATAL');
+        if (isFatal) {
+            log.error('fatal_error', error, 'Unrecoverable error — exiting');
+            process.exit(1);
+        }
+        // Non-fatal: log and continue
+        log.error('non_fatal_exception', error, 'Continuing after non-fatal error');
     });
 
     log.info('🚀 NewClaw v0.2.0 starting...');

@@ -219,6 +219,11 @@ export class MessageBus {
             }
 
         } catch (error: any) {
+            const isTimeout = error?.message?.includes('Timeout') || error?.message?.includes('abort');
+            const userMessage = isTimeout 
+                ? '⏱️ O modelo demorou mais que o esperado. Tente novamente em alguns instantes.' 
+                : '⚠️ Erro ao processar mensagem. Tente novamente.';
+            
             log.error('message_processing_failed', error, msg.text.slice(0, 50));
             log.error('error_details', {
                 channel: msg.channel,
@@ -228,7 +233,7 @@ export class MessageBus {
             });
             if (adapter) {
                 await adapter.send(
-                    { text: '⚠️ Erro interno ao processar mensagem. Tente novamente.', format: 'plain' },
+                    { text: userMessage, format: 'plain' },
                     msg.rawContext
                 ).catch(() => {});
             }

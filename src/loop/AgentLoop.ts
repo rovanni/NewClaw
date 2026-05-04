@@ -397,6 +397,16 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             const response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
             const rawContent = (response.content || '').slice(0, 300);
             log.info(`[${this.ts()}] [LLM-RAW] step=${stepCount} content=${JSON.stringify(rawContent)}`);
+            
+            // Check if this is a timeout/fallback response from ProviderFactory
+            // (when all providers fail, ProviderFactory returns a structured fallback instead of throwing)
+            const isTimeoutFallback = response.toolCalls?.some((tc: any) => tc.arguments?.is_timeout_fallback === true);
+            if (isTimeoutFallback) {
+                const fallbackContent = (response.toolCalls?.find((tc: any) => tc.arguments?.content)?.arguments?.content as string) || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
+                log.info(`[${this.ts()}] [TIMEOUT-FALLBACK] Provider returned timeout fallback response`);
+                return fallbackContent;
+            }
+            
             const atomicData = this.parseLLMResponse(response.content || '');
             log.info(`[${this.ts()}] [PARSE] step=${stepCount} parsed=${atomicData ? 'YES' : 'NO'} is_complete=${atomicData?.evaluation?.is_complete} action_type=${atomicData?.action?.type}`);
             
@@ -541,7 +551,13 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
     }
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<any> {
-        const timeoutMs = 180000; // 3min — cloud models can be slow for complex tasks
+        // Dynamic timeout: base 180s, but extend for large prompts
+        // Approximate token count: ~4 chars per token
+        const totalChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
+        const approxTokens = Math.ceil(totalChars / 4);
+        // Scale: 180s base + 60s per 1000 tokens above 2000, max 600s
+        const timeoutMs = Math.min(180000 + Math.max(0, approxTokens - 2000) * 60, 600000);
+        log.info(`[TIMEOUT] Dynamic timeout: ${Math.round(timeoutMs / 1000)}s (approx ${approxTokens} tokens, ${totalChars} chars)`);
 
         // Apply routed model to the default provider before calling
         if (chatProfile?.model) {
@@ -560,8 +576,18 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                 timeoutMs
             ));
         } catch (error: any) {
-            log.error(`Critical failure: ${error.message}.`);
-            throw error;
+            // This should never happen now — chatWithFallback returns a fallback response
+            // instead of throwing. But just in case, handle gracefully.
+            log.error(`Unexpected error in LLM call: ${error.message}.`);
+            return {
+                content: JSON.stringify({
+                    action: {
+                        type: 'final_answer',
+                        content: 'Desculpe, ocorreu um erro inesperado ao processar sua mensagem. Por favor, tente novamente.'
+                    },
+                    evaluation: { is_complete: true, confidence: 'low', reason: 'LLM call failed unexpectedly' }
+                })
+            };
         }
     }
 }
