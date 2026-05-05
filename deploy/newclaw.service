@@ -11,8 +11,6 @@ WorkingDirectory=/home/venus/newclaw
 ExecStart=/usr/bin/node bin/newclaw start
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=5
 Environment=NODE_ENV=production
 
 # Crash loop protection
