@@ -4,7 +4,7 @@
  * Unifies execution, validation, reassessment, and criticism into a single TURN.
  */
 
-import { ProviderFactory, LLMMessage, ToolDefinition } from '../core/ProviderFactory';
+import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary } from '../core/ProviderFactory';
 import type { Message } from '../memory/MemoryManager';
 import { ContextBuilder } from './ContextBuilder';
 import { ContextBudget } from './ContextBudget';
@@ -30,6 +30,17 @@ export interface ToolExecutor {
     description: string;
     parameters: Record<string, any>;
     execute(args: Record<string, any>): Promise<ToolResult>;
+}
+
+export interface LoopMetrics {
+    timestamp: number;
+    responseTimeMs: number;
+    status: 'success' | 'timeout' | 'error';
+    provider: string;
+    model: string;
+    promptTokens: number;
+    completionTokens: number;
+    promptCharCount: number;
 }
 
 export interface AgentLoopConfig {
@@ -109,6 +120,8 @@ export class AgentLoop {
     private modelRouter: ModelRouter;
     private stateManager: AgentStateManager;
     private sessionContext: SessionContext | null = null;
+    private metrics: LoopMetrics[] = [];
+    private metricsMaxSize = 100;
 
     constructor(providerFactory: ProviderFactory, memory: MemoryManager, config: AgentLoopConfig, skillLearner?: SkillLearner) {
         this.providerFactory = providerFactory;
@@ -398,13 +411,11 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             const rawContent = (response.content || '').slice(0, 300);
             log.info(`[${this.ts()}] [LLM-RAW] step=${stepCount} content=${JSON.stringify(rawContent)}`);
             
-            // Check if this is a timeout/fallback response from ProviderFactory
-            // (when all providers fail, ProviderFactory returns a structured fallback instead of throwing)
-            const isTimeoutFallback = response.toolCalls?.some((tc: any) => tc.arguments?.is_timeout_fallback === true);
-            if (isTimeoutFallback) {
-                const fallbackContent = (response.toolCalls?.find((tc: any) => tc.arguments?.content)?.arguments?.content as string) || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
-                log.info(`[${this.ts()}] [TIMEOUT-FALLBACK] Provider returned timeout fallback response`);
-                return fallbackContent;
+            // Check if this is a structured fallback response from ProviderFactory
+            // (when all providers fail, ProviderFactory returns LLMResult with status timeout/error)
+            if (response.status === 'timeout' || response.status === 'error') {
+                log.warn(`[${this.ts()}] [FALLBACK] Provider returned ${response.status}: ${response.fallbackReason}`);
+                return response.fallbackMessage || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
             }
             
             const atomicData = this.parseLLMResponse(response.content || '');
@@ -550,14 +561,66 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         return finalAtomic?.action?.content || sanitizeContent(finalResponse.content || '') || 'Desculpe, não consegui obter dados externos, mas com base no que sei...';
     }
 
-    private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<any> {
-        // Dynamic timeout: base 180s, but extend for large prompts
+    // ── Metrics ──
+
+    private recordMetrics(result: LLMResult, timeoutMs: number, promptCharCount: number, model?: string): void {
+        const metric: LoopMetrics = {
+            timestamp: Date.now(),
+            responseTimeMs: result.attempts.reduce((sum, a) => sum + a.latencyMs, 0),
+            status: result.status,
+            provider: result.attempts[result.attempts.length - 1]?.provider || 'unknown',
+            model: model || this.modelRouter.routeSync('').model || 'unknown',
+            promptTokens: result.usage?.prompt_tokens || 0,
+            completionTokens: result.usage?.completion_tokens || 0,
+            promptCharCount
+        };
+        
+        this.metrics.push(metric);
+        if (this.metrics.length > this.metricsMaxSize) {
+            this.metrics.shift();
+        }
+    }
+
+    public getMetrics(): { recent: LoopMetrics[]; summary: MetricsSummary } {
+        const timeouts = this.metrics.filter(m => m.status === 'timeout').length;
+        const errors = this.metrics.filter(m => m.status === 'error').length;
+        const avgResponseTime = this.metrics.length > 0 
+            ? Math.round(this.metrics.reduce((s, m) => s + m.responseTimeMs, 0) / this.metrics.length) 
+            : 0;
+        
+        return {
+            recent: this.metrics.slice(-20),
+            summary: {
+                total: this.metrics.length,
+                successes: this.metrics.length - timeouts - errors,
+                timeouts,
+                errors,
+                avgResponseTimeMs: avgResponseTime,
+                p95ResponseTimeMs: this.percentile(95)
+            }
+        };
+    }
+
+    private percentile(p: number): number {
+        if (this.metrics.length === 0) return 0;
+        const sorted = this.metrics.map(m => m.responseTimeMs).sort((a, b) => a - b);
+        const idx = Math.ceil(sorted.length * p / 100) - 1;
+        return sorted[Math.max(0, idx)];
+    }
+
+    private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<LLMResult> {
+        // Dynamic timeout with clamp: minimum 60s, maximum 300s (teto absoluto)
+        const MIN_TIMEOUT = 60000;   // 1 min
+        const MAX_TIMEOUT = 300000;  // 5 min (teto absoluto)
+        const BASE_TIMEOUT = 120000; // 2 min base
+        const TOKEN_SCALE = 40;      // 40ms per token above 2000
+
         // Approximate token count: ~4 chars per token
         const totalChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
         const approxTokens = Math.ceil(totalChars / 4);
-        // Scale: 180s base + 60s per 1000 tokens above 2000, max 600s
-        const timeoutMs = Math.min(180000 + Math.max(0, approxTokens - 2000) * 60, 600000);
-        log.info(`[TIMEOUT] Dynamic timeout: ${Math.round(timeoutMs / 1000)}s (approx ${approxTokens} tokens, ${totalChars} chars)`);
+        const rawTimeout = BASE_TIMEOUT + Math.max(0, approxTokens - 2000) * TOKEN_SCALE;
+        const timeoutMs = Math.max(MIN_TIMEOUT, Math.min(rawTimeout, MAX_TIMEOUT));
+        log.info(`[TIMEOUT] Dynamic timeout: ${Math.round(timeoutMs / 1000)}s (approx ${approxTokens} tokens, ${totalChars} chars, clamp=[${MIN_TIMEOUT/1000}-${MAX_TIMEOUT/1000}]s)`);
 
         // Apply routed model to the default provider before calling
         if (chatProfile?.model) {
@@ -569,25 +632,30 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         }
 
         try {
-            return await llmQueue.add(() => this.providerFactory.chatWithFallback(
+            const result = await llmQueue.add(() => this.providerFactory.chatWithFallback(
                 messages, 
                 toolDefs, 
                 undefined, // Always use ollama (single provider), model already set above
                 timeoutMs
             ));
+            
+            // Record metrics
+            this.recordMetrics(result, timeoutMs, totalChars, chatProfile?.model);
+            
+            return result;
         } catch (error: any) {
-            // This should never happen now — chatWithFallback returns a fallback response
+            // This should never happen now — chatWithFallback returns a structured fallback
             // instead of throwing. But just in case, handle gracefully.
             log.error(`Unexpected error in LLM call: ${error.message}.`);
-            return {
-                content: JSON.stringify({
-                    action: {
-                        type: 'final_answer',
-                        content: 'Desculpe, ocorreu um erro inesperado ao processar sua mensagem. Por favor, tente novamente.'
-                    },
-                    evaluation: { is_complete: true, confidence: 'low', reason: 'LLM call failed unexpectedly' }
-                })
+            const errorResult: LLMResult = {
+                status: 'error',
+                content: '',
+                fallbackReason: 'error',
+                fallbackMessage: 'Erro inesperado ao processar sua mensagem.',
+                attempts: [{ provider: 'unknown', error: error.message, latencyMs: 0 }]
             };
+            this.recordMetrics(errorResult, timeoutMs, totalChars, chatProfile?.model);
+            return errorResult;
         }
     }
 }

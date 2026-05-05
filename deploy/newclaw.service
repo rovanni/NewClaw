@@ -1,0 +1,23 @@
+[Unit]
+Description=NewClaw AI Agent
+After=network.target ollama.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=venus
+WorkingDirectory=/home/venus/newclaw
+ExecStart=/usr/bin/node bin/newclaw start
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+Environment=NODE_ENV=production
+
+# Crash loop protection
+RestartPreventExitStatus=1 2
+WatchdogSec=120
+
+[Install]
+WantedBy=multi-user.target

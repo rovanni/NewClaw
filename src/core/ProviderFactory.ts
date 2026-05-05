@@ -43,6 +43,28 @@ export interface ToolDefinition {
     parameters: Record<string, any>;
 }
 
+// ── Structured fallback types ──
+export type FallbackReason = 'timeout' | 'error' | 'empty_response';
+
+export interface LLMResult {
+    status: 'success' | 'timeout' | 'error';
+    content: string;
+    toolCalls?: ToolCall[];
+    usage?: { prompt_tokens: number; completion_tokens: number };
+    fallbackReason?: FallbackReason;
+    fallbackMessage?: string;
+    attempts: Array<{ provider: string; error?: string; latencyMs: number }>;
+}
+
+export interface MetricsSummary {
+    total: number;
+    successes: number;
+    timeouts: number;
+    errors: number;
+    avgResponseTimeMs: number;
+    p95ResponseTimeMs: number;
+}
+
 export interface ILLMProvider {
     name: string;
     chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse>;
@@ -628,15 +650,17 @@ export class ProviderFactory {
     }
 
     /** Chat with automatic fallback — tries next provider if current fails */
-    async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number): Promise<LLMResponse> {
+    async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number): Promise<LLMResult> {
         const providerOrder = this.getFallbackOrder(preferredProvider);
         const errors: string[] = [];
+        const attemptLog: Array<{ provider: string; error?: string; latencyMs: number }> = [];
         const MAX_RETRIES = 1; // 1 retry before moving to next provider
         const RETRY_BACKOFF_MS = 10000; // 10s backoff between retries
 
         for (const providerName of providerOrder) {
             // Retry loop: try MAX_RETRIES+1 times per provider before moving on
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+                const attemptStart = Date.now();
                 try {
                     const provider = this.providers.get(providerName);
                     if (!provider) break; // provider not available, skip
@@ -671,15 +695,27 @@ export class ProviderFactory {
                         }
                     }
 
+                    const latencyMs = Date.now() - attemptStart;
+                    attemptLog.push({ provider: providerName, latencyMs });
+
                     // Return if has content OR tool_calls (native function calling)
                     if ((result.content && result.content.trim().length > 0) || (result.toolCalls && result.toolCalls.length > 0)) {
-                        return result;
+                        return {
+                            status: 'success',
+                            content: result.content,
+                            toolCalls: result.toolCalls,
+                            usage: result.usage,
+                            attempts: attemptLog
+                        };
                     }
                     // Empty response — try next attempt or next provider
                     errors.push(`${providerName}: empty response`);
+                    attemptLog.push({ provider: providerName, error: 'empty response', latencyMs });
                     break; // No point retrying empty responses
                 } catch (error: any) {
-                    const isRetryable = error.message?.includes('Timeout') || 
+                    const latencyMs = Date.now() - attemptStart;
+                    const isTimeout = error.message?.includes('Timeout');
+                    const isRetryable = isTimeout || 
                                        error.message?.includes('abort') || 
                                        error.message?.includes('ECONNRESET') ||
                                        error.message?.includes('fetch failed') ||
@@ -687,6 +723,7 @@ export class ProviderFactory {
                     
                     log.warn(`${providerName} failed (attempt ${attempt + 1}): ${error.message}${isRetryable && attempt < MAX_RETRIES ? ' — will retry' : ''}`);
                     errors.push(`${providerName}: ${error.message}`);
+                    attemptLog.push({ provider: providerName, error: error.message, latencyMs });
                     
                     if (isRetryable && attempt < MAX_RETRIES) {
                         continue; // Retry with backoff
@@ -696,19 +733,17 @@ export class ProviderFactory {
             }
         }
 
-        // All providers exhausted — return friendly error response instead of throwing
+        // All providers exhausted — return structured fallback instead of throwing
+        const lastError = errors[errors.length - 1] || '';
+        const isTimeoutError = lastError.includes('Timeout') || lastError.includes('abort');
         log.error(`All providers exhausted: ${errors.join('; ')}`);
         return {
+            status: isTimeoutError ? 'timeout' : 'error',
             content: '',
-            toolCalls: [{
-                id: `call_timeout_${Date.now()}`,
-                name: 'final_answer',
-                arguments: {
-                    type: 'final_answer',
-                    content: 'O modelo demorou mais que o esperado e não conseguiu responder agora. Por favor, tente novamente em alguns instantes.',
-                    is_timeout_fallback: true
-                }
-            }]
+            toolCalls: undefined,
+            fallbackReason: isTimeoutError ? 'timeout' : 'error',
+            fallbackMessage: 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.',
+            attempts: attemptLog
         };
     }
 
