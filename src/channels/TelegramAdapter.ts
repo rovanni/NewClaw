@@ -240,6 +240,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 text: ctx.message!.text!,
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
+                metadata: { botToken: this.config.botToken },
             };
 
             if (this.bus) {
@@ -264,6 +265,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 text,
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
+                metadata: { botToken: this.config.botToken },
             };
 
             if (this.bus) {
@@ -295,6 +297,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 }],
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
+                metadata: { botToken: this.config.botToken },
             };
 
             if (this.bus) {
@@ -323,6 +326,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 }],
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
+                metadata: { botToken: this.config.botToken },
             };
 
             if (this.bus) {
@@ -354,6 +358,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 }],
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
+                metadata: { botToken: this.config.botToken },
             };
 
             if (this.bus) {
@@ -384,6 +389,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 }],
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
+                metadata: { botToken: this.config.botToken },
             };
 
             if (this.bus) {
@@ -439,11 +445,33 @@ export class TelegramAdapter implements ChannelAdapter {
         const chunks: string[] = [];
         const lines = text.split('\n');
         let current = '';
+        let insidePre = false;
 
         for (const line of lines) {
-            if ((current + '\n' + line).length > maxLength) {
+            // Track <pre> block boundaries to avoid splitting mid-code
+            const preOpenCount = (line.match(/<pre>/g) || []).length;
+            const preCloseCount = (line.match(/<\/pre>/g) || []).length;
+            const wouldBreakPre = insidePre;
+            insidePre = insidePre ? (preCloseCount === 0) : (preOpenCount > preCloseCount);
+
+            const wouldOverflow = (current + '\n' + line).length > maxLength;
+
+            if (wouldOverflow && !wouldBreakPre) {
+                // Safe to split here — not inside a <pre> block
                 if (current) chunks.push(current);
                 current = line;
+            } else if (wouldOverflow && wouldBreakPre) {
+                // Inside <pre> — force include the line to keep code intact
+                // If current chunk + line exceeds limit by a lot, we have no choice but to split
+                if (current.length > 0 && (current + '\n' + line).length > maxLength * 1.5) {
+                    // Close the <pre> in current chunk, open new <pre> in next
+                    current += '\n</pre>';
+                    chunks.push(current);
+                    current = '<pre>' + line;
+                    insidePre = true;
+                } else {
+                    current = current ? current + '\n' + line : line;
+                }
             } else {
                 current = current ? current + '\n' + line : line;
             }
