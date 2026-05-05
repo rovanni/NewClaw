@@ -259,17 +259,9 @@ export class OllamaProvider implements ILLMProvider {
     setBaseUrl(url: string): void { this.baseUrl = url; }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
-        try {
-            return await generationQueue.add(() => this._consumeStream(messages, tools));
-        } catch (error: any) {
-            // 1 retry after 10s on timeout/abort/network errors
-            if (error.message?.includes('abort') || error.message?.includes('timeout') || error.message?.includes('ECONNRESET') || error.message?.includes('fetch failed')) {
-                log.info(`Retry after: ${error.message}, waiting 10s...`);
-                await new Promise(r => setTimeout(r, 10000));
-                return await generationQueue.add(() => this._consumeStream(messages, tools));
-            }
-            throw error;
-        }
+        // Single attempt via generationQueue. Retries are handled by chatWithFallback.
+        // DO NOT retry here — duplicate retries cause duplicate LLM requests.
+        return await generationQueue.add(() => this._consumeStream(messages, tools));
     }
 
     /** Classification call — uses a separate queue to avoid blocking on long generations */
@@ -297,6 +289,8 @@ export class OllamaProvider implements ILLMProvider {
         const numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
         const controller = new AbortController();
         const timeoutMs = customTimeoutMs || 300000;
+        // NOTE: timeout stays active for the ENTIRE stream lifecycle (fetch + read).
+        // Cleared only when stream completes (done=true) or errors out.
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
         const requestBody: any = {
@@ -318,11 +312,13 @@ export class OllamaProvider implements ILLMProvider {
                 signal: controller.signal,
                 body: JSON.stringify(requestBody)
             });
-        } finally {
+        } catch (fetchErr: any) {
             clearTimeout(timeout);
+            throw fetchErr;
         }
 
         if (!response.ok) {
+            clearTimeout(timeout);
             throw new Error(`Ollama API error: ${response.status}`);
         }
 
@@ -422,6 +418,7 @@ export class OllamaProvider implements ILLMProvider {
             log.error(`[STREAM] Error: ${streamErr.message}. Chunks: ${totalContentChunks}, Chars: ${totalContentChars}`);
             throw streamErr;
         } finally {
+            clearTimeout(timeout);
             reader.releaseLock();
         }
     }
@@ -430,14 +427,23 @@ export class OllamaProvider implements ILLMProvider {
     /**
      * Consume the streaming generator and collect full response.
      * This is the wrapper that chat() and classify() use.
+     * 
+     * IMPORTANT: On stream failure, we THROW (don't fallback to non-streaming).
+     * The caller (chat() or chatWithFallback) handles retries and provider fallback.
+     * Doing non-streaming fallback here causes duplicate LLM requests.
      */
     private async _consumeStream(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number): Promise<LLMResponse> {
         let content = '';
         const toolCalls: any[] = [];
         let usage: any = undefined;
+        let chunkCount = 0;
+        const startTime = Date.now();
+
+        log.info(`[STREAM-CONSUME] Starting stream consumption (timeout=${customTimeoutMs || 'default'}ms)`);
 
         try {
             for await (const chunk of this.streamChat(messages, tools, customTimeoutMs)) {
+                chunkCount++;
                 switch (chunk.type) {
                     case 'content':
                         content += chunk.value;
@@ -451,16 +457,23 @@ export class OllamaProvider implements ILLMProvider {
                 }
             }
         } catch (streamErr: any) {
-            // Fallback: non-streaming request
-            log.warn(`Stream failed, falling back to non-streaming: ${streamErr.message}`);
-            return this._fallbackNonStreaming(messages, tools, customTimeoutMs);
+            const elapsed = Date.now() - startTime;
+            log.error(`[STREAM-CONSUME] Stream FAILED after ${chunkCount} chunks in ${elapsed}ms: ${streamErr.message}`);
+            log.error(`[STREAM-CONSUME] Content collected so far: ${content.length} chars`);
+            // THROW — let the caller handle retries/fallback.
+            // DO NOT call _fallbackNonStreaming here (causes duplicate requests).
+            throw streamErr;
         }
 
-        // Empty response check
+        const elapsed = Date.now() - startTime;
+
+        // Empty response check — also throw, caller handles
         if (!content && toolCalls.length === 0) {
-            log.warn('Stream completed with no content and no tool calls — falling back');
-            return this._fallbackNonStreaming(messages, tools, customTimeoutMs);
+            log.warn(`[STREAM-CONSUME] Empty response after ${chunkCount} chunks in ${elapsed}ms — throwing`);
+            throw new Error('Empty response from stream');
         }
+
+        log.info(`[STREAM-CONSUME] Complete: ${chunkCount} chunks, ${content.length} chars, ${toolCalls.length} toolCalls, ${elapsed}ms`);
 
         return {
             content,
@@ -475,6 +488,9 @@ export class OllamaProvider implements ILLMProvider {
 
     /**
      * Fallback: non-streaming request when streaming fails.
+     * WARNING: Not currently called — kept for potential future use.
+     * DO NOT call from _consumeStream (causes duplicate LLM requests).
+     * Only safe to call as last resort from chatWithFallback if all providers fail streaming.
      */
     private async _fallbackNonStreaming(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number): Promise<LLMResponse> {
         const numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
@@ -664,6 +680,8 @@ export class ProviderFactory {
         const attemptLog: AttemptInfo[] = [];
         const MAX_RETRIES = 1; // 1 retry before moving to next provider
         const RETRY_BACKOFF_MS = 10000; // 10s backoff between retries
+        const callId = `cwf-${Date.now().toString(36)}`;
+        log.info(`[${callId}] chatWithFallback START providers=[${providerOrder.join(',')}] timeout=${timeoutMs || 'none'}ms`);
 
         for (const providerName of providerOrder) {
             // Retry loop: try MAX_RETRIES+1 times per provider before moving on
@@ -709,6 +727,7 @@ export class ProviderFactory {
                     // Return if has content OR tool_calls (native function calling)
                     if ((result.content && result.content.trim().length > 0) || (result.toolCalls && result.toolCalls.length > 0)) {
                         attemptLog.push({ provider: providerName, model: modelUsed, duration, status: 'success' });
+                        log.info(`[${callId}] chatWithFallback SUCCESS provider=${providerName}/${modelUsed} content=${result.content.length}chars toolCalls=${result.toolCalls?.length || 0} duration=${duration}ms attempts=${attemptLog.length}`);
                         return {
                             status: 'success',
                             content: result.content,
@@ -753,7 +772,8 @@ export class ProviderFactory {
         // All providers exhausted — return structured fallback instead of throwing
         const lastError = errors[errors.length - 1] || '';
         const isTimeoutError = lastError.includes('Timeout') || lastError.includes('abort');
-        log.error(`All providers exhausted: ${errors.join('; ')}`);
+        log.error(`[${callId}] chatWithFallback EXHAUSTED providers=${providerOrder.join(',')} attempts=${attemptLog.length} lastError=${lastError}`);
+        log.error(`[${callId}] chatWithFallback attemptLog: ${JSON.stringify(attemptLog)}`);
         return {
             status: isTimeoutError ? 'timeout' : 'error',
             content: '',
