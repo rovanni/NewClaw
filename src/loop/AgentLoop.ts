@@ -331,6 +331,29 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         return null;
     }
 
+    /**
+     * Extract the canonical final text from an LLM response.
+     * 
+     * CONTRACT: action.content is the single source of truth.
+     * response.content (raiz) is unreliable — the model often sends it empty.
+     * 
+     * Priority: action.content > sanitizeContent(response.content)
+     * Never returns empty string — falls back to a default message.
+     */
+    private extractFinalText(response: LLMResult, atomicData: any): string {
+        // Source of truth: action.content from parsed JSON
+        if (atomicData?.action?.content && atomicData.action.content.trim().length > 0) {
+            return atomicData.action.content;
+        }
+        // Fallback: sanitized response.content (may be empty or raw JSON)
+        const sanitized = sanitizeContent(response.content || '');
+        if (sanitized.length > 0) {
+            return sanitized;
+        }
+        // Last resort
+        return 'Desculpe, não consegui gerar uma resposta adequada.';
+    }
+
     // ── Greeting fast-path: respond instantly without LLM for simple social messages ──
     private static readonly GREETING_PATTERNS: RegExp[] = [
         /^(oi+|ol[aá]+|opa+|eai+|eae|fala|hey|hello|hi|bom dia|boa tarde|boa noite|salve|coé|coe|tudo bem|tudo bom|blz|beleza|tranquilo)[\s!.?]*$/i,
@@ -424,8 +447,12 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             const atomicData = this.parseLLMResponse(response.content || '');
             log.info(`[${this.ts()}] [PARSE] step=${stepCount} parsed=${atomicData ? 'YES' : 'NO'} is_complete=${atomicData?.evaluation?.is_complete} action_type=${atomicData?.action?.type}`);
             
-            if (atomicData?.action?.content) {
-                lastBestContent = atomicData.action.content;
+            // Canonical extraction: action.content is source of truth
+            const finalText = this.extractFinalText(response, atomicData);
+            
+            // Track best content seen so far (for fallback synthesis)
+            if (finalText.length > 0) {
+                lastBestContent = finalText;
             }
 
             // Registrar resposta para contexto
@@ -443,7 +470,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
 
             if ((isFinalAnswer || isMarkedComplete || hasContentNoTool) && !wantsTool && !hasNativeToolCalls) {
                 log.info(`[${this.ts()}] [ATOMIC] Task marked as COMPLETE (reason: ${isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool'}).`);
-                return atomicData?.action?.content || lastBestContent || sanitizeContent(response.content || '');
+                return finalText;
             }
 
             // 2. Execução de Ferramentas (Nativas)
@@ -495,10 +522,9 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             const hasNoToolsRequested = !response.toolCalls?.length && atomicData?.action?.type !== 'tool';
             
             if (hasNoToolsRequested) {
-                const finalContent = atomicData?.action?.content || lastBestContent || sanitizeContent(response.content || '');
-                if (finalContent.length > 0) {
+                if (finalText.length > 0) {
                     log.info(`[${this.ts()}] [EARLY-EXIT] No tool calls requested → returning content (step ${stepCount})`);
-                    return finalContent;
+                    return finalText;
                 }
             }
 
@@ -561,7 +587,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         const finalResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile);
         const finalAtomic = this.parseLLMResponse(finalResponse.content || '');
         
-        return finalAtomic?.action?.content || sanitizeContent(finalResponse.content || '') || 'Desculpe, não consegui obter dados externos, mas com base no que sei...';
+        return this.extractFinalText(finalResponse, finalAtomic);
     }
 
     // ── Metrics ──
