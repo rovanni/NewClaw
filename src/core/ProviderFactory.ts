@@ -75,8 +75,14 @@ export interface MetricsSummary {
 
 export interface ILLMProvider {
     name: string;
-    chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse>;
+    chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse>;
     setModel(model: string): void;
+}
+
+/** Options that can be passed to chat() — extensible */
+export interface ChatOptions {
+    /** AbortSignal for cancellation — passed by chatWithFallback */
+    signal?: AbortSignal;
 }
 
 // === Gemini Provider ===
@@ -92,7 +98,7 @@ export class GeminiProvider implements ILLMProvider {
 
     setModel(model: string): void { this.model = model; }
 
-    async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
+    async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         const response = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`,
             {
@@ -149,7 +155,7 @@ export class DeepSeekProvider implements ILLMProvider {
 
     setModel(model: string): void { this.model = model; }
 
-    async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
+    async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -201,7 +207,7 @@ export class GroqProvider implements ILLMProvider {
 
     setModel(model: string): void { this.model = model; }
 
-    async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
+    async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -258,10 +264,11 @@ export class OllamaProvider implements ILLMProvider {
     setModel(model: string): void { this.model = model; }
     setBaseUrl(url: string): void { this.baseUrl = url; }
 
-    async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
+    async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         // Single attempt via generationQueue. Retries are handled by chatWithFallback.
         // DO NOT retry here — duplicate retries cause duplicate LLM requests.
-        return await generationQueue.add(() => this._consumeStream(messages, tools));
+        // Signal is passed through to streamChat for cancellation support.
+        return await generationQueue.add(() => this._consumeStream(messages, tools, undefined, options?.signal));
     }
 
     /** Classification call — uses a separate queue to avoid blocking on long generations */
@@ -280,7 +287,8 @@ export class OllamaProvider implements ILLMProvider {
      * 
      * Handles partial buffers (lines broken between chunks).
      */
-    async *streamChat(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number): AsyncGenerator<StreamChunk> {
+    async *streamChat(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal): AsyncGenerator<StreamChunk> {
+        const streamId = `str-${Date.now().toString(36)}`;
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (this.apiKey) {
             headers['Authorization'] = `Bearer ${this.apiKey}`;
@@ -289,9 +297,16 @@ export class OllamaProvider implements ILLMProvider {
         const numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
         const controller = new AbortController();
         const timeoutMs = customTimeoutMs || 300000;
-        // NOTE: timeout stays active for the ENTIRE stream lifecycle (fetch + read).
-        // Cleared only when stream completes (done=true) or errors out.
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        
+        // Link external signal — if chatWithFallback aborts, we abort too
+        if (externalSignal) {
+            if (externalSignal.aborted) {
+                clearTimeout(timeout);
+                throw new Error('Aborted by external signal before fetch');
+            }
+            externalSignal.addEventListener('abort', () => controller.abort(), { once: true });
+        }
 
         const requestBody: any = {
             model: this.model,
@@ -304,6 +319,8 @@ export class OllamaProvider implements ILLMProvider {
             })) : undefined
         };
 
+        log.info(`[${streamId}] [STREAM] START model=${this.model} timeout=${timeoutMs}ms`);
+
         let response: Response;
         try {
             response = await fetch(`${this.baseUrl}/api/chat`, {
@@ -314,11 +331,13 @@ export class OllamaProvider implements ILLMProvider {
             });
         } catch (fetchErr: any) {
             clearTimeout(timeout);
+            log.error(`[${streamId}] [STREAM] FETCH FAILED: ${fetchErr.message}`);
             throw fetchErr;
         }
 
         if (!response.ok) {
             clearTimeout(timeout);
+            log.error(`[${streamId}] [STREAM] HTTP ${response.status}`);
             throw new Error(`Ollama API error: ${response.status}`);
         }
 
@@ -354,7 +373,7 @@ export class OllamaProvider implements ILLMProvider {
                     try {
                         chunk = JSON.parse(trimmed);
                     } catch {
-                        log.warn(`[STREAM] Malformed JSON (${trimmed.length} chars): ${trimmed.slice(0, 80)}...`);
+                        log.warn(`[${streamId}] [STREAM] Malformed JSON (${trimmed.length} chars): ${trimmed.slice(0, 80)}...`);
                         continue;
                     }
 
@@ -366,7 +385,7 @@ export class OllamaProvider implements ILLMProvider {
 
                     if (chunk.done) {
                         const doneReason = chunk.done_reason || '(not provided)';
-                        log.info(`[STREAM] DONE received. done_reason="${doneReason}" prompt_eval_count=${chunk.prompt_eval_count || 0} eval_count=${chunk.eval_count || 0} total_content_chunks=${totalContentChunks} total_content_chars=${totalContentChars} elapsed=${Date.now() - streamStartTime}ms`);
+                        log.info(`[${streamId}] [STREAM] DONE done_reason="${doneReason}" prompt_eval=${chunk.prompt_eval_count || 0} eval=${chunk.eval_count || 0} chunks=${totalContentChunks} chars=${totalContentChars} elapsed=${Date.now() - streamStartTime}ms`);
                     }
 
                     if (chunk.message?.content) {
@@ -375,7 +394,7 @@ export class OllamaProvider implements ILLMProvider {
 
                     if (chunk.message?.tool_calls) {
                         for (const tc of chunk.message.tool_calls) {
-                            log.info(`[STREAM] Tool call: ${tc.function?.name || 'unknown'}`);
+                            log.info(`[${streamId}] [STREAM] Tool call: ${tc.function?.name || 'unknown'}`);
                             yield { type: 'tool_call', value: tc };
                         }
                     }
@@ -395,7 +414,7 @@ export class OllamaProvider implements ILLMProvider {
 
             // Flush remaining buffer (incomplete last line)
             if (buffer.trim()) {
-                log.info(`[STREAM] Flushing remaining buffer (${buffer.trim().length} chars)`);
+                log.info(`[${streamId}] [STREAM] Flushing remaining buffer (${buffer.trim().length} chars)`);
                 try {
                     const chunk = JSON.parse(buffer.trim());
                     if (chunk.message?.content) {
@@ -404,22 +423,23 @@ export class OllamaProvider implements ILLMProvider {
                     }
                     if (chunk.done) {
                         const doneReason = chunk.done_reason || '(not provided)';
-                        log.info(`[STREAM] DONE in buffer flush. done_reason="${doneReason}" eval_count=${chunk.eval_count || 0}`);
+                        log.info(`[${streamId}] [STREAM] DONE in buffer flush. done_reason="${doneReason}" eval_count=${chunk.eval_count || 0}`);
                         yield { type: 'done', value: { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0 } };
                     }
                 } catch {
-                    log.warn(`[STREAM] Failed to parse remaining buffer: ${buffer.trim().slice(0, 80)}...`);
+                    log.warn(`[${streamId}] [STREAM] Failed to parse remaining buffer: ${buffer.trim().slice(0, 80)}...`);
                 }
             }
 
             // If we reached here without yielding 'done', log it
-            log.warn(`[STREAM] Stream ended WITHOUT explicit 'done' chunk. Total chunks: ${totalContentChunks}, Total chars: ${totalContentChars}, Elapsed: ${Date.now() - streamStartTime}ms`);
+            log.warn(`[${streamId}] [STREAM] Stream ended WITHOUT explicit 'done' chunk. chunks=${totalContentChunks}, chars=${totalContentChars}, elapsed=${Date.now() - streamStartTime}ms`);
         } catch (streamErr: any) {
-            log.error(`[STREAM] Error: ${streamErr.message}. Chunks: ${totalContentChunks}, Chars: ${totalContentChars}`);
+            log.error(`[${streamId}] [STREAM] ERROR: ${streamErr.message}. chunks=${totalContentChunks}, chars=${totalContentChars}`);
             throw streamErr;
         } finally {
             clearTimeout(timeout);
             reader.releaseLock();
+            log.info(`[${streamId}] [STREAM] END (reader released, timeout cleared)`);
         }
     }
 
@@ -432,17 +452,19 @@ export class OllamaProvider implements ILLMProvider {
      * The caller (chat() or chatWithFallback) handles retries and provider fallback.
      * Doing non-streaming fallback here causes duplicate LLM requests.
      */
-    private async _consumeStream(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number): Promise<LLMResponse> {
+    private async _consumeStream(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal): Promise<LLMResponse> {
+        // ISOLATED buffer — each call gets its own. No shared state.
         let content = '';
         const toolCalls: any[] = [];
         let usage: any = undefined;
         let chunkCount = 0;
         const startTime = Date.now();
+        const consumeId = `sc-${Date.now().toString(36)}`;
 
-        log.info(`[STREAM-CONSUME] Starting stream consumption (timeout=${customTimeoutMs || 'default'}ms)`);
+        log.info(`[${consumeId}] [STREAM-CONSUME] START timeout=${customTimeoutMs || 'default'}ms`);
 
         try {
-            for await (const chunk of this.streamChat(messages, tools, customTimeoutMs)) {
+            for await (const chunk of this.streamChat(messages, tools, customTimeoutMs, externalSignal)) {
                 chunkCount++;
                 switch (chunk.type) {
                     case 'content':
@@ -458,22 +480,19 @@ export class OllamaProvider implements ILLMProvider {
             }
         } catch (streamErr: any) {
             const elapsed = Date.now() - startTime;
-            log.error(`[STREAM-CONSUME] Stream FAILED after ${chunkCount} chunks in ${elapsed}ms: ${streamErr.message}`);
-            log.error(`[STREAM-CONSUME] Content collected so far: ${content.length} chars`);
-            // THROW — let the caller handle retries/fallback.
-            // DO NOT call _fallbackNonStreaming here (causes duplicate requests).
+            log.error(`[${consumeId}] [STREAM-CONSUME] FAILED after ${chunkCount} chunks, ${content.length} chars, ${elapsed}ms: ${streamErr.message}`);
+            // DISCARD partial content — throw, caller handles
             throw streamErr;
         }
 
         const elapsed = Date.now() - startTime;
 
-        // Empty response check — also throw, caller handles
         if (!content && toolCalls.length === 0) {
-            log.warn(`[STREAM-CONSUME] Empty response after ${chunkCount} chunks in ${elapsed}ms — throwing`);
+            log.warn(`[${consumeId}] [STREAM-CONSUME] EMPTY after ${chunkCount} chunks, ${elapsed}ms`);
             throw new Error('Empty response from stream');
         }
 
-        log.info(`[STREAM-CONSUME] Complete: ${chunkCount} chunks, ${content.length} chars, ${toolCalls.length} toolCalls, ${elapsed}ms`);
+        log.info(`[${consumeId}] [STREAM-CONSUME] COMPLETE chunks=${chunkCount} content=${content.length}chars toolCalls=${toolCalls.length} duration=${elapsed}ms`);
 
         return {
             content,
@@ -554,7 +573,7 @@ export class OpenAIProvider implements ILLMProvider {
 
     setModel(model: string): void { this.model = model; }
 
-    async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
+    async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
             method: 'POST',
             headers: {
@@ -601,7 +620,7 @@ export class OpenRouterProvider extends OpenAIProvider {
         this.name = 'openrouter';
     }
 
-    async chat(messages: LLMMessage[], tools?: ToolDefinition[]): Promise<LLMResponse> {
+    async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         // OpenRouter specific headers can be added here if needed (e.g., HTTP-Referer)
         return super.chat(messages, tools);
     }
@@ -673,61 +692,116 @@ export class ProviderFactory {
         }
     }
 
-    /** Chat with automatic fallback — tries next provider if current fails */
+    /** Chat with automatic fallback — tries next provider if current fails
+     * 
+     * ATOMICITY GUARANTEE:
+     * - Each attempt gets its own AbortController and isolated buffers.
+     * - Previous attempts are ALWAYS aborted before starting a new one.
+     * - Only ONE response is returned — the LAST successful attempt.
+     * - No partial content from failed attempts is ever included.
+     * - Each attempt is fully sequential (generationQueue concurrency=1 ensures this).
+     */
     async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number): Promise<LLMResult> {
         const providerOrder = this.getFallbackOrder(preferredProvider);
-        const errors: string[] = [];
         const attemptLog: AttemptInfo[] = [];
-        const MAX_RETRIES = 1; // 1 retry before moving to next provider
-        const RETRY_BACKOFF_MS = 10000; // 10s backoff between retries
-        const callId = `cwf-${Date.now().toString(36)}`;
-        log.info(`[${callId}] chatWithFallback START providers=[${providerOrder.join(',')}] timeout=${timeoutMs || 'none'}ms`);
+        const MAX_RETRIES = 1;
+        const RETRY_BACKOFF_MS = 10000;
+        const requestId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        
+        // Track active abort controller so we can cancel any in-flight request
+        let activeAbortController: AbortController | null = null;
+        
+        log.info(`[${requestId}] chatWithFallback START providers=[${providerOrder.join(',')}] timeout=${timeoutMs || 'none'}ms`);
 
         for (const providerName of providerOrder) {
-            // Retry loop: try MAX_RETRIES+1 times per provider before moving on
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+                const attemptId = `${requestId}-${providerName}-${attempt}`;
                 const attemptStart = Date.now();
+                
+                // ABORT any previous in-flight request before starting new attempt
+                if (activeAbortController) {
+                    log.info(`[${requestId}] Aborting previous in-flight request before attempt ${attempt}`);
+                    activeAbortController.abort();
+                    activeAbortController = null;
+                }
+                
+                const currentAbort = new AbortController();
+                activeAbortController = currentAbort;
+
                 try {
                     const provider = this.providers.get(providerName);
-                    if (!provider) break; // provider not available, skip
+                    if (!provider) break;
                     const modelUsed = (provider instanceof OllamaProvider) ? provider.getModel() : (provider as any).model || provider.name;
                     
                     if (attempt > 0) {
-                        log.info(`Retry ${attempt}/${MAX_RETRIES} for ${providerName} after ${RETRY_BACKOFF_MS}ms backoff...`);
+                        log.info(`[${attemptId}] Retry ${attempt}/${MAX_RETRIES} after ${RETRY_BACKOFF_MS}ms backoff`);
                         await new Promise(r => setTimeout(r, RETRY_BACKOFF_MS));
                     }
                     
-                    log.info(`Trying ${providerName}/${modelUsed} (attempt ${attempt + 1})...${timeoutMs ? ` (timeout: ${timeoutMs}ms)` : ''}`);
+                    log.info(`[${attemptId}] START provider=${providerName}/${modelUsed} timeout=${timeoutMs || 'none'}ms`);
                     
-                    // Wrap chat call with optional timeout
-                    // Use AbortController instead of Promise.race for proper cancellation
-                    const chatPromise = provider.chat(messages, tools);
+                    // Pass abort signal via ChatOptions (parameter, not state)
+                    const chatOptions: ChatOptions = { signal: currentAbort.signal };
+                    
+                    // Chat call with timeout — isolate this attempt completely
+                    const chatPromise = provider.chat(messages, tools, chatOptions);
                     let result: LLMResponse;
 
                     if (timeoutMs) {
-                        result = await Promise.race([
-                            chatPromise,
-                            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeoutMs))
-                        ]);
+                        // Create a SEPARATE timeout for this attempt only
+                        const attemptTimeout = setTimeout(() => {
+                            currentAbort.abort();
+                        }, timeoutMs);
+                        
+                        try {
+                            result = await Promise.race([
+                                chatPromise,
+                                new Promise<never>((_, reject) => 
+                                    setTimeout(() => reject(new Error('Timeout')), timeoutMs)
+                                )
+                            ]);
+                        } finally {
+                            clearTimeout(attemptTimeout);
+                        }
                     } else {
                         result = await chatPromise;
+                    }
+
+                    // CRITICAL: Validate that this attempt was NOT aborted before accepting result
+                    // Prevents late responses from a previous/aborted request from being used
+                    if (currentAbort.signal.aborted) {
+                        log.warn(`[${attemptId}] ABORTED after completion — discarding result (content=${(result.content || '').length}chars)`);
+                        attemptLog.push({ provider: providerName, model: modelUsed, duration: Date.now() - attemptStart, status: 'error', errorMessage: 'Aborted — late response discarded' });
+                        activeAbortController = null;
+                        continue;
+                    }
+
+                    // Clear active abort — this attempt completed on its own
+                    activeAbortController = null;
+
+                    // ATOMICITY: Validate that this attempt was NOT aborted.
+                    // If aborted, the response may be partial/invalid — DISCARD completely.
+                    if (currentAbort.signal.aborted) {
+                        log.warn(`[${attemptId}] ABORTED after completion — discarding ${(result.content?.length || 0)} chars (late response)`);
+                        attemptLog.push({ provider: providerName, model: modelUsed, duration: Date.now() - attemptStart, status: 'error', errorMessage: 'Aborted — late response discarded' });
+                        continue;
                     }
 
                     // Check for leaked tool calls
                     if (!result.toolCalls || result.toolCalls.length === 0) {
                         const extractedCalls = this.extractLeakedToolCalls(result.content);
                         if (extractedCalls) {
-                            log.info(`Extracted leaked tool call: ${extractedCalls[0].name}`);
+                            log.info(`[${attemptId}] Extracted leaked tool call: ${extractedCalls[0].name}`);
                             result.toolCalls = extractedCalls;
                         }
                     }
 
                     const duration = Date.now() - attemptStart;
 
-                    // Return if has content OR tool_calls (native function calling)
+                    // Only ONE response per request — return immediately on first success
                     if ((result.content && result.content.trim().length > 0) || (result.toolCalls && result.toolCalls.length > 0)) {
                         attemptLog.push({ provider: providerName, model: modelUsed, duration, status: 'success' });
-                        log.info(`[${callId}] chatWithFallback SUCCESS provider=${providerName}/${modelUsed} content=${result.content.length}chars toolCalls=${result.toolCalls?.length || 0} duration=${duration}ms attempts=${attemptLog.length}`);
+                        log.info(`[${attemptId}] SUCCESS content=${result.content.length}chars toolCalls=${result.toolCalls?.length || 0} duration=${duration}ms`);
                         return {
                             status: 'success',
                             content: result.content,
@@ -736,12 +810,14 @@ export class ProviderFactory {
                             attempts: attemptLog
                         };
                     }
-                    // Empty response — try next attempt or next provider
-                    errors.push(`${providerName}: empty response`);
+                    
+                    // Empty response
                     attemptLog.push({ provider: providerName, model: modelUsed, duration, status: 'empty' });
-                    break; // No point retrying empty responses
+                    log.warn(`[${attemptId}] Empty response, moving to next`);
+                    break;
                 } catch (error: any) {
                     const duration = Date.now() - attemptStart;
+                    activeAbortController = null;
                     const prov = this.providers.get(providerName);
                     const modelUsed = (prov instanceof OllamaProvider) ? prov.getModel() : (prov as any)?.model || providerName;
                     const isTimeout = error.message?.includes('Timeout');
@@ -751,8 +827,7 @@ export class ProviderFactory {
                                        error.message?.includes('fetch failed') ||
                                        error.message?.includes('network');
                     
-                    log.warn(`${providerName}/${modelUsed} failed (attempt ${attempt + 1}): ${error.message}${isRetryable && attempt < MAX_RETRIES ? ' — will retry' : ''}`);
-                    errors.push(`${providerName}: ${error.message}`);
+                    log.warn(`[${attemptId}] FAILED ${error.message} duration=${duration}ms retryable=${isRetryable && attempt < MAX_RETRIES}`);
                     attemptLog.push({ 
                         provider: providerName, 
                         model: modelUsed, 
@@ -762,18 +837,19 @@ export class ProviderFactory {
                     });
                     
                     if (isRetryable && attempt < MAX_RETRIES) {
-                        continue; // Retry with backoff
+                        continue;
                     }
-                    break; // Non-retryable error or max retries reached — try next provider
+                    break;
                 }
             }
         }
 
-        // All providers exhausted — return structured fallback instead of throwing
-        const lastError = errors[errors.length - 1] || '';
-        const isTimeoutError = lastError.includes('Timeout') || lastError.includes('abort');
-        log.error(`[${callId}] chatWithFallback EXHAUSTED providers=${providerOrder.join(',')} attempts=${attemptLog.length} lastError=${lastError}`);
-        log.error(`[${callId}] chatWithFallback attemptLog: ${JSON.stringify(attemptLog)}`);
+        // All providers exhausted
+        const lastError = (attemptLog.length > 0 && attemptLog[attemptLog.length - 1]?.errorMessage) 
+            ? attemptLog[attemptLog.length - 1].errorMessage : '';
+        const isTimeoutError = lastError?.includes('Timeout') || lastError?.includes('abort');
+        log.error(`[${requestId}] EXHAUSTED attempts=${attemptLog.length}`);
+        
         return {
             status: isTimeoutError ? 'timeout' : 'error',
             content: '',
