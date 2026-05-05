@@ -4,7 +4,7 @@
  * Unifies execution, validation, reassessment, and criticism into a single TURN.
  */
 
-import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary } from '../core/ProviderFactory';
+import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary, AttemptInfo } from '../core/ProviderFactory';
 import type { Message } from '../memory/MemoryManager';
 import { ContextBuilder } from './ContextBuilder';
 import { ContextBudget } from './ContextBudget';
@@ -41,6 +41,9 @@ export interface LoopMetrics {
     promptTokens: number;
     completionTokens: number;
     promptCharCount: number;
+    estimatedTokens: number;
+    timeoutUsedMs: number;
+    didTimeout: boolean;
 }
 
 export interface AgentLoopConfig {
@@ -563,16 +566,20 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
 
     // ── Metrics ──
 
-    private recordMetrics(result: LLMResult, timeoutMs: number, promptCharCount: number, model?: string): void {
+    private recordMetrics(result: LLMResult, timeoutMs: number, promptCharCount: number, estimatedTokens: number, model?: string): void {
+        const lastAttempt = result.attempts[result.attempts.length - 1];
         const metric: LoopMetrics = {
             timestamp: Date.now(),
-            responseTimeMs: result.attempts.reduce((sum, a) => sum + a.latencyMs, 0),
+            responseTimeMs: result.attempts.reduce((sum, a) => sum + a.duration, 0),
             status: result.status,
-            provider: result.attempts[result.attempts.length - 1]?.provider || 'unknown',
-            model: model || this.modelRouter.routeSync('').model || 'unknown',
+            provider: lastAttempt?.provider || 'unknown',
+            model: model || lastAttempt?.model || this.modelRouter.routeSync('').model || 'unknown',
             promptTokens: result.usage?.prompt_tokens || 0,
             completionTokens: result.usage?.completion_tokens || 0,
-            promptCharCount
+            promptCharCount,
+            estimatedTokens,
+            timeoutUsedMs: timeoutMs,
+            didTimeout: result.status === 'timeout'
         };
         
         this.metrics.push(metric);
@@ -609,18 +616,21 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
     }
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<LLMResult> {
-        // Dynamic timeout with clamp: minimum 60s, maximum 300s (teto absoluto)
-        const MIN_TIMEOUT = 60000;   // 1 min
-        const MAX_TIMEOUT = 300000;  // 5 min (teto absoluto)
-        const BASE_TIMEOUT = 120000; // 2 min base
-        const TOKEN_SCALE = 40;      // 40ms per token above 2000
+        // Dynamic timeout with clamp
+        const MIN_TIMEOUT = 30000;      // 30s (reduzido de 60s)
+        const MAX_TIMEOUT = 300000;      // 5 min (teto absoluto)
+        const BASE_TIMEOUT = 120000;     // 2 min base
+        const SCALE_PER_TOKEN = 20;     // 20ms per token (reduzido de 40ms)
+        const MAX_SCALE = 120000;        // 120s teto de escala
+        const TOKEN_THRESHOLD = 2000;   // abaixo disto, só base
 
         // Approximate token count: ~4 chars per token
         const totalChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
         const approxTokens = Math.ceil(totalChars / 4);
-        const rawTimeout = BASE_TIMEOUT + Math.max(0, approxTokens - 2000) * TOKEN_SCALE;
+        const scale = Math.min(Math.max(0, approxTokens - TOKEN_THRESHOLD) * SCALE_PER_TOKEN, MAX_SCALE);
+        const rawTimeout = BASE_TIMEOUT + scale;
         const timeoutMs = Math.max(MIN_TIMEOUT, Math.min(rawTimeout, MAX_TIMEOUT));
-        log.info(`[TIMEOUT] Dynamic timeout: ${Math.round(timeoutMs / 1000)}s (approx ${approxTokens} tokens, ${totalChars} chars, clamp=[${MIN_TIMEOUT/1000}-${MAX_TIMEOUT/1000}]s)`);
+        log.info(`[TIMEOUT] Dynamic: ${Math.round(timeoutMs / 1000)}s (tokens≈${approxTokens}, chars=${totalChars}, scale=${Math.round(scale/1000)}s, clamp=[${MIN_TIMEOUT/1000}-${MAX_TIMEOUT/1000}]s)`);
 
         // Apply routed model to the default provider before calling
         if (chatProfile?.model) {
@@ -631,6 +641,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             }
         }
 
+        const callStart = Date.now();
         try {
             const result = await llmQueue.add(() => this.providerFactory.chatWithFallback(
                 messages, 
@@ -639,23 +650,51 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                 timeoutMs
             ));
             
-            // Record metrics
-            this.recordMetrics(result, timeoutMs, totalChars, chatProfile?.model);
+            // Record metrics with enriched data
+            this.recordMetrics(result, timeoutMs, totalChars, approxTokens, chatProfile?.model);
+            
+            // Detailed log on timeout
+            if (result.status === 'timeout' || result.status === 'error') {
+                const elapsed = Date.now() - callStart;
+                log.warn(`[TIMEOUT-DETAIL] status=${result.status} promptSize=${totalChars} estimatedTokens=${approxTokens} timeoutUsed=${Math.round(timeoutMs/1000)}s elapsed=${Math.round(elapsed/1000)}s provider=${result.attempts[result.attempts.length-1]?.provider || 'unknown'} model=${result.attempts[result.attempts.length-1]?.model || 'unknown'} attempts=${result.attempts.length}`);
+            }
             
             return result;
         } catch (error: any) {
             // This should never happen now — chatWithFallback returns a structured fallback
             // instead of throwing. But just in case, handle gracefully.
+            const elapsed = Date.now() - callStart;
             log.error(`Unexpected error in LLM call: ${error.message}.`);
+            log.warn(`[TIMEOUT-DETAIL] status=error promptSize=${totalChars} estimatedTokens=${approxTokens} timeoutUsed=${Math.round(timeoutMs/1000)}s elapsed=${Math.round(elapsed/1000)}s provider=unknown model=unknown`);
             const errorResult: LLMResult = {
                 status: 'error',
                 content: '',
                 fallbackReason: 'error',
                 fallbackMessage: 'Erro inesperado ao processar sua mensagem.',
-                attempts: [{ provider: 'unknown', error: error.message, latencyMs: 0 }]
+                attempts: [{ provider: 'unknown', model: 'unknown', duration: elapsed, status: 'error', errorMessage: error.message }]
             };
-            this.recordMetrics(errorResult, timeoutMs, totalChars, chatProfile?.model);
+            this.recordMetrics(errorResult, timeoutMs, totalChars, approxTokens, chatProfile?.model);
             return errorResult;
         }
     }
+
+    /**
+     * TODO: Concurrency limiter (NOT YET IMPLEMENTED)
+     * 
+     * When multiple sessions compete for LLM resources, we need a concurrency
+     * control layer to prevent overload and queue saturation.
+     * 
+     * Suggested approach:
+     *   - Semaphore or token bucket per provider (e.g. p-semaphore, bottleneck)
+     *   - Queue with priority (classification = high, generation = normal)
+     *   - Backpressure: reject/queue new requests when concurrency limit reached
+     *   - Config: MAX_CONCURRENT_LLM_CALLS (default: 2-3 for Ollama, 5+ for cloud)
+     *   - Metrics: queueDepth, avgWaitTime, rejectedCount
+     * 
+     * Current state: llmQueue (PQueue concurrency=1) provides basic serialization.
+     * This is sufficient for single-session but will bottleneck under multi-session load.
+     * 
+     * Implementation should be in ProviderFactory, not AgentLoop, since it's
+     * provider-level resource management.
+     */
 }

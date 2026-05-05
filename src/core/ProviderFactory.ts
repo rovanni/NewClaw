@@ -46,6 +46,14 @@ export interface ToolDefinition {
 // ── Structured fallback types ──
 export type FallbackReason = 'timeout' | 'error' | 'empty_response';
 
+export interface AttemptInfo {
+    provider: string;
+    model: string;
+    duration: number;       // ms
+    status: 'success' | 'timeout' | 'error' | 'empty';
+    errorMessage?: string;
+}
+
 export interface LLMResult {
     status: 'success' | 'timeout' | 'error';
     content: string;
@@ -53,7 +61,7 @@ export interface LLMResult {
     usage?: { prompt_tokens: number; completion_tokens: number };
     fallbackReason?: FallbackReason;
     fallbackMessage?: string;
-    attempts: Array<{ provider: string; error?: string; latencyMs: number }>;
+    attempts: AttemptInfo[];
 }
 
 export interface MetricsSummary {
@@ -653,7 +661,7 @@ export class ProviderFactory {
     async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number): Promise<LLMResult> {
         const providerOrder = this.getFallbackOrder(preferredProvider);
         const errors: string[] = [];
-        const attemptLog: Array<{ provider: string; error?: string; latencyMs: number }> = [];
+        const attemptLog: AttemptInfo[] = [];
         const MAX_RETRIES = 1; // 1 retry before moving to next provider
         const RETRY_BACKOFF_MS = 10000; // 10s backoff between retries
 
@@ -664,13 +672,14 @@ export class ProviderFactory {
                 try {
                     const provider = this.providers.get(providerName);
                     if (!provider) break; // provider not available, skip
+                    const modelUsed = (provider instanceof OllamaProvider) ? provider.getModel() : (provider as any).model || provider.name;
                     
                     if (attempt > 0) {
                         log.info(`Retry ${attempt}/${MAX_RETRIES} for ${providerName} after ${RETRY_BACKOFF_MS}ms backoff...`);
                         await new Promise(r => setTimeout(r, RETRY_BACKOFF_MS));
                     }
                     
-                    log.info(`Trying ${providerName} (attempt ${attempt + 1})...${timeoutMs ? ` (timeout: ${timeoutMs}ms)` : ''}`);
+                    log.info(`Trying ${providerName}/${modelUsed} (attempt ${attempt + 1})...${timeoutMs ? ` (timeout: ${timeoutMs}ms)` : ''}`);
                     
                     // Wrap chat call with optional timeout
                     // Use AbortController instead of Promise.race for proper cancellation
@@ -695,11 +704,11 @@ export class ProviderFactory {
                         }
                     }
 
-                    const latencyMs = Date.now() - attemptStart;
-                    attemptLog.push({ provider: providerName, latencyMs });
+                    const duration = Date.now() - attemptStart;
 
                     // Return if has content OR tool_calls (native function calling)
                     if ((result.content && result.content.trim().length > 0) || (result.toolCalls && result.toolCalls.length > 0)) {
+                        attemptLog.push({ provider: providerName, model: modelUsed, duration, status: 'success' });
                         return {
                             status: 'success',
                             content: result.content,
@@ -710,10 +719,12 @@ export class ProviderFactory {
                     }
                     // Empty response — try next attempt or next provider
                     errors.push(`${providerName}: empty response`);
-                    attemptLog.push({ provider: providerName, error: 'empty response', latencyMs });
+                    attemptLog.push({ provider: providerName, model: modelUsed, duration, status: 'empty' });
                     break; // No point retrying empty responses
                 } catch (error: any) {
-                    const latencyMs = Date.now() - attemptStart;
+                    const duration = Date.now() - attemptStart;
+                    const prov = this.providers.get(providerName);
+                    const modelUsed = (prov instanceof OllamaProvider) ? prov.getModel() : (prov as any)?.model || providerName;
                     const isTimeout = error.message?.includes('Timeout');
                     const isRetryable = isTimeout || 
                                        error.message?.includes('abort') || 
@@ -721,9 +732,15 @@ export class ProviderFactory {
                                        error.message?.includes('fetch failed') ||
                                        error.message?.includes('network');
                     
-                    log.warn(`${providerName} failed (attempt ${attempt + 1}): ${error.message}${isRetryable && attempt < MAX_RETRIES ? ' — will retry' : ''}`);
+                    log.warn(`${providerName}/${modelUsed} failed (attempt ${attempt + 1}): ${error.message}${isRetryable && attempt < MAX_RETRIES ? ' — will retry' : ''}`);
                     errors.push(`${providerName}: ${error.message}`);
-                    attemptLog.push({ provider: providerName, error: error.message, latencyMs });
+                    attemptLog.push({ 
+                        provider: providerName, 
+                        model: modelUsed, 
+                        duration, 
+                        status: isTimeout ? 'timeout' : 'error', 
+                        errorMessage: error.message 
+                    });
                     
                     if (isRetryable && attempt < MAX_RETRIES) {
                         continue; // Retry with backoff
