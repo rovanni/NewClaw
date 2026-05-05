@@ -8,6 +8,7 @@
  * DO NOT use this class directly in AgentLoop — use SessionContext instead.
  */
 
+import { extractText } from './ResponseAdapter';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('Contextcompressor');
@@ -76,7 +77,7 @@ export class ContextCompressor {
 
         try {
             const response = await this.providerFactory.getProvider().chat(summaryPrompt);
-            return response.content || 'Conversa anterior resumida.';
+            return extractText(response.content || 'Conversa anterior resumida.');
         } catch {
             // Fallback: just keep key points from each message
             return messages

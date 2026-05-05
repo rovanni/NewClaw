@@ -16,6 +16,7 @@ import PQueue from 'p-queue';
 import { MemoryManager } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
+import { normalizeFromRaw } from './ResponseAdapter';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('Agentloop');
 
@@ -341,9 +342,12 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
      * Never returns empty string — falls back to a default message.
      */
     private extractFinalText(response: LLMResult, atomicData: any): string {
-        // Source of truth: action.content from parsed JSON
-        if (atomicData?.action?.content && atomicData.action.content.trim().length > 0) {
-            return atomicData.action.content;
+        // Pipeline: parseLLMResponse → normalizeResponse (structured)
+        const normalized = normalizeFromRaw(response.content || '', (c) => this.parseLLMResponse(c));
+
+        // Source of truth: normalized content (covers action.content + raw fallback)
+        if (normalized.type !== 'empty' && normalized.content && normalized.content.trim().length > 0) {
+            return normalized.content;
         }
         // Fallback: sanitized response.content (may be empty or raw JSON)
         const sanitized = sanitizeContent(response.content || '');
@@ -445,7 +449,8 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             }
             
             const atomicData = this.parseLLMResponse(response.content || '');
-            log.info(`[${this.ts()}] [PARSE] step=${stepCount} parsed=${atomicData ? 'YES' : 'NO'} is_complete=${atomicData?.evaluation?.is_complete} action_type=${atomicData?.action?.type}`);
+            const normalized = normalizeFromRaw(response.content || '', (c) => this.parseLLMResponse(c));
+            log.info(`[${this.ts()}] [PARSE] step=${stepCount} parsed=${atomicData ? 'YES' : 'NO'} normalized_type=${normalized.type} is_complete=${atomicData?.evaluation?.is_complete} action_type=${atomicData?.action?.type}`);
             
             // Canonical extraction: action.content is source of truth
             const finalText = this.extractFinalText(response, atomicData);

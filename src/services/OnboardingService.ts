@@ -3,6 +3,7 @@
  * 
  * Transformado em fluxo dinâmico com classificação de intenção via LLM.
  */
+import { extractText } from '../loop/ResponseAdapter';
 import { Database } from 'better-sqlite3';
 import { ProviderFactory } from '../core/ProviderFactory';
 import { SkillLearner } from '../loop/SkillLearner';
@@ -243,7 +244,7 @@ JSON:`;
                 { role: 'system', content: 'Você é um assistente de extração de dados JSON preciso.' },
                 { role: 'user', content: prompt }
             ], []);
-            const content = response.content || '{}';
+            const content = extractText(response.content || '{}');
             const jsonStr = content.match(/\{[\s\S]*\}/)?.[0] || '{}';
             return JSON.parse(jsonStr);
         } catch {
