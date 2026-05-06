@@ -434,15 +434,15 @@ Respond ONLY in JSON:
         }
 
         const memoryWarnings = lines.filter(l => /heap|memory|OOM|ENOMEM/i.test(l));
-        if (memoryWarnings.length > 3) {
+        if (memoryWarnings.length > 5) {
             this.findings.push({
-                severity: 'critical',
+                severity: memoryWarnings.length > 15 ? 'critical' : 'warning',
                 category: 'runtime',
-                title: 'Possível memory leak',
-                description: `${memoryWarnings.length} avisos de memória nos logs recentes.`,
-                suggestion: 'Verificar closures, event listeners não removidos, e acumulação de dados em memória.',
+                title: 'Alertas de memória detectados',
+                description: `${memoryWarnings.length} avisos de recursos/memória nos logs recentes.`,
+                suggestion: 'Verificar picos de uso durante inferência ou acumulação de sessões inativas.',
                 autoFixable: false,
-                riskLevel: 'high'
+                riskLevel: memoryWarnings.length > 15 ? 'high' : 'medium'
             });
         }
     }

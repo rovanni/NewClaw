@@ -1038,4 +1038,38 @@ export class MemoryManager {
             return null;
         }
     }
+
+    /**
+     * Persist an agent execution trace step
+     */
+    public saveTrace(trace: {
+        id: string;
+        conversation_id?: string;
+        step: number;
+        decision?: string;
+        tool?: string;
+        input?: string;
+        output?: string;
+        provider?: string;
+        duration_ms?: number;
+    }): void {
+        try {
+            this.db.prepare(`
+                INSERT INTO agent_traces (id, conversation_id, step, decision, tool, input, output, provider, duration_ms)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                trace.id,
+                trace.conversation_id || null,
+                trace.step,
+                trace.decision || null,
+                trace.tool || null,
+                trace.input || null,
+                trace.output || null,
+                trace.provider || null,
+                trace.duration_ms || null
+            );
+        } catch (e: any) {
+            log.error('save_trace_failed', e.message);
+        }
+    }
 }

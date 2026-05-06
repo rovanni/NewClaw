@@ -72,6 +72,7 @@ export class SessionManager {
     private sessions: Map<string, SessionTranscript> = new Map();
     private sessionMutexes: Map<string, Promise<void>> = new Map();
     private compressionCheckpoints: Map<string, CompressionCheckpoint> = new Map();
+    private lastActivity: Map<string, number> = new Map();
     private contextCompressor: ContextCompressor | null = null;
 
     constructor(config: Partial<SessionConfig>, memory: MemoryManager, providerFactory?: ProviderFactory) {
@@ -97,6 +98,9 @@ export class SessionManager {
         const next = new Promise<void>(r => { resolve = r; });
         this.sessionMutexes.set(sid, next);
 
+        // Update last activity for TTL cleanup
+        this.lastActivity.set(sid, Date.now());
+
         // Timeout protection: if mutex takes > 30s, log warning and proceed
         const mutexTimeout = new Promise<void>((_, reject) => {
             setTimeout(() => reject(new Error(`Mutex timeout for ${sid} after 30s`)), 30_000);
@@ -119,6 +123,30 @@ export class SessionManager {
                 }
             }, 60_000);
         }
+    }
+
+    /**
+     * Cleanup inactive sessions from memory.
+     * Prevents memory leak in multi-user environments.
+     */
+    public async cleanupInactiveSessions(maxAgeMs: number = 3600_000): Promise<number> {
+        const now = Date.now();
+        let count = 0;
+        for (const [sid, lastSeen] of this.lastActivity.entries()) {
+            if (now - lastSeen > maxAgeMs) {
+                const transcript = this.sessions.get(sid);
+                if (transcript) {
+                    await transcript.close();
+                    this.sessions.delete(sid);
+                    this.sessionMutexes.delete(sid);
+                    this.compressionCheckpoints.delete(sid);
+                    this.lastActivity.delete(sid);
+                    count++;
+                }
+            }
+        }
+        if (count > 0) log.info(`Cleaned up ${count} inactive sessions from memory.`);
+        return count;
     }
 
     private sessionKey(key: SessionKey): string {

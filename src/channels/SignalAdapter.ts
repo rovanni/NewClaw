@@ -95,9 +95,16 @@ export class SignalAdapter implements ChannelAdapter {
         this.bus = bus;
     }
 
+    private started: boolean = false;
+
     async start(): Promise<void> {
         if (!this.config.enabled) {
             log.info('adapter_disabled', 'Signal adapter is disabled');
+            return;
+        }
+
+        if (this.started) {
+            log.warn('adapter_already_started', 'Signal adapter already started');
             return;
         }
 
@@ -133,6 +140,7 @@ export class SignalAdapter implements ChannelAdapter {
 
         // Alternative: use JSON-RPC if daemon is running
         this._isConnected = true;
+        this.started = true;
         log.info('adapter_started', '✅ Signal adapter started');
 
         // Start receive loop in background

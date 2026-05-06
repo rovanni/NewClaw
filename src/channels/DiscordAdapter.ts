@@ -82,9 +82,16 @@ export class DiscordAdapter implements ChannelAdapter {
         this.bus = bus;
     }
 
+    private started: boolean = false;
+
     async start(): Promise<void> {
         if (!this.config.enabled) {
             log.info('adapter_disabled', 'Discord adapter is disabled');
+            return;
+        }
+
+        if (this.started) {
+            log.warn('adapter_already_started', 'Discord adapter already started');
             return;
         }
 
@@ -94,6 +101,7 @@ export class DiscordAdapter implements ChannelAdapter {
         }
 
         this.registerHandlers();
+        this.started = true;
 
         try {
             await this.client.login(this.config.botToken);

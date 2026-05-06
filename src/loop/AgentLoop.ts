@@ -18,6 +18,9 @@ import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
 import { normalizeFromRaw } from './ResponseAdapter';
 import { createLogger } from '../shared/AppLogger';
+import { ClassificationMemory } from '../memory/ClassificationMemory';
+import { DecisionMemory } from '../memory/DecisionMemory';
+import { traceManager } from '../core/ExecutionTrace';
 const log = createLogger('Agentloop');
 
 export interface ToolResult {
@@ -126,6 +129,8 @@ export class AgentLoop {
     private sessionContext: SessionContext | null = null;
     private metrics: LoopMetrics[] = [];
     private metricsMaxSize = 100;
+    private classificationMemory: ClassificationMemory;
+    private decisionMemory: DecisionMemory;
 
     constructor(providerFactory: ProviderFactory, memory: MemoryManager, config: AgentLoopConfig, skillLearner?: SkillLearner) {
         this.providerFactory = providerFactory;
@@ -135,6 +140,10 @@ export class AgentLoop {
         this.skillLearner = skillLearner || new SkillLearner((memory as any).db || (memory as any)._db);
         this.modelRouter = new ModelRouter(config.modelRouter as any, providerFactory);
         this.stateManager = new AgentStateManager(memory);
+        
+        const db = (memory as any).db || (memory as any)._db;
+        this.classificationMemory = new ClassificationMemory(db);
+        this.decisionMemory = new DecisionMemory(db);
     }
 
     public getStateManager(): AgentStateManager {
@@ -387,6 +396,10 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         let toolFailureCount = 0;
         const usedToolInputs = new Set<string>();
 
+        // ── Recording: Trace start + Classification ──
+        const trace = traceManager.startTrace(conversationId, userText);
+        this.classificationMemory.store(userText, 'chat', 0.8);
+
         // ── Session Context Pipeline (mandatory) ──
         // 1. Checkpoint summary (structured system role)
         // 2. Recent transcript messages (linear replay)
@@ -439,12 +452,24 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
 
             const response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
             const rawContent = (response.content || '').slice(0, 300);
-            log.info(`[${this.ts()}] [LLM-RAW] step=${stepCount} content=${JSON.stringify(rawContent)}`);
+            log.info(`[${this.ts()}] [COGNITION] Step ${stepCount} response received.`);
+
+            // Record trace step
+            traceManager.addStep(trace, 'decision', { 
+                thought: this.parseLLMResponse(response.content || '')?.thought,
+                step: stepCount,
+                iteration
+            });
+            
+            const rawContentPreview = (response.content || '').slice(0, 300);
+            log.info(`[${this.ts()}] [LLM-RAW] step=${stepCount} content=${JSON.stringify(rawContentPreview)}`);
             
             // Check if this is a structured fallback response from ProviderFactory
             // (when all providers fail, ProviderFactory returns LLMResult with status timeout/error)
             if (response.status === 'timeout' || response.status === 'error') {
                 log.warn(`[${this.ts()}] [FALLBACK] Provider returned ${response.status}: ${response.fallbackReason}`);
+                traceManager.completeTrace(trace, 'error', response.fallbackMessage);
+                this.persistTrace(trace, stepCount, 'error', response.fallbackMessage);
                 return response.fallbackMessage || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
             }
             
@@ -475,6 +500,8 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
 
             if ((isFinalAnswer || isMarkedComplete || hasContentNoTool) && !wantsTool && !hasNativeToolCalls) {
                 log.info(`[${this.ts()}] [ATOMIC] Task marked as COMPLETE (reason: ${isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool'}).`);
+                traceManager.completeTrace(trace, 'completed', finalText);
+                this.persistTrace(trace, stepCount, 'completed', finalText);
                 return finalText;
             }
 
@@ -500,9 +527,18 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                         if (typeof (tool as any).setContext === 'function') {
                             (tool as any).setContext((this as any).currentChatId || '', (this as any).currentBotToken || '');
                         }
+                        const toolStartTime = Date.now();
                         const result = await tool.execute(toolCall.arguments);
+                        const toolDuration = Date.now() - toolStartTime;
+                        
                         log.info(`[${this.ts()}] [TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`);
                         
+                        // Recording: Trace + Decision + Skill
+                        traceManager.addStep(trace, 'tool_call', { tool: toolName, input: toolCall.arguments });
+                        traceManager.addStep(trace, 'tool_result', { tool: toolName, success: result.success, output: result.output });
+                        this.decisionMemory.recordFromLoop(toolName, result.success, toolDuration, userText);
+                        this.skillLearner.recordPattern(userText, toolName, result.success, toolDuration);
+
                         usedToolInputs.add(inputKey);
                         cycleHistory.push({ tool: toolName, input: toolInput, status: result.success ? 'success' : 'error' });
                         loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
@@ -515,7 +551,11 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                             });
                         }
 
-                        if ((toolName === 'send_audio' || toolName === 'send_document') && result.success) return result.output;
+                        if ((toolName === 'send_audio' || toolName === 'send_document') && result.success) {
+                            traceManager.completeTrace(trace, 'completed', result.output);
+                            this.persistTrace(trace, stepCount, 'completed', result.output);
+                            return result.output;
+                        }
                     }
                 }
                 continue; 
@@ -529,6 +569,8 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             if (hasNoToolsRequested) {
                 if (finalText.length > 0) {
                     log.info(`[${this.ts()}] [EARLY-EXIT] No tool calls requested → returning content (step ${stepCount})`);
+                    traceManager.completeTrace(trace, 'completed', finalText);
+                    this.persistTrace(trace, stepCount, 'completed', finalText);
                     return finalText;
                 }
             }
@@ -554,9 +596,18 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                     if (typeof (tool as any).setContext === 'function') {
                         (tool as any).setContext((this as any).currentChatId || '', (this as any).currentBotToken || '');
                     }
+                    const toolStartTime = Date.now();
                     const result = await tool.execute(atomicData.action.input || {});
+                    const toolDuration = Date.now() - toolStartTime;
+
                     log.info(`[${this.ts()}] [ATOMIC-TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
                     
+                    // Recording: Trace + Decision + Skill
+                    traceManager.addStep(trace, 'tool_call', { tool: toolName, input: atomicData.action.input });
+                    traceManager.addStep(trace, 'tool_result', { tool: toolName, success: result.success, output: result.output });
+                    this.decisionMemory.recordFromLoop(toolName, result.success, toolDuration, userText);
+                    this.skillLearner.recordPattern(userText, toolName, result.success, toolDuration);
+
                     usedToolInputs.add(inputKey);
                     cycleHistory.push({ tool: toolName, input: toolInput, status: result.success ? 'success' : 'error' });
                     loopMessages.push({ role: 'tool', content: result.output });
@@ -591,8 +642,34 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         
         const finalResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile);
         const finalAtomic = this.parseLLMResponse(finalResponse.content || '');
+        const text = this.extractFinalText(finalResponse, finalAtomic);
         
-        return this.extractFinalText(finalResponse, finalAtomic);
+        traceManager.completeTrace(trace, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
+        this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
+        
+        return text;
+    }
+
+    /**
+     * Persist trace into SQLite agent_traces table via MemoryManager
+     */
+    private persistTrace(trace: any, step: number, status: string, finalResponse: string): void {
+        try {
+            const lastStep = trace.steps[trace.steps.length - 1];
+            this.memory.saveTrace({
+                id: trace.id,
+                conversation_id: trace.sessionId,
+                step,
+                decision: status,
+                tool: lastStep?.type === 'tool_call' ? lastStep.data?.tool : undefined,
+                input: trace.userInput,
+                output: finalResponse,
+                provider: this.providerFactory.getProvider()?.name,
+                duration_ms: trace.totalDurationMs
+            });
+        } catch (e: any) {
+            log.warn('persist_trace_failed', e.message);
+        }
     }
 
     // ── Metrics ──

@@ -82,12 +82,23 @@ export class WhatsAppAdapter implements ChannelAdapter {
         this.bus = bus;
     }
 
+    private started: boolean = false;
+
     async start(): Promise<void> {
         if (!this.config.enabled) {
             log.info('adapter_disabled', 'WhatsApp adapter is disabled');
             return;
         }
 
+        if (this.started) {
+            log.warn('adapter_already_started', 'WhatsApp adapter already started');
+            return;
+        }
+        this.started = true;
+        await this.initSocket();
+    }
+
+    private async initSocket(): Promise<void> {
         try {
             const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
             const { version } = await fetchLatestBaileysVersion();
@@ -127,7 +138,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
 
                     if (shouldReconnect) {
                         log.info('reconnecting', 'Reconnecting WhatsApp...');
-                        await this.start();
+                        await this.initSocket();
                     } else {
                         this._isConnected = false;
                         log.error('logged_out', 'WhatsApp logged out — delete auth dir and re-scan QR');
