@@ -136,6 +136,7 @@ export class AgentLoop {
     private stateManager: AgentStateManager;
     private sessionContext: SessionContext | null = null;
     private metrics: LoopMetrics[] = [];
+    private metricsMaxSize = 100;
     private classificationMemory: ClassificationMemory;
     private decisionMemory: DecisionMemory;
 
@@ -157,14 +158,11 @@ export class AgentLoop {
         return this.stateManager;
     }
 
-    public setSessionContext(sessionContext: SessionContext) {
-        this.sessionContext = sessionContext;
-    }
-
     /**
      * Set session context for hybrid context building (checkpoint + recent + semantic).
      * If not set, falls back to getRecentMessages (legacy behavior).
-     */    public setSessionContext(sessionContext: SessionContext): void {
+     */
+    public setSessionContext(sessionContext: SessionContext): void {
         this.sessionContext = sessionContext;
     }
 
@@ -301,8 +299,8 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         return masterPrompt;
     }
 
-    public async run(conversationId: string, userText: string, userId?: string): Promise<string> {
-        return this.runWithTools(conversationId, userText, 0, userId);
+    public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string> {
+        return this.runWithTools(conversationId, userText, 0, userId, context);
     }
 
     private parseLLMResponse(content: string): any | null {
@@ -464,7 +462,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             if (response.status === 'timeout' || response.status === 'error') {
                 log.warn(`[${this.ts()}] [FALLBACK] Provider returned ${response.status}: ${response.fallbackReason}`);
                 traceManager.completeTrace(trace, 'error', response.fallbackMessage);
-                this.persistTrace(trace, stepCount, 'error', response.fallbackMessage, channelContext);
+                this.persistTrace(trace, stepCount, 'error', response.fallbackMessage || 'Timeout/Error', channelContext);
                 return response.fallbackMessage || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
             }
             

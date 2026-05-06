@@ -304,7 +304,7 @@ export class DiscordAdapter implements ChannelAdapter {
             }
         });
 
-        this.client.on('error', (error) => {
+        this.client.on('error', (error: any) => {
             log.error('client_error', error);
         });
 

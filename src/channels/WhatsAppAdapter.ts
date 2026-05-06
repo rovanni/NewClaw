@@ -123,7 +123,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
             });
 
             // Save credentials on update
-            this.sock.ev.on('connection.update', async (update) => {
+            this.sock.ev.on('connection.update', async (update: any) => {
                 const { connection, lastDisconnect, qr } = update;
 
                 if (qr) {
@@ -153,8 +153,8 @@ export class WhatsAppAdapter implements ChannelAdapter {
                                 await this.sock.requestPairingCode(this.config.phoneNumber);
                                 log.info('pairing_code', `Pairing code requested for ${this.config.phoneNumber}`);
                             }
-                        } catch (e: any) {
-                            log.warn('pairing_failed', e.message);
+                        } catch (error: any) {
+                            log.error('discord_login_error', error.message);
                         }
                     }
                 }
@@ -163,7 +163,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
             this.sock.ev.on('creds.update', saveCreds);
 
             // Handle incoming messages
-            this.sock.ev.on('messages.upsert', async ({ messages }) => {
+            this.sock.ev.on('messages.upsert', async ({ messages }: any) => {
                 for (const msg of messages) {
                     if (!msg.key?.fromMe && msg.message) {
                         await this.handleMessage(msg);
