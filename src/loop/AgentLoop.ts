@@ -50,6 +50,14 @@ export interface LoopMetrics {
     didTimeout: boolean;
 }
 
+export interface ChannelContext {
+    channel: string;
+    chatId: string;
+    botToken?: string;
+    userId?: string;
+    metadata?: any;
+}
+
 export interface AgentLoopConfig {
     languageDirective: string;
     systemPrompt: string;
@@ -128,7 +136,6 @@ export class AgentLoop {
     private stateManager: AgentStateManager;
     private sessionContext: SessionContext | null = null;
     private metrics: LoopMetrics[] = [];
-    private metricsMaxSize = 100;
     private classificationMemory: ClassificationMemory;
     private decisionMemory: DecisionMemory;
 
@@ -150,20 +157,8 @@ export class AgentLoop {
         return this.stateManager;
     }
 
-    /** Set Telegram context (legacy — for tools like send_audio/send_document) */
-    public setTelegramContext(chatId: string, botToken: string) {
-        (this as any).currentChatId = chatId;
-        (this as any).currentBotToken = botToken;
-    }
-
-    /** Set channel context (multi-canal — channel type + metadata) */
-    public setChannelContext(context: { channel: string; userId: string; chatId?: string; metadata?: Record<string, any> }) {
-        (this as any).currentChannel = context.channel;
-        (this as any).currentChatId = context.chatId || context.userId;
-        // Para Telegram, ainda precisamos do botToken via metadata
-        if (context.metadata?.botToken) {
-            (this as any).currentBotToken = context.metadata.botToken;
-        }
+    public setSessionContext(sessionContext: SessionContext) {
+        this.sessionContext = sessionContext;
     }
 
     /**
@@ -289,8 +284,8 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         return prompt;
     }
 
-    public async process(conversationId: string, userText: string, userId?: string): Promise<string> {
-        return this.run(conversationId, userText, userId);
+    public async process(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string> {
+        return this.run(conversationId, userText, userId, context);
     }
 
     public registerTool(tool: ToolExecutor) {
@@ -388,7 +383,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         "Opa! Bora lá! 💪",
     ];
 
-    private async runWithTools(conversationId: string, userText: string, iteration: number, userId?: string): Promise<string> {
+    private async runWithTools(conversationId: string, userText: string, iteration: number, userId?: string, channelContext?: ChannelContext): Promise<string> {
         log.info(`[${this.ts()}] [LOOP] Atomic Cognition Cycle ${iteration + 1}`);
 
         const cycleHistory: Array<{ tool: string, input: string, status: string }> = []
@@ -469,7 +464,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             if (response.status === 'timeout' || response.status === 'error') {
                 log.warn(`[${this.ts()}] [FALLBACK] Provider returned ${response.status}: ${response.fallbackReason}`);
                 traceManager.completeTrace(trace, 'error', response.fallbackMessage);
-                this.persistTrace(trace, stepCount, 'error', response.fallbackMessage);
+                this.persistTrace(trace, stepCount, 'error', response.fallbackMessage, channelContext);
                 return response.fallbackMessage || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
             }
             
@@ -501,7 +496,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             if ((isFinalAnswer || isMarkedComplete || hasContentNoTool) && !wantsTool && !hasNativeToolCalls) {
                 log.info(`[${this.ts()}] [ATOMIC] Task marked as COMPLETE (reason: ${isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool'}).`);
                 traceManager.completeTrace(trace, 'completed', finalText);
-                this.persistTrace(trace, stepCount, 'completed', finalText);
+                this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
                 return finalText;
             }
 
@@ -524,8 +519,8 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                     const tool = this.tools.get(toolName);
                     if (tool) {
                         // Inject Telegram context for tools that need it
-                        if (typeof (tool as any).setContext === 'function') {
-                            (tool as any).setContext((this as any).currentChatId || '', (this as any).currentBotToken || '');
+                        if (typeof (tool as any).setContext === 'function' && channelContext) {
+                            (tool as any).setContext(channelContext.chatId || '', channelContext.botToken || '');
                         }
                         const toolStartTime = Date.now();
                         const result = await tool.execute(toolCall.arguments);
@@ -553,7 +548,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
 
                         if ((toolName === 'send_audio' || toolName === 'send_document') && result.success) {
                             traceManager.completeTrace(trace, 'completed', result.output);
-                            this.persistTrace(trace, stepCount, 'completed', result.output);
+                            this.persistTrace(trace, stepCount, 'completed', result.output, channelContext);
                             return result.output;
                         }
                     }
@@ -570,7 +565,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                 if (finalText.length > 0) {
                     log.info(`[${this.ts()}] [EARLY-EXIT] No tool calls requested → returning content (step ${stepCount})`);
                     traceManager.completeTrace(trace, 'completed', finalText);
-                    this.persistTrace(trace, stepCount, 'completed', finalText);
+                    this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
                     return finalText;
                 }
             }
@@ -593,8 +588,8 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                 const tool = this.tools.get(toolName);
                 if (tool) {
                     // Inject Telegram context for tools that need it
-                    if (typeof (tool as any).setContext === 'function') {
-                        (tool as any).setContext((this as any).currentChatId || '', (this as any).currentBotToken || '');
+                    if (typeof (tool as any).setContext === 'function' && channelContext) {
+                        (tool as any).setContext(channelContext.chatId || '', channelContext.botToken || '');
                     }
                     const toolStartTime = Date.now();
                     const result = await tool.execute(atomicData.action.input || {});
@@ -645,7 +640,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         const text = this.extractFinalText(finalResponse, finalAtomic);
         
         traceManager.completeTrace(trace, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
-        this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
+        this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text, channelContext);
         
         return text;
     }
@@ -653,7 +648,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
     /**
      * Persist trace into SQLite agent_traces table via MemoryManager
      */
-    private persistTrace(trace: any, step: number, status: string, finalResponse: string): void {
+    private persistTrace(trace: any, step: number, status: string, finalResponse: string, context?: ChannelContext): void {
         try {
             const lastStep = trace.steps[trace.steps.length - 1];
             this.memory.saveTrace({

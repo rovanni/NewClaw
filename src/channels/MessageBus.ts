@@ -191,17 +191,20 @@ export class MessageBus {
             }
 
             // 3. Text processing through AgentLoop
-            this.agentLoop.setChannelContext({
-                channel: msg.channel,
-                userId: msg.userId,
-                chatId: msg.chatId || msg.userId,
-                metadata: msg.metadata,
-            });
-
             await this.sessionManager.recordUserMessage(sessionKey, msg.text);
             const startTime = Date.now();
             log.info('processing_start', `User: ${msg.text.slice(0, 80)}`, { channel: msg.channel, userId: msg.userId });
-            const response = await this.agentLoop.process(msg.userId, msg.text);
+            const response = await this.agentLoop.process(
+                msg.userId,
+                msg.text,
+                msg.userId,
+                {
+                    channel: msg.channel,
+                    chatId: msg.chatId || msg.userId,
+                    botToken: adapter?.getBotToken ? adapter.getBotToken() : undefined,
+                    metadata: msg.metadata,
+                }
+            );
             const duration = Date.now() - startTime;
             log.info('processing_done', `Duration: ${duration}ms`, { 
                 responseLength: response?.length || 0,

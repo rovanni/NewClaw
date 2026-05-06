@@ -82,6 +82,11 @@ export class DiscordAdapter implements ChannelAdapter {
         this.bus = bus;
     }
 
+    /** Retornar o token do bot */
+    getBotToken(): string {
+        return this.config.botToken;
+    }
+
     private started: boolean = false;
 
     async start(): Promise<void> {

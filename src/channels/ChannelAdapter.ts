@@ -91,6 +91,8 @@ export interface ChannelAdapter {
     healthCheck(): Promise<{ ok: boolean; details?: string }>;
     /** Enviar indicador de digitação ao canal (typing, recording, etc.) */
     sendTypingIndicator?(context: any, action?: TypingAction): Promise<void>;
+    /** Retornar o token do bot (se aplicável) */
+    getBotToken?(): string;
 }
 
 /** Configuração base para qualquer canal */
