@@ -129,20 +129,26 @@ export class SessionManager {
      * Cleanup inactive sessions from memory.
      * Prevents memory leak in multi-user environments.
      */
-    public async cleanupInactiveSessions(maxAgeMs: number = 3600_000): Promise<number> {
+    public async cleanupInactiveSessions(maxAgeMs: number = 1800_000): Promise<number> {
         const now = Date.now();
-        let count = 0;
+        const toDelete: string[] = [];
+
         for (const [sid, lastSeen] of this.lastActivity.entries()) {
             if (now - lastSeen > maxAgeMs) {
-                const transcript = this.sessions.get(sid);
-                if (transcript) {
-                    await transcript.close();
-                    this.sessions.delete(sid);
-                    this.sessionMutexes.delete(sid);
-                    this.compressionCheckpoints.delete(sid);
-                    this.lastActivity.delete(sid);
-                    count++;
-                }
+                toDelete.push(sid);
+            }
+        }
+
+        let count = 0;
+        for (const sid of toDelete) {
+            const transcript = this.sessions.get(sid);
+            if (transcript) {
+                await transcript.close();
+                this.sessions.delete(sid);
+                this.sessionMutexes.delete(sid);
+                this.compressionCheckpoints.delete(sid);
+                this.lastActivity.delete(sid);
+                count++;
             }
         }
         if (count > 0) log.info(`Cleaned up ${count} inactive sessions from memory.`);

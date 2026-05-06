@@ -145,11 +145,11 @@ export class AgentLoop {
         this.memory = memory;
         this.config = config;
         this.contextBuilder = new ContextBuilder(memory);
-        this.skillLearner = skillLearner || new SkillLearner((memory as any).db || (memory as any)._db);
+        const db = memory.getDatabase();
+        this.skillLearner = skillLearner || new SkillLearner(db);
         this.modelRouter = new ModelRouter(config.modelRouter as any, providerFactory);
         this.stateManager = new AgentStateManager(memory);
         
-        const db = (memory as any).db || (memory as any)._db;
         this.classificationMemory = new ClassificationMemory(db);
         this.decisionMemory = new DecisionMemory(db);
     }

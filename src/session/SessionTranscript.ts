@@ -230,11 +230,39 @@ export class SessionTranscript {
     replay(from?: number, to?: number): TranscriptEntry[] {
         if (!existsSync(this.filePath)) return [];
 
-        const lines = fs.readFileSync(this.filePath, 'utf-8').trim().split('\n');
+        let startOffset = 0;
+        
+        // Optimize: If we are replaying from a sequence number, check if we have a checkpoint offset
+        if (from !== undefined && from > 1) {
+            // Find the closest checkpoint BEFORE or AT 'from'
+            const checkpoint = [...this.index.checkpoints]
+                .reverse()
+                .find(c => c.seq < from);
+            
+            if (checkpoint) {
+                startOffset = checkpoint.offset;
+            }
+        }
+
+        // Read file from startOffset
+        const fd = fs.openSync(this.filePath, 'r');
+        const fileSize = fs.fstatSync(fd).size;
+        const length = fileSize - startOffset;
+        
+        let content = '';
+        if (length > 0) {
+            const buffer = Buffer.alloc(length);
+            fs.readSync(fd, buffer, 0, length, startOffset);
+            content = buffer.toString('utf-8');
+        }
+        fs.closeSync(fd);
+
+        const lines = content.trim().split('\n');
         const entries: TranscriptEntry[] = [];
 
         for (const line of lines) {
             try {
+                if (!line.trim()) continue;
                 const entry = JSON.parse(line) as TranscriptEntry;
                 if (from !== undefined && entry.seq < from) continue;
                 if (to !== undefined && entry.seq > to) continue;

@@ -24,6 +24,8 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
+import { createLogger } from '../../shared/AppLogger';
+const log = createLogger('AuditorService');
 
 // ============================================
 // TYPES
@@ -355,6 +357,7 @@ Rules for riskLevel:
 
             for (const logFile of logFiles) {
                 const logPath = path.join(logsPath, logFile);
+                log.info(`[AUDIT] Analisando log: ${logPath}`);
                 const content = fs.readFileSync(logPath, 'utf-8');
                 const lines = content.split('\n').slice(-500);
 
@@ -438,11 +441,11 @@ Respond ONLY in JSON:
             this.findings.push({
                 severity: memoryWarnings.length > 15 ? 'critical' : 'warning',
                 category: 'runtime',
-                title: 'Alertas de memória detectados',
-                description: `${memoryWarnings.length} avisos de recursos/memória nos logs recentes.`,
-                suggestion: 'Verificar picos de uso durante inferência ou acumulação de sessões inativas.',
+                title: 'Fragmentação ou Leak de Memória',
+                description: `Detectados ${memoryWarnings.length} avisos de heap/memory nos logs. Isso pode indicar que o processo está carregando arquivos muito grandes ou que há um vazamento em sessões longas.`,
+                suggestion: 'Otimizar o carregamento de logs de sessão (implementado) e reduzir o tempo de expiração de sessões inativas.',
                 autoFixable: false,
-                riskLevel: memoryWarnings.length > 15 ? 'high' : 'medium'
+                riskLevel: 'high'
             });
         }
     }
@@ -453,34 +456,30 @@ Respond ONLY in JSON:
 
     private async auditData(): Promise<void> {
         try {
-            const tables = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
-
+            // Test DB connection
+            const test = this.db.prepare('SELECT 1 as ok').get();
+            if (!test) throw new Error('DB query returned no results');
+            
+            // Check for empty tables
+            const tables = ['agent_traces', 'memory_classifications', 'tool_decisions'];
             for (const table of tables) {
                 try {
-                    const count = (this.db.prepare(`SELECT COUNT(*) as cnt FROM "${table.name}"`).get() as any).cnt;
-
-                    if (count === 0 && !['audit_reports', 'audit_findings', 'scheduled_tasks'].includes(table.name)) {
+                    const count = (this.db.prepare(`SELECT COUNT(*) as c FROM ${table}`).get() as any).c;
+                    if (count === 0) {
                         this.findings.push({
                             severity: 'info',
                             category: 'data',
-                            title: `Tabela vazia: ${table.name}`,
-                            description: `A tabela ${table.name} não possui registros.`,
-                            autoFixable: false
-                        });
-                    }
-
-                    if (count > 100000) {
-                        this.findings.push({
-                            severity: 'warning',
-                            category: 'data',
-                            title: `Tabela grande: ${table.name} (${count} registros)`,
-                            description: 'Tabelas muito grandes podem degradar performance. Considerar limpeza ou arquivamento.',
-                            autoFixable: false
+                            title: `Tabela vazia: ${table}`,
+                            description: `A tabela ${table} ainda não possui registros.`,
+                            suggestion: 'O sistema começará a popular estas tabelas conforme o agente for utilizado.',
+                            autoFixable: false,
+                            riskLevel: 'low'
                         });
                     }
                 } catch (e) {}
             }
 
+            // Check for orphans/old conversations
             try {
                 const orphans = this.db.prepare(`
                     SELECT COUNT(*) as cnt FROM conversations 
@@ -494,17 +493,21 @@ Respond ONLY in JSON:
                         title: `${orphans.cnt} conversas antigas (>30 dias)`,
                         description: 'Conversas não acessadas há mais de 30 dias.',
                         suggestion: 'Considerar arquivamento para economizar espaço.',
-                        autoFixable: false
+                        autoFixable: false,
+                        riskLevel: 'low'
                     });
                 }
             } catch (e) {}
+
         } catch (e: any) {
             this.findings.push({
-                severity: 'warning',
+                severity: 'critical',
                 category: 'data',
-                title: 'Erro ao auditar banco de dados',
+                title: 'Erro de conexão ou auditoria de dados',
                 description: e.message,
-                autoFixable: false
+                suggestion: 'Verificar se o arquivo data/newclaw.db está acessível e não está corrompido.',
+                autoFixable: false,
+                riskLevel: 'high'
             });
         }
     }
