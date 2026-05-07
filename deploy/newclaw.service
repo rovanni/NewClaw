@@ -21,7 +21,12 @@ TimeoutStopSec=30
 
 # Crash loop protection
 RestartPreventExitStatus=1 2
-WatchdogSec=120
+# WatchdogSec=120
+# DISABLED: Node.js does not implement sd_notify(). Without watchdog
+# notifications, systemd kills the process every 2min with SIGABRT.
+# Re-enable ONLY after implementing sd-notify in the codebase
+# (npm install sd-notify + setInterval(() => sdNotify.watchdog(), 30000))
+# and changing Type=notify.
 
 [Install]
 WantedBy=multi-user.target
