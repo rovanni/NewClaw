@@ -228,6 +228,14 @@ export class AgentController {
         this.telegramAdapter.setBus(this.messageBus);
         this.messageBus.registerAdapter(this.telegramAdapter);
 
+        // Register voice/audio media handlers — transcribe via Whisper API
+        this.messageBus.registerMediaHandler('voice', async (msg: any, attachment: any) => {
+            return this.transcribeAttachment(msg, attachment);
+        });
+        this.messageBus.registerMediaHandler('audio', async (msg: any, attachment: any) => {
+            return this.transcribeAttachment(msg, attachment);
+        });
+
         // Discord adapter (optional)
         if (config.discordBotToken) {
             this.discordAdapter = new DiscordAdapter({
@@ -522,5 +530,116 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
 4. Conecte projetos ao user_identity com: works_on ou owns.
 5. Use action=connect após action=create se precisar de mais conexões.
 6. Busque antes de criar para evitar duplicatas (use memory_search).${skillSection}`;
+    }
+
+    /**
+     * Transcribe voice/audio attachment via Whisper API.
+     * Downloads the file from Telegram, sends to Whisper, returns transcribed text.
+     * Falls back to local whisper-cli if API fails.
+     */
+    private async transcribeAttachment(msg: any, attachment: any): Promise<string | null> {
+        const vlog = createLogger('VoiceHandler');
+        try {
+            // Get file URL from Telegram via the adapter
+            const adapter = this.messageBus['adapters']?.get(msg.channel) as any;
+            const botToken = msg.metadata?.botToken || adapter?.config?.botToken;
+            const fileId = attachment.fileId;
+
+            if (!botToken || !fileId) {
+                vlog.error('missing_bot_token_or_file_id', `token=${!!botToken} fileId=${!!fileId}`);
+                return '⚠️ Não foi possível obter o arquivo de áudio (token ou fileId ausente).';
+            }
+
+            // Download file from Telegram
+            const fileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
+            const fileRes = await fetch(fileUrl);
+            const fileData = await fileRes.json() as any;
+
+            if (!fileData?.ok || !fileData?.result?.file_path) {
+                vlog.error('telegram_getfile_failed', JSON.stringify(fileData));
+                return '⚠️ Não foi possível obter o caminho do arquivo no Telegram.';
+            }
+
+            const filePath = fileData.result.file_path;
+            const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
+
+            // Download audio bytes
+            const audioRes = await fetch(downloadUrl);
+            if (!audioRes.ok) {
+                vlog.error('audio_download_failed', `status=${audioRes.status}`);
+                return '⚠️ Falha ao baixar o arquivo de áudio do Telegram.';
+            }
+            const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
+
+            vlog.info('audio_downloaded', `size=${audioBuffer.length} type=${attachment.type}`);
+
+            // Try Whisper API (Sol GPU first, then fallback)
+            const whisperApiUrl = process.env.WHISPER_API_URL || 'http://10.0.0.1:8177';
+            const whisperApiFallback = process.env.WHISPER_API_FALLBACK || '';
+            const whisperUrls = [whisperApiUrl, whisperApiFallback].filter(Boolean);
+
+            for (const whisperUrl of whisperUrls) {
+                try {
+                    const formData = new FormData();
+                    formData.append('file', new Blob([audioBuffer]), `audio.${filePath.endsWith('.oga') ? 'oga' : 'ogg'}`);
+
+                    const whisperRes = await fetch(`${whisperUrl}/inference`, {
+                        method: 'POST',
+                        body: formData,
+                        signal: AbortSignal.timeout(60_000),
+                    });
+
+                    if (whisperRes.ok) {
+                        const result = await whisperRes.json() as any;
+                        const transcription = result?.text || result?.transcription || '';
+                        if (transcription.trim()) {
+                            vlog.info('whisper_transcription_ok', `textLen=${transcription.length}`);
+                            // Replace msg.text with transcription so it flows to AgentLoop
+                            msg.text = transcription.trim();
+                            return null; // null = continue to text processing pipeline
+                        }
+                    }
+                    vlog.warn('whisper_api_failed', `url=${whisperUrl} status=${whisperRes.status}`);
+                } catch (e: any) {
+                    vlog.warn('whisper_api_error', `url=${whisperUrl} error=${e.message}`);
+                }
+            }
+
+            // Fallback: local whisper-cli
+            const tmpDir = this.config.tmpDir || '/tmp';
+            const fs = await import('fs/promises');
+            const pathMod = await import('path');
+            const tmpFile = pathMod.join(tmpDir, `whisper_${Date.now()}.ogg`);
+            const wavFile = pathMod.join(tmpDir, `whisper_${Date.now()}.wav`);
+
+            try {
+                await fs.writeFile(tmpFile, audioBuffer);
+                // Convert to WAV 16kHz mono
+                const { execSync } = await import('child_process');
+                execSync(`ffmpeg -y -i "${tmpFile}" -ar 16000 -ac 1 "${wavFile}" 2>/dev/null`, { timeout: 30_000 });
+                // Run local whisper
+                const whisperPath = process.env.WHISPER_PATH || 'whisper';
+                const output = execSync(`${whisperPath} "${wavFile}" --language pt --no-timestamps 2>/dev/null`, {
+                    timeout: 120_000,
+                    encoding: 'utf-8',
+                });
+                const transcription = output.trim();
+                if (transcription) {
+                    vlog.info('local_whisper_ok', `textLen=${transcription.length}`);
+                    msg.text = transcription;
+                    return null;
+                }
+            } catch (e: any) {
+                vlog.warn('local_whisper_failed', `error=${e.message}`);
+            } finally {
+                await fs.unlink(tmpFile).catch(() => {});
+                await fs.unlink(wavFile).catch(() => {});
+            }
+
+            return '⚠️ Não foi possível transcrever o áudio. Tente enviar como texto.';
+        } catch (err: any) {
+            vlog.error('transcription_failed', err);
+            return `⚠️ Erro na transcrição: ${err.message}`;
+        }
     }
 }

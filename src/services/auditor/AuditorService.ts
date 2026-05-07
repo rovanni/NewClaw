@@ -176,6 +176,18 @@ export class AuditorService {
             CREATE INDEX IF NOT EXISTS idx_findings_category ON audit_findings(category);
             CREATE INDEX IF NOT EXISTS idx_findings_fixable ON audit_findings(auto_fixable, fixed);
         `);
+
+        // Migration: add risk_level column if missing (backwards compatibility)
+        try {
+            const columns = this.db.pragma('table_info(audit_findings)') as Array<{ name: string }>;
+            const hasRiskLevel = columns.some(c => c.name === 'risk_level');
+            if (!hasRiskLevel) {
+                this.db.exec('ALTER TABLE audit_findings ADD COLUMN risk_level TEXT DEFAULT \'medium\'');
+                log.info('migration_added_risk_level', 'Added risk_level column to audit_findings');
+            }
+        } catch (e: any) {
+            log.warn('migration_risk_level_failed', e.message);
+        }
     }
 
     // ============================================

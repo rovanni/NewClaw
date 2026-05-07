@@ -82,6 +82,8 @@ export class TelegramAdapter implements ChannelAdapter {
     }
 
     private started: boolean = false;
+    private startRetries: number = 0;
+    private maxStartRetries: number = 3;
 
     async start(): Promise<void> {
         if (!this.config.enabled) {
@@ -94,16 +96,43 @@ export class TelegramAdapter implements ChannelAdapter {
             return;
         }
 
+        // Pre-check: kill any stale bot instances that would cause 409 Conflict
+        // This happens when the process was restarted but the old polling loop is still active
+        try {
+            // Delete webhook to ensure polling mode works
+            await this.bot.api.deleteWebhook({ drop_pending_updates: true });
+        } catch (e: any) {
+            log.warn('delete_webhook_failed', e.message);
+        }
+
         this.registerHandlers();
         this.started = true;
 
-        await this.bot.start({
-            onStart: () => {
-                this._isConnected = true;
-                log.info('bot_started', '🤖 Telegram Bot rodando!');
-            },
-            allowed_updates: ['message']
-        });
+        try {
+            await this.bot.start({
+                onStart: () => {
+                    this._isConnected = true;
+                    this.startRetries = 0; // Reset on success
+                    log.info('bot_started', '🤖 Telegram Bot rodando!');
+                },
+                allowed_updates: ['message']
+            });
+        } catch (e: any) {
+            if (e.message?.includes('409') || e.message?.includes('Conflict')) {
+                log.error('bot_start_409_conflict', 'Multiple bot instances detected. Waiting for old instance to stop...');
+                // Wait and retry — the old instance should time out within ~30s
+                if (this.startRetries < this.maxStartRetries) {
+                    this.startRetries++;
+                    const delay = this.startRetries * 15000; // 15s, 30s, 45s
+                    log.info('bot_start_retry', `Retry ${this.startRetries}/${this.maxStartRetries} in ${delay/1000}s...`);
+                    this.started = false; // Allow re-entry
+                    await new Promise(r => setTimeout(r, delay));
+                    return this.start();
+                }
+                log.error('bot_start_409_exhausted', 'All retries exhausted. Another bot instance is still running.');
+            }
+            throw e;
+        }
     }
 
     async stop(): Promise<void> {

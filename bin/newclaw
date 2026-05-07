@@ -21,7 +21,27 @@ function getPid() {
     const pid = fs.readFileSync(PID_FILE, 'utf8').trim();
     if (process.kill(pid, 0)) return parseInt(pid);
   } catch {}
-  return null;
+  // PID file stale or missing — try to find running process
+  return findRunningPid();
+}
+
+function findRunningPid() {
+  try {
+    const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
+    const pids = out.trim().split('\n').filter(Boolean).map(Number);
+    return pids.length > 0 ? pids[0] : null;
+  } catch { return null; }
+}
+
+function killAllInstances() {
+  try {
+    const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
+    const pids = out.trim().split('\n').filter(Boolean).map(Number);
+    for (const pid of pids) {
+      try { process.kill(pid, 'SIGTERM'); } catch {}
+    }
+    return pids.length;
+  } catch { return 0; }
 }
 
 function isRunning() {
@@ -80,7 +100,21 @@ function tailLog(logDir, daemon) {
 
 const commands = {
   start(args) {
-    if (isRunning()) { console.log(`🟢 NewClaw already running (PID ${getPid()})`); return; }
+    if (isRunning()) {
+      // Check if it's actually a node process (not a stale PID from a different process)
+      const pid = getPid();
+      try {
+        const out = execSync(`ps -p ${pid} -o comm=`, { encoding: 'utf-8' }).trim();
+        if (out === 'node') {
+          console.log(`🟢 NewClaw already running (PID ${pid})`);
+          return;
+        }
+      } catch {}
+      // Stale PID — clean up and continue
+      console.log(`⚠️ Stale PID ${pid} detected, cleaning up...`);
+      try { fs.unlinkSync(PID_FILE); } catch {}
+      killAllInstances();
+    }
     const daemon = args.includes('--daemon');
     const debug = args.includes('--debug');
     const tail = args.includes('--tail');
@@ -105,10 +139,17 @@ const commands = {
         cwd: DIR,
         stdio: ['ignore', outLog, errLog],
         env: { ...process.env, ...env },
-        detached: true
+        detached: false  // Don't detach — let parent manage lifecycle
       });
       
+      // Track the actual node process PID, not the wrapper
       fs.writeFileSync(PID_FILE, child.pid.toString());
+      
+      // Ensure child is killed if parent dies
+      const cleanup = () => { try { child.kill('SIGTERM'); } catch {} process.exit(0); };
+      process.on('SIGTERM', cleanup);
+      process.on('SIGINT', cleanup);
+      
       child.unref();
       
       console.log(`🚀 NewClaw started (daemon, PID ${child.pid})`);
@@ -179,10 +220,14 @@ const commands = {
 
   stop() {
     const pid = getPid();
-    if (!pid) { console.log('⚪ NewClaw is not running'); return; }
-    try { process.kill(pid, 'SIGTERM'); } catch {}
+    // Kill all instances to avoid 409 Conflict (multiple bot instances)
+    const killedCount = killAllInstances();
     try { fs.unlinkSync(PID_FILE); } catch {}
-    console.log('🛑 NewClaw stopped');
+    if (killedCount > 0) {
+      console.log(`🛑 NewClaw stopped (${killedCount} instance(s) terminated)`);
+    } else {
+      console.log('⚪ NewClaw is not running');
+    }
   },
 
   restart(args) {
