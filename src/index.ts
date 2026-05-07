@@ -8,6 +8,7 @@ import { AgentController } from './core/AgentController';
 import { DashboardServer } from './dashboard/DashboardServer';
 import { Logger } from './shared/Logger';
 import { createLogger } from './shared/AppLogger';
+import { getEventLoopMonitor } from './shared/EventLoopMonitor';
 const log = createLogger('Index');
 
 // Inicializar Logger (adiciona timestamps ao console.log)
@@ -82,6 +83,11 @@ async function main() {
     log.info('🚀 NewClaw v0.2.0 starting...');
     log.info(`   Language: ${config.language}`);
     log.info(`   Provider: ${config.defaultProvider}`);
+
+    // Start event loop monitor (non-blocking, low overhead)
+    const monitor = getEventLoopMonitor({ warnMs: 500, criticalMs: 2000 });
+    monitor.start();
+    log.info('   EventLoopMonitor: started (warn=500ms, critical=2000ms)');
 
     if (!config.telegramBotToken && !config.discordBotToken && !config.whatsappPhoneNumber && !config.signalPhoneNumber) {
         log.error('❌ Nenhum canal configurado! Configure TELEGRAM_BOT_TOKEN, DISCORD_BOT_TOKEN, WHATSAPP_PHONE_NUMBER ou SIGNAL_PHONE_NUMBER');

@@ -605,7 +605,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
                 }
             }
 
-            // Fallback: local whisper-cli
+            // Fallback: local whisper-cli (ASYNC — non-blocking)
             const tmpDir = this.config.tmpDir || '/tmp';
             const fs = await import('fs/promises');
             const pathMod = await import('path');
@@ -614,14 +614,20 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
 
             try {
                 await fs.writeFile(tmpFile, audioBuffer);
-                // Convert to WAV 16kHz mono
-                const { execSync } = await import('child_process');
-                execSync(`ffmpeg -y -i "${tmpFile}" -ar 16000 -ac 1 "${wavFile}" 2>/dev/null`, { timeout: 30_000 });
-                // Run local whisper
+                // Convert to WAV 16kHz mono (ASYNC via execFile)
+                const { execFile } = await import('child_process');
+                await new Promise<void>((resolve, reject) => {
+                    execFile('ffmpeg', ['-y', '-i', tmpFile, '-ar', '16000', '-ac', '1', wavFile], {
+                        timeout: 30_000,
+                    }, (err) => err ? reject(err) : resolve());
+                });
+                // Run local whisper (ASYNC via execFile)
                 const whisperPath = process.env.WHISPER_PATH || 'whisper';
-                const output = execSync(`${whisperPath} "${wavFile}" --language pt --no-timestamps 2>/dev/null`, {
-                    timeout: 120_000,
-                    encoding: 'utf-8',
+                const output = await new Promise<string>((resolve, reject) => {
+                    execFile(whisperPath, [wavFile, '--language', 'pt', '--no-timestamps'], {
+                        timeout: 120_000,
+                        encoding: 'utf-8',
+                    }, (err, stdout) => err ? reject(err) : resolve(stdout));
                 });
                 const transcription = output.trim();
                 if (transcription) {

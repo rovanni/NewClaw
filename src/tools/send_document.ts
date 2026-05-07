@@ -1,12 +1,12 @@
 /**
  * send_document — Enviar documentos/arquivos pelo Telegram
- *
- * Suporta envio de qualquer arquivo (HTML, PDF, PNG, etc.)
- * como documento do Telegram.
+ * 
+ * MIGRATED: execSync(curl) → fetch() multipart upload (non-blocking)
+ * Previous execSync blocked the event loop for up to 30s during uploads.
+ * Now uses native fetch() + FormData — fully async.
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
-import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { createLogger } from '../shared/AppLogger';
@@ -69,56 +69,49 @@ export class SendDocumentTool implements ToolExecutor {
             return { success: false, output: '', error: 'Contexto do Telegram não configurado.' };
         }
 
-        // Build curl command
-        const telegramUrl = `https://api.telegram.org/bot${this.botToken}/sendDocument`;
         const displayName = filename || path.basename(resolvedPath);
-        const captionText = caption || '';
-
-        let cmd = `curl -s -F "chat_id=${this.chatId}" -F "document=@${resolvedPath}"`;
-
-        // Set filename via multipart
-        cmd += ` -F "filename=${displayName}"`;
-
-        if (captionText) {
-            // Escape quotes in caption
-            const escapedCaption = captionText.replace(/'/g, "'\\''").replace(/"/g, '\\"');
-            cmd += ` -F "caption=${escapedCaption}"`;
-        }
-
-        cmd += ` "${telegramUrl}"`;
 
         try {
-            const result = execSync(cmd, {
-                timeout: 30000,
-                maxBuffer: 1024 * 1024
-            }).toString();
+            const uploadStart = Date.now();
+            log.info(`Uploading document "${displayName}" (${(stats.size / 1024).toFixed(1)}KB)...`);
 
-            // Check for Telegram API errors
-            try {
-                const response = JSON.parse(result);
-                if (response.ok) {
-                    const docName = response.result?.document?.file_name || displayName;
-                    const docSize = response.result?.document?.file_size
-                        ? `(${(response.result.document.file_size / 1024).toFixed(1)}KB)`
-                        : '';
-                    return {
-                        success: true,
-                        output: `✅ Documento "${docName}" ${docSize} enviado com sucesso.`
-                    };
-                } else {
-                    return {
-                        success: false,
-                        output: '',
-                        error: `Telegram API error: ${response.description || 'Unknown error'}`
-                    };
-                }
-            } catch {
-                // If response is not JSON, check for common errors
-                if (result.includes('error_code') || result.includes('Bad Request')) {
-                    return { success: false, output: '', error: `Telegram error: ${result.slice(0, 200)}` };
-                }
-                // Assume success if not JSON error
-                return { success: true, output: `✅ Documento "${displayName}" enviado.` };
+            // Read file and send via native fetch() — fully async, no event loop blocking
+            const fileBuffer = fs.readFileSync(resolvedPath);
+
+            const formData = new FormData();
+            formData.append('chat_id', this.chatId);
+            formData.append('document', new File([fileBuffer], displayName));
+            if (caption) {
+                formData.append('caption', caption.slice(0, 1024));
+            }
+
+            const telegramUrl = `https://api.telegram.org/bot${this.botToken}/sendDocument`;
+
+            const response = await fetch(telegramUrl, {
+                method: 'POST',
+                body: formData,
+                signal: AbortSignal.timeout(35000),
+            });
+
+            const result = await response.json() as any;
+            const uploadMs = Date.now() - uploadStart;
+            log.info(`Document upload done in ${uploadMs}ms`);
+
+            if (result.ok) {
+                const docName = result.result?.document?.file_name || displayName;
+                const docSize = result.result?.document?.file_size
+                    ? `(${(result.result.document.file_size / 1024).toFixed(1)}KB)`
+                    : '';
+                return {
+                    success: true,
+                    output: `✅ Documento "${docName}" ${docSize} enviado com sucesso.`
+                };
+            } else {
+                return {
+                    success: false,
+                    output: '',
+                    error: `Telegram API error: ${result.description || 'Unknown error'}`
+                };
             }
         } catch (error: any) {
             return {

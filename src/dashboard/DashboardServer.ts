@@ -26,6 +26,7 @@ import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
 import { SkillInstaller } from '../skills/SkillInstaller';
 import { createLogger } from '../shared/AppLogger';
+import { getEventLoopMonitor } from '../shared/EventLoopMonitor';
 const log = createLogger('Dashboardserver');
 
 // Simple token auth
@@ -482,6 +483,55 @@ export class DashboardServer {
                     platform: process.platform,
                     pid: process.pid,
                 }
+            });
+        });
+
+        // ── Health Check (load balancer / watchdog friendly) ─────────────────
+        this.app.get('/health', async (_req: Request, res: Response) => {
+            const startMs = Date.now();
+            const mem = process.memoryUsage();
+            const monitor = getEventLoopMonitor();
+            const stats = monitor.getStats();
+
+            // Check Ollama connectivity
+            let ollamaStatus = 'unknown';
+            try {
+                const ollamaRes = await fetch('http://localhost:11434/api/tags', {
+                    signal: AbortSignal.timeout(3000),
+                });
+                ollamaStatus = ollamaRes.ok ? 'healthy' : 'degraded';
+            } catch {
+                ollamaStatus = 'unreachable';
+            }
+
+            // Check Telegram connectivity
+            const telegramStatus = this.controller?.getTelegramAdapter()?.isConnected
+                ? 'connected' : 'disconnected';
+
+            const isHealthy = ollamaStatus !== 'unreachable' && stats.lagMs < 5000;
+            const responseMs = Date.now() - startMs;
+
+            res.status(isHealthy ? 200 : 503).json({
+                status: isHealthy ? 'ok' : 'degraded',
+                uptime: stats.uptimeSeconds,
+                memory: {
+                    rssMb: Math.round(mem.rss / 1048576),
+                    heapUsedMb: Math.round(mem.heapUsed / 1048576),
+                    heapTotalMb: Math.round(mem.heapTotal / 1048576),
+                },
+                eventLoop: {
+                    lagMs: stats.lagMs,
+                    avgLagMs: stats.avgLagMs,
+                    peakLagMs: stats.peakLagMs,
+                    warnCount: stats.warnCount,
+                    criticalCount: stats.criticalCount,
+                },
+                telegram: telegramStatus,
+                ollama: ollamaStatus,
+                activeHandles: stats.activeHandles,
+                activeRequests: stats.activeRequests,
+                responseTimeMs: responseMs,
+                timestamp: stats.timestamp,
             });
         });
 
