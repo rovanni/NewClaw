@@ -31,7 +31,35 @@ const log = createLogger('Dashboardserver');
 
 // Simple token auth
 const API_TOKENS: Set<string> = new Set();
-let dashboardAuth: { enabled: boolean; password: string } = { enabled: false, password: '' };
+let dashboardAuth: { enabled: boolean; passwordHash: string } = { enabled: false, passwordHash: '' };
+
+/** Hash a password with a random salt using SHA-256 (no external deps) */
+function hashPassword(password: string): string {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.createHash('sha256').update(salt + password).digest('hex');
+    return `${salt}:${hash}`;
+}
+
+/** Verify a password against a stored salt:hash using timing-safe comparison */
+function verifyPassword(password: string, stored: string): boolean {
+    if (!stored || !stored.includes(':')) return false;
+    const [salt, expectedHash] = stored.split(':');
+    const actualHash = crypto.createHash('sha256').update(salt + password).digest('hex');
+    try {
+        return crypto.timingSafeEqual(
+            Buffer.from(actualHash, 'hex'),
+            Buffer.from(expectedHash, 'hex')
+        );
+    } catch {
+        return false;
+    }
+}
+
+// Initialize from env if DASHBOARD_PASSWORD is set
+if (process.env.DASHBOARD_PASSWORD) {
+    dashboardAuth.enabled = true;
+    dashboardAuth.passwordHash = hashPassword(process.env.DASHBOARD_PASSWORD);
+}
 
 function authMiddleware(req: Request, res: Response, next: express.NextFunction): void {
     if (!dashboardAuth.enabled) { next(); return; }
@@ -535,8 +563,35 @@ export class DashboardServer {
             });
         });
 
+        // ── Rate limiter for /api/chat (in-memory, no external deps) ──
+        const chatRateLimit = new Map<string, number[]>();
+        const RATE_LIMIT_WINDOW_MS = 60_000;  // 1 minute window
+        const RATE_LIMIT_MAX = 10;             // max 10 requests per window
+
         // Web chat endpoint
         this.app.post('/api/chat', async (req: Request, res: Response) => {
+            // Rate limit by IP
+            const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+            const now = Date.now();
+            const timestamps = chatRateLimit.get(clientIp) || [];
+            const recent = timestamps.filter(t => now - t < RATE_LIMIT_WINDOW_MS);
+
+            if (recent.length >= RATE_LIMIT_MAX) {
+                const retryAfter = Math.ceil((recent[0] + RATE_LIMIT_WINDOW_MS - now) / 1000);
+                res.set('Retry-After', String(retryAfter));
+                return res.status(429).json({ error: `Rate limit exceeded. Try again in ${retryAfter}s.` });
+            }
+
+            recent.push(now);
+            chatRateLimit.set(clientIp, recent);
+
+            // Cleanup stale entries every 100 requests
+            if (chatRateLimit.size > 100) {
+                for (const [ip, ts] of chatRateLimit) {
+                    if (ts.every(t => now - t > RATE_LIMIT_WINDOW_MS)) chatRateLimit.delete(ip);
+                }
+            }
+
             if (!this.controller) {
                 return res.status(500).json({ error: 'AgentController not initialized' });
             }
@@ -611,7 +666,7 @@ export class DashboardServer {
             if (!dashboardAuth.enabled) {
                 return res.json({ success: true, token: 'no-auth-required' });
             }
-            if (password === dashboardAuth.password) {
+            if (password && verifyPassword(password, dashboardAuth.passwordHash)) {
                 const token = crypto.randomBytes(32).toString('hex');
                 API_TOKENS.add(token);
                 res.json({ success: true, token });
@@ -627,9 +682,9 @@ export class DashboardServer {
                 dashboardAuth.enabled = enabled;
             }
             if (password) {
-                dashboardAuth.password = password;
+                dashboardAuth.passwordHash = hashPassword(password);
             }
-            res.json({ success: true, auth: { enabled: dashboardAuth.enabled, hasPassword: !!dashboardAuth.password } });
+            res.json({ success: true, auth: { enabled: dashboardAuth.enabled, hasPassword: !!dashboardAuth.passwordHash } });
         });
 
         // === Memory APIs ===

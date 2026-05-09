@@ -993,16 +993,35 @@ export class MemoryManager {
         const row = this.db.prepare('SELECT * FROM graph_snapshots WHERE id = ?').get(id) as any;
         if (!row) return false;
         const data = JSON.parse(row.snapshot_data);
-        this.db.exec('DELETE FROM memory_edges');
-        this.db.exec('DELETE FROM memory_nodes');
-        for (const n of data.nodes) {
-            this.db.prepare(`INSERT OR REPLACE INTO memory_nodes (id, type, name, content, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-                .run(n.id, n.type, n.name, n.content, n.metadata, n.created_at, n.updated_at);
-        }
-        for (const e of data.edges) {
-            this.db.prepare(`INSERT OR REPLACE INTO memory_edges (from_node, to_node, relation, weight, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
-                .run(e.from_node, e.to_node, e.relation, e.weight, e.confidence || 1.0, e.created_at);
-        }
+
+        const restoreTransaction = this.db.transaction(() => {
+            this.db.exec('DELETE FROM memory_edges');
+            this.db.exec('DELETE FROM memory_nodes');
+
+            const insertNode = this.db.prepare(
+                `INSERT OR REPLACE INTO memory_nodes
+                 (id, type, name, content, metadata, pagerank, degree, betweenness, closeness, community_id, weight, confidence, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            );
+            for (const n of data.nodes) {
+                insertNode.run(
+                    n.id, n.type, n.name, n.content, n.metadata,
+                    n.pagerank || 0, n.degree || 0, n.betweenness || 0, n.closeness || 0, n.community_id || 0,
+                    n.weight || 1.0, n.confidence || 1.0,
+                    n.created_at, n.updated_at
+                );
+            }
+
+            const insertEdge = this.db.prepare(
+                `INSERT OR REPLACE INTO memory_edges (from_node, to_node, relation, weight, confidence, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?)`
+            );
+            for (const e of data.edges) {
+                insertEdge.run(e.from_node, e.to_node, e.relation, e.weight, e.confidence || 1.0, e.created_at);
+            }
+        });
+
+        restoreTransaction();
         return true;
     }
 

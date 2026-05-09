@@ -163,7 +163,7 @@ export class AgentController {
 
         // Inicializar onboarding
         this.onboardingService = new OnboardingService(
-            (this.memory as any).db || (this.memory as any)._db,
+            this.memory.getDatabase(),
             this.skillLearner,
             this.providerFactory,
             this.agentLoop.getStateManager()
@@ -183,7 +183,7 @@ export class AgentController {
         this.sessionLearner = new SessionLearner(this.sessionManager, this.memory);
 
         // Inicializar Scheduler
-        this.scheduler = new SchedulerService('./data/newclaw.db', (this.memory as any).db || (this.memory as any)._db);
+        this.scheduler = new SchedulerService('./data/newclaw.db', this.memory.getDatabase());
 
         // Inicializar MemoryGovernor
         this.memoryGovernor = new MemoryGovernor(this.memory, {
@@ -213,7 +213,7 @@ export class AgentController {
             ownerChatId: config.telegramAllowedUserIds[0] || '',
             maxFindingsPerCategory: 20,
             enableAutoFix: true,
-        }, (this.memory as any).db || (this.memory as any)._db);
+        }, this.memory.getDatabase());
 
         // Register commands on the MessageBus
         this.registerCommands();
@@ -391,7 +391,7 @@ export class AgentController {
         // /skills — listar skills
         this.messageBus.registerCommand('/skills', async (msg) => {
             try {
-                const db = (this.memory as any).db || (this.memory as any)._db;
+                const db = this.memory.getDatabase();
                 if (!db) return '⚠️ Banco de dados não disponível para revisar skills.';
 
                 const skills = db.prepare(
@@ -428,7 +428,7 @@ export class AgentController {
             if (!rawId) return 'Use /skill_approve <id_curto>. Veja os IDs com /skills';
 
             try {
-                const db = (this.memory as any).db || (this.memory as any)._db;
+                const db = this.memory.getDatabase();
                 const rows = db.prepare('SELECT id FROM auto_skills').all() as Array<{ id: string }>;
                 const match = rows.find(r => r.id.endsWith(rawId));
                 if (!match) return `Skill com ID curto "${rawId}" não encontrada.`;
@@ -447,7 +447,7 @@ export class AgentController {
             if (!rawId) return 'Use /skill_reject <id_curto>. Veja os IDs com /skills';
 
             try {
-                const db = (this.memory as any).db || (this.memory as any)._db;
+                const db = this.memory.getDatabase();
                 const rows = db.prepare('SELECT id FROM auto_skills').all() as Array<{ id: string }>;
                 const match = rows.find(r => r.id.endsWith(rawId));
                 if (!match) return `Skill com ID curto "${rawId}" não encontrada.`;

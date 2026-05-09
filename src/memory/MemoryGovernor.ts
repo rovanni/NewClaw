@@ -629,13 +629,9 @@ export class MemoryGovernor {
 
     private getAllNodes(): MemoryNode[] {
         try {
-            return this.memory.getNodesByType('identity')
-                .concat(this.memory.getNodesByType('preference'))
-                .concat(this.memory.getNodesByType('project'))
-                .concat(this.memory.getNodesByType('context'))
-                .concat(this.memory.getNodesByType('fact'))
-                .concat(this.memory.getNodesByType('skill'))
-                .concat(this.memory.getNodesByType('infrastructure'));
+            return this.memory.getDatabase().prepare(
+                'SELECT * FROM memory_nodes'
+            ).all() as MemoryNode[];
         } catch {
             return [];
         }
@@ -643,7 +639,7 @@ export class MemoryGovernor {
 
     private removeNode(nodeId: string): void {
         try {
-            const db = (this.memory as any).db;
+            const db = this.memory.getDatabase();
             // Remove edges pointing to/from this node
             db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(nodeId, nodeId);
             // Remove the node

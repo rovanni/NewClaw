@@ -159,7 +159,7 @@ export class EventLoopMonitor {
 
     private getActiveRequests(): number {
         try {
-            return (process as any)._getActiveActiveRequests?.()?.length ?? -1;
+            return (process as any)._getActiveRequests?.()?.length ?? -1;
         } catch {
             return -1;
         }

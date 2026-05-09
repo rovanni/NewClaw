@@ -47,7 +47,7 @@ export class SshExecTool implements ToolExecutor {
         const sshTarget = resolveHost(hostAlias);
 
         // Build SSH command
-        const sshCommand = `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no ${sshTarget} "${command.replace(/"/g, '\\"')}"`;
+        const sshCommand = `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new ${sshTarget} "${command.replace(/"/g, '\\"')}"`;
 
         try {
             const output = await new Promise<string>((resolve, reject) => {

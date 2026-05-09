@@ -93,7 +93,7 @@ export class ContextBuilder {
         const semanticResults = await this.semanticSearch(query);
 
         // 2. Get connectivity for each node
-        const db = (this.memory as any).db;
+        const db = this.memory.getDatabase();
 
         // 3. Calculate combined scores
         const ranked: RankedNode[] = semanticResults.map((node: any) => {

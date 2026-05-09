@@ -47,7 +47,7 @@ export class ExecCommandTool implements ToolExecutor {
             const hostAlias = match[1];
             const remoteCmd = match[2];
             const sshTarget = resolveHost(hostAlias);
-            command = `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no ${sshTarget} "${remoteCmd.replace(/"/g, '\\"')}"`;
+            command = `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new ${sshTarget} "${remoteCmd.replace(/"/g, '\\"')}"`;
         }
 
         // Resolver workdir: padrão = workspace

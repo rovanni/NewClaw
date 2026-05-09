@@ -104,6 +104,7 @@ export class GeminiProvider implements ILLMProvider {
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                signal: options?.signal,
                 body: JSON.stringify({
                     contents: messages.map(m => ({
                         role: m.role === 'assistant' ? 'model' : m.role,
@@ -184,7 +185,7 @@ export class DeepSeekProvider implements ILLMProvider {
             toolCalls: message?.tool_calls?.map((tc: any) => ({
                 id: tc.id,
                 name: tc.function.name,
-                arguments: JSON.parse(tc.function.arguments || '{}')
+                arguments: (() => { try { return JSON.parse(tc.function.arguments || '{}'); } catch { return {}; } })()
             })),
             usage: data.usage ? {
                 prompt_tokens: data.usage.prompt_tokens || 0,
@@ -236,7 +237,7 @@ export class GroqProvider implements ILLMProvider {
             toolCalls: message?.tool_calls?.map((tc: any) => ({
                 id: tc.id,
                 name: tc.function.name,
-                arguments: JSON.parse(tc.function.arguments || '{}')
+                arguments: (() => { try { return JSON.parse(tc.function.arguments || '{}'); } catch { return {}; } })()
             })),
             usage: data.usage ? {
                 prompt_tokens: data.usage.prompt_tokens || 0,
@@ -603,7 +604,7 @@ export class OpenAIProvider implements ILLMProvider {
             toolCalls: message?.tool_calls?.map((tc: any) => ({
                 id: tc.id,
                 name: tc.function.name,
-                arguments: JSON.parse(tc.function.arguments || '{}')
+                arguments: (() => { try { return JSON.parse(tc.function.arguments || '{}'); } catch { return {}; } })()
             })),
             usage: data.usage ? {
                 prompt_tokens: data.usage.prompt_tokens || 0,
@@ -778,14 +779,6 @@ export class ProviderFactory {
 
                     // Clear active abort — this attempt completed on its own
                     activeAbortController = null;
-
-                    // ATOMICITY: Validate that this attempt was NOT aborted.
-                    // If aborted, the response may be partial/invalid — DISCARD completely.
-                    if (currentAbort.signal.aborted) {
-                        log.warn(`[${attemptId}] ABORTED after completion — discarding ${(result.content?.length || 0)} chars (late response)`);
-                        attemptLog.push({ provider: providerName, model: modelUsed, duration: Date.now() - attemptStart, status: 'error', errorMessage: 'Aborted — late response discarded' });
-                        continue;
-                    }
 
                     // Check for leaked tool calls
                     if (!result.toolCalls || result.toolCalls.length === 0) {

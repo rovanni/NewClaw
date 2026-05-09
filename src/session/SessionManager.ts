@@ -323,7 +323,7 @@ export class SessionManager {
 
     private ensureCheckpointSchema(): void {
         try {
-            const db = (this.memory as any).db;
+            const db = this.memory.getDatabase();
             // Safe migration: add token_estimate column if missing
             const columns = db.prepare("PRAGMA table_info(session_checkpoints)").all() as Array<{ name: string }>;
             const hasTokenEstimate = columns.some(c => c.name === 'token_estimate');
@@ -339,7 +339,7 @@ export class SessionManager {
     private saveCheckpoint(sid: string, checkpoint: CompressionCheckpoint): void {
         try {
             this.ensureCheckpointSchema();
-            const db = (this.memory as any).db;
+            const db = this.memory.getDatabase();
             db.prepare(`
                 INSERT OR REPLACE INTO session_checkpoints 
                 (session_id, seq, summary, original_count, compressed_at, model, token_estimate)
@@ -347,7 +347,7 @@ export class SessionManager {
             `).run(sid, checkpoint.seq, checkpoint.summary, checkpoint.originalCount, checkpoint.compressedAt, checkpoint.model || null, checkpoint.tokenEstimate);
         } catch (err1) {
             try {
-                const db = (this.memory as any).db;
+                const db = this.memory.getDatabase();
                 db.exec(`
                     CREATE TABLE IF NOT EXISTS session_checkpoints (
                         session_id TEXT NOT NULL,
@@ -374,7 +374,7 @@ export class SessionManager {
 
     private loadCheckpoints(): void {
         try {
-            const db = (this.memory as any).db;
+            const db = this.memory.getDatabase();
             db.exec(`
                 CREATE TABLE IF NOT EXISTS session_checkpoints (
                     session_id TEXT NOT NULL,
@@ -528,7 +528,7 @@ export class SessionManager {
      */    private ensureConversation(key: SessionKey): void {
         const convId = this.conversationId(key);
         try {
-            const db = (this.memory as any).db;
+            const db = this.memory.getDatabase();
             const existing = db.prepare('SELECT id FROM conversations WHERE id = ?').get(convId);
             if (!existing) {
                 db.prepare('INSERT INTO conversations (id, user_id, provider) VALUES (?, ?, ?)').run(convId, key.userId, key.channel);
