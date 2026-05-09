@@ -131,6 +131,10 @@ export class AuditorService {
     private db: Database.Database;
     private findings: AuditFinding[] = [];
     private fixLogPath: string;
+    /** Timestamp of last audit — used to only read new log lines */
+    private lastAuditTimestamp: string | null = null;
+    /** Titles from previous report — used for deduplication */
+    private previousFindingTitles: Set<string> = new Set();
 
     constructor(config: AuditConfig, db?: Database.Database) {
         this.config = config;
@@ -196,6 +200,10 @@ export class AuditorService {
 
     async runFullAudit(): Promise<AuditReport> {
         const start = Date.now();
+
+        // Load previous report's finding titles for deduplication
+        this.loadPreviousFindings();
+
         this.findings = [];
 
         console.log('[AUDITOR] 🔍 Iniciando auditoria completa...');
@@ -209,8 +217,12 @@ export class AuditorService {
         console.log('[AUDITOR] 📝 [4/4] Auditando integrações...');
         await this.auditIntegration();
 
+        // Deduplicate against previous report
+        this.deduplicateFindings();
+
         const report = this.buildReport(Date.now() - start);
         this.saveReport(report);
+        this.lastAuditTimestamp = new Date().toISOString();
 
         console.log(`[AUDITOR] ✅ Auditoria concluída: ${report.totalFindings} achados (${report.critical} críticos)`);
         return report;
@@ -218,6 +230,7 @@ export class AuditorService {
 
     async runCategoryAudit(category: 'code' | 'runtime' | 'data' | 'integration'): Promise<AuditReport> {
         const start = Date.now();
+        this.loadPreviousFindings();
         this.findings = [];
 
         console.log(`[AUDITOR] 🔍 Auditoria de ${category}...`);
@@ -230,8 +243,11 @@ export class AuditorService {
             case 'integration': await this.auditIntegration(); break;
         }
 
+        this.deduplicateFindings();
+
         const report = this.buildReport(Date.now() - start);
         this.saveReport(report);
+        this.lastAuditTimestamp = new Date().toISOString();
         return report;
     }
 
@@ -245,7 +261,10 @@ export class AuditorService {
 
         const files = this.getSourceFiles(srcPath);
         const maxFiles = 10;
-        const filesToAudit = files.slice(0, maxFiles);
+
+        // Shuffle files so each audit covers different code areas
+        const shuffled = files.sort(() => Math.random() - 0.5);
+        const filesToAudit = shuffled.slice(0, maxFiles);
 
         for (const file of filesToAudit) {
             try {
@@ -371,7 +390,17 @@ Rules for riskLevel:
                 const logPath = path.join(logsPath, logFile);
                 log.info(`[AUDIT] Analisando log: ${logPath}`);
                 const content = fs.readFileSync(logPath, 'utf-8');
-                const lines = content.split('\n').slice(-500);
+                let lines = content.split('\n').slice(-500);
+
+                // Filter to only lines AFTER last audit timestamp
+                if (this.lastAuditTimestamp) {
+                    const cutoff = this.lastAuditTimestamp;
+                    lines = lines.filter(line => {
+                        const tsMatch = line.match(/^\[(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/);
+                        if (!tsMatch) return true; // include lines without timestamps
+                        return tsMatch[1] >= cutoff;
+                    });
+                }
 
                 const errorLines = lines.filter(l =>
                     /error|ERRO|fail|FALHA|exception|crash|timeout|ECONNREFUSED/i.test(l)
@@ -423,6 +452,55 @@ Respond ONLY in JSON:
                     suggestion: 'Verificar: systemctl status newclaw ou pm2 list',
                     autoFixable: false,
                     riskLevel: 'high'
+                });
+            }
+        } catch (e) {}
+
+        // Live memory snapshot (always fresh)
+        try {
+            const mem = process.memoryUsage();
+            const heapUsedMb = Math.round(mem.heapUsed / 1048576);
+            const heapTotalMb = Math.round(mem.heapTotal / 1048576);
+            const rssMb = Math.round(mem.rss / 1048576);
+            const heapUsagePercent = Math.round((mem.heapUsed / mem.heapTotal) * 100);
+
+            if (heapUsagePercent > 85) {
+                this.findings.push({
+                    severity: 'critical',
+                    category: 'runtime',
+                    title: `Heap usage alto: ${heapUsagePercent}% (${heapUsedMb}/${heapTotalMb} MB)`,
+                    description: `O processo está usando ${heapUsagePercent}% do heap (RSS: ${rssMb} MB). Risco de OOM.`,
+                    suggestion: 'Verificar vazamentos de memória em sessões ativas e executar GC manual.',
+                    autoFixable: false,
+                    riskLevel: 'high'
+                });
+            } else if (heapUsagePercent > 70) {
+                this.findings.push({
+                    severity: 'warning',
+                    category: 'runtime',
+                    title: `Heap usage moderado: ${heapUsagePercent}% (${heapUsedMb}/${heapTotalMb} MB)`,
+                    description: `RSS: ${rssMb} MB. Consumo de memória acima do ideal.`,
+                    suggestion: 'Monitorar tendência. Se crescer, investigar sessões longas ou cache.',
+                    autoFixable: false,
+                    riskLevel: 'medium'
+                });
+            }
+        } catch (e) {}
+
+        // Live event loop check
+        try {
+            const { getEventLoopMonitor } = require('../../shared/EventLoopMonitor');
+            const monitor = getEventLoopMonitor();
+            const stats = monitor.getStats();
+            if (stats.lagMs > 500) {
+                this.findings.push({
+                    severity: stats.lagMs > 2000 ? 'critical' : 'warning',
+                    category: 'runtime',
+                    title: `Event loop lag: ${stats.lagMs}ms (avg: ${stats.avgLagMs}ms, peak: ${stats.peakLagMs}ms)`,
+                    description: `Latência alta no event loop indica bloqueio de I/O ou processamento pesado.`,
+                    suggestion: 'Verificar operações síncronas de arquivo, queries SQLite lentas ou loops CPU-bound.',
+                    autoFixable: false,
+                    riskLevel: stats.lagMs > 2000 ? 'high' : 'medium'
                 });
             }
         } catch (e) {}
@@ -845,6 +923,45 @@ Respond ONLY in JSON:
         const elapsed = Math.round((Date.now() - startTime) / 1000);
         console.log(`[AUDITOR] 🤖 Ollama respondeu em ${elapsed}s`);
         return data.response || '';
+    }
+
+    // ============================================
+    // DEDUPLICATION
+    // ============================================
+
+    /**
+     * Load finding titles from the last report to detect duplicates.
+     * Prevents re-reporting the same issues across consecutive audits.
+     */
+    private loadPreviousFindings(): void {
+        this.previousFindingTitles.clear();
+        try {
+            const latest = this.db.prepare(
+                'SELECT full_report FROM audit_reports ORDER BY id DESC LIMIT 1'
+            ).get() as any;
+            if (latest?.full_report) {
+                const report = JSON.parse(latest.full_report) as AuditReport;
+                for (const f of report.findings || []) {
+                    this.previousFindingTitles.add(f.title);
+                }
+            }
+        } catch {
+            // No previous report — everything is new
+        }
+    }
+
+    /**
+     * Remove findings that were already reported in the previous audit.
+     * Only keeps NEW issues or issues with changed severity.
+     */
+    private deduplicateFindings(): void {
+        if (this.previousFindingTitles.size === 0) return;
+        const before = this.findings.length;
+        this.findings = this.findings.filter(f => !this.previousFindingTitles.has(f.title));
+        const removed = before - this.findings.length;
+        if (removed > 0) {
+            console.log(`[AUDITOR] 🔄 Deduplicação: ${removed} findings repetidos removidos (${this.findings.length} novos)`);
+        }
     }
 
     // ============================================
