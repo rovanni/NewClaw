@@ -5,6 +5,7 @@
  */
 
 import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary, AttemptInfo } from '../core/ProviderFactory';
+import { CognitiveWorkspace } from '../cognitive/CognitiveWorkspace';
 import path from 'path';
 import type { Message } from '../memory/MemoryManager';
 import { ContextBuilder } from './ContextBuilder';
@@ -144,10 +145,10 @@ export class AgentLoop {
     private memory: MemoryManager;
     private tools: Map<string, ToolExecutor> = new Map();
     private config: AgentLoopConfig;
-    /** Cognitive Workspace: internal reasoning preserved across steps.
-     *  NEVER shown to user. Used for continuity, self-correction, retry intelligence.
+    /** Cognitive Workspace: governed working memory for internal reasoning.
+     *  NEVER shown to user. Auto-pruned, distilled, budget-controlled.
      *  Reset each conversation turn. */
-    private cognitiveWorkspace: string = '';
+    private cognitiveWorkspace: CognitiveWorkspace;
     private maxIterations: number = 2;
     private contextBuilder: ContextBuilder;
     private skillLearner: SkillLearner;
@@ -164,6 +165,7 @@ export class AgentLoop {
         this.memory = memory;
         this.config = config;
         this.contextBuilder = new ContextBuilder(memory);
+        this.cognitiveWorkspace = new CognitiveWorkspace();
         const db = memory.getDatabase();
         this.skillLearner = skillLearner || new SkillLearner(db);
         this.modelRouter = new ModelRouter(config.modelRouter as any, providerFactory);
@@ -320,6 +322,9 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
     }
 
     public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string> {
+        // Reset cognitive workspace at start of each conversation turn
+        // Reasoning from previous turns is NOT carried over (prevents contamination)
+        this.cognitiveWorkspace.reset();
         return this.runWithTools(conversationId, userText, 0, userId, context);
     }
 
@@ -467,16 +472,17 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             const rawContent = (response.content || '').slice(0, 300);
             log.info(`[${this.ts()}] [COGNITION] Step ${stepCount} response received.`);
 
-            // ── Cognitive Workspace: preserve thinking as episodic memory ──
+            // ── Cognitive Workspace: preserve thinking as governed episodic memory ──
             // Thinking is NEVER shown to user, but preserved for:
-            // - continuity of reasoning
-            // - multi-step planning
+            // - continuity of reasoning across steps
+            // - multi-step planning context
             // - self-correction
             // - retry intelligence
+            // Governance: auto-pruned, distilled, budget-controlled (2000 tokens max)
             if (response.thinking && response.thinking.trim().length > 0) {
-                log.info(`[${this.ts()}] [COGNITIVE-WORKSPACE] Preserved ${response.thinking.length} chars of internal reasoning`);
-                // Store in episodic memory for this session (not persisted to user)
-                this.cognitiveWorkspace = (this.cognitiveWorkspace || '') + '\n[STEP ' + stepCount + ' REASONING] ' + response.thinking.trim();
+                this.cognitiveWorkspace.add(stepCount, response.thinking.trim(), 'reasoning');
+                const stats = this.cognitiveWorkspace.getStats();
+                log.info(`[${this.ts()}] [COGNITIVE-WORKSPACE] Preserved ${response.thinking.length} chars reasoning (workspace: ${stats.entries} entries, ${stats.totalTokens} tokens, types=${JSON.stringify(stats.types)})`);
             }
 
             // Record trace step (including thinking if available)
