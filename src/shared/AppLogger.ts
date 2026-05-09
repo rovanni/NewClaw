@@ -87,18 +87,44 @@ function formatTimestamp(): string {
     return new Date().toISOString().replace('T', ' ').substring(0, 19);
 }
 
+/** Generate a consistent color for a component name */
+function getComponentColor(name: string): string {
+    const colors = [
+        '\x1b[32m', // Green
+        '\x1b[33m', // Yellow
+        '\x1b[34m', // Blue
+        '\x1b[35m', // Magenta
+        '\x1b[36m', // Cyan
+        '\x1b[92m', // Bright Green
+        '\x1b[93m', // Bright Yellow
+        '\x1b[94m', // Bright Blue
+        '\x1b[95m', // Bright Magenta
+        '\x1b[96m', // Bright Cyan
+    ];
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+        hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return colors[Math.abs(hash) % colors.length];
+}
+
 function writeLog(level: LogLevel, component: string, event: string, message?: string, meta?: Record<string, any>) {
     if (!shouldLog(level)) return;
 
     const timestamp = formatTimestamp();
-    const color = COLORS[level];
+    const levelColor = COLORS[level];
+    const compColor = getComponentColor(component);
     const icon = ICONS[level];
+    const DIM = '\x1b[2m';
+    const BOLD = '\x1b[1m';
+    
     const metaStr = meta && Object.keys(meta).length > 0 
-        ? ' ' + Object.entries(meta).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' ')
+        ? ` ${DIM}` + Object.entries(meta).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' ') + RESET
         : '';
     const msgStr = message ? ` ${message}` : '';
 
-    const line = `${color}[${timestamp}] ${icon} [${component}] ${event}${msgStr}${metaStr}${RESET}`;
+    // Advanced coloring: Gray timestamp, dynamic component color, level-based icon
+    const line = `${DIM}[${timestamp}]${RESET} ${levelColor}${icon}${RESET} ${compColor}${BOLD}[${component}]${RESET} ${levelColor}${event}${RESET}${msgStr}${metaStr}`;
     
     if (level === 'error') {
         process.stderr.write(line + '\n');
