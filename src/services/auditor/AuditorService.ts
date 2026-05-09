@@ -462,25 +462,30 @@ Respond ONLY in JSON:
             const heapUsedMb = Math.round(mem.heapUsed / 1048576);
             const heapTotalMb = Math.round(mem.heapTotal / 1048576);
             const rssMb = Math.round(mem.rss / 1048576);
-            const heapUsagePercent = Math.round((mem.heapUsed / mem.heapTotal) * 100);
 
-            if (heapUsagePercent > 85) {
+            // NOTE: Node.js dynamically sizes heapTotal close to heapUsed,
+            // so percentage alone is misleading (40/42 MB = 96% but is fine).
+            // Use ABSOLUTE thresholds to avoid false positives.
+            const CRITICAL_MB = 512;
+            const WARNING_MB = 256;
+
+            if (rssMb > CRITICAL_MB) {
                 this.findings.push({
                     severity: 'critical',
                     category: 'runtime',
-                    title: `Heap usage alto: ${heapUsagePercent}% (${heapUsedMb}/${heapTotalMb} MB)`,
-                    description: `O processo está usando ${heapUsagePercent}% do heap (RSS: ${rssMb} MB). Risco de OOM.`,
-                    suggestion: 'Verificar vazamentos de memória em sessões ativas e executar GC manual.',
+                    title: `Memória RSS alta: ${rssMb} MB (heap: ${heapUsedMb}/${heapTotalMb} MB)`,
+                    description: `O processo está consumindo ${rssMb} MB de memória RSS. Risco de OOM em ambientes com recursos limitados.`,
+                    suggestion: 'Verificar vazamentos de memória em sessões ativas, limpar caches e considerar reiniciar o processo.',
                     autoFixable: false,
                     riskLevel: 'high'
                 });
-            } else if (heapUsagePercent > 70) {
+            } else if (rssMb > WARNING_MB) {
                 this.findings.push({
                     severity: 'warning',
                     category: 'runtime',
-                    title: `Heap usage moderado: ${heapUsagePercent}% (${heapUsedMb}/${heapTotalMb} MB)`,
-                    description: `RSS: ${rssMb} MB. Consumo de memória acima do ideal.`,
-                    suggestion: 'Monitorar tendência. Se crescer, investigar sessões longas ou cache.',
+                    title: `Memória RSS moderada: ${rssMb} MB (heap: ${heapUsedMb}/${heapTotalMb} MB)`,
+                    description: `Consumo de memória acima do esperado para operação normal.`,
+                    suggestion: 'Monitorar tendência. Se crescer consistentemente, investigar sessões longas ou cache.',
                     autoFixable: false,
                     riskLevel: 'medium'
                 });
