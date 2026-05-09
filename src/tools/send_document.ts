@@ -15,24 +15,27 @@ const log = createLogger('SendDocument');
 export class SendDocumentTool implements ToolExecutor {
     name = 'send_document';
     description = 'Enviar um arquivo como documento pelo Telegram. Use para enviar HTML, PDF, imagens ou outros arquivos. O arquivo deve existir no servidor.';
-    parameters = {
-        type: 'object',
-        properties: {
-            file_path: {
-                type: 'string',
-                description: 'Caminho absoluto do arquivo no servidor (ex: /home/venus/newclaw/workspace/sites/river.html)'
+    // Usa getter para garantir que o path.join dinâmico do OS seja avaliado no runtime
+    get parameters() {
+        return {
+            type: 'object' as const,
+            properties: {
+                file_path: {
+                    type: 'string',
+                    description: `Caminho absoluto do arquivo no servidor (ex: \${path.join(process.cwd(), 'workspace', 'tmp', 'arquivo.html')})`
+                },
+                caption: {
+                    type: 'string',
+                    description: 'Legenda do documento (opcional, máximo 1024 caracteres)'
+                },
+                filename: {
+                    type: 'string',
+                    description: 'Nome do arquivo como aparecerá no Telegram (opcional, padrão: nome original)'
+                }
             },
-            caption: {
-                type: 'string',
-                description: 'Legenda do documento (opcional, máximo 1024 caracteres)'
-            },
-            filename: {
-                type: 'string',
-                description: 'Nome do arquivo como aparecerá no Telegram (opcional, padrão: nome original)'
-            }
-        },
-        required: ['file_path']
-    };
+            required: ['file_path']
+        };
+    }
 
     private chatId: string = '';
     private botToken: string = '';

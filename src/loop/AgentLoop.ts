@@ -5,6 +5,7 @@
  */
 
 import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary, AttemptInfo } from '../core/ProviderFactory';
+import path from 'path';
 import type { Message } from '../memory/MemoryManager';
 import { ContextBuilder } from './ContextBuilder';
 import { ContextBudget } from './ContextBudget';
@@ -189,7 +190,7 @@ export class AgentLoop {
         FILE_OPS: `## 📁 REGRA DE ARQUIVOS E DOCUMENTOS
 - Quando o usuário pedir para CRIAR ou GERAR arquivos (HTML, slides, documentos, código, etc.), NUNCA envie o conteúdo como texto na resposta.
 - PROCEDIMENTO OBRIGATÓRIO: (1) use write com path e content para salvar o arquivo no servidor, (2) use send_document com o file_path para enviar o arquivo como documento pelo Telegram.
-- SEMPRE use /home/venus/newclaw/workspace/tmp/ como diretório para salvar arquivos temporários.
+- SEMPRE use \${path.join(process.cwd(), 'workspace', 'tmp')} como diretório para salvar arquivos temporários.
 - Para LER arquivos: use read com path.
 - Para EDITAR arquivos: use edit com path + oldText/newText (replace) ou startLine/endLine (patch) ou append=true (adicionar ao final).`,
 
