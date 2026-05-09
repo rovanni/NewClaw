@@ -15,8 +15,94 @@ const classificationQueue = new PQueue({ concurrency: 1 });
 // ── Streaming types ──
 export type StreamChunk =
     | { type: 'content'; value: string }
+    | { type: 'thinking'; value: string }
     | { type: 'tool_call'; value: any }
     | { type: 'done'; value: { prompt_tokens: number; completion_tokens: number } };
+
+/**
+ * Extract text from any LLM streaming chunk format.
+ * Supports: Ollama (content, thinking, reasoning), OpenAI (delta.content),
+ * DeepSeek (reasoning_content), Anthropic (thinking blocks), Gemini (parts).
+ * Returns { text, type } where type indicates the chunk source.
+ */
+function extractChunkText(chunk: any): { text: string; type: 'content' | 'thinking' | 'reasoning' | 'delta' | 'unknown' } {
+    // Ollama format: message.content, message.thinking, message.reasoning
+    if (chunk.message) {
+        if (chunk.message.content && chunk.message.content.trim()) {
+            return { text: chunk.message.content, type: 'content' };
+        }
+        if (chunk.message.thinking && chunk.message.thinking.trim()) {
+            return { text: chunk.message.thinking, type: 'thinking' };
+        }
+        if (chunk.message.reasoning && chunk.message.reasoning.trim()) {
+            return { text: chunk.message.reasoning, type: 'reasoning' };
+        }
+        if (chunk.message.tool_calls) {
+            return { text: '', type: 'content' }; // tool calls handled separately
+        }
+    }
+    // OpenAI streaming format: choices[0].delta.content
+    if (chunk.choices?.[0]?.delta) {
+        const delta = chunk.choices[0].delta;
+        if (delta.content && delta.content.trim()) {
+            return { text: delta.content, type: 'delta' };
+        }
+        if (delta.reasoning_content && delta.reasoning_content.trim()) {
+            return { text: delta.reasoning_content, type: 'reasoning' };
+        }
+        if (delta.thinking && delta.thinking.trim()) {
+            return { text: delta.thinking, type: 'thinking' };
+        }
+    }
+    // Anthropic streaming: content_block with thinking type
+    if (chunk.type === 'content_block_delta' && chunk.delta) {
+        if (chunk.delta.type === 'thinking_delta' && chunk.delta.thinking) {
+            return { text: chunk.delta.thinking, type: 'thinking' };
+        }
+        if (chunk.delta.type === 'text_delta' && chunk.delta.text) {
+            return { text: chunk.delta.text, type: 'content' };
+        }
+    }
+    // Gemini streaming: candidates[0].content.parts
+    if (chunk.candidates?.[0]?.content?.parts) {
+        for (const part of chunk.candidates[0].content.parts) {
+            if (part.text && part.text.trim()) {
+                return { text: part.text, type: 'content' };
+            }
+            if (part.thought && part.thought.trim()) {
+                return { text: part.thought, type: 'thinking' };
+            }
+        }
+    }
+    return { text: '', type: 'unknown' };
+}
+
+/**
+ * Check if a chunk represents any kind of activity (not just content).
+ * Used to reset idle/activity timers — any chunk type counts.
+ */
+function isChunkActive(chunk: any): boolean {
+    // Explicit done signal
+    if (chunk.done) return true;
+    // Has message with any field
+    if (chunk.message) {
+        if (chunk.message.content?.trim()) return true;
+        if (chunk.message.thinking?.trim()) return true;
+        if (chunk.message.reasoning?.trim()) return true;
+        if (chunk.message.tool_calls) return true;
+    }
+    // OpenAI delta
+    if (chunk.choices?.[0]?.delta) {
+        const delta = chunk.choices[0].delta;
+        if (delta.content?.trim() || delta.reasoning_content?.trim() || delta.thinking?.trim()) return true;
+        if (delta.tool_calls) return true;
+    }
+    // Anthropic
+    if (chunk.type === 'content_block_delta' || chunk.type === 'content_block_start' || chunk.type === 'content_block_stop') return true;
+    // Gemini
+    if (chunk.candidates?.[0]) return true;
+    return false;
+}
 
 export interface LLMMessage {
     role: 'user' | 'assistant' | 'system' | 'tool';
@@ -44,7 +130,7 @@ export interface ToolDefinition {
 }
 
 // ── Structured fallback types ──
-export type FallbackReason = 'timeout' | 'error' | 'empty_response';
+export type FallbackReason = 'timeout' | 'error' | 'empty_response' | 'streaming_failed';
 
 export interface AttemptInfo {
     provider: string;
@@ -278,13 +364,20 @@ export class OllamaProvider implements ILLMProvider {
     }
 
     /**
-     * Streaming generator — yields content tokens as they arrive from Ollama SSE.
+     * Streaming generator — yields content/thinking/tool_call tokens as they arrive from Ollama SSE.
      * This is the core streaming method. Other methods consume it.
      * 
-     * SSE format from Ollama:
-     *   {"message":{"role":"assistant","content":"Hel"},"done":false}
-     *   {"message":{"role":"assistant","content":"lo"},"done":false}
-     *   {"done":true,"prompt_eval_count":N,"eval_count":M}
+     * Supports reasoning/thinking streams from modern LLMs:
+     *   Ollama:    message.content, message.thinking, message.reasoning
+     *   OpenAI:    choices[0].delta.content, delta.reasoning_content, delta.thinking
+     *   DeepSeek:  choices[0].delta.reasoning_content
+     *   Anthropic: content_block_delta with thinking_delta/text_delta
+     *   Gemini:    candidates[0].content.parts with text/thought
+     * 
+     * Timeout architecture:
+     *   - CONNECTION_TIMEOUT (30s): Time to first byte / first chunk
+     *   - ACTIVITY_TIMEOUT (120s): Time since last activity of ANY type
+     *   - MAX_TIMEOUT (default 300s): Hard ceiling safety net
      * 
      * Handles partial buffers (lines broken between chunks).
      */
@@ -297,13 +390,54 @@ export class OllamaProvider implements ILLMProvider {
 
         const numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
         const controller = new AbortController();
-        const timeoutMs = customTimeoutMs || 300000;
-        const timeout = setTimeout(() => controller.abort(), timeoutMs);
-        
+
+        // Timeout architecture: 3 separate timers
+        const CONNECTION_TIMEOUT = 30_000;  // Time to first byte
+        const ACTIVITY_TIMEOUT = 120_000;   // Time since last activity of ANY type
+        const MAX_TIMEOUT = customTimeoutMs || 300_000;  // Hard ceiling
+
+        const startTime = Date.now();
+        let lastActivityTime = startTime;
+        let firstChunkReceived = false;
+
+        // Track chunk types for diagnostics
+        let stats = { content: 0, thinking: 0, reasoning: 0, delta: 0, unknown: 0, total: 0 };
+
+        let activityTimer: NodeJS.Timeout | null = null;
+        let maxTimer: NodeJS.Timeout | null = null;
+        let connectionTimer: NodeJS.Timeout | null = null;
+
+        const resetActivityTimer = () => {
+            if (activityTimer) clearTimeout(activityTimer);
+            activityTimer = setTimeout(() => {
+                log.warn(`[${streamId}] [STREAM] ACTIVITY TIMEOUT: No activity for ${ACTIVITY_TIMEOUT}ms`);
+                controller.abort();
+            }, ACTIVITY_TIMEOUT);
+        };
+
+        // Connection timer: abort if no first chunk received
+        connectionTimer = setTimeout(() => {
+            if (!firstChunkReceived) {
+                log.error(`[${streamId}] [STREAM] CONNECTION TIMEOUT: No first chunk in ${CONNECTION_TIMEOUT}ms`);
+                controller.abort();
+            }
+        }, CONNECTION_TIMEOUT);
+
+        // Max timeout: hard ceiling
+        maxTimer = setTimeout(() => {
+            log.warn(`[${streamId}] [STREAM] MAX TIMEOUT reached after ${MAX_TIMEOUT}ms`);
+            controller.abort();
+        }, MAX_TIMEOUT);
+
+        // Start activity timer
+        resetActivityTimer();
+
         // Link external signal — if chatWithFallback aborts, we abort too
         if (externalSignal) {
             if (externalSignal.aborted) {
-                clearTimeout(timeout);
+                if (connectionTimer) clearTimeout(connectionTimer);
+                if (activityTimer) clearTimeout(activityTimer);
+                if (maxTimer) clearTimeout(maxTimer);
                 throw new Error('Aborted by external signal before fetch');
             }
             externalSignal.addEventListener('abort', () => controller.abort(), { once: true });
@@ -320,7 +454,7 @@ export class OllamaProvider implements ILLMProvider {
             })) : undefined
         };
 
-        log.info(`[${streamId}] [STREAM] START model=${this.model} timeout=${timeoutMs}ms`);
+        log.info(`[${streamId}] [STREAM] START model=${this.model} connectionTimeout=${CONNECTION_TIMEOUT}ms activityTimeout=${ACTIVITY_TIMEOUT}ms maxTimeout=${MAX_TIMEOUT}ms`);
 
         let response: Response;
         try {
@@ -331,32 +465,38 @@ export class OllamaProvider implements ILLMProvider {
                 body: JSON.stringify(requestBody)
             });
         } catch (fetchErr: any) {
-            clearTimeout(timeout);
+            if (connectionTimer) clearTimeout(connectionTimer);
+            if (activityTimer) clearTimeout(activityTimer);
+            if (maxTimer) clearTimeout(maxTimer);
             log.error(`[${streamId}] [STREAM] FETCH FAILED: ${fetchErr.message}`);
             throw fetchErr;
         }
 
         if (!response.ok) {
-            clearTimeout(timeout);
+            if (connectionTimer) clearTimeout(connectionTimer);
+            if (activityTimer) clearTimeout(activityTimer);
+            if (maxTimer) clearTimeout(maxTimer);
             log.error(`[${streamId}] [STREAM] HTTP ${response.status}`);
             throw new Error(`Ollama API error: ${response.status}`);
         }
 
         const body = response.body;
-        if (!body) throw new Error('No response body from Ollama');
+        if (!body) {
+            if (connectionTimer) clearTimeout(connectionTimer);
+            if (activityTimer) clearTimeout(activityTimer);
+            if (maxTimer) clearTimeout(maxTimer);
+            throw new Error('No response body from Ollama');
+        }
 
         const reader = body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        let totalContentChunks = 0;
-        let totalContentChars = 0;
-        const streamStartTime = Date.now();
 
         try {
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) {
-                    log.info(`[STREAM] reader.read() done=true (stream ended by server). Chunks: ${totalContentChunks}, Chars: ${totalContentChars}, Elapsed: ${Date.now() - streamStartTime}ms`);
+                    log.info(`[${streamId}] [STREAM] reader.read() done=true (stream ended by server). stats=${JSON.stringify(stats)} elapsed=${Date.now() - startTime}ms`);
                     break;
                 }
 
@@ -378,36 +518,49 @@ export class OllamaProvider implements ILLMProvider {
                         continue;
                     }
 
-                    // ── Diagnostic logging ──
-                    if (chunk.message?.content) {
-                        totalContentChunks++;
-                        totalContentChars += chunk.message.content.length;
+                    // Extract text using universal chunk handler
+                    const { text, type } = extractChunkText(chunk);
+                    stats.total++;
+                    if (type !== 'unknown' && type !== 'content') stats[type]++;
+                    else if (type === 'content') stats.content++;
+
+                    // ANY activity resets the timer
+                    if (isChunkActive(chunk) || text) {
+                        lastActivityTime = Date.now();
+                        resetActivityTimer();
+                        if (!firstChunkReceived) {
+                            firstChunkReceived = true;
+                            if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
+                            log.info(`[${streamId}] [STREAM] First chunk received after ${Date.now() - startTime}ms type=${type}`);
+                        }
                     }
 
-                    if (chunk.done) {
-                        const doneReason = chunk.done_reason || '(not provided)';
-                        log.info(`[${streamId}] [STREAM] DONE done_reason="${doneReason}" prompt_eval=${chunk.prompt_eval_count || 0} eval=${chunk.eval_count || 0} chunks=${totalContentChunks} chars=${totalContentChars} elapsed=${Date.now() - streamStartTime}ms`);
-                    }
-
-                    if (chunk.message?.content) {
-                        yield { type: 'content', value: chunk.message.content };
+                    // Yield based on extracted type
+                    if (text) {
+                        const yieldType = (type === 'thinking' || type === 'reasoning') ? 'thinking' : 'content';
+                        if (yieldType === 'thinking') {
+                            log.debug(`[${streamId}] [STREAM] Thinking chunk: ${text.length} chars`);
+                        }
+                        yield { type: yieldType, value: text } as StreamChunk;
                     }
 
                     if (chunk.message?.tool_calls) {
                         for (const tc of chunk.message.tool_calls) {
                             log.info(`[${streamId}] [STREAM] Tool call: ${tc.function?.name || 'unknown'}`);
-                            yield { type: 'tool_call', value: tc };
+                            yield { type: 'tool_call', value: tc } as StreamChunk;
                         }
                     }
 
                     if (chunk.done) {
+                        const doneReason = chunk.done_reason || '(not provided)';
+                        log.info(`[${streamId}] [STREAM] DONE done_reason="${doneReason}" prompt_eval=${chunk.prompt_eval_count || 0} eval=${chunk.eval_count || 0} stats=${JSON.stringify(stats)} elapsed=${Date.now() - startTime}ms`);
                         yield {
                             type: 'done',
                             value: {
                                 prompt_tokens: chunk.prompt_eval_count || 0,
                                 completion_tokens: chunk.eval_count || 0
                             }
-                        };
+                        } as StreamChunk;
                         return; // Stream complete
                     }
                 }
@@ -418,14 +571,17 @@ export class OllamaProvider implements ILLMProvider {
                 log.info(`[${streamId}] [STREAM] Flushing remaining buffer (${buffer.trim().length} chars)`);
                 try {
                     const chunk = JSON.parse(buffer.trim());
-                    if (chunk.message?.content) {
-                        totalContentChars += chunk.message.content.length;
-                        yield { type: 'content', value: chunk.message.content };
+                    const { text, type } = extractChunkText(chunk);
+                    stats.total++;
+
+                    if (text) {
+                        const yieldType = (type === 'thinking' || type === 'reasoning') ? 'thinking' : 'content';
+                        yield { type: yieldType, value: text } as StreamChunk;
                     }
                     if (chunk.done) {
                         const doneReason = chunk.done_reason || '(not provided)';
-                        log.info(`[${streamId}] [STREAM] DONE in buffer flush. done_reason="${doneReason}" eval_count=${chunk.eval_count || 0}`);
-                        yield { type: 'done', value: { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0 } };
+                        log.info(`[${streamId}] [STREAM] DONE in buffer flush. done_reason="${doneReason}" stats=${JSON.stringify(stats)}`);
+                        yield { type: 'done', value: { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0 } } as StreamChunk;
                     }
                 } catch {
                     log.warn(`[${streamId}] [STREAM] Failed to parse remaining buffer: ${buffer.trim().slice(0, 80)}...`);
@@ -433,14 +589,16 @@ export class OllamaProvider implements ILLMProvider {
             }
 
             // If we reached here without yielding 'done', log it
-            log.warn(`[${streamId}] [STREAM] Stream ended WITHOUT explicit 'done' chunk. chunks=${totalContentChunks}, chars=${totalContentChars}, elapsed=${Date.now() - streamStartTime}ms`);
+            log.warn(`[${streamId}] [STREAM] Stream ended WITHOUT explicit 'done' chunk. stats=${JSON.stringify(stats)}, elapsed=${Date.now() - startTime}ms`);
         } catch (streamErr: any) {
-            log.error(`[${streamId}] [STREAM] ERROR: ${streamErr.message}. chunks=${totalContentChunks}, chars=${totalContentChars}`);
+            log.error(`[${streamId}] [STREAM] ERROR: ${streamErr.message}. stats=${JSON.stringify(stats)}`);
             throw streamErr;
         } finally {
-            clearTimeout(timeout);
+            if (connectionTimer) clearTimeout(connectionTimer);
+            if (activityTimer) clearTimeout(activityTimer);
+            if (maxTimer) clearTimeout(maxTimer);
             reader.releaseLock();
-            log.info(`[${streamId}] [STREAM] END (reader released, timeout cleared)`);
+            log.info(`[${streamId}] [STREAM] END (reader released, all timers cleared)`);
         }
     }
 
@@ -456,6 +614,7 @@ export class OllamaProvider implements ILLMProvider {
     private async _consumeStream(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal): Promise<LLMResponse> {
         // ISOLATED buffer — each call gets its own. No shared state.
         let content = '';
+        let thinking = '';  // Collect thinking separately
         const toolCalls: any[] = [];
         let usage: any = undefined;
         let chunkCount = 0;
@@ -471,6 +630,9 @@ export class OllamaProvider implements ILLMProvider {
                     case 'content':
                         content += chunk.value;
                         break;
+                    case 'thinking':
+                        thinking += chunk.value;
+                        break;
                     case 'tool_call':
                         toolCalls.push(chunk.value);
                         break;
@@ -481,9 +643,24 @@ export class OllamaProvider implements ILLMProvider {
             }
         } catch (streamErr: any) {
             const elapsed = Date.now() - startTime;
-            log.error(`[${consumeId}] [STREAM-CONSUME] FAILED after ${chunkCount} chunks, ${content.length} chars, ${elapsed}ms: ${streamErr.message}`);
-            // DISCARD partial content — throw, caller handles
-            throw streamErr;
+            // If we have thinking content but no final content, include thinking as content
+            // This handles models that think but never produce content before timeout
+            if (!content && thinking) {
+                log.warn(`[${consumeId}] [STREAM-CONSUME] Stream failed but have ${thinking.length} chars of thinking — using as content`);
+                content = thinking;
+            }
+            if (!content && !thinking) {
+                log.error(`[${consumeId}] [STREAM-CONSUME] FAILED after ${chunkCount} chunks, ${elapsed}ms: ${streamErr.message}`);
+                throw streamErr;
+            }
+            // If we have partial content, return it instead of throwing
+            log.warn(`[${consumeId}] [STREAM-CONSUME] Partial content after stream error: ${content.length} chars content, ${thinking.length} chars thinking`);
+        }
+
+        // If no content but have thinking, use thinking as content
+        if (!content && thinking) {
+            log.info(`[${consumeId}] [STREAM-CONSUME] No content but ${thinking.length} chars of thinking — using as content`);
+            content = thinking;
         }
 
         const elapsed = Date.now() - startTime;
@@ -493,7 +670,7 @@ export class OllamaProvider implements ILLMProvider {
             throw new Error('Empty response from stream');
         }
 
-        log.info(`[${consumeId}] [STREAM-CONSUME] COMPLETE chunks=${chunkCount} content=${content.length}chars toolCalls=${toolCalls.length} duration=${elapsed}ms`);
+        log.info(`[${consumeId}] [STREAM-CONSUME] COMPLETE chunks=${chunkCount} content=${content.length}chars thinking=${thinking.length}chars toolCalls=${toolCalls.length} duration=${elapsed}ms`);
 
         return {
             content,
@@ -512,7 +689,7 @@ export class OllamaProvider implements ILLMProvider {
      * DO NOT call from _consumeStream (causes duplicate LLM requests).
      * Only safe to call as last resort from chatWithFallback if all providers fail streaming.
      */
-    private async _fallbackNonStreaming(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number): Promise<LLMResponse> {
+    public async _fallbackNonStreaming(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number): Promise<LLMResponse> {
         const numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
@@ -708,6 +885,7 @@ export class ProviderFactory {
         const MAX_RETRIES = 1;
         const RETRY_BACKOFF_MS = 10000;
         const requestId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        const startTime = Date.now();
         
         // Track active abort controller so we can cancel any in-flight request
         let activeAbortController: AbortController | null = null;
@@ -837,7 +1015,31 @@ export class ProviderFactory {
             }
         }
 
-        // All providers exhausted
+        // All streaming providers exhausted — try non-streaming fallback as last resort
+        if (attemptLog.every(a => a.status === 'timeout' || a.status === 'error')) {
+            const ollamaProvider = this.providers.get('ollama');
+            if (ollamaProvider instanceof OllamaProvider) {
+                log.info(`[${requestId}] All streaming attempts failed — trying non-streaming fallback`);
+                try {
+                    const result = await ollamaProvider._fallbackNonStreaming(messages, tools, timeoutMs);
+                    if (result.content && result.content.trim()) {
+                        attemptLog.push({ provider: 'ollama', model: 'non-streaming-fallback', duration: Date.now() - startTime, status: 'success' });
+                        return {
+                            status: 'success',
+                            content: result.content,
+                            toolCalls: result.toolCalls,
+                            usage: result.usage,
+                            fallbackReason: 'streaming_failed',
+                            attempts: attemptLog
+                        };
+                    }
+                } catch (fallbackErr: any) {
+                    attemptLog.push({ provider: 'ollama', model: 'non-streaming-fallback', duration: Date.now() - startTime, status: 'error', errorMessage: fallbackErr.message });
+                }
+            }
+        }
+
+        // All providers exhausted (including fallback)
         const lastError = (attemptLog.length > 0 && attemptLog[attemptLog.length - 1]?.errorMessage) 
             ? attemptLog[attemptLog.length - 1].errorMessage : '';
         const isTimeoutError = lastError?.includes('Timeout') || lastError?.includes('abort');
