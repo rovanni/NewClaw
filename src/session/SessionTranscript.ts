@@ -15,6 +15,7 @@
 import fs from 'fs';
 import path from 'path';
 import { mkdirSync, existsSync } from 'fs';
+import readline from 'readline';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('Sessiontranscript');
 
@@ -98,11 +99,11 @@ export class SessionTranscript {
                 this.seqCounter = this.index.lastSeq;
             } catch {
                 // Corrupt index, rebuild from JSONL
-                this.rebuildIndex();
+                await this.rebuildIndex();
             }
         } else if (existsSync(this.filePath)) {
             // No index, rebuild from JSONL
-            this.rebuildIndex();
+            await this.rebuildIndex();
         }
 
         // Open append stream
@@ -175,28 +176,35 @@ export class SessionTranscript {
 
     /**
      * Rebuild index from JSONL file (used on init if index is missing/corrupt).
+     * Uses stream-based reading to prevent memory overflow on large files.
      */
-    private rebuildIndex(): void {
+    private async rebuildIndex(): Promise<void> {
         if (!existsSync(this.filePath)) return;
 
-        const content = fs.readFileSync(this.filePath, 'utf-8');
-        const lines = content.trim().split('\n');
+        const fileStream = fs.createReadStream(this.filePath);
+        const rl = readline.createInterface({
+            input: fileStream,
+            crlfDelay: Infinity
+        });
+
         let offset = 0;
         let lastSeq = 0;
         let totalEntries = 0;
         const checkpoints: SessionIndex['checkpoints'] = [];
 
-        for (const line of lines) {
-            if (!line.trim()) { offset += Buffer.byteLength(line + '\n', 'utf-8'); continue; }
-            try {
-                const entry = JSON.parse(line) as TranscriptEntry;
-                if (entry.seq > lastSeq) lastSeq = entry.seq;
-                totalEntries++;
-                if (entry.meta?.checkpoint) {
-                    checkpoints.push({ offset, seq: entry.seq, ts: entry.ts });
-                }
-            } catch { /* skip malformed */ }
-            offset += Buffer.byteLength(line + '\n', 'utf-8');
+        for await (const line of rl) {
+            const lineByteLength = Buffer.byteLength(line + '\n', 'utf-8');
+            if (line.trim()) {
+                try {
+                    const entry = JSON.parse(line) as TranscriptEntry;
+                    if (entry.seq > lastSeq) lastSeq = entry.seq;
+                    totalEntries++;
+                    if (entry.meta?.checkpoint) {
+                        checkpoints.push({ offset, seq: entry.seq, ts: entry.ts });
+                    }
+                } catch { /* skip malformed */ }
+            }
+            offset += lineByteLength;
         }
 
         this.index = {
@@ -226,8 +234,9 @@ export class SessionTranscript {
 
     /**
      * Replay the full transcript. Uses index for fast seek if available.
+     * Uses stream-based reading to prevent memory fragmentation.
      */
-    replay(from?: number, to?: number): TranscriptEntry[] {
+    async replay(from?: number, to?: number): Promise<TranscriptEntry[]> {
         if (!existsSync(this.filePath)) return [];
 
         let startOffset = 0;
@@ -244,25 +253,16 @@ export class SessionTranscript {
             }
         }
 
-        // Read file from startOffset
-        const fd = fs.openSync(this.filePath, 'r');
-        const fileSize = fs.fstatSync(fd).size;
-        const length = fileSize - startOffset;
-        
-        let content = '';
-        if (length > 0) {
-            const buffer = Buffer.alloc(length);
-            fs.readSync(fd, buffer, 0, length, startOffset);
-            content = buffer.toString('utf-8');
-        }
-        fs.closeSync(fd);
-
-        const lines = content.trim().split('\n');
         const entries: TranscriptEntry[] = [];
+        const fileStream = fs.createReadStream(this.filePath, { start: startOffset });
+        const rl = readline.createInterface({
+            input: fileStream,
+            crlfDelay: Infinity
+        });
 
-        for (const line of lines) {
+        for await (const line of rl) {
+            if (!line.trim()) continue;
             try {
-                if (!line.trim()) continue;
                 const entry = JSON.parse(line) as TranscriptEntry;
                 if (from !== undefined && entry.seq < from) continue;
                 if (to !== undefined && entry.seq > to) continue;
@@ -277,48 +277,49 @@ export class SessionTranscript {
      * Fast replay since last checkpoint using index.
      * Avoids parsing the entire file — seeks directly from checkpoint offset.
      */
-    replaySinceCheckpoint(): { entries: TranscriptEntry[]; lastCheckpointSeq: number | null } {
+    async replaySinceCheckpoint(): Promise<{ entries: TranscriptEntry[]; lastCheckpointSeq: number | null }> {
         const lastCheckpoint = this.index.checkpoints.length > 0
             ? this.index.checkpoints[this.index.checkpoints.length - 1]
             : null;
 
         if (!lastCheckpoint) {
-            return { entries: this.replay(), lastCheckpointSeq: null };
+            return { entries: await this.replay(), lastCheckpointSeq: null };
         }
 
         // Read from checkpoint offset onward (fast seek)
-        const entries = this.replay(lastCheckpoint.seq + 1);
+        const entries = await this.replay(lastCheckpoint.seq + 1);
         return { entries, lastCheckpointSeq: lastCheckpoint.seq };
     }
 
     /**
      * Replay conversation messages (user + assistant + tool_call + tool_result).
      */
-    replayMessages(from?: number, to?: number): TranscriptEntry[] {
-        return this.replay(from, to).filter(e =>
+    async replayMessages(from?: number, to?: number): Promise<TranscriptEntry[]> {
+        const entries = await this.replay(from, to);
+        return entries.filter(e =>
             e.role === 'user' || e.role === 'assistant' || e.role === 'tool_call' || e.role === 'tool_result'
         );
     }
 
-    getTail(n: number): TranscriptEntry[] {
-        const all = this.replay();
+    async getTail(n: number): Promise<TranscriptEntry[]> {
+        const all = await this.replay();
         return all.slice(-n);
     }
 
     /**
      * Get entries since last checkpoint (uses index for fast seek).
      */
-    getSinceCheckpoint(): { entries: TranscriptEntry[]; lastCheckpointSeq: number | null } {
+    async getSinceCheckpoint(): Promise<{ entries: TranscriptEntry[]; lastCheckpointSeq: number | null }> {
         const lastCheckpoint = this.index.checkpoints.length > 0
             ? this.index.checkpoints[this.index.checkpoints.length - 1]
             : null;
 
         if (lastCheckpoint === null) {
-            return { entries: this.replay(), lastCheckpointSeq: null };
+            return { entries: await this.replay(), lastCheckpointSeq: null };
         }
 
         return {
-            entries: this.replay(lastCheckpoint.seq + 1),
+            entries: await this.replay(lastCheckpoint.seq + 1),
             lastCheckpointSeq: lastCheckpoint.seq
         };
     }

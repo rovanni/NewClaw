@@ -129,7 +129,7 @@ export class SessionManager {
      * Cleanup inactive sessions from memory.
      * Prevents memory leak in multi-user environments.
      */
-    public async cleanupInactiveSessions(maxAgeMs: number = 1800_000): Promise<number> {
+    public async cleanupInactiveSessions(maxAgeMs: number = 900_000): Promise<number> {
         const now = Date.now();
         const toDelete: string[] = [];
 
@@ -237,14 +237,14 @@ export class SessionManager {
         let messages: TranscriptEntry[];
 
         if (checkpoint) {
-            const { entries } = transcript.getSinceCheckpoint();
+            const { entries } = await transcript.getSinceCheckpoint();
             messages = entries;
             // Checkpoint as STRUCTURED system role — not loose text
             contextString = systemPrompt;
             // Checkpoint summary will be injected as a system message in SessionContext
         } else {
             const stats = transcript.getStats();
-            messages = transcript.replayMessages(
+            messages = await transcript.replayMessages(
                 Math.max(1, stats.totalEntries - this.config.maxUncompressedMessages)
             );
         }
@@ -259,7 +259,7 @@ export class SessionManager {
         const transcript = await this.getOrCreateSession(key);
         const sid = this.sessionKey(key);
 
-        const { entries } = transcript.getSinceCheckpoint();
+        const { entries } = await transcript.getSinceCheckpoint();
         const userAssistantMessages = entries.filter(e => e.role === 'user' || e.role === 'assistant');
 
         // Hybrid trigger: message count OR token estimate
@@ -469,7 +469,7 @@ export class SessionManager {
 
         // Get checkpoint and recent messages to preserve
         const checkpoint = this.compressionCheckpoints.get(sid);
-        const { entries } = transcript.getSinceCheckpoint();
+        const { entries } = await transcript.getSinceCheckpoint();
 
         if (!checkpoint && entries.length === 0) {
             return { before, after: before, saved: 0 };

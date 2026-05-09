@@ -349,12 +349,12 @@ export class AgentController {
         // ── Stability: Periodic Cleanup ──
         setInterval(async () => {
             try {
-                // Cleanup inactive sessions from memory (TTL: 1 hour)
-                await this.sessionManager.cleanupInactiveSessions(3600_000);
+                // Cleanup inactive sessions from memory (TTL: 15 minutes)
+                await this.sessionManager.cleanupInactiveSessions(900_000);
             } catch (e) {
                 log.error('periodic_cleanup_failed', e);
             }
-        }, 600_000); // Check every 10 minutes
+        }, 300_000); // Check every 5 minutes
 
         log.info('✅ NewClaw running — multi-channel pipeline active');
     }

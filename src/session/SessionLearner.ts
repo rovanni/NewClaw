@@ -60,7 +60,7 @@ export class SessionLearner {
         const lastProcessed = this.processedSeqs.get(sid) || 0;
 
         // Get events since last processing
-        const events = transcript.replay(lastProcessed + 1);
+        const events = await transcript.replay(lastProcessed + 1);
         if (events.length === 0) return result;
 
         // Filter to learnable events
