@@ -718,12 +718,12 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<LLMResult> {
         // Dynamic timeout with clamp
-        const MIN_TIMEOUT = 30000;      // 30s (reduzido de 60s)
-        const MAX_TIMEOUT = 300000;      // 5 min (teto absoluto)
-        const BASE_TIMEOUT = 120000;     // 2 min base
-        const SCALE_PER_TOKEN = 20;     // 20ms per token (reduzido de 40ms)
-        const MAX_SCALE = 120000;        // 120s teto de escala
-        const TOKEN_THRESHOLD = 2000;   // abaixo disto, só base
+        const MIN_TIMEOUT = 45000;       // 45s min
+        const MAX_TIMEOUT = 420000;      // 7 min (teto absoluto para contextos gigantes)
+        const BASE_TIMEOUT = 180000;     // 3 min base (aumentado de 120s)
+        const SCALE_PER_TOKEN = 60;      // 60ms per token (aumentado de 20ms)
+        const MAX_SCALE = 240000;        // 240s teto de escala
+        const TOKEN_THRESHOLD = 1000;    // abaixo disto, só base (reduzido de 2000)
 
         // Approximate token count: ~4 chars per token
         const totalChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
@@ -731,23 +731,26 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         const scale = Math.min(Math.max(0, approxTokens - TOKEN_THRESHOLD) * SCALE_PER_TOKEN, MAX_SCALE);
         const rawTimeout = BASE_TIMEOUT + scale;
         const timeoutMs = Math.max(MIN_TIMEOUT, Math.min(rawTimeout, MAX_TIMEOUT));
-        log.info(`[TIMEOUT] Dynamic: ${Math.round(timeoutMs / 1000)}s (tokens≈${approxTokens}, chars=${totalChars}, scale=${Math.round(scale/1000)}s, clamp=[${MIN_TIMEOUT/1000}-${MAX_TIMEOUT/1000}]s)`);
+        log.info(`[${this.ts()}] [TIMEOUT] Dynamic: ${Math.round(timeoutMs / 1000)}s (tokens≈${approxTokens}, chars=${totalChars}, scale=${Math.round(scale/1000)}s, clamp=[${MIN_TIMEOUT/1000}-${MAX_TIMEOUT/1000}]s)`);
 
         // Apply routed model to the default provider before calling
         if (chatProfile?.model) {
             const provider = this.providerFactory.getProvider();
             if (provider) {
-                log.info(`Setting model ${chatProfile.model} on provider ${provider.name}`);
+                log.info(`[${this.ts()}] Setting model ${chatProfile.model} on provider ${provider.name}`);
                 provider.setModel(chatProfile.model);
             }
         }
 
         const callStart = Date.now();
         try {
+            // Enable Multi-Provider Fallback: 
+            // If the primary provider (e.g. Ollama) fails/timeouts, 
+            // ProviderFactory will try other configured providers.
             const result = await llmQueue.add(() => this.providerFactory.chatWithFallback(
                 messages, 
                 toolDefs, 
-                undefined, // Always use ollama (single provider), model already set above
+                undefined, // Pass undefined to use ALL available providers in sequence
                 timeoutMs
             ));
             
