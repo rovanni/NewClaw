@@ -74,6 +74,9 @@ export class SessionManager {
     private compressionCheckpoints: Map<string, CompressionCheckpoint> = new Map();
     private lastActivity: Map<string, number> = new Map();
     private contextCompressor: ContextCompressor | null = null;
+    
+    // Rastreamento de arquivos ativos por sessão (para manter no contexto mesmo após compressão)
+    private activeFiles: Map<string, Set<string>> = new Map();
 
     constructor(config: Partial<SessionConfig>, memory: MemoryManager, providerFactory?: ProviderFactory) {
         this.config = { ...DEFAULT_CONFIG, ...config };
@@ -210,7 +213,44 @@ export class SessionManager {
 
     async recordToolCall(key: SessionKey, toolName: string, input: string, meta?: TranscriptMeta): Promise<number> {
         const transcript = await this.getOrCreateSession(key);
+        const sid = this.sessionKey(key);
+        
+        // Track active files
+        if (toolName === 'read' || toolName === 'write' || toolName === 'edit') {
+            try {
+                const parsedArgs = JSON.parse(input);
+                if (parsedArgs.path) {
+                    if (!this.activeFiles.has(sid)) {
+                        this.activeFiles.set(sid, new Set());
+                    }
+                    this.activeFiles.get(sid)!.add(parsedArgs.path);
+                    
+                    // Keep maximum of 10 recent files to avoid context bloat
+                    if (this.activeFiles.get(sid)!.size > 10) {
+                        const arr = Array.from(this.activeFiles.get(sid)!);
+                        arr.shift(); // Remove oldest
+                        this.activeFiles.set(sid, new Set(arr));
+                    }
+                }
+            } catch (e) {
+                // Ignore parse errors
+            }
+        }
+        
         return transcript.append('tool_call', `Tool: ${toolName}`, { ...meta, tool_name: toolName, tool_input: input });
+    }
+
+    /**
+     * Helper para injetar a lista de arquivos trabalhados recentemente no prompt.
+     * Sobrevive à compressão do contexto.
+     */
+    getActiveFilesBlock(key: SessionKey): string | null {
+        const sid = this.sessionKey(key);
+        const files = this.activeFiles.get(sid);
+        if (!files || files.size === 0) return null;
+        
+        const fileList = Array.from(files).map(f => `- ${f}`).join('\n');
+        return `ARQUIVOS ATIVOS NESTA SESSÃO (que você manipulou recentemente):\n${fileList}`;
     }
 
     async recordToolResult(key: SessionKey, toolName: string, result: string, success: boolean, durationMs?: number, meta?: TranscriptMeta): Promise<number> {

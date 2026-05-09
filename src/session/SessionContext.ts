@@ -95,7 +95,12 @@ export class SessionContext {
 
         // 4. Build state block (short, essential info)
         const now = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'full', timeStyle: 'short' });
-        const stateBlock = `[ESTADO]\nData: ${now}`;
+        let stateBlock = `[ESTADO]\nData: ${now}`;
+        
+        const activeFiles = this.sessionManager.getActiveFilesBlock(key);
+        if (activeFiles) {
+            stateBlock += `\n\n${activeFiles}`;
+        }
 
         // 5. Build context using ContextBudget (modular, budgeted)
         const blocks: ContextBlock[] = this.budget.buildMessages({
