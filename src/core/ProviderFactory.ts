@@ -643,24 +643,28 @@ export class OllamaProvider implements ILLMProvider {
             }
         } catch (streamErr: any) {
             const elapsed = Date.now() - startTime;
-            // If we have thinking content but no final content, include thinking as content
-            // This handles models that think but never produce content before timeout
+            // IMPORTANT: thinking is INTERNAL reasoning — never leak to user.
+            // If we have thinking but no content, log it but do NOT use as content.
+            // This prevents reasoning/thought chains from being shown to the user.
             if (!content && thinking) {
-                log.warn(`[${consumeId}] [STREAM-CONSUME] Stream failed but have ${thinking.length} chars of thinking — using as content`);
-                content = thinking;
+                log.warn(`[${consumeId}] [STREAM-CONSUME] Stream failed with ${thinking.length} chars of thinking but NO content — NOT leaking thinking to user`);
             }
-            if (!content && !thinking) {
+            if (!content) {
                 log.error(`[${consumeId}] [STREAM-CONSUME] FAILED after ${chunkCount} chunks, ${elapsed}ms: ${streamErr.message}`);
                 throw streamErr;
             }
             // If we have partial content, return it instead of throwing
-            log.warn(`[${consumeId}] [STREAM-CONSUME] Partial content after stream error: ${content.length} chars content, ${thinking.length} chars thinking`);
+            log.warn(`[${consumeId}] [STREAM-CONSUME] Partial content after stream error: ${content.length} chars content, ${thinking.length} chars thinking (thinking discarded)`);
         }
 
-        // If no content but have thinking, use thinking as content
-        if (!content && thinking) {
-            log.info(`[${consumeId}] [STREAM-CONSUME] No content but ${thinking.length} chars of thinking — using as content`);
-            content = thinking;
+        // IMPORTANT: thinking is INTERNAL — never include in output content.
+        // Only content and toolCalls should be returned to the user/agent.
+        // Thinking is logged for diagnostics but discarded from the response.
+        if (thinking && !content) {
+            log.info(`[${consumeId}] [STREAM-CONSUME] Had ${thinking.length} chars of thinking but no content — returning empty content (thinking kept for logs only)`);
+        }
+        if (thinking) {
+            log.debug(`[${consumeId}] [STREAM-CONSUME] Discarded ${thinking.length} chars of internal thinking from response`);
         }
 
         const elapsed = Date.now() - startTime;

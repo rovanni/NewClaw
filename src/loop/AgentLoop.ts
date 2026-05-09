@@ -118,8 +118,22 @@ function sanitizeContent(content: string): string {
     // Remove leftover JSON action blocks that leaked
     result = result.replace(/"action"\s*:\s*\{[^}]*"type"\s*:\s*"tool"[^}]*\}/g, '');
     result = result.replace(/"evaluation"\s*:\s*\{[^}]*\}/g, '');
-    // Clean up "thought" leaks
+    // Clean up "thought" leaks (JSON format)
     result = result.replace(/"thought"\s*:\s*"[^"]*"[,\s]*/g, '');
+
+    // ── Anti-leak: Remove thinking/reasoning chains that leaked into output ──
+    // Pattern 1: <think>...</think> tags (common in reasoning models)
+    result = result.replace(/<think>[\s\S]*?<\/think>/gi, '');
+    // Pattern 2: <thinking>...</thinking> tags
+    result = result.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '');
+    // Pattern 3: 🤔 or 💭 prefix reasoning lines
+    result = result.replace(/^[🤔💭]\s*.*$/gm, '');
+    // Pattern 4: Lines that look like internal reasoning (e.g., "1. **Analyze...")
+    //    Only remove if the entire response is wrapped in reasoning
+    // Pattern 5: "Let me..." / "I'll..." / "I should..." self-talk at start
+    result = result.replace(/^(?:Let me|I'll|I should|I need to|Vou|Preciso|Devo|Vou\s+analisar)\s+[^.!\n]*[.!]\s*/gi, '');
+    // Pattern 6: JSON thought blocks with multiline strings
+    result = result.replace(/"thought"\s*:\s*"[\s\S]*?"[,\s}]*$/gm, '');
 
     return result.trim();
 }
