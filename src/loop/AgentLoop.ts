@@ -639,18 +639,43 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             
             loopMessages.push({ 
                 role: 'system', 
-                content: `SÍNTESE FINAL OBRIGATÓRIA: Você executou as seguintes ações:\n${toolSummary}\n\nAgora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específicos das alterações realizadas. Não diga "vou fazer" — você JÁ fez. Confirme as mudanças de forma clara e objetiva.`
+                content: `SÍNTESE FINAL OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON, NÃO use formato action/thought):
+
+Você executou as seguintes ações:
+${toolSummary}
+
+Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específicos das alterações realizadas. Não diga "vou fazer" — você JÁ fez. Confirme as mudanças de forma clara e objetiva. Responda DIRETAMENTE em linguagem natural.`
             });
             
             const synthesisResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile);
-            const synthesisAtomic = this.parseLLMResponse(synthesisResponse.content || '');
-            const synthesisText = this.extractFinalText(synthesisResponse, synthesisAtomic);
+            const rawSynthesis = synthesisResponse.content || '';
             
-            if (synthesisText.length > 0) {
+            // Use extractText (lightweight) instead of full Atomic parser
+            // because synthesis should be plain text, not structured JSON
+            const { extractText } = require('./ResponseAdapter');
+            let synthesisText = extractText(rawSynthesis);
+            
+            // If extractText returned empty/garbage, try the full pipeline as fallback
+            if (!synthesisText || synthesisText.length < 20) {
+                synthesisText = this.extractFinalText(synthesisResponse, this.parseLLMResponse(rawSynthesis));
+            }
+            
+            // Last resort: use raw content stripped of JSON artifacts
+            if (!synthesisText || synthesisText.length < 20) {
+                synthesisText = rawSynthesis
+                    .replace(/^\s*\{[\s\S]*\}\s*$/, '')  // Remove full JSON wrapper
+                    .replace(/```[\s\S]*?```/g, '')       // Remove code blocks
+                    .trim();
+            }
+            
+            if (synthesisText && synthesisText.length > 10) {
+                log.info(`[${this.ts()}] [SYNTHESIS] Success: ${synthesisText.length} chars extracted from ${rawSynthesis.length} chars raw`);
                 traceManager.completeTrace(trace, 'completed', synthesisText);
                 this.persistTrace(trace, stepCount, 'completed', synthesisText, channelContext);
                 return synthesisText;
             }
+            
+            log.warn(`[${this.ts()}] [SYNTHESIS] Failed to extract useful text (raw=${rawSynthesis.length}, extracted=${synthesisText?.length || 0})`);
         }
 
         // Fallback: return best content seen during the loop
@@ -660,12 +685,18 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         log.info(`[${this.ts()}] [FALLBACK] Generating final synthesis...`);
         loopMessages.push({ 
             role: 'system', 
-            content: 'FINALIZAÇÃO OBRIGATÓRIA: Forneça uma resposta honesta agora. Se não obteve dados suficientes, admita a limitação claramente. Não invente conclusões e não use linguagem vaga. Foque em ser útil e transparente.' 
+            content: 'FINALIZAÇÃO OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON): Forneça uma resposta honesta agora. Se não obteve dados suficientes, admita a limitação claramente. Responda diretamente em linguagem natural.' 
         });
         
         const finalResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile);
-        const finalAtomic = this.parseLLMResponse(finalResponse.content || '');
-        const text = this.extractFinalText(finalResponse, finalAtomic);
+        const rawFinal = finalResponse.content || '';
+        
+        // Same extraction strategy: extractText first, then full pipeline
+        const { extractText: extractTextFallback } = require('./ResponseAdapter');
+        let text = extractTextFallback(rawFinal);
+        if (!text || text.length < 20) {
+            text = this.extractFinalText(finalResponse, this.parseLLMResponse(rawFinal));
+        }
         
         traceManager.completeTrace(trace, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
         this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text, channelContext);
