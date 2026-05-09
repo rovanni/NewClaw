@@ -623,7 +623,37 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             }
         }
 
-        // Síntese de segurança se o loop terminar sem final_answer explícito
+        // Post-loop: determine if we need a final synthesis
+        const executedToolsInLastStep = cycleHistory.length > 0;
+        const hasGoodContent = lastBestContent && lastBestContent.length > 100;
+
+        // If tools were executed but we only have a brief/stale pre-execution message,
+        // force one final LLM call to synthesize what was actually accomplished.
+        if (executedToolsInLastStep && !hasGoodContent) {
+            log.info(`[${this.ts()}] [SYNTHESIS] Tools executed but response is stale/brief (${lastBestContent?.length || 0} chars). Generating post-action synthesis...`);
+            
+            // Build a summary of what tools accomplished
+            const toolSummary = cycleHistory
+                .map(h => `• ${h.tool}: ${h.status}`)
+                .join('\n');
+            
+            loopMessages.push({ 
+                role: 'system', 
+                content: `SÍNTESE FINAL OBRIGATÓRIA: Você executou as seguintes ações:\n${toolSummary}\n\nAgora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específicos das alterações realizadas. Não diga "vou fazer" — você JÁ fez. Confirme as mudanças de forma clara e objetiva.`
+            });
+            
+            const synthesisResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile);
+            const synthesisAtomic = this.parseLLMResponse(synthesisResponse.content || '');
+            const synthesisText = this.extractFinalText(synthesisResponse, synthesisAtomic);
+            
+            if (synthesisText.length > 0) {
+                traceManager.completeTrace(trace, 'completed', synthesisText);
+                this.persistTrace(trace, stepCount, 'completed', synthesisText, channelContext);
+                return synthesisText;
+            }
+        }
+
+        // Fallback: return best content seen during the loop
         if (lastBestContent) return lastBestContent;
 
         // Se chegamos aqui sem conteúdo útil, forçar uma síntese final do modelo
