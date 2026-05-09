@@ -192,7 +192,8 @@ export class AgentLoop {
 - PROCEDIMENTO OBRIGATÓRIO: (1) use write com path e content para salvar o arquivo no servidor, (2) use send_document com o file_path para enviar o arquivo como documento pelo Telegram.
 - SEMPRE use \${path.join(process.cwd(), 'workspace', 'tmp')} como diretório para salvar arquivos temporários.
 - Para LER arquivos: use read com path.
-- Para EDITAR arquivos: use edit com path + oldText/newText (replace) ou startLine/endLine (patch) ou append=true (adicionar ao final).`,
+- Para EDITAR arquivos: use edit com path + oldText/newText (replace) ou startLine/endLine (patch) ou append=true (adicionar ao final).
+- SE PERDER O CAMINHO DE UM ARQUIVO (devido a um restart ou compressão de memória): não peça ajuda ao usuário! Use a ferramenta exec_command para buscá-lo rodando \`find . -iname "*parte_do_nome*"\`. O cwd padrão já é o seu workspace, então sempre busque a partir do \`.\`.`,
 
         ACADEMIC: `## 📚 REGRA DE CONTEÚDO ACADÊMICO E SLIDES
 - Quando criar slides, aulas ou materiais educacionais, o conteúdo deve ser COMPLETO, DETALHADO e APROFUNDADO — nunca superficial ou resumido.
