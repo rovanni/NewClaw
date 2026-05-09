@@ -144,6 +144,10 @@ export class AgentLoop {
     private memory: MemoryManager;
     private tools: Map<string, ToolExecutor> = new Map();
     private config: AgentLoopConfig;
+    /** Cognitive Workspace: internal reasoning preserved across steps.
+     *  NEVER shown to user. Used for continuity, self-correction, retry intelligence.
+     *  Reset each conversation turn. */
+    private cognitiveWorkspace: string = '';
     private maxIterations: number = 2;
     private contextBuilder: ContextBuilder;
     private skillLearner: SkillLearner;
@@ -463,7 +467,19 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             const rawContent = (response.content || '').slice(0, 300);
             log.info(`[${this.ts()}] [COGNITION] Step ${stepCount} response received.`);
 
-            // Record trace step
+            // ── Cognitive Workspace: preserve thinking as episodic memory ──
+            // Thinking is NEVER shown to user, but preserved for:
+            // - continuity of reasoning
+            // - multi-step planning
+            // - self-correction
+            // - retry intelligence
+            if (response.thinking && response.thinking.trim().length > 0) {
+                log.info(`[${this.ts()}] [COGNITIVE-WORKSPACE] Preserved ${response.thinking.length} chars of internal reasoning`);
+                // Store in episodic memory for this session (not persisted to user)
+                this.cognitiveWorkspace = (this.cognitiveWorkspace || '') + '\n[STEP ' + stepCount + ' REASONING] ' + response.thinking.trim();
+            }
+
+            // Record trace step (including thinking if available)
             traceManager.addStep(trace, 'decision', { 
                 thought: this.parseLLMResponse(response.content || '')?.thought,
                 step: stepCount,
@@ -560,7 +576,12 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                             });
                         }
 
-                        if ((toolName === 'send_audio' || toolName === 'send_document') && result.success) {
+                        // ── Task FSM: Terminal tools should complete the task ──
+                        // After a successful send/delivery action, the task is DONE.
+                        // No further LLM generation needed — return the result immediately.
+                        const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
+                        if (terminalTools.includes(toolName) && result.success) {
+                            log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded → task DONE, returning result`);
                             traceManager.completeTrace(trace, 'completed', result.output);
                             this.persistTrace(trace, stepCount, 'completed', result.output, channelContext);
                             return result.output;
@@ -628,6 +649,16 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                             content: `[FALHA] A ferramenta "${toolName}" falhou. Tente uma abordagem diferente ou use seu conhecimento interno.` 
                         });
                     }
+
+                    // ── Task FSM: Terminal tools should complete the task ──
+                    const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
+                    if (terminalTools.includes(toolName) && result.success) {
+                        log.info(`[${this.ts()}] [TASK-FSM] Terminal atomic tool "${toolName}" succeeded → task DONE, returning result`);
+                        traceManager.completeTrace(trace, 'completed', result.output);
+                        this.persistTrace(trace, stepCount, 'completed', result.output, channelContext);
+                        return result.output;
+                    }
+
                     continue;
                 }
             }

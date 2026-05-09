@@ -113,6 +113,7 @@ export interface LLMMessage {
 
 export interface LLMResponse {
     content: string;
+    thinking?: string;   // Cognitive workspace: internal reasoning, NOT shown to user
     toolCalls?: ToolCall[];
     usage?: { prompt_tokens: number; completion_tokens: number };
 }
@@ -143,6 +144,7 @@ export interface AttemptInfo {
 export interface LLMResult {
     status: 'success' | 'timeout' | 'error';
     content: string;
+    thinking?: string;   // Cognitive workspace: internal reasoning, NOT shown to user
     toolCalls?: ToolCall[];
     usage?: { prompt_tokens: number; completion_tokens: number };
     fallbackReason?: FallbackReason;
@@ -678,6 +680,7 @@ export class OllamaProvider implements ILLMProvider {
 
         return {
             content,
+            thinking: thinking || undefined,   // Cognitive workspace: preserved for agent, never shown to user
             toolCalls: toolCalls.length > 0 ? toolCalls.map((tc: any) => ({
                 id: tc.function?.name || `call_${Date.now()}`,
                 name: tc.function?.name || '',
@@ -976,10 +979,11 @@ export class ProviderFactory {
                     // Only ONE response per request — return immediately on first success
                     if ((result.content && result.content.trim().length > 0) || (result.toolCalls && result.toolCalls.length > 0)) {
                         attemptLog.push({ provider: providerName, model: modelUsed, duration, status: 'success' });
-                        log.info(`[${attemptId}] SUCCESS content=${result.content.length}chars toolCalls=${result.toolCalls?.length || 0} duration=${duration}ms`);
+                        log.info(`[${attemptId}] SUCCESS content=${result.content.length}chars thinking=${(result.thinking || '').length}chars toolCalls=${result.toolCalls?.length || 0} duration=${duration}ms`);
                         return {
                             status: 'success',
                             content: result.content,
+                            thinking: result.thinking || undefined,   // Preserve cognitive workspace
                             toolCalls: result.toolCalls,
                             usage: result.usage,
                             attempts: attemptLog
