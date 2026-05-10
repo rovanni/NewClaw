@@ -23,6 +23,7 @@ import { createLogger } from '../shared/AppLogger';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
 import { traceManager } from '../core/ExecutionTrace';
+import { AgentFSM, AgentFSMEvent } from './AgentFSM';
 const log = createLogger('Agentloop');
 
 export interface ToolResult {
@@ -166,13 +167,12 @@ export class AgentLoop {
         this.config = config;
         this.contextBuilder = new ContextBuilder(memory);
         this.cognitiveWorkspace = new CognitiveWorkspace();
-        const db = memory.getDatabase();
-        this.skillLearner = skillLearner || new SkillLearner(db);
+        this.skillLearner = skillLearner || new SkillLearner(memory);
         this.modelRouter = new ModelRouter(config.modelRouter as any, providerFactory);
         this.stateManager = new AgentStateManager(memory);
         
-        this.classificationMemory = new ClassificationMemory(db);
-        this.decisionMemory = new DecisionMemory(db);
+        this.classificationMemory = new ClassificationMemory(memory);
+        this.decisionMemory = new DecisionMemory(memory);
     }
 
     public getStateManager(): AgentStateManager {
@@ -416,6 +416,17 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
 
         // ── Recording: Trace start + Classification ──
         const trace = traceManager.startTrace(conversationId, userText);
+        const fsm = new AgentFSM();
+        const move = (event: AgentFSMEvent, meta?: Record<string, unknown>) => {
+            try {
+                const transition = fsm.transition(event, meta);
+                log.info(`[${this.ts()}] [AGENT-FSM] ${transition.from} --${event}--> ${transition.to}`);
+                traceManager.addStep(trace, 'fsm_transition', transition);
+            } catch (error: any) {
+                log.warn(`[${this.ts()}] [AGENT-FSM] Invalid transition ${fsm.getState()} --${event}: ${error.message}`);
+            }
+        };
+        move('START_TURN');
         this.classificationMemory.store(userText, 'chat', 0.8);
 
         // ── Session Context Pipeline (mandatory) ──
@@ -468,7 +479,9 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                 });
             }
 
+            move('LLM_REQUEST', { step: stepCount });
             const response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
+            move('LLM_RESPONSE', { step: stepCount, status: response.status });
             const rawContent = (response.content || '').slice(0, 300);
             log.info(`[${this.ts()}] [COGNITION] Step ${stepCount} response received.`);
 
@@ -499,6 +512,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             // (when all providers fail, ProviderFactory returns LLMResult with status timeout/error)
             if (response.status === 'timeout' || response.status === 'error') {
                 log.warn(`[${this.ts()}] [FALLBACK] Provider returned ${response.status}: ${response.fallbackReason}`);
+                move('FAIL', { step: stepCount, status: response.status });
                 traceManager.completeTrace(trace, 'error', response.fallbackMessage);
                 this.persistTrace(trace, stepCount, 'error', response.fallbackMessage || 'Timeout/Error', channelContext);
                 return response.fallbackMessage || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
@@ -531,6 +545,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
 
             if ((isFinalAnswer || isMarkedComplete || hasContentNoTool) && !wantsTool && !hasNativeToolCalls) {
                 log.info(`[${this.ts()}] [ATOMIC] Task marked as COMPLETE (reason: ${isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool'}).`);
+                move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool' });
                 traceManager.completeTrace(trace, 'completed', finalText);
                 this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
                 return finalText;
@@ -554,6 +569,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                     
                     const tool = this.tools.get(toolName);
                     if (tool) {
+                        move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'native' });
                         // Inject Telegram context for tools that need it
                         if (typeof (tool as any).setContext === 'function' && channelContext) {
                             (tool as any).setContext(channelContext.chatId || '', channelContext.botToken || '');
@@ -588,10 +604,12 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                         const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
                         if (terminalTools.includes(toolName) && result.success) {
                             log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded → task DONE, returning result`);
+                            move('FINAL_READY', { step: stepCount, tool: toolName, terminal: true });
                             traceManager.completeTrace(trace, 'completed', result.output);
                             this.persistTrace(trace, stepCount, 'completed', result.output, channelContext);
                             return result.output;
                         }
+                        move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
                     }
                 }
                 continue; 
@@ -605,6 +623,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             if (hasNoToolsRequested) {
                 if (finalText.length > 0) {
                     log.info(`[${this.ts()}] [EARLY-EXIT] No tool calls requested → returning content (step ${stepCount})`);
+                    move('FINAL_READY', { step: stepCount, reason: 'no_tools_requested' });
                     traceManager.completeTrace(trace, 'completed', finalText);
                     this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
                     return finalText;
@@ -628,6 +647,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
 
                 const tool = this.tools.get(toolName);
                 if (tool) {
+                    move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'json_action' });
                     // Inject Telegram context for tools that need it
                     if (typeof (tool as any).setContext === 'function' && channelContext) {
                         (tool as any).setContext(channelContext.chatId || '', channelContext.botToken || '');
@@ -660,11 +680,13 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                     const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
                     if (terminalTools.includes(toolName) && result.success) {
                         log.info(`[${this.ts()}] [TASK-FSM] Terminal atomic tool "${toolName}" succeeded → task DONE, returning result`);
+                        move('FINAL_READY', { step: stepCount, tool: toolName, terminal: true });
                         traceManager.completeTrace(trace, 'completed', result.output);
                         this.persistTrace(trace, stepCount, 'completed', result.output, channelContext);
                         return result.output;
                     }
 
+                    move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
                     continue;
                 }
             }
@@ -684,6 +706,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         // force one final LLM call to synthesize what was actually accomplished.
         if (executedToolsInLastStep && !hasGoodContent) {
             log.info(`[${this.ts()}] [SYNTHESIS] Tools executed but response is stale/brief (${lastBestContent?.length || 0} chars). Generating post-action synthesis...`);
+            move('SYNTHESIS_REQUIRED', { step: stepCount, tools: cycleHistory.length });
             
             // Build a summary of what tools accomplished
             const toolSummary = cycleHistory
@@ -700,7 +723,9 @@ ${toolSummary}
 Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específicos das alterações realizadas. Não diga "vou fazer" — você JÁ fez. Confirme as mudanças de forma clara e objetiva. Responda DIRETAMENTE em linguagem natural.`
             });
             
+            move('LLM_REQUEST', { step: stepCount, phase: 'synthesis' });
             const synthesisResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile);
+            move('LLM_RESPONSE', { step: stepCount, phase: 'synthesis', status: synthesisResponse.status });
             const rawSynthesis = synthesisResponse.content || '';
             
             // Use extractText (lightweight) instead of full Atomic parser
@@ -723,6 +748,7 @@ Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específic
             
             if (synthesisText && synthesisText.length > 10) {
                 log.info(`[${this.ts()}] [SYNTHESIS] Success: ${synthesisText.length} chars extracted from ${rawSynthesis.length} chars raw`);
+                move('FINAL_READY', { step: stepCount, reason: 'synthesis' });
                 traceManager.completeTrace(trace, 'completed', synthesisText);
                 this.persistTrace(trace, stepCount, 'completed', synthesisText, channelContext);
                 return synthesisText;
@@ -732,7 +758,12 @@ Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específic
         }
 
         // Fallback: return best content seen during the loop
-        if (lastBestContent) return lastBestContent;
+        if (lastBestContent) {
+            move('FINAL_READY', { step: stepCount, reason: 'last_best_content' });
+            traceManager.completeTrace(trace, 'completed', lastBestContent);
+            this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
+            return lastBestContent;
+        }
 
         // Se chegamos aqui sem conteúdo útil, forçar uma síntese final do modelo
         log.info(`[${this.ts()}] [FALLBACK] Generating final synthesis...`);
@@ -741,7 +772,10 @@ Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específic
             content: 'FINALIZAÇÃO OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON): Forneça uma resposta honesta agora. Se não obteve dados suficientes, admita a limitação claramente. Responda diretamente em linguagem natural.' 
         });
         
+        move('SYNTHESIS_REQUIRED', { step: stepCount, reason: 'fallback' });
+        move('LLM_REQUEST', { step: stepCount, phase: 'fallback' });
         const finalResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile);
+        move('LLM_RESPONSE', { step: stepCount, phase: 'fallback', status: finalResponse.status });
         const rawFinal = finalResponse.content || '';
         
         // Same extraction strategy: extractText first, then full pipeline
@@ -751,6 +785,7 @@ Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específic
             text = this.extractFinalText(finalResponse, this.parseLLMResponse(rawFinal));
         }
         
+        move('FINAL_READY', { step: stepCount, reason: stepCount >= maxSteps ? 'max_iterations' : 'fallback' });
         traceManager.completeTrace(trace, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
         this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text, channelContext);
         

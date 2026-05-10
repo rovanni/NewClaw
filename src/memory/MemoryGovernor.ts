@@ -10,6 +10,7 @@
  */
 
 import { MemoryManager, MemoryNode } from './MemoryManager';
+import type { MemoryFacade } from './MemoryFacade';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('Memorygovernor');
 
@@ -79,12 +80,14 @@ const DEFAULT_CONFIG: GovernorConfig = {
 
 export class MemoryGovernor {
     private memory: MemoryManager;
+    private memoryFacade: MemoryFacade;
     private config: GovernorConfig;
     private lastRun: Date | null = null;
     private accessLog: Map<string, { count: number; lastAccessed: Date; wasHelpful: boolean }> = new Map();
 
     constructor(memory: MemoryManager, config?: Partial<GovernorConfig>) {
         this.memory = memory;
+        this.memoryFacade = memory.getFacade();
         this.config = { ...DEFAULT_CONFIG, ...config };
     }
 
@@ -629,9 +632,7 @@ export class MemoryGovernor {
 
     private getAllNodes(): MemoryNode[] {
         try {
-            return this.memory.getDatabase().prepare(
-                'SELECT * FROM memory_nodes'
-            ).all() as MemoryNode[];
+            return this.memoryFacade.getAllNodes();
         } catch {
             return [];
         }
@@ -639,11 +640,7 @@ export class MemoryGovernor {
 
     private removeNode(nodeId: string): void {
         try {
-            const db = this.memory.getDatabase();
-            // Remove edges pointing to/from this node
-            db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(nodeId, nodeId);
-            // Remove the node
-            db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(nodeId);
+            this.memoryFacade.removeNode(nodeId);
         } catch (err) {
             log.warn(`Failed to remove node ${nodeId}:`, (err as Error).message);
         }

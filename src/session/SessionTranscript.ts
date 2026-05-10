@@ -340,10 +340,22 @@ export class SessionTranscript {
     async close(): Promise<void> {
         if (this.writeStream) {
             await this.flush();
-            this.writeStream.end();
+            const stream = this.writeStream;
+            await new Promise<void>((resolve, reject) => {
+                const onError = (error: Error) => {
+                    stream.off('error', onError);
+                    reject(error);
+                };
+                stream.once('error', onError);
+                stream.end(() => {
+                    stream.off('error', onError);
+                    resolve();
+                });
+            });
             this.writeStream = null;
         }
         this.saveIndex();
+        this.initialized = false;
     }
 
     getStats(): { totalEntries: number; totalBytes: number; firstTs: string | null; lastTs: string | null; checkpointCount: number } {

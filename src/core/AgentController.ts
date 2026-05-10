@@ -8,6 +8,7 @@
 import { ProviderFactory, ILLMProvider } from './ProviderFactory';
 import { AgentLoop } from '../loop/AgentLoop';
 import { MemoryManager } from '../memory/MemoryManager';
+import type { MemoryFacade } from '../memory/MemoryFacade';
 import { SkillLoader } from '../skills/SkillLoader';
 import { OnboardingService } from '../services/OnboardingService';
 import { SkillLearner } from '../loop/SkillLearner';
@@ -41,6 +42,7 @@ import { SignalAdapter, type SignalConfig } from '../channels/SignalAdapter';
 import { NormalizedMessage } from '../channels/ChannelAdapter';
 import { AuditorService } from '../services/auditor/AuditorService';
 import { registerAuditCommand } from '../services/auditor/auditCommand';
+import { LifecycleManager } from './LifecycleManager';
 const log = createLogger('AgentController');
 
 export interface NewClawConfig {
@@ -99,6 +101,8 @@ export class AgentController {
     private providerFactory: ProviderFactory;
     public getProviderFactory(): ProviderFactory { return this.providerFactory; }
     private memory: MemoryManager;
+    private memoryFacade: MemoryFacade;
+    private lifecycle = new LifecycleManager();
     public getMemory(): MemoryManager { return this.memory; }
     public getSessionLearner(): SessionLearner { return this.sessionLearner; }
     public getMemoryGovernor(): MemoryGovernor { return this.memoryGovernor; }
@@ -132,6 +136,7 @@ export class AgentController {
 
         // Inicializar componentes
         this.memory = new MemoryManager('./data/newclaw.db');
+        this.memoryFacade = this.memory.getFacade();
         this.providerFactory = new ProviderFactory({
             geminiKey: config.geminiApiKey,
             deepseekKey: config.deepseekApiKey,
@@ -143,7 +148,7 @@ export class AgentController {
             defaultProvider: config.defaultProvider
         });
         this.skillLoader = new SkillLoader(config.skillsDir);
-        this.skillLearner = new SkillLearner(this.memory.getDatabase());
+        this.skillLearner = new SkillLearner(this.memory);
 
         // Construir system prompt
         const languageDirective = this.buildLanguageDirective(config.language);
@@ -163,7 +168,7 @@ export class AgentController {
 
         // Inicializar onboarding
         this.onboardingService = new OnboardingService(
-            this.memory.getDatabase(),
+            this.memory,
             this.skillLearner,
             this.providerFactory,
             this.agentLoop.getStateManager()
@@ -183,7 +188,7 @@ export class AgentController {
         this.sessionLearner = new SessionLearner(this.sessionManager, this.memory);
 
         // Inicializar Scheduler
-        this.scheduler = new SchedulerService('./data/newclaw.db', this.memory.getDatabase());
+        this.scheduler = new SchedulerService('./data/newclaw.db', this.memory);
 
         // Inicializar MemoryGovernor
         this.memoryGovernor = new MemoryGovernor(this.memory, {
@@ -213,7 +218,7 @@ export class AgentController {
             ownerChatId: config.telegramAllowedUserIds[0] || '',
             maxFindingsPerCategory: 20,
             enableAutoFix: true,
-        }, this.memory.getDatabase());
+        }, this.memory);
 
         // Register commands on the MessageBus
         this.registerCommands();
@@ -303,7 +308,12 @@ export class AgentController {
         });
 
         // Start scheduler after bot is ready
-        setTimeout(() => this.scheduler.startAll(), 5000);
+        this.lifecycle.registerTimeout('scheduler.startAll', () => this.scheduler.startAll(), 5000);
+
+        this.lifecycle.registerService('memory', () => this.memory.close());
+        this.lifecycle.registerService('sessions', () => this.sessionManager.closeAll());
+        this.lifecycle.registerService('scheduler', () => this.scheduler.stopAll());
+        this.lifecycle.registerService('messageBus', () => this.messageBus.stopAll());
 
         // Registrar skills/tools
         this.registerSkills();
@@ -334,7 +344,7 @@ export class AgentController {
         }
 
         // Schedule governance cycle every 24 hours
-        setInterval(() => {
+        this.lifecycle.registerInterval('memory.governance.daily', () => {
             try {
                 const stats = this.memoryGovernor.runGovernanceCycle();
                 log.info(`Daily cycle: ${JSON.stringify(stats)}`);
@@ -347,7 +357,7 @@ export class AgentController {
         await this.messageBus.startAll();
 
         // ── Stability: Periodic Cleanup ──
-        setInterval(async () => {
+        this.lifecycle.registerInterval('sessions.cleanup', async () => {
             try {
                 // Cleanup inactive sessions from memory (TTL: 15 minutes)
                 await this.sessionManager.cleanupInactiveSessions(900_000);
@@ -357,6 +367,11 @@ export class AgentController {
         }, 300_000); // Check every 5 minutes
 
         log.info('✅ NewClaw running — multi-channel pipeline active');
+    }
+
+    async stop(reason: string = 'shutdown'): Promise<void> {
+        await this.lifecycle.shutdown(reason);
+        log.info('NewClaw stopped');
     }
 
     /**
@@ -391,21 +406,7 @@ export class AgentController {
         // /skills — listar skills
         this.messageBus.registerCommand('/skills', async (msg) => {
             try {
-                const db = this.memory.getDatabase();
-                if (!db) return '⚠️ Banco de dados não disponível para revisar skills.';
-
-                const skills = db.prepare(
-                    `SELECT id, name, status, priority, source_pattern, source_tool, updated_at
-                     FROM auto_skills
-                     ORDER BY
-                        CASE status WHEN 'proposed' THEN 0 WHEN 'active' THEN 1 ELSE 2 END,
-                        priority DESC,
-                        updated_at DESC
-                     LIMIT 10`
-                ).all() as Array<{
-                    id: string; name: string; status: string; priority: number;
-                    source_pattern?: string; source_tool?: string;
-                }>;
+                const skills = this.memoryFacade.listAutoSkills(10);
 
                 if (skills.length === 0) return 'Nenhuma skill automática cadastrada ainda.';
 
@@ -428,13 +429,11 @@ export class AgentController {
             if (!rawId) return 'Use /skill_approve <id_curto>. Veja os IDs com /skills';
 
             try {
-                const db = this.memory.getDatabase();
-                const rows = db.prepare('SELECT id FROM auto_skills').all() as Array<{ id: string }>;
-                const match = rows.find(r => r.id.endsWith(rawId));
+                const match = this.memoryFacade.findAutoSkillIdBySuffix(rawId);
                 if (!match) return `Skill com ID curto "${rawId}" não encontrada.`;
 
-                db.prepare('UPDATE auto_skills SET status = ? WHERE id = ?').run('active', match.id);
-                return `✅ Skill aprovada: ${match.id}`;
+                this.memoryFacade.setAutoSkillStatus(match, 'active');
+                return `✅ Skill aprovada: ${match}`;
             } catch (e: any) {
                 return `⚠️ Erro: ${e.message}`;
             }
@@ -447,13 +446,11 @@ export class AgentController {
             if (!rawId) return 'Use /skill_reject <id_curto>. Veja os IDs com /skills';
 
             try {
-                const db = this.memory.getDatabase();
-                const rows = db.prepare('SELECT id FROM auto_skills').all() as Array<{ id: string }>;
-                const match = rows.find(r => r.id.endsWith(rawId));
+                const match = this.memoryFacade.findAutoSkillIdBySuffix(rawId);
                 if (!match) return `Skill com ID curto "${rawId}" não encontrada.`;
 
-                db.prepare('UPDATE auto_skills SET status = ? WHERE id = ?').run('rejected', match.id);
-                return `❌ Skill rejeitada: ${match.id}`;
+                this.memoryFacade.setAutoSkillStatus(match, 'rejected');
+                return `❌ Skill rejeitada: ${match}`;
             } catch (e: any) {
                 return `⚠️ Erro: ${e.message}`;
             }

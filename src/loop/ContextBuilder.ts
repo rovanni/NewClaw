@@ -8,6 +8,7 @@
  */
 
 import { MemoryManager } from '../memory/MemoryManager';
+import type { MemoryFacade } from '../memory/MemoryFacade';
 
 // ── Relevance Gate ───────────────────────────────────────────
 // Short greetings and social messages should NOT trigger semantic context injection.
@@ -40,6 +41,7 @@ interface RankedNode {
 
 export class ContextBuilder {
     private memory: MemoryManager;
+    private memoryFacade: MemoryFacade;
     private readonly MAX_NODES = 6;
     private readonly MAX_SUMMARY = 200;
     private readonly MAX_RELATIONS = 3;
@@ -51,6 +53,7 @@ export class ContextBuilder {
 
     constructor(memory: MemoryManager) {
         this.memory = memory;
+        this.memoryFacade = memory.getFacade();
     }
 
     /**
@@ -92,14 +95,11 @@ export class ContextBuilder {
         // 1. Semantic search (similarity)
         const semanticResults = await this.semanticSearch(query);
 
-        // 2. Get connectivity for each node
-        const db = this.memory.getDatabase();
-
-        // 3. Calculate combined scores
+        // 2. Calculate combined scores
         const ranked: RankedNode[] = semanticResults.map((node: any) => {
             const similarity = node.score || node.attentionScore || 0.5;
-            const connectivity = this.getConnectivity(node.id, db);
-            const recency = this.getRecency(node.id, db);
+            const connectivity = this.getConnectivity(node.id);
+            const recency = this.getRecency(node.id);
 
             const score = (similarity * this.W_SIMILARITY) +
                           (connectivity * this.W_CONNECTIVITY) +
@@ -111,11 +111,11 @@ export class ContextBuilder {
                 type: node.type || 'fact',
                 summary: this.compactContent(node.content),
                 score,
-                relations: this.getTopRelations(node.id, db)
+                relations: this.getTopRelations(node.id)
             };
         });
 
-        // 4. Sort by score, select top-K
+        // 3. Sort by score, select top-K
         ranked.sort((a, b) => b.score - a.score);
         return ranked.slice(0, this.MAX_NODES);
     }
@@ -155,12 +155,9 @@ export class ContextBuilder {
     /**
      * Get connectivity score (0-1) based on number of edges.
      */
-    private getConnectivity(nodeId: string, db: any): number {
+    private getConnectivity(nodeId: string): number {
         try {
-            const result = db.prepare(
-                'SELECT COUNT(*) as cnt FROM memory_edges WHERE from_node = ? OR to_node = ?'
-            ).get(nodeId, nodeId) as any;
-            const degree = result?.cnt || 0;
+            const degree = this.memoryFacade.getNodeConnectivity(nodeId);
             // Normalize: 0 edges = 0, 10+ edges = 1
             return Math.min(degree / 10, 1.0);
         } catch {
@@ -171,20 +168,9 @@ export class ContextBuilder {
     /**
      * Get recency score (0-1) based on last_accessed time.
      */
-    private getRecency(nodeId: string, db: any): number {
+    private getRecency(nodeId: string): number {
         try {
-            const result = db.prepare(
-                'SELECT last_accessed FROM memory_nodes WHERE id = ?'
-            ).get(nodeId) as any;
-            if (!result?.last_accessed) return 0.3; // default
-            const lastAccess = new Date(result.last_accessed).getTime();
-            const now = Date.now();
-            const hoursSinceAccess = (now - lastAccess) / (1000 * 60 * 60);
-            // Fresh = 1.0, 24h = 0.7, 7d = 0.3, 30d+ = 0.1
-            if (hoursSinceAccess < 1) return 1.0;
-            if (hoursSinceAccess < 24) return 0.7;
-            if (hoursSinceAccess < 168) return 0.3;
-            return 0.1;
+            return this.memoryFacade.getNodeRecency(nodeId);
         } catch {
             return 0.3;
         }
@@ -193,12 +179,9 @@ export class ContextBuilder {
     /**
      * Get top-N relation names for a node.
      */
-    private getTopRelations(nodeId: string, db: any): string[] {
+    private getTopRelations(nodeId: string): string[] {
         try {
-            const edges = db.prepare(
-                'SELECT to_node, relation FROM memory_edges WHERE from_node = ? ORDER BY weight DESC LIMIT ?'
-            ).all(nodeId, this.MAX_RELATIONS) as any[];
-            return edges.map((e: any) => e.to_node);
+            return this.memoryFacade.getTopRelations(nodeId, this.MAX_RELATIONS);
         } catch {
             return [];
         }

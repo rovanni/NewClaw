@@ -10,6 +10,7 @@
  */
 
 import { MemoryManager } from '../memory/MemoryManager';
+import type { MemoryFacade } from '../memory/MemoryFacade';
 import { SessionTranscript, TranscriptEntry, TranscriptMeta, SessionEventType } from './SessionTranscript';
 import { ContextCompressor } from '../loop/ContextCompressor';
 import { ProviderFactory } from '../core/ProviderFactory';
@@ -69,6 +70,7 @@ const DEFAULT_CONFIG: SessionConfig = {
 export class SessionManager {
     private config: SessionConfig;
     private memory: MemoryManager;
+    private memoryFacade: MemoryFacade;
     private sessions: Map<string, SessionTranscript> = new Map();
     private sessionMutexes: Map<string, Promise<void>> = new Map();
     private compressionCheckpoints: Map<string, CompressionCheckpoint> = new Map();
@@ -81,6 +83,7 @@ export class SessionManager {
     constructor(config: Partial<SessionConfig>, memory: MemoryManager, providerFactory?: ProviderFactory) {
         this.config = { ...DEFAULT_CONFIG, ...config };
         this.memory = memory;
+        this.memoryFacade = memory.getFacade();
 
         fs.mkdirSync(this.config.transcriptDir, { recursive: true });
         this.loadCheckpoints();
@@ -363,14 +366,7 @@ export class SessionManager {
 
     private ensureCheckpointSchema(): void {
         try {
-            const db = this.memory.getDatabase();
-            // Safe migration: add token_estimate column if missing
-            const columns = db.prepare("PRAGMA table_info(session_checkpoints)").all() as Array<{ name: string }>;
-            const hasTokenEstimate = columns.some(c => c.name === 'token_estimate');
-            if (!hasTokenEstimate) {
-                db.exec('ALTER TABLE session_checkpoints ADD COLUMN token_estimate INTEGER DEFAULT 0');
-                log.info('migration', 'Added token_estimate column to session_checkpoints');
-            }
+            this.memoryFacade.ensureSessionCheckpointSchema();
         } catch (err) {
             log.warn('migration', 'Schema check failed', { error: String(err) });
         }
@@ -378,34 +374,27 @@ export class SessionManager {
 
     private saveCheckpoint(sid: string, checkpoint: CompressionCheckpoint): void {
         try {
-            this.ensureCheckpointSchema();
-            const db = this.memory.getDatabase();
-            db.prepare(`
-                INSERT OR REPLACE INTO session_checkpoints 
-                (session_id, seq, summary, original_count, compressed_at, model, token_estimate)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            `).run(sid, checkpoint.seq, checkpoint.summary, checkpoint.originalCount, checkpoint.compressedAt, checkpoint.model || null, checkpoint.tokenEstimate);
+            this.memoryFacade.saveSessionCheckpoint({
+                session_id: sid,
+                seq: checkpoint.seq,
+                summary: checkpoint.summary,
+                original_count: checkpoint.originalCount,
+                compressed_at: checkpoint.compressedAt,
+                model: checkpoint.model || null,
+                token_estimate: checkpoint.tokenEstimate
+            });
         } catch (err1) {
             try {
-                const db = this.memory.getDatabase();
-                db.exec(`
-                    CREATE TABLE IF NOT EXISTS session_checkpoints (
-                        session_id TEXT NOT NULL,
-                        seq INTEGER NOT NULL,
-                        summary TEXT NOT NULL,
-                        original_count INTEGER NOT NULL,
-                        compressed_at TEXT NOT NULL,
-                        model TEXT,
-                        token_estimate REAL,
-                        PRIMARY KEY (session_id)
-                    )
-                `);
                 this.ensureCheckpointSchema();
-                db.prepare(`
-                    INSERT OR REPLACE INTO session_checkpoints 
-                    (session_id, seq, summary, original_count, compressed_at, model, token_estimate)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `).run(sid, checkpoint.seq, checkpoint.summary, checkpoint.originalCount, checkpoint.compressedAt, checkpoint.model || null, checkpoint.tokenEstimate);
+                this.memoryFacade.saveSessionCheckpoint({
+                    session_id: sid,
+                    seq: checkpoint.seq,
+                    summary: checkpoint.summary,
+                    original_count: checkpoint.originalCount,
+                    compressed_at: checkpoint.compressedAt,
+                    model: checkpoint.model || null,
+                    token_estimate: checkpoint.tokenEstimate
+                });
             } catch (err2) {
                 log.warn('checkpoint_save_failed', 'Failed to save checkpoint', { error: String(err2) });
             }
@@ -414,27 +403,14 @@ export class SessionManager {
 
     private loadCheckpoints(): void {
         try {
-            const db = this.memory.getDatabase();
-            db.exec(`
-                CREATE TABLE IF NOT EXISTS session_checkpoints (
-                    session_id TEXT NOT NULL,
-                    seq INTEGER NOT NULL,
-                    summary TEXT NOT NULL,
-                    original_count INTEGER NOT NULL,
-                    compressed_at TEXT NOT NULL,
-                    model TEXT,
-                    token_estimate REAL,
-                    PRIMARY KEY (session_id)
-                )
-            `);
-            const rows = db.prepare('SELECT * FROM session_checkpoints').all() as any[];
+            const rows = this.memoryFacade.loadSessionCheckpoints();
             for (const row of rows) {
                 this.compressionCheckpoints.set(row.session_id, {
                     seq: row.seq,
                     summary: row.summary,
                     originalCount: row.original_count,
                     compressedAt: row.compressed_at,
-                    model: row.model,
+                    model: row.model || undefined,
                     tokenEstimate: row.token_estimate || 0
                 });
             }
@@ -465,6 +441,8 @@ export class SessionManager {
             await transcript.close();
         }
         this.sessions.clear();
+        this.sessionMutexes.clear();
+        this.lastActivity.clear();
     }
 
     getSessionStats(key: SessionKey): { transcriptEntries: number; transcriptBytes: number; hasCheckpoint: boolean; lastActivity: string | null; checkpointCount: number } | null {
@@ -565,13 +543,12 @@ export class SessionManager {
     /**
      * Ensure conversation exists in MemoryManager DB.
      * addMessage has a FOREIGN KEY constraint — conversation_id must exist first.
-     */    private ensureConversation(key: SessionKey): void {
+     */
+    private ensureConversation(key: SessionKey): void {
         const convId = this.conversationId(key);
         try {
-            const db = this.memory.getDatabase();
-            const existing = db.prepare('SELECT id FROM conversations WHERE id = ?').get(convId);
-            if (!existing) {
-                db.prepare('INSERT INTO conversations (id, user_id, provider) VALUES (?, ?, ?)').run(convId, key.userId, key.channel);
+            const created = this.memoryFacade.ensureConversation(convId, key.userId, key.channel);
+            if (created) {
                 log.info(`Created conversation: ${convId}`);
             }
         } catch (err) {

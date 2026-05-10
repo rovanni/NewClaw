@@ -6,6 +6,7 @@
  * e aprende com sucesso/falha para priorizar respostas.
  */
 import { Database } from 'better-sqlite3';
+import { MemoryManager } from './MemoryManager';
 
 type MemoryContext = 'terminal' | 'coding' | 'chat' | 'analysis' | 'crypto' | 'trading';
 
@@ -19,8 +20,8 @@ export interface ClassificationResult {
 export class ClassificationMemory {
     private db: Database;
 
-    constructor(db: Database) {
-        this.db = db;
+    constructor(db: Database | MemoryManager) {
+        this.db = db instanceof MemoryManager ? db.getDatabase() : db;
         this.initializeSchema();
     }
 

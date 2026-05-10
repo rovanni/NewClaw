@@ -7,6 +7,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { MemoryManager } from '../memory/MemoryManager';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('Skilllearner');
 
@@ -51,8 +52,8 @@ interface ToolPatternStat {
 export class SkillLearner {
     private db: Database.Database;
 
-    constructor(db: Database.Database) {
-        this.db = db;
+    constructor(db: Database.Database | MemoryManager) {
+        this.db = db instanceof MemoryManager ? db.getDatabase() : db;
         this.ensureTable();
     }
 
