@@ -42,9 +42,14 @@ import { SignalAdapter, type SignalConfig } from '../channels/SignalAdapter';
 import { NormalizedMessage } from '../channels/ChannelAdapter';
 import { AuditorService } from '../services/auditor/AuditorService';
 import { registerAuditCommand } from '../services/auditor/auditCommand';
+// New core modules
+import { eventBus, EventTypes, type AppEvent } from './EventBus';
+import { circuitRegistry, CircuitBreakerManager } from './CircuitBreaker';
+import { toolExecutor, type ToolExecutorLike } from './ToolExecutor';
+import { promptRegistry } from './PromptRegistry';
+import { ConfidenceClassifier } from './ConfidenceClassifier';
+import { SessionAutoCleaner } from '../session/SessionAutoCleaner';
 import { LifecycleManager } from './LifecycleManager';
-import { EventBus, eventBus, EventTypes, type AppEvent } from './EventBus';
-import { CircuitBreaker, CircuitBreakerManager } from './CircuitBreaker';
 const log = createLogger('AgentController');
 
 export interface NewClawConfig {
@@ -116,9 +121,11 @@ export class AgentController {
     private memoryGovernor: MemoryGovernor;
     private scheduler: SchedulerService;
     private messageBus: MessageBus;
-    private eventBus: EventBus;
-    private circuitBreakers: CircuitBreakerManager;
+    private _eventBus: any;
+    private circuitBreakers: any;
     private auditor: AuditorService;
+    private sessionAutoCleaner: SessionAutoCleaner;
+    private confidenceClassifier: ConfidenceClassifier;
     private telegramAdapter: TelegramAdapter;
     private discordAdapter: DiscordAdapter | null = null;
     private whatsAppAdapter: WhatsAppAdapter | null = null;
@@ -127,9 +134,9 @@ export class AgentController {
     /** Get the MessageBus */
     public getMessageBus(): MessageBus { return this.messageBus; }
     /** Get the EventBus */
-    public getEventBus(): EventBus { return this.eventBus; }
+    public getEventBus() { return this._eventBus; }
     /** Get the CircuitBreakerManager */
-    public getCircuitBreakers(): CircuitBreakerManager { return this.circuitBreakers; }
+    public getCircuitBreakers() { return this.circuitBreakers; }
     /** Get the TelegramAdapter */
     public getTelegramAdapter(): TelegramAdapter { return this.telegramAdapter; }
     /** Get the DiscordAdapter (if enabled) */
@@ -138,13 +145,18 @@ export class AgentController {
     public getWhatsAppAdapter(): WhatsAppAdapter | null { return this.whatsAppAdapter; }
     /** Get the SignalAdapter (if enabled) */
     public getSignalAdapter(): SignalAdapter | null { return this.signalAdapter; }
+    public getConfidenceClassifier(): ConfidenceClassifier { return this.confidenceClassifier; }
+    public getSessionAutoCleaner(): SessionAutoCleaner { return this.sessionAutoCleaner; }
+    public getCircuitBreakerStates() { return circuitRegistry.getAllMetrics(); }
+    public getPromptRegistry() { return promptRegistry; }
+    public getToolExecutor() { return toolExecutor; }
 
     constructor(config: NewClawConfig) {
         this.config = config;
 
         // Inicializar EventBus e CircuitBreaker (camada de infraestrutura)
-        this.eventBus = eventBus; // singleton
-        this.circuitBreakers = new CircuitBreakerManager({ threshold: 5, resetTimeoutMs: 60_000 });
+        this._eventBus = eventBus; // singleton
+        this.circuitBreakers = circuitRegistry; // singleton registry
         this.memory = new MemoryManager('./data/newclaw.db');
         this.memoryFacade = this.memory.getFacade();
         this.providerFactory = new ProviderFactory({
@@ -233,6 +245,34 @@ export class AgentController {
         // Register commands on the MessageBus
         this.registerCommands();
 
+        // ─── New Core Modules ────────────────────────────────────────
+
+        // EventBus: log all events for observability
+        eventBus.on('circuit:open', (data) => {
+            log.warn(`[CircuitBreaker] ${data.name} OPEN — ${data.failures}/${data.threshold} failures`);
+        });
+        eventBus.on('circuit:closed', (data) => {
+            log.info(`[CircuitBreaker] ${data.name} CLOSED — ${data.successes} consecutive successes`);
+        });
+        eventBus.on('tool:timeout', (data) => {
+            log.warn(`[ToolExecutor] ${data.tool} timed out after ${data.timeoutMs}ms`);
+        });
+        eventBus.on('tool:failed', (data) => {
+            log.warn(`[ToolExecutor] ${data.tool} failed: ${data.error}`);
+        });
+
+        // ConfidenceClassifier
+        this.confidenceClassifier = new ConfidenceClassifier();
+
+        // PromptRegistry: load prompts from YAML files
+        promptRegistry.load();
+        log.info(`   PromptRegistry: ${JSON.stringify(promptRegistry.getStats())}`);
+
+        // SessionAutoCleaner: automatic JSONL compaction
+        this.sessionAutoCleaner = new SessionAutoCleaner(this.sessionManager, {
+            transcriptDir: './data/sessions',
+        });
+
         // Telegram adapter (primary)
         this.telegramAdapter = new TelegramAdapter({
             enabled: true,
@@ -308,7 +348,7 @@ export class AgentController {
                 log.info(`[Scheduler] Triggering task #${task.id}: ${task.label} → chat ${chatId}`);
 
                 // Emit event via EventBus — any adapter can listen
-                this.eventBus.emit({
+                this._eventBus.emitAppEvent({
                     type: EventTypes.SCHEDULER_TRIGGER,
                     payload: { chatId, prompt, taskId: task.id, actionType: task.action_type, label: task.label },
                     source: 'scheduler',
@@ -316,7 +356,7 @@ export class AgentController {
                 });
             } catch (e) {
                 log.error(`[Scheduler] Failed to emit scheduled event:`, e);
-                this.eventBus.emit({
+                this._eventBus.emitAppEvent({
                     type: EventTypes.SCHEDULER_FAILED,
                     payload: { taskId: task.id, error: String(e) },
                     source: 'scheduler',
@@ -325,7 +365,8 @@ export class AgentController {
         });
 
         // ── EventBus: scheduler triggers → AgentLoop → response to chat ──
-        this.eventBus.on(EventTypes.SCHEDULER_TRIGGER, async (event: AppEvent) => {
+        this._eventBus.onAny(async (event: AppEvent) => {
+            if (event.type !== EventTypes.SCHEDULER_TRIGGER) return;
             try {
                 const { chatId, prompt, taskId, actionType, label } = event.payload as {
                     chatId: string; prompt: string; taskId: number; actionType: string; label: string;
@@ -337,7 +378,7 @@ export class AgentController {
                     text: result,
                     format: 'markdown'
                 });
-                this.eventBus.emit({
+                this._eventBus.emitAppEvent({
                     type: EventTypes.SCHEDULER_COMPLETED,
                     payload: { taskId, chatId },
                     source: 'agent',
@@ -405,7 +446,28 @@ export class AgentController {
             }
         }, 300_000); // Check every 5 minutes
 
+        // ── Session Auto Cleaner: JSONL compaction ──
+        this.sessionAutoCleaner.start();
+
+        // ── Prompt Hot-Reload: check for changes every 5 minutes ──
+        setInterval(() => {
+            promptRegistry.reloadIfChanged();
+        }, 5 * 60_000);
+
+        // ── Circuit Breaker: periodic status log ──
+        setInterval(() => {
+            const states = circuitRegistry.getAllMetrics();
+            if (states.length > 0) {
+                for (const cb of states) {
+                    if (cb.state !== 'closed') {
+                        log.warn(`[CircuitBreaker] ${cb.providerName} state=${cb.state} failures=${cb.totalFailures}`);
+                    }
+                }
+            }
+        }, 60_000);
+
         log.info('✅ NewClaw running — multi-channel pipeline active');
+        log.info('   Modules: EventBus ✅ | CircuitBreaker ✅ | ToolExecutor ✅ | ConfidenceClassifier ✅ | PromptRegistry ✅ | SessionAutoCleaner ✅');
     }
 
     async stop(reason: string = 'shutdown'): Promise<void> {

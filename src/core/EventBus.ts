@@ -1,171 +1,253 @@
 /**
- * EventBus — Pub/sub desacoplado para comunicação entre componentes
- *
- * Substitui acoplamentos diretos (ex: Scheduler → TelegramAdapter)
- * por eventos tipados que qualquer adapter pode escutar.
- *
- * Uso:
- *   bus.on('scheduler.trigger', (event) => { ... });
- *   bus.emit({ type: 'scheduler.trigger', payload: { ... }, source: 'scheduler' });
+ * EventBus — Pub/Sub desacoplado para o NewClaw
+ * 
+ * Duas APIs complementares:
+ * 1. Tipada: eventBus.on('tool:executed', data) — type-safe com EventBusEvents
+ * 2. Genérica: eventBus.emit({ type: 'scheduler.trigger', payload, source }) — AppEvent flexível
+ * 
+ * Ambas coexistem. Handlers genéricos recebem AppEvent; handlers tipados recebem dados específicos.
  */
 
+import { EventEmitter } from 'events';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('EventBus');
 
-// ── Types ────────────────────────────────────────────────────────────
+// ── Tipos de Evento Tipados ──────────────────────────────────────
+
+export interface EventBusEvents {
+    'tool:executed': { tool: string; input: Record<string, any>; success: boolean; durationMs: number; error?: string };
+    'tool:failed': { tool: string; input: Record<string, any>; error: string; durationMs: number };
+    'tool:timeout': { tool: string; input: Record<string, any>; timeoutMs: number };
+    'llm:call': { provider: string; model: string; tokens: number; durationMs: number };
+    'llm:fallback': { fromProvider: string; toProvider: string; reason: string };
+    'llm:timeout': { provider: string; model: string; timeoutMs: number };
+    'llm:error': { provider: string; model: string; error: string };
+    'agent:thinking': { conversationId: string; step: number };
+    'agent:response': { conversationId: string; response: string; stepCount: number; durationMs: number };
+    'agent:error': { conversationId: string; error: string };
+    'session:created': { sessionId: string; channel: string };
+    'session:closed': { sessionId: string };
+    'session:compressed': { sessionId: string; messagesCompressed: number; tokensSaved: number };
+    'memory:node:created': { id: string; type: string; name: string };
+    'memory:node:updated': { id: string; field: string; oldValue: string; newValue: string };
+    'memory:edge:created': { from: string; to: string; relation: string };
+    'memory:governance': { nodesDecayed: number; conflictsDetected: number; nodesGCd: number };
+    'circuit:open': { name: string; failures: number; threshold: number };
+    'circuit:half-open': { name: string };
+    'circuit:closed': { name: string; successes: number };
+    'channel:message': { channel: string; userId: string; type: string; text: string };
+    'channel:error': { channel: string; error: string };
+    'memory:classified': { contentId: string; confidence: Confidence; score: number };
+}
+
+// ── Confidence Types (#11) ─────────────────────────────────────
+
+export type Confidence = 'FACT' | 'INFERENCE' | 'HYPOTHESIS' | 'REASONING' | 'SPECULATION' | 'TOOL_RESULT' | 'USER_INPUT';
+
+export const CONFIDENCE_SCORES: Record<Confidence, number> = {
+    FACT: 0.95,
+    TOOL_RESULT: 0.9,
+    USER_INPUT: 0.85,
+    REASONING: 0.7,
+    INFERENCE: 0.6,
+    HYPOTHESIS: 0.3,
+    SPECULATION: 0.1,
+};
+
+export const CONFIDENCE_TTL: Record<Confidence, number> = {
+    FACT: Infinity,
+    TOOL_RESULT: 720,
+    USER_INPUT: 720,
+    REASONING: 168,
+    INFERENCE: 72,
+    HYPOTHESIS: 24,
+    SPECULATION: 6,
+};
+
+export interface ClassifiedContent {
+    id: string;
+    content: string;
+    confidence: Confidence;
+    score: number;
+    source: string;
+    ttl: number;
+    createdAt: Date;
+    expiresAt?: Date;
+}
+
+// ── AppEvent (Generic Event) ─────────────────────────────────────
 
 export type EventPayload = Record<string, unknown>;
 
 export interface AppEvent {
-    /** Event type (e.g. 'scheduler.trigger', 'tool.result', 'memory.updated') */
     type: string;
-    /** Event data */
     payload: EventPayload;
-    /** Source component */
     source: string;
-    /** ISO 8601 timestamp (auto-filled if omitted) */
     timestamp?: string;
-    /** Correlation ID for tracing across components */
     correlationId?: string;
 }
 
 export type EventHandler = (event: AppEvent) => void | Promise<void>;
 
-export interface EventSubscription {
-    eventType: string;
-    handler: EventHandler;
-    id: number;
-}
+// ── Well-known event types ────────────────────────────────────────
 
-// ── EventBus ─────────────────────────────────────────────────────────
+export const EventTypes = {
+    SCHEDULER_TRIGGER: 'scheduler.trigger',
+    SCHEDULER_COMPLETED: 'scheduler.completed',
+    SCHEDULER_FAILED: 'scheduler.failed',
+    TOOL_RESULT: 'tool.result',
+    MEMORY_UPDATED: 'memory.updated',
+    STATE_CHANGED: 'agent.state_changed',
+    LLM_RESPONSE: 'llm.response',
+    LLM_ERROR: 'llm.error',
+    CIRCUIT_STATE: 'circuit.state',
+    SESSION_START: 'session.start',
+    SESSION_END: 'session.end',
+    AGENT_START: 'agent.start',
+    AGENT_STOP: 'agent.stop',
+} as const;
 
-export class EventBus {
-    private handlers: Map<string, Set<EventHandler>> = new Map();
-    private wildcardHandlers: Set<EventHandler> = new Set();
-    private subscriptionCounter: number = 0;
+export type EventType = typeof EventTypes[keyof typeof EventTypes];
+
+// ── EventBus Class ────────────────────────────────────────────────
+
+type TypedEventHandler<T> = (data: T) => void | Promise<void>;
+
+class EventBusClass {
+    private emitter: EventEmitter;
+    private metrics: Map<string, { emitCount: number; lastEmitAt: number }> = new Map();
     private eventLog: AppEvent[] = [];
     private maxLogSize: number = 200;
 
-    /**
-     * Subscribe to an event type.
-     * Returns a subscription ID for unsubscribing.
-     */
-    on(eventType: string, handler: EventHandler): number {
-        const id = ++this.subscriptionCounter;
-        if (!this.handlers.has(eventType)) {
-            this.handlers.set(eventType, new Set());
+    constructor() {
+        this.emitter = new EventEmitter();
+    }
+
+    // ── Typed API ────────────────────────────────────────────────
+
+    emit<T extends keyof EventBusEvents>(event: T, data: EventBusEvents[T]): boolean {
+        this.recordMetric(event as string);
+        try {
+            return this.emitter.emit(event, data);
+        } catch (err) {
+            console.error(`[EventBus] Error emitting ${String(event)}:`, err);
+            return false;
         }
-        this.handlers.get(eventType)!.add(handler);
-        log.info(`[EVENTBUS] Subscribed to '${eventType}' (sub #${id})`);
-        return id;
     }
 
-    /**
-     * Subscribe to ALL events (wildcard).
-     */
-    onAny(handler: EventHandler): number {
-        const id = ++this.subscriptionCounter;
-        this.wildcardHandlers.add(handler);
-        log.info(`[EVENTBUS] Subscribed to '*' (wildcard, sub #${id})`);
-        return id;
+    async emitAsync<T extends keyof EventBusEvents>(event: T, data: EventBusEvents[T]): Promise<boolean> {
+        this.recordMetric(event as string);
+        const listeners = this.emitter.listeners(event);
+        if (listeners.length === 0) return true;
+
+        const results = await Promise.allSettled(
+            listeners.map(async (listener) => {
+                try {
+                    await (listener as TypedEventHandler<EventBusEvents[T]>)(data);
+                } catch (err) {
+                    console.error(`[EventBus] Async handler error for ${String(event)}:`, err);
+                    throw err;
+                }
+            })
+        );
+        return results.every(r => r.status === 'fulfilled');
     }
 
-    /**
-     * Unsubscribe by event type and handler reference.
-     */
-    off(eventType: string, handler: EventHandler): boolean {
-        const handlers = this.handlers.get(eventType);
-        if (handlers) {
-            const deleted = handlers.delete(handler);
-            if (handlers.size === 0) {
-                this.handlers.delete(eventType);
-            }
-            return deleted;
-        }
-        return false;
+    on<T extends keyof EventBusEvents>(event: T, handler: TypedEventHandler<EventBusEvents[T]>): () => void {
+        this.emitter.on(event, handler as any);
+        return () => this.emitter.off(event, handler as any);
     }
 
-    /**
-     * Unsubscribe wildcard handler.
-     */
-    offAny(handler: EventHandler): boolean {
-        return this.wildcardHandlers.delete(handler);
+    once<T extends keyof EventBusEvents>(event: T, handler: TypedEventHandler<EventBusEvents[T]>): () => void {
+        this.emitter.once(event, handler as any);
+        return () => this.emitter.off(event, handler as any);
     }
 
+    off<T extends keyof EventBusEvents>(event: T, handler: TypedEventHandler<EventBusEvents[T]>): void {
+        this.emitter.off(event, handler as any);
+    }
+
+    handlerCount(event: keyof EventBusEvents): number {
+        return this.emitter.listenerCount(event);
+    }
+
+    // ── Generic AppEvent API ──────────────────────────────────────
+
     /**
-     * Emit an event to all subscribers.
-     * Handlers are called asynchronously — errors are caught and logged.
+     * Emit a generic AppEvent (for scheduler, lifecycle, etc).
+     * Routes to the typed emitter under the hood.
      */
-    async emit(event: AppEvent): Promise<void> {
+    async emitAppEvent(event: AppEvent): Promise<void> {
         const enriched: AppEvent = {
             ...event,
             timestamp: event.timestamp || new Date().toISOString(),
         };
-
-        // Log event for observability
         this.logEvent(enriched);
 
-        const typeHandlers = this.handlers.get(enriched.type);
-        const allHandlers = [...(typeHandlers || []), ...this.wildcardHandlers];
-
-        if (allHandlers.length === 0) {
-            log.debug(`[EVENTBUS] No handlers for '${enriched.type}' (source: ${enriched.source})`);
-            return;
-        }
-
-        log.info(`[EVENTBUS] Emit '${enriched.type}' → ${allHandlers.length} handler(s) (source: ${enriched.source}, correlationId: ${enriched.correlationId || 'none'})`);
-
-        // Execute handlers in parallel, catch errors individually
-        const results = await Promise.allSettled(
-            allHandlers.map(async (handler) => {
-                try {
-                    await handler(enriched);
-                } catch (error: any) {
-                    log.error(`[EVENTBUS] Handler error for '${enriched.type}': ${error.message}`, error);
-                }
-            })
-        );
-
-        // Log any rejected promises
-        for (const result of results) {
-            if (result.status === 'rejected') {
-                log.error(`[EVENTBUS] Handler rejected for '${enriched.type}': ${result.reason}`);
-            }
+        // Also emit on the typed bus if the type matches
+        const handlers = this.emitter.listeners(enriched.type);
+        if (handlers.length === 0) {
+            log.debug(`[EventBus] No handlers for '${enriched.type}' (source: ${enriched.source})`);
+        } else {
+            log.info(`[EventBus] Emit '${enriched.type}' → ${handlers.length} handler(s)`);
+            await Promise.allSettled(
+                handlers.map(async (handler) => {
+                    try { await handler(enriched); } catch (e: any) { log.error(`[EventBus] Handler error: ${e.message}`); }
+                })
+            );
         }
     }
 
     /**
-     * Get recent event log for observability/debugging.
+     * Subscribe to generic AppEvent type.
+     */
+    onAny(handler: EventHandler): number {
+        // Wildcard via EventEmitter's special wildcard handling
+        const id = Date.now();
+        for (const eventType of Object.values(EventTypes)) {
+            this.emitter.on(eventType, handler as any);
+        }
+        log.info(`[EventBus] Subscribed to all event types (sub #${id})`);
+        return id;
+    }
+
+    /**
+     * Get recent event log for observability.
      */
     getEventLog(limit: number = 50): AppEvent[] {
         return this.eventLog.slice(-limit);
     }
 
     /**
-     * Get handler count for an event type.
-     */
-    handlerCount(eventType: string): number {
-        return (this.handlers.get(eventType)?.size || 0) + this.wildcardHandlers.size;
-    }
-
-    /**
      * Get all registered event types.
      */
     eventTypes(): string[] {
-        return Array.from(this.handlers.keys());
+        return this.emitter.eventNames().map(String);
     }
 
     /**
-     * Remove all subscriptions and clear log.
+     * Clear all subscriptions.
      */
     clear(): void {
-        this.handlers.clear();
-        this.wildcardHandlers.clear();
+        this.emitter.removeAllListeners();
         this.eventLog = [];
-        log.info('[EVENTBUS] All subscriptions cleared');
+        log.info('[EventBus] All subscriptions cleared');
     }
 
-    // ── Private ───────────────────────────────────────────────────
+    // ── Metrics ───────────────────────────────────────────────────
+
+    getMetrics(): Map<string, { emitCount: number; lastEmitAt: number }> {
+        return new Map(this.metrics);
+    }
+
+    // ── Private ──────────────────────────────────────────────────
+
+    private recordMetric(event: string): void {
+        const existing = this.metrics.get(event) || { emitCount: 0, lastEmitAt: 0 };
+        existing.emitCount++;
+        existing.lastEmitAt = Date.now();
+        this.metrics.set(event, existing);
+    }
 
     private logEvent(event: AppEvent): void {
         this.eventLog.push(event);
@@ -175,38 +257,6 @@ export class EventBus {
     }
 }
 
-// ── Singleton ────────────────────────────────────────────────────────
-
-export const eventBus = new EventBus();
-
-// ── Well-known event types ────────────────────────────────────────────
-
-export const EventTypes = {
-    /** Scheduler triggers a scheduled task */
-    SCHEDULER_TRIGGER: 'scheduler.trigger',
-    /** Scheduler task completed */
-    SCHEDULER_COMPLETED: 'scheduler.completed',
-    /** Scheduler task failed */
-    SCHEDULER_FAILED: 'scheduler.failed',
-    /** A tool finished execution */
-    TOOL_RESULT: 'tool.result',
-    /** Memory was updated */
-    MEMORY_UPDATED: 'memory.updated',
-    /** Agent state changed */
-    STATE_CHANGED: 'agent.state_changed',
-    /** LLM call completed */
-    LLM_RESPONSE: 'llm.response',
-    /** LLM call failed */
-    LLM_ERROR: 'llm.error',
-    /** Circuit breaker state changed */
-    CIRCUIT_STATE: 'circuit.state',
-    /** Session started */
-    SESSION_START: 'session.start',
-    /** Session ended */
-    SESSION_END: 'session.end',
-    /** Agent lifecycle event */
-    AGENT_START: 'agent.start',
-    AGENT_STOP: 'agent.stop',
-} as const;
-
-export type EventType = typeof EventTypes[keyof typeof EventTypes];
+// ── Singleton ────────────────────────────────────────────────────
+export const eventBus = new EventBusClass();
+export default eventBus;

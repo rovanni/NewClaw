@@ -11,3 +11,5 @@ export { SessionLearner } from './SessionLearner';
 export type { ExtractedFact, SessionLearningResult } from './SessionLearner';
 export { EventRanker } from './EventRanker';
 export type { RankedEvent } from './EventRanker';
+export { SessionAutoCleaner } from './SessionAutoCleaner';
+export type { AutoCleanerConfig } from './SessionAutoCleaner';

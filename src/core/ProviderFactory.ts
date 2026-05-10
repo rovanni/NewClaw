@@ -5,7 +5,7 @@
 
 import PQueue from 'p-queue';
 import { createLogger } from '../shared/AppLogger';
-import { CircuitBreakerManager } from './CircuitBreaker';
+import { circuitRegistry, type CircuitBreaker } from './CircuitBreaker';
 const log = createLogger('Providerfactory');
 
 // Separate queues: classification (fast, priority) vs generation (long tasks)
@@ -816,7 +816,7 @@ export class OpenRouterProvider extends OpenAIProvider {
 export class ProviderFactory {
     private providers: Map<string, ILLMProvider> = new Map();
     private defaultProvider: string;
-    public readonly circuitBreakers: CircuitBreakerManager;
+    public readonly circuitBreakers: typeof circuitRegistry;
 
     constructor(config: {
         geminiKey?: string;
@@ -829,7 +829,7 @@ export class ProviderFactory {
         defaultProvider: string;
     }) {
         this.defaultProvider = config.defaultProvider || 'gemini';
-        this.circuitBreakers = new CircuitBreakerManager({ threshold: 5, resetTimeoutMs: 60_000 });
+        this.circuitBreakers = circuitRegistry;
 
         if (config.geminiKey) this.providers.set('gemini', new GeminiProvider(config.geminiKey));
         if (config.deepseekKey) this.providers.set('deepseek', new DeepSeekProvider(config.deepseekKey));
@@ -904,7 +904,7 @@ export class ProviderFactory {
 
         // ── Circuit Breaker: skip providers that are in OPEN state ──
         const activeProviders = providerOrder.filter(name => {
-            const breaker = this.circuitBreakers.getBreaker(name);
+            const breaker = this.circuitBreakers.getOrCreate({ name });
             if (!breaker.canExecute()) {
                 log.info(`[${requestId}] CIRCUIT-OPEN: Skipping '${name}' (failures: ${breaker.getFailureCount()})`);
                 return false;
@@ -1003,7 +1003,7 @@ export class ProviderFactory {
                     // Only ONE response per request — return immediately on first success
                     if ((result.content && result.content.trim().length > 0) || (result.toolCalls && result.toolCalls.length > 0)) {
                         attemptLog.push({ provider: providerName, model: modelUsed, duration, status: 'success' });
-                        this.circuitBreakers.getBreaker(providerName).recordSuccess();
+                        this.circuitBreakers.getOrCreate({ name: providerName }).recordSuccess();
                         log.info(`[${attemptId}] SUCCESS content=${result.content.length}chars thinking=${(result.thinking || '').length}chars toolCalls=${result.toolCalls?.length || 0} duration=${duration}ms`);
                         return {
                             status: 'success',
@@ -1041,7 +1041,7 @@ export class ProviderFactory {
                     });
                     
                     // Record failure in circuit breaker
-                    this.circuitBreakers.getBreaker(providerName).recordFailure(error.message);
+                    this.circuitBreakers.getOrCreate({ name: providerName }).recordFailure(error.message);
                     
                     if (isRetryable && attempt < MAX_RETRIES) {
                         continue;
