@@ -26,7 +26,16 @@ export class ReadTool implements ToolExecutor {
         required: ['path']
     };
 
-    /** Resolve e valida caminho dentro do sandbox (workspace) */
+    /**
+     * Resolve e valida caminho dentro do sandbox (workspace).
+     *
+     * Estratégia multi-candidato:
+     * 1. Resolver o caminho como fornecido (absoluto ou relativo ao workspace)
+     * 2. Se absoluto e não existir no disco, tentar como relativo ao workspace
+     *    Exemplo: "/uenp" → tenta "/uenp", depois "WORKSPACE_DIR/uenp"
+     * 3. Retornar o primeiro candidato que (a) é permitido E (b) existe no disco
+     * 4. Se nenhum existir, retornar o primeiro permitido (para operações de escrita)
+     */
     private resolvePath(inputPath: string): { resolved: string; error?: string } {
         const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
         const projectRoot = process.cwd();
@@ -35,22 +44,14 @@ export class ReadTool implements ToolExecutor {
         let expanded = inputPath;
         
         // Normalizar APENAS prefixo relativo 'workspace/' (sem barra inicial).
-        // NÃO tocar em '/workspace/' absoluto — é um diretório real no VPS.
         if (!expanded.startsWith('/') && expanded.startsWith('workspace/')) {
-            expanded = expanded.slice(10); // Remove 'workspace/'
+            expanded = expanded.slice(10);
         }
 
         if (expanded.startsWith('~/')) {
             expanded = homeDir + expanded.slice(1);
         } else if (expanded.startsWith('@')) {
             expanded = expanded.slice(1);
-        }
-
-        let resolved: string;
-        if (path.isAbsolute(expanded)) {
-            resolved = path.normalize(expanded);
-        } else {
-            resolved = path.resolve(workspaceDir, expanded);
         }
 
         // Roots permitidas (Sandbox)
@@ -61,24 +62,56 @@ export class ReadTool implements ToolExecutor {
             path.join(projectRoot, 'workspace'),
             path.join(projectRoot, 'logs'),
             path.join(projectRoot, 'data'),
-            '/uenp',
             homeDir,
         ];
 
-        const isAllowed = allowedRoots.some(root => {
-            const rel = path.relative(root, resolved);
-            if (rel === '') return true;
-            return !rel.startsWith('..') && !path.isAbsolute(rel);
-        });
+        const checkAllowed = (p: string): boolean => {
+            return allowedRoots.some(root => {
+                const rel = path.relative(root, p);
+                if (rel === '') return true;
+                return !rel.startsWith('..') && !path.isAbsolute(rel);
+            });
+        };
 
-        if (!isAllowed) {
-            return {
-                resolved,
-                error: `⛔ Caminho fora do sandbox: ${inputPath} → ${resolved}. Allowed roots: ${allowedRoots.join(', ')}`
-            };
+        // Construir lista de candidatos (ordem de prioridade)
+        const candidates: string[] = [];
+
+        if (path.isAbsolute(expanded)) {
+            // 1. Caminho absoluto como fornecido
+            candidates.push(path.normalize(expanded));
+            // 2. Fallback: tratar como relativo ao workspace (strip leading /)
+            //    "/uenp" → "WORKSPACE_DIR/uenp"
+            candidates.push(path.resolve(workspaceDir, expanded.slice(1)));
+            // 3. Fallback para /workspace/ prefix:
+            //    "/workspace/tmp/x" → "WORKSPACE_DIR/tmp/x"
+            if (expanded.startsWith('/workspace/')) {
+                candidates.push(path.resolve(workspaceDir, expanded.slice(11)));
+            }
+        } else {
+            // Relativo: resolver a partir do workspace
+            candidates.push(path.resolve(workspaceDir, expanded));
         }
 
-        return { resolved };
+        // Fase 1: encontrar o primeiro candidato que é permitido E existe no disco
+        for (const candidate of candidates) {
+            if (checkAllowed(candidate) && fs.existsSync(candidate)) {
+                return { resolved: candidate };
+            }
+        }
+
+        // Fase 2: nenhum existe — retornar o primeiro candidato permitido
+        // (necessário para operações de escrita onde o arquivo ainda não existe)
+        for (const candidate of candidates) {
+            if (checkAllowed(candidate)) {
+                return { resolved: candidate };
+            }
+        }
+
+        // Nenhum candidato é permitido
+        return {
+            resolved: candidates[0] || inputPath,
+            error: `⛔ Caminho fora do sandbox: ${inputPath} → tentados: ${candidates.join(', ')}. Allowed roots: ${allowedRoots.join(', ')}`
+        };
     }
 
     async execute(args: Record<string, any>): Promise<ToolResult> {

@@ -22,7 +22,11 @@ export class WriteTool implements ToolExecutor {
         required: ['path', 'content']
     };
 
-    /** Resolve e valida caminho dentro do sandbox (workspace) */
+    /**
+     * Resolve e valida caminho dentro do sandbox (workspace).
+     * Multi-candidato: tenta absoluto, depois workspace-relativo.
+     * Para escrita, retorna o primeiro candidato permitido (arquivo pode não existir ainda).
+     */
     private resolvePath(inputPath: string): { resolved: string; error?: string } {
         const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
         const projectRoot = process.cwd();
@@ -30,23 +34,14 @@ export class WriteTool implements ToolExecutor {
 
         let expanded = inputPath;
         
-        // Normalizar APENAS prefixo relativo 'workspace/' (sem barra inicial).
-        // NÃO tocar em '/workspace/' absoluto — é um diretório real no VPS.
         if (!expanded.startsWith('/') && expanded.startsWith('workspace/')) {
-            expanded = expanded.slice(10); // Remove 'workspace/'
+            expanded = expanded.slice(10);
         }
 
         if (expanded.startsWith('~/')) {
             expanded = homeDir + expanded.slice(1);
         } else if (expanded.startsWith('@')) {
             expanded = expanded.slice(1);
-        }
-
-        let resolved: string;
-        if (path.isAbsolute(expanded)) {
-            resolved = path.normalize(expanded);
-        } else {
-            resolved = path.resolve(workspaceDir, expanded);
         }
 
         // Roots permitidas (Sandbox)
@@ -57,23 +52,52 @@ export class WriteTool implements ToolExecutor {
             path.join(projectRoot, 'workspace'),
             path.join(projectRoot, 'logs'),
             path.join(projectRoot, 'data'),
-            '/uenp',
             homeDir,
         ];
 
-        const isAllowed = allowedRoots.some(root => {
-            const rel = path.relative(root, resolved);
-            if (rel === '') return true;
-            return !rel.startsWith('..') && !path.isAbsolute(rel);
-        });
+        const checkAllowed = (p: string): boolean => {
+            return allowedRoots.some(root => {
+                const rel = path.relative(root, p);
+                if (rel === '') return true;
+                return !rel.startsWith('..') && !path.isAbsolute(rel);
+            });
+        };
 
-        if (!isAllowed) {
-            return {
-                resolved,
-                error: `⛔ Caminho fora do sandbox: ${inputPath} → ${resolved}. Allowed roots: ${allowedRoots.join(', ')}`
-            };
+        // Construir lista de candidatos
+        const candidates: string[] = [];
+
+        if (path.isAbsolute(expanded)) {
+            candidates.push(path.normalize(expanded));
+            candidates.push(path.resolve(workspaceDir, expanded.slice(1)));
+            if (expanded.startsWith('/workspace/')) {
+                candidates.push(path.resolve(workspaceDir, expanded.slice(11)));
+            }
+        } else {
+            candidates.push(path.resolve(workspaceDir, expanded));
         }
 
+        // Fase 1: primeiro candidato permitido E existente no disco
+        for (const candidate of candidates) {
+            if (checkAllowed(candidate) && fs.existsSync(candidate)) {
+                return this.checkSelfEdit(candidate, inputPath, projectRoot);
+            }
+        }
+
+        // Fase 2: primeiro candidato permitido (para criação de arquivo)
+        for (const candidate of candidates) {
+            if (checkAllowed(candidate)) {
+                return this.checkSelfEdit(candidate, inputPath, projectRoot);
+            }
+        }
+
+        return {
+            resolved: candidates[0] || inputPath,
+            error: `⛔ Caminho fora do sandbox: ${inputPath} → tentados: ${candidates.join(', ')}. Allowed roots: ${allowedRoots.join(', ')}`
+        };
+    }
+
+    /** Bloquear edição de código próprio do NewClaw */
+    private checkSelfEdit(resolved: string, inputPath: string, projectRoot: string): { resolved: string; error?: string } {
         const blockedPaths = [
             path.join(projectRoot, 'src'),
             path.join(projectRoot, 'dist'),
@@ -87,7 +111,6 @@ export class WriteTool implements ToolExecutor {
                 error: `⛔ BLOCKED: Não pode modificar código próprio do NewClaw (${inputPath})`
             };
         }
-
         return { resolved };
     }
 
