@@ -5,6 +5,7 @@
 
 import PQueue from 'p-queue';
 import { createLogger } from '../shared/AppLogger';
+import { CircuitBreakerManager } from './CircuitBreaker';
 const log = createLogger('Providerfactory');
 
 // Separate queues: classification (fast, priority) vs generation (long tasks)
@@ -815,6 +816,7 @@ export class OpenRouterProvider extends OpenAIProvider {
 export class ProviderFactory {
     private providers: Map<string, ILLMProvider> = new Map();
     private defaultProvider: string;
+    public readonly circuitBreakers: CircuitBreakerManager;
 
     constructor(config: {
         geminiKey?: string;
@@ -827,6 +829,7 @@ export class ProviderFactory {
         defaultProvider: string;
     }) {
         this.defaultProvider = config.defaultProvider || 'gemini';
+        this.circuitBreakers = new CircuitBreakerManager({ threshold: 5, resetTimeoutMs: 60_000 });
 
         if (config.geminiKey) this.providers.set('gemini', new GeminiProvider(config.geminiKey));
         if (config.deepseekKey) this.providers.set('deepseek', new DeepSeekProvider(config.deepseekKey));
@@ -899,7 +902,28 @@ export class ProviderFactory {
         
         log.info(`[${requestId}] chatWithFallback START providers=[${providerOrder.join(',')}] timeout=${timeoutMs || 'none'}ms`);
 
-        for (const providerName of providerOrder) {
+        // ── Circuit Breaker: skip providers that are in OPEN state ──
+        const activeProviders = providerOrder.filter(name => {
+            const breaker = this.circuitBreakers.getBreaker(name);
+            if (!breaker.canExecute()) {
+                log.info(`[${requestId}] CIRCUIT-OPEN: Skipping '${name}' (failures: ${breaker.getFailureCount()})`);
+                return false;
+            }
+            return true;
+        });
+
+        if (activeProviders.length === 0) {
+            log.error(`[${requestId}] ALL_PROVIDERS_CIRCUIT_OPEN — no provider available`);
+            return {
+                status: 'error' as const,
+                content: 'Todos os providers estão temporariamente indisponíveis. Tente novamente em alguns segundos.',
+                attempts: attemptLog,
+            };
+        }
+
+        log.info(`[${requestId}] Active providers after circuit check: [${activeProviders.join(',')}]`);
+
+        for (const providerName of activeProviders) {
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
                 const attemptId = `${requestId}-${providerName}-${attempt}`;
                 const attemptStart = Date.now();
@@ -979,6 +1003,7 @@ export class ProviderFactory {
                     // Only ONE response per request — return immediately on first success
                     if ((result.content && result.content.trim().length > 0) || (result.toolCalls && result.toolCalls.length > 0)) {
                         attemptLog.push({ provider: providerName, model: modelUsed, duration, status: 'success' });
+                        this.circuitBreakers.getBreaker(providerName).recordSuccess();
                         log.info(`[${attemptId}] SUCCESS content=${result.content.length}chars thinking=${(result.thinking || '').length}chars toolCalls=${result.toolCalls?.length || 0} duration=${duration}ms`);
                         return {
                             status: 'success',
@@ -1014,6 +1039,9 @@ export class ProviderFactory {
                         status: isTimeout ? 'timeout' : 'error', 
                         errorMessage: error.message 
                     });
+                    
+                    // Record failure in circuit breaker
+                    this.circuitBreakers.getBreaker(providerName).recordFailure(error.message);
                     
                     if (isRetryable && attempt < MAX_RETRIES) {
                         continue;

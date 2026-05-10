@@ -43,6 +43,8 @@ import { NormalizedMessage } from '../channels/ChannelAdapter';
 import { AuditorService } from '../services/auditor/AuditorService';
 import { registerAuditCommand } from '../services/auditor/auditCommand';
 import { LifecycleManager } from './LifecycleManager';
+import { EventBus, eventBus, EventTypes, type AppEvent } from './EventBus';
+import { CircuitBreaker, CircuitBreakerManager } from './CircuitBreaker';
 const log = createLogger('AgentController');
 
 export interface NewClawConfig {
@@ -114,6 +116,8 @@ export class AgentController {
     private memoryGovernor: MemoryGovernor;
     private scheduler: SchedulerService;
     private messageBus: MessageBus;
+    private eventBus: EventBus;
+    private circuitBreakers: CircuitBreakerManager;
     private auditor: AuditorService;
     private telegramAdapter: TelegramAdapter;
     private discordAdapter: DiscordAdapter | null = null;
@@ -122,6 +126,10 @@ export class AgentController {
 
     /** Get the MessageBus */
     public getMessageBus(): MessageBus { return this.messageBus; }
+    /** Get the EventBus */
+    public getEventBus(): EventBus { return this.eventBus; }
+    /** Get the CircuitBreakerManager */
+    public getCircuitBreakers(): CircuitBreakerManager { return this.circuitBreakers; }
     /** Get the TelegramAdapter */
     public getTelegramAdapter(): TelegramAdapter { return this.telegramAdapter; }
     /** Get the DiscordAdapter (if enabled) */
@@ -134,7 +142,9 @@ export class AgentController {
     constructor(config: NewClawConfig) {
         this.config = config;
 
-        // Inicializar componentes
+        // Inicializar EventBus e CircuitBreaker (camada de infraestrutura)
+        this.eventBus = eventBus; // singleton
+        this.circuitBreakers = new CircuitBreakerManager({ threshold: 5, resetTimeoutMs: 60_000 });
         this.memory = new MemoryManager('./data/newclaw.db');
         this.memoryFacade = this.memory.getFacade();
         this.providerFactory = new ProviderFactory({
@@ -280,7 +290,7 @@ export class AgentController {
             log.info('Signal adapter registered');
         }
 
-        // Scheduler trigger — sends via TelegramAdapter
+        // ── Scheduler via EventBus (desacoplado de qualquer adapter) ──
         this.scheduler.setTriggerHandler(async (task) => {
             try {
                 const chatId = task.chat_id;
@@ -296,18 +306,47 @@ export class AgentController {
                     prompt = `[AGENDADO] ${params.message || task.label}`;
                 }
                 log.info(`[Scheduler] Triggering task #${task.id}: ${task.label} → chat ${chatId}`);
+
+                // Emit event via EventBus — any adapter can listen
+                this.eventBus.emit({
+                    type: EventTypes.SCHEDULER_TRIGGER,
+                    payload: { chatId, prompt, taskId: task.id, actionType: task.action_type, label: task.label },
+                    source: 'scheduler',
+                    correlationId: `scheduler-${task.id}`,
+                });
+            } catch (e) {
+                log.error(`[Scheduler] Failed to emit scheduled event:`, e);
+                this.eventBus.emit({
+                    type: EventTypes.SCHEDULER_FAILED,
+                    payload: { taskId: task.id, error: String(e) },
+                    source: 'scheduler',
+                });
+            }
+        });
+
+        // ── EventBus: scheduler triggers → AgentLoop → response to chat ──
+        this.eventBus.on(EventTypes.SCHEDULER_TRIGGER, async (event: AppEvent) => {
+            try {
+                const { chatId, prompt, taskId, actionType, label } = event.payload as {
+                    chatId: string; prompt: string; taskId: number; actionType: string; label: string;
+                };
+                log.info(`[EVENTBUS] Processing scheduler.trigger #${taskId} → chat ${chatId}`);
                 const result = await this.agentLoop.process(chatId, prompt);
-                // Send result via TelegramAdapter
+                // Send via the primary adapter (Telegram for now)
                 await this.telegramAdapter.sendToChat(chatId, {
                     text: result,
                     format: 'markdown'
                 });
+                this.eventBus.emit({
+                    type: EventTypes.SCHEDULER_COMPLETED,
+                    payload: { taskId, chatId },
+                    source: 'agent',
+                    correlationId: event.correlationId,
+                });
             } catch (e) {
-                log.error(`[Scheduler] Failed to send scheduled message:`, e);
+                log.error(`[EVENTBUS] scheduler.trigger handler failed:`, e);
             }
         });
-
-        // Start scheduler after bot is ready
         this.lifecycle.registerTimeout('scheduler.startAll', () => this.scheduler.startAll(), 5000);
 
         this.lifecycle.registerService('memory', () => this.memory.close());
