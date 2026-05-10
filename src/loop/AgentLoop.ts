@@ -601,6 +601,22 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
             const isExplicitlyIncomplete = atomicData?.evaluation?.is_complete === false;
             const hasContentNoTool = atomicData?.action?.content && !wantsTool && !hasNativeToolCalls;
 
+            // ── Anti-Procrastination Guard ──
+            // Detect when the model says it will do something but didn't actually call a tool.
+            // This prevents the "promise and vanish" bug where the model says
+            // "Agora vou criar..." or "Vou expandir..." without a tool_call.
+            const PROMISE_PATTERNS = /(?:vou\s+(?:criar|expandir|gerar|fazer|produzir|montar|escrever|adicionar|incluir|desenvolver)|agora\s+vou|a\s+seguir\s+vou|next\s+i(?:'??ll)?\s+(?:create|expand|generate|make|write|add)|let\s+me\s+(?:create|expand|generate|write))/i;
+            const looksLikePromise = !wantsTool && !hasNativeToolCalls && finalText.length > 0 && PROMISE_PATTERNS.test(finalText);
+            
+            if (looksLikePromise) {
+                log.warn(`[${this.ts()}] [ANTI-PROCASTINATION] Model promises action without tool_call — forcing retry. Preview: ${finalText.slice(0, 100)}`);
+                loopMessages.push({
+                    role: 'system',
+                    content: `[CRÍTICO] Você disse que iria realizar uma ação mas NÃO chamou nenhuma ferramenta. Você DEVE chamar a ferramenta AGORA no mesmo turno. Não prometa — execute. Use write para criar/editar arquivos, send_document para enviar, etc. Responda em JSON: {"action":{"type":"tool","name":"write","input":{...}},"evaluation":{"is_complete":false}}`
+                });
+                continue;
+            }
+
             if (((isFinalAnswer || isMarkedComplete || hasContentNoTool) && !isExplicitlyIncomplete) && !wantsTool && !hasNativeToolCalls) {
                 log.info(`[${this.ts()}] [ATOMIC] Task marked as COMPLETE (reason: ${isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool'}).`);
                 move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool' });
@@ -676,9 +692,10 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
             // 3. Failsafe Early Exit: No tool calls and no tool action?
             // If the model is just providing text (JSON or raw) without requesting a tool, 
             // we should not loop. One step is enough for a direct response.
+            // BUT: if the text looks like a promise to act, we must NOT exit early.
             const hasNoToolsRequested = !response.toolCalls?.length && atomicData?.action?.type !== 'tool';
             
-            if (hasNoToolsRequested && !isExplicitlyIncomplete) {
+            if (hasNoToolsRequested && !isExplicitlyIncomplete && !looksLikePromise) {
                 if (finalText.length > 0) {
                     log.info(`[${this.ts()}] [EARLY-EXIT] No tool calls requested → returning content (step ${stepCount})`);
                     move('FINAL_READY', { step: stepCount, reason: 'no_tools_requested' });
