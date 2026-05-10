@@ -31,10 +31,8 @@ export class SchedulerService {
     private timers: Map<number, ReturnType<typeof setTimeout>> = new Map();
     private onTrigger: ((task: ScheduledTask) => Promise<void>) | null = null;
 
-    constructor(dbPath: string, db?: Database.Database | MemoryManager) {
-        if (db instanceof MemoryManager) {
-            this.db = db.getDatabase();
-        } else if (db) {
+    constructor(dbPath: string, db?: Database.Database) {
+        if (db) {
             this.db = db;
         } else {
             const dir = path.dirname(dbPath);

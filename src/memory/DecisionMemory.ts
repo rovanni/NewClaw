@@ -21,8 +21,8 @@ export interface ToolDecision {
 export class DecisionMemory {
     private db: Database;
 
-    constructor(db: Database | MemoryManager) {
-        this.db = db instanceof MemoryManager ? db.getDatabase() : db;
+    constructor(db: Database) {
+        this.db = db;
         this.initializeSchema();
     }
 

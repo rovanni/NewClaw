@@ -12,6 +12,7 @@ import path from 'path';
 import fs from 'fs';
 import { createLogger } from '../shared/AppLogger';
 import { MemoryFacade, SqliteMemoryFacade } from './MemoryFacade';
+import { ConfidenceClassifier } from '../core/ConfidenceClassifier';
 const log = createLogger('Memorymanager');
 
 export interface Message {
@@ -60,11 +61,7 @@ export class MemoryManager {
     private attentionLayer: AttentionLayer | null = null;
     private attentionFeedback: AttentionFeedback | null = null;
     private facade: MemoryFacade | null = null;
-
-    /** @deprecated Prefer getFacade() or a database-backed service constructor. */
-    getDatabase(): Database.Database {
-        return this.db;
-    }
+    private classifier: ConfidenceClassifier;
 
     getFacade(): MemoryFacade {
         if (!this.facade) {
@@ -118,14 +115,18 @@ export class MemoryManager {
 
     private inverseRelations: Record<string, string> = {};
 
-    constructor(dbPath: string = './data/newclaw.db') {
-        this.dbPath = dbPath;
-        const dir = path.dirname(dbPath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
+    constructor(dbOrPath: string | Database.Database = './data/newclaw.db') {
+        if (typeof dbOrPath === 'string') {
+            this.dbPath = dbOrPath;
+            const dir = path.dirname(dbOrPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            this.db = new Database(dbOrPath);
+            this.db.pragma('journal_mode = WAL');
+        } else {
+            this.db = dbOrPath;
+            this.dbPath = ':memory:';
         }
-        this.db = new Database(dbPath);
-        this.db.pragma('journal_mode = WAL');
+        this.classifier = new ConfidenceClassifier();
         try { this.attentionLayer = new AttentionLayer(this.db); } catch (e) { log.warn('init_failed', 'AttentionLayer init failed', { error: String(e) }); }
         try { this.attentionFeedback = new AttentionFeedback(this.db); } catch (e) { log.warn('init_failed', 'AttentionFeedback init failed', { error: String(e) }); }
         this.initialize();
@@ -629,7 +630,18 @@ export class MemoryManager {
 
     // === Grafo de Memória (como IalClaw) ===
 
-    addNode(node: MemoryNode): void {
+    addNode(node: MemoryNode, source: string = 'unknown'): void {
+        const classification = this.classifier.classify(node.content, source, node.metadata);
+        
+        // Sanitização de Dados: FACT vs INFERENCE pipeline
+        if (!this.classifier.shouldPersist(classification.confidence)) {
+            log.warn(`[MemoryManager] Preventing persistence of ${classification.confidence} content: ${node.id}`);
+            return;
+        }
+
+        // Apply classification score if not explicitly set
+        const confidenceScore = node.confidence ?? classification.score;
+
         this.db.prepare(`
             INSERT OR REPLACE INTO memory_nodes (id, type, name, content, metadata, weight, confidence, last_updated, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -640,7 +652,7 @@ export class MemoryManager {
             node.content, 
             JSON.stringify(node.metadata || {}),
             node.weight ?? 1.0,
-            node.confidence ?? 1.0,
+            confidenceScore,
             node.last_updated || new Date().toISOString()
         );
 
@@ -1039,7 +1051,7 @@ export class MemoryManager {
     }
 
     close(): void {
-        this.attentionFeedback?.destroy();
+        this.attentionFeedback?.stopBackgroundJobs();
         this.db.close();
     }
 

@@ -60,8 +60,8 @@ export class OnboardingService {
     private stateManager: AgentStateManager;
     private states: Map<string, OnboardingState> = new Map();
 
-    constructor(db: Database | MemoryManager, skillLearner: SkillLearner, providerFactory: ProviderFactory, stateManager: AgentStateManager) {
-        this.db = db instanceof MemoryManager ? db.getDatabase() : db;
+    constructor(db: Database, skillLearner: SkillLearner, providerFactory: ProviderFactory, stateManager: AgentStateManager) {
+        this.db = db;
         this.skillLearner = skillLearner;
         this.providerFactory = providerFactory;
         this.stateManager = stateManager;

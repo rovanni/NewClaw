@@ -52,8 +52,8 @@ interface ToolPatternStat {
 export class SkillLearner {
     private db: Database.Database;
 
-    constructor(db: Database.Database | MemoryManager) {
-        this.db = db instanceof MemoryManager ? db.getDatabase() : db;
+    constructor(db: Database.Database) {
+        this.db = db;
         this.ensureTable();
     }
 

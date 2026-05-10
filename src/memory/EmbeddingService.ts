@@ -15,8 +15,8 @@ export class EmbeddingService {
     private model: string;
     private db: Database;
 
-    constructor(db: Database | MemoryManager, ollamaUrl: string = 'http://localhost:11434', model: string = DEFAULT_EMBED_MODEL) {
-        this.db = db instanceof MemoryManager ? db.getDatabase() : db;
+    constructor(db: Database, ollamaUrl: string = 'http://localhost:11434', model: string = DEFAULT_EMBED_MODEL) {
+        this.db = db;
         this.ollamaUrl = ollamaUrl;
         this.model = model;
         this.initializeSchema();

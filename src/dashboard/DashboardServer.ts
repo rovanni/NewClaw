@@ -87,6 +87,7 @@ export class DashboardServer {
     private decisionMemory?: DecisionMemory;
     private skillInstaller?: SkillInstaller;
     private config: NewClawConfig;
+    private db?: any;
 
     constructor(config: NewClawConfig) {
         this.config = config;
@@ -1500,13 +1501,17 @@ export class DashboardServer {
         this.providerFactory = pf;
     }
 
+    public setDatabase(db: any) {
+        this.db = db;
+    }
+
     public setMemoryManager(mm: MemoryManager) {
         this.memoryManager = mm;
         this.memoryCurator = new MemoryCurator(mm);
         this.graphAnalytics = new GraphAnalytics(mm);
-        this.embeddingService = new EmbeddingService(mm);
-        this.classificationMemory = new ClassificationMemory(mm);
-        this.decisionMemory = new DecisionMemory(mm);
+        this.embeddingService = new EmbeddingService(this.db || mm);
+        this.classificationMemory = new ClassificationMemory(this.db || mm);
+        this.decisionMemory = new DecisionMemory(this.db || mm);
         this.skillInstaller = new SkillInstaller();
         this.memoryCurator.startAutoCurate(30 * 60 * 1000); // Every 30 min
     }

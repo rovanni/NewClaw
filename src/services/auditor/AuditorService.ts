@@ -137,11 +137,9 @@ export class AuditorService {
     /** Titles from previous report — used for deduplication */
     private previousFindingTitles: Set<string> = new Set();
 
-    constructor(config: AuditConfig, db?: Database.Database | MemoryManager) {
+    constructor(config: AuditConfig, db?: Database.Database) {
         this.config = config;
-        if (db instanceof MemoryManager) {
-            this.db = db.getDatabase();
-        } else if (db) {
+        if (db) {
             this.db = db;
         } else {
             this.db = new Database(config.dbPath);

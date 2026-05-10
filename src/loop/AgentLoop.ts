@@ -60,6 +60,7 @@ export interface ChannelContext {
     botToken?: string;
     userId?: string;
     metadata?: any;
+    correlationId?: string;
 }
 
 export interface AgentLoopConfig {
@@ -163,19 +164,19 @@ export class AgentLoop {
     private classificationMemory: ClassificationMemory;
     private decisionMemory: DecisionMemory;
 
-    constructor(providerFactory: ProviderFactory, memory: MemoryManager, config: AgentLoopConfig, skillLearner?: SkillLearner) {
+    constructor(providerFactory: ProviderFactory, memory: MemoryManager, config: AgentLoopConfig, skillLearner: SkillLearner, classificationMemory?: ClassificationMemory, decisionMemory?: DecisionMemory) {
         this.providerFactory = providerFactory;
         this.memory = memory;
         this.config = config;
         this.contextBuilder = new ContextBuilder(memory);
         this.cognitiveWorkspace = new CognitiveWorkspace();
-        this.skillLearner = skillLearner || new SkillLearner(memory);
+        this.skillLearner = skillLearner as SkillLearner;
         this.modelRouter = new ModelRouter(config.modelRouter as any, providerFactory);
         this.intentRouter = new UnifiedIntentRouter();
         this.stateManager = new AgentStateManager(memory);
         
-        this.classificationMemory = new ClassificationMemory(memory);
-        this.decisionMemory = new DecisionMemory(memory);
+        this.classificationMemory = classificationMemory as ClassificationMemory;
+        this.decisionMemory = decisionMemory as DecisionMemory;
     }
 
     public getIntentRouter(): UnifiedIntentRouter {

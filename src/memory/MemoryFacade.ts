@@ -33,6 +33,7 @@ export interface MemoryFacade {
     loadSessionCheckpoints(): SessionCheckpointRecord[];
     saveSessionCheckpoint(record: SessionCheckpointRecord): void;
     getAllNodes(): MemoryNode[];
+    addNode(node: MemoryNode, source?: string): void;
     removeNode(nodeId: string): void;
     applyNodeDecay(): void;
     autoScoreNodes(): void;
@@ -123,6 +124,10 @@ export class SqliteMemoryFacade implements MemoryFacade {
 
     getAllNodes(): MemoryNode[] {
         return this.db.prepare('SELECT * FROM memory_nodes').all() as MemoryNode[];
+    }
+
+    addNode(node: MemoryNode, source: string = 'unknown'): void {
+        this.memory.addNode(node, source);
     }
 
     removeNode(nodeId: string): void {

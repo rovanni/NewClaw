@@ -20,6 +20,6 @@ export type { PromptCategoryConfig } from './PromptRegistry';
 export { ExecutionTrace, traceManager } from './ExecutionTrace';
 export type { StepType, TraceStep } from './ExecutionTrace';
 export { ProviderFactory } from './ProviderFactory';
-export { SimpleDecisionEngine } from './SimpleDecisionEngine';
+
 export { StateStabilityGuard } from './StateStabilityGuard';
 export { ToolRegistry } from './ToolRegistry';

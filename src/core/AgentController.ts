@@ -29,6 +29,8 @@ import { WeatherTool } from '../tools/weather';
 import { ToolRegistry } from './ToolRegistry';
 import { SessionManager } from '../session/SessionManager';
 import { SessionContext } from '../session/SessionContext';
+import { ClassificationMemory } from '../memory/ClassificationMemory';
+import { DecisionMemory } from '../memory/DecisionMemory';
 import { SchedulerService } from '../services/SchedulerService';
 import { ScheduleTool } from '../tools/schedule_tool';
 import { SessionLearner } from '../session/SessionLearner';
@@ -106,13 +108,20 @@ export class AgentController {
     private config: NewClawConfig;
     private agentLoop: AgentLoop;
     private providerFactory: ProviderFactory;
-    public getProviderFactory(): ProviderFactory { return this.providerFactory; }
     private memory: MemoryManager;
     private memoryFacade: MemoryFacade;
     private lifecycle = new LifecycleManager();
-    public getMemory(): MemoryManager { return this.memory; }
-    public getSessionLearner(): SessionLearner { return this.sessionLearner; }
+    public getMemory(): MemoryManager {
+        return this.memory;
+    }
+
+    public getDatabase(): any {
+        return this.db;
+    }
+
+    public getProviderFactory(): ProviderFactory { return this.providerFactory; }
     public getMemoryGovernor(): MemoryGovernor { return this.memoryGovernor; }
+    public getSessionLearner(): SessionLearner { return this.sessionLearner; }
     private skillLoader: SkillLoader;
     private skillLearner: SkillLearner;
     private onboardingService: OnboardingService;
@@ -124,6 +133,7 @@ export class AgentController {
     private _eventBus: any;
     private circuitBreakers: any;
     private auditor: AuditorService;
+    private db: any;
     private sessionAutoCleaner: SessionAutoCleaner;
     private confidenceClassifier: ConfidenceClassifier;
     private telegramAdapter: TelegramAdapter;
@@ -157,7 +167,19 @@ export class AgentController {
         // Inicializar EventBus e CircuitBreaker (camada de infraestrutura)
         this._eventBus = eventBus; // singleton
         this.circuitBreakers = circuitRegistry; // singleton registry
-        this.memory = new MemoryManager('./data/newclaw.db');
+        
+        // Setup SQLite Database connection directly
+        const dbPath = './data/newclaw.db';
+        const fs = require('fs');
+        const path = require('path');
+        const Database = require('better-sqlite3');
+        const dir = path.dirname(dbPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const db = new Database(dbPath);
+        db.pragma('journal_mode = WAL');
+        this.db = db; // Store in class property
+        
+        this.memory = new MemoryManager(db);
         this.memoryFacade = this.memory.getFacade();
         this.providerFactory = new ProviderFactory({
             geminiKey: config.geminiApiKey,
@@ -169,12 +191,17 @@ export class AgentController {
             ollamaApiKey: config.ollamaApiKey,
             defaultProvider: config.defaultProvider
         });
+        
+        // Pass db directly to services instead of this.memory to avoid getDatabase()
         this.skillLoader = new SkillLoader(config.skillsDir);
-        this.skillLearner = new SkillLearner(this.memory);
+        this.skillLearner = new SkillLearner(db);
 
         // Construir system prompt
         const languageDirective = this.buildLanguageDirective(config.language);
         const systemPrompt = config.systemPrompt || this.buildSystemPrompt();
+
+        const classificationMemory = new ClassificationMemory(db);
+        const decisionMemory = new DecisionMemory(db);
 
         // Inicializar AgentLoop
         this.agentLoop = new AgentLoop(
@@ -185,12 +212,14 @@ export class AgentController {
                 systemPrompt,
                 modelRouter: config.modelRouter
             },
-            this.skillLearner
+            this.skillLearner,
+            classificationMemory,
+            decisionMemory
         );
 
         // Inicializar onboarding
         this.onboardingService = new OnboardingService(
-            this.memory,
+            db,
             this.skillLearner,
             this.providerFactory,
             this.agentLoop.getStateManager()
@@ -210,7 +239,7 @@ export class AgentController {
         this.sessionLearner = new SessionLearner(this.sessionManager, this.memory);
 
         // Inicializar Scheduler
-        this.scheduler = new SchedulerService('./data/newclaw.db', this.memory);
+        this.scheduler = new SchedulerService(dbPath, db);
 
         // Inicializar MemoryGovernor
         this.memoryGovernor = new MemoryGovernor(this.memory, {
@@ -240,7 +269,7 @@ export class AgentController {
             ownerChatId: config.telegramAllowedUserIds[0] || '',
             maxFindingsPerCategory: 20,
             enableAutoFix: true,
-        }, this.memory);
+        }, db);
 
         // Register commands on the MessageBus
         this.registerCommands();

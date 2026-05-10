@@ -104,6 +104,7 @@ async function main() {
     const dashboard = new DashboardServer(config);
     dashboard.setController(controller);
     dashboard.setProviderFactory(controller.getProviderFactory());
+    dashboard.setDatabase(controller.getDatabase());
     dashboard.setMemoryManager(controller.getMemory());
     dashboard.start(config.dashboardPort);
     log.info(`\n⚙️  Configurações e Whitelist disponíveis em: http://localhost:${config.dashboardPort}/config\n`);

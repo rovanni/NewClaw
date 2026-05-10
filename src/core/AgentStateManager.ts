@@ -1,7 +1,26 @@
 import { MemoryManager } from '../memory/MemoryManager';
+import { createLogger } from '../shared/AppLogger';
+
+const log = createLogger('AgentStateManager');
 
 export type AgentMode = 'learning' | 'assisting' | 'exploring';
 export type AgentFocus = 'automation' | 'study' | 'project' | 'unknown';
+export type AgentModeEvent = 'ONBOARDING_COMPLETE' | 'START_EXPLORATION' | 'REQUIRE_LEARNING' | 'RETURN_TO_ASSISTING';
+
+const MODE_TRANSITIONS: Record<AgentMode, Partial<Record<AgentModeEvent, AgentMode>>> = {
+    learning: {
+        ONBOARDING_COMPLETE: 'assisting',
+        START_EXPLORATION: 'exploring'
+    },
+    assisting: {
+        REQUIRE_LEARNING: 'learning',
+        START_EXPLORATION: 'exploring'
+    },
+    exploring: {
+        REQUIRE_LEARNING: 'learning',
+        RETURN_TO_ASSISTING: 'assisting'
+    }
+};
 
 export interface AgentState {
     mode: AgentMode;
@@ -70,6 +89,19 @@ export class AgentStateManager {
         });
     }
 
+    transitionMode(event: AgentModeEvent): void {
+        const currentState = this.getState();
+        const nextMode = MODE_TRANSITIONS[currentState.mode][event];
+
+        if (!nextMode) {
+            log.warn(`Invalid state transition: ${currentState.mode} --${event}--> ?`);
+            return;
+        }
+
+        log.info(`[FSM-TRANSITION] ${currentState.mode} --${event}--> ${nextMode}`);
+        this.updateState({ mode: nextMode });
+    }
+
     /**
      * Initial transition after onboarding
      */
@@ -81,11 +113,11 @@ export class AgentStateManager {
         };
         
         this.updateState({
-            mode: 'assisting',
             current_focus: focusMap[intent] || 'unknown',
             confidence: 0.6,
             user_alignment: 0.5
         });
+        this.transitionMode('ONBOARDING_COMPLETE');
     }
 
     /**

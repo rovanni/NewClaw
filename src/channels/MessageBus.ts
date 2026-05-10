@@ -9,6 +9,7 @@
  * Funciona como o Gateway do OpenClaw, mas integrado ao NewClaw.
  */
 
+import crypto from 'crypto';
 import { AgentLoop } from '../loop/AgentLoop';
 import { SessionManager, type SessionKey } from '../session/SessionManager';
 import {
@@ -150,10 +151,13 @@ export class MessageBus {
         const sessionKey: SessionKey = { channel: msg.channel, userId: msg.userId };
         const typingKey = `${msg.channel}:${msg.userId}`;
 
+        const correlationId = crypto.randomUUID();
+
         log.info('message_received', msg.text.slice(0, 50), {
             channel: msg.channel,
             userId: msg.userId,
-            type: msg.type
+            type: msg.type,
+            correlationId
         });
 
         // Iniciar typing indicator antes do processamento
@@ -207,6 +211,7 @@ export class MessageBus {
                     chatId: msg.chatId || msg.userId,
                     botToken: adapter?.getBotToken ? adapter.getBotToken() : undefined,
                     metadata: msg.metadata,
+                    correlationId
                 }
             );
             const duration = Date.now() - startTime;
