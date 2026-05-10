@@ -35,18 +35,18 @@ export class EditTool implements ToolExecutor {
     private resolvePath(inputPath: string): { resolved: string; error?: string } {
         const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
         const projectRoot = process.cwd();
+        const homeDir = process.env.HOME || '/root';
 
         let expanded = inputPath;
         
-        // Normalizar prefixos comuns do agente
-        if (expanded.startsWith('/workspace/')) {
-            expanded = expanded.slice(11); // Remove '/workspace/'
-        } else if (expanded.startsWith('workspace/')) {
+        // Normalizar APENAS prefixo relativo 'workspace/' (sem barra inicial).
+        // NÃO tocar em '/workspace/' absoluto — é um diretório real no VPS.
+        if (!expanded.startsWith('/') && expanded.startsWith('workspace/')) {
             expanded = expanded.slice(10); // Remove 'workspace/'
         }
 
         if (expanded.startsWith('~/')) {
-            expanded = (process.env.HOME || '/root') + expanded.slice(1);
+            expanded = homeDir + expanded.slice(1);
         } else if (expanded.startsWith('@')) {
             expanded = expanded.slice(1);
         }
@@ -62,11 +62,12 @@ export class EditTool implements ToolExecutor {
         const allowedRoots = [
             workspaceDir,
             '/tmp',
+            '/workspace',
             path.join(projectRoot, 'workspace'),
             path.join(projectRoot, 'logs'),
             path.join(projectRoot, 'data'),
             '/uenp',
-            '/workspace'
+            homeDir,
         ];
 
         const isAllowed = allowedRoots.some(root => {
@@ -78,7 +79,7 @@ export class EditTool implements ToolExecutor {
         if (!isAllowed) {
             return {
                 resolved,
-                error: `⛔ Caminho fora do sandbox: ${inputPath}. Workspace: ${workspaceDir}. Allowed: ${allowedRoots.join(', ')}`
+                error: `⛔ Caminho fora do sandbox: ${inputPath} → ${resolved}. Allowed roots: ${allowedRoots.join(', ')}`
             };
         }
 
