@@ -5,6 +5,7 @@
  */
 import { extractText } from '../loop/ResponseAdapter';
 import { Database } from 'better-sqlite3';
+import { MemoryManager } from '../memory/MemoryManager';
 import { ProviderFactory } from '../core/ProviderFactory';
 import { SkillLearner } from '../loop/SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
@@ -59,8 +60,8 @@ export class OnboardingService {
     private stateManager: AgentStateManager;
     private states: Map<string, OnboardingState> = new Map();
 
-    constructor(db: Database, skillLearner: SkillLearner, providerFactory: ProviderFactory, stateManager: AgentStateManager) {
-        this.db = db;
+    constructor(db: Database | MemoryManager, skillLearner: SkillLearner, providerFactory: ProviderFactory, stateManager: AgentStateManager) {
+        this.db = db instanceof MemoryManager ? db.getDatabase() : db;
         this.skillLearner = skillLearner;
         this.providerFactory = providerFactory;
         this.stateManager = stateManager;

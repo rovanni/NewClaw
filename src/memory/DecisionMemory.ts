@@ -5,6 +5,7 @@
  * Permite que o agente aprenda com experiências passadas.
  */
 import { Database } from 'better-sqlite3';
+import { MemoryManager } from './MemoryManager';
 
 export interface ToolDecision {
     id?: number;
@@ -20,8 +21,8 @@ export interface ToolDecision {
 export class DecisionMemory {
     private db: Database;
 
-    constructor(db: Database) {
-        this.db = db;
+    constructor(db: Database | MemoryManager) {
+        this.db = db instanceof MemoryManager ? db.getDatabase() : db;
         this.initializeSchema();
     }
 

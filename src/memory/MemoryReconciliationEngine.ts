@@ -1,10 +1,13 @@
 import { MemoryManager, MemoryNode } from './MemoryManager';
+import type { MemoryFacade } from './MemoryFacade';
 
 export class MemoryReconciliationEngine {
     private memory: MemoryManager;
+    private memoryFacade: MemoryFacade;
 
     constructor(memory: MemoryManager) {
         this.memory = memory;
+        this.memoryFacade = memory.getFacade();
     }
 
     /**
@@ -12,17 +15,14 @@ export class MemoryReconciliationEngine {
      * Never deletes, only modulates weight and confidence.
      */
     reconcile(): void {
-        const db = this.memory.getDatabase();
-        const nodes = db.prepare('SELECT * FROM memory_nodes WHERE type IN ("preference", "fact", "skill")').all() as any[];
+        const nodes = this.memoryFacade.listNodesForReconciliation();
         
         const visited = new Set<string>();
 
-        for (const rowA of nodes) {
-            const nodeA: MemoryNode = { ...rowA, metadata: JSON.parse(rowA.metadata || "{}") };
+        for (const nodeA of nodes) {
             visited.add(nodeA.id);
             
-            for (const rowB of nodes) {
-                const nodeB: MemoryNode = { ...rowB, metadata: JSON.parse(rowB.metadata || "{}") };
+            for (const nodeB of nodes) {
                 if (visited.has(nodeB.id)) continue;
 
                 const similarity = this.calculateSimilarity(nodeA, nodeB);

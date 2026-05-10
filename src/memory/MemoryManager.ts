@@ -11,6 +11,7 @@ import { AttentionFeedback } from "./AttentionFeedback";
 import path from 'path';
 import fs from 'fs';
 import { createLogger } from '../shared/AppLogger';
+import { MemoryFacade, SqliteMemoryFacade } from './MemoryFacade';
 const log = createLogger('Memorymanager');
 
 export interface Message {
@@ -58,10 +59,18 @@ export class MemoryManager {
     private dbPath: string;
     private attentionLayer: AttentionLayer | null = null;
     private attentionFeedback: AttentionFeedback | null = null;
+    private facade: MemoryFacade | null = null;
 
-    /** Expose db for SkillLearner and other components */
+    /** @deprecated Prefer getFacade() or a database-backed service constructor. */
     getDatabase(): Database.Database {
         return this.db;
+    }
+
+    getFacade(): MemoryFacade {
+        if (!this.facade) {
+            this.facade = new SqliteMemoryFacade(this.db, this);
+        }
+        return this.facade;
     }
 
     // ── Ontologia formal do grafo de memória ──
@@ -1030,6 +1039,7 @@ export class MemoryManager {
     }
 
     close(): void {
+        this.attentionFeedback?.destroy();
         this.db.close();
     }
 

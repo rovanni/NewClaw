@@ -108,6 +108,26 @@ async function main() {
     dashboard.start(config.dashboardPort);
     log.info(`\n⚙️  Configurações e Whitelist disponíveis em: http://localhost:${config.dashboardPort}/config\n`);
 
+    let shuttingDown = false;
+    const shutdown = async (signal: string) => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+
+        log.info('shutdown_signal', signal);
+        try {
+            await dashboard.stop();
+            await controller.stop(signal);
+            monitor.stop();
+            process.exit(0);
+        } catch (error) {
+            log.error('shutdown_failed', error);
+            process.exit(1);
+        }
+    };
+
+    process.once('SIGINT', () => void shutdown('SIGINT'));
+    process.once('SIGTERM', () => void shutdown('SIGTERM'));
+
     await controller.start();
 }
 

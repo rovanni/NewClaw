@@ -21,6 +21,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { MemoryManager } from '../../memory/MemoryManager';
 import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
@@ -136,9 +137,11 @@ export class AuditorService {
     /** Titles from previous report — used for deduplication */
     private previousFindingTitles: Set<string> = new Set();
 
-    constructor(config: AuditConfig, db?: Database.Database) {
+    constructor(config: AuditConfig, db?: Database.Database | MemoryManager) {
         this.config = config;
-        if (db) {
+        if (db instanceof MemoryManager) {
+            this.db = db.getDatabase();
+        } else if (db) {
             this.db = db;
         } else {
             this.db = new Database(config.dbPath);

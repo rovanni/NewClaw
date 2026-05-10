@@ -1,10 +1,13 @@
-import { MemoryManager, MemoryNode } from './MemoryManager';
+import { MemoryManager } from './MemoryManager';
+import type { MemoryFacade } from './MemoryFacade';
 
 export class MemoryScoringEngine {
     private memory: MemoryManager;
+    private memoryFacade: MemoryFacade;
 
     constructor(memory: MemoryManager) {
         this.memory = memory;
+        this.memoryFacade = memory.getFacade();
     }
 
     /**
@@ -12,16 +15,7 @@ export class MemoryScoringEngine {
      * Older nodes that haven't been updated lose weight.
      */
     applyDecay(): void {
-        const db = this.memory.getDatabase();
-        // Decay formula: weight = weight * 0.99 for nodes not updated in the last 24h
-        // Using SQLite datetime function
-        db.prepare(`
-            UPDATE memory_nodes 
-            SET weight = weight * 0.99 
-            WHERE last_updated < datetime('now', '-1 day')
-            AND id NOT LIKE 'core_%' 
-            AND id NOT IN ('identity', 'agent_state', 'core_user', 'system_reflection')
-        `).run();
+        this.memoryFacade.applyNodeDecay();
     }
 
     /**
@@ -66,13 +60,7 @@ export class MemoryScoringEngine {
      * Auto-score nodes based on their type and content.
      */
     autoScoreNodes(): void {
-        const db = this.memory.getDatabase();
-        
-        // Identity nodes have full confidence
-        db.prepare("UPDATE memory_nodes SET weight = 1.0, confidence = 1.0 WHERE type = 'identity'").run();
-        
-        // Preferences start with high but not absolute confidence
-        db.prepare("UPDATE memory_nodes SET confidence = 0.85 WHERE type = 'preference' AND confidence < 0.85").run();
+        this.memoryFacade.autoScoreNodes();
     }
 
     /**

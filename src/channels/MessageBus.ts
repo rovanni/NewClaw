@@ -79,6 +79,10 @@ export class MessageBus {
 
     /** Parar todos os canais */
     async stopAll(): Promise<void> {
+        for (const key of this.typingIntervals.keys()) {
+            this.stopTypingIndicator(key);
+        }
+
         for (const [type, adapter] of this.adapters) {
             try {
                 await adapter.stop();
