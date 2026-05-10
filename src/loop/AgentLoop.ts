@@ -274,7 +274,8 @@ Você deve SEMPRE responder em JSON estruturado:
     "reason": "Justificativa da confiança e por que a tarefa está ou não completa."
   }
 }
-Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_complete=true.`
+Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_complete=true.
+NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta necessária no mesmo JSON. Se prometer agir, use "type": "tool".`
     };
 
     private buildMasterPrompt(category: string): string {
@@ -597,9 +598,10 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             const hasNativeToolCalls = response.toolCalls && response.toolCalls.length > 0;
             const isFinalAnswer = atomicData?.action?.type === 'final_answer';
             const isMarkedComplete = atomicData?.evaluation?.is_complete === true;
+            const isExplicitlyIncomplete = atomicData?.evaluation?.is_complete === false;
             const hasContentNoTool = atomicData?.action?.content && !wantsTool && !hasNativeToolCalls;
 
-            if ((isFinalAnswer || isMarkedComplete || hasContentNoTool) && !wantsTool && !hasNativeToolCalls) {
+            if (((isFinalAnswer || isMarkedComplete || hasContentNoTool) && !isExplicitlyIncomplete) && !wantsTool && !hasNativeToolCalls) {
                 log.info(`[${this.ts()}] [ATOMIC] Task marked as COMPLETE (reason: ${isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool'}).`);
                 move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool' });
                 traceManager.completeTrace(trace, 'completed', finalText);
@@ -676,7 +678,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             // we should not loop. One step is enough for a direct response.
             const hasNoToolsRequested = !response.toolCalls?.length && atomicData?.action?.type !== 'tool';
             
-            if (hasNoToolsRequested) {
+            if (hasNoToolsRequested && !isExplicitlyIncomplete) {
                 if (finalText.length > 0) {
                     log.info(`[${this.ts()}] [EARLY-EXIT] No tool calls requested → returning content (step ${stepCount})`);
                     move('FINAL_READY', { step: stepCount, reason: 'no_tools_requested' });
