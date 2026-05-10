@@ -4,6 +4,9 @@
  * Usage: node bin/newclaw <command> [options]
  * 
  * Commands: start, stop, restart, status, logs, update, help
+ * 
+ * ⚠️  Process management uses PM2 exclusively.
+ *     NEVER use raw kill + spawn — that creates duplicate processes.
  */
 const { execSync, spawn, exec } = require('child_process');
 const fs = require('fs');
@@ -16,12 +19,79 @@ const ENV_FILE = fs.existsSync(path.join(DIR, 'newclaw.env'))
   ? path.join(DIR, 'newclaw.env') 
   : path.join(DIR, '.env');
 
-function getPid() {
+// ─── PM2 Integration ────────────────────────────────────────────────
+// PM2 is the SINGLE process manager. No raw kill+spawn.
+// This prevents the duplicate-process bug (Telegram 409 Conflict).
+const PM2_BIN = findPM2();
+
+function findPM2() {
+  // Check common locations
+  const candidates = [
+    path.join(require('os').homedir(), '.npm/_npx/*/node_modules/pm2/bin/pm2'),
+    '/usr/local/bin/pm2',
+    '/usr/bin/pm2',
+    path.join(require('os').homedir(), '.npm-global/bin/pm2'),
+  ];
+  // Check npx cache
   try {
-    const pid = fs.readFileSync(PID_FILE, 'utf8').trim();
-    if (process.kill(pid, 0)) return parseInt(pid);
+    const homeDir = require('os').homedir();
+    const npxDirs = execSync(`find ${homeDir}/.npm/_npx -name pm2 -type f -path '*/bin/pm2' 2>/dev/null`, { encoding: 'utf-8' }).trim().split('\n');
+    if (npxDirs[0]) return npxDirs[0];
   } catch {}
-  // PID file stale or missing — try to find running process
+  // Check global npm bin
+  try {
+    const npmBin = execSync('npm bin -g', { encoding: 'utf-8' }).trim();
+    const pm2Path = path.join(npmBin, 'pm2');
+    if (fs.existsSync(pm2Path)) return pm2Path;
+  } catch {}
+  try {
+    return execSync('which pm2', { encoding: 'utf-8' }).trim();
+  } catch {}
+  return null;
+}
+
+function pm2(args = []) {
+  if (!PM2_BIN) {
+    console.error('❌ PM2 não encontrado. Instale com: npm install -g pm2');
+    process.exit(1);
+  }
+  try {
+    return execSync(`node ${PM2_BIN} ${args.join(' ')}`, { encoding: 'utf-8', cwd: DIR });
+  } catch (e) {
+    return e.stdout || '';
+  }
+}
+
+function isPM2Running() {
+  try {
+    const out = pm2(['show', 'newclaw']);
+    return out.includes('online') || out.includes('stopping');
+  } catch { return false; }
+}
+
+function syncPidFile() {
+  // Sync PID file with PM2's actual PID
+  try {
+    const out = pm2(['show', 'newclaw']);
+    const match = out.match(/│\s*pid\s*│\s*(\d+)/);
+    if (match) fs.writeFileSync(PID_FILE, match[1]);
+  } catch {}
+}
+
+function getPid() {
+  // Priority: PM2 → PID file → process scan
+  try {
+    const out = pm2(['show', 'newclaw']);
+    const match = out.match(/│\s*pid\s*│\s*(\d+)/);
+    if (match && match[1] !== '0') {
+      const pid = parseInt(match[1]);
+      if (process.kill(pid, 0)) return pid;
+    }
+  } catch {}
+  try {
+    const pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim());
+    if (process.kill(pid, 0)) return pid;
+  } catch {}
   return findRunningPid();
 }
 
@@ -34,6 +104,24 @@ function findRunningPid() {
 }
 
 function killAllInstances() {
+  // ⚠️ Use PM2 stop instead of raw kill to prevent Telegram 409 conflicts
+  // Only fall back to raw kill if PM2 is unavailable
+  if (PM2_BIN) {
+    try {
+      pm2(['stop', 'newclaw']);
+      // Also kill any orphan processes not managed by PM2
+      try {
+        const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
+        const pids = out.trim().split('\n').filter(Boolean).map(Number);
+        let orphans = 0;
+        for (const pid of pids) {
+          try { process.kill(pid, 'SIGTERM'); orphans++; } catch {}
+        }
+        return orphans;
+      } catch { return 0; }
+    } catch {}
+  }
+  // Fallback: raw kill (only if PM2 unavailable)
   try {
     const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
     const pids = out.trim().split('\n').filter(Boolean).map(Number);
@@ -42,7 +130,7 @@ function killAllInstances() {
     }
     return pids.length;
   } catch { return 0; }
-}
+  }
 
 function isRunning() {
   const pid = getPid();
@@ -100,8 +188,14 @@ function tailLog(logDir, daemon) {
 
 const commands = {
   start(args) {
+    // ⚠️ ALWAYS use PM2 for process management
+    // Raw spawn creates duplicate processes → Telegram 409 Conflict
+    const daemon = args.includes('--daemon');
+    const debug = args.includes('--debug');
+    const tail = args.includes('--tail');
+    const usePM2 = PM2_BIN !== null;
+    
     if (isRunning()) {
-      // Check if it's actually a node process (not a stale PID from a different process)
       const pid = getPid();
       try {
         const out = execSync(`ps -p ${pid} -o comm=`, { encoding: 'utf-8' }).trim();
@@ -110,28 +204,58 @@ const commands = {
           return;
         }
       } catch {}
-      // Stale PID — clean up and continue
       console.log(`⚠️ Stale PID ${pid} detected, cleaning up...`);
       try { fs.unlinkSync(PID_FILE); } catch {}
       killAllInstances();
+      // Wait for process cleanup
+      execSync('sleep 3');
     }
-    const daemon = args.includes('--daemon');
-    const debug = args.includes('--debug');
-    const tail = args.includes('--tail');
     
     // Load .env
     const env = readEnv();
     if (debug) env.LOG_LEVEL = 'debug';
-    
-    // Check lang override
     const langArg = args.find(a => a.startsWith('--lang='));
     if (langArg) env.APP_LANG = langArg.split('=')[1];
     
-    const envStr = Object.entries(env).map(([k,v]) => `${k}=${v}`).join(' ');
     const logDir = path.join(DIR, 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    
+    if (usePM2) {
+      // ✅ PM2 path — single source of truth for process management
+      // Clean up any orphan Telegram polling first
+      try { execSync('curl -s "https://api.telegram.org/bot' + env.TELEGRAM_BOT_TOKEN + '/deleteWebhook?drop_pending_updates=true" > /dev/null 2>&1'); } catch {}
+      
+      // Build environment string for PM2
+      const envStr = Object.entries(env).map(([k,v]) => `${k}=${v}`).join(',');
+      
+      // Check if PM2 already has the app
+      const pm2List = pm2(['list']);
+      if (pm2List.includes('newclaw') && pm2List.includes('stopped')) {
+        // App exists but stopped — restart it
+        pm2(['restart', 'newclaw']);
+      } else if (pm2List.includes('newclaw') && pm2List.includes('online')) {
+        console.log('🟢 NewClaw already running via PM2');
+        syncPidFile();
+        return;
+      } else {
+        // Fresh start
+        pm2(['start', 'dist/index.js', '--name', 'newclaw', `--env ${envStr}`]);
+      }
+      syncPidFile();
+      console.log('🚀 NewClaw started via PM2');
+      console.log(`   Mode: ${debug ? 'debug' : 'normal'}`);
+      console.log(`   Manage: pm2 list | pm2 logs newclaw`);
+      if (tail) {
+        console.log('\n📡 Tailing logs (Ctrl+C to stop)...\n');
+        tailLog(logDir, true);
+      }
+      return;
+    }
+    
+    // ─── Fallback: raw spawn (only if PM2 unavailable) ───
+    console.log('⚠️ PM2 not found, using raw process spawn (no auto-restart)');
     
     if (daemon) {
-      fs.mkdirSync(logDir, { recursive: true });
       const outLog = fs.openSync(path.join(logDir, 'newclaw-stdout.log'), 'a');
       const errLog = fs.openSync(path.join(logDir, 'newclaw-stderr.log'), 'a');
       
@@ -139,17 +263,13 @@ const commands = {
         cwd: DIR,
         stdio: ['ignore', outLog, errLog],
         env: { ...process.env, ...env },
-        detached: false  // Don't detach — let parent manage lifecycle
+        detached: false
       });
       
-      // Track the actual node process PID, not the wrapper
       fs.writeFileSync(PID_FILE, child.pid.toString());
-      
-      // Ensure child is killed if parent dies
       const cleanup = () => { try { child.kill('SIGTERM'); } catch {} process.exit(0); };
       process.on('SIGTERM', cleanup);
       process.on('SIGINT', cleanup);
-      
       child.unref();
       
       console.log(`🚀 NewClaw started (daemon, PID ${child.pid})`);
@@ -219,20 +339,49 @@ const commands = {
   },
 
   stop() {
-    const pid = getPid();
-    // Kill all instances to avoid 409 Conflict (multiple bot instances)
-    const killedCount = killAllInstances();
-    try { fs.unlinkSync(PID_FILE); } catch {}
-    if (killedCount > 0) {
-      console.log(`🛑 NewClaw stopped (${killedCount} instance(s) terminated)`);
+    // ⚠️ Use PM2 stop to prevent orphan processes
+    if (PM2_BIN) {
+      try {
+        pm2(['stop', 'newclaw']);
+        // Kill any orphans that PM2 might not track
+        try {
+          const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
+          const pids = out.trim().split('\n').filter(Boolean).map(Number);
+          for (const pid of pids) { try { process.kill(pid, 'SIGTERM'); } catch {} }
+          if (pids.length > 0) console.log(`   Cleaned ${pids.length} orphan process(es)`);
+        } catch {}
+        try { fs.unlinkSync(PID_FILE); } catch {}
+        console.log('🛑 NewClaw stopped (via PM2)');
+      } catch {
+        console.log('⚪ NewClaw is not running');
+      }
     } else {
-      console.log('⚪ NewClaw is not running');
+      const killedCount = killAllInstances();
+      try { fs.unlinkSync(PID_FILE); } catch {}
+      if (killedCount > 0) {
+        console.log(`🛑 NewClaw stopped (${killedCount} instance(s) terminated)`);
+      } else {
+        console.log('⚪ NewClaw is not running');
+      }
     }
   },
 
   restart(args) {
-    commands.stop();
-    setTimeout(() => commands.start([...args, '--daemon']), 2000);
+    // ⚠️ Use PM2 restart — never stop+spawn manually (causes 409)
+    if (PM2_BIN) {
+      console.log('🔄 Restarting NewClaw via PM2...');
+      // Clean up Telegram polling first
+      const env = readEnv();
+      if (env.TELEGRAM_BOT_TOKEN) {
+        try { execSync(`curl -s "https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true" > /dev/null 2>&1`); } catch {}
+      }
+      pm2(['restart', 'newclaw']);
+      syncPidFile();
+      console.log('✅ NewClaw restarted via PM2');
+    } else {
+      commands.stop();
+      setTimeout(() => commands.start([...args, '--daemon']), 3000);
+    }
   },
 
   status(args) {
