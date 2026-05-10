@@ -271,7 +271,10 @@ Category:`;
         return bestCategory;
     }
 
-    private getProfileByCategory(category: Category): ModelProfile | undefined {
+    /**
+     * Get profile by category (public for UnifiedIntentRouter integration).
+     */
+    getProfileByCategory(category: Category): ModelProfile | undefined {
         return this.config.profiles.find(p => p.category === category);
     }
 

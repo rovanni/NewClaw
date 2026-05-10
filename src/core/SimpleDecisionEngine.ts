@@ -1,9 +1,10 @@
 /**
- * SimpleDecisionEngine — Deterministic intent parser (OpenClaw pattern)
- * 
- * Classification: DIRECT_REPLY | EXECUTE
- * EXECUTE routes to a specific tool based on keywords — NO tool definitions sent to LLM.
- * The backend decides what to run. The LLM only generates text.
+ * SimpleDecisionEngine — @deprecated Use UnifiedIntentRouter instead.
+ *
+ * This class is retained for backward compatibility only.
+ * All intent routing should go through UnifiedIntentRouter.route().
+ *
+ * Removal scheduled: after full migration is verified.
  */
 
 export type SimpleDecision = 'EXECUTE' | 'DIRECT_REPLY';

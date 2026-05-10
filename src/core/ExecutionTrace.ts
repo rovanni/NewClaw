@@ -7,7 +7,7 @@
 
 import { EventEmitter } from 'events';
 
-export type StepType = 'decision' | 'tool_call' | 'tool_result' | 'llm_call' | 'llm_response' | 'fsm_transition' | 'error' | 'final';
+export type StepType = 'decision' | 'tool_call' | 'tool_result' | 'llm_call' | 'llm_response' | 'fsm_transition' | 'intent_classification' | 'error' | 'final';
 
 export interface TraceStep {
     step: number;

@@ -14,6 +14,7 @@ import { ResponseBuilder } from './ResponseBuilder';
 import { SessionContext } from '../session/SessionContext';
 import type { SessionKey } from '../session/SessionManager';
 import { ModelRouter } from './ModelRouter';
+import { UnifiedIntentRouter, IntentDecision } from './UnifiedIntentRouter';
 import PQueue from 'p-queue';
 import { MemoryManager } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
@@ -154,6 +155,7 @@ export class AgentLoop {
     private contextBuilder: ContextBuilder;
     private skillLearner: SkillLearner;
     private modelRouter: ModelRouter;
+    private intentRouter: UnifiedIntentRouter;
     private stateManager: AgentStateManager;
     private sessionContext: SessionContext | null = null;
     private metrics: LoopMetrics[] = [];
@@ -169,10 +171,22 @@ export class AgentLoop {
         this.cognitiveWorkspace = new CognitiveWorkspace();
         this.skillLearner = skillLearner || new SkillLearner(memory);
         this.modelRouter = new ModelRouter(config.modelRouter as any, providerFactory);
+        this.intentRouter = new UnifiedIntentRouter();
         this.stateManager = new AgentStateManager(memory);
         
         this.classificationMemory = new ClassificationMemory(memory);
         this.decisionMemory = new DecisionMemory(memory);
+    }
+
+    public getIntentRouter(): UnifiedIntentRouter {
+        return this.intentRouter;
+    }
+
+    /**
+     * @deprecated Use getIntentRouter().route() instead. ModelRouter remains for provider selection only.
+     */
+    public getModelRouter(): ModelRouter {
+        return this.modelRouter;
     }
 
     public getStateManager(): AgentStateManager {
@@ -414,7 +428,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         let toolFailureCount = 0;
         const usedToolInputs = new Set<string>();
 
-        // ── Recording: Trace start + Classification ──
+        // ── Recording: Trace start + Unified Intent Routing ──
         const trace = traceManager.startTrace(conversationId, userText);
         const fsm = new AgentFSM();
         const move = (event: AgentFSMEvent, meta?: Record<string, unknown>) => {
@@ -427,14 +441,44 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             }
         };
         move('START_TURN');
-        this.classificationMemory.store(userText, 'chat', 0.8);
+
+        // ── UnifiedIntentRouter: SINGLE SOURCE OF TRUTH ──
+        const intentDecision: IntentDecision = this.intentRouter.route(userText, {
+            sessionId: conversationId,
+        });
+        traceManager.addStep(trace, 'intent_classification', {
+            intent: intentDecision.intent,
+            category: intentDecision.category,
+            executionMode: intentDecision.executionMode,
+            confidence: intentDecision.confidence,
+            source: intentDecision.source,
+            modelCategory: intentDecision.modelCategory,
+            riskLevel: intentDecision.riskLevel,
+            cognitiveLoad: intentDecision.cognitiveLoad,
+            requiresTools: intentDecision.requiresTools,
+            requiresMemory: intentDecision.requiresMemory,
+            requiresReasoning: intentDecision.requiresReasoning,
+        });
+        log.info(`[${this.ts()}] [UNIFIED-ROUTER] intent=${intentDecision.intent} mode=${intentDecision.executionMode} category=${intentDecision.category} confidence=${intentDecision.confidence} source=${intentDecision.source} model=${intentDecision.modelCategory}`);
+
+        // ── Fast path: direct reply for greetings ──
+        if (intentDecision.terminalAction && intentDecision.executionMode === 'direct' && intentDecision.category === 'greeting') {
+            log.info(`[${this.ts()}] [FAST-PATH] Greeting detected — skipping LLM`);
+            move('FINAL_READY');
+            traceManager.completeTrace(trace, 'completed', 'Greeting fast path');
+            // Return simple greeting response
+            const greetings = ['Olá! 👋', 'Oi! Como posso ajudar?', 'E aí! 🚀', 'Olá! Tô aqui! 💪', 'Opa! Bora? 😊'];
+            return greetings[Math.floor(Math.random() * greetings.length)];
+        }
+
+        this.classificationMemory.store(userText, intentDecision.modelCategory, intentDecision.confidence);
 
         // ── Session Context Pipeline (mandatory) ──
         // 1. Checkpoint summary (structured system role)
         // 2. Recent transcript messages (linear replay)
         // 3. Semantic memory graph
         // 4. Skill context
-        const context = await this.contextBuilder.buildContext(userText);
+        const context = intentDecision.requiresMemory ? await this.contextBuilder.buildContext(userText) : '';
         const skillResult = this.skillLearner.buildSkillContext(userText, 2);
         const skillContext = skillResult && skillResult.confidence >= 0.7 ? skillResult.text : '';
         
@@ -444,7 +488,18 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
             parameters: t.parameters
         }));
 
+        // ── Model routing guided by UnifiedIntentRouter ──
+        // Use intent decision's model category, fall back to ModelRouter for actual provider selection
         const chatProfile = await this.modelRouter.route(userText);
+        // Override model category with UnifiedIntentRouter's decision if more specific
+        if (intentDecision.modelCategory && intentDecision.confidence >= 0.8) {
+            const intentProfile = this.modelRouter.getProfileByCategory(intentDecision.modelCategory);
+            if (intentProfile) {
+                chatProfile.model = intentProfile.model;
+                chatProfile.category = intentProfile.category;
+                log.info(`[${this.ts()}] [UNIFIED-ROUTER] Overriding model: ${intentDecision.modelCategory} → ${intentProfile.model}`);
+            }
+        }
         
         // ── Dynamic System Prompt Assembly ──
         const dynamicMasterPrompt = this.buildMasterPrompt(chatProfile.category);

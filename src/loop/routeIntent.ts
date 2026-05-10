@@ -1,5 +1,10 @@
 /**
- * Intent Router — Deterministic + LLM fallback
+ * @deprecated Use UnifiedIntentRouter.route() instead.
+ *
+ * This function is retained for backward compatibility only.
+ * All intent routing should go through UnifiedIntentRouter.route().
+ *
+ * Removal scheduled: after full migration is verified.
  */
 
 export interface RouteResult {
