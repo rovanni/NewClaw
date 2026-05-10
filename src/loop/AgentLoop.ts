@@ -20,6 +20,8 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
 import { normalizeFromRaw } from './ResponseAdapter';
+import { ProtocolParser } from './ProtocolParser';
+import { StructuredAgentResponse, ProtocolViolationError } from './ProtocolTypes';
 import { createLogger } from '../shared/AppLogger';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
@@ -163,6 +165,7 @@ export class AgentLoop {
     private metricsMaxSize = 100;
     private classificationMemory: ClassificationMemory;
     private decisionMemory: DecisionMemory;
+    private protocolParser: ProtocolParser;
 
     constructor(providerFactory: ProviderFactory, memory: MemoryManager, config: AgentLoopConfig, skillLearner: SkillLearner, classificationMemory?: ClassificationMemory, decisionMemory?: DecisionMemory) {
         this.providerFactory = providerFactory;
@@ -174,6 +177,7 @@ export class AgentLoop {
         this.modelRouter = new ModelRouter(config.modelRouter as any, providerFactory);
         this.intentRouter = new UnifiedIntentRouter();
         this.stateManager = new AgentStateManager(memory);
+        this.protocolParser = new ProtocolParser();
         
         this.classificationMemory = classificationMemory as ClassificationMemory;
         this.decisionMemory = decisionMemory as DecisionMemory;
@@ -575,9 +579,24 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                 return response.fallbackMessage || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
             }
             
+            // ── Strict Cognitive Protocol ──
+            // The runtime operates on StructuredAgentResponse, NEVER on text heuristics.
+            // Pipeline: LLM Response → ProtocolParser.strictParse() → StructuredAgentResponse
+            // If strict parse fails → Semantic Recovery (isComplete=false, type=planning)
+            //   → inject recovery prompt → re-parse → if still fails → ProtocolViolationError
+            
+            this.protocolParser.setProviderContext(
+                response.attempts?.[0]?.provider || 'unknown',
+                response.attempts?.[0]?.model || 'unknown'
+            );
+            
+            const structured = this.protocolParser.strictParse(response.content || '');
+            
+            // Keep backward compatibility: also parse with legacy parser for atomicData
+            // This will be removed once ProtocolParser is the sole authority
             const atomicData = this.parseLLMResponse(response.content || '');
             const normalized = normalizeFromRaw(response.content || '', (c) => this.parseLLMResponse(c));
-            log.info(`[${this.ts()}] [PARSE] step=${stepCount} parsed=${atomicData ? 'YES' : 'NO'} normalized_type=${normalized.type} is_complete=${atomicData?.evaluation?.is_complete} action_type=${atomicData?.action?.type}`);
+            log.info(`[${this.ts()}] [PARSE] step=${stepCount} structured_type=${structured?.type || 'null'} parsed=${atomicData ? 'YES' : 'NO'} normalized_type=${normalized.type} is_complete=${structured?.isComplete ?? 'null'} action_type=${structured?.type || atomicData?.action?.type || 'null'}`);
             
             // Canonical extraction: action.content is source of truth
             const finalText = this.extractFinalText(response, atomicData);
@@ -590,36 +609,39 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
             // Registrar resposta para contexto
             loopMessages.push({ role: 'assistant', content: response.content, toolCalls: response.toolCalls });
 
-            // 1. Verificação de Conclusão (Cognitiva ou Heurística)
-            // CRITICAL: If action.type === 'tool', we MUST execute the tool first,
-            // even if is_complete is true. The LLM sometimes sets is_complete
-            // prematurely before the tool has run.
-            const wantsTool = atomicData?.action?.type === 'tool' && atomicData?.action?.name;
-            const hasNativeToolCalls = response.toolCalls && response.toolCalls.length > 0;
-            const isFinalAnswer = atomicData?.action?.type === 'final_answer';
-            const isMarkedComplete = atomicData?.evaluation?.is_complete === true;
-            const isExplicitlyIncomplete = atomicData?.evaluation?.is_complete === false;
-            const hasContentNoTool = atomicData?.action?.content && !wantsTool && !hasNativeToolCalls;
-
-            // ── Anti-Procrastination Guard ──
-            // Detect when the model says it will do something but didn't actually call a tool.
-            // This prevents the "promise and vanish" bug where the model says
-            // "Agora vou criar..." or "Vou expandir..." without a tool_call.
-            const PROMISE_PATTERNS = /(?:vou\s+(?:criar|expandir|gerar|fazer|produzir|montar|escrever|adicionar|incluir|desenvolver)|agora\s+vou|a\s+seguir\s+vou|next\s+i(?:'??ll)?\s+(?:create|expand|generate|make|write|add)|let\s+me\s+(?:create|expand|generate|write))/i;
-            const looksLikePromise = !wantsTool && !hasNativeToolCalls && finalText.length > 0 && PROMISE_PATTERNS.test(finalText);
+            // ── Protocol-Based Decision Authority ──
+            // All decisions derive from StructuredAgentResponse, NEVER from text heuristics.
             
-            if (looksLikePromise) {
-                log.warn(`[${this.ts()}] [ANTI-PROCASTINATION] Model promises action without tool_call — forcing retry. Preview: ${finalText.slice(0, 100)}`);
+            const wantsTool = structured?.type === 'tool_call' || (atomicData?.action?.type === 'tool' && atomicData?.action?.name);
+            const hasNativeToolCalls = response.toolCalls && response.toolCalls.length > 0;
+            
+            // ── Protocol Recovery: If strict parse returned 'planning' with isComplete=false ──
+            // This means the model didn't follow the structured protocol.
+            // Inject recovery prompt and continue the loop.
+            if (structured?.metadata?.protocolViolation && structured?.type === 'planning') {
+                log.warn(`[${this.ts()}] [PROTOCOL-RECOVERY] Model response not in structured format — injecting recovery prompt (step ${stepCount})`);
+                traceManager.addStep(trace, 'protocol_violation', {
+                    step: stepCount,
+                    type: 'unstructured_response',
+                    content_preview: (response.content || '').slice(0, 200),
+                });
                 loopMessages.push({
                     role: 'system',
-                    content: `[CRÍTICO] Você disse que iria realizar uma ação mas NÃO chamou nenhuma ferramenta. Você DEVE chamar a ferramenta AGORA no mesmo turno. Não prometa — execute. Use write para criar/editar arquivos, send_document para enviar, etc. Responda em JSON: {"action":{"type":"tool","name":"write","input":{...}},"evaluation":{"is_complete":false}}`
+                    content: this.protocolParser.getRecoveryPrompt()
                 });
                 continue;
             }
-
-            if (((isFinalAnswer || isMarkedComplete || hasContentNoTool) && !isExplicitlyIncomplete) && !wantsTool && !hasNativeToolCalls) {
-                log.info(`[${this.ts()}] [ATOMIC] Task marked as COMPLETE (reason: ${isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool'}).`);
-                move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : isMarkedComplete ? 'is_complete' : 'content_no_tool' });
+            
+            // ── Decision: Task Complete? ──
+            // Only exit when the StructuredAgentResponse explicitly says isComplete=true.
+            // Never exit on unstructured text, promises, or implicit completion.
+            const isExplicitlyComplete = structured?.isComplete === true;
+            const isExplicitlyIncomplete = structured?.isComplete === false;
+            const isFinalAnswer = structured?.type === 'final_answer';
+            
+            if ((isFinalAnswer || isExplicitlyComplete) && !isExplicitlyIncomplete && !wantsTool && !hasNativeToolCalls) {
+                log.info(`[${this.ts()}] [PROTOCOL] Task COMPLETE — structured type=${structured?.type}, isComplete=${structured?.isComplete}, confidence=${structured?.confidence}`);
+                move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : 'is_complete' });
                 traceManager.completeTrace(trace, 'completed', finalText);
                 this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
                 return finalText;
@@ -689,15 +711,15 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                 continue; 
             }
 
-            // 3. Failsafe Early Exit: No tool calls and no tool action?
-            // If the model is just providing text (JSON or raw) without requesting a tool, 
-            // we should not loop. One step is enough for a direct response.
-            // BUT: if the text looks like a promise to act, we must NOT exit early.
-            const hasNoToolsRequested = !response.toolCalls?.length && atomicData?.action?.type !== 'tool';
+            // 3. Protocol-Based Early Exit
+            // Only exit early when the StructuredAgentResponse confirms completion.
+            // If structured.type === 'planning' (protocol violation recovery), we NEVER exit.
+            const hasNoToolsRequested = !response.toolCalls?.length && !wantsTool;
+            const isStructuredPlanning = structured?.type === 'planning';
             
-            if (hasNoToolsRequested && !isExplicitlyIncomplete && !looksLikePromise) {
+            if (hasNoToolsRequested && !isExplicitlyIncomplete && !isStructuredPlanning) {
                 if (finalText.length > 0) {
-                    log.info(`[${this.ts()}] [EARLY-EXIT] No tool calls requested → returning content (step ${stepCount})`);
+                    log.info(`[${this.ts()}] [PROTOCOL-EXIT] No tools, structured complete — returning content (step ${stepCount}, type=${structured?.type})`);
                     move('FINAL_READY', { step: stepCount, reason: 'no_tools_requested' });
                     traceManager.completeTrace(trace, 'completed', finalText);
                     this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
