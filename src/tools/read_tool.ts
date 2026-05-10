@@ -32,6 +32,14 @@ export class ReadTool implements ToolExecutor {
         const projectRoot = process.cwd();
 
         let expanded = inputPath;
+        
+        // Normalizar prefixos comuns do agente
+        if (expanded.startsWith('/workspace/')) {
+            expanded = expanded.slice(11); // Remove '/workspace/'
+        } else if (expanded.startsWith('workspace/')) {
+            expanded = expanded.slice(10); // Remove 'workspace/'
+        }
+
         if (expanded.startsWith('~/')) {
             expanded = (process.env.HOME || '/root') + expanded.slice(1);
         } else if (expanded.startsWith('@')) {
@@ -45,23 +53,29 @@ export class ReadTool implements ToolExecutor {
             resolved = path.resolve(workspaceDir, expanded);
         }
 
+        // Roots permitidas (Sandbox)
         const allowedRoots = [
             workspaceDir,
             '/tmp',
             path.join(projectRoot, 'workspace'),
             path.join(projectRoot, 'logs'),
-            path.join(projectRoot, 'data')
+            path.join(projectRoot, 'data'),
+            '/uenp', // Permitir diretório específico do usuário Luciano
+            '/workspace' // Alguns agentes tentam ler do root /workspace
         ];
 
         const isAllowed = allowedRoots.some(root => {
             const rel = path.relative(root, resolved);
-            return rel && !rel.startsWith('..') && !path.isAbsolute(rel);
-        }) || resolved === workspaceDir || allowedRoots.includes(resolved);
+            // rel é vazio se resolved === root
+            if (rel === '') return true;
+            // rel não deve começar com .. (não pode subir) e não deve ser absoluto (para garantir que está abaixo do root)
+            return !rel.startsWith('..') && !path.isAbsolute(rel);
+        });
 
         if (!isAllowed) {
             return {
                 resolved,
-                error: `⛔ Caminho fora do sandbox: ${inputPath}. Workspace: ${workspaceDir}`
+                error: `⛔ Caminho fora do sandbox: ${inputPath}. Workspace: ${workspaceDir}. Allowed: ${allowedRoots.join(', ')}`
             };
         }
 

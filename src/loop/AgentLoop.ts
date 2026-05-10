@@ -634,7 +634,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                         const result = await tool.execute(toolCall.arguments);
                         const toolDuration = Date.now() - toolStartTime;
                         
-                        log.info(`[${this.ts()}] [TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`);
+                        log.info(`[${this.ts()}] [TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
                         
                         // Recording: Trace + Decision + Skill
                         traceManager.addStep(trace, 'tool_call', { tool: toolName, input: toolCall.arguments });
