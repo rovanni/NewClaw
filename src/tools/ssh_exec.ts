@@ -1,11 +1,26 @@
 /**
  * ssh_exec — Execute commands on remote servers via SSH
  * Uses centralized server_config for host resolution and safety checks
+ * 
+ * Security: Uses BatchMode=yes to prevent password prompts (fail fast instead).
+ *           Uses -i to specify the SSH key explicitly.
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { exec } from 'child_process';
 import { resolveHost, isDestructive } from './server_config';
+import { createLogger } from '../shared/AppLogger';
+
+const log = createLogger('SshExecTool');
+
+/** Default SSH key path (ed25519 preferred, falls back to rsa) */
+function getDefaultKey(): string {
+    const { existsSync } = require('fs');
+    const home = process.env.HOME || process.env.USERPROFILE || '/root';
+    if (existsSync(`${home}/.ssh/id_ed25519`)) return `${home}/.ssh/id_ed25519`;
+    if (existsSync(`${home}/.ssh/id_rsa`)) return `${home}/.ssh/id_rsa`;
+    return `${home}/.ssh/id_ed25519`; // default path, will fail if not present
+}
 
 export class SshExecTool implements ToolExecutor {
     name = 'ssh_exec';
@@ -45,9 +60,18 @@ export class SshExecTool implements ToolExecutor {
 
         // Resolve host alias to SSH target (centralized)
         const sshTarget = resolveHost(hostAlias);
+        const sshKey = getDefaultKey();
 
-        // Build SSH command
-        const sshCommand = `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new ${sshTarget} "${command.replace(/"/g, '\\"')}"`;
+        // Build SSH command with:
+        //   - BatchMode=yes: fail fast instead of prompting for password
+        //   - StrictHostKeyChecking=accept-new: auto-accept new hosts
+        //   - ConnectTimeout=5: fail fast on unreachable hosts
+        //   - -i <key>: explicit key file
+        //   - ServerAliveInterval=15: detect dead connections
+        const escapedCommand = command.replace(/"/g, '\\"').replace(/'/g, "'\\''");
+        const sshCommand = `ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -i "${sshKey}" ${sshTarget} '${escapedCommand}'`;
+
+        log.info(`[SSH] Executing on ${sshTarget}: ${command.slice(0, 80)}${command.length > 80 ? '...' : ''}`);
 
         try {
             const output = await new Promise<string>((resolve, reject) => {
@@ -55,7 +79,7 @@ export class SshExecTool implements ToolExecutor {
                     if (error) {
                         const partial = (stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : '');
                         if (partial.trim()) {
-                            resolve(partial + '\n[exit code: ' + (error.code || 'unknown') + ']');
+                            resolve(partial + `\n[exit code: ${error.code || 'unknown'}]`);
                         } else {
                             reject(error);
                         }
@@ -67,7 +91,32 @@ export class SshExecTool implements ToolExecutor {
 
             return { success: true, output: output.trim().slice(0, 8000) };
         } catch (error: any) {
-            return { success: false, output: '', error: `SSH to ${sshTarget} failed: ${error.message}` };
+            const msg = error.message || String(error);
+            
+            // Friendly error messages
+            if (msg.includes('Permission denied')) {
+                return { 
+                    success: false, 
+                    output: '', 
+                    error: `SSH authentication failed for ${sshTarget}. Check if the SSH key is configured and authorized on the target server. Key tried: ${sshKey}` 
+                };
+            }
+            if (msg.includes('Connection timed out') || msg.includes('ConnectTimeout')) {
+                return { 
+                    success: false, 
+                    output: '', 
+                    error: `SSH connection timed out for ${sshTarget}. The server may be unreachable.` 
+                };
+            }
+            if (msg.includes('Connection refused')) {
+                return { 
+                    success: false, 
+                    output: '', 
+                    error: `SSH connection refused for ${sshTarget}. The SSH service may not be running.` 
+                };
+            }
+            
+            return { success: false, output: '', error: `SSH to ${sshTarget} failed: ${msg}` };
         }
     }
 }
