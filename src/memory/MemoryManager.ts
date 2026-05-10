@@ -642,6 +642,23 @@ export class MemoryManager {
         // Apply classification score if not explicitly set
         const confidenceScore = node.confidence ?? classification.score;
 
+        // Truncate metadata if too large (prevents "Too many properties to enumerate")
+        let metadataObj = node.metadata || {};
+        let metadataJson = JSON.stringify(metadataObj);
+        if (metadataJson.length > 8000) {
+            // Keep only top-level string values, truncate each
+            const truncated: Record<string, any> = {};
+            const keys = Object.keys(metadataObj).slice(0, 20); // max 20 keys
+            for (const key of keys) {
+                const val = String(metadataObj[key] ?? '');
+                truncated[key] = val.length > 500 ? val.slice(0, 500) + '...' : metadataObj[key];
+            }
+            truncated['_truncated'] = true;
+            metadataObj = truncated;
+            metadataJson = JSON.stringify(metadataObj);
+            log.warn(`[MemoryManager] Truncated metadata for node ${node.id}: ${metadataJson.length} chars`);
+        }
+
         this.db.prepare(`
             INSERT OR REPLACE INTO memory_nodes (id, type, name, content, metadata, weight, confidence, last_updated, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -650,7 +667,7 @@ export class MemoryManager {
             node.type, 
             node.name, 
             node.content, 
-            JSON.stringify(node.metadata || {}),
+            metadataJson,
             node.weight ?? 1.0,
             confidenceScore,
             node.last_updated || new Date().toISOString()

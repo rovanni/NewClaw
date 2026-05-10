@@ -84,6 +84,7 @@ export class TelegramAdapter implements ChannelAdapter {
     private started: boolean = false;
     private startRetries: number = 0;
     private maxStartRetries: number = 3;
+    private handlersRegistered: boolean = false;
 
     async start(): Promise<void> {
         if (!this.config.enabled) {
@@ -105,7 +106,11 @@ export class TelegramAdapter implements ChannelAdapter {
             log.warn('delete_webhook_failed', e.message);
         }
 
-        this.registerHandlers();
+        // Register handlers ONCE — grammY throws if handlers are registered multiple times
+        if (!this.handlersRegistered) {
+            this.registerHandlers();
+            this.handlersRegistered = true;
+        }
         this.started = true;
 
         try {

@@ -652,12 +652,29 @@ export class MemoryGovernor {
      * Preserves the data for potential future recovery.
      */    private archiveNode(node: MemoryNode): void {
         try {
+            // Truncate metadata if too large (prevents "Too many properties to enumerate")
+            let metadata: Record<string, any> = { ...node.metadata, archived: 'true', archived_at: new Date().toISOString(), original_type: node.type };
+            const metadataJson = JSON.stringify(metadata);
+            if (metadataJson.length > 4000) {
+                // Keep only essential fields + truncated content
+                const essentialKeys = ['archived', 'archived_at', 'original_type', 'source', 'confidence'];
+                const truncated: Record<string, any> = {};
+                for (const key of essentialKeys) {
+                    if (metadata[key] !== undefined) {
+                        const val = String(metadata[key]);
+                        truncated[key] = val.length > 200 ? val.slice(0, 200) + '...' : val;
+                    }
+                }
+                truncated['_truncated'] = true;
+                metadata = truncated;
+            }
+
             this.memory.addNode({
                 ...node,
                 type: 'context', // Keep as context type (archived)
                 confidence: 0.1, // Minimum confidence
                 weight: 0.1, // Minimum weight
-                metadata: { ...node.metadata, archived: 'true', archived_at: new Date().toISOString(), original_type: node.type },
+                metadata,
                 last_updated: new Date().toISOString()
             });
             log.info(`Archived node: ${node.id} (was ${node.type}, confidence was ${node.confidence})`);
