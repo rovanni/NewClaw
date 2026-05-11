@@ -187,6 +187,7 @@ export class AgentLoop {
     private metricsMaxSize = 100;
     private classificationMemory: ClassificationMemory;
     private decisionMemory: DecisionMemory;
+    private pendingActions: Map<string, { toolName: string, arguments: any, stepCount: number, chatProfile: any, messages: any[] }> = new Map();
     private protocolParser: ProtocolParser;
 
     constructor(providerFactory: ProviderFactory, memory: MemoryManager, config: AgentLoopConfig, skillLearner: SkillLearner, classificationMemory?: ClassificationMemory, decisionMemory?: DecisionMemory) {
@@ -203,6 +204,16 @@ export class AgentLoop {
         
         this.classificationMemory = classificationMemory as ClassificationMemory;
         this.decisionMemory = decisionMemory as DecisionMemory;
+    }
+
+    private isAuthorized(conversationId: string, toolName: string, args: any): boolean {
+        const auth = (this as any)._currentAuthorizedAction;
+        if (auth && auth.toolName === toolName && JSON.stringify(auth.args) === JSON.stringify(args)) {
+            // Consumir a autorização para que não seja usada novamente
+            delete (this as any)._currentAuthorizedAction;
+            return true;
+        }
+        return false;
     }
 
     public getIntentRouter(): UnifiedIntentRouter {
@@ -471,6 +482,31 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         move('START_TURN');
 
         // ── UnifiedIntentRouter: SINGLE SOURCE OF TRUTH ──
+        // ── Human-in-the-Loop: Check for pending authorizations ──
+        const pending = this.pendingActions.get(conversationId);
+        if (pending) {
+            const approvalTerms = ['sim', 'yes', 'ok', 'autorizar', 'autorizado', 'pode', 'prosseguir'];
+            const isApproved = approvalTerms.some(term => userText.toLowerCase().includes(term));
+            
+            if (isApproved) {
+                log.info(`[${this.ts()}] [AUTH] Action APPROVED for ${conversationId}: ${pending.toolName}`);
+                // Clear pending status but keep the action data to execute it
+                this.pendingActions.delete(conversationId);
+                // Mark as temporarily authorized for this specific cycle
+                (this as any)._currentAuthorizedAction = { toolName: pending.toolName, args: pending.arguments };
+                
+                // Retomar o loop a partir do contexto salvo
+                // Para simplificar, vamos re-injetar uma mensagem de sistema e deixar o loop rodar
+                // Mas o ideal é que ele continue o passo atual.
+                // Vou injetar a autorização e deixar o fluxo seguir.
+            } else {
+                log.warn(`[${this.ts()}] [AUTH] Action REJECTED for ${conversationId}: ${pending.toolName}`);
+                this.pendingActions.delete(conversationId);
+                return `❌ Execução cancelada pelo usuário. Como posso ajudar agora?`;
+            }
+        }
+
+        move('START', { conversationId });
         const intentDecision: IntentDecision = this.intentRouter.route(userText, {
             sessionId: conversationId,
         });
@@ -692,6 +728,21 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                         if (typeof (tool as any).setContext === 'function' && channelContext) {
                             (tool as any).setContext(channelContext.chatId || '', channelContext.botToken || '');
                         }
+                        const isDangerous = ToolRegistry.isDangerous(toolName);
+                        if (isDangerous && !this.isAuthorized(conversationId, toolName, toolCall.arguments)) {
+                            log.warn(`[${this.ts()}] [AUTH] Intercepted dangerous tool: ${toolName}`);
+                            this.pendingActions.set(conversationId, {
+                                toolName,
+                                arguments: toolCall.arguments,
+                                stepCount,
+                                chatProfile,
+                                messages: [...loopMessages]
+                            });
+                            
+                            const argsStr = JSON.stringify(toolCall.arguments, null, 2);
+                            return `⚠️ **AUTORIZAÇÃO NECESSÁRIA**\n\nO agente deseja executar uma ferramenta do sistema:\n\n🛠 **Ferramenta:** \`${toolName}\`\n📦 **Parâmetros:**\n\`\`\`json\n${argsStr}\n\`\`\`\n\nDigite **"sim"** ou **"autorizar"** para prosseguir, ou qualquer outra coisa para cancelar.`;
+                        }
+
                         const toolStartTime = Date.now();
                         const result = await tool.execute(toolCall.arguments);
                         const toolDuration = Date.now() - toolStartTime;

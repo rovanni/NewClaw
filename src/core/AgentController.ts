@@ -613,7 +613,7 @@ export class AgentController {
         ToolRegistry.register(new SendAudioTool());
         ToolRegistry.register(new SendDocumentTool());
         ToolRegistry.register(new MemoryAdminTool(this.memory));
-        ToolRegistry.register(new SshExecTool());
+        ToolRegistry.register(new SshExecTool(), { dangerous: true });
         ToolRegistry.register(new CryptoAnalysisTool());
         ToolRegistry.register(new WeatherTool());
         ToolRegistry.register(new ScheduleTool(this.scheduler));

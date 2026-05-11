@@ -122,9 +122,12 @@ export class MemoryManager {
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
             this.db = new Database(dbOrPath);
             this.db.pragma('journal_mode = WAL');
+            this.db.pragma('synchronous = NORMAL');
+            this.db.pragma('busy_timeout = 5000');
         } else {
             this.db = dbOrPath;
             this.dbPath = ':memory:';
+            this.db.pragma('busy_timeout = 5000');
         }
         this.classifier = new ConfidenceClassifier();
         try { this.attentionLayer = new AttentionLayer(this.db); } catch (e) { log.warn('init_failed', 'AttentionLayer init failed', { error: String(e) }); }
@@ -269,8 +272,13 @@ export class MemoryManager {
             USING fts5(name, content, type, content='memory_nodes');
         `);
 
-        // Rebuild FTS index from scratch
-        this.db.exec(`INSERT INTO memory_nodes_fts(memory_nodes_fts) VALUES('rebuild')`);
+        // FTS index is maintained by triggers below. 
+        // Forced rebuild only happens if the FTS table is empty.
+        const ftsCount = (this.db.prepare('SELECT count(*) as count FROM memory_nodes_fts').get() as any).count;
+        if (ftsCount === 0) {
+            log.info('[MemoryManager] Initializing FTS index...');
+            this.db.exec(`INSERT INTO memory_nodes_fts(memory_nodes_fts) VALUES('rebuild')`);
+        }
 
         // FTS Triggers (use native rowid — no fts_rowid column)
         this.db.exec(`
