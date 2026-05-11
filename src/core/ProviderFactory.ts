@@ -977,11 +977,12 @@ export class ProviderFactory {
                         result = await chatPromise;
                     }
 
-                    // CRITICAL: Validate that this attempt was NOT aborted before accepting result
-                    // Prevents late responses from a previous/aborted request from being used
-                    if (currentAbort.signal.aborted) {
-                        log.warn(`[${attemptId}] ABORTED after completion — discarding result (content=${(result.content || '').length}chars)`);
-                        attemptLog.push({ provider: providerName, model: modelUsed, duration: Date.now() - attemptStart, status: 'error', errorMessage: 'Aborted — late response discarded' });
+                    // CRITICAL: If we have content, we accept it even if the signal was aborted at the very last millisecond.
+                    // Only discard if we have NO content AND it was aborted.
+                    const hasContent = (result.content && result.content.trim().length > 0) || (result.toolCalls && result.toolCalls.length > 0);
+                    if (currentAbort.signal.aborted && !hasContent) {
+                        log.warn(`[${attemptId}] ABORTED with no content — moving to next attempt`);
+                        attemptLog.push({ provider: providerName, model: modelUsed, duration: Date.now() - attemptStart, status: 'error', errorMessage: 'Aborted — no content' });
                         activeAbortController = null;
                         continue;
                     }
