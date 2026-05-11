@@ -295,19 +295,9 @@ export class MemoryManager {
             }
         }
 
-        // FTS Triggers (use native rowid — no fts_rowid column)
-        this.db.exec(`
-            CREATE TRIGGER IF NOT EXISTS memory_nodes_ai AFTER INSERT ON memory_nodes BEGIN
-              INSERT INTO memory_nodes_fts(rowid, name, content, type) VALUES (new.rowid, new.name, new.content, new.type);
-            END;
-            CREATE TRIGGER IF NOT EXISTS memory_nodes_ad AFTER DELETE ON memory_nodes BEGIN
-              INSERT INTO memory_nodes_fts(memory_nodes_fts, rowid, name, content, type) VALUES('delete', old.rowid, old.name, old.content, old.type);
-            END;
-            CREATE TRIGGER IF NOT EXISTS memory_nodes_au AFTER UPDATE ON memory_nodes BEGIN
-              INSERT INTO memory_nodes_fts(memory_nodes_fts, rowid, name, content, type) VALUES('delete', old.rowid, old.name, old.content, old.type);
-              INSERT INTO memory_nodes_fts(rowid, name, content, type) VALUES (new.rowid, new.name, new.content, new.type);
-            END;
-        `);
+        // FTS Triggers are REMOVED — they cause DB corruption with better-sqlite3 transactions.
+        // Instead, FTS is rebuilt periodically when empty or via explicit rebuild.
+        // The memory search fallback uses LIKE queries when FTS is stale.
 
         // ── Snapshots do grafo ──
         this.db.exec(`
