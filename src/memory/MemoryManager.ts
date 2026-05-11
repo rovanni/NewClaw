@@ -241,15 +241,17 @@ export class MemoryManager {
         tryAddColumn('CREATE INDEX IF NOT EXISTS idx_memory_nodes_degree ON memory_nodes(degree)');
 
         // ── FTS5 Semantic Search (using native rowid — no fts_rowid column needed) ──
-        // Drop old triggers and FTS5 table if they exist (from previous schema)
-        try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_ai'); } catch {}
-        try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_ad'); } catch {}
-        try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_au'); } catch {}
-        try { this.db.exec('DROP TABLE IF EXISTS memory_nodes_fts'); } catch {}
-        // Drop the broken fts_rowid column by recreating the table without it
-        // (SQLite doesn't support DROP COLUMN, so we recreate)
+        // Only drop and recreate FTS if schema migration requires it (fts_rowid column)
+        // Do NOT drop FTS on every startup — this was causing DB corruption race conditions
         const currentCols = (this.db.prepare("PRAGMA table_info(memory_nodes)").all() as any[]).map(c => c.name);
-        if (currentCols.includes('fts_rowid')) {
+        const needsFtsRebuild = currentCols.includes('fts_rowid');
+
+        if (needsFtsRebuild) {
+            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_ai'); } catch {}
+            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_ad'); } catch {}
+            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_au'); } catch {}
+            try { this.db.exec('DROP TABLE IF EXISTS memory_nodes_fts'); } catch {}
+
             // Migrate: recreate table without fts_rowid (disable FK during migration)
             this.db.pragma('foreign_keys = OFF');
             this.db.exec(`CREATE TABLE IF NOT EXISTS memory_nodes_v3 (
@@ -267,17 +269,30 @@ export class MemoryManager {
         }
 
         // Create FTS5 using native rowid (no content_rowid — uses SQLite's built-in rowid)
+        // Use CREATE VIRTUAL TABLE IF NOT EXISTS to avoid destructive rebuild on every startup
         this.db.exec(`
             CREATE VIRTUAL TABLE IF NOT EXISTS memory_nodes_fts
             USING fts5(name, content, type, content='memory_nodes');
         `);
 
-        // FTS index is maintained by triggers below. 
-        // Forced rebuild only happens if the FTS table is empty.
-        const ftsCount = (this.db.prepare('SELECT count(*) as count FROM memory_nodes_fts').get() as any).count;
-        if (ftsCount === 0) {
-            log.info('[MemoryManager] Initializing FTS index...');
-            this.db.exec(`INSERT INTO memory_nodes_fts(memory_nodes_fts) VALUES('rebuild')`);
+        // FTS index: only rebuild if the table is empty (new DB or after schema migration)
+        try {
+            const ftsCount = (this.db.prepare('SELECT count(*) as count FROM memory_nodes_fts').get() as any).count;
+            if (ftsCount === 0) {
+                log.info('[MemoryManager] Rebuilding FTS index (empty)...');
+                this.db.exec(`INSERT INTO memory_nodes_fts(memory_nodes_fts) VALUES('rebuild')`);
+            }
+        } catch (e: any) {
+            // FTS table might not exist yet or be corrupted — rebuild safely
+            log.warn('[MemoryManager] FTS rebuild needed:', e.message);
+            try {
+                this.db.exec('DROP TABLE IF EXISTS memory_nodes_fts');
+                this.db.exec(`CREATE VIRTUAL TABLE memory_nodes_fts USING fts5(name, content, type, content='memory_nodes')`);
+                this.db.exec(`INSERT INTO memory_nodes_fts(memory_nodes_fts) VALUES('rebuild')`);
+                log.info('[MemoryManager] FTS index rebuilt successfully');
+            } catch (rebuildErr: any) {
+                log.error('[MemoryManager] FTS rebuild failed:', rebuildErr.message);
+            }
         }
 
         // FTS Triggers (use native rowid — no fts_rowid column)
