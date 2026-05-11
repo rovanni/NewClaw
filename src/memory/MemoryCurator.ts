@@ -204,6 +204,50 @@ export class MemoryCurator {
     }
 
     /**
+     * Enforce storage quotas to prevent exponential database growth.
+     * 1. Delete execution traces older than 3 days.
+     * 2. Limit message history to last 1000 messages per session.
+     */
+    private async enforceStorageQuotas(): Promise<{ prunedTraces: number; prunedMessages: number }> {
+        try {
+            const db = (this.mm as any).db;
+            
+            // 1. Prune old execution traces (if execution_traces table exists)
+            let prunedTraces = 0;
+            try {
+                const result = db.prepare(`DELETE FROM execution_traces WHERE created_at < datetime('now', '-3 days')`).run();
+                prunedTraces = result.changes;
+            } catch { /* table might not exist yet */ }
+
+            // 2. Prune old messages (keep last 1000 per session)
+            let prunedMessages = 0;
+            const sessions = db.prepare('SELECT DISTINCT session_id FROM messages').all();
+            for (const session of sessions) {
+                const result = db.prepare(`
+                    DELETE FROM messages 
+                    WHERE session_id = ? 
+                    AND id NOT IN (
+                        SELECT id FROM messages 
+                        WHERE session_id = ? 
+                        ORDER BY created_at DESC 
+                        LIMIT 1000
+                    )
+                `).run(session.session_id, session.session_id);
+                prunedMessages = result.changes;
+            }
+
+            if (prunedTraces > 0 || prunedMessages > 0) {
+                log.info(`[StorageQuotas] Pruned ${prunedTraces} traces and ${prunedMessages} old messages.`);
+            }
+
+            return { prunedTraces, prunedMessages };
+        } catch (error: any) {
+            log.error('[StorageQuotas] Error:', error.message);
+            return { prunedTraces: 0, prunedMessages: 0 };
+        }
+    }
+
+    /**
      * Apply temporal decay to edge weights
      * Edges not accessed in 30 days lose 2% weight (×0.98)
      */
@@ -244,14 +288,16 @@ export class MemoryCurator {
         this.intervalId = setInterval(async () => {
             try {
                 const result = await this.curate();
+                await this.enforceStorageQuotas();
                 await this.analytics.updateMetrics();
                 await this.analytics.detectCommunities();
 
-                // Record metrics snapshot for evolution tracking
-                try {
-                    (this.mm as any).recordMetricsSnapshot?.();
-                } catch { /* optional */ }
-                await this.analytics.detectCommunities();
+                // Reclaim space (VACUUM is heavy, so we run it only if we deleted things or every 10 runs)
+                const db = (this.mm as any).db;
+                if (Math.random() < 0.1) {
+                    log.info('[MemoryCurator] Running VACUUM to reclaim disk space...');
+                    db.exec('VACUUM');
+                }
                 
                 // Embed missing nodes (if embedding service available)
                 if (this.embeddingService) {
