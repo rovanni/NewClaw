@@ -117,6 +117,28 @@ function sanitizeContent(content: string): string {
         if (inner.length > 0) result = inner;
     }
 
+    // ── Anti-leak: Remove ```json blocks that contain protocol JSON ──
+    // The model sometimes outputs ```json\n{"thought":..."action":...}``` which should be parsed
+    // by ProtocolParser, not shown to the user. If it leaks through, strip it.
+    result = result.replace(/```json\s*\n?[\s\S]*?```/g, (match) => {
+        // Try to extract the action.content from the JSON inside
+        try {
+            const jsonStr = match.replace(/^```json\s*\n?/, '').replace(/\n?```\s*$/, '');
+            const parsed = JSON.parse(jsonStr);
+            if (parsed.action?.content && typeof parsed.action.content === 'string') {
+                return parsed.action.content;
+            }
+            if (parsed.content && typeof parsed.content === 'string') {
+                return parsed.content;
+            }
+        } catch {}
+        return ''; // Remove the block entirely if we can't extract content
+    });
+
+    // ── Anti-leak: Strip any remaining ```json or ``` blocks with protocol keys ──
+    // Catches cases where the code fence regex above didn't match (partial/malformed)
+    result = result.replace(/```(?:json)?\s*\n?\{[\s\S]*?"(?:thought|action|evaluation)"[\s\S]*?\}\s*```/g, '');
+
     // Remove leaked system prompt fragments
     result = result.replace(/^Você é o núcleo cognitivo[\s\S]*?(?=\n\n|\n[A-Z])/i, '');
     result = result.replace(/^##\s*(PRINCÍPIO|ARQUITETURA|REGRA|FORMATO|PROTOCOLO)[\s\S]*?(?=\n\n[A-Z])/im, '');
