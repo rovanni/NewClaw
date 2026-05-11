@@ -212,27 +212,27 @@ export class MemoryCurator {
         try {
             const db = (this.mm as any).db;
             
-            // 1. Prune old execution traces (if execution_traces table exists)
+            // 1. Prune old execution traces (if agent_traces table exists)
             let prunedTraces = 0;
             try {
-                const result = db.prepare(`DELETE FROM execution_traces WHERE created_at < datetime('now', '-3 days')`).run();
+                const result = db.prepare(`DELETE FROM agent_traces WHERE created_at < datetime('now', '-3 days')`).run();
                 prunedTraces = result.changes;
             } catch { /* table might not exist yet */ }
 
-            // 2. Prune old messages (keep last 1000 per session)
+            // 2. Prune old messages (keep last 1000 per conversation)
             let prunedMessages = 0;
-            const sessions = db.prepare('SELECT DISTINCT session_id FROM messages').all();
-            for (const session of sessions) {
+            const conversations = db.prepare('SELECT DISTINCT conversation_id FROM messages').all();
+            for (const conv of conversations) {
                 const result = db.prepare(`
                     DELETE FROM messages 
-                    WHERE session_id = ? 
+                    WHERE conversation_id = ? 
                     AND id NOT IN (
                         SELECT id FROM messages 
-                        WHERE session_id = ? 
+                        WHERE conversation_id = ? 
                         ORDER BY created_at DESC 
                         LIMIT 1000
                     )
-                `).run(session.session_id, session.session_id);
+                `).run(conv.conversation_id, conv.conversation_id);
                 prunedMessages = result.changes;
             }
 
