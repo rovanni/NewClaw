@@ -355,6 +355,7 @@ export class TelegramAdapter implements ChannelAdapter {
         // Voice
         this.bot.on('message:voice', async (ctx) => {
             const userId = ctx.from!.id.toString();
+            log.info('voice_received', `userId=${userId} duration=${ctx.message!.voice?.duration}s`);
             if (!this.config.allowedUserIds.includes(userId)) return;
 
             const voice = ctx.message!.voice!;
@@ -384,6 +385,7 @@ export class TelegramAdapter implements ChannelAdapter {
         // Audio files
         this.bot.on('message:audio', async (ctx) => {
             const userId = ctx.from!.id.toString();
+            log.info('audio_received', `userId=${userId} file=${(ctx.message as any)?.audio?.file_name}`);
             if (!this.config.allowedUserIds.includes(userId)) return;
 
             const audio = (ctx.message as any)?.audio;
