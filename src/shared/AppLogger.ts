@@ -102,7 +102,10 @@ function writeAuditLine(level: LogLevel, component: string, event: string, messa
 }
 
 function formatTimestamp(): string {
-    return new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const d = new Date();
+    const offset = d.getTimezoneOffset();
+    const local = new Date(d.getTime() - offset * 60000);
+    return local.toISOString().replace('T', ' ').substring(0, 19);
 }
 
 /** Generate a consistent color for a component name */

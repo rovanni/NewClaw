@@ -176,7 +176,7 @@ export class AgentController {
         const dir = path.dirname(dbPath);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         const db = new Database(dbPath);
-        db.pragma('journal_mode = WAL');
+        db.pragma('journal_mode = DELETE');
         this.db = db; // Store in class property
         
         this.memory = new MemoryManager(db);

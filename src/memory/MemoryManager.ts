@@ -121,7 +121,7 @@ export class MemoryManager {
             const dir = path.dirname(dbOrPath);
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
             this.db = new Database(dbOrPath);
-            this.db.pragma('journal_mode = WAL');
+            this.db.pragma('journal_mode = DELETE');
             this.db.pragma('synchronous = NORMAL');
             this.db.pragma('busy_timeout = 5000');
         } else {
