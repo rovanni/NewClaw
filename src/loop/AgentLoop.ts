@@ -271,7 +271,8 @@ export class AgentLoop {
         ACADEMIC: `## 📚 REGRA DE CONTEÚDO ACADÊMICO E SLIDES
 - Quando criar slides, aulas ou materiais educacionais, o conteúdo deve ser COMPLETO, DETALHADO e APROFUNDADO — nunca superficial ou resumido.
 - Cada slide deve ter conteúdo substancial: explicações claras, exemplos práticos, diagramas textuais.
-- Mínimo de 15 slides para aulas, com pelo menos 3-5 pontos por slide.`,
+- Mínimo de 15 slides para aulas, com pelo menos 3-5 pontos por slide.
+- **DETERMINAÇÃO CRÍTICA**: Você NÃO PODE definir "is_complete": true até que tenha efetivamente gerado TODOS os slides e salvo o arquivo final. Se você apenas planejou ou começou, use "is_complete": false e continue no próximo passo.`,
 
         AUDIO: `## 🔊 REGRA DE ÁUDIO E VOZ
 - Quando o usuário pedir para OUVIR, FALAR, NARRAR, ou gerar ÁUDIO, use SEMPRE a ferramenta send_audio.
@@ -584,7 +585,7 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         );
         const loopMessages = sessionMessages;
         let stepCount = 0;
-        const maxSteps = 5; 
+        const maxSteps = 15; // Aumentado de 5 para 15 para tarefas complexas
 
         while (stepCount < maxSteps) {
             stepCount++;
