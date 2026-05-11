@@ -316,12 +316,17 @@ export class MemoryCurator {
             }
         }, intervalMs);
         
-        // Initial run
-        this.curate().then(async r => {
-            await this.analytics.updateMetrics();
-            if (r.orphansFixed > 0) log.info(`[MemoryCurator] Initial: ${r.details.join('; ')}`);
-            else log.info('[MemoryCurator] Initial: graph clean, metrics updated.');
-        }).catch(e => log.error('[MemoryCurator] Initial error:', e));
+        // Initial run (with 2s delay to let DB stabilize after startup)
+        setTimeout(async () => {
+            try {
+                const r = await this.curate();
+                await this.analytics.updateMetrics();
+                if (r.orphansFixed > 0) log.info(`[MemoryCurator] Initial: ${r.details.join('; ')}`);
+                else log.info('[MemoryCurator] Initial: graph clean, metrics updated.');
+            } catch (e: any) {
+                log.error('[MemoryCurator] Initial error:', e);
+            }
+        }, 2000);
     }
 
     stopAutoCurate(): void {

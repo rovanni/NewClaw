@@ -11,14 +11,36 @@ export class GraphAnalytics {
         this.mm = memoryManager;
     }
 
+    /**
+     * Retry wrapper for DB operations that may fail on first attempt (e.g. startup race).
+     * Retries up to maxRetries times with exponential backoff for malformed/locked errors.
+     */
+    private async withRetry<T>(fn: () => T, maxRetries: number = 3, baseDelayMs: number = 500): Promise<T> {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                return fn();
+            } catch (error: any) {
+                if (attempt === maxRetries) throw error;
+                const msg = error?.message || String(error);
+                if (msg.includes('malformed') || msg.includes('SQLITE_CORRUPT') || msg.includes('locked')) {
+                    log.warn('db_retry', `Attempt ${attempt}/${maxRetries} failed, retrying in ${baseDelayMs * attempt}ms`, { attempt, maxRetries });
+                    await new Promise(resolve => setTimeout(resolve, baseDelayMs * attempt));
+                } else {
+                    throw error; // Non-retryable error
+                }
+            }
+        }
+        throw new Error('withRetry: unreachable');
+    }
+
     async updateMetrics(): Promise<void> {
         try {
             const db = (this.mm as any).db;
             if (!db) throw new Error('Database not initialized');
 
             // 1. Fetch current snapshot of Nodes and Edges
-            const nodes: Array<{ id: string }> = db.prepare('SELECT id FROM memory_nodes').all();
-            const edges: Array<{ from_node: string; to_node: string; weight: number }> = db.prepare('SELECT from_node, to_node, weight FROM memory_edges').all();
+            const nodes: Array<{ id: string }> = await this.withRetry(() => db.prepare('SELECT id FROM memory_nodes').all());
+            const edges: Array<{ from_node: string; to_node: string; weight: number }> = await this.withRetry(() => db.prepare('SELECT from_node, to_node, weight FROM memory_edges').all());
 
             if (nodes.length === 0) return;
 
@@ -109,7 +131,7 @@ export class GraphAnalytics {
                 }
             });
 
-            transaction(nodes.map(n => n.id));
+            await this.withRetry(() => transaction(nodes.map(n => n.id)));
             // Ensure node_metrics table exists
             try {
                 db.exec(`
@@ -152,7 +174,7 @@ export class GraphAnalytics {
                     metricsStmt.run(degreeMap[id] || 0, degreeMap[id] || 0, id);
                 }
             });
-            metricsTransaction(nodes.map(n => n.id), degreeTotal);
+            await this.withRetry(() => metricsTransaction(nodes.map(n => n.id), degreeTotal));
 
             log.info('metrics_updated', undefined, { nodeCount: nodes.length });
 
@@ -238,7 +260,7 @@ export class GraphAnalytics {
                     updateStmt.run(cId, nodeId);
                 }
             });
-            transaction(communities);
+            await this.withRetry(() => transaction(communities));
 
             log.info('communities_detected', undefined, { communityCount: summary.communityCount, nodeCount: nodes.length });
             return { communityCount: summary.communityCount, updated: nodes.length };
