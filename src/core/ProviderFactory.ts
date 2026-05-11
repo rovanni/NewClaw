@@ -395,7 +395,7 @@ export class OllamaProvider implements ILLMProvider {
         const controller = new AbortController();
 
         // Timeout architecture: 3 separate timers
-        const CONNECTION_TIMEOUT = 30_000;  // Time to first byte
+        const CONNECTION_TIMEOUT = 90_000;  // Time to first byte (increased from 30s)
         const ACTIVITY_TIMEOUT = 120_000;   // Time since last activity of ANY type
         const MAX_TIMEOUT = customTimeoutMs || 300_000;  // Hard ceiling
 
