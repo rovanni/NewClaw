@@ -44,36 +44,53 @@ const ICONS: Record<LogLevel, string> = {
 
 const RESET = '\x1b[0m';
 
-function parseLevel(env?: string): LogLevel {
+function getConfiguredLevel(): LogLevel {
+    const env = process.env.LOG_LEVEL;
     const normalized = (env || 'info').toLowerCase().trim();
     if (normalized in LEVELS) return normalized as LogLevel;
     return 'info';
 }
 
-const configuredLevel = parseLevel(process.env.LOG_LEVEL);
-
 function shouldLog(level: LogLevel): boolean {
-    return LEVELS[level] >= LEVELS[configuredLevel];
+    return LEVELS[level] >= LEVELS[getConfiguredLevel()];
 }
 
 // ── File audit logging ────────────────────────────────────────────
 // Writes clean (no ANSI) lines to a log file for forensic auditing.
 // Controlled by LOG_FILE env var (default: ./logs/newclaw-audit.log)
 
-const LOG_FILE = process.env.LOG_FILE || '';
-const auditStream: fs.WriteStream | null = (() => {
-    if (!LOG_FILE) return null;
-    try {
-        const dir = path.dirname(LOG_FILE);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        return fs.createWriteStream(LOG_FILE, { flags: 'a', encoding: 'utf8' });
-    } catch {
-        return null;
+let _auditStream: fs.WriteStream | null = null;
+let _currentLogFile = '';
+
+function getAuditStream(): fs.WriteStream | null {
+    const envFile = process.env.LOG_FILE || '';
+    
+    // Se o arquivo mudou ou ainda não abrimos, tenta abrir
+    if (envFile !== _currentLogFile) {
+        if (_auditStream) {
+            _auditStream.end();
+            _auditStream = null;
+        }
+        
+        if (envFile) {
+            try {
+                const dir = path.dirname(envFile);
+                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+                _auditStream = fs.createWriteStream(envFile, { flags: 'a', encoding: 'utf8' });
+                _currentLogFile = envFile;
+            } catch (e) {
+                console.error('Failed to create audit stream:', e);
+                _currentLogFile = '';
+            }
+        }
     }
-})();
+    
+    return _auditStream;
+}
 
 function writeAuditLine(level: LogLevel, component: string, event: string, message?: string, meta?: Record<string, any>) {
-    if (!auditStream) return;
+    const stream = getAuditStream();
+    if (!stream) return;
     const timestamp = formatTimestamp();
     const levelStr = level.toUpperCase().padEnd(5);
     const metaStr = meta && Object.keys(meta).length > 0

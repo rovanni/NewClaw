@@ -4,6 +4,9 @@
  */
 
 import dotenv from 'dotenv';
+// Carregar .env IMEDIATAMENTE (antes de outros imports que dependem de env vars)
+dotenv.config();
+
 import { AgentController } from './core/AgentController';
 import { DashboardServer } from './dashboard/DashboardServer';
 import { Logger } from './shared/Logger';
@@ -13,9 +16,6 @@ const log = createLogger('Index');
 
 // Inicializar Logger (adiciona timestamps ao console.log)
 Logger.hookGlobalConsole();
-
-// Carregar .env
-dotenv.config();
 
 const config = {
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
