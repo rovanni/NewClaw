@@ -114,14 +114,17 @@ export class TelegramAdapter implements ChannelAdapter {
         this.started = true;
 
         try {
+            log.info('bot_starting', 'Iniciando polling do Telegram...');
             await this.bot.start({
-                onStart: () => {
+                onStart: (info) => {
                     this._isConnected = true;
                     this.startRetries = 0; // Reset on success
-                    log.info('bot_started', '🤖 Telegram Bot rodando!');
+                    log.info('bot_started', `🤖 Telegram Bot rodando! botInfo=${JSON.stringify(info).slice(0, 100)}`);
                 },
                 allowed_updates: ['message']
             });
+            // If we reach here, bot.start() resolved (meaning bot was stopped)
+            log.warn('bot_start_resolved', 'bot.start() resolved unexpectedly — bot was stopped');
         } catch (e: any) {
             if (e.message?.includes('409') || e.message?.includes('Conflict')) {
                 log.error('bot_start_409_conflict', 'Multiple bot instances detected. Waiting for old instance to stop...');
@@ -273,6 +276,7 @@ export class TelegramAdapter implements ChannelAdapter {
         // Text messages
         this.bot.on('message:text', async (ctx) => {
             const userId = ctx.from!.id.toString();
+            log.info('text_message_received', `userId=${userId} text="${ctx.message?.text?.slice(0, 50)}"`);
             if (!this.config.allowedUserIds.includes(userId)) {
                 log.info('unauthorized', `Usuário não autorizado: ${userId}`);
                 return;
@@ -297,10 +301,11 @@ export class TelegramAdapter implements ChannelAdapter {
 
         // Commands
         this.bot.on('message', async (ctx) => {
+            const userId = ctx.from!.id.toString();
+            log.info('generic_message_received', `userId=${userId} type=${ctx.message?.text ? 'text' : 'other'} has_voice=${!!ctx.message?.voice} has_audio=${!!(ctx.message as any)?.audio}`);
             const text = ctx.message?.text;
             if (!text || !text.startsWith('/')) return;
 
-            const userId = ctx.from!.id.toString();
             if (!this.config.allowedUserIds.includes(userId)) return;
 
             const msg: NormalizedMessage = {

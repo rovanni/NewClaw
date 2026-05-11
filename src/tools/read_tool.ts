@@ -74,43 +74,61 @@ export class ReadTool implements ToolExecutor {
         };
 
         // Construir lista de candidatos (ordem de prioridade)
+        // IMPORTANT: Most specific/direct paths first, then fallbacks.
+        // Avoid nested workspace/workspace/ paths by preferring direct paths.
         const candidates: string[] = [];
 
         if (path.isAbsolute(expanded)) {
-            // 1. Caminho absoluto como fornecido
-            candidates.push(path.normalize(expanded));
-            // 2. Fallback: tratar como relativo ao workspace (strip leading /)
-            //    "/uenp" → "WORKSPACE_DIR/uenp"
-            candidates.push(path.resolve(workspaceDir, expanded.slice(1)));
-            // 3. Fallback para /workspace/ prefix:
-            //    "/workspace/tmp/x" → "WORKSPACE_DIR/tmp/x"
+            // 1. Absolute path as-is (highest priority)
+            //    But skip if it's under WORKSPACE_DIR/workspace/ (nested, likely wrong)
+            const directPath = path.normalize(expanded);
+            const nestedWorkspace = path.join(workspaceDir, 'workspace');
+            if (!directPath.startsWith(nestedWorkspace + path.sep) && directPath !== nestedWorkspace) {
+                candidates.push(directPath);
+            }
+            
+            // 2. Fallback: treat as relative to workspace (strip leading /)
+            //    /uenp → WORKSPACE_DIR/uenp
+            const relativeToWorkspace = path.resolve(workspaceDir, expanded.slice(1));
+            candidates.push(relativeToWorkspace);
+            
+            // 3. Fallback for /workspace/ prefix:
+            //    /workspace/tmp/x → WORKSPACE_DIR/tmp/x (not WORKSPACE_DIR/workspace/tmp/x)
             if (expanded.startsWith('/workspace/')) {
                 candidates.push(path.resolve(workspaceDir, expanded.slice(11)));
             }
         } else {
-            // Relativo: resolver a partir do workspace
+            // Relative: resolve from workspace
             candidates.push(path.resolve(workspaceDir, expanded));
         }
 
-        // Fase 1: encontrar o primeiro candidato que é permitido E existe no disco
-        for (const candidate of candidates) {
+        // De-duplicate candidates (preserve order)
+        const seen = new Set<string>();
+        const uniqueCandidates = candidates.filter(c => {
+            if (seen.has(c)) return false;
+            seen.add(c);
+            return true;
+        });
+
+        // Phase 1: find the first candidate that is allowed AND exists on disk
+        for (const candidate of uniqueCandidates) {
             if (checkAllowed(candidate) && fs.existsSync(candidate)) {
                 return { resolved: candidate };
             }
         }
 
-        // Fase 2: nenhum existe — retornar o primeiro candidato permitido
-        // (necessário para operações de escrita onde o arquivo ainda não existe)
-        for (const candidate of candidates) {
+        // Phase 2: no candidate exists — return the first allowed candidate
+        // (needed for write operations where the file doesn't exist yet)
+        for (const candidate of uniqueCandidates) {
             if (checkAllowed(candidate)) {
                 return { resolved: candidate };
             }
         }
 
-        // Nenhum candidato é permitido
+        // No candidate is allowed
         return {
-            resolved: candidates[0] || inputPath,
-            error: `⛔ Caminho fora do sandbox: ${inputPath} → tentados: ${candidates.join(', ')}. Allowed roots: ${allowedRoots.join(', ')}`
+            resolved: uniqueCandidates[0] || inputPath,
+            error: `⛔ Caminho fora do sandbox: ${inputPath} → tentados: ${uniqueCandidates.join(', ')}. Allowed roots: ${allowedRoots.join(', ')}`
         };
     }
 
