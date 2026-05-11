@@ -52,8 +52,17 @@ export class ExecCommandTool implements ToolExecutor {
 
         // Resolver workdir: padrão = workspace
         const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
+        const effectiveWorkdir = workdir || workspaceDir;
+        
+        // FIX: Prevenir path duplication - o LLM gera 'workspace/tmp/file.py'
+        // mas cwd já é WORKSPACE_DIR, resultando em WORKSPACE_DIR/workspace/tmp/file.py.
+        // Strip 'workspace/' from command paths when cwd is already workspace.
+        if (!workdir) {
+            command = command.replace(/\bworkspace\//g, '');
+        }
+        
         const execOptions: any = { timeout };
-        execOptions.cwd = workdir || workspaceDir;
+        execOptions.cwd = effectiveWorkdir;
 
         try {
             const output = await new Promise<string>((resolve, reject) => {

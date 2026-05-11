@@ -229,7 +229,7 @@ export class AgentLoop {
         FILE_OPS: `## 📁 REGRA DE ARQUIVOS E DOCUMENTOS
 - Quando o usuário pedir para CRIAR ou GERAR arquivos (HTML, slides, documentos, código, etc.), NUNCA envie o conteúdo como texto na resposta.
 - PROCEDIMENTO OBRIGATÓRIO: (1) use write com path e content para salvar o arquivo no servidor, (2) use send_document com o file_path para enviar o arquivo como documento pelo Telegram.
-- SEMPRE use \${path.join(process.cwd(), 'workspace', 'tmp')} como diretório para salvar arquivos temporários.
+- SEMPRE use caminhos RELATIVOS ao workspace (ex: tmp/arquivo.html). O cwd já é o workspace, então tmp/file.py resolve para WORKSPACE_DIR/tmp/file.py. NUNCA use prefixo workspace/ em caminhos (causa duplicação: workspace/workspace/tmp).
 - Para LER arquivos: use read com path.
 - Para EDITAR arquivos: use edit com path + oldText/newText (replace) ou startLine/endLine (patch) ou append=true (adicionar ao final).
 - SE PERDER O CAMINHO DE UM ARQUIVO (devido a um restart ou compressão de memória): não peça ajuda ao usuário! Use a ferramenta exec_command para buscá-lo rodando \`find . -iname "*parte_do_nome*"\`. O cwd padrão já é o seu workspace, então sempre busque a partir do \`.\`.`,

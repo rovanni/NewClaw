@@ -51,13 +51,21 @@ export class SendDocumentTool implements ToolExecutor {
         const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
 
         let expanded = inputPath;
+
+        // FIX: Strip 'workspace/' prefix from relative paths to prevent duplication.
+        // LLM often generates 'workspace/tmp/file.py' which resolves to
+        // WORKSPACE_DIR/workspace/tmp/file.py (doubled). Match write_tool behavior.
+        if (!expanded.startsWith('/') && expanded.startsWith('workspace/')) {
+            expanded = expanded.slice('workspace/'.length);
+        }
+
         if (expanded.startsWith('~/')) {
             expanded = (process.env.HOME || '/root') + expanded.slice(1);
         } else if (expanded.startsWith('@')) {
             expanded = expanded.slice(1);
         }
 
-        // Se caminho já é absoluto e contém /workspace/workspace/, normalizar (remover duplo)
+        // Se caminho absoluto: normalizar duplo workspace/workspace
         if (path.isAbsolute(expanded)) {
             const normalized = expanded.replace(/\/workspace\/workspace\//, '/workspace/').replace(/\/workspace\/workspace$/, '/workspace');
             return { resolved: path.normalize(normalized) };
