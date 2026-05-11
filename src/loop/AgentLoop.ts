@@ -27,6 +27,7 @@ import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
 import { traceManager } from '../core/ExecutionTrace';
 import { AgentFSM, AgentFSMEvent } from './AgentFSM';
+import { ToolRegistry } from '../core/ToolRegistry';
 const log = createLogger('Agentloop');
 
 export interface ToolResult {
@@ -506,7 +507,6 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
             }
         }
 
-        move('START', { conversationId });
         const intentDecision: IntentDecision = this.intentRouter.route(userText, {
             sessionId: conversationId,
         });

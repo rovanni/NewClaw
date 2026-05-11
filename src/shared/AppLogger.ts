@@ -90,14 +90,16 @@ function getAuditStream(): fs.WriteStream | null {
 
 function writeAuditLine(level: LogLevel, component: string, event: string, message?: string, meta?: Record<string, any>) {
     const stream = getAuditStream();
-    if (!stream) return;
     const timestamp = formatTimestamp();
     const levelStr = level.toUpperCase().padEnd(5);
     const metaStr = meta && Object.keys(meta).length > 0
         ? ' ' + Object.entries(meta).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' ')
         : '';
     const msgStr = message ? ` ${message}` : '';
-    auditStream.write(`[${timestamp}] ${levelStr} [${component}] ${event}${msgStr}${metaStr}\n`);
+    const stream = getAuditStream();
+    if (stream) {
+        stream.write(`[${timestamp}] ${levelStr} [${component}] ${event}${msgStr}${metaStr}\n`);
+    }
 }
 
 function formatTimestamp(): string {
