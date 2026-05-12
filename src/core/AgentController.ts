@@ -708,7 +708,9 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
             for (const whisperUrl of whisperUrls) {
                 try {
                     const formData = new FormData();
-                    formData.append('file', new Blob([audioBuffer]), `audio.${filePath.endsWith('.oga') ? 'oga' : 'ogg'}`);
+                    // whisper.cpp expects a named file — use File (not Blob) for proper content-disposition
+                    const audioFile = new File([audioBuffer], `audio.${filePath.endsWith('.oga') ? 'oga' : 'ogg'}`, { type: 'audio/ogg' });
+                    formData.append('file', audioFile);
 
                     const whisperRes = await fetch(`${whisperUrl}/inference`, {
                         method: 'POST',
@@ -751,7 +753,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
                 // Run local whisper (ASYNC via execFile)
                 const whisperPath = process.env.WHISPER_PATH || 'whisper';
                 const output = await new Promise<string>((resolve, reject) => {
-                    execFile(whisperPath, [wavFile, '--language', 'pt', '--no-timestamps'], {
+                    execFile(whisperPath, [wavFile, '--language', 'pt'], {
                         timeout: 120_000,
                         encoding: 'utf-8',
                     }, (err, stdout) => err ? reject(err) : resolve(stdout));
