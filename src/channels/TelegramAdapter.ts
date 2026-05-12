@@ -273,6 +273,12 @@ export class TelegramAdapter implements ChannelAdapter {
     // ─── Private: Input Handlers ────────────────────────────────
 
     private registerHandlers(): void {
+        // ── Debug middleware: log every incoming update ──
+        this.bot.use(async (ctx, next) => {
+            log.info('update_received', `update_id=${ctx.update.update_id} type=${Object.keys(ctx.update).filter(k => k !== 'update_id').join(',')}`);
+            return next();
+        });
+
         // Text messages
         this.bot.on('message:text', async (ctx) => {
             const userId = ctx.from!.id.toString();
