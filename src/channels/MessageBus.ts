@@ -261,6 +261,11 @@ export class MessageBus {
             const handler = this.mediaHandlers.get(attachment.type);
             if (handler) {
                 const result = await handler(msg, attachment);
+                if (result === null) {
+                    // Handler processed successfully (e.g., voice transcribed → msg.text set)
+                    // Continue to text processing pipeline
+                    return null;
+                }
                 if (result !== null) return result;
             }
         }
