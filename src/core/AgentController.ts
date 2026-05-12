@@ -700,6 +700,35 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
 
             vlog.info('audio_downloaded', `size=${audioBuffer.length} type=${attachment.type}`);
 
+            // Convert OGG/OGA (Telegram Opus) to WAV 16kHz mono before sending to Whisper API
+            // whisper.cpp only accepts WAV format — OGG Opus causes HTTP 400
+            const tmpDir = this.config.tmpDir || '/tmp';
+            const fs = await import('fs/promises');
+            const pathMod = await import('path');
+            const { execFile } = await import('child_process');
+            const tmpOgg = pathMod.join(tmpDir, `whisper_${Date.now()}.ogg`);
+            const tmpWav = pathMod.join(tmpDir, `whisper_${Date.now()}.wav`);
+            let wavBuffer: Buffer;
+
+            try {
+                await fs.writeFile(tmpOgg, audioBuffer);
+                await new Promise<void>((resolve, reject) => {
+                    execFile('ffmpeg', ['-y', '-i', tmpOgg, '-ar', '16000', '-ac', '1', tmpWav], {
+                        timeout: 30_000,
+                    }, (err) => err ? reject(err) : resolve());
+                });
+                wavBuffer = await fs.readFile(tmpWav);
+                vlog.info('audio_converted', `oggSize=${audioBuffer.length} wavSize=${wavBuffer.length}`);
+            } catch (convErr: any) {
+                vlog.warn('audio_conversion_failed', convErr.message);
+                // Fallback: send raw OGG and hope the API handles it
+                wavBuffer = audioBuffer;
+            } finally {
+                // Cleanup temp files
+                await fs.unlink(tmpOgg).catch(() => {});
+                await fs.unlink(tmpWav).catch(() => {});
+            }
+
             // Try Whisper API (Sol GPU first, then fallback)
             const whisperApiUrl = process.env.WHISPER_API_URL || 'http://10.0.0.1:8177';
             const whisperApiFallback = process.env.WHISPER_API_FALLBACK || '';
@@ -708,8 +737,8 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
             for (const whisperUrl of whisperUrls) {
                 try {
                     const formData = new FormData();
-                    // whisper.cpp expects a named file — use File (not Blob) for proper content-disposition
-                    const audioFile = new File([audioBuffer], `audio.${filePath.endsWith('.oga') ? 'oga' : 'ogg'}`, { type: 'audio/ogg' });
+                    // Send pre-converted WAV (whisper.cpp requires WAV, not OGG Opus)
+                    const audioFile = new File([wavBuffer], 'audio.wav', { type: 'audio/wav' });
                     formData.append('file', audioFile);
 
                     const whisperRes = await fetch(`${whisperUrl}/inference`, {
@@ -735,25 +764,15 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
             }
 
             // Fallback: local whisper-cli (ASYNC — non-blocking)
-            const tmpDir = this.config.tmpDir || '/tmp';
-            const fs = await import('fs/promises');
-            const pathMod = await import('path');
-            const tmpFile = pathMod.join(tmpDir, `whisper_${Date.now()}.ogg`);
-            const wavFile = pathMod.join(tmpDir, `whisper_${Date.now()}.wav`);
+            // Reuse the already-converted WAV buffer
+            const localWavFile = pathMod.join(tmpDir, `whisper_local_${Date.now()}.wav`);
 
             try {
-                await fs.writeFile(tmpFile, audioBuffer);
-                // Convert to WAV 16kHz mono (ASYNC via execFile)
-                const { execFile } = await import('child_process');
-                await new Promise<void>((resolve, reject) => {
-                    execFile('ffmpeg', ['-y', '-i', tmpFile, '-ar', '16000', '-ac', '1', wavFile], {
-                        timeout: 30_000,
-                    }, (err) => err ? reject(err) : resolve());
-                });
+                await fs.writeFile(localWavFile, wavBuffer);
                 // Run local whisper (ASYNC via execFile)
                 const whisperPath = process.env.WHISPER_PATH || 'whisper';
                 const output = await new Promise<string>((resolve, reject) => {
-                    execFile(whisperPath, [wavFile, '--language', 'pt'], {
+                    execFile(whisperPath, [localWavFile, '--language', 'pt'], {
                         timeout: 120_000,
                         encoding: 'utf-8',
                     }, (err, stdout) => err ? reject(err) : resolve(stdout));
@@ -767,8 +786,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
             } catch (e: any) {
                 vlog.warn('local_whisper_failed', `error=${e.message}`);
             } finally {
-                await fs.unlink(tmpFile).catch(() => {});
-                await fs.unlink(wavFile).catch(() => {});
+                await fs.unlink(localWavFile).catch(() => {});
             }
 
             return '⚠️ Não foi possível transcrever o áudio. Tente enviar como texto.';
