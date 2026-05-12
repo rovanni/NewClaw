@@ -115,6 +115,8 @@ export class TelegramAdapter implements ChannelAdapter {
 
         try {
             log.info('bot_starting', 'Iniciando polling do Telegram...');
+            const pollingInfo = await this.bot.api.getMe();
+            log.info('bot_api_check', `getMe OK: id=${pollingInfo.id} username=${pollingInfo.username}`);
             await this.bot.start({
                 onStart: (info) => {
                     this._isConnected = true;
@@ -273,6 +275,12 @@ export class TelegramAdapter implements ChannelAdapter {
     // ─── Private: Input Handlers ────────────────────────────────
 
     private registerHandlers(): void {
+        // ── Debug middleware: log every incoming update ──
+        // ── Global error handler ──
+        this.bot.catch((err) => {
+            log.error('bot_error', err instanceof Error ? err : undefined, String(err));
+        });
+
         // ── Debug middleware: log every incoming update ──
         this.bot.use(async (ctx, next) => {
             log.info('update_received', `update_id=${ctx.update.update_id} type=${Object.keys(ctx.update).filter(k => k !== 'update_id').join(',')}`);
