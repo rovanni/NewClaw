@@ -315,13 +315,12 @@ export class TelegramAdapter implements ChannelAdapter {
             }
         });
 
-        // Commands
-        this.bot.on('message', async (ctx) => {
-            const userId = ctx.from!.id.toString();
-            log.info('generic_message_received', `userId=${userId} type=${ctx.message?.text ? 'text' : 'other'} has_voice=${!!ctx.message?.voice} has_audio=${!!(ctx.message as any)?.audio}`);
+        // Commands — only handle slash commands, never intercept media
+        this.bot.on('message:text', async (ctx) => {
             const text = ctx.message?.text;
-            if (!text || !text.startsWith('/')) return;
+            if (!text || !text.startsWith('/')) return; // Only process commands here
 
+            const userId = ctx.from!.id.toString();
             if (!this.config.allowedUserIds.includes(userId)) return;
 
             const msg: NormalizedMessage = {
