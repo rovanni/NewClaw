@@ -123,7 +123,9 @@ export class TelegramAdapter implements ChannelAdapter {
                     this.startRetries = 0; // Reset on success
                     log.info('bot_started', `🤖 Telegram Bot rodando! botInfo=${JSON.stringify(info).slice(0, 100)}`);
                 },
-                allowed_updates: ['message']
+            // Note: removed allowed_updates restriction to receive all update types
+            // allowed_updates: ['message'] causes issues with some grammY versions
+            // grammY defaults to receiving all types when omitted
             });
             // If we reach here, bot.start() resolved (meaning bot was stopped)
             log.warn('bot_start_resolved', 'bot.start() resolved unexpectedly — bot was stopped');
