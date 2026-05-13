@@ -838,7 +838,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
 
                 if (fileData?.ok && fileData?.result?.file_path) {
                     const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-                    dlog.info('downloading_from_telegram', { fileName, path: fileData.result.file_path });
+                    dlog.info('downloading_from_telegram', `Downloading ${fileName}`, { path: fileData.result.file_path });
                     
                     const docRes = await fetch(downloadUrl);
                     if (docRes.ok) {
@@ -850,7 +850,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
                     dlog.error('telegram_getfile_failed', fileData);
                 }
             } else if (channel === 'discord' && attachment.url) {
-                dlog.info('downloading_from_discord', { fileName, url: attachment.url });
+                dlog.info('downloading_from_discord', `Downloading ${fileName}`, { url: attachment.url });
                 const docRes = await fetch(attachment.url);
                 if (docRes.ok) {
                     fileBuffer = Buffer.from(await docRes.arrayBuffer());
@@ -865,7 +865,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
                 const targetPath = pathMod.join(workspaceDir, safeFileName);
                 await fs.writeFile(targetPath, fileBuffer);
                 
-                dlog.info('document_saved', { path: targetPath, size: fileBuffer.length });
+                dlog.info('document_saved', `Saved to ${targetPath}`, { path: targetPath, size: fileBuffer.length });
                 
                 // Update msg.text so AgentLoop knows about the file
                 const fileInfo = `\n[ARQUIVO ANEXADO: ${safeFileName} (salvo em workspace/${safeFileName})]\n`;
@@ -933,7 +933,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
                 const targetPath = pathMod.join(workspaceDir, safeFileName);
                 await fs.writeFile(targetPath, fileBuffer);
                 
-                vlog.info('photo_saved', { path: targetPath, size: fileBuffer.length });
+                vlog.info('photo_saved', `Saved to ${targetPath}`, { path: targetPath, size: fileBuffer.length });
                 
                 const fileInfo = `\n[IMAGEM RECEBIDA: ${safeFileName} (salvo em workspace/${safeFileName})]\n`;
                 msg.text = (msg.text || '') + fileInfo;
