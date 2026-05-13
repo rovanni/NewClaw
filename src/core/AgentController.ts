@@ -319,6 +319,12 @@ export class AgentController {
         this.messageBus.registerMediaHandler('audio', async (msg: any, attachment: any) => {
             return this.transcribeAttachment(msg, attachment);
         });
+        this.messageBus.registerMediaHandler('document', async (msg: any, attachment: any) => {
+            return this.handleDocumentAttachment(msg, attachment);
+        });
+        this.messageBus.registerMediaHandler('photo', async (msg: any, attachment: any) => {
+            return this.handlePhotoAttachment(msg, attachment);
+        });
 
         // Discord adapter (optional)
         if (config.discordBotToken) {
@@ -668,7 +674,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
         const vlog = createLogger('VoiceHandler');
         try {
             // Get file URL from Telegram via the adapter
-            const adapter = this.messageBus['adapters']?.get(msg.channel) as any;
+            const adapter = this.messageBus.getAdapter(msg.channel) as any;
             const botToken = msg.metadata?.botToken || adapter?.config?.botToken;
             const fileId = attachment.fileId;
 
@@ -793,6 +799,152 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
         } catch (err: any) {
             vlog.error('transcription_failed', err);
             return `⚠️ Erro na transcrição: ${err.message}`;
+        }
+    }
+
+    /**
+     * Handle document attachments.
+     * Downloads the file from the channel and saves it to the workspace.
+     */
+    private async handleDocumentAttachment(msg: any, attachment: any): Promise<string | null> {
+        const dlog = createLogger('DocumentHandler');
+        try {
+            const channel = msg.channel;
+            const workspaceDir = process.env.WORKSPACE_DIR || require('path').join(process.cwd(), 'workspace');
+            const fs = await import('fs/promises');
+            const pathMod = await import('path');
+
+            if (!require('fs').existsSync(workspaceDir)) {
+                await fs.mkdir(workspaceDir, { recursive: true });
+            }
+
+            let fileBuffer: Buffer | null = null;
+            let fileName = attachment.fileName || `file_${Date.now()}`;
+
+            if (channel === 'telegram') {
+                const adapter = this.messageBus.getAdapter('telegram') as any;
+                const botToken = msg.metadata?.botToken || adapter?.getBotToken?.();
+                const fileId = attachment.fileId;
+
+                if (!botToken || !fileId) {
+                    dlog.error('missing_bot_token_or_file_id', `token=${!!botToken} fileId=${!!fileId}`);
+                    return '⚠️ Não foi possível obter o documento (token ou fileId ausente).';
+                }
+
+                // Download metadata from Telegram
+                const fileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
+                const fileRes = await fetch(fileUrl);
+                const fileData = await fileRes.json() as any;
+
+                if (fileData?.ok && fileData?.result?.file_path) {
+                    const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+                    dlog.info('downloading_from_telegram', { fileName, path: fileData.result.file_path });
+                    
+                    const docRes = await fetch(downloadUrl);
+                    if (docRes.ok) {
+                        fileBuffer = Buffer.from(await docRes.arrayBuffer());
+                    } else {
+                        dlog.error('telegram_download_failed', { status: docRes.status });
+                    }
+                } else {
+                    dlog.error('telegram_getfile_failed', fileData);
+                }
+            } else if (channel === 'discord' && attachment.url) {
+                dlog.info('downloading_from_discord', { fileName, url: attachment.url });
+                const docRes = await fetch(attachment.url);
+                if (docRes.ok) {
+                    fileBuffer = Buffer.from(await docRes.arrayBuffer());
+                }
+            } else if (attachment.data) {
+                // If attachment already has base64 data
+                fileBuffer = Buffer.from(attachment.data, 'base64');
+            }
+
+            if (fileBuffer) {
+                const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+                const targetPath = pathMod.join(workspaceDir, safeFileName);
+                await fs.writeFile(targetPath, fileBuffer);
+                
+                dlog.info('document_saved', { path: targetPath, size: fileBuffer.length });
+                
+                // Update msg.text so AgentLoop knows about the file
+                const fileInfo = `\n[ARQUIVO ANEXADO: ${safeFileName} (salvo em workspace/${safeFileName})]\n`;
+                msg.text = (msg.text || '') + fileInfo;
+                
+                // Return null to continue processing with the updated text
+                return null;
+            }
+
+            return `⚠️ Falha ao baixar o arquivo do canal ${channel}.`;
+        } catch (err: any) {
+            dlog.error('document_handling_failed', err);
+            return `⚠️ Erro ao processar documento: ${err.message}`;
+        }
+    }
+
+    /**
+     * Handle photo attachments.
+     * Downloads the photo and saves it to the workspace.
+     */
+    private async handlePhotoAttachment(msg: any, attachment: any): Promise<string | null> {
+        const vlog = createLogger('VisionHandler');
+        try {
+            const channel = msg.channel;
+            const workspaceDir = process.env.WORKSPACE_DIR || require('path').join(process.cwd(), 'workspace');
+            const fs = await import('fs/promises');
+            const pathMod = await import('path');
+
+            if (!require('fs').existsSync(workspaceDir)) {
+                await fs.mkdir(workspaceDir, { recursive: true });
+            }
+
+            let fileBuffer: Buffer | null = null;
+            let fileName = attachment.fileName || `photo_${Date.now()}.jpg`;
+
+            if (channel === 'telegram') {
+                const adapter = this.messageBus.getAdapter('telegram') as any;
+                const botToken = msg.metadata?.botToken || adapter?.getBotToken?.();
+                const fileId = attachment.fileId;
+
+                if (botToken && fileId) {
+                    const fileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
+                    const fileRes = await fetch(fileUrl);
+                    const fileData = await fileRes.json() as any;
+
+                    if (fileData?.ok && fileData?.result?.file_path) {
+                        const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+                        const imgRes = await fetch(downloadUrl);
+                        if (imgRes.ok) {
+                            fileBuffer = Buffer.from(await imgRes.arrayBuffer());
+                            const ext = pathMod.extname(fileData.result.file_path);
+                            if (ext) fileName = `photo_${Date.now()}${ext}`;
+                        }
+                    }
+                }
+            } else if (channel === 'discord' && attachment.url) {
+                const imgRes = await fetch(attachment.url);
+                if (imgRes.ok) {
+                    fileBuffer = Buffer.from(await imgRes.arrayBuffer());
+                }
+            }
+
+            if (fileBuffer) {
+                const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+                const targetPath = pathMod.join(workspaceDir, safeFileName);
+                await fs.writeFile(targetPath, fileBuffer);
+                
+                vlog.info('photo_saved', { path: targetPath, size: fileBuffer.length });
+                
+                const fileInfo = `\n[IMAGEM RECEBIDA: ${safeFileName} (salvo em workspace/${safeFileName})]\n`;
+                msg.text = (msg.text || '') + fileInfo;
+                
+                return null;
+            }
+
+            return `⚠️ Falha ao baixar a imagem do canal ${channel}.`;
+        } catch (err: any) {
+            vlog.error('photo_handling_failed', err);
+            return `⚠️ Erro ao processar imagem: ${err.message}`;
         }
     }
 }

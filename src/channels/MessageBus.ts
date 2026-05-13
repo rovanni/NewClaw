@@ -61,6 +61,11 @@ export class MessageBus {
         this.mediaHandlers.set(type, handler);
     }
 
+    /** Obter um adapter pelo tipo */
+    getAdapter(type: ChannelType): ChannelAdapter | undefined {
+        return this.adapters.get(type);
+    }
+
     /** Iniciar todos os canais */
     async startAll(): Promise<void> {
         if (this.started) return;
