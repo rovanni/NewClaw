@@ -1127,23 +1127,4 @@ Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específic
         }
     }
 
-    /**
-     * TODO: Concurrency limiter (NOT YET IMPLEMENTED)
-     * 
-     * When multiple sessions compete for LLM resources, we need a concurrency
-     * control layer to prevent overload and queue saturation.
-     * 
-     * Suggested approach:
-     *   - Semaphore or token bucket per provider (e.g. p-semaphore, bottleneck)
-     *   - Queue with priority (classification = high, generation = normal)
-     *   - Backpressure: reject/queue new requests when concurrency limit reached
-     *   - Config: MAX_CONCURRENT_LLM_CALLS (default: 2-3 for Ollama, 5+ for cloud)
-     *   - Metrics: queueDepth, avgWaitTime, rejectedCount
-     * 
-     * Current state: llmQueue (PQueue concurrency=1) provides basic serialization.
-     * This is sufficient for single-session but will bottleneck under multi-session load.
-     * 
-     * Implementation should be in ProviderFactory, not AgentLoop, since it's
-     * provider-level resource management.
-     */
 }

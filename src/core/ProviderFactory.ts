@@ -8,10 +8,29 @@ import { createLogger } from '../shared/AppLogger';
 import { circuitRegistry, type CircuitBreaker } from './CircuitBreaker';
 const log = createLogger('Providerfactory');
 
-// Separate queues: classification (fast, priority) vs generation (long tasks)
-// This prevents classification timeouts when a long generation is in progress
-const generationQueue = new PQueue({ concurrency: 1 });
-const classificationQueue = new PQueue({ concurrency: 1 });
+/**
+ * Concurrency Configuration
+ */
+const CONCURRENCY_CONFIG = {
+    classification: parseInt(process.env.MAX_CONCURRENT_CLASSIFICATION || '5', 10),
+    generation: parseInt(process.env.MAX_CONCURRENT_GENERATION || '2', 10), // Default for Ollama local
+    cloud_generation: parseInt(process.env.MAX_CONCURRENT_CLOUD || '10', 10)
+};
+
+// Unified Queue with Priority support
+// Priority: 0 (highest) to Infinity (lowest)
+const taskQueue = new PQueue({ 
+    concurrency: CONCURRENCY_CONFIG.classification + CONCURRENCY_CONFIG.cloud_generation 
+});
+
+/**
+ * Task Priorities
+ */
+export enum TaskPriority {
+    CLASSIFICATION = 0, // High priority
+    INTERACTIVE = 1,    // Normal chat
+    BACKGROUND = 2      // Long tasks (slides, reports)
+}
 
 // ── Streaming types ──
 export type StreamChunk =
@@ -189,47 +208,49 @@ export class GeminiProvider implements ILLMProvider {
     setModel(model: string): void { this.model = model; }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
-        const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                signal: options?.signal,
-                body: JSON.stringify({
-                    contents: messages.map(m => ({
-                        role: m.role === 'assistant' ? 'model' : m.role,
-                        parts: [{ text: m.content }]
-                    })),
-                    tools: tools ? [{ functionDeclarations: tools.map(t => ({
-                        name: t.name,
-                        description: t.description,
-                        parameters: t.parameters
-                    }))}] : undefined
-                })
+        return await taskQueue.add(async () => {
+            const response = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: options?.signal,
+                    body: JSON.stringify({
+                        contents: messages.map(m => ({
+                            role: m.role === 'assistant' ? 'model' : m.role,
+                            parts: [{ text: m.content }]
+                        })),
+                        tools: tools ? [{ functionDeclarations: tools.map(t => ({
+                            name: t.name,
+                            description: t.description,
+                            parameters: t.parameters
+                        }))}] : undefined
+                    })
+                }
+            );
+
+            if (!response.ok) {
+                throw new Error(`Gemini API error: ${response.status}`);
             }
-        );
 
-        if (!response.ok) {
-            throw new Error(`Gemini API error: ${response.status}`);
-        }
+            const data = await response.json() as any;
+            const candidate = data.candidates?.[0];
+            const content = candidate?.content?.parts?.[0]?.text || '';
+            const functionCall = candidate?.content?.parts?.[0]?.functionCall;
 
-        const data = await response.json() as any;
-        const candidate = data.candidates?.[0];
-        const content = candidate?.content?.parts?.[0]?.text || '';
-        const functionCall = candidate?.content?.parts?.[0]?.functionCall;
-
-        return {
-            content,
-            toolCalls: functionCall ? [{
-                id: `call_${Date.now()}`,
-                name: functionCall.name,
-                arguments: functionCall.args
-            }] : undefined,
-            usage: data.usageMetadata ? {
-                prompt_tokens: data.usageMetadata.promptTokenCount || 0,
-                completion_tokens: data.usageMetadata.candidatesTokenCount || 0
-            } : undefined
-        };
+            return {
+                content,
+                toolCalls: functionCall ? [{
+                    id: `call_${Date.now()}`,
+                    name: functionCall.name,
+                    arguments: functionCall.args
+                }] : undefined,
+                usage: data.usageMetadata ? {
+                    prompt_tokens: data.usageMetadata.promptTokenCount || 0,
+                    completion_tokens: data.usageMetadata.candidatesTokenCount || 0
+                } : undefined
+            };
+        }, { priority: TaskPriority.INTERACTIVE });
     }
 }
 
@@ -247,41 +268,43 @@ export class DeepSeekProvider implements ILLMProvider {
     setModel(model: string): void { this.model = model; }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
-        const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.apiKey}`
-            },
-            body: JSON.stringify({
-                model: this.model,
-                messages,
-                tools: tools ? tools.map(t => ({
-                    type: 'function',
-                    function: { name: t.name, description: t.description, parameters: t.parameters }
-                })) : undefined
-            })
-        });
+        return await taskQueue.add(async () => {
+            const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.apiKey}`
+                },
+                body: JSON.stringify({
+                    model: this.model,
+                    messages,
+                    tools: tools ? tools.map(t => ({
+                        type: 'function',
+                        function: { name: t.name, description: t.description, parameters: t.parameters }
+                    })) : undefined
+                })
+            });
 
-        if (!response.ok) {
-            throw new Error(`DeepSeek API error: ${response.status}`);
-        }
+            if (!response.ok) {
+                throw new Error(`DeepSeek API error: ${response.status}`);
+            }
 
-        const data = await response.json() as any;
-        const message = data.choices?.[0]?.message;
+            const data = await response.json() as any;
+            const message = data.choices?.[0]?.message;
 
-        return {
-            content: message?.content || '',
-            toolCalls: message?.tool_calls?.map((tc: any) => ({
-                id: tc.id,
-                name: tc.function.name,
-                arguments: (() => { try { return JSON.parse(tc.function.arguments || '{}'); } catch { return {}; } })()
-            })),
-            usage: data.usage ? {
-                prompt_tokens: data.usage.prompt_tokens || 0,
-                completion_tokens: data.usage.completion_tokens || 0
-            } : undefined
-        };
+            return {
+                content: message?.content || '',
+                toolCalls: message?.tool_calls?.map((tc: any) => ({
+                    id: tc.id,
+                    name: tc.function.name,
+                    arguments: (() => { try { return JSON.parse(tc.function.arguments || '{}'); } catch { return {}; } })()
+                })),
+                usage: data.usage ? {
+                    prompt_tokens: data.usage.prompt_tokens || 0,
+                    completion_tokens: data.usage.completion_tokens || 0
+                } : undefined
+            };
+        }, { priority: TaskPriority.INTERACTIVE });
     }
 }
 
@@ -299,41 +322,43 @@ export class GroqProvider implements ILLMProvider {
     setModel(model: string): void { this.model = model; }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.apiKey}`
-            },
-            body: JSON.stringify({
-                model: this.model,
-                messages,
-                tools: tools ? tools.map(t => ({
-                    type: 'function',
-                    function: { name: t.name, description: t.description, parameters: t.parameters }
-                })) : undefined
-            })
-        });
+        return await taskQueue.add(async () => {
+            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.apiKey}`
+                },
+                body: JSON.stringify({
+                    model: this.model,
+                    messages,
+                    tools: tools ? tools.map(t => ({
+                        type: 'function',
+                        function: { name: t.name, description: t.description, parameters: t.parameters }
+                    })) : undefined
+                })
+            });
 
-        if (!response.ok) {
-            throw new Error(`Groq API error: ${response.status}`);
-        }
+            if (!response.ok) {
+                throw new Error(`Groq API error: ${response.status}`);
+            }
 
-        const data = await response.json() as any;
-        const message = data.choices?.[0]?.message;
+            const data = await response.json() as any;
+            const message = data.choices?.[0]?.message;
 
-        return {
-            content: message?.content || '',
-            toolCalls: message?.tool_calls?.map((tc: any) => ({
-                id: tc.id,
-                name: tc.function.name,
-                arguments: (() => { try { return JSON.parse(tc.function.arguments || '{}'); } catch { return {}; } })()
-            })),
-            usage: data.usage ? {
-                prompt_tokens: data.usage.prompt_tokens || 0,
-                completion_tokens: data.usage.completion_tokens || 0
-            } : undefined
-        };
+            return {
+                content: message?.content || '',
+                toolCalls: message?.tool_calls?.map((tc: any) => ({
+                    id: tc.id,
+                    name: tc.function.name,
+                    arguments: (() => { try { return JSON.parse(tc.function.arguments || '{}'); } catch { return {}; } })()
+                })),
+                usage: data.usage ? {
+                    prompt_tokens: data.usage.prompt_tokens || 0,
+                    completion_tokens: data.usage.completion_tokens || 0
+                } : undefined
+            };
+        }, { priority: TaskPriority.INTERACTIVE });
     }
 }
 
@@ -356,15 +381,21 @@ export class OllamaProvider implements ILLMProvider {
     setBaseUrl(url: string): void { this.baseUrl = url; }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
-        // Single attempt via generationQueue. Retries are handled by chatWithFallback.
-        // DO NOT retry here — duplicate retries cause duplicate LLM requests.
-        // Signal is passed through to streamChat for cancellation support.
-        return await generationQueue.add(() => this._consumeStream(messages, tools, undefined, options?.signal));
+        // Use a lower priority for chat/generation
+        const priority = this.model.includes(':cloud') ? TaskPriority.INTERACTIVE : TaskPriority.BACKGROUND;
+        
+        return await taskQueue.add(
+            () => this._consumeStream(messages, tools, undefined, options?.signal),
+            { priority }
+        );
     }
 
-    /** Classification call — uses a separate queue to avoid blocking on long generations */
+    /** Classification call — high priority to avoid blocking the cognitive loop */
     async classify(messages: LLMMessage[], timeoutMs: number = 30000): Promise<LLMResponse> {
-        return await classificationQueue.add(() => this._consumeStream(messages, undefined, timeoutMs));
+        return await taskQueue.add(
+            () => this._consumeStream(messages, undefined, timeoutMs),
+            { priority: TaskPriority.CLASSIFICATION }
+        );
     }
 
     /**
@@ -765,42 +796,44 @@ export class OpenAIProvider implements ILLMProvider {
     setModel(model: string): void { this.model = model; }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
-        const response = await fetch(`${this.baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.apiKey}`
-            },
-            body: JSON.stringify({
-                model: this.model,
-                messages,
-                tools: tools ? tools.map(t => ({
-                    type: 'function',
-                    function: { name: t.name, description: t.description, parameters: t.parameters }
-                })) : undefined
-            })
-        });
+        return await taskQueue.add(async () => {
+            const response = await fetch(`${this.baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.apiKey}`
+                },
+                body: JSON.stringify({
+                    model: this.model,
+                    messages,
+                    tools: tools ? tools.map(t => ({
+                        type: 'function',
+                        function: { name: t.name, description: t.description, parameters: t.parameters }
+                    })) : undefined
+                })
+            });
 
-        if (!response.ok) {
-            const error = await response.text();
-            throw new Error(`${this.name} API error (${response.status}): ${error}`);
-        }
+            if (!response.ok) {
+                const error = await response.text();
+                throw new Error(`${this.name} API error (${response.status}): ${error}`);
+            }
 
-        const data = await response.json() as any;
-        const message = data.choices?.[0]?.message;
+            const data = await response.json() as any;
+            const message = data.choices?.[0]?.message;
 
-        return {
-            content: message?.content || '',
-            toolCalls: message?.tool_calls?.map((tc: any) => ({
-                id: tc.id,
-                name: tc.function.name,
-                arguments: (() => { try { return JSON.parse(tc.function.arguments || '{}'); } catch { return {}; } })()
-            })),
-            usage: data.usage ? {
-                prompt_tokens: data.usage.prompt_tokens || 0,
-                completion_tokens: data.usage.completion_tokens || 0
-            } : undefined
-        };
+            return {
+                content: message?.content || '',
+                toolCalls: message?.tool_calls?.map((tc: any) => ({
+                    id: tc.id,
+                    name: tc.function.name,
+                    arguments: (() => { try { return JSON.parse(tc.function.arguments || '{}'); } catch { return {}; } })()
+                })),
+                usage: data.usage ? {
+                    prompt_tokens: data.usage.prompt_tokens || 0,
+                    completion_tokens: data.usage.completion_tokens || 0
+                } : undefined
+            };
+        }, { priority: TaskPriority.INTERACTIVE });
     }
 }
 
