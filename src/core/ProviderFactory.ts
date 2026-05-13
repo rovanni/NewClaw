@@ -108,6 +108,7 @@ function isChunkActive(chunk: any): boolean {
 export interface LLMMessage {
     role: 'user' | 'assistant' | 'system' | 'tool';
     content: string;
+    images?: string[]; // Base64 encoded images for vision models
     toolCalls?: ToolCall[];
     tool_call_id?: string;
 }
@@ -448,7 +449,11 @@ export class OllamaProvider implements ILLMProvider {
 
         const requestBody: any = {
             model: this.model,
-            messages,
+            messages: messages.map(m => ({
+                role: m.role,
+                content: m.content,
+                images: m.images
+            })),
             stream: true,
             options: { num_ctx: numCtx },
             tools: tools ? tools.map(t => ({

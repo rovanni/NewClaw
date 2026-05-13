@@ -213,6 +213,7 @@ export class AgentController {
                 modelRouter: config.modelRouter
             },
             this.skillLearner,
+            this.skillLoader,
             classificationMemory,
             decisionMemory
         );
@@ -617,7 +618,7 @@ export class AgentController {
         ToolRegistry.register(new MemorySearchTool(this.memory));
         ToolRegistry.register(new MemoryWriteTool(this.memory));
         ToolRegistry.register(new SendAudioTool());
-        ToolRegistry.register(new SendDocumentTool());
+        ToolRegistry.register(new SendDocumentTool(this.messageBus));
         ToolRegistry.register(new MemoryAdminTool(this.memory));
         ToolRegistry.register(new SshExecTool(), { dangerous: true });
         ToolRegistry.register(new CryptoAnalysisTool());
@@ -935,7 +936,10 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
                 
                 vlog.info('photo_saved', `Saved to ${targetPath}`, { path: targetPath, size: fileBuffer.length });
                 
-                const fileInfo = `\n[IMAGEM RECEBIDA: ${safeFileName} (salvo em workspace/${safeFileName})]\n`;
+                // --- NOVO: Processamento de Visão Automático ---
+                const visionDescription = await this.processVision(fileBuffer, safeFileName);
+                
+                const fileInfo = `\n[IMAGEM RECEBIDA: ${safeFileName}]\n[DESCRIÇÃO DA VISÃO]: ${visionDescription}\n`;
                 msg.text = (msg.text || '') + fileInfo;
                 
                 return null;
@@ -945,6 +949,46 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
         } catch (err: any) {
             vlog.error('photo_handling_failed', err);
             return `⚠️ Erro ao processar imagem: ${err.message}`;
+        }
+    }
+
+    /**
+     * Processa uma imagem usando o provedor de visão configurado.
+     */
+    private async processVision(fileBuffer: Buffer, fileName: string): Promise<string> {
+        const vlog = createLogger('VisionHandler');
+        try {
+            const modelRouter = this.agentLoop.getModelRouter();
+            const visionProfile = modelRouter.getProfileByCategory('vision');
+            
+            if (!visionProfile) {
+                vlog.warn('vision_not_configured', 'Perfil de visão não encontrado no ModelRouter.');
+                return "(Visão não configurada)";
+            }
+
+            vlog.info('vision_start', `Analisando imagem ${fileName} com o modelo ${visionProfile.model}...`);
+            
+            const base64Image = fileBuffer.toString('base64');
+            
+            // Usar o OllamaProvider diretamente para visão (com base no profile)
+            const { OllamaProvider } = await import('./ProviderFactory');
+            const visionProvider = new OllamaProvider(visionProfile.server, visionProfile.model);
+            
+            const response = await visionProvider.chat([
+                {
+                    role: 'user',
+                    content: 'Descreva esta imagem em detalhes. Se houver texto, faça o OCR completo e extraia o conteúdo.',
+                    images: [base64Image]
+                }
+            ]);
+
+            const description = response.content || "Não foi possível extrair informações da imagem.";
+            vlog.info('vision_complete', `Descrição gerada (${description.length} caracteres)`);
+            
+            return description;
+        } catch (err: any) {
+            vlog.error('vision_failed', err);
+            return `Erro ao processar visão: ${err.message}`;
         }
     }
 }

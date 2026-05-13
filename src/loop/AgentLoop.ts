@@ -28,6 +28,7 @@ import { DecisionMemory } from '../memory/DecisionMemory';
 import { traceManager } from '../core/ExecutionTrace';
 import { AgentFSM, AgentFSMEvent } from './AgentFSM';
 import { ToolRegistry } from '../core/ToolRegistry';
+import { SkillLoader } from '../skills/SkillLoader';
 const log = createLogger('Agentloop');
 
 export interface ToolResult {
@@ -180,6 +181,7 @@ export class AgentLoop {
     private maxIterations: number = 2;
     private contextBuilder: ContextBuilder;
     private skillLearner: SkillLearner;
+    private skillLoader: SkillLoader;
     private modelRouter: ModelRouter;
     private intentRouter: UnifiedIntentRouter;
     private stateManager: AgentStateManager;
@@ -191,13 +193,14 @@ export class AgentLoop {
     private pendingActions: Map<string, { toolName: string, arguments: any, stepCount: number, chatProfile: any, messages: any[] }> = new Map();
     private protocolParser: ProtocolParser;
 
-    constructor(providerFactory: ProviderFactory, memory: MemoryManager, config: AgentLoopConfig, skillLearner: SkillLearner, classificationMemory?: ClassificationMemory, decisionMemory?: DecisionMemory) {
+    constructor(providerFactory: ProviderFactory, memory: MemoryManager, config: AgentLoopConfig, skillLearner: SkillLearner, skillLoader: SkillLoader, classificationMemory?: ClassificationMemory, decisionMemory?: DecisionMemory) {
         this.providerFactory = providerFactory;
         this.memory = memory;
         this.config = config;
         this.contextBuilder = new ContextBuilder(memory);
         this.cognitiveWorkspace = new CognitiveWorkspace();
         this.skillLearner = skillLearner as SkillLearner;
+        this.skillLoader = skillLoader as SkillLoader;
         this.modelRouter = new ModelRouter(config.modelRouter as any, providerFactory);
         this.intentRouter = new UnifiedIntentRouter();
         this.stateManager = new AgentStateManager(memory);
@@ -545,7 +548,21 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         // 4. Skill context
         const context = intentDecision.requiresMemory ? await this.contextBuilder.buildContext(userText) : '';
         const skillResult = this.skillLearner.buildSkillContext(userText, 2);
-        const skillContext = skillResult && skillResult.confidence >= 0.7 ? skillResult.text : '';
+        
+        // Unificar Autonomous Skills (Learner) com Manual Skills (Loader)
+        let skillContext = skillResult && skillResult.confidence >= 0.7 ? skillResult.text : '';
+        
+        // Buscar skills manuais que coincidam com os gatilhos
+        const manualSkills = this.skillLoader.loadAll();
+        const matchedManual = manualSkills.filter(s => 
+            s.triggers?.some(t => userText.toLowerCase().includes(t.toLowerCase()))
+        );
+
+        if (matchedManual.length > 0) {
+            const manualBlock = matchedManual.map(s => `### SKILL MANUAL: ${s.name}\n${s.content}`).join('\n\n');
+            skillContext = skillContext ? `${skillContext}\n\n${manualBlock}` : manualBlock;
+            log.info(`[SKILL] Injetando ${matchedManual.length} skill(s) manual(ais): ${matchedManual.map(s => s.name).join(', ')}`);
+        }
         
         const toolDefs: ToolDefinition[] = Array.from(this.tools.values()).map(t => ({
             name: t.name,
@@ -725,9 +742,13 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                     const tool = this.tools.get(toolName);
                     if (tool) {
                         move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'native' });
-                        // Inject Telegram context for tools that need it
+                        // Inject channel context for tools that need it
                         if (typeof (tool as any).setContext === 'function' && channelContext) {
-                            (tool as any).setContext(channelContext.chatId || '', channelContext.botToken || '');
+                            (tool as any).setContext(
+                                channelContext.chatId || '', 
+                                channelContext.botToken || '', 
+                                channelContext.channel
+                            );
                         }
                         const isDangerous = ToolRegistry.isDangerous(toolName);
                         if (isDangerous && !this.isAuthorized(conversationId, toolName, toolCall.arguments)) {
@@ -819,9 +840,13 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                 const tool = this.tools.get(toolName);
                 if (tool) {
                     move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'json_action' });
-                    // Inject Telegram context for tools that need it
+                    // Inject channel context for tools that need it
                     if (typeof (tool as any).setContext === 'function' && channelContext) {
-                        (tool as any).setContext(channelContext.chatId || '', channelContext.botToken || '');
+                        (tool as any).setContext(
+                            channelContext.chatId || '', 
+                            channelContext.botToken || '', 
+                            channelContext.channel
+                        );
                     }
                     const toolStartTime = Date.now();
                     const result = await tool.execute(atomicData.action.input || {});
