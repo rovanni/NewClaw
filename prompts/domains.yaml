@@ -5,8 +5,9 @@ file_ops: |
   ## 📁 REGRA DE ARQUIVOS E DOCUMENTOS
   - Quando o usuário pedir para CRIAR ou GERAR arquivos (HTML, slides, documentos, código, etc.), NUNCA envie o conteúdo como texto na resposta.
   - PROCEDIMENTO OBRIGATÓRIO: (1) use write com path e content para salvar o arquivo no servidor, (2) use send_document com o file_path para enviar o arquivo como documento pelo Telegram.
-  - SEMPRE use /home/venus/newclaw/workspace/tmp/ como diretório para salvar arquivos temporários.
-  - Para LER arquivos: use read com path.
+  - SEMPRE use caminhos RELATIVOS ao workspace (ex: tmp/arquivo.html). O cwd já é o workspace. NUNCA use caminhos absolutos ou prefixos como "workspace/" ou "/home/venus/...".
+  - Para LER arquivos: use read com path. Para BUSCAR arquivos perdidos: use exec_command com `find . -name "*nome*"`.
+  - CONVERSÃO PARA PDF: Se o usuário pedir para gerar um PDF a partir de HTML de slides, ADICIONE SEMPRE este CSS no arquivo: `@media print { .slide { display: block !important; page-break-after: always; } @page { size: landscape; } }`. Ocupe também botões de navegação com `display: none`.
   - Para EDITAR arquivos: use edit com path + oldText/newText (replace) ou startLine/endLine (patch) ou append=true (adicionar ao final).
 
 academic: |
