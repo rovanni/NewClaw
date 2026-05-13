@@ -486,34 +486,30 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         };
         move('START_TURN');
 
-        // ── UnifiedIntentRouter: SINGLE SOURCE OF TRUTH ──
-        // ── Human-in-the-Loop: Check for pending authorizations ──
-        const pending = this.pendingActions.get(conversationId);
-        if (pending) {
-            const approvalTerms = ['sim', 'yes', 'ok', 'autorizar', 'autorizado', 'pode', 'prosseguir'];
-            const isApproved = approvalTerms.some(term => userText.toLowerCase().includes(term));
-            
-            if (isApproved) {
-                log.info(`[${this.ts()}] [AUTH] Action APPROVED for ${conversationId}: ${pending.toolName}`);
-                // Clear pending status but keep the action data to execute it
-                this.pendingActions.delete(conversationId);
-                // Mark as temporarily authorized for this specific cycle
-                (this as any)._currentAuthorizedAction = { toolName: pending.toolName, args: pending.arguments };
-                
-                // Retomar o loop a partir do contexto salvo
-                // Para simplificar, vamos re-injetar uma mensagem de sistema e deixar o loop rodar
-                // Mas o ideal é que ele continue o passo atual.
-                // Vou injetar a autorização e deixar o fluxo seguir.
-            } else {
-                log.warn(`[${this.ts()}] [AUTH] Action REJECTED for ${conversationId}: ${pending.toolName}`);
-                this.pendingActions.delete(conversationId);
-                return `❌ Execução cancelada pelo usuário. Como posso ajudar agora?`;
-            }
-        }
-
         const intentDecision: IntentDecision = this.intentRouter.route(userText, {
             sessionId: conversationId,
         });
+
+        // ── Human-in-the-Loop: Check for pending authorizations ──
+        const pending = this.pendingActions.get(conversationId);
+        if (pending) {
+            log.info(`[${this.ts()}] [AUTH] Evaluating response for pending action. Intent: ${intentDecision.category}`);
+            
+            if (intentDecision.category === 'confirmation') {
+                log.info(`[${this.ts()}] [AUTH] Action APPROVED via Router for ${conversationId}: ${pending.toolName}`);
+                this.pendingActions.delete(conversationId);
+                // Mark as temporarily authorized for this specific cycle
+                (this as any)._currentAuthorizedAction = { toolName: pending.toolName, args: pending.arguments };
+            } else if (intentDecision.category === 'rejection') {
+                log.warn(`[${this.ts()}] [AUTH] Action REJECTED via Router for ${conversationId}: ${pending.toolName}`);
+                this.pendingActions.delete(conversationId);
+                return `❌ Execução cancelada pelo usuário. Como posso ajudar agora?`;
+            } else {
+                // Not a clear confirmation or rejection — handle as a normal turn 
+                // but keep the action in pendingActions so it can be approved later.
+                log.info(`[${this.ts()}] [AUTH] Ambiguous response. Keeping ${pending.toolName} pending and proceeding with conversation.`);
+            }
+        }
         traceManager.addStep(trace, 'intent_classification', {
             intent: intentDecision.intent,
             category: intentDecision.category,

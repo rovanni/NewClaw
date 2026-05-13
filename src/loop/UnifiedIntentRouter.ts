@@ -20,7 +20,7 @@ const log = createLogger('UnifiedIntentRouter');
 export type ExecutionMode = 'direct' | 'tool' | 'planner' | 'hybrid';
 export type RiskLevel = 'low' | 'medium' | 'high';
 export type CognitiveLoad = 'minimal' | 'normal' | 'deep';
-export type IntentCategory = 'greeting' | 'conversation' | 'information' | 'creation' | 'system_operation' | 'data_analysis' | 'memory_operation' | 'audio' | 'vision' | 'destructive';
+export type IntentCategory = 'greeting' | 'conversation' | 'information' | 'creation' | 'system_operation' | 'data_analysis' | 'memory_operation' | 'audio' | 'vision' | 'destructive' | 'confirmation' | 'rejection';
 
 export interface IntentDecision {
     /** Intent classification */
@@ -104,6 +104,8 @@ interface DeterministicRule {
 }
 
 const GREETING_PATTERN = /^(oi+|ol[aá]+|opa+|eai+|eae+|fala+|bom dia|boa tarde|boa noite|tudo bem|blz+|beleza+|tranquilo|obrigad[oa]?|valeu+|kk+|haha+|salve|coé?|hey|hi|hello|bye|tchau|flw|falou)[\s!.?]*$/i;
+const CONFIRMATION_PATTERN = /^(sim+|yes+|ok+|autorizado+|autorizar+|pode+|prosseguir+|manda bala+|faz isso+|executar+|rodar+|confirmo+|concordo+|positivo+|true|y)[\s!.?]*$/i;
+const REJECTION_PATTERN = /^(não+|nao+|no+|cancelar+|cancela+|parar+|para+|stop+|negativo+|abortar+|aborta+|false|n)[\s!.?]*$/i;
 
 const DESTRUCTIVE_KEYWORDS = [
     'rm -rf', 'rm -r', 'del /', 'format', 'formatar',
@@ -120,6 +122,40 @@ const DETERMINISTIC_RULES: DeterministicRule[] = [
         keywords: [],
         patterns: [GREETING_PATTERN],
         confidence: 0.97,
+        riskLevel: 'low',
+        cognitiveLoad: 'minimal',
+        requiresReasoning: false,
+        requiresTools: false,
+        requiresMemory: false,
+        requiresPlanning: false,
+        requiresStreaming: false,
+        modelCategory: 'light',
+        terminalAction: true,
+    },
+    {
+        id: 'confirmation',
+        category: 'confirmation',
+        executionMode: 'direct',
+        keywords: ['sim', 'autorizar', 'autorizado', 'pode', 'prosseguir', 'manda bala', 'ok'],
+        patterns: [CONFIRMATION_PATTERN],
+        confidence: 0.98,
+        riskLevel: 'low',
+        cognitiveLoad: 'minimal',
+        requiresReasoning: false,
+        requiresTools: false,
+        requiresMemory: false,
+        requiresPlanning: false,
+        requiresStreaming: false,
+        modelCategory: 'light',
+        terminalAction: true,
+    },
+    {
+        id: 'rejection',
+        category: 'rejection',
+        executionMode: 'direct',
+        keywords: ['não', 'nao', 'cancelar', 'abortar', 'parar'],
+        patterns: [REJECTION_PATTERN],
+        confidence: 0.98,
         riskLevel: 'low',
         cognitiveLoad: 'minimal',
         requiresReasoning: false,
@@ -392,6 +428,22 @@ const SEMANTIC_RULES: SemanticRule[] = [
         cognitiveLoad: 'normal',
         requiresReasoning: true,
     },
+    {
+        category: 'confirmation',
+        modelCategory: 'light',
+        keywords: ['sim', 'ok', 'pode', 'autorizo', 'confirmo'],
+        patterns: [],
+        cognitiveLoad: 'minimal',
+        requiresReasoning: false,
+    },
+    {
+        category: 'rejection',
+        modelCategory: 'light',
+        keywords: ['não', 'nao', 'cancela', 'para', 'abortar'],
+        patterns: [],
+        cognitiveLoad: 'minimal',
+        requiresReasoning: false,
+    },
 ];
 
 // ── UnifiedIntentRouter ──────────────────────────────────────────────
@@ -548,6 +600,8 @@ export class UnifiedIntentRouter {
 
         switch (category) {
             case 'greeting':
+            case 'confirmation':
+            case 'rejection':
                 executionMode = 'direct';
                 requiresTools = false;
                 requiresMemory = false;
