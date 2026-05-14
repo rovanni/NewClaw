@@ -106,6 +106,14 @@ export class TelegramAdapter implements ChannelAdapter {
             log.warn('delete_webhook_failed', e.message);
         }
 
+        // Grace period: give Telegram time to release the old polling connection
+        // This is critical during restarts — the old process may still be dying
+        const gracePeriod = parseInt(process.env.TELEGRAM_START_GRACE_MS || '3000', 10);
+        if (gracePeriod > 0) {
+            log.info('startup_grace_period', `Waiting ${gracePeriod}ms for old instance to release...`);
+            await new Promise(r => setTimeout(r, gracePeriod));
+        }
+
         // Register handlers ONCE — grammY throws if handlers are registered multiple times
         if (!this.handlersRegistered) {
             this.registerHandlers();
@@ -148,9 +156,22 @@ export class TelegramAdapter implements ChannelAdapter {
     }
 
     async stop(): Promise<void> {
+        // Graceful shutdown: tell Telegram to drop the polling connection
+        // BEFORE stopping grammY, so the 409 Conflict window is minimized
+        try {
+            await this.bot.api.deleteWebhook({ drop_pending_updates: true });
+            log.info('webhook_dropped', 'Dropped pending updates before stop');
+        } catch (e: any) {
+            log.warn('drop_webhook_on_stop_failed', e.message);
+        }
+
+        // Give Telegram a moment to process the drop
+        await new Promise(r => setTimeout(r, 2000));
+
         this.bot.stop();
         this._isConnected = false;
-        log.info('bot_stopped', 'Telegram Bot stopped');
+        this.started = false;
+        log.info('bot_stopped', 'Telegram Bot stopped gracefully');
     }
 
     /** Enviar resposta normalizada via Telegram */
