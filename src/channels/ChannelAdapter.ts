@@ -72,6 +72,29 @@ export interface ResponseAttachment {
 /** Tipo de ação de digitação para o canal */
 export type TypingAction = 'typing' | 'upload_photo' | 'record_video' | 'record_voice' | 'upload_document';
 
+/** Configuração de reconexão automática */
+export interface ReconnectConfig {
+    /** Habilitar auto-reconexão em caso de falha */
+    enabled: boolean;
+    /** Atraso inicial em segundos antes da primeira tentativa */
+    initialDelaySeconds: number;
+    /** Fator de multiplicação para backoff exponencial */
+    backoffMultiplier: number;
+    /** Atraso máximo em segundos */
+    maxDelaySeconds: number;
+    /** Número máximo de tentativas (0 = ilimitado) */
+    maxRetries: number;
+}
+
+/** Configuração padrão de reconexão */
+export const DEFAULT_RECONNECT_CONFIG: ReconnectConfig = {
+    enabled: true,
+    initialDelaySeconds: 10,
+    backoffMultiplier: 2,
+    maxDelaySeconds: 300, // 5 minutos
+    maxRetries: 0, // ilimitado
+};
+
 /** Interface que cada canal deve implementar */
 export interface ChannelAdapter {
     /** Tipo do canal */

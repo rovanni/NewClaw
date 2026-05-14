@@ -66,7 +66,7 @@ export class MessageBus {
         return this.adapters.get(type);
     }
 
-    /** Iniciar todos os canais */
+    /** Iniciar todos os canais com auto-reconexão */
     async startAll(): Promise<void> {
         if (this.started) return;
 
@@ -75,9 +75,10 @@ export class MessageBus {
                 await adapter.start();
                 log.info('adapter_started', `${adapter.displayName} started`);
             } catch (error: any) {
-                // Don't crash — the adapter schedules its own reconnect on network errors
-                // 409 conflicts and network errors are handled by the adapter's retry logic
+                // Don't crash — schedule background reconnect
+                // Each adapter handles its own reconnect via scheduleReconnect
                 log.error('adapter_start_failed', error, `${type} failed to start — will retry in background`);
+                this.scheduleAdapterReconnect(type, adapter, error);
             }
         }
 
@@ -85,8 +86,54 @@ export class MessageBus {
         log.info('bus_started', `MessageBus started with ${this.adapters.size} adapters`);
     }
 
-    /** Parar todos os canais */
+    /** Agendar reconexão para um adapter que falhou */
+    private reconnectTimers: Map<ChannelType, NodeJS.Timeout> = new Map();
+    private reconnectAttempts: Map<ChannelType, number> = new Map();
+
+    private scheduleAdapterReconnect(type: ChannelType, adapter: ChannelAdapter, error: any): void {
+        const attempts = (this.reconnectAttempts.get(type) || 0) + 1;
+        this.reconnectAttempts.set(type, attempts);
+
+        // Backoff exponencial: 10s, 20s, 40s, 80s... max 5min
+        const delay = Math.min(10 * Math.pow(2, attempts - 1), 300) * 1000;
+
+        log.info('adapter_reconnect_scheduled', `${adapter.displayName} reconnect attempt ${attempts} in ${delay/1000}s`, {
+            channel: type,
+            attempt: attempts,
+            delayMs: delay,
+            error: error?.message || String(error)
+        });
+
+        // Limpar timer anterior se existir
+        const existing = this.reconnectTimers.get(type);
+        if (existing) clearTimeout(existing);
+
+        const timer = setTimeout(async () => {
+            log.info('adapter_reconnect_attempt', `Reconnecting ${adapter.displayName} (attempt ${attempts})...`);
+            try {
+                await adapter.start();
+                log.info('adapter_reconnected', `✅ ${adapter.displayName} reconnected successfully after ${attempts} attempts`);
+                this.reconnectAttempts.delete(type);
+                this.reconnectTimers.delete(type);
+            } catch (reconnectError: any) {
+                log.error('adapter_reconnect_failed', `${adapter.displayName} reconnect failed`, reconnectError?.message || String(reconnectError));
+                this.scheduleAdapterReconnect(type, adapter, reconnectError);
+            }
+        }, delay);
+
+        this.reconnectTimers.set(type, timer);
+    }
+
+    /** Parar todos os canais e cancelar reconexões */
     async stopAll(): Promise<void> {
+        // Cancelar todos os timers de reconexão
+        for (const [type, timer] of this.reconnectTimers) {
+            clearTimeout(timer);
+            log.info('reconnect_cancelled', `Cancelled reconnect timer for ${type}`);
+        }
+        this.reconnectTimers.clear();
+        this.reconnectAttempts.clear();
+
         for (const key of this.typingIntervals.keys()) {
             this.stopTypingIndicator(key);
         }

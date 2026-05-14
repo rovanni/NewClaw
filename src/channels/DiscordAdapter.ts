@@ -88,6 +88,9 @@ export class DiscordAdapter implements ChannelAdapter {
     }
 
     private started: boolean = false;
+    private reconnectTimer: NodeJS.Timeout | null = null;
+    private reconnectAttempts: number = 0;
+    private maxReconnectAttempts: number = 0; // 0 = ilimitado
 
     async start(): Promise<void> {
         if (!this.config.enabled) {
@@ -95,8 +98,8 @@ export class DiscordAdapter implements ChannelAdapter {
             return;
         }
 
-        if (this.started) {
-            log.warn('adapter_already_started', 'Discord adapter already started');
+        if (this.started && this._isConnected) {
+            log.warn('adapter_already_started', 'Discord adapter already started and connected');
             return;
         }
 
@@ -111,16 +114,45 @@ export class DiscordAdapter implements ChannelAdapter {
         try {
             await this.client.login(this.config.botToken);
             this._isConnected = true;
+            this.reconnectAttempts = 0;
             log.info('bot_started', '🤖 Discord Bot rodando!');
         } catch (e: any) {
             log.error('login_failed', e, 'Discord login failed');
             this._isConnected = false;
+            // Auto-reconnect com backoff exponencial
+            this.scheduleReconnect(e);
         }
     }
 
+    private scheduleReconnect(error: any): void {
+        this.reconnectAttempts++;
+        const delay = Math.min(10 * Math.pow(2, this.reconnectAttempts - 1), 300);
+        log.info('reconnect_scheduled', `Discord reconnect attempt ${this.reconnectAttempts} in ${delay}s`, { error: error?.message });
+
+        if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+
+        this.reconnectTimer = setTimeout(async () => {
+            log.info('reconnect_attempt', `Reconnecting Discord (attempt ${this.reconnectAttempts})...`);
+            try {
+                await this.client.login(this.config.botToken);
+                this._isConnected = true;
+                this.reconnectAttempts = 0;
+                log.info('reconnected', '✅ Discord reconnected successfully');
+            } catch (e: any) {
+                log.error('reconnect_failed', 'Discord reconnect failed', e?.message);
+                this.scheduleReconnect(e);
+            }
+        }, delay * 1000);
+    }
+
     async stop(): Promise<void> {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
         this.client.destroy();
         this._isConnected = false;
+        this.started = false;
         log.info('bot_stopped', 'Discord Bot stopped');
     }
 
