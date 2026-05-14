@@ -69,25 +69,47 @@ function isPM2Running() {
   } catch { return false; }
 }
 
-function syncPidFile() {
-  // Sync PID file with PM2's actual PID
+function getPM2Pid() {
+  // Read PID from PM2's pid file — the most reliable method
+  // pm2 show no longer displays numeric pid in its table output
+  const pm2PidFile = path.join(require('os').homedir(), '.pm2', 'pids', 'newclaw-0.pid');
+  try {
+    const pid = parseInt(fs.readFileSync(pm2PidFile, 'utf8').trim());
+    if (pid > 0 && process.kill(pid, 0)) return pid;
+  } catch {}
+  // Fallback: parse pm2 show (may not have numeric pid in newer versions)
   try {
     const out = pm2(['show', 'newclaw']);
-    const match = out.match(/│\s*pid\s*│\s*(\d+)/);
-    if (match) fs.writeFileSync(PID_FILE, match[1]);
+    // Try both old format (│ pid │ 123) and new format
+    const match = out.match(/│\s*pid\s*│\s*(\d+)/) || out.match(/│\s*pid\s+path\s*│\s*([^\s]+)/);
+    if (match) {
+      // If it's a path, read the pid from that file
+      const value = match[1].trim();
+      if (/^\d+$/.test(value)) {
+        const pid = parseInt(value);
+        if (pid > 0 && process.kill(pid, 0)) return pid;
+      }
+      // It's a file path
+      try {
+        const pid = parseInt(fs.readFileSync(value, 'utf8').trim());
+        if (pid > 0 && process.kill(pid, 0)) return pid;
+      } catch {}
+    }
   } catch {}
+  return null;
+}
+
+function syncPidFile() {
+  const pid = getPM2Pid();
+  if (pid) {
+    try { fs.writeFileSync(PID_FILE, pid.toString()); } catch {}
+  }
 }
 
 function getPid() {
   // Priority: PM2 → PID file → process scan
-  try {
-    const out = pm2(['show', 'newclaw']);
-    const match = out.match(/│\s*pid\s*│\s*(\d+)/);
-    if (match && match[1] !== '0') {
-      const pid = parseInt(match[1]);
-      if (process.kill(pid, 0)) return pid;
-    }
-  } catch {}
+  const pm2Pid = getPM2Pid();
+  if (pm2Pid) return pm2Pid;
   try {
     const pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim());
     if (process.kill(pid, 0)) return pid;
