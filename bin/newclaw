@@ -69,6 +69,28 @@ function isPM2Running() {
   } catch { return false; }
 }
 
+function pm2JStart() {
+  // Get PM2 process status via JSON API (reliable, no string parsing)
+  try {
+    const out = execSync(`node ${PM2_BIN} jstart 2>/dev/null`, { encoding: 'utf-8', cwd: DIR });
+    const procs = JSON.parse(out);
+    const nc = procs.find(p => p.name === 'newclaw');
+    if (!nc) return 'not_found';
+    return nc.pm2_env?.status || 'unknown';
+  } catch {
+    // Fallback to string-based check
+    try {
+      const out = pm2(['list']);
+      if (out.includes('newclaw')) {
+        if (out.includes('online')) return 'online';
+        if (out.includes('stopped')) return 'stopped';
+        if (out.includes('errored')) return 'errored';
+      }
+      return 'not_found';
+    } catch { return 'not_found'; }
+  }
+}
+
 function getPM2Pid() {
   // Read PID from PM2's pid file — the most reliable method
   // pm2 show no longer displays numeric pid in its table output
@@ -212,56 +234,65 @@ const commands = {
   start(args) {
     // ⚠️ ALWAYS use PM2 for process management
     // Raw spawn creates duplicate processes → Telegram 409 Conflict
-    const daemon = args.includes('--daemon');
     const debug = args.includes('--debug');
     const tail = args.includes('--tail');
     const usePM2 = PM2_BIN !== null;
-    
-    if (isRunning()) {
-      const pid = getPid();
-      try {
-        const out = execSync(`ps -p ${pid} -o comm=`, { encoding: 'utf-8' }).trim();
-        if (out === 'node') {
-          console.log(`🟢 NewClaw already running (PID ${pid})`);
-          return;
-        }
-      } catch {}
-      console.log(`⚠️ Stale PID ${pid} detected, cleaning up...`);
-      try { fs.unlinkSync(PID_FILE); } catch {}
-      killAllInstances();
-      // Wait for process cleanup
-      execSync('sleep 3');
+
+    // ─── GUARD 1: PM2 status check (authoritative) ──────────────────
+    if (usePM2) {
+      const pm2Status = pm2JStart();
+      if (pm2Status === 'online') {
+        const pid = getPM2Pid();
+        console.log(`🟢 NewClaw already running via PM2 (PID ${pid})`);
+        syncPidFile();
+        return;
+      }
     }
-    
-    // Load .env
+
+    // ─── GUARD 2: process scan (catches orphans) ──────────────────
+    const runningPid = getPid();
+    if (runningPid) {
+      try {
+        process.kill(runningPid, 0);
+        console.log(`🟢 NewClaw already running (PID ${runningPid})`);
+        syncPidFile();
+        return;
+      } catch {
+        console.log(`⚠️ Stale PID ${runningPid}, cleaning up...`);
+        try { fs.unlinkSync(PID_FILE); } catch {}
+      }
+    }
+
+    // ─── CLEANUP: kill orphans + release Telegram polling ──────────
+    // Only call deleteWebhook when NO instance is running,
+    // otherwise we kill the active bot's polling connection
     const env = readEnv();
+    try {
+      execSync('curl -s "https://api.telegram.org/bot' + env.TELEGRAM_BOT_TOKEN + '/deleteWebhook?drop_pending_updates=true" >/dev/null 2>\&1');
+    } catch {}
+    killAllInstances();
+    console.log('⏳ Waiting for cleanup (5s)...');
+    execSync('sleep 5');
+
     if (debug) env.LOG_LEVEL = 'debug';
     const langArg = args.find(a => a.startsWith('--lang='));
     if (langArg) env.APP_LANG = langArg.split('=')[1];
-    
+
     const logDir = path.join(DIR, 'logs');
     fs.mkdirSync(logDir, { recursive: true });
-    
+
     if (usePM2) {
-      // ✅ PM2 path — single source of truth for process management
-      // Clean up any orphan Telegram polling first
-      try { execSync('curl -s "https://api.telegram.org/bot' + env.TELEGRAM_BOT_TOKEN + '/deleteWebhook?drop_pending_updates=true" > /dev/null 2>&1'); } catch {}
-      
-      // Build environment string for PM2
-      const envStr = Object.entries(env).map(([k,v]) => `${k}=${v}`).join(',');
-      
-      // Check if PM2 already has the app
-      const pm2List = pm2(['list']);
-      if (pm2List.includes('newclaw') && pm2List.includes('stopped')) {
-        // App exists but stopped — restart it
+      // ─── GUARD 3: re-check PM2 after cleanup (race condition) ──────
+      const pm2Status = pm2JStart();
+      if (pm2Status === 'stopped' || pm2Status === 'errored') {
         pm2(['restart', 'newclaw']);
-      } else if (pm2List.includes('newclaw') && pm2List.includes('online')) {
-        console.log('🟢 NewClaw already running via PM2');
+      } else if (pm2Status === 'online') {
+        console.log('🟢 NewClaw started while we were cleaning up');
         syncPidFile();
         return;
       } else {
-        // Fresh start
-        pm2(['start', 'dist/index.js', '--name', 'newclaw', `--env ${envStr}`]);
+        // Fresh start — use ecosystem.config.cjs for consistency
+        pm2(['start', 'ecosystem.config.cjs']);
       }
       syncPidFile();
       console.log('🚀 NewClaw started via PM2');
