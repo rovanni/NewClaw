@@ -84,6 +84,9 @@ export class TelegramAdapter implements ChannelAdapter {
     private started: boolean = false;
     private startRetries: number = 0;
     private maxStartRetries: number = 3;
+    private maxNetworkRetries: number = 10; // Retry network errors indefinitely
+    private networkRetryCount: number = 0;
+    private reconnectTimer: NodeJS.Timeout | null = null;
     private handlersRegistered: boolean = false;
 
     async start(): Promise<void> {
@@ -92,8 +95,8 @@ export class TelegramAdapter implements ChannelAdapter {
             return;
         }
 
-        if (this.started) {
-            log.warn('adapter_already_started', 'Telegram adapter already started');
+        if (this.started && this._isConnected) {
+            log.warn('adapter_already_started', 'Telegram adapter already started and connected');
             return;
         }
 
@@ -129,33 +132,67 @@ export class TelegramAdapter implements ChannelAdapter {
                 onStart: (info) => {
                     this._isConnected = true;
                     this.startRetries = 0; // Reset on success
+                    this.networkRetryCount = 0; // Reset network retries on success
                     log.info('bot_started', `🤖 Telegram Bot rodando! botInfo=${JSON.stringify(info).slice(0, 100)}`);
                 },
-            // Note: removed allowed_updates restriction to receive all update types
-            // allowed_updates: ['message'] causes issues with some grammY versions
-            // grammY defaults to receiving all types when omitted
             });
             // If we reach here, bot.start() resolved (meaning bot was stopped)
             log.warn('bot_start_resolved', 'bot.start() resolved unexpectedly — bot was stopped');
         } catch (e: any) {
             if (e.message?.includes('409') || e.message?.includes('Conflict')) {
                 log.error('bot_start_409_conflict', 'Multiple bot instances detected. Waiting for old instance to stop...');
-                // Wait and retry — the old instance should time out within ~30s
                 if (this.startRetries < this.maxStartRetries) {
                     this.startRetries++;
                     const delay = this.startRetries * 15000; // 15s, 30s, 45s
                     log.info('bot_start_retry', `Retry ${this.startRetries}/${this.maxStartRetries} in ${delay/1000}s...`);
-                    this.started = false; // Allow re-entry
+                    this.started = false;
                     await new Promise(r => setTimeout(r, delay));
                     return this.start();
                 }
                 log.error('bot_start_409_exhausted', 'All retries exhausted. Another bot instance is still running.');
+                // Schedule background retry instead of giving up completely
+                this.scheduleReconnect(30);
+                return;
+            }
+            // Network errors — schedule background retry instead of crashing
+            if (e.message?.includes('Network') || e.message?.includes('ECONNREFUSED') ||
+                e.message?.includes('ENOTFOUND') || e.message?.includes('ETIMEDOUT') ||
+                e.message?.includes('fetch failed') || e.message?.includes('request failed')) {
+                this.networkRetryCount++;
+                const delay = Math.min(this.networkRetryCount * 10, 300); // 10s, 20s, 30s... max 5min
+                log.error('bot_start_network_error', `Network error on start (attempt ${this.networkRetryCount}). Scheduling reconnect in ${delay}s...`, e.message);
+                this.scheduleReconnect(delay);
+                return;
             }
             throw e;
         }
     }
 
+    /** Schedule a background reconnect attempt */
+    private scheduleReconnect(delaySeconds: number): void {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+        }
+        log.info('reconnect_scheduled', `Reconnect attempt scheduled in ${delaySeconds}s`);
+        this.reconnectTimer = setTimeout(async () => {
+            log.info('reconnect_attempt', 'Attempting to reconnect Telegram bot...');
+            this.started = false;
+            this._isConnected = false;
+            try {
+                await this.start();
+            } catch (e: any) {
+                log.error('reconnect_failed', 'Reconnect attempt failed', e.message);
+            }
+        }, delaySeconds * 1000);
+    }
+
     async stop(): Promise<void> {
+        // Cancel any pending reconnect
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+
         // Graceful shutdown: tell Telegram to drop the polling connection
         // BEFORE stopping grammY, so the 409 Conflict window is minimized
         try {

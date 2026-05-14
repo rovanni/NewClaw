@@ -75,7 +75,9 @@ export class MessageBus {
                 await adapter.start();
                 log.info('adapter_started', `${adapter.displayName} started`);
             } catch (error: any) {
-                log.error('adapter_start_failed', error, `${type} failed to start`);
+                // Don't crash — the adapter schedules its own reconnect on network errors
+                // 409 conflicts and network errors are handled by the adapter's retry logic
+                log.error('adapter_start_failed', error, `${type} failed to start — will retry in background`);
             }
         }
 
