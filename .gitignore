@@ -3,14 +3,34 @@ dist/
 data/
 tmp/
 .env
+
+# SQLite
 *.sqlite
 *.sqlite-shm
-*.sqlite-walaudio/
+*.sqlite-wal
+*.db
+
+# Audio/voz (cache temporario)
+audio/
+*.ogg
+*.mp3
+
+# Backups e logs
 backups/
 logs/
 *.pid
-*.ogg
-*.mp3
-*.db
+
+# Workspace gerado
 workspace/sites/*.html
 workspace/space-invaders*.html
+
+# Scripts e utilitarios ad-hoc
+debug_loop.js
+fetch.js
+scratch/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

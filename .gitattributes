@@ -1,0 +1,31 @@
+# Normalização de line endings — evita diff fantasma entre Windows e Linux.
+# `text=auto`: git detecta arquivos de texto e normaliza para LF no repositório.
+# `eol=lf`: força LF no working tree também (compatível com Linux/macOS/Windows moderno).
+
+* text=auto eol=lf
+
+# Scripts de shell devem sempre ser LF (rodam em Linux/VPS)
+*.sh    text eol=lf
+*.bash  text eol=lf
+
+# Scripts do Windows devem ser CRLF
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+*.cmd   text eol=crlf
+
+# Arquivos binários — não tocar
+*.db        binary
+*.sqlite    binary
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.pdf       binary
+*.zip       binary
+*.tar       binary
+*.gz        binary
+*.mp3       binary
+*.ogg       binary
+*.wav       binary
+*.node      binary
