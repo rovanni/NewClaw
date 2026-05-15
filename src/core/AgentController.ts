@@ -5,7 +5,7 @@
  * Arquitetura multi-canal: Telegram ✅, Discord 🟡, Web
  */
 
-import { ProviderFactory, ILLMProvider } from './ProviderFactory';
+import { ProviderFactory } from './ProviderFactory';
 import { AgentLoop } from '../loop/AgentLoop';
 import { MemoryManager } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
@@ -37,17 +37,16 @@ import { SessionLearner } from '../session/SessionLearner';
 import { MemoryGovernor } from '../memory/MemoryGovernor';
 import { createLogger } from '../shared/AppLogger';
 import { MessageBus } from '../channels/MessageBus';
-import { TelegramAdapter, type TelegramConfig } from '../channels/TelegramAdapter';
-import { DiscordAdapter, type DiscordConfig } from '../channels/DiscordAdapter';
-import { WhatsAppAdapter, type WhatsAppConfig } from '../channels/WhatsAppAdapter';
-import { SignalAdapter, type SignalConfig } from '../channels/SignalAdapter';
-import { NormalizedMessage } from '../channels/ChannelAdapter';
+import { TelegramAdapter } from '../channels/TelegramAdapter';
+import { DiscordAdapter } from '../channels/DiscordAdapter';
+import { WhatsAppAdapter } from '../channels/WhatsAppAdapter';
+import { SignalAdapter } from '../channels/SignalAdapter';
 import { AuditorService } from '../services/auditor/AuditorService';
 import { registerAuditCommand } from '../services/auditor/auditCommand';
 // New core modules
 import { eventBus, EventTypes, type AppEvent } from './EventBus';
-import { circuitRegistry, CircuitBreakerManager } from './CircuitBreaker';
-import { toolExecutor, type ToolExecutorLike } from './ToolExecutor';
+import { circuitRegistry } from './CircuitBreaker';
+import { toolExecutor } from './ToolExecutor';
 import { promptRegistry } from './PromptRegistry';
 import { ConfidenceClassifier } from './ConfidenceClassifier';
 import { SessionAutoCleaner } from '../session/SessionAutoCleaner';
@@ -404,7 +403,7 @@ export class AgentController {
         this._eventBus.onAny(async (event: AppEvent) => {
             if (event.type !== EventTypes.SCHEDULER_TRIGGER) return;
             try {
-                const { chatId, prompt, taskId, actionType, label } = event.payload as {
+                const { chatId, prompt, taskId } = event.payload as {
                     chatId: string; prompt: string; taskId: number; actionType: string; label: string;
                 };
                 log.info(`[EVENTBUS] Processing scheduler.trigger #${taskId} → chat ${chatId}`);
@@ -487,12 +486,13 @@ export class AgentController {
         this.sessionAutoCleaner.start();
 
         // ── Prompt Hot-Reload: check for changes every 5 minutes ──
-        setInterval(() => {
+        // Registrado no LifecycleManager para clearInterval automático no shutdown.
+        this.lifecycle.registerInterval('promptHotReload', () => {
             promptRegistry.reloadIfChanged();
         }, 5 * 60_000);
 
         // ── Circuit Breaker: periodic status log ──
-        setInterval(() => {
+        this.lifecycle.registerInterval('circuitBreakerMonitor', () => {
             const states = circuitRegistry.getAllMetrics();
             if (states.length > 0) {
                 for (const cb of states) {
@@ -542,7 +542,7 @@ export class AgentController {
         });
 
         // /skills — listar skills
-        this.messageBus.registerCommand('/skills', async (msg) => {
+        this.messageBus.registerCommand('/skills', async (_msg) => {
             try {
                 const skills = this.memoryFacade.listAutoSkills(10);
 
@@ -608,7 +608,6 @@ export class AgentController {
      * Registra tools no AgentLoop
      */
     private registerSkills(): void {
-        const skills = this.skillLoader.loadAll();
 
         ToolRegistry.register(new ExecCommandTool(), { dangerous: true });
         ToolRegistry.register(new WebSearchTool());

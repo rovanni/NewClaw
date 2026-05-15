@@ -145,7 +145,6 @@ export class CognitiveWorkspace {
 
         // If still over budget after distillation, drop oldest non-distilled entries
         if (this.totalTokens() > this.config.maxTokens) {
-            const excess = this.totalTokens() - this.config.maxTokens;
             let dropped = 0;
             while (this.entries.length > 0 && this.totalTokens() > this.config.maxTokens) {
                 this.entries.shift();
@@ -169,9 +168,6 @@ export class CognitiveWorkspace {
 
         // Mark entries for distillation
         const toDistill = oldEntries.slice(0, Math.ceil(oldEntries.length / 2));
-        const distilledContent = toDistill.map(e =>
-            `[${e.type}] ${e.content.slice(0, 200)}`
-        ).join(' | ');
 
         // Compress: take key insights from each entry (first 100 chars)
         const summary = `Raciocínio anterior: ${toDistill.map(e => {

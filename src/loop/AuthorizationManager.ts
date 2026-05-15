@@ -5,8 +5,8 @@
  */
 
 import { createLogger } from '../shared/AppLogger';
-import { ToolExecutor, ToolResult } from './AgentLoop';
 import { ResponseOption } from '../channels/ChannelAdapter';
+
 
 const log = createLogger('AuthorizationManager');
 

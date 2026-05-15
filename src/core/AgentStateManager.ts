@@ -123,7 +123,7 @@ export class AgentStateManager {
     /**
      * Update state based on interaction metrics
      */
-    updateFromInteraction(success: boolean, consistency: number, alignmentDelta: number): void {
+    updateFromInteraction(success: boolean, _consistency: number, alignmentDelta: number): void {
         const current = this.getState();
         
         // Confidence increases with success, decreases with failure

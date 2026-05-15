@@ -4,13 +4,8 @@
  * Unifies execution, validation, reassessment, and criticism into a single TURN.
  */
 
-import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary, AttemptInfo } from '../core/ProviderFactory';
+import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary } from '../core/ProviderFactory';
 import { CognitiveWorkspace } from '../cognitive/CognitiveWorkspace';
-import path from 'path';
-import type { Message } from '../memory/MemoryManager';
-import { ContextBuilder } from './ContextBuilder';
-import { ContextBudget } from './ContextBudget';
-import { ResponseBuilder } from './ResponseBuilder';
 import { SessionContext } from '../session/SessionContext';
 import type { SessionKey } from '../session/SessionManager';
 import { ModelRouter } from './ModelRouter';
@@ -20,10 +15,9 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
 import { normalizeFromRaw, extractText } from './ResponseAdapter';
-import { AuthorizationManager, PendingAction } from './AuthorizationManager';
+import { AuthorizationManager } from './AuthorizationManager';
 import { ResponseOption } from '../channels/ChannelAdapter';
 import { ProtocolParser } from './ProtocolParser';
-import { StructuredAgentResponse, ProtocolViolationError } from './ProtocolTypes';
 import { createLogger } from '../shared/AppLogger';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
@@ -180,13 +174,11 @@ export class AgentLoop {
     private providerFactory: ProviderFactory;
     private memory: MemoryManager;
     private tools: Map<string, ToolExecutor> = new Map();
-    private config: AgentLoopConfig;
     /** Cognitive Workspace: governed working memory for internal reasoning.
      *  NEVER shown to user. Auto-pruned, distilled, budget-controlled.
      *  Reset each conversation turn. */
     private cognitiveWorkspace = new CognitiveWorkspace();
     private authManager = new AuthorizationManager();
-    private contextBuilder: ContextBuilder;
     private skillLearner: SkillLearner;
     private skillLoader: SkillLoader;
     private modelRouter: ModelRouter;
@@ -202,8 +194,6 @@ export class AgentLoop {
     constructor(providerFactory: ProviderFactory, memory: MemoryManager, config: AgentLoopConfig, skillLearner: SkillLearner, skillLoader: SkillLoader, classificationMemory?: ClassificationMemory, decisionMemory?: DecisionMemory) {
         this.providerFactory = providerFactory;
         this.memory = memory;
-        this.config = config;
-        this.contextBuilder = new ContextBuilder(memory);
         this.skillLearner = skillLearner as SkillLearner;
         this.skillLoader = skillLoader as SkillLoader;
         this.modelRouter = new ModelRouter(config.modelRouter as any, providerFactory);
@@ -364,7 +354,7 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         return prompt;
     }
 
-    public async process(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string | ProcessedResult> {
+    public async process(conversationId: string, userText: string, _userId?: string, context?: ChannelContext): Promise<string | ProcessedResult> {
         const result = await this.run(conversationId, userText, conversationId, context);
         return result;
     }
@@ -375,9 +365,6 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
 
     private ts(): string { return new Date().toLocaleTimeString('pt-BR', { hour12: false }); }
 
-    private buildContextBlock(userText: string, context: string, skillContext: string, masterPrompt: string): string {
-        return masterPrompt;
-    }
 
     public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string | ProcessedResult> {
         this.cognitiveWorkspace.reset();
@@ -413,7 +400,7 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         return null;
     }
 
-    private extractFinalText(response: LLMResult, atomicData: any): string {
+    private extractFinalText(response: LLMResult, _atomicData: any): string {
         const normalized = normalizeFromRaw(response.content || '', (c) => this.parseLLMResponse(c));
 
         if (normalized.type !== 'empty' && normalized.content && normalized.content.trim().length > 0) {
@@ -426,27 +413,7 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         return 'Desculpe, não consegui gerar uma resposta adequada.';
     }
 
-    private static readonly GREETING_PATTERNS: RegExp[] = [
-        /^(oi+|ol[aá]+|opa+|eai+|eae|fala|hey|hello|hi|bom dia|boa tarde|boa noite|salve|coé|coe|tudo bem|tudo bom|blz|beleza|tranquilo)[\s!.?]*$/i,
-        /^(tchau|bye|até|ate|flw|falou|fui)[\s!.?]*$/i,
-        /^(valeu|obrigad[oa]?|vlw|obg)[\s!.?]*$/i,
-    ];
-
-    private static isSimpleGreeting(text: string): boolean {
-        const trimmed = text.trim().toLowerCase();
-        if (trimmed.length < 2 || trimmed.length > 50) return false;
-        return AgentLoop.GREETING_PATTERNS.some(p => p.test(trimmed));
-    }
-
-    private static readonly GREETING_RESPONSES: string[] = [
-        "Oi! Tô por aqui, pode falar! 👋",
-        "E aí! Como posso te ajudar? 😊",
-        "Olá! No que posso te ajudar hoje?",
-        "Fala! Tô pronto pra ação 🚀",
-        "Opa! Bora lá! 💪",
-    ];
-
-    private async runWithTools(conversationId: string, userText: string, iteration: number, userId?: string, channelContext?: ChannelContext): Promise<string | ProcessedResult> {
+    private async runWithTools(conversationId: string, userText: string, iteration: number, _userId?: string, channelContext?: ChannelContext): Promise<string | ProcessedResult> {
         log.info(`[${this.ts()}] [LOOP] Atomic Cognition Cycle ${iteration + 1}`);
 
         const cycleHistory: Array<{ tool: string, input: string, status: string }> = []
@@ -495,8 +462,6 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         }
 
         this.classificationMemory.store(userText, intentDecision.modelCategory, intentDecision.confidence);
-
-        const context = intentDecision.requiresMemory ? await this.contextBuilder.buildContext(userText) : '';
         const skillResult = this.skillLearner.buildSkillContext(userText, 2);
         let skillContext = skillResult && skillResult.confidence >= 0.7 ? skillResult.text : '';
         
@@ -644,7 +609,6 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
             
             const structured = this.protocolParser.strictParse(response.content || '');
             const atomicData = this.parseLLMResponse(response.content || '');
-            const normalized = normalizeFromRaw(response.content || '', (c) => this.parseLLMResponse(c));
             
             const finalText = this.extractFinalText(response, atomicData);
             
@@ -938,7 +902,7 @@ Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específic
     /**
      * Persist trace into SQLite agent_traces table via MemoryManager
      */
-    private persistTrace(trace: any, step: number, status: string, finalResponse: string, context?: ChannelContext): void {
+    private persistTrace(trace: any, step: number, status: string, finalResponse: string, _context?: ChannelContext): void {
         try {
             const lastStep = trace.steps[trace.steps.length - 1];
             this.memory.saveTrace({

@@ -57,7 +57,6 @@ export interface MemoryEdge {
 // Memory management core
 export class MemoryManager {
     private db: Database.Database;
-    private dbPath: string;
     private attentionLayer: AttentionLayer | null = null;
     private attentionFeedback: AttentionFeedback | null = null;
     private facade: MemoryFacade | null = null;
@@ -117,7 +116,6 @@ export class MemoryManager {
 
     constructor(dbOrPath: string | Database.Database = './data/newclaw.db') {
         if (typeof dbOrPath === 'string') {
-            this.dbPath = dbOrPath;
             const dir = path.dirname(dbOrPath);
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
             this.db = new Database(dbOrPath);
@@ -126,7 +124,6 @@ export class MemoryManager {
             this.db.pragma('busy_timeout = 5000');
         } else {
             this.db = dbOrPath;
-            this.dbPath = ':memory:';
             this.db.pragma('busy_timeout = 5000');
         }
         this.classifier = new ConfidenceClassifier();
@@ -616,7 +613,6 @@ export class MemoryManager {
 
         // Try FTS5 on messages content
         try {
-            const ftsQuery = keywords.map(k => `"${k}"`).join(' OR ');
             const results = this.db.prepare(`
                 SELECT * FROM messages 
                 WHERE conversation_id = ? 

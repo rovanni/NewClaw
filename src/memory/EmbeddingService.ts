@@ -5,10 +5,8 @@
  * Fallback automático para FTS5 se embeddings não disponíveis.
  */
 import { Database } from 'better-sqlite3';
-import { MemoryManager } from './MemoryManager';
 
 const DEFAULT_EMBED_MODEL = 'nomic-embed-text';
-const EMBED_DIM = 768;
 
 export class EmbeddingService {
     private ollamaUrl: string;

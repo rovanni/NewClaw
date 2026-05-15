@@ -11,7 +11,7 @@
 
 import { MemoryManager } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
-import { SessionTranscript, TranscriptEntry, TranscriptMeta, SessionEventType } from './SessionTranscript';
+import { SessionTranscript, TranscriptEntry, TranscriptMeta } from './SessionTranscript';
 import { ContextCompressor } from '../loop/ContextCompressor';
 import { ProviderFactory } from '../core/ProviderFactory';
 import fs from 'fs';

@@ -97,8 +97,7 @@ export class ResponseBuilder {
         }
     }
 
-    private formatMemoryAdmin(params: Record<string, any>, result: ToolResult): string {
-        const action = params.action || '';
+    private formatMemoryAdmin(_params: Record<string, any>, result: ToolResult): string {
         const output = result.output || '';
 
         // Stats, list, orphans, etc. — format directly

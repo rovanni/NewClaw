@@ -82,7 +82,6 @@ export class MemoryGovernor {
     private memory: MemoryManager;
     private memoryFacade: MemoryFacade;
     private config: GovernorConfig;
-    private lastRun: Date | null = null;
     private accessLog: Map<string, { count: number; lastAccessed: Date; wasHelpful: boolean }> = new Map();
 
     constructor(memory: MemoryManager, config?: Partial<GovernorConfig>) {
@@ -121,7 +120,6 @@ export class MemoryGovernor {
 
             // Get source classification from metadata
             const source: FactSource = (node.metadata?.source as FactSource) || 'inferred';
-            const sourceWeight = this.config.sourceWeights[source] || 0.6;
 
             // Base decay: confidence * decayFactor^days * sourceWeight
             let newConfidence = (node.confidence || 1.0) * Math.pow(this.config.decayFactor, daysSinceUpdate);
@@ -158,7 +156,6 @@ export class MemoryGovernor {
             }
         }
 
-        this.lastRun = now;
         log.info(`Confidence decay: ${decayed}/${total} nodes affected`);
         return { decayed, total };
     }
@@ -222,8 +219,6 @@ export class MemoryGovernor {
                     const sourceB = (b.metadata?.source as FactSource) || 'inferred';
                     const confA = a.confidence || 0.5;
                     const confB = b.confidence || 0.5;
-                    const timeA = a.last_updated || a.created_at || '';
-                    const timeB = b.last_updated || b.created_at || '';
 
                     let classification: ConflictType;
                     let resolution: ConflictResult['resolution'];
@@ -397,7 +392,7 @@ export class MemoryGovernor {
                     break;
                 case 'archive_older':
                     // Archive the older one
-                    const [newer, older] = (conflict.nodeA.last_updated || '') >= (conflict.nodeB.last_updated || '')
+                    const [_newer, older] = (conflict.nodeA.last_updated || '') >= (conflict.nodeB.last_updated || '')
                         ? [conflict.nodeA, conflict.nodeB]
                         : [conflict.nodeB, conflict.nodeA];
                     this.archiveNode(older);

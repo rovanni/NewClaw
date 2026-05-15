@@ -11,7 +11,6 @@
  */
 
 import { createLogger } from '../shared/AppLogger';
-import { traceManager } from '../core/ExecutionTrace';
 
 const log = createLogger('UnifiedIntentRouter');
 
@@ -334,7 +333,7 @@ const DETERMINISTIC_RULES: DeterministicRule[] = [
         modelCategory: 'code',
         terminalAction: false,
         toolName: 'write',
-        toolParams: (input: string) => ({ path: './workspace/tmp/', content: '' }),
+        toolParams: (_input: string) => ({ path: './workspace/tmp/', content: '' }),
     },
     {
         id: 'file_read',
@@ -353,7 +352,7 @@ const DETERMINISTIC_RULES: DeterministicRule[] = [
         modelCategory: 'chat',
         terminalAction: false,
         toolName: 'read',
-        toolParams: (input: string) => ({ path: './workspace/' }),
+        toolParams: (_input: string) => ({ path: './workspace/' }),
     },
     {
         id: 'file_edit',
@@ -372,7 +371,7 @@ const DETERMINISTIC_RULES: DeterministicRule[] = [
         modelCategory: 'code',
         terminalAction: false,
         toolName: 'edit',
-        toolParams: (input: string) => ({ path: './workspace/' }),
+        toolParams: (_input: string) => ({ path: './workspace/' }),
     },
 ];
 
@@ -592,9 +591,9 @@ export class UnifiedIntentRouter {
     // ── Layer 3: Strategy Selection ─────────────────────────────────────
 
     private strategySelection(
-        input: string,
+        _input: string,
         semantic: { category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number },
-        context?: { lastTask?: string; sessionId?: string }
+        _context?: { lastTask?: string; sessionId?: string }
     ): IntentDecision {
         const { category, modelCategory, cognitiveLoad, requiresReasoning, confidence } = semantic;
 

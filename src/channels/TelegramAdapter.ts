@@ -16,11 +16,10 @@ import {
     NormalizedMessage,
     NormalizedResponse,
     ChannelConfig,
-    ChannelAttachment,
     ResponseAttachment
 } from './ChannelAdapter';
 import { MessageBus } from './MessageBus';
-import { mdToTelegramHTML, safeReply } from '../shared/TelegramFormatter';
+import { mdToTelegramHTML } from '../shared/TelegramFormatter';
 import { createLogger } from '../shared/AppLogger';
 
 const log = createLogger('TelegramAdapter');
@@ -84,7 +83,6 @@ export class TelegramAdapter implements ChannelAdapter {
     private started: boolean = false;
     private startRetries: number = 0;
     private maxStartRetries: number = 3;
-    private maxNetworkRetries: number = 10; // Retry network errors indefinitely
     private networkRetryCount: number = 0;
     private reconnectTimer: NodeJS.Timeout | null = null;
     private handlersRegistered: boolean = false;

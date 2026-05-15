@@ -14,9 +14,8 @@ import {
     Message,
     Partials,
     TextChannel,
-    EmbedBuilder,
     AttachmentBuilder,
-    ChannelType as DiscordChannelType
+    ChannelType as _DiscordChannelType
 } from 'discord.js';
 import {
     ChannelAdapter,
@@ -90,7 +89,6 @@ export class DiscordAdapter implements ChannelAdapter {
     private started: boolean = false;
     private reconnectTimer: NodeJS.Timeout | null = null;
     private reconnectAttempts: number = 0;
-    private maxReconnectAttempts: number = 0; // 0 = ilimitado
 
     async start(): Promise<void> {
         if (!this.config.enabled) {

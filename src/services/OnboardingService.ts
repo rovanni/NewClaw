@@ -5,7 +5,6 @@
  */
 import { extractText } from '../loop/ResponseAdapter';
 import { Database } from 'better-sqlite3';
-import { MemoryManager } from '../memory/MemoryManager';
 import { ProviderFactory } from '../core/ProviderFactory';
 import { SkillLearner } from '../loop/SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';

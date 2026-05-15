@@ -414,7 +414,7 @@ export class SignalAdapter implements ChannelAdapter {
             execFile(signalPath, args, {
                 timeout: 30000,
                 maxBuffer: 5 * 1024 * 1024,
-            }, (error: any, stdout: string, stderr: string) => {
+            }, (error: any, stdout: string, _stderr: string) => {
                 if (error) {
                     reject(error);
                 } else {

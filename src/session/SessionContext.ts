@@ -14,10 +14,10 @@
  * 6. Current user message
  */
 
-import { SessionManager, SessionKey, estimateTokens as legacyEstimateTokens } from './SessionManager';
+import { SessionManager, SessionKey } from './SessionManager';
 import { ContextBuilder } from '../loop/ContextBuilder';
 import { MemoryManager } from '../memory/MemoryManager';
-import { ContextBudget, ContextBlock, DEFAULT_BUDGET, truncateToChars } from '../loop/ContextBudget';
+import { ContextBudget, ContextBlock, DEFAULT_BUDGET } from '../loop/ContextBudget';
 import { LLMMessage } from '../core/ProviderFactory';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('SessionContext');
@@ -39,13 +39,11 @@ export interface SessionContextResult {
 export class SessionContext {
     private sessionManager: SessionManager;
     private contextBuilder: ContextBuilder;
-    private memory: MemoryManager;
     private budget: ContextBudget;
 
     constructor(sessionManager: SessionManager, memory: MemoryManager, budgetConfig?: Partial<typeof DEFAULT_BUDGET>) {
         this.sessionManager = sessionManager;
         this.contextBuilder = new ContextBuilder(memory);
-        this.memory = memory;
         this.budget = new ContextBudget(budgetConfig);
     }
 

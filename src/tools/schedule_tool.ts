@@ -6,7 +6,7 @@
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
-import { SchedulerService, ScheduledTask } from '../services/SchedulerService';
+import { SchedulerService } from '../services/SchedulerService';
 
 export class ScheduleTool implements ToolExecutor {
     name = 'schedule';

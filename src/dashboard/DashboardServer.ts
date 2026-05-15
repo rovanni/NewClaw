@@ -18,9 +18,8 @@ import { AgentController, NewClawConfig } from '../core/AgentController';
 import { ProviderFactory } from '../core/ProviderFactory';
 import { traceManager } from '../core/ExecutionTrace';
 import { ToolRegistry } from '../core/ToolRegistry';
-import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
+import { MemoryManager } from '../memory/MemoryManager';
 import { MemoryCurator } from '../memory/MemoryCurator';
-import { GraphAnalytics } from '../memory/GraphAnalytics';
 import { EmbeddingService } from '../memory/EmbeddingService';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
@@ -81,7 +80,6 @@ export class DashboardServer {
     private providerFactory?: ProviderFactory;
     private memoryManager?: MemoryManager;
     private memoryCurator?: MemoryCurator;
-    private graphAnalytics?: GraphAnalytics;
     private embeddingService?: EmbeddingService;
     private classificationMemory?: ClassificationMemory;
     private decisionMemory?: DecisionMemory;
@@ -1446,7 +1444,7 @@ export class DashboardServer {
         });
 
         // Export/Import conversations
-        this.app.get('/api/conversations/export', (req: Request, res: Response) => {
+        this.app.get('/api/conversations/export', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
                 const mm = this.memoryManager as any;
@@ -1508,7 +1506,6 @@ export class DashboardServer {
     public setMemoryManager(mm: MemoryManager) {
         this.memoryManager = mm;
         this.memoryCurator = new MemoryCurator(mm);
-        this.graphAnalytics = new GraphAnalytics(mm);
         this.embeddingService = new EmbeddingService(this.db || mm);
         this.classificationMemory = new ClassificationMemory(this.db || mm);
         this.decisionMemory = new DecisionMemory(this.db || mm);
@@ -1732,17 +1729,6 @@ export class DashboardServer {
                 right: { id: item.right.id, name: item.right.name, type: item.right.type },
                 similarity: Number(item.similarity.toFixed(2)),
             }));
-    }
-
-    private mergeNodeContent(keepContent: string, mergeContent: string): string {
-        const left = String(keepContent || '').trim();
-        const right = String(mergeContent || '').trim();
-        if (!left) return right;
-        if (!right) return left;
-        if (left === right) return left;
-        if (left.includes(right)) return left;
-        if (right.includes(left)) return right;
-        return `${left}\n\n---\n\n${right}`;
     }
 
     private normalizeText(value: string): string {

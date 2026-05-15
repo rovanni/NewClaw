@@ -86,18 +86,13 @@ const DEFAULT_CONFIG: RouterConfig = {
     ]
 };
 
-// Cache de classificação (evita chamar LLM pra mesma query)
-const classificationCache = new Map<string, { category: Category; timestamp: number }>();
-const CACHE_TTL = 300000; // 5 minutos
 
 export class ModelRouter {
     private config: RouterConfig;
     private usageLog: Map<string, number> = new Map();
-    private providerFactory?: any; // Avoiding circular dependency by using any
 
-    constructor(config?: any, providerFactory?: any) {
+    constructor(config?: any, _providerFactory?: any) {
         this.config = { ...DEFAULT_CONFIG };
-        this.providerFactory = providerFactory;
         
         if (config) {
             // Se vier do Dashboard/Env, mapeia os modelos individuais para os perfis

@@ -25,7 +25,6 @@ export interface Skill extends SkillMeta {
 export class SkillLoader {
     private skillsDir: string;
     private cache: Map<string, Skill> = new Map();
-    private lastLoadTime: number = 0;
 
     constructor(skillsDir: string = './skills') {
         this.skillsDir = skillsDir;
@@ -63,7 +62,6 @@ export class SkillLoader {
             }
         }
 
-        this.lastLoadTime = Date.now();
         return Array.from(this.cache.values());
     }
 

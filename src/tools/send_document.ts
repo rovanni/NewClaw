@@ -1,11 +1,9 @@
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import path from 'path';
 import fs from 'fs';
-import { createLogger } from '../shared/AppLogger';
 import { MessageBus } from '../channels/MessageBus';
 import { DiscordAdapter } from '../channels/DiscordAdapter';
 
-const log = createLogger('SendDocument');
 
 export class SendDocumentTool implements ToolExecutor {
     name = 'send_document';
@@ -145,4 +143,4 @@ export class SendDocumentTool implements ToolExecutor {
             return { success: false, output: '', error: `Erro Telegram: ${error.message}` };
         }
     }
-}
+}

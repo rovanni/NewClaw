@@ -13,8 +13,6 @@
  * extractText just pulls readable text from any LLM output.
  */
 
-import { createLogger } from '../shared/AppLogger';
-const log = createLogger('ResponseAdapter');
 
 // ── Full structured response (AgentLoop, tools, ObserverValidator) ──
 

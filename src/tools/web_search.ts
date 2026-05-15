@@ -3,11 +3,8 @@
  * leitura de páginas e síntese pronta para o LLM.
  */
 
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 
-const execFileAsync = promisify(execFile);
 
 interface SearchCandidate {
     title: string;

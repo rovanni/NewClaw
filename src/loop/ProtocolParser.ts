@@ -15,7 +15,6 @@
 import { createLogger } from '../shared/AppLogger';
 import {
     StructuredAgentResponse,
-    AgentActionType,
     ConfidenceLevel,
     ProtocolViolationError,
     ProtocolMetrics,

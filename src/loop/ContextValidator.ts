@@ -12,7 +12,7 @@ export interface ValidationResult {
  * ContextValidator — Assesses the quality and reliability of the current context.
  */
 export class ContextValidator {
-    validate(userText: string, context: string, state: AgentState): ValidationResult {
+    validate(_userText: string, context: string, state: AgentState): ValidationResult {
         let quality = 1.0;
         let hasConflict = false;
 

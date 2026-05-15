@@ -61,7 +61,7 @@ async function main() {
     // Global error handlers to prevent silent crashes
     // These catch unhandled rejections/exceptions but DO NOT exit the process.
     // The service must stay alive even if a single request fails.
-    process.on('unhandledRejection', (reason, promise) => {
+    process.on('unhandledRejection', (reason, _promise) => {
         log.error('unhandled_rejection', reason instanceof Error ? reason : undefined, String(reason));
         // DO NOT exit — log and continue. One failed request should not kill the service.
     });

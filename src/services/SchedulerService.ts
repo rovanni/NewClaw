@@ -10,7 +10,6 @@
 
 import Database from 'better-sqlite3';
 import path from 'path';
-import { MemoryManager } from '../memory/MemoryManager';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('Schedulerservice');
 
@@ -35,7 +34,6 @@ export class SchedulerService {
         if (db) {
             this.db = db;
         } else {
-            const dir = path.dirname(dbPath);
             if (!path.isAbsolute(dbPath)) dbPath = path.resolve(process.cwd(), dbPath);
             this.db = new Database(dbPath);
         }
@@ -99,11 +97,7 @@ export class SchedulerService {
             return `${minute} ${hours.join(',')} * * *`;
         }
 
-        // Multiple different minutes — build multiple cron parts joined
-        const parts = [...byMinute.entries()].map(([minute, hours]) => 
-            `${minute} ${hours.join(',')} * * *`
-        );
-        // Return first one for simplicity (most common case is same minute)
+        // Multiple different minutes — return first one for simplicity (most common case is same minute)
         const [minute, hours] = [...byMinute.entries()][0];
         return `${minute} ${hours.join(',')} * * *`;
     }
@@ -180,7 +174,7 @@ export class SchedulerService {
 
     /** Stop all timers (call on shutdown) */
     stopAll(): void {
-        for (const [id, timer] of this.timers) {
+        for (const [_id, timer] of this.timers) {
             clearTimeout(timer);
         }
         this.timers.clear();

@@ -5,7 +5,6 @@
  * Permite que o agente aprenda com experiências passadas.
  */
 import { Database } from 'better-sqlite3';
-import { MemoryManager } from './MemoryManager';
 
 export interface ToolDecision {
     id?: number;

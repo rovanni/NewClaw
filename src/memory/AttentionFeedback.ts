@@ -44,7 +44,6 @@ const CRITICAL_RELATIONS = ['depends_on', 'causes', 'has_trait', 'follows_rule']
 
 // Anti-dominance
 const MAX_REINFORCEMENT_IMPACT = 2.5;  // Max contribution to attention_score
-const DIVERSITY_MIN_DIFFERENT_DOMAINS = 2; // At least N domains in results
 
 // Classification
 const ACTIVE_THRESHOLD = 2.0;

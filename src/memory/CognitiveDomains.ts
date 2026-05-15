@@ -123,11 +123,11 @@ export function getCrossDomainStrength(fromDomain: string, toDomain: string): nu
  */
 export const DOMAIN_QUERIES = {
     /** Get all nodes in a domain */
-    byDomain: (domain: CognitiveDomain) =>
+    byDomain: (_domain: CognitiveDomain) =>
         `SELECT * FROM memory_nodes WHERE domain = ? ORDER BY pagerank DESC`,
 
     /** Get nodes by domain and type */
-    byDomainAndType: (domain: CognitiveDomain, type: string) =>
+    byDomainAndType: (_domain: CognitiveDomain, _type: string) =>
         `SELECT * FROM memory_nodes WHERE domain = ? AND type = ? ORDER BY pagerank DESC`,
 
     /** Count nodes per domain */
@@ -145,7 +145,7 @@ export const DOMAIN_QUERIES = {
         ORDER BY e.weight DESC`,
 
     /** Search within a domain using FTS5 */
-    searchInDomain: (domain: CognitiveDomain) =>
+    searchInDomain: (_domain: CognitiveDomain) =>
         `SELECT n.* FROM memory_nodes n
          JOIN memory_nodes_fts f ON f.rowid = n.rowid
          WHERE n.domain = ? AND memory_nodes_fts MATCH ?

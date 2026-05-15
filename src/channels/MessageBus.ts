@@ -18,7 +18,6 @@ import {
     TypingAction,
     NormalizedMessage,
     NormalizedResponse,
-    ChannelSession,
     ChannelAttachment
 } from './ChannelAdapter';
 import { createLogger } from '../shared/AppLogger';
@@ -315,7 +314,7 @@ export class MessageBus {
     }
 
     /** Process attachments via registered handlers */
-    private async processAttachments(msg: NormalizedMessage, sessionKey: SessionKey): Promise<string | null> {
+    private async processAttachments(msg: NormalizedMessage, _sessionKey: SessionKey): Promise<string | null> {
         for (const attachment of msg.attachments || []) {
             const handler = this.mediaHandlers.get(attachment.type);
             if (handler) {

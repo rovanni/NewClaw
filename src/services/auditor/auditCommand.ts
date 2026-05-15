@@ -15,7 +15,7 @@
  *   /audit fix      — Run auto-fix pipeline (only low-risk, multi-validated fixes)
  */
 
-import { AuditorService, AuditReport, FixReport } from './AuditorService';
+import { AuditorService, AuditReport } from './AuditorService';
 import { Bot, Context } from 'grammy';
 import { MessageBus } from '../../channels/MessageBus';
 import { NormalizedMessage } from '../../channels/ChannelAdapter';

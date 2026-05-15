@@ -57,11 +57,9 @@ export class CircuitBreaker {
     private state: CircuitState = 'CLOSED';
     private config: CircuitBreakerConfig;
     private failureCount: number = 0;
-    private successCount: number = 0;
     private consecutiveFailures: number = 0;
     private consecutiveSuccesses: number = 0;
     private lastFailureTime: number = 0;
-    private lastSuccessTime: number = 0;
     private lastStateChangeTime: number = Date.now();
     private halfOpenAttempted: boolean = false;
     private nextAttemptAt: number = 0;
@@ -238,7 +236,6 @@ export class CircuitBreaker {
         this.totalSuccesses++;
         this.consecutiveSuccesses++;
         this.consecutiveFailures = 0;
-        this.lastSuccessTime = Date.now();
         this.updateAvgDuration(durationMs);
 
         if (this.state === 'HALF_OPEN') {

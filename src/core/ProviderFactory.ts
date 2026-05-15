@@ -5,7 +5,7 @@
 
 import PQueue from 'p-queue';
 import { createLogger } from '../shared/AppLogger';
-import { circuitRegistry, type CircuitBreaker } from './CircuitBreaker';
+import { circuitRegistry } from './CircuitBreaker';
 const log = createLogger('Providerfactory');
 
 /**
@@ -267,7 +267,7 @@ export class DeepSeekProvider implements ILLMProvider {
 
     setModel(model: string): void { this.model = model; }
 
-    async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
+    async chat(messages: LLMMessage[], tools?: ToolDefinition[], _options?: ChatOptions): Promise<LLMResponse> {
         return await taskQueue.add(async () => {
             const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
                 method: 'POST',
@@ -321,7 +321,7 @@ export class GroqProvider implements ILLMProvider {
 
     setModel(model: string): void { this.model = model; }
 
-    async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
+    async chat(messages: LLMMessage[], tools?: ToolDefinition[], _options?: ChatOptions): Promise<LLMResponse> {
         return await taskQueue.add(async () => {
             const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
@@ -432,7 +432,6 @@ export class OllamaProvider implements ILLMProvider {
         const MAX_TIMEOUT = customTimeoutMs || 300_000;  // Hard ceiling
 
         const startTime = Date.now();
-        let lastActivityTime = startTime;
         let firstChunkReceived = false;
 
         // Track chunk types for diagnostics
@@ -565,7 +564,6 @@ export class OllamaProvider implements ILLMProvider {
 
                     // ANY activity resets the timer
                     if (isChunkActive(chunk) || text) {
-                        lastActivityTime = Date.now();
                         resetActivityTimer();
                         if (!firstChunkReceived) {
                             firstChunkReceived = true;
@@ -795,7 +793,7 @@ export class OpenAIProvider implements ILLMProvider {
 
     setModel(model: string): void { this.model = model; }
 
-    async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
+    async chat(messages: LLMMessage[], tools?: ToolDefinition[], _options?: ChatOptions): Promise<LLMResponse> {
         return await taskQueue.add(async () => {
             const response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
@@ -844,7 +842,7 @@ export class OpenRouterProvider extends OpenAIProvider {
         this.name = 'openrouter';
     }
 
-    async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
+    async chat(messages: LLMMessage[], tools?: ToolDefinition[], _options?: ChatOptions): Promise<LLMResponse> {
         // OpenRouter specific headers can be added here if needed (e.g., HTTP-Referer)
         return super.chat(messages, tools);
     }

@@ -30,7 +30,6 @@ import { MessageBus } from './MessageBus';
 import { createLogger } from '../shared/AppLogger';
 import PQueue from 'p-queue';
 import { existsSync, mkdirSync, readFileSync } from 'fs';
-import { join } from 'path';
 
 const log = createLogger('WhatsAppAdapter');
 

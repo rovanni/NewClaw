@@ -92,14 +92,6 @@ export class AttentionLayer {
 
     // Max nodes in context window
     private static readonly MAX_CONTEXT_WINDOW = 20;
-    // Max hops for context relevance
-    private static readonly MAX_HOPS = 2;
-    // Context relevance decay per hop
-    private static readonly HOP_DECAY: Record<number, number> = {
-        0: 1.0,  // directly connected
-        1: 0.7,  // 1 hop
-        2: 0.4,  // 2 hops
-    };
 
     constructor(db: Database.Database, weights?: Partial<AttentionWeights>) {
         this.db = db;

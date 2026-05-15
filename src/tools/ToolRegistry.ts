@@ -2,7 +2,7 @@
  * ToolRegistry — Registro central de ferramentas do NewClaw
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor } from '../loop/AgentLoop';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('Toolregistry');
 

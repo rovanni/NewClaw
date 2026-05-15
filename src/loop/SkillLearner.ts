@@ -7,7 +7,6 @@
  */
 
 import Database from 'better-sqlite3';
-import { MemoryManager } from '../memory/MemoryManager';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('Skilllearner');
 
