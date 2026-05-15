@@ -269,17 +269,22 @@ export class MessageBus {
                 }
             );
             const duration = Date.now() - startTime;
+            
+            const responseText = typeof response === 'string' ? response : response.text;
+            const responseOptions = typeof response === 'string' ? undefined : response.options;
+
             log.info('processing_done', `Duration: ${duration}ms`, { 
-                responseLength: response?.length || 0,
+                responseLength: responseText?.length || 0,
                 channel: msg.channel
             });
-            await this.sessionManager.recordAssistantMessage(sessionKey, response || '', { model: 'newclaw' });
+            await this.sessionManager.recordAssistantMessage(sessionKey, responseText || '', { model: 'newclaw' });
 
             // 4. Send response back through the originating channel
             if (adapter) {
                 const normalizedResponse: NormalizedResponse = {
-                    text: response || 'Desculpe, não consegui gerar uma resposta.',
-                    format: 'markdown'
+                    text: responseText || 'Desculpe, não consegui gerar uma resposta.',
+                    format: 'markdown',
+                    options: responseOptions
                 };
                 await adapter.send(normalizedResponse, msg.rawContext);
             }

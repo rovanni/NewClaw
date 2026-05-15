@@ -60,6 +60,13 @@ export interface NormalizedResponse {
     reactions?: string[];
     /** Reply to message ID */
     replyToId?: string;
+    /** Opções interativas (botões) */
+    options?: ResponseOption[];
+}
+
+export interface ResponseOption {
+    label: string;
+    value: string;
 }
 
 export interface ResponseAttachment {

@@ -26,7 +26,7 @@ export class ExecCommandTool implements ToolExecutor {
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
         let command = args.command as string;
-        const timeout = (args.timeout as number) || 30000;
+        const timeout = (args.timeout as number) || 60000;
         const workdir = args.workdir as string;
 
         if (!command) {
@@ -50,13 +50,13 @@ export class ExecCommandTool implements ToolExecutor {
             command = `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new ${sshTarget} "${remoteCmd.replace(/"/g, '\\"')}"`;
         }
 
-        // Resolver workdir: padrão = workspace
-        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
-        const effectiveWorkdir = workdir || workspaceDir;
+        // ── Path Resolution ──
+        const workspaceDir = path.resolve(process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace'));
         
-        // FIX: Prevenir path duplication - o LLM gera 'workspace/tmp/file.py'
-        // mas cwd já é WORKSPACE_DIR, resultando em WORKSPACE_DIR/workspace/tmp/file.py.
-        // Strip 'workspace/' from command paths when cwd is already workspace.
+        // Se workdir for absoluto, resolve em relação ao root; se relativo, em relação ao workspace
+        const effectiveWorkdir = workdir ? path.resolve(workspaceDir, workdir) : workspaceDir;
+        
+        // FIX: Prevenir path duplication no comando
         if (!workdir) {
             command = command.replace(/\bworkspace\//g, '');
         }
@@ -80,7 +80,7 @@ export class ExecCommandTool implements ToolExecutor {
                 });
             });
 
-            return { success: true, output: output.trim().slice(0, 8000) };
+            return { success: true, output: output.trim().slice(0, 16000) }; // Aumentado limite de output
         } catch (error: any) {
             return { success: false, output: '', error: error.message };
         }

@@ -20,6 +20,8 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
 import { normalizeFromRaw, extractText } from './ResponseAdapter';
+import { AuthorizationManager, PendingAction } from './AuthorizationManager';
+import { ResponseOption } from '../channels/ChannelAdapter';
 import { ProtocolParser } from './ProtocolParser';
 import { StructuredAgentResponse, ProtocolViolationError } from './ProtocolTypes';
 import { createLogger } from '../shared/AppLogger';
@@ -169,6 +171,11 @@ function sanitizeContent(content: string): string {
 }
 
 
+export interface ProcessedResult {
+    text: string;
+    options?: ResponseOption[];
+}
+
 export class AgentLoop {
     private providerFactory: ProviderFactory;
     private memory: MemoryManager;
@@ -177,8 +184,8 @@ export class AgentLoop {
     /** Cognitive Workspace: governed working memory for internal reasoning.
      *  NEVER shown to user. Auto-pruned, distilled, budget-controlled.
      *  Reset each conversation turn. */
-    private cognitiveWorkspace: CognitiveWorkspace;
-    private maxIterations: number = 2;
+    private cognitiveWorkspace = new CognitiveWorkspace();
+    private authManager = new AuthorizationManager();
     private contextBuilder: ContextBuilder;
     private skillLearner: SkillLearner;
     private skillLoader: SkillLoader;
@@ -190,7 +197,6 @@ export class AgentLoop {
     private metricsMaxSize = 100;
     private classificationMemory: ClassificationMemory;
     private decisionMemory: DecisionMemory;
-    private pendingActions: Map<string, { toolName: string, arguments: any, stepCount: number, chatProfile: any, messages: any[] }> = new Map();
     private protocolParser: ProtocolParser;
 
     constructor(providerFactory: ProviderFactory, memory: MemoryManager, config: AgentLoopConfig, skillLearner: SkillLearner, skillLoader: SkillLoader, classificationMemory?: ClassificationMemory, decisionMemory?: DecisionMemory) {
@@ -198,7 +204,6 @@ export class AgentLoop {
         this.memory = memory;
         this.config = config;
         this.contextBuilder = new ContextBuilder(memory);
-        this.cognitiveWorkspace = new CognitiveWorkspace();
         this.skillLearner = skillLearner as SkillLearner;
         this.skillLoader = skillLoader as SkillLoader;
         this.modelRouter = new ModelRouter(config.modelRouter as any, providerFactory);
@@ -211,10 +216,9 @@ export class AgentLoop {
     }
 
     private isAuthorized(conversationId: string, toolName: string, args: any): boolean {
-        const auth = (this as any)._currentAuthorizedAction;
-        if (auth && auth.toolName === toolName && JSON.stringify(auth.args) === JSON.stringify(args)) {
-            // Consumir a autorização para que não seja usada novamente
-            delete (this as any)._currentAuthorizedAction;
+        const pending = this.authManager.getPending(conversationId);
+        if (pending && this.authManager.isMatch(pending, toolName, args)) {
+            this.authManager.removePending(conversationId);
             return true;
         }
         return false;
@@ -326,7 +330,6 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
 
         switch (category) {
             case 'light':
-                // Mínimo necessário
                 break;
             case 'chat':
                 prompt += components.RESPONSE_ARCH + "\n\n";
@@ -345,7 +348,6 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                 prompt += components.VISION + "\n\n";
                 break;
             case 'execution':
-                // Full capabilities
                 prompt += components.RESPONSE_ARCH + "\n\n";
                 prompt += components.FILE_OPS + "\n\n";
                 prompt += components.ACADEMIC + "\n\n";
@@ -362,8 +364,9 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         return prompt;
     }
 
-    public async process(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string> {
-        return this.run(conversationId, userText, userId, context);
+    public async process(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string | ProcessedResult> {
+        const result = await this.run(conversationId, userText, conversationId, context);
+        return result;
     }
 
     public registerTool(tool: ToolExecutor) {
@@ -373,15 +376,10 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
     private ts(): string { return new Date().toLocaleTimeString('pt-BR', { hour12: false }); }
 
     private buildContextBlock(userText: string, context: string, skillContext: string, masterPrompt: string): string {
-        // DEPRECATED: This method is kept for backward compatibility but should not be used.
-        // ContextBudget in SessionContext.buildLLMMessages() now handles all context assembly.
-        // This method returns just the master prompt — all other blocks are assembled separately.
         return masterPrompt;
     }
 
-    public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string> {
-        // Reset cognitive workspace at start of each conversation turn
-        // Reasoning from previous turns is NOT carried over (prevents contamination)
+    public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string | ProcessedResult> {
         this.cognitiveWorkspace.reset();
         return this.runWithTools(conversationId, userText, 0, userId, context);
     }
@@ -402,14 +400,12 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                     return JSON.parse(jsonStr);
                 }
             } catch (e2) {
-                // Fallback: extract content field from partial/malformed JSON
                 try {
                     const contentMatch = content.match(/"content"\s*:\s*"([^"]*(?:""[^"]*)*)"/);
                     if (contentMatch && contentMatch[1]) {
                         return { action: { type: 'final_answer', content: contentMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"') }, evaluation: { is_complete: true, confidence: 'low', reason: 'Extracted from partial JSON' } };
                     }
                 } catch (e3) {
-                    // Give up
                 }
                 return null;
             }
@@ -417,33 +413,19 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         return null;
     }
 
-    /**
-     * Extract the canonical final text from an LLM response.
-     * 
-     * CONTRACT: action.content is the single source of truth.
-     * response.content (raiz) is unreliable — the model often sends it empty.
-     * 
-     * Priority: action.content > sanitizeContent(response.content)
-     * Never returns empty string — falls back to a default message.
-     */
     private extractFinalText(response: LLMResult, atomicData: any): string {
-        // Pipeline: parseLLMResponse → normalizeResponse (structured)
         const normalized = normalizeFromRaw(response.content || '', (c) => this.parseLLMResponse(c));
 
-        // Source of truth: normalized content (covers action.content + raw fallback)
         if (normalized.type !== 'empty' && normalized.content && normalized.content.trim().length > 0) {
             return normalized.content;
         }
-        // Fallback: sanitized response.content (may be empty or raw JSON)
         const sanitized = sanitizeContent(response.content || '');
         if (sanitized.length > 0) {
             return sanitized;
         }
-        // Last resort
         return 'Desculpe, não consegui gerar uma resposta adequada.';
     }
 
-    // ── Greeting fast-path: respond instantly without LLM for simple social messages ──
     private static readonly GREETING_PATTERNS: RegExp[] = [
         /^(oi+|ol[aá]+|opa+|eai+|eae|fala|hey|hello|hi|bom dia|boa tarde|boa noite|salve|coé|coe|tudo bem|tudo bom|blz|beleza|tranquilo)[\s!.?]*$/i,
         /^(tchau|bye|até|ate|flw|falou|fui)[\s!.?]*$/i,
@@ -464,7 +446,7 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         "Opa! Bora lá! 💪",
     ];
 
-    private async runWithTools(conversationId: string, userText: string, iteration: number, userId?: string, channelContext?: ChannelContext): Promise<string> {
+    private async runWithTools(conversationId: string, userText: string, iteration: number, userId?: string, channelContext?: ChannelContext): Promise<string | ProcessedResult> {
         log.info(`[${this.ts()}] [LOOP] Atomic Cognition Cycle ${iteration + 1}`);
 
         const cycleHistory: Array<{ tool: string, input: string, status: string }> = []
@@ -472,7 +454,6 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         let toolFailureCount = 0;
         const usedToolInputs = new Set<string>();
 
-        // ── Recording: Trace start + Unified Intent Routing ──
         const trace = traceManager.startTrace(conversationId, userText);
         const fsm = new AgentFSM();
         const move = (event: AgentFSMEvent, meta?: Record<string, unknown>) => {
@@ -505,19 +486,16 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         });
         log.info(`[${this.ts()}] [UNIFIED-ROUTER] intent=${intentDecision.intent} mode=${intentDecision.executionMode} category=${intentDecision.category} confidence=${intentDecision.confidence} source=${intentDecision.source} model=${intentDecision.modelCategory}`);
 
-        // ── Fast path: direct reply for greetings ──
         if (intentDecision.terminalAction && intentDecision.executionMode === 'direct' && intentDecision.category === 'greeting') {
             log.info(`[${this.ts()}] [FAST-PATH] Greeting detected — skipping LLM`);
             move('FINAL_READY');
             traceManager.completeTrace(trace, 'completed', 'Greeting fast path');
-            // Return simple greeting response
             const greetings = ['Olá! 👋', 'Oi! Como posso ajudar?', 'E aí! 🚀', 'Olá! Tô aqui! 💪', 'Opa! Bora? 😊'];
             return greetings[Math.floor(Math.random() * greetings.length)];
         }
 
         this.classificationMemory.store(userText, intentDecision.modelCategory, intentDecision.confidence);
 
-        // ── Context and Routing Preparation ──
         const context = intentDecision.requiresMemory ? await this.contextBuilder.buildContext(userText) : '';
         const skillResult = this.skillLearner.buildSkillContext(userText, 2);
         let skillContext = skillResult && skillResult.confidence >= 0.7 ? skillResult.text : '';
@@ -563,16 +541,14 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
         );
         const loopMessages = sessionMessages;
 
-        // ── Human-in-the-Loop: Check for pending authorizations ──
-        const pending = this.pendingActions.get(conversationId);
+        const pending = this.authManager.getPending(conversationId);
         if (pending) {
             log.info(`[${this.ts()}] [AUTH] Evaluating response for pending action. Intent: ${intentDecision.category}`);
             
             if (intentDecision.category === 'confirmation') {
                 log.info(`[${this.ts()}] [AUTH] Action APPROVED via Router for ${conversationId}: ${pending.toolName}`);
-                this.pendingActions.delete(conversationId);
+                this.authManager.removePending(conversationId);
                 
-                // --- IMMEDIATE EXECUTION OF CONFIRMED ACTION ---
                 const tool = this.tools.get(pending.toolName);
                 if (tool) {
                     log.info(`[${this.ts()}] [AUTH] Executing approved tool: ${pending.toolName}`);
@@ -618,8 +594,8 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                 }
             } else if (intentDecision.category === 'rejection') {
                 log.warn(`[${this.ts()}] [AUTH] Action REJECTED via Router for ${conversationId}: ${pending.toolName}`);
-                this.pendingActions.delete(conversationId);
-                return `❌ Execução cancelada pelo usuário. Como posso ajudar agora?`;
+                this.authManager.removePending(conversationId);
+                return { text: `❌ Execução cancelada pelo usuário. Como posso ajudar agora?` };
             } else {
                 log.info(`[${this.ts()}] [AUTH] Ambiguous response. Keeping ${pending.toolName} pending and proceeding with conversation.`);
             }
@@ -642,34 +618,17 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
             move('LLM_REQUEST', { step: stepCount });
             const response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
             move('LLM_RESPONSE', { step: stepCount, status: response.status });
-            const rawContent = (response.content || '').slice(0, 300);
-            log.info(`[${this.ts()}] [COGNITION] Step ${stepCount} response received.`);
-
-            // ── Cognitive Workspace: preserve thinking as governed episodic memory ──
-            // Thinking is NEVER shown to user, but preserved for:
-            // - continuity of reasoning across steps
-            // - multi-step planning context
-            // - self-correction
-            // - retry intelligence
-            // Governance: auto-pruned, distilled, budget-controlled (2000 tokens max)
+            
             if (response.thinking && response.thinking.trim().length > 0) {
                 this.cognitiveWorkspace.add(stepCount, response.thinking.trim(), 'reasoning');
-                const stats = this.cognitiveWorkspace.getStats();
-                log.info(`[${this.ts()}] [COGNITIVE-WORKSPACE] Preserved ${response.thinking.length} chars reasoning (workspace: ${stats.entries} entries, ${stats.totalTokens} tokens, types=${JSON.stringify(stats.types)})`);
             }
 
-            // Record trace step (including thinking if available)
             traceManager.addStep(trace, 'decision', { 
                 thought: this.parseLLMResponse(response.content || '')?.thought,
                 step: stepCount,
                 iteration
             });
             
-            const rawContentPreview = (response.content || '').slice(0, 300);
-            log.info(`[${this.ts()}] [LLM-RAW] step=${stepCount} content=${JSON.stringify(rawContentPreview)}`);
-            
-            // Check if this is a structured fallback response from ProviderFactory
-            // (when all providers fail, ProviderFactory returns LLMResult with status timeout/error)
             if (response.status === 'timeout' || response.status === 'error') {
                 log.warn(`[${this.ts()}] [FALLBACK] Provider returned ${response.status}: ${response.fallbackReason}`);
                 move('FAIL', { step: stepCount, status: response.status });
@@ -678,52 +637,27 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                 return response.fallbackMessage || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
             }
             
-            // ── Strict Cognitive Protocol ──
-            // The runtime operates on StructuredAgentResponse, NEVER on text heuristics.
-            // Pipeline: LLM Response → ProtocolParser.strictParse() → StructuredAgentResponse
-            // If strict parse fails → Semantic Recovery (isComplete=false, type=planning)
-            //   → inject recovery prompt → re-parse → if still fails → ProtocolViolationError
-            
             this.protocolParser.setProviderContext(
                 response.attempts?.[0]?.provider || 'unknown',
                 response.attempts?.[0]?.model || 'unknown'
             );
             
             const structured = this.protocolParser.strictParse(response.content || '');
-            
-            // Keep backward compatibility: also parse with legacy parser for atomicData
-            // This will be removed once ProtocolParser is the sole authority
             const atomicData = this.parseLLMResponse(response.content || '');
             const normalized = normalizeFromRaw(response.content || '', (c) => this.parseLLMResponse(c));
-            log.info(`[${this.ts()}] [PARSE] step=${stepCount} structured_type=${structured?.type || 'null'} parsed=${atomicData ? 'YES' : 'NO'} normalized_type=${normalized.type} is_complete=${structured?.isComplete ?? 'null'} action_type=${structured?.type || atomicData?.action?.type || 'null'}`);
             
-            // Canonical extraction: action.content is source of truth
             const finalText = this.extractFinalText(response, atomicData);
             
-            // Track best content seen so far (for fallback synthesis)
             if (finalText.length > 0) {
                 lastBestContent = finalText;
             }
 
-            // Registrar resposta para contexto
             loopMessages.push({ role: 'assistant', content: response.content, toolCalls: response.toolCalls });
 
-            // ── Protocol-Based Decision Authority ──
-            // All decisions derive from StructuredAgentResponse, NEVER from text heuristics.
-            
             const wantsTool = structured?.type === 'tool_call' || (atomicData?.action?.type === 'tool' && atomicData?.action?.name);
             const hasNativeToolCalls = response.toolCalls && response.toolCalls.length > 0;
             
-            // ── Protocol Recovery: If strict parse returned 'planning' with isComplete=false ──
-            // This means the model didn't follow the structured protocol.
-            // Inject recovery prompt and continue the loop.
             if (structured?.metadata?.protocolViolation && structured?.type === 'planning') {
-                log.warn(`[${this.ts()}] [PROTOCOL-RECOVERY] Model response not in structured format — injecting recovery prompt (step ${stepCount})`);
-                traceManager.addStep(trace, 'protocol_violation', {
-                    step: stepCount,
-                    type: 'unstructured_response',
-                    content_preview: (response.content || '').slice(0, 200),
-                });
                 loopMessages.push({
                     role: 'system',
                     content: this.protocolParser.getRecoveryPrompt()
@@ -731,22 +665,17 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                 continue;
             }
             
-            // ── Decision: Task Complete? ──
-            // Only exit when the StructuredAgentResponse explicitly says isComplete=true.
-            // Never exit on unstructured text, promises, or implicit completion.
             const isExplicitlyComplete = structured?.isComplete === true;
             const isExplicitlyIncomplete = structured?.isComplete === false;
             const isFinalAnswer = structured?.type === 'final_answer';
             
             if ((isFinalAnswer || isExplicitlyComplete) && !isExplicitlyIncomplete && !wantsTool && !hasNativeToolCalls) {
-                log.info(`[${this.ts()}] [PROTOCOL] Task COMPLETE — structured type=${structured?.type}, isComplete=${structured?.isComplete}, confidence=${structured?.confidence}`);
                 move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : 'is_complete' });
                 traceManager.completeTrace(trace, 'completed', finalText);
                 this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                return finalText;
+                return { text: finalText };
             }
 
-            // 2. Execução de Ferramentas (Nativas)
             if (response.toolCalls && response.toolCalls.length > 0) {
                 for (const toolCall of response.toolCalls) {
                     const toolName = toolCall.name;
@@ -754,7 +683,6 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                     const inputKey = `${toolName}:${toolInput}`;
 
                     if (usedToolInputs.has(inputKey)) {
-                        log.warn(`[${this.ts()}] [TOOL] Blocked repeated call: ${toolName}`);
                         loopMessages.push({ 
                             role: 'system', 
                             content: `[AVISO] Você já tentou a ferramenta "${toolName}" com este input. NÃO repita. Mude a estratégia ou responda com o que já sabe.` 
@@ -765,7 +693,6 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                     const tool = this.tools.get(toolName);
                     if (tool) {
                         move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'native' });
-                        // Inject channel context for tools that need it
                         if (typeof (tool as any).setContext === 'function' && channelContext) {
                             (tool as any).setContext(
                                 channelContext.chatId || '', 
@@ -775,17 +702,15 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                         }
                         const isDangerous = ToolRegistry.isDangerous(toolName);
                         if (isDangerous && !this.isAuthorized(conversationId, toolName, toolCall.arguments)) {
-                            log.warn(`[${this.ts()}] [AUTH] Intercepted dangerous tool: ${toolName}`);
-                            this.pendingActions.set(conversationId, {
-                                toolName,
-                                arguments: toolCall.arguments,
-                                stepCount,
-                                chatProfile,
-                                messages: [...loopMessages]
-                            });
+                            log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
+                            this.authManager.addPending(conversationId, toolName, toolCall.arguments);
+                            move('AUTH_REQUIRED', { step: stepCount, tool: toolName });
                             
-                            const argsStr = JSON.stringify(toolCall.arguments, null, 2);
-                            return `⚠️ **AUTORIZAÇÃO NECESSÁRIA**\n\nO agente deseja executar uma ferramenta do sistema:\n\n🛠 **Ferramenta:** \`${toolName}\`\n📦 **Parâmetros:**\n\`\`\`json\n${argsStr}\n\`\`\`\n\nDigite **"sim"** ou **"autorizar"** para prosseguir, ou qualquer outra coisa para cancelar.`;
+                            const authReq = this.authManager.formatRequest(toolName, toolCall.arguments);
+                            return {
+                                text: authReq.text,
+                                options: authReq.options
+                            };
                         }
 
                         const toolStartTime = Date.now();

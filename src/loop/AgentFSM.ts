@@ -8,6 +8,7 @@ export type AgentFSMEvent =
     | 'TOOL_COMPLETED'
     | 'SYNTHESIS_REQUIRED'
     | 'FINAL_READY'
+    | 'AUTH_REQUIRED'
     | 'FAIL';
 
 export interface AgentFSMTransition {
@@ -28,11 +29,13 @@ const TRANSITIONS: Record<AgentFSMState, Partial<Record<AgentFSMEvent, AgentFSMS
         TOOL_REQUESTED: 'EXECUTING_TOOL',
         SYNTHESIS_REQUIRED: 'SYNTHESIZING',
         FINAL_READY: 'DONE',
+        AUTH_REQUIRED: 'DONE',
         FAIL: 'ERROR'
     },
     EXECUTING_TOOL: {
         TOOL_COMPLETED: 'THINKING',
         FINAL_READY: 'DONE',
+        AUTH_REQUIRED: 'DONE',
         FAIL: 'ERROR'
     },
     SYNTHESIZING: {

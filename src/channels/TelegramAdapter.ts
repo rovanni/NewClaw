@@ -8,7 +8,7 @@
  * Todo output recebe NormalizedResponse.
  */
 
-import { Bot, Context, InputFile } from 'grammy';
+import { Bot, Context, InputFile, InlineKeyboard } from 'grammy';
 import {
     ChannelAdapter,
     ChannelType,
@@ -236,31 +236,54 @@ export class TelegramAdapter implements ChannelAdapter {
             // Handle format
             if (response.format === 'markdown' || response.format === 'html') {
                 const html = mdToTelegramHTML(response.text);
+                const keyboard = response.options ? new InlineKeyboard() : undefined;
+                if (keyboard && response.options) {
+                    response.options.forEach(opt => {
+                        keyboard.text(opt.label, opt.value).row();
+                    });
+                }
+
                 if (html.length <= maxLen) {
                     try {
-                        await ctx.reply(html, { parse_mode: 'HTML' });
+                        await ctx.reply(html, { parse_mode: 'HTML', reply_markup: keyboard });
                     } catch {
-                        await ctx.reply(response.text);
+                        await ctx.reply(response.text, { reply_markup: keyboard });
                     }
                 } else {
                     const chunks = this.splitIntoChunks(html, maxLen);
-                    for (const chunk of chunks) {
+                    for (let i = 0; i < chunks.length; i++) {
+                        const isLast = i === chunks.length - 1;
                         try {
-                            await ctx.reply(chunk, { parse_mode: 'HTML' });
+                            await ctx.reply(chunks[i], { 
+                                parse_mode: 'HTML', 
+                                reply_markup: isLast ? keyboard : undefined 
+                            });
                         } catch {
-                            await ctx.reply(chunk);
+                            await ctx.reply(chunks[i], { 
+                                reply_markup: isLast ? keyboard : undefined 
+                            });
                         }
                         await new Promise(r => setTimeout(r, 100));
                     }
                 }
             } else {
                 // Plain text
+                const keyboard = response.options ? new InlineKeyboard() : undefined;
+                if (keyboard && response.options) {
+                    response.options.forEach(opt => {
+                        keyboard.text(opt.label, opt.value).row();
+                    });
+                }
+
                 if (response.text.length <= maxLen) {
-                    await ctx.reply(response.text);
+                    await ctx.reply(response.text, { reply_markup: keyboard });
                 } else {
                     const chunks = this.splitIntoChunks(response.text, maxLen);
-                    for (const chunk of chunks) {
-                        await ctx.reply(chunk);
+                    for (let i = 0; i < chunks.length; i++) {
+                        const isLast = i === chunks.length - 1;
+                        await ctx.reply(chunks[i], { 
+                            reply_markup: isLast ? keyboard : undefined 
+                        });
                         await new Promise(r => setTimeout(r, 100));
                     }
                 }
@@ -495,6 +518,7 @@ export class TelegramAdapter implements ChannelAdapter {
 
         // Documents
         this.bot.on('message:document', async (ctx) => {
+            // ... (keeping existing logic)
             const userId = ctx.from!.id.toString();
             if (!this.config.allowedUserIds.includes(userId)) return;
 
@@ -517,6 +541,37 @@ export class TelegramAdapter implements ChannelAdapter {
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
                 metadata: { botToken: this.config.botToken },
+            };
+
+            if (this.bus) {
+                await this.bus.processMessage(msg);
+            }
+        });
+
+        // Callback queries (Button clicks)
+        this.bot.on('callback_query:data', async (ctx) => {
+            const userId = ctx.from.id.toString();
+            if (!this.config.allowedUserIds.includes(userId)) return;
+
+            const data = ctx.callbackQuery.data;
+            log.info('callback_received', `userId=${userId} data="${data}"`);
+
+            // Answer callback to remove loading state
+            await ctx.answerCallbackQuery().catch(() => {});
+
+            // Optional: Edit message to remove buttons or show selection
+            // await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }).catch(() => {});
+
+            const msg: NormalizedMessage = {
+                messageId: `cb_${ctx.callbackQuery.id}`,
+                channel: 'telegram',
+                userId,
+                userName: ctx.from.first_name,
+                type: 'text',
+                text: data, // Treat button value as text input
+                rawContext: ctx,
+                chatId: ctx.chat?.id.toString() || userId,
+                metadata: { botToken: this.config.botToken, isCallback: true },
             };
 
             if (this.bus) {
