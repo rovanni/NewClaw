@@ -19,7 +19,7 @@ import PQueue from 'p-queue';
 import { MemoryManager } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
-import { normalizeFromRaw } from './ResponseAdapter';
+import { normalizeFromRaw, extractText } from './ResponseAdapter';
 import { ProtocolParser } from './ProtocolParser';
 import { StructuredAgentResponse, ProtocolViolationError } from './ProtocolTypes';
 import { createLogger } from '../shared/AppLogger';
@@ -490,26 +490,6 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
             sessionId: conversationId,
         });
 
-        // ── Human-in-the-Loop: Check for pending authorizations ──
-        const pending = this.pendingActions.get(conversationId);
-        if (pending) {
-            log.info(`[${this.ts()}] [AUTH] Evaluating response for pending action. Intent: ${intentDecision.category}`);
-            
-            if (intentDecision.category === 'confirmation') {
-                log.info(`[${this.ts()}] [AUTH] Action APPROVED via Router for ${conversationId}: ${pending.toolName}`);
-                this.pendingActions.delete(conversationId);
-                // Mark as temporarily authorized for this specific cycle
-                (this as any)._currentAuthorizedAction = { toolName: pending.toolName, args: pending.arguments };
-            } else if (intentDecision.category === 'rejection') {
-                log.warn(`[${this.ts()}] [AUTH] Action REJECTED via Router for ${conversationId}: ${pending.toolName}`);
-                this.pendingActions.delete(conversationId);
-                return `❌ Execução cancelada pelo usuário. Como posso ajudar agora?`;
-            } else {
-                // Not a clear confirmation or rejection — handle as a normal turn 
-                // but keep the action in pendingActions so it can be approved later.
-                log.info(`[${this.ts()}] [AUTH] Ambiguous response. Keeping ${pending.toolName} pending and proceeding with conversation.`);
-            }
-        }
         traceManager.addStep(trace, 'intent_classification', {
             intent: intentDecision.intent,
             category: intentDecision.category,
@@ -537,18 +517,11 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
 
         this.classificationMemory.store(userText, intentDecision.modelCategory, intentDecision.confidence);
 
-        // ── Session Context Pipeline (mandatory) ──
-        // 1. Checkpoint summary (structured system role)
-        // 2. Recent transcript messages (linear replay)
-        // 3. Semantic memory graph
-        // 4. Skill context
+        // ── Context and Routing Preparation ──
         const context = intentDecision.requiresMemory ? await this.contextBuilder.buildContext(userText) : '';
         const skillResult = this.skillLearner.buildSkillContext(userText, 2);
-        
-        // Unificar Autonomous Skills (Learner) com Manual Skills (Loader)
         let skillContext = skillResult && skillResult.confidence >= 0.7 ? skillResult.text : '';
         
-        // Buscar skills manuais que coincidam com os gatilhos
         const manualSkills = this.skillLoader.loadAll();
         const matchedManual = manualSkills.filter(s => 
             s.triggers?.some(t => userText.toLowerCase().includes(t.toLowerCase()))
@@ -566,10 +539,7 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
             parameters: t.parameters
         }));
 
-        // ── Model routing guided by UnifiedIntentRouter ──
-        // Use intent decision's model category, fall back to ModelRouter for actual provider selection
         const chatProfile = await this.modelRouter.route(userText);
-        // Override model category with UnifiedIntentRouter's decision if more specific
         if (intentDecision.modelCategory && intentDecision.confidence >= 0.8) {
             const intentProfile = this.modelRouter.getProfileByCategory(intentDecision.modelCategory);
             if (intentProfile) {
@@ -578,33 +548,90 @@ NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta ne
                 log.info(`[${this.ts()}] [UNIFIED-ROUTER] Overriding model: ${intentDecision.modelCategory} → ${intentProfile.model}`);
             }
         }
-        
-        // ── Dynamic System Prompt Assembly ──
-        const dynamicMasterPrompt = this.buildMasterPrompt(chatProfile.category);
-        // context and skillContext are now handled by SessionContext + ContextBudget
-        // No more monolithic concatenation — each block is a separate message
-        
+
         if (!this.sessionContext) {
             log.error('sessionContext not set — session pipeline is mandatory. Throwing.');
             throw new Error('SessionContext is required. Set via AgentLoop.setSessionContext() before processing.');
         }
 
         const sessionKey: SessionKey = { channel: 'telegram', userId: conversationId };
-        const { messages: sessionMessages, stats } = await this.sessionContext.buildLLMMessages(
+        const { messages: sessionMessages } = await this.sessionContext.buildLLMMessages(
             sessionKey,
-            dynamicMasterPrompt,  // Just the system prompt — ContextBudget handles the rest
+            this.buildMasterPrompt(chatProfile.category),
             userText,
-            skillContext  // Pass skills block separately — no concatenation
+            skillContext
         );
         const loopMessages = sessionMessages;
+
+        // ── Human-in-the-Loop: Check for pending authorizations ──
+        const pending = this.pendingActions.get(conversationId);
+        if (pending) {
+            log.info(`[${this.ts()}] [AUTH] Evaluating response for pending action. Intent: ${intentDecision.category}`);
+            
+            if (intentDecision.category === 'confirmation') {
+                log.info(`[${this.ts()}] [AUTH] Action APPROVED via Router for ${conversationId}: ${pending.toolName}`);
+                this.pendingActions.delete(conversationId);
+                
+                // --- IMMEDIATE EXECUTION OF CONFIRMED ACTION ---
+                const tool = this.tools.get(pending.toolName);
+                if (tool) {
+                    log.info(`[${this.ts()}] [AUTH] Executing approved tool: ${pending.toolName}`);
+                    move('TOOL_REQUESTED', { step: 0, tool: pending.toolName, mode: 'auth_resume' });
+                    
+                    if (typeof (tool as any).setContext === 'function' && channelContext) {
+                        (tool as any).setContext(
+                            channelContext.chatId || '', 
+                            channelContext.botToken || '', 
+                            channelContext.channel
+                        );
+                    }
+
+                    try {
+                        const result = await tool.execute(pending.arguments);
+                        log.info(`[${this.ts()}] [AUTH] Approved tool ${pending.toolName} executed. Success: ${result.success}`);
+                        cycleHistory.push({ tool: pending.toolName, input: JSON.stringify(pending.arguments), status: result.success ? 'success' : 'error' });
+                        
+                        const toolCallId = `auth_${Date.now()}`;
+                        loopMessages.push({ 
+                            role: 'assistant', 
+                            content: `Executando comando autorizado: ${pending.toolName}`,
+                            toolCalls: [{ id: toolCallId, name: pending.toolName, arguments: pending.arguments }]
+                        });
+                        loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCallId });
+                        
+                        if (!result.success) {
+                            loopMessages.push({ role: 'system', content: `[AVISO] O comando autorizado falhou: ${result.error || 'Erro desconhecido'}` });
+                        }
+
+                        const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
+                        if (terminalTools.includes(pending.toolName) && result.success) {
+                            log.info(`[${this.ts()}] [AUTH] Terminal tool succeeded → finishing turn`);
+                            move('FINAL_READY', { step: 0, tool: pending.toolName, terminal: true });
+                            traceManager.completeTrace(trace, 'completed', result.output);
+                            this.persistTrace(trace, 0, 'completed', result.output, channelContext);
+                            return result.output;
+                        }
+                    } catch (toolError: any) {
+                        log.error(`[AUTH] Error executing approved tool ${pending.toolName}:`, toolError);
+                        loopMessages.push({ role: 'system', content: `[ERRO CRÍTICO] Falha ao executar comando autorizado: ${toolError.message}` });
+                    }
+                }
+            } else if (intentDecision.category === 'rejection') {
+                log.warn(`[${this.ts()}] [AUTH] Action REJECTED via Router for ${conversationId}: ${pending.toolName}`);
+                this.pendingActions.delete(conversationId);
+                return `❌ Execução cancelada pelo usuário. Como posso ajudar agora?`;
+            } else {
+                log.info(`[${this.ts()}] [AUTH] Ambiguous response. Keeping ${pending.toolName} pending and proceeding with conversation.`);
+            }
+        }
+        
         let stepCount = 0;
-        const maxSteps = 15; // Aumentado de 5 para 15 para tarefas complexas
+        const maxSteps = 15;
 
         while (stepCount < maxSteps) {
             stepCount++;
             log.info(`[${this.ts()}] [COGNITION] Step ${stepCount}...`);
 
-            // Check if we should force synthesis due to tool failures
             if (toolFailureCount >= 2) {
                 loopMessages.push({ 
                     role: 'system', 
@@ -971,8 +998,7 @@ Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específic
         const rawFinal = finalResponse.content || '';
         
         // Same extraction strategy: extractText first, then full pipeline
-        const { extractText: extractTextFallback } = require('./ResponseAdapter');
-        let text = extractTextFallback(rawFinal);
+        let text = extractText(rawFinal);
         if (!text || text.length < 20) {
             text = this.extractFinalText(finalResponse, this.parseLLMResponse(rawFinal));
         }

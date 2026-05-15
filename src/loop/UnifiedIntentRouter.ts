@@ -528,7 +528,16 @@ export class UnifiedIntentRouter {
             for (const keyword of rule.keywords) {
                 if (normalized.includes(keyword.toLowerCase())) {
                     // For high-specificity rules (crypto, shell), keyword match is sufficient
-                    // For low-specificity rules, require pattern match to avoid false positives
+                    // For low-specificity rules (confirmation, rejection, greeting), 
+                    // require pattern match OR exact match to avoid false positives on common words like "sim"
+                    if (rule.category === 'confirmation' || rule.category === 'rejection' || rule.category === 'greeting') {
+                        // Only match if it's the exact word or matches the pattern
+                        if (normalized === keyword.toLowerCase() || rule.patterns.some(p => p.test(normalized))) {
+                            return rule;
+                        }
+                        continue;
+                    }
+
                     if (rule.confidence >= 0.85 || rule.keywords.length < 10) {
                         return rule;
                     }
