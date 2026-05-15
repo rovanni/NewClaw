@@ -34,3 +34,6 @@ scratch/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Relatórios e Auditoria
+docs/AUDIT_CHECKLIST_*.md
