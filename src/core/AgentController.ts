@@ -411,8 +411,9 @@ export class AgentController {
                 const result = await this.agentLoop.process(chatId, prompt);
                 // Send via the primary adapter (Telegram for now)
                 await this.telegramAdapter.sendToChat(chatId, {
-                    text: result,
-                    format: 'markdown'
+                    text: typeof result === 'string' ? result : result.text,
+                    format: 'markdown',
+                    options: typeof result === 'string' ? undefined : result.options
                 });
                 this._eventBus.emitAppEvent({
                     type: EventTypes.SCHEDULER_COMPLETED,
@@ -521,7 +522,7 @@ export class AgentController {
                 return res.response;
             }
             const result = await this.agentLoop.process(sessionId, message);
-            return result;
+            return typeof result === 'string' ? result : result.text;
         } catch (err: any) {
             log.error('Web message error:', err.message);
             return `Erro: ${err.message}`;
