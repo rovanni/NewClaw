@@ -37,3 +37,6 @@ Thumbs.db
 
 # Relatórios e Auditoria
 docs/AUDIT_CHECKLIST_*.md
+ARCHITECTURE_REVIEW.md
+AUDIT_PART*.md
+AUDITORIA_ARQUITETURAL_COMPLETA.md
