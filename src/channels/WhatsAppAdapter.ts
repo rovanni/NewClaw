@@ -65,7 +65,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
             browser: config.browser || 'NewClaw',
         };
         // Merge any extra keys from config
-        if (config.botToken !== undefined) (this.config as any).botToken = config.botToken;
+        if (config.botToken !== undefined) (this.config as Record<string, unknown>).botToken = config.botToken;
         this.sendQueue = new PQueue({ concurrency: 1 });
         this.authDir = this.config.authDir!;
 
@@ -114,7 +114,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
                         debug: () => {},
                         trace: () => {},
                         child: () => ({ info: () => {}, error: () => {}, warn: () => {}, debug: () => {}, trace: () => {} }),
-                    } as any),
+                    } as unknown as import('@whiskeysockets/baileys').UserFacingSocketConfig['logger']),
                 },
                 printQRInTerminal: true,
                 browser: [this.config.browser || 'NewClaw', 'Chrome', '120.0'] as [string, string, string],
@@ -123,7 +123,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
             });
 
             // Save credentials on update
-            this.sock.ev.on('connection.update', async (update: any) => {
+            this.sock.ev.on('connection.update', async (update: Partial<import('@whiskeysockets/baileys').ConnectionState>) => {
                 const { connection, lastDisconnect, qr } = update;
 
                 if (qr) {
@@ -131,7 +131,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
                 }
 
                 if (connection === 'close') {
-                    const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+                    const statusCode = (lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
                     const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
                     log.warn('connection_closed', `WhatsApp disconnected (code: ${statusCode})`);
@@ -163,7 +163,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
             this.sock.ev.on('creds.update', saveCreds);
 
             // Handle incoming messages
-            this.sock.ev.on('messages.upsert', async ({ messages }: any) => {
+            this.sock.ev.on('messages.upsert', async ({ messages }: { messages: import('@whiskeysockets/baileys').WAMessage[] }) => {
                 for (const msg of messages) {
                     if (!msg.key?.fromMe && msg.message) {
                         await this.handleMessage(msg);
@@ -187,7 +187,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
         log.info('adapter_stopped', 'WhatsApp adapter stopped');
     }
 
-    async send(response: NormalizedResponse, context: any): Promise<void> {
+    async send(response: NormalizedResponse, context: unknown): Promise<void> {
         const jid = context as string;
         if (!jid || !this.sock) {
             log.warn('no_jid', 'No JID or socket available for WhatsApp send');

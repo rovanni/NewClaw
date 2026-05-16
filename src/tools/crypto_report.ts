@@ -33,12 +33,12 @@ const COINGECKO_IDS: Record<string, string> = {
     'polkadot': 'polkadot',
 };
 
-interface CryptoReportCoin {
-    id: string; symbol: string; name: string;
-    current_price: number | null; market_cap: number | null; total_volume: number | null;
-    price_change_percentage_24h: number | null; price_change_percentage_7d_in_currency?: number | null;
+interface CoinSimplePrice {
+    usd?: number; brl?: number;
+    usd_24h_change?: number; usd_market_cap?: number; usd_24h_vol?: number;
     [key: string]: unknown;
 }
+type SimplePriceResponse = Record<string, CoinSimplePrice>;
 
 export class CryptoReportTool implements ToolExecutor {
     name = 'crypto_report';
@@ -63,10 +63,10 @@ export class CryptoReportTool implements ToolExecutor {
         try {
             const url = `https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd,brl&include_24hr_change=true&include_market_cap=true&include_24hr_vol=true`;
             
-            let data: CryptoReportCoin[];
+            let data: SimplePriceResponse;
             const cached = cache.get(url);
             if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-                data = cached.data;
+                data = cached.data as SimplePriceResponse;
             } else {
                 const response = await fetch(url);
                 if (!response.ok) {
@@ -75,7 +75,7 @@ export class CryptoReportTool implements ToolExecutor {
                     }
                     return { success: false, output: '', error: `CoinGecko API error: ${response.status}` };
                 }
-                data = await response.json() as CryptoReportCoin[];
+                data = await response.json() as SimplePriceResponse;
                 cache.set(url, { data, timestamp: Date.now() });
             }
 

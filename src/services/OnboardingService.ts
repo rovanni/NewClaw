@@ -90,7 +90,7 @@ export class OnboardingService {
         `);
 
         const columns = new Set(
-            ((this.db.prepare("PRAGMA table_info(user_profile)").all() as any[]) || []).map(c => c.name)
+            ((this.db.prepare("PRAGMA table_info(user_profile)").all() as Array<{ name: string; [key: string]: unknown }>) || []).map(c => c.name)
         );
         const addColumn = (sql: string) => { try { this.db.exec(sql); } catch { /* coluna já existe — migration idempotente */ } };
 
@@ -332,7 +332,7 @@ JSON:`;
 
     private generateWelcomeMessage(data: Partial<UserProfile>): string {
         const name = data.name || 'amigo';
-        const intentMap: any = {
+        const intentMap: Record<string, string> = {
             automation: 'impulsionar sua automação',
             study: 'acelerar seu aprendizado',
             projects: 'gerenciar seus projetos',

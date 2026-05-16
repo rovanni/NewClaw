@@ -15,7 +15,7 @@
  *   /audit fix      — Run auto-fix pipeline (only low-risk, multi-validated fixes)
  */
 
-import { AuditorService, AuditReport } from './AuditorService';
+import { AuditorService, AuditReport, DbAuditReport } from './AuditorService';
 import { Bot, Context } from 'grammy';
 import { MessageBus } from '../../channels/MessageBus';
 import { NormalizedMessage } from '../../channels/ChannelAdapter';
@@ -50,10 +50,10 @@ export function registerAuditCommand(
                 case 'history': {
                     const history = auditor.getReportHistory(10);
                     let historyText = '📋 *Histórico de Auditorias:*\n\n';
-                    history.forEach((r: any) => {
-                        const emoji = r.critical > 0 ? '🔴' : r.warnings > 0 ? '🟡' : '✅';
-                        const date = new Date(r.timestamp).toLocaleString('pt-BR');
-                        historyText += `${emoji} ${date} — ${r.total_findings} achados (${r.critical}C/${r.warnings}W/${r.info_count}I)\n`;
+                    history.forEach((r: DbAuditReport) => {
+                        const emoji = (r.critical ?? 0) > 0 ? '🔴' : (r.warnings ?? 0) > 0 ? '🟡' : '✅';
+                        const date = new Date(r.timestamp ?? '').toLocaleString('pt-BR');
+                        historyText += `${emoji} ${date} — ${r.total_findings ?? 0} achados (${r.critical ?? 0}C/${r.warnings ?? 0}W/${r.info_count ?? 0}I)\n`;
                     });
                     if (history.length === 0) historyText += 'Nenhuma auditoria realizada ainda.';
                     return historyText;
@@ -122,10 +122,10 @@ export function registerAuditCommandTelegram(
                 case 'history': {
                     const history = auditor.getReportHistory(10);
                     let historyText = '📋 *Histórico de Auditorias:*\n\n';
-                    history.forEach((r: any) => {
-                        const emoji = r.critical > 0 ? '🔴' : r.warnings > 0 ? '🟡' : '✅';
-                        const date = new Date(r.timestamp).toLocaleString('pt-BR');
-                        historyText += `${emoji} ${date} — ${r.total_findings} achados (${r.critical}C/${r.warnings}W/${r.info_count}I)\n`;
+                    history.forEach((r: DbAuditReport) => {
+                        const emoji = (r.critical ?? 0) > 0 ? '🔴' : (r.warnings ?? 0) > 0 ? '🟡' : '✅';
+                        const date = new Date(r.timestamp ?? '').toLocaleString('pt-BR');
+                        historyText += `${emoji} ${date} — ${r.total_findings ?? 0} achados (${r.critical ?? 0}C/${r.warnings ?? 0}W/${r.info_count ?? 0}I)\n`;
                     });
                     if (history.length === 0) historyText += 'Nenhuma auditoria realizada ainda.';
                     await ctx.reply(historyText, { parse_mode: 'Markdown' });

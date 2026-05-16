@@ -570,7 +570,7 @@ export class AttentionLayer {
         try {
             searchCount = (this.db.prepare(
                 'SELECT COUNT(*) as cnt FROM attention_history'
-            ).get() as any)?.cnt || 0;
+            ).get() as { cnt: number } | undefined)?.cnt || 0;
         } catch { /* table might not exist yet */ }
 
         return {

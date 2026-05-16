@@ -69,17 +69,17 @@ function escapeHtml(text: string): string {
 /**
  * Safe reply — try HTML first, fallback to plain text
  */
-export function safeReply(ctx: any, text: string, extra: any = {}): Promise<any> {
+export function safeReply(ctx: { reply(text: string, opts?: Record<string, unknown>): Promise<unknown> }, text: string, extra: Record<string, unknown> = {}): Promise<unknown> {
     const html = mdToTelegramHTML(text);
-    return ctx.reply(html, { ...extra, parse_mode: 'HTML' })
+    return ctx.reply(html, { ...extra, parse_mode: 'HTML' as const })
         .catch(() => ctx.reply(text, extra));
 }
 
 /**
  * Safe send message — for bot.api.sendMessage
  */
-export function safeSendMessage(api: any, chatId: string | number, text: string, extra: any = {}): Promise<any> {
+export function safeSendMessage(api: { sendMessage(chatId: string | number, text: string, opts?: Record<string, unknown>): Promise<unknown> }, chatId: string | number, text: string, extra: Record<string, unknown> = {}): Promise<unknown> {
     const html = mdToTelegramHTML(text);
-    return api.sendMessage(chatId, html, { ...extra, parse_mode: 'HTML' })
+    return api.sendMessage(chatId, html, { ...extra, parse_mode: 'HTML' as const })
         .catch(() => api.sendMessage(chatId, text, extra));
 }

@@ -225,7 +225,7 @@ export class MemoryWriteTool implements ToolExecutor {
         // Count edges that will be removed
         const edges = db.prepare(
             'SELECT COUNT(*) as cnt FROM memory_edges WHERE from_node = ? OR to_node = ?'
-        ).get(id, id) as { edges: number } | undefined;
+        ).get(id, id) as { cnt: number } | undefined;
 
         db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(id, id);
         db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(id);

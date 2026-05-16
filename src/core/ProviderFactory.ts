@@ -7,6 +7,46 @@ import PQueue from 'p-queue';
 import { createLogger } from '../shared/AppLogger';
 import { circuitRegistry } from './CircuitBreaker';
 import { errorMessage } from '../shared/errors';
+
+/** OpenAI/Ollama-compatible tool call shape */
+interface RawToolCall {
+    id?: string; index?: number; type?: string;
+    function?: { name?: string; arguments?: string };
+    [key: string]: unknown;
+}
+/** Gemini API response shape */
+interface GeminiChatResponse {
+    candidates?: Array<{
+        content?: { parts?: Array<{ text?: string; functionCall?: { name?: string; args?: unknown }; [key: string]: unknown }> };
+        [key: string]: unknown;
+    }>;
+    usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+    [key: string]: unknown;
+}
+/** OpenAI-compatible chat completion response */
+interface OpenAIChatResponse {
+    choices?: Array<{
+        message?: { content?: string | null; tool_calls?: RawToolCall[]; [key: string]: unknown };
+        delta?: { content?: string | null; tool_calls?: RawToolCall[]; [key: string]: unknown };
+        finish_reason?: string; [key: string]: unknown;
+    }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    message?: { content?: string | null; tool_calls?: RawToolCall[]; [key: string]: unknown };
+    [key: string]: unknown;
+}
+/** Raw streaming chunk from any LLM API (Ollama/OpenAI/Anthropic/Gemini) */
+interface RawApiChunk {
+    type?: string; done?: boolean;
+    message?: { content?: string; thinking?: string; reasoning?: string; tool_calls?: RawToolCall[]; [key: string]: unknown };
+    choices?: Array<{
+        delta?: { content?: string | null; reasoning_content?: string; thinking?: string; tool_calls?: RawToolCall[]; [key: string]: unknown };
+        finish_reason?: string; [key: string]: unknown;
+    }>;
+    delta?: { type?: string; text?: string; thinking?: string; [key: string]: unknown };
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: string; [key: string]: unknown }> }; [key: string]: unknown }>;
+    prompt_eval_count?: number; eval_count?: number;
+    [key: string]: unknown;
+}
 const log = createLogger('Providerfactory');
 
 /**
@@ -37,7 +77,7 @@ export enum TaskPriority {
 export type StreamChunk =
     | { type: 'content'; value: string }
     | { type: 'thinking'; value: string }
-    | { type: 'tool_call'; value: any }
+    | { type: 'tool_call'; value: RawToolCall }
     | { type: 'done'; value: { prompt_tokens: number; completion_tokens: number } };
 
 /**
@@ -46,7 +86,7 @@ export type StreamChunk =
  * DeepSeek (reasoning_content), Anthropic (thinking blocks), Gemini (parts).
  * Returns { text, type } where type indicates the chunk source.
  */
-function extractChunkText(chunk: any): { text: string; type: 'content' | 'thinking' | 'reasoning' | 'delta' | 'unknown' } {
+function extractChunkText(chunk: RawApiChunk): { text: string; type: 'content' | 'thinking' | 'reasoning' | 'delta' | 'unknown' } {
     // Ollama format: message.content, message.thinking, message.reasoning
     if (chunk.message) {
         if (chunk.message.content && chunk.message.content.trim()) {
@@ -102,7 +142,7 @@ function extractChunkText(chunk: any): { text: string; type: 'content' | 'thinki
  * Check if a chunk represents any kind of activity (not just content).
  * Used to reset idle/activity timers — any chunk type counts.
  */
-function isChunkActive(chunk: any): boolean {
+function isChunkActive(chunk: RawApiChunk): boolean {
     // Explicit done signal
     if (chunk.done) return true;
     // Has message with any field
@@ -234,7 +274,7 @@ export class GeminiProvider implements ILLMProvider {
                 throw new Error(`Gemini API error: ${response.status}`);
             }
 
-            const data = await response.json() as any;
+            const data = await response.json() as GeminiChatResponse;
             const candidate = data.candidates?.[0];
             const content = candidate?.content?.parts?.[0]?.text || '';
             const functionCall = candidate?.content?.parts?.[0]?.functionCall;
@@ -243,12 +283,12 @@ export class GeminiProvider implements ILLMProvider {
                 content,
                 toolCalls: functionCall ? [{
                     id: `call_${Date.now()}`,
-                    name: functionCall.name,
-                    arguments: functionCall.args
+                    name: functionCall?.name ?? '',
+                    arguments: (functionCall?.args ?? {}) as Record<string, unknown>
                 }] : undefined,
                 usage: data.usageMetadata ? {
-                    prompt_tokens: data.usageMetadata.promptTokenCount || 0,
-                    completion_tokens: data.usageMetadata.candidatesTokenCount || 0
+                    prompt_tokens: data.usageMetadata?.promptTokenCount ?? 0,
+                    completion_tokens: data.usageMetadata?.candidatesTokenCount ?? 0
                 } : undefined
             };
         }, { priority: TaskPriority.INTERACTIVE });
@@ -290,19 +330,19 @@ export class DeepSeekProvider implements ILLMProvider {
                 throw new Error(`DeepSeek API error: ${response.status}`);
             }
 
-            const data = await response.json() as any;
+            const data = await response.json() as OpenAIChatResponse;
             const message = data.choices?.[0]?.message;
 
             return {
                 content: message?.content || '',
-                toolCalls: message?.tool_calls?.map((tc: any) => ({
-                    id: tc.id,
-                    name: tc.function.name,
-                    arguments: (() => { try { return JSON.parse(tc.function.arguments || '{}'); } catch { return {}; } })()
+                toolCalls: message?.tool_calls?.map((tc: RawToolCall) => ({
+                    id: tc.id ?? `call_${Date.now()}`,
+                    name: tc.function?.name ?? '',
+                    arguments: (() => { try { return JSON.parse(tc.function?.arguments || '{}'); } catch { return {}; } })()
                 })),
                 usage: data.usage ? {
-                    prompt_tokens: data.usage.prompt_tokens || 0,
-                    completion_tokens: data.usage.completion_tokens || 0
+                    prompt_tokens: data.usage?.prompt_tokens ?? 0,
+                    completion_tokens: data.usage?.completion_tokens ?? 0
                 } : undefined
             };
         }, { priority: TaskPriority.INTERACTIVE });
@@ -344,19 +384,19 @@ export class GroqProvider implements ILLMProvider {
                 throw new Error(`Groq API error: ${response.status}`);
             }
 
-            const data = await response.json() as any;
+            const data = await response.json() as OpenAIChatResponse;
             const message = data.choices?.[0]?.message;
 
             return {
                 content: message?.content || '',
-                toolCalls: message?.tool_calls?.map((tc: any) => ({
-                    id: tc.id,
-                    name: tc.function.name,
-                    arguments: (() => { try { return JSON.parse(tc.function.arguments || '{}'); } catch { return {}; } })()
+                toolCalls: message?.tool_calls?.map((tc: RawToolCall) => ({
+                    id: tc.id ?? `call_${Date.now()}`,
+                    name: tc.function?.name ?? '',
+                    arguments: (() => { try { return JSON.parse(tc.function?.arguments || '{}'); } catch { return {}; } })()
                 })),
                 usage: data.usage ? {
-                    prompt_tokens: data.usage.prompt_tokens || 0,
-                    completion_tokens: data.usage.completion_tokens || 0
+                    prompt_tokens: data.usage?.prompt_tokens ?? 0,
+                    completion_tokens: data.usage?.completion_tokens ?? 0
                 } : undefined
             };
         }, { priority: TaskPriority.INTERACTIVE });
@@ -478,7 +518,7 @@ export class OllamaProvider implements ILLMProvider {
             externalSignal.addEventListener('abort', () => controller.abort(), { once: true });
         }
 
-        const requestBody: any = {
+        const requestBody: Record<string, unknown> = {
             model: this.model,
             messages: messages.map(m => ({
                 role: m.role,
@@ -549,7 +589,7 @@ export class OllamaProvider implements ILLMProvider {
                     const trimmed = line.trim();
                     if (!trimmed) continue;
 
-                    let chunk: any;
+                    let chunk: RawApiChunk;
                     try {
                         chunk = JSON.parse(trimmed);
                     } catch {
@@ -653,8 +693,8 @@ export class OllamaProvider implements ILLMProvider {
         // ISOLATED buffer — each call gets its own. No shared state.
         let content = '';
         let thinking = '';  // Collect thinking separately
-        const toolCalls: any[] = [];
-        let usage: any = undefined;
+        const toolCalls: RawToolCall[] = [];
+        let usage: OpenAIChatResponse['usage'] | undefined = undefined;
         let chunkCount = 0;
         const startTime = Date.now();
         const consumeId = `sc-${Date.now().toString(36)}`;
@@ -717,12 +757,12 @@ export class OllamaProvider implements ILLMProvider {
         return {
             content,
             thinking: thinking || undefined,   // Cognitive workspace: preserved for agent, never shown to user
-            toolCalls: toolCalls.length > 0 ? toolCalls.map((tc: any) => ({
+            toolCalls: toolCalls.length > 0 ? toolCalls.map((tc: RawToolCall) => ({
                 id: tc.function?.name || `call_${Date.now()}`,
                 name: tc.function?.name || '',
                 arguments: tc.function?.arguments || {}
             })) : undefined,
-            usage
+            usage: usage ? { prompt_tokens: usage.prompt_tokens ?? 0, completion_tokens: usage.completion_tokens ?? 0 } : undefined
         };
     }
 
@@ -759,18 +799,18 @@ export class OllamaProvider implements ILLMProvider {
             });
 
             if (!response.ok) throw new Error(`Ollama fallback error: ${response.status}`);
-            const data = await response.json() as any;
+            const data = await response.json() as OpenAIChatResponse;
             const message = data.message;
             return {
                 content: message?.content || '',
-                toolCalls: message?.tool_calls?.map((tc: any) => ({
+                toolCalls: message?.tool_calls?.map((tc: RawToolCall) => ({
                     id: tc.function?.name || `call_${Date.now()}`,
                     name: tc.function?.name || '',
                     arguments: tc.function?.arguments || {}
                 })),
                 usage: data.usage ? {
-                    prompt_tokens: data.usage.prompt_tokens || 0,
-                    completion_tokens: data.usage.completion_tokens || 0
+                    prompt_tokens: data.usage?.prompt_tokens ?? 0,
+                    completion_tokens: data.usage?.completion_tokens ?? 0
                 } : undefined
             };
         } finally {
@@ -817,19 +857,19 @@ export class OpenAIProvider implements ILLMProvider {
                 throw new Error(`${this.name} API error (${response.status}): ${error}`);
             }
 
-            const data = await response.json() as any;
+            const data = await response.json() as OpenAIChatResponse;
             const message = data.choices?.[0]?.message;
 
             return {
                 content: message?.content || '',
-                toolCalls: message?.tool_calls?.map((tc: any) => ({
-                    id: tc.id,
-                    name: tc.function.name,
-                    arguments: (() => { try { return JSON.parse(tc.function.arguments || '{}'); } catch { return {}; } })()
+                toolCalls: message?.tool_calls?.map((tc: RawToolCall) => ({
+                    id: tc.id ?? `call_${Date.now()}`,
+                    name: tc.function?.name ?? '',
+                    arguments: (() => { try { return JSON.parse(tc.function?.arguments || '{}'); } catch { return {}; } })()
                 })),
                 usage: data.usage ? {
-                    prompt_tokens: data.usage.prompt_tokens || 0,
-                    completion_tokens: data.usage.completion_tokens || 0
+                    prompt_tokens: data.usage?.prompt_tokens ?? 0,
+                    completion_tokens: data.usage?.completion_tokens ?? 0
                 } : undefined
             };
         }, { priority: TaskPriority.INTERACTIVE });
@@ -978,7 +1018,7 @@ export class ProviderFactory {
                 try {
                     const provider = this.providers.get(providerName);
                     if (!provider) break;
-                    const modelUsed = (provider instanceof OllamaProvider) ? provider.getModel() : (provider as any).model || provider.name;
+                    const modelUsed = (provider instanceof OllamaProvider) ? provider.getModel() : (provider as { model?: string }).model || provider.name;
                     
                     if (attempt > 0) {
                         log.info(`[${attemptId}] Retry ${attempt}/${MAX_RETRIES} after ${RETRY_BACKOFF_MS}ms backoff`);
@@ -1061,7 +1101,7 @@ export class ProviderFactory {
                     const duration = Date.now() - attemptStart;
                     activeAbortController = null;
                     const prov = this.providers.get(providerName);
-                    const modelUsed = (prov instanceof OllamaProvider) ? prov.getModel() : (prov as any)?.model || providerName;
+                    const modelUsed = (prov instanceof OllamaProvider) ? prov.getModel() : (prov as { model?: string })?.model || providerName;
                     const isTimeout = errorMessage(error)?.includes('Timeout');
                     const isRetryable = isTimeout || 
                                        errorMessage(error)?.includes('abort') || 

@@ -113,8 +113,8 @@ export class SkillInstaller {
         if (!fs.existsSync(publicDir)) return [];
 
         return fs.readdirSync(publicDir, { withFileTypes: true })
-            .filter((d: any) => d.isDirectory())
-            .map((d: any) => d.name);
+            .filter((d: import('fs').Dirent) => d.isDirectory())
+            .map((d: import('fs').Dirent) => d.name);
     }
 
     /**

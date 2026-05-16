@@ -26,11 +26,11 @@ export interface NormalizedMessage {
     /** Anexos (fotos, áudio, etc.) */
     attachments?: ChannelAttachment[];
     /** Metadados específicos do canal */
-    metadata?: Record<string, any>;
+    metadata?: Record<string, unknown>;
     /** Responder a (thread/conversation) */
     replyToId?: string;
     /** Contexto do canal (ctx original) para responder */
-    rawContext?: any;
+    rawContext?: unknown;
     /** Chat ID para responder (usado por Discord e canais com múltiplos canais) */
     chatId?: string;
 }
@@ -116,11 +116,11 @@ export interface ChannelAdapter {
     /** Parar o adapter */
     stop(): Promise<void>;
     /** Enviar mensagem para o canal */
-    send(response: NormalizedResponse, context: any): Promise<void>;
+    send(response: NormalizedResponse, context: unknown): Promise<void>;
     /** Verificar saúde */
     healthCheck(): Promise<{ ok: boolean; details?: string }>;
     /** Enviar indicador de digitação ao canal (typing, recording, etc.) */
-    sendTypingIndicator?(context: any, action?: TypingAction): Promise<void>;
+    sendTypingIndicator?(context: unknown, action?: TypingAction): Promise<void>;
     /** Retornar o token do bot (se aplicável) */
     getBotToken?(): string;
 }
@@ -128,7 +128,7 @@ export interface ChannelAdapter {
 /** Configuração base para qualquer canal */
 export interface ChannelConfig {
     enabled: boolean;
-    [key: string]: any;
+    [key: string]: unknown;
 }
 
 /** Sessão de canal (mapeia userId → SessionKey) */

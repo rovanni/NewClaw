@@ -85,7 +85,7 @@ export class SignalAdapter implements ChannelAdapter {
             webhookPort: config.webhookPort || 7584,
         };
         // Merge remaining config keys
-        if (config.botToken !== undefined) (this.config as any).botToken = config.botToken;
+        if (config.botToken !== undefined) (this.config as Record<string, unknown>).botToken = config.botToken;
     }
 
     get isConnected(): boolean {
@@ -157,7 +157,7 @@ export class SignalAdapter implements ChannelAdapter {
         log.info('adapter_stopped', 'Signal adapter stopped');
     }
 
-    async send(response: NormalizedResponse, context: any): Promise<void> {
+    async send(response: NormalizedResponse, context: unknown): Promise<void> {
         const phoneNumber = context as string;
         if (!phoneNumber || !this.config.phoneNumber) {
             log.warn('no_phone', 'No phone number for Signal send');
@@ -239,7 +239,7 @@ export class SignalAdapter implements ChannelAdapter {
             const child = execFile(signalPath, args, {
                 maxBuffer: 10 * 1024 * 1024,
                 timeout: 120000,
-            }, (error: any, stdout: string) => {
+            }, (error: { code?: string | number | null; killed?: boolean; message?: string } | null, stdout: string) => {
                 if (error && error.code !== 0 && !error.killed) {
                     log.warn('receive_timeout', 'Signal receive timeout (normal for long-polling)');
                     resolve();
@@ -415,7 +415,7 @@ export class SignalAdapter implements ChannelAdapter {
             execFile(signalPath, args, {
                 timeout: 30000,
                 maxBuffer: 5 * 1024 * 1024,
-            }, (error: any, stdout: string, _stderr: string) => {
+            }, (error: { code?: string | number | null; message?: string } | null, stdout: string, _stderr: string) => {
                 if (error) {
                     reject(error);
                 } else {

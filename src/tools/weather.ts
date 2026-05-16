@@ -91,14 +91,14 @@ export class WeatherTool implements ToolExecutor {
         const geoRes = await fetch(geoUrl, { signal: AbortSignal.timeout(10000) });
         if (!geoRes.ok) throw new Error('Falha ao buscar a cidade na API de geocoding.');
         
-        const geoData = await geoRes.json() as Array<{ lat: number; lon: number; name: string; country: string; [key: string]: unknown }>;
+        const geoData = await geoRes.json() as { results?: Array<{ latitude: number; longitude: number; name: string; country?: string; admin1?: string; [key: string]: unknown }> };
         if (!geoData.results || geoData.results.length === 0) {
             throw new Error(`Cidade "${city}" não encontrada.`);
         }
         
         const location = geoData.results[0];
-        const lat = location.latitude;
-        const lon = location.longitude;
+        const lat = location.latitudeitude;
+        const lon = location.longitudegitude;
         
         const adminPart = location.admin1 ? `${location.admin1} - ` : '';
         const countryPart = location.country || '';
@@ -109,12 +109,26 @@ export class WeatherTool implements ToolExecutor {
         const weatherRes = await fetch(weatherUrl, { signal: AbortSignal.timeout(10000) });
         if (!weatherRes.ok) throw new Error('Falha ao buscar o clima na API do open-meteo.');
 
-        const weatherData = await weatherRes.json() as { main: { temp: number; feels_like: number; humidity: number }; weather: Array<{ description: string }>; wind: { speed: number }; [key: string]: unknown };
+        const weatherData = await weatherRes.json() as {
+            current?: {
+                temperature_2m?: number; apparent_temperature?: number; relative_humidity_2m?: number;
+                precipitation?: number; weather_code?: number; wind_speed_10m?: number;
+                [key: string]: unknown;
+            };
+            current_units?: { temperature_2m?: string; apparent_temperature?: string; relative_humidity_2m?: string; precipitation?: string; wind_speed_10m?: string; [key: string]: unknown };
+            daily?: {
+                time?: string[]; weather_code?: number[]; temperature_2m_max?: number[];
+                temperature_2m_min?: number[]; precipitation_probability_max?: number[];
+                [key: string]: unknown;
+            };
+            [key: string]: unknown;
+        };
         const current = weatherData.current;
         const units = weatherData.current_units;
         const daily = weatherData.daily;
 
-        const desc = this.getWeatherDescription(current.weather_code);
+        if (!current || !units) throw new Error('Open-Meteo: dados de clima indisponíveis.');
+        const desc = this.getWeatherDescription(current.weather_code ?? 0);
         const temp = `${current.temperature_2m}${units.temperature_2m}`;
         const feelsLike = `${current.apparent_temperature}${units.apparent_temperature}`;
         const wind = `${current.wind_speed_10m}${units.wind_speed_10m}`;
@@ -163,7 +177,19 @@ export class WeatherTool implements ToolExecutor {
         const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
         if (!res.ok) throw new Error(`wttr.in falhou: ${res.status}`);
 
-        const data = await res.json() as { list?: Array<{ dt_txt?: string; main?: { temp?: number }; weather?: Array<{ description?: string }>; [key: string]: unknown }>; [key: string]: unknown };
+        const data = await res.json() as {
+            current_condition?: Array<{
+                temp_C?: string; FeelsLikeC?: string; humidity?: string; windspeedKmph?: string;
+                lang_pt?: Array<{ value?: string }>; weatherDesc?: Array<{ value?: string }>;
+                [key: string]: unknown;
+            }>;
+            weather?: Array<{
+                maxtempC?: string; mintempC?: string;
+                hourly?: Array<{ lang_pt?: Array<{ value?: string }>; weatherDesc?: Array<{ value?: string }>; [key: string]: unknown }>;
+                [key: string]: unknown;
+            }>;
+            [key: string]: unknown;
+        };
         const current = data?.current_condition?.[0];
         if (!current) throw new Error('wttr.in: sem dados de clima atual');
 

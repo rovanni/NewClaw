@@ -15,6 +15,13 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 const log = createLogger('SendAudio');
 
+interface TelegramSendResponse {
+    ok: boolean;
+    result?: { voice?: { duration?: number }; audio?: { duration?: number }; [key: string]: unknown };
+    description?: string;
+    [key: string]: unknown;
+}
+
 export class SendAudioTool implements ToolExecutor {
     name = 'send_audio';
     description = 'Gera áudio TTS em português e envia via Telegram. Use quando o usuário pedir para ouvir, falar, narrar ou gerar áudio. NÃO chame esta ferramenta mais de uma vez por pedido.';
@@ -171,7 +178,7 @@ export class SendAudioTool implements ToolExecutor {
      * Send voice message to Telegram via native HTTP multipart (no curl needed).
      * Uses global fetch() + FormData + File — all native in Node.js 22.
      */
-    private async sendVoiceTelegram(oggPath: string): Promise<any> {
+    private async sendVoiceTelegram(oggPath: string): Promise<TelegramSendResponse> {
         const fs = await import('fs');
         const fileBuffer = fs.readFileSync(oggPath);
 
@@ -183,13 +190,13 @@ export class SendAudioTool implements ToolExecutor {
             `https://api.telegram.org/bot${this.botToken}/sendVoice`,
             { method: 'POST', body: formData, signal: AbortSignal.timeout(35000) }
         );
-        return response.json();
+        return response.json() as Promise<TelegramSendResponse>;
     }
 
     /**
      * Send audio message to Telegram via native HTTP multipart.
      */
-    private async sendAudioTelegram(oggPath: string): Promise<any> {
+    private async sendAudioTelegram(oggPath: string): Promise<TelegramSendResponse> {
         const fs = await import('fs');
         const fileBuffer = fs.readFileSync(oggPath);
 
@@ -201,7 +208,7 @@ export class SendAudioTool implements ToolExecutor {
             `https://api.telegram.org/bot${this.botToken}/sendAudio`,
             { method: 'POST', body: formData, signal: AbortSignal.timeout(35000) }
         );
-        return response.json();
+        return response.json() as Promise<TelegramSendResponse>;
     }
 
     private cleanupFiles(files: string[]): void {

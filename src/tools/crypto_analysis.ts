@@ -30,9 +30,18 @@ interface CoinGeckoMarket {
     [key: string]: unknown;
 }
 interface CoinGeckoDetail {
-    market_data?: { current_price?: { usd?: number }; market_cap?: { usd?: number };
-        total_volume?: { usd?: number }; price_change_percentage_24h?: number;
-        price_change_percentage_7d?: number; price_change_percentage_30d?: number; };
+    market_data?: {
+        current_price?: { usd?: number };
+        market_cap?: { usd?: number };
+        total_volume?: { usd?: number };
+        price_change_percentage_24h?: number;
+        price_change_percentage_7d?: number;
+        price_change_percentage_30d?: number;
+        price_change_percentage_1h_in_currency?: { usd?: number };
+        ath?: { usd?: number };
+        ath_date?: { usd?: string };
+        atl?: { usd?: number };
+    };
     name?: string; symbol?: string;
     [key: string]: unknown;
 }
@@ -79,12 +88,12 @@ export class CryptoAnalysisTool implements ToolExecutor {
         }
     }
 
-    private async fetchMarkets(perPage: number = 100): Promise<any[]> {
+    private async fetchMarkets(perPage: number = 100): Promise<CoinGeckoMarket[]> {
         const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${perPage}&page=1&sparkline=false&price_change_percentage=1h%2C24h%2C7d`;
         
         const cached = cache.get(url);
         if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-            return cached.data;
+            return cached.data as CoinGeckoMarket[];
         }
 
         let response = await fetch(url);
@@ -219,7 +228,7 @@ export class CryptoAnalysisTool implements ToolExecutor {
         let data: CoinGeckoDetail;
         const cached = cache.get(url);
         if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-            data = cached.data;
+            data = cached.data as CoinGeckoDetail;
         } else {
             const response = await fetch(url);
             if (!response.ok) {
@@ -231,6 +240,7 @@ export class CryptoAnalysisTool implements ToolExecutor {
         }
 
         const md = data.market_data;
+        if (!md) return { success: true, output: `🔍 **${data.name ?? symbol}** — dados de mercado indisponíveis.` };
         let report = `🔍 **${data.name} (${data.symbol?.toUpperCase()})**\n\n`;
         report += `Preço: $${md.current_price?.usd?.toLocaleString()}\n`;
         report += `Market Cap: $${this.formatCurrency(md.market_cap?.usd)}\n`;

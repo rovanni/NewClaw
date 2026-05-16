@@ -62,7 +62,7 @@ export class ExecCommandTool implements ToolExecutor {
             command = command.replace(/\bworkspace\//g, '');
         }
         
-        const execOptions: any = { timeout };
+        const execOptions: { timeout: number; cwd?: string } = { timeout };
         execOptions.cwd = effectiveWorkdir;
 
         try {

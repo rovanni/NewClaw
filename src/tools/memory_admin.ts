@@ -26,7 +26,8 @@ interface CountRow { c: number }
 interface NodeRow { id: string; type: string; name: string; domain: string; len?: number }
 interface TypeCountRow { type: string; c: number }
 interface DomainCountRow { domain: string; c: number }
-interface NodeDetailRow extends MemoryNode { len?: number }
+interface NodeDetailRow extends MemoryNode { len?: number; domain?: string | null; degree?: number }
+interface DuplicateRow { id1: string; id2: string; name1: string; name2: string; type1: string; type2: string; domain1?: string | null }
 interface EmbeddingRow { model: string; updated_at: string }
 interface EdgeRow { to_node?: string; from_node?: string; relation: string; weight: number }
 
@@ -153,7 +154,7 @@ export class MemoryAdminTool implements ToolExecutor {
 
         let output = `📋 ${rows.length} nós encontrados:\n`;
         for (const r of rows) {
-            const status = r.len < 30 ? '⚠️ GHOST' : '✅';
+            const status = (r.len ?? 0) < 30 ? '⚠️ GHOST' : '✅';
             output += `  ${status} ${r.id} | ${r.type}/${r.domain || '?'} | ${r.name} (${r.len} chars)\n`;
         }
         return { success: true, output };
@@ -192,7 +193,7 @@ export class MemoryAdminTool implements ToolExecutor {
                 AND (LOWER(a.name) = LOWER(b.name) OR LOWER(a.name) LIKE '%' || LOWER(b.name) || '%')
             ORDER BY a.domain, a.name
             LIMIT 30
-        `).all() as NodeDetailRow[];
+        `).all() as DuplicateRow[];
 
         if (dupes.length === 0) return { success: true, output: '✅ Nenhuma duplicata óbvia encontrada.' };
 
@@ -353,8 +354,8 @@ export class MemoryAdminTool implements ToolExecutor {
         const updateStmt = db.prepare('UPDATE memory_nodes SET degree = ?, pagerank = ? WHERE id = ?');
         const transaction = db.transaction((rows: NodeDetailRow[]) => {
             for (const row of rows) {
-                const pr = Math.min(row.degree / nodeCount, 1.0);
-                updateStmt.run(row.degree, pr, row.id);
+                const pr = Math.min((row.degree ?? 0) / nodeCount, 1.0);
+                updateStmt.run(row.degree ?? 0, pr, row.id);
             }
         });
         transaction(degrees);

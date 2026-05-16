@@ -1005,12 +1005,12 @@ export class DashboardServer {
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 // Try to get nodes with metrics safely
-                let nodes: Array<any>;
+                let nodes: Array<{ id: string; type: string; name: string; pagerank: number; degree: number; betweenness: number; closeness: number }>;
                 try {
-                    nodes = db.prepare('SELECT id, type, name, pagerank, degree, betweenness, closeness FROM memory_nodes').all();
+                    nodes = db.prepare('SELECT id, type, name, pagerank, degree, betweenness, closeness FROM memory_nodes').all() as { id: string; type: string; name: string; pagerank: number; degree: number; betweenness: number; closeness: number }[];
                 } catch (e) {
                     // Fallback if migration hasn't run
-                    nodes = db.prepare('SELECT id, type, name, 0 as pagerank, 0 as degree, 0 as betweenness, 0 as closeness FROM memory_nodes').all();
+                    nodes = db.prepare('SELECT id, type, name, 0 as pagerank, 0 as degree, 0 as betweenness, 0 as closeness FROM memory_nodes').all() as { id: string; type: string; name: string; pagerank: number; degree: number; betweenness: number; closeness: number }[];
                 }
 
                 const edgesCountRow = db.prepare('SELECT COUNT(*) as c FROM memory_edges').get() as { c: number };
@@ -1552,7 +1552,7 @@ export class DashboardServer {
 
             // Save config version to DB for audit trail
             try {
-                const mm = this.controller ? (this.controller as any).memory : null;
+                const mm = this.controller ? (this.controller as unknown as { memory?: { db?: import('better-sqlite3').Database } }).memory : null;
                 if (mm && mm.db) {
                     // Deactivate previous
                     mm.db.prepare('UPDATE agent_config SET is_active = 0').run();

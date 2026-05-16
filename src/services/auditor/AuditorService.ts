@@ -26,6 +26,15 @@ import path from 'path';
 import { execSync } from 'child_process';
 import { createLogger } from '../../shared/AppLogger';
 import { errorMessage } from '../../shared/errors';
+
+/** Shape of raw finding parsed from LLM JSON output */
+interface LLMFinding {
+    severity?: string; line?: number; title?: string; description?: string;
+    suggestion?: string; autoFixable?: boolean; riskLevel?: string;
+    [key: string]: unknown;
+}
+/** Ollama models list response */
+interface OllamaModelsResponse { models?: Array<{ name: string; [key: string]: unknown }> }
 const log = createLogger('AuditorService');
 
 // ============================================
@@ -65,6 +74,22 @@ export interface AuditConfig {
     ownerChatId: string;
     maxFindingsPerCategory: number;
     enableAutoFix: boolean;
+}
+
+/** Audit finding row as stored in SQLite (snake_case columns) */
+export interface DbFinding {
+    id?: number; severity?: string; category?: string;
+    file_path?: string; line_number?: number;
+    title?: string; description?: string; suggestion?: string;
+    auto_fixable?: number; fixed?: number; risk_level?: string;
+    [key: string]: unknown;
+}
+/** Audit report row as stored in SQLite (snake_case columns) */
+export interface DbAuditReport {
+    id?: number; timestamp?: string; total_findings?: number;
+    critical?: number; warnings?: number; info_count?: number;
+    summary?: string; duration_ms?: number;
+    [key: string]: unknown;
 }
 
 // ============================================
@@ -358,8 +383,8 @@ Rules for riskLevel:
             if (!jsonMatch) return [];
 
             const parsed = JSON.parse(jsonMatch[0]);
-            return (parsed.findings || []).map((f: any) => ({
-                severity: f.severity || 'info',
+            return (parsed.findings || []).map((f: LLMFinding) => ({
+                severity: (f.severity || 'info') as AuditFinding['severity'],
                 category: 'code' as const,
                 file: relativePath,
                 line: f.line,
@@ -367,7 +392,7 @@ Rules for riskLevel:
                 description: f.description || '',
                 suggestion: f.suggestion,
                 autoFixable: f.autoFixable || false,
-                riskLevel: f.riskLevel || 'medium'
+                riskLevel: (f.riskLevel || 'medium') as AuditFinding['riskLevel']
             }));
         } catch (e) {
             return [];
@@ -422,15 +447,15 @@ Respond ONLY in JSON:
                         const jsonMatch = response.match(/\{[\s\S]*\}/);
                         if (jsonMatch) {
                             const parsed = JSON.parse(jsonMatch[0]);
-                            (parsed.findings || []).forEach((f: any) => {
+                            (parsed.findings || []).forEach((f: LLMFinding) => {
                                 this.findings.push({
-                                    severity: f.severity || 'warning',
+                                    severity: (f.severity || 'warning') as AuditFinding['severity'],
                                     category: 'runtime',
                                     title: f.title || 'Runtime error pattern',
                                     description: f.description || '',
                                     suggestion: f.suggestion,
                                     autoFixable: f.autoFixable || false,
-                                    riskLevel: f.riskLevel || 'medium'
+                                    riskLevel: (f.riskLevel || 'medium') as AuditFinding['riskLevel']
                                 });
                             });
                         }
@@ -560,7 +585,7 @@ Respond ONLY in JSON:
             const tables = ['agent_traces', 'memory_classifications', 'tool_decisions'];
             for (const table of tables) {
                 try {
-                    const count = (this.db.prepare(`SELECT COUNT(*) as c FROM ${table}`).get() as any).c;
+                    const count = (this.db.prepare(`SELECT COUNT(*) as c FROM ${table}`).get() as { c: number }).c;
                     if (count === 0) {
                         this.findings.push({
                             severity: 'info',
@@ -580,9 +605,9 @@ Respond ONLY in JSON:
                 const orphans = this.db.prepare(`
                     SELECT COUNT(*) as cnt FROM conversations 
                     WHERE updated_at < datetime('now', '-30 days')
-                `).get() as any;
+                `).get() as { cnt?: number; [key: string]: unknown };
 
-                if (orphans?.cnt > 0) {
+                if ((orphans?.cnt ?? 0) > 0) {
                     this.findings.push({
                         severity: 'info',
                         category: 'data',
@@ -636,8 +661,8 @@ Respond ONLY in JSON:
             } else {
                 // Check available models
                 try {
-                    const models = await response.json() as any;
-                    const modelNames: string[] = (models?.models || []).map((m: any) => m.name);
+                    const models = await response.json() as OllamaModelsResponse;
+                    const modelNames: string[] = (models?.models || []).map((m: { name: string; [key: string]: unknown }) => m.name);
                     if (modelNames.length === 0) {
                         this.findings.push({
                             severity: 'warning',
@@ -676,12 +701,12 @@ Respond ONLY in JSON:
                 const response = await fetch(`https://api.telegram.org/bot${telegramToken}/getMe`, {
                     signal: AbortSignal.timeout(5000)
                 });
-                const data = await response.json() as any;
+                const data = await response.json() as Record<string, unknown>;
                 if (data.ok) {
-                    const botName = data.result?.username || 'unknown';
-                    channelStatuses.push({ channel: 'Telegram', connected: true, detail: `@${botName}` });
+                    const botName = (data.result as Record<string, unknown>)?.username || 'unknown';
+                    channelStatuses.push({ channel: 'Telegram', connected: true, detail: `@${String(botName)}` });
                 } else {
-                    channelStatuses.push({ channel: 'Telegram', connected: false, detail: `API erro: ${data.error_code || data.description}` });
+                    channelStatuses.push({ channel: 'Telegram', connected: false, detail: `API erro: ${String(data.error_code || data.description)}` });
                     this.findings.push({
                         severity: 'critical',
                         category: 'integration',
@@ -717,8 +742,8 @@ Respond ONLY in JSON:
                     signal: AbortSignal.timeout(5000)
                 });
                 if (response.ok) {
-                    const data = await response.json() as any;
-                    channelStatuses.push({ channel: 'Discord', connected: true, detail: data.username || 'connected' });
+                    const data = await response.json() as Record<string, unknown>;
+                    channelStatuses.push({ channel: 'Discord', connected: true, detail: String(data.username || 'connected') });
                 } else {
                     channelStatuses.push({ channel: 'Discord', connected: false, detail: `HTTP ${response.status}` });
                     this.findings.push({
@@ -925,10 +950,10 @@ Respond ONLY in JSON:
             throw new Error(`Ollama returned ${response.status}`);
         }
 
-        const data = await response.json() as any;
+        const data = await response.json() as Record<string, unknown>;
         const elapsed = Math.round((Date.now() - startTime) / 1000);
         log.info('ollama_response', `🤖 Ollama respondeu em ${elapsed}s`);
-        return data.response || '';
+        return String(data.response || '');
     }
 
     // ============================================
@@ -944,7 +969,7 @@ Respond ONLY in JSON:
         try {
             const latest = this.db.prepare(
                 'SELECT full_report FROM audit_reports ORDER BY id DESC LIMIT 1'
-            ).get() as any;
+            ).get() as { full_report?: string } | undefined;
             if (latest?.full_report) {
                 const report = JSON.parse(latest.full_report) as AuditReport;
                 for (const f of report.findings || []) {
@@ -1049,28 +1074,28 @@ Respond ONLY in JSON:
     // HISTORY & QUERIES
     // ============================================
 
-    getLatestReport(): any {
+    getLatestReport(): DbAuditReport | undefined {
         return this.db.prepare(`
             SELECT * FROM audit_reports ORDER BY id DESC LIMIT 1
-        `).get();
+        `).get() as DbAuditReport | undefined;
     }
 
-    getFindings(severity?: string): any[] {
+    getFindings(severity?: string): DbFinding[] {
         if (severity) {
             return this.db.prepare(`
                 SELECT * FROM audit_findings WHERE severity = ? ORDER BY id DESC LIMIT 50
-            `).all(severity);
+            `).all(severity) as unknown as DbFinding[];
         }
         return this.db.prepare(`
             SELECT * FROM audit_findings ORDER BY id DESC LIMIT 50
-        `).all();
+        `).all() as unknown as DbFinding[];
     }
 
-    getReportHistory(limit: number = 10): any[] {
+    getReportHistory(limit: number = 10): DbAuditReport[] {
         return this.db.prepare(`
             SELECT id, timestamp, total_findings, critical, warnings, info_count, summary 
             FROM audit_reports ORDER BY id DESC LIMIT ?
-        `).all(limit);
+        `).all(limit) as unknown as DbAuditReport[];
     }
 
     // ============================================
@@ -1143,7 +1168,7 @@ Respond ONLY in JSON:
             WHERE auto_fixable = 1 AND fixed = 0 AND risk_level = 'low'
             ORDER BY severity DESC, id ASC
             LIMIT 20
-        `).all() as any[];
+        `).all() as unknown as DbFinding[];
 
         log.info('fix_pipeline_start', `🔧 ${fixableFindings.length} correções candidatas (risk_level=low)`);
 
@@ -1155,12 +1180,12 @@ Respond ONLY in JSON:
                 const patch = await this.generatePatch(finding);
                 if (!patch) {
                     results.push({
-                        findingId: finding.id,
-                        title: finding.title,
+                        findingId: (finding as DbFinding).id ?? 0,
+                        title: (finding as DbFinding).title ?? 'Unknown finding',
                         status: 'rejected',
                         reason: 'Falha ao gerar patch'
                     });
-                    this.logFix(finding.id, 'rejected', 'Falha ao gerar patch');
+                    this.logFix((finding as DbFinding).id ?? 0, 'rejected', 'Falha ao gerar patch');
                     continue;
                 }
 
@@ -1171,12 +1196,12 @@ Respond ONLY in JSON:
                 const consensus = this.buildConsensus(validation.opinions);
                 if (!consensus.approved) {
                     results.push({
-                        findingId: finding.id,
-                        title: finding.title,
+                        findingId: (finding as DbFinding).id ?? 0,
+                        title: (finding as DbFinding).title ?? 'Unknown finding',
                         status: 'rejected',
-                        reason: `Consenso insuficiente (agreement=${consensus.agreement.toFixed(2)}, confidence=${consensus.confidence.toFixed(2)})`
+                        reason: `Consenso insuficiente (agreement=${consensus.agreement.toFixed(2)}, confidence=${(consensus.confidence ?? 0).toFixed(2)})`
                     });
-                    this.logFix(finding.id, 'rejected', `Consenso insuficiente: agreement=${consensus.agreement.toFixed(2)}`);
+                    this.logFix((finding as DbFinding).id ?? 0, 'rejected', `Consenso insuficiente: agreement=${consensus.agreement.toFixed(2)}`);
                     continue;
                 }
 
@@ -1184,12 +1209,12 @@ Respond ONLY in JSON:
                 const safety = this.validatePatchSafety(patch);
                 if (!safety.safe) {
                     results.push({
-                        findingId: finding.id,
-                        title: finding.title,
+                        findingId: (finding as DbFinding).id ?? 0,
+                        title: (finding as DbFinding).title ?? 'Unknown finding',
                         status: 'rejected',
                         reason: `Validação de segurança falhou: ${safety.reasons.join('; ')}`
                     });
-                    this.logFix(finding.id, 'rejected', `Safety check falhou: ${safety.reasons.join('; ')}`);
+                    this.logFix((finding as DbFinding).id ?? 0, 'rejected', `Safety check falhou: ${safety.reasons.join('; ')}`);
                     continue;
                 }
 
@@ -1197,34 +1222,34 @@ Respond ONLY in JSON:
                 const applied = this.applyPatch(patch);
                 if (!applied) {
                     results.push({
-                        findingId: finding.id,
-                        title: finding.title,
+                        findingId: (finding as DbFinding).id ?? 0,
+                        title: (finding as DbFinding).title ?? 'Unknown finding',
                         status: 'error',
                         reason: 'Erro ao aplicar patch no arquivo'
                     });
-                    this.logFix(finding.id, 'rejected', 'Erro ao aplicar patch');
+                    this.logFix((finding as DbFinding).id ?? 0, 'rejected', 'Erro ao aplicar patch');
                     continue;
                 }
 
                 // Step 6: Update database
-                this.markFindingFixed(finding.id);
+                this.markFindingFixed(finding.id ?? 0);
 
                 results.push({
-                    findingId: finding.id,
-                    title: finding.title,
+                    findingId: finding.id ?? 0,
+                    title: finding.title ?? 'Unknown',
                     status: 'applied',
                     patchSummary: patch.summary
                 });
-                this.logFix(finding.id, 'applied', `Patch aplicado: ${patch.summary}`);
+                this.logFix((finding as DbFinding).id ?? 0, 'applied', `Patch aplicado: ${patch.summary}`);
 
             } catch (error) {
                 results.push({
-                    findingId: finding.id,
-                    title: finding.title,
+                    findingId: finding.id ?? 0,
+                    title: finding.title ?? 'Unknown',
                     status: 'error',
                     reason: errorMessage(error)
                 });
-                this.logFix(finding.id, 'rejected', `Exceção: ${errorMessage(error)}`);
+                this.logFix((finding as DbFinding).id ?? 0, 'rejected', `Exceção: ${errorMessage(error)}`);
             }
         }
 
@@ -1254,8 +1279,8 @@ Respond ONLY in JSON:
      * Generates a patch using the LLM for a given finding.
      * Returns null if generation fails.
      */
-    async generatePatch(finding: any): Promise<GeneratedPatch | null> {
-        const filePath = finding.file_path;
+    async generatePatch(finding: AuditFinding | DbFinding): Promise<GeneratedPatch | null> {
+        const filePath = (finding as DbFinding).file_path;
         const srcRoot = this.config.srcPath;
         const fullPath = filePath ? path.join(srcRoot, filePath) : null;
 
@@ -1266,7 +1291,7 @@ Respond ONLY in JSON:
             // Truncate large files
             if (fileContent.length > 15000) {
                 // Try to extract context around the finding line
-                const targetLine = finding.line_number || 0;
+                const targetLine = (finding as DbFinding).line_number || 0;
                 const lines = fileContent.split('\n');
                 const startLine = Math.max(0, targetLine - 30);
                 const endLine = Math.min(lines.length, targetLine + 30);
@@ -1282,7 +1307,7 @@ FINDING:
   Description: ${finding.description}
   Suggestion: ${finding.suggestion || 'N/A'}
   File: ${filePath || 'N/A'}
-  Line: ${finding.line_number || 'N/A'}
+  Line: ${(finding as DbFinding).line_number || 'N/A'}
 
 ${fileContent ? `CURRENT FILE CONTENT (relevant section):\n\`\`\`typescript\n${fileContent}\n\`\`\`` : 'No file content available.'}
 
@@ -1304,7 +1329,7 @@ Respond ONLY in JSON (no markdown, no explanation):
 }`;
 
         try {
-            log.info('patch_generation', `🤖 Gerando patch for finding #${finding.id}...`);
+            log.info('patch_generation', `🤖 Gerando patch for finding #${(finding as DbFinding).id ?? '?'}...`);
             const response = await this.callOllama(prompt);
             const jsonMatch = response.match(/\{[\s\S]*\}/);
             if (!jsonMatch) return null;
@@ -1346,7 +1371,7 @@ Respond ONLY in JSON (no markdown, no explanation):
      * Simulates multi-agent validation using different LLM prompts/roles.
      * Each "agent" reviews the patch independently.
      */
-    async validatePatch(patch: GeneratedPatch, finding: any): Promise<PatchValidation> {
+    async validatePatch(patch: GeneratedPatch, finding: AuditFinding | DbFinding): Promise<PatchValidation> {
         const agents = [
             { name: 'code_reviewer', role: 'senior code reviewer' },
             { name: 'bug_detector', role: 'bug detection specialist' },
@@ -1377,7 +1402,7 @@ Respond ONLY in JSON (no markdown, no explanation):
         agentName: string,
         agentRole: string,
         patch: GeneratedPatch,
-        finding: any
+        finding: AuditFinding | DbFinding
     ): Promise<AgentOpinion> {
         const prompt = `You are a ${agentRole}. Review this proposed code patch and decide if it should be applied.
 

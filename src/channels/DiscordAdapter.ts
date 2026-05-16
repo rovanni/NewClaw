@@ -123,7 +123,7 @@ export class DiscordAdapter implements ChannelAdapter {
         }
     }
 
-    private scheduleReconnect(error: any): void {
+    private scheduleReconnect(error: unknown): void {
         this.reconnectAttempts++;
         const delay = Math.min(10 * Math.pow(2, this.reconnectAttempts - 1), 300);
         log.info('reconnect_scheduled', `Discord reconnect attempt ${this.reconnectAttempts} in ${delay}s`, { error: errorMessage(error) });
@@ -156,7 +156,7 @@ export class DiscordAdapter implements ChannelAdapter {
     }
 
     /** Enviar resposta normalizada via Discord */
-    async send(response: NormalizedResponse, context: any): Promise<void> {
+    async send(response: NormalizedResponse, context: unknown): Promise<void> {
         const channel = context as TextChannel;
         if (!channel) {
             log.warn('no_channel', 'No Discord channel in context');
@@ -335,7 +335,7 @@ export class DiscordAdapter implements ChannelAdapter {
             }
         });
 
-        this.client.on('error', (error: any) => {
+        this.client.on('error', (error: unknown) => {
             log.error('client_error', error);
         });
 

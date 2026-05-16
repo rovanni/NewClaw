@@ -72,7 +72,7 @@ export class ManageMemoryTool implements ToolExecutor {
                 if (!args.query) return { success: false, error: 'Ação search exige parâmetro "query".', output: '' };
                 const results = await this.memoryManager.semanticSearch(args.query, 10);
                 if (results.length === 0) return { success: true, output: 'Nenhum nó encontrado para essa busca.' };
-                const output = results.map((n: MemoryNode) => 
+                const output = results.map((n: MemoryNode & { score?: number }) => 
                     `[${n.score?.toFixed(2) || '?'}] ${n.id} (${n.type}): ${n.name} — ${(n.content || '').slice(0, 100)}`
                 ).join('\n');
                 return { success: true, output: 'Busca semântica:\n' + output };

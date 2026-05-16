@@ -669,8 +669,8 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                     const tool = this.tools.get(toolName);
                     if (tool) {
                         move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'native' });
-                        if (typeof (tool as any).setContext === 'function' && channelContext) {
-                            (tool as any).setContext(
+                        if (typeof (tool as unknown as { setContext?: (...args: unknown[]) => void }).setContext === 'function' && channelContext) {
+                            (tool as unknown as { setContext: (...args: unknown[]) => void }).setContext(
                                 channelContext.chatId || '', 
                                 channelContext.botToken || '', 
                                 channelContext.channel

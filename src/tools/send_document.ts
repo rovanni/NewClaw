@@ -134,7 +134,7 @@ export class SendDocumentTool implements ToolExecutor {
                 signal: AbortSignal.timeout(35000),
             });
 
-            const result = await response.json() as any;
+            const result = await response.json() as { ok?: boolean; description?: string; [key: string]: unknown };
             if (result.ok) {
                 return { success: true, output: `✅ Documento "${displayName}" enviado ao Telegram.` };
             } else {

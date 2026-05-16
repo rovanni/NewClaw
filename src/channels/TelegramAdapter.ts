@@ -39,6 +39,17 @@ export interface TelegramConfig extends ChannelConfig {
     audioRate?: string;
 }
 
+/** Subset of Telegram Message fields used by this adapter */
+type TelegramChatAction = "typing" | "upload_photo" | "record_video" | "record_voice" | "upload_document" | "upload_video" | "upload_voice" | "choose_sticker" | "find_location" | "record_video_note" | "upload_video_note";
+
+interface TelegramMsg {
+    photo?: Array<{ file_id: string; width?: number; height?: number }>;
+    audio?: { file_id: string; file_name?: string; duration?: number; file_size?: number; mime_type?: string };
+    document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
+    caption?: string;
+    [key: string]: unknown;
+}
+
 export class TelegramAdapter implements ChannelAdapter {
     readonly channelType: ChannelType = 'telegram';
     readonly displayName: string = 'Telegram';
@@ -211,7 +222,7 @@ export class TelegramAdapter implements ChannelAdapter {
     }
 
     /** Enviar resposta normalizada via Telegram */
-    async send(response: NormalizedResponse, context: any): Promise<void> {
+    async send(response: NormalizedResponse, context: unknown): Promise<void> {
         const ctx = context as Context;
         if (!ctx) return;
 
@@ -338,7 +349,7 @@ export class TelegramAdapter implements ChannelAdapter {
     }
 
     /** Enviar indicador de digitação ("typing...") no Telegram */
-    async sendTypingIndicator(context: any, action: TypingAction = 'typing'): Promise<void> {
+    async sendTypingIndicator(context: unknown, action: TypingAction = 'typing'): Promise<void> {
         try {
             const ctx = context as Context;
             if (!ctx) return;
@@ -348,7 +359,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 : action === 'record_voice' ? 'record_voice'
                 : action === 'upload_document' ? 'upload_document'
                 : 'typing';
-            await ctx.replyWithChatAction(chatAction as any);
+            await ctx.replyWithChatAction(chatAction as TelegramChatAction);
         } catch {
             // Silently fail — typing indicator is best-effort
         }
@@ -425,7 +436,7 @@ export class TelegramAdapter implements ChannelAdapter {
             const userId = ctx.from!.id.toString();
             if (!this.config.allowedUserIds.includes(userId)) return;
 
-            const photos = (ctx.message as any)?.photo;
+            const photos = (ctx.message as unknown as TelegramMsg)?.photo;
             if (!photos || photos.length === 0) return;
             const photo = photos[photos.length - 1];
 
@@ -435,7 +446,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 userId,
                 userName: ctx.from!.first_name,
                 type: 'photo',
-                text: (ctx.message as any)?.caption || '',
+                text: (ctx.message as unknown as TelegramMsg)?.caption || '',
                 attachments: [{
                     type: 'photo',
                     fileId: photo.file_id,
@@ -485,10 +496,10 @@ export class TelegramAdapter implements ChannelAdapter {
         // Audio files
         this.bot.on('message:audio', async (ctx) => {
             const userId = ctx.from!.id.toString();
-            log.info('audio_received', `userId=${userId} file=${(ctx.message as any)?.audio?.file_name}`);
+            log.info('audio_received', `userId=${userId} file=${(ctx.message as unknown as TelegramMsg)?.audio?.file_name}`);
             if (!this.config.allowedUserIds.includes(userId)) return;
 
-            const audio = (ctx.message as any)?.audio;
+            const audio = (ctx.message as unknown as TelegramMsg)?.audio;
             if (!audio) return;
 
             const msg: NormalizedMessage = {
@@ -521,7 +532,7 @@ export class TelegramAdapter implements ChannelAdapter {
             const userId = ctx.from!.id.toString();
             if (!this.config.allowedUserIds.includes(userId)) return;
 
-            const doc = (ctx.message as any)?.document;
+            const doc = (ctx.message as unknown as TelegramMsg)?.document;
             if (!doc) return;
 
             const msg: NormalizedMessage = {
@@ -530,7 +541,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 userId,
                 userName: ctx.from!.first_name,
                 type: 'document',
-                text: (ctx.message as any)?.caption || '',
+                text: (ctx.message as unknown as TelegramMsg)?.caption || '',
                 attachments: [{
                     type: 'document',
                     fileId: doc.file_id,

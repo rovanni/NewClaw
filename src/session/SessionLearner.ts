@@ -223,7 +223,7 @@ export class SessionLearner {
                     ...existingNode,
                     weight: (existingNode.weight || 1) + 0.05,
                     last_updated: new Date().toISOString()
-                } as any);
+                } as unknown as import('../memory/MemoryManager').MemoryNode);
                 return 'edge';
             }
 

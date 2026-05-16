@@ -182,7 +182,7 @@ export class AppLogger {
         writeLog('warn', this.component, event, message, { ...this.baseMeta, ...(meta || {}) });
     }
 
-    error(event: string, error?: any, message?: string, meta?: Record<string, any>) {
+    error(event: string, error?: unknown, message?: string, meta?: Record<string, unknown>) {
         let errMsg: string;
         let errMeta: Record<string, any> = { ...this.baseMeta, ...(meta || {}) };
 
@@ -192,7 +192,7 @@ export class AppLogger {
         } else if (typeof error === 'string') {
             errMsg = error;
         } else if (error && typeof error === 'object') {
-            errMsg = error.message || message || 'Unknown error object';
+            errMsg = (error as { message?: string }).message || message || 'Unknown error object';
             try {
                 errMeta.rawError = JSON.stringify(error).slice(0, 500);
             } catch {

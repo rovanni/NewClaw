@@ -474,7 +474,7 @@ export class MemoryManager {
                 // Constraint already supports 'rule' — clean up test row and return
                 this.db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(testId);
                 return;
-            } catch (e: any) {
+            } catch (e) {
                 // CHECK constraint failed — need migration
                 if (!String(e).includes('CHECK constraint')) return; // some other error, skip
             }
@@ -509,7 +509,7 @@ export class MemoryManager {
             `);
 
             // Copy all data
-            const colCount = ((this.db.prepare('PRAGMA table_info(memory_nodes)').all() as any[]) || []).length;
+            const colCount = ((this.db.prepare('PRAGMA table_info(memory_nodes)').all() as Array<{ name: string; [key: string]: unknown }>) || []).length;
             log.info('migration_copy', `Copying ${colCount} columns from memory_nodes to memory_nodes_new...`);
 
             this.db.exec('INSERT INTO memory_nodes_new SELECT * FROM memory_nodes');
@@ -531,7 +531,7 @@ export class MemoryManager {
             this.db.pragma('integrity_check');
 
             log.info('migration_done', 'memory_nodes CHECK constraint migration completed successfully.');
-        } catch (e: any) {
+        } catch (e) {
             log.error('migration_failed', e, 'memory_nodes CHECK constraint migration failed');
             // Re-enable FK even on failure
             try { this.db.pragma('foreign_keys = ON'); } catch {}

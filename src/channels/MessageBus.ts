@@ -90,7 +90,7 @@ export class MessageBus {
     private reconnectTimers: Map<ChannelType, NodeJS.Timeout> = new Map();
     private reconnectAttempts: Map<ChannelType, number> = new Map();
 
-    private scheduleAdapterReconnect(type: ChannelType, adapter: ChannelAdapter, error: any): void {
+    private scheduleAdapterReconnect(type: ChannelType, adapter: ChannelAdapter, error: unknown): void {
         const attempts = (this.reconnectAttempts.get(type) || 0) + 1;
         this.reconnectAttempts.set(type, attempts);
 
@@ -156,7 +156,7 @@ export class MessageBus {
      * Iniciar indicador de digitação para um canal.
      * Envia imediatamente e depois a cada 4s até stopTypingIndicator().
      */
-    private startTypingIndicator(adapter: ChannelAdapter, context: any, action: TypingAction = 'typing', key?: string): void {
+    private startTypingIndicator(adapter: ChannelAdapter, context: unknown, action: TypingAction = 'typing', key?: string): void {
         if (!adapter.sendTypingIndicator) return;
 
         const intervalKey = key || 'default';
@@ -344,7 +344,7 @@ export class MessageBus {
         for (const [type, adapter] of this.adapters) {
             results[type] = await adapter.healthCheck();
         }
-        return results as any;
+        return results as Record<ChannelType, { ok: boolean; details?: string }>;
     }
 
     /** Listar canais registrados */

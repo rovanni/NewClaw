@@ -8,19 +8,19 @@ export class Logger {
         return `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}]`;
     }
 
-    static info(message: string, ...args: any[]): void {
+    static info(message: string, ...args: unknown[]): void {
         console.log(`${this.getTimestamp()} [INFO] ${message}`, ...args);
     }
 
-    static warn(message: string, ...args: any[]): void {
+    static warn(message: string, ...args: unknown[]): void {
         console.warn(`${this.getTimestamp()} [WARN] ⚠️ ${message}`, ...args);
     }
 
-    static error(message: string, ...args: any[]): void {
+    static error(message: string, ...args: unknown[]): void {
         console.error(`${this.getTimestamp()} [ERROR] ❌ ${message}`, ...args);
     }
 
-    static debug(tag: string, message: string, ...args: any[]): void {
+    static debug(tag: string, message: string, ...args: unknown[]): void {
         console.log(`${this.getTimestamp()} [${tag}] ${message}`, ...args);
     }
 
@@ -32,7 +32,7 @@ export class Logger {
         const originalWarn = console.warn;
         const originalError = console.error;
 
-        console.log = (message?: any, ...optionalParams: any[]) => {
+        console.log = (message?: unknown, ...optionalParams: unknown[]) => {
             if (typeof message === 'string') {
                 originalLog(`${this.getTimestamp()} ${message}`, ...optionalParams);
             } else {
@@ -40,7 +40,7 @@ export class Logger {
             }
         };
 
-        console.warn = (message?: any, ...optionalParams: any[]) => {
+        console.warn = (message?: unknown, ...optionalParams: unknown[]) => {
             if (typeof message === 'string') {
                 originalWarn(`${this.getTimestamp()} ${message}`, ...optionalParams);
             } else {
@@ -48,7 +48,7 @@ export class Logger {
             }
         };
 
-        console.error = (message?: any, ...optionalParams: any[]) => {
+        console.error = (message?: unknown, ...optionalParams: unknown[]) => {
             if (typeof message === 'string') {
                 originalError(`${this.getTimestamp()} ${message}`, ...optionalParams);
             } else {

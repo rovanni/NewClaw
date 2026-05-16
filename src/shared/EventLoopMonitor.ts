@@ -151,7 +151,7 @@ export class EventLoopMonitor {
 
     private getActiveHandles(): number {
         try {
-            return (process as any)._getActiveHandles?.()?.length ?? -1;
+            return (process as unknown as { _getActiveHandles?: () => unknown[] })._getActiveHandles?.()?.length ?? -1;
         } catch {
             return -1;
         }
@@ -159,7 +159,7 @@ export class EventLoopMonitor {
 
     private getActiveRequests(): number {
         try {
-            return (process as any)._getActiveRequests?.()?.length ?? -1;
+            return (process as unknown as { _getActiveRequests?: () => unknown[] })._getActiveRequests?.()?.length ?? -1;
         } catch {
             return -1;
         }

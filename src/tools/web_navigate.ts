@@ -72,7 +72,7 @@ export class WebNavigateTool implements ToolExecutor {
         }
     }
 
-    private clampNumber(value: any, fallback: number, min: number, max: number): number {
+    private clampNumber(value: unknown, fallback: number, min: number, max: number): number {
         const num = Number(value);
         if (!Number.isFinite(num)) return fallback;
         return Math.max(min, Math.min(max, Math.round(num)));
