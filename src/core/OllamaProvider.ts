@@ -344,15 +344,18 @@ export class OllamaProvider implements ILLMProvider {
             log.warn(`[${consumeId}] [STREAM-CONSUME] Partial content after stream error: ${content.length} chars content, ${thinking.length} chars thinking (thinking discarded)`);
         }
 
-        // IMPORTANT: thinking is INTERNAL — never include in output content.
-        if (thinking && !content) {
-            log.info(`[${consumeId}] [STREAM-CONSUME] Had ${thinking.length} chars of thinking but no content — returning empty content (thinking kept for logs only)`);
-        }
-        if (thinking) {
+        const elapsed = Date.now() - startTime;
+
+        // Some models (e.g. deepseek-v4-flash:cloud via Ollama) return their full response
+        // in message.thinking instead of message.content. When content is empty but thinking
+        // is available, use thinking as the actual response content.
+        if (!content && thinking) {
+            log.info(`[${consumeId}] [STREAM-CONSUME] No content but ${thinking.length} chars of thinking — using as content (model returned response in thinking field)`);
+            content = thinking;
+            thinking = '';
+        } else if (thinking) {
             log.debug(`[${consumeId}] [STREAM-CONSUME] Discarded ${thinking.length} chars of internal thinking from response`);
         }
-
-        const elapsed = Date.now() - startTime;
 
         if (!content && toolCalls.length === 0) {
             log.warn(`[${consumeId}] [STREAM-CONSUME] EMPTY after ${chunkCount} chunks, ${elapsed}ms`);
@@ -409,8 +412,10 @@ export class OllamaProvider implements ILLMProvider {
             if (!response.ok) throw new Error(`Ollama fallback error: ${response.status}`);
             const data = await response.json() as OpenAIChatResponse;
             const message = data.message;
+            // Same fallback as streaming: some models return response in thinking field
+            const content = message?.content || (message as unknown as { thinking?: string })?.thinking || '';
             return {
-                content: message?.content || '',
+                content,
                 toolCalls: message?.tool_calls?.map((tc: RawToolCall, i: number) => ({
                     id: tc.id || `call_${Date.now()}_${i}`,
                     name: tc.function?.name || '',
