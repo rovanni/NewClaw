@@ -403,14 +403,14 @@ export class MemoryManager {
         const isValidIdentifier = (id: string) => /^[a-z0-9_]+$/i.test(id);
         
         if (!allowedTables.includes(table) || !isValidIdentifier(column)) {
-            log.error('migration_safety_violation', 'Invalid table or column name', { table, column });
+            log.error('migration_safety_violation', 'Invalid table or column name', undefined, { table, column });
             return;
         }
 
         // Basic type validation (must start with an allowed SQL type)
         const baseType = type.split(' ')[0].toUpperCase();
         if (!allowedTypes.includes(baseType)) {
-            log.error('migration_safety_violation', 'Invalid SQL type', { type });
+            log.error('migration_safety_violation', 'Invalid SQL type', undefined, { type });
             return;
         }
 
