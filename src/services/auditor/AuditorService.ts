@@ -206,15 +206,15 @@ export class AuditorService {
 
         this.findings = [];
 
-        console.log('[AUDITOR] 🔍 Iniciando auditoria completa...');
+        log.info('audit_start', '🔍 Iniciando auditoria completa...');
 
-        console.log('[AUDITOR] 📝 [1/4] Auditando código...');
+        log.info('audit_step', '📝 [1/4] Auditando código...');
         await this.auditCode();
-        console.log('[AUDITOR] 📝 [2/4] Auditando runtime...');
+        log.info('audit_step', '📝 [2/4] Auditando runtime...');
         await this.auditRuntime();
-        console.log('[AUDITOR] 📝 [3/4] Auditando dados...');
+        log.info('audit_step', '📝 [3/4] Auditando dados...');
         await this.auditData();
-        console.log('[AUDITOR] 📝 [4/4] Auditando integrações...');
+        log.info('audit_step', '📝 [4/4] Auditando integrações...');
         await this.auditIntegration();
 
         // Deduplicate against previous report
@@ -224,7 +224,7 @@ export class AuditorService {
         this.saveReport(report);
         this.lastAuditTimestamp = new Date().toISOString();
 
-        console.log(`[AUDITOR] ✅ Auditoria concluída: ${report.totalFindings} achados (${report.critical} críticos)`);
+        log.info('audit_complete', `✅ Auditoria concluída: ${report.totalFindings} achados (${report.critical} críticos)`);
         return report;
     }
 
@@ -233,8 +233,8 @@ export class AuditorService {
         this.loadPreviousFindings();
         this.findings = [];
 
-        console.log(`[AUDITOR] 🔍 Auditoria de ${category}...`);
-        console.log(`[AUDITOR] 📝 Enviando para análise do LLM...`);
+        log.info('category_audit_start', `🔍 Auditoria de ${category}...`);
+        log.info('llm_analysis_start', `📝 Enviando para análise do LLM...`);
 
         switch (category) {
             case 'code': await this.auditCode(); break;
@@ -350,9 +350,9 @@ Rules for riskLevel:
 - high: Complex fix (changing architecture, affecting multiple files). Manual only.`;
 
         try {
-            console.log(`[AUDITOR] 🤖 LLM analisando ${relativePath}...`);
+            log.info('file_analysis_start', `🤖 LLM analisando ${relativePath}...`);
             const response = await this.callOllama(prompt);
-            console.log(`[AUDITOR] ✅ ${relativePath} analisado`);
+            log.info('file_analysis_complete', `✅ ${relativePath} analisado`);
             const jsonMatch = response.match(/\{[\s\S]*\}/);
             if (!jsonMatch) return [];
 
@@ -907,7 +907,7 @@ Respond ONLY in JSON:
     // ============================================
 
     private async callOllama(prompt: string): Promise<string> {
-        console.log('[AUDITOR] 🤖 Enviando prompt ao Ollama...');
+        log.info('ollama_request', '🤖 Enviando prompt ao Ollama...');
         const startTime = Date.now();
         const response = await fetch(this.config.ollamaUrl, {
             method: 'POST',
@@ -926,7 +926,7 @@ Respond ONLY in JSON:
 
         const data = await response.json() as any;
         const elapsed = Math.round((Date.now() - startTime) / 1000);
-        console.log(`[AUDITOR] 🤖 Ollama respondeu em ${elapsed}s`);
+        log.info('ollama_response', `🤖 Ollama respondeu em ${elapsed}s`);
         return data.response || '';
     }
 
@@ -965,7 +965,7 @@ Respond ONLY in JSON:
         this.findings = this.findings.filter(f => !this.previousFindingTitles.has(f.title));
         const removed = before - this.findings.length;
         if (removed > 0) {
-            console.log(`[AUDITOR] 🔄 Deduplicação: ${removed} findings repetidos removidos (${this.findings.length} novos)`);
+            log.info('deduplication', `🔄 Deduplicação: ${removed} findings repetidos removidos (${this.findings.length} novos)`);
         }
     }
 
@@ -1144,10 +1144,10 @@ Respond ONLY in JSON:
             LIMIT 20
         `).all() as any[];
 
-        console.log(`[AUDITOR-FIX] 🔧 ${fixableFindings.length} correções candidatas (risk_level=low)`);
+        log.info('fix_pipeline_start', `🔧 ${fixableFindings.length} correções candidatas (risk_level=low)`);
 
         for (const finding of fixableFindings) {
-            console.log(`[AUDITOR-FIX] 🔨 Processando finding #${finding.id}: ${finding.title}`);
+            log.info('process_finding', `🔨 Processando finding #${finding.id}: ${finding.title}`);
 
             try {
                 // Step 1: Generate patch
@@ -1241,7 +1241,7 @@ Respond ONLY in JSON:
             durationMs: Date.now() - start
         };
 
-        console.log(`[AUDITOR-FIX] ✅ Pipeline concluído: ${applied} aplicados, ${rejected} rejeitados, ${errors} erros`);
+        log.info('fix_pipeline_complete', `✅ Pipeline concluído: ${applied} aplicados, ${rejected} rejeitados, ${errors} erros`);
         return report;
     }
 
@@ -1303,7 +1303,7 @@ Respond ONLY in JSON (no markdown, no explanation):
 }`;
 
         try {
-            console.log(`[AUDITOR-FIX] 🤖 Gerando patch para finding #${finding.id}...`);
+            log.info('patch_generation', `🤖 Gerando patch for finding #${finding.id}...`);
             const response = await this.callOllama(prompt);
             const jsonMatch = response.match(/\{[\s\S]*\}/);
             if (!jsonMatch) return null;
@@ -1320,13 +1320,13 @@ Respond ONLY in JSON (no markdown, no explanation):
 
             // Reject if LLM has low confidence
             if (patch.confidence < 0.5) {
-                console.log(`[AUDITOR-FIX] ⚠️ Patch com confiança baixa (${patch.confidence}) — rejeitado`);
+                log.warn('patch_rejected', `⚠️ Patch com confiança baixa (${patch.confidence}) — rejeitado`);
                 return null;
             }
 
             // Reject if before/after are empty or identical
             if (!patch.before || !patch.after || patch.before === patch.after) {
-                console.log(`[AUDITOR-FIX] ⚠️ Patch vazio ou sem mudança — rejeitado`);
+                log.warn('patch_rejected', `⚠️ Patch vazio ou sem mudança — rejeitado`);
                 return null;
             }
 
@@ -1584,7 +1584,7 @@ Respond ONLY in JSON:
             // Create backup
             const backupPath = fullPath + '.bak';
             fs.writeFileSync(backupPath, content, 'utf-8');
-            console.log(`[AUDITOR-FIX] 💾 Backup criado: ${backupPath}`);
+            log.info('backup_created', `💾 Backup criado: ${backupPath}`);
 
             // Apply patch (replace first occurrence only)
             const newContent = content.replace(patch.before, patch.after);
@@ -1597,7 +1597,7 @@ Respond ONLY in JSON:
 
             // Write the modified file
             fs.writeFileSync(fullPath, newContent, 'utf-8');
-            console.log(`[AUDITOR-FIX] ✅ Patch aplicado em: ${patch.file}`);
+            log.info('patch_applied', `✅ Patch aplicado em: ${patch.file}`);
 
             return true;
         } catch (e: any) {
@@ -1608,7 +1608,7 @@ Respond ONLY in JSON:
                 if (fs.existsSync(backupPath)) {
                     const backup = fs.readFileSync(backupPath, 'utf-8');
                     fs.writeFileSync(fullPath, backup, 'utf-8');
-                    console.log(`[AUDITOR-FIX] 🔄 Restaurado do backup: ${fullPath}`);
+                    log.info('backup_restored', `🔄 Restaurado do backup: ${fullPath}`);
                 }
             } catch (restoreError) {
                 console.error(`[AUDITOR-FIX] ❌ Falha ao restaurar backup: ${restoreError}`);
@@ -1625,7 +1625,7 @@ Respond ONLY in JSON:
         this.db.prepare(`
             UPDATE audit_findings SET fixed = 1 WHERE id = ?
         `).run(findingId);
-        console.log(`[AUDITOR-FIX] 📝 Finding #${findingId} marcado como corrigido`);
+        log.info('finding_fixed', `📝 Finding #${findingId} marcado como corrigido`);
     }
 
     // ============================================
