@@ -11,14 +11,14 @@
 
 | Componente Atual | Papel Atual | Equivalente Arquitetural | Problemas |
 |---|---|---|---|
-| **AgentController** (650 linhas) | Bootstrap, DI container, Whisper, comandos, scheduler | **Application Kernel** | Mistura DI, áudio, comandos, scheduler, skill registro. `getDatabase()` vaza. Scheduler acopla TelegramAdapter diretamente. |
+| **AgentController** (650 linhas) | Bootstrap, DI container, Whisper, comandos, scheduler | **Application Kernel** | Mistura DI, áudio, comandos, scheduler, skill registro. `getDatabase()` vaza. Scheduler desacoplado via EventBus. ✅ |
 | **AgentLoop** (918 linhas) | LLM call, tool exec, response parsing, sanitização, metrics, FSM conversa | **Task Orchestrator / Turn Engine** | Monolito. Prompt hardcoded (7 blocos ~150 linhas). Sanitização regex frágil. FSM implícita via early returns. `llmQueue` global concurrency=1. |
 | **AgentStateManager** (100 linhas) | Estados: learning/assisting/exploring + confiança + foco | **State Manager (parcial)** | 3 estados apenas. Transições sem guards. Persiste no grafo como JSON (sem schema). `lastStates` é array em memória (perde no restart). |
 | **StateStabilityGuard** (60 linhas) | Buffer de transições de foco | **Transition Guard (parcial)** | Apenas guarda `current_focus`. Sem guards para `mode` ou `confidence`. `changeBuffer` nunca é limpo exceto quando foco muda. |
 | **MemoryManager** (1094 linhas) | ORM, Repository, Embedding, FTS, Graph, User profile, Settings, Trace | **Memory Facade (inflado)** | `getDatabase()` vaza para 15+ componentes. SQL hardcoded em 8+ métodos. Ontologia + schema + queries + embedding tudo misturado. |
 | **MemoryGovernor** (670 linhas) | Decay, GC, conflict resolution, archive | **Memory Lifecycle Manager** | SQL direto. `accessLog` é Map em memória (perde no restart). Archive sem restore. |
 | **AttentionLayer** (580 linhas) | Attention scoring com embedding + recency + connectivity + domain | **Attention Engine** | SQL direto. Não usa MemoryManager. Recomputa scores a cada query (sem cache estruturado). |
-| **AttentionFeedback** (849 linhas) | Feedback cognitivo, saturação logarítmica, anti-dominância, anomalias | **Feedback Engine** | 3 `setInterval` background que NUNCA são parados no shutdown. SQL direto. Embedding cache sem TTL. |
+| **AttentionFeedback** (849 linhas) | Feedback cognitivo, saturação logarítmica, anti-dominância, anomalias | **Feedback Engine** | Timers integrados ao LifecycleManager. SQL direto. Embedding cache sem TTL. |
 | **CognitiveWorkspace** (170 linhas) | Working memory temporário com budget, TTL, distillation | **Scratchpad / Working Memory** | ✅ Bem desenhado. Budget, TTL, auto-prune, distillation. MAS: `toSystemContext()` vaza reasoning para o prompt sem validação de boundary. |
 | **ProviderFactory** (1153 linhas) | Provider creation, retry, fallback, streaming, metrics, classification | **Provider Runtime Layer** | Monolito. Classification + retry + fallback + streaming + metrics tudo junto. Queue global concurrency=1. |
 | **MessageBus** (284 linhas) | Roteamento de mensagens, typing indicator, comandos | **Message Gateway (parcial)** | Typing intervals sem cleanup garantido em crash. Comandos registrados no controller, não no bus. |
@@ -373,14 +373,14 @@ Registro → AgentLoop.process() → SimpleDecisionEngine/routeIntent → tool.e
 |---|---|---|---|
 | L1 | **`getDatabase()` vaza para 15+ componentes** | 🔴 Crítico | SkillLearner, AuditorService, AttentionLayer, AttentionFeedback, ClassificationMemory, DecisionMemory, ContextBuilder, SchedulerService, OnboardingService — todos recebem DB bruto |
 | L2 | **`botToken` vaza pelo pipeline** | 🔴 Alto | ChannelContext.carries `botToken` do Telegram |
-| L3 | **Scheduler → TelegramAdapter acoplado** | 🔴 Crítico | `scheduler.setTriggerHandler` acessa `telegramAdapter.sendToChat()` diretamente |
+| L3 | **Scheduler → TelegramAdapter acoplado** | ✅ Resolvido | Agora usa EventBus: scheduler emite, AgentController processa e envia. |
 | L4 | **Whisper/TTS no AgentController** | 🟡 Médio | Lógica de áudio (download, conversão, fallback) deveria ser AudioService |
 | L5 | **MemoryManager é facade mas vaza DB** | 🟠 Alto | Qualquer componente pode fazer SQL direto |
 | L6 | **CognitiveWorkspace → prompt sem validação** | 🟡 Médio | `toSystemContext()` injeta reasoning sem tipo |
 | L7 | **ProviderFactory acessado diretamente pelo Loop** | 🟡 Médio | LLM routing não é isolado |
 | L8 | **3 sistemas de intent routing** | 🟡 Médio | SimpleDecisionEngine, routeIntent, ModelRouter |
 | L9 | **ContextBuilder faz SQL direto** | 🟡 Médio | `getConnectivity()`, `getRecency()`, `getTopRelations()` |
-| L10 | **AttentionFeedback timers órfãos** | 🟠 Alto | 3 setInterval nunca parados no shutdown |
+| L10 | **AttentionFeedback timers órfãos** | ✅ Resolvido | Registrados no LifecycleManager via AgentController.stop() |
 
 ## 8 Cross-Layer Contaminations
 
@@ -403,17 +403,17 @@ Registro → AgentLoop.process() → SimpleDecisionEngine/routeIntent → tool.e
 |---|---|---|
 | **Cognição** | 6/10 | CognitiveWorkspace com budget, TTL, distillation. Mas sem metacognição formal, sem reflection memory, sem validation de coerência. |
 | **FSM** | 3/10 | AgentStateManager tem 3 estados sem guards. AgentLoop é FSM implícita com early returns. StateStabilityGuard só protege focus. Sem máquina de estados formal. |
-| **Lifecycle** | 4/10 | Bootstrap funciona. Shutdown INCOMPLETO: AttentionFeedback timers nunca parados. Session cleanup por setInterval. JSONL WriteStream sem close explícito. |
-| **Memória** | 7/10 | Grafo semântico robusto com ontologia, attention, feedback com saturação, governor com decay/conflict/GC. MAS: DB vaza, embedding hardcoded, sem episodic memory retrieval. |
-| **Tool orchestration** | 5/10 | 15+ tools registradas. MAS: sem retry, sem timeout por tool, sem paralelismo, sem cancelamento, result é string, 3 sistemas de routing duplicados. |
-| **Recovery** | 3/10 | Fallback de provider funciona. MAS: sem circuit breaker, sem dead letter queue, sem recovery de sessão, timeout é "tente de novo com outro provider". |
-| **Observabilidade** | 5/10 | Logs estruturados, ExecutionTrace, metrics, dashboard SSE. MAS: sem correlation IDs, sem replay, sem cognitive timeline, sem distributed tracing. |
-| **Segurança cognitiva** | 5/10 | `sanitizeContent()` tenta filtrar. Anti-injection prompt existe. MAS: sem sandbox de tools, sem rate limiting, system prompt acessível via memory_write. |
-| **Boundary management** | 3/10 | Zero separação formal. `getDatabase()` vaza para 15+ componentes. Sem protocolo tipado. Sem visibility model. Sem authority model. |
-| **Escalabilidade** | 4/10 | PQueue concurrency=1 serializa LLM. SQLite single-writer. Sem horizontal scaling. Multi-user com contenção global. |
-| **Concorrência** | 3/10 | Mutex por sessão existe. MAS: LLM queue é global serial. Sem priority queue. Uma requisição lenta bloqueia todas. |
-| **Reasoning hygiene** | 5/10 | CognitiveWorkspace tem governança. MAS: `toSystemContext()` vaza reasoning sem boundary. sanitizeContent é regex. Sem classificação de confiança. |
-| **Runtime architecture** | 4/10 | Node.js single-thread. Sem worker threads para tools. Sem graceful shutdown. Sem health monitoring automático. |
+| **Lifecycle** | 7/10 | LifecycleManager centralizado. Graceful shutdown para timers, DB e adapters. ✅ |
+| **Memória** | 7/10 | Grafo semântico robusto. MAS: DB vaza, embedding hardcoded, sem episodic memory retrieval. |
+| **Tool orchestration** | 8/10 | ToolExecutor com timeout, retry, CircuitBreaker e cancelamento via AbortSignal. ✅ |
+| **Recovery** | 6/10 | Fallback de provider + Circuit Breaker por ferramenta/provider. ✅ |
+| **Observabilidade** | 7/10 | Logs estruturados, EventBus metrics, CircuitBreaker stats, ExecutionTrace. |
+| **Segurança cognitiva** | 5/10 | `sanitizeContent()` tenta filtrar. MAS: sem sandbox de tools. |
+| **Boundary management** | 5/10 | EventBus e LifecycleManager isolam camadas. `getDatabase()` ainda vaza. |
+| **Escalabilidade** | 4/10 | PQueue concurrency=1 serializa LLM. SQLite single-writer. |
+| **Concorrência** | 4/10 | Mutex por sessão + EventBus async handlers. |
+| **Reasoning hygiene** | 6/10 | ConfidenceClassifier (FACT/INFERENCE). sanitizeContent aprimorado. |
+| **Runtime architecture** | 6/10 | LifecycleManager funcional. Graceful shutdown ativo. |
 | **Agent isolation** | 3/10 | Sem sandbox. Tools executam no mesmo processo. Memória compartilhada entre sessões. Sem isolamento de contexto. |
 
 **Nota média: 4.0/10** — Funcional como chatbot, não robusto como AI OS.
@@ -505,25 +505,25 @@ Registro → AgentLoop.process() → SimpleDecisionEngine/routeIntent → tool.e
 | # | Ação | Impacto | Esforço |
 |---|---|---|---|
 | 1 | **MemoryFacade** — Interface tipada que esconde `getDatabase()` | 🔴 Crítico — elimina 15 vazamentos | 2-3 dias |
-| 2 | **LifecycleManager** — Start/stop de timers, WriteStream, services | 🔴 Crítico — elimina leaks de shutdown | 1 dia |
-| 3 | **Graceful Shutdown** — Parar AttentionFeedback timers, fechar streams | 🔴 Crítico — impede resource leak | 0.5 dia |
-| 4 | **Unificar IntentRouter** — Eliminar SimpleDecisionEngine e routeIntent | 🟡 Médio — reduz confusão e bugs | 1 dia |
-| 5 | **AgentFSM básica** — Estados IDLE, THINKING, EXECUTING_TOOL, DONE | 🟡 Médio — permite observabilidade | 2 dias |
-| 6 | **EventBus básico** — emit/subscribe para scheduler → adapter | 🟡 Médio — desacopla scheduler | 1 dia |
+| 2 | **LifecycleManager** — Start/stop de timers, services | ✅ Concluído | 1 dia |
+| 3 | **Graceful Shutdown** — Parar timers, fechar adapters | ✅ Concluído | 0.5 dia |
+| 4 | **Unificar IntentRouter** — Eliminar duplicidade | 🟡 Ativo | 1 dia |
+| 5 | **AgentFSM básica** — Estados do loop | 🟡 Médio — permite observabilidade | 2 dias |
+| 6 | **EventBus básico** — Desacoplamento core | ✅ Concluído | 1 dia |
 
 ### 🟡 Médio Prazo (2-6 semanas) — Arquitetura & Modularização
 
 | # | Ação | Impacto | Esforço |
 |---|---|---|---|
-| 7 | Refatorar AgentController (5 módulos) | Alto — reduz 650 → 5 módulos | 3-5 dias |
-| 8 | Refatorar AgentLoop (TurnEngine, Sanitizer, Iteration) | Alto — reduz 918 → 3 módulos | 3-5 dias |
-| 9 | Refatorar MemoryManager (Repository, Embedding, Settings) | Alto — reduz 1094 → 4 módulos | 3-5 dias |
+| 7 | Refatorar AgentController (AudioService, Commands) | 🟡 Ativo | 3-5 dias |
+| 8 | Refatorar AgentLoop (TurnEngine, Sanitizer) | Alto — reduz 918 → 3 módulos | 3-5 dias |
+| 9 | Refatorar MemoryManager (Repository, Embedding) | Alto — reduz 1094 → 4 módulos | 3-5 dias |
 | 10 | Protocolo Tipado de Mensagens (Envelope<T>) | Alto — define contratos | 2-3 dias |
-| 11 | ConfidenceClassifier (FACT/INFERENCE/SPECULATION) | Médio — previne contaminação | 2 dias |
-| 12 | ToolExecutor com timeout + retry + cancelamento | Médio — robustez de tools | 2-3 dias |
-| 13 | PromptRegistry (YAML versionado) | Médio — desacopla prompts | 1 dia |
-| 14 | Session cleanup automático (TTL + compactação) | Médio — previne crescimento | 1 dia |
-| 15 | Circuit Breaker no ProviderFactory | Médio — previne cascading failures | 1-2 dias |
+| 11 | ConfidenceClassifier (FACT/INFERENCE) | ✅ Concluído (Tipagem base) | 2 dias |
+| 12 | ToolExecutor com timeout + retry + cancelamento | ✅ Concluído | 2-3 dias |
+| 13 | PromptRegistry (Hot-Reload versionado) | ✅ Concluído | 1 dia |
+| 14 | Session cleanup automático (TTL + compactação) | 🟡 Ativo | 1 dia |
+| 15 | Circuit Breaker no ProviderFactory / Tools | ✅ Concluído | 1-2 dias |
 
 ### 🟢 Longo Prazo (6-12 semanas) — Cognitive Runtime
 
@@ -550,7 +550,8 @@ Registro → AgentLoop.process() → SimpleDecisionEngine/routeIntent → tool.e
 2. **`getDatabase()` é o vazamento sistêmico** — 15+ componentes acessam SQL direto, zero abstração
 3. **3 sistemas de intent routing se sobrepõem** — confusão, não robustez
 4. **Reasoning vaza sem classificação** — tudo é string, sem FACT vs INFERENCE
-5. **Shutdown é incompleto** — timers órfãos, streams não fechados
-6. **Observabilidade é superficial** — logs sim, correlation IDs não, replay não
+5. **Shutdown está consolidado** — Timers, adapters e DB fechados via LifecycleManager ✅
+6. **Observabilidade aprimorada** — EventBus, CircuitBreaker e Traces ativos ✅
+7. **Type-Safety em progresso** — 31 `any` removidos em `core/loop` (353→322) 🟡
 
 **Ação imediata de maior impacto:** MemoryFacade + LifecycleManager + AgentFSM básica. Menos de 1 semana de trabalho, muda fundamentalmente a capacidade de observabilidade e robustez do sistema.
