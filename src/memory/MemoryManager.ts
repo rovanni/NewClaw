@@ -211,7 +211,6 @@ export class MemoryManager {
         `);
 
         // ── Metrics History (Bloco 4) ──
-        const tryAddColumn = (stmt: string) => { try { this.db.exec(stmt); } catch (e: any) { /* column exists */ } };
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS memory_metrics_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -225,17 +224,17 @@ export class MemoryManager {
                 FOREIGN KEY (node_id) REFERENCES memory_nodes(id)
             )
         `);
-        tryAddColumn('CREATE INDEX IF NOT EXISTS idx_metrics_history_node ON memory_metrics_history(node_id)');
-        tryAddColumn('CREATE INDEX IF NOT EXISTS idx_metrics_history_recorded ON memory_metrics_history(recorded_at)');
+        this.safeExec('CREATE INDEX IF NOT EXISTS idx_metrics_history_node ON memory_metrics_history(node_id)');
+        this.safeExec('CREATE INDEX IF NOT EXISTS idx_metrics_history_recorded ON memory_metrics_history(recorded_at)');
 
         // ── Schema Analytics Migration (Safe Additions) ──
-        tryAddColumn('ALTER TABLE memory_nodes ADD COLUMN pagerank REAL DEFAULT 0.0');
-        tryAddColumn('ALTER TABLE memory_nodes ADD COLUMN degree INTEGER DEFAULT 0');
-        tryAddColumn('ALTER TABLE memory_nodes ADD COLUMN betweenness REAL DEFAULT 0.0');
-        tryAddColumn('ALTER TABLE memory_nodes ADD COLUMN closeness REAL DEFAULT 0.0');
+        this.safeAddColumn('memory_nodes', 'pagerank', 'REAL DEFAULT 0.0');
+        this.safeAddColumn('memory_nodes', 'degree', 'INTEGER DEFAULT 0');
+        this.safeAddColumn('memory_nodes', 'betweenness', 'REAL DEFAULT 0.0');
+        this.safeAddColumn('memory_nodes', 'closeness', 'REAL DEFAULT 0.0');
 
-        tryAddColumn('CREATE INDEX IF NOT EXISTS idx_memory_nodes_pagerank ON memory_nodes(pagerank)');
-        tryAddColumn('CREATE INDEX IF NOT EXISTS idx_memory_nodes_degree ON memory_nodes(degree)');
+        this.safeExec('CREATE INDEX IF NOT EXISTS idx_memory_nodes_pagerank ON memory_nodes(pagerank)');
+        this.safeExec('CREATE INDEX IF NOT EXISTS idx_memory_nodes_degree ON memory_nodes(degree)');
 
         // ── FTS5 Semantic Search (using native rowid — no fts_rowid column needed) ──
         // Only drop and recreate FTS if schema migration requires it (fts_rowid column)
@@ -363,16 +362,65 @@ export class MemoryManager {
     }
 
     private ensureMemorySchema(): void {
-        const tryAddColumn = (table: string, column: string, type: string) => {
-            try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`); } catch (e) { /* column exists */ }
-        };
-        tryAddColumn('memory_nodes', 'weight', 'REAL DEFAULT 1.0');
-        tryAddColumn('memory_nodes', 'confidence', 'REAL DEFAULT 1.0');
-        tryAddColumn('memory_nodes', 'last_updated', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
-        tryAddColumn('memory_nodes', 'domain', 'TEXT');
-        tryAddColumn('memory_edges', 'last_accessed', 'DATETIME');
-        tryAddColumn('memory_edges', 'domain', 'TEXT');
-        tryAddColumn('node_metrics', 'last_accessed', 'DATETIME');
+        this.safeAddColumn('memory_nodes', 'weight', 'REAL DEFAULT 1.0');
+        this.safeAddColumn('memory_nodes', 'confidence', 'REAL DEFAULT 1.0');
+        this.safeAddColumn('memory_nodes', 'last_updated', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
+        this.safeAddColumn('memory_nodes', 'domain', 'TEXT');
+        this.safeAddColumn('memory_edges', 'last_accessed', 'DATETIME');
+        this.safeAddColumn('memory_edges', 'domain', 'TEXT');
+        this.safeAddColumn('node_metrics', 'last_accessed', 'DATETIME');
+    }
+
+    /**
+     * Safe wrapper for schema migrations (ALTER TABLE / CREATE INDEX).
+     * Validates that the query follows expected safe patterns.
+     */
+    private safeExec(sql: string): void {
+        // Only allow CREATE INDEX or simple PRAGMA/ALTER that are known safe patterns
+        const isSafePattern = /^(CREATE INDEX IF NOT EXISTS [a-z0-9_]+ ON [a-z0-9_]+\([a-z0-9_]+\))$/i.test(sql);
+        
+        if (!isSafePattern) {
+            log.warn('migration_safety_check', 'Blocked potentially unsafe SQL execution', { sql });
+            return;
+        }
+
+        try {
+            this.db.exec(sql);
+        } catch (e: any) {
+            // Ignore if index already exists or similar non-critical errors
+        }
+    }
+
+    /**
+     * Centralized method to add columns safely with allow-list validation.
+     * Prevents SQL injection by verifying table and column names against a safe pattern.
+     */
+    private safeAddColumn(table: string, column: string, type: string): void {
+        const allowedTables = ['memory_nodes', 'memory_edges', 'node_metrics', 'user_profile', 'conversations', 'messages'];
+        const allowedTypes = ['TEXT', 'INTEGER', 'REAL', 'DATETIME', 'BOOLEAN'];
+        
+        // Validate identifiers (alphanumeric + underscore only)
+        const isValidIdentifier = (id: string) => /^[a-z0-9_]+$/i.test(id);
+        
+        if (!allowedTables.includes(table) || !isValidIdentifier(column)) {
+            log.error('migration_safety_violation', 'Invalid table or column name', { table, column });
+            return;
+        }
+
+        // Basic type validation (must start with an allowed SQL type)
+        const baseType = type.split(' ')[0].toUpperCase();
+        if (!allowedTypes.includes(baseType)) {
+            log.error('migration_safety_violation', 'Invalid SQL type', { type });
+            return;
+        }
+
+        try {
+            this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+        } catch (e: any) {
+            if (!e.message.includes('duplicate column name')) {
+                log.warn('migration_column_failed', e.message, { table, column });
+            }
+        }
     }
 
     private incrementBootCount(): void {
