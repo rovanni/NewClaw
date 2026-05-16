@@ -1,0 +1,752 @@
+import { Router, Request, Response } from 'express';
+import type Database from 'better-sqlite3';
+import { errorMessage } from '../../shared/errors';
+import { createLogger } from '../../shared/AppLogger';
+import { MemoryManager } from '../../memory/MemoryManager';
+import { DashboardContext, DashboardNode, DashboardEdge } from './types';
+
+const log = createLogger('Dashboardserver');
+
+function computeCentrality(db: Database.Database): Record<string, { degree: number; inDegree: number; outDegree: number }> {
+    const nodes = db.prepare('SELECT id FROM memory_nodes').all() as Array<{ id: string }>;
+    const edges = db.prepare('SELECT from_node, to_node FROM memory_edges').all() as Array<{ from_node: string; to_node: string }>;
+    const centrality: Record<string, { degree: number; inDegree: number; outDegree: number }> = {};
+    for (const n of nodes) centrality[n.id] = { degree: 0, inDegree: 0, outDegree: 0 };
+    for (const e of edges) {
+        if (centrality[e.from_node]) { centrality[e.from_node].outDegree++; centrality[e.from_node].degree++; }
+        if (centrality[e.to_node]) { centrality[e.to_node].inDegree++; centrality[e.to_node].degree++; }
+    }
+    return centrality;
+}
+
+function normalizeText(value: string): string {
+    return value
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function stringSimilarity(left: string, right: string): number {
+    const a = normalizeText(left);
+    const b = normalizeText(right);
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+
+    const aTokens = new Set(a.split(' ').filter(Boolean));
+    const bTokens = new Set(b.split(' ').filter(Boolean));
+    const shared = [...aTokens].filter((token) => bTokens.has(token)).length;
+    const tokenScore = shared / Math.max(aTokens.size, bTokens.size, 1);
+    const substringBonus = a.includes(b) || b.includes(a) ? 0.15 : 0;
+
+    return Math.min(1, tokenScore + substringBonus);
+}
+
+function findDuplicateCandidates(nodes: DashboardNode[]) {
+    const candidates: Array<{ left: DashboardNode; right: DashboardNode; similarity: number }> = [];
+    for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+            const left = nodes[i];
+            const right = nodes[j];
+            const nameSimilarity = stringSimilarity(left.name || '', right.name || '');
+            const contentSimilarity = stringSimilarity(left.content || '', right.content || '');
+            const sameNormalizedName = normalizeText(left.name || '') === normalizeText(right.name || '');
+            const similarity = Math.max(nameSimilarity, contentSimilarity * 0.75);
+            if (sameNormalizedName || similarity >= 0.82) {
+                candidates.push({ left, right, similarity: sameNormalizedName ? 0.98 : similarity });
+            }
+        }
+    }
+    return candidates
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, 12)
+        .map((item) => ({
+            left: { id: item.left.id, name: item.left.name, type: item.left.type },
+            right: { id: item.right.id, name: item.right.name, type: item.right.type },
+            similarity: Number(item.similarity.toFixed(2)),
+        }));
+}
+
+function computeMemoryReview(nodes: DashboardNode[], edges: DashboardEdge[]) {
+    const centrality: Record<string, { degree: number; inDegree: number; outDegree: number }> = {};
+    for (const node of nodes) centrality[node.id] = { degree: 0, inDegree: 0, outDegree: 0 };
+    for (const edge of edges) {
+        if (centrality[edge.from_node]) { centrality[edge.from_node].outDegree++; centrality[edge.from_node].degree++; }
+        if (centrality[edge.to_node]) { centrality[edge.to_node].inDegree++; centrality[edge.to_node].degree++; }
+    }
+
+    const orphanNodes = nodes
+        .filter((node) => (centrality[node.id]?.degree || 0) === 0)
+        .map((node) => ({
+            id: node.id, type: node.type, name: node.name,
+            contentLength: String(node.content || '').trim().length,
+        }));
+
+    const sparseNodes = nodes
+        .filter((node) => {
+            const degree = centrality[node.id]?.degree || 0;
+            const contentLength = String(node.content || '').trim().length;
+            return contentLength < 40 || (degree <= 1 && contentLength < 120);
+        })
+        .map((node) => ({
+            id: node.id, type: node.type, name: node.name,
+            degree: centrality[node.id]?.degree || 0,
+            contentLength: String(node.content || '').trim().length,
+        }))
+        .sort((a, b) => a.contentLength - b.contentLength || a.degree - b.degree)
+        .slice(0, 20);
+
+    const duplicateCandidates = findDuplicateCandidates(nodes);
+
+    const issues = [
+        ...orphanNodes.map((node) => ({
+            kind: 'orphan', priority: 100, nodeId: node.id,
+            title: node.name || node.id, detail: 'No sem relacoes',
+        })),
+        ...sparseNodes.map((node) => ({
+            kind: 'sparse',
+            priority: 70 - Math.min(node.contentLength, 60) + (node.degree === 0 ? 10 : 0),
+            nodeId: node.id, title: node.name || node.id,
+            detail: `Conteudo curto (${node.contentLength} chars), grau ${node.degree}`,
+        })),
+        ...duplicateCandidates.map((pair) => ({
+            kind: 'duplicate',
+            priority: 80 + Math.round(pair.similarity * 10),
+            nodeId: pair.left.id, secondaryNodeId: pair.right.id,
+            title: `${pair.left.name || pair.left.id} / ${pair.right.name || pair.right.id}`,
+            detail: `Possivel duplicata (${Math.round(pair.similarity * 100)}%)`,
+        })),
+    ]
+        .sort((a, b) => b.priority - a.priority)
+        .slice(0, 25);
+
+    const totalNodes = Math.max(nodes.length, 1);
+    const totalEdges = edges.length;
+    const edgeDensity = totalNodes > 1 ? totalEdges / totalNodes : totalEdges;
+    const orphanPenalty = Math.min(35, Math.round((orphanNodes.length / totalNodes) * 100));
+    const sparsePenalty = Math.min(25, Math.round((sparseNodes.length / totalNodes) * 60));
+    const duplicatePenalty = Math.min(15, duplicateCandidates.length * 3);
+    const densityBonus = Math.min(20, Math.round(edgeDensity * 8));
+    const qualityScore = Math.max(0, Math.min(100, 55 + densityBonus - orphanPenalty - sparsePenalty - duplicatePenalty));
+
+    return {
+        summary: {
+            totalNodes: nodes.length, totalEdges: edges.length,
+            orphanCount: orphanNodes.length, sparseCount: sparseNodes.length,
+            duplicateCount: duplicateCandidates.length, qualityScore,
+        },
+        orphanNodes, sparseNodes, duplicateCandidates, issues, centrality,
+    };
+}
+
+export function createMemoryRouter(ctx: DashboardContext): Router {
+    const router = Router();
+
+    router.get('/graph', (_req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const type = _req.query.type as string;
+            const limit = Math.min(parseInt(String(_req.query.limit)) || 200, 500);
+
+            let nodes;
+            if (type) {
+                nodes = db.prepare('SELECT id, type, name FROM memory_nodes WHERE type = ? ORDER BY updated_at DESC LIMIT ?').all(type, limit);
+            } else {
+                nodes = db.prepare('SELECT id, type, name FROM memory_nodes ORDER BY updated_at DESC LIMIT ?').all(limit);
+            }
+
+            const nodeIds = nodes.map(n => (n as DashboardNode).id);
+            const placeholders = nodeIds.map(() => '?').join(',');
+            const edges = db.prepare(`SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node IN (${placeholders}) AND to_node IN (${placeholders})`).all(...nodeIds, ...nodeIds);
+
+            res.json({ success: true, nodes, edges });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/graph/:nodeId', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const nodeId = String(req.params.nodeId);
+            const depth = parseInt(String(req.query.depth)) || 1;
+
+            const collected = new Set<string>([nodeId]);
+            let frontier = new Set<string>([nodeId]);
+
+            for (let i = 0; i < depth; i++) {
+                const frontierPlaceholders = Array.from(frontier).map(() => '?').join(',');
+                const connectedEdges = db.prepare(
+                    `SELECT from_node, to_node FROM memory_edges WHERE from_node IN (${frontierPlaceholders}) OR to_node IN (${frontierPlaceholders})`
+                ).all(...Array.from(frontier), ...Array.from(frontier)) as Array<{ from_node: string; to_node: string }>;
+
+                frontier = new Set();
+                for (const e of connectedEdges) {
+                    if (!collected.has(e.from_node)) { collected.add(e.from_node); frontier.add(e.from_node); }
+                    if (!collected.has(e.to_node)) { collected.add(e.to_node); frontier.add(e.to_node); }
+                }
+            }
+
+            const idsArray = Array.from(collected);
+            const idsPlaceholders = idsArray.map(() => '?').join(',');
+            const nodes = db.prepare(`SELECT id, type, name FROM memory_nodes WHERE id IN (${idsPlaceholders})`).all(...idsArray);
+            const edges = db.prepare(`SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node IN (${idsPlaceholders}) AND to_node IN (${idsPlaceholders})`).all(...idsArray, ...idsArray);
+
+            res.json({ success: true, nodes, edges, center: nodeId, depth });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/ontology', (_req: Request, res: Response) => {
+        res.json({
+            success: true,
+            nodeTypes: MemoryManager.NODE_TYPES,
+            relations: Object.entries(MemoryManager.RELATION_ONTOLOGY).map(([key, val]) => ({
+                id: key,
+                label: val.label,
+                description: val.description,
+                allowedFrom: val.allowedFrom,
+                allowedTo: val.allowedTo,
+                inverse: null
+            })),
+            inverseRelations: {}
+        });
+    });
+
+    router.get('/snapshots', (_req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const snapshots = ctx.memoryManager.listSnapshots() ?? [];
+            res.json({ success: true, snapshots });
+        } catch (err) { res.status(500).json({ error: errorMessage(err) }); }
+    });
+
+    router.post('/snapshots', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const id = ctx.memoryManager.createSnapshot(req.body.label as string);
+            res.json({ success: true, id });
+        } catch (err) { res.status(500).json({ error: errorMessage(err) }); }
+    });
+
+    router.post('/snapshots/:id/restore', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const ok = ctx.memoryManager.restoreSnapshot(String(req.params.id));
+            ok ? res.json({ success: true }) : res.status(404).json({ error: 'Snapshot not found' });
+        } catch (err) { res.status(500).json({ error: errorMessage(err) }); }
+    });
+
+    router.delete('/snapshots/:id', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const ok = ctx.memoryManager.deleteSnapshot(String(req.params.id));
+            ok ? res.json({ success: true }) : res.status(404).json({ error: 'Snapshot not found' });
+        } catch (err) { res.status(500).json({ error: errorMessage(err) }); }
+    });
+
+    router.get('/stats', (_req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const totalNodes = (db.prepare('SELECT COUNT(*) as c FROM memory_nodes').get() as { c: number }).c;
+            const totalEdges = (db.prepare('SELECT COUNT(*) as c FROM memory_edges').get() as { c: number }).c;
+            const totalMessages = (db.prepare('SELECT COUNT(*) as c FROM messages').get() as { c: number }).c;
+            const totalConversations = (db.prepare('SELECT COUNT(*) as c FROM conversations').get() as { c: number }).c;
+            const nodesByType = db.prepare('SELECT type, COUNT(*) as c FROM memory_nodes GROUP BY type').all() as Array<{ type: string; c: number }>;
+
+            res.json({
+                success: true,
+                stats: { totalNodes, totalEdges, totalMessages, totalConversations, nodesByType: Object.fromEntries(nodesByType.map(r => [r.type, r.c])) },
+                centrality: computeCentrality(db)
+            });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/review', (_req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const nodes = db.prepare('SELECT id, type, name, content, updated_at FROM memory_nodes ORDER BY updated_at DESC').all() as DashboardNode[];
+            const edges = db.prepare('SELECT from_node, to_node, relation FROM memory_edges').all() as DashboardEdge[];
+            const review = computeMemoryReview(nodes, edges);
+
+            res.json({ success: true, review });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.post('/merge', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const { keepId, mergeId } = req.body || {};
+            if (!keepId || !mergeId) return res.status(400).json({ error: 'keepId and mergeId are required' });
+            if (keepId === mergeId) return res.status(400).json({ error: 'keepId and mergeId must be different' });
+
+            const keepNode = db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(keepId) as DashboardNode | undefined;
+            const mergeNode = db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(mergeId) as DashboardNode | undefined;
+            if (!keepNode || !mergeNode) return res.status(404).json({ error: 'Node not found' });
+
+            const snapshotId = ctx.memoryManager.createSnapshot?.(`pre-merge:${keepId}<-${mergeId}`) || null;
+
+            const lines1 = String(keepNode.content || '').split('\n').map((l: string) => l.trim()).filter(Boolean);
+            const lines2 = String(mergeNode.content || '').split('\n').map((l: string) => l.trim()).filter(Boolean);
+            const mergedContent = Array.from(new Set([...lines1, ...lines2])).join('\n');
+            const mergedName = String(keepNode.name || '').trim() || String(mergeNode.name || '').trim();
+            const mergedType = keepNode.type || mergeNode.type;
+
+            db.prepare('UPDATE memory_nodes SET name = ?, type = ?, content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+                .run(mergedName, mergedType, mergedContent, keepId);
+
+            const relatedEdges = db.prepare('SELECT from_node, to_node, relation, weight, confidence FROM memory_edges WHERE from_node = ? OR to_node = ?')
+                .all(mergeId, mergeId) as DashboardEdge[];
+
+            for (const edge of relatedEdges) {
+                const nextFrom = edge.from_node === mergeId ? keepId : edge.from_node;
+                const nextTo = edge.to_node === mergeId ? keepId : edge.to_node;
+                if (nextFrom === nextTo) continue;
+                db.prepare(`INSERT OR REPLACE INTO memory_edges (from_node, to_node, relation, weight, confidence) VALUES (?, ?, ?, ?, ?)`)
+                    .run(nextFrom, nextTo, edge.relation, edge.weight || 1.0, edge.confidence || 1.0);
+            }
+
+            try { db.prepare('DELETE FROM memory_metrics_history WHERE node_id = ?').run(mergeId); } catch (e) { log.warn('merge_cleanup_metrics_failed', errorMessage(e)); }
+            try { db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(mergeId); } catch (e) { log.warn('merge_cleanup_embeddings_failed', errorMessage(e)); }
+            db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(mergeId, mergeId);
+            db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(mergeId);
+
+            log.info(`Nodes merged: keep=${keepId}, removed=${mergeId}`);
+            res.json({ success: true, snapshotId, keptNodeId: keepId, removedNodeId: mergeId });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/nodes', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const type = req.query.type as string;
+            const limit = Math.min(parseInt(String(req.query.limit)) || 50, 200);
+            let nodes;
+            if (type) {
+                nodes = db.prepare('SELECT id, type, name, substr(content, 1, 200) as content, updated_at FROM memory_nodes WHERE type = ? ORDER BY updated_at DESC LIMIT ?').all(type, limit);
+            } else {
+                nodes = db.prepare('SELECT id, type, name, substr(content, 1, 200) as content, updated_at FROM memory_nodes ORDER BY updated_at DESC LIMIT ?').all(limit);
+            }
+            res.json({ success: true, nodes });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/search', async (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const q = req.query.q as string;
+            if (!q) return res.status(400).json({ error: 'Query parameter "q" required' });
+
+            if (ctx.embeddingService) {
+                try {
+                    const available = await ctx.embeddingService.isAvailable();
+                    if (available) {
+                        const results = await ctx.embeddingService.search(q, 20);
+                        if (results.length > 0) {
+                            const ids = results.map(r => r.id);
+                            const scores = new Map(results.map(r => [r.id, r.score]));
+                            const placeholders = ids.map(() => '?').join(',');
+                            const nodes = db.prepare(
+                                `SELECT id, type, name, substr(content, 1, 200) as content, updated_at FROM memory_nodes WHERE id IN (${placeholders})`
+                            ).all(...ids);
+                            const nodesWithScore = (nodes as DashboardNode[]).map(n => ({ ...n, score: scores.get(n.id) || 0 }));
+                            nodesWithScore.sort((a, b) => b.score - a.score);
+                            return res.json({ success: true, nodes: nodesWithScore, method: 'embedding' });
+                        }
+                    }
+                } catch { /* fall through */ }
+            }
+
+            try {
+                const nodes = db.prepare(`
+                    SELECT n.id, n.type, n.name, substr(n.content, 1, 200) as content, n.updated_at
+                    FROM memory_nodes_fts f
+                    JOIN memory_nodes n ON f.rowid = n.rowid
+                    WHERE memory_nodes_fts MATCH ?
+                    ORDER BY rank LIMIT 50
+                `).all(`${q}*`);
+                return res.json({ success: true, nodes, method: 'fts5' });
+            } catch {
+                const nodes = db.prepare(
+                    'SELECT id, type, name, substr(content, 1, 200) as content, updated_at FROM memory_nodes WHERE name LIKE ? OR content LIKE ? ORDER BY updated_at DESC LIMIT 50'
+                ).all(`%${q}%`, `%${q}%`);
+                return res.json({ success: true, nodes, method: 'like' });
+            }
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/analytics', (_req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            type NodeMetrics = { id: string; type: string; name: string; pagerank: number; degree: number; betweenness: number; closeness: number };
+            let nodes: NodeMetrics[];
+            try {
+                nodes = db.prepare('SELECT id, type, name, pagerank, degree, betweenness, closeness FROM memory_nodes').all() as NodeMetrics[];
+            } catch {
+                nodes = db.prepare('SELECT id, type, name, 0 as pagerank, 0 as degree, 0 as betweenness, 0 as closeness FROM memory_nodes').all() as NodeMetrics[];
+            }
+
+            const totalEdges = (db.prepare('SELECT COUNT(*) as c FROM memory_edges').get() as { c: number }).c;
+            const maxEdges = nodes.length * (nodes.length - 1);
+            const density = maxEdges > 0 ? totalEdges / maxEdges : 0;
+
+            const topByDegree = [...nodes].sort((a, b) => (b.degree || 0) - (a.degree || 0)).slice(0, 10).map(n => ({ id: n.id, name: n.name, type: n.type, value: n.degree }));
+            const topByBetweenness = [...nodes].sort((a, b) => (b.betweenness || 0) - (a.betweenness || 0)).slice(0, 10).map(n => ({ id: n.id, name: n.name, type: n.type, value: Math.round((n.betweenness || 0) * 100) / 100 }));
+            const topByCloseness = [...nodes].sort((a, b) => (b.closeness || 0) - (a.closeness || 0)).slice(0, 10).map(n => ({ id: n.id, name: n.name, type: n.type, value: Math.round((n.closeness || 0) * 100) / 100 }));
+
+            res.json({
+                success: true,
+                analytics: {
+                    totalNodes: nodes.length, totalEdges,
+                    density: Math.round(density * 10000) / 10000,
+                    avgDegree: nodes.length > 0 ? Math.round(totalEdges * 2 / nodes.length * 100) / 100 : 0,
+                    topByDegree, topByBetweenness, topByCloseness
+                }
+            });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/nodes/:id', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const id = String(req.params.id);
+            const node = db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(id);
+            if (!node) return res.status(404).json({ error: 'Node not found' });
+
+            db.prepare('UPDATE memory_edges SET weight = weight + 0.1 WHERE from_node = ? OR to_node = ?').run(id, id);
+            db.prepare('UPDATE memory_nodes SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
+
+            const edges = db.prepare('SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node = ? OR to_node = ?').all(id, id);
+            try {
+                (node as DashboardNode).metadata = JSON.parse(String((node as DashboardNode).metadata || '{}'));
+            } catch (e) {
+                log.warn(`Corrupted metadata for node ${id}: ${errorMessage(e)}`);
+                (node as DashboardNode).metadata = {};
+            }
+
+            res.json({ success: true, node, edges });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.put('/nodes/:id', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const id = String(req.params.id);
+            const { type, name, content } = req.body;
+
+            const existing = db.prepare('SELECT id FROM memory_nodes WHERE id = ?').get(id);
+            if (!existing) return res.status(404).json({ error: 'Node not found' });
+
+            if (type) db.prepare('UPDATE memory_nodes SET type = ? WHERE id = ?').run(type, id);
+            if (name) db.prepare('UPDATE memory_nodes SET name = ? WHERE id = ?').run(name, id);
+            if (content !== undefined) db.prepare('UPDATE memory_nodes SET content = ? WHERE id = ?').run(content, id);
+            db.prepare('UPDATE memory_nodes SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
+
+            log.info(`Node updated: ${id}`);
+            res.json({ success: true });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.post('/nodes', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const { id, type, name, content } = req.body;
+            if (!id || !type || !name || content === undefined) {
+                return res.status(400).json({ error: 'id, type, name, content required' });
+            }
+
+            db.prepare('INSERT OR REPLACE INTO memory_nodes (id, type, name, content, metadata, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)')
+                .run(id, type, name, content, '{}');
+
+            log.info(`Node created: ${id} (${type})`);
+            res.json({ success: true });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.delete('/nodes/:id', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const id = String(req.params.id);
+            try { db.prepare('DELETE FROM memory_metrics_history WHERE node_id = ?').run(id); } catch (e) { log.warn('delete_cleanup_metrics_failed', errorMessage(e)); }
+            try { db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(id); } catch (e) { log.warn('delete_cleanup_embeddings_failed', errorMessage(e)); }
+            db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(id, id);
+            db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(id);
+
+            log.info(`Node deleted: ${id}`);
+            res.json({ success: true });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.post('/edges', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const { from, to, relation, weight } = req.body;
+            if (!from || !to || !relation) return res.status(400).json({ error: 'from, to, relation required' });
+
+            db.prepare('INSERT OR REPLACE INTO memory_edges (from_node, to_node, relation, weight) VALUES (?, ?, ?, ?)')
+                .run(from, to, relation, weight || 1.0);
+
+            log.info(`Edge created: ${from} -${relation}-> ${to}`);
+            res.json({ success: true });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.delete('/edges', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const { from, to, relation } = req.body;
+            db.prepare('DELETE FROM memory_edges WHERE from_node = ? AND to_node = ? AND relation = ?')
+                .run(from, to, relation);
+
+            log.info(`Edge deleted: ${from} -${relation}-> ${to}`);
+            res.json({ success: true });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.put('/edges', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            if (!db) return res.status(500).json({ error: 'DB not available' });
+
+            const { from, to, old_relation, new_relation } = req.body;
+            if (!from || !to || !old_relation || !new_relation) {
+                return res.status(400).json({ error: 'from, to, old_relation, new_relation required' });
+            }
+
+            const result = db.prepare('UPDATE memory_edges SET relation = ? WHERE from_node = ? AND to_node = ? AND relation = ?')
+                .run(new_relation, from, to, old_relation);
+
+            if (result.changes === 0) return res.status(404).json({ error: 'Edge not found' });
+
+            log.info(`Edge updated: ${from} -${old_relation}-> ${to} => ${from} -${new_relation}-> ${to}`);
+            res.json({ success: true, changes: result.changes });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.post('/curate', async (_req: Request, res: Response) => {
+        if (!ctx.memoryCurator) return res.status(500).json({ error: 'Curator not available' });
+        try {
+            const result = await ctx.memoryCurator.curate();
+            res.json({ success: true, ...result });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.post('/embed', async (req: Request, res: Response) => {
+        if (!ctx.embeddingService) return res.status(500).json({ error: 'EmbeddingService not available' });
+        try {
+            const limit = (req.body?.limit as number) || 50;
+            const count = await ctx.embeddingService.embedMissing(limit);
+            const available = await ctx.embeddingService.isAvailable();
+            res.json({ success: true, embedded: count, model: ctx.embeddingService.getModel?.() || 'nomic-embed-text', available });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/dashboard/top-nodes', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            const metric = (req.query.metric as string) || 'pagerank';
+            const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
+
+            const validMetrics = ['pagerank', 'degree', 'betweenness', 'closeness'];
+            if (!validMetrics.includes(metric)) {
+                return res.status(400).json({ error: `Invalid metric. Use: ${validMetrics.join(', ')}` });
+            }
+
+            const nodes = db.prepare(
+                `SELECT id, type, name, ${metric} FROM memory_nodes ORDER BY ${metric} DESC LIMIT ?`
+            ).all(limit);
+            res.json({ success: true, metric, nodes });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/dashboard/evolution', (req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+            const node_id = req.query.node_id as string;
+            const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
+
+            let rows;
+            if (node_id) {
+                rows = db.prepare(
+                    'SELECT node_id, pagerank, degree, betweenness, closeness, community_id, recorded_at FROM memory_metrics_history WHERE node_id = ? ORDER BY recorded_at DESC LIMIT ?'
+                ).all(node_id, limit);
+            } else {
+                rows = db.prepare(
+                    'SELECT recorded_at, COUNT(*) as node_count, AVG(pagerank) as avg_pagerank, AVG(degree) as avg_degree, AVG(betweenness) as avg_betweenness, AVG(closeness) as avg_closeness FROM memory_metrics_history GROUP BY recorded_at ORDER BY recorded_at DESC LIMIT ?'
+                ).all(limit);
+            }
+            res.json({ success: true, rows });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/dashboard/communities', (_req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+
+            const communities = db.prepare(
+                'SELECT community_id, COUNT(*) as node_count, GROUP_CONCAT(id) as node_ids FROM memory_nodes WHERE community_id IS NOT NULL GROUP BY community_id ORDER BY COUNT(*) DESC'
+            ).all() as Array<{ community_id: number; node_count: number; node_ids: string }>;
+
+            const result = communities.map(c => ({
+                ...c,
+                node_ids: c.node_ids ? c.node_ids.split(',') : []
+            }));
+
+            res.json({ success: true, communities: result, total_communities: result.length });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/dashboard/density', (_req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const db = ctx.memoryManager.getDatabase();
+
+            const nodeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_nodes').get() as { c: number }).c;
+            const edgeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_edges').get() as { c: number }).c;
+            const maxEdges = nodeCount * (nodeCount - 1);
+            const density = maxEdges > 0 ? (edgeCount / maxEdges).toFixed(4) : 0;
+            const avgDegree = nodeCount > 0 ? (2 * edgeCount / nodeCount).toFixed(2) : 0;
+            const avgWeight = (db.prepare('SELECT AVG(weight) as w FROM memory_edges').get() as { w: number | null }).w || 0;
+
+            res.json({
+                success: true,
+                nodeCount, edgeCount,
+                density: parseFloat(density as string),
+                avgDegree: parseFloat(avgDegree as string),
+                avgWeight: Math.round(avgWeight * 100) / 100,
+                maxEdges
+            });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.post('/dashboard/record-snapshot', (_req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const count = ctx.memoryManager.recordMetricsSnapshot();
+            res.json({ success: true, recorded: count });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/classifications', (_req: Request, res: Response) => {
+        if (!ctx.classificationMemory) return res.status(500).json({ error: 'ClassificationMemory not available' });
+        try {
+            const stats = ctx.classificationMemory.stats();
+            res.json({ success: true, ...stats });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/decisions', (req: Request, res: Response) => {
+        if (!ctx.decisionMemory) return res.status(500).json({ error: 'DecisionMemory not available' });
+        try {
+            const tool = req.query.tool as string | undefined;
+            const stats = ctx.decisionMemory.getToolStats(tool);
+            res.json({ success: true, stats });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.post('/decisions', (req: Request, res: Response) => {
+        if (!ctx.decisionMemory) return res.status(500).json({ error: 'DecisionMemory not available' });
+        try {
+            const { toolName, context, taskType, success, latencyMs, feedback } = req.body;
+            const id = ctx.decisionMemory.record({ toolName, context, taskType, success, latencyMs, feedback });
+            res.json({ success: true, id });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    return router;
+}
