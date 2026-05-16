@@ -491,78 +491,13 @@ function newclawHeader(activePage) {
 }
 
 // Auto-init
-
-// ── Auth System ──────────────────────────────────────────────────
-const NEWCLAW_AUTH_KEY = NEWCLAW_KEY + 'auth_token';
-
-function newclawGetToken() {
-  return localStorage.getItem(NEWCLAW_AUTH_KEY) || '';
-}
-
-function newclawSetToken(token) {
-  if (token) localStorage.setItem(NEWCLAW_AUTH_KEY, token);
-  else localStorage.removeItem(NEWCLAW_AUTH_KEY);
-}
-
-function newclawIsAuthenticated() { return !!newclawGetToken(); }
-
-async function newclawFetch(url, options = {}) {
-  const token = newclawGetToken();
-  if (token) {
-    options.headers = options.headers || {};
-    if (options.headers instanceof Headers) options.headers.set('Authorization', 'Bearer ' + token);
-    else options.headers['Authorization'] = 'Bearer ' + token;
-  }
-  const res = await fetch(url, options);
-  if (res.status === 401) { newclawSetToken(''); newclawShowLogin(); throw new Error('Unauthorized'); }
-  return res;
-}
-
-function newclawShowLogin() {
-  if (document.getElementById('newclaw-login-overlay')) return;
-  const overlay = document.createElement('div');
-  overlay.id = 'newclaw-login-overlay';
-  overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:99999;font-family:system-ui,sans-serif;';
-  const lang = CURRENT_LANG || 'pt-BR';
-  const isPtBR = lang === 'pt-BR', isEnUS = lang === 'en-US';
-  const labelPass = isEnUS ? 'Password' : isPtBR ? 'Senha' : 'Contraseña';
-  const btnLogin = isEnUS ? 'Login' : isPtBR ? 'Entrar' : 'Entrar';
-  const titleText = isEnUS ? '🔒 Authentication Required' : isPtBR ? '🔒 Autenticação Necessária' : '🔒 Autenticación Requerida';
-  const hintText = isEnUS ? 'Enter the dashboard password' : isPtBR ? 'Digite a senha do dashboard' : 'Ingrese la contraseña del dashboard';
-  const errInvalid = isEnUS ? 'Invalid password' : isPtBR ? 'Senha inválida' : 'Contraseña inválida';
-  overlay.innerHTML = '<div style="background:var(--bg-surface,#1a1a2e);border:1px solid var(--border-color,#333);border-radius:12px;padding:32px;width:340px;box-shadow:0 8px 32px rgba(0,0,0,0.5);"><h2 style="color:var(--text-main,#eee);margin:0 0 8px;font-size:1.2rem;">' + titleText + '</h2><p style="color:var(--text-muted,#888);margin:0 0 20px;font-size:0.85rem;">' + hintText + '</p><form id="newclaw-login-form"><input type="password" id="newclaw-login-pass" placeholder="' + labelPass + '" autofocus style="width:100%;padding:10px 14px;background:var(--bg-input,#111);border:1px solid var(--border-color,#333);border-radius:8px;color:var(--text-main,#eee);font-size:0.9rem;box-sizing:border-box;outline:none;"><div id="newclaw-login-error" style="color:#f44;margin-top:8px;font-size:0.8rem;display:none;"></div><button type="submit" style="width:100%;margin-top:16px;padding:10px;background:var(--accent,#6c63ff);color:#fff;border:none;border-radius:8px;font-size:0.9rem;cursor:pointer;">' + btnLogin + '</button></form></div>';
-  document.body.appendChild(overlay);
-  const form = document.getElementById('newclaw-login-form');
-  const errorDiv = document.getElementById('newclaw-login-error');
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const password = document.getElementById('newclaw-login-pass').value;
-    if (!password) return;
-    try {
-      const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
-      const data = await res.json();
-      if (data.success && data.token) { newclawSetToken(data.token); overlay.remove(); window.location.reload(); }
-      else { errorDiv.textContent = errInvalid; errorDiv.style.display = 'block'; document.getElementById('newclaw-login-pass').value = ''; document.getElementById('newclaw-login-pass').focus(); }
-    } catch (err) { errorDiv.textContent = errInvalid; errorDiv.style.display = 'block'; }
-  });
-  document.getElementById('newclaw-login-pass').focus();
-}
-
-async function newclawCheckAuth() {
-  const token = newclawGetToken();
-  if (!token) {
-    try { const res = await newclawFetch('/api/config'); if (res.status === 401) { newclawShowLogin(); return false; } return true; } catch { return true; }
-  }
-  try { const res = await newclawFetch('/api/config'); return res.status !== 401; } catch { return false; }
-}
 document.addEventListener('DOMContentLoaded', async () => {
   newclawInitTheme();
-  newclawCheckAuth();
 
   // Try to fetch default language from server if not set in localStorage
   if (!localStorage.getItem(NEWCLAW_KEY + 'lang')) {
     try {
-      const res = await newclawFetch('/api/config');
+      const res = await fetch('/api/config');
       const data = await res.json();
       if (data.success && data.config.language) {
         let lang = data.config.language;

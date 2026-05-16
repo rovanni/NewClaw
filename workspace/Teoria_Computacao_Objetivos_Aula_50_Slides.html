@@ -1,0 +1,1329 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aula: Teoria da Computação - UENP (50 Slides)</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+        onload="renderMathInElement(document.body, {delimiters:[{left:'$',right:'$',display:false},{left:'$$',right:'$$',display:true}]});"></script>
+    <style>
+        :root {
+            --primary: #1a365d;
+            --secondary: #2c5282;
+            --accent: #ecc94a;
+            --text: #2d3748;
+            --bg: #f7fafc;
+            --white: #ffffff;
+            --success: #38a169;
+            --danger: #e53e3e;
+            --info: #3182ce;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .slide-container {
+            width: 90%;
+            max-width: 1100px;
+            margin: 40px auto;
+        }
+        .slide {
+            background: var(--white);
+            border-radius: 15px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            padding: 40px;
+            margin-bottom: 50px;
+            min-height: 600px;
+            display: none;
+            border-left: 10px solid var(--primary);
+            position: relative;
+        }
+        .slide.active {
+            display: block;
+            animation: fadeIn 0.5s ease-in-out;
+        }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        h1 {
+            color: var(--primary);
+            font-size: 2.2rem;
+            border-bottom: 3px solid var(--accent);
+            padding-bottom: 10px;
+            margin-top: 0;
+        }
+        h2 {
+            color: var(--secondary);
+            font-size: 1.6rem;
+            margin-top: 20px;
+        }
+        h3 {
+            color: var(--secondary);
+            font-size: 1.3rem;
+            margin-top: 15px;
+        }
+        .content {
+            font-size: 1.15rem; line-height: 1.6;
+            margin-top: 25px;
+        }
+        .bullet-points {
+            list-style: none;
+            padding: 0;
+        }
+        .bullet-points li {
+            margin-bottom: 12px;
+            padding-left: 30px;
+            position: relative;
+        }
+        .bullet-points li::before {
+            content: '▹';
+            position: absolute;
+            left: 0;
+            color: var(--secondary);
+            font-weight: bold;
+            font-size: 1.4rem;
+        }
+        .sub-bullet {
+            list-style: none;
+            padding: 0;
+            margin-top: 8px;
+            margin-left: 20px;
+        }
+        .sub-bullet li {
+            margin-bottom: 6px;
+            padding-left: 25px;
+            position: relative;
+        }
+        .sub-bullet li::before {
+            content: '◦';
+            position: absolute;
+            left: 5px;
+            color: var(--accent);
+            font-weight: bold;
+            font-size: 1.2rem;
+        }
+        .highlight-box {
+            background: #edf2f7;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            border-left: 5px solid var(--accent);
+            font-style: italic;
+        }
+        .definition-box {
+            background: #ebf8ff;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            border-left: 5px solid var(--info);
+        }
+        .example-box {
+            background: #f0fff4;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            border-left: 5px solid var(--success);
+        }
+        .warning-box {
+            background: #fff5f5;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            border-left: 5px solid var(--danger);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 1.05rem;
+        }
+        th, td {
+            border: 1px solid #cbd5e0;
+            padding: 10px;
+            text-align: left;
+        }
+        th {
+            background-color: var(--primary);
+            color: white;
+        }
+        .nav-buttons {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            display: flex;
+            gap: 10px;
+            z-index: 1000;
+        }
+        button {
+            padding: 10px 20px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+        button:hover { background: var(--secondary); }
+        .slide-number {
+            position: absolute;
+            bottom: 20px;
+            left: 40px;
+            font-size: 0.9rem;
+            color: #a0aec0;
+        }
+        .diagram {
+            background: #f7fafc;
+            border: 2px solid #cbd5e0;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 0.95rem;
+            white-space: pre;
+            overflow-x: auto;
+        }
+        .two-col {
+            display: flex;
+            gap: 30px;
+        }
+        .two-col > div {
+            flex: 1;
+        }
+        .tag {
+            display: inline-block;
+            background: var(--primary);
+            color: white;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            margin: 2px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="slide-container">
+
+        <!-- ==================== SEÇÃO 1: INTRODUÇÃO (Slides 1-10) ==================== -->
+
+        <!-- SLIDE 1: CAPA -->
+        <div class="slide active">
+            <div style="text-align: center; margin-top: 100px;">
+                <h1 style="font-size: 3.2rem; border: none;">Teoria da Computação</h1>
+                <h2 style="color: var(--text);">Fundamentos, Limites e Modelos Matemáticos</h2>
+                <div class="highlight-box" style="display: inline-block; margin-top: 50px;">
+                    Universidade Estadual do Norte do Paraná (UENP)<br>
+                    Curso de Graduação em Computação<br>
+                    <strong>Prof. Luciano Rovanni do Nascimento</strong>
+                </div>
+            </div>
+            <div class="slide-number">Slide 1 / 56</div>
+        </div>
+
+        <!-- SLIDE 2: SUMÁRIO -->
+        <div class="slide">
+            <h1>📋 Sumário da Apresentação</h1>
+            <div class="content">
+                <div class="two-col">
+                    <div>
+                        <h3>Parte I — Fundamentos (Slides 3-10)</h3>
+                        <ul class="bullet-points">
+                            <li>Objetivo da Disciplina</li>
+                            <li>Os 3 Pilares</li>
+                            <li>Conceitos de Base: Alfabeto, String, Linguagem</li>
+                            <li>Operações com Linguagens</li>
+                            <li>Progressão de Modelos</li>
+                        </ul>
+                        <h3>Parte II — Autômatos Finitos (Slides 11-25)</h3>
+                        <ul class="bullet-points">
+                            <li>AFD e AFN — Definições e Exemplos</li>
+                            <li>Expressões Regulares</li>
+                            <li>Conversão AFN → AFD</li>
+                            <li>Propriedades e Lema do Bombeamento</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3>Parte III — Linguagens Livre de Contexto (Slides 26-37)</h3>
+                        <ul class="bullet-points">
+                            <li>Gramáticas (GLC) e Forma Normal de Chomsky</li>
+                            <li>Árvores de Derivação e Ambiguidade</li>
+                            <li>Autômatos de Pilha</li>
+                            <li>Propriedades e Lema do Bombeamento para CFL</li>
+                            <li>Aplicação em Compiladores</li>
+                        </ul>
+                        <h3>Parte IV — Computabilidade (Slides 38-50)</h3>
+                        <ul class="bullet-points">
+                            <li>Máquina de Turing</li>
+                            <li>Decidibilidade e Problema da Parada</li>
+                            <li>Teorema de Rice e Limites</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="slide-number">Slide 2 / 56</div>
+        </div>
+
+        <!-- SLIDE 3: OBJETIVO DA DISCIPLINA -->
+        <div class="slide">
+            <h1>🎯 Objetivo da Disciplina</h1>
+            <div class="content">
+                <p>A Teoria da Computação não trata de hardware ou linguagens de programação específicas, mas da <strong>natureza fundamental da computação</strong>.</p>
+                <div class="highlight-box">
+                    "O objetivo central é entender os limites do que pode ser computado e como pode ser computado."
+                </div>
+                <p>Buscamos responder a três questões existenciais da ciência da computação:</p>
+                <ul class="bullet-points">
+                    <li><strong>Como computar?</strong> (Mecanismos e Modelos)</li>
+                    <li><strong>O que pode ser expresso?</strong> (Sintaxe e Estrutura)</li>
+                    <li><strong>Até onde é possível computar?</strong> (Limites e Impossibilidades)</li>
+                </ul>
+            </div>
+            <div class="slide-number">Slide 3 / 56</div>
+        </div>
+
+        <!-- SLIDE 4: POR QUE ESTUDAR TEORIA? -->
+        <div class="slide">
+            <h1>🤔 Por Que Estudar Teoria da Computação?</h1>
+            <div class="content">
+                <ul class="bullet-points">
+                    <li><strong>Compreensão profunda:</strong> Saber <em>por que</em> as linguagens e compiladores funcionam, não apenas <em>como</em> usá-los.</li>
+                    <li><strong>Economia de esforço:</strong> Conhecer os limites evita tentar resolver o impossível (ex: verificação automática de terminação de programas).</li>
+                    <li><strong>Base para IA e verificação formal:</strong> Os limites da computabilidade delimitam o que a IA pode, em princípio, alcançar.</li>
+                    <li><strong>Competência profissional:</strong> Entender regex, parsers e complexidade é requisito em engenharia de software, segurança e bioinformática.</li>
+                </ul>
+                <div class="highlight-box">"A teoria é a base que transforma um programador em cientista da computação."</div>
+            </div>
+            <div class="slide-number">Slide 4 / 56</div>
+        </div>
+
+        <!-- SLIDE 5: OS 3 PILARES -->
+        <div class="slide">
+            <h1>📌 Os 3 Pilares da Disciplina</h1>
+            <div class="content">
+                <table>
+                    <thead>
+                        <tr><th>Pilar</th><th>Pergunta Central</th><th>Conteúdo Principal</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><strong>Autômatos</strong></td><td>Como computar?</td><td>AFD, AFN, Autômatos de Pilha</td></tr>
+                        <tr><td><strong>Linguagens Formais</strong></td><td>O que pode ser expresso?</td><td>Gramáticas, Regex, Hierarquia de Chomsky</td></tr>
+                        <tr><td><strong>Computabilidade</strong></td><td>Até onde é possível?</td><td>Máquina de Turing, Decidibilidade, Problema da Parada</td></tr>
+                    </tbody>
+                </table>
+                <div class="highlight-box">Os três pilares são interdependentes: autômatos reconhecem linguagens, e linguagens definem o alcance da computação.</div>
+            </div>
+            <div class="slide-number">Slide 5 / 56</div>
+        </div>
+
+        <!-- SLIDE 6: ALFABETO -->
+        <div class="slide">
+            <h1>🔤 Conceitos de Base: Alfabeto (Σ)</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Definição:</strong> Um <strong>alfabeto</strong> (denotado por $\Sigma$) é um conjunto finito e não vazio de símbolos.
+                </div>
+                <ul class="bullet-points">
+                    <li><strong>Exemplo 1:</strong> $\Sigma = \{0, 1\}$ — alfabeto binário</li>
+                    <li><strong>Exemplo 2:</strong> $\Sigma = \{a, b, c, \ldots, z\}$ — letras minúsculas</li>
+                    <li><strong>Exemplo 3:</strong> $\Sigma = \{\text{if, else, while, (, ), \{, \}}\}$ — tokens de uma linguagem</li>
+                </ul>
+                <div class="warning-box">Importante: O alfabeto é sempre <strong>finito</strong>. O conjunto infinito de todas as strings possíveis forma outra estrutura (próximo slide).</div>
+            </div>
+            <div class="slide-number">Slide 6 / 56</div>
+        </div>
+
+        <!-- SLIDE 7: STRING -->
+        <div class="slide">
+            <h1>🔗 Conceitos de Base: String (Cadeia)</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Definição:</strong> Uma <strong>string</strong> (ou cadeia) é uma sequência finita de símbolos de um alfabeto $\Sigma$.
+                </div>
+                <ul class="bullet-points">
+                    <li><strong>Comprimento:</strong> Número de símbolos. Denotado $|w|$. Ex: $|\text{aba}| = 3$</li>
+                    <li><strong>String vazia:</strong> Denotada $\varepsilon$ (ou $\lambda$). Tem comprimento 0.</li>
+                    <li><strong>Concatenação:</strong> $w_1 \cdot w_2$. Ex: $\text{ab} \cdot \text{cd} = \text{abcd}$</li>
+                    <li><strong>Potência:</strong> $w^n$ = $w$ repetida $n$ vezes. Ex: $(\text{ab})^3 = \text{ababab}$</li>
+                    <li><strong>Reverso:</strong> $w^R$. Ex: $(\text{abc})^R = \text{cba}$</li>
+                </ul>
+            </div>
+            <div class="slide-number">Slide 7 / 56</div>
+        </div>
+
+        <!-- SLIDE 8: LINGUAGEM -->
+        <div class="slide">
+            <h1>📚 Conceitos de Base: Linguagem</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Definição:</strong> Uma <strong>linguagem</strong> sobre $\Sigma$ é qualquer conjunto (finito ou infinito) de strings sobre $\Sigma$.
+                </div>
+                <ul class="bullet-points">
+                    <li><strong>Linguagem finita:</strong> $L = \{\text{ab}, \text{ba}\}$ — apenas 2 strings</li>
+                    <li><strong>Linguagem infinita:</strong> $L = \{a^n b^n \mid n \geq 0\}$ — infinitas strings</li>
+                    <li><strong>Linguagem vazia:</strong> $L = \emptyset$ — nenhum string</li>
+                    <li><strong>Fecho de Kleene:</strong> $\Sigma^*$ — todas as strings possíveis sobre $\Sigma$, incluindo $\varepsilon$</li>
+                    <li><strong>Fecho positivo:</strong> $\Sigma^+ = \Sigma^* \setminus \{\varepsilon\}$</li>
+                </ul>
+                <div class="example-box">
+                    <strong>Exemplo prático:</strong> Se $\Sigma = \{0, 1\}$, então $\Sigma^* = \{\varepsilon, 0, 1, 00, 01, 10, 11, 000, \ldots\}$
+                </div>
+            </div>
+            <div class="slide-number">Slide 8 / 56</div>
+        </div>
+
+        <!-- SLIDE 9: OPERAÇÕES COM LINGUAGENS -->
+        <div class="slide">
+            <h1>⚙️ Operações com Linguagens</h1>
+            <div class="content">
+                <table>
+                    <thead><tr><th>Operação</th><th>Notação</th><th>Exemplo</th></tr></thead>
+                    <tbody>
+                        <tr><td>União</td><td>$L_1 \cup L_2$</td><td>Strings em $L_1$ ou em $L_2$</td></tr>
+                        <tr><td>Interseção</td><td>$L_1 \cap L_2$</td><td>Strings em ambos</td></tr>
+                        <tr><td>Concatenação</td><td>$L_1 \cdot L_2$</td><td>$\{ab\} \cdot \{cd\} = \{abcd\}$</td></tr>
+                        <tr><td>Fecho de Kleene</td><td>$L^*$</td><td>$\{a\}^* = \{\varepsilon, a, aa, aaa, \ldots\}$</td></tr>
+                        <tr><td>Complemento</td><td>$\overline{L}$</td><td>$\Sigma^* \setminus L$</td></tr>
+                        <tr><td>Reverso</td><td>$L^R$</td><td>$\{ab, cd\}^R = \{ba, dc\}$</td></tr>
+                    </tbody>
+                </table>
+                <div class="highlight-box">Estas operações são a base algébrica para construir linguagens complexas a partir de linguagens simples.</div>
+            </div>
+            <div class="slide-number">Slide 9 / 56</div>
+        </div>
+
+        <!-- SLIDE 10: PROGRESSÃO DE MODELOS -->
+        <div class="slide">
+            <h1>🚀 Progressão de Modelos de Computação</h1>
+            <div class="content">
+                <p>A teoria constrói a intuição gradualmente, do simples ao complexo:</p>
+                <div class="diagram">    ┌─────────────┐     ┌──────────────┐     ┌─────────────────────┐
+    │  Autômato   │────▶│  Autômato    │────▶│  Máquina de Turing  │
+    │  Finito     │     │  de Pilha    │     │                     │
+    │ (sem mem.)  │     │ (mem. LIFO)  │     │  (mem. infinita)   │
+    └─────────────┘     └──────────────┘     └─────────────────────┘
+         ▲                    ▲                       ▲
+         │                    │                       │
+    Linguagens           Linguagens            Linguagens
+    Regulares           Livre de Ctx.        Recurs. Enum.
+    (Tipo 3)            (Tipo 2)              (Tipo 0)</div>
+                <div class="highlight-box">Cada nível adiciona <strong>poder computacional</strong>. A Máquina de Turing é o teto — qualquer linguagem de programação moderna é "Turing Complete".</div>
+            </div>
+            <div class="slide-number">Slide 10 / 56</div>
+        </div>
+
+        <!-- ==================== SEÇÃO 2: AUTÔMATOS FINITOS (Slides 11-25) ==================== -->
+
+        <!-- SLIDE 11 -->
+        <div class="slide">
+            <h1>🧩 Pilar 1: Autômatos — Modelos de Reconhecimento</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Definição:</strong> Um <strong>autômato</strong> é um modelo matemático de um sistema que processa entradas e muda de estado de acordo com regras bem definidas.
+                </div>
+                <ul class="bullet-points">
+                    <li><strong>Componentes essenciais:</strong> Estados, Alfabeto de entrada, Função de transição, Estado inicial, Conjunto de estados de aceitação.</li>
+                    <li><strong>Funcionamento:</strong> Lê a entrada símbolo a símbolo, transita entre estados, e ao final aceita ou rejeita a string.</li>
+                    <li><strong>Tipos:</strong> AFD (Determinístico), AFN (Não Determinístico), AP (de Pilha), MT (Máquina de Turing).</li>
+                </ul>
+            </div>
+            <div class="slide-number">Slide 11 / 53</div>
+        </div>
+
+        <!-- SLIDE 12: GLOSSÁRIO DE SIGLAS - VISÃO GERAL -->
+        <div class="slide">
+            <h1>📖 Glossário de Siglas — Visão Geral</h1>
+            <div class="content">
+                <p>Ao longo desta disciplina, usaremos diversas siglas técnicas. Vamos conhecê-las e entendê-las antes de aprofundar cada conceito!</p>
+                <table>
+                    <thead><tr><th>Sigla</th><th>Nome Completo</th><th>Categoria</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>AFD</strong></td><td>Autômato Finito Determinístico</td><td>Autômato</td></tr>
+                        <tr><td><strong>AFN</strong></td><td>Autômato Finito Não Determinístico</td><td>Autômato</td></tr>
+                        <tr><td><strong>AP</strong></td><td>Autômato de Pilha (Pushdown Automaton)</td><td>Autômato</td></tr>
+                        <tr><td><strong>MT</strong></td><td>Máquina de Turing</td><td>Autômato</td></tr>
+                        <tr><td><strong>GLC</strong></td><td>Gramática Livre de Contexto</td><td>Gramática</td></tr>
+                        <tr><td><strong>GSC</strong></td><td>Gramática Sensível ao Contexto</td><td>Gramática</td></tr>
+                        <tr><td><strong>FNC</strong></td><td>Forma Normal de Chomsky</td><td>Gramática</td></tr>
+                        <tr><td><strong>Regex</strong></td><td>Expressão Regular</td><td>Linguagem</td></tr>
+                        <tr><td><strong>CFL</strong></td><td>Context-Free Language (Linguagem Livre de Contexto)</td><td>Linguagem</td></tr>
+                        <tr><td><strong>RE</strong></td><td>Recursivamente Enumerável</td><td>Linguagem</td></tr>
+                    </tbody>
+                </table>
+                <div class="highlight-box">Vamos detalhar cada uma destas siglas nos próximos slides!</div>
+            </div>
+            <div class="slide-number">Slide 12 / 53</div>
+        </div>
+
+        <!-- SLIDE 13: AFD E AFN - EXPLICAÇÃO DETALHADA -->
+        <div class="slide">
+            <h1>🔵🟡 AFD e AFN — O Que Significam?</h1>
+            <div class="content">
+                <div class="two-col">
+                    <div>
+                        <h3>🔵 AFD — Autômato Finito Determinístico</h3>
+                        <div class="definition-box">
+                            <strong>A</strong>utômato = Máquina abstrata que processa entradas<br>
+                            <strong>F</strong>inito = Número limitado de estados<br>
+                            <strong>D</strong>eterminístico = Para cada estado e símbolo, há <strong>exatamente uma</strong> transição
+                        </div>
+                        <ul class="sub-bullet">
+                            <li>Não há ambiguidade na execução</li>
+                            <li>Caminho único para cada entrada</li>
+                            <li>Fácil de implementar (tabela)</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3>🟡 AFN — Autômato Finito Não Determinístico</h3>
+                        <div class="definition-box">
+                            <strong>A</strong>utômato = Máquina abstrata que processa entradas<br>
+                            <strong>F</strong>inito = Número limitado de estados<br>
+                            <strong>N</strong>ão Determinístico = Pode haver <strong>múltiplas</strong> transições (ou nenhuma) para o mesmo par (estado, símbolo)
+                        </div>
+                        <ul class="sub-bullet">
+                            <li>Permite "escolhas" simultâneas</li>
+                            <li>Inclui transições ε (sem consumir símbolo)</li>
+                            <li>Mais intuitivo para modelar</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="example-box">
+                    <strong>Analogia:</strong> AFD é como uma estrada com uma única direção em cada cruzamento. AFN é como uma encruzilhada onde você pode seguir vários caminhos ao mesmo tempo — a string é aceita se pelo menos um caminho chega ao destino.
+                </div>
+            </div>
+            <div class="slide-number">Slide 13 / 53</div>
+        </div>
+
+        <!-- SLIDE 14: AP, MT E OUTRAS SIGLAS -->
+        <div class="slide">
+            <h1>🥞⚙️ AP, MT, GLC e Outras Siglas</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>AP — Autômato de Pilha (Pushdown Automaton):</strong><br>
+                    Como um AFN, mas com uma <strong>pilha (stack)</strong> adicional. A pilha permite "lembrar" informações — essencial para reconhecer estruturas aninhadas como parênteses balanceados. Reconhece as linguagens <strong>livre de contexto</strong>.
+                </div>
+                <div class="definition-box">
+                    <strong>MT — Máquina de Turing:</strong><br>
+                    O modelo mais poderoso de computação. Possui uma <strong>fita infinita</strong> que pode ler e escrever, movendo-se para esquerda e direita. É o "teto" computacional — qualquer problema computável pode ser resolvido por uma MT.
+                </div>
+                <div class="definition-box">
+                    <strong>GLC — Gramática Livre de Contexto:</strong><br>
+                    Conjunto de regras de substituição (produções) onde o lado esquerdo é uma única variável. Ex: $S \to aSb \mid \varepsilon$. Gera exatamente as linguagens que um AP reconhece.
+                </div>
+                <div class="highlight-box">
+                    <strong>Relação fundamental:</strong><br>
+                    AFD/AFN ↔ Linguagens Regulares (Tipo 3)<br>
+                    AP ↔ GLC ↔ Linguagens Livre de Contexto (Tipo 2)<br>
+                    MT ↔ Linguagens Recursivamente Enumeráveis (Tipo 0)
+                </div>
+            </div>
+            <div class="slide-number">Slide 14 / 53</div>
+        </div>
+
+        <!-- SLIDE 15: AFD DEFINIÇÃO -->
+        <div class="slide">
+            <h1>🔵 AFD — Autômato Finito Determinístico</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Definição Formal:</strong> Um AFD é uma 5-tupla $M = (Q, \Sigma, \delta, q_0, F)$ onde:
+                    <ul class="sub-bullet">
+                        <li>$Q$ — conjunto finito de estados</li>
+                        <li>$\Sigma$ — alfabeto de entrada</li>
+                        <li>$\delta: Q \times \Sigma \to Q$ — função de transição (determinística)</li>
+                        <li>$q_0 \in Q$ — estado inicial</li>
+                        <li>$F \subseteq Q$ — conjunto de estados de aceitação (finais)</li>
+                    </ul>
+                </div>
+                <div class="highlight-box">Característica fundamental: Para cada par $(q, a)$, existe <strong>exatamente uma</strong> transição definida. Sem ambiguidade.</div>
+            </div>
+            <div class="slide-number">Slide 12 / 56</div>
+        </div>
+
+        <!-- SLIDE 13: AFD EXEMPLO VISUAL -->
+        <div class="slide">
+            <h1>🔵 AFD — Exemplo: Strings terminando em "01"</h1>
+            <div class="content">
+                <div class="definition-box">
+                    $M = (\{q_0, q_1, q_2\}, \{0,1\}, \delta, q_0, \{q_2\})$
+                </div>
+                <table>
+                    <thead><tr><th>$\delta$</th><th>0</th><th>1</th></tr></thead>
+                    <tbody>
+                        <tr><td>$q_0$</td><td>$q_1$</td><td>$q_0$</td></tr>
+                        <tr><td>$q_1$</td><td>$q_1$</td><td>$q_2$</td></tr>
+                        <tr><td>$q_2$</td><td>$q_1$</td><td>$q_0$</td></tr>
+                    </tbody>
+                </table>
+                <div class="diagram">    (q₀)──0──▶(q₁)──1──▶((q₂))✓
+     ▲         │              │
+     │1        │0             │0,1
+     └─────────┘              │
+     (loop em q₀)        q₂─0─▶q₁
+                          q₂─1─▶q₀</div>
+                <div class="slide-number">Slide 13 / 56</div>
+            </div>
+        </div>
+
+        <!-- SLIDE 14: AFD TESTES -->
+        <div class="slide">
+            <h1>🔵 AFD — Testando Strings</h1>
+            <div class="content">
+                <div class="example-box">
+                    <strong>Teste 1: "0101"</strong><br>
+                    $q_0 \xrightarrow{0} q_1 \xrightarrow{1} q_2 \xrightarrow{0} q_1 \xrightarrow{1} q_2$ → Estado final $q_2$ ✅ <strong>Aceita!</strong>
+                </div>
+                <div class="example-box">
+                    <strong>Teste 2: "0110"</strong><br>
+                    $q_0 \xrightarrow{0} q_1 \xrightarrow{1} q_2 \xrightarrow{1} q_0 \xrightarrow{0} q_1$ → Estado final $q_1$ ❌ <strong>Rejeita!</strong>
+                </div>
+                <div class="example-box">
+                    <strong>Teste 3: "ε" (vazia)</strong><br>
+                    Permanece em $q_0$ → Estado final $q_0$ ❌ <strong>Rejeita!</strong> (string vazia não termina em "01")
+                </div>
+                <div class="example-box">
+                    <strong>Teste 4: "01"</strong><br>
+                    $q_0 \xrightarrow{0} q_1 \xrightarrow{1} q_2$ → Estado final $q_2$ ✅ <strong>Aceita!</strong>
+                </div>
+            </div>
+            <div class="slide-number">Slide 14 / 56</div>
+        </div>
+
+        <!-- SLIDE 15: AFD MINIMIZAÇÃO -->
+        <div class="slide">
+            <h1>🔵 Minimização de AFD</h1>
+            <div class="content">
+                <ul class="bullet-points">
+                    <li><strong>Problema:</strong> Dado um AFD, encontrar o AFD equivalente com o menor número de estados.</li>
+                    <li><strong>Teorema:</strong> Para toda linguagem regular, existe um <strong>único</strong> AFD mínimo (a menos de renomeação de estados).</li>
+                    <li><strong>Algoritmo:</strong> Remover estados inalcançáveis, depois mesclar estados equivalentes.</li>
+                </ul>
+                <div class="definition-box">
+                    <strong>Estados equivalentes:</strong> Dois estados $p$ e $q$ são equivalentes se, para toda string $w$, $\hat{\delta}(p,w) \in F \iff \hat{\delta}(q,w) \in F$.
+                </div>
+                <div class="highlight-box">A minimização garante que o autômato é o mais eficiente possível — importante em implementações reais de analisadores léxicos.</div>
+            </div>
+            <div class="slide-number">Slide 15 / 56</div>
+        </div>
+
+        <!-- SLIDE 16: AFN DEFINIÇÃO -->
+        <div class="slide">
+            <h1>🟡 AFN — Autômato Finito Não Determinístico</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Definição Formal:</strong> Um AFN é uma 5-tupla $M = (Q, \Sigma, \delta, q_0, F)$ onde:
+                    <ul class="sub-bullet">
+                        <li>$Q, \Sigma, q_0, F$ — mesmos do AFD</li>
+                        <li>$\delta: Q \times (\Sigma \cup \{\varepsilon\}) \to \mathcal{P}(Q)$ — função de transição para <strong>conjuntos</strong> de estados</li>
+                    </ul>
+                </div>
+                <ul class="bullet-points">
+                    <li><strong>Não determinismo:</strong> Para um mesmo $(q, a)$, pode haver 0, 1 ou várias transições.</li>
+                    <li><strong>Transições $\varepsilon$:</strong> O autômato pode mudar de estado sem consumir símbolo da entrada.</li>
+                    <li><strong>Aceitação:</strong> A string é aceita se <strong>existe pelo menos um caminho</strong> que leva a um estado final.</li>
+                </ul>
+                <div class="warning-box">Não determinismo <strong>não é aleatoriedade</strong>. É a existência simultânea de múltiplas possibilidades de computação.</div>
+            </div>
+            <div class="slide-number">Slide 16 / 56</div>
+        </div>
+
+        <!-- SLIDE 17: AFN EXEMPLO -->
+        <div class="slide">
+            <h1>🟡 AFN — Exemplo: Substring "01"</h1>
+            <div class="content">
+                <div class="diagram">    (q₀)──0──▶(q₁)──1──▶((q₂))✓
+     │ 0,1↺          │ 0↺        │ 0,1↺
+     └─────────────────────────────────┘</div>
+                <ul class="bullet-points">
+                    <li>Em $q_0$: consome 0 ou 1 e fica em $q_0$, OU consome 0 e vai para $q_1$.</li>
+                    <li>Em $q_1$: consome 1 e vai para $q_2$ (aceita!), OU consome 0 e fica.</li>
+                    <li>Em $q_2$: consome qualquer coisa e fica (estado de aceitação).</li>
+                </ul>
+                <div class="example-box">
+                    <strong>"00101":</strong> $q_0 \xrightarrow{0} \{q_0, q_1\} \xrightarrow{0} \{q_0, q_1\} \xrightarrow{1} \{q_0, q_2\}$ ✅ (encontrou caminho para $q_2$)
+                </div>
+            </div>
+            <div class="slide-number">Slide 17 / 56</div>
+        </div>
+
+        <!-- SLIDE 18: AFN COM ε-TRANSIÇÕES -->
+        <div class="slide">
+            <h1>🟡 AFN com ε-Transições</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>ε-fecho (ε-closure):</strong> Para um estado $q$, $\varepsilon\text{-fecho}(q)$ é o conjunto de todos os estados alcançáveis a partir de $q$ seguindo apenas transições $\varepsilon$ (incluindo o próprio $q$).
+                </div>
+                <div class="example-box">
+                    <strong>Exemplo:</strong> Se $q_0 \xrightarrow{\varepsilon} q_1 \xrightarrow{\varepsilon} q_2$, então:<br>
+                    $\varepsilon\text{-fecho}(q_0) = \{q_0, q_1, q_2\}$<br>
+                    $\varepsilon\text{-fecho}(q_1) = \{q_1, q_2\}$<br>
+                    $\varepsilon\text{-fecho}(q_2) = \{q_2\}$
+                </div>
+                <div class="highlight-box">O ε-fecho é fundamental para a conversão AFN → AFD e para a simulação de AFN.</div>
+            </div>
+            <div class="slide-number">Slide 18 / 56</div>
+        </div>
+
+        <!-- SLIDE 19: AFD vs AFN -->
+        <div class="slide">
+            <h1>⚖️ AFD vs AFN — Comparação</h1>
+            <div class="content">
+                <table>
+                    <thead><tr><th>Aspecto</th><th>AFD</th><th>AFN</th></tr></thead>
+                    <tbody>
+                        <tr><td>Transição</td><td>Exatamente 1 destino</td><td>0, 1 ou vários destinos</td></tr>
+                        <tr><td>Transição $\varepsilon$</td><td>Não permitida</td><td>Permitida</td></tr>
+                        <tr><td>Execução</td><td>Caminho único</td><td>Múltiplos caminhos</td></tr>
+                        <tr><td>Modelagem</td><td>Mais difícil de projetar</td><td>Mais intuitivo</td></tr>
+                        <tr><td>Implementação</td><td>Direta e eficiente</td><td>Requer simulação</td></tr>
+                        <tr><td>Poder computacional</td><td><strong>Igual</strong></td><td><strong>Igual</strong></td></tr>
+                    </tbody>
+                </table>
+                <div class="highlight-box"><strong>Teorema:</strong> AFD e AFN reconhecem <strong>exatamente</strong> as mesmas linguagens (as linguagens regulares).</div>
+            </div>
+            <div class="slide-number">Slide 19 / 56</div>
+        </div>
+
+        <!-- SLIDE 20: CONVERSÃO AFN → AFD -->
+        <div class="slide">
+            <h1>🔄 Conversão AFN → AFD (Construção de Subconjuntos)</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Algoritmo (Subset Construction):</strong>
+                    <ul class="sub-bullet">
+                        <li>Cada estado do AFD corresponde a um <strong>subconjunto</strong> de estados do AFN</li>
+                        <li>Estado inicial do AFD = $\varepsilon$-fecho de $\{q_0\}$ do AFN</li>
+                        <li>Para cada estado-subconjunto $S$ e símbolo $a$: calcular destino como $\varepsilon$-fecho de $\bigcup_{q \in S} \delta(q, a)$</li>
+                        <li>Estado final do AFD: todo subconjunto que contém pelo menos um estado final do AFN</li>
+                    </ul>
+                </div>
+                <div class="warning-box">
+                    <strong>Explosão de estados:</strong> Se o AFN tem $n$ estados, o AFD equivalente pode ter até $2^n$ estados. Na prática, muitos subconjuntos são inalcançáveis.
+                </div>
+            </div>
+            <div class="slide-number">Slide 20 / 56</div>
+        </div>
+
+        <!-- SLIDE 21: EXPRESSÕES REGULARES -->
+        <div class="slide">
+            <h1>📝 Expressões Regulares (Regex)</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Definição:</strong> Uma expressão regular sobre $\Sigma$ é definida recursivamente:
+                    <ul class="sub-bullet">
+                        <li>$\emptyset$ — linguagem vazia</li>
+                        <li>$\varepsilon$ — linguagem $\{\varepsilon\}$</li>
+                        <li>$a$ (para $a \in \Sigma$) — linguagem $\{a\}$</li>
+                        <li>Se $R_1, R_2$ são regex: $R_1 + R_2$ (união), $R_1 \cdot R_2$ (concatenação), $R_1^*$ (fecho)</li>
+                    </ul>
+                </div>
+                <div class="example-box">
+                    <strong>Exemplos:</strong><br>
+                    $(0+1)^*$ = todas as strings binárias<br>
+                    $0(0+1)^*1$ = strings binárias começando com 0 e terminando com 1<br>
+                    $(aa)^*$ = strings com número par de $a$'s
+                </div>
+            </div>
+            <div class="slide-number">Slide 21 / 56</div>
+        </div>
+
+        <!-- SLIDE 22: REGEX ↔ AF -->
+        <div class="slide">
+            <h1>🔗 Expressões Regulares ↔ Autômatos Finitos</h1>
+            <div class="content">
+                <div class="diagram">    Expressão Regular          Autômato Finito
+         (Regex)          ↔        (AFD/AFN)
+           ▲                         ▲
+           │   Linguagens Regulares   │
+           └─────────────────────────┘</div>
+                <p><strong>Teorema de Kleene:</strong> Uma linguagem é regular se e somente se pode ser descrita por uma expressão regular.</p>
+                <ul class="bullet-points">
+                    <li><strong>Regex → AFN:</strong> Construção de Thompson (algoritmo sistemático)</li>
+                    <li><strong>AFD → Regex:</strong> Resolução de equações de Arden ou construção de estado eliminável</li>
+                </ul>
+                <div class="highlight-box">Os três formalismos — AFD, AFN e Regex — são <strong>equivalentes</strong> em poder expressivo.</div>
+            </div>
+            <div class="slide-number">Slide 22 / 56</div>
+        </div>
+
+        <!-- SLIDE 23: CONSTRUÇÃO DE THOMPSON -->
+        <div class="slide">
+            <h1>🔨 Construção de Thompson: Regex → AFN</h1>
+            <div class="content">
+                <p>Construção recursiva que transforma qualquer regex em um AFN com $\varepsilon$-transições:</p>
+                <table>
+                    <thead><tr><th>Regex</th><th>AFN Resultante</th></tr></thead>
+                    <tbody>
+                        <tr><td>$a$</td><td>Dois estados ligados por transição $a$</td></tr>
+                        <tr><td>$R_1 + R_2$</td><td>Novo inicial com $\varepsilon$ para $R_1$ e $R_2$; ambos vão com $\varepsilon$ para novo final</td></tr>
+                        <tr><td>$R_1 \cdot R_2$</td><td>Final de $R_1$ ligado com $\varepsilon$ ao inicial de $R_2$</td></tr>
+                        <tr><td>$R_1^*$</td><td>Loop com $\varepsilon$-transições do final ao inicial de $R_1$</td></tr>
+                    </tbody>
+                </table>
+                <div class="example-box">Usada por ferramentas como <strong>lex</strong> e <strong>flex</strong> para gerar analisadores léxicos a partir de definições regex.</div>
+            </div>
+            <div class="slide-number">Slide 23 / 56</div>
+        </div>
+
+        <!-- SLIDE 24: PROPRIEDADES DAS LINGUAGENS REGULARES -->
+        <div class="slide">
+            <h1>✅ Propriedades das Linguagens Regulares</h1>
+            <div class="content">
+                <ul class="bullet-points">
+                    <li><strong>Fechamento sob união:</strong> Se $L_1, L_2$ são regulares, $L_1 \cup L_2$ é regular.</li>
+                    <li><strong>Fechamento sob concatenação:</strong> $L_1 \cdot L_2$ é regular.</li>
+                    <li><strong>Fechamento sob fecho:</strong> $L^*$ é regular.</li>
+                    <li><strong>Fechamento sob complemento:</strong> $\overline{L}$ é regular (trocar estados finais por não-finais no AFD).</li>
+                    <li><strong>Fechamento sob interseção:</strong> $L_1 \cap L_2$ é regular (via De Morgan ou construção de produto).</li>
+                    <li><strong>Fechamento sob diferença:</strong> $L_1 \setminus L_2$ é regular ($L_1 \cap \overline{L_2}$).</li>
+                    <li><strong>Fechamento sob reverso:</strong> $L^R$ é regular.</li>
+                </ul>
+                <div class="highlight-box">As linguagens regulares formam uma <strong>álgebra</strong> muito bem comportada — fechada sob todas as operações principais.</div>
+            </div>
+            <div class="slide-number">Slide 24 / 56</div>
+        </div>
+
+        <!-- SLIDE 25: LEMA DO BOMBEAMENTO -->
+        <div class="slide">
+            <h1>💨 Lema do Bombeamento (Pumping Lemma)</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Enunciado:</strong> Se $L$ é regular, então existe uma constante $p$ (comprimento de bombeamento) tal que toda string $w \in L$ com $|w| \geq p$ pode ser dividida em $w = xyz$ onde:
+                    <ul class="sub-bullet">
+                        <li>$|y| > 0$ (o pedaço "bombeado" não é vazio)</li>
+                        <li>$|xy| \leq p$ (o bombeamento ocorre no início)</li>
+                        <li>$xy^iz \in L$ para todo $i \geq 0$ (repetir $y$ qualquer número de vezes)</li>
+                    </ul>
+                </div>
+                <div class="warning-box">
+                    <strong>Uso principal:</strong> Provar que uma linguagem <strong>NÃO é regular</strong>. A contrapositiva: se para todo $p$ existe $w$ que viola as condições, então $L$ não é regular.
+                </div>
+                <div class="example-box">
+                    <strong>Exemplo:</strong> $L = \{a^n b^n \mid n \geq 0\}$ não é regular.<br>
+                    Tome $w = a^p b^p$, divida $w = xyz$ com $y = a^k$ ($k > 0$).<br>
+                    Bombeie: $xy^2z = a^{p+k}b^p \notin L$. <strong>Contradição!</strong> ∎
+                </div>
+            </div>
+            <div class="slide-number">Slide 25 / 56</div>
+        </div>
+
+        <!-- ==================== SEÇÃO 3: LINGUAGENS LIVRE DE CONTEXTO (Slides 26-37) ==================== -->
+
+        <!-- SLIDE 26: HIERARQUIA DE CHOMSKY -->
+        <div class="slide">
+            <h1>📐 A Hierarquia de Chomsky</h1>
+            <div class="content">
+                <table>
+                    <thead><tr><th>Tipo</th><th>Linguagem</th><th>Autômato</th><th>Gramática</th><th>Exemplo</th></tr></thead>
+                    <tbody>
+                        <tr><td>Tipo 3</td><td>Regulares</td><td>AFD / AFN</td><td>Regular</td><td>Tokens, IDs</td></tr>
+                        <tr><td>Tipo 2</td><td>Livre de Contexto</td><td>Autômato de Pilha</td><td>GLC</td><td>Parênteses balanceados</td></tr>
+                        <tr><td>Tipo 1</td><td>Sensível ao Contexto</td><td>Autômato Linearmente Limitado</td><td>GSC</td><td>$\{a^n b^n c^n\}$</td></tr>
+                        <tr><td>Tipo 0</td><td>Recursivamente Enumeráveis</td><td>Máquina de Turing</td><td>G Irrestrita</td><td>Qualquer algoritmo</td></tr>
+                    </tbody>
+                </table>
+                <div class="diagram">  Tipo 0 (RE) ⊇ Tipo 1 (SC) ⊇ Tipo 2 (LC) ⊇ Tipo 3 (Reg)
+  ──────────────────────────────────────────────────────▶
+       Mais geral                          Mais restrito</div>
+                <div class="highlight-box">Cada inclusão é <strong>própria</strong>: existem linguagens em cada nível que não pertencem ao nível inferior.</div>
+            </div>
+            <div class="slide-number">Slide 26 / 56</div>
+        </div>
+
+        <!-- SLIDE 27: GLC DEFINIÇÃO -->
+        <div class="slide">
+            <h1>📖 Gramáticas Livre de Contexto (GLC)</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Definição Formal:</strong> Uma GLC é uma 4-tupla $G = (V, \Sigma, R, S)$ onde:
+                    <ul class="sub-bullet">
+                        <li>$V$ — conjunto de variáveis (não-terminais)</li>
+                        <li>$\Sigma$ — alfabeto de terminais</li>
+                        <li>$R$ — regras de produção da forma $A \to \alpha$ onde $A \in V$ e $\alpha \in (V \cup \Sigma)^*$</li>
+                        <li>$S \in V$ — símbolo inicial</li>
+                    </ul>
+                </div>
+                <div class="example-box">
+                    <strong>Exemplo:</strong> $L = \{a^n b^n \mid n \geq 0\}$<br>
+                    $S \to aSb \mid \varepsilon$<br>
+                    Derivação: $S \Rightarrow aSb \Rightarrow aaSbb \Rightarrow aa\varepsilon bb = aabb$
+                </div>
+            </div>
+            <div class="slide-number">Slide 27 / 56</div>
+        </div>
+
+        <!-- SLIDE 28: FORMA NORMAL DE CHOMSKY -->
+        <div class="slide">
+            <h1>📐 Forma Normal de Chomsky (FNC)</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Definição:</strong> Uma GLC está na FNC se toda regra é da forma:
+                    <ul class="sub-bullet">
+                        <li>$A \to BC$ (duas variáveis)</li>
+                        <li>$A \to a$ (um terminal)</li>
+                        <li>$S \to \varepsilon$ (permitido apenas para o símbolo inicial)</li>
+                    </ul>
+                </div>
+                <ul class="bullet-points">
+                    <li><strong>Importância:</strong> Permite algoritmos de parsing eficientes (CYK em $O(n^3)$).</li>
+                    <li><strong>Conversão:</strong> Toda GLC pode ser convertida para FNC equivalente em tempo polinomial.</li>
+                    <li><strong>Passos da conversão:</strong> Eliminar $\varepsilon$-produções → Eliminar produções unitárias → Converter regras longas.</li>
+                </ul>
+            </div>
+            <div class="slide-number">Slide 28 / 56</div>
+        </div>
+
+        <!-- SLIDE 29: ÁRVORES DE DERIVAÇÃO -->
+        <div class="slide">
+            <h1>🌳 Árvores de Derivação (Parse Trees)</h1>
+            <div class="content">
+                <p>Uma árvore de derivação visualiza como uma string é gerada pela gramática:</p>
+                <div class="diagram">        S
+       / \
+      a   S
+         / \
+        a   S
+           / \
+          b   S
+              |
+              ε
+
+String derivada: aab</div>
+                <ul class="bullet-points">
+                    <li><strong>Raiz:</strong> Símbolo inicial $S$</li>
+                    <li><strong>Folhas:</strong> Terminais (lidas da esquerda para direita = string derivada)</li>
+                    <li><strong>Internos:</strong> Variáveis com filhos segundo regras de produção</li>
+                    <li><strong>Yield:</strong> String formada pela concatenação das folhas (esquerda → direita)</li>
+                </ul>
+            </div>
+            <div class="slide-number">Slide 29 / 56</div>
+        </div>
+
+        <!-- SLIDE 30: AMBIGUIDADE -->
+        <div class="slide">
+            <h1>⚠️ Ambiguidade em Gramáticas</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Definição:</strong> Uma gramática é <strong>ambígua</strong> se existe uma string com duas ou mais árvores de derivação distintas.
+                </div>
+                <div class="example-box">
+                    <strong>Exemplo clássico:</strong> Expressões aritméticas<br>
+                    $E \to E + E \mid E \times E \mid a$<br>
+                    Para $a + a \times a$: duas parse trees (soma primeiro ou multiplicação primeiro).
+                </div>
+                <ul class="bullet-points">
+                    <li><strong>Solução:</strong> Gramática não-ambígua: $E \to E + T \mid T$, $T \to T \times F \mid F$, $F \to a$</li>
+                    <li><strong>Importante:</strong> Existem linguagens <strong>inerentemente ambíguas</strong> — nenhuma GLC para elas pode ser não-ambígua.</li>
+                </ul>
+            </div>
+            <div class="slide-number">Slide 30 / 56</div>
+        </div>
+
+        <!-- SLIDE 31: AP DEFINIÇÃO -->
+        <div class="slide">
+            <h1>🥞 Autômato de Pilha (AP) — Definição</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Definição Formal:</strong> Um AP é uma 7-tupla $M = (Q, \Sigma, \Gamma, \delta, q_0, Z_0, F)$ onde:
+                    <ul class="sub-bullet">
+                        <li>$Q$ — estados, $\Sigma$ — alfabeto de entrada, $\Gamma$ — alfabeto da pilha</li>
+                        <li>$\delta: Q \times (\Sigma \cup \{\varepsilon\}) \times (\Gamma \cup \{\varepsilon\}) \to \mathcal{P}(Q \times (\Gamma \cup \{\varepsilon\}))$</li>
+                        <li>$q_0$ — estado inicial, $Z_0$ — símbolo inicial da pilha, $F$ — estados finais</li>
+                    </ul>
+                </div>
+                <div class="highlight-box">O AP é como um AFN, mas com uma <strong>pilha infinita</strong> (memória LIFO). Pode empilhar (push) e desempilhar (pop) símbolos.</div>
+            </div>
+            <div class="slide-number">Slide 31 / 56</div>
+        </div>
+
+        <!-- SLIDE 32: AP EXEMPLO -->
+        <div class="slide">
+            <h1>🥞 Autômato de Pilha — Exemplo</h1>
+            <div class="content">
+                <p><strong>Problema:</strong> AP para $L = \{a^n b^n \mid n \geq 0\}$</p>
+                <ul class="bullet-points">
+                    <li><strong>Estado $q_1$:</strong> Para cada $a$ lido, empilha $a$ na pilha.</li>
+                    <li><strong>Transição $\varepsilon$:</strong> Muda para $q_2$ (sem consumir entrada).</li>
+                    <li><strong>Estado $q_2$:</strong> Para cada $b$ lido, desempilha um $a$.</li>
+                    <li><strong>Aceita:</strong> Se a entrada acabou e a pilha está vazia (ou no símbolo $Z_0$).</li>
+                </ul>
+                <div class="example-box">
+                    <strong>"aabb":</strong> push $a$ → push $a$ → pop $a$ → pop $a$ → pilha volta a $Z_0$ ✅<br>
+                    <strong>"aab":</strong> push $a$ → push $a$ → pop $a$ → entrada acabou, pilha não vazia ❌
+                </div>
+            </div>
+            <div class="slide-number">Slide 32 / 56</div>
+        </div>
+
+        <!-- SLIDE 33: AP DETERMINÍSTICO vs NÃO DETERMINÍSTICO -->
+        <div class="slide">
+            <h1>⚖️ AP Determinístico vs Não Determinístico</h1>
+            <div class="content">
+                <table>
+                    <thead><tr><th>Aspecto</th><th>AP Determinístico</th><th>AP Não Determinístico</th></tr></thead>
+                    <tbody>
+                        <tr><td>Transições</td><td>No máximo 1 por configuração</td><td>Múltiplas permitidas</td></tr>
+                        <tr><td>$\varepsilon$-transições</td><td>Restritas (não conflitam com leitura)</td><td>Irrestritas</td></tr>
+                        <tr><td>Linguagens</td><td>DCFL (subconjunto próprio)</td><td>Todas as CFL</td></tr>
+                        <tr><td>Parsing</td><td>Linear $O(n)$ — base do LR parsing</td><td>Pode exigir $O(n^3)$</td></tr>
+                    </tbody>
+                </table>
+                <div class="warning-box"><strong>Atenção:</strong> Ao contrário dos autômatos finitos, AP determinístico e não determinístico <strong>NÃO são equivalentes</strong>. Existem CFL que não são DCFL.</div>
+            </div>
+            <div class="slide-number">Slide 33 / 56</div>
+        </div>
+
+        <!-- SLIDE 34: PROPRIEDADES DAS CFL -->
+        <div class="slide">
+            <h1>✅ Propriedades das Linguagens Livre de Contexto</h1>
+            <div class="content">
+                <ul class="bullet-points">
+                    <li><strong>Fechamento sob união:</strong> $L_1 \cup L_2$ é CFL (criar novo $S' \to S_1 \mid S_2$).</li>
+                    <li><strong>Fechamento sob concatenação:</strong> $L_1 \cdot L_2$ é CFL ($S' \to S_1 S_2$).</li>
+                    <li><strong>Fechamento sob fecho:</strong> $L^*$ é CFL ($S' \to S S' \mid \varepsilon$).</li>
+                    <li><strong>NÃO fechado sob interseção:</strong> $L_1 \cap L_2$ pode não ser CFL.</li>
+                    <li><strong>NÃO fechado sob complemento:</strong> $\overline{L}$ pode não ser CFL.</li>
+                    <li><strong>Interseção com regular:</strong> $L_1 \cap L_2$ é CFL se $L_1$ é CFL e $L_2$ é regular.</li>
+                </ul>
+                <div class="warning-box">A não-fechamento sob interseção e complemento é uma diferença crucial em relação às linguagens regulares.</div>
+            </div>
+            <div class="slide-number">Slide 34 / 56</div>
+        </div>
+
+        <!-- SLIDE 35: LEMA DO BOMBEAMENTO PARA CFL -->
+        <div class="slide">
+            <h1>💨 Lema do Bombeamento para CFL</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Enunciado:</strong> Se $L$ é CFL, existe $p$ tal que toda $w \in L$ com $|w| \geq p$ pode ser dividida em $w = uvxyz$ onde:
+                    <ul class="sub-bullet">
+                        <li>$|vy| > 0$ (há algo para bombear)</li>
+                        <li>$|vxy| \leq p$ (bombeamento local)</li>
+                        <li>$uv^ixy^iz \in L$ para todo $i \geq 0$</li>
+                    </ul>
+                </div>
+                <div class="example-box">
+                    <strong>Exemplo:</strong> $L = \{a^n b^n c^n \mid n \geq 0\}$ não é CFL.<br>
+                    Tome $w = a^p b^p c^p$. Os trechos $v$ e $y$ só contêm 1 ou 2 tipos de símbolos.<br>
+                    Bombeando, o balanceamento dos 3 tipos é quebrado. <strong>Contradição!</strong> ∎
+                </div>
+            </div>
+            <div class="slide-number">Slide 35 / 56</div>
+        </div>
+
+        <!-- SLIDE 36: ALGORITMO CYK -->
+        <div class="slide">
+            <h1>🔍 Algoritmo CYK — Parsing em $O(n^3)$</h1>
+            <div class="content">
+                <ul class="bullet-points">
+                    <li><strong>Entrada:</strong> GLC na Forma Normal de Chomsky + string $w$ de comprimento $n$.</li>
+                    <li><strong>Ideia:</strong> Programação dinâmica. Para cada substring $w[i..j]$, determinar quais variáveis podem derivá-la.</li>
+                    <li><strong>Tabela:</strong> Matriz triangular $n \times n$ onde $T[i][j]$ = conjunto de variáveis que derivam $w[i..j]$.</li>
+                    <li><strong>Complexidade:</strong> $O(n^3 \cdot |R|)$ — polinomial!</li>
+                </ul>
+                <div class="highlight-box">A existência de um algoritmo polinomial para membership testing é uma diferença crucial entre CFL e linguagens sensíveis ao contexto.</div>
+            </div>
+            <div class="slide-number">Slide 36 / 56</div>
+        </div>
+
+        <!-- SLIDE 37: APLICAÇÃO - COMPILADORES -->
+        <div class="slide">
+            <h1>🛠️ Aplicação: Compiladores</h1>
+            <div class="content">
+                <div class="two-col">
+                    <div>
+                        <h3>Análise Léxica (Scanner)</h3>
+                        <ul class="bullet-points">
+                            <li>Transforma código-fonte em <em>tokens</em></li>
+                            <li>Usa AFD e Regex</li>
+                            <li>Ferramentas: <span class="tag">lex</span> <span class="tag">flex</span></li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3>Análise Sintática (Parser)</h3>
+                        <ul class="bullet-points">
+                            <li>Verifica estrutura dos tokens</li>
+                            <li>Usa GLC e AP Determinístico</li>
+                            <li>Parsers LL/LR: tempo linear</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="example-box">
+                    <strong>Gramática simplificada de expressões:</strong><br>
+                    $E \to E + T \mid T$ &nbsp;&nbsp; $T \to T \times F \mid F$ &nbsp;&nbsp; $F \to (E) \mid \text{id}$<br>
+                    <strong>"x + y * z"</strong> → Parse tree respeita precedência (* antes de +)
+                </div>
+                <div class="highlight-box">Sem essa teoria, cada linguagem de programação teria que ser processada por "gambiarras" em vez de parsers matematicamente provados.</div>
+            </div>
+            <div class="slide-number">Slide 37 / 56</div>
+        </div>
+
+        <!-- ==================== SEÇÃO 4: COMPUTABILIDADE (Slides 38-50) ==================== -->
+
+        <!-- SLIDE 38: MT INTRODUÇÃO -->
+        <div class="slide">
+            <h1>⚙️ Pilar 3: Computabilidade — Máquina de Turing</h1>
+            <div class="content">
+                <p>Alan Turing (1936) propôs um modelo matemático que captura a essência da computação:</p>
+                <div class="diagram">  ┌───────────────────────────────────────────────────┐
+  │ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ │  ← Fita infinita
+  └───────────────────────────────────────────────────┘
+                     ▲
+                     │
+               ┌─────┐
+               │  █  │  ← Cabeça de leitura/escrita
+               └─────┘
+               │ UC  │  ← Unidade de Controle (estados)
+               └─────┘</div>
+                <ul class="bullet-points">
+                    <li><strong>Fita infinita:</strong> Memória ilimitada em ambas as direções.</li>
+                    <li><strong>Cabeça:</strong> Lê e escreve um símbolo, move L ou R.</li>
+                    <li><strong>Estados:</strong> Finitos, com transições baseadas no símbolo lido.</li>
+                </ul>
+            </div>
+            <div class="slide-number">Slide 38 / 56</div>
+        </div>
+
+        <!-- SLIDE 39: MT DEFINIÇÃO FORMAL -->
+        <div class="slide">
+            <h1>⚙️ Máquina de Turing — Definição Formal</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Definição:</strong> Uma MT é uma 7-tupla $M = (Q, \Sigma, \Gamma, \delta, q_0, q_{accept}, q_{reject})$ onde:
+                    <ul class="sub-bullet">
+                        <li>$Q$ — estados, $\Sigma$ — alfabeto de entrada, $\Gamma \supseteq \Sigma$ — alfabeto da fita (inclui branco $␣$)</li>
+                        <li>$\delta: Q \times \Gamma \to Q \times \Gamma \times \{L, R\}$ — função de transição</li>
+                        <li>$q_0$ — estado inicial, $q_{accept}$ — estado de aceitação, $q_{reject}$ — estado de rejeição</li>
+                    </ul>
+                </div>
+                <div class="highlight-box">A MT para quando atinge $q_{accept}$ ou $q_{reject}$. Se nunca atinge, <strong>entra em loop infinito</strong> (não para).</div>
+            </div>
+            <div class="slide-number">Slide 39 / 56</div>
+        </div>
+
+        <!-- SLIDE 40: MT EXEMPLO -->
+        <div class="slide">
+            <h1>⚙️ Máquina de Turing — Exemplo</h1>
+            <div class="content">
+                <p><strong>Problema:</strong> MT que aceita $L = \{a^n b^n c^n \mid n \geq 1\}$</p>
+                <ul class="bullet-points">
+                    <li><strong>Passo 1:</strong> Substituir o primeiro $a$ por $X$, mover até o primeiro $b$, substituir por $Y$.</li>
+                    <li><strong>Passo 2:</strong> Mover até o primeiro $c$, substituir por $Z$, voltar ao início.</li>
+                    <li><strong>Passo 3:</strong> Repetir até todos os $a$'s, $b$'s e $c$'s serem marcados.</li>
+                    <li><strong>Passo 4:</strong> Verificar se não sobrou nenhum símbolo não marcado. Se sim, aceita.</li>
+                </ul>
+                <div class="example-box">
+                    <strong>"aabbcc":</strong> $aabbcc \to XaYbcc \to XaYbZc \to XXYYZZ$ ✅<br>
+                    <strong>"aabcc":</strong> Faltou um $b$ — processo falha ao tentar marcar $c$ sem $b$ correspondente ❌
+                </div>
+            </div>
+            <div class="slide-number">Slide 40 / 56</div>
+        </div>
+
+        <!-- SLIDE 41: VARIANTES DA MT -->
+        <div class="slide">
+            <h1>🔧 Variantes da Máquina de Turing</h1>
+            <div class="content">
+                <ul class="bullet-points">
+                    <li><strong>MT Multi-fita:</strong> $k$ fitas com cabeças independentes. Mais fácil de programar, mas equivalente em poder.</li>
+                    <li><strong>MT Não Determinística:</strong> Múltiplas transições possíveis. Aceita se existe um caminho de aceitação.</li>
+                    <li><strong>MT Bidirecional vs Unidirecional:</strong> Fita infinita em ambas as direções vs apenas à direita — equivalentes.</li>
+                    <li><strong>Enumerador:</strong> MT com saída — enumera todas as strings de uma linguagem.</li>
+                </ul>
+                <div class="highlight-box"><strong>Resultado central:</strong> Todas as variantes razoáveis de MT são equivalentes em poder computacional. A soma de conveniências não aumenta o poder.</div>
+            </div>
+            <div class="slide-number">Slide 41 / 56</div>
+        </div>
+
+        <!-- SLIDE 42: TESE DE CHURCH-TURING -->
+        <div class="slide">
+            <h1>📜 Tese de Church-Turing</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Tese (não teorema!):</strong> Qualquer função que pode ser computada por um procedimento efetivo (algoritmo) pode ser computada por uma Máquina de Turing.
+                </div>
+                <ul class="bullet-points">
+                    <li><strong>Não é provável</strong> — é uma tese sobre a natureza da computação, não um teorema matemático.</li>
+                    <li><strong>Evidência:</strong> Todos os modelos propostos (cálculo lambda, funções recursivas, MT) são equivalentes.</li>
+                    <li><strong>Implicação:</strong> Se algo não pode ser feito por MT, não pode ser feito por <em>nenhum</em> computador, atual ou futuro.</li>
+                </ul>
+                <div class="warning-box">Computação quântica e neural <strong>não violam</strong> a Tese de Church-Turing — podem ser mais rápidas, mas não resolvem problemas indecidíveis.</div>
+            </div>
+            <div class="slide-number">Slide 42 / 56</div>
+        </div>
+
+        <!-- SLIDE 43: UNIVERSALIDADE -->
+        <div class="slide">
+            <h1>🌐 Máquina de Turing Universal (UTM)</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Definição:</strong> Uma MT Universal $U$ é uma MT que pode simular <strong>qualquer</strong> outra MT $M$ dada a descrição de $M$ e a entrada $w$ como parte de sua própria fita.
+                </div>
+                <ul class="bullet-points">
+                    <li>$U(\langle M \rangle, w)$ simula $M(w)$ — aceita se $M$ aceita, rejeita se $M$ rejeita, não para se $M$ não para.</li>
+                    <li><strong>Implicação prática:</strong> É a prova teórica de que computadores de propósito geral são possíveis.</li>
+                    <li><strong>Hardware como dado:</strong> O programa é um dado na fita; a MT Universal é o "processador".</li>
+                </ul>
+                <div class="highlight-box">A UMT é o conceito teórico por trás de toda arquitetura de computador moderno (von Neumann): hardware fixo + software variável.</div>
+            </div>
+            <div class="slide-number">Slide 43 / 56</div>
+        </div>
+
+        <!-- SLIDE 44: DECIDIBILIDADE -->
+        <div class="slide">
+            <h1>⚖️ Decidibilidade</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Linguagem Decidível:</strong> Uma linguagem $L$ é decidível se existe uma MT que sempre <strong>para</strong> e aceita toda $w \in L$ e rejeita toda $w \notin L$.
+                </div>
+                <ul class="bullet-points">
+                    <li><strong>Reconhecível (Recursivamente Enumerável):</strong> Existe MT que aceita $w \in L$, mas pode <strong>não parar</strong> para $w \notin L$.</li>
+                    <li><strong>Co-reconhecível:</strong> $\overline{L}$ é reconhecível (existe MT que aceita strings fora de $L$).</li>
+                    <li><strong>Teorema:</strong> $L$ é decidível ⟺ $L$ é reconhecível <strong>e</strong> co-reconhecível.</li>
+                </ul>
+                <div class="diagram">    Decidíveis ⊂ Reconhecíveis ⊂ Todas as linguagens
+                     ⊂ Co-reconhecíveis ↗</div>
+            </div>
+            <div class="slide-number">Slide 44 / 56</div>
+        </div>
+
+        <!-- SLIDE 45: PROBLEMA DA PARADA -->
+        <div class="slide">
+            <h1>🛑 O Problema da Parada (Halting Problem)</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Problema:</strong> Dado um programa $P$ e uma entrada $w$, $P$ para ao processar $w$?
+                </div>
+                <div class="definition-box">
+                    <strong>Definição formal:</strong> $A_{TM} = \{\langle M, w \rangle \mid M \text{ é uma MT que aceita } w\}$
+                </div>
+                <div class="warning-box">
+                    <strong>Teorema (Turing, 1936):</strong> $A_{TM}$ é <strong>reconhecível</strong> mas <strong>não é decidível</strong>. Não existe algoritmo que resolva o Problema da Parada para todas as entradas.
+                </div>
+            </div>
+            <div class="slide-number">Slide 45 / 56</div>
+        </div>
+
+        <!-- SLIDE 46: PROVA DO HALTING PROBLEM -->
+        <div class="slide">
+            <h1>🛑 Prova: Problema da Parada é Indecidível</h1>
+            <div class="content">
+                <div class="example-box">
+                    <strong>Prova por contradição (diagonalização):</strong><br><br>
+                    Suponha que existe MT $H$ que decide $A_{TM}$:<br>
+                    $H(\langle M, w \rangle)$ = aceita se $M$ aceita $w$, rejeita caso contrário.<br><br>
+                    Construa $D$: "Dado $\langle M \rangle$, rode $H(\langle M, \langle M \rangle \rangle)$. Se aceita, rejeite. Se rejeita, aceite."<br><br>
+                    O que acontece quando rodamos $D$ em si mesma?<br>
+                    $D(\langle D \rangle)$: Se $D$ aceita a si, então rejeita. Se rejeita, então aceita.<br><br>
+                    <strong>Contradição!</strong> $D$ não pode existir, logo $H$ não pode existir. ∎
+                </div>
+            </div>
+            <div class="slide-number">Slide 46 / 56</div>
+        </div>
+
+        <!-- SLIDE 47: OUTROS PROBLEMAS INDECIDÍVEIS -->
+        <div class="slide">
+            <h1>🔴 Outros Problemas Indecidíveis</h1>
+            <div class="content">
+                <ul class="bullet-points">
+                    <li><strong>$E_{TM}$:</strong> Uma MT aceita alguma string? (Problema da vaciedade)</li>
+                    <li><strong>$EQ_{TM}$:</strong> Duas MTs reconhecem a mesma linguagem? (Problema da equivalência)</li>
+                    <li><strong>Post Correspondence Problem (PCP):</strong> Dadas listas de strings, existe emparelhamento?</li>
+                    <li><strong>Equivalência de GLC:</strong> Duas gramáticas geram a mesma linguagem?</li>
+                    <li><strong>Ambiguidade de GLC:</strong> Uma gramática é ambígua?</li>
+                </ul>
+                <div class="highlight-box">Técnica de prova: <strong>Redução</strong>. Se sabemos que $A$ é indecidível, mostramos que se $B$ fosse decidível, $A$ também seria. Logo $B$ é indecidível.</div>
+            </div>
+            <div class="slide-number">Slide 47 / 56</div>
+        </div>
+
+        <!-- SLIDE 48: TEOREMA DE RICE -->
+        <div class="slide">
+            <h1>📜 Teorema de Rice</h1>
+            <div class="content">
+                <div class="definition-box">
+                    <strong>Teorema:</strong> Toda propriedade <strong>não trivial</strong> das linguagens reconhecidas por MTs é <strong>indecidível</strong>.
+                </div>
+                <ul class="bullet-points">
+                    <li><strong>Não trivial:</strong> Nem sempre verdadeira nem sempre falsa (existe MT com a propriedade e existe MT sem).</li>
+                    <li><strong>Exemplos de propriedades indecidíveis:</strong></li>
+                </ul>
+                <ul class="sub-bullet">
+                    <li>$L(M)$ é finita?</li>
+                    <li>$L(M)$ é regular?</li>
+                    <li>$L(M)$ é vazia?</li>
+                    <li>$L(M)$ contém uma string específica?</li>
+                </ul>
+                <div class="warning-box">O Teorema de Rice é um "atalho" poderoso — evita provar indecidibilidade por redução para cada caso individual.</div>
+            </div>
+            <div class="slide-number">Slide 48 / 56</div>
+        </div>
+
+        <!-- SLIDE 49: SÍNTESE FINAL -->
+        <div class="slide">
+            <h1>🎓 Resumo e Reflexão Final</h1>
+            <div class="content">
+                <div class="highlight-box" style="font-size: 1.3rem; text-align: center; border-left: none; border-top: 5px solid var(--accent);">
+                    "Teoria da Computação ensina que nem todo problema tem solução computacional, e que conhecer esses limites é tão importante quanto saber programar."
+                </div>
+                <table>
+                    <thead><tr><th>Pilar</th><th>O que aprendemos</th><th>Pergunta respondida</th></tr></thead>
+                    <tbody>
+                        <tr><td>Autômatos</td><td>AFD = AFN = Regex; Lema do Bombeamento; Minimização</td><td>Como reconhecer padrões?</td></tr>
+                        <tr><td>Linguagens</td><td>GLC ↔ AP; FNC; CYK; Ambiguidade</td><td>Como expressar estrutura?</td></tr>
+                        <tr><td>Computabilidade</td><td>MT = limite; Halting Problem; Rice; Church-Turing</td><td>Até onde dá pra ir?</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="slide-number">Slide 49 / 56</div>
+        </div>
+
+        <!-- SLIDE 50: DISCUSSÃO -->
+        <div class="slide">
+            <h1>📝 Discussão e Próximos Passos</h1>
+            <div class="content">
+                <p><strong>Questões para reflexão:</strong></p>
+                <ol>
+                    <li>Se conseguirmos criar um computador quântico, o Problema da Parada se torna decidível? (Dica: Não — a Tese de Church-Turing se mantém).</li>
+                    <li>Por que não usamos Autômatos Finitos para validar a sintaxe de Java ou Python? O que falta neles?</li>
+                    <li>Qual a diferença entre um algoritmo "lento" e um problema "indecidível"?</li>
+                    <li>Como o Lema do Bombeamento nos ajuda a provar que $\{a^n b^n c^n\}$ não é livre de contexto?</li>
+                    <li>Todo problema prático é decidível? Existe algo que os engenheiros realmente querem resolver mas não podem?</li>
+                </ol>
+                <div style="margin-top: 30px; color: var(--secondary); font-weight: bold; font-size: 1.2rem;">
+                    👉 Próxima Aula: Autômatos Finitos Determinísticos — Exercícios e Implementação
+                </div>
+            </div>
+            <div class="slide-number">Slide 50 / 56</div>
+        </div>
+
+    </div>
+
+    <div class="nav-buttons">
+        <button onclick="changeSlide(-1)">⬅️ Anterior</button>
+        <button onclick="changeSlide(1)">Próximo ➡️</button>
+    </div>
+
+    <script>
+        let currentSlide = 0;
+        const slides = document.querySelectorAll('.slide');
+
+        function changeSlide(direction) {
+            slides[currentSlide].classList.remove('active');
+            currentSlide += direction;
+            if (currentSlide >= slides.length) currentSlide = 0;
+            if (currentSlide < 0) currentSlide = slides.length - 1;
+            slides[currentSlide].classList.add('active');
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight') changeSlide(1);
+            if (e.key === 'ArrowLeft') changeSlide(-1);
+        });
+    </script>
+</body>
+</html>

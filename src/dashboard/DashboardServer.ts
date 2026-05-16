@@ -66,7 +66,7 @@ function authMiddleware(req: Request, res: Response, next: express.NextFunction)
     const token = req.headers.authorization?.replace('Bearer ', '') || req.query.token;
     if (token && API_TOKENS.has(String(token))) { next(); return; }
     // Allow page loads and assets
-    const allowedPaths = ['/', '/config', '/help', '/traces', '/memory', '/memory-graph', '/memory-review', '/shared.js', '/shared.css', '/favicon.ico'];
+    const allowedPaths = ['/', '/config', '/help', '/traces', '/memory', '/memory-graph', '/memory-review', '/shared.js', '/shared.css', '/favicon.ico', '/api/auth/login', '/health'];
     if (allowedPaths.includes(req.path) || req.path.endsWith('.html') || req.path.endsWith('.js') || req.path.endsWith('.css')) { 
         next(); 
         return; 

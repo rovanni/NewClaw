@@ -272,7 +272,7 @@
     // === Sync conversations with server DB ===
     async function syncFromServer() {
       try {
-        const res = await fetch('/api/conversations?userId=web-dashboard');
+        const res = await newclawFetch('/api/conversations?userId=web-dashboard');
         const data = await res.json();
         if (!data.success) return;
         // Merge server convs into local (keep local if newer)
@@ -388,7 +388,7 @@
       showStatus('thinking', t('status_thinking'));
       try {
         showStatus('sending', t('status_sending'));
-        const res = await fetch('/api/chat', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({message: msg, sessionId: currentConvId || 'web-session'}) });
+        const res = await newclawFetch('/api/chat', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({message: msg, sessionId: currentConvId || 'web-session'}) });
         showStatus('receiving', t('status_receiving'));
         const data = await res.json();
         hideStatus();
@@ -441,11 +441,11 @@
         renderSidebar(); renderChat();
       }
     });
-    fetch('/api/config').then(r=>r.json()).then(d=>{ if(d.success) document.querySelector('.newclaw-header-subtitle')?.remove(); });
+    newclawFetch('/api/config').then(r=>r.json()).then(d=>{ if(d.success) document.querySelector('.newclaw-header-subtitle')?.remove(); });
 
     // ── Sidebar status bar ──
     setInterval(() => {
-      fetch('/api/status').then(r=>r.json()).then(d => {
+      newclawFetch('/api/status').then(r=>r.json()).then(d => {
         if (!d.success) return;
         const s = d.status;
         let bar = document.getElementById('sidebarStatusBar');
@@ -462,7 +462,7 @@
     }, 30000); // Update every 30s
 
     // Initial status
-    fetch('/api/status').then(r=>r.json()).then(d => {
+    newclawFetch('/api/status').then(r=>r.json()).then(d => {
       if (!d.success) return;
       let bar = document.getElementById('sidebarStatusBar');
       if (!bar) {

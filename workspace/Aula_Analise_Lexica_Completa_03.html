@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Aula Mestra 03: Especialista em Análise Léxica (Projeto MicroC em C++)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&family=Roboto+Mono&display=swap" rel="stylesheet">
+    <style>
+        body { 
+            font-family: 'Lato', 'Segoe UI', sans-serif; 
+            background: #fff8e1; 
+            color: #455a64; 
+            margin: 0; 
+            overflow: hidden; 
+        }
+        
+        .progress-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 6px;
+            background: rgba(45, 89, 134, 0.1);
+            z-index: 200;
+        }
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(to right, #2d5986, #1a6b3c);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .slide { 
+            width: 100vw; 
+            height: 100vh; 
+            padding: 40px 80px; 
+            box-sizing: border-box; 
+            display: none; 
+            flex-direction: column; 
+            justify-content: center; 
+            border-left: 15px solid #2d5986; 
+            position: relative; 
+        }
+        .slide.active { display: flex; animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        
+        h1 { color: #2d5986; font-size: 2.5em; margin-bottom: 15px; font-weight: 900; }
+        h2 { color: #1a6b3c; font-size: 1.9em; margin-bottom: 12px; border-bottom: 2px solid rgba(26, 107, 60, 0.2); padding-bottom: 5px; }
+        h3 { color: #8b4513; font-size: 1.5em; margin-bottom: 8px; }
+        p, li { font-size: 1.25em; line-height: 1.4; margin-bottom: 6px; }
+        
+        .code { 
+            background: #1e1e1e; 
+            color: #d4d4d4; 
+            padding: 15px; 
+            border-radius: 8px; 
+            font-family: 'Roboto Mono', monospace; 
+            font-size: 0.95em; 
+            white-space: pre-wrap; 
+            margin: 10px 0; 
+            border: 1px solid #333;
+            overflow-y: auto;
+            max-height: 380px;
+        }
+        code { 
+            background: #eceff1; 
+            padding: 1px 5px; 
+            border-radius: 3px; 
+            font-family: 'Roboto Mono', monospace; 
+            font-size: 0.9em; 
+            color: #d81b60; 
+            font-weight: bold;
+        }
+        .important { 
+            color: #b71c1c; 
+            font-weight: bold; 
+            background: #ffebee; 
+            padding: 8px 12px; 
+            border-radius: 6px; 
+            border-left: 5px solid #b71c1c;
+            margin: 10px 0;
+            font-size: 1.05em;
+        }
+        
+        .quiz-option {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            border: 2px solid #cfd8dc;
+            margin: 10px 0;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: bold;
+        }
+        .quiz-option:hover { border-color: #2d5986; background: #f0f4f8; }
+        .answer-hidden { visibility: hidden; color: #1a6b3c; font-weight: 900; font-size: 1.5em; margin-top: 10px; }
+        .answer-visible { visibility: visible; animation: pop 0.3s ease; }
+        @keyframes pop { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+        .controls { position: fixed; bottom: 20px; right: 20px; z-index: 100; }
+        button { 
+            padding: 8px 16px; 
+            font-size: 0.95em; 
+            cursor: pointer; 
+            background: #2d5986; 
+            color: white; 
+            border: none; 
+            border-radius: 6px; 
+            margin-left: 8px; 
+            font-weight: bold;
+        }
+        .slide-number { position: fixed; bottom: 20px; left: 20px; font-size: 0.95em; color: #6a7a7d; font-weight: bold; }
+        
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 0.95em; background: white; border-radius: 6px; overflow: hidden; }
+        th { background: #2d5986; color: white; padding: 10px; text-align: left; }
+        td { padding: 8px; border-bottom: 1px solid #eee; }
+        tr:nth-child(even) { background: #f9f9f9; }
+        
+        blockquote { 
+            border-left: 5px solid #2d5986; 
+            padding: 12px 18px; 
+            font-style: italic; 
+            color: #37474f; 
+            background: rgba(45, 89, 134, 0.08); 
+            margin: 10px 0; 
+            font-size: 1.15em;
+        }
+        
+        .step-box { background: #e8f5e9; border: 2px solid #2e7d32; padding: 12px; border-radius: 8px; margin: 8px 0; }
+        .step-title { color: #2e7d32; font-weight: bold; display: block; margin-bottom: 3px; font-size: 1.05em; }
+
+        /* Alinhamento visual para Pipeline */
+        .pipeline-flow { font-family: 'Roboto Mono', monospace; color: #2d5986; text-align: center; }
+        .arrow { font-size: 1.5em; margin: 5px 0; color: #1a6b3c; }
+    </style>
+</head>
+<body>
+    <div class="progress-container"><div class="progress-bar" id="p-bar"></div></div>
+
+    <!-- Slide 1 -->
+    <div class="slide active">
+        <h1>Projeto MicroC: Do Zero ao Analisador Léxico</h1>
+        <h2>Fase 1: Construção do Scanner Passo a Passo (C++)</h2>
+        <p><b>Objetivo:</b> Implementar a fundação do nosso compilador em C++.</p>
+        <div class="box" style="background:#e3f2fd; border-left: 10px solid #2d5986; padding: 20px; border-radius: 10px;">
+            <p><strong>Por que esta aula é crucial?</strong></p>
+            <p>Todo compilador começa "enxergando" apenas caracteres soltos. Hoje, vamos ensinar a nossa máquina a ler esses caracteres e entender que 'i', 'n', 't' juntos formam o tipo de dado <code>INT</code>. Sem essa base, o compilador seria "cego".</p>
+        </div>
+        <p><b>Duração:</b> 100 Minutos | <b>Contexto:</b> Projeto MicroC</p>
+        <p><i>Professor: Luciano Rovanni do Nascimento</i></p>
+        <div class="slide-number">Slide 1</div>
+    </div>
+
+    <!-- Slide 2 -->
+    <div class="slide">
+        <h2>A Jornada do MicroC: O Mapa do Tesouro</h2>
+        <p>Construir um compilador parece impossível, mas o segredo é o <strong>"Dividir para Conquistar"</strong>. Veja o nosso roteiro passo a passo:</p>
+        <div class="step-box">
+            <span class="step-title">1. Fase Léxica (O Scanner - Hoje!):</span>
+            <p>É como aprender a ler. Transformamos um "mar de letras" em palavras individuais (Tokens).</p>
+        </div>
+        <div class="step-box" style="background:#fff3e0; border-color:#ff9800;">
+            <span class="step-title">2. Fase Sintática (O Parser):</span>
+            <p>É como aprender a gramática. Verificamos se as palavras formam frases que fazem sentido (Árvore).</p>
+        </div>
+        <div class="step-box" style="background:#f3e5f5; border-color:#9c27b0;">
+            <span class="step-title">3. Fase Semântica e Geração:</span>
+            <p>É a inteligência e a tradução. Verificamos se as operações são válidas e geramos o código final.</p>
+        </div>
+        <div class="slide-number">Slide 2</div>
+    </div>
+
+    <!-- Slide 3 -->
+    <div class="slide">
+        <h2>Curiosidade: Compiladores que você já usa!</h2>
+        <p>O código que vamos escrever hoje segue a mesma lógica usada por gigantes da tecnologia. Veja onde esse conhecimento se aplica:</p>
+        <ul>
+            <li><strong>Python:</strong> Antes de rodar seu script, o CPython usa um Scanner para quebrar seu código em tokens.</li>
+            <li><strong>Clang (Mac/iOS):</strong> O compilador da Apple usa scanners ultra-otimizados para processar milhões de linhas de código em segundos.</li>
+            <li><strong>V8 (Chrome):</strong> O motor de JavaScript do Google faz análise léxica "on-the-fly" para que os sites carreguem instantaneamente.</li>
+        </ul>
+        <div class="important">
+            <strong>Dica para a Carreira:</strong> Entender como o código é lido pela máquina separa o "programador que apenas copia" do "especialista que resolve problemas".
+        </div>
+        <div class="slide-number">Slide 3</div>
+    </div>
+
+    <!-- Slide 4 -->
+    <div class="slide">
+        <h2>1. O que é a Análise Léxica? (O Filtro)</h2>
+        <p>Imagine que o código fonte é uma sopa de letras. O Scanner é como uma <strong>peneira</strong> que separa o que presta do que é lixo.</p>
+        
+        <div class="box" style="background:#fffde7; border-left: 5px solid #fbc02d; padding: 15px;">
+            <strong>As 4 Tarefas do Scanner:</strong>
+            <ol>
+                <li><strong>Leitura de Caracteres:</strong> Lê o arquivo um por um (ex: 'i', depois 'n', depois 't').</li>
+                <li><strong>Agrupamento (Lexemas):</strong> Junta 'i'+'n'+'t' e reconhece a palavra "int".</li>
+                <li><strong>Classificação (Tokens):</strong> Diz para o computador: "Isso é um Tipo de Dado Inteiro".</li>
+                <li><strong>Limpeza:</strong> Remove espaços, tabs e comentários que não servem para o computador.</li>
+            </ol>
+        </div>
+        <div class="slide-number">Slide 4</div>
+    </div>
+
+    <!-- NOVO SLIDE VISUAL: Pipeline Real do Compilador -->
+    <div class="slide">
+        <h2>Visualizando a "Esteira de Produção"</h2>
+        <p>Veja como uma linha simples de código é "mastigada" pelo compilador:</p>
+        <div class="pipeline-flow">
+            <div class="code" style="border: 2px solid #2d5986;">Entrada (Texto): int x = 10 + 20;</div>
+            <div class="arrow">↓ (O Scanner entra em ação)</div>
+            <div class="step-box" style="display:inline-block; border-color:#2d5986; background:#e3f2fd;">
+                <strong>Resultado do Scanner (Tokens):</strong><br>
+                <code>[T_INT]</code> <code>[T_ID:x]</code> <code>[T_ASSIGN]</code> <code>[T_NUM:10]</code> <code>[T_PLUS]</code> <code>[T_NUM:20]</code>
+            </div>
+            <div class="arrow">↓ (O Parser recebe os Tokens)</div>
+            <div class="step-box" style="display:inline-block; border-color:#1a6b3c; background:#e8f5e9;">
+                <strong>Resultado do Parser (Lógica):</strong><br>
+                "Atribua à variável 'x' o resultado da soma entre 10 e 20"
+            </div>
+        </div>
+        <p style="text-align:center; font-size: 0.9em; margin-top:10px;"><i>O Scanner simplifica o mundo para o resto do compilador.</i></p>
+        <div class="slide-number">Slide 5</div>
+    </div>
+
+    <!-- Slide 5 -->
+    <div class="slide">
+        <h2>2. Por que o Scanner é importante para o Parser?</h2>
+        <p>Imagine que o Parser (Sintático) é um juiz. O Scanner é o assistente que organiza os papéis.</p>
+        <div class="box" style="background:#f1f8e9; border-left: 5px solid #558b2f; padding: 15px;">
+            <strong>O que acontece nos bastidores:</strong>
+            <ul>
+                <li><strong>Redução de Complexidade:</strong> O Parser não precisa lidar com "espaços em branco" ou "caracteres individuais". Ele só vê <b>Tokens</b> prontos.</li>
+                <li><strong>Eficiência:</strong> É muito mais rápido para o computador ler uma lista de 10 tokens do que processar 100 caracteres soltos.</li>
+                <li><strong>Tratamento de Erros:</strong> Se o usuário digitar um caractere proibido (ex: '@'), o Scanner barra na hora!</li>
+            </ul>
+        </div>
+        <div class="slide-number">Slide 6</div>
+    </div>
+
+    <!-- Slide 6 (Melhorado: Tabela de Lexemas) -->
+    <div class="slide">
+        <h2>3. Conceitos Fundamentais: Lexema vs Token</h2>
+        <p>Abaixo, a transformação prática de uma linha de código em tokens:</p>
+        <div class="code">Código: int soma = 10;</div>
+        <table>
+            <tr><th>Lexema</th><th>Token</th><th>Descrição</th></tr>
+            <tr><td>int</td><td>T_INT</td><td>Palavra reservada de tipo</td></tr>
+            <tr><td>soma</td><td>T_ID</td><td>Identificador de variável</td></tr>
+            <tr><td>=</td><td>T_ASSIGN</td><td>Operador de atribuição</td></tr>
+            <tr><td>10</td><td>T_NUM</td><td>Literal numérico</td></tr>
+            <tr><td>;</td><td>T_SEMICOLON</td><td>Separador de instrução</td></tr>
+        </table>
+        <p><i>O Scanner reconhece o lexema e classifica como um Token.</i></p>
+    </div>
+
+    <!-- Slide 7 -->
+    <div class="slide">
+        <h2>4. Por que não pular a Análise Léxica?</h2>
+        <p>Poderíamos ler tudo de uma vez? Sim, mas seria um pesadelo técnico.</p>
+        <div class="step-box" style="border-color:#2d5986;">
+            <strong>Vantagens da Separação:</strong>
+            <ol>
+                <li><strong>Manutenção:</strong> Se você quiser mudar o símbolo de atribuição de <code>=</code> para <code>:=</code>, você só mexe no Scanner.</li>
+                <li><strong>Portabilidade:</strong> Facilita ler arquivos de diferentes sistemas operacionais (Windows vs Linux) que usam quebras de linha diferentes.</li>
+                <li><strong>Gramática Limpa:</strong> O Parser não precisa se preocupar com onde o programador colocou um espaço em branco.</li>
+            </ol>
+        </div>
+        <div class="important">O léxico é a "higienização" necessária para a segurança do compilador.</div>
+        <div class="slide-number">Slide 8</div>
+    </div>
+
+    <!-- Slide 8 -->
+    <div class="slide">
+        <h2>5. Conheça o Nosso Alvo: A Linguagem MicroC</h2>
+        <p>Para aprender, não precisamos de algo complexo como C++. Vamos focar no <b>MicroC</b>:</p>
+        <div class="box" style="background:#fff3e0; border-left: 5px solid #ff9800;">
+            <strong>Regras do Jogo:</strong>
+            <ul>
+                <li><strong>Tipos:</strong> Apenas <code>int</code> (para não complicar com pontos flutuantes agora).</li>
+                <li><strong>Comandos:</strong> <code>if</code>, <code>while</code>, <code>print</code>.</li>
+                <li><strong>Matemática:</strong> Soma, Subtração, Multiplicação e Divisão.</li>
+                <li><strong>Variáveis:</strong> Podem ter letras, números e sublinhado (mas não começam com número).</li>
+            </ul>
+        </div>
+        <p><i>O seu desafio é fazer o computador entender esse dialeto.</i></p>
+        <div class="slide-number">Slide 9</div>
+    </div>
+
+    <!-- Slide 9 -->
+    <div class="slide">
+        <h2>6. Como o Scanner lê o MicroC</h2>
+        <p>Imagine que o Scanner está "olhando" para este código:</p>
+        <div class="code" style="font-size:1.1em;">
+            int soma = 10 + 20; // Cálculo simples
+        </div>
+        <p><strong>Ato 1:</strong> Ignora os espaços.<br>
+        <strong>Ato 2:</strong> Reconhece <code>int</code> como tipo.<br>
+        <strong>Ato 3:</strong> Reconhece <code>soma</code> como nome.<br>
+        <strong>Ato 4:</strong> Vê o <code>//</code> e <strong>descarta</strong> tudo até o fim da linha.</p>
+        <div class="important">O comentário existe para o humano, o Scanner o apaga para o computador.</div>
+        <div class="slide-number">Slide 10</div>
+    </div>
+
+    <!-- Slide 10 -->
+    <div class="slide">
+        <h2>7. Resumo do "Contrato" do Scanner</h2>
+        <p>Para não esquecer as responsabilidades da sua classe C++:</p>
+        <div class="step-box">
+            <ul>
+                <li><strong>Input:</strong> Texto bruto (String de caracteres).</li>
+                <li><strong>Output:</strong> Fluxo de objetos <code>Token</code>.</li>
+                <li><strong>Ação Oculta:</strong> Pula espaços em branco e comentários.</li>
+                <li><strong>Ação de Emergência:</strong> Avisa se encontrar algo que não existe no MicroC.</li>
+            </ul>
+        </div>
+        <p style="text-align:center;"><i>Se o Scanner falhar, o compilador para!</i></p>
+        <div class="slide-number">Slide 11</div>
+    </div>
+
+    <!-- Slide 11 -->
+    <div class="slide">
+        <h2>8. Expressões Regulares (ER): A Linguagem das Regras</h2>
+        <p>Como explicamos para o C++ o que é um "Número" ou um "Nome"? Usamos <b>ERs</b>.</p>
+        <ul>
+            <li><strong>Números:</strong> <code>[0-9]+</code> (Significa: Pelo menos um dígito de 0 a 9).</li>
+            <li><strong>Identificadores:</strong> <code>[a-zA-Z_][a-zA-Z0-9_]*</code> (Significa: Começa com letra ou _, depois pode ter qualquer coisa).</li>
+            <li><strong>Operadores:</strong> Símbolos fixos como <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, <code>=</code>.</li>
+        </ul>
+        <div class="important">Pense na ER como um "Formulário de Validação" para cada palavra do código.</div>
+        <div class="slide-number">Slide 12</div>
+    </div>
+
+    <!-- Slide 12 -->
+    <div class="slide">
+        <h2>9. Decifrando os Códigos (Quantificadores)</h2>
+        <p>Esses símbolos estranhos nas Regex são atalhos para repetir padrões:</p>
+        <table>
+            <tr><th>Símbolo</th><th>Significado</th><th>Exemplo Prático</th></tr>
+            <tr><td><code>*</code></td><td>Zero ou mais vezes</td><td><code>a*</code> aceita nada, "a", "aa", "aaa"...</td></tr>
+            <tr><td><code>+</code></td><td>Uma ou mais vezes</td><td><code>[0-9]+</code> precisa de pelo menos 1 número.</td></tr>
+            <tr><td><code>[a-z]</code></td><td>Qualquer letra minúscula</td><td>Define um intervalo de busca.</td></tr>
+            <tr><td><code>|</code></td><td>Ou (Escolha)</td><td><code>int|float</code> aceita um ou outro.</td></tr>
+        </table>
+        <p><i>Combinando esses símbolos, criamos regras para qualquer linguagem do mundo.</i></p>
+        <div class="slide-number">Slide 13</div>
+    </div>
+
+    <!-- Slide 13 -->
+    <div class="slide">
+        <h2>10. Desafio Prático: Pensando em Regex</h2>
+        <p>Como você definiria a regra para reconhecer um <strong>Horário (HH:MM)</strong>?</p>
+        <div class="box" style="background:#e8f5e9; padding:20px; border-radius:10px;">
+            <strong>Passo 1:</strong> Dois dígitos para a hora <code>[0-9][0-9]</code><br>
+            <strong>Passo 2:</strong> O caractere dois pontos <code>:</code><br>
+            <strong>Passo 3:</strong> Dois dígitos para os minutos <code>[0-9][0-9]</code>
+        </div>
+        <p style="text-align:center; font-weight:bold;">Regex Final: <code>[0-9]{2}:[0-9]{2}</code></p>
+        <div class="slide-number">Slide 14</div>
+    </div>
+
+    <!-- Slide 14 -->
+    <div class="slide">
+        <h2>Desafio Relâmpago ⚡ (Pense Rápido)</h2>
+        <p>Qual a Regex para uma <strong>Data no formato brasileiro (DD/MM/AAAA)</strong>?</p>
+        <div class="quiz-option" onclick="revealAnswer(this)">Clique aqui para pensar e ver a Resposta</div>
+        <div class="answer-hidden">RESPOSTA: <code>[0-9]{2}/[0-9]{2}/[0-9]{4}</code></div>
+        <div class="box" style="margin-top:15px; font-size:0.9em;">
+            <strong>Explicação:</strong> 2 dígitos + barra + 2 dígitos + barra + 4 dígitos.
+        </div>
+        <div class="slide-number">Slide 15</div>
+    </div>
+
+    <div class="slide">
+        <h2>Desafio Relâmpago ⚡ (Pense Rápido)</h2>
+        <p>Regex para um <strong>ID que começa obrigatoriamente com 'v' ou 'x' e termina com um número</strong>.</p>
+        <div class="quiz-option" onclick="revealAnswer(this)">Clique para ver a Resposta e a Lógica</div>
+        <div class="answer-hidden">RESPOSTA: <code>[vx][a-zA-Z0-9_]*[0-9]</code></div>
+        <div class="box" style="margin-top:10px; font-size:0.9em;">
+            <strong>Passo a Passo:</strong>
+            1. <code>[vx]</code>: Começa com v OU x.<br>
+            2. <code>[a-zA-Z0-9_]*</code>: No meio pode ter qualquer letra, número ou _ (zero ou mais vezes).<br>
+            3. <code>[0-9]</code>: Termina obrigatoriamente com um dígito.
+        </div>
+        <div class="slide-number">Slide 16</div>
+    </div>
+
+    <!-- Slide 16 -->
+    <div class="slide">
+        <h2>11. O Caminho da Implementação</h2>
+        <p>Como transformamos uma ideia (Regex) em código C++ real? Seguimos esta trilha:</p>
+        <div class="step-box" style="text-align:center;">
+            <strong>Expressão Regular (A Regra)</strong><br>
+            <div class="arrow">↓</div>
+            <strong>Autômato Finito (O Desenho/Lógica)</strong><br>
+            <div class="arrow">↓</div>
+            <strong>Código C++ (O Motor)</strong>
+        </div>
+        <div class="important">
+            <strong>Fato:</strong> Você não precisa ser um gênio da matemática para criar um compilador. Você só precisa saber desenhar as setas do autômato!
+        </div>
+        <div class="slide-number">Slide 17</div>
+    </div>
+
+    <!-- Slide 17 -->
+    <div class="slide">
+        <h2>12. O Modelo de Estados (O "GPS" do Scanner)</h2>
+        <p>Um autômato é como um GPS: dependendo de onde você está e qual símbolo você lê, ele te leva para um novo lugar.</p>
+        <div class="box" style="background:#e3f2fd; border-left: 5px solid #1976d2;">
+            <ul>
+                <li><b>Estado Inicial (q0):</b> O ponto de partida. A máquina está "limpa", pronta para ler o primeiro caractere.</li>
+                <li><b>Transições:</b> Se eu ler '1', vou para o caminho A. Se eu ler 'a', vou para o caminho B.</li>
+                <li><b>Estado de Aceitação (Fim):</b> Quando a palavra acaba e a máquina diz: "Sucesso! Encontrei um Token".</li>
+            </ul>
+        </div>
+        <div class="slide-number">Slide 18</div>
+    </div>
+
+    <!-- Slide 18 -->
+    <div class="slide">
+        <h2>13. Exemplo Real: Como reconhecer um Número?</h2>
+        <p>Imagine que o Scanner está lendo "123;". Como ele sabe que "123" é um número?</p>
+        <div class="step-box">
+            <ol>
+                <li>Lê '1': "Opa, é um dígito. Estou no estado 'Lendo Número'".</li>
+                <li>Lê '2': "Outro dígito. Vou acumulando... 12".</li>
+                <li>Lê '3': "Mais um! Acumulando... 123".</li>
+                <li>Lê ';': "Espera! Isso NÃO é um dígito. O número acabou em 123!".</li>
+            </ol>
+        </div>
+        <div class="important">O scanner "devolve" o ';' para a próxima leitura e entrega o Token de Número.</div>
+        <div class="slide-number">Slide 19</div>
+    </div>
+
+    <!-- Slide 19 -->
+    <div class="slide">
+        <h2>14. O Dilema da "Espiadinha" (Lookahead)</h2>
+        <p>Como o Scanner diferencia <code><</code> (Menor) de <code><=</code> (Menor ou Igual)?</p>
+        <div class="box" style="background:#fff3e0; border-left: 5px solid #ffb300;">
+            <p><strong>A Técnica do Lookahead:</strong></p>
+            <ol>
+                <li>Lê o caractere <code><</code>.</li>
+                <li>A máquina para e "olha" o próximo caractere sem sair do lugar.</li>
+                <li>Se o próximo for <code>=</code>, ela consome os dois e retorna <code>T_LE</code> (Less Equal).</li>
+                <li>Se não for <code>=</code>, ela retorna apenas <code>T_LT</code> (Less Than).</li>
+            </ol>
+        </div>
+        <div class="slide-number">Slide 20</div>
+    </div>
+
+    <div class="slide">
+        <h2>Ferramentas de Apoio (Visuais)</h2>
+        <p>RegEx101.com e Regexper.com para visualização de diagramas.</p>
+    </div>
+
+    <!-- Slide 21 -->
+    <div class="slide">
+        <h2>15. Nomes vs Comandos (Palavras Reservadas)</h2>
+        <p>Por que <code>if</code> é um comando e <code>idade</code> é uma variável?</p>
+        <p>Ambos seguem a mesma regra de "Identificador". O segredo está na <strong>Tabela de Palavras Reservadas</strong>:</p>
+        <div class="code">
+            1. Scanner lê "if".
+            2. Ele classifica como ID (Identificador) temporariamente.
+            3. Ele olha em uma tabela: "O texto 'if' está na lista de comandos?".
+            4. SIM! Então ele troca o tipo para T_IF.
+        </div>
+        <p><i>Se não estiver na lista, ele continua sendo apenas um T_ID (Nome de variável).</i></p>
+        <div class="slide-number">Slide 21</div>
+    </div>
+
+    <!-- Slide 22 -->
+    <div class="slide">
+        <h2>16. Organizando a Casa: Tabela de Símbolos</h2>
+        <p>Imagine que seu código tem a variável <code>soma</code> em 50 lugares diferentes.</p>
+        <ul>
+            <li>O Scanner não precisa guardar a palavra "soma" 50 vezes na memória.</li>
+            <li>Ele guarda <b>uma vez só</b> na Tabela de Símbolos.</li>
+            <li>Os tokens apenas apontam para o lugar onde "soma" está guardado.</li>
+        </ul>
+        <div class="important">Isso economiza memória e acelera o compilador.</div>
+        <div class="slide-number">Slide 22</div>
+    </div>
+
+    <!-- Slide 23 -->
+    <div class="slide">
+        <h2>17. Recapitulação da Teoria</h2>
+        <p>ERs, Autômatos, Lookahead e Tabelas.</p>
+    </div>
+
+    <!-- Slide 23 -->
+    <div class="slide">
+        <h2>17. Como o peek() funciona na prática</h2>
+        <p>O segredo da "espiada" sem movimento é essencial para alunos com dificuldade:</p>
+        <div class="code">Código: int x == 10;
+        ^
+      ponteiro 'pos'</div>
+        <ul>
+            <li><b>peek():</b> Funciona como olhar através de uma fresta. Você vê o que está na frente (o próximo '='), mas seus pés (o ponteiro <code>pos</code>) continuam no mesmo lugar.</li>
+            <li><b>next():</b> Você olha o caractere E dá um passo à frente. Agora seus pés estão no novo caractere.</li>
+        </ul>
+        <div class="box" style="background:#e8f5e9; border: 1px solid #2e7d32;">
+            <strong>Lógica em C++:</strong><br>
+            <code>if (peek() == '=') { next(); return T_EQ; }</code>
+        </div>
+        <div class="slide-number">Slide 23</div>
+    </div>
+
+    <!-- Slide 24 -->
+    <div class="slide">
+        <h2>Visualizando o Movimento do Scanner</h2>
+        <p>Veja o ponteiro <code>pos</code> "andando" pelo código fonte:</p>
+        <div class="code" style="font-size:1.2em; text-align:center;">
+            int soma = 10;
+            <br>
+            <span style="color:red">^</span><br>
+            <b>pos</b> (passo 1)
+        </div>
+        <div class="arrow">↓ (next() chamado)</div>
+        <div class="code" style="font-size:1.2em; text-align:center;">
+            int soma = 10;
+            <br>
+             <span style="color:red">^</span><br>
+             <b>pos</b> (passo 2)
+        </div>
+        <p style="margin-top:10px;">O Scanner é um caminhante que decide o que viu a cada passo que dá.</p>
+        <div class="slide-number">Slide 24</div>
+    </div>
+
+    <!-- Slide 25 -->
+    <div class="slide">
+        <h2>18. Implementando em C++: O Plano de Voo</h2>
+        <p>Agora que sabemos a teoria, vamos construir o motor. Precisamos de:</p>
+        <ol>
+            <li><strong>Uma Classe Scanner:</strong> Para guardar o código e a posição atual.</li>
+            <li><strong>Um Objeto Token:</strong> Para guardar o que encontramos (tipo, texto, linha).</li>
+            <li><strong>Um Loop Infinito:</strong> Que roda até o arquivo acabar.</li>
+        </ol>
+        <div class="important">A partir daqui, o foco é 100% no código que vocês vão digitar no laboratório.</div>
+        <div class="slide-number">Slide 25</div>
+    </div>
+
+    <!-- Slide 26 -->
+    <div class="slide">
+        <h2>19. A Anatomia do Token em C++</h2>
+        <p>O que o compilador precisa saber sobre cada palavra que ele lê?</p>
+        <div class="code">struct Token {
+    TokenType type;  // Ex: T_INT, T_NUM
+    string lexeme;   // Ex: "123", "soma"
+    int line;        // Ex: Linha 5
+    int column;      // Ex: Coluna 12 (Crucial para o IDE!)
+};</div>
+        <p><strong>Por que a coluna é importante?</strong><br>
+        Imagine que o erro está em uma linha gigante. Sem a coluna, o programador fica perdido procurando o erro.</p>
+        <div class="slide-number">Slide 26</div>
+    </div>
+
+    <!-- Slide 27 -->
+    <div class="slide">
+        <h2>20. O Coração do Compilador: nextToken()</h2>
+        <p>Esta é a função mais importante. Ela é o "motor" que gira a engrenagem:</p>
+        <div class="code">Token nextToken() {
+    skipWhitespace(); // 1. Limpa a sujeira
+    char c = peek();  // 2. Olha o que vem
+    
+    if (isdigit(c)) return scanNumber();     // 3. Se for número, trata
+    if (isalpha(c)) return scanIdentifier(); // 4. Se for letra, trata
+    
+    switch(c) {
+        case '+': next(); return Token(T_PLUS); // 5. Símbolos fixos
+        // ... outros casos
+    }
+}</div>
+        <div class="slide-number">Slide 27</div>
+    </div>
+
+    <!-- Slide 28 -->
+    <div class="slide">
+        <h2>21. Passo a Passo: scanNumber()</h2>
+        <p>Como a função de ler números funciona internamente?</p>
+        <div class="step-box">
+            <ol>
+                <li>Cria uma string vazia <code>buffer</code>.</li>
+                <li>Inicia um loop: <code>while (isdigit(peek()))</code>.</li>
+                <li>Dentro do loop: <code>buffer += next();</code> (Consome e guarda).</li>
+                <li>Quando achar algo que não é número, sai do loop.</li>
+                <li>Retorna um Token do tipo <code>T_NUM</code> com o valor guardado.</li>
+            </ol>
+        </div>
+        <div class="slide-number">Slide 28</div>
+    </div>
+
+    <!-- Slide 29 -->
+    <div class="slide">
+        <h2>22. Passo a Passo: scanIdentifier()</h2>
+        <p>Quase igual à leitura de números, mas com uma regra extra:</p>
+        <div class="step-box">
+            <ol>
+                <li>Lê todas as letras e números (ex: "while").</li>
+                <li>Antes de retornar, consulta a Tabela de Reservadas.</li>
+                <li>Se for "while", retorna <code>T_WHILE</code>.</li>
+                <li>Se for "x", retorna <code>T_ID</code>.</li>
+            </ol>
+        </div>
+        <div class="important">Lembre-se: O Scanner é o primeiro a saber se uma palavra é um comando ou apenas um nome.</div>
+        <div class="slide-number">Slide 29</div>
+    </div>
+
+    <div class="slide">
+        <h2>Quiz Rápido: Token ou Erro? 🤔</h2>
+        <p>O que acontece se o programador digitar o caractere <code>$</code> dentro de um nome de variável no MicroC?</p>
+        <div class="quiz-option" onclick="revealAnswer(this, 'c1')">Opção A: O Scanner ignora e segue em frente.</div>
+        <div class="quiz-option" onclick="revealAnswer(this, 'c1')">Opção B: O Scanner avisa um "Erro Léxico".</div>
+        <div id="c1" class="answer-hidden">RESPOSTA CORRETA: B) Erro Léxico!</div>
+        <div class="box" style="margin-top:10px;">
+            <strong>Por que?</strong> No MicroC, o símbolo <code>$</code> não faz parte do alfabeto permitido. O Scanner é o segurança que barra intrusos.
+        </div>
+        <div class="slide-number">Slide 30</div>
+    </div>
+
+    <!-- NOVO SLIDE: Detectando Erros Léxicos -->
+    <div class="slide">
+        <h2>Detectando Erros Léxicos</h2>
+        <p>O Scanner é o primeiro "segurança" do seu compilador:</p>
+        <div class="code">Código: int valor@ = 10;</div>
+        <div class="important">
+            <b>Saída do Compilador:</b><br>
+            Erro Léxico: Caractere inválido '@' na Linha 1, Coluna 10.
+        </div>
+        <ul>
+            <li>O Parser (Sintático) nem chegou a ser executado.</li>
+            <li>O Scanner barrou o programa antes de qualquer análise complexa.</li>
+            <li>Isso protege o compilador de tentar entender lixo.</li>
+        </ul>
+    </div>
+
+    <!-- Slide 29 -->
+    <div class="slide">
+        <h2>23. Símbolos Compostos</h2>
+        <p>Lookahead real para operadores.</p>
+    </div>
+
+    <!-- Slide 31 -->
+    <div class="slide">
+        <h2>23. Limpando a Sujeira: Espaços e Comentários</h2>
+        <p>Como o compilador "esquece" o que não importa?</p>
+        <div class="code">
+void skipWhitespace() {
+    while (isspace(peek()) || peek() == '/') {
+        if (peek() == '/') {
+            if (peekNext() == '/') { // Comentário de linha //
+                while (peek() != '\n' && !isEOF()) next();
+            } else return; // Pode ser um operador de divisão
+        } else next(); // Pula espaço, tab, \n
+    }
+}
+        </div>
+        <div class="important">Pular espaços é o que permite que você escreva o código com a indentação que quiser.</div>
+        <div class="slide-number">Slide 31</div>
+    </div>
+
+    <!-- Slide 32 -->
+    <div class="slide">
+        <h2>24. O Sentinela: Como saber que o arquivo acabou?</h2>
+        <p>O Scanner não pode ler além do fim do arquivo, senão o programa trava!</p>
+        <ul>
+            <li>Usamos o caractere <b>EOF (End of File)</b>.</li>
+            <li>No C++, verificamos se o índice atingiu o <code>code.length()</code>.</li>
+            <li>Sempre que a máquina chega no fim, ela emite um <code>Token(T_EOF)</code>.</li>
+        </ul>
+        <div class="box" style="background:#fff3e0;">
+            <strong>Dica:</strong> Sem o Token de Fim, o Parser ficaria esperando código para sempre!
+        </div>
+        <div class="slide-number">Slide 32</div>
+    </div>
+
+    <!-- Slide 33 -->
+    <div class="slide">
+        <h2>25. Performance: O Buffer Duplo (Curiosidade)</h2>
+        <p>Compiladores profissionais (como o do GCC) não leem um caractere por vez do disco.</p>
+        <div class="step-box">
+            <p>Eles carregam um "bloco" de 4096 caracteres na memória de uma vez. Isso é 1000x mais rápido do que ler do HD bit a bit.</p>
+        </div>
+        <p><i>No MicroC, usaremos <code>std::string</code> para simplificar, mas saiba que no mundo real a performance é levada a sério.</i></p>
+        <div class="slide-number">Slide 33</div>
+    </div>
+
+    <!-- Slide 34-59: Detalhando Teoria de Autômatos na prática do Scanner -->
+    <div class="slide">
+        <h2>26. Thompson e a Construção de Autômatos</h2>
+        <p>Como as Expressões Regulares viram máquinas?</p>
+        <p>Usamos a <strong>Construção de Thompson</strong> para criar pequenos módulos para cada símbolo (*, +, |) e depois os conectamos.</p>
+        <div class="important">É como montar um LEGO de estados lógicos.</div>
+        <div class="slide-number">Slide 34</div>
+    </div>
+
+    <div class="slide">
+        <h2>27. Determinismo (AFD) vs Não-Determinismo (AFN)</h2>
+        <p>Por que convertemos tudo para AFD?</p>
+        <ul>
+            <li><strong>AFN:</strong> Pode estar em vários estados ao mesmo tempo (confuso para o computador).</li>
+            <li><strong>AFD:</strong> Tem um caminho único e claro (perfeito para o comando <code>switch</code> do C++).</li>
+        </ul>
+        <p><i>Todo Scanner eficiente é um AFD.</i></p>
+        <div class="slide-number">Slide 35</div>
+    </div>
+
+    <div class="slide">
+        <h2>28. Minimização: Menos é Mais</h2>
+        <p>Às vezes criamos um autômato com 10 estados que poderia ter apenas 3.</p>
+        <div class="box" style="background:#e8f5e9;">
+            A minimização de estados garante que o seu Scanner ocupe o mínimo de memória possível e rode na velocidade máxima.
+        </div>
+        <div class="slide-number">Slide 36</div>
+    </div>
+
+    <div class="slide">
+        <h2>29. Tratamento de Strings "entre aspas"</h2>
+        <p>Como ler algo como <code>"Ola Mundo"</code>?</p>
+        <div class="code">
+if (peek() == '"') {
+    next(); // Consome a primeira aspa
+    while (peek() != '"' && !isEOF()) {
+        buffer += next();
+    }
+    next(); // Consome a aspa final
+    return Token(T_STRING, buffer);
+}
+        </div>
+        <div class="slide-number">Slide 37</div>
+    </div>
+
+    <div class="slide">
+        <h2>30. O Alfabeto Unicode e o UTF-8</h2>
+        <p>E se o programador usar acentos ou emojis no código?</p>
+        <p>Compiladores modernos precisam lidar com múltiplos bytes por caractere. No MicroC, ficaremos no <strong>ASCII</strong> (letras básicas), mas o mundo real usa <strong>UTF-8</strong>.</p>
+        <div class="slide-number">Slide 38</div>
+    </div>
+
+    <!-- Slide 60 -->
+    <div class="slide">
+        <h2>Laboratório Prático: Mão na Massa!</h2>
+        <p>Chegou a hora de transformar toda essa teoria em um arquivo <code>.cpp</code> real.</p>
+        <div class="box" style="background:#e3f2fd; padding:20px; border-radius:10px;">
+            <strong>Nossa Missão:</strong>
+            <ol>
+                <li>Criar a estrutura do Token.</li>
+                <li>Criar a classe Scanner.</li>
+                <li>Implementar a leitura de Números e IDs.</li>
+                <li>Fazer um programa que lê uma string e imprime os Tokens.</li>
+            </ol>
+        </div>
+        <div class="slide-number">Slide 39</div>
+    </div>
+
+    <!-- Slide 61 -->
+    <div class="slide">
+        <h2>Passo 1: Definindo os Tipos de Token</h2>
+        <p>No topo do seu arquivo, precisamos listar todas as "categorias" que nossa máquina reconhece:</p>
+        <div class="code">
+enum class TokenType {
+    T_INT, T_ID, T_NUM, T_ASSIGN, T_PLUS, 
+    T_IF, T_WHILE, T_PRINT, T_SEMICOLON,
+    T_EOF, T_ERROR
+};
+        </div>
+        <div class="slide-number">Slide 40</div>
+    </div>
+
+    <!-- Slide 62 -->
+    <div class="slide">
+        <h2>Passo 2: A Estrutura do Token</h2>
+        <p>Crie a <code>struct</code> que carregará a informação de cada palavra:</p>
+        <div class="code">
+struct Token {
+    TokenType type;
+    string lexeme;
+    int line;
+};
+        </div>
+        <div class="slide-number">Slide 41</div>
+    </div>
+
+    <!-- Slide 63 -->
+    <div class="slide">
+        <h2>Passo 3: A Classe Scanner (O Esqueleto)</h2>
+        <div class="code">
+class Scanner {
+    string source;
+    int pos = 0;
+    int line = 1;
+
+public:
+    Scanner(string s) : source(s) {}
+
+    char peek() { return (pos < source.length()) ? source[pos] : '\0'; }
+    char next() { return source[pos++]; }
+    bool isEOF() { return pos >= source.length(); }
+    
+    Token nextToken(); // Vamos implementar a seguir!
+};
+        </div>
+        <div class="slide-number">Slide 42</div>
+    </div>
+
+    <!-- Slide 64 -->
+    <div class="slide">
+        <h2>Passo 4: Implementando o Coração (nextToken)</h2>
+        <div class="code">
+Token Scanner::nextToken() {
+    skipWhitespace();
+    if (isEOF()) return {TokenType::T_EOF, "", line};
+
+    char c = peek();
+    if (isdigit(c)) return scanNumber();
+    if (isalpha(c)) return scanIdentifier();
+
+    switch(c) {
+        case '+': next(); return {TokenType::T_PLUS, "+", line};
+        case '=': next(); return {TokenType::T_ASSIGN, "=", line};
+        case ';': next(); return {TokenType::T_SEMICOLON, ";", line};
+        default:  return {TokenType::T_ERROR, string(1, next()), line};
+    }
+}
+        </div>
+        <div class="slide-number">Slide 43</div>
+    </div>
+
+    <!-- Slide 65 -->
+    <div class="slide">
+        <h2>Passo 5: Como testar seu Scanner?</h2>
+        <p>No <code>main()</code>, crie um loop para imprimir o que o Scanner encontrou:</p>
+        <div class="code">
+int main() {
+    Scanner sc("int x = 10 + 20;");
+    Token t;
+    while ((t = sc.nextToken()).type != TokenType::T_EOF) {
+        cout << "Token: " << t.lexeme << " [Tipo: " << (int)t.type << "]" << endl;
+    }
+    return 0;
+}
+        </div>
+        <div class="slide-number">Slide 44</div>
+    </div>
+
+    <!-- Slide 66 -->
+    <div class="slide">
+        <h2>Dicas de Ouro para o Laboratório</h2>
+        <ul>
+            <li><strong>Cuidado com o loop infinito:</strong> Se você esquecer de chamar <code>next()</code>, o Scanner ficará lendo o mesmo caractere para sempre.</li>
+            <li><strong>Use o <code>cout</code> para debugar:</strong> Imprima o caractere que o Scanner está lendo em cada passo.</li>
+            <li><strong>Teste aos poucos:</strong> Primeiro faça funcionar apenas números, depois operadores.</li>
+        </ul>
+        <div class="slide-number">Slide 45</div>
+    </div>
+    
+    <!-- NOVO SLIDE: Próximos Passos (Transição) -->
+    <div class="slide">
+        <h2>A Próxima Fronteira: O Parser</h2>
+        <p>Agora que temos os Tokens, o que vem a seguir?</p>
+        <ol>
+            <li><b>Gramática Livre de Contexto:</b> Definir as regras de "montagem".</li>
+            <li><b>Parser Descendente Recursivo:</b> Transformar o fluxo de tokens em uma Árvore.</li>
+            <li><b>AST (Abstract Syntax Tree):</b> A estrutura final que o compilador entende.</li>
+            <li><b>Precedência:</b> Garantir que 2 + 3 * 4 seja calculado corretamente.</li>
+        </ol>
+        <div class="important">O Scanner é o alicerce. Sem ele, não há Parser.</div>
+    </div>
+
+    <!-- Slide Final Cinematográfico -->
+    <div class="slide" style="background:#1a2b3c; color:white; border-left-color:#1a6b3c">
+        <h1 style="color:#ffffff">Hoje você criou isto.</h1>
+        <div class="pipeline-flow" style="color:#d4d4d4">
+            Código Fonte &rarr; Scanner Léxico &rarr; Fluxo de Tokens &rarr; Parser &rarr; AST &rarr; <b>Compilador</b>
+        </div>
+        <br>
+        <blockquote style="color:#ffffff; background:rgba(255,255,255,0.1)">
+            "Toda linguagem de programação começa exatamente aqui."
+        </blockquote>
+        <p style="text-align:center; font-size:1.5em; margin-top:20px">Parabéns por completar a Fase 1.</p>
+    </div>
+
+    <div class="slide-number">Slide <span id="current-num">1</span> / <span id="total-num"></span></div>
+    <div class="controls">
+        <button onclick="changeSlide(-1)">Anterior</button>
+        <button onclick="changeSlide(1)">Próximo</button>
+    </div>
+
+    <script>
+        let currentSlide = 0;
+        const slides = document.querySelectorAll('.slide');
+        const numSpan = document.getElementById('current-num');
+        const totalSpan = document.getElementById('total-num');
+        const pBar = document.getElementById('p-bar');
+
+        totalSpan.innerText = slides.length;
+
+        function updateProgress() {
+            const percent = ((currentSlide + 1) / slides.length) * 100;
+            pBar.style.width = percent + "%";
+        }
+
+        function changeSlide(dir) {
+            slides[currentSlide].classList.remove('active');
+            currentSlide += dir;
+            if (currentSlide >= slides.length) currentSlide = 0;
+            if (currentSlide < 0) currentSlide = slides.length - 1;
+            slides[currentSlide].classList.add('active');
+            numSpan.innerText = currentSlide + 1;
+            updateProgress();
+            window.scrollTo(0,0);
+        }
+
+        function revealAnswer(el, targetId) {
+            const answer = el.nextElementSibling.classList.contains('answer-hidden') ? el.nextElementSibling : document.getElementById(targetId);
+            if (answer) {
+                answer.classList.add('answer-visible');
+                el.style.borderColor = "#1a6b3c"; el.style.color = "#1a6b3c";
+            }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') changeSlide(1);
+            if (e.key === 'ArrowLeft') changeSlide(-1);
+        });
+        
+        updateProgress();
+
+        let touchstartX = 0;
+        document.addEventListener('touchstart', e => { touchstartX = e.changedTouches[0].screenX; });
+        document.addEventListener('touchend', e => {
+            let touchendX = e.changedTouches[0].screenX;
+            if (touchendX < touchstartX - 50) changeSlide(1);
+            if (touchendX > touchstartX + 50) changeSlide(-1);
+        });
+    </script>
+</body>
+</html>

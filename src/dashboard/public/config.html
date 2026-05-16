@@ -370,7 +370,7 @@
 
     async function loadConfig() {
       try {
-        const res = await fetch('/api/config'); const data = await res.json();
+        const res = await newclawFetch('/api/config'); const data = await res.json();
         if (data.success) {
           document.getElementById('defaultProvider').value = data.config.defaultProvider;
           document.getElementById('language').value = data.config.language;
@@ -401,7 +401,7 @@
     }
     async function loadProviders() {
       try {
-        const res = await fetch('/api/providers'); const data = await res.json();
+        const res = await newclawFetch('/api/providers'); const data = await res.json();
         if (data.success && data.providers.ollama?.models) {
           availableModelsList = data.providers.ollama.models;
           initModelDropdowns();
@@ -413,7 +413,7 @@
     function setKS(id, v) { const e=document.getElementById(id); e.textContent=v?'✓ Configurado':'✗ Ausente'; e.className='api-key-status '+(v?'configured':'missing'); }
     async function loadStatus() {
       try {
-        const res = await fetch('/api/status'); const data = await res.json();
+        const res = await newclawFetch('/api/status'); const data = await res.json();
         if (data.success) {
           document.getElementById('sysStatus').textContent='Online'; document.getElementById('sysStatus').className='value online';
           document.getElementById('sysUptime').textContent=data.status.uptimeHuman;
@@ -423,7 +423,7 @@
     }
     async function loadTools() {
       try {
-        const res = await fetch('/api/tools/status'); const data = await res.json();
+        const res = await newclawFetch('/api/tools/status'); const data = await res.json();
         if (data.success) {
           document.getElementById('toolsGrid').innerHTML = data.tools.map(t => {
             const icon = toolIcons[t.name]||'🔧';
@@ -437,8 +437,8 @@
     async function loadSkillLearnerInsights() {
       try {
         const [skillsRes, patternsRes] = await Promise.all([
-          fetch('/api/skills/auto'),
-          fetch('/api/skills/patterns')
+          newclawFetch('/api/skills/auto'),
+          newclawFetch('/api/skills/patterns')
         ]);
         const skillsData = await skillsRes.json();
         const patternsData = await patternsRes.json();
@@ -506,7 +506,7 @@
       if (!name) return;
       showToast('⬇️ Baixando "' + name + '"... Isso pode demorar.', 'success');
       try {
-        const res = await fetch('/api/ollama/pull', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:name})});
+        const res = await newclawFetch('/api/ollama/pull', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:name})});
         const data = await res.json();
         if (data.success) { showToast('✅ "'+name+'" baixado!', 'success'); document.getElementById('ollamaModel').value=name; loadProviders(); }
         else showToast('❌ Falha: '+(data.error||'desconhecido'), 'error');
@@ -542,7 +542,7 @@
         if (isExternalApi) continue;
 
         try {
-          const checkRes = await fetch('/api/ollama/exists/' + encodeURIComponent(model));
+          const checkRes = await newclawFetch('/api/ollama/exists/' + encodeURIComponent(model));
           const checkData = await checkRes.json();
           if (checkData.success && !checkData.exists) {
             // For :cloud models, it's an instant registration. For others, it's a real download.
@@ -551,7 +551,7 @@
             
             showToast(msg, 'success');
             
-            fetch('/api/ollama/pull', {
+            newclawFetch('/api/ollama/pull', {
               method: 'POST', headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({ model })
             }).then(r => r.json()).then(data => {
@@ -567,7 +567,7 @@
       }
 
       try {
-        const res = await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});
+        const res = await newclawFetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});
         const data = await res.json();
         if (data.success) { showToast('✅ Salvo!','success'); document.getElementById('sysModel').textContent=config.ollamaModel; }
         else showToast('❌ Erro: '+(data.error||'desconhecido'),'error');
@@ -577,12 +577,12 @@
       await saveConfig();
       if (!confirm('Reiniciar o NewClaw?')) return;
       try {
-        await fetch('/api/restart',{method:'POST'});
+        await newclawFetch('/api/restart',{method:'POST'});
         showToast('🔄 Reiniciando... Aguarde.','success');
         let tries = 0;
         const check = async () => {
           try {
-            const r = await fetch('/api/status');
+            const r = await newclawFetch('/api/status');
             if (r.ok) { location.reload(); return; }
           } catch {}
           tries++;
@@ -672,7 +672,7 @@
       document.getElementById(inputId).value = modelName;
       document.getElementById(`dropdown-${inputId}`).classList.remove('show');
       try {
-        await fetch('/api/models/add', {
+        await newclawFetch('/api/models/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ model: modelName })

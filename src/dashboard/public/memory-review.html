@@ -80,7 +80,7 @@
 
     async function loadReview() {
       try {
-        const r = await fetch('/api/memory/review');
+        const r = await newclawFetch('/api/memory/review');
         const d = await r.json();
         if (!d.success) return;
         reviewData = d.review;
@@ -133,7 +133,7 @@
       const mergeLabel = keepSide === 'left' ? (pair.right.name || pair.right.id) : (pair.left.name || pair.left.id);
       if (!confirm(`Mesclar "${mergeLabel}" em "${keepLabel}"?\n\nUm snapshot será criado antes da operação.`)) return;
       try {
-        const r = await fetch('/api/memory/merge', {
+        const r = await newclawFetch('/api/memory/merge', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ keepId, mergeId })
@@ -153,7 +153,7 @@
     async function linkSequentialDates() {
       if (!confirm("Interligar todas as memórias de datas (ex: 2026-02-10) em sequência cronológica?")) return;
       try {
-        const r = await fetch('/api/memory/nodes?limit=2000');
+        const r = await newclawFetch('/api/memory/nodes?limit=2000');
         const d = await r.json();
         if (!d.success) return alert('Erro ao carregar nós: ' + (d.error || 'Erro desconhecido'));
         
@@ -173,7 +173,7 @@
         for (let i = 0; i < dateNodes.length - 1; i++) {
           const fromId = dateNodes[i].id;
           const toId = dateNodes[i+1].id;
-          const edgeRes = await fetch('/api/memory/edges', {
+          const edgeRes = await newclawFetch('/api/memory/edges', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ from: fromId, to: toId, relation: 'next' })

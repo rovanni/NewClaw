@@ -143,7 +143,7 @@
 
     async function loadStats() {
       try {
-        const r = await fetch('/api/memory/stats'); const d = await r.json();
+        const r = await newclawFetch('/api/memory/stats'); const d = await r.json();
         if (d.success) {
           const s = d.stats;
           document.getElementById('statsRow').innerHTML = `
@@ -216,7 +216,7 @@
         }
 
         // Fetch all nodes for the "To" dropdown
-        const allNodesRes = await fetch('/api/memory/nodes?limit=200');
+        const allNodesRes = await newclawFetch('/api/memory/nodes?limit=200');
         const allNodesData = await allNodesRes.json();
         const allNodesList = allNodesData.success ? allNodesData.nodes : [];
         const toOptions = allNodesList.filter(n => n.id !== n.id).map(n => `<option value="${escAttr(n.id)}">${esc(n.name || n.id)} (${n.type})</option>`).join('');
@@ -312,7 +312,7 @@
     
     async function loadAllNodesForEdge() {
       try {
-        const r = await fetch('/api/memory/nodes?limit=200'); const d = await r.json();
+        const r = await newclawFetch('/api/memory/nodes?limit=200'); const d = await r.json();
         if (d.success) allNodesForEdge = d.nodes;
       } catch(e) {}
     }
@@ -355,7 +355,7 @@
     async function deleteEdge(from, to, relation) {
       if (!confirm(`Remover relação: ${from} —${relation}→ ${to}?`)) return;
       try {
-        const r = await fetch('/api/memory/edges', {
+        const r = await newclawFetch('/api/memory/edges', {
           method: 'DELETE', headers: {'Content-Type':'application/json'},
           body: JSON.stringify({ from, to, relation })
         });
@@ -372,7 +372,7 @@
       if (!to) { alert('Selecione o nó de destino (use a busca)'); return; }
       if (!relation) { alert('Selecione o tipo de relação'); return; }
       try {
-        const r = await fetch('/api/memory/edges', {
+        const r = await newclawFetch('/api/memory/edges', {
           method: 'POST', headers: {'Content-Type':'application/json'},
           body: JSON.stringify({ from: fromId, to, relation })
         });

@@ -592,17 +592,17 @@
       const action = undoStack.pop();
       try {
         if(action.type === 'deleteNode') {
-          const r = await fetch('/api/memory/nodes', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(action.data) });
+          const r = await newclawFetch('/api/memory/nodes', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(action.data) });
           const d = await r.json();
           if(d.success && action.edges) {
             for(const e of action.edges) {
-              await fetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:e.from_node,to:e.to_node,relation:e.relation}) }).catch(()=>{});
+              await newclawFetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:e.from_node,to:e.to_node,relation:e.relation}) }).catch(()=>{});
             }
           }
           await loadAllNodes(); await loadGraph();
           showToast('↩️ Nó restaurado: ' + (action.data.name||action.data.id));
         } else if(action.type === 'deleteEdge') {
-          await fetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:action.data.from,to:action.data.to,relation:action.data.relation}) });
+          await newclawFetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:action.data.from,to:action.data.to,relation:action.data.relation}) });
           await loadAllNodes(); await loadGraph();
           showToast('↩️ Relação restaurada');
         }
@@ -613,7 +613,7 @@
     /* #5: Update empty sidebar stats + recent nodes */
     async function updateEmptyStats() {
       try {
-        const r = await fetch('/api/memory/stats');
+        const r = await newclawFetch('/api/memory/stats');
         const d = await r.json();
         if(!d.success) return;
         const s = d.stats;
@@ -671,7 +671,7 @@
     }
 
     async function loadAllNodes() {
-      try { const r = await fetch('/api/memory/nodes?limit=200'); const d = await r.json(); if (d.success) allNodesList = d.nodes; } catch(e) {}
+      try { const r = await newclawFetch('/api/memory/nodes?limit=200'); const d = await r.json(); if (d.success) allNodesList = d.nodes; } catch(e) {}
     }
     loadAllNodes();
 
@@ -806,7 +806,7 @@
       const rc = document.getElementById('rightContent');
       rc.innerHTML = '<div style="color:var(--text-muted);font-size:0.85rem;text-align:center;padding:20px;">Carregando detalhes...</div>';
       try {
-        const r = await fetch('/api/memory/nodes/' + encodeURIComponent(id));
+        const r = await newclawFetch('/api/memory/nodes/' + encodeURIComponent(id));
         const contentType = r.headers.get("content-type");
         if (!contentType || !contentType.includes("application/json")) {
            rc.innerHTML = `<div style="color:var(--text-error);padding:15px;background:var(--bg-error-light);border-radius:6px;font-size:0.85rem;">Erro Fatal: Resposta do servidor não foi em JSON. (Status: ${r.status})</div>`;
@@ -916,7 +916,7 @@
       if (!from || !to) { showToast('Selecione os nós De e Para'); return; }
       if (!relation) { showToast('Selecione o tipo de relação'); return; }
       try {
-        const r = await fetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from,to,relation}) });
+        const r = await newclawFetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from,to,relation}) });
         const d = await r.json();
         if (d.success) { loadGraph(); showToast('✅ Relação criada!'); } else showToast('❌ ' + d.error);
       } catch(e) { showToast('❌ ' + e.message); }
@@ -985,9 +985,9 @@
       try {
         let r;
         if (modalOldRel && modalOldRel !== rel) {
-          r = await fetch('/api/memory/edges', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:modalFrom,to:modalTo,old_relation:modalOldRel,new_relation:rel}) });
+          r = await newclawFetch('/api/memory/edges', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:modalFrom,to:modalTo,old_relation:modalOldRel,new_relation:rel}) });
         } else if (!modalOldRel) {
-          r = await fetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:modalFrom,to:modalTo,relation:rel}) });
+          r = await newclawFetch('/api/memory/edges', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({from:modalFrom,to:modalTo,relation:rel}) });
         } else {
           closeModal(); return; // unchanged
         }
@@ -1063,7 +1063,7 @@
 
     async function loadGraph() {
       try {
-        const r = await fetch('/api/memory/graph');
+        const r = await newclawFetch('/api/memory/graph');
         const d = await r.json();
         if (!d.success) return;
         allNodes = d.nodes;
@@ -1211,7 +1211,7 @@
       cy.on('cxttap','edge', evt => {
         const edge = evt.target, relation = edge.data('relation')||'related_to';
         if (confirm(`Remover relação "${relation}"?`)) {
-          fetch('/api/memory/edges',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({from:edge.data('source'),to:edge.data('target'),relation})})
+          newclawFetch('/api/memory/edges',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({from:edge.data('source'),to:edge.data('target'),relation})})
           .then(r=>r.json()).then(d=>{if(d.success)cy.remove(edge);});
         }
       });
@@ -1225,7 +1225,7 @@
       const type = document.getElementById('editType')?.value || 'fact';
       const content = document.getElementById('editContent')?.value || '';
       try {
-        const r = await fetch('/api/memory/nodes/' + encodeURIComponent(id), {
+        const r = await newclawFetch('/api/memory/nodes/' + encodeURIComponent(id), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, type, content })
@@ -1251,13 +1251,13 @@
         // #4: Save for undo
         let nodeData = null, nodeEdges = null;
         try {
-          const nr = await fetch('/api/memory/nodes/' + encodeURIComponent(id));
+          const nr = await newclawFetch('/api/memory/nodes/' + encodeURIComponent(id));
           const nd = await nr.json();
           if(nd.node) nodeData = { id:nd.node.id, type:nd.node.type, name:nd.node.name, content:nd.node.content };
           if(nd.edges) nodeEdges = nd.edges;
         } catch(e) {}
 
-        const r = await fetch('/api/memory/nodes/' + encodeURIComponent(id), { method: 'DELETE' });
+        const r = await newclawFetch('/api/memory/nodes/' + encodeURIComponent(id), { method: 'DELETE' });
         const d = await r.json();
         if (!d.success) {
           showToast('Erro ao deletar: ' + (d.error || 'falha desconhecida'));
@@ -1301,7 +1301,7 @@
       if (!to) { showToast('Selecione o no de destino'); return; }
       if (!relation) { showToast('Selecione o tipo de relacao'); return; }
       try {
-        const r = await fetch('/api/memory/edges', {
+        const r = await newclawFetch('/api/memory/edges', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ from: fromId, to, relation })
@@ -1332,7 +1332,7 @@
 
       const id = makeNodeId(name);
       try {
-        const createRes = await fetch('/api/memory/nodes', {
+        const createRes = await newclawFetch('/api/memory/nodes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id, type, name, content })
@@ -1343,7 +1343,7 @@
           return;
         }
 
-        const edgeRes = await fetch('/api/memory/edges', {
+        const edgeRes = await newclawFetch('/api/memory/edges', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ from: fromId, to: id, relation })
@@ -1381,7 +1381,7 @@
       if (!name) { showToast('Digite o nome do nó'); return; }
       const id = makeNodeId(name);
       try {
-        const r = await fetch('/api/memory/nodes', {
+        const r = await newclawFetch('/api/memory/nodes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id, type, name, content })
@@ -1411,7 +1411,7 @@
 
     async function deleteEdge(from,to,relation) {
       if (!confirm(`Remover relação ${from} —${relation}→ ${to}?`)) return;
-      try { const r = await fetch('/api/memory/edges',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({from,to,relation})}); const d = await r.json();
+      try { const r = await newclawFetch('/api/memory/edges',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({from,to,relation})}); const d = await r.json();
         if (d.success && selectedNodeId) { loadGraph().then(() => selectGraphNode(selectedNodeId)); } else if (d.error) showToast('❌ '+d.error);
       } catch(e) { showToast('❌ '+e.message); }
     }
@@ -1633,7 +1633,7 @@
 
     async function exportNodeDetails(id) {
       try {
-        const r = await fetch('/api/memory/nodes/' + encodeURIComponent(id));
+        const r = await newclawFetch('/api/memory/nodes/' + encodeURIComponent(id));
         const d = await r.json();
         if (!d.success) return;
         const n = d.node;
@@ -1704,7 +1704,7 @@
   }
 
   async function loadTopNodes() {
-    const res = await fetch('/api/memory/dashboard/top-nodes?metric=pagerank&limit=8');
+    const res = await newclawFetch('/api/memory/dashboard/top-nodes?metric=pagerank&limit=8');
     const data = await res.json();
     const canvas = document.getElementById('topNodesChart');
     const ctx = canvas.getContext('2d');
@@ -1724,7 +1724,7 @@
   }
 
   async function loadCommunities() {
-    const res = await fetch('/api/memory/dashboard/communities');
+    const res = await newclawFetch('/api/memory/dashboard/communities');
     const data = await res.json();
     const el = document.getElementById('communitiesList');
     if (!data.communities) { el.innerHTML = 'Sem dados'; return; }
@@ -1735,7 +1735,7 @@
   }
 
   async function loadDensity() {
-    const res = await fetch('/api/memory/dashboard/density');
+    const res = await newclawFetch('/api/memory/dashboard/density');
     const data = await res.json();
     const el = document.getElementById('densityInfo');
     el.innerHTML = `<div style="margin-bottom:4px;">Nós: <b>${data.nodeCount}</b></div>
