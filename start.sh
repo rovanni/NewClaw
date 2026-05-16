@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 # NewClaw start/restart script
 # Usage: ./start.sh [start|stop|restart]
 
