@@ -517,10 +517,17 @@ export class AgentController {
      */
     async handleWebMessage(sessionId: string, message: string): Promise<string> {
         try {
-            if (this.onboardingService.isOnboardingRequired(sessionId)) {
-                const res = await this.onboardingService.handle(sessionId, message);
+            // Para o Dashboard Web (que é local/pessoal), usamos um ID de usuário fixo para o Onboarding.
+            // Isso evita que ele peça seu nome a cada nova conversa (sessionId), 
+            // mas mantém os históricos de chat separados.
+            const webUserId = 'web-dashboard-user';
+
+            if (this.onboardingService.isOnboardingRequired(webUserId)) {
+                const res = await this.onboardingService.handle(webUserId, message);
                 return res.response;
             }
+
+            // O processamento real continua usando o sessionId para manter o histórico isolado
             const result = await this.agentLoop.process(sessionId, message);
             return typeof result === 'string' ? result : result.text;
         } catch (err: any) {
