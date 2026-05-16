@@ -850,7 +850,6 @@ Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específic
             
             // Use extractText (lightweight) instead of full Atomic parser
             // because synthesis should be plain text, not structured JSON
-            const { extractText } = require('./ResponseAdapter');
             let synthesisText = extractText(rawSynthesis);
             
             // If extractText returned empty/garbage, try the full pipeline as fallback
