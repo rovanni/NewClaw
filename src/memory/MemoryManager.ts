@@ -161,7 +161,7 @@ export class MemoryManager {
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS memory_nodes (
                 id TEXT PRIMARY KEY,
-                type TEXT NOT NULL CHECK(type IN ('identity', 'preference', 'project', 'context', 'fact', 'skill', 'infrastructure')),
+                type TEXT NOT NULL CHECK(type IN ('identity', 'preference', 'project', 'context', 'fact', 'skill', 'infrastructure', 'trait', 'rule', 'strategy', 'knowledge')),
                 name TEXT NOT NULL,
                 content TEXT NOT NULL,
                 metadata TEXT,
@@ -370,6 +370,10 @@ export class MemoryManager {
         this.safeAddColumn('memory_edges', 'last_accessed', 'DATETIME');
         this.safeAddColumn('memory_edges', 'domain', 'TEXT');
         this.safeAddColumn('node_metrics', 'last_accessed', 'DATETIME');
+
+        // Migration: expand CHECK constraint on memory_nodes to include new types
+        // SQLite doesn't support ALTER CHECK, so we recreate the table if the constraint is outdated
+        this.migrateMemoryNodesCheckConstraint();
     }
 
     /**
@@ -421,6 +425,90 @@ export class MemoryManager {
             if (!errorMessage(e).includes('duplicate column name')) {
                 log.warn('migration_column_failed', errorMessage(e), { table, column });
             }
+        }
+    }
+
+    /**
+     * Migration: Update memory_nodes CHECK constraint to support expanded node types.
+     * SQLite doesn't support ALTER TABLE ... ALTER CHECK, so we must:
+     * 1. Create new table with updated CHECK
+     * 2. Copy data
+     * 3. Drop old table
+     * 4. Rename new table
+     * This only runs if the current constraint doesn't include 'rule' (the first new type).
+     */
+    private migrateMemoryNodesCheckConstraint(): void {
+        try {
+            // Check if the constraint already includes 'rule' by attempting an insert
+            const testId = `__migration_test_${Date.now()}`;
+            try {
+                this.db.prepare(
+                    "INSERT INTO memory_nodes (id, type, name, content) VALUES (?, 'rule', 'test', 'test')"
+                ).run(testId);
+                // Constraint already supports 'rule' — clean up test row and return
+                this.db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(testId);
+                return;
+            } catch (e: any) {
+                // CHECK constraint failed — need migration
+                if (!String(e).includes('CHECK constraint')) return; // some other error, skip
+            }
+
+            log.info('migration_start', 'Migrating memory_nodes CHECK constraint to support new types...');
+
+            // Disable foreign keys during migration
+            this.db.pragma('foreign_keys = OFF');
+
+            this.db.exec(`
+                CREATE TABLE memory_nodes_new (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL CHECK(type IN ('identity', 'preference', 'project', 'context', 'fact', 'skill', 'infrastructure', 'trait', 'rule', 'strategy', 'knowledge')),
+                    name TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    metadata TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    pagerank REAL DEFAULT 0.0,
+                    degree INTEGER DEFAULT 0,
+                    betweenness REAL DEFAULT 0.0,
+                    closeness REAL DEFAULT 0.0,
+                    weight REAL DEFAULT 1.0,
+                    confidence REAL DEFAULT 1.0,
+                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    context_type TEXT,
+                    classification_score REAL DEFAULT 0,
+                    community_id INTEGER DEFAULT 0,
+                    domain TEXT,
+                    last_accessed DATETIME
+                )
+            `);
+
+            // Copy all data
+            const colCount = ((this.db.prepare('PRAGMA table_info(memory_nodes)').all() as any[]) || []).length;
+            log.info('migration_copy', `Copying ${colCount} columns from memory_nodes to memory_nodes_new...`);
+
+            this.db.exec('INSERT INTO memory_nodes_new SELECT * FROM memory_nodes');
+
+            // Swap tables
+            this.db.exec('DROP TABLE memory_nodes');
+            this.db.exec('ALTER TABLE memory_nodes_new RENAME TO memory_nodes');
+
+            // Recreate indexes
+            this.safeExec('CREATE INDEX IF NOT EXISTS idx_memory_nodes_type ON memory_nodes(type)');
+            this.safeExec('CREATE INDEX IF NOT EXISTS idx_memory_nodes_name ON memory_nodes(name)');
+            this.safeExec('CREATE INDEX IF NOT EXISTS idx_memory_nodes_pagerank ON memory_nodes(pagerank)');
+            this.safeExec('CREATE INDEX IF NOT EXISTS idx_memory_nodes_degree ON memory_nodes(degree)');
+
+            // Re-enable foreign keys
+            this.db.pragma('foreign_keys = ON');
+
+            // Integrity check
+            this.db.pragma('integrity_check');
+
+            log.info('migration_done', 'memory_nodes CHECK constraint migration completed successfully.');
+        } catch (e: any) {
+            log.error('migration_failed', e, 'memory_nodes CHECK constraint migration failed');
+            // Re-enable FK even on failure
+            try { this.db.pragma('foreign_keys = ON'); } catch {}
         }
     }
 
