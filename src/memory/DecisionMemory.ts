@@ -17,6 +17,15 @@ export interface ToolDecision {
     createdAt?: string;
 }
 
+
+// ── SQLite Row Types ────────────────────────────────────────
+interface ToolDecisionRow {
+    tool_name: string;
+    success_rate: number;
+    avg_latency: number;
+    uses: number;
+}
+
 export class DecisionMemory {
     private db: Database;
 
@@ -79,7 +88,7 @@ export class DecisionMemory {
             HAVING uses >= 2
             ORDER BY success_rate DESC, avg_latency ASC
             LIMIT 1
-        `).get(context, taskType) as any;
+        `).get(context, taskType) as ToolDecisionRow | undefined;
 
         if (!row || row.success_rate < 0.3) return null;
 
@@ -104,7 +113,7 @@ export class DecisionMemory {
             ? this.db.prepare(query).all(toolName)
             : this.db.prepare(query).all();
 
-        return (rows as any[]).map(r => ({
+        return (rows as ToolDecisionRow[]).map(r => ({
             toolName: r.tool_name,
             uses: r.uses,
             successRate: Math.round(r.success_rate * 100) / 100,

@@ -151,7 +151,7 @@ export class SqliteMemoryFacade implements MemoryFacade {
     }
 
     listNodesForReconciliation(): MemoryNode[] {
-        const rows = this.db.prepare('SELECT * FROM memory_nodes WHERE type IN ("preference", "fact", "skill")').all() as any[];
+        const rows = this.db.prepare('SELECT * FROM memory_nodes WHERE type IN ("preference", "fact", "skill")').all() as Array<MemoryNode & { metadata: string }>;
         return rows.map(row => ({
             ...row,
             metadata: JSON.parse(row.metadata || '{}')

@@ -25,28 +25,15 @@ const log = createLogger('ProtocolParser');
 
 // ── Recovery prompt for re-structuring ──
 
-const RECOVERY_PROMPT = `[PROTOCOL-RECOVERY]
-Sua resposta anterior não seguiu o protocolo estruturado obrigatório.
-Reestruture semanticamente a resposta no formato JSON válido.
-
-Formato OBRIGATÓRIO:
+const RECOVERY_PROMPT = `[ERRO DE PROTOCOLO]
+Sua resposta não foi um JSON válido. 
+CORRIJA IMEDIATAMENTE seguindo o formato:
 {
-  "thought": "seu raciocínio interno",
-  "action": {
-    "type": "tool" | "final_answer",
-    "name": "nome_da_tool" (se type=tool),
-    "input": {} (se type=tool),
-    "content": "sua resposta ao usuário" (obrigatório se type=final_answer)
-  },
-  "evaluation": {
-    "is_complete": true | false,
-    "confidence": "low" | "medium" | "high",
-    "reason": "justificativa"
-  }
+  "thought": "análise",
+  "action": { "type": "tool" | "final_answer", "name": "...", "input": {}, "content": "..." },
+  "evaluation": { "is_complete": bool, "confidence": "...", "reason": "..." }
 }
-
-NÃO explique. NÃO converse. NÃO repita raciocínio.
-Retorne APENAS o JSON válido.`;
+Responda APENAS o JSON. Sem texto adicional.`;
 
 const MAX_RECOVERY_ATTEMPTS = 2;
 

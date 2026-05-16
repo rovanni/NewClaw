@@ -55,6 +55,23 @@ export interface MemoryEdge {
     weight?: number;
 }
 
+
+// ── SQLite Row Types ────────────────────────────────────────
+
+interface PragmaColumnRow { name: string; [key: string]: unknown }
+interface CountRow        { count: number }
+interface SnapshotRow {
+    id: string;
+    label: string;
+    node_count: number;
+    edge_count: number;
+    created_at: string;
+    snapshot_data: string;
+}
+interface SettingRow      { value: string }
+interface UserProfileRow  { name: string; language_preference: string; response_style: string; expertise: string }
+interface MemoryNodeRow extends Omit<MemoryNode, 'metadata'> { metadata: string }
+
 // Memory management core
 export class MemoryManager {
     private db: Database.Database;
@@ -62,6 +79,15 @@ export class MemoryManager {
     private attentionFeedback: AttentionFeedback | null = null;
     private facade: MemoryFacade | null = null;
     private classifier: ConfidenceClassifier;
+
+    /**
+     * Expõe o banco para componentes internos que ainda não foram migrados
+     * para Repository pattern (veja Boundary Leak L1 no ARCHITECTURE_REVIEW.md).
+     * @internal — não usar fora de src/memory/
+     */
+    getDatabase(): Database.Database {
+        return this.db;
+    }
 
     getFacade(): MemoryFacade {
         if (!this.facade) {
@@ -240,7 +266,7 @@ export class MemoryManager {
         // ── FTS5 Semantic Search (using native rowid — no fts_rowid column needed) ──
         // Only drop and recreate FTS if schema migration requires it (fts_rowid column)
         // Do NOT drop FTS on every startup — this was causing DB corruption race conditions
-        const currentCols = (this.db.prepare("PRAGMA table_info(memory_nodes)").all() as any[]).map(c => c.name);
+        const currentCols = (this.db.prepare("PRAGMA table_info(memory_nodes)").all() as PragmaColumnRow[]).map(c => c.name);
         const needsFtsRebuild = currentCols.includes('fts_rowid');
 
         if (needsFtsRebuild) {
@@ -274,7 +300,7 @@ export class MemoryManager {
 
         // FTS index: only rebuild if the table is empty (new DB or after schema migration)
         try {
-            const ftsCount = (this.db.prepare('SELECT count(*) as count FROM memory_nodes_fts').get() as any).count;
+            const ftsCount = (this.db.prepare('SELECT count(*) as count FROM memory_nodes_fts').get() as CountRow).count;
             if (ftsCount === 0) {
                 log.info('[MemoryManager] Rebuilding FTS index (empty)...');
                 this.db.exec(`INSERT INTO memory_nodes_fts(memory_nodes_fts) VALUES('rebuild')`);
@@ -548,7 +574,7 @@ export class MemoryManager {
 
     private ensureUserProfileSchema(): void {
         const columns = new Set(
-            ((this.db.prepare("PRAGMA table_info(user_profile)").all() as any[]) || []).map(c => c.name)
+            ((this.db.prepare("PRAGMA table_info(user_profile)").all() as PragmaColumnRow[]) || []).map(c => c.name)
         );
         const addColumn = (sql: string) => {
             try { this.db.exec(sql); } catch (e) { 
@@ -839,7 +865,7 @@ export class MemoryManager {
     }
 
     getNode(id: string): MemoryNode | undefined {
-        const row = this.db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(id) as any;
+        const row = this.db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(id) as MemoryNodeRow | undefined;
         if (!row) return undefined;
         return { 
             ...row, 
@@ -1017,7 +1043,7 @@ export class MemoryManager {
                 body: JSON.stringify({ model: 'nomic-embed-text:latest', prompt: text })
             });
             if (!response.ok) return null;
-            const data = await response.json() as any;
+            const data = await response.json() as { embedding?: number[] };
             const embedding = data.embedding;
             if (!embedding) return null;
             return new Float64Array(embedding);
@@ -1178,11 +1204,11 @@ export class MemoryManager {
     }
 
     listSnapshots(): { id: string; label: string; node_count: number; edge_count: number; created_at: string }[] {
-        return this.db.prepare('SELECT id, label, node_count, edge_count, created_at FROM graph_snapshots ORDER BY created_at DESC').all() as any[];
+        return this.db.prepare('SELECT id, label, node_count, edge_count, created_at FROM graph_snapshots ORDER BY created_at DESC').all() as Omit<SnapshotRow, 'snapshot_data'>[];
     }
 
     restoreSnapshot(id: string): boolean {
-        const row = this.db.prepare('SELECT * FROM graph_snapshots WHERE id = ?').get(id) as any;
+        const row = this.db.prepare('SELECT * FROM graph_snapshots WHERE id = ?').get(id) as SnapshotRow | undefined;
         if (!row) return false;
         const data = JSON.parse(row.snapshot_data);
 
@@ -1230,7 +1256,7 @@ export class MemoryManager {
 
     getSetting(key: string): string | null {
         try {
-            const row = this.db.prepare('SELECT value FROM memory WHERE key = ?').get(key) as any;
+            const row = this.db.prepare('SELECT value FROM memory WHERE key = ?').get(key) as SettingRow | undefined;
             return row?.value || null;
         } catch {
             return null;
@@ -1245,7 +1271,7 @@ export class MemoryManager {
 
     getUserProfile(userId: string): { name: string; language_preference: string; response_style: string; expertise: string } | null {
         try {
-            return this.db.prepare('SELECT name, language_preference, response_style, expertise FROM user_profile WHERE user_id = ?').get(userId) as any;
+            return this.db.prepare('SELECT name, language_preference, response_style, expertise FROM user_profile WHERE user_id = ?').get(userId) as UserProfileRow | null;
         } catch {
             return null;
         }

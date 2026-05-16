@@ -16,6 +16,23 @@ export interface ClassificationResult {
     source: 'context' | 'global';
 }
 
+
+// ── SQLite Row Types ────────────────────────────────────────
+interface ClassificationRow {
+    id: number;
+    input_hash: string;
+    normalized: string;
+    type: string;
+    context: MemoryContext;
+    confidence: number;
+    hits: number;
+    penalty_count: number;
+    last_used: string;
+}
+
+interface CountCRow      { c: number }
+interface GroupCountRow  { context?: string; type?: string; c: number }
+
 export class ClassificationMemory {
     private db: Database;
 
@@ -118,7 +135,7 @@ export class ClassificationMemory {
         // 1. Exact match in same context
         const exact = this.db.prepare(
             'SELECT * FROM memory_classifications WHERE input_hash = ? AND context = ?'
-        ).get(hash, context) as any;
+        ).get(hash, context) as ClassificationRow | undefined;
 
         if (exact) {
             this.db.prepare(
@@ -135,9 +152,9 @@ export class ClassificationMemory {
         // 2. Fuzzy match in same context
         const contextRows = this.db.prepare(
             'SELECT * FROM memory_classifications WHERE context = ? ORDER BY hits DESC LIMIT 20'
-        ).all(context) as any[];
+        ).all(context) as ClassificationRow[];
 
-        let bestMatch: any = null;
+        let bestMatch: ClassificationRow | null = null;
         let bestScore = 0;
         const MIN_SIMILARITY = 0.5;
 
@@ -162,7 +179,7 @@ export class ClassificationMemory {
         // 3. Global fuzzy match (with penalty)
         const globalRows = this.db.prepare(
             'SELECT * FROM memory_classifications ORDER BY hits DESC LIMIT 20'
-        ).all() as any[];
+        ).all() as ClassificationRow[];
 
         for (const row of globalRows) {
             const sim = this.similarity(normalized, row.normalized);
@@ -228,14 +245,14 @@ export class ClassificationMemory {
      * Get stats
      */
     stats(): { total: number; byContext: Record<string, number>; byType: Record<string, number> } {
-        const total = (this.db.prepare('SELECT COUNT(*) as c FROM memory_classifications').get() as any).c;
+        const total = (this.db.prepare('SELECT COUNT(*) as c FROM memory_classifications').get() as CountCRow).c;
         const byContext: Record<string, number> = {};
-        const contextRows = this.db.prepare('SELECT context, COUNT(*) as c FROM memory_classifications GROUP BY context').all() as any[];
-        for (const r of contextRows) byContext[r.context] = r.c;
+        const contextRows = this.db.prepare('SELECT context, COUNT(*) as c FROM memory_classifications GROUP BY context').all() as GroupCountRow[];
+        for (const r of contextRows) byContext[r.context!] = r.c;
 
         const byType: Record<string, number> = {};
-        const typeRows = this.db.prepare('SELECT type, COUNT(*) as c FROM memory_classifications GROUP BY type').all() as any[];
-        for (const r of typeRows) byType[r.type] = r.c;
+        const typeRows = this.db.prepare('SELECT type, COUNT(*) as c FROM memory_classifications GROUP BY type').all() as GroupCountRow[];
+        for (const r of typeRows) byType[r.type!] = r.c;
 
         return { total, byContext, byType };
     }

@@ -47,6 +47,23 @@ export interface ContextState {
     updatedAt: string;
 }
 
+
+// ── SQLite Row Types ────────────────────────────────────────
+
+interface ContextStateRow {
+    id: string;
+    active_goal: string | null;
+    current_task: string | null;
+    recent_node_ids: string;
+    recent_interaction: string | null;
+    updated_at: string;
+}
+
+interface NodeTypeRow   { type: string }
+interface NodeBasicRow  { id: string; type: string; name: string; content: string }
+interface NodeDomainRow { domain: string | null; type: string }
+interface NodeTimeRow   { last_accessed: string | null; updated_at: string | null }
+
 // ── Domain Priority Map ────────────────────────────────────
 
 // Type-based fallback when domain column is not set
@@ -136,7 +153,7 @@ export class AttentionLayer {
     private loadContextState(): void {
         const row = this.db.prepare(
             'SELECT * FROM attention_context WHERE id = ?'
-        ).get('active') as any;
+        ).get('active') as ContextStateRow | undefined;
 
         if (row) {
             this.contextState = {
@@ -307,7 +324,7 @@ export class AttentionLayer {
     calculateRecency(nodeId: string): number {
         const node = this.db.prepare(
             'SELECT last_accessed, updated_at FROM memory_nodes WHERE id = ?'
-        ).get(nodeId) as any;
+        ).get(nodeId) as NodeTimeRow | undefined;
 
         if (!node) return 0.1;
 
@@ -359,7 +376,7 @@ export class AttentionLayer {
      * Get domain priority based on node type.
      */
     calculateDomainPriority(nodeId: string): number {
-        const node = this.db.prepare('SELECT domain, type FROM memory_nodes WHERE id = ?').get(nodeId) as any;
+        const node = this.db.prepare('SELECT domain, type FROM memory_nodes WHERE id = ?').get(nodeId) as NodeDomainRow | undefined;
         if (!node) return 0.3;
         if (node.domain) return getDomainPriority(node.domain);
         return TYPE_PRIORITY[node.type] || 0.3;
@@ -375,7 +392,7 @@ export class AttentionLayer {
     }): AttentionCandidate {
         const node = this.db.prepare(
             'SELECT id, type, name, content FROM memory_nodes WHERE id = ?'
-        ).get(params.nodeId) as any;
+        ).get(params.nodeId) as NodeBasicRow | undefined;
 
         const contextRelevance = this.calculateContextRelevance(params.nodeId);
         const recency = this.calculateRecency(params.nodeId);
@@ -425,7 +442,7 @@ export class AttentionLayer {
         for (const result of embeddingResults) {
             const node = this.db.prepare(
                 'SELECT type FROM memory_nodes WHERE id = ?'
-            ).get(result.nodeId) as any;
+            ).get(result.nodeId) as NodeTypeRow | undefined;
 
             if (!node) continue;
 
@@ -455,7 +472,7 @@ export class AttentionLayer {
 
                     const node = this.db.prepare(
                         'SELECT type FROM memory_nodes WHERE id = ?'
-                    ).get(neighbor.node_id) as any;
+                    ).get(neighbor.node_id) as NodeTypeRow | undefined;
 
                     if (!node || node.type === 'legacy_container') continue;
 

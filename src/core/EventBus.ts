@@ -155,17 +155,19 @@ export class EventBusClass {
     }
 
     on<T extends keyof EventBusEvents>(event: T, handler: TypedEventHandler<EventBusEvents[T]>): () => void {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Node.js EventEmitter usa (...args: any[]) => void, incompatível com handlers tipados
         this.emitter.on(event, handler as any);
-        return () => this.emitter.off(event, handler as any);
+        return () => this.emitter.off(event, handler as any); // eslint-disable-line @typescript-eslint/no-explicit-any
     }
 
     once<T extends keyof EventBusEvents>(event: T, handler: TypedEventHandler<EventBusEvents[T]>): () => void {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- interop obrigatório com EventEmitter
         this.emitter.once(event, handler as any);
-        return () => this.emitter.off(event, handler as any);
+        return () => this.emitter.off(event, handler as any); // eslint-disable-line @typescript-eslint/no-explicit-any
     }
 
     off<T extends keyof EventBusEvents>(event: T, handler: TypedEventHandler<EventBusEvents[T]>): void {
-        this.emitter.off(event, handler as any);
+        this.emitter.off(event, handler as any); // eslint-disable-line @typescript-eslint/no-explicit-any
     }
 
     handlerCount(event: keyof EventBusEvents): number {
@@ -206,7 +208,7 @@ export class EventBusClass {
         // Wildcard via EventEmitter's special wildcard handling
         const id = Date.now();
         for (const eventType of Object.values(EventTypes)) {
-            this.emitter.on(eventType, handler as any);
+            this.emitter.on(eventType, handler as any); // eslint-disable-line @typescript-eslint/no-explicit-any -- interop com EventEmitter
         }
         log.info(`[EventBus] Subscribed to all event types (sub #${id})`);
         return id;

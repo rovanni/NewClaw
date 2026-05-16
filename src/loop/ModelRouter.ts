@@ -193,7 +193,7 @@ Category:`;
             if (this.providerFactory) {
                 const response = await this.providerFactory.classifyWithFallback([
                     { role: 'user', content: prompt }
-                ], 30000); 
+                ], 60000); 
                 
                 const content = (response.content || '').trim().toLowerCase();
                 for (const cat of VALID_CATEGORIES) {
@@ -205,7 +205,7 @@ Category:`;
 
             // Legacy fetch fallback (Ollama only) — direct call, bypasses generation queue
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 30000); // 30s (increased from 15s)
+            const timeout = setTimeout(() => controller.abort(), 60000); // 60s (increased from 30s)
             const response = await fetch(`${this.config.classifierServer}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

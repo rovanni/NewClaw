@@ -92,6 +92,44 @@ export interface AnomalyReport {
     timestamp: string;
 }
 
+
+// ── SQLite Row Types ────────────────────────────────────────
+
+interface CountRow    { cnt: number }
+interface SumUsageRow { total_usage: number }
+interface SumRow      { s: number }
+interface MaxRow      { max: number }
+interface AvgMaxRow   { avg: number; max: number }
+interface UsageRow    { usage_count: number }
+interface ClassCountRow { memory_class: string; cnt: number }
+interface FeedbackStateRow {
+    id: string;
+    last_decay_at: string | null;
+    last_normalization_at: string | null;
+    anomalies_detected: number;
+}
+interface NodeWithDomainRow {
+    node_id: string;
+    reinforcement_score: number;
+    last_accessed_at: string | null;
+    domain: string;
+    type: string;
+}
+interface EdgeRow {
+    from_node: string;
+    to_node: string;
+    relation: string;
+    weight: number;
+    last_accessed: string | null;
+}
+interface TopNodeRow extends NodeMetrics { name: string }
+interface NodeForSuggestRow {
+    node_id: string;
+    reinforcement_score: number;
+    name: string;
+    domain: string;
+}
+
 // ── AttentionFeedback Class ─────────────────────────────────
 
 export class AttentionFeedback {
@@ -174,7 +212,7 @@ export class AttentionFeedback {
         // Saturating increment: logarithmic decay of gain
         const current = this.db.prepare(
             'SELECT usage_count, reinforcement_score FROM node_metrics WHERE node_id = ?'
-        ).get(nodeId) as any;
+        ).get(nodeId) as Pick<NodeMetrics, 'usage_count' | 'reinforcement_score'> | undefined;
 
         if (!current) return;
 
@@ -234,9 +272,9 @@ export class AttentionFeedback {
             WHERE e1.from_node = ? AND e2.to_node = ?
                OR (e1.from_node = ? AND e2.to_node = ?)
             LIMIT 1
-        `).get(nodeA, nodeB, nodeB, nodeA) as any;
+        `).get(nodeA, nodeB, nodeB, nodeA) as CountRow | undefined;
 
-        return common && common.cnt > 0;
+        return (common?.cnt ?? 0) > 0;
     }
 
     /**
@@ -269,7 +307,7 @@ export class AttentionFeedback {
 
         const row = this.db.prepare(
             'SELECT embedding FROM memory_embeddings WHERE node_id = ?'
-        ).get(nodeId) as any;
+        ).get(nodeId) as { embedding: Buffer } | undefined;
 
         if (!row || !row.embedding) return null;
 
@@ -325,7 +363,7 @@ export class AttentionFeedback {
             SELECT from_node, to_node, relation, weight FROM memory_edges
             WHERE (from_node = ? AND to_node = ?) OR (from_node = ? AND to_node = ?)
             LIMIT 1
-        `).get(nodeA, nodeB, nodeB, nodeA) as any;
+        `).get(nodeA, nodeB, nodeB, nodeA) as Pick<EdgeRow, 'from_node' | 'to_node' | 'relation' | 'weight'> | undefined;
 
         if (existing) {
             this.db.prepare(`
@@ -352,7 +390,7 @@ export class AttentionFeedback {
     getReinforcementContribution(nodeId: string): number {
         const metrics = this.db.prepare(
             'SELECT reinforcement_score FROM node_metrics WHERE node_id = ?'
-        ).get(nodeId) as any;
+        ).get(nodeId) as Pick<NodeMetrics, 'reinforcement_score'> | undefined;
 
         if (!metrics) return 0;
 
@@ -408,7 +446,7 @@ export class AttentionFeedback {
             FROM node_metrics nm
             JOIN memory_nodes mn ON nm.node_id = mn.id
             WHERE nm.reinforcement_score > ?
-        `).all(MIN_REINFORCEMENT) as any[];
+        `).all(MIN_REINFORCEMENT) as NodeWithDomainRow[];
 
         for (const node of nodes) {
             // Active context nodes don't decay
@@ -466,7 +504,7 @@ export class AttentionFeedback {
             SELECT from_node, to_node, relation, weight, last_accessed
             FROM memory_edges
             WHERE weight > ?
-        `).all(MIN_EDGE_WEIGHT) as any[];
+        `).all(MIN_EDGE_WEIGHT) as EdgeRow[];
 
         for (const edge of edges) {
             // Never decay critical relations
@@ -520,15 +558,15 @@ export class AttentionFeedback {
         // 1. Check concentration: top 3 nodes shouldn't have >40% of all usage
         const concentration = this.db.prepare(`
             SELECT SUM(usage_count) as total_usage FROM node_metrics
-        `).get() as any;
+        `).get() as SumUsageRow | undefined;
 
         const top3 = this.db.prepare(`
             SELECT node_id, usage_count FROM node_metrics
             ORDER BY usage_count DESC LIMIT 3
-        `).all() as any[];
+        `).all() as UsageRow[];
 
-        if (concentration?.total_usage > 0 && top3.length >= 3) {
-            const top3Usage = top3.reduce((sum: number, n: any) => sum + n.usage_count, 0);
+        if (concentration && concentration.total_usage > 0 && top3.length >= 3) {
+            const top3Usage = top3.reduce((sum: number, n: UsageRow) => sum + n.usage_count, 0);
             const concentrationRatio = top3Usage / concentration.total_usage;
 
             if (concentrationRatio > CONCENTRATION_THRESHOLD) {
@@ -542,8 +580,8 @@ export class AttentionFeedback {
         }
 
         // 2. Check edge density
-        const nodeCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM memory_nodes').get() as any)?.cnt || 0;
-        const edgeCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM memory_edges').get() as any)?.cnt || 0;
+        const nodeCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM memory_nodes').get() as CountRow | undefined)?.cnt ?? 0;
+        const edgeCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM memory_edges').get() as CountRow | undefined)?.cnt ?? 0;
         const edgeDensity = nodeCount > 0 ? edgeCount / nodeCount : 0;
 
         if (edgeDensity < MIN_EDGE_DENSITY) {
@@ -559,7 +597,7 @@ export class AttentionFeedback {
         const recentBursts = this.db.prepare(`
             SELECT node_id, reinforcement_score FROM node_metrics
             WHERE reinforcement_score > 4.8
-        `).all() as any[];
+        `).all() as Pick<NodeMetrics, 'node_id' | 'reinforcement_score'>[];
 
         if (recentBursts.length > 15) {
             anomalies.push({
@@ -576,12 +614,12 @@ export class AttentionFeedback {
             WHERE n.id NOT IN (SELECT from_node FROM memory_edges)
             AND n.id NOT IN (SELECT to_node FROM memory_edges)
             AND n.type != 'legacy_container'
-        `).get() as any;
+        `).get() as CountRow | undefined;
 
-        if (orphans?.cnt > 10) {
+        if ((orphans?.cnt ?? 0) > 10) {
             anomalies.push({
                 type: 'orphan',
-                details: `${orphans.cnt} orphan nodes (no edges)`,
+                details: `${orphans?.cnt ?? 0} orphan nodes (no edges)`,
                 severity: 'low',
                 timestamp: now,
             });
@@ -611,7 +649,7 @@ export class AttentionFeedback {
     private classifyNode(nodeId: string): MemoryClass {
         const metrics = this.db.prepare(
             'SELECT reinforcement_score, last_accessed_at FROM node_metrics WHERE node_id = ?'
-        ).get(nodeId) as any;
+        ).get(nodeId) as Pick<NodeMetrics, 'reinforcement_score' | 'last_accessed_at'> | undefined;
 
         if (!metrics) return 'latent';
 
@@ -636,7 +674,7 @@ export class AttentionFeedback {
     }
 
     reclassifyAll(): { active: number; longterm: number; latent: number } {
-        const nodes = this.db.prepare('SELECT node_id FROM node_metrics').all() as any[];
+        const nodes = this.db.prepare('SELECT node_id FROM node_metrics').all() as Pick<NodeMetrics, 'node_id'>[];
         let active = 0, longterm = 0, latent = 0;
         for (const node of nodes) {
             const cls = this.classifyNode(node.node_id);
@@ -652,7 +690,7 @@ export class AttentionFeedback {
     normalize(): void {
         const max = this.db.prepare(
             'SELECT MAX(reinforcement_score) as max FROM node_metrics'
-        ).get() as any;
+        ).get() as MaxRow | undefined;
 
         if (max && max.max > MAX_REINFORCEMENT * 0.9) {
             this.db.prepare(`
@@ -664,7 +702,7 @@ export class AttentionFeedback {
 
         const maxWeight = this.db.prepare(
             'SELECT MAX(weight) as max FROM memory_edges'
-        ).get() as any;
+        ).get() as MaxRow | undefined;
 
         if (maxWeight && maxWeight.max > MAX_EDGE_WEIGHT * 0.9) {
             this.db.prepare(`
@@ -689,7 +727,7 @@ export class AttentionFeedback {
             AND mn.type != 'legacy_container'
             ORDER BY nm.reinforcement_score DESC
             LIMIT 20
-        `).all() as any[];
+        `).all() as NodeForSuggestRow[];
 
         const suggestions: Array<{ from: string; to: string; reason: string }> = [];
 
@@ -708,7 +746,7 @@ export class AttentionFeedback {
                         SELECT COUNT(*) as cnt FROM memory_edges e1
                         JOIN memory_edges e2 ON e1.to_node = e2.from_node
                         WHERE e1.from_node = ? AND e2.to_node = ?
-                    `).get(a.node_id, b.node_id) as any;
+                    `).get(a.node_id, b.node_id) as CountRow | undefined;
 
                     if (common && common.cnt > 0) {
                         suggestions.push({
@@ -747,7 +785,7 @@ export class AttentionFeedback {
                 const anomalies = this.monitor();
                 if (anomalies.length > 0) {
                     if (anomalies.length > 0) {
-                        const types = anomalies.map((a: any) => a.type).join(', ');
+                        const types = anomalies.map((a: AnomalyReport) => a.type).join(', ');
                         log.info(`[AttentionFeedback] Monitor: ${anomalies.length} anomalies — ${types}`);
                     }
                 }
@@ -767,19 +805,19 @@ export class AttentionFeedback {
     // ── Stats ───────────────────────────────────────────────
 
     getStats(): FeedbackStats {
-        const total = this.db.prepare('SELECT COUNT(*) as cnt FROM node_metrics').get() as any;
+        const total = this.db.prepare('SELECT COUNT(*) as cnt FROM node_metrics').get() as CountRow | undefined;
         const byClass = this.db.prepare(
             'SELECT memory_class, COUNT(*) as cnt FROM node_metrics GROUP BY memory_class'
-        ).all() as any[];
+        ).all() as ClassCountRow[];
         const avg = this.db.prepare(
             'SELECT AVG(reinforcement_score) as avg, MAX(reinforcement_score) as max FROM node_metrics'
-        ).get() as any;
+        ).get() as AvgMaxRow | undefined;
         const edges = this.db.prepare(
             'SELECT COUNT(*) as cnt FROM memory_edges WHERE weight > 1.0'
-        ).get() as any;
+        ).get() as CountRow | undefined;
         const state = this.db.prepare(
             "SELECT * FROM feedback_state WHERE id = 'main'"
-        ).get() as any;
+        ).get() as FeedbackStateRow | undefined;
 
         const classMap: Record<string, number> = {};
         for (const row of byClass) { classMap[row.memory_class] = row.cnt; }
@@ -787,16 +825,16 @@ export class AttentionFeedback {
         // Concentration index
         const top3 = this.db.prepare(
             'SELECT usage_count FROM node_metrics ORDER BY usage_count DESC LIMIT 3'
-        ).all() as any[];
-        const totalUsage = total?.cnt > 0
-            ? (this.db.prepare('SELECT SUM(usage_count) as s FROM node_metrics').get() as any)?.s || 0
+        ).all() as UsageRow[];
+        const totalUsage = (total?.cnt ?? 0) > 0
+            ? (this.db.prepare('SELECT SUM(usage_count) as s FROM node_metrics').get() as SumRow | undefined)?.s ?? 0
             : 0;
-        const top3Usage = top3.reduce((s: number, r: any) => s + (r.usage_count || 0), 0);
+        const top3Usage = top3.reduce((s: number, r: UsageRow) => s + (r.usage_count || 0), 0);
         const concentrationIndex = totalUsage > 0 ? top3Usage / totalUsage : 0;
 
         // Edge density
-        const nodeCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM memory_nodes WHERE type != "legacy_container"').get() as any)?.cnt || 0;
-        const edgeCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM memory_edges').get() as any)?.cnt || 0;
+        const nodeCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM memory_nodes WHERE type != "legacy_container"').get() as CountRow | undefined)?.cnt ?? 0;
+        const edgeCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM memory_edges').get() as CountRow | undefined)?.cnt ?? 0;
         const edgeDensity = nodeCount > 0 ? edgeCount / nodeCount : 0;
 
         return {
@@ -823,11 +861,11 @@ export class AttentionFeedback {
             WHERE mn.type != 'legacy_container'
             ORDER BY nm.reinforcement_score DESC
             LIMIT ?
-        `).all(limit) as any[];
+        `).all(limit) as TopNodeRow[];
     }
 
     getNodeMetrics(nodeId: string): NodeMetrics | null {
-        return this.db.prepare('SELECT * FROM node_metrics WHERE node_id = ?').get(nodeId) as any;
+        return this.db.prepare('SELECT * FROM node_metrics WHERE node_id = ?').get(nodeId) as NodeMetrics | null;
     }
 
     // ── Time Helpers ────────────────────────────────────────

@@ -15,18 +15,25 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
 import { normalizeFromRaw, extractText } from './ResponseAdapter';
+import type { ParsedLLMResponse } from './ContentExtractor';
 import { AuthorizationManager } from './AuthorizationManager';
 import { ResponseOption } from '../channels/ChannelAdapter';
 import { ProtocolParser } from './ProtocolParser';
 import { createLogger } from '../shared/AppLogger';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
-import { traceManager } from '../core/ExecutionTrace';
+import { traceManager, ExecutionTrace } from '../core/ExecutionTrace';
 import { AgentFSM, AgentFSMEvent } from './AgentFSM';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { SkillLoader } from '../skills/SkillLoader';
+import { ModelProfile } from './ModelRouter';
 import { errorMessage } from '../shared/errors';
 const log = createLogger('Agentloop');
+
+/** Duck-type para ferramentas que suportam injeção de contexto de canal */
+interface ContextAwareTool {
+    setContext(chatId: string, botToken: string, channel?: string): void;
+}
 
 export interface ToolResult {
     success: boolean;
@@ -37,8 +44,8 @@ export interface ToolResult {
 export interface ToolExecutor {
     name: string;
     description: string;
-    parameters: Record<string, any>;
-    execute(args: Record<string, any>): Promise<ToolResult>;
+    parameters: Record<string, unknown>;
+    execute(args: Record<string, unknown>): Promise<ToolResult>;
 }
 
 export interface LoopMetrics {
@@ -60,7 +67,7 @@ export interface ChannelContext {
     chatId: string;
     botToken?: string;
     userId?: string;
-    metadata?: any;
+    metadata?: Record<string, unknown>;
     correlationId?: string;
 }
 
@@ -200,7 +207,7 @@ export class AgentLoop {
         this.memory = memory;
         this.skillLearner = skillLearner as SkillLearner;
         this.skillLoader = skillLoader as SkillLoader;
-        this.modelRouter = new ModelRouter(config.modelRouter as any, providerFactory);
+        this.modelRouter = new ModelRouter(config.modelRouter, providerFactory);
         this.intentRouter = new UnifiedIntentRouter();
         this.stateManager = new AgentStateManager(memory);
         this.protocolParser = new ProtocolParser();
@@ -209,7 +216,7 @@ export class AgentLoop {
         this.decisionMemory = decisionMemory as DecisionMemory;
     }
 
-    private isAuthorized(conversationId: string, toolName: string, args: any): boolean {
+    private isAuthorized(conversationId: string, toolName: string, args: Record<string, unknown>): boolean {
         const pending = this.authManager.getPending(conversationId);
         if (pending && this.authManager.isMatch(pending, toolName, args)) {
             this.authManager.removePending(conversationId);
@@ -375,7 +382,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         return this.runWithTools(conversationId, userText, 0, userId, context);
     }
 
-    private parseLLMResponse(content: string): any | null {
+    private parseLLMResponse(content: string): ParsedLLMResponse | null {
         if (!content) return null;
         
         const clean = sanitizeContent(content);
@@ -405,7 +412,7 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
         return null;
     }
 
-    private extractFinalText(response: LLMResult, _atomicData: any): string {
+    private extractFinalText(response: LLMResult, _atomicData: unknown): string {
         const normalized = normalizeFromRaw(response.content || '', (c) => this.parseLLMResponse(c));
 
         if (normalized.type !== 'empty' && normalized.content && normalized.content.trim().length > 0) {
@@ -524,10 +531,10 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                     log.info(`[${this.ts()}] [AUTH] Executing approved tool: ${pending.toolName}`);
                     move('TOOL_REQUESTED', { step: 0, tool: pending.toolName, mode: 'auth_resume' });
                     
-                    if (typeof (tool as any).setContext === 'function' && channelContext) {
-                        (tool as any).setContext(
-                            channelContext.chatId || '', 
-                            channelContext.botToken || '', 
+                    if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
+                        (tool as unknown as ContextAwareTool).setContext(
+                            channelContext.chatId || '',
+                            channelContext.botToken || '',
                             channelContext.channel
                         );
                     }
@@ -758,10 +765,10 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                 if (tool) {
                     move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'json_action' });
                     // Inject channel context for tools that need it
-                    if (typeof (tool as any).setContext === 'function' && channelContext) {
-                        (tool as any).setContext(
-                            channelContext.chatId || '', 
-                            channelContext.botToken || '', 
+                    if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
+                        (tool as unknown as ContextAwareTool).setContext(
+                            channelContext.chatId || '',
+                            channelContext.botToken || '',
                             channelContext.channel
                         );
                     }
@@ -907,7 +914,7 @@ Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específic
     /**
      * Persist trace into SQLite agent_traces table via MemoryManager
      */
-    private persistTrace(trace: any, step: number, status: string, finalResponse: string, _context?: ChannelContext): void {
+    private persistTrace(trace: ExecutionTrace, step: number, status: string, finalResponse: string, _context?: ChannelContext): void {
         try {
             const lastStep = trace.steps[trace.steps.length - 1];
             this.memory.saveTrace({
@@ -977,7 +984,7 @@ Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específic
         return sorted[Math.max(0, idx)];
     }
 
-    private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: any): Promise<LLMResult> {
+    private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: ModelProfile): Promise<LLMResult> {
         // Dynamic timeout with clamp
         const MIN_TIMEOUT = 45000;       // 45s min
         const MAX_TIMEOUT = 420000;      // 7 min (teto absoluto para contextos gigantes)

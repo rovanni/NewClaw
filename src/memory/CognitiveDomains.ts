@@ -64,7 +64,7 @@ export type CognitiveDomain = keyof typeof COGNITIVE_DOMAINS;
 export function isTypeValidForDomain(type: string, domain: CognitiveDomain): boolean {
     const domainDef = COGNITIVE_DOMAINS[domain];
     if (!domainDef) return false;
-    return domainDef.allowedTypes.includes(type as any);
+    return domainDef.allowedTypes.includes(type);
 }
 
 /**

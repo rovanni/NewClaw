@@ -11,6 +11,26 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 const log = createLogger('Skilllearner');
 
+/** Row da tabela skill_patterns */
+interface PatternRow {
+    pattern: string;
+    tool_name: string;
+    success_count: number;
+    fail_count: number;
+    avg_latency_ms: number;
+    last_seen?: string;
+}
+
+/** Formato de retorno do getPatternStats() */
+export interface PatternStatRow {
+    pattern: string;
+    tool_name: string;
+    success_count: number;
+    fail_count: number;
+    avg_latency_ms: number;
+}
+
+
 export interface Skill {
     id: string;
     name: string;
@@ -117,7 +137,7 @@ export class SkillLearner {
         try {
             const existing = this.db.prepare(
                 'SELECT * FROM skill_patterns WHERE pattern = ? AND tool_name = ?'
-            ).get(pattern, toolName) as any;
+            ).get(pattern, toolName) as PatternRow | undefined;
 
             if (existing) {
                 const newSuccess = existing.success_count + (success ? 1 : 0);
@@ -241,10 +261,10 @@ export class SkillLearner {
         ).all() as Skill[];
     }
 
-    getPatternStats(): any[] {
+    getPatternStats(): PatternStatRow[] {
         return this.db.prepare(
             'SELECT pattern, tool_name, success_count, fail_count, avg_latency_ms FROM skill_patterns WHERE success_count >= 2 ORDER BY success_count DESC'
-        ).all();
+        ).all() as PatternStatRow[];
     }
 
     approveSkill(id: string): boolean {
@@ -387,7 +407,7 @@ export class SkillLearner {
                AND (success_count * 1.0 / (success_count + fail_count)) >= 0.8
                AND (success_count + fail_count) >= 3
              ORDER BY success_count DESC, fail_count ASC, avg_latency_ms ASC`
-        ).all() as any[];
+        ).all() as PatternRow[];
 
         for (const item of patterns) {
             const alreadyExists = this.db.prepare(
@@ -499,8 +519,8 @@ export class SkillLearner {
     /**
      * Observe a meta-event or state change in the system.
      */
-    observe(event: string, metadata?: any): void {
-        log.info(`Observed event: ${event}`, metadata || '');
+    observe(event: string, metadata?: Record<string, unknown>): void {
+        log.info(`Observed event: ${event}${metadata ? ` ${JSON.stringify(metadata)}` : ''}`);
         this.db.prepare(
             'INSERT INTO skill_patterns (pattern, tool_name, success_count, fail_count, avg_latency_ms, last_seen) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(pattern, tool_name) DO UPDATE SET last_seen = CURRENT_TIMESTAMP, success_count = success_count + 1'
         ).run(`event:${event}`, 'system', 1, 0, 0);

@@ -392,7 +392,7 @@ export class OllamaProvider implements ILLMProvider {
     }
 
     /** Classification call — high priority to avoid blocking the cognitive loop */
-    async classify(messages: LLMMessage[], timeoutMs: number = 30000): Promise<LLMResponse> {
+    async classify(messages: LLMMessage[], timeoutMs: number = 60000): Promise<LLMResponse> {
         return await taskQueue.add(
             () => this._consumeStream(messages, undefined, timeoutMs),
             { priority: TaskPriority.CLASSIFICATION }
@@ -428,7 +428,7 @@ export class OllamaProvider implements ILLMProvider {
         const controller = new AbortController();
 
         // Timeout architecture: 3 separate timers
-        const CONNECTION_TIMEOUT = 90_000;  // Time to first byte (increased from 30s)
+        const CONNECTION_TIMEOUT = 120_000; // Time to first byte (increased from 90s)
         const ACTIVITY_TIMEOUT = 120_000;   // Time since last activity of ANY type
         const MAX_TIMEOUT = customTimeoutMs || 300_000;  // Hard ceiling
 

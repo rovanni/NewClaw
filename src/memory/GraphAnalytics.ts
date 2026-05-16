@@ -36,12 +36,12 @@ export class GraphAnalytics {
 
     async updateMetrics(): Promise<void> {
         try {
-            const db = (this.mm as any).db;
+            const db = this.mm.getDatabase();
             if (!db) throw new Error('Database not initialized');
 
             // 1. Fetch current snapshot of Nodes and Edges
-            const nodes: Array<{ id: string }> = await this.withRetry(() => db.prepare('SELECT id FROM memory_nodes').all());
-            const edges: Array<{ from_node: string; to_node: string; weight: number }> = await this.withRetry(() => db.prepare('SELECT from_node, to_node, weight FROM memory_edges').all());
+            const nodes = await this.withRetry(() => db.prepare('SELECT id FROM memory_nodes').all()) as Array<{ id: string }>;
+            const edges = await this.withRetry(() => db.prepare('SELECT from_node, to_node, weight FROM memory_edges').all()) as Array<{ from_node: string; to_node: string; weight: number }>;
 
             if (nodes.length === 0) return;
 
@@ -235,14 +235,14 @@ export class GraphAnalytics {
      */
     async detectCommunities(): Promise<{ communityCount: number; updated: number }> {
         try {
-            const db = (this.mm as any).db;
+            const db = this.mm.getDatabase();
             if (!db) throw new Error('Database not initialized');
 
             // Add community_id column if not exists
             try { db.exec('ALTER TABLE memory_nodes ADD COLUMN community_id INTEGER DEFAULT 0'); } catch { /* exists */ }
 
-            const nodes: Array<{ id: string }> = db.prepare('SELECT id FROM memory_nodes').all();
-            const edges: Array<{ from_node: string; to_node: string; weight: number }> = db.prepare('SELECT from_node, to_node, weight FROM memory_edges').all();
+            const nodes = db.prepare('SELECT id FROM memory_nodes').all() as Array<{ id: string }>;
+            const edges = db.prepare('SELECT from_node, to_node, weight FROM memory_edges').all() as Array<{ from_node: string; to_node: string; weight: number }>;
 
             if (nodes.length === 0) return { communityCount: 0, updated: 0 };
 

@@ -47,7 +47,7 @@ export class EmbeddingService {
                 body: JSON.stringify({ model: this.model, prompt: text })
             });
             if (!res.ok) return null;
-            const data = await res.json() as any;
+            const data = await res.json() as { embedding?: number[] };
             return data.embedding || null;
         } catch {
             return null;
@@ -138,8 +138,8 @@ export class EmbeddingService {
         try {
             const res = await fetch(`${this.ollamaUrl}/api/tags`);
             if (!res.ok) return false;
-            const data = await res.json() as any;
-            return (data.models || []).some((m: any) => m.name.includes(this.model.split(':')[0]));
+            const data = await res.json() as { models?: Array<{ name: string }> };
+            return (data.models || []).some(m => m.name.includes(this.model.split(':')[0]));
         } catch {
             return false;
         }
