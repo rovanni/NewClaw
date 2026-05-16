@@ -1,6 +1,6 @@
 /**
  * AgentController — Facade principal do NewClaw
- * 
+ *
  * Orquestra: ChannelAdapter → MessageBus → AgentLoop → ChannelAdapter
  * Arquitetura multi-canal: Telegram ✅, Discord 🟡, Web
  */
@@ -39,14 +39,11 @@ import { SessionLearner } from '../session/SessionLearner';
 import { MemoryGovernor } from '../memory/MemoryGovernor';
 import { createLogger } from '../shared/AppLogger';
 import { MessageBus } from '../channels/MessageBus';
-import type { NormalizedMessage, ChannelAttachment } from '../channels/ChannelAdapter';
 import { TelegramAdapter } from '../channels/TelegramAdapter';
 import { DiscordAdapter } from '../channels/DiscordAdapter';
 import { WhatsAppAdapter } from '../channels/WhatsAppAdapter';
 import { SignalAdapter } from '../channels/SignalAdapter';
 import { AuditorService } from '../services/auditor/AuditorService';
-import { registerAuditCommand } from '../services/auditor/auditCommand';
-// New core modules
 import { eventBus, EventTypes, type AppEvent } from './EventBus';
 import { circuitRegistry } from './CircuitBreaker';
 import { toolExecutor } from './ToolExecutor';
@@ -56,57 +53,18 @@ import { SessionAutoCleaner } from '../session/SessionAutoCleaner';
 import { MemoryCurator } from '../memory/MemoryCurator';
 import { LifecycleManager } from './LifecycleManager';
 import { getEventLoopMonitor } from '../shared/EventLoopMonitor';
-const log = createLogger('AgentController');
+import type { NewClawConfig } from './agentControllerTypes';
+import { openDatabase, buildLanguageDirective, buildSystemPrompt } from './agentControllerSetup';
+import { registerCommands } from './agentControllerCommands';
+import {
+    transcribeAttachment,
+    handleDocumentAttachment,
+    handlePhotoAttachment,
+} from './agentMediaHandlers';
 
-export interface NewClawConfig {
-    telegramBotToken: string;
-    telegramAllowedUserIds: string[];
-    /** Discord bot token (optional) */
-    discordBotToken?: string;
-    /** Discord allowed guild IDs (optional) */
-    discordAllowedGuildIds?: string[];
-    /** Discord allowed user IDs (optional) */
-    discordAllowedUserIds?: string[];
-    /** WhatsApp phone number (optional) */
-    whatsappPhoneNumber?: string;
-    /** WhatsApp allowed JIDs (optional) */
-    whatsappAllowedJids?: string[];
-    /** WhatsApp auth directory */
-    whatsappAuthDir?: string;
-    /** Signal phone number (optional) */
-    signalPhoneNumber?: string;
-    /** Signal allowed numbers (optional) */
-    signalAllowedNumbers?: string[];
-    /** Signal CLI path */
-    signalCliPath?: string;
-    language: string;
-    defaultProvider: string;
-    geminiApiKey?: string;
-    deepseekApiKey?: string;
-    groqApiKey?: string;
-    openrouterApiKey?: string;
-    ollamaUrl?: string;
-    ollamaModel?: string;
-    ollamaApiKey?: string;
-    maxIterations: number;
-    memoryWindowSize: number;
-    skillsDir: string;
-    tmpDir: string;
-    whisperPath: string;
-    dashboardPort?: number;
-    systemPrompt?: string;
-    modelRouter?: {
-        chat?: string;
-        code?: string;
-        vision?: string;
-        light?: string;
-        analysis?: string;
-        execution?: string;
-        visionServer?: string;
-        classifierModel?: string;
-        classifierServer?: string;
-    };
-}
+export type { NewClawConfig };
+
+const log = createLogger('AgentController');
 
 export class AgentController {
     private config: NewClawConfig;
@@ -115,17 +73,6 @@ export class AgentController {
     private memory: MemoryManager;
     private memoryFacade: MemoryFacade;
     private lifecycle = new LifecycleManager();
-    public getMemory(): MemoryManager {
-        return this.memory;
-    }
-
-    public getDatabase(): Database.Database {
-        return this.db;
-    }
-
-    public getProviderFactory(): ProviderFactory { return this.providerFactory; }
-    public getMemoryGovernor(): MemoryGovernor { return this.memoryGovernor; }
-    public getSessionLearner(): SessionLearner { return this.sessionLearner; }
     private skillLoader: SkillLoader;
     private skillLearner: SkillLearner;
     private onboardingService: OnboardingService;
@@ -134,7 +81,6 @@ export class AgentController {
     private memoryGovernor: MemoryGovernor;
     private scheduler: SchedulerService;
     private messageBus: MessageBus;
-    // Typed as the singleton instances — inferred to avoid TS4094 with non-exported class internals
     private _eventBus = eventBus;
     private circuitBreakers = circuitRegistry;
     private auditor!: AuditorService;
@@ -147,19 +93,17 @@ export class AgentController {
     private whatsAppAdapter: WhatsAppAdapter | null = null;
     private signalAdapter: SignalAdapter | null = null;
 
-    /** Get the MessageBus */
+    public getMemory(): MemoryManager { return this.memory; }
+    public getDatabase(): Database.Database { return this.db; }
+    public getProviderFactory(): ProviderFactory { return this.providerFactory; }
+    public getMemoryGovernor(): MemoryGovernor { return this.memoryGovernor; }
+    public getSessionLearner(): SessionLearner { return this.sessionLearner; }
     public getMessageBus(): MessageBus { return this.messageBus; }
-    /** Get the EventBus */
     public getEventBus() { return this._eventBus; }
-    /** Get the CircuitBreakerManager */
     public getCircuitBreakers() { return this.circuitBreakers; }
-    /** Get the TelegramAdapter */
     public getTelegramAdapter(): TelegramAdapter { return this.telegramAdapter; }
-    /** Get the DiscordAdapter (if enabled) */
     public getDiscordAdapter(): DiscordAdapter | null { return this.discordAdapter; }
-    /** Get the WhatsAppAdapter (if enabled) */
     public getWhatsAppAdapter(): WhatsAppAdapter | null { return this.whatsAppAdapter; }
-    /** Get the SignalAdapter (if enabled) */
     public getSignalAdapter(): SignalAdapter | null { return this.signalAdapter; }
     public getConfidenceClassifier(): ConfidenceClassifier { return this.confidenceClassifier; }
     public getSessionAutoCleaner(): SessionAutoCleaner { return this.sessionAutoCleaner; }
@@ -171,23 +115,10 @@ export class AgentController {
     constructor(config: NewClawConfig) {
         this.config = config;
 
-        // Inicializar EventBus e CircuitBreaker (camada de infraestrutura)
-        // Reusing singleton references (already assigned as field initializers)
-        // this._eventBus = eventBus;
-        // this.circuitBreakers = circuitRegistry;
-        
-        // Setup SQLite Database connection directly
         const dbPath = './data/newclaw.db';
-        const fs = require('fs');
-        const path = require('path');
-        const Database = require('better-sqlite3');
-        const dir = path.dirname(dbPath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        const db = new Database(dbPath);
-        db.pragma('journal_mode = DELETE');
-        this.db = db; // Store in class property
-        
-        this.memory = new MemoryManager(db);
+        this.db = openDatabase(dbPath);
+
+        this.memory = new MemoryManager(this.db);
         this.memoryFacade = this.memory.getFacade();
         this.providerFactory = new ProviderFactory({
             geminiKey: config.geminiApiKey,
@@ -199,42 +130,33 @@ export class AgentController {
             ollamaApiKey: config.ollamaApiKey,
             defaultProvider: config.defaultProvider
         });
-        
-        // Pass db directly to services instead of this.memory to avoid getDatabase()
+
         this.skillLoader = new SkillLoader(config.skillsDir);
-        this.skillLearner = new SkillLearner(db);
+        this.skillLearner = new SkillLearner(this.db);
 
-        // Construir system prompt
-        const languageDirective = this.buildLanguageDirective(config.language);
-        const systemPrompt = config.systemPrompt || this.buildSystemPrompt();
+        const languageDirective = buildLanguageDirective(config.language);
+        const systemPrompt = config.systemPrompt || buildSystemPrompt(this.skillLoader);
 
-        const classificationMemory = new ClassificationMemory(db);
-        const decisionMemory = new DecisionMemory(db);
+        const classificationMemory = new ClassificationMemory(this.db);
+        const decisionMemory = new DecisionMemory(this.db);
 
-        // Inicializar AgentLoop
         this.agentLoop = new AgentLoop(
             this.providerFactory,
             this.memory,
-            {
-                languageDirective,
-                systemPrompt,
-                modelRouter: config.modelRouter
-            },
+            { languageDirective, systemPrompt, modelRouter: config.modelRouter },
             this.skillLearner,
             this.skillLoader,
             classificationMemory,
             decisionMemory
         );
 
-        // Inicializar onboarding
         this.onboardingService = new OnboardingService(
-            db,
+            this.db,
             this.skillLearner,
             this.providerFactory,
             this.agentLoop.getStateManager()
         );
 
-        // Inicializar SessionManager
         this.sessionManager = new SessionManager(
             { transcriptDir: './data/sessions' },
             this.memory,
@@ -244,13 +166,10 @@ export class AgentController {
         const sessionContext = new SessionContext(this.sessionManager, this.memory);
         this.agentLoop.setSessionContext(sessionContext);
 
-        // Inicializar SessionLearner
         this.sessionLearner = new SessionLearner(this.sessionManager, this.memory);
 
-        // Inicializar Scheduler
-        this.scheduler = new SchedulerService(dbPath, db);
+        this.scheduler = new SchedulerService(dbPath, this.db);
 
-        // Inicializar MemoryGovernor
         this.memoryGovernor = new MemoryGovernor(this.memory, {
             decayFactor: 0.98,
             minConfidence: 0.3,
@@ -263,12 +182,8 @@ export class AgentController {
             archiveEnabled: true
         });
 
-        // ─── MessageBus + Adapters ────────────────────────────
-
-        // MessageBus is the central pipeline
         this.messageBus = new MessageBus(this.agentLoop, this.sessionManager);
 
-        // AuditorService — self-diagnosis engine
         this.auditor = new AuditorService({
             ollamaUrl: config.ollamaUrl || 'http://localhost:11434',
             model: config.ollamaModel || 'glm-5.1:cloud',
@@ -278,14 +193,10 @@ export class AgentController {
             ownerChatId: config.telegramAllowedUserIds[0] || '',
             maxFindingsPerCategory: 20,
             enableAutoFix: true,
-        }, db);
+        }, this.db);
 
-        // Register commands on the MessageBus
-        this.registerCommands();
+        registerCommands(this.messageBus, this.memory, this.memoryFacade, this.sessionManager, this.auditor, this.config);
 
-        // ─── New Core Modules ────────────────────────────────────────
-
-        // EventBus: log all events for observability
         eventBus.on('circuit:open', (data) => {
             log.warn(`[CircuitBreaker] ${data.name} OPEN — ${data.failures}/${data.threshold} failures`);
         });
@@ -299,22 +210,17 @@ export class AgentController {
             log.warn(`[ToolExecutor] ${data.tool} failed: ${data.error}`);
         });
 
-        // ConfidenceClassifier
         this.confidenceClassifier = new ConfidenceClassifier();
 
-        // PromptRegistry: load prompts from YAML files
         promptRegistry.load();
         log.info(`   PromptRegistry: ${JSON.stringify(promptRegistry.getStats())}`);
 
-        // SessionAutoCleaner: automatic JSONL compaction
         this.sessionAutoCleaner = new SessionAutoCleaner(this.sessionManager, {
             transcriptDir: './data/sessions',
         });
 
-        // MemoryCurator: automatic graph cleanup and analytics
         this.memoryCurator = new MemoryCurator(this.memory);
 
-        // Telegram adapter (primary)
         this.telegramAdapter = new TelegramAdapter({
             enabled: true,
             botToken: config.telegramBotToken,
@@ -324,21 +230,18 @@ export class AgentController {
         this.telegramAdapter.setBus(this.messageBus);
         this.messageBus.registerAdapter(this.telegramAdapter);
 
-        // Register voice/audio media handlers — transcribe via Whisper API
-        this.messageBus.registerMediaHandler('voice', async (msg, attachment) => {
-            return this.transcribeAttachment(msg, attachment);
-        });
-        this.messageBus.registerMediaHandler('audio', async (msg, attachment) => {
-            return this.transcribeAttachment(msg, attachment);
-        });
-        this.messageBus.registerMediaHandler('document', async (msg, attachment) => {
-            return this.handleDocumentAttachment(msg, attachment);
-        });
+        const { tmpDir } = config;
+        this.messageBus.registerMediaHandler('voice', async (msg, attachment) =>
+            transcribeAttachment(msg, attachment, this.messageBus, tmpDir));
+        this.messageBus.registerMediaHandler('audio', async (msg, attachment) =>
+            transcribeAttachment(msg, attachment, this.messageBus, tmpDir));
+        this.messageBus.registerMediaHandler('document', async (msg, attachment) =>
+            handleDocumentAttachment(msg, attachment, this.messageBus));
         this.messageBus.registerMediaHandler('photo', async (msg, attachment) => {
-            return this.handlePhotoAttachment(msg, attachment);
+            const profile = this.agentLoop.getModelRouter().getProfileByCategory('vision');
+            return handlePhotoAttachment(msg, attachment, this.messageBus, profile ?? null);
         });
 
-        // Discord adapter (optional)
         if (config.discordBotToken) {
             this.discordAdapter = new DiscordAdapter({
                 enabled: true,
@@ -351,7 +254,6 @@ export class AgentController {
             log.info('Discord adapter registered');
         }
 
-        // WhatsApp adapter (optional)
         if (config.whatsappPhoneNumber) {
             this.whatsAppAdapter = new WhatsAppAdapter({
                 enabled: true,
@@ -364,7 +266,6 @@ export class AgentController {
             log.info('WhatsApp adapter registered');
         }
 
-        // Signal adapter (optional)
         if (config.signalPhoneNumber) {
             this.signalAdapter = new SignalAdapter({
                 enabled: true,
@@ -377,7 +278,6 @@ export class AgentController {
             log.info('Signal adapter registered');
         }
 
-        // ── Scheduler via EventBus (desacoplado de qualquer adapter) ──
         this.scheduler.setTriggerHandler(async (task) => {
             try {
                 const chatId = task.chat_id;
@@ -393,8 +293,6 @@ export class AgentController {
                     prompt = `[AGENDADO] ${params.message || task.label}`;
                 }
                 log.info(`[Scheduler] Triggering task #${task.id}: ${task.label} → chat ${chatId}`);
-
-                // Emit event via EventBus — any adapter can listen
                 this._eventBus.emitAppEvent({
                     type: EventTypes.SCHEDULER_TRIGGER,
                     payload: { chatId, prompt, taskId: task.id, actionType: task.action_type, label: task.label },
@@ -411,7 +309,6 @@ export class AgentController {
             }
         });
 
-        // ── EventBus: scheduler triggers → AgentLoop → response to chat ──
         this._eventBus.onAny(async (event: AppEvent) => {
             if (event.type !== EventTypes.SCHEDULER_TRIGGER) return;
             try {
@@ -420,7 +317,6 @@ export class AgentController {
                 };
                 log.info(`[EVENTBUS] Processing scheduler.trigger #${taskId} → chat ${chatId}`);
                 const result = await this.agentLoop.process(chatId, prompt);
-                // Send via the primary adapter (Telegram for now)
                 await this.telegramAdapter.sendToChat(chatId, {
                     text: typeof result === 'string' ? result : result.text,
                     format: 'markdown',
@@ -436,8 +332,8 @@ export class AgentController {
                 log.error(`[EVENTBUS] scheduler.trigger handler failed:`, e);
             }
         });
-        this.lifecycle.registerTimeout('scheduler.startAll', () => this.scheduler.startAll(), 5000);
 
+        this.lifecycle.registerTimeout('scheduler.startAll', () => this.scheduler.startAll(), 5000);
         this.lifecycle.registerService('memory', () => this.memory.close());
         this.lifecycle.registerService('memoryCurator', () => this.memoryCurator.stopAutoCurate());
         this.lifecycle.registerService('sessions', () => this.sessionManager.closeAll());
@@ -446,13 +342,9 @@ export class AgentController {
         this.lifecycle.registerService('messageBus', () => this.messageBus.stopAll());
         this.lifecycle.registerService('eventLoopMonitor', () => getEventLoopMonitor().stop());
 
-        // Registrar skills/tools
         this.registerSkills();
     }
 
-    /**
-     * Inicia o NewClaw
-     */
     async start(): Promise<void> {
         log.info('🚀 NewClaw starting...');
         log.info(`   Provider: ${this.providerFactory.getDefaultProvider()}`);
@@ -460,13 +352,11 @@ export class AgentController {
         log.info(`   Language: ${this.config.language}`);
         log.info(`   Skills: ${this.skillLoader.getSkillNames().join(', ') || 'none'}`);
 
-        // Channels status
         const channels = this.messageBus.listAdapters();
         for (const ch of channels) {
             log.info(`   Channel: ${ch.name} (${ch.connected ? 'connected' : 'not connected'})`);
         }
 
-        // Run governance cycle on boot
         try {
             const stats = this.memoryGovernor.runGovernanceCycle();
             log.info(`Boot cycle: ${stats.nodesDecayed} decayed, ${stats.conflictsDetected} conflicts, ${stats.nodesGarbageCollected} GC'd`);
@@ -474,7 +364,6 @@ export class AgentController {
             log.warn('Boot cycle failed:', (err as Error).message);
         }
 
-        // Schedule governance cycle every 24 hours
         this.lifecycle.registerInterval('memory.governance.daily', () => {
             try {
                 const stats = this.memoryGovernor.runGovernanceCycle();
@@ -484,39 +373,28 @@ export class AgentController {
             }
         }, 24 * 60 * 60 * 1000);
 
-        // Start all channel adapters via MessageBus
         await this.messageBus.startAll();
 
-        // ── Stability: Periodic Cleanup ──
         this.lifecycle.registerInterval('sessions.cleanup', async () => {
             try {
-                // Cleanup inactive sessions from memory (TTL: 15 minutes)
                 await this.sessionManager.cleanupInactiveSessions(900_000);
             } catch (e) {
                 log.error('periodic_cleanup_failed', e);
             }
-        }, 300_000); // Check every 5 minutes
+        }, 300_000);
 
-        // ── Session Auto Cleaner: JSONL compaction ──
         this.sessionAutoCleaner.start();
-
-        // ── Memory Curator: Graph analytics and cleanup ──
         this.memoryCurator.startAutoCurate();
 
-        // ── Prompt Hot-Reload: check for changes every 5 minutes ──
-        // Registrado no LifecycleManager para clearInterval automático no shutdown.
         this.lifecycle.registerInterval('promptHotReload', () => {
             promptRegistry.reloadIfChanged();
         }, 5 * 60_000);
 
-        // ── Circuit Breaker: periodic status log ──
         this.lifecycle.registerInterval('circuitBreakerMonitor', () => {
             const states = circuitRegistry.getAllMetrics();
-            if (states.length > 0) {
-                for (const cb of states) {
-                    if (cb.state !== 'closed') {
-                        log.warn(`[CircuitBreaker] ${cb.providerName} state=${cb.state} failures=${cb.totalFailures}`);
-                    }
+            for (const cb of states) {
+                if (cb.state !== 'closed') {
+                    log.warn(`[CircuitBreaker] ${cb.providerName} state=${cb.state} failures=${cb.totalFailures}`);
                 }
             }
         }, 60_000);
@@ -530,22 +408,13 @@ export class AgentController {
         log.info('NewClaw stopped');
     }
 
-    /**
-     * Handle web dashboard messages
-     */
     async handleWebMessage(sessionId: string, message: string): Promise<string> {
         try {
-            // Para o Dashboard Web (que é local/pessoal), usamos um ID de usuário fixo para o Onboarding.
-            // Isso evita que ele peça seu nome a cada nova conversa (sessionId), 
-            // mas mantém os históricos de chat separados.
             const webUserId = 'web-dashboard-user';
-
             if (this.onboardingService.isOnboardingRequired(webUserId)) {
                 const res = await this.onboardingService.handle(webUserId, message);
                 return res.response;
             }
-
-            // O processamento real continua usando o sessionId para manter o histórico isolado
             const result = await this.agentLoop.process(sessionId, message);
             return typeof result === 'string' ? result : result.text;
         } catch (err) {
@@ -554,86 +423,7 @@ export class AgentController {
         }
     }
 
-    /**
-     * Register command handlers on the MessageBus
-     */
-    private registerCommands(): void {
-        // /clear — limpar contexto
-        this.messageBus.registerCommand('/clear', async (msg) => {
-            this.memory.createNewConversation(msg.userId);
-            const sessionKey = { channel: msg.channel, userId: msg.userId };
-            await this.sessionManager.closeSession(sessionKey);
-            return '🧹 Sessão limpa! Contexto anterior comprimido. Nova sessão iniciada.';
-        });
-
-        // /skills — listar skills
-        this.messageBus.registerCommand('/skills', async (_msg) => {
-            try {
-                const skills = this.memoryFacade.listAutoSkills(10);
-
-                if (skills.length === 0) return 'Nenhuma skill automática cadastrada ainda.';
-
-                const lines = skills.map(skill => {
-                    const shortId = skill.id.slice(-8);
-                    const status = skill.status === 'proposed' ? 'PROPOSED' : skill.status === 'active' ? 'ACTIVE' : 'REJECTED';
-                    return `• **${skill.name}** [${status}]\n  id: \`${shortId}\` | origem: ${skill.source_pattern || 'manual'} → ${skill.source_tool || '—'} | pri: ${skill.priority}`;
-                });
-
-                return `🧠 **SkillLearner**\n\n${lines.join('\n\n')}\n\nAções:\n\`/skill_approve <id>\` / \`/skill_reject <id>\``;
-            } catch (e) {
-                return `⚠️ Erro ao listar skills: ${errorMessage(e)}`;
-            }
-        });
-
-        // /skill_approve
-        this.messageBus.registerCommand('/skill_approve', async (msg) => {
-            const parts = msg.text.trim().split(/\s+/);
-            const rawId = parts[1];
-            if (!rawId) return 'Use /skill_approve <id_curto>. Veja os IDs com /skills';
-
-            try {
-                const match = this.memoryFacade.findAutoSkillIdBySuffix(rawId);
-                if (!match) return `Skill com ID curto "${rawId}" não encontrada.`;
-
-                this.memoryFacade.setAutoSkillStatus(match, 'active');
-                return `✅ Skill aprovada: ${match}`;
-            } catch (e) {
-                return `⚠️ Erro: ${errorMessage(e)}`;
-            }
-        });
-
-        // /skill_reject
-        this.messageBus.registerCommand('/skill_reject', async (msg) => {
-            const parts = msg.text.trim().split(/\s+/);
-            const rawId = parts[1];
-            if (!rawId) return 'Use /skill_reject <id_curto>. Veja os IDs com /skills';
-
-            try {
-                const match = this.memoryFacade.findAutoSkillIdBySuffix(rawId);
-                if (!match) return `Skill com ID curto "${rawId}" não encontrada.`;
-
-                this.memoryFacade.setAutoSkillStatus(match, 'rejected');
-                return `❌ Skill rejeitada: ${match}`;
-            } catch (e) {
-                return `⚠️ Erro: ${errorMessage(e)}`;
-            }
-        });
-
-        // /audit — owner-only self-diagnosis (multi-channel)
-        const ownerIds = [
-            ...this.config.telegramAllowedUserIds,
-            ...this.config.discordAllowedUserIds || [],
-            ...this.config.whatsappAllowedJids || [],
-            ...this.config.signalAllowedNumbers || [],
-        ];
-        registerAuditCommand(this.messageBus, this.auditor, ownerIds);
-    }
-
-    /**
-     * Registra tools no AgentLoop
-     */
     private registerSkills(): void {
-
         ToolRegistry.register(new ExecCommandTool(), { dangerous: true });
         ToolRegistry.register(new WebSearchTool());
         ToolRegistry.register(new WebNavigateTool());
@@ -655,365 +445,5 @@ export class AgentController {
         }
 
         log.info(`   Tools: ${ToolRegistry.getStatus().map(t => `${t.name}${t.dangerous ? '⚠️' : ''}${t.enabled ? '' : '❌'}`).join(', ')}`);
-    }
-
-    /**
-     * Constroi diretiva de idioma
-     */
-    private buildLanguageDirective(lang: string): string {
-        const languages: Record<string, string> = {
-            'pt-BR': 'Você DEVE responder SEMPRE em português brasileiro (pt-BR). QUANDO usar ferramentas, TRADUZA todo o resultado para pt-BR antes de responder. NUNCA responda em inglês.',
-            'en-US': 'You MUST respond in American English. When using tools, translate any non-English content to English.',
-            'es-ES': 'Debes responder SIEMPRE en español. Quando uses ferramentas, traduce todo el contenido al español.',
-        };
-        return languages[lang] || languages['pt-BR'];
-    }
-
-    /**
-     * Constroi system prompt padrão
-     */
-    private buildSystemPrompt(): string {
-        const skillContext = this.skillLoader.getSkillSummaries();
-        const skillSection = skillContext 
-            ? `\n\nSkills disponíveis:\n${skillContext}`
-            : '';
-
-        return `Identidade: Você é o NewClaw, um assistente cognitivo avançado focado em produtividade e análise.
-Workspace: Seu diretório de trabalho padrão é "/newclaw/workspace". Use-o para todas as operações de arquivo.
-Memória: Você possui memória persistente em grafo e aprende sobre o usuário continuamente.
-
-REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
-1. TODO nó novo DEVE ser conectado ao grafo — NUNCA crie nós soltos/isolados.
-2. Conecte fatos/skills ao user_identity com: has_trait, uses, works_on, created.
-3. Conecte infraestrutura ao user_identity com: uses, e ao servidor com: runs_on.
-4. Conecte projetos ao user_identity com: works_on ou owns.
-5. Use action=connect após action=create se precisar de mais conexões.
-6. Busque antes de criar para evitar duplicatas (use memory_search).${skillSection}`;
-    }
-
-    /**
-     * Transcribe voice/audio attachment via Whisper API.
-     * Downloads the file from Telegram, sends to Whisper, returns transcribed text.
-     * Falls back to local whisper-cli if API fails.
-     */
-    private async transcribeAttachment(msg: NormalizedMessage, attachment: ChannelAttachment): Promise<string | null> {
-        const vlog = createLogger('VoiceHandler');
-        try {
-            // Get file URL from Telegram via the adapter
-            const adapter = this.messageBus.getAdapter(msg.channel);
-            const botToken = adapter?.getBotToken?.();
-            const fileId = attachment.fileId;
-
-            if (!botToken || !fileId) {
-                vlog.error('missing_bot_token_or_file_id', `token=${!!botToken} fileId=${!!fileId}`);
-                return '⚠️ Não foi possível obter o arquivo de áudio (token ou fileId ausente).';
-            }
-
-            // Download file from Telegram
-            const fileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
-            const fileRes = await fetch(fileUrl);
-            const fileData = await fileRes.json() as { ok?: boolean; result?: { file_path?: string } };
-
-            if (!fileData?.ok || !fileData?.result?.file_path) {
-                vlog.error('telegram_getfile_failed', JSON.stringify(fileData));
-                return '⚠️ Não foi possível obter o caminho do arquivo no Telegram.';
-            }
-
-            const filePath = fileData.result.file_path;
-            const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
-
-            // Download audio bytes
-            const audioRes = await fetch(downloadUrl);
-            if (!audioRes.ok) {
-                vlog.error('audio_download_failed', `status=${audioRes.status}`);
-                return '⚠️ Falha ao baixar o arquivo de áudio do Telegram.';
-            }
-            const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
-
-            vlog.info('audio_downloaded', `size=${audioBuffer.length} type=${attachment.type}`);
-
-            // Convert OGG/OGA (Telegram Opus) to WAV 16kHz mono before sending to Whisper API
-            // whisper.cpp only accepts WAV format — OGG Opus causes HTTP 400
-            const tmpDir = this.config.tmpDir || '/tmp';
-            const fs = await import('fs/promises');
-            const pathMod = await import('path');
-            const { execFile } = await import('child_process');
-            const tmpOgg = pathMod.join(tmpDir, `whisper_${Date.now()}.ogg`);
-            const tmpWav = pathMod.join(tmpDir, `whisper_${Date.now()}.wav`);
-            let wavBuffer: Buffer;
-
-            try {
-                await fs.writeFile(tmpOgg, audioBuffer);
-                await new Promise<void>((resolve, reject) => {
-                    execFile('ffmpeg', ['-y', '-i', tmpOgg, '-ar', '16000', '-ac', '1', tmpWav], {
-                        timeout: 30_000,
-                    }, (err) => err ? reject(err) : resolve());
-                });
-                wavBuffer = await fs.readFile(tmpWav);
-                vlog.info('audio_converted', `oggSize=${audioBuffer.length} wavSize=${wavBuffer.length}`);
-            } catch (convErr) {
-                vlog.warn('audio_conversion_failed', errorMessage(convErr));
-                // Fallback: send raw OGG and hope the API handles it
-                wavBuffer = audioBuffer;
-            } finally {
-                // Cleanup temp files
-                await fs.unlink(tmpOgg).catch(() => {});
-                await fs.unlink(tmpWav).catch(() => {});
-            }
-
-            // Try Whisper API (Sol GPU first, then fallback)
-            const whisperApiUrl = process.env.WHISPER_API_URL || 'http://10.0.0.1:8177';
-            const whisperApiFallback = process.env.WHISPER_API_FALLBACK || '';
-            const whisperUrls = [whisperApiUrl, whisperApiFallback].filter(Boolean);
-
-            for (const whisperUrl of whisperUrls) {
-                try {
-                    const formData = new FormData();
-                    // Send pre-converted WAV (whisper.cpp requires WAV, not OGG Opus)
-                    const audioFile = new File([wavBuffer], 'audio.wav', { type: 'audio/wav' });
-                    formData.append('file', audioFile);
-
-                    const whisperRes = await fetch(`${whisperUrl}/inference`, {
-                        method: 'POST',
-                        body: formData,
-                        signal: AbortSignal.timeout(60_000),
-                    });
-
-                    if (whisperRes.ok) {
-                        const result = await whisperRes.json() as { text?: string; transcription?: string };
-                        const transcription = result?.text || result?.transcription || '';
-                        if (transcription.trim()) {
-                            vlog.info('whisper_transcription_ok', `textLen=${transcription.length}`);
-                            // Replace msg.text with transcription so it flows to AgentLoop
-                            msg.text = transcription.trim();
-                            return null; // null = continue to text processing pipeline
-                        }
-                    }
-                    vlog.warn('whisper_api_failed', `url=${whisperUrl} status=${whisperRes.status}`);
-                } catch (e) {
-                    vlog.warn('whisper_api_error', `url=${whisperUrl} error=${errorMessage(e)}`);
-                }
-            }
-
-            // Fallback: local whisper-cli (ASYNC — non-blocking)
-            // Reuse the already-converted WAV buffer
-            const localWavFile = pathMod.join(tmpDir, `whisper_local_${Date.now()}.wav`);
-
-            try {
-                await fs.writeFile(localWavFile, wavBuffer);
-                // Run local whisper (ASYNC via execFile)
-                const whisperPath = process.env.WHISPER_PATH || 'whisper';
-                const output = await new Promise<string>((resolve, reject) => {
-                    execFile(whisperPath, [localWavFile, '--language', 'pt'], {
-                        timeout: 120_000,
-                        encoding: 'utf-8',
-                    }, (err, stdout) => err ? reject(err) : resolve(stdout));
-                });
-                const transcription = output.trim();
-                if (transcription) {
-                    vlog.info('local_whisper_ok', `textLen=${transcription.length}`);
-                    msg.text = transcription;
-                    return null;
-                }
-            } catch (e) {
-                vlog.warn('local_whisper_failed', `error=${errorMessage(e)}`);
-            } finally {
-                await fs.unlink(localWavFile).catch(() => {});
-            }
-
-            return '⚠️ Não foi possível transcrever o áudio. Tente enviar como texto.';
-        } catch (err) {
-            vlog.error('transcription_failed', err);
-            return `⚠️ Erro na transcrição: ${errorMessage(err)}`;
-        }
-    }
-
-    /**
-     * Handle document attachments.
-     * Downloads the file from the channel and saves it to the workspace.
-     */
-    private async handleDocumentAttachment(msg: NormalizedMessage, attachment: ChannelAttachment): Promise<string | null> {
-        const dlog = createLogger('DocumentHandler');
-        try {
-            const channel = msg.channel;
-            const workspaceDir = process.env.WORKSPACE_DIR || require('path').join(process.cwd(), 'workspace');
-            const fs = await import('fs/promises');
-            const pathMod = await import('path');
-
-            if (!require('fs').existsSync(workspaceDir)) {
-                await fs.mkdir(workspaceDir, { recursive: true });
-            }
-
-            let fileBuffer: Buffer | null = null;
-            let fileName = attachment.fileName || `file_${Date.now()}`;
-
-            if (channel === 'telegram') {
-                const adapter = this.messageBus.getAdapter('telegram');
-                const botToken = adapter?.getBotToken?.();
-                const fileId = attachment.fileId;
-
-                if (!botToken || !fileId) {
-                    dlog.error('missing_bot_token_or_file_id', `token=${!!botToken} fileId=${!!fileId}`);
-                    return '⚠️ Não foi possível obter o documento (token ou fileId ausente).';
-                }
-
-                // Download metadata from Telegram
-                const fileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
-                const fileRes = await fetch(fileUrl);
-                const fileData = await fileRes.json() as { ok?: boolean; result?: { file_path?: string } };
-
-                if (fileData?.ok && fileData?.result?.file_path) {
-                    const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-                    dlog.info('downloading_from_telegram', `Downloading ${fileName}`, { path: fileData.result.file_path });
-                    
-                    const docRes = await fetch(downloadUrl);
-                    if (docRes.ok) {
-                        fileBuffer = Buffer.from(await docRes.arrayBuffer());
-                    } else {
-                        dlog.error('telegram_download_failed', { status: docRes.status });
-                    }
-                } else {
-                    dlog.error('telegram_getfile_failed', fileData);
-                }
-            } else if (channel === 'discord' && attachment.url) {
-                dlog.info('downloading_from_discord', `Downloading ${fileName}`, { url: attachment.url });
-                const docRes = await fetch(attachment.url);
-                if (docRes.ok) {
-                    fileBuffer = Buffer.from(await docRes.arrayBuffer());
-                }
-            } else if (attachment.data) {
-                // If attachment already has base64 data
-                fileBuffer = Buffer.from(attachment.data, 'base64');
-            }
-
-            if (fileBuffer) {
-                const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-                const targetPath = pathMod.join(workspaceDir, safeFileName);
-                await fs.writeFile(targetPath, fileBuffer);
-                
-                dlog.info('document_saved', `Saved to ${targetPath}`, { path: targetPath, size: fileBuffer.length });
-                
-                // Update msg.text so AgentLoop knows about the file
-                const fileInfo = `\n[ARQUIVO ANEXADO: ${safeFileName} (salvo em workspace/${safeFileName})]\n`;
-                msg.text = (msg.text || '') + fileInfo;
-                
-                // Return null to continue processing with the updated text
-                return null;
-            }
-
-            return `⚠️ Falha ao baixar o arquivo do canal ${channel}.`;
-        } catch (err) {
-            dlog.error('document_handling_failed', err);
-            return `⚠️ Erro ao processar documento: ${errorMessage(err)}`;
-        }
-    }
-
-    /**
-     * Handle photo attachments.
-     * Downloads the photo and saves it to the workspace.
-     */
-    private async handlePhotoAttachment(msg: NormalizedMessage, attachment: ChannelAttachment): Promise<string | null> {
-        const vlog = createLogger('VisionHandler');
-        try {
-            const channel = msg.channel;
-            const workspaceDir = process.env.WORKSPACE_DIR || require('path').join(process.cwd(), 'workspace');
-            const fs = await import('fs/promises');
-            const pathMod = await import('path');
-
-            if (!require('fs').existsSync(workspaceDir)) {
-                await fs.mkdir(workspaceDir, { recursive: true });
-            }
-
-            let fileBuffer: Buffer | null = null;
-            let fileName = attachment.fileName || `photo_${Date.now()}.jpg`;
-
-            if (channel === 'telegram') {
-                const adapter = this.messageBus.getAdapter('telegram');
-                const botToken = adapter?.getBotToken?.();
-                const fileId = attachment.fileId;
-
-                if (botToken && fileId) {
-                    const fileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
-                    const fileRes = await fetch(fileUrl);
-                    const fileData = await fileRes.json() as { ok?: boolean; result?: { file_path?: string } };
-
-                    if (fileData?.ok && fileData?.result?.file_path) {
-                        const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-                        const imgRes = await fetch(downloadUrl);
-                        if (imgRes.ok) {
-                            fileBuffer = Buffer.from(await imgRes.arrayBuffer());
-                            const ext = pathMod.extname(fileData.result.file_path);
-                            if (ext) fileName = `photo_${Date.now()}${ext}`;
-                        }
-                    }
-                }
-            } else if (channel === 'discord' && attachment.url) {
-                const imgRes = await fetch(attachment.url);
-                if (imgRes.ok) {
-                    fileBuffer = Buffer.from(await imgRes.arrayBuffer());
-                }
-            }
-
-            if (fileBuffer) {
-                const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-                const targetPath = pathMod.join(workspaceDir, safeFileName);
-                await fs.writeFile(targetPath, fileBuffer);
-                
-                vlog.info('photo_saved', `Saved to ${targetPath}`, { path: targetPath, size: fileBuffer.length });
-                
-                // --- NOVO: Processamento de Visão Automático ---
-                const visionDescription = await this.processVision(fileBuffer, safeFileName);
-                
-                const fileInfo = `\n[IMAGEM RECEBIDA: ${safeFileName}]\n[DESCRIÇÃO DA VISÃO]: ${visionDescription}\n`;
-                msg.text = (msg.text || '') + fileInfo;
-                
-                return null;
-            }
-
-            return `⚠️ Falha ao baixar a imagem do canal ${channel}.`;
-        } catch (err) {
-            vlog.error('photo_handling_failed', err);
-            return `⚠️ Erro ao processar imagem: ${errorMessage(err)}`;
-        }
-    }
-
-    /**
-     * Processa uma imagem usando o provedor de visão configurado.
-     */
-    private async processVision(fileBuffer: Buffer, fileName: string): Promise<string> {
-        const vlog = createLogger('VisionHandler');
-        try {
-            const modelRouter = this.agentLoop.getModelRouter();
-            const visionProfile = modelRouter.getProfileByCategory('vision');
-            
-            if (!visionProfile) {
-                vlog.warn('vision_not_configured', 'Perfil de visão não encontrado no ModelRouter.');
-                return "(Visão não configurada)";
-            }
-
-            vlog.info('vision_start', `Analisando imagem ${fileName} com o modelo ${visionProfile.model}...`);
-            
-            const base64Image = fileBuffer.toString('base64');
-            
-            // Usar o OllamaProvider diretamente para visão (com base no profile)
-            const { OllamaProvider } = await import('./ProviderFactory');
-            const visionProvider = new OllamaProvider(visionProfile.server, visionProfile.model);
-            
-            const response = await visionProvider.chat([
-                {
-                    role: 'user',
-                    content: 'Descreva esta imagem em detalhes. Se houver texto, faça o OCR completo e extraia o conteúdo.',
-                    images: [base64Image]
-                }
-            ]);
-
-            const description = response.content || "Não foi possível extrair informações da imagem.";
-            vlog.info('vision_complete', `Descrição gerada (${description.length} caracteres)`);
-            
-            return description;
-        } catch (err) {
-            vlog.error('vision_failed', err);
-            return `Erro ao processar visão: ${errorMessage(err)}`;
-        }
     }
 }

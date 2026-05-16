@@ -1,0 +1,40 @@
+export interface NewClawConfig {
+    telegramBotToken: string;
+    telegramAllowedUserIds: string[];
+    discordBotToken?: string;
+    discordAllowedGuildIds?: string[];
+    discordAllowedUserIds?: string[];
+    whatsappPhoneNumber?: string;
+    whatsappAllowedJids?: string[];
+    whatsappAuthDir?: string;
+    signalPhoneNumber?: string;
+    signalAllowedNumbers?: string[];
+    signalCliPath?: string;
+    language: string;
+    defaultProvider: string;
+    geminiApiKey?: string;
+    deepseekApiKey?: string;
+    groqApiKey?: string;
+    openrouterApiKey?: string;
+    ollamaUrl?: string;
+    ollamaModel?: string;
+    ollamaApiKey?: string;
+    maxIterations: number;
+    memoryWindowSize: number;
+    skillsDir: string;
+    tmpDir: string;
+    whisperPath: string;
+    dashboardPort?: number;
+    systemPrompt?: string;
+    modelRouter?: {
+        chat?: string;
+        code?: string;
+        vision?: string;
+        light?: string;
+        analysis?: string;
+        execution?: string;
+        visionServer?: string;
+        classifierModel?: string;
+        classifierServer?: string;
+    };
+}
