@@ -950,8 +950,8 @@ Respond ONLY in JSON:
                     this.previousFindingTitles.add(f.title);
                 }
             }
-        } catch {
-            // No previous report — everything is new
+        } catch (e: any) {
+            log.info(`No previous audit report found to deduplicate (or table not ready): ${e.message}`);
         }
     }
 

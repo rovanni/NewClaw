@@ -129,7 +129,10 @@ function sanitizeContent(content: string): string {
             if (parsed.content && typeof parsed.content === 'string') {
                 return parsed.content;
             }
-        } catch {}
+        } catch (e: any) {
+            // Not valid JSON inside the code fence — we return empty to strip the block
+            // and prevent protocol leakage to the user.
+        }
         return ''; // Remove the block entirely if we can't extract content
     });
 

@@ -158,7 +158,9 @@ export class ProtocolParser {
         // Strategy 1: Direct parse
         try {
             return JSON.parse(content.trim());
-        } catch {}
+        } catch {
+            /* Strategy 1 failed: Not a direct JSON string, moving to block extraction */
+        }
 
         // Strategy 2: Extract JSON block from mixed content
         try {
@@ -169,7 +171,9 @@ export class ProtocolParser {
                 jsonStr = jsonStr.replace(/,\s*([\}\]])/g, '$1');
                 return JSON.parse(jsonStr);
             }
-        } catch {}
+            } catch {
+                /* Strategy 2 failed: Block found but not valid JSON, moving to partial extraction */
+            }
 
         // Strategy 3: Extract partial content from malformed JSON
         try {
@@ -187,7 +191,9 @@ export class ProtocolParser {
                     },
                 };
             }
-        } catch {}
+            } catch {
+                /* Strategy 3 failed: Could not even extract partial content */
+            }
 
         return null;
     }

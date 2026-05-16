@@ -264,7 +264,9 @@ export class DashboardServer {
                     const data = await resp.json() as any;
                     ollamaModels = (data.models || []).map((m: any) => m.name);
                 }
-            } catch {}
+            } catch (err: any) {
+                log.warn(`Could not fetch Ollama models for dashboard: ${err.message}`);
+            }
 
             const knownCloudModels = [
                 'glm-5:cloud', 'glm-5.1:cloud', 'glm-4:cloud',
@@ -906,8 +908,8 @@ export class DashboardServer {
                     `).run(nextFrom, nextTo, edge.relation, edge.weight || 1.0, edge.confidence || 1.0);
                 }
 
-                try { db.prepare('DELETE FROM memory_metrics_history WHERE node_id = ?').run(mergeId); } catch {}
-                try { db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(mergeId); } catch {}
+                try { db.prepare('DELETE FROM memory_metrics_history WHERE node_id = ?').run(mergeId); } catch (e: any) { log.warn('merge_cleanup_metrics_failed', e.message); }
+                try { db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(mergeId); } catch (e: any) { log.warn('merge_cleanup_embeddings_failed', e.message); }
                 db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(mergeId, mergeId);
                 db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(mergeId);
 
@@ -1057,7 +1059,12 @@ export class DashboardServer {
                 db.prepare('UPDATE memory_nodes SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
 
                 const edges = db.prepare('SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node = ? OR to_node = ?').all(id, id);
-                try { (node as any).metadata = JSON.parse((node as any).metadata || '{}'); } catch {}
+                try { 
+                    (node as any).metadata = JSON.parse((node as any).metadata || '{}'); 
+                } catch (e: any) {
+                    log.warn(`Corrupted metadata for node ${id}: ${e.message}`);
+                    (node as any).metadata = {};
+                }
 
                 res.json({ success: true, node, edges });
             } catch (err: any) {
@@ -1123,8 +1130,8 @@ export class DashboardServer {
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const id = String(req.params.id);
-                try { db.prepare('DELETE FROM memory_metrics_history WHERE node_id = ?').run(id); } catch {}
-                try { db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(id); } catch {}
+                try { db.prepare('DELETE FROM memory_metrics_history WHERE node_id = ?').run(id); } catch (e: any) { log.warn('delete_cleanup_metrics_failed', e.message); }
+                try { db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(id); } catch (e: any) { log.warn('delete_cleanup_embeddings_failed', e.message); }
                 db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(id, id);
                 db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(id);
 

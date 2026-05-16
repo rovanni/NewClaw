@@ -243,10 +243,10 @@ export class MemoryManager {
         const needsFtsRebuild = currentCols.includes('fts_rowid');
 
         if (needsFtsRebuild) {
-            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_ai'); } catch {}
-            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_ad'); } catch {}
-            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_au'); } catch {}
-            try { this.db.exec('DROP TABLE IF EXISTS memory_nodes_fts'); } catch {}
+            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_ai'); } catch (e: any) { log.warn('fts_migration_cleanup_failed', e.message); }
+            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_ad'); } catch (e: any) { log.warn('fts_migration_cleanup_failed', e.message); }
+            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_au'); } catch (e: any) { log.warn('fts_migration_cleanup_failed', e.message); }
+            try { this.db.exec('DROP TABLE IF EXISTS memory_nodes_fts'); } catch (e: any) { log.warn('fts_migration_cleanup_failed', e.message); }
 
             // Migrate: recreate table without fts_rowid (disable FK during migration)
             this.db.pragma('foreign_keys = OFF');
@@ -462,7 +462,11 @@ export class MemoryManager {
             ((this.db.prepare("PRAGMA table_info(user_profile)").all() as any[]) || []).map(c => c.name)
         );
         const addColumn = (sql: string) => {
-            try { this.db.exec(sql); } catch { /* ignore if already exists */ }
+            try { this.db.exec(sql); } catch (e: any) { 
+                if (!e.message.includes('duplicate column name')) {
+                    log.warn('schema_update_failed', e.message, { sql });
+                }
+            }
         };
 
         if (!columns.has('assistant_name')) addColumn("ALTER TABLE user_profile ADD COLUMN assistant_name TEXT");
@@ -489,7 +493,11 @@ export class MemoryManager {
     setUserName(userId: string, name: string): void {
         this.db.prepare('UPDATE user_profile SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?').run(name, userId);
         this.addNode({ id: 'user_identity', type: 'identity', name: name, content: `Nome oficial: ${name}`, confidence: 1.0 });
-        try { this.addEdge('core_user', 'user_identity', 'has_identity', 1.0, 1.0); } catch {}
+        try { 
+            this.addEdge('core_user', 'user_identity', 'has_identity', 1.0, 1.0); 
+        } catch (e: any) {
+            log.warn('bootstrap_edge_failed', e.message, { from: 'core_user', to: 'user_identity' });
+        }
     }
 
     private bootstrapCoreGraph(): void {
