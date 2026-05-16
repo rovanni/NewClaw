@@ -84,6 +84,7 @@ export class SessionAutoCleaner {
 
         // Run first cleanup after 5 minutes (let system stabilize)
         this.timer = setTimeout(() => {
+            if (!this.timer) return; // Stopped in the meantime
             this.runCleanupCycle();
             // Then schedule periodic
             this.timer = setInterval(() => this.runCleanupCycle(), this.config.compactIntervalMs);
@@ -95,6 +96,8 @@ export class SessionAutoCleaner {
      */
     stop(): void {
         if (this.timer) {
+            // In Node.js clearTimeout and clearInterval use the same ID pool
+            clearTimeout(this.timer);
             clearInterval(this.timer);
             this.timer = null;
         }

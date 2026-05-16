@@ -1511,14 +1511,19 @@ export class DashboardServer {
         this.db = db;
     }
 
-    public setMemoryManager(mm: MemoryManager) {
+    public setMemoryManager(mm: MemoryManager, curator?: MemoryCurator) {
         this.memoryManager = mm;
-        this.memoryCurator = new MemoryCurator(mm);
+        this.memoryCurator = curator || new MemoryCurator(mm);
         this.embeddingService = new EmbeddingService(this.db || mm);
         this.classificationMemory = new ClassificationMemory(this.db || mm);
         this.decisionMemory = new DecisionMemory(this.db || mm);
         this.skillInstaller = new SkillInstaller();
-        this.memoryCurator.startAutoCurate(30 * 60 * 1000); // Every 30 min
+        
+        // Only start if it was created here (fallback), 
+        // otherwise AgentController manages its lifecycle
+        if (!curator) {
+            this.memoryCurator.startAutoCurate(30 * 60 * 1000); 
+        }
     }
 
     /**

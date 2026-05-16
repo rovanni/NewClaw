@@ -105,7 +105,7 @@ async function main() {
     dashboard.setController(controller);
     dashboard.setProviderFactory(controller.getProviderFactory());
     dashboard.setDatabase(controller.getDatabase());
-    dashboard.setMemoryManager(controller.getMemory());
+    dashboard.setMemoryManager(controller.getMemory(), controller.getMemoryCurator());
     dashboard.start(config.dashboardPort);
     log.info(`\n⚙️  Configurações e Whitelist disponíveis em: http://localhost:${config.dashboardPort}/config\n`);
 
@@ -118,7 +118,6 @@ async function main() {
         try {
             await dashboard.stop();
             await controller.stop(signal);
-            monitor.stop();
             process.exit(0);
         } catch (error) {
             log.error('shutdown_failed', error);

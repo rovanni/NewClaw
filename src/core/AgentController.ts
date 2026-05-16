@@ -51,7 +51,9 @@ import { toolExecutor } from './ToolExecutor';
 import { promptRegistry } from './PromptRegistry';
 import { ConfidenceClassifier } from './ConfidenceClassifier';
 import { SessionAutoCleaner } from '../session/SessionAutoCleaner';
+import { MemoryCurator } from '../memory/MemoryCurator';
 import { LifecycleManager } from './LifecycleManager';
+import { getEventLoopMonitor } from '../shared/EventLoopMonitor';
 const log = createLogger('AgentController');
 
 export interface NewClawConfig {
@@ -135,6 +137,7 @@ export class AgentController {
     private auditor: AuditorService;
     private db: any;
     private sessionAutoCleaner: SessionAutoCleaner;
+    private memoryCurator: MemoryCurator;
     private confidenceClassifier: ConfidenceClassifier;
     private telegramAdapter: TelegramAdapter;
     private discordAdapter: DiscordAdapter | null = null;
@@ -157,6 +160,7 @@ export class AgentController {
     public getSignalAdapter(): SignalAdapter | null { return this.signalAdapter; }
     public getConfidenceClassifier(): ConfidenceClassifier { return this.confidenceClassifier; }
     public getSessionAutoCleaner(): SessionAutoCleaner { return this.sessionAutoCleaner; }
+    public getMemoryCurator(): MemoryCurator { return this.memoryCurator; }
     public getCircuitBreakerStates() { return circuitRegistry.getAllMetrics(); }
     public getPromptRegistry() { return promptRegistry; }
     public getToolExecutor() { return toolExecutor; }
@@ -303,6 +307,9 @@ export class AgentController {
             transcriptDir: './data/sessions',
         });
 
+        // MemoryCurator: automatic graph cleanup and analytics
+        this.memoryCurator = new MemoryCurator(this.memory);
+
         // Telegram adapter (primary)
         this.telegramAdapter = new TelegramAdapter({
             enabled: true,
@@ -428,9 +435,12 @@ export class AgentController {
         this.lifecycle.registerTimeout('scheduler.startAll', () => this.scheduler.startAll(), 5000);
 
         this.lifecycle.registerService('memory', () => this.memory.close());
+        this.lifecycle.registerService('memoryCurator', () => this.memoryCurator.stopAutoCurate());
         this.lifecycle.registerService('sessions', () => this.sessionManager.closeAll());
+        this.lifecycle.registerService('sessionAutoCleaner', () => this.sessionAutoCleaner.stop());
         this.lifecycle.registerService('scheduler', () => this.scheduler.stopAll());
         this.lifecycle.registerService('messageBus', () => this.messageBus.stopAll());
+        this.lifecycle.registerService('eventLoopMonitor', () => getEventLoopMonitor().stop());
 
         // Registrar skills/tools
         this.registerSkills();
@@ -485,6 +495,9 @@ export class AgentController {
 
         // ── Session Auto Cleaner: JSONL compaction ──
         this.sessionAutoCleaner.start();
+
+        // ── Memory Curator: Graph analytics and cleanup ──
+        this.memoryCurator.startAutoCurate();
 
         // ── Prompt Hot-Reload: check for changes every 5 minutes ──
         // Registrado no LifecycleManager para clearInterval automático no shutdown.
