@@ -90,9 +90,11 @@ const DEFAULT_CONFIG: RouterConfig = {
 export class ModelRouter {
     private config: RouterConfig;
     private usageLog: Map<string, number> = new Map();
+    private providerFactory: ProviderFactory | null = null;
 
-    constructor(config?: any, _providerFactory?: any) {
+    constructor(config?: any, providerFactory?: ProviderFactory) {
         this.config = { ...DEFAULT_CONFIG };
+        this.providerFactory = providerFactory || null;
         
         if (config) {
             // Se vier do Dashboard/Env, mapeia os modelos individuais para os perfis
@@ -187,12 +189,11 @@ Message: "${query.slice(0, 200)}"
 Category:`;
 
         try {
-            // Use ProviderFactory.classifyWithFallback — separate queue avoids blocking on long generations
-            if ((this as any).providerFactory) {
-                const factory = (this as any).providerFactory as ProviderFactory;
-                const response = await factory.classifyWithFallback([
+            // 1. Use unified ProviderFactory if available (handles fallback/queuing)
+            if (this.providerFactory) {
+                const response = await this.providerFactory.classifyWithFallback([
                     { role: 'user', content: prompt }
-                ], 30000); // 30s timeout for classification (separate queue)
+                ], 30000); 
                 
                 const content = (response.content || '').trim().toLowerCase();
                 for (const cat of VALID_CATEGORIES) {
