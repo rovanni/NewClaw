@@ -22,7 +22,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "form-data": "^4.0.5",
-    "grammy": "^1.21.0",
+    "grammy": "^1.42.0",
     "p-queue": "^9.2.0",
     "ts-node": "^10.9.0",
     "typescript": "^6.0.3"

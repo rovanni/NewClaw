@@ -295,11 +295,11 @@ export class MessageBus {
                 : '⚠️ Erro ao processar mensagem. Tente novamente.';
             
             log.error('message_processing_failed', error, msg.text.slice(0, 50));
-            log.error('error_details', {
+            log.error('error_details', undefined, 'Processing failure details', {
                 channel: msg.channel,
                 userId: msg.userId,
-                errorMessage: error?.message || 'Unknown error',
-                errorStack: error?.stack?.split('\n').slice(0, 3).join(' | ')
+                errorMessage: error instanceof Error ? error.message : (typeof error === 'object' ? JSON.stringify(error) : String(error)),
+                errorStack: error instanceof Error ? error.stack?.split('\n').slice(0, 5).join(' | ') : 'No stack trace'
             });
             if (adapter) {
                 await adapter.send(

@@ -183,8 +183,25 @@ export class AppLogger {
     }
 
     error(event: string, error?: any, message?: string, meta?: Record<string, any>) {
-        const errMsg = error instanceof Error ? error.message : typeof error === 'string' ? error : message || 'Unknown error';
-        const errMeta = error instanceof Error ? { stack: error.stack, ...meta } : meta;
+        let errMsg: string;
+        let errMeta: Record<string, any> = { ...this.baseMeta, ...(meta || {}) };
+
+        if (error instanceof Error) {
+            errMsg = error.message;
+            errMeta.stack = error.stack;
+        } else if (typeof error === 'string') {
+            errMsg = error;
+        } else if (error && typeof error === 'object') {
+            errMsg = error.message || message || 'Unknown error object';
+            try {
+                errMeta.rawError = JSON.stringify(error).slice(0, 500);
+            } catch {
+                errMeta.rawError = '[Circular or Non-Serializable]';
+            }
+        } else {
+            errMsg = message || 'Unknown error';
+        }
+
         writeLog('error', this.component, event, errMsg, errMeta);
     }
 }
