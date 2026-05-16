@@ -424,7 +424,9 @@ export class AgentLoop {
             const wantsTool = structured?.type === 'tool_call' || (atomicData?.action?.type === 'tool' && atomicData?.action?.name);
             const hasNativeToolCalls = response.toolCalls && response.toolCalls.length > 0;
 
-            if (structured?.metadata?.protocolViolation && structured?.type === 'planning') {
+            // Protocol violation recovery — only if there are NO native tool calls to execute.
+            // Native tool calls must always be executed regardless of content format.
+            if (structured?.metadata?.protocolViolation && structured?.type === 'planning' && !hasNativeToolCalls) {
                 loopMessages.push({ role: 'system', content: this.protocolParser.getRecoveryPrompt() });
                 continue;
             }
