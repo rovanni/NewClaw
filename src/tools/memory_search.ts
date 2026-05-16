@@ -10,7 +10,7 @@
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
-import { MemoryManager } from '../memory/MemoryManager';
+import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
 import { errorMessage } from '../shared/errors';
 
 /**
@@ -88,7 +88,7 @@ export class MemorySearchTool implements ToolExecutor {
             // 2. If few results, expand with synonyms and search again
             if (results.length < 2) {
                 const expandedQueries = expandWithSynonyms(query);
-                const seenIds = new Set(results.map((n: any) => n.id));
+                const seenIds = new Set(results.map((n: MemoryNode) => n.id));
 
                 for (const expandedQuery of expandedQueries.slice(1)) { // Skip original (already searched)
                     try {
@@ -110,7 +110,7 @@ export class MemorySearchTool implements ToolExecutor {
             if (results.length < 2) {
                 try {
                     const textResults = this.memoryManager.searchNodes(query, limit);
-                    const seenIds = new Set(results.map((n: any) => n.id));
+                    const seenIds = new Set(results.map((n: MemoryNode) => n.id));
                     for (const node of textResults) {
                         if (!seenIds.has(node.id)) {
                             results.push({ ...node, score: 0.3 }); // Lower confidence for text-only match
@@ -121,7 +121,7 @@ export class MemorySearchTool implements ToolExecutor {
             }
 
             // 4. Sort by score descending
-            results.sort((a: any, b: any) => (b.score || 0) - (a.score || 0));
+            results.sort((a: MemoryNode & { score?: number }, b: MemoryNode & { score?: number }) => (b.score || 0) - (a.score || 0));
             results = results.slice(0, limit);
 
             if (results.length === 0) {
@@ -129,7 +129,7 @@ export class MemorySearchTool implements ToolExecutor {
             }
 
             // 5. Format output — HIDE internal IDs from user
-            const output = results.map((n: any) => {
+            const output = results.map((n: MemoryNode & { score?: number }) => {
                 const score = n.score ? ` (${(n.score * 100).toFixed(0)}%)` : '';
                 const content = (n.content || '').slice(0, 200);
                 return `📌 ${n.name}${score} [${n.type}]: ${content}`;

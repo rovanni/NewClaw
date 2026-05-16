@@ -93,7 +93,7 @@ export class WebSearchTool implements ToolExecutor {
         };
     }
 
-    private clampNumber(value: any, fallback: number, min: number, max: number): number {
+    private clampNumber(value: unknown, fallback: number, min: number, max: number): number {
         const num = Number(value);
         if (!Number.isFinite(num)) return fallback;
         return Math.max(min, Math.min(max, Math.round(num)));
@@ -209,9 +209,9 @@ export class WebSearchTool implements ToolExecutor {
             const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
             if (!resp.ok) return [];
 
-            const data = await resp.json() as any;
+            const data = await resp.json() as { items?: Array<{ title?: string; link?: string; snippet?: string; [key: string]: unknown }> };
             const items = Array.isArray(data?.query?.search) ? data.query.search : [];
-            return items.slice(0, maxResults).map((item: any) => ({
+            return items.slice(0, maxResults).map((item) => ({
                 title: this.cleanText(item.title || ''),
                 url: `https://pt.wikipedia.org/wiki/${encodeURIComponent(String(item.title || '').replace(/\s+/g, '_'))}`,
                 snippet: this.cleanText(item.snippet || ''),
@@ -233,9 +233,9 @@ export class WebSearchTool implements ToolExecutor {
             const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
             if (!resp.ok) return [];
 
-            const data = await resp.json() as any;
+            const data = await resp.json() as { items?: Array<{ title?: string; link?: string; snippet?: string; [key: string]: unknown }> };
             const items = Array.isArray(data?.items) ? data.items : [];
-            return items.slice(0, maxResults).map((item: any) => ({
+            return items.slice(0, maxResults).map((item) => ({
                 title: this.cleanText(item.title || ''),
                 url: String(item.link || '').trim(),
                 snippet: this.cleanText(item.snippet || ''),
@@ -258,9 +258,9 @@ export class WebSearchTool implements ToolExecutor {
                 });
                 if (!resp.ok) continue;
 
-                const data = await resp.json() as any;
+                const data = await resp.json() as { items?: Array<{ title?: string; link?: string; snippet?: string; [key: string]: unknown }> };
                 const results = Array.isArray(data?.results) ? data.results : [];
-                return results.slice(0, maxResults).map((item: any) => ({
+                return results.slice(0, maxResults).map((item) => ({
                     title: this.cleanText(item.title || ''),
                     url: String(item.url || '').trim(),
                     snippet: this.cleanText(item.content || ''),

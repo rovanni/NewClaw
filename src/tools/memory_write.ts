@@ -11,7 +11,8 @@
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
-import { MemoryManager } from '../memory/MemoryManager';
+import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
+import type Database from 'better-sqlite3';
 import { errorMessage } from '../shared/errors';
 
 export class MemoryWriteTool implements ToolExecutor {
@@ -89,8 +90,8 @@ export class MemoryWriteTool implements ToolExecutor {
         }
     }
 
-    private getDb(): any {
-        return (this.memoryManager as any).db;
+    private getDb(): Database.Database {
+        return this.memoryManager.getDatabase();
     }
 
     // ── CREATE ────────────────────────────────────────────────
@@ -122,7 +123,7 @@ export class MemoryWriteTool implements ToolExecutor {
         const existing = this.memoryManager.getNode(id);
         if (existing) {
             existing.name = name;
-            existing.type = type as any;
+            existing.type = type as MemoryNode['type'];
             existing.content = content;
             this.memoryManager.addNode(existing);
 
@@ -134,7 +135,7 @@ export class MemoryWriteTool implements ToolExecutor {
             return { success: true, output: `✅ Nó "${id}" atualizado (já existia).` };
         }
 
-        this.memoryManager.addNode({ id, type: type as any, name, content });
+        this.memoryManager.addNode({ id, type: type as MemoryNode['type'], name, content });
 
         // Auto-connect identity to core_user if it's not core_user itself
         if (type === 'identity' && id !== 'core_user') {
@@ -224,7 +225,7 @@ export class MemoryWriteTool implements ToolExecutor {
         // Count edges that will be removed
         const edges = db.prepare(
             'SELECT COUNT(*) as cnt FROM memory_edges WHERE from_node = ? OR to_node = ?'
-        ).get(id, id) as any;
+        ).get(id, id) as { edges: number } | undefined;
 
         db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(id, id);
         db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(id);
@@ -303,7 +304,7 @@ export class MemoryWriteTool implements ToolExecutor {
             // 5. Transfer edges from source to target
             const sourceEdges = db.prepare(
                 'SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node = ? OR to_node = ?'
-            ).all(sourceId, sourceId) as any[];
+            ).all(sourceId, sourceId) as Array<{ from_node: string; to_node: string; relation: string; weight: number; confidence: number }>;
 
             for (const edge of sourceEdges) {
                 if (edge.from_node === sourceId) {
@@ -340,7 +341,7 @@ export class MemoryWriteTool implements ToolExecutor {
             }
 
             // Use best domain
-            const sourceDomain = db.prepare('SELECT domain FROM memory_nodes WHERE id = ?').get(sourceId) as any;
+            const sourceDomain = db.prepare('SELECT domain FROM memory_nodes WHERE id = ?').get(sourceId) as { domain: string | null } | undefined;
             if (sourceDomain?.domain && !db.prepare('SELECT domain FROM memory_nodes WHERE id = ?').get(id)) {
                 db.prepare('UPDATE memory_nodes SET domain = ? WHERE id = ?').run(sourceDomain.domain, id);
             }
@@ -375,7 +376,7 @@ export class MemoryWriteTool implements ToolExecutor {
 
     // ── Helpers ──────────────────────────────────────────────
 
-    private async regenerateEmbedding(nodeId: string, node: any): Promise<void> {
+    private async regenerateEmbedding(nodeId: string, node: MemoryNode): Promise<void> {
         try {
             const text = `${node.name}: ${(node.content || '').slice(0, 200)}`;
             const resp = await fetch('http://localhost:11434/api/embeddings', {
@@ -385,7 +386,7 @@ export class MemoryWriteTool implements ToolExecutor {
                 signal: AbortSignal.timeout(15000)
             });
             if (resp.ok) {
-                const data = await resp.json() as any;
+                const data = await resp.json() as { embedding?: number[] };
                 if (data.embedding) {
                     const buf = Buffer.from(new Float64Array(data.embedding).buffer);
                     this.getDb()?.prepare('INSERT OR REPLACE INTO memory_embeddings (node_id, embedding, model, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)')

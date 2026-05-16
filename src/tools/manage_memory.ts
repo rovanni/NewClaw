@@ -1,5 +1,5 @@
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
-import { MemoryManager } from '../memory/MemoryManager';
+import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
 import { errorMessage } from '../shared/errors';
 
 export class ManageMemoryTool implements ToolExecutor {
@@ -72,7 +72,7 @@ export class ManageMemoryTool implements ToolExecutor {
                 if (!args.query) return { success: false, error: 'Ação search exige parâmetro "query".', output: '' };
                 const results = await this.memoryManager.semanticSearch(args.query, 10);
                 if (results.length === 0) return { success: true, output: 'Nenhum nó encontrado para essa busca.' };
-                const output = results.map((n: any) => 
+                const output = results.map((n: MemoryNode) => 
                     `[${n.score?.toFixed(2) || '?'}] ${n.id} (${n.type}): ${n.name} — ${(n.content || '').slice(0, 100)}`
                 ).join('\n');
                 return { success: true, output: 'Busca semântica:\n' + output };
@@ -86,7 +86,7 @@ export class ManageMemoryTool implements ToolExecutor {
                 const existing = this.memoryManager.getNode(args.node_id);
                 if (existing) {
                     existing.name = args.node_name;
-                    existing.type = args.node_type as any;
+                    existing.type = args.node_type as MemoryNode['type'];
                     if (!existing.content.includes(args.node_content)) {
                         existing.content += '\n' + args.node_content;
                     }
@@ -95,7 +95,7 @@ export class ManageMemoryTool implements ToolExecutor {
                 } else {
                     this.memoryManager.addNode({
                         id: args.node_id,
-                        type: args.node_type as any,
+                        type: args.node_type as MemoryNode['type'],
                         name: args.node_name,
                         content: args.node_content
                     });
@@ -131,7 +131,7 @@ export class ManageMemoryTool implements ToolExecutor {
             
             if (action === 'delete_node') {
                 if (!args.node_id) return { success: false, error: 'delete_node exige node_id', output: '' };
-                const db = (this.memoryManager as any).db;
+                const db = this.memoryManager.getDatabase();
                 db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(args.node_id, args.node_id);
                 db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(args.node_id);
                 return { success: true, output: `✅ Nó "${args.node_id}" e todas as suas arestas foram deletados permanentemente.` };

@@ -26,6 +26,7 @@ import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
 import { SkillInstaller } from '../skills/SkillInstaller';
 import { createLogger } from '../shared/AppLogger';
+import type Database from 'better-sqlite3';
 import { getEventLoopMonitor } from '../shared/EventLoopMonitor';
 const log = createLogger('Dashboardserver');
 
@@ -74,6 +75,14 @@ function authMiddleware(req: Request, res: Response, next: express.NextFunction)
     res.status(401).json({ error: 'Unauthorized' });
 }
 
+/** Config estendido com customModels em runtime */
+interface ExtendedConfig extends NewClawConfig { customModels?: string[] }
+
+/** Linha básica de nó de memória para métodos privados do dashboard */
+interface DashboardNode { id: string; type: string; name: string; content: string; [key: string]: unknown }
+/** Linha básica de aresta para métodos privados do dashboard */
+interface DashboardEdge { from_node: string; to_node: string; relation: string; weight: number; [key: string]: unknown }
+
 export class DashboardServer {
     private app: express.Express;
     private server?: Server;
@@ -86,7 +95,7 @@ export class DashboardServer {
     private decisionMemory?: DecisionMemory;
     private skillInstaller?: SkillInstaller;
     private config: NewClawConfig;
-    private db?: any;
+    private db?: Database.Database;
 
     constructor(config: NewClawConfig) {
         this.config = config;
@@ -221,7 +230,7 @@ export class DashboardServer {
 
             // Also update AgentLoop config so system prompt and iterations take effect
             if (this.controller) {
-                const loop = (this.controller as any).agentLoop;
+                const loop = (this.controller as unknown as { agentLoop: { updateConfig?: (cfg: Record<string, unknown>) => void } }).agentLoop;
                 if (loop && typeof loop.updateConfig === 'function') {
                     loop.updateConfig({
                         maxIterations: this.config.maxIterations,
@@ -262,8 +271,8 @@ export class DashboardServer {
                 const ollamaUrl = this.config.ollamaUrl || 'http://localhost:11434';
                 const resp = await fetch(`${ollamaUrl}/api/tags`);
                 if (resp.ok) {
-                    const data = await resp.json() as any;
-                    ollamaModels = (data.models || []).map((m: any) => m.name);
+                    const data = await resp.json() as { models?: Array<{ name: string }> };
+                    ollamaModels = (data.models || []).map(m => m.name);
                 }
             } catch (err) {
                 log.warn(`Could not fetch Ollama models for dashboard: ${errorMessage(err)}`);
@@ -290,7 +299,7 @@ export class DashboardServer {
             const currentModel = this.providerFactory?.getCurrentModel() || this.config.ollamaModel;
             if (currentModel) userModels.push(currentModel);
 
-            const customModels: string[] = (this.config as any).customModels || [];
+            const customModels: string[] = (this.config as ExtendedConfig).customModels || [];
 
             const allModels = [...new Set([
                 ...ollamaModels,
@@ -316,11 +325,11 @@ export class DashboardServer {
         this.app.post('/api/models/add', (req: Request, res: Response) => {
             const { model } = req.body;
             if (!model || !model.trim()) return res.status(400).json({ error: 'Model name required' });
-            const customModels: string[] = (this.config as any).customModels || [];
+            const customModels: string[] = (this.config as ExtendedConfig).customModels || [];
             const name = model.trim();
             if (!customModels.includes(name)) {
                 customModels.push(name);
-                (this.config as any).customModels = customModels;
+                (this.config as ExtendedConfig).customModels = customModels;
             }
             res.json({ success: true, message: `Model "${name}" added to list` });
         });
@@ -356,8 +365,8 @@ export class DashboardServer {
             try {
                 const resp = await fetch(`${ollamaUrl}/api/tags`);
                 if (resp.ok) {
-                    const data = await resp.json() as any;
-                    const models: string[] = (data.models || []).map((m: any) => m.name);
+                    const data = await resp.json() as { models?: Array<{ name: string }> };
+                    const models: string[] = (data.models || []).map(m => m.name);
                     const exists = models.includes(model);
                     res.json({ success: true, model, exists, models });
                 } else {
@@ -397,8 +406,7 @@ export class DashboardServer {
         this.app.get('/api/skills/auto', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const skills = db.prepare(
@@ -421,8 +429,7 @@ export class DashboardServer {
         this.app.get('/api/skills/patterns', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const patterns = db.prepare(
@@ -440,8 +447,7 @@ export class DashboardServer {
         this.app.post('/api/skills/auto/:id/approve', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const result = db.prepare(
@@ -460,8 +466,7 @@ export class DashboardServer {
         this.app.post('/api/skills/auto/:id/reject', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const result = db.prepare(
@@ -657,7 +662,7 @@ export class DashboardServer {
             res.json({ success: true, message: 'Restarting...' });
             // Use the start.sh script which manages PID and restarts
             const { exec } = require('child_process');
-            exec('bash ./start.sh restart', (err: any) => {
+            exec('bash ./start.sh restart', (err: Error | null) => {
                 if (err) log.error('Restart error:', errorMessage(err));
             });
         });
@@ -695,8 +700,7 @@ export class DashboardServer {
         this.app.get('/api/memory/graph', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const type = _req.query.type as string;
@@ -709,7 +713,7 @@ export class DashboardServer {
                     nodes = db.prepare('SELECT id, type, name FROM memory_nodes ORDER BY updated_at DESC LIMIT ?').all(limit);
                 }
 
-                const nodeIds = nodes.map((n: any) => n.id);
+                const nodeIds = nodes.map(n => (n as DashboardNode).id);
                 const placeholders = nodeIds.map(() => '?').join(',');
                 const edges = db.prepare(`SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node IN (${placeholders}) AND to_node IN (${placeholders})`).all(...nodeIds, ...nodeIds);
 
@@ -723,8 +727,7 @@ export class DashboardServer {
         this.app.get('/api/memory/graph/:nodeId', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const nodeId = String(req.params.nodeId);
@@ -738,7 +741,7 @@ export class DashboardServer {
                     const frontierPlaceholders = Array.from(frontier).map(() => '?').join(',');
                     const connectedEdges = db.prepare(
                         `SELECT from_node, to_node FROM memory_edges WHERE from_node IN (${frontierPlaceholders}) OR to_node IN (${frontierPlaceholders})`
-                    ).all(...Array.from(frontier), ...Array.from(frontier));
+                    ).all(...Array.from(frontier), ...Array.from(frontier)) as Array<{ from_node: string; to_node: string }>;
 
                     frontier = new Set();
                     for (const e of connectedEdges) {
@@ -769,9 +772,9 @@ export class DashboardServer {
                     description: val.description,
                     allowedFrom: val.allowedFrom,
                     allowedTo: val.allowedTo,
-                    inverse: (this.memoryManager as any)?.inverseRelations?.[key] || null
+                    inverse: null  // inverseRelations not directly accessible
                 })),
-                inverseRelations: (this.memoryManager as any)?.getInverseRelationMap?.() || {}
+                inverseRelations: {}
             });
         });
 
@@ -779,7 +782,7 @@ export class DashboardServer {
         this.app.get('/api/memory/snapshots', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const snapshots = (this.memoryManager as any).listSnapshots();
+                const snapshots = this.memoryManager?.listSnapshots() ?? [];
                 res.json({ success: true, snapshots });
             } catch (err) { res.status(500).json({ error: errorMessage(err) }); }
         });
@@ -787,7 +790,7 @@ export class DashboardServer {
         this.app.post('/api/memory/snapshots', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const id = (this.memoryManager as any).createSnapshot(req.body.label);
+                const id = this.memoryManager?.createSnapshot(req.body.label as string);
                 res.json({ success: true, id });
             } catch (err) { res.status(500).json({ error: errorMessage(err) }); }
         });
@@ -795,7 +798,7 @@ export class DashboardServer {
         this.app.post('/api/memory/snapshots/:id/restore', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const ok = (this.memoryManager as any).restoreSnapshot(req.params.id);
+                const ok = this.memoryManager?.restoreSnapshot(String(req.params.id));
                 ok ? res.json({ success: true }) : res.status(404).json({ error: 'Snapshot not found' });
             } catch (err) { res.status(500).json({ error: errorMessage(err) }); }
         });
@@ -803,7 +806,7 @@ export class DashboardServer {
         this.app.delete('/api/memory/snapshots/:id', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const ok = (this.memoryManager as any).deleteSnapshot(req.params.id);
+                const ok = this.memoryManager?.deleteSnapshot(String(req.params.id));
                 ok ? res.json({ success: true }) : res.status(404).json({ error: 'Snapshot not found' });
             } catch (err) { res.status(500).json({ error: errorMessage(err) }); }
         });
@@ -811,10 +814,11 @@ export class DashboardServer {
         // Config history
         this.app.get('/api/config/history', (_req: Request, res: Response) => {
             try {
-                const mm = this.controller ? (this.controller as any).memory : null;
-                if (!mm || !mm.db) return res.status(500).json({ error: 'DB not available' });
-                const history = mm.db.prepare('SELECT id, config_json, created_at, is_active FROM agent_config ORDER BY created_at DESC LIMIT 20').all();
-                res.json({ success: true, history: history.map((h: any) => ({ ...h, config: JSON.parse(h.config_json) })) });
+                const mm = this.controller?.getMemory() ?? null;
+                if (!mm) return res.status(500).json({ error: 'DB not available' });
+                const db = mm.getDatabase();
+                const history = db.prepare('SELECT id, config_json, created_at, is_active FROM agent_config ORDER BY created_at DESC LIMIT 20').all() as Array<{ id: string; config_json: string; created_at: string; is_active: number }>;
+                res.json({ success: true, history: history.map(h => ({ ...h, config: JSON.parse(h.config_json) })) });
             } catch (err) {
                 res.status(500).json({ error: errorMessage(err) });
             }
@@ -824,19 +828,18 @@ export class DashboardServer {
         this.app.get('/api/memory/stats', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
-                const totalNodes = db.prepare('SELECT COUNT(*) as c FROM memory_nodes').get().c;
-                const totalEdges = db.prepare('SELECT COUNT(*) as c FROM memory_edges').get().c;
-                const totalMessages = db.prepare('SELECT COUNT(*) as c FROM messages').get().c;
-                const totalConversations = db.prepare('SELECT COUNT(*) as c FROM conversations').get().c;
-                const nodesByType = db.prepare('SELECT type, COUNT(*) as c FROM memory_nodes GROUP BY type').all();
+                const totalNodes = (db.prepare('SELECT COUNT(*) as c FROM memory_nodes').get() as { c: number }).c;
+                const totalEdges = (db.prepare('SELECT COUNT(*) as c FROM memory_edges').get() as { c: number }).c;
+                const totalMessages = (db.prepare('SELECT COUNT(*) as c FROM messages').get() as { c: number }).c;
+                const totalConversations = (db.prepare('SELECT COUNT(*) as c FROM conversations').get() as { c: number }).c;
+                const nodesByType = db.prepare('SELECT type, COUNT(*) as c FROM memory_nodes GROUP BY type').all() as Array<{ type: string; c: number }>;
 
                 res.json({
                     success: true,
-                    stats: { totalNodes, totalEdges, totalMessages, totalConversations, nodesByType: Object.fromEntries(nodesByType.map((r: any) => [r.type, r.c])) },
+                    stats: { totalNodes, totalEdges, totalMessages, totalConversations, nodesByType: Object.fromEntries(nodesByType.map(r => [r.type, r.c])) },
                     centrality: this.computeCentrality(db)
                 });
             } catch (err) {
@@ -848,12 +851,11 @@ export class DashboardServer {
         this.app.get('/api/memory/review', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
-                const nodes = db.prepare('SELECT id, type, name, content, updated_at FROM memory_nodes ORDER BY updated_at DESC').all();
-                const edges = db.prepare('SELECT from_node, to_node, relation FROM memory_edges').all();
+                const nodes = db.prepare('SELECT id, type, name, content, updated_at FROM memory_nodes ORDER BY updated_at DESC').all() as DashboardNode[];
+                const edges = db.prepare('SELECT from_node, to_node, relation FROM memory_edges').all() as DashboardEdge[];
                 const review = this.computeMemoryReview(nodes, edges);
 
                 res.json({ success: true, review });
@@ -865,8 +867,7 @@ export class DashboardServer {
         this.app.post('/api/memory/merge', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const { keepId, mergeId } = req.body || {};
@@ -877,13 +878,13 @@ export class DashboardServer {
                     return res.status(400).json({ error: 'keepId and mergeId must be different' });
                 }
 
-                const keepNode = db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(keepId) as any;
-                const mergeNode = db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(mergeId) as any;
+                const keepNode = db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(keepId) as DashboardNode | undefined;
+                const mergeNode = db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(mergeId) as DashboardNode | undefined;
                 if (!keepNode || !mergeNode) {
                     return res.status(404).json({ error: 'Node not found' });
                 }
 
-                const snapshotId = mm.createSnapshot?.(`pre-merge:${keepId}<-${mergeId}`) || null;
+                const snapshotId = this.memoryManager?.createSnapshot?.(`pre-merge:${keepId}<-${mergeId}`) || null;
 
                 const content1 = String(keepNode.content || '');
                 const content2 = String(mergeNode.content || '');
@@ -897,7 +898,7 @@ export class DashboardServer {
                     .run(mergedName, mergedType, mergedContent, keepId);
 
                 const relatedEdges = db.prepare('SELECT from_node, to_node, relation, weight, confidence FROM memory_edges WHERE from_node = ? OR to_node = ?')
-                    .all(mergeId, mergeId) as any[];
+                    .all(mergeId, mergeId) as DashboardEdge[];
 
                 for (const edge of relatedEdges) {
                     const nextFrom = edge.from_node === mergeId ? keepId : edge.from_node;
@@ -925,8 +926,7 @@ export class DashboardServer {
         this.app.get('/api/memory/nodes', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const type = req.query.type as string;
@@ -947,8 +947,7 @@ export class DashboardServer {
         this.app.get('/api/memory/search', async (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const q = req.query.q as string;
@@ -968,8 +967,8 @@ export class DashboardServer {
                                     `SELECT id, type, name, substr(content, 1, 200) as content, updated_at FROM memory_nodes WHERE id IN (${placeholders})`
                                 ).all(...ids);
                                 // Add score to each node
-                                const nodesWithScore = nodes.map((n: any) => ({ ...n, score: scores.get(n.id) || 0 }));
-                                nodesWithScore.sort((a: any, b: any) => b.score - a.score);
+                                const nodesWithScore = (nodes as DashboardNode[]).map(n => ({ ...n, score: scores.get(n.id) || 0 }));
+                                nodesWithScore.sort((a, b) => b.score - a.score);
                                 return res.json({ success: true, nodes: nodesWithScore, method: 'embedding' });
                             }
                         }
@@ -1002,8 +1001,7 @@ export class DashboardServer {
         this.app.get('/api/memory/analytics', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 // Try to get nodes with metrics safely
@@ -1047,8 +1045,7 @@ export class DashboardServer {
         this.app.get('/api/memory/nodes/:id', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const id = String(req.params.id);
@@ -1061,10 +1058,10 @@ export class DashboardServer {
 
                 const edges = db.prepare('SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node = ? OR to_node = ?').all(id, id);
                 try { 
-                    (node as any).metadata = JSON.parse((node as any).metadata || '{}'); 
+                    (node as DashboardNode).metadata = JSON.parse(String((node as DashboardNode).metadata || '{}')); 
                 } catch (e) {
                     log.warn(`Corrupted metadata for node ${id}: ${errorMessage(e)}`);
-                    (node as any).metadata = {};
+                    (node as DashboardNode).metadata = {};
                 }
 
                 res.json({ success: true, node, edges });
@@ -1077,8 +1074,7 @@ export class DashboardServer {
         this.app.put('/api/memory/nodes/:id', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const id = String(req.params.id);
@@ -1103,8 +1099,7 @@ export class DashboardServer {
         this.app.post('/api/memory/nodes', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const { id, type, name, content } = req.body;
@@ -1126,8 +1121,7 @@ export class DashboardServer {
         this.app.delete('/api/memory/nodes/:id', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const id = String(req.params.id);
@@ -1147,8 +1141,7 @@ export class DashboardServer {
         this.app.post('/api/memory/edges', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const { from, to, relation, weight } = req.body;
@@ -1170,8 +1163,7 @@ export class DashboardServer {
         this.app.delete('/api/memory/edges', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const { from, to, relation } = req.body;
@@ -1190,8 +1182,7 @@ export class DashboardServer {
         this.app.put('/api/memory/edges', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const { from, to, old_relation, new_relation } = req.body;
@@ -1243,8 +1234,7 @@ export class DashboardServer {
         this.app.get('/api/memory/dashboard/top-nodes', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 const metric = (req.query.metric as string) || 'pagerank';
                 const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
 
@@ -1266,8 +1256,7 @@ export class DashboardServer {
         this.app.get('/api/memory/dashboard/evolution', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 const node_id = req.query.node_id as string;
                 const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
 
@@ -1291,8 +1280,7 @@ export class DashboardServer {
         this.app.get('/api/memory/dashboard/communities', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
 
                 const communities = db.prepare(
                     'SELECT community_id, COUNT(*) as node_count, GROUP_CONCAT(id) as node_ids FROM memory_nodes WHERE community_id IS NOT NULL GROUP BY community_id ORDER BY COUNT(*) DESC'
@@ -1314,15 +1302,14 @@ export class DashboardServer {
         this.app.get('/api/memory/dashboard/density', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
 
-                const nodeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_nodes').get() as any).c;
-                const edgeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_edges').get() as any).c;
+                const nodeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_nodes').get() as { c: number }).c;
+                const edgeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_edges').get() as { c: number }).c;
                 const maxEdges = nodeCount * (nodeCount - 1);
                 const density = maxEdges > 0 ? (edgeCount / maxEdges).toFixed(4) : 0;
                 const avgDegree = nodeCount > 0 ? (2 * edgeCount / nodeCount).toFixed(2) : 0;
-                const avgWeight = (db.prepare('SELECT AVG(weight) as w FROM memory_edges').get() as any).w || 0;
+                const avgWeight = (db.prepare('SELECT AVG(weight) as w FROM memory_edges').get() as { w: number | null }).w || 0;
 
                 res.json({
                     success: true,
@@ -1425,8 +1412,7 @@ export class DashboardServer {
         this.app.get('/api/conversations', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
                 const userId = (req.query.userId as string) || 'web-dashboard';
                 const convs = db.prepare('SELECT id, user_id, provider, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY updated_at DESC').all(userId);
@@ -1439,8 +1425,7 @@ export class DashboardServer {
         this.app.get('/api/conversations/:id/messages', (req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
                 const convId = req.params.id;
                 const limit = parseInt(req.query.limit as string) || 50;
@@ -1455,8 +1440,7 @@ export class DashboardServer {
         this.app.get('/api/conversations/export', (_req: Request, res: Response) => {
             if (!this.memoryManager) return res.status(500).json({ error: 'Memory not available' });
             try {
-                const mm = this.memoryManager as any;
-                const db = mm.db || mm._db;
+                const db = this.memoryManager?.getDatabase();
                 if (!db) return res.status(500).json({ error: 'DB not available' });
                 const convs = db.prepare('SELECT * FROM conversations').all();
                 const msgs = db.prepare('SELECT * FROM messages').all();
@@ -1473,13 +1457,13 @@ export class DashboardServer {
             res.setHeader('Connection', 'keep-alive');
             res.flushHeaders?.();
 
-            const sendEvent = (event: string, data: any) => {
+            const sendEvent = (event: string, data: unknown) => {
                 res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
             };
 
-            const onStep = (data: any) => sendEvent('trace_step', data);
-            const onStart = (data: any) => sendEvent('trace_start', data);
-            const onComplete = (data: any) => sendEvent('trace_complete', data);
+            const onStep = (data: unknown) => sendEvent('trace_step', data);
+            const onStart = (data: unknown) => sendEvent('trace_start', data);
+            const onComplete = (data: unknown) => sendEvent('trace_complete', data);
 
             traceManager.on('trace_step', onStep);
             traceManager.on('trace_start', onStart);
@@ -1507,16 +1491,17 @@ export class DashboardServer {
         this.providerFactory = pf;
     }
 
-    public setDatabase(db: any) {
+    public setDatabase(db: Database.Database) {
         this.db = db;
     }
 
     public setMemoryManager(mm: MemoryManager, curator?: MemoryCurator) {
         this.memoryManager = mm;
         this.memoryCurator = curator || new MemoryCurator(mm);
-        this.embeddingService = new EmbeddingService(this.db || mm);
-        this.classificationMemory = new ClassificationMemory(this.db || mm);
-        this.decisionMemory = new DecisionMemory(this.db || mm);
+        const db = this.db ?? mm.getDatabase();
+        this.embeddingService = new EmbeddingService(db);
+        this.classificationMemory = new ClassificationMemory(db);
+        this.decisionMemory = new DecisionMemory(db);
         this.skillInstaller = new SkillInstaller();
         
         // Only start if it was created here (fallback), 
@@ -1621,9 +1606,9 @@ export class DashboardServer {
         this.server = undefined;
     }
 
-    private computeCentrality(db: any): Record<string, { degree: number; inDegree: number; outDegree: number }> {
-        const nodes: { id: string }[] = db.prepare('SELECT id FROM memory_nodes').all();
-        const edges: { from_node: string; to_node: string }[] = db.prepare('SELECT from_node, to_node FROM memory_edges').all();
+    private computeCentrality(db: Database.Database): Record<string, { degree: number; inDegree: number; outDegree: number }> {
+        const nodes = db.prepare('SELECT id FROM memory_nodes').all() as Array<{ id: string }>;
+        const edges = db.prepare('SELECT from_node, to_node FROM memory_edges').all() as Array<{ from_node: string; to_node: string }>;
         const centrality: Record<string, { degree: number; inDegree: number; outDegree: number }> = {};
         for (const n of nodes) centrality[n.id] = { degree: 0, inDegree: 0, outDegree: 0 };
         for (const e of edges) {
@@ -1633,7 +1618,7 @@ export class DashboardServer {
         return centrality;
     }
 
-    private computeMemoryReview(nodes: any[], edges: any[]) {
+    private computeMemoryReview(nodes: DashboardNode[], edges: DashboardEdge[]) {
         const centrality: Record<string, { degree: number; inDegree: number; outDegree: number }> = {};
         for (const node of nodes) centrality[node.id] = { degree: 0, inDegree: 0, outDegree: 0 };
         for (const edge of edges) {
@@ -1727,8 +1712,8 @@ export class DashboardServer {
         };
     }
 
-    private findDuplicateCandidates(nodes: any[]) {
-        const candidates: Array<{ left: any; right: any; similarity: number }> = [];
+    private findDuplicateCandidates(nodes: DashboardNode[]) {
+        const candidates: Array<{ left: DashboardNode; right: DashboardNode; similarity: number }> = [];
         for (let i = 0; i < nodes.length; i++) {
             for (let j = i + 1; j < nodes.length; j++) {
                 const left = nodes[i];

@@ -91,7 +91,7 @@ export class WeatherTool implements ToolExecutor {
         const geoRes = await fetch(geoUrl, { signal: AbortSignal.timeout(10000) });
         if (!geoRes.ok) throw new Error('Falha ao buscar a cidade na API de geocoding.');
         
-        const geoData = await geoRes.json() as any;
+        const geoData = await geoRes.json() as Array<{ lat: number; lon: number; name: string; country: string; [key: string]: unknown }>;
         if (!geoData.results || geoData.results.length === 0) {
             throw new Error(`Cidade "${city}" não encontrada.`);
         }
@@ -109,7 +109,7 @@ export class WeatherTool implements ToolExecutor {
         const weatherRes = await fetch(weatherUrl, { signal: AbortSignal.timeout(10000) });
         if (!weatherRes.ok) throw new Error('Falha ao buscar o clima na API do open-meteo.');
 
-        const weatherData = await weatherRes.json() as any;
+        const weatherData = await weatherRes.json() as { main: { temp: number; feels_like: number; humidity: number }; weather: Array<{ description: string }>; wind: { speed: number }; [key: string]: unknown };
         const current = weatherData.current;
         const units = weatherData.current_units;
         const daily = weatherData.daily;
@@ -163,7 +163,7 @@ export class WeatherTool implements ToolExecutor {
         const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
         if (!res.ok) throw new Error(`wttr.in falhou: ${res.status}`);
 
-        const data = await res.json() as any;
+        const data = await res.json() as { list?: Array<{ dt_txt?: string; main?: { temp?: number }; weather?: Array<{ description?: string }>; [key: string]: unknown }>; [key: string]: unknown };
         const current = data?.current_condition?.[0];
         if (!current) throw new Error('wttr.in: sem dados de clima atual');
 

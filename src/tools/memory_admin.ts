@@ -18,7 +18,17 @@
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { MemoryManager } from '../memory/MemoryManager';
+import { MemoryNode } from '../memory/MemoryManager';
+import type Database from 'better-sqlite3';
 import { errorMessage } from '../shared/errors';
+
+interface CountRow { c: number }
+interface NodeRow { id: string; type: string; name: string; domain: string; len?: number }
+interface TypeCountRow { type: string; c: number }
+interface DomainCountRow { domain: string; c: number }
+interface NodeDetailRow extends MemoryNode { len?: number }
+interface EmbeddingRow { model: string; updated_at: string }
+interface EdgeRow { to_node?: string; from_node?: string; relation: string; weight: number }
 
 export class MemoryAdminTool implements ToolExecutor {
     name = 'memory_admin';
@@ -53,8 +63,8 @@ export class MemoryAdminTool implements ToolExecutor {
         this.memoryManager = memoryManager;
     }
 
-    private getDb(): any {
-        return (this.memoryManager as any).db;
+    private getDb(): Database.Database {
+        return this.memoryManager.getDatabase();
     }
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
@@ -86,21 +96,21 @@ export class MemoryAdminTool implements ToolExecutor {
 
     private stats(): ToolResult {
         const db = this.getDb();
-        const nodeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_nodes').get() as any).c;
-        const edgeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_edges').get() as any).c;
-        const embeddingCount = (db.prepare('SELECT COUNT(*) as c FROM memory_embeddings').get() as any).c;
+        const nodeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_nodes').get() as CountRow).c;
+        const edgeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_edges').get() as CountRow).c;
+        const embeddingCount = (db.prepare('SELECT COUNT(*) as c FROM memory_embeddings').get() as CountRow).c;
         const orphanCount = (db.prepare(`
             SELECT COUNT(*) as c FROM memory_nodes n
             WHERE n.id NOT IN (SELECT from_node FROM memory_edges)
               AND n.id NOT IN (SELECT to_node FROM memory_edges)
-        `).get() as any).c;
+        `).get() as CountRow).c;
         const ghostCount = (db.prepare(`
             SELECT COUNT(*) as c FROM memory_nodes
             WHERE (length(content) < 30 AND id NOT LIKE 'memory_%' AND type != 'context') OR content LIKE '%.md' AND length(content) < 50
-        `).get() as any).c;
+        `).get() as CountRow).c;
 
-        const types = db.prepare('SELECT type, COUNT(*) as c FROM memory_nodes GROUP BY type ORDER BY c DESC').all() as any[];
-        const domainStats = db.prepare('SELECT domain, COUNT(*) as c FROM memory_nodes GROUP BY domain ORDER BY c DESC').all() as any[];
+        const types = db.prepare('SELECT type, COUNT(*) as c FROM memory_nodes GROUP BY type ORDER BY c DESC').all() as TypeCountRow[];
+        const domainStats = db.prepare('SELECT domain, COUNT(*) as c FROM memory_nodes GROUP BY domain ORDER BY c DESC').all() as DomainCountRow[];
 
         let output = `📊 Estatísticas do Grafo Cognitivo:\n`;
         output += `   Nós: ${nodeCount} | Arestas: ${edgeCount} | Embeddings: ${embeddingCount}\n`;
@@ -117,24 +127,24 @@ export class MemoryAdminTool implements ToolExecutor {
 
     private list(filter: string, limit: number): ToolResult {
         const db = this.getDb();
-        let rows: any[];
+        let rows: NodeRow[];
 
         if (!filter) {
-            rows = db.prepare('SELECT id, type, domain, name, length(content) as len FROM memory_nodes ORDER BY domain, id LIMIT ?').all(limit) as any[];
+            rows = db.prepare('SELECT id, type, domain, name, length(content) as len FROM memory_nodes ORDER BY domain, id LIMIT ?').all(limit) as NodeRow[];
         } else {
             // Try as type first
-            const byType = db.prepare('SELECT id, type, domain, name, length(content) as len FROM memory_nodes WHERE type = ? ORDER BY domain, id LIMIT ?').all(filter, limit) as any[];
+            const byType = db.prepare('SELECT id, type, domain, name, length(content) as len FROM memory_nodes WHERE type = ? ORDER BY domain, id LIMIT ?').all(filter, limit) as NodeRow[];
             if (byType.length > 0) {
                 rows = byType;
             } else {
                 // Try as domain
-                const byDomain = db.prepare('SELECT id, type, domain, name, length(content) as len FROM memory_nodes WHERE domain = ? ORDER BY id LIMIT ?').all(filter, limit) as any[];
+                const byDomain = db.prepare('SELECT id, type, domain, name, length(content) as len FROM memory_nodes WHERE domain = ? ORDER BY id LIMIT ?').all(filter, limit) as NodeRow[];
                 if (byDomain.length > 0) {
                     rows = byDomain;
                 } else {
                     // Search by name or content
                     rows = db.prepare("SELECT id, type, domain, name, length(content) as len FROM memory_nodes WHERE name LIKE ? OR content LIKE ? ORDER BY id LIMIT ?")
-                        .all(`%${filter}%`, `%${filter}%`, limit) as any[];
+                        .all(`%${filter}%`, `%${filter}%`, limit) as NodeRow[];
                 }
             }
         }
@@ -157,7 +167,7 @@ export class MemoryAdminTool implements ToolExecutor {
             SELECT id, type, domain, name, length(content) as len FROM memory_nodes n
             WHERE n.id NOT IN (SELECT from_node FROM memory_edges)
               AND n.id NOT IN (SELECT to_node FROM memory_edges)
-        `).all() as any[];
+        `).all() as NodeDetailRow[];
 
         if (orphans.length === 0) return { success: true, output: '✅ Nenhum nó órfão encontrado.' };
 
@@ -182,7 +192,7 @@ export class MemoryAdminTool implements ToolExecutor {
                 AND (LOWER(a.name) = LOWER(b.name) OR LOWER(a.name) LIKE '%' || LOWER(b.name) || '%')
             ORDER BY a.domain, a.name
             LIMIT 30
-        `).all() as any[];
+        `).all() as NodeDetailRow[];
 
         if (dupes.length === 0) return { success: true, output: '✅ Nenhuma duplicata óbvia encontrada.' };
 
@@ -203,7 +213,7 @@ export class MemoryAdminTool implements ToolExecutor {
             WHERE (length(content) < 30 AND id NOT LIKE 'memory_%' AND type != 'context')
                OR (content LIKE '%.md' AND length(content) < 50 AND id NOT LIKE 'memory_%')
             ORDER BY domain, id
-        `).all() as any[];
+        `).all() as NodeDetailRow[];
 
         if (ghosts.length === 0) return { success: true, output: '✅ Nenhum ghost encontrado.' };
 
@@ -225,7 +235,7 @@ export class MemoryAdminTool implements ToolExecutor {
             SELECT id FROM memory_nodes
             WHERE length(content) < 10
                OR (content LIKE '%.md' AND length(content) < 50 AND id NOT LIKE 'memory_%')
-        `).all() as any[];
+        `).all() as NodeDetailRow[];
 
         // Find and remove orphans that are also ghosts
         const orphanGhosts = db.prepare(`
@@ -233,13 +243,13 @@ export class MemoryAdminTool implements ToolExecutor {
             WHERE n.id NOT IN (SELECT from_node FROM memory_edges)
               AND n.id NOT IN (SELECT to_node FROM memory_edges)
               AND (length(n.content) < 30 OR (n.content LIKE '%.md' AND length(n.content) < 50))
-        `).all() as any[];
+        `).all() as NodeDetailRow[];
 
         const toRemove = [...new Set([...ghosts.map(g => g.id), ...orphanGhosts.map(o => o.id)])];
 
         // Safety: never remove identity or preference nodes
         const safeToRemove = toRemove.filter(id => {
-            const node = db.prepare('SELECT type, id FROM memory_nodes WHERE id = ?').get(id) as any;
+            const node = db.prepare('SELECT type, id FROM memory_nodes WHERE id = ?').get(id) as { type: string; id: string } | undefined;
             return node && node.type !== 'identity' && !id.startsWith('core:') && !id.startsWith('core_') && !id.startsWith('pref_');
         });
 
@@ -272,8 +282,8 @@ export class MemoryAdminTool implements ToolExecutor {
 
     private domains(): ToolResult {
         const db = this.getDb();
-        const domains = db.prepare('SELECT domain, COUNT(*) as c FROM memory_nodes GROUP BY domain ORDER BY c DESC').all() as any[];
-        const types = db.prepare('SELECT type, COUNT(*) as c FROM memory_nodes GROUP BY type ORDER BY c DESC').all() as any[];
+        const domains = db.prepare('SELECT domain, COUNT(*) as c FROM memory_nodes GROUP BY domain ORDER BY c DESC').all() as DomainCountRow[];
+        const types = db.prepare('SELECT type, COUNT(*) as c FROM memory_nodes GROUP BY type ORDER BY c DESC').all() as TypeCountRow[];
 
         let output = `📊 Domínios:\n`;
         for (const d of domains) output += `  ${d.domain || '(none)'}: ${d.c} nós\n`;
@@ -287,12 +297,12 @@ export class MemoryAdminTool implements ToolExecutor {
 
     private async reindex(id?: string): Promise<ToolResult> {
         const db = this.getDb();
-        let nodes: any[];
+        let nodes: Array<{ id: string; name: string; content: string }>;
 
         if (id) {
-            nodes = db.prepare('SELECT id, name, content FROM memory_nodes WHERE id = ?').all(id) as any[];
+            nodes = db.prepare('SELECT id, name, content FROM memory_nodes WHERE id = ?').all(id) as Array<{ id: string; name: string; content: string }>;
         } else {
-            nodes = db.prepare('SELECT id, name, content FROM memory_nodes').all() as any[];
+            nodes = db.prepare('SELECT id, name, content FROM memory_nodes').all() as Array<{ id: string; name: string; content: string }>;
         }
 
         let updated = 0;
@@ -308,7 +318,7 @@ export class MemoryAdminTool implements ToolExecutor {
                     signal: AbortSignal.timeout(15000)
                 });
                 if (resp.ok) {
-                    const data = await resp.json() as any;
+                    const data = await resp.json() as { embedding?: number[] };
                     if (data.embedding) {
                         const buf = Buffer.from(new Float64Array(data.embedding).buffer);
                         db.prepare('INSERT OR REPLACE INTO memory_embeddings (node_id, embedding, model, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)')
@@ -329,7 +339,7 @@ export class MemoryAdminTool implements ToolExecutor {
 
     private recalc(): ToolResult {
         const db = this.getDb();
-        const nodeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_nodes').get() as any).c;
+        const nodeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_nodes').get() as CountRow).c;
 
         // Simple degree calculation
         const degrees = db.prepare(`
@@ -338,10 +348,10 @@ export class MemoryAdminTool implements ToolExecutor {
             LEFT JOIN memory_edges e ON n.id = e.from_node
             LEFT JOIN memory_edges e2 ON n.id = e2.to_node
             GROUP BY n.id
-        `).all() as any[];
+        `).all() as NodeDetailRow[];
 
         const updateStmt = db.prepare('UPDATE memory_nodes SET degree = ?, pagerank = ? WHERE id = ?');
-        const transaction = db.transaction((rows: any[]) => {
+        const transaction = db.transaction((rows: NodeDetailRow[]) => {
             for (const row of rows) {
                 const pr = Math.min(row.degree / nodeCount, 1.0);
                 updateStmt.run(row.degree, pr, row.id);
@@ -361,12 +371,12 @@ export class MemoryAdminTool implements ToolExecutor {
         if (!id) return { success: false, output: '', error: 'inspect exige: id do nó.' };
 
         const db = this.getDb();
-        const node = db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(id) as any;
+        const node = db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(id) as NodeDetailRow | undefined;
         if (!node) return { success: false, output: '', error: `Nó "${id}" não encontrado.` };
 
-        const outEdges = db.prepare('SELECT to_node, relation, weight FROM memory_edges WHERE from_node = ?').all(id) as any[];
-        const inEdges = db.prepare('SELECT from_node, relation, weight FROM memory_edges WHERE to_node = ?').all(id) as any[];
-        const embedding = db.prepare('SELECT model, updated_at FROM memory_embeddings WHERE node_id = ?').get(id) as any;
+        const outEdges = db.prepare('SELECT to_node, relation, weight FROM memory_edges WHERE from_node = ?').all(id) as EdgeRow[];
+        const inEdges = db.prepare('SELECT from_node, relation, weight FROM memory_edges WHERE to_node = ?').all(id) as EdgeRow[];
+        const embedding = db.prepare('SELECT model, updated_at FROM memory_embeddings WHERE node_id = ?').get(id) as EmbeddingRow | undefined;
 
         let output = `🔍 Nó: ${node.id}\n`;
         output += `   Nome: ${node.name}\n`;

@@ -10,12 +10,32 @@ import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { errorMessage } from '../shared/errors';
 
 interface CacheEntry {
-    data: any;
+    data: unknown;
     timestamp: number;
 }
 
 const cache = new Map<string, CacheEntry>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+interface CoinGeckoMarket {
+    id: string; symbol: string; name: string;
+    current_price: number | null;
+    market_cap: number | null;
+    total_volume: number | null;
+    price_change_percentage_24h: number | null;
+    price_change_percentage_7d_in_currency?: number | null;
+    price_change_percentage_1h_in_currency?: number | null;
+    high_24h?: number | null; low_24h?: number | null;
+    ath?: number | null; ath_change_percentage?: number | null;
+    [key: string]: unknown;
+}
+interface CoinGeckoDetail {
+    market_data?: { current_price?: { usd?: number }; market_cap?: { usd?: number };
+        total_volume?: { usd?: number }; price_change_percentage_24h?: number;
+        price_change_percentage_7d?: number; price_change_percentage_30d?: number; };
+    name?: string; symbol?: string;
+    [key: string]: unknown;
+}
 
 export class CryptoAnalysisTool implements ToolExecutor {
     name = 'crypto_analysis';
@@ -78,9 +98,9 @@ export class CryptoAnalysisTool implements ToolExecutor {
             }
         }
         
-        const data = await response.json() as any[];
+        const data = await response.json() as CoinGeckoMarket[];
         cache.set(url, { data, timestamp: Date.now() });
-        return data;
+        return data as CoinGeckoMarket[];
     }
 
     private async analiseSangrando(limit: number): Promise<ToolResult> {
@@ -88,13 +108,13 @@ export class CryptoAnalysisTool implements ToolExecutor {
 
         // Filtrar: em queda > 3% nas 24h, mas com volume significativo e não estávelcoin
         const opportunities = coins
-            .filter((c: any) => {
+            .filter((c) => {
                 const change = c.price_change_percentage_24h || 0;
                 const isStablecoin = ['usdt','usdc','dai','busd','tusd','frax','usdd','dai'].includes(c.symbol?.toLowerCase());
                 const volumeOk = (c.total_volume || 0) > 1000000; // > $1M volume
                 return change < -3 && !isStablecoin && volumeOk;
             })
-            .map((c: any) => {
+            .map((c) => {
                 const change24h = c.price_change_percentage_24h || 0;
                 const change7d = c.price_change_percentage_7d_in_currency || 0;
                 const change1h = c.price_change_percentage_1h_in_currency || 0;
@@ -121,7 +141,7 @@ export class CryptoAnalysisTool implements ToolExecutor {
                     signal: change1h > 0 ? '🟢 RECUPERAÇÃO' : '🔴 AINDA CAINDO'
                 };
             })
-            .sort((a: any, b: any) => parseFloat(b.recoveryScore) - parseFloat(a.recoveryScore))
+            .sort((a, b) => parseFloat(String(b.recoveryScore)) - parseFloat(a.recoveryScore))
             .slice(0, limit);
 
         if (opportunities.length === 0) {
@@ -146,8 +166,8 @@ export class CryptoAnalysisTool implements ToolExecutor {
     private async topGainers(limit: number): Promise<ToolResult> {
         const coins = await this.fetchMarkets(100);
         const gainers = coins
-            .filter((c: any) => !['usdt','usdc','dai','busd'].includes(c.symbol?.toLowerCase()))
-            .sort((a: any, b: any) => (b.price_change_percentage_24h || 0) - (a.price_change_percentage_24h || 0))
+            .filter((c) => !['usdt','usdc','dai','busd'].includes(c.symbol?.toLowerCase()))
+            .sort((a, b) => (b.price_change_percentage_24h || 0) - (a.price_change_percentage_24h || 0))
             .slice(0, limit);
 
         let report = `📈 **TOP ${limit} GAINERS (24h)**\n\n`;
@@ -161,8 +181,8 @@ export class CryptoAnalysisTool implements ToolExecutor {
     private async topLosers(limit: number): Promise<ToolResult> {
         const coins = await this.fetchMarkets(100);
         const losers = coins
-            .filter((c: any) => !['usdt','usdc','dai','busd'].includes(c.symbol?.toLowerCase()))
-            .sort((a: any, b: any) => (a.price_change_percentage_24h || 0) - (b.price_change_percentage_24h || 0))
+            .filter((c) => !['usdt','usdc','dai','busd'].includes(c.symbol?.toLowerCase()))
+            .sort((a, b) => (a.price_change_percentage_24h || 0) - (b.price_change_percentage_24h || 0))
             .slice(0, limit);
 
         let report = `📉 **TOP ${limit} LOSERS (24h)**\n\n`;
@@ -196,7 +216,7 @@ export class CryptoAnalysisTool implements ToolExecutor {
 
         const url = `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false`;
         
-        let data: any;
+        let data: CoinGeckoDetail;
         const cached = cache.get(url);
         if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
             data = cached.data;
@@ -206,7 +226,7 @@ export class CryptoAnalysisTool implements ToolExecutor {
                 if (response.status === 429) return { success: false, output: '', error: 'CoinGecko API limit reached (429)' };
                 return { success: false, output: '', error: `Moeda "${symbol}" não encontrada` };
             }
-            data = await response.json() as any;
+            data = await response.json() as CoinGeckoDetail;
             cache.set(url, { data, timestamp: Date.now() });
         }
 
