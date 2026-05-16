@@ -1802,4 +1802,3 @@ function formatBytes(bytes: number): string {
     }
     return `${size.toFixed(1)} ${units[i]}`;
 }
-
