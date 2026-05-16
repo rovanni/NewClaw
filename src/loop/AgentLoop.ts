@@ -372,6 +372,8 @@ export class AgentLoop {
 
         let stepCount = 0;
         const maxSteps = 15;
+        let hasUsedNativeTools = false;      // true once any native tool call executes
+        let consecutiveNonProgressSteps = 0; // non-JSON, no-tool responses in a row
 
         while (stepCount < maxSteps) {
             stepCount++;
@@ -424,12 +426,42 @@ export class AgentLoop {
             const wantsTool = structured?.type === 'tool_call' || (atomicData?.action?.type === 'tool' && atomicData?.action?.name);
             const hasNativeToolCalls = response.toolCalls && response.toolCalls.length > 0;
 
-            // Protocol violation recovery — only if there are NO native tool calls to execute.
-            // Native tool calls must always be executed regardless of content format.
+            // Track when the model demonstrates native tool capability.
+            if (hasNativeToolCalls) {
+                hasUsedNativeTools = true;
+                consecutiveNonProgressSteps = 0;
+            }
+
+            // Protocol violation recovery — only when there are NO native tool calls to execute.
+            // Native tool calls must always execute regardless of content format.
             if (structured?.metadata?.protocolViolation && structured?.type === 'planning' && !hasNativeToolCalls) {
+                consecutiveNonProgressSteps++;
+
+                // Generic signal 1: model already used native tools and now has a plain-text answer.
+                // Applies to any model that uses toolCalls[] natively instead of JSON protocol.
+                if (hasUsedNativeTools && finalText.length > 30) {
+                    log.info(`[${this.ts()}] [PROTOCOL-EXIT] Native-tool model → plain-text final answer (step ${stepCount}, len=${finalText.length})`);
+                    move('FINAL_READY', { step: stepCount, reason: 'native_tool_final' });
+                    traceManager.completeTrace(trace, 'completed', finalText);
+                    this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
+                    return { text: finalText };
+                }
+
+                // Generic signal 2: model received 2 recovery prompts and still didn't produce JSON.
+                // Accept best available content rather than spinning indefinitely.
+                if (consecutiveNonProgressSteps >= 2 && lastBestContent.length > 0) {
+                    log.info(`[${this.ts()}] [PROTOCOL-EXIT] ${consecutiveNonProgressSteps} non-progress steps → using best content (len=${lastBestContent.length})`);
+                    move('FINAL_READY', { step: stepCount, reason: 'non_progress_limit' });
+                    traceManager.completeTrace(trace, 'completed', lastBestContent);
+                    this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
+                    return { text: lastBestContent };
+                }
+
                 loopMessages.push({ role: 'system', content: this.protocolParser.getRecoveryPrompt() });
                 continue;
             }
+
+            consecutiveNonProgressSteps = 0;
 
             const isExplicitlyComplete = structured?.isComplete === true;
             const isExplicitlyIncomplete = structured?.isComplete === false;
