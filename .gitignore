@@ -35,6 +35,9 @@ scratch/
 .DS_Store
 Thumbs.db
 
+# Claude Code
+.claude/
+
 # Relatórios e Auditoria
 docs/AUDIT_CHECKLIST_*.md
 ARCHITECTURE_REVIEW.md
