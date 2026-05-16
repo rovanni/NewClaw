@@ -208,19 +208,4 @@ export class AppLogger {
 
 export function createLogger(component: string, baseMeta: Record<string, any> = {}): AppLogger {
     return new AppLogger(component, baseMeta);
-}      try {
-                errMeta.rawError = JSON.stringify(error).slice(0, 500);
-            } catch {
-                errMeta.rawError = '[Circular or Non-Serializable]';
-            }
-        } else {
-            errMsg = message || 'Unknown error';
-        }
-
-        writeLog('error', this.component, event, errMsg, errMeta);
-    }
-}
-
-export function createLogger(component: string, baseMeta: Record<string, any> = {}): AppLogger {
-    return new AppLogger(component, baseMeta);
 }
