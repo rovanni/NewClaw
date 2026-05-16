@@ -10,6 +10,7 @@ import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { exec } from 'child_process';
 import { resolveHost, isDestructive } from './server_config';
 import path from 'path';
+import { errorMessage } from '../shared/errors';
 
 export class ExecCommandTool implements ToolExecutor {
     name = 'exec_command';
@@ -81,8 +82,8 @@ export class ExecCommandTool implements ToolExecutor {
             });
 
             return { success: true, output: output.trim().slice(0, 16000) }; // Aumentado limite de output
-        } catch (error: any) {
-            return { success: false, output: '', error: error.message };
+        } catch (error) {
+            return { success: false, output: '', error: errorMessage(error) };
         }
     }
 }

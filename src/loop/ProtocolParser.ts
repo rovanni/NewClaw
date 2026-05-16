@@ -308,4 +308,14 @@ export class ProtocolParser {
             },
         };
     }
+}ence: 'low',
+                reason: 'Protocol violation: response not in structured format. Recovery required.',
+            },
+            metadata: {
+                protocolViolation: true,
+                rawContentLength: content.length,
+                recoveryNeeded: true,
+            },
+        };
+    }
 }

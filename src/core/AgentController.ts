@@ -6,6 +6,7 @@
  */
 
 import { ProviderFactory } from './ProviderFactory';
+import { errorMessage } from '../shared/errors';
 import { AgentLoop } from '../loop/AgentLoop';
 import { MemoryManager } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
@@ -530,9 +531,9 @@ export class AgentController {
             // O processamento real continua usando o sessionId para manter o histórico isolado
             const result = await this.agentLoop.process(sessionId, message);
             return typeof result === 'string' ? result : result.text;
-        } catch (err: any) {
-            log.error('Web message error:', err.message);
-            return `Erro: ${err.message}`;
+        } catch (err) {
+            log.error('Web message error:', errorMessage(err));
+            return `Erro: ${errorMessage(err)}`;
         }
     }
 
@@ -562,8 +563,8 @@ export class AgentController {
                 });
 
                 return `🧠 **SkillLearner**\n\n${lines.join('\n\n')}\n\nAções:\n\`/skill_approve <id>\` / \`/skill_reject <id>\``;
-            } catch (e: any) {
-                return `⚠️ Erro ao listar skills: ${e.message}`;
+            } catch (e) {
+                return `⚠️ Erro ao listar skills: ${errorMessage(e)}`;
             }
         });
 
@@ -579,8 +580,8 @@ export class AgentController {
 
                 this.memoryFacade.setAutoSkillStatus(match, 'active');
                 return `✅ Skill aprovada: ${match}`;
-            } catch (e: any) {
-                return `⚠️ Erro: ${e.message}`;
+            } catch (e) {
+                return `⚠️ Erro: ${errorMessage(e)}`;
             }
         });
 
@@ -596,8 +597,8 @@ export class AgentController {
 
                 this.memoryFacade.setAutoSkillStatus(match, 'rejected');
                 return `❌ Skill rejeitada: ${match}`;
-            } catch (e: any) {
-                return `⚠️ Erro: ${e.message}`;
+            } catch (e) {
+                return `⚠️ Erro: ${errorMessage(e)}`;
             }
         });
 
@@ -683,7 +684,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
         try {
             // Get file URL from Telegram via the adapter
             const adapter = this.messageBus.getAdapter(msg.channel) as any;
-            const botToken = msg.metadata?.botToken || adapter?.config?.botToken;
+            const botToken = adapter?.getBotToken?.() || adapter?.config?.botToken;
             const fileId = attachment.fileId;
 
             if (!botToken || !fileId) {
@@ -733,8 +734,8 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
                 });
                 wavBuffer = await fs.readFile(tmpWav);
                 vlog.info('audio_converted', `oggSize=${audioBuffer.length} wavSize=${wavBuffer.length}`);
-            } catch (convErr: any) {
-                vlog.warn('audio_conversion_failed', convErr.message);
+            } catch (convErr) {
+                vlog.warn('audio_conversion_failed', errorMessage(convErr));
                 // Fallback: send raw OGG and hope the API handles it
                 wavBuffer = audioBuffer;
             } finally {
@@ -772,8 +773,8 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
                         }
                     }
                     vlog.warn('whisper_api_failed', `url=${whisperUrl} status=${whisperRes.status}`);
-                } catch (e: any) {
-                    vlog.warn('whisper_api_error', `url=${whisperUrl} error=${e.message}`);
+                } catch (e) {
+                    vlog.warn('whisper_api_error', `url=${whisperUrl} error=${errorMessage(e)}`);
                 }
             }
 
@@ -797,16 +798,16 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
                     msg.text = transcription;
                     return null;
                 }
-            } catch (e: any) {
-                vlog.warn('local_whisper_failed', `error=${e.message}`);
+            } catch (e) {
+                vlog.warn('local_whisper_failed', `error=${errorMessage(e)}`);
             } finally {
                 await fs.unlink(localWavFile).catch(() => {});
             }
 
             return '⚠️ Não foi possível transcrever o áudio. Tente enviar como texto.';
-        } catch (err: any) {
+        } catch (err) {
             vlog.error('transcription_failed', err);
-            return `⚠️ Erro na transcrição: ${err.message}`;
+            return `⚠️ Erro na transcrição: ${errorMessage(err)}`;
         }
     }
 
@@ -831,7 +832,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
 
             if (channel === 'telegram') {
                 const adapter = this.messageBus.getAdapter('telegram') as any;
-                const botToken = msg.metadata?.botToken || adapter?.getBotToken?.();
+                const botToken = adapter?.getBotToken?.();
                 const fileId = attachment.fileId;
 
                 if (!botToken || !fileId) {
@@ -884,9 +885,9 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
             }
 
             return `⚠️ Falha ao baixar o arquivo do canal ${channel}.`;
-        } catch (err: any) {
+        } catch (err) {
             dlog.error('document_handling_failed', err);
-            return `⚠️ Erro ao processar documento: ${err.message}`;
+            return `⚠️ Erro ao processar documento: ${errorMessage(err)}`;
         }
     }
 
@@ -911,7 +912,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
 
             if (channel === 'telegram') {
                 const adapter = this.messageBus.getAdapter('telegram') as any;
-                const botToken = msg.metadata?.botToken || adapter?.getBotToken?.();
+                const botToken = adapter?.getBotToken?.();
                 const fileId = attachment.fileId;
 
                 if (botToken && fileId) {
@@ -953,9 +954,9 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
             }
 
             return `⚠️ Falha ao baixar a imagem do canal ${channel}.`;
-        } catch (err: any) {
+        } catch (err) {
             vlog.error('photo_handling_failed', err);
-            return `⚠️ Erro ao processar imagem: ${err.message}`;
+            return `⚠️ Erro ao processar imagem: ${errorMessage(err)}`;
         }
     }
 
@@ -993,9 +994,9 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
             vlog.info('vision_complete', `Descrição gerada (${description.length} caracteres)`);
             
             return description;
-        } catch (err: any) {
+        } catch (err) {
             vlog.error('vision_failed', err);
-            return `Erro ao processar visão: ${err.message}`;
+            return `Erro ao processar visão: ${errorMessage(err)}`;
         }
     }
 }

@@ -1,4 +1,5 @@
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { errorMessage } from '../shared/errors';
 
 export class ApiRequestTool implements ToolExecutor {
     name = 'api_request';
@@ -56,11 +57,11 @@ export class ApiRequestTool implements ToolExecutor {
                 success: true,
                 output: data,
             };
-        } catch (error: any) {
+        } catch (error) {
             return {
                 success: false,
                 output: '',
-                error: `Network Error: ${error.message}`
+                error: `Network Error: ${errorMessage(error)}`
             };
         }
     }

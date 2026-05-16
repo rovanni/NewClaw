@@ -2,6 +2,7 @@ import { MemoryManager } from './MemoryManager';
 import { GraphAnalytics } from './GraphAnalytics';
 import { EmbeddingService } from './EmbeddingService';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 const log = createLogger('Memorycurator');
 
 interface CuratorResult {
@@ -241,8 +242,8 @@ export class MemoryCurator {
             }
 
             return { prunedTraces, prunedMessages };
-        } catch (error: any) {
-            log.error('[StorageQuotas] Error:', error.message);
+        } catch (error) {
+            log.error('[StorageQuotas] Error:', errorMessage(error));
             return { prunedTraces: 0, prunedMessages: 0 };
         }
     }
@@ -277,8 +278,8 @@ export class MemoryCurator {
             }
 
             return { decayed: result.changes };
-        } catch (error: any) {
-            log.error('[TemporalDecay] Error:', error.message);
+        } catch (error) {
+            log.error('[TemporalDecay] Error:', errorMessage(error));
             return { decayed: 0 };
         }
     }
@@ -323,7 +324,7 @@ export class MemoryCurator {
                 await this.analytics.updateMetrics();
                 if (r.orphansFixed > 0) log.info(`[MemoryCurator] Initial: ${r.details.join('; ')}`);
                 else log.info('[MemoryCurator] Initial: graph clean, metrics updated.');
-            } catch (e: any) {
+            } catch (e) {
                 log.error('[MemoryCurator] Initial error:', e);
             }
         }, 2000);

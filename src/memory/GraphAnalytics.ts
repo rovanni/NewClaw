@@ -1,4 +1,5 @@
 import { MemoryManager } from './MemoryManager';
+import { errorMessage } from '../shared/errors';
 import { LouvainDetector } from './LouvainDetector';
 import { createLogger } from '../shared/AppLogger';
 
@@ -19,9 +20,9 @@ export class GraphAnalytics {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 return fn();
-            } catch (error: any) {
+            } catch (error) {
                 if (attempt === maxRetries) throw error;
-                const msg = error?.message || String(error);
+                const msg = errorMessage(error) || String(error);
                 if (msg.includes('malformed') || msg.includes('SQLITE_CORRUPT') || msg.includes('locked')) {
                     log.warn('db_retry', `Attempt ${attempt}/${maxRetries} failed, retrying in ${baseDelayMs * attempt}ms`, { attempt, maxRetries });
                     await new Promise(resolve => setTimeout(resolve, baseDelayMs * attempt));
@@ -153,8 +154,8 @@ export class GraphAnalytics {
                     INSERT OR IGNORE INTO node_metrics (node_id, usage_count, last_accessed_at, reinforcement_score, memory_class)
                     SELECT id, 0, CURRENT_TIMESTAMP, 0.0, 'latent' FROM memory_nodes
                 `).run();
-            } catch (e: any) {
-                log.warn('metrics_backfill_failed', e.message);
+            } catch (e) {
+                log.warn('metrics_backfill_failed', errorMessage(e));
             }
 
             // Update node_metrics with computed analytics
@@ -178,7 +179,7 @@ export class GraphAnalytics {
 
             log.info('metrics_updated', undefined, { nodeCount: nodes.length });
 
-        } catch (error: any) {
+        } catch (error) {
             log.error('metrics_update_failed', error);
         }
     }
@@ -264,7 +265,7 @@ export class GraphAnalytics {
 
             log.info('communities_detected', undefined, { communityCount: summary.communityCount, nodeCount: nodes.length });
             return { communityCount: summary.communityCount, updated: nodes.length };
-        } catch (error: any) {
+        } catch (error) {
             log.error('community_detection_failed', error);
             return { communityCount: 0, updated: 0 };
         }

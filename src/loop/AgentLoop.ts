@@ -25,6 +25,7 @@ import { traceManager } from '../core/ExecutionTrace';
 import { AgentFSM, AgentFSMEvent } from './AgentFSM';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { SkillLoader } from '../skills/SkillLoader';
+import { errorMessage } from '../shared/errors';
 const log = createLogger('Agentloop');
 
 export interface ToolResult {
@@ -129,7 +130,7 @@ function sanitizeContent(content: string): string {
             if (parsed.content && typeof parsed.content === 'string') {
                 return parsed.content;
             }
-        } catch (e: any) {
+        } catch (e) {
             // Not valid JSON inside the code fence — we return empty to strip the block
             // and prevent protocol leakage to the user.
         }
@@ -395,7 +396,8 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                     if (contentMatch && contentMatch[1]) {
                         return { action: { type: 'final_answer', content: contentMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"') }, evaluation: { is_complete: true, confidence: 'low', reason: 'Extracted from partial JSON' } };
                     }
-                } catch (e3) {
+                } catch {
+                    /* fallback de parse: retorna null abaixo */
                 }
                 return null;
             }
@@ -431,8 +433,8 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                 const transition = fsm.transition(event, meta);
                 log.info(`[${this.ts()}] [AGENT-FSM] ${transition.from} --${event}--> ${transition.to}`);
                 traceManager.addStep(trace, 'fsm_transition', transition);
-            } catch (error: any) {
-                log.warn(`[${this.ts()}] [AGENT-FSM] Invalid transition ${fsm.getState()} --${event}: ${error.message}`);
+            } catch (error) {
+                log.warn(`[${this.ts()}] [AGENT-FSM] Invalid transition ${fsm.getState()} --${event}: ${errorMessage(error)}`);
             }
         };
         move('START_TURN');
@@ -555,9 +557,9 @@ Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_com
                             this.persistTrace(trace, 0, 'completed', result.output, channelContext);
                             return result.output;
                         }
-                    } catch (toolError: any) {
+                    } catch (toolError) {
                         log.error(`[AUTH] Error executing approved tool ${pending.toolName}:`, toolError);
-                        loopMessages.push({ role: 'system', content: `[ERRO CRÍTICO] Falha ao executar comando autorizado: ${toolError.message}` });
+                        loopMessages.push({ role: 'system', content: `[ERRO CRÍTICO] Falha ao executar comando autorizado: ${errorMessage(toolError)}` });
                     }
                 }
             } else if (intentDecision.category === 'rejection') {
@@ -919,8 +921,8 @@ Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específic
                 provider: this.providerFactory.getProvider()?.name,
                 duration_ms: trace.totalDurationMs
             });
-        } catch (e: any) {
-            log.warn('persist_trace_failed', e.message);
+        } catch (e) {
+            log.warn('persist_trace_failed', errorMessage(e));
         }
     }
 
@@ -1023,18 +1025,18 @@ Agora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específic
             }
             
             return result;
-        } catch (error: any) {
+        } catch (error) {
             // This should never happen now — chatWithFallback returns a structured fallback
             // instead of throwing. But just in case, handle gracefully.
             const elapsed = Date.now() - callStart;
-            log.error(`Unexpected error in LLM call: ${error.message}.`);
+            log.error(`Unexpected error in LLM call: ${errorMessage(error)}.`);
             log.warn(`[TIMEOUT-DETAIL] status=error promptSize=${totalChars} estimatedTokens=${approxTokens} timeoutUsed=${Math.round(timeoutMs/1000)}s elapsed=${Math.round(elapsed/1000)}s provider=unknown model=unknown`);
             const errorResult: LLMResult = {
                 status: 'error',
                 content: '',
                 fallbackReason: 'error',
                 fallbackMessage: 'Erro inesperado ao processar sua mensagem.',
-                attempts: [{ provider: 'unknown', model: 'unknown', duration: elapsed, status: 'error', errorMessage: error.message }]
+                attempts: [{ provider: 'unknown', model: 'unknown', duration: elapsed, status: 'error', errorMessage: errorMessage(error) }]
             };
             this.recordMetrics(errorResult, timeoutMs, totalChars, approxTokens, chatProfile?.model);
             return errorResult;

@@ -9,6 +9,7 @@
  */
 
 import { Bot, Context, InputFile, InlineKeyboard } from 'grammy';
+import { errorMessage } from '../shared/errors';
 import {
     ChannelAdapter,
     ChannelType,
@@ -103,8 +104,8 @@ export class TelegramAdapter implements ChannelAdapter {
         try {
             // Delete webhook to ensure polling mode works
             await this.bot.api.deleteWebhook({ drop_pending_updates: true });
-        } catch (e: any) {
-            log.warn('delete_webhook_failed', e.message);
+        } catch (e) {
+            log.warn('delete_webhook_failed', errorMessage(e));
         }
 
         // Grace period: give Telegram time to release the old polling connection
@@ -136,8 +137,8 @@ export class TelegramAdapter implements ChannelAdapter {
             });
             // If we reach here, bot.start() resolved (meaning bot was stopped)
             log.warn('bot_start_resolved', 'bot.start() resolved unexpectedly — bot was stopped');
-        } catch (e: any) {
-            if (e.message?.includes('409') || e.message?.includes('Conflict')) {
+        } catch (e) {
+            if (errorMessage(e)?.includes('409') || errorMessage(e)?.includes('Conflict')) {
                 log.error('bot_start_409_conflict', 'Multiple bot instances detected. Waiting for old instance to stop...');
                 if (this.startRetries < this.maxStartRetries) {
                     this.startRetries++;
@@ -153,12 +154,12 @@ export class TelegramAdapter implements ChannelAdapter {
                 return;
             }
             // Network errors — schedule background retry instead of crashing
-            if (e.message?.includes('Network') || e.message?.includes('ECONNREFUSED') ||
-                e.message?.includes('ENOTFOUND') || e.message?.includes('ETIMEDOUT') ||
-                e.message?.includes('fetch failed') || e.message?.includes('request failed')) {
+            if (errorMessage(e)?.includes('Network') || errorMessage(e)?.includes('ECONNREFUSED') ||
+                errorMessage(e)?.includes('ENOTFOUND') || errorMessage(e)?.includes('ETIMEDOUT') ||
+                errorMessage(e)?.includes('fetch failed') || errorMessage(e)?.includes('request failed')) {
                 this.networkRetryCount++;
                 const delay = Math.min(this.networkRetryCount * 10, 300); // 10s, 20s, 30s... max 5min
-                log.error('bot_start_network_error', `Network error on start (attempt ${this.networkRetryCount}). Scheduling reconnect in ${delay}s...`, e.message);
+                log.error('bot_start_network_error', `Network error on start (attempt ${this.networkRetryCount}). Scheduling reconnect in ${delay}s...`, errorMessage(e));
                 this.scheduleReconnect(delay);
                 return;
             }
@@ -178,8 +179,8 @@ export class TelegramAdapter implements ChannelAdapter {
             this._isConnected = false;
             try {
                 await this.start();
-            } catch (e: any) {
-                log.error('reconnect_failed', 'Reconnect attempt failed', e.message);
+            } catch (e) {
+                log.error('reconnect_failed', 'Reconnect attempt failed', errorMessage(e));
             }
         }, delaySeconds * 1000);
     }
@@ -196,8 +197,8 @@ export class TelegramAdapter implements ChannelAdapter {
         try {
             await this.bot.api.deleteWebhook({ drop_pending_updates: true });
             log.info('webhook_dropped', 'Dropped pending updates before stop');
-        } catch (e: any) {
-            log.warn('drop_webhook_on_stop_failed', e.message);
+        } catch (e) {
+            log.warn('drop_webhook_on_stop_failed', errorMessage(e));
         }
 
         // Give Telegram a moment to process the drop
@@ -292,7 +293,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 // Telegram doesn't natively support reactions in the same way
                 // Skip for now — future: use setMessageReaction if available
             }
-        } catch (e: any) {
+        } catch (e) {
             log.error('send_failed', e);
         }
     }
@@ -322,7 +323,7 @@ export class TelegramAdapter implements ChannelAdapter {
                     await new Promise(r => setTimeout(r, 100));
                 }
             }
-        } catch (e: any) {
+        } catch (e) {
             log.error('send_to_chat_failed', e);
         }
     }
@@ -331,8 +332,8 @@ export class TelegramAdapter implements ChannelAdapter {
         try {
             const me = await this.bot.api.getMe();
             return { ok: true, details: `@${me.username} (${me.first_name})` };
-        } catch (e: any) {
-            return { ok: false, details: e.message };
+        } catch (e) {
+            return { ok: false, details: errorMessage(e) };
         }
     }
 
@@ -386,7 +387,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 text: ctx.message!.text!,
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
-                metadata: { botToken: this.config.botToken },
+                metadata: {},
             };
 
             if (this.bus) {
@@ -411,7 +412,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 text,
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
-                metadata: { botToken: this.config.botToken },
+                metadata: {},
             };
 
             if (this.bus) {
@@ -443,7 +444,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 }],
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
-                metadata: { botToken: this.config.botToken },
+                metadata: {},
             };
 
             if (this.bus) {
@@ -473,7 +474,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 }],
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
-                metadata: { botToken: this.config.botToken },
+                metadata: {},
             };
 
             if (this.bus) {
@@ -506,7 +507,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 }],
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
-                metadata: { botToken: this.config.botToken },
+                metadata: {},
             };
 
             if (this.bus) {
@@ -538,7 +539,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 }],
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
-                metadata: { botToken: this.config.botToken },
+                metadata: {},
             };
 
             if (this.bus) {
@@ -569,7 +570,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 text: data, // Treat button value as text input
                 rawContext: ctx,
                 chatId: ctx.chat?.id.toString() || userId,
-                metadata: { botToken: this.config.botToken, isCallback: true },
+                metadata: { isCallback: true },
             };
 
             if (this.bus) {
@@ -616,7 +617,7 @@ export class TelegramAdapter implements ChannelAdapter {
                     break;
                 }
             }
-        } catch (e: any) {
+        } catch (e) {
             log.error('attachment_send_failed', e);
         }
     }

@@ -6,6 +6,7 @@
 import PQueue from 'p-queue';
 import { createLogger } from '../shared/AppLogger';
 import { circuitRegistry } from './CircuitBreaker';
+import { errorMessage } from '../shared/errors';
 const log = createLogger('Providerfactory');
 
 /**
@@ -502,11 +503,11 @@ export class OllamaProvider implements ILLMProvider {
                 signal: controller.signal,
                 body: JSON.stringify(requestBody)
             });
-        } catch (fetchErr: any) {
+        } catch (fetchErr) {
             if (connectionTimer) clearTimeout(connectionTimer);
             if (activityTimer) clearTimeout(activityTimer);
             if (maxTimer) clearTimeout(maxTimer);
-            log.error(`[${streamId}] [STREAM] FETCH FAILED: ${fetchErr.message}`);
+            log.error(`[${streamId}] [STREAM] FETCH FAILED: ${errorMessage(fetchErr)}`);
             throw fetchErr;
         }
 
@@ -627,8 +628,8 @@ export class OllamaProvider implements ILLMProvider {
 
             // If we reached here without yielding 'done', log it
             log.warn(`[${streamId}] [STREAM] Stream ended WITHOUT explicit 'done' chunk. stats=${JSON.stringify(stats)}, elapsed=${Date.now() - startTime}ms`);
-        } catch (streamErr: any) {
-            log.error(`[${streamId}] [STREAM] ERROR: ${streamErr.message}. stats=${JSON.stringify(stats)}`);
+        } catch (streamErr) {
+            log.error(`[${streamId}] [STREAM] ERROR: ${errorMessage(streamErr)}. stats=${JSON.stringify(stats)}`);
             throw streamErr;
         } finally {
             if (connectionTimer) clearTimeout(connectionTimer);
@@ -678,7 +679,7 @@ export class OllamaProvider implements ILLMProvider {
                         break;
                 }
             }
-        } catch (streamErr: any) {
+        } catch (streamErr) {
             const elapsed = Date.now() - startTime;
             // IMPORTANT: thinking is INTERNAL reasoning — never leak to user.
             // If we have thinking but no content, log it but do NOT use as content.
@@ -687,7 +688,7 @@ export class OllamaProvider implements ILLMProvider {
                 log.warn(`[${consumeId}] [STREAM-CONSUME] Stream failed with ${thinking.length} chars of thinking but NO content — NOT leaking thinking to user`);
             }
             if (!content) {
-                log.error(`[${consumeId}] [STREAM-CONSUME] FAILED after ${chunkCount} chunks, ${elapsed}ms: ${streamErr.message}`);
+                log.error(`[${consumeId}] [STREAM-CONSUME] FAILED after ${chunkCount} chunks, ${elapsed}ms: ${errorMessage(streamErr)}`);
                 throw streamErr;
             }
             // If we have partial content, return it instead of throwing
@@ -1056,29 +1057,29 @@ export class ProviderFactory {
                     attemptLog.push({ provider: providerName, model: modelUsed, duration, status: 'empty' });
                     log.warn(`[${attemptId}] Empty response, moving to next`);
                     break;
-                } catch (error: any) {
+                } catch (error) {
                     const duration = Date.now() - attemptStart;
                     activeAbortController = null;
                     const prov = this.providers.get(providerName);
                     const modelUsed = (prov instanceof OllamaProvider) ? prov.getModel() : (prov as any)?.model || providerName;
-                    const isTimeout = error.message?.includes('Timeout');
+                    const isTimeout = errorMessage(error)?.includes('Timeout');
                     const isRetryable = isTimeout || 
-                                       error.message?.includes('abort') || 
-                                       error.message?.includes('ECONNRESET') ||
-                                       error.message?.includes('fetch failed') ||
-                                       error.message?.includes('network');
+                                       errorMessage(error)?.includes('abort') || 
+                                       errorMessage(error)?.includes('ECONNRESET') ||
+                                       errorMessage(error)?.includes('fetch failed') ||
+                                       errorMessage(error)?.includes('network');
                     
-                    log.warn(`[${attemptId}] FAILED ${error.message} duration=${duration}ms retryable=${isRetryable && attempt < MAX_RETRIES}`);
+                    log.warn(`[${attemptId}] FAILED ${errorMessage(error)} duration=${duration}ms retryable=${isRetryable && attempt < MAX_RETRIES}`);
                     attemptLog.push({ 
                         provider: providerName, 
                         model: modelUsed, 
                         duration, 
                         status: isTimeout ? 'timeout' : 'error', 
-                        errorMessage: error.message 
+                        errorMessage: errorMessage(error) 
                     });
                     
                     // Record failure in circuit breaker
-                    this.circuitBreakers.getOrCreate({ name: providerName }).recordFailure(error.message);
+                    this.circuitBreakers.getOrCreate({ name: providerName }).recordFailure(errorMessage(error));
                     
                     if (isRetryable && attempt < MAX_RETRIES) {
                         continue;
@@ -1106,8 +1107,8 @@ export class ProviderFactory {
                             attempts: attemptLog
                         };
                     }
-                } catch (fallbackErr: any) {
-                    attemptLog.push({ provider: 'ollama', model: 'non-streaming-fallback', duration: Date.now() - startTime, status: 'error', errorMessage: fallbackErr.message });
+                } catch (fallbackErr) {
+                    attemptLog.push({ provider: 'ollama', model: 'non-streaming-fallback', duration: Date.now() - startTime, status: 'error', errorMessage: errorMessage(fallbackErr) });
                 }
             }
         }
@@ -1183,8 +1184,8 @@ export class ProviderFactory {
                     return result;
                 }
                 errors.push(`${providerName}: empty response`);
-            } catch (error: any) {
-                errors.push(`${providerName}: ${error.message}`);
+            } catch (error) {
+                errors.push(`${providerName}: ${errorMessage(error)}`);
                 continue;
             }
         }

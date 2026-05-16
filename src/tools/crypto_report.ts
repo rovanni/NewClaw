@@ -3,6 +3,7 @@
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { errorMessage } from '../shared/errors';
 
 interface CacheEntry {
     data: any;
@@ -86,8 +87,8 @@ export class CryptoReportTool implements ToolExecutor {
             const report = `${symbol.toUpperCase()}: ${usd} | ${brl} | 24h: ${change24h} | Cap: ${marketCap} | Vol: ${vol24h}`;
 
             return { success: true, output: report };
-        } catch (error: any) {
-            return { success: false, output: '', error: error.message };
+        } catch (error) {
+            return { success: false, output: '', error: errorMessage(error) };
         }
     }
 }

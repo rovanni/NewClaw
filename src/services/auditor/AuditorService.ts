@@ -25,6 +25,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { createLogger } from '../../shared/AppLogger';
+import { errorMessage } from '../../shared/errors';
 const log = createLogger('AuditorService');
 
 // ============================================
@@ -189,8 +190,8 @@ export class AuditorService {
                 this.db.exec('ALTER TABLE audit_findings ADD COLUMN risk_level TEXT DEFAULT \'medium\'');
                 log.info('migration_added_risk_level', 'Added risk_level column to audit_findings');
             }
-        } catch (e: any) {
-            log.warn('migration_risk_level_failed', e.message);
+        } catch (e) {
+            log.warn('migration_risk_level_failed', errorMessage(e));
         }
     }
 
@@ -271,13 +272,13 @@ export class AuditorService {
                 const content = fs.readFileSync(file, 'utf-8');
                 const findings = await this.analyzeCodeWithLLM(file, content);
                 this.findings.push(...findings);
-            } catch (e: any) {
+            } catch (e) {
                 this.findings.push({
                     severity: 'warning',
                     category: 'code',
                     file,
                     title: 'Erro ao ler arquivo',
-                    description: e.message,
+                    description: errorMessage(e),
                     autoFixable: false
                 });
             }
@@ -433,7 +434,7 @@ Respond ONLY in JSON:
                                 });
                             });
                         }
-                    } catch (e) {}
+                    } catch (e) { log.debug('audit_check_skipped', String(e)); }
                 }
 
                 this.findRuntimePatterns(lines);
@@ -454,7 +455,7 @@ Respond ONLY in JSON:
                     riskLevel: 'high'
                 });
             }
-        } catch (e) {}
+        } catch (e) { log.debug('audit_check_skipped', String(e)); }
 
         // Live memory snapshot (always fresh)
         try {
@@ -490,7 +491,7 @@ Respond ONLY in JSON:
                     riskLevel: 'medium'
                 });
             }
-        } catch (e) {}
+        } catch (e) { log.debug('audit_check_skipped', String(e)); }
 
         // Live event loop check
         try {
@@ -508,7 +509,7 @@ Respond ONLY in JSON:
                     riskLevel: stats.lagMs > 2000 ? 'high' : 'medium'
                 });
             }
-        } catch (e) {}
+        } catch (e) { log.debug('audit_check_skipped', String(e)); }
     }
 
     private findRuntimePatterns(lines: string[]): void {
@@ -571,7 +572,7 @@ Respond ONLY in JSON:
                             riskLevel: 'low'
                         });
                     }
-                } catch (e) {}
+                } catch (e) { log.debug('audit_check_skipped', String(e)); }
             }
 
             // Check for orphans/old conversations
@@ -592,14 +593,14 @@ Respond ONLY in JSON:
                         riskLevel: 'low'
                     });
                 }
-            } catch (e) {}
+            } catch (e) { log.debug('audit_check_skipped', String(e)); }
 
-        } catch (e: any) {
+        } catch (e) {
             this.findings.push({
                 severity: 'critical',
                 category: 'data',
                 title: 'Erro de conexão ou auditoria de dados',
-                description: e.message,
+                description: errorMessage(e),
                 suggestion: 'Verificar se o arquivo data/newclaw.db está acessível e não está corrompido.',
                 autoFixable: false,
                 riskLevel: 'high'
@@ -648,14 +649,14 @@ Respond ONLY in JSON:
                             riskLevel: 'medium'
                         });
                     }
-                } catch (e) {}
+                } catch (e) { log.debug('audit_check_skipped', String(e)); }
             }
-        } catch (e: any) {
+        } catch (e) {
             this.findings.push({
                 severity: 'critical',
                 category: 'integration',
                 title: 'Ollama inacessível',
-                description: e.message,
+                description: errorMessage(e),
                 suggestion: 'Iniciar Ollama: ollama serve',
                 autoFixable: false,
                 riskLevel: 'high'
@@ -691,13 +692,13 @@ Respond ONLY in JSON:
                         riskLevel: 'high'
                     });
                 }
-            } catch (e: any) {
-                channelStatuses.push({ channel: 'Telegram', connected: false, detail: e.message });
+            } catch (e) {
+                channelStatuses.push({ channel: 'Telegram', connected: false, detail: errorMessage(e) });
                 this.findings.push({
                     severity: 'warning',
                     category: 'integration',
                     title: 'Telegram API inacessível',
-                    description: e.message,
+                    description: errorMessage(e),
                     suggestion: 'Verificar conexão com api.telegram.org',
                     autoFixable: false,
                     riskLevel: 'medium'
@@ -730,13 +731,13 @@ Respond ONLY in JSON:
                         riskLevel: 'high'
                     });
                 }
-            } catch (e: any) {
-                channelStatuses.push({ channel: 'Discord', connected: false, detail: e.message });
+            } catch (e) {
+                channelStatuses.push({ channel: 'Discord', connected: false, detail: errorMessage(e) });
                 this.findings.push({
                     severity: 'warning',
                     category: 'integration',
                     title: 'Discord API inacessível',
-                    description: e.message,
+                    description: errorMessage(e),
                     suggestion: 'Verificar conexão com discord.com',
                     autoFixable: false,
                     riskLevel: 'medium'
@@ -789,8 +790,8 @@ Respond ONLY in JSON:
                 } else {
                     channelStatuses.push({ channel: 'Signal', connected: true, detail: `${signalNumber} (cli ok)` });
                 }
-            } catch (e: any) {
-                channelStatuses.push({ channel: 'Signal', connected: false, detail: e.message });
+            } catch (e) {
+                channelStatuses.push({ channel: 'Signal', connected: false, detail: errorMessage(e) });
             }
         } else {
             channelStatuses.push({ channel: 'Signal', connected: false, detail: 'SIGNAL_PHONE_NUMBER não configurado' });
@@ -807,7 +808,7 @@ Respond ONLY in JSON:
             } else {
                 channelStatuses.push({ channel: 'Web Dashboard', connected: false, detail: `HTTP ${dashResponse.status}` });
             }
-        } catch (e: any) {
+        } catch (e) {
             channelStatuses.push({ channel: 'Web Dashboard', connected: false, detail: 'não responde' });
             this.findings.push({
                 severity: 'warning',
@@ -865,7 +866,7 @@ Respond ONLY in JSON:
                     riskLevel: usage > 95 ? 'high' : 'medium'
                 });
             }
-        } catch (e) {}
+        } catch (e) { log.debug('audit_check_skipped', String(e)); }
 
         // Node.js version
         try {
@@ -882,7 +883,7 @@ Respond ONLY in JSON:
                     riskLevel: 'medium'
                 });
             }
-        } catch (e) {}
+        } catch (e) { log.debug('audit_check_skipped', String(e)); }
 
         // Process health
         try {
@@ -899,7 +900,7 @@ Respond ONLY in JSON:
                     riskLevel: 'high'
                 });
             }
-        } catch (e) {}
+        } catch (e) { log.debug('audit_check_skipped', String(e)); }
     }
 
     // ============================================
@@ -950,8 +951,8 @@ Respond ONLY in JSON:
                     this.previousFindingTitles.add(f.title);
                 }
             }
-        } catch (e: any) {
-            log.info(`No previous audit report found to deduplicate (or table not ready): ${e.message}`);
+        } catch (e) {
+            log.info(`No previous audit report found to deduplicate (or table not ready): ${errorMessage(e)}`);
         }
     }
 
@@ -1040,7 +1041,7 @@ Respond ONLY in JSON:
                 );
             }
         } catch (e) {
-            console.error('[AUDITOR] Erro ao salvar relatório:', e);
+            log.error('audit_error', e, '[AUDITOR] Erro ao salvar relatório:');
         }
     }
 
@@ -1216,14 +1217,14 @@ Respond ONLY in JSON:
                 });
                 this.logFix(finding.id, 'applied', `Patch aplicado: ${patch.summary}`);
 
-            } catch (error: any) {
+            } catch (error) {
                 results.push({
                     findingId: finding.id,
                     title: finding.title,
                     status: 'error',
-                    reason: error.message
+                    reason: errorMessage(error)
                 });
-                this.logFix(finding.id, 'rejected', `Exceção: ${error.message}`);
+                this.logFix(finding.id, 'rejected', `Exceção: ${errorMessage(error)}`);
             }
         }
 
@@ -1331,8 +1332,8 @@ Respond ONLY in JSON (no markdown, no explanation):
             }
 
             return patch;
-        } catch (e: any) {
-            console.error(`[AUDITOR-FIX] ❌ Erro ao gerar patch: ${e.message}`);
+        } catch (e) {
+            log.error('audit_error', undefined, `[AUDITOR-FIX] ❌ Erro ao gerar patch: ${errorMessage(e)}`);
             return null;
         }
     }
@@ -1358,13 +1359,13 @@ Respond ONLY in JSON (no markdown, no explanation):
             try {
                 const opinion = await this.getAgentOpinion(agent.name, agent.role, patch, finding);
                 opinions.push(opinion);
-            } catch (e: any) {
+            } catch (e) {
                 // On error, default to rejection
                 opinions.push({
                     agent: agent.name,
                     approve: false,
                     confidence: 0,
-                    reason: `Erro na avaliação: ${e.message}`
+                    reason: `Erro na avaliação: ${errorMessage(e)}`
                 });
             }
         }
@@ -1493,8 +1494,8 @@ Respond ONLY in JSON:
                 if (!validSyntax) {
                     reasons.push('String "before" não encontrada no arquivo — patch não aplicável');
                 }
-            } catch (e: any) {
-                reasons.push(`Erro ao ler arquivo: ${e.message}`);
+            } catch (e) {
+                reasons.push(`Erro ao ler arquivo: ${errorMessage(e)}`);
             }
         }
 
@@ -1569,7 +1570,7 @@ Respond ONLY in JSON:
 
         try {
             if (!fs.existsSync(fullPath)) {
-                console.error(`[AUDITOR-FIX] ❌ Arquivo não encontrado: ${fullPath}`);
+                log.error('audit_error', undefined, `[AUDITOR-FIX] ❌ Arquivo não encontrado: ${fullPath}`);
                 return false;
             }
 
@@ -1577,7 +1578,7 @@ Respond ONLY in JSON:
 
             // Verify 'before' exists in current content
             if (!content.includes(patch.before)) {
-                console.error(`[AUDITOR-FIX] ❌ String "before" não encontrada no arquivo`);
+                log.error('audit_error', undefined, `[AUDITOR-FIX] ❌ String "before" não encontrada no arquivo`);
                 return false;
             }
 
@@ -1591,7 +1592,7 @@ Respond ONLY in JSON:
 
             // Verify the replacement actually happened
             if (newContent === content) {
-                console.error(`[AUDITOR-FIX] ❌ Patch não alterou o conteúdo`);
+                log.error('audit_error', undefined, `[AUDITOR-FIX] ❌ Patch não alterou o conteúdo`);
                 return false;
             }
 
@@ -1600,8 +1601,8 @@ Respond ONLY in JSON:
             log.info('patch_applied', `✅ Patch aplicado em: ${patch.file}`);
 
             return true;
-        } catch (e: any) {
-            console.error(`[AUDITOR-FIX] ❌ Erro ao aplicar patch: ${e.message}`);
+        } catch (e) {
+            log.error('audit_error', undefined, `[AUDITOR-FIX] ❌ Erro ao aplicar patch: ${errorMessage(e)}`);
             // Try to restore from backup
             try {
                 const backupPath = fullPath + '.bak';
@@ -1611,7 +1612,7 @@ Respond ONLY in JSON:
                     log.info('backup_restored', `🔄 Restaurado do backup: ${fullPath}`);
                 }
             } catch (restoreError) {
-                console.error(`[AUDITOR-FIX] ❌ Falha ao restaurar backup: ${restoreError}`);
+                log.error('audit_error', undefined, `[AUDITOR-FIX] ❌ Falha ao restaurar backup: ${restoreError}`);
             }
             return false;
         }
@@ -1644,7 +1645,7 @@ Respond ONLY in JSON:
             const logLine = `[${timestamp}] finding=#${findingId} result=${result} reason="${reason.replace(/"/g, '\\"')}"\n`;
             fs.appendFileSync(this.fixLogPath, logLine, 'utf-8');
         } catch (e) {
-            console.error(`[AUDITOR-FIX] Erro ao escrever log: ${e}`);
+            log.error('audit_error', undefined, `[AUDITOR-FIX] Erro ao escrever log: ${e}`);
         }
     }
 

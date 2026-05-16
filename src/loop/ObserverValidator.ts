@@ -6,6 +6,7 @@
 
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 const log = createLogger('Observervalidator');
 
 export interface ValidationResult {
@@ -90,8 +91,8 @@ export class ObserverValidator {
                 confidence: Number(result.confidence) || 0.5,
                 suggestedFix: result.suggested_fix || result.suggestedFix || undefined
             };
-        } catch (error: any) {
-            log.info(`Error: ${error.message}, assuming approved`);
+        } catch (error) {
+            log.info(`Error: ${errorMessage(error)}, assuming approved`);
             return { approved: true, reason: 'Observer failed, assuming OK', confidence: 0.3 };
         }
     }

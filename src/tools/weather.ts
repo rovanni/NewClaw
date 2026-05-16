@@ -5,6 +5,7 @@
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 const log = createLogger('WeatherTool');
 
 export class WeatherTool implements ToolExecutor {
@@ -72,8 +73,8 @@ export class WeatherTool implements ToolExecutor {
             try {
                 const result = await source.fn();
                 if (result.success) return result;
-            } catch (error: any) {
-                log.warn(`[WeatherTool] ${source.name} failed for ${city}: ${error.message}`);
+            } catch (error) {
+                log.warn(`[WeatherTool] ${source.name} failed for ${city}: ${errorMessage(error)}`);
             }
         }
 

@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 const log = createLogger('Skillloader');
 
 export interface SkillMeta {
@@ -57,8 +58,8 @@ export class SkillLoader {
                     this.cache.set(skill.name, skill);
                     log.info(`Carregada: ${skill.name} - ${skill.description}`);
                 }
-            } catch (error: any) {
-                log.error(`Erro ao carregar ${entry.name}:`, error.message);
+            } catch (error) {
+                log.error(`Erro ao carregar ${entry.name}:`, errorMessage(error));
             }
         }
 

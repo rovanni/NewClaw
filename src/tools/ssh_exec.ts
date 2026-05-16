@@ -10,6 +10,7 @@ import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { exec } from 'child_process';
 import { resolveHost, isDestructive } from './server_config';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 
 const log = createLogger('SshExecTool');
 
@@ -90,8 +91,8 @@ export class SshExecTool implements ToolExecutor {
             });
 
             return { success: true, output: output.trim().slice(0, 8000) };
-        } catch (error: any) {
-            const msg = error.message || String(error);
+        } catch (error) {
+            const msg = errorMessage(error) || String(error);
             
             // Friendly error messages
             if (msg.includes('Permission denied')) {

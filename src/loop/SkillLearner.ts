@@ -8,6 +8,7 @@
 
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 const log = createLogger('Skilllearner');
 
 export interface Skill {
@@ -136,8 +137,8 @@ export class SkillLearner {
             }
 
             this.tryCreateSkillProposal();
-        } catch (error: any) {
-            log.error(`Error recording pattern: ${error.message}`);
+        } catch (error) {
+            log.error(`Error recording pattern: ${errorMessage(error)}`);
         }
     }
 

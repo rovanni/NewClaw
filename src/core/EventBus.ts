@@ -10,6 +10,7 @@
 
 import { EventEmitter } from 'events';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 const log = createLogger('EventBus');
 
 // ── Tipos de Evento Tipados ──────────────────────────────────────
@@ -192,7 +193,7 @@ class EventBusClass {
             log.info(`[EventBus] Emit '${enriched.type}' → ${handlers.length} handler(s)`);
             await Promise.allSettled(
                 handlers.map(async (handler) => {
-                    try { await handler(enriched); } catch (e: any) { log.error(`[EventBus] Handler error: ${e.message}`); }
+                    try { await handler(enriched); } catch (e) { log.error(`[EventBus] Handler error: ${errorMessage(e)}`); }
                 })
             );
         }

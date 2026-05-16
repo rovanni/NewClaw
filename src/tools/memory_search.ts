@@ -11,6 +11,7 @@
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { MemoryManager } from '../memory/MemoryManager';
+import { errorMessage } from '../shared/errors';
 
 /**
  * Sinônimos e expansões para termos comuns em pt-BR.
@@ -135,7 +136,7 @@ export class MemorySearchTool implements ToolExecutor {
             }).join('\n');
 
             return { success: true, output };
-        } catch (error: any) {
+        } catch (error) {
             // Fallback to simple search
             try {
                 const nodes = this.memoryManager.searchNodes(query, limit);
@@ -144,8 +145,8 @@ export class MemorySearchTool implements ToolExecutor {
                 }
                 const output = nodes.map(n => `📌 ${n.name} [${n.type}]: ${(n.content || '').slice(0, 200)}`).join('\n');
                 return { success: true, output };
-            } catch (fallbackError: any) {
-                return { success: false, output: '', error: `Erro na busca: ${fallbackError.message}` };
+            } catch (fallbackError) {
+                return { success: false, output: '', error: `Erro na busca: ${errorMessage(fallbackError)}` };
             }
         }
     }

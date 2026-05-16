@@ -8,6 +8,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 const log = createLogger('Skillinstaller');
 
 const execAsync = promisify(exec);
@@ -96,9 +97,9 @@ export class SkillInstaller {
             }
 
             return { success: false, error: 'Nenhum método de instalação fornecido (git, npm, npx).' };
-        } catch (err: any) {
-            log.error('[SkillInstaller] Error:', err.message);
-            return { success: false, error: err.message };
+        } catch (err) {
+            log.error('[SkillInstaller] Error:', errorMessage(err));
+            return { success: false, error: errorMessage(err) };
         }
     }
 
@@ -130,8 +131,8 @@ export class SkillInstaller {
         try {
             fs.rmSync(skillPath, { recursive: true, force: true });
             return { success: true, data: { skillName } };
-        } catch (err: any) {
-            return { success: false, error: err.message };
+        } catch (err) {
+            return { success: false, error: errorMessage(err) };
         }
     }
 }

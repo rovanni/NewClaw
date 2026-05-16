@@ -12,6 +12,7 @@
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import fs from 'fs';
 import path from 'path';
+import { errorMessage } from '../shared/errors';
 
 export class ReadTool implements ToolExecutor {
     name = 'read';
@@ -176,8 +177,8 @@ export class ReadTool implements ToolExecutor {
             }
 
             return { success: true, output: content };
-        } catch (error: any) {
-            return { success: false, output: '', error: error.message };
+        } catch (error) {
+            return { success: false, output: '', error: errorMessage(error) };
         }
     }
 }

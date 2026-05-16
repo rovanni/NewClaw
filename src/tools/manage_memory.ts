@@ -1,5 +1,6 @@
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { MemoryManager } from '../memory/MemoryManager';
+import { errorMessage } from '../shared/errors';
 
 export class ManageMemoryTool implements ToolExecutor {
     name = 'manage_memory';
@@ -138,11 +139,11 @@ export class ManageMemoryTool implements ToolExecutor {
 
             return { success: false, error: `Ação "${action}" desconhecida.`, output: '' };
 
-        } catch (error: any) {
+        } catch (error) {
             return {
                 success: false,
                 output: '',
-                error: `System Error: ${error.message}`
+                error: `System Error: ${errorMessage(error)}`
             };
         }
     }

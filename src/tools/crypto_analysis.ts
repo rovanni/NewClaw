@@ -7,6 +7,7 @@
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { errorMessage } from '../shared/errors';
 
 interface CacheEntry {
     data: any;
@@ -53,8 +54,8 @@ export class CryptoAnalysisTool implements ToolExecutor {
                 case 'detail': return await this.detail(symbol);
                 default: return await this.analiseSangrando(limit);
             }
-        } catch (error: any) {
-            return { success: false, output: '', error: `Erro na análise: ${error.message}` };
+        } catch (error) {
+            return { success: false, output: '', error: `Erro na análise: ${errorMessage(error)}` };
         }
     }
 

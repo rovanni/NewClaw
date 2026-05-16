@@ -9,6 +9,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { errorMessage } from '../shared/errors';
 
 const execFileAsync = promisify(execFile);
 
@@ -66,8 +67,8 @@ export class WebNavigateTool implements ToolExecutor {
                 default:
                     return { success: false, output: '', error: 'action invalida. Use search, open ou follow_link.' };
             }
-        } catch (error: any) {
-            return { success: false, output: '', error: error.message || 'falha na navegacao web.' };
+        } catch (error) {
+            return { success: false, output: '', error: errorMessage(error) || 'falha na navegacao web.' };
         }
     }
 

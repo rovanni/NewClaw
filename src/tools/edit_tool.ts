@@ -13,6 +13,7 @@
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import fs from 'fs';
 import path from 'path';
+import { errorMessage } from '../shared/errors';
 
 export class EditTool implements ToolExecutor {
     name = 'edit';
@@ -198,8 +199,8 @@ export class EditTool implements ToolExecutor {
                 output: '',
                 error: 'Especifique o modo: (1) oldText+newText para replace, (2) startLine+endLine para patch, ou (3) append=true+content para adicionar ao final'
             };
-        } catch (error: any) {
-            return { success: false, output: '', error: error.message };
+        } catch (error) {
+            return { success: false, output: '', error: errorMessage(error) };
         }
     }
 }

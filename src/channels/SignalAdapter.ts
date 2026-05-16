@@ -16,6 +16,7 @@
  */
 
 import { execFile } from 'child_process';
+import { errorMessage } from '../shared/errors';
 import { createServer, type Server } from 'http';
 import {
     ChannelAdapter,
@@ -117,7 +118,7 @@ export class SignalAdapter implements ChannelAdapter {
         try {
             await this.execSignalCli(['--version']);
             log.info('cli_found', 'signal-cli found');
-        } catch (e: any) {
+        } catch (e) {
             log.error('cli_not_found', e, 'signal-cli not found. Install: https://github.com/AsamK/signal-cli');
             return;
         }
@@ -186,7 +187,7 @@ export class SignalAdapter implements ChannelAdapter {
                     await new Promise(r => setTimeout(r, 500));
                 }
             }
-        } catch (e: any) {
+        } catch (e) {
             log.error('send_failed', e, `Signal send failed to ${phoneNumber}`);
         }
     }
@@ -203,8 +204,8 @@ export class SignalAdapter implements ChannelAdapter {
         try {
             const version = await this.execSignalCli(['--version']);
             return { ok: true, details: `Signal CLI ${version.trim()}` };
-        } catch (e: any) {
-            return { ok: false, details: `signal-cli error: ${e.message}` };
+        } catch (e) {
+            return { ok: false, details: `signal-cli error: ${errorMessage(e)}` };
         }
     }
 
@@ -215,7 +216,7 @@ export class SignalAdapter implements ChannelAdapter {
             while (this._isConnected) {
                 try {
                     await this.receiveMessages();
-                } catch (e: any) {
+                } catch (e) {
                     log.error('receive_error', e, 'Signal receive loop error');
                     await new Promise(r => setTimeout(r, 5000));
                 }
@@ -389,7 +390,7 @@ export class SignalAdapter implements ChannelAdapter {
                             await this.handleSignalMessage(msg);
                             res.writeHead(200);
                             res.end('OK');
-                        } catch (e: any) {
+                        } catch (e) {
                             log.error('webhook_parse_error', e);
                             res.writeHead(400);
                             res.end('Bad Request');

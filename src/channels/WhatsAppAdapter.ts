@@ -30,6 +30,7 @@ import { MessageBus } from './MessageBus';
 import { createLogger } from '../shared/AppLogger';
 import PQueue from 'p-queue';
 import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { errorMessage } from '../shared/errors';
 
 const log = createLogger('WhatsAppAdapter');
 
@@ -152,8 +153,8 @@ export class WhatsAppAdapter implements ChannelAdapter {
                                 await this.sock.requestPairingCode(this.config.phoneNumber);
                                 log.info('pairing_code', `Pairing code requested for ${this.config.phoneNumber}`);
                             }
-                        } catch (error: any) {
-                            log.error('discord_login_error', error.message);
+                        } catch (error) {
+                            log.error('discord_login_error', errorMessage(error));
                         }
                     }
                 }
@@ -171,7 +172,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
             });
 
             log.info('adapter_started', 'WhatsApp adapter started');
-        } catch (e: any) {
+        } catch (e) {
             log.error('start_failed', e, 'WhatsApp adapter failed to start');
             this._isConnected = false;
         }
@@ -217,7 +218,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
                         await new Promise(r => setTimeout(r, 500));
                     }
                 }
-            } catch (e: any) {
+            } catch (e) {
                 log.error('send_failed', e, `WhatsApp send failed to ${jid}`);
             }
         });
@@ -374,7 +375,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
                     break;
                 }
             }
-        } catch (e: any) {
+        } catch (e) {
             log.error('attachment_send_failed', e);
         }
     }

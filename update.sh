@@ -72,15 +72,26 @@ if [ -f "$ENV_BACKUP" ]; then
 fi
 
 # 7. Install deps if changed
+# Instala TODAS as deps (incluindo devDeps como @types/* e typescript),
+# porque o build precisa do tsc e dos tipos. Depois do build, faz prune
+# para devolver o node_modules ao estado de produção.
 DIFF=$(git diff $LOCAL..$REMOTE --name-only 2>/dev/null || true)
+DEPS_CHANGED=0
 if echo "$DIFF" | grep -qE 'package(-lock)?\.json'; then
-    echo "📦 Instalando dependências..."
-    npm install --production
+    DEPS_CHANGED=1
+    echo "📦 Instalando dependências (incluindo dev para build)..."
+    npm install
 fi
 
 # 8. Build
 echo "🔧 Compilando..."
 npm run build
+
+# 8b. Prune devDeps se foram instaladas (mantém node_modules slim em produção)
+if [ "$DEPS_CHANGED" -eq 1 ]; then
+    echo "🧹 Removendo devDependencies pós-build..."
+    npm prune --omit=dev
+fi
 
 # 9. Restart if requested
 if [ "$1" = "restart" ] || [ "$1" = "-r" ]; then

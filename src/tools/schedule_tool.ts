@@ -7,6 +7,7 @@
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { SchedulerService } from '../services/SchedulerService';
+import { errorMessage } from '../shared/errors';
 
 export class ScheduleTool implements ToolExecutor {
     name = 'schedule';
@@ -110,8 +111,8 @@ export class ScheduleTool implements ToolExecutor {
 
             return { success: false, error: `Ação "${action}" inválida.`, output: '' };
 
-        } catch (error: any) {
-            return { success: false, output: '', error: `Erro: ${error.message}` };
+        } catch (error) {
+            return { success: false, output: '', error: `Erro: ${errorMessage(error)}` };
         }
     }
 }

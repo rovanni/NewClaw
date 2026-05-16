@@ -6,6 +6,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { errorMessage } from '../shared/errors';
 import { AttentionLayer } from "./AttentionLayer";
 import { AttentionFeedback } from "./AttentionFeedback";
 import path from 'path';
@@ -243,10 +244,10 @@ export class MemoryManager {
         const needsFtsRebuild = currentCols.includes('fts_rowid');
 
         if (needsFtsRebuild) {
-            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_ai'); } catch (e: any) { log.warn('fts_migration_cleanup_failed', e.message); }
-            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_ad'); } catch (e: any) { log.warn('fts_migration_cleanup_failed', e.message); }
-            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_au'); } catch (e: any) { log.warn('fts_migration_cleanup_failed', e.message); }
-            try { this.db.exec('DROP TABLE IF EXISTS memory_nodes_fts'); } catch (e: any) { log.warn('fts_migration_cleanup_failed', e.message); }
+            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_ai'); } catch (e) { log.warn('fts_migration_cleanup_failed', errorMessage(e)); }
+            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_ad'); } catch (e) { log.warn('fts_migration_cleanup_failed', errorMessage(e)); }
+            try { this.db.exec('DROP TRIGGER IF EXISTS memory_nodes_au'); } catch (e) { log.warn('fts_migration_cleanup_failed', errorMessage(e)); }
+            try { this.db.exec('DROP TABLE IF EXISTS memory_nodes_fts'); } catch (e) { log.warn('fts_migration_cleanup_failed', errorMessage(e)); }
 
             // Migrate: recreate table without fts_rowid (disable FK during migration)
             this.db.pragma('foreign_keys = OFF');
@@ -278,16 +279,16 @@ export class MemoryManager {
                 log.info('[MemoryManager] Rebuilding FTS index (empty)...');
                 this.db.exec(`INSERT INTO memory_nodes_fts(memory_nodes_fts) VALUES('rebuild')`);
             }
-        } catch (e: any) {
+        } catch (e) {
             // FTS table might not exist yet or be corrupted — rebuild safely
-            log.warn('[MemoryManager] FTS rebuild needed:', e.message);
+            log.warn('[MemoryManager] FTS rebuild needed:', errorMessage(e));
             try {
                 this.db.exec('DROP TABLE IF EXISTS memory_nodes_fts');
                 this.db.exec(`CREATE VIRTUAL TABLE memory_nodes_fts USING fts5(name, content, type, content='memory_nodes')`);
                 this.db.exec(`INSERT INTO memory_nodes_fts(memory_nodes_fts) VALUES('rebuild')`);
                 log.info('[MemoryManager] FTS index rebuilt successfully');
-            } catch (rebuildErr: any) {
-                log.error('[MemoryManager] FTS rebuild failed:', rebuildErr.message);
+            } catch (rebuildErr) {
+                log.error('[MemoryManager] FTS rebuild failed:', errorMessage(rebuildErr));
             }
         }
 
@@ -386,7 +387,7 @@ export class MemoryManager {
 
         try {
             this.db.exec(sql);
-        } catch (e: any) {
+        } catch (e) {
             // Ignore if index already exists or similar non-critical errors
         }
     }
@@ -416,9 +417,9 @@ export class MemoryManager {
 
         try {
             this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
-        } catch (e: any) {
-            if (!e.message.includes('duplicate column name')) {
-                log.warn('migration_column_failed', e.message, { table, column });
+        } catch (e) {
+            if (!errorMessage(e).includes('duplicate column name')) {
+                log.warn('migration_column_failed', errorMessage(e), { table, column });
             }
         }
     }
@@ -462,9 +463,9 @@ export class MemoryManager {
             ((this.db.prepare("PRAGMA table_info(user_profile)").all() as any[]) || []).map(c => c.name)
         );
         const addColumn = (sql: string) => {
-            try { this.db.exec(sql); } catch (e: any) { 
-                if (!e.message.includes('duplicate column name')) {
-                    log.warn('schema_update_failed', e.message, { sql });
+            try { this.db.exec(sql); } catch (e) { 
+                if (!errorMessage(e).includes('duplicate column name')) {
+                    log.warn('schema_update_failed', errorMessage(e), { sql });
                 }
             }
         };
@@ -495,8 +496,8 @@ export class MemoryManager {
         this.addNode({ id: 'user_identity', type: 'identity', name: name, content: `Nome oficial: ${name}`, confidence: 1.0 });
         try { 
             this.addEdge('core_user', 'user_identity', 'has_identity', 1.0, 1.0); 
-        } catch (e: any) {
-            log.warn('bootstrap_edge_failed', e.message, { from: 'core_user', to: 'user_identity' });
+        } catch (e) {
+            log.warn('bootstrap_edge_failed', errorMessage(e), { from: 'core_user', to: 'user_identity' });
         }
     }
 
@@ -1191,8 +1192,8 @@ export class MemoryManager {
                 trace.provider || null,
                 trace.duration_ms || null
             );
-        } catch (e: any) {
-            log.error('save_trace_failed', e.message);
+        } catch (e) {
+            log.error('save_trace_failed', errorMessage(e));
         }
     }
 }

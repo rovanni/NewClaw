@@ -13,6 +13,7 @@
 
 import { eventBus, EventTypes } from './EventBus';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 
 const log = createLogger('CircuitBreaker');
 
@@ -106,7 +107,7 @@ export class CircuitBreaker {
             const duration = Date.now() - startTime;
             this.onSuccess(duration);
             return result;
-        } catch (error: any) {
+        } catch (error) {
             const duration = Date.now() - startTime;
             this.onFailure(error, duration);
             throw error;
@@ -258,7 +259,7 @@ export class CircuitBreaker {
         this.lastFailureTime = Date.now();
         this.updateAvgDuration(durationMs);
 
-        if (error?.message?.includes('timeout') || error?.message?.includes('abort')) {
+        if (errorMessage(error)?.includes('timeout') || errorMessage(error)?.includes('abort')) {
             this.totalTimeouts++;
         }
 

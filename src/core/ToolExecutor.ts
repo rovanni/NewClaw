@@ -13,6 +13,7 @@
 import { CircuitBreaker, circuitRegistry, CircuitBreakerOpenError } from './CircuitBreaker';
 import { eventBus } from './EventBus';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 
 const log = createLogger('ToolExecutor');
 
@@ -188,9 +189,9 @@ export class ToolExecutorService {
                     fromCircuitBreaker: false,
                 };
 
-            } catch (error: any) {
+            } catch (error) {
                 const durationMs = Date.now() - startTime;
-                lastError = error.message;
+                lastError = errorMessage(error);
 
                 // CircuitBreaker open — don't retry
                 if (error instanceof CircuitBreakerOpenError) {
@@ -206,8 +207,8 @@ export class ToolExecutorService {
 
                     return {
                         success: false,
-                        output: `Circuito aberto para "${tool.name}". ${error.message}`,
-                        error: error.message,
+                        output: `Circuito aberto para "${tool.name}". ${errorMessage(error)}`,
+                        error: errorMessage(error),
                         durationMs,
                         attempts,
                         timedOut: false,
@@ -217,7 +218,7 @@ export class ToolExecutorService {
                 }
 
                 // Timeout — emit event
-                if (error.message?.includes('timed out')) {
+                if (errorMessage(error)?.includes('timed out')) {
                     if (!silent) {
                         eventBus.emit('tool:timeout', {
                             tool: tool.name,
@@ -230,7 +231,7 @@ export class ToolExecutorService {
                     return {
                         success: false,
                         output: `Ferramenta "${tool.name}" excedeu o tempo limite de ${Math.round(timeout / 1000)}s.`,
-                        error: error.message,
+                        error: errorMessage(error),
                         durationMs,
                         attempts,
                         timedOut: true,
@@ -273,7 +274,7 @@ export class ToolExecutorService {
                     eventBus.emit('tool:failed', {
                         tool: tool.name,
                         input: args,
-                        error: error.message,
+                        error: errorMessage(error),
                         durationMs,
                     });
                 }
@@ -281,7 +282,7 @@ export class ToolExecutorService {
                 return {
                     success: false,
                     output: `Falha na execução de "${tool.name}" após ${attempts} tentativa(s).`,
-                    error: error.message,
+                    error: errorMessage(error),
                     durationMs,
                     attempts,
                     timedOut: false,

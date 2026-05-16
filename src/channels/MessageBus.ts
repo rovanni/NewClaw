@@ -21,6 +21,7 @@ import {
     ChannelAttachment
 } from './ChannelAdapter';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 
 const log = createLogger('MessageBus');
 
@@ -73,7 +74,7 @@ export class MessageBus {
             try {
                 await adapter.start();
                 log.info('adapter_started', `${adapter.displayName} started`);
-            } catch (error: any) {
+            } catch (error) {
                 // Don't crash — schedule background reconnect
                 // Each adapter handles its own reconnect via scheduleReconnect
                 log.error('adapter_start_failed', error, `${type} failed to start — will retry in background`);
@@ -100,7 +101,7 @@ export class MessageBus {
             channel: type,
             attempt: attempts,
             delayMs: delay,
-            error: error?.message || String(error)
+            error: errorMessage(error) || String(error)
         });
 
         // Limpar timer anterior se existir
@@ -114,8 +115,8 @@ export class MessageBus {
                 log.info('adapter_reconnected', `✅ ${adapter.displayName} reconnected successfully after ${attempts} attempts`);
                 this.reconnectAttempts.delete(type);
                 this.reconnectTimers.delete(type);
-            } catch (reconnectError: any) {
-                log.error('adapter_reconnect_failed', `${adapter.displayName} reconnect failed`, reconnectError?.message || String(reconnectError));
+            } catch (reconnectError) {
+                log.error('adapter_reconnect_failed', `${adapter.displayName} reconnect failed`, errorMessage(reconnectError) || String(reconnectError));
                 this.scheduleAdapterReconnect(type, adapter, reconnectError);
             }
         }, delay);
@@ -140,7 +141,7 @@ export class MessageBus {
         for (const [type, adapter] of this.adapters) {
             try {
                 await adapter.stop();
-            } catch (error: any) {
+            } catch (error) {
                 log.error('adapter_stop_failed', error, `${type} failed to stop`);
             }
         }
@@ -288,8 +289,8 @@ export class MessageBus {
                 await adapter.send(normalizedResponse, msg.rawContext);
             }
 
-        } catch (error: any) {
-            const isTimeout = error?.message?.includes('Timeout') || error?.message?.includes('abort');
+        } catch (error) {
+            const isTimeout = errorMessage(error)?.includes('Timeout') || errorMessage(error)?.includes('abort');
             const userMessage = isTimeout 
                 ? '⏱️ O modelo demorou mais que o esperado. Tente novamente em alguns instantes.' 
                 : '⚠️ Erro ao processar mensagem. Tente novamente.';
@@ -298,7 +299,7 @@ export class MessageBus {
             log.error('error_details', undefined, 'Processing failure details', {
                 channel: msg.channel,
                 userId: msg.userId,
-                errorMessage: error instanceof Error ? error.message : (typeof error === 'object' ? JSON.stringify(error) : String(error)),
+                errorMessage: error instanceof Error ? errorMessage(error) : (typeof error === 'object' ? JSON.stringify(error) : String(error)),
                 errorStack: error instanceof Error ? error.stack?.split('\n').slice(0, 5).join(' | ') : 'No stack trace'
             });
             if (adapter) {

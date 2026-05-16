@@ -18,6 +18,7 @@
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { MemoryManager } from '../memory/MemoryManager';
+import { errorMessage } from '../shared/errors';
 
 export class MemoryAdminTool implements ToolExecutor {
     name = 'memory_admin';
@@ -76,8 +77,8 @@ export class MemoryAdminTool implements ToolExecutor {
                 case 'inspect': return this.inspect(id);
                 default: return { success: false, output: '', error: `Ação "${action}" inválida. Use: stats, list, orphans, duplicates, ghosts, cleanup, domains, reindex, recalc, inspect.` };
             }
-        } catch (error: any) {
-            return { success: false, output: '', error: `Erro: ${error.message}` };
+        } catch (error) {
+            return { success: false, output: '', error: `Erro: ${errorMessage(error)}` };
         }
     }
 

@@ -9,6 +9,7 @@
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import fs from 'fs';
 import path from 'path';
+import { errorMessage } from '../shared/errors';
 
 export class WriteTool implements ToolExecutor {
     name = 'write';
@@ -148,8 +149,8 @@ export class WriteTool implements ToolExecutor {
             fs.writeFileSync(finalPath, content);
             const verb = existed ? 'Sobrescrito' : 'Criado';
             return { success: true, output: `${verb}: ${finalPath}` };
-        } catch (error: any) {
-            return { success: false, output: '', error: error.message };
+        } catch (error) {
+            return { success: false, output: '', error: errorMessage(error) };
         }
     }
 }

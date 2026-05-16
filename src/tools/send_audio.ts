@@ -12,6 +12,7 @@ import { execFile } from 'child_process';
 import { mkdirSync, existsSync, unlinkSync } from 'fs';
 import path from 'path';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 const log = createLogger('SendAudio');
 
 export class SendAudioTool implements ToolExecutor {
@@ -83,8 +84,8 @@ export class SendAudioTool implements ToolExecutor {
                     '--text', text,
                     '--write-media', mp3File
                 ], 30000);
-            } catch (ttsErr: any) {
-                log.error(`edge-tts failed with voice ${voice}:`, ttsErr.message);
+            } catch (ttsErr) {
+                log.error(`edge-tts failed with voice ${voice}:`, errorMessage(ttsErr));
                 if (voice !== 'pt-BR-AntonioNeural') {
                     log.info('Falling back to pt-BR-AntonioNeural...');
                     await this.runCommand(edgeTtsPath, [
@@ -134,19 +135,19 @@ export class SendAudioTool implements ToolExecutor {
                 } else {
                     log.info('voice_sent', 'Voice sent OK', { duration: sendResult.result?.voice?.duration || '?' });
                 }
-            } catch (uploadError: any) {
-                log.error('Telegram upload error:', uploadError.message);
-                return { success: false, output: '', error: `Upload failed: ${uploadError.message}` };
+            } catch (uploadError) {
+                log.error('Telegram upload error:', errorMessage(uploadError));
+                return { success: false, output: '', error: `Upload failed: ${errorMessage(uploadError)}` };
             }
 
             // Cleanup
             this.cleanupFiles([mp3File, oggFile]);
 
             return { success: true, output: '🔊 Áudio enviado com sucesso!' };
-        } catch (error: any) {
+        } catch (error) {
             // Cleanup on error
             this.cleanupFiles([mp3File, oggFile]);
-            return { success: false, output: '', error: `Erro ao gerar áudio: ${error.message}` };
+            return { success: false, output: '', error: `Erro ao gerar áudio: ${errorMessage(error)}` };
         }
     }
 

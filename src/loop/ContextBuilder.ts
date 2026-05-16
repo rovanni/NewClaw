@@ -191,3 +191,13 @@ export class ContextBuilder {
         }
     }
 }
+s for a node.
+     */
+    private getTopRelations(nodeId: string): string[] {
+        try {
+            return this.memoryFacade.getTopRelations(nodeId, this.MAX_RELATIONS);
+        } catch {
+            return [];
+        }
+    }
+}

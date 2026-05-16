@@ -28,6 +28,7 @@ import {
 } from './ChannelAdapter';
 import { MessageBus } from './MessageBus';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 
 const log = createLogger('DiscordAdapter');
 
@@ -114,7 +115,7 @@ export class DiscordAdapter implements ChannelAdapter {
             this._isConnected = true;
             this.reconnectAttempts = 0;
             log.info('bot_started', '🤖 Discord Bot rodando!');
-        } catch (e: any) {
+        } catch (e) {
             log.error('login_failed', e, 'Discord login failed');
             this._isConnected = false;
             // Auto-reconnect com backoff exponencial
@@ -125,7 +126,7 @@ export class DiscordAdapter implements ChannelAdapter {
     private scheduleReconnect(error: any): void {
         this.reconnectAttempts++;
         const delay = Math.min(10 * Math.pow(2, this.reconnectAttempts - 1), 300);
-        log.info('reconnect_scheduled', `Discord reconnect attempt ${this.reconnectAttempts} in ${delay}s`, { error: error?.message });
+        log.info('reconnect_scheduled', `Discord reconnect attempt ${this.reconnectAttempts} in ${delay}s`, { error: errorMessage(error) });
 
         if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
 
@@ -136,8 +137,8 @@ export class DiscordAdapter implements ChannelAdapter {
                 this._isConnected = true;
                 this.reconnectAttempts = 0;
                 log.info('reconnected', '✅ Discord reconnected successfully');
-            } catch (e: any) {
-                log.error('reconnect_failed', 'Discord reconnect failed', e?.message);
+            } catch (e) {
+                log.error('reconnect_failed', 'Discord reconnect failed', errorMessage(e));
                 this.scheduleReconnect(e);
             }
         }, delay * 1000);
@@ -206,7 +207,7 @@ export class DiscordAdapter implements ChannelAdapter {
                 // Discord reactions on last sent message — not trivial to implement here
                 // Future: store last message ID and react
             }
-        } catch (e: any) {
+        } catch (e) {
             log.error('send_failed', e);
         }
     }
@@ -220,7 +221,7 @@ export class DiscordAdapter implements ChannelAdapter {
                 return;
             }
             await this.send(response, channel);
-        } catch (e: any) {
+        } catch (e) {
             log.error('send_to_channel_failed', e);
         }
     }
@@ -232,8 +233,8 @@ export class DiscordAdapter implements ChannelAdapter {
         try {
             const user = this.client.user;
             return { ok: true, details: `${user?.username} (${this.client.guilds.cache.size} guilds)` };
-        } catch (e: any) {
-            return { ok: false, details: e.message };
+        } catch (e) {
+            return { ok: false, details: errorMessage(e) };
         }
     }
 
@@ -368,7 +369,7 @@ export class DiscordAdapter implements ChannelAdapter {
                     await channel.send({ files: [discordAttachment] });
                     break;
             }
-        } catch (e: any) {
+        } catch (e) {
             log.error('attachment_send_failed', e);
         }
     }

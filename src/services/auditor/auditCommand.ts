@@ -19,6 +19,7 @@ import { AuditorService, AuditReport } from './AuditorService';
 import { Bot, Context } from 'grammy';
 import { MessageBus } from '../../channels/MessageBus';
 import { NormalizedMessage } from '../../channels/ChannelAdapter';
+import { errorMessage } from '../../shared/errors';
 
 // ============================================
 // MULTI-CHANNEL HANDLER (works on ALL channels)
@@ -78,8 +79,8 @@ export function registerAuditCommand(
                     return auditor.formatReport(report);
                 }
             }
-        } catch (error: any) {
-            return `❌ Erro na auditoria: ${error.message}`;
+        } catch (error) {
+            return `❌ Erro na auditoria: ${errorMessage(error)}`;
         }
     });
 
@@ -177,8 +178,8 @@ export function registerAuditCommandTelegram(
                     }
                 }
             }
-        } catch (error: any) {
-            await ctx.reply(`❌ Erro na auditoria: ${error.message}`);
+        } catch (error) {
+            await ctx.reply(`❌ Erro na auditoria: ${errorMessage(error)}`);
         }
     });
 

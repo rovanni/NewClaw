@@ -12,6 +12,7 @@
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { MemoryManager } from '../memory/MemoryManager';
+import { errorMessage } from '../shared/errors';
 
 export class MemoryWriteTool implements ToolExecutor {
     name = 'memory_write';
@@ -83,8 +84,8 @@ export class MemoryWriteTool implements ToolExecutor {
                 case 'merge': return await this.merge(args);
                 default: return { success: false, output: '', error: `Ação "${action}" inválida. Use: create, update, connect, delete, merge.` };
             }
-        } catch (error: any) {
-            return { success: false, output: '', error: `Erro: ${error.message}` };
+        } catch (error) {
+            return { success: false, output: '', error: `Erro: ${errorMessage(error)}` };
         }
     }
 

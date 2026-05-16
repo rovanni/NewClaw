@@ -9,6 +9,7 @@ import { ProviderFactory } from '../core/ProviderFactory';
 import { SkillLearner } from '../loop/SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 const log = createLogger('Onboardingservice');
 
 export interface UserProfile {
@@ -91,7 +92,7 @@ export class OnboardingService {
         const columns = new Set(
             ((this.db.prepare("PRAGMA table_info(user_profile)").all() as any[]) || []).map(c => c.name)
         );
-        const addColumn = (sql: string) => { try { this.db.exec(sql); } catch { } };
+        const addColumn = (sql: string) => { try { this.db.exec(sql); } catch { /* coluna já existe — migration idempotente */ } };
 
         if (!columns.has('intent')) addColumn("ALTER TABLE user_profile ADD COLUMN intent TEXT");
         if (!columns.has('assistant_name')) addColumn("ALTER TABLE user_profile ADD COLUMN assistant_name TEXT");
@@ -143,8 +144,8 @@ export class OnboardingService {
             }
 
             return false;
-        } catch (e: any) {
-            log.error(`Error checking onboarding status: ${e.message}`);
+        } catch (e) {
+            log.error(`Error checking onboarding status: ${errorMessage(e)}`);
             return true; // Safe fallback
         }
     }
@@ -324,8 +325,8 @@ JSON:`;
             }
 
             log.info('[Onboarding] Memory nodes created with semantic connections');
-        } catch (e: any) {
-            log.error('[Onboarding] Error creating memory nodes:', e.message);
+        } catch (e) {
+            log.error('[Onboarding] Error creating memory nodes:', errorMessage(e));
         }
     }
 

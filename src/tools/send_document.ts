@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { MessageBus } from '../channels/MessageBus';
 import { DiscordAdapter } from '../channels/DiscordAdapter';
+import { errorMessage } from '../shared/errors';
 
 
 export class SendDocumentTool implements ToolExecutor {
@@ -103,8 +104,8 @@ export class SendDocumentTool implements ToolExecutor {
             }, channelId);
 
             return { success: true, output: `✅ Documento "${displayName}" enviado com sucesso ao Discord.` };
-        } catch (error: any) {
-            return { success: false, output: '', error: `Erro Discord: ${error.message}` };
+        } catch (error) {
+            return { success: false, output: '', error: `Erro Discord: ${errorMessage(error)}` };
         }
     }
 
@@ -139,8 +140,8 @@ export class SendDocumentTool implements ToolExecutor {
             } else {
                 return { success: false, output: '', error: `Telegram error: ${result.description}` };
             }
-        } catch (error: any) {
-            return { success: false, output: '', error: `Erro Telegram: ${error.message}` };
+        } catch (error) {
+            return { success: false, output: '', error: `Erro Telegram: ${errorMessage(error)}` };
         }
     }
 }

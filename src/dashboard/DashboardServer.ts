@@ -10,6 +10,7 @@
  */
 
 import express, { Request, Response } from 'express';
+import { errorMessage } from '../shared/errors';
 import cors from 'cors';
 import path from 'path';
 import crypto from 'crypto';
@@ -179,9 +180,9 @@ export class DashboardServer {
                     this.providerFactory?.setDefaultProvider(defaultProvider);
                     this.config.defaultProvider = defaultProvider;
                     log.info(`Provider switched to: ${defaultProvider}`);
-                } catch (err: any) {
-                    log.error(`Provider switch failed: ${err.message}`);
-                    return res.status(400).json({ success: false, error: err.message });
+                } catch (err) {
+                    log.error(`Provider switch failed: ${errorMessage(err)}`);
+                    return res.status(400).json({ success: false, error: errorMessage(err) });
                 }
             }
 
@@ -264,8 +265,8 @@ export class DashboardServer {
                     const data = await resp.json() as any;
                     ollamaModels = (data.models || []).map((m: any) => m.name);
                 }
-            } catch (err: any) {
-                log.warn(`Could not fetch Ollama models for dashboard: ${err.message}`);
+            } catch (err) {
+                log.warn(`Could not fetch Ollama models for dashboard: ${errorMessage(err)}`);
             }
 
             const knownCloudModels = [
@@ -342,8 +343,8 @@ export class DashboardServer {
                     const errText = await pullRes.text();
                     res.status(500).json({ success: false, error: `Pull failed: ${errText.slice(0, 200)}` });
                 }
-            } catch (err: any) {
-                res.status(500).json({ success: false, error: err.message });
+            } catch (err) {
+                res.status(500).json({ success: false, error: errorMessage(err) });
             }
 
 
@@ -387,8 +388,8 @@ export class DashboardServer {
                     });
 
                 res.json({ success: true, skills: entries });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -411,8 +412,8 @@ export class DashboardServer {
                 ).all();
 
                 res.json({ success: true, skills });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -431,8 +432,8 @@ export class DashboardServer {
                 ).all();
 
                 res.json({ success: true, patterns });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -451,8 +452,8 @@ export class DashboardServer {
 
                 if (result.changes === 0) return res.status(404).json({ success: false, error: 'Skill not found' });
                 res.json({ success: true });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -471,8 +472,8 @@ export class DashboardServer {
 
                 if (result.changes === 0) return res.status(404).json({ success: false, error: 'Skill not found' });
                 res.json({ success: true });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -603,8 +604,8 @@ export class DashboardServer {
 
                 const response = await this.controller.handleWebMessage(sessionId, message);
                 res.json({ success: true, response, sessionId });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -657,7 +658,7 @@ export class DashboardServer {
             // Use the start.sh script which manages PID and restarts
             const { exec } = require('child_process');
             exec('bash ./start.sh restart', (err: any) => {
-                if (err) log.error('Restart error:', err.message);
+                if (err) log.error('Restart error:', errorMessage(err));
             });
         });
 
@@ -713,8 +714,8 @@ export class DashboardServer {
                 const edges = db.prepare(`SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node IN (${placeholders}) AND to_node IN (${placeholders})`).all(...nodeIds, ...nodeIds);
 
                 res.json({ success: true, nodes, edges });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -752,8 +753,8 @@ export class DashboardServer {
                 const edges = db.prepare(`SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node IN (${idsPlaceholders}) AND to_node IN (${idsPlaceholders})`).all(...idsArray, ...idsArray);
 
                 res.json({ success: true, nodes, edges, center: nodeId, depth });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -780,7 +781,7 @@ export class DashboardServer {
             try {
                 const snapshots = (this.memoryManager as any).listSnapshots();
                 res.json({ success: true, snapshots });
-            } catch (err: any) { res.status(500).json({ error: err.message }); }
+            } catch (err) { res.status(500).json({ error: errorMessage(err) }); }
         });
 
         this.app.post('/api/memory/snapshots', (req: Request, res: Response) => {
@@ -788,7 +789,7 @@ export class DashboardServer {
             try {
                 const id = (this.memoryManager as any).createSnapshot(req.body.label);
                 res.json({ success: true, id });
-            } catch (err: any) { res.status(500).json({ error: err.message }); }
+            } catch (err) { res.status(500).json({ error: errorMessage(err) }); }
         });
 
         this.app.post('/api/memory/snapshots/:id/restore', (req: Request, res: Response) => {
@@ -796,7 +797,7 @@ export class DashboardServer {
             try {
                 const ok = (this.memoryManager as any).restoreSnapshot(req.params.id);
                 ok ? res.json({ success: true }) : res.status(404).json({ error: 'Snapshot not found' });
-            } catch (err: any) { res.status(500).json({ error: err.message }); }
+            } catch (err) { res.status(500).json({ error: errorMessage(err) }); }
         });
 
         this.app.delete('/api/memory/snapshots/:id', (req: Request, res: Response) => {
@@ -804,7 +805,7 @@ export class DashboardServer {
             try {
                 const ok = (this.memoryManager as any).deleteSnapshot(req.params.id);
                 ok ? res.json({ success: true }) : res.status(404).json({ error: 'Snapshot not found' });
-            } catch (err: any) { res.status(500).json({ error: err.message }); }
+            } catch (err) { res.status(500).json({ error: errorMessage(err) }); }
         });
 
         // Config history
@@ -814,8 +815,8 @@ export class DashboardServer {
                 if (!mm || !mm.db) return res.status(500).json({ error: 'DB not available' });
                 const history = mm.db.prepare('SELECT id, config_json, created_at, is_active FROM agent_config ORDER BY created_at DESC LIMIT 20').all();
                 res.json({ success: true, history: history.map((h: any) => ({ ...h, config: JSON.parse(h.config_json) })) });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -838,8 +839,8 @@ export class DashboardServer {
                     stats: { totalNodes, totalEdges, totalMessages, totalConversations, nodesByType: Object.fromEntries(nodesByType.map((r: any) => [r.type, r.c])) },
                     centrality: this.computeCentrality(db)
                 });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -856,8 +857,8 @@ export class DashboardServer {
                 const review = this.computeMemoryReview(nodes, edges);
 
                 res.json({ success: true, review });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -908,15 +909,15 @@ export class DashboardServer {
                     `).run(nextFrom, nextTo, edge.relation, edge.weight || 1.0, edge.confidence || 1.0);
                 }
 
-                try { db.prepare('DELETE FROM memory_metrics_history WHERE node_id = ?').run(mergeId); } catch (e: any) { log.warn('merge_cleanup_metrics_failed', e.message); }
-                try { db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(mergeId); } catch (e: any) { log.warn('merge_cleanup_embeddings_failed', e.message); }
+                try { db.prepare('DELETE FROM memory_metrics_history WHERE node_id = ?').run(mergeId); } catch (e) { log.warn('merge_cleanup_metrics_failed', errorMessage(e)); }
+                try { db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(mergeId); } catch (e) { log.warn('merge_cleanup_embeddings_failed', errorMessage(e)); }
                 db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(mergeId, mergeId);
                 db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(mergeId);
 
                 log.info(`Nodes merged: keep=${keepId}, removed=${mergeId}`);
                 res.json({ success: true, snapshotId, keptNodeId: keepId, removedNodeId: mergeId });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -937,8 +938,8 @@ export class DashboardServer {
                     nodes = db.prepare('SELECT id, type, name, substr(content, 1, 200) as content, updated_at FROM memory_nodes ORDER BY updated_at DESC LIMIT ?').all(limit);
                 }
                 res.json({ success: true, nodes });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -992,8 +993,8 @@ export class DashboardServer {
                     ).all(`%${q}%`, `%${q}%`);
                     return res.json({ success: true, nodes, method: 'like' });
                 }
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1038,8 +1039,8 @@ export class DashboardServer {
                         topByCloseness
                     }
                 });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1061,14 +1062,14 @@ export class DashboardServer {
                 const edges = db.prepare('SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node = ? OR to_node = ?').all(id, id);
                 try { 
                     (node as any).metadata = JSON.parse((node as any).metadata || '{}'); 
-                } catch (e: any) {
-                    log.warn(`Corrupted metadata for node ${id}: ${e.message}`);
+                } catch (e) {
+                    log.warn(`Corrupted metadata for node ${id}: ${errorMessage(e)}`);
                     (node as any).metadata = {};
                 }
 
                 res.json({ success: true, node, edges });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1093,8 +1094,8 @@ export class DashboardServer {
 
                 log.info(`Node updated: ${id}`);
                 res.json({ success: true });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1116,8 +1117,8 @@ export class DashboardServer {
 
                 log.info(`Node created: ${id} (${type})`);
                 res.json({ success: true });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1130,15 +1131,15 @@ export class DashboardServer {
                 if (!db) return res.status(500).json({ error: 'DB not available' });
 
                 const id = String(req.params.id);
-                try { db.prepare('DELETE FROM memory_metrics_history WHERE node_id = ?').run(id); } catch (e: any) { log.warn('delete_cleanup_metrics_failed', e.message); }
-                try { db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(id); } catch (e: any) { log.warn('delete_cleanup_embeddings_failed', e.message); }
+                try { db.prepare('DELETE FROM memory_metrics_history WHERE node_id = ?').run(id); } catch (e) { log.warn('delete_cleanup_metrics_failed', errorMessage(e)); }
+                try { db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(id); } catch (e) { log.warn('delete_cleanup_embeddings_failed', errorMessage(e)); }
                 db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(id, id);
                 db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(id);
 
                 log.info(`Node deleted: ${id}`);
                 res.json({ success: true });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1160,8 +1161,8 @@ export class DashboardServer {
 
                 log.info(`Edge created: ${from} -${relation}-> ${to}`);
                 res.json({ success: true });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1179,8 +1180,8 @@ export class DashboardServer {
 
                 log.info(`Edge deleted: ${from} -${relation}-> ${to}`);
                 res.json({ success: true });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1207,8 +1208,8 @@ export class DashboardServer {
 
                 log.info(`Edge updated: ${from} -${old_relation}-> ${to} => ${from} -${new_relation}-> ${to}`);
                 res.json({ success: true, changes: result.changes });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1218,8 +1219,8 @@ export class DashboardServer {
             try {
                 const result = await this.memoryCurator.curate();
                 res.json({ success: true, ...result });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1231,8 +1232,8 @@ export class DashboardServer {
                 const count = await this.embeddingService.embedMissing(limit);
                 const available = await this.embeddingService.isAvailable();
                 res.json({ success: true, embedded: count, model: this.embeddingService.getModel?.() || 'nomic-embed-text', available });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1256,8 +1257,8 @@ export class DashboardServer {
                     `SELECT id, type, name, ${metric} FROM memory_nodes ORDER BY ${metric} DESC LIMIT ?`
                 ).all(limit);
                 res.json({ success: true, metric, nodes });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1281,8 +1282,8 @@ export class DashboardServer {
                     ).all(limit);
                 }
                 res.json({ success: true, rows });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1304,8 +1305,8 @@ export class DashboardServer {
                 }));
 
                 res.json({ success: true, communities: result, total_communities: result.length });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1332,8 +1333,8 @@ export class DashboardServer {
                     avgWeight: Math.round(avgWeight * 100) / 100,
                     maxEdges
                 });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1343,8 +1344,8 @@ export class DashboardServer {
             try {
                 const count = this.memoryManager.recordMetricsSnapshot();
                 res.json({ success: true, recorded: count });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1356,8 +1357,8 @@ export class DashboardServer {
             try {
                 const stats = this.classificationMemory.stats();
                 res.json({ success: true, ...stats });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1368,8 +1369,8 @@ export class DashboardServer {
                 const tool = req.query.tool as string | undefined;
                 const stats = this.decisionMemory.getToolStats(tool);
                 res.json({ success: true, stats });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1380,8 +1381,8 @@ export class DashboardServer {
                 const { toolName, context, taskType, success, latencyMs, feedback } = req.body;
                 const id = this.decisionMemory.record({ toolName, context, taskType, success, latencyMs, feedback });
                 res.json({ success: true, id });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1393,8 +1394,8 @@ export class DashboardServer {
             try {
                 const result = await this.skillInstaller.install(req.body);
                 res.json(result);
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1404,8 +1405,8 @@ export class DashboardServer {
             try {
                 const skills = this.skillInstaller.listInstalled();
                 res.json({ success: true, skills });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1415,8 +1416,8 @@ export class DashboardServer {
             try {
                 const result = await this.skillInstaller.remove(String(req.params.name));
                 res.json(result);
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1430,8 +1431,8 @@ export class DashboardServer {
                 const userId = (req.query.userId as string) || 'web-dashboard';
                 const convs = db.prepare('SELECT id, user_id, provider, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY updated_at DESC').all(userId);
                 res.json({ success: true, conversations: convs });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1445,8 +1446,8 @@ export class DashboardServer {
                 const limit = parseInt(req.query.limit as string) || 50;
                 const msgs = db.prepare('SELECT role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?').all(convId, limit);
                 res.json({ success: true, messages: msgs.reverse() });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1460,8 +1461,8 @@ export class DashboardServer {
                 const convs = db.prepare('SELECT * FROM conversations').all();
                 const msgs = db.prepare('SELECT * FROM messages').all();
                 res.json({ success: true, export: { conversations: convs, messages: msgs, exportedAt: new Date().toISOString() } });
-            } catch (err: any) {
-                res.status(500).json({ error: err.message });
+            } catch (err) {
+                res.status(500).json({ error: errorMessage(err) });
             }
         });
 
@@ -1568,7 +1569,7 @@ export class DashboardServer {
                     // Insert new
                     mm.db.prepare('INSERT INTO agent_config (config_json, is_active) VALUES (?, 1)').run(JSON.stringify(this.config));
                 }
-            } catch (e: any) { /* DB not available, skip */ }
+            } catch (e) { /* DB not available, skip */ }
 
             for (const [key, value] of Object.entries(updates)) {
                 const regex = new RegExp(`^${key}=.*$`, 'm');
@@ -1581,16 +1582,24 @@ export class DashboardServer {
 
             fs.writeFileSync(envPath, envContent.trim() + '\n');
             log.info(`Persisted to .env: ${Object.keys(updates).join(', ')}`);
-        } catch (error: any) {
-            log.error(`Failed to persist .env: ${error.message}`);
+        } catch (error) {
+            log.error(`Failed to persist .env: ${errorMessage(error)}`);
         }
     }
 
     public start(port: number = 3090) {
         if (this.server) return;
 
-        this.server = this.app.listen(port, () => {
-            log.info(`NewClaw Dashboard rodando em http://localhost:${port}`);
+        // Bind em 127.0.0.1 por padrão para evitar exposição em interfaces públicas.
+        // Para expor em LAN/proxy reverso defina DASHBOARD_HOST=0.0.0.0 (e DASHBOARD_PASSWORD).
+        const host = process.env.DASHBOARD_HOST || '127.0.0.1';
+
+        if (host !== '127.0.0.1' && !dashboardAuth.enabled) {
+            log.warn(`⚠️  Dashboard em ${host}:${port} SEM senha. Defina DASHBOARD_PASSWORD ou volte para DASHBOARD_HOST=127.0.0.1.`);
+        }
+
+        this.server = this.app.listen(port, host, () => {
+            log.info(`NewClaw Dashboard rodando em http://${host}:${port}${dashboardAuth.enabled ? ' (auth ON)' : ' (auth OFF — somente localhost)'}`);
         });
     }
 
