@@ -114,7 +114,7 @@ export type EventType = typeof EventTypes[keyof typeof EventTypes];
 
 type TypedEventHandler<T> = (data: T) => void | Promise<void>;
 
-class EventBusClass {
+export class EventBusClass {
     private emitter: EventEmitter;
     private metrics: Map<string, { emitCount: number; lastEmitAt: number }> = new Map();
     private eventLog: AppEvent[] = [];

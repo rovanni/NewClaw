@@ -92,7 +92,7 @@ export class ModelRouter {
     private usageLog: Map<string, number> = new Map();
     private providerFactory: ProviderFactory | null = null;
 
-    constructor(config?: any, providerFactory?: ProviderFactory) {
+    constructor(config?: Partial<RouterConfig> & Record<string, string>, providerFactory?: ProviderFactory) {
         this.config = { ...DEFAULT_CONFIG };
         this.providerFactory = providerFactory || null;
         
@@ -221,7 +221,7 @@ Category:`;
 
             if (!response.ok) throw new Error(`API error: ${response.status}`);
 
-            const data = await response.json() as any;
+            const data = await response.json() as { message?: { content?: string } };
             const content = (data.message?.content || '').trim().toLowerCase();
 
             for (const cat of VALID_CATEGORIES) {

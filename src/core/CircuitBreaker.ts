@@ -251,7 +251,7 @@ export class CircuitBreaker {
         }
     }
 
-    private onFailure(error: any, durationMs: number): void {
+    private onFailure(error: unknown, durationMs: number): void {
         this.totalFailures++;
         this.consecutiveFailures++;
         this.consecutiveSuccesses = 0;
@@ -347,7 +347,7 @@ export class CircuitBreakerOpenError extends Error {
 
 // ── Circuit Breaker Registry ─────────────────────────────────────────
 
-class CircuitBreakerRegistry {
+export class CircuitBreakerRegistry {
     private breakers: Map<string, CircuitBreaker> = new Map();
     private defaultConfig: Omit<CircuitBreakerConfig, 'name'>;
 

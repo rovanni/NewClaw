@@ -159,11 +159,11 @@ export class ContextBudget {
             if (msgTokens > historyTokenBudget) {
                 // Truncate further to fit
                 const remaining = truncateToTokens(msg.content, historyTokenBudget);
-                blocks.push({ role: msg.role as any, content: remaining, priority: 3 });
+                blocks.push({ role: msg.role as ContextBlock['role'], content: remaining, priority: 3 });
                 totalTokens += estimateTokens(remaining);
                 historyTokenBudget -= estimateTokens(remaining);
             } else {
-                blocks.push({ role: msg.role as any, content: msg.content, priority: 3 });
+                blocks.push({ role: msg.role as ContextBlock['role'], content: msg.content, priority: 3 });
                 totalTokens += msgTokens;
                 historyTokenBudget -= msgTokens;
             }

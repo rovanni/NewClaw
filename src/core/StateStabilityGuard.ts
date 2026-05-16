@@ -8,7 +8,7 @@ const log = createLogger('Statestabilityguard');
  */
 export class StateStabilityGuard {
     private stateManager: AgentStateManager;
-    private changeBuffer: Map<string, { value: any, count: number }> = new Map();
+    private changeBuffer: Map<string, { value: unknown, count: number }> = new Map();
 
     constructor(stateManager: AgentStateManager) {
         this.stateManager = stateManager;

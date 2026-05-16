@@ -77,7 +77,14 @@ export function sanitizeContent(content: string): string {
  * Use parseLLMResponse for flow control (is_complete, action.type, tool dispatch).
  * Use normalizeResponse for content extraction (text, toolCalls, raw).
  */
-export function parseLLMResponse(raw: string): { action: any; thought: any; evaluation: any } | null {
+export interface ParsedLLMResponse {
+    action?: { type?: string; name?: string; content?: string; input?: Record<string, unknown> };
+    thought?: string;
+    evaluation?: { is_complete?: boolean; confidence?: 'low' | 'medium' | 'high'; reason?: string };
+    content?: string;
+}
+
+export function parseLLMResponse(raw: string): ParsedLLMResponse | null {
     if (!raw || !raw.trim()) return null;
 
     const trimmed = raw.trim();
@@ -124,7 +131,7 @@ export function parseLLMResponse(raw: string): { action: any; thought: any; eval
  * Priority: action.content > response.content > sanitized > fallback
  * Never returns empty string.
  */
-export function extractText(response: any): string {
+export function extractText(response: unknown): string {
     if (!response) return '';
 
     // If it's already a string, sanitize and return
@@ -132,20 +139,25 @@ export function extractText(response: any): string {
         return sanitizeContent(response) || '';
     }
 
+    if (typeof response !== 'object') return '';
+    const obj = response as Record<string, unknown>;
+
     // Priority 1: action.content (atomic JSON)
-    if (response.action?.content && typeof response.action.content === 'string' && response.action.content.trim().length > 0) {
-        return response.action.content;
+    const action = (obj as Record<string, unknown>).action as Record<string, unknown> | undefined;
+    if (action?.content && typeof action.content === 'string' && (action.content as string).trim().length > 0) {
+        return action.content as string;
     }
 
     // Priority 2: response.content (generic/Ollama)
-    if (response.content && typeof response.content === 'string') {
-        const sanitized = sanitizeContent(response.content);
+    if (obj.content && typeof obj.content === 'string') {
+        const sanitized = sanitizeContent(obj.content as string);
         if (sanitized.length > 0) return sanitized;
     }
 
     // Priority 3: OpenAI-like
-    if (response.choices?.[0]?.message?.content) {
-        return response.choices[0].message.content;
+    const choices = (obj as Record<string, unknown>).choices as Array<{ message?: { content?: string } }> | undefined;
+    if (choices?.[0]?.message?.content) {
+        return choices[0].message.content;
     }
 
     return '';

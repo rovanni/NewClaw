@@ -10,7 +10,7 @@
  * - Eventos via EventBus
  */
 
-import { CircuitBreaker, circuitRegistry, CircuitBreakerOpenError } from './CircuitBreaker';
+import { CircuitBreaker, circuitRegistry, CircuitBreakerOpenError, type CircuitBreakerMetrics } from './CircuitBreaker';
 import { eventBus } from './EventBus';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
@@ -44,8 +44,8 @@ export interface ToolExecutionResult {
 export interface ToolExecutorLike {
     name: string;
     description: string;
-    parameters: Record<string, any>;
-    execute(args: Record<string, any>): Promise<{ success: boolean; output: string; error?: string }>;
+    parameters: Record<string, unknown>;
+    execute(args: Record<string, unknown>): Promise<{ success: boolean; output: string; error?: string }>;
 }
 
 // ── Default timeouts por categoria de tool ───────────────────────
@@ -331,7 +331,7 @@ export class ToolExecutorService {
     /**
      * Get all circuit breaker states.
      */
-    getCircuitBreakerStates(): Array<{ name: string; state: string; metrics: any }> {
+    getCircuitBreakerStates(): Array<{ name: string; state: string; metrics: CircuitBreakerMetrics }> {
         return Array.from(this.circuitBreakers.entries()).map(([name, breaker]) => ({
             name,
             state: breaker.getState(),

@@ -13,6 +13,7 @@
  */
 
 import { createLogger } from '../shared/AppLogger';
+import type { ParsedLLMResponse } from './ContentExtractor';
 import {
     StructuredAgentResponse,
     ConfidenceLevel,
@@ -154,7 +155,7 @@ export class ProtocolParser {
     /**
      * Attempt JSON parse with multiple strategies.
      */
-    private attemptJsonParse(content: string): any | null {
+    private attemptJsonParse(content: string): ParsedLLMResponse | null {
         // Strategy 1: Direct parse
         try {
             return JSON.parse(content.trim());
@@ -204,7 +205,7 @@ export class ProtocolParser {
      * Maps the model's JSON format into the canonical protocol type.
      * Returns null if the parsed object doesn't match any known structure.
      */
-    private normalizeToStructured(parsed: any): StructuredAgentResponse | null {
+    private normalizeToStructured(parsed: ParsedLLMResponse): StructuredAgentResponse | null {
         if (!parsed || typeof parsed !== 'object') return null;
 
         const action = parsed.action || {};

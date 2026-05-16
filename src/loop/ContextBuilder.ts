@@ -7,7 +7,7 @@
  * Seleção: top-K (5-8 nós) com conteúdo compactado
  */
 
-import { MemoryManager } from '../memory/MemoryManager';
+import { MemoryManager, type MemoryNode } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
 
 // ── Relevance Gate ───────────────────────────────────────────
@@ -96,7 +96,7 @@ export class ContextBuilder {
         const semanticResults = await this.semanticSearch(query);
 
         // 2. Calculate combined scores
-        const ranked: RankedNode[] = semanticResults.map((node: any) => {
+        const ranked: RankedNode[] = semanticResults.map((node) => {
             const similarity = node.score || node.attentionScore || 0.5;
             const connectivity = this.getConnectivity(node.id);
             const recency = this.getRecency(node.id);
@@ -127,7 +127,7 @@ export class ContextBuilder {
     /**
      * Semantic search with attention — returns top results.
      */
-    private async semanticSearch(query: string): Promise<any[]> {
+    private async semanticSearch(query: string): Promise<Array<MemoryNode & { score: number; attentionScore?: number }>> {
         try {
             const results = await this.memory.semanticSearchWithAttention(query, 12);
             return results || [];

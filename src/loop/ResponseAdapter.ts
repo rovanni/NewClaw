@@ -13,6 +13,8 @@
  * extractText just pulls readable text from any LLM output.
  */
 
+import type { ParsedLLMResponse } from './ContentExtractor';
+
 
 // ── Full structured response (AgentLoop, tools, ObserverValidator) ──
 
@@ -26,7 +28,7 @@ export interface NormalizedResponse {
         reason?: string;
     };
     toolName?: string;
-    toolInput?: Record<string, any>;
+    toolInput?: Record<string, unknown>;
 }
 
 // ── Lightweight extraction result (compressor, validator, onboarding) ──
@@ -42,7 +44,7 @@ export type ExtractedText = string;
  * Always receives the result of parseLLMResponse first, then wraps it.
  * Pipeline: raw LLM → sanitizeContent → parseLLMResponse → normalizeResponse
  */
-export function normalizeResponse(parsed: any | null, rawContent: string): NormalizedResponse {
+export function normalizeResponse(parsed: ParsedLLMResponse | null, rawContent: string): NormalizedResponse {
     // ── Case 1: parsed JSON from parseLLMResponse ──
     if (parsed && typeof parsed === 'object') {
         const action = parsed.action || {};
@@ -148,7 +150,7 @@ export function extractText(content: string): ExtractedText {
  * 
  * This is the recommended entry point for AgentLoop.
  */
-export function normalizeFromRaw(rawContent: string, parseFn: (content: string) => any | null): NormalizedResponse {
+export function normalizeFromRaw(rawContent: string, parseFn: (content: string) => ParsedLLMResponse | null): NormalizedResponse {
     const parsed = parseFn(rawContent);
     return normalizeResponse(parsed, rawContent);
 }

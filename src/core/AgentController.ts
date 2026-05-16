@@ -5,6 +5,7 @@
  * Arquitetura multi-canal: Telegram ✅, Discord 🟡, Web
  */
 
+import Database from 'better-sqlite3';
 import { ProviderFactory } from './ProviderFactory';
 import { errorMessage } from '../shared/errors';
 import { AgentLoop } from '../loop/AgentLoop';
@@ -38,6 +39,7 @@ import { SessionLearner } from '../session/SessionLearner';
 import { MemoryGovernor } from '../memory/MemoryGovernor';
 import { createLogger } from '../shared/AppLogger';
 import { MessageBus } from '../channels/MessageBus';
+import type { NormalizedMessage, ChannelAttachment } from '../channels/ChannelAdapter';
 import { TelegramAdapter } from '../channels/TelegramAdapter';
 import { DiscordAdapter } from '../channels/DiscordAdapter';
 import { WhatsAppAdapter } from '../channels/WhatsAppAdapter';
@@ -117,7 +119,7 @@ export class AgentController {
         return this.memory;
     }
 
-    public getDatabase(): any {
+    public getDatabase(): Database.Database {
         return this.db;
     }
 
@@ -132,10 +134,11 @@ export class AgentController {
     private memoryGovernor: MemoryGovernor;
     private scheduler: SchedulerService;
     private messageBus: MessageBus;
-    private _eventBus: any;
-    private circuitBreakers: any;
-    private auditor: AuditorService;
-    private db: any;
+    // Typed as the singleton instances — inferred to avoid TS4094 with non-exported class internals
+    private _eventBus = eventBus;
+    private circuitBreakers = circuitRegistry;
+    private auditor!: AuditorService;
+    private db!: Database.Database;
     private sessionAutoCleaner: SessionAutoCleaner;
     private memoryCurator: MemoryCurator;
     private confidenceClassifier: ConfidenceClassifier;
@@ -169,8 +172,9 @@ export class AgentController {
         this.config = config;
 
         // Inicializar EventBus e CircuitBreaker (camada de infraestrutura)
-        this._eventBus = eventBus; // singleton
-        this.circuitBreakers = circuitRegistry; // singleton registry
+        // Reusing singleton references (already assigned as field initializers)
+        // this._eventBus = eventBus;
+        // this.circuitBreakers = circuitRegistry;
         
         // Setup SQLite Database connection directly
         const dbPath = './data/newclaw.db';
@@ -321,16 +325,16 @@ export class AgentController {
         this.messageBus.registerAdapter(this.telegramAdapter);
 
         // Register voice/audio media handlers — transcribe via Whisper API
-        this.messageBus.registerMediaHandler('voice', async (msg: any, attachment: any) => {
+        this.messageBus.registerMediaHandler('voice', async (msg, attachment) => {
             return this.transcribeAttachment(msg, attachment);
         });
-        this.messageBus.registerMediaHandler('audio', async (msg: any, attachment: any) => {
+        this.messageBus.registerMediaHandler('audio', async (msg, attachment) => {
             return this.transcribeAttachment(msg, attachment);
         });
-        this.messageBus.registerMediaHandler('document', async (msg: any, attachment: any) => {
+        this.messageBus.registerMediaHandler('document', async (msg, attachment) => {
             return this.handleDocumentAttachment(msg, attachment);
         });
-        this.messageBus.registerMediaHandler('photo', async (msg: any, attachment: any) => {
+        this.messageBus.registerMediaHandler('photo', async (msg, attachment) => {
             return this.handlePhotoAttachment(msg, attachment);
         });
 
@@ -692,12 +696,12 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
      * Downloads the file from Telegram, sends to Whisper, returns transcribed text.
      * Falls back to local whisper-cli if API fails.
      */
-    private async transcribeAttachment(msg: any, attachment: any): Promise<string | null> {
+    private async transcribeAttachment(msg: NormalizedMessage, attachment: ChannelAttachment): Promise<string | null> {
         const vlog = createLogger('VoiceHandler');
         try {
             // Get file URL from Telegram via the adapter
-            const adapter = this.messageBus.getAdapter(msg.channel) as any;
-            const botToken = adapter?.getBotToken?.() || adapter?.config?.botToken;
+            const adapter = this.messageBus.getAdapter(msg.channel);
+            const botToken = adapter?.getBotToken?.();
             const fileId = attachment.fileId;
 
             if (!botToken || !fileId) {
@@ -708,7 +712,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
             // Download file from Telegram
             const fileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
             const fileRes = await fetch(fileUrl);
-            const fileData = await fileRes.json() as any;
+            const fileData = await fileRes.json() as { ok?: boolean; result?: { file_path?: string } };
 
             if (!fileData?.ok || !fileData?.result?.file_path) {
                 vlog.error('telegram_getfile_failed', JSON.stringify(fileData));
@@ -776,7 +780,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
                     });
 
                     if (whisperRes.ok) {
-                        const result = await whisperRes.json() as any;
+                        const result = await whisperRes.json() as { text?: string; transcription?: string };
                         const transcription = result?.text || result?.transcription || '';
                         if (transcription.trim()) {
                             vlog.info('whisper_transcription_ok', `textLen=${transcription.length}`);
@@ -828,7 +832,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
      * Handle document attachments.
      * Downloads the file from the channel and saves it to the workspace.
      */
-    private async handleDocumentAttachment(msg: any, attachment: any): Promise<string | null> {
+    private async handleDocumentAttachment(msg: NormalizedMessage, attachment: ChannelAttachment): Promise<string | null> {
         const dlog = createLogger('DocumentHandler');
         try {
             const channel = msg.channel;
@@ -844,7 +848,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
             let fileName = attachment.fileName || `file_${Date.now()}`;
 
             if (channel === 'telegram') {
-                const adapter = this.messageBus.getAdapter('telegram') as any;
+                const adapter = this.messageBus.getAdapter('telegram');
                 const botToken = adapter?.getBotToken?.();
                 const fileId = attachment.fileId;
 
@@ -856,7 +860,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
                 // Download metadata from Telegram
                 const fileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
                 const fileRes = await fetch(fileUrl);
-                const fileData = await fileRes.json() as any;
+                const fileData = await fileRes.json() as { ok?: boolean; result?: { file_path?: string } };
 
                 if (fileData?.ok && fileData?.result?.file_path) {
                     const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
@@ -908,7 +912,7 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
      * Handle photo attachments.
      * Downloads the photo and saves it to the workspace.
      */
-    private async handlePhotoAttachment(msg: any, attachment: any): Promise<string | null> {
+    private async handlePhotoAttachment(msg: NormalizedMessage, attachment: ChannelAttachment): Promise<string | null> {
         const vlog = createLogger('VisionHandler');
         try {
             const channel = msg.channel;
@@ -924,14 +928,14 @@ REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
             let fileName = attachment.fileName || `photo_${Date.now()}.jpg`;
 
             if (channel === 'telegram') {
-                const adapter = this.messageBus.getAdapter('telegram') as any;
+                const adapter = this.messageBus.getAdapter('telegram');
                 const botToken = adapter?.getBotToken?.();
                 const fileId = attachment.fileId;
 
                 if (botToken && fileId) {
                     const fileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
                     const fileRes = await fetch(fileUrl);
-                    const fileData = await fileRes.json() as any;
+                    const fileData = await fileRes.json() as { ok?: boolean; result?: { file_path?: string } };
 
                     if (fileData?.ok && fileData?.result?.file_path) {
                         const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
