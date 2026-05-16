@@ -314,7 +314,7 @@ Você deve SEMPRE responder em JSON estruturado:
   }
 }
 Importante: Pense uma vez, pense profundo. Se type="final_answer", defina is_complete=true.
-NUNCA responda dizendo que "vai fazer" algo sem REALMENTE chamar a ferramenta necessária no mesmo JSON. Se prometer agir, use "type": "tool".`
+3. PREFERÊNCIAS: Sempre priorize instruções explícitas do usuário ("Sempre faça X") sobre deduções geográficas ou conhecimentos genéricos. Se o usuário definiu um padrão para clima, local ou formato, obedeça-o rigorosamente.`
     };
 
     private buildMasterPrompt(category: string): string {

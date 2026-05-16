@@ -101,9 +101,13 @@ export class ContextBuilder {
             const connectivity = this.getConnectivity(node.id);
             const recency = this.getRecency(node.id);
 
-            const score = (similarity * this.W_SIMILARITY) +
+            let score = (similarity * this.W_SIMILARITY) +
                           (connectivity * this.W_CONNECTIVITY) +
                           (recency * this.W_RECENCY);
+
+            // BÔNUS DE TIPO: Preferências e Identidade são "âncoras" de contexto
+            if (node.type === 'preference') score *= 1.5; // +50% de peso
+            if (node.type === 'identity') score *= 1.3;   // +30% de peso
 
             return {
                 id: node.id,

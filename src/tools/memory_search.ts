@@ -19,34 +19,19 @@ import { MemoryManager } from '../memory/MemoryManager';
  */
 const SYNONYM_MAP: Record<string, string[]> = {
     // Eventos e compromissos
-    'reunião': ['compromisso', 'encontro', 'agenda', 'horário', 'evento', 'comprometido'],
-    'compromisso': ['reunião', 'agenda', 'horário', 'evento', 'aula'],
-    'aula': ['compromisso', 'reunião', 'agenda', 'horário', 'turma', 'disciplina'],
-    'agenda': ['compromisso', 'reunião', 'horário', 'evento', 'aula'],
+    'reunião': ['compromisso', 'encontro', 'agenda', 'horário', 'evento', 'chamada'],
+    'compromisso': ['reunião', 'agenda', 'horário', 'evento', 'marcado'],
+    'agenda': ['compromisso', 'reunião', 'horário', 'evento', 'calendário'],
     'horário': ['agenda', 'compromisso', 'reunião', 'hora', 'quando'],
 
-    // Localidades
-    'bandeirantes': ['uenp', 'campus', 'universidade', 'faculdade'],
-    'uenp': ['bandeirantes', 'campus', 'universidade', 'faculdade', 'ensino'],
-    'cornélio procópio': ['cp', 'cornelio procopio'],
-
-    // Disciplinas
-    'engenharia de software': ['software', 'disciplina', 'matéria', 'materia'],
-    'compiladores': ['disciplina', 'matéria', 'compilador', 'compilação'],
-    'teoria da computação': ['tc', 'disciplina', 'matéria'],
-
     // Clima
-    'clima': ['tempo', 'previsão', 'chuva', 'temperatura', 'tempo'],
+    'clima': ['tempo', 'previsão', 'chuva', 'temperatura', 'climatologia'],
     'tempo': ['clima', 'previsão', 'chuva', 'temperatura'],
     'previsão': ['clima', 'tempo', 'chuva', 'temperatura'],
 
-    // Pessoas
-    'luciano': ['rovanni', 'professor', 'prof'],
-    'professor': ['luciano', 'rovanni', 'docente'],
-
     // Trabalho/Projeto
-    'trabalho': ['projeto', 'tarefa', 'atividade', 'entrega'],
-    'projeto': ['trabalho', 'tarefa', 'atividade', 'entrega'],
+    'trabalho': ['projeto', 'tarefa', 'atividade', 'entrega', 'job'],
+    'projeto': ['trabalho', 'tarefa', 'atividade', 'entrega', 'desenvolvimento'],
 };
 
 /**
