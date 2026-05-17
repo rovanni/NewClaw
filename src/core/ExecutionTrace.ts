@@ -19,6 +19,7 @@ export interface TraceStep {
 
 export interface ExecutionTrace {
     id: string;
+    correlationId?: string;
     sessionId: string;
     userInput: string;
     startTime: number;
@@ -38,10 +39,11 @@ class ExecutionTraceManager extends EventEmitter {
     private recentTraces: ExecutionTrace[] = [];
     private maxRecent = 50;
 
-    startTrace(sessionId: string, userInput: string): ExecutionTrace {
+    startTrace(sessionId: string, userInput: string, correlationId?: string): ExecutionTrace {
         const id = `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const trace: ExecutionTrace = {
             id,
+            correlationId,
             sessionId,
             userInput,
             startTime: Date.now(),

@@ -354,6 +354,7 @@ export class MemoryManager {
     public saveTrace(trace: {
         id: string;
         conversation_id?: string;
+        correlation_id?: string;
         step: number;
         decision?: string;
         tool?: string;
@@ -364,11 +365,12 @@ export class MemoryManager {
     }): void {
         try {
             this.db.prepare(`
-                INSERT INTO agent_traces (id, conversation_id, step, decision, tool, input, output, provider, duration_ms)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO agent_traces (id, conversation_id, correlation_id, step, decision, tool, input, output, provider, duration_ms)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 trace.id,
                 trace.conversation_id || null,
+                trace.correlation_id || null,
                 trace.step,
                 trace.decision || null,
                 trace.tool || null,

@@ -252,7 +252,8 @@ export class AgentLoop {
                 input: trace.userInput,
                 output: finalResponse,
                 provider: this.providerFactory.getProvider()?.name,
-                duration_ms: trace.totalDurationMs
+                duration_ms: trace.totalDurationMs,
+                correlation_id: trace.correlationId
             });
         } catch (e) {
             log.warn('persist_trace_failed', errorMessage(e));
@@ -321,7 +322,10 @@ export class AgentLoop {
     // ── Core execution loop ────────────────────────────────────────────────────
 
     private async runWithTools(conversationId: string, userText: string, iteration: number, _userId?: string, channelContext?: ChannelContext): Promise<string | ProcessedResult> {
-        log.info(`[${this.ts()}] [LOOP] Atomic Cognition Cycle ${iteration + 1}`);
+        const correlationId = channelContext?.correlationId;
+        const turnLog = correlationId ? log.child({ cid: correlationId.slice(0, 8) }) : log;
+
+        turnLog.info('turn_start', `Cycle ${iteration + 1}`, { conversationId });
 
         const cycleHistory: Array<{ tool: string; input: string; status: string }> = [];
         let lastBestContent = '';
@@ -332,7 +336,7 @@ export class AgentLoop {
         this.activeTurns.set(conversationId, turnAbort);
         const turnSignal = turnAbort.signal;
 
-        const trace = traceManager.startTrace(conversationId, userText);
+        const trace = traceManager.startTrace(conversationId, userText, correlationId);
         const fsm = new AgentFSM();
         const move = (event: AgentFSMEvent, meta?: Record<string, unknown>) => {
             try {

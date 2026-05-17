@@ -118,6 +118,7 @@ export function ensureMemorySchema(db: Database.Database): void {
     safeAddColumn(db, 'memory_edges', 'last_accessed', 'DATETIME');
     safeAddColumn(db, 'memory_edges', 'domain', 'TEXT');
     safeAddColumn(db, 'node_metrics', 'last_accessed', 'DATETIME');
+    safeAddColumn(db, 'agent_traces', 'correlation_id', 'TEXT');
     migrateMemoryNodesCheckConstraint(db);
 }
 
@@ -296,6 +297,7 @@ export function initializeSchema(db: Database.Database): Record<string, string> 
         CREATE TABLE IF NOT EXISTS agent_traces (
             id TEXT PRIMARY KEY,
             conversation_id TEXT,
+            correlation_id TEXT,
             step INTEGER,
             decision TEXT,
             tool TEXT,
