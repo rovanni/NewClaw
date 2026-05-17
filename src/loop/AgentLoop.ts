@@ -109,6 +109,37 @@ export class AgentLoop {
         return false;
     }
 
+    /**
+     * Returns true for exec_command calls that are read-only and safe to run without user authorization.
+     * Multi-line scripts and any command with destructive patterns always require authorization.
+     */
+    private isSafeExecCommand(toolName: string, args: Record<string, unknown>): boolean {
+        if (toolName !== 'exec_command') return false;
+        const cmd = String(args.command || '').trim();
+
+        // Multi-line scripts (more than 3 non-empty lines) always require auth
+        const nonEmptyLines = cmd.split('\n').filter(l => l.trim().length > 0);
+        if (nonEmptyLines.length > 3) return false;
+
+        // Destructive patterns always require auth
+        if (/\brm\s|mkfs|drop\s+table|truncate\s+table|>\s*\/[a-z]/i.test(cmd)) return false;
+
+        // File writes always require auth (redirect to real path, not /dev/null)
+        if (/\s>(?!>?\s*\/dev\/null)/.test(cmd)) return false;
+
+        // Pipe into destructive commands always requires auth
+        if (/\|\s*(rm|dd|mkfs|shred)\b/.test(cmd)) return false;
+
+        const SAFE_COMMANDS = new Set([
+            'ls', 'cat', 'find', 'pwd', 'echo', 'which', 'command', 'type',
+            'head', 'tail', 'grep', 'wc', 'stat', 'file', 'node', 'npm',
+            'env', 'printenv', 'df', 'du', 'ps', 'uname', 'hostname',
+            'id', 'whoami', 'date', 'uptime', 'lsb_release', 'readlink',
+        ]);
+        const firstWord = cmd.split(/[\s;|&]/)[0].replace(/^\.\//, '');
+        return SAFE_COMMANDS.has(firstWord);
+    }
+
     public getIntentRouter(): UnifiedIntentRouter { return this.intentRouter; }
 
     public getProfileRegistry(): ModelProfileRegistry { return this.profileRegistry; }
@@ -344,6 +375,41 @@ export class AgentLoop {
             }
         };
         move('START_TURN');
+
+        // ── Pre-turn: resolve pending authorization (before LLM) ──────────────
+        const pendingAuth = this.authManager.getPending(conversationId);
+        if (pendingAuth) {
+            const trimmed = userText.trim();
+            const isConfirm = /^(sim|yes|ok|autorizado|confirmar|pode|s|y)$/i.test(trimmed);
+            const isReject  = /^(n[aã]o|cancelar|cancel|n|no|nope)$/i.test(trimmed);
+
+            if (isConfirm) {
+                log.info(`[${this.ts()}] [AUTH] ✅ User confirmed pending action: ${pendingAuth.toolName}`);
+                this.authManager.removePending(conversationId);
+                const tool = this.tools.get(pendingAuth.toolName);
+                if (tool) {
+                    move('TOOL_REQUESTED', { step: 0, tool: pendingAuth.toolName, mode: 'auth_confirmed' });
+                    if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
+                        (tool as unknown as ContextAwareTool).setContext(
+                            channelContext.chatId || '',
+                            channelContext.channel
+                        );
+                    }
+                    const result = await tool.execute(pendingAuth.arguments as Record<string, unknown>);
+                    move('TOOL_COMPLETED', { step: 0, tool: pendingAuth.toolName, success: result.success });
+                    move('FINAL_READY', { step: 0, reason: 'auth_confirmed' });
+                    traceManager.completeTrace(trace, 'completed', result.output);
+                    this.persistTrace(trace, 0, 'completed', result.output, channelContext);
+                    return result.output;
+                }
+            } else if (isReject) {
+                log.info(`[${this.ts()}] [AUTH] ❌ User rejected pending action: ${pendingAuth.toolName}`);
+                this.authManager.removePending(conversationId);
+                move('FINAL_READY', { step: 0, reason: 'auth_rejected' });
+                traceManager.completeTrace(trace, 'cancelled', 'User rejected action');
+                return 'Operação cancelada. ✅';
+            }
+        }
 
         const intentDecision: IntentDecision = this.intentRouter.route(userText, { sessionId: conversationId });
 
@@ -626,7 +692,7 @@ export class AgentLoop {
                             );
                         }
 
-                        const isDangerous = ToolRegistry.isDangerous(toolName);
+                        const isDangerous = ToolRegistry.isDangerous(toolName) && !this.isSafeExecCommand(toolName, toolCall.arguments);
                         if (isDangerous && !this.isAuthorized(conversationId, toolName, toolCall.arguments)) {
                             log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
                             this.authManager.addPending(conversationId, toolName, toolCall.arguments);
