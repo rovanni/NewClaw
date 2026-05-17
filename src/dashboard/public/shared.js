@@ -513,6 +513,7 @@ async function newclawFetch(url, options = {}) {
     if (options.headers instanceof Headers) options.headers.set('Authorization', 'Bearer ' + token);
     else options.headers['Authorization'] = 'Bearer ' + token;
   }
+  options.credentials = options.credentials || 'same-origin';
   const res = await fetch(url, options);
   if (res.status === 401) { newclawSetToken(''); newclawShowLogin(); throw new Error('Unauthorized'); }
   return res;
@@ -539,7 +540,7 @@ function newclawShowLogin() {
     const password = document.getElementById('newclaw-login-pass').value;
     if (!password) return;
     try {
-      const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+      const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ password }) });
       const data = await res.json();
       if (data.success && data.token) { newclawSetToken(data.token); overlay.remove(); window.location.reload(); }
       else { errorDiv.textContent = errInvalid; errorDiv.style.display = 'block'; document.getElementById('newclaw-login-pass').value = ''; document.getElementById('newclaw-login-pass').focus(); }

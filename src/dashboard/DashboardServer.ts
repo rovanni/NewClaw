@@ -11,6 +11,7 @@
 
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import { Server } from 'http';
 import { AgentController, NewClawConfig } from '../core/AgentController';
@@ -46,6 +47,8 @@ export class DashboardServer {
         this.app = express();
         this.app.use(cors());
         this.app.use(express.json());
+        this.app.use(cookieParser());
+
         this.app.use(authMiddleware);
         this.app.use(express.static(path.join(__dirname, 'public')));
 
