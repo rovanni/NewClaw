@@ -16,7 +16,7 @@ import { SessionContext } from '../session/SessionContext';
 import type { SessionKey } from '../session/SessionManager';
 import { ModelProfileRegistry } from './ModelProfileRegistry';
 import { UnifiedIntentRouter, IntentDecision } from './UnifiedIntentRouter';
-import PQueue from 'p-queue';
+import { generationQueue, TaskPriority } from '../core/providerQueue';
 import { MemoryManager } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
@@ -47,7 +47,6 @@ import { buildLoopMetric, summarizeMetrics } from './agentMetrics';
 export type { ToolResult, ToolExecutor, LoopMetrics, ChannelContext, AgentLoopConfig, ProcessedResult };
 
 const log = createLogger('Agentloop');
-const llmQueue = new PQueue({ concurrency: 1 });
 
 export class AgentLoop {
     private providerFactory: ProviderFactory;
@@ -285,13 +284,10 @@ export class AgentLoop {
 
         const callStart = Date.now();
         try {
-            const result = await llmQueue.add(() => this.providerFactory.chatWithFallback(
-                messages,
-                toolDefs,
-                undefined,
-                timeoutMs,
-                signal
-            ));
+            const result = await generationQueue.add(
+                () => this.providerFactory.chatWithFallback(messages, toolDefs, undefined, timeoutMs, signal),
+                { priority: TaskPriority.INTERACTIVE }
+            );
 
             this.pushMetric(result, timeoutMs, totalChars, approxTokens, chatProfile?.model);
 
