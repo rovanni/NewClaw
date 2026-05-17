@@ -725,7 +725,7 @@ export class AgentLoop {
                         }
 
                         const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
-                        if (result.success && !terminalTools.includes(toolName)) {
+                        if (result.success && !terminalTools.includes(toolName) && !this.isSafeExecCommand(toolName, toolCall.arguments)) {
                             this.lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
                             void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
                         }
@@ -814,7 +814,7 @@ export class AgentLoop {
                         return result.output;
                     }
 
-                    if (result.success) {
+                    if (result.success && !this.isSafeExecCommand(toolName, atomicData.action?.input as Record<string, unknown> || {})) {
                         this.lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
                         void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
                     }
