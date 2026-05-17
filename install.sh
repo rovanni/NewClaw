@@ -614,6 +614,22 @@ configure() {
     fi
   fi
 
+  # Dashboard password (opcional)
+  dashboard_password=""
+  if [ "$NO_PROMPT" -eq 0 ]; then
+    echo ""
+    echo -e "  ${BOLD}Senha para o Dashboard web${NC} (vazio = sem senha, acesso livre)"
+    echo -ne "  Nova senha (mín. 8 caracteres, Enter para pular): "
+    stty -echo 2>/dev/null || true
+    read -r dashboard_password < /dev/tty 2>/dev/null || read -r dashboard_password 2>/dev/null || dashboard_password=""
+    stty echo 2>/dev/null || true
+    echo ""
+    if [ -n "$dashboard_password" ] && [ ${#dashboard_password} -lt 8 ]; then
+      warn "Senha muito curta — dashboard ficará sem senha. Use 'newclaw passwd' depois."
+      dashboard_password=""
+    fi
+  fi
+
   # Escrever .env
   if [ "$DRY_RUN" -eq 0 ]; then
     cat > "$ENV_FILE" << EOF
@@ -663,6 +679,7 @@ TMP_DIR=./workspace/tmp
 
 # ─── Dashboard Web ────────────────────────────────────────────
 DASHBOARD_PORT=${DASHBOARD_PORT}
+DASHBOARD_PASSWORD=${dashboard_password}
 
 # ─── Whisper / TTS (opcional) ────────────────────────────────
 WHISPER_API_URL=
@@ -864,6 +881,7 @@ show_summary() {
   echo -e "    ${CYAN}newclaw logs -f${NC}          — ver logs em tempo real"
   echo -e "    ${CYAN}newclaw restart${NC}          — reiniciar"
   echo -e "    ${CYAN}newclaw stop${NC}             — parar"
+  echo -e "    ${CYAN}newclaw passwd${NC}           — alterar senha do Dashboard"
   echo ""
   echo -e "  ${YELLOW}Agora abra o Telegram e mande 'Oi' para seu bot! 🎉${NC}"
   echo ""

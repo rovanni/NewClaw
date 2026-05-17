@@ -155,6 +155,11 @@ irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
 | `newclaw status` | Comprobación de salud y tiempo de actividad |
 | `newclaw logs -f` | Registros en tiempo real |
 | `newclaw update` | Actualiza y recompila el proyecto |
+| `newclaw passwd` | Define o cambia la contraseña del Dashboard web |
+| `newclaw onboard` | Configura proveedores y claves de API |
+| `newclaw channels` | Estado de los canales (Telegram, Discord, WhatsApp, Signal) |
+| `newclaw channels enable <nombre>` | Configura un canal |
+| `newclaw channels disable <nombre>` | Desactiva un canal |
 
 ---
 
@@ -168,6 +173,7 @@ NewClaw incluye un **Agente de Auto-Diagnóstico** que utiliza el LLM local para
 |---------|-----------|-------|
 | `/audit` | Auditoría completa (código + ejecución + datos + integración) | ~1-3 min |
 | `/audit fix` | **Auto-corrección** — solo aplica correcciones de bajo riesgo validadas | ~1-5 min |
+| `/cancel` | Cancela la operación en curso (`/cancelar`, `/stop`, `/pare` también funcionan) | instantáneo |
 
 ---
 

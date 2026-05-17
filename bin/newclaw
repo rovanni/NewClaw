@@ -716,6 +716,79 @@ const commands = {
     });
   },
 
+  passwd() {
+    const rl = require('readline').createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      terminal: true,
+    });
+
+    function askHidden(prompt, cb) {
+      process.stdout.write(prompt);
+      // Mute echo — suppress all output except newlines
+      rl._writeToOutput = function(s) {
+        if (s === '\n' || s === '\r\n' || s === '\r') process.stdout.write('\n');
+      };
+      rl.question('', (answer) => {
+        // Restore normal output
+        rl._writeToOutput = function(s) { process.stdout.write(s); };
+        cb(answer);
+      });
+    }
+
+    console.log('\n🔐 NewClaw — Alterar senha do Dashboard\n');
+
+    askHidden('Nova senha: ', (pw1) => {
+      if (!pw1) {
+        console.log('❌ Senha não pode ser vazia.');
+        rl.close();
+        return;
+      }
+      if (pw1.length < 8) {
+        console.log('❌ Senha deve ter pelo menos 8 caracteres.');
+        rl.close();
+        return;
+      }
+      askHidden('Confirme a senha: ', (pw2) => {
+        rl.close();
+        if (pw1 !== pw2) {
+          console.log('❌ As senhas não coincidem.');
+          return;
+        }
+
+        const env = readEnv();
+        env['DASHBOARD_PASSWORD'] = pw1;
+        writeEnv(env);
+        console.log('✅ Senha salva no .env!');
+
+        // Try to update the running agent via API (best-effort)
+        const port = env['DASHBOARD_PORT'] || '3090';
+        const http = require('http');
+        const body = JSON.stringify({ password: pw1 });
+        const req = http.request({
+          hostname: '127.0.0.1',
+          port: parseInt(port),
+          path: '/api/auth/config',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+          timeout: 2000,
+        }, (res) => {
+          if (res.statusCode === 200) {
+            console.log('✅ Senha também aplicada em tempo real (sem reiniciar)!');
+          } else if (res.statusCode === 401) {
+            console.log('💡 Agente em execução: reinicie para aplicar a nova senha.');
+            console.log('   newclaw restart');
+          }
+        });
+        req.on('error', () => {
+          console.log('💡 Agente não está em execução. Inicie para usar a nova senha.');
+        });
+        req.write(body);
+        req.end();
+      });
+    });
+  },
+
   help() {
     console.log(`
 🪐 NewClaw CLI — Referência de Comandos
@@ -723,6 +796,7 @@ const commands = {
 Comando                 Descrição
 ----------------------- ----------------------------------------------------
 newclaw onboard         Configura provedores e chaves de API
+newclaw passwd          Define ou altera a senha do Dashboard web
 newclaw channels         Status dos canais (telegram, discord, whatsapp, signal)
 newclaw channels enable <canal>   Configura um canal
 newclaw channels disable <canal>  Desativa um canal

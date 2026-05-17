@@ -526,6 +526,7 @@ function Step-Configure {
     $WaJids = ""
     $SignalPhone = ""
     $SignalNumbers = ""
+    $DashboardPassword = ""
 
     if (-not $NoPrompt) {
         Write-Host ""
@@ -548,8 +549,19 @@ function Step-Configure {
 
         # Signal
         if (Read-YesNo "Configurar Signal? (requer signal-cli instalado)" "n") {
-            $SignalPhone = Read-Answer "  Número de telefone com código do país (ex: +5511999999999)" ""
+            $SignalPhone = Read-Answer "  Número de telefone com código do país (ex: +5511999999)" ""
             $SignalNumbers = Read-Answer "  Números permitidos (vírgula, vazio = todos)" ""
+        }
+
+        # Dashboard password
+        Write-Host ""
+        Write-Host "    ━━━ Dashboard Web ━━━" -ForegroundColor Yellow
+        Write-Host "    Senha para proteger o Dashboard (vazio = sem senha, acesso livre)" -ForegroundColor Cyan
+        $securePw = Read-Host "  Nova senha (mín. 8 chars, Enter para pular)" -AsSecureString
+        $DashboardPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePw))
+        if ($DashboardPassword.Length -gt 0 -and $DashboardPassword.Length -lt 8) {
+            Write-Warn "Senha muito curta — dashboard ficará sem senha. Use 'newclaw passwd' depois."
+            $DashboardPassword = ""
         }
     }
 
@@ -601,6 +613,7 @@ TMP_DIR=./workspace/tmp
 
 # ─── Dashboard Web ────────────────────────────────────────────
 DASHBOARD_PORT=$Port
+DASHBOARD_PASSWORD=$DashboardPassword
 
 # ─── Whisper / TTS (opcional) ────────────────────────────────
 WHISPER_API_URL=
@@ -764,6 +777,7 @@ function Show-Summary {
     Write-Host "      newclaw logs -f   — ver logs" -ForegroundColor Cyan
     Write-Host "      newclaw restart   — reiniciar" -ForegroundColor Cyan
     Write-Host "      newclaw stop      — parar" -ForegroundColor Cyan
+    Write-Host "      newclaw passwd    — alterar senha do Dashboard" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "    Agora abra o Telegram e mande 'Oi' para seu bot! 🎉" -ForegroundColor Yellow
     Write-Host ""
