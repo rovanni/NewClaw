@@ -29,7 +29,7 @@ export function safeExec(db: Database.Database, sql: string): void {
 }
 
 export function safeAddColumn(db: Database.Database, table: string, column: string, type: string): void {
-    const allowedTables = ['memory_nodes', 'memory_edges', 'node_metrics', 'user_profile', 'conversations', 'messages'];
+    const allowedTables = ['memory_nodes', 'memory_edges', 'node_metrics', 'user_profile', 'conversations', 'messages', 'agent_traces'];
     const allowedTypes = ['TEXT', 'INTEGER', 'REAL', 'DATETIME', 'BOOLEAN'];
     const isValidIdentifier = (id: string) => /^[a-z0-9_]+$/i.test(id);
 
