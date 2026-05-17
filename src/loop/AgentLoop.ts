@@ -73,7 +73,7 @@ export class AgentLoop {
     private observer: ObserverValidator;
     private reflectionMemory: ReflectionMemory;
     private fsmHistoryStore: FSMHistoryStore;
-    private lastToolExecution: { toolName: string; toolOutput: string; intent: string } | null = null;
+    private lastToolExecution: { toolName: string; toolOutput: string; intent: string; category: string } | null = null;
 
     constructor(
         providerFactory: ProviderFactory,
@@ -129,6 +129,7 @@ export class AgentLoop {
     private async tryValidateTool(
         userText: string,
         intent: string,
+        category: string,
         toolName: string,
         toolOutput: string,
         messages: LLMMessage[],
@@ -160,6 +161,7 @@ export class AgentLoop {
                 reason: validation.reason,
                 confidence: validation.confidence,
                 suggestedFix: validation.suggestedFix,
+                pattern: category,
             });
 
             if (!validation.approved && validation.confidence >= 0.6 && validation.suggestedFix) {
@@ -189,6 +191,7 @@ export class AgentLoop {
                 await this.tryValidateTool(
                     userText,
                     last.intent,
+                    last.category,
                     last.toolName,
                     last.toolOutput,
                     [],         // sem injeção de mensagem — só persistência
@@ -373,7 +376,7 @@ export class AgentLoop {
 
         let skillContext = intentDecision.skillContext ?? '';
 
-        const reflectionHint = this.reflectionMemory.buildContextHint(userText);
+        const reflectionHint = this.reflectionMemory.buildContextHint(intentDecision.category);
         if (reflectionHint) {
             skillContext = skillContext ? `${skillContext}\n\n${reflectionHint}` : reflectionHint;
         }
@@ -658,8 +661,8 @@ export class AgentLoop {
 
                         const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
                         if (result.success && !terminalTools.includes(toolName)) {
-                            this.lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent };
-                            await this.tryValidateTool(userText, intentDecision.intent, toolName, result.output, loopMessages, trace.id, conversationId);
+                            this.lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
+                            await this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
                         }
                         if (terminalTools.includes(toolName) && result.success) {
                             log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded → task DONE, returning result`);
@@ -747,8 +750,8 @@ export class AgentLoop {
                     }
 
                     if (result.success) {
-                        this.lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent };
-                        await this.tryValidateTool(userText, intentDecision.intent, toolName, result.output, loopMessages, trace.id, conversationId);
+                        this.lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
+                        await this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
                     }
 
                     move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });

@@ -111,9 +111,10 @@ export class ReflectionMemory {
         reason: string;
         confidence: number;
         suggestedFix?: string;
+        pattern?: string;
     }): void {
         try {
-            const pattern = this.extractPattern(params.userInput, params.toolUsed);
+            const pattern = params.pattern ?? (params.toolUsed ? `tool_${params.toolUsed}` : 'general');
             const id = `ref_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
             this.db.prepare(`
@@ -151,9 +152,9 @@ export class ReflectionMemory {
      * Retorna um hint de contexto baseado em padrões de falha similares.
      * Retorna string vazia se não há nada relevante.
      */
-    buildContextHint(userInput: string): string {
+    buildContextHint(category: string): string {
         try {
-            const patterns = this.getFailurePatterns(userInput);
+            const patterns = this.getFailurePatterns(category);
             if (patterns.length === 0) return '';
 
             const lines: string[] = ['Padrões de erro similares detectados no histórico:'];
@@ -175,9 +176,7 @@ export class ReflectionMemory {
      * Padrões de falha agrupados por (pattern, tool_used), com taxa de falha >= 30%
      * e ao menos 2 registros — relevantes para o input atual.
      */
-    private getFailurePatterns(userInput: string): PatternAggRow[] {
-        const inputPattern = this.extractPattern(userInput, '');
-
+    private getFailurePatterns(category: string): PatternAggRow[] {
         return this.db.prepare(`
             SELECT
                 pattern,
@@ -196,7 +195,7 @@ export class ReflectionMemory {
             HAVING total >= 2 AND failure_rate >= 0.30
             ORDER BY failure_rate DESC, total DESC
             LIMIT 3
-        `).all(inputPattern ?? '__no_match__') as PatternAggRow[];
+        `).all(category) as PatternAggRow[];
     }
 
     /** Retorna as últimas N anotações (para observabilidade/dashboard). */
@@ -240,19 +239,6 @@ export class ReflectionMemory {
     }
 
     // ── Internals ──────────────────────────────────────────────────────
-
-    private extractPattern(userInput: string, toolUsed: string): string {
-        const lower = userInput.toLowerCase();
-        if (/(pre[cç]o|cota[cç][aã]o|valor|quanto).*(bitcoin|btc|eth|sol|ada|xrp|doge|river)/.test(lower)) return 'crypto_price';
-        if (/(bitcoin|btc|ethereum|eth|solana|sol|cardano|ada|xrp|dogecoin|doge|river)/.test(lower)) return 'crypto_query';
-        if (/(clima|tempo|temperatura|previs[aã]o|chovendo)/.test(lower)) return 'weather';
-        if (/(audio|áudio|voz|tts)/.test(lower)) return 'audio_request';
-        if (/(lembre|guarde|salve|memorize|anote)/.test(lower)) return 'memory_write';
-        if (/(lembra|o que voc[eê] sabe|buscar na mem)/.test(lower)) return 'memory_search';
-        if (/(arquivo|html|css|site|página)/.test(lower)) return 'file_operation';
-        if (toolUsed) return `tool_${toolUsed}`;
-        return 'general';
-    }
 
     private rowToAnnotation(row: AnnotationRow): ReflectionAnnotation {
         return {
