@@ -17,6 +17,7 @@
     "@types/node": "^20.0.0",
     "@whiskeysockets/baileys": "^7.0.0-rc11",
     "better-sqlite3": "^12.10.0",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "discord.js": "^14.26.4",
     "dotenv": "^17.4.2",
@@ -26,5 +27,8 @@
     "p-queue": "^9.2.0",
     "ts-node": "^10.9.0",
     "typescript": "^6.0.3"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.10"
   }
 }
