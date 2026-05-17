@@ -91,7 +91,11 @@ export class ProviderFactory {
      * - Only ONE response is returned — the LAST successful attempt.
      * - No partial content from failed attempts is ever included.
      */
-    async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number): Promise<LLMResult> {
+    async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number, externalSignal?: AbortSignal): Promise<LLMResult> {
+        if (externalSignal?.aborted) {
+            return { status: 'cancelled', content: '', fallbackReason: 'cancelled', fallbackMessage: 'Operação cancelada.', attempts: [] };
+        }
+
         const providerOrder = this.getFallbackOrder(preferredProvider);
         const attemptLog: AttemptInfo[] = [];
         const MAX_RETRIES = 1;
@@ -128,6 +132,12 @@ export class ProviderFactory {
                 const attemptId = `${requestId}-${providerName}-${attempt}`;
                 const attemptStart = Date.now();
 
+                if (externalSignal?.aborted) {
+                    if (activeAbortController) { activeAbortController.abort(); activeAbortController = null; }
+                    log.info(`[${requestId}] External cancellation before attempt ${providerName}-${attempt}`);
+                    return { status: 'cancelled', content: '', fallbackReason: 'cancelled', fallbackMessage: 'Operação cancelada.', attempts: attemptLog };
+                }
+
                 if (activeAbortController) {
                     log.info(`[${requestId}] Aborting previous in-flight request before attempt ${attempt}`);
                     activeAbortController.abort();
@@ -137,6 +147,13 @@ export class ProviderFactory {
                 const currentAbort = new AbortController();
                 activeAbortController = currentAbort;
 
+                // Link external signal so a cancel() from AgentLoop propagates into the provider HTTP call
+                let onExternalAbort: (() => void) | null = null;
+                if (externalSignal) {
+                    onExternalAbort = () => currentAbort.abort();
+                    externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+                }
+
                 try {
                     const provider = this.providers.get(providerName);
                     if (!provider) break;
@@ -145,6 +162,11 @@ export class ProviderFactory {
                     if (attempt > 0) {
                         log.info(`[${attemptId}] Retry ${attempt}/${MAX_RETRIES} after ${RETRY_BACKOFF_MS}ms backoff`);
                         await new Promise(r => setTimeout(r, RETRY_BACKOFF_MS));
+                        if (externalSignal?.aborted) {
+                            activeAbortController = null;
+                            if (onExternalAbort) externalSignal.removeEventListener('abort', onExternalAbort);
+                            return { status: 'cancelled', content: '', fallbackReason: 'cancelled', fallbackMessage: 'Operação cancelada.', attempts: attemptLog };
+                        }
                     }
 
                     log.info(`[${attemptId}] START provider=${providerName}/${modelUsed} timeout=${timeoutMs || 'none'}ms`);
@@ -169,7 +191,14 @@ export class ProviderFactory {
                         result = await chatPromise;
                     }
 
+                    if (onExternalAbort) externalSignal!.removeEventListener('abort', onExternalAbort);
+
                     const hasContent = (result.content && result.content.trim().length > 0) || (result.toolCalls && result.toolCalls.length > 0);
+                    if (externalSignal?.aborted) {
+                        log.info(`[${attemptId}] External cancellation after response — discarding`);
+                        activeAbortController = null;
+                        return { status: 'cancelled', content: '', fallbackReason: 'cancelled', fallbackMessage: 'Operação cancelada.', attempts: attemptLog };
+                    }
                     if (currentAbort.signal.aborted && !hasContent) {
                         log.warn(`[${attemptId}] ABORTED with no content — moving to next attempt`);
                         attemptLog.push({ provider: providerName, model: modelUsed, duration: Date.now() - attemptStart, status: 'error', errorMessage: 'Aborted — no content' });
@@ -209,6 +238,15 @@ export class ProviderFactory {
                 } catch (error) {
                     const duration = Date.now() - attemptStart;
                     activeAbortController = null;
+                    if (onExternalAbort) externalSignal!.removeEventListener('abort', onExternalAbort);
+
+                    // External cancel trumps all other error classification
+                    if (externalSignal?.aborted) {
+                        log.info(`[${attemptId}] Cancelled by external signal`);
+                        attemptLog.push({ provider: providerName, model: providerName, duration, status: 'cancelled', errorMessage: 'Cancelled' });
+                        return { status: 'cancelled', content: '', fallbackReason: 'cancelled', fallbackMessage: 'Operação cancelada.', attempts: attemptLog };
+                    }
+
                     const prov = this.providers.get(providerName);
                     const modelUsed = (prov instanceof OllamaProvider) ? prov.getModel() : (prov as { model?: string })?.model || providerName;
                     const isTimeout = errorMessage(error)?.includes('Timeout');

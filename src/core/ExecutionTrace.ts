@@ -30,7 +30,7 @@ export interface ExecutionTrace {
     confidence?: number;
     provider?: string;
     finalResponse?: string;
-    status: 'running' | 'completed' | 'error' | 'max_iterations';
+    status: 'running' | 'completed' | 'error' | 'max_iterations' | 'timeout' | 'cancelled';
 }
 
 class ExecutionTraceManager extends EventEmitter {

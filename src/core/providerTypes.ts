@@ -74,18 +74,18 @@ export interface ToolDefinition {
     parameters: Record<string, any>;
 }
 
-export type FallbackReason = 'timeout' | 'error' | 'empty_response' | 'streaming_failed';
+export type FallbackReason = 'timeout' | 'error' | 'empty_response' | 'streaming_failed' | 'cancelled';
 
 export interface AttemptInfo {
     provider: string;
     model: string;
     duration: number;
-    status: 'success' | 'timeout' | 'error' | 'empty';
+    status: 'success' | 'timeout' | 'error' | 'empty' | 'cancelled';
     errorMessage?: string;
 }
 
 export interface LLMResult {
-    status: 'success' | 'timeout' | 'error';
+    status: 'success' | 'timeout' | 'error' | 'cancelled';
     content: string;
     thinking?: string;
     toolCalls?: ToolCall[];

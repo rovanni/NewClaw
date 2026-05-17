@@ -21,7 +21,7 @@ export interface ToolExecutor {
 export interface LoopMetrics {
     timestamp: number;
     responseTimeMs: number;
-    status: 'success' | 'timeout' | 'error';
+    status: 'success' | 'timeout' | 'error' | 'cancelled';
     provider: string;
     model: string;
     promptTokens: number;

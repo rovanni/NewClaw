@@ -1,4 +1,4 @@
-export type AgentFSMState = 'IDLE' | 'THINKING' | 'EXECUTING_TOOL' | 'SYNTHESIZING' | 'DONE' | 'ERROR';
+export type AgentFSMState = 'IDLE' | 'THINKING' | 'EXECUTING_TOOL' | 'SYNTHESIZING' | 'DONE' | 'ERROR' | 'TIMEOUT' | 'CANCELLED';
 
 export type AgentFSMEvent =
     | 'START_TURN'
@@ -9,7 +9,9 @@ export type AgentFSMEvent =
     | 'SYNTHESIS_REQUIRED'
     | 'FINAL_READY'
     | 'AUTH_REQUIRED'
-    | 'FAIL';
+    | 'FAIL'
+    | 'TIMEOUT'
+    | 'CANCEL';
 
 export interface AgentFSMTransition {
     from: AgentFSMState;
@@ -30,23 +32,31 @@ const TRANSITIONS: Record<AgentFSMState, Partial<Record<AgentFSMEvent, AgentFSMS
         SYNTHESIS_REQUIRED: 'SYNTHESIZING',
         FINAL_READY: 'DONE',
         AUTH_REQUIRED: 'DONE',
-        FAIL: 'ERROR'
+        FAIL: 'ERROR',
+        TIMEOUT: 'TIMEOUT',
+        CANCEL: 'CANCELLED'
     },
     EXECUTING_TOOL: {
         TOOL_COMPLETED: 'THINKING',
         FINAL_READY: 'DONE',
         AUTH_REQUIRED: 'DONE',
-        FAIL: 'ERROR'
+        FAIL: 'ERROR',
+        TIMEOUT: 'TIMEOUT',
+        CANCEL: 'CANCELLED'
     },
     SYNTHESIZING: {
         LLM_REQUEST: 'SYNTHESIZING',
         LLM_RESPONSE: 'SYNTHESIZING',
         SYNTHESIS_REQUIRED: 'SYNTHESIZING',
         FINAL_READY: 'DONE',
-        FAIL: 'ERROR'
+        FAIL: 'ERROR',
+        TIMEOUT: 'TIMEOUT',
+        CANCEL: 'CANCELLED'
     },
     DONE: {},
-    ERROR: {}
+    ERROR: {},
+    TIMEOUT: {},
+    CANCELLED: {}
 };
 
 export class AgentFSM {

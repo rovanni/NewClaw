@@ -65,6 +65,7 @@ export class AgentLoop {
     private sessionContext: SessionContext | null = null;
     private metrics: LoopMetrics[] = [];
     private metricsMaxSize = 100;
+    private activeTurns: Map<string, AbortController> = new Map();
     private classificationMemory: ClassificationMemory;
     private decisionMemory: DecisionMemory;
     private protocolParser: ProtocolParser;
@@ -200,6 +201,15 @@ export class AgentLoop {
 
     // ── Entry points ───────────────────────────────────────────────────────────
 
+    public cancel(conversationId: string): void {
+        const ctrl = this.activeTurns.get(conversationId);
+        if (ctrl) {
+            ctrl.abort();
+            this.activeTurns.delete(conversationId);
+            log.info(`[${this.ts()}] [AGENT-FSM] Turn cancelled: ${conversationId}`);
+        }
+    }
+
     public async process(conversationId: string, userText: string, _userId?: string, context?: ChannelContext): Promise<string | ProcessedResult> {
         return this.run(conversationId, userText, conversationId, context);
     }
@@ -245,7 +255,7 @@ export class AgentLoop {
 
     // ── LLM call with fallback ─────────────────────────────────────────────────
 
-    private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: ModelProfile): Promise<LLMResult> {
+    private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: ModelProfile, signal?: AbortSignal): Promise<LLMResult> {
         const MIN_TIMEOUT = 45000;
         const MAX_TIMEOUT = 420000;
         const BASE_TIMEOUT = 180000;
@@ -273,7 +283,8 @@ export class AgentLoop {
                 messages,
                 toolDefs,
                 undefined,
-                timeoutMs
+                timeoutMs,
+                signal
             ));
 
             this.pushMetric(result, timeoutMs, totalChars, approxTokens, chatProfile?.model);
@@ -310,6 +321,10 @@ export class AgentLoop {
         let lastBestContent = '';
         let toolFailureCount = 0;
         const usedToolInputs = new Set<string>();
+
+        const turnAbort = new AbortController();
+        this.activeTurns.set(conversationId, turnAbort);
+        const turnSignal = turnAbort.signal;
 
         const trace = traceManager.startTrace(conversationId, userText);
         const fsm = new AgentFSM();
@@ -475,7 +490,7 @@ export class AgentLoop {
             }
 
             move('LLM_REQUEST', { step: stepCount });
-            const response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile);
+            const response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile, turnSignal);
             move('LLM_RESPONSE', { step: stepCount, status: response.status });
 
             if (response.thinking && response.thinking.trim().length > 0) {
@@ -488,12 +503,30 @@ export class AgentLoop {
                 iteration
             });
 
-            if (response.status === 'timeout' || response.status === 'error') {
-                log.warn(`[${this.ts()}] [FALLBACK] Provider returned ${response.status}: ${response.fallbackReason}`);
+            if (response.status === 'cancelled') {
+                log.info(`[${this.ts()}] [AGENT-FSM] Turn cancelled at step ${stepCount}`);
+                move('CANCEL', { step: stepCount });
+                traceManager.completeTrace(trace, 'cancelled', 'Operação cancelada.');
+                this.activeTurns.delete(conversationId);
+                return { text: 'Operação cancelada.' };
+            }
+
+            if (response.status === 'timeout') {
+                log.warn(`[${this.ts()}] [FALLBACK] Provider timeout at step ${stepCount}`);
+                move('TIMEOUT', { step: stepCount });
+                traceManager.completeTrace(trace, 'timeout', response.fallbackMessage);
+                this.persistTrace(trace, stepCount, 'timeout', response.fallbackMessage || 'Timeout', channelContext);
+                this.activeTurns.delete(conversationId);
+                return response.fallbackMessage || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
+            }
+
+            if (response.status === 'error') {
+                log.warn(`[${this.ts()}] [FALLBACK] Provider error at step ${stepCount}: ${response.fallbackReason}`);
                 move('FAIL', { step: stepCount, status: response.status });
                 traceManager.completeTrace(trace, 'error', response.fallbackMessage);
-                this.persistTrace(trace, stepCount, 'error', response.fallbackMessage || 'Timeout/Error', channelContext);
-                return response.fallbackMessage || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
+                this.persistTrace(trace, stepCount, 'error', response.fallbackMessage || 'Error', channelContext);
+                this.activeTurns.delete(conversationId);
+                return response.fallbackMessage || 'Erro ao processar sua mensagem.';
             }
 
             this.protocolParser.setProviderContext(
@@ -740,8 +773,13 @@ export class AgentLoop {
             });
 
             move('LLM_REQUEST', { step: stepCount, phase: 'synthesis' });
-            const synthesisResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile);
+            const synthesisResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile, turnSignal);
             move('LLM_RESPONSE', { step: stepCount, phase: 'synthesis', status: synthesisResponse.status });
+            if (synthesisResponse.status === 'cancelled') {
+                move('CANCEL', { step: stepCount, phase: 'synthesis' });
+                this.activeTurns.delete(conversationId);
+                return { text: 'Operação cancelada.' };
+            }
             const rawSynthesis = synthesisResponse.content || '';
 
             let synthesisText = extractText(rawSynthesis);
@@ -783,8 +821,13 @@ export class AgentLoop {
 
         move('SYNTHESIS_REQUIRED', { step: stepCount, reason: 'fallback' });
         move('LLM_REQUEST', { step: stepCount, phase: 'fallback' });
-        const finalResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile);
+        const finalResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile, turnSignal);
         move('LLM_RESPONSE', { step: stepCount, phase: 'fallback', status: finalResponse.status });
+        if (finalResponse.status === 'cancelled') {
+            move('CANCEL', { step: stepCount, phase: 'fallback' });
+            this.activeTurns.delete(conversationId);
+            return { text: 'Operação cancelada.' };
+        }
         const rawFinal = finalResponse.content || '';
 
         let text = extractText(rawFinal);
@@ -796,6 +839,7 @@ export class AgentLoop {
         traceManager.completeTrace(trace, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
         this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text, channelContext);
         this.schedulePostTurnValidation(userText, text, trace.id, conversationId);
+        this.activeTurns.delete(conversationId);
 
         return text;
     }
