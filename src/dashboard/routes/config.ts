@@ -142,7 +142,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
 
         if (modelRouter) {
             ctx.config.modelRouter = { ...(ctx.config.modelRouter || {}), ...modelRouter };
-            log.info(`ModelRouter updated: ${JSON.stringify(ctx.config.modelRouter)}`);
+            log.info(`ModelProfileRegistry updated: ${JSON.stringify(ctx.config.modelRouter)}`);
         }
 
         if (ctx.controller) {

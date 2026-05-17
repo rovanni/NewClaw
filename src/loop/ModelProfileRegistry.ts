@@ -1,32 +1,35 @@
 /**
- * ModelRouter — Roteamento inteligente de modelos por tipo de tarefa
- * 
- * Estratégia: classificação baseada em INTENÇÃO (criar vs perguntar vs saudar),
- * não em tópicos específicos. Funciona para qualquer idioma e qualquer assunto.
- * 
- * Fluxo: LLM classifica → fallback determinístico → default.
+ * ModelProfileRegistry — Registry e resolução de perfis de modelo por categoria
+ *
+ * Responsabilidade: mapear category → ModelProfile (model, server, maxTokens).
+ * NÃO classifica intenção — isso é responsabilidade do UnifiedIntentRouter.
+ *
+ * Fluxo de resolução:
+ *   1. Determinístico (0ms) — keyword/regex matching
+ *   2. LLM leve como fallback para casos ambíguos
+ *   3. Default profile se tudo falhar
  */
 
 import { ProviderFactory } from '../core/ProviderFactory';
 import { createLogger } from '../shared/AppLogger';
-const log = createLogger('Modelrouter');
+const log = createLogger('ModelProfileRegistry');
 
 // Perfil de modelos por categoria
 export interface ModelProfile {
     id: string;           // Identificador único
-    model: string;       // Nome no Ollama
-    server: string;      // URL do servidor Ollama
+    model: string;        // Nome no provider
+    server: string;       // URL do servidor
     category: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution';
-    description: string; // Descrição humana
-    maxTokens?: number;  // Limite de contexto (opcional)
+    description: string;  // Descrição humana
+    maxTokens?: number;   // Limite de contexto (opcional)
 }
 
-export interface RouterConfig {
+export interface ProfileRegistryConfig {
     defaultProfile: string;
     profiles: ModelProfile[];
     classifierModel: string;
-    classifierServer: string;     // Servidor do classificador
-    fallbackRules: FallbackRule[]; // Regras determinísticas de fallback
+    classifierServer: string;
+    fallbackRules: FallbackRule[];
 }
 
 export interface FallbackRule {
@@ -39,8 +42,7 @@ export interface FallbackRule {
 const VALID_CATEGORIES = ['chat', 'code', 'vision', 'light', 'analysis', 'execution'] as const;
 type Category = typeof VALID_CATEGORIES[number];
 
-// ── Intent-based descriptions ──────────────────────────────────────
-// Focus on WHAT THE USER WANTS TO DO, not what topic they're talking about
+// Descrições baseadas em INTENÇÃO — funciona para qualquer idioma/assunto
 const CATEGORY_DESCRIPTIONS: Record<Category, string> = {
     chat: 'Questions, explanations, opinions, reasoning — the user wants INFORMATION, not a file',
     code: 'The user wants to CREATE, BUILD, GENERATE, EDIT, or FIX something — any file, document, page, script, app, or artifact',
@@ -50,17 +52,17 @@ const CATEGORY_DESCRIPTIONS: Record<Category, string> = {
     execution: 'Complex tasks, tool loops, multi-step agent execution and reasoning'
 };
 
-const DEFAULT_CONFIG: RouterConfig = {
+const DEFAULT_CONFIG: ProfileRegistryConfig = {
     defaultProfile: 'chat-primary',
     classifierModel: "gemma4:31b-cloud",
     classifierServer: 'http://localhost:11434',
     profiles: [
-        { id: 'chat-primary', model: 'glm-5.1:cloud', server: 'http://localhost:11434', category: 'chat', description: 'Conversa geral e raciocínio' },
-        { id: 'code-primary', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'code', description: 'Programação e criação de conteúdo' },
-        { id: 'light-chat', model: 'glm-5.1:cloud', server: 'http://localhost:11434', category: 'light', description: 'Conversa leve e rápida' },
-        { id: 'vision-primary', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'vision', description: 'Análise de imagens e OCR' },
-        { id: 'analysis-primary', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'analysis', description: 'Análise profunda e cripto' },
-        { id: 'execution-primary', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'execution', description: 'Execução de ferramentas e tarefas complexas' },
+        { id: 'chat-primary',      model: 'glm-5.1:cloud',    server: 'http://localhost:11434', category: 'chat',      description: 'Conversa geral e raciocínio' },
+        { id: 'code-primary',      model: 'gemma4:31b-cloud',  server: 'http://localhost:11434', category: 'code',      description: 'Programação e criação de conteúdo' },
+        { id: 'light-chat',        model: 'glm-5.1:cloud',    server: 'http://localhost:11434', category: 'light',     description: 'Conversa leve e rápida' },
+        { id: 'vision-primary',    model: 'gemma4:31b-cloud',  server: 'http://localhost:11434', category: 'vision',    description: 'Análise de imagens e OCR' },
+        { id: 'analysis-primary',  model: 'kimi-k2.6:cloud',  server: 'http://localhost:11434', category: 'analysis',  description: 'Análise profunda e cripto' },
+        { id: 'execution-primary', model: 'kimi-k2.6:cloud',  server: 'http://localhost:11434', category: 'execution', description: 'Execução de ferramentas e tarefas complexas' },
     ],
     fallbackRules: [
         {
@@ -86,18 +88,17 @@ const DEFAULT_CONFIG: RouterConfig = {
     ]
 };
 
-
-export class ModelRouter {
-    private config: RouterConfig;
+export class ModelProfileRegistry {
+    private config: ProfileRegistryConfig;
     private usageLog: Map<string, number> = new Map();
     private providerFactory: ProviderFactory | null = null;
 
-    constructor(config?: Partial<RouterConfig> & Record<string, string>, providerFactory?: ProviderFactory) {
+    constructor(config?: Partial<ProfileRegistryConfig> & Record<string, string>, providerFactory?: ProviderFactory) {
         this.config = { ...DEFAULT_CONFIG };
         this.providerFactory = providerFactory || null;
-        
+
         if (config) {
-            // Se vier do Dashboard/Env, mapeia os modelos individuais para os perfis
+            // Mapeia modelos individuais vindos do Dashboard/Env para os perfis
             const categories: Array<Category> = ['chat', 'code', 'vision', 'light', 'analysis', 'execution'];
             for (const cat of categories) {
                 if (config[cat]) {
@@ -109,34 +110,32 @@ export class ModelRouter {
                 }
             }
 
-            // Outras configs
             if (config.classifierModel) this.config.classifierModel = config.classifierModel;
             if (config.classifierServer) this.config.classifierServer = config.classifierServer;
         }
     }
 
     /**
-     * Roteamento principal: Determinístico primeiro (rápido), LLM como fallback.
+     * Resolução de perfil: determinístico primeiro (0ms), LLM como fallback.
      */
-    async route(query: string): Promise<ModelProfile> {
+    async resolveProfile(query: string): Promise<ModelProfile> {
         // 1. Deterministic classification FIRST (0ms, instant)
         const detCategory = this.fallbackClassify(query);
         if (detCategory !== 'chat') {
-            // Deterministic match found (code/vision/analysis) — use it directly
             const profile = this.getProfileByCategory(detCategory);
             if (profile) {
                 this.logUsage(profile.id);
-                log.info(`Deterministic routing: ${detCategory} → ${profile.model}`);
+                log.info(`Deterministic profile resolution: ${detCategory} → ${profile.model}`);
                 return profile;
             }
         }
 
-        // 2. For ambiguous/chat/light: try LLM classification with short timeout
+        // 2. LLM classification para casos ambíguos/chat/light
         try {
             const category = await this.llmClassify(query);
             const profile = this.getProfileByCategory(category);
             if (profile) {
-                log.info(`LLM routing: ${category} → ${profile.model}`);
+                log.info(`LLM profile resolution: ${category} → ${profile.model}`);
                 this.logUsage(profile.id);
                 return profile;
             }
@@ -144,13 +143,12 @@ export class ModelRouter {
             log.warn(`LLM classification failed: ${(err as Error).message}. Falling back to deterministic.`);
         }
 
-        // 3. Final fallback
+        // 3. Fallback final
         const category = this.fallbackClassify(query);
         const profile = this.getProfileByCategory(category);
-        
         if (profile) {
             this.logUsage(profile.id);
-            log.info(`Fallback routing: ${category} → ${profile.model}`);
+            log.info(`Fallback profile resolution: ${category} → ${profile.model}`);
             return profile;
         }
 
@@ -158,19 +156,16 @@ export class ModelRouter {
     }
 
     /**
-     * Synchronous route (for non-async contexts — uses fallback only).
+     * Resolução síncrona de perfil (apenas determinístico — para contextos não-async).
      */
-    routeSync(query: string): ModelProfile {
+    resolveProfileSync(query: string): ModelProfile {
         const category = this.fallbackClassify(query);
         const profile = this.getProfileByCategory(category);
         return profile || this.config.profiles.find(p => p.id === this.config.defaultProfile) || this.config.profiles[0];
     }
 
     /**
-     * LLM classification: pede ao modelo leve para classificar a query.
-     * Retorna exatamente uma categoria: chat, code, vision, light, analysis
-     * 
-     * The prompt is intentionally multilingual and intent-based.
+     * LLM classification: modelo leve classifica a query em uma categoria.
      */
     private async llmClassify(query: string): Promise<Category> {
         const prompt = `Classify this message into ONE category. Reply with ONLY the category word, nothing else.
@@ -189,12 +184,11 @@ Message: "${query.slice(0, 200)}"
 Category:`;
 
         try {
-            // 1. Use unified ProviderFactory if available (handles fallback/queuing)
             if (this.providerFactory) {
                 const response = await this.providerFactory.classifyWithFallback([
                     { role: 'user', content: prompt }
-                ], 60000); 
-                
+                ], 60000);
+
                 const content = (response.content || '').trim().toLowerCase();
                 for (const cat of VALID_CATEGORIES) {
                     if (content.includes(cat)) return cat;
@@ -203,9 +197,9 @@ Category:`;
                 if (VALID_CATEGORIES.includes(firstWord as Category)) return firstWord as Category;
             }
 
-            // Legacy fetch fallback (Ollama only) — direct call, bypasses generation queue
+            // Fallback legado: Ollama direto, bypassa fila de geração
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 60000); // 60s (increased from 30s)
+            const timeout = setTimeout(() => controller.abort(), 60000);
             const response = await fetch(`${this.config.classifierServer}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -239,11 +233,8 @@ Category:`;
     }
 
     /**
-     * Deterministic fallback: intent-based verb detection + keyword matching.
-     * 
-     * Strategy: detect ACTION VERBS (create, build, make, write, etc.) to identify
-     * "code" intent regardless of the topic. This makes the fallback work for
-     * any subject — from "create a physics lesson" to "build me a game".
+     * Classificação determinística por verbos de intenção e keywords.
+     * Funciona para qualquer assunto — detecta AÇÃO, não tópico.
      */
     private fallbackClassify(query: string): Category {
         const lower = query.toLowerCase();
@@ -267,9 +258,6 @@ Category:`;
         return bestCategory;
     }
 
-    /**
-     * Get profile by category (public for UnifiedIntentRouter integration).
-     */
     getProfileByCategory(category: Category): ModelProfile | undefined {
         return this.config.profiles.find(p => p.category === category);
     }
@@ -302,27 +290,17 @@ Category:`;
         this.usageLog.set(profileId, (this.usageLog.get(profileId) || 0) + 1);
     }
 
-    /**
-     * Retorna o modelo configurado para EXECUÇÃO (Agent Loop).
-     * Se não configurado explicitamente, faz fallback para o modelo de CHAT.
-     */
+    /** Retorna o modelo configurado para execução. Fallback: chat. */
     getExecutionModel(): string {
         const profile = this.getProfileByCategory('execution');
         if (profile) return profile.model;
-
-        // Fallback para chat
-        const chatProfile = this.getProfileByCategory('chat');
-        return chatProfile?.model || this.config.profiles[0].model;
+        return this.getProfileByCategory('chat')?.model || this.config.profiles[0].model;
     }
 
-    /**
-     * Retorna o perfil completo de EXECUÇÃO.
-     */
+    /** Retorna o perfil completo de execução. Fallback: chat. */
     getExecutionProfile(): ModelProfile {
-        const profile = this.getProfileByCategory('execution');
-        if (profile) return profile;
-
-        const chatProfile = this.getProfileByCategory('chat');
-        return chatProfile || this.config.profiles[0];
+        return this.getProfileByCategory('execution')
+            ?? this.getProfileByCategory('chat')
+            ?? this.config.profiles[0];
     }
 }

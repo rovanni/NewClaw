@@ -184,7 +184,7 @@ export async function processVision(
     visionProfile: VisionProfile | null
 ): Promise<string> {
     if (!visionProfile) {
-        visionLog.warn('vision_not_configured', 'Perfil de visão não encontrado no ModelRouter.');
+        visionLog.warn('vision_not_configured', 'Perfil de visão não encontrado no ModelProfileRegistry.');
         return '(Visão não configurada)';
     }
     try {

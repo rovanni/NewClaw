@@ -14,7 +14,7 @@ import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary 
 import { CognitiveWorkspace } from '../cognitive/CognitiveWorkspace';
 import { SessionContext } from '../session/SessionContext';
 import type { SessionKey } from '../session/SessionManager';
-import { ModelRouter } from './ModelRouter';
+import { ModelProfileRegistry } from './ModelProfileRegistry';
 import { UnifiedIntentRouter, IntentDecision } from './UnifiedIntentRouter';
 import PQueue from 'p-queue';
 import { MemoryManager } from '../memory/MemoryManager';
@@ -31,7 +31,7 @@ import { AgentFSM, AgentFSMEvent } from './AgentFSM';
 import { FSMHistoryStore } from './FSMHistoryStore';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { SkillLoader } from '../skills/SkillLoader';
-import { ModelProfile } from './ModelRouter';
+import { ModelProfile } from './ModelProfileRegistry';
 import { errorMessage } from '../shared/errors';
 import { ObserverValidator } from './ObserverValidator';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
@@ -60,7 +60,7 @@ export class AgentLoop {
     private authManager = new AuthorizationManager();
     private skillLearner: SkillLearner;
     private skillLoader: SkillLoader;
-    private modelRouter: ModelRouter;
+    private profileRegistry: ModelProfileRegistry;
     private intentRouter: UnifiedIntentRouter;
     private stateManager: AgentStateManager;
     private sessionContext: SessionContext | null = null;
@@ -88,7 +88,7 @@ export class AgentLoop {
         this.memory = memory;
         this.skillLearner = skillLearner as SkillLearner;
         this.skillLoader = skillLoader as SkillLoader;
-        this.modelRouter = new ModelRouter(config.modelRouter, providerFactory);
+        this.profileRegistry = new ModelProfileRegistry(config.modelRouter, providerFactory);
         this.intentRouter = new UnifiedIntentRouter(this.skillLearner);
         this.stateManager = new AgentStateManager(memory);
         this.protocolParser = new ProtocolParser();
@@ -112,8 +112,7 @@ export class AgentLoop {
 
     public getIntentRouter(): UnifiedIntentRouter { return this.intentRouter; }
 
-    /** @deprecated Use getIntentRouter().route() instead. ModelRouter remains for provider selection only. */
-    public getModelRouter(): ModelRouter { return this.modelRouter; }
+    public getProfileRegistry(): ModelProfileRegistry { return this.profileRegistry; }
 
     public getStateManager(): AgentStateManager { return this.stateManager; }
 
@@ -228,7 +227,7 @@ export class AgentLoop {
     // ── Metrics ───────────────────────────────────────────────────────────────
 
     private pushMetric(result: LLMResult, timeoutMs: number, totalChars: number, approxTokens: number, preferredModel: string | undefined): void {
-        const fallbackModel = this.modelRouter.routeSync('').model || 'unknown';
+        const fallbackModel = this.profileRegistry.resolveProfileSync('').model || 'unknown';
         const metric = buildLoopMetric(result, timeoutMs, totalChars, approxTokens, preferredModel || fallbackModel);
         this.metrics.push(metric);
         if (this.metrics.length > this.metricsMaxSize) this.metrics.shift();
@@ -401,9 +400,9 @@ export class AgentLoop {
             parameters: t.parameters
         }));
 
-        const chatProfile = await this.modelRouter.route(userText);
+        const chatProfile = await this.profileRegistry.resolveProfile(userText);
         if (intentDecision.modelCategory && intentDecision.confidence >= 0.8) {
-            const intentProfile = this.modelRouter.getProfileByCategory(intentDecision.modelCategory);
+            const intentProfile = this.profileRegistry.getProfileByCategory(intentDecision.modelCategory);
             if (intentProfile) {
                 chatProfile.model = intentProfile.model;
                 chatProfile.category = intentProfile.category;

@@ -123,7 +123,7 @@ export function parseLLMResponse(raw: string): ParsedLLMResponse | null {
 /**
  * Lightweight text extraction for SIMPLE flows.
  *
- * Use this in: ContextCompressor, ObserverValidator, ModelRouter, OnboardingService
+ * Use this in: ContextCompressor, ObserverValidator, ModelProfileRegistry, OnboardingService
  * — places that only need the text and don't care about toolCalls or raw.
  *
  * For STRUCTURED flows (AgentLoop), use ResponseAdapter.normalizeResponse() instead.

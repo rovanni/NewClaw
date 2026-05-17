@@ -6,8 +6,8 @@
  *   2. SemanticRouting — classificação por intenção + contexto cognitivo
  *   3. StrategySelection — modo de execução, provider, budget
  *
- * Substitui: SimpleDecisionEngine, routeIntent, ModelRouter (routing logic)
- * Provider selection permanece em ProviderFactory, mas é guiado por IntentDecision.
+ * Substitui (routing logic): SimpleDecisionEngine, routeIntent, ModelRouter.
+ * Profile/provider selection permanece em ModelProfileRegistry, guiado por IntentDecision.modelCategory.
  */
 
 import { createLogger } from '../shared/AppLogger';
@@ -41,7 +41,7 @@ export interface IntentDecision {
     requiresPlanning: boolean;
     /** Whether streaming response is preferred */
     requiresStreaming: boolean;
-    /** Preferred provider id (from ModelRouter profiles) */
+    /** Preferred provider id (resolved via ModelProfileRegistry) */
     preferredProvider?: string;
     /** Preferred model name */
     preferredModel?: string;
@@ -858,7 +858,7 @@ export class UnifiedIntentRouter {
     // ── Public API ──────────────────────────────────────────────────────
 
     /**
-     * Get model category for a given input (compatibility with ModelRouter).
+     * Get model category for a given input (used by ModelProfileRegistry for profile resolution).
      */
     getModelCategory(input: string): 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution' {
         const decision = this.route(input);

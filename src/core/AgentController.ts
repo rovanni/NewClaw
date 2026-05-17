@@ -237,7 +237,7 @@ export class AgentController {
         this.messageBus.registerMediaHandler('document', async (msg, attachment) =>
             handleDocumentAttachment(msg, attachment, this.messageBus));
         this.messageBus.registerMediaHandler('photo', async (msg, attachment) => {
-            const profile = this.agentLoop.getModelRouter().getProfileByCategory('vision');
+            const profile = this.agentLoop.getProfileRegistry().getProfileByCategory('vision');
             return handlePhotoAttachment(msg, attachment, this.messageBus, profile ?? null);
         });
 
