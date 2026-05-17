@@ -1,5 +1,4 @@
 import { Router, Request, Response } from 'express';
-import type Database from 'better-sqlite3';
 import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import { MemoryManager } from '../../memory/MemoryManager';
@@ -7,9 +6,12 @@ import { DashboardContext, DashboardNode, DashboardEdge } from './types';
 
 const log = createLogger('Dashboardserver');
 
-function computeCentrality(db: Database.Database): Record<string, { degree: number; inDegree: number; outDegree: number }> {
-    const nodes = db.prepare('SELECT id FROM memory_nodes').all() as Array<{ id: string }>;
-    const edges = db.prepare('SELECT from_node, to_node FROM memory_edges').all() as Array<{ from_node: string; to_node: string }>;
+// ── Pure-computation helpers (no DB access) ───────────────────────────────────
+
+function computeCentrality(
+    nodes: Array<{ id: string }>,
+    edges: Array<{ from_node: string; to_node: string }>
+): Record<string, { degree: number; inDegree: number; outDegree: number }> {
     const centrality: Record<string, { degree: number; inDegree: number; outDegree: number }> = {};
     for (const n of nodes) centrality[n.id] = { degree: 0, inDegree: 0, outDegree: 0 };
     for (const e of edges) {
@@ -141,29 +143,17 @@ function computeMemoryReview(nodes: DashboardNode[], edges: DashboardEdge[]) {
     };
 }
 
+// ── Router ────────────────────────────────────────────────────────────────────
+
 export function createMemoryRouter(ctx: DashboardContext): Router {
     const router = Router();
 
     router.get('/graph', (_req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
-            const type = _req.query.type as string;
+            const type = _req.query.type as string | undefined;
             const limit = Math.min(parseInt(String(_req.query.limit)) || 200, 500);
-
-            let nodes;
-            if (type) {
-                nodes = db.prepare('SELECT id, type, name FROM memory_nodes WHERE type = ? ORDER BY updated_at DESC LIMIT ?').all(type, limit);
-            } else {
-                nodes = db.prepare('SELECT id, type, name FROM memory_nodes ORDER BY updated_at DESC LIMIT ?').all(limit);
-            }
-
-            const nodeIds = nodes.map(n => (n as DashboardNode).id);
-            const placeholders = nodeIds.map(() => '?').join(',');
-            const edges = db.prepare(`SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node IN (${placeholders}) AND to_node IN (${placeholders})`).all(...nodeIds, ...nodeIds);
-
+            const { nodes, edges } = ctx.memoryManager.getDashboardRepository().getGraph(type, limit);
             res.json({ success: true, nodes, edges });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
@@ -173,33 +163,9 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
     router.get('/graph/:nodeId', (req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
             const nodeId = String(req.params.nodeId);
             const depth = parseInt(String(req.query.depth)) || 1;
-
-            const collected = new Set<string>([nodeId]);
-            let frontier = new Set<string>([nodeId]);
-
-            for (let i = 0; i < depth; i++) {
-                const frontierPlaceholders = Array.from(frontier).map(() => '?').join(',');
-                const connectedEdges = db.prepare(
-                    `SELECT from_node, to_node FROM memory_edges WHERE from_node IN (${frontierPlaceholders}) OR to_node IN (${frontierPlaceholders})`
-                ).all(...Array.from(frontier), ...Array.from(frontier)) as Array<{ from_node: string; to_node: string }>;
-
-                frontier = new Set();
-                for (const e of connectedEdges) {
-                    if (!collected.has(e.from_node)) { collected.add(e.from_node); frontier.add(e.from_node); }
-                    if (!collected.has(e.to_node)) { collected.add(e.to_node); frontier.add(e.to_node); }
-                }
-            }
-
-            const idsArray = Array.from(collected);
-            const idsPlaceholders = idsArray.map(() => '?').join(',');
-            const nodes = db.prepare(`SELECT id, type, name FROM memory_nodes WHERE id IN (${idsPlaceholders})`).all(...idsArray);
-            const edges = db.prepare(`SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node IN (${idsPlaceholders}) AND to_node IN (${idsPlaceholders})`).all(...idsArray, ...idsArray);
-
+            const { nodes, edges } = ctx.memoryManager.getDashboardRepository().getNodeNeighborhood(nodeId, depth);
             res.json({ success: true, nodes, edges, center: nodeId, depth });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
@@ -257,19 +223,12 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
     router.get('/stats', (_req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
-            const totalNodes = (db.prepare('SELECT COUNT(*) as c FROM memory_nodes').get() as { c: number }).c;
-            const totalEdges = (db.prepare('SELECT COUNT(*) as c FROM memory_edges').get() as { c: number }).c;
-            const totalMessages = (db.prepare('SELECT COUNT(*) as c FROM messages').get() as { c: number }).c;
-            const totalConversations = (db.prepare('SELECT COUNT(*) as c FROM conversations').get() as { c: number }).c;
-            const nodesByType = db.prepare('SELECT type, COUNT(*) as c FROM memory_nodes GROUP BY type').all() as Array<{ type: string; c: number }>;
-
+            const data = ctx.memoryManager.getDashboardRepository().getStats();
+            const { totalNodes, totalEdges, totalMessages, totalConversations, nodesByType, allNodesForCentrality, allEdgesForCentrality } = data;
             res.json({
                 success: true,
-                stats: { totalNodes, totalEdges, totalMessages, totalConversations, nodesByType: Object.fromEntries(nodesByType.map(r => [r.type, r.c])) },
-                centrality: computeCentrality(db)
+                stats: { totalNodes, totalEdges, totalMessages, totalConversations, nodesByType },
+                centrality: computeCentrality(allNodesForCentrality, allEdgesForCentrality)
             });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
@@ -279,13 +238,8 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
     router.get('/review', (_req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
-            const nodes = db.prepare('SELECT id, type, name, content, updated_at FROM memory_nodes ORDER BY updated_at DESC').all() as DashboardNode[];
-            const edges = db.prepare('SELECT from_node, to_node, relation FROM memory_edges').all() as DashboardEdge[];
-            const review = computeMemoryReview(nodes, edges);
-
+            const { nodes, edges } = ctx.memoryManager.getDashboardRepository().getReviewData();
+            const review = computeMemoryReview(nodes as DashboardNode[], edges as DashboardEdge[]);
             res.json({ success: true, review });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
@@ -295,43 +249,14 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
     router.post('/merge', (req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
             const { keepId, mergeId } = req.body || {};
             if (!keepId || !mergeId) return res.status(400).json({ error: 'keepId and mergeId are required' });
             if (keepId === mergeId) return res.status(400).json({ error: 'keepId and mergeId must be different' });
 
-            const keepNode = db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(keepId) as DashboardNode | undefined;
-            const mergeNode = db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(mergeId) as DashboardNode | undefined;
-            if (!keepNode || !mergeNode) return res.status(404).json({ error: 'Node not found' });
-
+            const repo = ctx.memoryManager.getDashboardRepository();
             const snapshotId = ctx.memoryManager.createSnapshot?.(`pre-merge:${keepId}<-${mergeId}`) || null;
-
-            const lines1 = String(keepNode.content || '').split('\n').map((l: string) => l.trim()).filter(Boolean);
-            const lines2 = String(mergeNode.content || '').split('\n').map((l: string) => l.trim()).filter(Boolean);
-            const mergedContent = Array.from(new Set([...lines1, ...lines2])).join('\n');
-            const mergedName = String(keepNode.name || '').trim() || String(mergeNode.name || '').trim();
-            const mergedType = keepNode.type || mergeNode.type;
-
-            db.prepare('UPDATE memory_nodes SET name = ?, type = ?, content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-                .run(mergedName, mergedType, mergedContent, keepId);
-
-            const relatedEdges = db.prepare('SELECT from_node, to_node, relation, weight, confidence FROM memory_edges WHERE from_node = ? OR to_node = ?')
-                .all(mergeId, mergeId) as DashboardEdge[];
-
-            for (const edge of relatedEdges) {
-                const nextFrom = edge.from_node === mergeId ? keepId : edge.from_node;
-                const nextTo = edge.to_node === mergeId ? keepId : edge.to_node;
-                if (nextFrom === nextTo) continue;
-                db.prepare(`INSERT OR REPLACE INTO memory_edges (from_node, to_node, relation, weight, confidence) VALUES (?, ?, ?, ?, ?)`)
-                    .run(nextFrom, nextTo, edge.relation, edge.weight || 1.0, edge.confidence || 1.0);
-            }
-
-            try { db.prepare('DELETE FROM memory_metrics_history WHERE node_id = ?').run(mergeId); } catch (e) { log.warn('merge_cleanup_metrics_failed', errorMessage(e)); }
-            try { db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(mergeId); } catch (e) { log.warn('merge_cleanup_embeddings_failed', errorMessage(e)); }
-            db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(mergeId, mergeId);
-            db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(mergeId);
+            const result = repo.mergeNodes(keepId, mergeId);
+            if (!result) return res.status(404).json({ error: 'Node not found' });
 
             log.info(`Nodes merged: keep=${keepId}, removed=${mergeId}`);
             res.json({ success: true, snapshotId, keptNodeId: keepId, removedNodeId: mergeId });
@@ -343,17 +268,9 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
     router.get('/nodes', (req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
-            const type = req.query.type as string;
-            const limit = Math.min(parseInt(String(req.query.limit)) || 50, 200);
-            let nodes;
-            if (type) {
-                nodes = db.prepare('SELECT id, type, name, substr(content, 1, 200) as content, updated_at FROM memory_nodes WHERE type = ? ORDER BY updated_at DESC LIMIT ?').all(type, limit);
-            } else {
-                nodes = db.prepare('SELECT id, type, name, substr(content, 1, 200) as content, updated_at FROM memory_nodes ORDER BY updated_at DESC LIMIT ?').all(limit);
-            }
+            const type = req.query.type as string | undefined;
+            const limit = parseInt(String(req.query.limit)) || 50;
+            const nodes = ctx.memoryManager.getDashboardRepository().listNodes(type, limit);
             res.json({ success: true, nodes });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
@@ -363,9 +280,6 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
     router.get('/search', async (req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
             const q = req.query.q as string;
             if (!q) return res.status(400).json({ error: 'Query parameter "q" required' });
 
@@ -377,33 +291,18 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
                         if (results.length > 0) {
                             const ids = results.map(r => r.id);
                             const scores = new Map(results.map(r => [r.id, r.score]));
-                            const placeholders = ids.map(() => '?').join(',');
-                            const nodes = db.prepare(
-                                `SELECT id, type, name, substr(content, 1, 200) as content, updated_at FROM memory_nodes WHERE id IN (${placeholders})`
-                            ).all(...ids);
-                            const nodesWithScore = (nodes as DashboardNode[]).map(n => ({ ...n, score: scores.get(n.id) || 0 }));
+                            const nodes = ctx.memoryManager.getDashboardRepository().searchNodes(q, ids);
+                            const nodesWithScore = nodes.map(n => ({ ...n, score: scores.get(n.id) || 0 }));
                             nodesWithScore.sort((a, b) => b.score - a.score);
                             return res.json({ success: true, nodes: nodesWithScore, method: 'embedding' });
                         }
                     }
-                } catch { /* fall through */ }
+                } catch { /* fall through to text search */ }
             }
 
-            try {
-                const nodes = db.prepare(`
-                    SELECT n.id, n.type, n.name, substr(n.content, 1, 200) as content, n.updated_at
-                    FROM memory_nodes_fts f
-                    JOIN memory_nodes n ON f.rowid = n.rowid
-                    WHERE memory_nodes_fts MATCH ?
-                    ORDER BY rank LIMIT 50
-                `).all(`${q}*`);
-                return res.json({ success: true, nodes, method: 'fts5' });
-            } catch {
-                const nodes = db.prepare(
-                    'SELECT id, type, name, substr(content, 1, 200) as content, updated_at FROM memory_nodes WHERE name LIKE ? OR content LIKE ? ORDER BY updated_at DESC LIMIT 50'
-                ).all(`%${q}%`, `%${q}%`);
-                return res.json({ success: true, nodes, method: 'like' });
-            }
+            const nodes = ctx.memoryManager.getDashboardRepository().searchNodes(q);
+            const method = nodes.length > 0 ? 'fts5' : 'like';
+            return res.json({ success: true, nodes, method });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
         }
@@ -412,18 +311,7 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
     router.get('/analytics', (_req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
-            type NodeMetrics = { id: string; type: string; name: string; pagerank: number; degree: number; betweenness: number; closeness: number };
-            let nodes: NodeMetrics[];
-            try {
-                nodes = db.prepare('SELECT id, type, name, pagerank, degree, betweenness, closeness FROM memory_nodes').all() as NodeMetrics[];
-            } catch {
-                nodes = db.prepare('SELECT id, type, name, 0 as pagerank, 0 as degree, 0 as betweenness, 0 as closeness FROM memory_nodes').all() as NodeMetrics[];
-            }
-
-            const totalEdges = (db.prepare('SELECT COUNT(*) as c FROM memory_edges').get() as { c: number }).c;
+            const { nodes, totalEdges } = ctx.memoryManager.getDashboardRepository().getAnalytics();
             const maxEdges = nodes.length * (nodes.length - 1);
             const density = maxEdges > 0 ? totalEdges / maxEdges : 0;
 
@@ -448,24 +336,17 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
     router.get('/nodes/:id', (req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
             const id = String(req.params.id);
-            const node = db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(id);
-            if (!node) return res.status(404).json({ error: 'Node not found' });
+            const result = ctx.memoryManager.getDashboardRepository().getNodeWithEdges(id);
+            if (!result) return res.status(404).json({ error: 'Node not found' });
 
-            db.prepare('UPDATE memory_edges SET weight = weight + 0.1 WHERE from_node = ? OR to_node = ?').run(id, id);
-            db.prepare('UPDATE memory_nodes SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
-
-            const edges = db.prepare('SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node = ? OR to_node = ?').all(id, id);
+            const { node, edges } = result;
             try {
                 (node as DashboardNode).metadata = JSON.parse(String((node as DashboardNode).metadata || '{}'));
             } catch (e) {
                 log.warn(`Corrupted metadata for node ${id}: ${errorMessage(e)}`);
                 (node as DashboardNode).metadata = {};
             }
-
             res.json({ success: true, node, edges });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
@@ -475,20 +356,10 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
     router.put('/nodes/:id', (req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
             const id = String(req.params.id);
             const { type, name, content } = req.body;
-
-            const existing = db.prepare('SELECT id FROM memory_nodes WHERE id = ?').get(id);
-            if (!existing) return res.status(404).json({ error: 'Node not found' });
-
-            if (type) db.prepare('UPDATE memory_nodes SET type = ? WHERE id = ?').run(type, id);
-            if (name) db.prepare('UPDATE memory_nodes SET name = ? WHERE id = ?').run(name, id);
-            if (content !== undefined) db.prepare('UPDATE memory_nodes SET content = ? WHERE id = ?').run(content, id);
-            db.prepare('UPDATE memory_nodes SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
-
+            const updated = ctx.memoryManager.getDashboardRepository().updateNode(id, { type, name, content });
+            if (!updated) return res.status(404).json({ error: 'Node not found' });
             log.info(`Node updated: ${id}`);
             res.json({ success: true });
         } catch (err) {
@@ -499,17 +370,11 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
     router.post('/nodes', (req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
             const { id, type, name, content } = req.body;
             if (!id || !type || !name || content === undefined) {
                 return res.status(400).json({ error: 'id, type, name, content required' });
             }
-
-            db.prepare('INSERT OR REPLACE INTO memory_nodes (id, type, name, content, metadata, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)')
-                .run(id, type, name, content, '{}');
-
+            ctx.memoryManager.getDashboardRepository().createNode(id, type, name, content);
             log.info(`Node created: ${id} (${type})`);
             res.json({ success: true });
         } catch (err) {
@@ -520,15 +385,8 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
     router.delete('/nodes/:id', (req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
             const id = String(req.params.id);
-            try { db.prepare('DELETE FROM memory_metrics_history WHERE node_id = ?').run(id); } catch (e) { log.warn('delete_cleanup_metrics_failed', errorMessage(e)); }
-            try { db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(id); } catch (e) { log.warn('delete_cleanup_embeddings_failed', errorMessage(e)); }
-            db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(id, id);
-            db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(id);
-
+            ctx.memoryManager.getDashboardRepository().deleteNode(id);
             log.info(`Node deleted: ${id}`);
             res.json({ success: true });
         } catch (err) {
@@ -539,15 +397,9 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
     router.post('/edges', (req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
             const { from, to, relation, weight } = req.body;
             if (!from || !to || !relation) return res.status(400).json({ error: 'from, to, relation required' });
-
-            db.prepare('INSERT OR REPLACE INTO memory_edges (from_node, to_node, relation, weight) VALUES (?, ?, ?, ?)')
-                .run(from, to, relation, weight || 1.0);
-
+            ctx.memoryManager.getDashboardRepository().createEdge(from, to, relation, weight);
             log.info(`Edge created: ${from} -${relation}-> ${to}`);
             res.json({ success: true });
         } catch (err) {
@@ -558,191 +410,10 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
     router.delete('/edges', (req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
             const { from, to, relation } = req.body;
-            db.prepare('DELETE FROM memory_edges WHERE from_node = ? AND to_node = ? AND relation = ?')
-                .run(from, to, relation);
-
+            ctx.memoryManager.getDashboardRepository().deleteEdge(from, to, relation);
             log.info(`Edge deleted: ${from} -${relation}-> ${to}`);
             res.json({ success: true });
-        } catch (err) {
-            res.status(500).json({ error: errorMessage(err) });
-        }
-    });
-
-    router.put('/edges', (req: Request, res: Response) => {
-        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
-        try {
-            const db = ctx.memoryManager.getDatabase();
-            if (!db) return res.status(500).json({ error: 'DB not available' });
-
-            const { from, to, old_relation, new_relation } = req.body;
-            if (!from || !to || !old_relation || !new_relation) {
-                return res.status(400).json({ error: 'from, to, old_relation, new_relation required' });
-            }
-
-            const result = db.prepare('UPDATE memory_edges SET relation = ? WHERE from_node = ? AND to_node = ? AND relation = ?')
-                .run(new_relation, from, to, old_relation);
-
-            if (result.changes === 0) return res.status(404).json({ error: 'Edge not found' });
-
-            log.info(`Edge updated: ${from} -${old_relation}-> ${to} => ${from} -${new_relation}-> ${to}`);
-            res.json({ success: true, changes: result.changes });
-        } catch (err) {
-            res.status(500).json({ error: errorMessage(err) });
-        }
-    });
-
-    router.post('/curate', async (_req: Request, res: Response) => {
-        if (!ctx.memoryCurator) return res.status(500).json({ error: 'Curator not available' });
-        try {
-            const result = await ctx.memoryCurator.curate();
-            res.json({ success: true, ...result });
-        } catch (err) {
-            res.status(500).json({ error: errorMessage(err) });
-        }
-    });
-
-    router.post('/embed', async (req: Request, res: Response) => {
-        if (!ctx.embeddingService) return res.status(500).json({ error: 'EmbeddingService not available' });
-        try {
-            const limit = (req.body?.limit as number) || 50;
-            const count = await ctx.embeddingService.embedMissing(limit);
-            const available = await ctx.embeddingService.isAvailable();
-            res.json({ success: true, embedded: count, model: ctx.embeddingService.getModel?.() || 'nomic-embed-text', available });
-        } catch (err) {
-            res.status(500).json({ error: errorMessage(err) });
-        }
-    });
-
-    router.get('/dashboard/top-nodes', (req: Request, res: Response) => {
-        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
-        try {
-            const db = ctx.memoryManager.getDatabase();
-            const metric = (req.query.metric as string) || 'pagerank';
-            const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
-
-            const validMetrics = ['pagerank', 'degree', 'betweenness', 'closeness'];
-            if (!validMetrics.includes(metric)) {
-                return res.status(400).json({ error: `Invalid metric. Use: ${validMetrics.join(', ')}` });
-            }
-
-            const nodes = db.prepare(
-                `SELECT id, type, name, ${metric} FROM memory_nodes ORDER BY ${metric} DESC LIMIT ?`
-            ).all(limit);
-            res.json({ success: true, metric, nodes });
-        } catch (err) {
-            res.status(500).json({ error: errorMessage(err) });
-        }
-    });
-
-    router.get('/dashboard/evolution', (req: Request, res: Response) => {
-        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
-        try {
-            const db = ctx.memoryManager.getDatabase();
-            const node_id = req.query.node_id as string;
-            const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
-
-            let rows;
-            if (node_id) {
-                rows = db.prepare(
-                    'SELECT node_id, pagerank, degree, betweenness, closeness, community_id, recorded_at FROM memory_metrics_history WHERE node_id = ? ORDER BY recorded_at DESC LIMIT ?'
-                ).all(node_id, limit);
-            } else {
-                rows = db.prepare(
-                    'SELECT recorded_at, COUNT(*) as node_count, AVG(pagerank) as avg_pagerank, AVG(degree) as avg_degree, AVG(betweenness) as avg_betweenness, AVG(closeness) as avg_closeness FROM memory_metrics_history GROUP BY recorded_at ORDER BY recorded_at DESC LIMIT ?'
-                ).all(limit);
-            }
-            res.json({ success: true, rows });
-        } catch (err) {
-            res.status(500).json({ error: errorMessage(err) });
-        }
-    });
-
-    router.get('/dashboard/communities', (_req: Request, res: Response) => {
-        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
-        try {
-            const db = ctx.memoryManager.getDatabase();
-
-            const communities = db.prepare(
-                'SELECT community_id, COUNT(*) as node_count, GROUP_CONCAT(id) as node_ids FROM memory_nodes WHERE community_id IS NOT NULL GROUP BY community_id ORDER BY COUNT(*) DESC'
-            ).all() as Array<{ community_id: number; node_count: number; node_ids: string }>;
-
-            const result = communities.map(c => ({
-                ...c,
-                node_ids: c.node_ids ? c.node_ids.split(',') : []
-            }));
-
-            res.json({ success: true, communities: result, total_communities: result.length });
-        } catch (err) {
-            res.status(500).json({ error: errorMessage(err) });
-        }
-    });
-
-    router.get('/dashboard/density', (_req: Request, res: Response) => {
-        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
-        try {
-            const db = ctx.memoryManager.getDatabase();
-
-            const nodeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_nodes').get() as { c: number }).c;
-            const edgeCount = (db.prepare('SELECT COUNT(*) as c FROM memory_edges').get() as { c: number }).c;
-            const maxEdges = nodeCount * (nodeCount - 1);
-            const density = maxEdges > 0 ? (edgeCount / maxEdges).toFixed(4) : 0;
-            const avgDegree = nodeCount > 0 ? (2 * edgeCount / nodeCount).toFixed(2) : 0;
-            const avgWeight = (db.prepare('SELECT AVG(weight) as w FROM memory_edges').get() as { w: number | null }).w || 0;
-
-            res.json({
-                success: true,
-                nodeCount, edgeCount,
-                density: parseFloat(density as string),
-                avgDegree: parseFloat(avgDegree as string),
-                avgWeight: Math.round(avgWeight * 100) / 100,
-                maxEdges
-            });
-        } catch (err) {
-            res.status(500).json({ error: errorMessage(err) });
-        }
-    });
-
-    router.post('/dashboard/record-snapshot', (_req: Request, res: Response) => {
-        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
-        try {
-            const count = ctx.memoryManager.recordMetricsSnapshot();
-            res.json({ success: true, recorded: count });
-        } catch (err) {
-            res.status(500).json({ error: errorMessage(err) });
-        }
-    });
-
-    router.get('/classifications', (_req: Request, res: Response) => {
-        if (!ctx.classificationMemory) return res.status(500).json({ error: 'ClassificationMemory not available' });
-        try {
-            const stats = ctx.classificationMemory.stats();
-            res.json({ success: true, ...stats });
-        } catch (err) {
-            res.status(500).json({ error: errorMessage(err) });
-        }
-    });
-
-    router.get('/decisions', (req: Request, res: Response) => {
-        if (!ctx.decisionMemory) return res.status(500).json({ error: 'DecisionMemory not available' });
-        try {
-            const tool = req.query.tool as string | undefined;
-            const stats = ctx.decisionMemory.getToolStats(tool);
-            res.json({ success: true, stats });
-        } catch (err) {
-            res.status(500).json({ error: errorMessage(err) });
-        }
-    });
-
-    router.post('/decisions', (req: Request, res: Response) => {
-        if (!ctx.decisionMemory) return res.status(500).json({ error: 'DecisionMemory not available' });
-        try {
-            const { toolName, context, taskType, success, latencyMs, feedback } = req.body;
-            const id = ctx.decisionMemory.record({ toolName, context, taskType, success, latencyMs, feedback });
-            res.json({ success: true, id });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
         }

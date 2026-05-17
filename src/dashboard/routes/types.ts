@@ -6,8 +6,6 @@ import { EmbeddingService } from '../../memory/EmbeddingService';
 import { ClassificationMemory } from '../../memory/ClassificationMemory';
 import { DecisionMemory } from '../../memory/DecisionMemory';
 import { SkillInstaller } from '../../skills/SkillInstaller';
-import type Database from 'better-sqlite3';
-
 export interface DashboardContext {
     controller?: AgentController;
     providerFactory?: ProviderFactory;
@@ -18,7 +16,6 @@ export interface DashboardContext {
     decisionMemory?: DecisionMemory;
     skillInstaller?: SkillInstaller;
     config: NewClawConfig;
-    db?: Database.Database;
 }
 
 export interface ExtendedConfig extends NewClawConfig { customModels?: string[] }

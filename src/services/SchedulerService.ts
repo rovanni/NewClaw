@@ -16,6 +16,7 @@ const log = createLogger('Schedulerservice');
 export interface ScheduledTask {
     id: number;
     chat_id: string;
+    channel: string;          // telegram | discord | signal | whatsapp | web
     label: string;
     cron_expr: string;        // e.g. "0 8,12,18 * * *"
     action_type: string;      // weather | crypto | custom
@@ -45,6 +46,7 @@ export class SchedulerService {
             CREATE TABLE IF NOT EXISTS scheduled_tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chat_id TEXT NOT NULL,
+                channel TEXT NOT NULL DEFAULT 'telegram',
                 label TEXT NOT NULL,
                 cron_expr TEXT NOT NULL,
                 action_type TEXT NOT NULL DEFAULT 'custom',
@@ -54,6 +56,12 @@ export class SchedulerService {
                 created_at TEXT DEFAULT (datetime('now'))
             )
         `);
+        // Migration: add channel column to existing tables
+        try {
+            this.db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN channel TEXT NOT NULL DEFAULT 'telegram'`);
+        } catch {
+            // Column already exists — ignore
+        }
     }
 
     setTriggerHandler(handler: (task: ScheduledTask) => Promise<void>): void {
@@ -125,10 +133,10 @@ export class SchedulerService {
     }
 
     /** Create a new scheduled task */
-    createTask(chatId: string, label: string, cronExpr: string, actionType: string, actionParams: string): ScheduledTask {
+    createTask(chatId: string, label: string, cronExpr: string, actionType: string, actionParams: string, channel: string = 'telegram'): ScheduledTask {
         const info = this.db.prepare(
-            'INSERT INTO scheduled_tasks (chat_id, label, cron_expr, action_type, action_params) VALUES (?, ?, ?, ?, ?)'
-        ).run(chatId, label, cronExpr, actionType, actionParams);
+            'INSERT INTO scheduled_tasks (chat_id, channel, label, cron_expr, action_type, action_params) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(chatId, channel, label, cronExpr, actionType, actionParams);
 
         const task = this.getTask(info.lastInsertRowid as number);
         if (task && task.active) this.startTaskTimer(task);

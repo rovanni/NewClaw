@@ -292,10 +292,10 @@ export class AgentController {
                     const params = JSON.parse(task.action_params || '{}');
                     prompt = `[AGENDADO] ${params.message || task.label}`;
                 }
-                log.info(`[Scheduler] Triggering task #${task.id}: ${task.label} → chat ${chatId}`);
+                log.info(`[Scheduler] Triggering task #${task.id}: ${task.label} → chat ${chatId} (${task.channel})`);
                 this._eventBus.emitAppEvent({
                     type: EventTypes.SCHEDULER_TRIGGER,
-                    payload: { chatId, prompt, taskId: task.id, actionType: task.action_type, label: task.label },
+                    payload: { chatId, channel: task.channel || 'telegram', prompt, taskId: task.id, actionType: task.action_type, label: task.label },
                     source: 'scheduler',
                     correlationId: `scheduler-${task.id}`,
                 });
@@ -312,12 +312,12 @@ export class AgentController {
         this._eventBus.onAny(async (event: AppEvent) => {
             if (event.type !== EventTypes.SCHEDULER_TRIGGER) return;
             try {
-                const { chatId, prompt, taskId } = event.payload as {
-                    chatId: string; prompt: string; taskId: number; actionType: string; label: string;
+                const { chatId, channel, prompt, taskId } = event.payload as {
+                    chatId: string; channel: string; prompt: string; taskId: number; actionType: string; label: string;
                 };
-                log.info(`[EVENTBUS] Processing scheduler.trigger #${taskId} → chat ${chatId}`);
+                log.info(`[EVENTBUS] Processing scheduler.trigger #${taskId} → chat ${chatId} (${channel})`);
                 const result = await this.agentLoop.process(chatId, prompt);
-                await this.telegramAdapter.sendToChat(chatId, {
+                await this.messageBus.sendToChat(channel as import('../channels/ChannelAdapter').ChannelType, chatId, {
                     text: typeof result === 'string' ? result : result.text,
                     format: 'markdown',
                     options: typeof result === 'string' ? undefined : result.options

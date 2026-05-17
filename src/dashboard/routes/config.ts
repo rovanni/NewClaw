@@ -181,9 +181,8 @@ export function createConfigRouter(ctx: DashboardContext): Router {
         try {
             const mm = ctx.controller?.getMemory() ?? null;
             if (!mm) return res.status(500).json({ error: 'DB not available' });
-            const db = mm.getDatabase();
-            const history = db.prepare('SELECT id, config_json, created_at, is_active FROM agent_config ORDER BY created_at DESC LIMIT 20').all() as Array<{ id: string; config_json: string; created_at: string; is_active: number }>;
-            res.json({ success: true, history: history.map(h => ({ ...h, config: JSON.parse(h.config_json) })) });
+            const history = mm.getDashboardRepository().getConfigHistory();
+            res.json({ success: true, history });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
         }

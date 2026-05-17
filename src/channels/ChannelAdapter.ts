@@ -117,6 +117,8 @@ export interface ChannelAdapter {
     stop(): Promise<void>;
     /** Enviar mensagem para o canal */
     send(response: NormalizedResponse, context: unknown): Promise<void>;
+    /** Enviar mensagem diretamente para um chatId (sem rawContext — usado pelo Scheduler) */
+    sendToChat?(chatId: string, response: NormalizedResponse): Promise<void>;
     /** Verificar saúde */
     healthCheck(): Promise<{ ok: boolean; details?: string }>;
     /** Enviar indicador de digitação ao canal (typing, recording, etc.) */

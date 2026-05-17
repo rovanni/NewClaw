@@ -66,6 +66,20 @@ export class MessageBus {
         return this.adapters.get(type);
     }
 
+    /** Enviar mensagem diretamente para um chatId no canal especificado (usado pelo Scheduler) */
+    async sendToChat(channel: ChannelType, chatId: string, response: NormalizedResponse): Promise<void> {
+        const adapter = this.adapters.get(channel);
+        if (!adapter) {
+            log.warn('send_to_chat_no_adapter', `No adapter registered for channel "${channel}"`);
+            return;
+        }
+        if (!adapter.sendToChat) {
+            log.warn('send_to_chat_unsupported', `Adapter "${channel}" does not support sendToChat`);
+            return;
+        }
+        await adapter.sendToChat(chatId, response);
+    }
+
     /** Iniciar todos os canais com auto-reconexão */
     async startAll(): Promise<void> {
         if (this.started) return;

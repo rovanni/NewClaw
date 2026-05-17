@@ -22,7 +22,6 @@ import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
 import { SkillInstaller } from '../skills/SkillInstaller';
 import { createLogger } from '../shared/AppLogger';
-import type Database from 'better-sqlite3';
 import { authMiddleware, createAuthRouter, dashboardAuth } from './routes/auth';
 import { createConfigRouter } from './routes/config';
 import { createProvidersRouter } from './routes/providers';
@@ -87,14 +86,10 @@ export class DashboardServer {
         this.ctx.providerFactory = pf;
     }
 
-    public setDatabase(db: Database.Database) {
-        this.ctx.db = db;
-    }
-
     public setMemoryManager(mm: MemoryManager, curator?: MemoryCurator) {
         this.ctx.memoryManager = mm;
         this.ctx.memoryCurator = curator || new MemoryCurator(mm);
-        const db = this.ctx.db ?? mm.getDatabase();
+        const db = mm.getDatabase();
         this.ctx.embeddingService = new EmbeddingService(db);
         this.ctx.classificationMemory = new ClassificationMemory(db);
         this.ctx.decisionMemory = new DecisionMemory(db);

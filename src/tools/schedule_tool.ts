@@ -33,13 +33,15 @@ export class ScheduleTool implements ToolExecutor {
 
     private scheduler: SchedulerService;
     private currentChatId: string = '';
+    private currentChannel: string = 'telegram';
 
     constructor(scheduler: SchedulerService) {
         this.scheduler = scheduler;
     }
 
-    setContext(chatId: string, _botToken: string): void {
+    setContext(chatId: string, _botToken: string, channel?: string): void {
         this.currentChatId = chatId;
+        this.currentChannel = channel || 'telegram';
     }
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
@@ -62,7 +64,8 @@ export class ScheduleTool implements ToolExecutor {
 
                 const task = this.scheduler.createTask(
                     chatId, label, cronExpr,
-                    actionInfo.action_type, actionInfo.action_params
+                    actionInfo.action_type, actionInfo.action_params,
+                    this.currentChannel
                 );
 
                 const timeDesc = this.scheduler.describeCron(cronExpr);

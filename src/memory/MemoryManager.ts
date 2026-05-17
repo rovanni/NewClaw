@@ -23,6 +23,7 @@ import { initializeSchema } from './memorySchema';
 import * as conv from './conversationRepository';
 import * as graph from './graphRepository';
 import * as snap from './snapshotRepository';
+import { DashboardMemoryRepository } from '../dashboard/DashboardMemoryRepository';
 
 export type { Message, Conversation, MemoryNode, MemoryEdge } from './memoryTypes';
 
@@ -33,6 +34,7 @@ export class MemoryManager {
     private attentionLayer: AttentionLayer | null = null;
     private attentionFeedback: AttentionFeedback | null = null;
     private facade: MemoryFacade | null = null;
+    private dashboardRepo: DashboardMemoryRepository | null = null;
     private classifier: ConfidenceClassifier;
     private inverseRelations: Record<string, string> = {};
 
@@ -50,6 +52,11 @@ export class MemoryManager {
     getFacade(): MemoryFacade {
         if (!this.facade) this.facade = new SqliteMemoryFacade(this.db, this);
         return this.facade;
+    }
+
+    getDashboardRepository(): DashboardMemoryRepository {
+        if (!this.dashboardRepo) this.dashboardRepo = new DashboardMemoryRepository(this.db);
+        return this.dashboardRepo;
     }
 
     constructor(dbOrPath: string | Database.Database = './data/newclaw.db') {

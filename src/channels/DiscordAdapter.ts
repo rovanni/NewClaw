@@ -212,8 +212,8 @@ export class DiscordAdapter implements ChannelAdapter {
         }
     }
 
-    /** Enviar para canal específico (por ID) */
-    async sendToChannel(channelId: string, response: NormalizedResponse): Promise<void> {
+    /** Enviar para canal específico (por ID) — usado internamente e pelo Scheduler */
+    async sendToChat(channelId: string, response: NormalizedResponse): Promise<void> {
         try {
             const channel = this.client.channels.cache.get(channelId);
             if (!channel || !channel.isTextBased()) {
@@ -224,6 +224,11 @@ export class DiscordAdapter implements ChannelAdapter {
         } catch (e) {
             log.error('send_to_channel_failed', e);
         }
+    }
+
+    /** @deprecated Use sendToChat instead */
+    async sendToChannel(channelId: string, response: NormalizedResponse): Promise<void> {
+        return this.sendToChat(channelId, response);
     }
 
     async healthCheck(): Promise<{ ok: boolean; details?: string }> {
