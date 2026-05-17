@@ -19,30 +19,20 @@ export async function transcribeAttachment(
     tmpDir: string
 ): Promise<string | null> {
     try {
-        const adapter = messageBus.getAdapter(msg.channel);
-        const botToken = adapter?.getBotToken?.();
         const fileId = attachment.fileId;
 
-        if (!botToken || !fileId) {
-            voiceLog.error('missing_bot_token_or_file_id', `token=${!!botToken} fileId=${!!fileId}`);
-            return '⚠️ Não foi possível obter o arquivo de áudio (token ou fileId ausente).';
+        if (!fileId) {
+            voiceLog.error('missing_file_id', 'fileId ausente no attachment');
+            return '⚠️ Não foi possível obter o arquivo de áudio (fileId ausente).';
         }
 
-        const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
-        const fileData = await fileRes.json() as { ok?: boolean; result?: { file_path?: string } };
-
-        if (!fileData?.ok || !fileData?.result?.file_path) {
-            voiceLog.error('telegram_getfile_failed', JSON.stringify(fileData));
-            return '⚠️ Não foi possível obter o caminho do arquivo no Telegram.';
-        }
-
-        const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-        const audioRes = await fetch(downloadUrl);
-        if (!audioRes.ok) {
-            voiceLog.error('audio_download_failed', `status=${audioRes.status}`);
+        let audioBuffer: Buffer;
+        try {
+            audioBuffer = await messageBus.downloadFile(msg.channel, fileId);
+        } catch (e) {
+            voiceLog.error('audio_download_failed', e);
             return '⚠️ Falha ao baixar o arquivo de áudio do Telegram.';
         }
-        const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
         voiceLog.info('audio_downloaded', `size=${audioBuffer.length} type=${attachment.type}`);
 
         // Convert OGG/OGA (Telegram Opus) to WAV 16kHz mono — whisper.cpp requires WAV
@@ -153,26 +143,16 @@ export async function handleDocumentAttachment(
         const fileName = attachment.fileName || `file_${Date.now()}`;
 
         if (channel === 'telegram') {
-            const adapter = messageBus.getAdapter('telegram');
-            const botToken = adapter?.getBotToken?.();
             const fileId = attachment.fileId;
-
-            if (!botToken || !fileId) {
-                documentLog.error('missing_bot_token_or_file_id', `token=${!!botToken} fileId=${!!fileId}`);
-                return '⚠️ Não foi possível obter o documento (token ou fileId ausente).';
-            }
-
-            const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
-            const fileData = await fileRes.json() as { ok?: boolean; result?: { file_path?: string } };
-
-            if (fileData?.ok && fileData?.result?.file_path) {
-                const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-                documentLog.info('downloading_from_telegram', `Downloading ${fileName}`, { path: fileData.result.file_path });
-                const docRes = await fetch(downloadUrl);
-                if (docRes.ok) fileBuffer = Buffer.from(await docRes.arrayBuffer());
-                else documentLog.error('telegram_download_failed', { status: docRes.status });
+            if (!fileId) {
+                documentLog.error('missing_file_id', 'fileId ausente no attachment');
             } else {
-                documentLog.error('telegram_getfile_failed', fileData);
+                try {
+                    documentLog.info('downloading_from_telegram', `Downloading ${fileName}`);
+                    fileBuffer = await messageBus.downloadFile('telegram', fileId);
+                } catch (e) {
+                    documentLog.error('telegram_download_failed', e);
+                }
             }
         } else if (channel === 'discord' && attachment.url) {
             documentLog.info('downloading_from_discord', `Downloading ${fileName}`, { url: attachment.url });
@@ -248,22 +228,13 @@ export async function handlePhotoAttachment(
         let fileName = attachment.fileName || `photo_${Date.now()}.jpg`;
 
         if (channel === 'telegram') {
-            const adapter = messageBus.getAdapter('telegram');
-            const botToken = adapter?.getBotToken?.();
             const fileId = attachment.fileId;
-
-            if (botToken && fileId) {
-                const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
-                const fileData = await fileRes.json() as { ok?: boolean; result?: { file_path?: string } };
-
-                if (fileData?.ok && fileData?.result?.file_path) {
-                    const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-                    const imgRes = await fetch(downloadUrl);
-                    if (imgRes.ok) {
-                        fileBuffer = Buffer.from(await imgRes.arrayBuffer());
-                        const ext = pathMod.extname(fileData.result.file_path);
-                        if (ext) fileName = `photo_${Date.now()}${ext}`;
-                    }
+            if (fileId) {
+                try {
+                    fileBuffer = await messageBus.downloadFile('telegram', fileId);
+                    fileName = `photo_${Date.now()}.jpg`;
+                } catch (e) {
+                    visionLog.warn('telegram_photo_download_failed', errorMessage(e));
                 }
             }
         } else if (channel === 'discord' && attachment.url) {

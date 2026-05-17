@@ -32,6 +32,7 @@ import { ToolRegistry } from '../core/ToolRegistry';
 import { SkillLoader } from '../skills/SkillLoader';
 import { ModelProfile } from './ModelRouter';
 import { errorMessage } from '../shared/errors';
+import { ObserverValidator } from './ObserverValidator';
 
 import {
     ToolResult, ToolExecutor, LoopMetrics, ChannelContext,
@@ -66,6 +67,7 @@ export class AgentLoop {
     private classificationMemory: ClassificationMemory;
     private decisionMemory: DecisionMemory;
     private protocolParser: ProtocolParser;
+    private observer: ObserverValidator;
 
     constructor(
         providerFactory: ProviderFactory,
@@ -86,6 +88,7 @@ export class AgentLoop {
         this.protocolParser = new ProtocolParser();
         this.classificationMemory = classificationMemory as ClassificationMemory;
         this.decisionMemory = decisionMemory as DecisionMemory;
+        this.observer = new ObserverValidator(providerFactory);
     }
 
     // ── Accessors ──────────────────────────────────────────────────────────────
@@ -114,6 +117,35 @@ export class AgentLoop {
     public registerTool(tool: ToolExecutor): void { this.tools.set(tool.name, tool); }
 
     private ts(): string { return new Date().toLocaleTimeString('pt-BR', { hour12: false }); }
+
+    private async tryValidateTool(
+        userText: string,
+        intent: string,
+        toolName: string,
+        toolOutput: string,
+        messages: LLMMessage[]
+    ): Promise<void> {
+        try {
+            const timeout = new Promise<null>(res => setTimeout(() => res(null), 5000));
+            const validation = await Promise.race([
+                this.observer.validate(userText, intent, toolName, toolOutput, ''),
+                timeout
+            ]);
+            if (!validation) {
+                log.info(`[OBSERVER] Validation timed out for ${toolName}`);
+                return;
+            }
+            log.info(`[OBSERVER] ${validation.approved ? '✅' : '❌'} ${toolName} confidence=${validation.confidence} reason="${validation.reason}"`);
+            if (!validation.approved && validation.confidence >= 0.6 && validation.suggestedFix) {
+                messages.push({
+                    role: 'system',
+                    content: `[OBSERVER] A ferramenta "${toolName}" pode não ter atendido à solicitação. ${validation.reason} — Sugestão: ${validation.suggestedFix}`
+                });
+            }
+        } catch {
+            // validação é não-fatal
+        }
+    }
 
     // ── Entry points ───────────────────────────────────────────────────────────
 
@@ -326,7 +358,6 @@ export class AgentLoop {
                     if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
                         (tool as unknown as ContextAwareTool).setContext(
                             channelContext.chatId || '',
-                            channelContext.botToken || '',
                             channelContext.channel
                         );
                     }
@@ -494,7 +525,6 @@ export class AgentLoop {
                         if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
                             (tool as unknown as ContextAwareTool).setContext(
                                 channelContext.chatId || '',
-                                channelContext.botToken || '',
                                 channelContext.channel
                             );
                         }
@@ -532,6 +562,9 @@ export class AgentLoop {
                         }
 
                         const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
+                        if (result.success && !terminalTools.includes(toolName)) {
+                            await this.tryValidateTool(userText, intentDecision.intent, toolName, result.output, loopMessages);
+                        }
                         if (terminalTools.includes(toolName) && result.success) {
                             log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded → task DONE, returning result`);
                             move('FINAL_READY', { step: stepCount, tool: toolName, terminal: true });
@@ -580,7 +613,6 @@ export class AgentLoop {
                     if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
                         (tool as unknown as ContextAwareTool).setContext(
                             channelContext.chatId || '',
-                            channelContext.botToken || '',
                             channelContext.channel
                         );
                     }
@@ -615,6 +647,10 @@ export class AgentLoop {
                         traceManager.completeTrace(trace, 'completed', result.output);
                         this.persistTrace(trace, stepCount, 'completed', result.output, channelContext);
                         return result.output;
+                    }
+
+                    if (result.success) {
+                        await this.tryValidateTool(userText, intentDecision.intent, toolName, result.output, loopMessages);
                     }
 
                     move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });

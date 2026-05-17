@@ -29,7 +29,6 @@ export class SendDocumentTool implements ToolExecutor {
     };
 
     private chatId: string = '';
-    private botToken: string = '';
     private channel: string = 'telegram';
     private bus: MessageBus;
 
@@ -37,9 +36,8 @@ export class SendDocumentTool implements ToolExecutor {
         this.bus = bus;
     }
 
-    setContext(chatId: string, botToken: string, channel?: string): void {
+    setContext(chatId: string, channel?: string): void {
         this.chatId = chatId;
-        this.botToken = botToken;
         this.channel = channel || 'telegram';
     }
 
@@ -82,7 +80,7 @@ export class SendDocumentTool implements ToolExecutor {
         if (this.channel === 'discord') {
             return this.sendToDiscord(resolvedPath, this.chatId, caption, filename);
         } else {
-            return this.sendToTelegram(resolvedPath, this.chatId, this.botToken, caption, filename);
+            return this.sendToTelegram(resolvedPath, this.chatId, caption, filename);
         }
     }
 
@@ -109,13 +107,13 @@ export class SendDocumentTool implements ToolExecutor {
         }
     }
 
-    private async sendToTelegram(resolvedPath: string, chatId: string, botToken: string, caption?: string, filename?: string): Promise<ToolResult> {
+    private async sendToTelegram(resolvedPath: string, chatId: string, caption?: string, filename?: string): Promise<ToolResult> {
         const stats = fs.statSync(resolvedPath);
         if (stats.size > 50 * 1024 * 1024) {
             return { success: false, output: '', error: 'Arquivo excede 50MB (limite Telegram).' };
         }
 
-        if (!chatId || !botToken) {
+        if (!chatId) {
             return { success: false, output: '', error: 'Contexto Telegram incompleto.' };
         }
 
@@ -123,23 +121,8 @@ export class SendDocumentTool implements ToolExecutor {
 
         try {
             const fileBuffer = fs.readFileSync(resolvedPath);
-            const formData = new FormData();
-            formData.append('chat_id', chatId);
-            formData.append('document', new File([fileBuffer], displayName));
-            if (caption) formData.append('caption', caption.slice(0, 1024));
-
-            const response = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
-                method: 'POST',
-                body: formData,
-                signal: AbortSignal.timeout(35000),
-            });
-
-            const result = await response.json() as { ok?: boolean; description?: string; [key: string]: unknown };
-            if (result.ok) {
-                return { success: true, output: `✅ Documento "${displayName}" enviado ao Telegram.` };
-            } else {
-                return { success: false, output: '', error: `Telegram error: ${result.description}` };
-            }
+            await this.bus.sendDocument('telegram', chatId, fileBuffer, displayName, caption);
+            return { success: true, output: `✅ Documento "${displayName}" enviado ao Telegram.` };
         } catch (error) {
             return { success: false, output: '', error: `Erro Telegram: ${errorMessage(error)}` };
         }

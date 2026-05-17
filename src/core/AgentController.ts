@@ -432,7 +432,7 @@ export class AgentController {
         ToolRegistry.register(new ReadTool());
         ToolRegistry.register(new MemorySearchTool(this.memory));
         ToolRegistry.register(new MemoryWriteTool(this.memory));
-        ToolRegistry.register(new SendAudioTool());
+        ToolRegistry.register(new SendAudioTool(this.messageBus));
         ToolRegistry.register(new SendDocumentTool(this.messageBus));
         ToolRegistry.register(new MemoryAdminTool(this.memory));
         ToolRegistry.register(new SshExecTool(), { dangerous: true });

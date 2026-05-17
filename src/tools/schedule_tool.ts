@@ -39,7 +39,7 @@ export class ScheduleTool implements ToolExecutor {
         this.scheduler = scheduler;
     }
 
-    setContext(chatId: string, _botToken: string, channel?: string): void {
+    setContext(chatId: string, channel?: string): void {
         this.currentChatId = chatId;
         this.currentChannel = channel || 'telegram';
     }

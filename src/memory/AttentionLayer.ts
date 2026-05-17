@@ -9,7 +9,8 @@
  *   (context_relevance   * w2) +
  *   (recency             * w3) +
  *   (relation_strength   * w4) +
- *   (domain_priority     * w5)
+ *   (domain_priority     * w5) +
+ *   (graph_centrality    * w6)
  */
 
 import { getDomainPriority } from './CognitiveDomains';
@@ -23,6 +24,7 @@ export interface AttentionWeights {
     w3_recency: number;
     w4_relation: number;
     w5_domain: number;
+    w6_pagerank: number;
 }
 
 export interface AttentionCandidate {
@@ -35,6 +37,7 @@ export interface AttentionCandidate {
     recency: number;
     relationStrength: number;
     domainPriority: number;
+    graphCentrality: number;
     attentionScore: number;
 }
 
@@ -118,6 +121,7 @@ export class AttentionLayer {
             w3_recency:   1.5,
             w4_relation:  1.0,
             w5_domain:    0.5,
+            w6_pagerank:  0.5,   // Graph centrality boost for structurally important nodes
             ...weights,
         };
         this.initSchema();
@@ -391,20 +395,23 @@ export class AttentionLayer {
         embeddingScore: number;
     }): AttentionCandidate {
         const node = this.db.prepare(
-            'SELECT id, type, name, content FROM memory_nodes WHERE id = ?'
-        ).get(params.nodeId) as NodeBasicRow | undefined;
+            'SELECT id, type, name, content, pagerank FROM memory_nodes WHERE id = ?'
+        ).get(params.nodeId) as (NodeBasicRow & { pagerank?: number }) | undefined;
 
         const contextRelevance = this.calculateContextRelevance(params.nodeId);
         const recency = this.calculateRecency(params.nodeId);
         const relationStrength = this.calculateRelationStrength(params.nodeId);
         const domainPriority = this.calculateDomainPriority(params.nodeId);
+        // Normalize pagerank to [0,1]: typical values are ~1/N per node; multiply by 10 and cap.
+        const graphCentrality = Math.min(1.0, (node?.pagerank || 0) * 10);
 
         const attentionScore =
             (params.embeddingScore * this.weights.w1_embedding) +
             (contextRelevance * this.weights.w2_context) +
             (recency * this.weights.w3_recency) +
             (relationStrength * this.weights.w4_relation) +
-            (domainPriority * this.weights.w5_domain);
+            (domainPriority * this.weights.w5_domain) +
+            (graphCentrality * this.weights.w6_pagerank);
 
         return {
             nodeId: params.nodeId,
@@ -416,6 +423,7 @@ export class AttentionLayer {
             recency,
             relationStrength,
             domainPriority,
+            graphCentrality,
             attentionScore,
         };
     }

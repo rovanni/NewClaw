@@ -87,9 +87,35 @@ export class TelegramAdapter implements ChannelAdapter {
         this.bus = bus;
     }
 
-    /** Retornar o token do bot */
-    getBotToken(): string {
-        return this.config.botToken;
+    /** Baixar arquivo do Telegram por fileId (token confinado ao adapter) */
+    async downloadFile(fileId: string): Promise<Buffer> {
+        const file = await this.bot.api.getFile(fileId);
+        if (!file.file_path) throw new Error(`File path not available for fileId=${fileId}`);
+        const response = await fetch(
+            `https://api.telegram.org/file/bot${this.config.botToken}/${file.file_path}`,
+            { signal: AbortSignal.timeout(60_000) }
+        );
+        if (!response.ok) throw new Error(`Download failed: HTTP ${response.status}`);
+        return Buffer.from(await response.arrayBuffer());
+    }
+
+    /** Enviar voz (com fallback para audio) via API do grammY */
+    async sendVoice(chatId: string, buffer: Buffer, filename: string = 'voice.ogg'): Promise<void> {
+        try {
+            await this.bot.api.sendVoice(chatId, new InputFile(buffer, filename));
+        } catch (e) {
+            log.warn('send_voice_fallback_audio', errorMessage(e));
+            await this.bot.api.sendAudio(chatId, new InputFile(buffer, filename));
+        }
+    }
+
+    /** Enviar documento via API do grammY */
+    async sendDocument(chatId: string, buffer: Buffer, filename: string, caption?: string): Promise<void> {
+        await this.bot.api.sendDocument(
+            chatId,
+            new InputFile(buffer, filename),
+            caption ? { caption: caption.slice(0, 1024) } : undefined
+        );
     }
 
     private started: boolean = false;

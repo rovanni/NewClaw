@@ -277,7 +277,6 @@ export class MessageBus {
                 {
                     channel: msg.channel,
                     chatId: msg.chatId || msg.userId,
-                    botToken: adapter?.getBotToken ? adapter.getBotToken() : undefined,
                     metadata: msg.metadata,
                     correlationId
                 }
@@ -350,6 +349,33 @@ export class MessageBus {
         }
 
         return null;
+    }
+
+    /** Baixar arquivo por fileId no canal especificado */
+    async downloadFile(channel: ChannelType, fileId: string): Promise<Buffer> {
+        const adapter = this.adapters.get(channel);
+        if (!adapter?.downloadFile) throw new Error(`Adapter "${channel}" does not support downloadFile`);
+        return adapter.downloadFile(fileId);
+    }
+
+    /** Enviar áudio/voz para um chatId via o adapter do canal */
+    async sendVoice(channel: ChannelType, chatId: string, buffer: Buffer, filename?: string): Promise<void> {
+        const adapter = this.adapters.get(channel);
+        if (!adapter?.sendVoice) {
+            log.warn('send_voice_unsupported', `Adapter "${channel}" does not support sendVoice`);
+            return;
+        }
+        await adapter.sendVoice(chatId, buffer, filename);
+    }
+
+    /** Enviar documento para um chatId via o adapter do canal */
+    async sendDocument(channel: ChannelType, chatId: string, buffer: Buffer, filename: string, caption?: string): Promise<void> {
+        const adapter = this.adapters.get(channel);
+        if (!adapter?.sendDocument) {
+            log.warn('send_document_unsupported', `Adapter "${channel}" does not support sendDocument`);
+            return;
+        }
+        await adapter.sendDocument(chatId, buffer, filename, caption);
     }
 
     /** Health check de todos os canais */

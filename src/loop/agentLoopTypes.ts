@@ -2,7 +2,7 @@ import { ResponseOption } from '../channels/ChannelAdapter';
 
 /** Duck-type para ferramentas que suportam injeção de contexto de canal */
 export interface ContextAwareTool {
-    setContext(chatId: string, botToken: string, channel?: string): void;
+    setContext(chatId: string, channel?: string): void;
 }
 
 export interface ToolResult {
@@ -35,7 +35,6 @@ export interface LoopMetrics {
 export interface ChannelContext {
     channel: string;
     chatId: string;
-    botToken?: string;
     userId?: string;
     metadata?: Record<string, unknown>;
     correlationId?: string;

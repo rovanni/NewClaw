@@ -123,8 +123,12 @@ export interface ChannelAdapter {
     healthCheck(): Promise<{ ok: boolean; details?: string }>;
     /** Enviar indicador de digitação ao canal (typing, recording, etc.) */
     sendTypingIndicator?(context: unknown, action?: TypingAction): Promise<void>;
-    /** Retornar o token do bot (se aplicável) */
-    getBotToken?(): string;
+    /** Baixar arquivo por fileId (ex: Telegram getFile + download) */
+    downloadFile?(fileId: string): Promise<Buffer>;
+    /** Enviar áudio/voz para um chatId específico */
+    sendVoice?(chatId: string, buffer: Buffer, filename?: string): Promise<void>;
+    /** Enviar documento para um chatId específico */
+    sendDocument?(chatId: string, buffer: Buffer, filename: string, caption?: string): Promise<void>;
 }
 
 /** Configuração base para qualquer canal */

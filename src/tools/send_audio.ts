@@ -1,7 +1,7 @@
 /**
  * send_audio — Generate TTS audio and send via Telegram
  * Uses edge-tts (AntonioNeural pt-BR) + ffmpeg for ogg conversion
- * 
+ *
  * MIGRATED: execSync/execFileSync → execFile (non-blocking)
  * Previous execSync calls blocked the event loop for up to 65s during
  * curl uploads. Now all subprocess calls are async.
@@ -9,18 +9,14 @@
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { execFile } from 'child_process';
-import { mkdirSync, existsSync, unlinkSync } from 'fs';
+import { mkdirSync, existsSync, unlinkSync, readFileSync } from 'fs';
 import path from 'path';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
-const log = createLogger('SendAudio');
+import { MessageBus } from '../channels/MessageBus';
+import { ChannelType } from '../channels/ChannelAdapter';
 
-interface TelegramSendResponse {
-    ok: boolean;
-    result?: { voice?: { duration?: number }; audio?: { duration?: number }; [key: string]: unknown };
-    description?: string;
-    [key: string]: unknown;
-}
+const log = createLogger('SendAudio');
 
 export class SendAudioTool implements ToolExecutor {
     name = 'send_audio';
@@ -35,16 +31,21 @@ export class SendAudioTool implements ToolExecutor {
     };
 
     private chatId: string | null = null;
-    private botToken: string | null = null;
+    private channel: ChannelType = 'telegram';
+    private bus: MessageBus;
     private lastSendTime: number = 0;
     private static readonly MIN_INTERVAL_MS = 10000; // 10s debounce
 
-    setContext(chatId: string, botToken: string): void {
-        this.chatId = chatId;
-        this.botToken = botToken;
+    constructor(bus: MessageBus) {
+        this.bus = bus;
     }
 
-    async execute(args: Record<string, any>): Promise<ToolResult> {
+    setContext(chatId: string, channel?: string): void {
+        this.chatId = chatId;
+        this.channel = (channel || 'telegram') as ChannelType;
+    }
+
+    async execute(args: Record<string, unknown>): Promise<ToolResult> {
         // Debounce: prevent duplicate sends within 10 seconds
         const now = Date.now();
         if (now - this.lastSendTime < SendAudioTool.MIN_INTERVAL_MS) {
@@ -82,7 +83,7 @@ export class SendAudioTool implements ToolExecutor {
         try {
             // Generate audio with edge-tts (ASYNC — non-blocking)
             const edgeTtsPath = process.env.EDGE_TTS_PATH || 'edge-tts';
-            
+
             log.info(`Generating MP3 with voice=${voice}...`);
             const ttsStart = Date.now();
             try {
@@ -120,30 +121,20 @@ export class SendAudioTool implements ToolExecutor {
             ], 15000);
             log.info(`ffmpeg done in ${Date.now() - ffmpegStart}ms`);
 
-            // Send via Telegram using HTTP multipart (ASYNC — non-blocking)
-            if (!this.chatId || !this.botToken) {
-                log.error('Missing Telegram context: chatId=' + this.chatId + ' botToken=' + (this.botToken ? 'SET' : 'NULL'));
+            if (!this.chatId) {
+                log.error('Missing channel context: chatId=' + this.chatId);
                 this.cleanupFiles([mp3File, oggFile]);
-                return { success: false, output: '', error: 'Contexto Telegram não configurado. Não foi possível enviar o áudio.' };
+                return { success: false, output: '', error: 'Contexto de canal não configurado.' };
             }
 
             try {
-                log.info(`Uploading to Telegram via HTTP multipart...`);
+                log.info(`Uploading via MessageBus (channel=${this.channel})...`);
                 const uploadStart = Date.now();
-                const sendResult = await this.sendVoiceTelegram(oggFile);
-                log.info(`Telegram upload done in ${Date.now() - uploadStart}ms`);
-
-                if (!sendResult.ok) {
-                    log.error('Telegram sendVoice failed, trying sendAudio fallback...');
-                    const fallbackResult = await this.sendAudioTelegram(oggFile);
-                    if (!fallbackResult.ok) {
-                        return { success: false, output: '', error: `Telegram sendVoice/sendAudio failed: ${JSON.stringify(fallbackResult)}` };
-                    }
-                } else {
-                    log.info('voice_sent', 'Voice sent OK', { duration: sendResult.result?.voice?.duration || '?' });
-                }
+                const fileBuffer = readFileSync(oggFile);
+                await this.bus.sendVoice(this.channel, this.chatId, fileBuffer, 'voice.ogg');
+                log.info(`Upload done in ${Date.now() - uploadStart}ms`);
             } catch (uploadError) {
-                log.error('Telegram upload error:', errorMessage(uploadError));
+                log.error('Upload error:', errorMessage(uploadError));
                 return { success: false, output: '', error: `Upload failed: ${errorMessage(uploadError)}` };
             }
 
@@ -172,43 +163,6 @@ export class SendAudioTool implements ToolExecutor {
                 }
             });
         });
-    }
-
-    /**
-     * Send voice message to Telegram via native HTTP multipart (no curl needed).
-     * Uses global fetch() + FormData + File — all native in Node.js 22.
-     */
-    private async sendVoiceTelegram(oggPath: string): Promise<TelegramSendResponse> {
-        const fs = await import('fs');
-        const fileBuffer = fs.readFileSync(oggPath);
-
-        const formData = new FormData();
-        formData.append('chat_id', this.chatId!);
-        formData.append('voice', new File([fileBuffer], 'voice.ogg', { type: 'audio/ogg' }));
-
-        const response = await fetch(
-            `https://api.telegram.org/bot${this.botToken}/sendVoice`,
-            { method: 'POST', body: formData, signal: AbortSignal.timeout(35000) }
-        );
-        return response.json() as Promise<TelegramSendResponse>;
-    }
-
-    /**
-     * Send audio message to Telegram via native HTTP multipart.
-     */
-    private async sendAudioTelegram(oggPath: string): Promise<TelegramSendResponse> {
-        const fs = await import('fs');
-        const fileBuffer = fs.readFileSync(oggPath);
-
-        const formData = new FormData();
-        formData.append('chat_id', this.chatId!);
-        formData.append('audio', new File([fileBuffer], 'audio.ogg', { type: 'audio/ogg' }));
-
-        const response = await fetch(
-            `https://api.telegram.org/bot${this.botToken}/sendAudio`,
-            { method: 'POST', body: formData, signal: AbortSignal.timeout(35000) }
-        );
-        return response.json() as Promise<TelegramSendResponse>;
     }
 
     private cleanupFiles(files: string[]): void {
