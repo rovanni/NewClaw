@@ -1,11 +1,11 @@
 /**
- * ContextCompressor — DEPRECATED: Compression is now handled by SessionManager.maybeCompress()
- * 
- * This class is kept as a utility for SessionManager, which delegates LLM-based
- * summarization to this compressor while managing checkpoints and transcripts
- * independently.
- * 
- * DO NOT use this class directly in AgentLoop — use SessionContext instead.
+ * ContextCompressor — responsável pela sumarização via LLM de mensagens antigas.
+ *
+ * Separação de responsabilidades intencional:
+ * - SessionManager.maybeCompress(): orquestração (checkpoints, quando acionar, fallback)
+ * - ContextCompressor: sumarização via LLM (o trabalho pesado de compressão)
+ *
+ * Use via SessionManager, não diretamente no AgentLoop.
  */
 
 import { extractText } from './ResponseAdapter';
