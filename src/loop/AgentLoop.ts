@@ -92,7 +92,7 @@ export class AgentLoop {
         this.classificationMemory = classificationMemory as ClassificationMemory;
         this.decisionMemory = decisionMemory as DecisionMemory;
         this.observer = new ObserverValidator(providerFactory);
-        this.reflectionMemory = new ReflectionMemory(memory.getDatabase());
+        this.reflectionMemory = new ReflectionMemory(memory);
     }
 
     // ── Accessors ──────────────────────────────────────────────────────────────

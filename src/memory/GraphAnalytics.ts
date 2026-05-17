@@ -1,53 +1,28 @@
 import { MemoryManager } from './MemoryManager';
-import { errorMessage } from '../shared/errors';
+import type { MemoryGraphRepository, NodeCentralityUpdate } from './MemoryGraphRepository';
 import { LouvainDetector } from './LouvainDetector';
 import { createLogger } from '../shared/AppLogger';
 
 const log = createLogger('GraphAnalytics');
 
 export class GraphAnalytics {
-    private mm: MemoryManager;
+    private repo: MemoryGraphRepository;
 
     constructor(memoryManager: MemoryManager) {
-        this.mm = memoryManager;
-    }
-
-    /**
-     * Retry wrapper for DB operations that may fail on first attempt (e.g. startup race).
-     * Retries up to maxRetries times with exponential backoff for malformed/locked errors.
-     */
-    private async withRetry<T>(fn: () => T, maxRetries: number = 3, baseDelayMs: number = 500): Promise<T> {
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-                return fn();
-            } catch (error) {
-                if (attempt === maxRetries) throw error;
-                const msg = errorMessage(error) || String(error);
-                if (msg.includes('malformed') || msg.includes('SQLITE_CORRUPT') || msg.includes('locked')) {
-                    log.warn('db_retry', `Attempt ${attempt}/${maxRetries} failed, retrying in ${baseDelayMs * attempt}ms`, { attempt, maxRetries });
-                    await new Promise(resolve => setTimeout(resolve, baseDelayMs * attempt));
-                } else {
-                    throw error; // Non-retryable error
-                }
-            }
-        }
-        throw new Error('withRetry: unreachable');
+        this.repo = memoryManager.getGraphRepository();
     }
 
     async updateMetrics(): Promise<void> {
         try {
-            const db = this.mm.getDatabase();
-            if (!db) throw new Error('Database not initialized');
-
             // 1. Fetch current snapshot of Nodes and Edges
-            const nodes = await this.withRetry(() => db.prepare('SELECT id FROM memory_nodes').all()) as Array<{ id: string }>;
-            const edges = await this.withRetry(() => db.prepare('SELECT from_node, to_node, weight FROM memory_edges').all()) as Array<{ from_node: string; to_node: string; weight: number }>;
+            const nodeIds = await this.repo.withRetry(() => this.repo.getAllNodeIds());
+            const edges = await this.repo.withRetry(() => this.repo.getAllEdgesWeighted());
 
-            if (nodes.length === 0) return;
+            if (nodeIds.length === 0) return;
 
             // 2. Compute Degree Centrality
             const degreeTotal: Record<string, number> = {};
-            nodes.forEach(n => degreeTotal[n.id] = 0);
+            nodeIds.forEach(id => { degreeTotal[id] = 0; });
             edges.forEach(e => {
                 degreeTotal[e.from_node] = (degreeTotal[e.from_node] || 0) + 1;
                 degreeTotal[e.to_node] = (degreeTotal[e.to_node] || 0) + 1;
@@ -55,20 +30,20 @@ export class GraphAnalytics {
 
             // Adjacency representations for centralities
             const adjacency: Record<string, string[]> = {};
-            nodes.forEach(n => adjacency[n.id] = []);
+            nodeIds.forEach(id => { adjacency[id] = []; });
             edges.forEach(e => {
                 adjacency[e.from_node]?.push(e.to_node);
-                adjacency[e.to_node]?.push(e.from_node); // treat as undirected for traditional betweenness/closeness scaling
+                adjacency[e.to_node]?.push(e.from_node);
             });
 
             // 3. Compute Betweenness Centrality (BFS Approximation)
             const betweenness: Record<string, number> = {};
-            nodes.forEach(n => betweenness[n.id] = 0);
+            nodeIds.forEach(id => { betweenness[id] = 0; });
 
-            for (const source of nodes.map(n => n.id)) {
+            for (const source of nodeIds) {
                 const dist: Record<string, number> = {};
                 const pred: Record<string, string[]> = {};
-                nodes.forEach(n => { dist[n.id] = -1; pred[n.id] = []; });
+                nodeIds.forEach(id => { dist[id] = -1; pred[id] = []; });
                 dist[source] = 0;
                 const queue = [source];
                 while (queue.length > 0) {
@@ -78,7 +53,7 @@ export class GraphAnalytics {
                         if (dist[w] === dist[v] + 1) pred[w].push(v);
                     }
                 }
-                for (const n of nodes.map(n => n.id)) {
+                for (const n of nodeIds) {
                     if (n !== source && pred[n].length > 0) {
                         for (const p of pred[n]) {
                             betweenness[p] = (betweenness[p] || 0) + 1 / pred[n].length;
@@ -89,9 +64,9 @@ export class GraphAnalytics {
 
             // 4. Compute Closeness Centrality
             const closeness: Record<string, number> = {};
-            for (const source of nodes.map(n => n.id)) {
+            for (const source of nodeIds) {
                 const dist: Record<string, number> = {};
-                nodes.forEach(n => dist[n.id] = -1);
+                nodeIds.forEach(id => { dist[id] = -1; });
                 dist[source] = 0;
                 const queue = [source];
                 while (queue.length > 0) {
@@ -105,79 +80,24 @@ export class GraphAnalytics {
             }
 
             // 5. Compute PageRank (Directed)
-            const pagerank = this.computePageRank(nodes.map(n => n.id), edges, 0.85, 30);
+            const pagerank = this.computePageRank(nodeIds, edges, 0.85, 30);
 
-            // 6. DB Bulk Update using a Transaction
-            const updateStmt = db.prepare(`
-                UPDATE memory_nodes
-                SET pagerank = ?, degree = ?, betweenness = ?, closeness = ?
-                WHERE id = ?
-            `);
+            // 6. Bulk update centrality metrics
+            const centralityUpdates: NodeCentralityUpdate[] = nodeIds.map(id => ({
+                id,
+                pagerank: pagerank[id] || 0.0,
+                degree: degreeTotal[id] || 0,
+                betweenness: betweenness[id] || 0.0,
+                closeness: closeness[id] || 0.0,
+            }));
+            await this.repo.withRetry(() => this.repo.bulkUpdateNodeCentrality(centralityUpdates));
 
-            const transaction = db.transaction((nodesList: string[]) => {
-                for (const id of nodesList) {
-                    const p = pagerank[id] || 0.0;
-                    const d = degreeTotal[id] || 0;
-                    const b = betweenness[id] || 0.0;
-                    const c = closeness[id] || 0.0;
-                    
-                    // Normalize float bounds to handle UI constraints
-                    updateStmt.run(
-                        Number(p.toFixed(6)),
-                        d,
-                        Number(b.toFixed(6)),
-                        Number(c.toFixed(6)),
-                        id
-                    );
-                }
-            });
+            // 7. Ensure node_metrics table and backfill
+            this.repo.ensureNodeMetricsTable();
+            this.repo.backfillNodeMetrics();
+            await this.repo.withRetry(() => this.repo.bulkUpdateNodeMetricsClass(nodeIds, degreeTotal));
 
-            await this.withRetry(() => transaction(nodes.map(n => n.id)));
-            // Ensure node_metrics table exists
-            try {
-                db.exec(`
-                    CREATE TABLE IF NOT EXISTS node_metrics (
-                        node_id TEXT PRIMARY KEY,
-                        usage_count INTEGER DEFAULT 0,
-                        last_accessed_at DATETIME,
-                        reinforcement_score REAL DEFAULT 0.0,
-                        memory_class TEXT DEFAULT 'latent',
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                    )
-                `);
-            } catch { /* table already exists */ }
-
-            // Backfill: ensure every memory_node has a row in node_metrics
-            try {
-                db.prepare(`
-                    INSERT OR IGNORE INTO node_metrics (node_id, usage_count, last_accessed_at, reinforcement_score, memory_class)
-                    SELECT id, 0, CURRENT_TIMESTAMP, 0.0, 'latent' FROM memory_nodes
-                `).run();
-            } catch (e) {
-                log.warn('metrics_backfill_failed', errorMessage(e));
-            }
-
-            // Update node_metrics with computed analytics
-            const metricsStmt = db.prepare(`
-                UPDATE node_metrics
-                SET memory_class = CASE
-                    WHEN ? >= 5 THEN 'core'
-                    WHEN ? >= 2 THEN 'active'
-                    ELSE 'latent'
-                    END,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE node_id = ?
-            `);
-
-            const metricsTransaction = db.transaction((nodeIds: string[], degreeMap: Record<string, number>) => {
-                for (const id of nodeIds) {
-                    metricsStmt.run(degreeMap[id] || 0, degreeMap[id] || 0, id);
-                }
-            });
-            await this.withRetry(() => metricsTransaction(nodes.map(n => n.id), degreeTotal));
-
-            log.info('metrics_updated', undefined, { nodeCount: nodes.length });
+            log.info('metrics_updated', undefined, { nodeCount: nodeIds.length });
 
         } catch (error) {
             log.error('metrics_update_failed', error);
@@ -235,36 +155,25 @@ export class GraphAnalytics {
      */
     async detectCommunities(): Promise<{ communityCount: number; updated: number }> {
         try {
-            const db = this.mm.getDatabase();
-            if (!db) throw new Error('Database not initialized');
+            this.repo.addColumnIfNotExists('memory_nodes', 'community_id', 'INTEGER DEFAULT 0');
 
-            // Add community_id column if not exists
-            try { db.exec('ALTER TABLE memory_nodes ADD COLUMN community_id INTEGER DEFAULT 0'); } catch { /* exists */ }
+            const nodeIds = this.repo.getAllNodeIds();
+            const edges = this.repo.getAllEdgesWeighted();
 
-            const nodes = db.prepare('SELECT id FROM memory_nodes').all() as Array<{ id: string }>;
-            const edges = db.prepare('SELECT from_node, to_node, weight FROM memory_edges').all() as Array<{ from_node: string; to_node: string; weight: number }>;
-
-            if (nodes.length === 0) return { communityCount: 0, updated: 0 };
+            if (nodeIds.length === 0) return { communityCount: 0, updated: 0 };
 
             const detector = new LouvainDetector(
-                nodes.map(n => n.id),
+                nodeIds,
                 edges.map(e => ({ from: e.from_node, to: e.to_node, weight: e.weight }))
             );
 
             const communities = detector.detect();
             const summary = detector.summarize(communities);
 
-            // Persist community_id
-            const updateStmt = db.prepare('UPDATE memory_nodes SET community_id = ? WHERE id = ?');
-            const transaction = db.transaction((assignments: Map<string, number>) => {
-                for (const [nodeId, cId] of assignments) {
-                    updateStmt.run(cId, nodeId);
-                }
-            });
-            await this.withRetry(() => transaction(communities));
+            await this.repo.withRetry(() => this.repo.updateNodeCommunityIds(communities));
 
-            log.info('communities_detected', undefined, { communityCount: summary.communityCount, nodeCount: nodes.length });
-            return { communityCount: summary.communityCount, updated: nodes.length };
+            log.info('communities_detected', undefined, { communityCount: summary.communityCount, nodeCount: nodeIds.length });
+            return { communityCount: summary.communityCount, updated: nodeIds.length };
         } catch (error) {
             log.error('community_detection_failed', error);
             return { communityCount: 0, updated: 0 };

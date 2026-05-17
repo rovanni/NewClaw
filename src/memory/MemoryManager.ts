@@ -24,6 +24,10 @@ import * as conv from './conversationRepository';
 import * as graph from './graphRepository';
 import * as snap from './snapshotRepository';
 import { DashboardMemoryRepository } from '../dashboard/DashboardMemoryRepository';
+import { MemoryGraphRepository } from './MemoryGraphRepository';
+import { EmbeddingService } from './EmbeddingService';
+import { ClassificationMemory } from './ClassificationMemory';
+import { DecisionMemory } from './DecisionMemory';
 
 export type { Message, Conversation, MemoryNode, MemoryEdge } from './memoryTypes';
 
@@ -35,6 +39,10 @@ export class MemoryManager {
     private attentionFeedback: AttentionFeedback | null = null;
     private facade: MemoryFacade | null = null;
     private dashboardRepo: DashboardMemoryRepository | null = null;
+    private graphRepo: MemoryGraphRepository | null = null;
+    private embeddingServiceInstance: EmbeddingService | null = null;
+    private classificationMemoryInstance: ClassificationMemory | null = null;
+    private decisionMemoryInstance: DecisionMemory | null = null;
     private classifier: ConfidenceClassifier;
     private inverseRelations: Record<string, string> = {};
 
@@ -43,9 +51,8 @@ export class MemoryManager {
     static readonly RELATION_ONTOLOGY = graph.RELATION_ONTOLOGY;
 
     /**
-     * Expõe o banco para componentes internos que ainda não foram migrados
-     * para Repository pattern (veja Boundary Leak L1 no ARCHITECTURE_REVIEW.md).
-     * @internal — não usar fora de src/memory/
+     * @internal — uso restrito a src/memory/ e testes.
+     * Componentes externos devem usar getFacade() ou getGraphRepository().
      */
     getDatabase(): Database.Database { return this.db; }
 
@@ -57,6 +64,26 @@ export class MemoryManager {
     getDashboardRepository(): DashboardMemoryRepository {
         if (!this.dashboardRepo) this.dashboardRepo = new DashboardMemoryRepository(this.db);
         return this.dashboardRepo;
+    }
+
+    getGraphRepository(): MemoryGraphRepository {
+        if (!this.graphRepo) this.graphRepo = new MemoryGraphRepository(this.db);
+        return this.graphRepo;
+    }
+
+    getEmbeddingService(): EmbeddingService {
+        if (!this.embeddingServiceInstance) this.embeddingServiceInstance = new EmbeddingService(this.db);
+        return this.embeddingServiceInstance;
+    }
+
+    getClassificationMemory(): ClassificationMemory {
+        if (!this.classificationMemoryInstance) this.classificationMemoryInstance = new ClassificationMemory(this.db);
+        return this.classificationMemoryInstance;
+    }
+
+    getDecisionMemory(): DecisionMemory {
+        if (!this.decisionMemoryInstance) this.decisionMemoryInstance = new DecisionMemory(this.db);
+        return this.decisionMemoryInstance;
     }
 
     constructor(dbOrPath: string | Database.Database = './data/newclaw.db') {

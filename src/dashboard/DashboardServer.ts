@@ -18,9 +18,6 @@ import { AgentController, NewClawConfig } from '../core/AgentController';
 import { ProviderFactory } from '../core/ProviderFactory';
 import { MemoryManager } from '../memory/MemoryManager';
 import { MemoryCurator } from '../memory/MemoryCurator';
-import { EmbeddingService } from '../memory/EmbeddingService';
-import { ClassificationMemory } from '../memory/ClassificationMemory';
-import { DecisionMemory } from '../memory/DecisionMemory';
 import { SkillInstaller } from '../skills/SkillInstaller';
 import { createLogger } from '../shared/AppLogger';
 import { authMiddleware, createAuthRouter, dashboardAuth } from './routes/auth';
@@ -92,10 +89,9 @@ export class DashboardServer {
     public setMemoryManager(mm: MemoryManager, curator?: MemoryCurator) {
         this.ctx.memoryManager = mm;
         this.ctx.memoryCurator = curator || new MemoryCurator(mm);
-        const db = mm.getDatabase();
-        this.ctx.embeddingService = new EmbeddingService(db);
-        this.ctx.classificationMemory = new ClassificationMemory(db);
-        this.ctx.decisionMemory = new DecisionMemory(db);
+        this.ctx.embeddingService = mm.getEmbeddingService();
+        this.ctx.classificationMemory = mm.getClassificationMemory();
+        this.ctx.decisionMemory = mm.getDecisionMemory();
         this.ctx.skillInstaller = new SkillInstaller();
 
         // Only start auto-curate if curator was not provided (AgentController manages its own lifecycle)

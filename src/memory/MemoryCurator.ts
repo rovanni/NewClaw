@@ -1,6 +1,7 @@
 import { MemoryManager } from './MemoryManager';
 import { GraphAnalytics } from './GraphAnalytics';
 import { EmbeddingService } from './EmbeddingService';
+import type { MemoryGraphRepository } from './MemoryGraphRepository';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 const log = createLogger('Memorycurator');
@@ -14,12 +15,14 @@ interface CuratorResult {
 
 export class MemoryCurator {
     private mm: MemoryManager;
+    private repo: MemoryGraphRepository;
     private analytics: GraphAnalytics;
     private embeddingService?: EmbeddingService;
     private intervalId: ReturnType<typeof setInterval> | null = null;
 
     constructor(memoryManager: MemoryManager, embeddingService?: EmbeddingService) {
         this.mm = memoryManager;
+        this.repo = memoryManager.getGraphRepository();
         this.analytics = new GraphAnalytics(memoryManager);
         this.embeddingService = embeddingService;
     }
@@ -35,10 +38,9 @@ export class MemoryCurator {
 
     async curate(): Promise<CuratorResult> {
         const result: CuratorResult = { orphansFixed: 0, hubsCreated: 0, edgesCreated: [], details: [] };
-        const db = this.mm.getDatabase();
 
-        const nodes = db.prepare('SELECT id, type, name FROM memory_nodes').all() as Array<{ id: string; type: string; name: string }>;
-        const edges = db.prepare('SELECT from_node, to_node, relation FROM memory_edges').all() as Array<{ from_node: string; to_node: string; relation: string }>;
+        const nodes = this.repo.getAllNodes();
+        const edges = this.repo.getAllEdges();
 
         const connectedNodes = new Set<string>();
         for (const e of edges) {
@@ -56,10 +58,8 @@ export class MemoryCurator {
         const trueOrphans = orphans.filter(o => o.id !== DAILY_HUB && o.id !== SYSTEM_HUB && o.id !== INFRA_HUB);
 
         if (trueOrphans.length === 0) {
-            // Clean any existing self-loops silently
-            db.prepare('DELETE FROM memory_edges WHERE from_node = to_node').run();
-            // Clean duplicate daily assignments that were mistakenly put in SYSTEM_HUB
-            db.prepare("DELETE FROM memory_edges WHERE from_node = 'ctx_system_memory' AND to_node GLOB 'memory_[0-9][0-9][0-9][0-9]-*'").run();
+            this.repo.deleteSelfLoops();
+            this.repo.deleteDuplicateDailySystemEdges();
             
             result.details.push('No true orphans found — graph is clean!');
             return result;
@@ -166,38 +166,18 @@ export class MemoryCurator {
      * Detect and fix unstructured identity nodes as requested.
      */
     private cleanupInvalidNodes(): { invalidCount: number } {
-        const db = this.mm.getDatabase();
         let invalidCount = 0;
-
-        // 1. Find identity nodes that look like free text
-        const identityNodes = db.prepare(`SELECT id, name, content FROM memory_nodes WHERE type = 'identity'`).all() as Array<{ id: string; name: string; content: string }>;
         const forbiddenPatterns = [/se chama/i, /é o/i, /é a/i, /chamado/i, /meu nome/i, /nome é/i];
 
-        for (const node of identityNodes) {
+        for (const node of this.repo.getIdentityNodes()) {
             const isUnstructured = node.content.length > 80 || forbiddenPatterns.some(p => p.test(node.content));
-
             if (isUnstructured && node.id !== 'core_user' && node.id !== 'identity' && node.id !== 'core_agent') {
-                // Reduce weight and mark as potentially invalid in metadata
-                db.prepare(`
-                    UPDATE memory_nodes
-                    SET weight = 0.2,
-                        confidence = 0.2,
-                        metadata = json_insert(COALESCE(metadata, '{}'), '$.invalid', true, '$.reason', 'unstructured_identity')
-                    WHERE id = ?
-                `).run(node.id);
+                this.repo.updateNodeWeightAndMeta(node.id, 0.2, 0.2);
                 invalidCount++;
             }
         }
 
-        // 2. Ensure identity nodes are connected to core_user
-        const orphans = db.prepare(`
-            SELECT n.id FROM memory_nodes n
-            LEFT JOIN memory_edges e ON n.id = e.to_node AND e.from_node = 'core_user'
-            WHERE n.type = 'identity' AND n.id NOT IN ('core_user', 'identity', 'core_agent', 'core_identity')
-            AND e.from_node IS NULL
-        `).all() as Array<{ id: string }>;
-
-        for (const orphan of orphans) {
+        for (const orphan of this.repo.getUnconnectedIdentityNodes()) {
             this.addEdgeSafe('core_user', orphan.id, 'has_identity');
         }
 
@@ -211,30 +191,11 @@ export class MemoryCurator {
      */
     private async enforceStorageQuotas(): Promise<{ prunedTraces: number; prunedMessages: number }> {
         try {
-            const db = this.mm.getDatabase();
-            
-            // 1. Prune old execution traces (if agent_traces table exists)
-            let prunedTraces = 0;
-            try {
-                const result = db.prepare(`DELETE FROM agent_traces WHERE created_at < datetime('now', '-3 days')`).run();
-                prunedTraces = result.changes;
-            } catch { /* table might not exist yet */ }
-
-            // 2. Prune old messages (keep last 1000 per conversation)
+            const prunedTraces = this.repo.pruneOldTraces(3);
             let prunedMessages = 0;
-            const conversations = db.prepare('SELECT DISTINCT conversation_id FROM messages').all() as Array<{ conversation_id: string }>;
-            for (const conv of conversations) {
-                const result = db.prepare(`
-                    DELETE FROM messages
-                    WHERE conversation_id = ?
-                    AND id NOT IN (
-                        SELECT id FROM messages
-                        WHERE conversation_id = ?
-                        ORDER BY created_at DESC
-                        LIMIT 1000
-                    )
-                `).run(conv.conversation_id, conv.conversation_id);
-                prunedMessages = result.changes;
+
+            for (const convId of this.repo.getConversationIds()) {
+                prunedMessages += this.repo.pruneOldMessagesForConversation(convId, 1000);
             }
 
             if (prunedTraces > 0 || prunedMessages > 0) {
@@ -254,30 +215,10 @@ export class MemoryCurator {
      */
     private async applyTemporalDecay(): Promise<{ decayed: number }> {
         try {
-            const db = this.mm.getDatabase();
-
-            // Add last_accessed column if not exists
-            try { db.exec('ALTER TABLE memory_edges ADD COLUMN last_accessed TEXT'); } catch { /* exists */ }
-
-            // Update last_accessed for recently accessed edges (weight was incremented)
-            db.prepare(`
-                UPDATE memory_edges SET last_accessed = CURRENT_TIMESTAMP
-                WHERE last_accessed IS NULL
-            `).run();
-
-            // Apply decay to edges not accessed in 30 days
-            const result = db.prepare(`
-                UPDATE memory_edges
-                SET weight = MAX(weight * 0.98, 0.1)
-                WHERE last_accessed < datetime('now', '-30 days')
-                  AND weight > 0.1
-            `).run();
-
-            if (result.changes > 0) {
-                log.info(`[TemporalDecay] ${result.changes} edges decayed (×0.98)`);
-            }
-
-            return { decayed: result.changes };
+            this.repo.ensureEdgeLastAccessed();
+            const decayed = this.repo.decayOldEdges(30, 0.98, 0.1);
+            if (decayed > 0) log.info(`[TemporalDecay] ${decayed} edges decayed (×0.98)`);
+            return { decayed };
         } catch (error) {
             log.error('[TemporalDecay] Error:', errorMessage(error));
             return { decayed: 0 };
@@ -293,11 +234,9 @@ export class MemoryCurator {
                 await this.analytics.updateMetrics();
                 await this.analytics.detectCommunities();
 
-                // Reclaim space (VACUUM is heavy, so we run it only if we deleted things or every 10 runs)
-                const db = this.mm.getDatabase();
                 if (Math.random() < 0.1) {
                     log.info('[MemoryCurator] Running VACUUM to reclaim disk space...');
-                    db.exec('VACUUM');
+                    this.repo.vacuum();
                 }
                 
                 // Embed missing nodes (if embedding service available)

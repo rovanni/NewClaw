@@ -2,6 +2,13 @@ import type Database from 'better-sqlite3';
 import type { AttentionFeedback } from './AttentionFeedback';
 import type { MemoryManager, MemoryNode } from './MemoryManager';
 
+export interface EdgeRow {
+    from_node: string;
+    to_node: string;
+    relation: string;
+    weight: number;
+}
+
 export type AutoSkillStatus = 'proposed' | 'active' | 'rejected';
 
 export interface AutoSkillSummary {
@@ -42,6 +49,15 @@ export interface MemoryFacade {
     getNodeRecency(nodeId: string): number;
     getTopRelations(nodeId: string, limit: number): string[];
     getAttentionFeedback(): AttentionFeedback | null;
+
+    // ── Node write helpers (for tools) ────────────────────────────────────────
+    setNodeDomain(id: string, domain: string): void;
+    deleteNodeFull(id: string): void;
+    countNodeEdges(id: string): number;
+    upsertEmbedding(nodeId: string, embedding: Buffer, model: string): void;
+    getEdgesOf(nodeId: string): EdgeRow[];
+    insertEdgeIfNotExists(from: string, to: string, relation: string, weight: number): void;
+    getNodeDomain(id: string): string | null;
 }
 
 export class SqliteMemoryFacade implements MemoryFacade {
@@ -189,5 +205,48 @@ export class SqliteMemoryFacade implements MemoryFacade {
 
     getAttentionFeedback(): AttentionFeedback | null {
         return this.memory.getAttentionFeedback();
+    }
+
+    setNodeDomain(id: string, domain: string): void {
+        this.db.prepare('UPDATE memory_nodes SET domain = ? WHERE id = ?').run(domain, id);
+    }
+
+    deleteNodeFull(id: string): void {
+        this.db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(id, id);
+        this.db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(id);
+        this.db.prepare('DELETE FROM node_metrics WHERE node_id = ?').run(id);
+        this.db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(id);
+    }
+
+    countNodeEdges(id: string): number {
+        const row = this.db.prepare(
+            'SELECT COUNT(*) as cnt FROM memory_edges WHERE from_node = ? OR to_node = ?'
+        ).get(id, id) as { cnt: number } | undefined;
+        return row?.cnt ?? 0;
+    }
+
+    upsertEmbedding(nodeId: string, embedding: Buffer, model: string): void {
+        this.db.prepare(
+            'INSERT OR REPLACE INTO memory_embeddings (node_id, embedding, model, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)'
+        ).run(nodeId, embedding, model);
+    }
+
+    getEdgesOf(nodeId: string): EdgeRow[] {
+        return this.db.prepare(
+            'SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node = ? OR to_node = ?'
+        ).all(nodeId, nodeId) as EdgeRow[];
+    }
+
+    insertEdgeIfNotExists(from: string, to: string, relation: string, weight: number): void {
+        this.db.prepare(
+            'INSERT OR IGNORE INTO memory_edges (from_node, to_node, relation, weight) VALUES (?, ?, ?, ?)'
+        ).run(from, to, relation, weight);
+    }
+
+    getNodeDomain(id: string): string | null {
+        const row = this.db.prepare(
+            'SELECT domain FROM memory_nodes WHERE id = ?'
+        ).get(id) as { domain: string | null } | undefined;
+        return row?.domain ?? null;
     }
 }

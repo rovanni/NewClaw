@@ -94,7 +94,6 @@ export class AgentController {
     private signalAdapter: SignalAdapter | null = null;
 
     public getMemory(): MemoryManager { return this.memory; }
-    public getDatabase(): Database.Database { return this.db; }
     public getProviderFactory(): ProviderFactory { return this.providerFactory; }
     public getMemoryGovernor(): MemoryGovernor { return this.memoryGovernor; }
     public getSessionLearner(): SessionLearner { return this.sessionLearner; }

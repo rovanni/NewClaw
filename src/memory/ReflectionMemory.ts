@@ -10,9 +10,9 @@
  *   ReflectionMemory.buildContextHint(input) → injetado em skillContext
  */
 
-import Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
+import type { MemoryManager } from './MemoryManager';
 
 const log = createLogger('ReflectionMemory');
 
@@ -64,10 +64,10 @@ interface PatternAggRow {
 // ── ReflectionMemory ───────────────────────────────────────────────────
 
 export class ReflectionMemory {
-    private db: Database.Database;
+    private db: ReturnType<MemoryManager['getDatabase']>;
 
-    constructor(db: Database.Database) {
-        this.db = db;
+    constructor(memory: MemoryManager) {
+        this.db = memory.getDatabase();
         this.initSchema();
     }
 

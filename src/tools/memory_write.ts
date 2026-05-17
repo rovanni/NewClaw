@@ -12,7 +12,7 @@
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
-import type Database from 'better-sqlite3';
+import type { MemoryFacade } from '../memory/MemoryFacade';
 import { errorMessage } from '../shared/errors';
 
 export class MemoryWriteTool implements ToolExecutor {
@@ -40,9 +40,11 @@ export class MemoryWriteTool implements ToolExecutor {
     };
 
     private memoryManager: MemoryManager;
+    private facade: MemoryFacade;
 
     constructor(memoryManager: MemoryManager) {
         this.memoryManager = memoryManager;
+        this.facade = memoryManager.getFacade();
     }
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
@@ -90,10 +92,6 @@ export class MemoryWriteTool implements ToolExecutor {
         }
     }
 
-    private getDb(): Database.Database {
-        return this.memoryManager.getDatabase();
-    }
-
     // ── CREATE ────────────────────────────────────────────────
 
     private async create(args: Record<string, any>): Promise<ToolResult> {
@@ -127,39 +125,26 @@ export class MemoryWriteTool implements ToolExecutor {
             existing.content = content;
             this.memoryManager.addNode(existing);
 
-            // Update domain if provided
-            if (domain) {
-                this.getDb()?.prepare('UPDATE memory_nodes SET domain = ? WHERE id = ?').run(domain, id);
-            }
+            if (domain) this.facade.setNodeDomain(id, domain as string);
 
             return { success: true, output: `✅ Nó "${id}" atualizado (já existia).` };
         }
 
         this.memoryManager.addNode({ id, type: type as MemoryNode['type'], name, content });
 
-        // Auto-connect identity to core_user if it's not core_user itself
         if (type === 'identity' && id !== 'core_user') {
-            try {
-                this.memoryManager.addEdge('core_user', id, 'has_identity');
-            } catch (e) { /* ignore if already connected or relation failed */ }
+            try { this.memoryManager.addEdge('core_user', id, 'has_identity'); } catch { /* ignore */ }
         }
 
-        // Auto-connect non-identity nodes to user_identity to prevent orphan nodes
         if (type !== 'identity' && id !== 'core_user' && id !== 'user_identity') {
             const userIdentity = this.memoryManager.getNode('user_identity');
             if (userIdentity) {
-                // Smart relation: choose best relation based on type + content
                 const relation = this.inferRelation(type, name, content);
-                try {
-                    this.memoryManager.addEdge('user_identity', id, relation);
-                } catch (e) { /* ignore if already connected */ }
+                try { this.memoryManager.addEdge('user_identity', id, relation); } catch { /* ignore */ }
             }
         }
 
-        // Set domain if provided
-        if (domain) {
-            this.getDb()?.prepare('UPDATE memory_nodes SET domain = ? WHERE id = ?').run(domain, id);
-        }
+        if (domain) this.facade.setNodeDomain(id, domain as string);
 
         return { success: true, output: `✅ Nó "${id}" (${type}) criado e auto-conectado ao grafo. Use action=connect para ligações adicionais.` };
     }
@@ -177,12 +162,8 @@ export class MemoryWriteTool implements ToolExecutor {
         if (content) node.content = content;
         this.memoryManager.addNode(node);
 
-        // Update domain
-        if (domain) {
-            this.getDb()?.prepare('UPDATE memory_nodes SET domain = ? WHERE id = ?').run(domain, id);
-        }
+        if (domain) this.facade.setNodeDomain(id, domain as string);
 
-        // Re-generate embedding
         await this.regenerateEmbedding(id, node);
 
         return { success: true, output: `✅ Nó "${id}" atualizado.` };
@@ -215,24 +196,13 @@ export class MemoryWriteTool implements ToolExecutor {
         const { id } = args;
         if (!id) return { success: false, output: '', error: 'delete exige: id.' };
 
-        const db = this.getDb();
-        if (!db) return { success: false, output: '', error: 'DB não disponível.' };
-
-        // Check if node exists
         const node = this.memoryManager.getNode(id);
         if (!node) return { success: false, output: '', error: `Nó "${id}" não encontrado.` };
 
-        // Count edges that will be removed
-        const edges = db.prepare(
-            'SELECT COUNT(*) as cnt FROM memory_edges WHERE from_node = ? OR to_node = ?'
-        ).get(id, id) as { cnt: number } | undefined;
+        const edgeCount = this.facade.countNodeEdges(id as string);
+        this.facade.deleteNodeFull(id as string);
 
-        db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(id, id);
-        db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(id);
-        db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(id);
-        db.prepare('DELETE FROM node_metrics WHERE node_id = ?').run(id);
-
-        return { success: true, output: `✅ Nó "${id}" (${node.type}/${node.name}) removido com ${edges?.cnt || 0} conexões.` };
+        return { success: true, output: `✅ Nó "${id}" (${node.type}/${node.name}) removido com ${edgeCount} conexões.` };
     }
 
     // ── MERGE (Inteligente) ──────────────────────────────────
@@ -256,9 +226,6 @@ export class MemoryWriteTool implements ToolExecutor {
         if (!id || !merge_ids || !Array.isArray(merge_ids) || merge_ids.length === 0) {
             return { success: false, output: '', error: 'merge exige: id (nó destino) e merge_ids (lista de IDs para mesclar).' };
         }
-
-        const db = this.getDb();
-        if (!db) return { success: false, output: '', error: 'DB não disponível.' };
 
         // 1. Validate target
         const target = this.memoryManager.getNode(id);
@@ -302,31 +269,16 @@ export class MemoryWriteTool implements ToolExecutor {
             }
 
             // 5. Transfer edges from source to target
-            const sourceEdges = db.prepare(
-                'SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node = ? OR to_node = ?'
-            ).all(sourceId, sourceId) as Array<{ from_node: string; to_node: string; relation: string; weight: number; confidence: number }>;
+            const sourceEdges = this.facade.getEdgesOf(sourceId as string);
 
             for (const edge of sourceEdges) {
-                if (edge.from_node === sourceId) {
-                    // Avoid self-loops and duplicates
-                    const exists = db.prepare(
-                        'SELECT 1 FROM memory_edges WHERE from_node = ? AND to_node = ? AND relation = ?'
-                    ).get(id, edge.to_node, edge.relation);
-                    if (!exists && edge.to_node !== id) {
-                        db.prepare('INSERT OR IGNORE INTO memory_edges (from_node, to_node, relation, weight) VALUES (?, ?, ?, ?)')
-                            .run(id, edge.to_node, edge.relation, edge.weight || 1.0);
-                        edgesTransferred++;
-                    }
+                if (edge.from_node === sourceId && edge.to_node !== id) {
+                    this.facade.insertEdgeIfNotExists(id as string, edge.to_node, edge.relation, edge.weight || 1.0);
+                    edgesTransferred++;
                 }
-                if (edge.to_node === sourceId) {
-                    const exists = db.prepare(
-                        'SELECT 1 FROM memory_edges WHERE from_node = ? AND to_node = ? AND relation = ?'
-                    ).get(edge.from_node, id, edge.relation);
-                    if (!exists && edge.from_node !== id) {
-                        db.prepare('INSERT OR IGNORE INTO memory_edges (from_node, to_node, relation, weight) VALUES (?, ?, ?, ?)')
-                            .run(edge.from_node, id, edge.relation, edge.weight || 1.0);
-                        edgesTransferred++;
-                    }
+                if (edge.to_node === sourceId && edge.from_node !== id) {
+                    this.facade.insertEdgeIfNotExists(edge.from_node, id as string, edge.relation, edge.weight || 1.0);
+                    edgesTransferred++;
                 }
             }
 
@@ -341,16 +293,13 @@ export class MemoryWriteTool implements ToolExecutor {
             }
 
             // Use best domain
-            const sourceDomain = db.prepare('SELECT domain FROM memory_nodes WHERE id = ?').get(sourceId) as { domain: string | null } | undefined;
-            if (sourceDomain?.domain && !db.prepare('SELECT domain FROM memory_nodes WHERE id = ?').get(id)) {
-                db.prepare('UPDATE memory_nodes SET domain = ? WHERE id = ?').run(sourceDomain.domain, id);
+            const sourceDomain = this.facade.getNodeDomain(sourceId as string);
+            if (sourceDomain && !this.facade.getNodeDomain(id as string)) {
+                this.facade.setNodeDomain(id as string, sourceDomain);
             }
 
             // 7. Delete source
-            db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(sourceId, sourceId);
-            db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(sourceId);
-            db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(sourceId);
-            db.prepare('DELETE FROM node_metrics WHERE node_id = ?').run(sourceId);
+            this.facade.deleteNodeFull(sourceId as string);
 
             results.push(`✅ "${sourceId}" (${source.type}/${source.name}) mesclado em "${id}"`);
         }
@@ -360,10 +309,7 @@ export class MemoryWriteTool implements ToolExecutor {
             this.memoryManager.addNode(target);
         }
 
-        // Update domain
-        if (args.domain) {
-            db.prepare('UPDATE memory_nodes SET domain = ? WHERE id = ?').run(args.domain, id);
-        }
+        if (args.domain) this.facade.setNodeDomain(id as string, args.domain as string);
 
         // Regenerate embedding
         await this.regenerateEmbedding(id, target);
@@ -389,8 +335,7 @@ export class MemoryWriteTool implements ToolExecutor {
                 const data = await resp.json() as { embedding?: number[] };
                 if (data.embedding) {
                     const buf = Buffer.from(new Float64Array(data.embedding).buffer);
-                    this.getDb()?.prepare('INSERT OR REPLACE INTO memory_embeddings (node_id, embedding, model, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)')
-                        .run(nodeId, buf, 'nomic-embed-text');
+                    this.facade.upsertEmbedding(nodeId, buf, 'nomic-embed-text');
                 }
             }
         } catch { /* embedding optional */ }
