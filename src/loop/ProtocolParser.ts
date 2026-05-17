@@ -256,8 +256,12 @@ export class ProtocolParser {
     private hasNativeToolCallStructure(content: string): boolean {
         // Native tool calls arrive via response.toolCalls, not in content.
         // If we're here, the content itself might contain tool call markers.
-        // Check for [TOOL_CALL] blocks or function_call patterns
         if (content.includes('[TOOL_CALL]') || content.includes('"function_call"')) {
+            return true;
+        }
+        // Deepseek DSML format leaked into content (｜ = U+FF5C full-width pipe)
+        if (content.includes('<｜DSML｜') || content.includes('<|DSML|')) {
+            log.warn('[PROTOCOL] ⚠️ Deepseek DSML tool call leaked into content — stripping');
             return true;
         }
         return false;

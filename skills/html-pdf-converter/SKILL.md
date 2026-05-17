@@ -23,13 +23,15 @@ Converte HTML para PDF detectando e instalando automaticamente a melhor ferramen
 
 ---
 
-## Passo 1 — Identificar o arquivo HTML
+## Passo 1 — Identificar o nome do arquivo HTML
+
+**NÃO leia o conteúdo do arquivo HTML.** Apenas confirme o nome:
 
 ```bash
-ls workspace/*.html
+ls *.html
 ```
 
-Anote o nome exato do arquivo.
+Anote somente o nome base (sem extensão). Exemplo: se existir `slides.html`, o BASENAME é `slides`.
 
 ---
 
@@ -59,6 +61,12 @@ const p=require('$PDIR');
   const b=await p.launch({args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage']});
   const pg=await b.newPage();
   await pg.goto('file://$INPUT',{waitUntil:'networkidle0',timeout:30000});
+  // Torna todos os slides visíveis — corrige display:none em slides inativos
+  await pg.addStyleTag({content:[
+    '.slide,.step,section,[class*=\"slide\"],[class*=\"step\"]{display:block!important;visibility:visible!important;opacity:1!important;position:relative!important;}',
+    'body,html{overflow:visible!important;height:auto!important;}',
+    '*{animation:none!important;transition:none!important;}'
+  ].join('')});
   await pg.pdf({path:'$OUTPUT',format:'A4',landscape:true,printBackground:true,
     margin:{top:'10mm',bottom:'10mm',left:'10mm',right:'10mm'}});
   await b.close();

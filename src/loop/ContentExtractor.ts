@@ -27,6 +27,12 @@ export function sanitizeContent(content: string): string {
     result = result.replace(/<\/?think>/gi, '');
     result = result.replace(/\[TOOL_CALL\][\s\S]*?\[\/TOOL_CALL\]/gi, '');
 
+    // Remove Deepseek DSML tool call leaks (｜ = U+FF5C full-width pipe)
+    // Matches both ASCII | and full-width ｜ variants
+    result = result.replace(/<[|｜]DSML[|｜][\s\S]*?<[|｜]\/DSML[|｜]>/gi, '');
+    result = result.replace(/<[|｜]DSML[|｜]tool_calls[\s\S]*$/i, '');
+    result = result.replace(/<[|｜]DSML[|｜][^>]*>/g, '');
+
     // Remove negritos residuais (**)
     result = result.replace(/\*\*/g, '');
 
