@@ -33,6 +33,7 @@ import { SkillLoader } from '../skills/SkillLoader';
 import { ModelProfile } from './ModelRouter';
 import { errorMessage } from '../shared/errors';
 import { ObserverValidator } from './ObserverValidator';
+import { ReflectionMemory } from '../memory/ReflectionMemory';
 
 import {
     ToolResult, ToolExecutor, LoopMetrics, ChannelContext,
@@ -68,6 +69,8 @@ export class AgentLoop {
     private decisionMemory: DecisionMemory;
     private protocolParser: ProtocolParser;
     private observer: ObserverValidator;
+    private reflectionMemory: ReflectionMemory;
+    private lastToolExecution: { toolName: string; toolOutput: string; intent: string } | null = null;
 
     constructor(
         providerFactory: ProviderFactory,
@@ -89,6 +92,7 @@ export class AgentLoop {
         this.classificationMemory = classificationMemory as ClassificationMemory;
         this.decisionMemory = decisionMemory as DecisionMemory;
         this.observer = new ObserverValidator(providerFactory);
+        this.reflectionMemory = new ReflectionMemory(memory.getDatabase());
     }
 
     // ── Accessors ──────────────────────────────────────────────────────────────
@@ -123,12 +127,15 @@ export class AgentLoop {
         intent: string,
         toolName: string,
         toolOutput: string,
-        messages: LLMMessage[]
+        messages: LLMMessage[],
+        traceId?: string,
+        conversationId?: string,
+        finalResponse?: string
     ): Promise<void> {
         try {
             const timeout = new Promise<null>(res => setTimeout(() => res(null), 5000));
             const validation = await Promise.race([
-                this.observer.validate(userText, intent, toolName, toolOutput, ''),
+                this.observer.validate(userText, intent, toolName, toolOutput, finalResponse ?? ''),
                 timeout
             ]);
             if (!validation) {
@@ -136,6 +143,21 @@ export class AgentLoop {
                 return;
             }
             log.info(`[OBSERVER] ${validation.approved ? '✅' : '❌'} ${toolName} confidence=${validation.confidence} reason="${validation.reason}"`);
+
+            this.reflectionMemory.record({
+                traceId,
+                conversationId,
+                userInput: userText,
+                intent,
+                toolUsed: toolName,
+                toolOutput: toolOutput.slice(0, 1000),
+                finalResponse: finalResponse?.slice(0, 500),
+                approved: validation.approved,
+                reason: validation.reason,
+                confidence: validation.confidence,
+                suggestedFix: validation.suggestedFix,
+            });
+
             if (!validation.approved && validation.confidence >= 0.6 && validation.suggestedFix) {
                 messages.push({
                     role: 'system',
@@ -145,6 +167,35 @@ export class AgentLoop {
         } catch {
             // validação é não-fatal
         }
+    }
+
+    // ── Post-turn validation (fire-and-forget) ─────────────────────────────────
+
+    private schedulePostTurnValidation(
+        userText: string,
+        finalResponse: string,
+        traceId: string,
+        conversationId: string
+    ): void {
+        const last = this.lastToolExecution;
+        if (!last) return;
+        // Roda fora do caminho crítico — não bloqueia a resposta ao usuário
+        setImmediate(async () => {
+            try {
+                await this.tryValidateTool(
+                    userText,
+                    last.intent,
+                    last.toolName,
+                    last.toolOutput,
+                    [],         // sem injeção de mensagem — só persistência
+                    traceId,
+                    conversationId,
+                    finalResponse
+                );
+            } catch {
+                // não-fatal
+            }
+        });
     }
 
     // ── Entry points ───────────────────────────────────────────────────────────
@@ -299,7 +350,14 @@ export class AgentLoop {
         }
 
         this.classificationMemory.store(userText, intentDecision.modelCategory, intentDecision.confidence);
+        this.lastToolExecution = null;
+
         let skillContext = intentDecision.skillContext ?? '';
+
+        const reflectionHint = this.reflectionMemory.buildContextHint(userText);
+        if (reflectionHint) {
+            skillContext = skillContext ? `${skillContext}\n\n${reflectionHint}` : reflectionHint;
+        }
 
         const manualSkills = this.skillLoader.loadAll();
         const matchedManual = manualSkills.filter(s =>
@@ -501,6 +559,7 @@ export class AgentLoop {
                 move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : 'is_complete' });
                 traceManager.completeTrace(trace, 'completed', finalText);
                 this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
+                this.schedulePostTurnValidation(userText, finalText, trace.id, conversationId);
                 return { text: finalText };
             }
 
@@ -562,7 +621,8 @@ export class AgentLoop {
 
                         const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
                         if (result.success && !terminalTools.includes(toolName)) {
-                            await this.tryValidateTool(userText, intentDecision.intent, toolName, result.output, loopMessages);
+                            this.lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent };
+                            await this.tryValidateTool(userText, intentDecision.intent, toolName, result.output, loopMessages, trace.id, conversationId);
                         }
                         if (terminalTools.includes(toolName) && result.success) {
                             log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded → task DONE, returning result`);
@@ -587,6 +647,7 @@ export class AgentLoop {
                     move('FINAL_READY', { step: stepCount, reason: 'no_tools_requested' });
                     traceManager.completeTrace(trace, 'completed', finalText);
                     this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
+                    this.schedulePostTurnValidation(userText, finalText, trace.id, conversationId);
                     return finalText;
                 }
             }
@@ -649,7 +710,8 @@ export class AgentLoop {
                     }
 
                     if (result.success) {
-                        await this.tryValidateTool(userText, intentDecision.intent, toolName, result.output, loopMessages);
+                        this.lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent };
+                        await this.tryValidateTool(userText, intentDecision.intent, toolName, result.output, loopMessages, trace.id, conversationId);
                     }
 
                     move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
@@ -698,6 +760,7 @@ export class AgentLoop {
                 move('FINAL_READY', { step: stepCount, reason: 'synthesis' });
                 traceManager.completeTrace(trace, 'completed', synthesisText);
                 this.persistTrace(trace, stepCount, 'completed', synthesisText, channelContext);
+                this.schedulePostTurnValidation(userText, synthesisText, trace.id, conversationId);
                 return synthesisText;
             }
 
@@ -708,6 +771,7 @@ export class AgentLoop {
             move('FINAL_READY', { step: stepCount, reason: 'last_best_content' });
             traceManager.completeTrace(trace, 'completed', lastBestContent);
             this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
+            this.schedulePostTurnValidation(userText, lastBestContent, trace.id, conversationId);
             return lastBestContent;
         }
 
@@ -731,6 +795,7 @@ export class AgentLoop {
         move('FINAL_READY', { step: stepCount, reason: stepCount >= maxSteps ? 'max_iterations' : 'fallback' });
         traceManager.completeTrace(trace, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
         this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text, channelContext);
+        this.schedulePostTurnValidation(userText, text, trace.id, conversationId);
 
         return text;
     }
