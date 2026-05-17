@@ -440,14 +440,6 @@ const SEMANTIC_RULES: SemanticRule[] = [
         cognitiveLoad: 'minimal',
         requiresReasoning: false,
     },
-    {
-        category: 'rejection',
-        modelCategory: 'light',
-        keywords: ['não', 'nao', 'cancela', 'para', 'abortar'],
-        patterns: [],
-        cognitiveLoad: 'minimal',
-        requiresReasoning: false,
-    },
 ];
 
 // ── UnifiedIntentRouter ──────────────────────────────────────────────

@@ -136,7 +136,7 @@ export class AgentLoop {
         finalResponse?: string
     ): Promise<void> {
         try {
-            const timeout = new Promise<null>(res => setTimeout(() => res(null), 5000));
+            const timeout = new Promise<null>(res => setTimeout(() => res(null), 20000));
             const validation = await Promise.race([
                 this.observer.validate(userText, intent, toolName, toolOutput, finalResponse ?? ''),
                 timeout
@@ -661,7 +661,7 @@ export class AgentLoop {
                         const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
                         if (result.success && !terminalTools.includes(toolName)) {
                             this.lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
-                            await this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
+                            void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
                         }
                         if (terminalTools.includes(toolName) && result.success) {
                             log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded → task DONE, returning result`);
@@ -750,7 +750,7 @@ export class AgentLoop {
 
                     if (result.success) {
                         this.lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
-                        await this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
+                        void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
                     }
 
                     move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
