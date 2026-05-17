@@ -14,6 +14,7 @@ export interface ValidationResult {
     reason: string;
     confidence: number;
     suggestedFix?: string;
+    validationSkipped?: boolean;
 }
 
 const OBSERVER_PROMPT = `Você é um agente observador responsável por validar a qualidade das ações de um assistente virtual.
@@ -78,8 +79,8 @@ export class ObserverValidator {
             // Extract JSON from response
             const jsonMatch = content.match(/\{[^}]*"approved"[^}]*\}/s);
             if (!jsonMatch) {
-                log.info(`No JSON found in response, assuming approved. Elapsed: ${elapsed}ms`);
-                return { approved: true, reason: 'Observer returned non-JSON, assuming OK', confidence: 0.5 };
+                log.warn(`No JSON found in response, skipping validation. Elapsed: ${elapsed}ms`);
+                return { approved: false, reason: 'Observer returned non-JSON', confidence: 0, validationSkipped: true };
             }
 
             const result = JSON.parse(jsonMatch[0]);
@@ -92,8 +93,8 @@ export class ObserverValidator {
                 suggestedFix: result.suggested_fix || result.suggestedFix || undefined
             };
         } catch (error) {
-            log.info(`Error: ${errorMessage(error)}, assuming approved`);
-            return { approved: true, reason: 'Observer failed, assuming OK', confidence: 0.3 };
+            log.warn(`Validation error: ${errorMessage(error)}, skipping`);
+            return { approved: false, reason: `Observer error: ${errorMessage(error)}`, confidence: 0, validationSkipped: true };
         }
     }
 }

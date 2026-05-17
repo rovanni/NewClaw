@@ -28,6 +28,7 @@ import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
 import { traceManager, ExecutionTrace } from '../core/ExecutionTrace';
 import { AgentFSM, AgentFSMEvent } from './AgentFSM';
+import { FSMHistoryStore } from './FSMHistoryStore';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { SkillLoader } from '../skills/SkillLoader';
 import { ModelProfile } from './ModelRouter';
@@ -71,6 +72,7 @@ export class AgentLoop {
     private protocolParser: ProtocolParser;
     private observer: ObserverValidator;
     private reflectionMemory: ReflectionMemory;
+    private fsmHistoryStore: FSMHistoryStore;
     private lastToolExecution: { toolName: string; toolOutput: string; intent: string } | null = null;
 
     constructor(
@@ -94,6 +96,7 @@ export class AgentLoop {
         this.decisionMemory = decisionMemory as DecisionMemory;
         this.observer = new ObserverValidator(providerFactory);
         this.reflectionMemory = new ReflectionMemory(memory);
+        this.fsmHistoryStore = new FSMHistoryStore(memory);
     }
 
     // ── Accessors ──────────────────────────────────────────────────────────────
@@ -143,9 +146,9 @@ export class AgentLoop {
                 log.info(`[OBSERVER] Validation timed out for ${toolName}`);
                 return;
             }
-            log.info(`[OBSERVER] ${validation.approved ? '✅' : '❌'} ${toolName} confidence=${validation.confidence} reason="${validation.reason}"`);
+            log.info(`[OBSERVER] ${validation.validationSkipped ? '⚠️ skipped' : validation.approved ? '✅' : '❌'} ${toolName} confidence=${validation.confidence} reason="${validation.reason}"`);
 
-            this.reflectionMemory.record({
+            if (!validation.validationSkipped) this.reflectionMemory.record({
                 traceId,
                 conversationId,
                 userInput: userText,
@@ -333,6 +336,7 @@ export class AgentLoop {
                 const transition = fsm.transition(event, meta);
                 log.info(`[${this.ts()}] [AGENT-FSM] ${transition.from} --${event}--> ${transition.to}`);
                 traceManager.addStep(trace, 'fsm_transition', transition);
+                this.fsmHistoryStore.record(transition, trace.id, conversationId);
             } catch (error) {
                 log.warn(`[${this.ts()}] [AGENT-FSM] Invalid transition ${fsm.getState()} --${event}: ${errorMessage(error)}`);
             }
