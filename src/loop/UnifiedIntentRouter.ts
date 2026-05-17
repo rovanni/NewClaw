@@ -11,6 +11,7 @@
  */
 
 import { createLogger } from '../shared/AppLogger';
+import type { SkillLearner } from './SkillLearner';
 
 const log = createLogger('UnifiedIntentRouter');
 
@@ -63,6 +64,10 @@ export interface IntentDecision {
         outputTool: string;
         outputParams: Record<string, unknown>;
     };
+    /** Tools recommended by SkillLearner based on past patterns */
+    preferredTools?: string[];
+    /** Skill context text to inject into system prompt (from SkillLearner) */
+    skillContext?: string;
     /** Deterministic source (which gate matched) */
     source: 'deterministic' | 'semantic' | 'fallback';
     /** Routing trace for observability */
@@ -450,6 +455,11 @@ const SEMANTIC_RULES: SemanticRule[] = [
 export class UnifiedIntentRouter {
     private classificationCache: Map<string, { decision: IntentDecision; timestamp: number }> = new Map();
     private readonly CACHE_TTL = 300_000; // 5 minutes
+    private skillLearner: SkillLearner | null;
+
+    constructor(skillLearner?: SkillLearner) {
+        this.skillLearner = skillLearner ?? null;
+    }
 
     /**
      * Route a user input through the 3-layer pipeline.
@@ -473,7 +483,7 @@ export class UnifiedIntentRouter {
             const decision = this.buildDecisionFromRule(deterministicMatch, input, 'deterministic', trace, startTime);
             trace.deterministicMatch = deterministicMatch.id;
             log.info(`[UNIFIED-ROUTER] Deterministic: ${deterministicMatch.id} → ${deterministicMatch.category} (confidence: ${decision.confidence})`);
-            return this.cacheAndTrace(input, decision);
+            return this.cacheAndTrace(input, this.enrichWithSkillContext(input, decision));
         }
 
         // ── Layer 2: Semantic Routing ──
@@ -490,7 +500,8 @@ export class UnifiedIntentRouter {
         trace.strategyDecision = decision.executionMode;
 
         log.info(`[UNIFIED-ROUTER] Semantic: ${semanticResult.category} → ${decision.executionMode} (confidence: ${decision.confidence}, model: ${decision.modelCategory})`);
-        return this.cacheAndTrace(input, { ...decision, trace: { ...decision.trace, ...trace, totalTimeMs: Date.now() - startTime } });
+        const enriched = this.enrichWithSkillContext(input, { ...decision, trace: { ...decision.trace, ...trace, totalTimeMs: Date.now() - startTime } });
+        return this.cacheAndTrace(input, enriched);
     }
 
     /**
@@ -794,6 +805,23 @@ export class UnifiedIntentRouter {
             source,
             trace: { ...trace, totalTimeMs: Date.now() - startTime },
         };
+    }
+
+    // ── SkillLearner Enrichment ──────────────────────────────────────────
+
+    private enrichWithSkillContext(input: string, decision: IntentDecision): IntentDecision {
+        if (!this.skillLearner) return decision;
+        try {
+            const skillResult = this.skillLearner.buildSkillContext(input, 2);
+            if (!skillResult || skillResult.confidence < 0.7) return decision;
+            return {
+                ...decision,
+                preferredTools: skillResult.preferredTools.length > 0 ? skillResult.preferredTools : decision.preferredTools,
+                skillContext: skillResult.text || decision.skillContext,
+            };
+        } catch {
+            return decision;
+        }
     }
 
     // ── Cache and Trace ──────────────────────────────────────────────────

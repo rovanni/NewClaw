@@ -83,7 +83,7 @@ export class AgentLoop {
         this.skillLearner = skillLearner as SkillLearner;
         this.skillLoader = skillLoader as SkillLoader;
         this.modelRouter = new ModelRouter(config.modelRouter, providerFactory);
-        this.intentRouter = new UnifiedIntentRouter();
+        this.intentRouter = new UnifiedIntentRouter(this.skillLearner);
         this.stateManager = new AgentStateManager(memory);
         this.protocolParser = new ProtocolParser();
         this.classificationMemory = classificationMemory as ClassificationMemory;
@@ -299,8 +299,7 @@ export class AgentLoop {
         }
 
         this.classificationMemory.store(userText, intentDecision.modelCategory, intentDecision.confidence);
-        const skillResult = this.skillLearner.buildSkillContext(userText, 2);
-        let skillContext = skillResult && skillResult.confidence >= 0.7 ? skillResult.text : '';
+        let skillContext = intentDecision.skillContext ?? '';
 
         const manualSkills = this.skillLoader.loadAll();
         const matchedManual = manualSkills.filter(s =>

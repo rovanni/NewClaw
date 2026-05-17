@@ -149,7 +149,39 @@ export class AttentionLayer {
                 attention_scores TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS attention_weights (
+                key TEXT PRIMARY KEY,
+                value REAL NOT NULL,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
         `);
+        this.loadWeightsFromDb();
+    }
+
+    // ── Weight Persistence ─────────────────────────────────
+
+    private loadWeightsFromDb(): void {
+        const rows = this.db.prepare('SELECT key, value FROM attention_weights').all() as Array<{ key: string; value: number }>;
+        for (const { key, value } of rows) {
+            if (key in this.weights) {
+                (this.weights as unknown as Record<string, number>)[key] = value;
+            }
+        }
+    }
+
+    /** Update a single weight at runtime and persist it to the DB. */
+    setWeight(key: keyof AttentionWeights, value: number): void {
+        this.weights[key] = value;
+        this.db.prepare(
+            `INSERT INTO attention_weights (key, value, updated_at) VALUES (?, ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+        ).run(key, value);
+    }
+
+    /** Return a copy of the current weights (defaults merged with DB overrides). */
+    getWeights(): AttentionWeights {
+        return { ...this.weights };
     }
 
     // ── Context State Management ────────────────────────────
