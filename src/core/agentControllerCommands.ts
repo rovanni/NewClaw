@@ -6,6 +6,7 @@ import type { SessionManager } from '../session/SessionManager';
 import type { AuditorService } from '../services/auditor/AuditorService';
 import { registerAuditCommand } from '../services/auditor/auditCommand';
 import type { NewClawConfig } from './agentControllerTypes';
+import type { AgentLoop } from '../loop/AgentLoop';
 
 export function registerCommands(
     messageBus: MessageBus,
@@ -13,8 +14,16 @@ export function registerCommands(
     memoryFacade: MemoryFacade,
     sessionManager: SessionManager,
     auditor: AuditorService,
-    config: NewClawConfig
+    config: NewClawConfig,
+    agentLoop: AgentLoop
 ): void {
+    for (const cmd of ['/cancelar', '/cancel', '/stop', '/pare']) {
+        messageBus.registerCommand(cmd, async (msg) => {
+            agentLoop.cancel(msg.userId);
+            return '⏹ Operação cancelada.';
+        });
+    }
+
     messageBus.registerCommand('/clear', async (msg) => {
         memory.createNewConversation(msg.userId);
         const sessionKey = { channel: msg.channel, userId: msg.userId };

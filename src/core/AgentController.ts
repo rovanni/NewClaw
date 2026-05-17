@@ -194,7 +194,7 @@ export class AgentController {
             enableAutoFix: true,
         }, this.db);
 
-        registerCommands(this.messageBus, this.memory, this.memoryFacade, this.sessionManager, this.auditor, this.config);
+        registerCommands(this.messageBus, this.memory, this.memoryFacade, this.sessionManager, this.auditor, this.config, this.agentLoop);
 
         eventBus.on('circuit:open', (data) => {
             log.warn(`[CircuitBreaker] ${data.name} OPEN — ${data.failures}/${data.threshold} failures`);
