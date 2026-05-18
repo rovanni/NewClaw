@@ -267,6 +267,30 @@ export class MemoryManager {
         return ctx.length > maxChars ? ctx.substring(0, maxChars) + '...[truncado]' : ctx;
     }
 
+    // ── Keyword Search (no embeddings) ────────────────────────────────────────
+
+    /**
+     * Fast synchronous text search using SQL LIKE — no embedding generation.
+     * All provided terms are OR-combined against the content column.
+     * Excludes EXPIRED/SUMMARIZED/ARCHIVED nodes.
+     */
+    keywordSearch(terms: string[], limit = 5): import('./memoryTypes').MemoryNode[] {
+        if (terms.length === 0) return [];
+        try {
+            const conditions = terms.map(() => 'content LIKE ?').join(' OR ');
+            const params: unknown[] = [...terms.map(t => `%${t}%`), limit];
+            return this.db.prepare(`
+                SELECT * FROM memory_nodes
+                WHERE lifecycle_state NOT IN ('EXPIRED', 'SUMMARIZED', 'ARCHIVED')
+                AND (${conditions})
+                ORDER BY confidence DESC, weight DESC
+                LIMIT ?
+            `).all(...params) as import('./memoryTypes').MemoryNode[];
+        } catch {
+            return [];
+        }
+    }
+
     // ── Semantic Search ────────────────────────────────────────────────────────
 
     async semanticSearch(query: string, limit: number = 5): Promise<Array<import('./memoryTypes').MemoryNode & { score: number }>> {

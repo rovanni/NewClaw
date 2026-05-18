@@ -357,6 +357,32 @@ export class AgentLoop {
     // ── Tool-first fast path ────────────────────────────────────────────────────
 
     /**
+     * Searches memory for a saved weather city preference without embeddings.
+     * Looks for nodes containing weather-related terms and extracts the city using regex.
+     * Returns null if nothing is found.
+     */
+    private lookupWeatherCityPreference(): string | null {
+        try {
+            const nodes = this.memory.keywordSearch(
+                ['previsão do tempo', 'clima', 'cidade padrão', 'considerar'],
+                5
+            );
+            for (const node of nodes) {
+                if (!node.content) continue;
+                // Pattern: "considerar <Cidade, Estado> como cidade"
+                const m1 = node.content.match(/considerar\s+([A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][a-záàãâéêíóõôúç]+(?:\s+[A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][a-záàãâéêíóõôúç]+)*(?:,\s*[A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][a-záàãâéêíóõôúç]+)*)\s+como\s+cidade/i);
+                if (m1?.[1]) return m1[1].trim();
+                // Pattern: "cidade padrão: <Cidade>" or "cidade padrão é <Cidade>"
+                const m2 = node.content.match(/cidade\s+(?:padrão|default)[:\sé]+([A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][a-záàãâéêíóõôúç\s,]+?)(?:\.|,|$)/i);
+                if (m2?.[1]) return m2[1].trim();
+            }
+        } catch {
+            // non-fatal
+        }
+        return null;
+    }
+
+    /**
      * Executes a tool directly without spinning up the LLM cognition loop.
      * Returns the tool output as the final response, or null to fall back to the full loop.
      *
@@ -380,7 +406,21 @@ export class AgentLoop {
             return null;
         }
 
-        const toolArgs = intentDecision.toolParams ?? {};
+        let toolArgs: Record<string, unknown> = intentDecision.toolParams ?? {};
+
+        // Weather-specific: if no city was extracted from the query, look up the
+        // user's preferred city from memory before giving up and falling back.
+        if (toolName === 'weather' && !toolArgs.city) {
+            const preferredCity = this.lookupWeatherCityPreference();
+            if (preferredCity) {
+                toolArgs = { ...toolArgs, city: preferredCity };
+                log.info(`[${this.ts()}] [FAST-PATH] Weather city from memory: "${preferredCity}"`);
+            } else {
+                log.info(`[${this.ts()}] [FAST-PATH] No city in intent or memory — falling back to cognition loop`);
+                return null;
+            }
+        }
+
         log.info(`[${this.ts()}] [FAST-PATH] Tool-first "${toolName}" args=${JSON.stringify(toolArgs)}`);
 
         if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
