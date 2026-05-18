@@ -7,356 +7,600 @@
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/shared.css">
   <style>
-    .main { max-width: 860px; margin: 0 auto; padding: 32px 24px; }
+    body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+    #header-root { flex-shrink: 0; }
+    .layout { flex: 1; display: flex; overflow: hidden; }
+
+    /* Sidebar */
+    .sidebar {
+      width: 210px; flex-shrink: 0; background: var(--bg-surface);
+      border-right: 1px solid var(--border-color);
+      display: flex; flex-direction: column; overflow-y: auto;
+    }
+    .sidebar-label {
+      padding: 16px 16px 8px; font-size: 0.63rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.09em; color: var(--text-soft);
+    }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 14px; margin: 1px 8px; border-radius: 8px;
+      cursor: pointer; font-size: 0.855rem; color: var(--text-muted); transition: all 0.15s;
+    }
+    .nav-item:hover { background: var(--bg-input); color: var(--text-main); }
+    .nav-item.active { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+    .nav-item .ni { font-size: 1rem; width: 20px; text-align: center; flex-shrink: 0; }
+    .sidebar-footer {
+      padding: 14px; border-top: 1px solid var(--border-color);
+      display: flex; flex-direction: column; gap: 8px; margin-top: auto;
+    }
+
+    /* Content */
+    .content { flex: 1; overflow-y: auto; background: var(--bg-base); }
+    .page { display: none; padding: 28px 32px; max-width: 920px; }
+    .page.active { display: block; }
+    .page-title { font-size: 1.2rem; font-weight: 700; margin-bottom: 4px; }
+    .page-subtitle { font-size: 0.8rem; color: var(--text-soft); margin-bottom: 22px; }
+
+    /* Sections */
     .section {
       background: var(--bg-surface); border: 1px solid var(--border-color);
-      border-radius: var(--radius); padding: 24px; margin-bottom: 20px;
+      border-radius: var(--radius); padding: 20px; margin-bottom: 14px;
     }
     .section-title {
-      font-size: 1rem; font-weight: 600; margin-bottom: 16px;
+      font-size: 0.88rem; font-weight: 600; margin-bottom: 14px;
       display: flex; align-items: center; gap: 8px; color: var(--accent);
     }
-    .form-group { margin-bottom: 16px; }
+
+    /* Forms */
+    .form-group { margin-bottom: 14px; }
     .form-group:last-child { margin-bottom: 0; }
-    .form-label { display: block; font-size: 0.82rem; color: var(--text-muted); margin-bottom: 6px; font-weight: 500; }
-    .form-hint { font-size: 0.72rem; color: var(--text-soft); margin-top: 4px; }
+    .form-label { display: block; font-size: 0.79rem; color: var(--text-muted); margin-bottom: 5px; font-weight: 500; }
+    .form-hint { font-size: 0.69rem; color: var(--text-soft); margin-top: 4px; }
     .form-input, .form-select, .form-textarea {
       width: 100%; background: var(--bg-input); border: 1px solid var(--border-color);
-      border-radius: 8px; padding: 10px 14px; color: var(--text-main);
-      font-family: var(--font-family); font-size: 0.88rem; outline: none; transition: border-color 0.2s;
+      border-radius: 8px; padding: 9px 12px; color: var(--text-main);
+      font-family: var(--font-family); font-size: 0.86rem; outline: none; transition: border-color 0.2s;
     }
     .form-input:focus, .form-select:focus, .form-textarea:focus { border-color: var(--accent); }
-    .form-textarea { min-height: 100px; resize: vertical; line-height: 1.5; }
+    .form-textarea { min-height: 120px; resize: vertical; line-height: 1.5; }
     .form-select {
       cursor: pointer; appearance: none;
       background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2398a8c2' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
       background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px;
     }
-    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+    /* Buttons */
     .btn {
-      padding: 10px 24px; border-radius: 8px; font-weight: 600;
-      font-size: 0.88rem; cursor: pointer; border: none; transition: all 0.2s;
+      padding: 9px 20px; border-radius: 8px; font-weight: 600;
+      font-size: 0.84rem; cursor: pointer; border: none; transition: all 0.2s;
+      text-align: center; width: 100%;
     }
     .btn-primary { background: var(--accent-bg); color: var(--accent); border: 1px solid var(--accent); }
     .btn-primary:hover { background: var(--accent); color: var(--bg-base); }
+    .btn-warning { background: rgba(251,191,36,0.15); color: var(--warning); border: 1px solid var(--warning); }
+    .btn-warning:hover { background: var(--warning); color: var(--bg-base); }
     .btn-danger { background: rgba(248,113,113,0.15); color: var(--danger); border: 1px solid var(--danger); }
-    .btn-danger:hover { background: var(--danger); color: var(--bg-base); }
-    .btn-group { display: flex; gap: 10px; margin-top: 20px; }
-    .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
-    .status-card { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 10px; padding: 14px; }
-    .status-card .label { font-size: 0.72rem; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.05em; }
-    .status-card .value { font-size: 1.1rem; font-weight: 600; margin-top: 4px; }
-    .status-card .value.online { color: var(--success); }
-    .status-card .value.offline { color: var(--danger); }
-    .tools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
-    .tool-card {
-      background: var(--bg-input); border: 1px solid var(--border-color);
-      border-radius: 10px; padding: 12px; display: flex; align-items: center; gap: 10px;
-    }
-    .tool-card .tool-icon {
-      width: 36px; height: 36px; background: var(--accent-bg);
-      border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1rem;
-    }
-    .tool-card .tool-name { font-weight: 500; font-size: 0.85rem; }
-    .tool-card .tool-desc { font-size: 0.72rem; color: var(--text-soft); }
-    .tool-toggle {
-      padding: 4px 10px; border-radius: 6px; font-size: 0.72rem;
-      cursor: pointer; border: none; font-weight: 600; transition: all 0.2s;
-    }
-    .tool-toggle.on { background: rgba(248,113,113,0.15); color: var(--danger); }
-    .tool-toggle.off { background: rgba(74,222,128,0.15); color: var(--success); }
-    .insight-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .insight-card {
-      background: var(--bg-input); border: 1px solid var(--border-color);
-      border-radius: 10px; padding: 14px; min-height: 180px;
-    }
-    .insight-card h3 { font-size: 0.86rem; color: var(--text-main); margin: 0 0 10px; }
-    .insight-list { display: flex; flex-direction: column; gap: 8px; }
-    .insight-item {
-      background: var(--bg-surface); border: 1px solid var(--border-color);
-      border-radius: 8px; padding: 10px;
-    }
-    .insight-item .title { font-size: 0.82rem; font-weight: 600; color: var(--text-main); }
-    .insight-item .meta { font-size: 0.72rem; color: var(--text-soft); margin-top: 4px; }
-    .insight-actions { display: flex; gap: 8px; margin-top: 8px; }
-    .mini-btn {
-      padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border-color);
-      background: var(--bg-input); color: var(--text-muted); font-size: 0.72rem; cursor: pointer;
-    }
-    .mini-btn:hover { border-color: var(--accent); color: var(--accent); }
-    .mini-btn.approve { background: rgba(74,222,128,0.15); color: var(--success); border-color: rgba(74,222,128,0.3); }
-    .mini-btn.reject { background: rgba(248,113,113,0.15); color: var(--danger); border-color: rgba(248,113,113,0.3); }
-    .empty-note { font-size: 0.8rem; color: var(--text-soft); }
-    .badge {
-      display: inline-block; font-size: 0.65rem; padding: 1px 6px;
-      border-radius: 4px; font-weight: 600; margin-left: 6px; vertical-align: middle;
-    }
+    .btn-danger:hover { background: var(--danger); color: #fff; }
+    .btn-sm { padding: 5px 12px; font-size: 0.74rem; border-radius: 6px; width: auto; }
+    .btn-ghost { background: var(--bg-input); color: var(--text-muted); border: 1px solid var(--border-color); }
+    .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* Status cards */
+    .status-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+    .status-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 10px; padding: 14px 16px; }
+    .s-label { font-size: 0.67rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-soft); }
+    .s-val { font-size: 1rem; font-weight: 700; margin-top: 5px; }
+    .s-val.online { color: var(--success); }
+    .s-val.offline { color: var(--danger); }
+    .s-val.small { font-size: 0.78rem; font-weight: 500; margin-top: 6px; }
+
+    /* Router cards */
+    .router-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+    .router-card { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 10px; padding: 14px; }
+    .router-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .router-card-icon { font-size: 1.15rem; }
+    .router-card-label { font-size: 0.84rem; font-weight: 600; }
+    .router-card-sub { font-size: 0.68rem; color: var(--text-soft); }
+
+    /* Provider cards */
+    .provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+    .provider-card { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 10px; padding: 16px; }
+    .provider-card.wide { grid-column: 1 / -1; }
+    .provider-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .provider-name { font-size: 0.92rem; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .provider-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-soft); flex-shrink: 0; transition: background 0.3s; }
+    .provider-dot.ok { background: var(--success); }
+    .provider-dot.err { background: var(--danger); }
+
+    /* API key */
+    .api-key-group { display: flex; gap: 8px; align-items: center; }
+    .api-key-group .form-input { flex: 1; }
+    .api-key-status { font-size: 0.7rem; padding: 2px 7px; border-radius: 4px; white-space: nowrap; flex-shrink: 0; }
+    .api-key-status.configured { background: rgba(74,222,128,0.15); color: var(--success); }
+    .api-key-status.missing { background: rgba(248,113,113,0.15); color: var(--danger); }
+
+    /* Badges */
+    .badge { display: inline-block; font-size: 0.62rem; padding: 1px 5px; border-radius: 4px; font-weight: 600; margin-left: 4px; vertical-align: middle; }
     .badge-cloud { background: rgba(96,165,250,0.15); color: var(--accent); }
     .badge-local { background: rgba(74,222,128,0.15); color: var(--success); }
     .badge-active { background: rgba(74,222,128,0.15); color: var(--success); }
     .badge-proposed { background: rgba(251,191,36,0.15); color: var(--warning); }
     .badge-rejected { background: rgba(248,113,113,0.15); color: var(--danger); }
-    .api-key-group { display: flex; gap: 8px; align-items: center; }
-    .api-key-group .form-input { flex: 1; }
-    .api-key-status { font-size: 0.78rem; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
-    .api-key-status.configured { background: rgba(74,222,128,0.15); color: var(--success); }
-    .api-key-status.missing { background: rgba(248,113,113,0.15); color: var(--danger); }
-    .toast {
-      position: fixed; bottom: 24px; right: 24px; padding: 12px 20px;
-      border-radius: 10px; font-size: 0.85rem; font-weight: 500;
-      transform: translateY(100px); opacity: 0; transition: all 0.3s; z-index: 1000;
+
+    /* Tool accordions */
+    .tool-accordion { border: 1px solid var(--border-color); border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
+    .tool-acc-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 11px 16px; cursor: pointer; background: var(--bg-surface);
+      font-size: 0.875rem; font-weight: 600; transition: background 0.15s; user-select: none;
     }
+    .tool-acc-header:hover { background: var(--bg-input); }
+    .acc-left { display: flex; align-items: center; gap: 10px; }
+    .acc-count { font-size: 0.7rem; color: var(--text-soft); font-weight: 400; }
+    .acc-arrow { font-size: 0.65rem; color: var(--text-soft); transition: transform 0.2s; }
+    .tool-acc-header.open .acc-arrow { transform: rotate(180deg); }
+    .tool-acc-body { display: none; background: var(--bg-input); }
+    .tool-acc-body.open { display: block; }
+    .tool-row {
+      display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .tool-row:last-child { border-bottom: none; }
+    .tool-row-icon { width: 30px; height: 30px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 0.88rem; background: var(--bg-surface); flex-shrink: 0; }
+    .tool-row-info { flex: 1; min-width: 0; }
+    .tool-row-name { font-size: 0.81rem; font-weight: 600; }
+    .tool-row-desc { font-size: 0.69rem; color: var(--text-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tool-toggle { padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 600; cursor: pointer; border: 1px solid; transition: all 0.15s; flex-shrink: 0; }
+    .tool-toggle.on { background: rgba(248,113,113,0.12); color: var(--danger); border-color: rgba(248,113,113,0.3); }
+    .tool-toggle.on:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
+    .tool-toggle.off { background: rgba(74,222,128,0.12); color: var(--success); border-color: rgba(74,222,128,0.3); }
+    .tool-toggle.off:hover { background: var(--success); color: #fff; border-color: var(--success); }
+
+    /* Search */
+    .search-bar { margin-bottom: 14px; }
+    .search-bar input {
+      width: 100%; background: var(--bg-surface); border: 1px solid var(--border-color);
+      border-radius: 8px; padding: 9px 14px; color: var(--text-main);
+      font-family: var(--font-family); font-size: 0.85rem; outline: none;
+    }
+    .search-bar input:focus { border-color: var(--accent); }
+
+    /* Skills */
+    .skill-item { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 10px; padding: 13px; margin-bottom: 10px; }
+    .skill-item-name { font-size: 0.86rem; font-weight: 600; margin-bottom: 4px; }
+    .skill-item-meta { font-size: 0.7rem; color: var(--text-soft); }
+    .skill-item-desc { font-size: 0.77rem; color: var(--text-muted); margin-top: 6px; }
+    .skill-item-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .mini-btn { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-surface); color: var(--text-muted); font-size: 0.71rem; cursor: pointer; }
+    .mini-btn.approve { background: rgba(74,222,128,0.15); color: var(--success); border-color: rgba(74,222,128,0.3); }
+    .mini-btn.reject { background: rgba(248,113,113,0.15); color: var(--danger); border-color: rgba(248,113,113,0.3); }
+    .pattern-item { background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 13px; margin-bottom: 8px; }
+    .pattern-name { font-size: 0.81rem; font-weight: 600; }
+    .pattern-meta { font-size: 0.69rem; color: var(--text-soft); margin-top: 3px; }
+    .empty-note { font-size: 0.79rem; color: var(--text-soft); padding: 14px; text-align: center; }
+
+    /* Model dropdown */
+    .model-select-container { position: relative; width: 100%; }
+    .model-select-input {
+      width: 100%; background: var(--bg-input); border: 1px solid var(--border-color);
+      border-radius: 8px; padding: 9px 36px 9px 12px; color: var(--text-main);
+      font-family: var(--font-family); font-size: 0.86rem; outline: none; transition: border-color 0.2s; cursor: text;
+    }
+    .model-select-input:focus { border-color: var(--accent); }
+    .model-select-arrow { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); pointer-events: none; opacity: 0.6; }
+    .model-dropdown {
+      position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+      background: var(--bg-surface); border: 1px solid var(--border-color);
+      border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      z-index: 200; max-height: 240px; overflow-y: auto; display: none;
+    }
+    .model-dropdown.show { display: block; }
+    .model-dropdown-group { padding: 5px 12px; font-size: 0.67rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; background: var(--bg-muted); }
+    .model-item { padding: 9px 12px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-color); font-size: 0.83rem; transition: background 0.15s; }
+    .model-item:last-child { border-bottom: none; }
+    .model-item:hover { background: var(--accent-bg); }
+    .model-item .model-name { font-weight: 500; }
+    .model-item-pull { padding: 9px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px; color: var(--accent); font-weight: 600; font-size: 0.83rem; transition: background 0.15s; }
+    .model-item-pull:hover { background: var(--accent-bg); }
+    .model-item-add { padding: 9px 12px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; color: var(--accent); font-weight: 600; font-size: 0.83rem; transition: background 0.15s; border-bottom: 1px solid var(--border-color); }
+    .model-item-add:hover { background: var(--accent-bg); }
+
+    /* Pull chips */
+    .pull-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    .chip { padding: 4px 10px; border-radius: 6px; font-size: 0.71rem; cursor: pointer; border: 1px solid var(--border-color); background: var(--bg-surface); color: var(--text-muted); transition: all 0.15s; }
+    .chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+
+    /* Toast */
+    .toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 20px; border-radius: 10px; font-size: 0.83rem; font-weight: 500; transform: translateY(100px); opacity: 0; transition: all 0.3s; z-index: 9999; }
     .toast.show { transform: translateY(0); opacity: 1; }
     .toast.success { background: rgba(74,222,128,0.15); color: var(--success); border: 1px solid var(--success); }
     .toast.error { background: rgba(248,113,113,0.15); color: var(--danger); border: 1px solid var(--danger); }
 
-    /* Custom Dropdown CSS */
-    .model-select-container { position: relative; width: 100%; }
-    .model-select-input {
-      width: 100%; background: var(--bg-input); border: 1px solid var(--border-color);
-      border-radius: 8px; padding: 10px 14px; padding-right: 36px; color: var(--text-main);
-      font-family: var(--font-family); font-size: 0.88rem; outline: none; transition: border-color 0.2s;
-      cursor: text;
+    @media (max-width: 768px) {
+      .sidebar { width: 52px; }
+      .nav-item span:not(.ni) { display: none; }
+      .sidebar-label { display: none; }
+      .form-row, .two-col { grid-template-columns: 1fr; }
+      .status-grid { grid-template-columns: 1fr 1fr; }
+      .router-grid { grid-template-columns: 1fr; }
+      .page { padding: 18px 14px; }
     }
-    .model-select-input:focus { border-color: var(--accent); }
-    .model-select-arrow {
-      position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
-      pointer-events: none; opacity: 0.6;
-    }
-    .model-dropdown {
-      position: absolute; top: calc(100% + 4px); left: 0; right: 0;
-      background: var(--bg-surface); border: 1px solid var(--border-color);
-      border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 1000;
-      max-height: 250px; overflow-y: auto; display: none;
-    }
-    .model-dropdown.show { display: block; }
-    .model-dropdown-group {
-      padding: 6px 12px; font-size: 0.70rem; font-weight: 600; color: var(--text-muted);
-      text-transform: uppercase; letter-spacing: 0.05em; background: var(--bg-muted);
-    }
-    .model-item {
-      padding: 10px 12px; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
-      border-bottom: 1px solid var(--border-color); font-size: 0.85rem; transition: background 0.2s;
-    }
-    .model-item:last-child { border-bottom: none; }
-    .model-item:hover { background: var(--accent-bg); }
-    .model-item .model-name { font-weight: 500; }
-    .model-item-pull {
-      padding: 10px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px;
-      color: var(--accent); font-weight: 600; font-size: 0.85rem; transition: background 0.2s;
-    }
-    .model-item-pull:hover { background: var(--accent-bg); }
-    .model-item-add {
-      padding: 10px 12px; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
-      color: var(--accent); font-weight: 600; font-size: 0.85rem; transition: background 0.2s;
-      border-bottom: 1px solid var(--border-color);
-    }
-    .model-item-add:hover { background: var(--accent-bg); }
   </style>
 </head>
 <body>
   <div id="header-root"></div>
-  <div class="main">
-    <div class="section">
-      <div class="section-title" data-i18n="status_title">📊 Status</div>
-      <div class="status-grid" id="statusGrid">
-        <div class="status-card"><div class="label">Status</div><div class="value" id="sysStatus">—</div></div>
-        <div class="status-card"><div class="label">Uptime</div><div class="value" id="sysUptime">—</div></div>
-        <div class="status-card"><div class="label">Memória</div><div class="value" id="sysMemory">—</div></div>
-        <div class="status-card"><div class="label">Modelo</div><div class="value" id="sysModel">—</div></div>
-      </div>
-    </div>
+  <div class="layout">
 
-    <div class="section">
-      <div class="section-title" data-i18n="model_title">🤖 Modelo LLM</div>
-      <div class="form-group">
-        <label class="form-label" data-i18n="provider_label">Provider</label>
-        <select class="form-select" id="defaultProvider">
-          <option value="ollama">Ollama (Local/Cloud)</option>
-          <option value="gemini">Google Gemini</option>
-          <option value="deepseek">DeepSeek</option>
-          <option value="groq">Groq</option>
-        </select>
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-label">Configurações</div>
+      <nav id="sidebar-nav">
+        <div class="nav-item active" data-page="geral" onclick="showPage('geral')">
+          <span class="ni">🏠</span><span>Geral</span>
+        </div>
+        <div class="nav-item" data-page="modelos" onclick="showPage('modelos')">
+          <span class="ni">🤖</span><span>Modelos</span>
+        </div>
+        <div class="nav-item" data-page="providers" onclick="showPage('providers')">
+          <span class="ni">🔌</span><span>Providers</span>
+        </div>
+        <div class="nav-item" data-page="ferramentas" onclick="showPage('ferramentas')">
+          <span class="ni">🛠️</span><span>Ferramentas</span>
+        </div>
+        <div class="nav-item" data-page="skills" onclick="showPage('skills')">
+          <span class="ni">🎓</span><span>Skills</span>
+        </div>
+        <div class="nav-item" data-page="seguranca" onclick="showPage('seguranca')">
+          <span class="ni">🔒</span><span>Segurança</span>
+        </div>
+        <div class="nav-item" data-page="avancado" onclick="showPage('avancado')">
+          <span class="ni">⚙️</span><span>Avançado</span>
+        </div>
+      </nav>
+      <div class="sidebar-footer">
+        <button class="btn btn-primary" onclick="saveConfig()">💾 Salvar</button>
+        <button class="btn btn-warning" onclick="saveAndRestart()">🔄 Reiniciar</button>
       </div>
-      <div id="ollamaSection">
-        <div class="form-group">
-          <label class="form-label" data-i18n="ollama_model_label">Modelo Ollama <span class="badge badge-cloud">cloud</span> <span class="badge badge-local">local</span></label>
-          <div class="model-select-container" id="container-ollamaModel">
-            <input type="text" class="model-select-input" autocomplete="off" id="ollamaModel" value="glm-5.1:cloud" placeholder="glm-5.1:cloud, gemma4:31b-cloud, llama3.2...">
-            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
-            <div class="model-dropdown" id="dropdown-ollamaModel"></div>
-          </div>
-          <div class="form-hint">Cloud: glm-5.1:cloud, gemma4:31b-cloud | Local: llama3.2, mistral, codellama</div>
-        </div>
-        
-        <div class="form-group">
-          <label class="form-label" data-i18n="ollama_pull_label">Baixar Modelo</label>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button class="btn-primary" style="padding:4px 10px;font-size:0.72rem;border-radius:6px;cursor:pointer;border:none;" onclick="pullModel('qwen2.5:7b')">qwen2.5:7b</button>
-            <button class="btn-primary" style="padding:4px 10px;font-size:0.72rem;border-radius:6px;cursor:pointer;border:none;" onclick="pullModel('llama3.1:8b')">llama3.1:8b</button>
-            <button class="btn-primary" style="padding:4px 10px;font-size:0.72rem;border-radius:6px;cursor:pointer;border:none;" onclick="pullModel('gemma4:31b-cloud')">gemma4:31b-cloud</button>
-            <button class="btn-primary" style="padding:4px 10px;font-size:0.72rem;border-radius:6px;cursor:pointer;border:none;" onclick="pullModel('mistral:7b')">mistral:7b</button>
-            <button class="btn-primary" style="padding:4px 10px;font-size:0.72rem;border-radius:6px;cursor:pointer;border:none;" onclick="pullModel('deepseek-coder-v2:16b')">deepseek-coder-v2:16b</button>
-            <input type="text" id="customModelPull" placeholder="modelo:tag" style="width:120px;padding:4px 8px;font-size:0.72rem;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-input);color:var(--text-main);">
-            <button class="btn-primary" style="padding:4px 10px;font-size:0.72rem;border-radius:6px;cursor:pointer;border:none;" onclick="pullModel(document.getElementById('customModelPull').value)">⬇️ Pull</button>
-          </div>
-          <div class="form-hint">Clique para baixar. Modelos cloud são instantâneos, locais dependem do tamanho.</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="ollama_url_label">Ollama URL</label>
-          <input type="text" class="form-input" id="ollamaUrl" value="" placeholder="http://localhost:11434">
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="ollama_key_label">Ollama API Key (cloud)</label>
-          <div class="api-key-group">
-            <input type="password" class="form-input" id="ollamaApiKey" placeholder="Opcional para modelos cloud">
-            <span class="api-key-status" id="ollamaKeyStatus">—</span>
-          </div>
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label class="form-label" data-i18n="lang_label">Idioma</label>
-          <select class="form-select" id="language"><option value="pt-BR">Português</option><option value="en-US">English</option><option value="es">Español</option></select></div>
-        <div class="form-group"><label class="form-label" data-i18n="iterations_label">Iterações Máximas</label>
-          <input type="number" class="form-input" id="maxIterations" min="1" max="20" value="5"></div>
-      </div>
-      <div class="form-group"><label class="form-label" data-i18n="memory_window_label">Janela de Memória</label>
-        <input type="number" class="form-input" id="memoryWindowSize" min="5" max="100" value="20"></div>
-    </div>
+    </aside>
 
-    <div class="section">
-      <div class="section-title">🛡️ Telegram Security</div>
-      <div class="form-group">
-        <label class="form-label">Usuários Autorizados (Whitelist)</label>
-        <input type="text" class="form-input" id="telegramAllowedUserIds" placeholder="Ex: 123456789, 987654321">
-        <div class="form-hint">IDs numéricos separados por vírgula. Apenas estes usuários podem interagir com o bot. O seu ID atual pode ser obtido via @userinfobot no Telegram.</div>
-      </div>
-    </div>
+    <!-- Content -->
+    <main class="content">
 
-    <div class="section">
-      <div class="section-title" data-i18n="keys_title">🔑 Outros Providers</div>
-      <div class="form-group"><label class="form-label">Gemini API Key</label>
-        <div class="api-key-group"><input type="password" class="form-input" id="geminiKey" placeholder="AIza..."><span class="api-key-status" id="geminiStatus">—</span></div></div>
-      <div class="form-group"><label class="form-label">DeepSeek API Key</label>
-        <div class="api-key-group"><input type="password" class="form-input" id="deepseekKey" placeholder="sk-..."><span class="api-key-status" id="deepseekStatus">—</span></div></div>
-      <div class="form-group"><label class="form-label">Groq API Key</label>
-        <div class="api-key-group"><input type="password" class="form-input" id="groqKey" placeholder="gsk_..."><span class="api-key-status" id="groqStatus">—</span></div></div>
-    </div>
+      <!-- PAGE: Geral -->
+      <div class="page active" id="page-geral">
+        <div class="page-title">🏠 Geral</div>
+        <div class="page-subtitle">Status do sistema e configurações básicas de comportamento</div>
 
-    <div class="section">
-      <div class="section-title">🧠 Roteamento de Modelos (ModelRouter)</div>
-      <p style="font-size:0.85rem;color:var(--text-soft);margin-bottom:12px;">O NewClaw escolhe automaticamente o melhor modelo para cada tipo de tarefa. Configure abaixo.</p>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">💬 Chat (conversa geral)</label>
-          <div class="model-select-container" id="container-modelChat">
-            <input type="text" class="model-select-input" autocomplete="off" id="modelChat" placeholder="glm-5.1:cloud">
-            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
-            <div class="model-dropdown" id="dropdown-modelChat"></div>
+        <div class="status-grid">
+          <div class="status-card">
+            <div class="s-label">Status</div>
+            <div class="s-val" id="sysStatus">—</div>
+          </div>
+          <div class="status-card">
+            <div class="s-label">Uptime</div>
+            <div class="s-val" id="sysUptime">—</div>
+          </div>
+          <div class="status-card">
+            <div class="s-label">Memória RAM</div>
+            <div class="s-val" id="sysMemory">—</div>
+          </div>
+          <div class="status-card">
+            <div class="s-label">Modelo Atual</div>
+            <div class="s-val small" id="sysModel">—</div>
           </div>
         </div>
-        <div class="form-group">
-          <label class="form-label">💻 Código (programação)</label>
-          <div class="model-select-container" id="container-modelCode">
-            <input type="text" class="model-select-input" autocomplete="off" id="modelCode" placeholder="gemma4:e4b">
-            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
-            <div class="model-dropdown" id="dropdown-modelCode"></div>
-          </div>
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">👁️ Visão (imagens/OCR)</label>
-          <div class="model-select-container" id="container-modelVision">
-            <input type="text" class="model-select-input" autocomplete="off" id="modelVision" placeholder="gemma4:e4b">
-            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
-            <div class="model-dropdown" id="dropdown-modelVision"></div>
-          </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">⚡ Leve (respostas curtas)</label>
-          <div class="model-select-container" id="container-modelLight">
-            <input type="text" class="model-select-input" autocomplete="off" id="modelLight" placeholder="gemma4:e4b">
-            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
-            <div class="model-dropdown" id="dropdown-modelLight"></div>
-          </div>
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">📊 Análise (cripto/mercado)</label>
-          <div class="model-select-container" id="container-modelAnalysis">
-            <input type="text" class="model-select-input" autocomplete="off" id="modelAnalysis" placeholder="glm-5:cloud">
-            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
-            <div class="model-dropdown" id="dropdown-modelAnalysis"></div>
-          </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">🧠 Execução (tools / tarefas complexas)</label>
-          <div class="model-select-container" id="container-modelExecution">
-            <input type="text" class="model-select-input" autocomplete="off" id="modelExecution" placeholder="kimi-k2.6:cloud">
-            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
-            <div class="model-dropdown" id="dropdown-modelExecution"></div>
-          </div>
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">🧠 Classificador (LLM que decide a categoria)</label>
-          <div class="model-select-container" id="container-classifierModel">
-            <input type="text" class="model-select-input" autocomplete="off" id="classifierModel" placeholder="gemma4:31b-cloud">
-            <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
-            <div class="model-dropdown" id="dropdown-classifierModel"></div>
-          </div>
-          <div class="form-hint">Modelo leve usado para roteamento e montagem de prompt dinâmico.</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Servidor Classificador (URL)</label>
-          <input type="text" class="form-input" id="classifierServer" placeholder="http://localhost:11434">
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Servidor Visão (URL)</label>
-          <input type="text" class="form-input" id="visionServer" placeholder="http://localhost:11434">
-        </div>
-        <div class="form-group"></div>
-      </div>
-      <div id="routerStats" style="font-size:0.82rem;color:var(--text-soft);padding:8px;background:var(--bg-input);border-radius:8px;margin-top:8px;">Carregando estatísticas...</div>
-    </div>
 
-    <div class="section">
-      <div class="section-title" data-i18n="system_prompt_title">💬 System Prompt</div>
-      <div class="form-group"><label class="form-label" data-i18n="system_prompt_label">Instruções do Sistema</label>
-        <textarea class="form-textarea" id="systemPrompt" placeholder="Defina o comportamento..."></textarea>
-        <div class="form-hint">Deixe vazio para usar o prompt padrão.</div></div>
-    </div>
-
-    <div class="section">
-      <div class="section-title" data-i18n="tools_title">🛠️ Ferramentas</div>
-      <div class="tools-grid" id="toolsGrid"></div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">🧠 SkillLearner</div>
-      <div class="form-hint" style="margin-bottom:14px;">O SkillLearner agora gera propostas a partir de padrões fortes. Apenas skills aprovadas entram no prompt do agente.</div>
-      <div class="insight-grid">
-        <div class="insight-card">
-          <h3>Propostas e skills aprovadas</h3>
-          <div class="insight-list" id="autoSkillsList"><div class="empty-note">Carregando...</div></div>
-        </div>
-        <div class="insight-card">
-          <h3>Padrões observados</h3>
-          <div class="insight-list" id="skillPatternsList"><div class="empty-note">Carregando...</div></div>
+        <div class="section">
+          <div class="section-title">🌐 Idioma & Comportamento</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Idioma</label>
+              <select class="form-select" id="language">
+                <option value="pt-BR">🇧🇷 Português</option>
+                <option value="en-US">🇺🇸 English</option>
+                <option value="es">🇪🇸 Español</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Iterações Máximas</label>
+              <input type="number" class="form-input" id="maxIterations" min="1" max="20" value="5">
+              <div class="form-hint">Loops por ciclo de raciocínio (1–20)</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Janela de Memória</label>
+            <input type="number" class="form-input" id="memoryWindowSize" min="5" max="100" value="20" style="max-width:200px;">
+            <div class="form-hint">Mensagens mantidas no contexto ativo</div>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="btn-group">
-      <button class="btn btn-primary" onclick="saveConfig()" data-i18n="save_btn">💾 Salvar</button>
-      <button class="btn btn-primary" onclick="saveAndRestart()" style="background:rgba(251,191,36,0.15);color:var(--warning);border-color:var(--warning)" data-i18n="restart_btn">🔄 Salvar & Reiniciar</button>
-      <button class="btn btn-danger" onclick="resetConfig()" data-i18n="reset_btn">🔄 Resetar</button>
-    </div>
+      <!-- PAGE: Modelos -->
+      <div class="page" id="page-modelos">
+        <div class="page-title">🤖 Modelos</div>
+        <div class="page-subtitle">Modelo principal e roteamento inteligente por tipo de tarefa</div>
+
+        <div class="section">
+          <div class="section-title">Modelo Principal</div>
+          <div class="form-group">
+            <label class="form-label">Provider Padrão</label>
+            <select class="form-select" id="defaultProvider" style="max-width:300px;">
+              <option value="ollama">Ollama (Local + Cloud)</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="groq">Groq</option>
+            </select>
+          </div>
+          <div id="ollamaSection">
+            <div class="form-group">
+              <label class="form-label">Modelo Ollama <span class="badge badge-cloud">cloud</span> <span class="badge badge-local">local</span></label>
+              <div class="model-select-container" id="container-ollamaModel">
+                <input type="text" class="model-select-input" autocomplete="off" id="ollamaModel" value="glm-5.1:cloud" placeholder="glm-5.1:cloud, gemma4:31b-cloud, llama3.2...">
+                <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+                <div class="model-dropdown" id="dropdown-ollamaModel"></div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Download Rápido</label>
+              <div class="pull-chips">
+                <div class="chip" onclick="pullModel('qwen2.5:7b')">qwen2.5:7b</div>
+                <div class="chip" onclick="pullModel('llama3.1:8b')">llama3.1:8b</div>
+                <div class="chip" onclick="pullModel('gemma4:31b-cloud')">gemma4:31b-cloud</div>
+                <div class="chip" onclick="pullModel('mistral:7b')">mistral:7b</div>
+                <div class="chip" onclick="pullModel('deepseek-coder-v2:16b')">deepseek-coder-v2:16b</div>
+              </div>
+              <div style="display:flex;gap:8px;margin-top:8px;">
+                <input type="text" id="customModelPull" placeholder="modelo:tag" style="flex:1;max-width:200px;padding:7px 10px;font-size:0.78rem;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-input);color:var(--text-main);outline:none;">
+                <button class="btn btn-primary btn-sm" onclick="pullModel(document.getElementById('customModelPull').value)">⬇️ Pull</button>
+              </div>
+              <div class="form-hint">Modelos :cloud são instantâneos; locais dependem do tamanho</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">🔀 ModelRouter — Roteamento por Tipo de Tarefa</div>
+          <p style="font-size:0.79rem;color:var(--text-soft);margin-bottom:14px;">Cada tipo de tarefa usa o modelo mais adequado automaticamente.</p>
+          <div class="router-grid">
+            <div class="router-card">
+              <div class="router-card-header">
+                <span class="router-card-icon">💬</span>
+                <div><div class="router-card-label">Chat</div><div class="router-card-sub">Conversas gerais</div></div>
+              </div>
+              <div class="model-select-container" id="container-modelChat">
+                <input type="text" class="model-select-input" autocomplete="off" id="modelChat" placeholder="glm-5.1:cloud">
+                <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+                <div class="model-dropdown" id="dropdown-modelChat"></div>
+              </div>
+            </div>
+            <div class="router-card">
+              <div class="router-card-header">
+                <span class="router-card-icon">💻</span>
+                <div><div class="router-card-label">Código</div><div class="router-card-sub">Programação</div></div>
+              </div>
+              <div class="model-select-container" id="container-modelCode">
+                <input type="text" class="model-select-input" autocomplete="off" id="modelCode" placeholder="gemma4:e4b">
+                <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+                <div class="model-dropdown" id="dropdown-modelCode"></div>
+              </div>
+            </div>
+            <div class="router-card">
+              <div class="router-card-header">
+                <span class="router-card-icon">👁️</span>
+                <div><div class="router-card-label">Visão</div><div class="router-card-sub">Imagens / OCR</div></div>
+              </div>
+              <div class="model-select-container" id="container-modelVision">
+                <input type="text" class="model-select-input" autocomplete="off" id="modelVision" placeholder="gemma4:e4b">
+                <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+                <div class="model-dropdown" id="dropdown-modelVision"></div>
+              </div>
+            </div>
+            <div class="router-card">
+              <div class="router-card-header">
+                <span class="router-card-icon">⚡</span>
+                <div><div class="router-card-label">Leve</div><div class="router-card-sub">Respostas rápidas</div></div>
+              </div>
+              <div class="model-select-container" id="container-modelLight">
+                <input type="text" class="model-select-input" autocomplete="off" id="modelLight" placeholder="gemma4:e4b">
+                <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+                <div class="model-dropdown" id="dropdown-modelLight"></div>
+              </div>
+            </div>
+            <div class="router-card">
+              <div class="router-card-header">
+                <span class="router-card-icon">📊</span>
+                <div><div class="router-card-label">Análise</div><div class="router-card-sub">Cripto / Mercado</div></div>
+              </div>
+              <div class="model-select-container" id="container-modelAnalysis">
+                <input type="text" class="model-select-input" autocomplete="off" id="modelAnalysis" placeholder="glm-5:cloud">
+                <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+                <div class="model-dropdown" id="dropdown-modelAnalysis"></div>
+              </div>
+            </div>
+            <div class="router-card">
+              <div class="router-card-header">
+                <span class="router-card-icon">🧠</span>
+                <div><div class="router-card-label">Execução</div><div class="router-card-sub">Tools / Tarefas complexas</div></div>
+              </div>
+              <div class="model-select-container" id="container-modelExecution">
+                <input type="text" class="model-select-input" autocomplete="off" id="modelExecution" placeholder="kimi-k2.6:cloud">
+                <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+                <div class="model-dropdown" id="dropdown-modelExecution"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">🔎 Classificador de Roteamento</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Modelo Classificador</label>
+              <div class="model-select-container" id="container-classifierModel">
+                <input type="text" class="model-select-input" autocomplete="off" id="classifierModel" placeholder="gemma4:31b-cloud">
+                <svg class="model-select-arrow" width="12" height="12" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+                <div class="model-dropdown" id="dropdown-classifierModel"></div>
+              </div>
+              <div class="form-hint">Modelo leve usado para decidir a categoria da mensagem</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Servidor Classificador</label>
+              <input type="text" class="form-input" id="classifierServer" placeholder="http://localhost:11434">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Servidor Visão</label>
+            <input type="text" class="form-input" id="visionServer" placeholder="http://localhost:11434" style="max-width:340px;">
+          </div>
+          <div id="routerStats" style="font-size:0.77rem;color:var(--text-soft);padding:8px 10px;background:var(--bg-input);border-radius:8px;margin-top:10px;">Carregando estatísticas...</div>
+        </div>
+      </div>
+
+      <!-- PAGE: Providers -->
+      <div class="page" id="page-providers">
+        <div class="page-title">🔌 Providers</div>
+        <div class="page-subtitle">Conexões com provedores de LLM e gerenciamento de chaves de API</div>
+
+        <div class="provider-grid">
+          <div class="provider-card wide">
+            <div class="provider-card-header">
+              <div class="provider-name">🦙 Ollama <span class="badge badge-local">Local</span> <span class="badge badge-cloud">Cloud</span></div>
+              <div class="provider-dot" id="ollamaProviderDot"></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">URL do Servidor</label>
+                <input type="text" class="form-input" id="ollamaUrl" placeholder="http://localhost:11434">
+              </div>
+              <div class="form-group">
+                <label class="form-label">API Key (modelos cloud)</label>
+                <div class="api-key-group">
+                  <input type="password" class="form-input" id="ollamaApiKey" placeholder="Opcional">
+                  <span class="api-key-status" id="ollamaKeyStatus">—</span>
+                </div>
+              </div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="testOllamaConnection()" style="margin-top:4px;">🔍 Testar Conexão</button>
+          </div>
+
+          <div class="provider-card">
+            <div class="provider-card-header">
+              <div class="provider-name">✨ Google Gemini</div>
+              <div class="provider-dot" id="geminiProviderDot"></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">API Key</label>
+              <div class="api-key-group">
+                <input type="password" class="form-input" id="geminiKey" placeholder="AIza...">
+                <span class="api-key-status" id="geminiStatus">—</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="provider-card">
+            <div class="provider-card-header">
+              <div class="provider-name">🌊 DeepSeek</div>
+              <div class="provider-dot" id="deepseekProviderDot"></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">API Key</label>
+              <div class="api-key-group">
+                <input type="password" class="form-input" id="deepseekKey" placeholder="sk-...">
+                <span class="api-key-status" id="deepseekStatus">—</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="provider-card">
+            <div class="provider-card-header">
+              <div class="provider-name">⚡ Groq</div>
+              <div class="provider-dot" id="groqProviderDot"></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">API Key</label>
+              <div class="api-key-group">
+                <input type="password" class="form-input" id="groqKey" placeholder="gsk_...">
+                <span class="api-key-status" id="groqStatus">—</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PAGE: Ferramentas -->
+      <div class="page" id="page-ferramentas">
+        <div class="page-title">🛠️ Ferramentas</div>
+        <div class="page-subtitle">Habilite ou desabilite tools disponíveis para o agente, agrupadas por categoria</div>
+
+        <div class="search-bar">
+          <input type="text" id="toolSearch" placeholder="🔍  Filtrar ferramentas..." oninput="filterTools(this.value)">
+        </div>
+
+        <div id="toolsContainer">
+          <div class="empty-note">Carregando ferramentas...</div>
+        </div>
+      </div>
+
+      <!-- PAGE: Skills -->
+      <div class="page" id="page-skills">
+        <div class="page-title">🎓 SkillLearner</div>
+        <div class="page-subtitle">Skills geradas automaticamente a partir de padrões detectados nas interações</div>
+
+        <div class="two-col">
+          <div>
+            <div class="section">
+              <div class="section-title">Propostas & Aprovadas</div>
+              <div id="autoSkillsList"><div class="empty-note">Carregando...</div></div>
+            </div>
+          </div>
+          <div>
+            <div class="section">
+              <div class="section-title">Padrões Observados</div>
+              <div id="skillPatternsList"><div class="empty-note">Carregando...</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PAGE: Segurança -->
+      <div class="page" id="page-seguranca">
+        <div class="page-title">🔒 Segurança</div>
+        <div class="page-subtitle">Controle de acesso e usuários autorizados</div>
+
+        <div class="section">
+          <div class="section-title">📱 Telegram — Whitelist</div>
+          <div class="form-group">
+            <label class="form-label">IDs de Usuários Autorizados</label>
+            <input type="text" class="form-input" id="telegramAllowedUserIds" placeholder="123456789, 987654321">
+            <div class="form-hint">IDs numéricos separados por vírgula. Use @userinfobot no Telegram para descobrir seu ID.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PAGE: Avançado -->
+      <div class="page" id="page-avancado">
+        <div class="page-title">⚙️ Avançado</div>
+        <div class="page-subtitle">System prompt personalizado e opções avançadas</div>
+
+        <div class="section">
+          <div class="section-title">💬 System Prompt</div>
+          <div class="form-group">
+            <label class="form-label">Instruções do Sistema</label>
+            <textarea class="form-textarea" id="systemPrompt" placeholder="Defina o comportamento personalizado do agente..." style="min-height:160px;"></textarea>
+            <div class="form-hint">Deixe vazio para usar o prompt padrão do sistema.</div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">🔄 Reset</div>
+          <p style="font-size:0.8rem;color:var(--text-soft);margin-bottom:12px;">Restaura os valores padrão no formulário (não salva automaticamente).</p>
+          <button class="btn btn-danger" style="width:auto;" onclick="resetConfig()">🔄 Resetar Formulário</button>
+        </div>
+      </div>
+
+    </main>
   </div>
   <div class="toast" id="toast"></div>
 
@@ -366,329 +610,446 @@
     newclawInitTheme();
     newclawApplyI18n();
 
-    const toolIcons = { exec_command:'💻', web_search:'🔍', file_ops:'📁', crypto_report:'📊', send_audio:'🔊' };
+    // Navigation
+    function showPage(name) {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('#sidebar-nav .nav-item').forEach(n => n.classList.remove('active'));
+      document.getElementById('page-' + name).classList.add('active');
+      const item = document.querySelector('#sidebar-nav [data-page="' + name + '"]');
+      if (item) item.classList.add('active');
+    }
 
+    // Tool categories
+    const TOOL_CAT = {
+      web_search:'web', web_navigate:'web', web_scrape:'web',
+      exec_command:'sistema', ssh_exec:'sistema', write:'sistema', read:'sistema', edit:'sistema', list_dir:'sistema',
+      memory_search:'memoria', memory_write:'memoria', memory_admin:'memoria',
+      send_audio:'comunicacao', send_document:'comunicacao', send_image:'comunicacao',
+      crypto_report:'dados', crypto_analysis:'dados', weather:'dados', schedule:'dados', get_news:'dados',
+    };
+    const CAT_META = {
+      web:         { icon: '🌐', label: 'Web' },
+      sistema:     { icon: '🖥️', label: 'Sistema' },
+      memoria:     { icon: '🧠', label: 'Memória' },
+      comunicacao: { icon: '📡', label: 'Comunicação' },
+      dados:       { icon: '📈', label: 'Dados' },
+      outros:      { icon: '🔧', label: 'Outros' },
+    };
+    const TOOL_ICONS = {
+      exec_command:'💻', web_search:'🔍', web_navigate:'🌐', file_ops:'📁',
+      crypto_report:'📊', crypto_analysis:'📉', send_audio:'🔊', send_document:'📄',
+      memory_search:'🔎', memory_write:'✍️', memory_admin:'⚙️',
+      ssh_exec:'🖥️', write:'📝', read:'📖', edit:'✏️', list_dir:'📂',
+      weather:'🌤️', schedule:'📅', send_image:'🖼️', get_news:'📰',
+    };
+
+    let allTools = [];
+
+    function renderTools(tools) {
+      const grouped = {};
+      tools.forEach(t => {
+        const cat = TOOL_CAT[t.name] || 'outros';
+        if (!grouped[cat]) grouped[cat] = [];
+        grouped[cat].push(t);
+      });
+      const order = ['web', 'sistema', 'memoria', 'comunicacao', 'dados', 'outros'];
+      let html = '';
+      order.forEach(cat => {
+        const items = grouped[cat];
+        if (!items || !items.length) return;
+        const meta = CAT_META[cat];
+        const onCount = items.filter(t => t.enabled).length;
+        html += `
+          <div class="tool-accordion">
+            <div class="tool-acc-header open" onclick="toggleAcc(this)">
+              <div class="acc-left">
+                <span>${meta.icon}</span>
+                <span>${meta.label}</span>
+                <span class="acc-count">${onCount}/${items.length} ativas</span>
+              </div>
+              <span class="acc-arrow">▼</span>
+            </div>
+            <div class="tool-acc-body open">
+              ${items.map(t => {
+                const icon = TOOL_ICONS[t.name] || '🔧';
+                const warn = t.dangerous ? ' <span class="badge badge-proposed">⚠️ perigosa</span>' : '';
+                return `
+                  <div class="tool-row" data-name="${t.name}">
+                    <div class="tool-row-icon">${icon}</div>
+                    <div class="tool-row-info">
+                      <div class="tool-row-name">${t.name}${warn}</div>
+                      <div class="tool-row-desc" title="${t.description || ''}">${t.description || ''}</div>
+                    </div>
+                    <button class="tool-toggle ${t.enabled ? 'on' : 'off'}" onclick="toggleTool('${t.name}', ${!t.enabled})">
+                      ${t.enabled ? 'Disable' : 'Enable'}
+                    </button>
+                  </div>`;
+              }).join('')}
+            </div>
+          </div>`;
+      });
+      document.getElementById('toolsContainer').innerHTML = html || '<div class="empty-note">Nenhuma ferramenta disponível.</div>';
+    }
+
+    function filterTools(query) {
+      const q = query.toLowerCase().trim();
+      if (!q) { renderTools(allTools); return; }
+      renderTools(allTools.filter(t => t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q)));
+    }
+
+    function toggleAcc(header) {
+      const body = header.nextElementSibling;
+      header.classList.toggle('open');
+      body.classList.toggle('open');
+    }
+
+    // API: load config
     async function loadConfig() {
       try {
-        const res = await newclawFetch('/api/config'); const data = await res.json();
-        if (data.success) {
-          document.getElementById('defaultProvider').value = data.config.defaultProvider;
-          document.getElementById('language').value = data.config.language;
-          document.getElementById('maxIterations').value = data.config.maxIterations;
-          document.getElementById('memoryWindowSize').value = data.config.memoryWindowSize;
-          document.getElementById('systemPrompt').value = data.config.systemPrompt || '';
-          document.getElementById('telegramAllowedUserIds').value = data.config.telegramAllowedUserIds || '';
-          document.getElementById('ollamaUrl').value = data.config.ollamaUrl || 'http://localhost:11434';
-          document.getElementById('ollamaModel').value = data.config.ollamaModel || 'glm-5.1:cloud';
-          document.getElementById('sysModel').textContent = data.config.currentModel || data.config.ollamaModel;
-          setKS('geminiStatus', data.config.hasGeminiKey); setKS('deepseekStatus', data.config.hasDeepseekKey);
-          setKS('groqStatus', data.config.hasGroqKey); setKS('ollamaKeyStatus', data.config.hasOllamaApiKey);
-          toggleOllama(data.config.defaultProvider);
-          // Load ModelRouter config
-          if (data.config.modelRouter) {
-            document.getElementById('modelChat').value = data.config.modelRouter.chat || 'glm-5.1:cloud';
-            document.getElementById('modelCode').value = data.config.modelRouter.code || 'gemma4:e4b';
-            document.getElementById('modelVision').value = data.config.modelRouter.vision || 'gemma4:e4b';
-            document.getElementById('modelLight').value = data.config.modelRouter.light || 'gemma4:e4b';
-            document.getElementById('modelAnalysis').value = data.config.modelRouter.analysis || 'glm-5:cloud';
-            document.getElementById('modelExecution').value = data.config.modelRouter.execution || 'kimi-k2.6:cloud';
-            document.getElementById('classifierModel').value = data.config.modelRouter.classifierModel || 'gemma4:31b-cloud';
-            document.getElementById('classifierServer').value = data.config.modelRouter.classifierServer || 'http://localhost:11434';
-            document.getElementById('visionServer').value = data.config.modelRouter.visionServer || 'http://localhost:11434';
-          }
+        const res = await newclawFetch('/api/config');
+        const data = await res.json();
+        if (!data.success) return;
+        const c = data.config;
+        document.getElementById('defaultProvider').value = c.defaultProvider;
+        document.getElementById('language').value = c.language;
+        document.getElementById('maxIterations').value = c.maxIterations;
+        document.getElementById('memoryWindowSize').value = c.memoryWindowSize;
+        document.getElementById('systemPrompt').value = c.systemPrompt || '';
+        document.getElementById('telegramAllowedUserIds').value = c.telegramAllowedUserIds || '';
+        document.getElementById('ollamaUrl').value = c.ollamaUrl || 'http://localhost:11434';
+        document.getElementById('ollamaModel').value = c.ollamaModel || 'glm-5.1:cloud';
+        document.getElementById('sysModel').textContent = c.currentModel || c.ollamaModel || '—';
+        setKS('geminiStatus', c.hasGeminiKey);
+        setKS('deepseekStatus', c.hasDeepseekKey);
+        setKS('groqStatus', c.hasGroqKey);
+        setKS('ollamaKeyStatus', c.hasOllamaApiKey);
+        setProviderDot('geminiProviderDot', c.hasGeminiKey);
+        setProviderDot('deepseekProviderDot', c.hasDeepseekKey);
+        setProviderDot('groqProviderDot', c.hasGroqKey);
+        toggleOllama(c.defaultProvider);
+        if (c.modelRouter) {
+          document.getElementById('modelChat').value     = c.modelRouter.chat           || 'glm-5.1:cloud';
+          document.getElementById('modelCode').value     = c.modelRouter.code           || 'gemma4:e4b';
+          document.getElementById('modelVision').value   = c.modelRouter.vision         || 'gemma4:e4b';
+          document.getElementById('modelLight').value    = c.modelRouter.light          || 'gemma4:e4b';
+          document.getElementById('modelAnalysis').value = c.modelRouter.analysis       || 'glm-5:cloud';
+          document.getElementById('modelExecution').value= c.modelRouter.execution      || 'kimi-k2.6:cloud';
+          document.getElementById('classifierModel').value   = c.modelRouter.classifierModel   || 'gemma4:31b-cloud';
+          document.getElementById('classifierServer').value  = c.modelRouter.classifierServer  || 'http://localhost:11434';
+          document.getElementById('visionServer').value      = c.modelRouter.visionServer      || 'http://localhost:11434';
         }
-      } catch (e) { showToast('Erro: ' + e.message, 'error'); }
+      } catch (e) { showToast('Erro ao carregar config: ' + e.message, 'error'); }
     }
+
     async function loadProviders() {
       try {
-        const res = await newclawFetch('/api/providers'); const data = await res.json();
+        const res = await newclawFetch('/api/providers');
+        const data = await res.json();
         if (data.success && data.providers.ollama?.models) {
           availableModelsList = data.providers.ollama.models;
           initModelDropdowns();
+          setProviderDot('ollamaProviderDot', true);
         }
       } catch {}
     }
-    function toggleOllama(p) { document.getElementById('ollamaSection').style.display = p === 'ollama' ? 'block' : 'none'; }
+
+    function toggleOllama(p) {
+      const sec = document.getElementById('ollamaSection');
+      if (sec) sec.style.display = p === 'ollama' ? 'block' : 'none';
+    }
     document.getElementById('defaultProvider').addEventListener('change', e => toggleOllama(e.target.value));
-    function setKS(id, v) { const e=document.getElementById(id); e.textContent=v?'✓ Configurado':'✗ Ausente'; e.className='api-key-status '+(v?'configured':'missing'); }
+
+    function setKS(id, v) {
+      const e = document.getElementById(id);
+      if (!e) return;
+      e.textContent = v ? '✓ Configurado' : '✗ Ausente';
+      e.className = 'api-key-status ' + (v ? 'configured' : 'missing');
+    }
+
+    function setProviderDot(id, ok) {
+      const el = document.getElementById(id);
+      if (el) { el.classList.remove('ok', 'err'); el.classList.add(ok ? 'ok' : 'err'); }
+    }
+
+    async function testOllamaConnection() {
+      showToast('🔍 Testando Ollama...', 'success');
+      try {
+        const res = await newclawFetch('/api/providers');
+        const data = await res.json();
+        if (data.success && data.providers.ollama) {
+          const count = data.providers.ollama.models?.length || 0;
+          showToast('✅ Ollama OK — ' + count + ' modelos disponíveis', 'success');
+          setProviderDot('ollamaProviderDot', true);
+        } else {
+          showToast('❌ Ollama não encontrado', 'error');
+          setProviderDot('ollamaProviderDot', false);
+        }
+      } catch (e) { showToast('❌ Erro: ' + e.message, 'error'); }
+    }
+
     async function loadStatus() {
       try {
-        const res = await newclawFetch('/api/status'); const data = await res.json();
+        const res = await newclawFetch('/api/status');
+        const data = await res.json();
         if (data.success) {
-          document.getElementById('sysStatus').textContent='Online'; document.getElementById('sysStatus').className='value online';
-          document.getElementById('sysUptime').textContent=data.status.uptimeHuman;
-          document.getElementById('sysMemory').textContent=data.status.memory.heapUsed;
+          document.getElementById('sysStatus').textContent = 'Online';
+          document.getElementById('sysStatus').className = 's-val online';
+          document.getElementById('sysUptime').textContent = data.status.uptimeHuman;
+          document.getElementById('sysMemory').textContent = data.status.memory.heapUsed;
         }
-      } catch { document.getElementById('sysStatus').textContent='Offline'; document.getElementById('sysStatus').className='value offline'; }
+      } catch {
+        document.getElementById('sysStatus').textContent = 'Offline';
+        document.getElementById('sysStatus').className = 's-val offline';
+      }
     }
+
     async function loadTools() {
       try {
-        const res = await newclawFetch('/api/tools/status'); const data = await res.json();
-        if (data.success) {
-          document.getElementById('toolsGrid').innerHTML = data.tools.map(t => {
-            const icon = toolIcons[t.name]||'🔧';
-            const badges = (t.enabled?'<span class="badge badge-active">ON</span>':'<span class="badge" style="background:rgba(248,113,113,0.15);color:var(--danger)">OFF</span>')+(t.dangerous?'<span class="badge" style="background:rgba(251,191,36,0.15);color:var(--warning)">⚠️</span>':'');
-            const btn = t.enabled? `<button class="tool-toggle on" onclick="toggleTool('${t.name}',false)">Disable</button>` : `<button class="tool-toggle off" onclick="toggleTool('${t.name}',true)">Enable</button>`;
-            return `<div class="tool-card"><div class="tool-icon">${icon}</div><div style="flex:1"><div class="tool-name">${t.name} ${badges}</div><div class="tool-desc">${t.description}</div></div>${btn}</div>`;
-          }).join('');
-        }
+        const res = await newclawFetch('/api/tools/status');
+        const data = await res.json();
+        if (data.success) { allTools = data.tools; renderTools(allTools); }
       } catch {}
     }
+
     async function loadSkillLearnerInsights() {
       try {
-        const [skillsRes, patternsRes] = await Promise.all([
-          newclawFetch('/api/skills/auto'),
-          newclawFetch('/api/skills/patterns')
-        ]);
-        const skillsData = await skillsRes.json();
-        const patternsData = await patternsRes.json();
+        const [sr, pr] = await Promise.all([newclawFetch('/api/skills/auto'), newclawFetch('/api/skills/patterns')]);
+        const sd = await sr.json();
+        const pd = await pr.json();
+        const skills = sd.success ? sd.skills : [];
+        const patterns = pd.success ? pd.patterns : [];
 
-        const autoSkills = skillsData.success ? skillsData.skills : [];
-        const patterns = patternsData.success ? patternsData.patterns : [];
-
-        document.getElementById('autoSkillsList').innerHTML = autoSkills.length
-          ? autoSkills.slice(0, 6).map(skill => `
-              <div class="insight-item">
-                <div class="title">${skill.name} ${statusBadge(skill.status)}</div>
-                <div class="meta">prioridade ${skill.priority} · hits ${skill.hits} · tools ${safeJsonList(skill.tool_sequence)}</div>
-                <div class="meta">origem: ${skill.source_pattern || 'manual'} → ${skill.source_tool || '—'}</div>
-                <div class="meta">${skill.description}</div>
-                ${skill.status === 'proposed' ? `
-                  <div class="insight-actions">
-                    <button class="mini-btn approve" onclick="reviewAutoSkill('${skill.id}','approve')">Aprovar</button>
-                    <button class="mini-btn reject" onclick="reviewAutoSkill('${skill.id}','reject')">Rejeitar</button>
+        document.getElementById('autoSkillsList').innerHTML = skills.length
+          ? skills.slice(0, 8).map(s => `
+              <div class="skill-item">
+                <div class="skill-item-name">${s.name} ${statusBadge(s.status)}</div>
+                <div class="skill-item-meta">prioridade ${s.priority} · hits ${s.hits} · ${safeJsonList(s.tool_sequence)}</div>
+                <div class="skill-item-desc">${s.description}</div>
+                ${s.status === 'proposed' ? `
+                  <div class="skill-item-actions">
+                    <button class="mini-btn approve" onclick="reviewSkill('${s.id}','approve')">✓ Aprovar</button>
+                    <button class="mini-btn reject" onclick="reviewSkill('${s.id}','reject')">✗ Rejeitar</button>
                   </div>` : ''}
               </div>`).join('')
-          : '<div class="empty-note">Nenhuma proposta gerada ainda.</div>';
+          : '<div class="empty-note">Nenhuma proposta ainda.</div>';
 
         document.getElementById('skillPatternsList').innerHTML = patterns.length
-          ? patterns.slice(0, 8).map(pattern => `
-              <div class="insight-item">
-                <div class="title">${pattern.pattern} → ${pattern.tool_name}</div>
-                <div class="meta">sucesso ${pattern.success_count} · falha ${pattern.fail_count} · latência média ${pattern.avg_latency_ms}ms</div>
-                <div class="meta">último uso: ${pattern.last_seen || '—'}</div>
+          ? patterns.slice(0, 10).map(p => `
+              <div class="pattern-item">
+                <div class="pattern-name">${p.pattern} → ${p.tool_name}</div>
+                <div class="pattern-meta">✓ ${p.success_count} · ✗ ${p.fail_count} · ⏱ ${p.avg_latency_ms}ms</div>
               </div>`).join('')
-          : '<div class="empty-note">Ainda não há padrões suficientes registrados.</div>';
-      } catch (e) {
-        document.getElementById('autoSkillsList').innerHTML = '<div class="empty-note">Falha ao carregar auto-skills.</div>';
-        document.getElementById('skillPatternsList').innerHTML = '<div class="empty-note">Falha ao carregar padrões.</div>';
+          : '<div class="empty-note">Padrões insuficientes ainda.</div>';
+      } catch {
+        document.getElementById('autoSkillsList').innerHTML = '<div class="empty-note">Falha ao carregar.</div>';
+        document.getElementById('skillPatternsList').innerHTML = '<div class="empty-note">Falha ao carregar.</div>';
       }
     }
-    async function reviewAutoSkill(id, action) {
+
+    async function reviewSkill(id, action) {
       try {
-        const res = await fetch(`/api/skills/auto/${id}/${action}`, { method: 'POST' });
+        const res = await fetch('/api/skills/auto/' + id + '/' + action, { method: 'POST' });
         const data = await res.json();
-        if (!data.success) throw new Error(data.error || 'falha ao revisar skill');
+        if (!data.success) throw new Error(data.error || 'falha');
         showToast(action === 'approve' ? '✅ Skill aprovada.' : '🛑 Skill rejeitada.', 'success');
         loadSkillLearnerInsights();
-      } catch (e) {
-        showToast('❌ ' + e.message, 'error');
-      }
+      } catch (e) { showToast('❌ ' + e.message, 'error'); }
     }
+
     async function toggleTool(name, enable) {
-      const action = enable?'enable':'disable';
-      try { await fetch(`/api/tools/${name}/${action}`,{method:'POST'}); loadTools(); } catch {}
-    }
-    function statusBadge(status) {
-      if (status === 'active') return '<span class="badge badge-active">ACTIVE</span>';
-      if (status === 'rejected') return '<span class="badge badge-rejected">REJECTED</span>';
-      return '<span class="badge badge-proposed">PROPOSED</span>';
-    }
-    function safeJsonList(value) {
       try {
-        const parsed = JSON.parse(value || '[]');
-        return Array.isArray(parsed) && parsed.length ? parsed.join(', ') : '—';
-      } catch {
-        return '—';
-      }
+        await fetch('/api/tools/' + name + '/' + (enable ? 'enable' : 'disable'), { method: 'POST' });
+        loadTools();
+      } catch {}
     }
+
+    function statusBadge(s) {
+      if (s === 'active')   return '<span class="badge badge-active">ATIVA</span>';
+      if (s === 'rejected') return '<span class="badge badge-rejected">REJEITADA</span>';
+      return '<span class="badge badge-proposed">PROPOSTA</span>';
+    }
+
+    function safeJsonList(v) {
+      try { const p = JSON.parse(v || '[]'); return Array.isArray(p) && p.length ? p.join(', ') : '—'; }
+      catch { return '—'; }
+    }
+
     async function pullModel(name) {
-      if (!name) return;
-      showToast('⬇️ Baixando "' + name + '"... Isso pode demorar.', 'success');
+      if (!name || !name.trim()) return;
+      name = name.trim();
+      showToast('⬇️ Baixando "' + name + '"...', 'success');
       try {
-        const res = await newclawFetch('/api/ollama/pull', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:name})});
+        const res = await newclawFetch('/api/ollama/pull', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model: name }) });
         const data = await res.json();
-        if (data.success) { showToast('✅ "'+name+'" baixado!', 'success'); document.getElementById('ollamaModel').value=name; loadProviders(); }
-        else showToast('❌ Falha: '+(data.error||'desconhecido'), 'error');
-      } catch(e) { showToast('❌ Erro: '+e.message, 'error'); }
+        if (data.success) {
+          showToast('✅ "' + name + '" pronto!', 'success');
+          document.getElementById('ollamaModel').value = name;
+          loadProviders();
+        } else { showToast('❌ Falha: ' + (data.error || 'desconhecido'), 'error'); }
+      } catch (e) { showToast('❌ Erro: ' + e.message, 'error'); }
     }
 
     async function saveConfig() {
-      const config = { defaultProvider:document.getElementById('defaultProvider').value, language:document.getElementById('language').value,
-        maxIterations:parseInt(document.getElementById('maxIterations').value), memoryWindowSize:parseInt(document.getElementById('memoryWindowSize').value),
-        systemPrompt:document.getElementById('systemPrompt').value, ollamaUrl:document.getElementById('ollamaUrl').value, ollamaModel:document.getElementById('ollamaModel').value,
-        telegramAllowedUserIds:document.getElementById('telegramAllowedUserIds').value,
-        ollamaApiKey:document.getElementById('ollamaApiKey').value||undefined,
-        modelRouter: { chat:document.getElementById('modelChat').value, code:document.getElementById('modelCode').value,
-          vision:document.getElementById('modelVision').value, light:document.getElementById('modelLight').value,
-          analysis:document.getElementById('modelAnalysis').value, execution:document.getElementById('modelExecution').value, 
-          classifierModel:document.getElementById('classifierModel').value, classifierServer:document.getElementById('classifierServer').value,
-          visionServer:document.getElementById('visionServer').value } };
+      const config = {
+        defaultProvider:        document.getElementById('defaultProvider').value,
+        language:               document.getElementById('language').value,
+        maxIterations:          parseInt(document.getElementById('maxIterations').value),
+        memoryWindowSize:       parseInt(document.getElementById('memoryWindowSize').value),
+        systemPrompt:           document.getElementById('systemPrompt').value,
+        ollamaUrl:              document.getElementById('ollamaUrl').value,
+        ollamaModel:            document.getElementById('ollamaModel').value,
+        telegramAllowedUserIds: document.getElementById('telegramAllowedUserIds').value,
+        ollamaApiKey:           document.getElementById('ollamaApiKey').value || undefined,
+        modelRouter: {
+          chat:            document.getElementById('modelChat').value,
+          code:            document.getElementById('modelCode').value,
+          vision:          document.getElementById('modelVision').value,
+          light:           document.getElementById('modelLight').value,
+          analysis:        document.getElementById('modelAnalysis').value,
+          execution:       document.getElementById('modelExecution').value,
+          classifierModel: document.getElementById('classifierModel').value,
+          classifierServer:document.getElementById('classifierServer').value,
+          visionServer:    document.getElementById('visionServer').value,
+        }
+      };
 
-      // Check if models exist first (Main model + Router models)
-      const modelsToValidate = new Set();
-      if (config.ollamaModel && config.defaultProvider === 'ollama') modelsToValidate.add(config.ollamaModel);
-      
-      if (config.modelRouter) {
-        ['chat', 'code', 'vision', 'light', 'analysis', 'execution'].forEach(key => {
-          const m = config.modelRouter[key];
-          if (m && m.trim()) modelsToValidate.add(m.trim());
-        });
-      }
+      const toValidate = new Set();
+      if (config.ollamaModel && config.defaultProvider === 'ollama') toValidate.add(config.ollamaModel);
+      ['chat','code','vision','light','analysis','execution'].forEach(k => {
+        const m = config.modelRouter[k];
+        if (m && m.trim()) toValidate.add(m.trim());
+      });
 
-      for (const model of modelsToValidate) {
-        // Skip direct API providers (Groq, Gemini, DeepSeek) as they don't use Ollama pull
-        const isExternalApi = model.includes('groq') || model.includes('gemini') || model.includes('deepseek');
-        if (isExternalApi) continue;
-
+      for (const model of toValidate) {
+        if (model.includes('groq') || model.includes('gemini') || model.includes('deepseek')) continue;
         try {
-          const checkRes = await newclawFetch('/api/ollama/exists/' + encodeURIComponent(model));
-          const checkData = await checkRes.json();
-          if (checkData.success && !checkData.exists) {
-            // For :cloud models, it's an instant registration. For others, it's a real download.
-            const isCloud = model.includes(':cloud');
-            const msg = isCloud ? '✨ Registrando modelo cloud "' + model + '"...' : '⬇️ Modelo "' + model + '" não encontrado. Baixando...';
-            
-            showToast(msg, 'success');
-            
-            newclawFetch('/api/ollama/pull', {
-              method: 'POST', headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ model })
-            }).then(r => r.json()).then(data => {
-              if (data.success) { 
-                showToast('✅ Modelo "' + model + '" pronto!', 'success'); 
-                loadProviders(); 
-              } else {
-                showToast('⚠️ Falha ao registrar "' + model + '": ' + (data.error || 'desconhecido'), 'error');
-              }
-            }).catch(() => {});
+          const check = await newclawFetch('/api/ollama/exists/' + encodeURIComponent(model));
+          const cd = await check.json();
+          if (cd.success && !cd.exists) {
+            showToast((model.includes(':cloud') ? '✨ Registrando "' : '⬇️ Baixando "') + model + '"...', 'success');
+            newclawFetch('/api/ollama/pull', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model }) })
+              .then(r => r.json()).then(d => {
+                if (d.success) { showToast('✅ "' + model + '" pronto!', 'success'); loadProviders(); }
+                else showToast('⚠️ Falha "' + model + '": ' + (d.error || '?'), 'error');
+              }).catch(() => {});
           }
-        } catch (e) { }
+        } catch {}
       }
 
       try {
-        const res = await newclawFetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});
+        const res = await newclawFetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(config) });
         const data = await res.json();
-        if (data.success) { showToast('✅ Salvo!','success'); document.getElementById('sysModel').textContent=config.ollamaModel; }
-        else showToast('❌ Erro: '+(data.error||'desconhecido'),'error');
-      } catch(e) { showToast('❌ Conexão: '+e.message,'error'); }
+        if (data.success) {
+          showToast('✅ Configuração salva!', 'success');
+          document.getElementById('sysModel').textContent = config.ollamaModel;
+        } else { showToast('❌ Erro: ' + (data.error || 'desconhecido'), 'error'); }
+      } catch (e) { showToast('❌ Conexão: ' + e.message, 'error'); }
     }
+
     async function saveAndRestart() {
       await saveConfig();
-      if (!confirm('Reiniciar o NewClaw?')) return;
+      if (!confirm('Reiniciar o NewClaw agora?')) return;
       try {
-        await newclawFetch('/api/restart',{method:'POST'});
-        showToast('🔄 Reiniciando... Aguarde.','success');
+        await newclawFetch('/api/restart', { method: 'POST' });
+        showToast('🔄 Reiniciando... Aguarde.', 'success');
         let tries = 0;
         const check = async () => {
-          try {
-            const r = await newclawFetch('/api/status');
-            if (r.ok) { location.reload(); return; }
-          } catch {}
-          tries++;
-          if (tries < 30) setTimeout(check, 2000);
-          else location.reload();
+          try { const r = await newclawFetch('/api/status'); if (r.ok) { location.reload(); return; } } catch {}
+          if (++tries < 30) setTimeout(check, 2000); else location.reload();
         };
         setTimeout(check, 5000);
-      } catch(e) { showToast('⚠️ Reiniciando...','error'); setTimeout(()=>location.reload(),8000); }
+      } catch { showToast('⚠️ Reiniciando...', 'error'); setTimeout(() => location.reload(), 8000); }
     }
-    function resetConfig() {
-      if(!confirm('Resetar?')) return;
-      document.getElementById('defaultProvider').value='ollama'; document.getElementById('language').value='pt-BR';
-      document.getElementById('maxIterations').value=5; document.getElementById('memoryWindowSize').value=20;
-      document.getElementById('systemPrompt').value=''; document.getElementById('ollamaModel').value='glm-5.1:cloud';
-      document.getElementById('telegramAllowedUserIds').value='';
-      showToast('🔄 Resetado.','success');
-    }
-    function showToast(msg,type) { const t=document.getElementById('toast'); t.textContent=msg; t.className=`toast ${type}`; setTimeout(()=>t.classList.add('show'),10); setTimeout(()=>t.classList.remove('show'),3000); }
 
+    function resetConfig() {
+      if (!confirm('Resetar formulário para valores padrão?')) return;
+      document.getElementById('defaultProvider').value = 'ollama';
+      document.getElementById('language').value = 'pt-BR';
+      document.getElementById('maxIterations').value = 5;
+      document.getElementById('memoryWindowSize').value = 20;
+      document.getElementById('systemPrompt').value = '';
+      document.getElementById('ollamaModel').value = 'glm-5.1:cloud';
+      document.getElementById('telegramAllowedUserIds').value = '';
+      showToast('🔄 Formulário resetado.', 'success');
+    }
+
+    function showToast(msg, type) {
+      const t = document.getElementById('toast');
+      t.textContent = msg; t.className = 'toast ' + type;
+      setTimeout(() => t.classList.add('show'), 10);
+      setTimeout(() => t.classList.remove('show'), 3500);
+    }
+
+    // Model dropdowns
     let availableModelsList = [];
     function initModelDropdowns() {
-      if (window.isDropdownsInit) return; window.isDropdownsInit = true;
-      const inputs = ['ollamaModel', 'modelChat', 'modelCode', 'modelVision', 'modelLight', 'modelAnalysis', 'modelExecution', 'classifierModel'];
-      inputs.forEach(id => {
+      if (window._dropdownsInit) return;
+      window._dropdownsInit = true;
+      const ids = ['ollamaModel','modelChat','modelCode','modelVision','modelLight','modelAnalysis','modelExecution','classifierModel'];
+      ids.forEach(id => {
         const input = document.getElementById(id);
-        const dropdown = document.getElementById(`dropdown-${id}`);
-        const container = document.getElementById(`container-${id}`);
+        const dropdown = document.getElementById('dropdown-' + id);
+        const container = document.getElementById('container-' + id);
         if (!input || !dropdown) return;
-        const showDropdown = () => { renderDropdown(id); dropdown.classList.add('show'); };
-        input.addEventListener('focus', showDropdown);
-        input.addEventListener('click', showDropdown);
-        input.addEventListener('input', showDropdown);
-        document.addEventListener('click', (e) => { if (container && !container.contains(e.target)) dropdown.classList.remove('show'); });
+        const show = () => { renderDropdown(id); dropdown.classList.add('show'); };
+        input.addEventListener('focus', show);
+        input.addEventListener('click', show);
+        input.addEventListener('input', show);
+        document.addEventListener('click', e => { if (container && !container.contains(e.target)) dropdown.classList.remove('show'); });
       });
     }
 
-    function renderDropdown(inputId) {
-      const input = document.getElementById(inputId);
-      const dropdown = document.getElementById(`dropdown-${inputId}`);
+    function renderDropdown(id) {
+      const input = document.getElementById(id);
+      const dropdown = document.getElementById('dropdown-' + id);
       const filter = input.value.trim();
-      const filterLow = filter.toLowerCase();
-      
+      const fl = filter.toLowerCase();
       const clouds = availableModelsList.filter(m => m.includes('cloud') || m.includes('groq') || m.includes('gemini'));
       const locals = availableModelsList.filter(m => !clouds.includes(m));
-      const filterList = (list) => filterLow ? list.filter(m => m.toLowerCase().includes(filterLow)) : list;
-      const filteredClouds = filterList(clouds);
-      const filteredLocals = filterList(locals);
-      
+      const f = list => fl ? list.filter(m => m.toLowerCase().includes(fl)) : list;
+      const fc = f(clouds), fl2 = f(locals);
       let html = '';
-      
-      // 1. Always show option to use whatever is typed if it's not in the list
       if (filter && !availableModelsList.includes(filter)) {
-        html += `<div class="model-item-add" onclick="addAndSelect('${inputId}', '${filter}')">
-                   <span class="model-name">✨ Usar "${filter}"</span><span class="badge" style="background:#5c6bc0;color:#fff;">custom</span>
-                 </div>`;
-        html += `<div style="border-bottom:1px solid var(--border-color);margin:4px 0;"></div>`;
+        html += `<div class="model-item-add" onclick="addAndSelect('${id}','${filter}')"><span class="model-name">✨ Usar "${filter}"</span><span class="badge" style="background:#5c6bc0;color:#fff">custom</span></div>`;
+        html += `<div style="border-bottom:1px solid var(--border-color);"></div>`;
       }
-
-      if (filteredClouds.length > 0) {
+      if (fc.length) {
         html += `<div class="model-dropdown-group">Cloud Models</div>`;
-        filteredClouds.forEach(m => {
-          html += `<div class="model-item" onclick="selectDropdownModel('${inputId}', '${m}')">
-                     <span class="model-name">${m}</span><span class="badge badge-cloud">cloud</span>
-                   </div>`;
-        });
+        fc.forEach(m => html += `<div class="model-item" onclick="selectDropdownModel('${id}','${m}')"><span class="model-name">${m}</span><span class="badge badge-cloud">cloud</span></div>`);
       }
-      if (filteredLocals.length > 0) {
+      if (fl2.length) {
         html += `<div class="model-dropdown-group">Local Models</div>`;
-        filteredLocals.forEach(m => {
-          html += `<div class="model-item" onclick="selectDropdownModel('${inputId}', '${m}')">
-                     <span class="model-name">${m}</span><span class="badge badge-local">local</span>
-                   </div>`;
-        });
+        fl2.forEach(m => html += `<div class="model-item" onclick="selectDropdownModel('${id}','${m}')"><span class="model-name">${m}</span><span class="badge badge-local">local</span></div>`);
       }
-      if (filterLow && filteredClouds.length === 0 && filteredLocals.length === 0 && !availableModelsList.includes(filter)) {
-        html += `<div class="model-item-pull" onclick="pullAndSelect('${inputId}', '${filter}')">⬇️ Baixar modelo local "${filter}"...</div>`;
+      if (fl && !fc.length && !fl2.length && !availableModelsList.includes(filter)) {
+        html += `<div class="model-item-pull" onclick="pullAndSelect('${id}','${filter}')">⬇️ Baixar "${filter}"...</div>`;
       }
-      dropdown.innerHTML = html || `<div style="padding:10px;font-size:0.8rem;color:var(--text-soft);text-align:center;">Nenhum modelo</div>`;
+      dropdown.innerHTML = html || `<div style="padding:10px;font-size:0.8rem;color:var(--text-soft);text-align:center">Nenhum modelo</div>`;
     }
 
-    window.selectDropdownModel = function(inputId, modelName) { 
-      document.getElementById(inputId).value = modelName; 
-      document.getElementById(`dropdown-${inputId}`).classList.remove('show'); 
-    };
-    
-    window.addAndSelect = async function(inputId, modelName) {
-      document.getElementById(inputId).value = modelName;
-      document.getElementById(`dropdown-${inputId}`).classList.remove('show');
-      try {
-        await newclawFetch('/api/models/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: modelName })
-        });
-        // Reload list in background
-        loadProviders();
-      } catch(e) {}
+    window.selectDropdownModel = (id, m) => {
+      document.getElementById(id).value = m;
+      document.getElementById('dropdown-' + id).classList.remove('show');
     };
 
-    window.pullAndSelect = function(inputId, modelName) { 
-      document.getElementById(inputId).value = modelName; 
-      document.getElementById(`dropdown-${inputId}`).classList.remove('show'); 
-      pullModel(modelName); 
+    window.addAndSelect = async (id, m) => {
+      document.getElementById(id).value = m;
+      document.getElementById('dropdown-' + id).classList.remove('show');
+      try { await newclawFetch('/api/models/add', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model: m }) }); loadProviders(); } catch {}
     };
 
-    loadConfig(); loadStatus(); loadTools(); loadProviders(); loadSkillLearnerInsights();
+    window.pullAndSelect = (id, m) => {
+      document.getElementById(id).value = m;
+      document.getElementById('dropdown-' + id).classList.remove('show');
+      pullModel(m);
+    };
+
+    // Init
+    loadConfig();
+    loadStatus();
+    loadTools();
+    loadProviders();
+    loadSkillLearnerInsights();
     setInterval(loadStatus, 30000);
   </script>
 </body>

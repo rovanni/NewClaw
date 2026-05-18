@@ -35,6 +35,7 @@ scratch/
 .idea/
 .DS_Store
 Thumbs.db
+.aiexclude
 
 # Claude Code
 .claude/
