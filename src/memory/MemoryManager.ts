@@ -30,6 +30,7 @@ import { ClassificationMemory } from './ClassificationMemory';
 import { DecisionMemory } from './DecisionMemory';
 import { DomainSummaryService } from './DomainSummaryService';
 import { EpisodicMemoryService } from './EpisodicMemoryService';
+import { CognitiveReflectionEngine } from './CognitiveReflectionEngine';
 
 export type { Message, Conversation, MemoryNode, MemoryEdge } from './memoryTypes';
 
@@ -47,6 +48,7 @@ export class MemoryManager {
     private decisionMemoryInstance: DecisionMemory | null = null;
     private domainSummaryServiceInstance: DomainSummaryService | null = null;
     private episodicMemoryServiceInstance: EpisodicMemoryService | null = null;
+    private cognitiveReflectionEngineInstance: CognitiveReflectionEngine | null = null;
     private classifier: ConfidenceClassifier;
     private inverseRelations: Record<string, string> = {};
 
@@ -98,6 +100,11 @@ export class MemoryManager {
     getEpisodicMemoryService(): EpisodicMemoryService {
         if (!this.episodicMemoryServiceInstance) this.episodicMemoryServiceInstance = new EpisodicMemoryService(this.db);
         return this.episodicMemoryServiceInstance;
+    }
+
+    getCognitiveReflectionEngine(): CognitiveReflectionEngine {
+        if (!this.cognitiveReflectionEngineInstance) this.cognitiveReflectionEngineInstance = new CognitiveReflectionEngine(this.db);
+        return this.cognitiveReflectionEngineInstance;
     }
 
     constructor(dbOrPath: string | Database.Database = './data/newclaw.db') {

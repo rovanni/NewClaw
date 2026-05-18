@@ -12,6 +12,7 @@ import type { MemoryFacade } from '../memory/MemoryFacade';
 import { classifyDomain } from '../memory/DomainRegistry';
 import type { DomainSummaryService } from '../memory/DomainSummaryService';
 import type { EpisodicMemoryService } from '../memory/EpisodicMemoryService';
+import type { CognitiveReflectionEngine } from '../memory/CognitiveReflectionEngine';
 
 // ── Relevance Gate ───────────────────────────────────────────
 // Short greetings and social messages should NOT trigger semantic context injection.
@@ -47,6 +48,7 @@ export class ContextBuilder {
     private memoryFacade: MemoryFacade;
     private domainSummaryService: DomainSummaryService;
     private episodicMemoryService: EpisodicMemoryService;
+    private reflectionEngine: CognitiveReflectionEngine;
     private readonly MAX_NODES = 6;
     private readonly MAX_SUMMARY = 200;
     private readonly MAX_RELATIONS = 3;
@@ -61,6 +63,7 @@ export class ContextBuilder {
         this.memoryFacade = memory.getFacade();
         this.domainSummaryService = memory.getDomainSummaryService();
         this.episodicMemoryService = memory.getEpisodicMemoryService();
+        this.reflectionEngine = memory.getCognitiveReflectionEngine();
     }
 
     /**
@@ -90,12 +93,15 @@ export class ContextBuilder {
 
             const domainClass = classifyDomain(query);
 
-            // Block 1: episodic history (exclude current conversation)
+            // Block 1: cognitive profile (metacognitive reflection — throttled, updated every 24h)
+            const reflectionBlock = this.reflectionEngine.buildReflectionBlock();
+
+            // Block 2: episodic history (exclude current conversation)
             const episodicBlock = conversationId
                 ? this.episodicMemoryService.buildEpisodicPromptBlock(conversationId, 3)
                 : '';
 
-            // Block 2: domain summary
+            // Block 3: domain summary
             let domainBlock = '';
             if (domainClass && domainClass.confidence >= 0.3) {
                 domainBlock = this.domainSummaryService.buildPromptBlock(domainClass.domainId);
@@ -110,7 +116,7 @@ export class ContextBuilder {
 
             if (ranked.length === 0) {
                 const fallback = this.memory.getContext(200);
-                const header = [episodicBlock, domainBlock].filter(Boolean).join('\n---\n');
+                const header = [reflectionBlock, episodicBlock, domainBlock].filter(Boolean).join('\n---\n');
                 return header ? `${header}\n${fallback}` : fallback;
             }
 
@@ -121,7 +127,7 @@ export class ContextBuilder {
             });
 
             const detailsStr = 'Contexto: ' + parts.join('. ');
-            const blocks = [episodicBlock, domainBlock].filter(Boolean);
+            const blocks = [reflectionBlock, episodicBlock, domainBlock].filter(Boolean);
             return blocks.length > 0 ? `${blocks.join('\n---\n')}\n---\n${detailsStr}` : detailsStr;
         } catch {
             return this.memory.getContext(200);

@@ -13,6 +13,7 @@ import { MemoryManager, MemoryNode } from './MemoryManager';
 import type { MemoryFacade } from './MemoryFacade';
 import { DomainGravityService } from './DomainGravityService';
 import { EpisodicMemoryService } from './EpisodicMemoryService';
+import { CognitiveReflectionEngine } from './CognitiveReflectionEngine';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('Memorygovernor');
 
@@ -61,6 +62,7 @@ export interface GovernorStats {
     ttlsAssigned: number;
     gravitiesDecayed: number;
     episodesClosed: number;
+    reflectionsUpdated: number;
     conflictsDetected: number;
     conflictsResolved: number;
     factsReinforced: number;
@@ -91,6 +93,7 @@ export class MemoryGovernor {
     private accessLog: Map<string, { count: number; lastAccessed: Date; wasHelpful: boolean }> = new Map();
     private gravityServiceInstance: DomainGravityService | null = null;
     private episodicServiceInstance: EpisodicMemoryService | null = null;
+    private reflectionEngineInstance: CognitiveReflectionEngine | null = null;
 
     constructor(memory: MemoryManager, config?: Partial<GovernorConfig>) {
         this.memory = memory;
@@ -110,6 +113,13 @@ export class MemoryGovernor {
             this.episodicServiceInstance = this.memory.getEpisodicMemoryService();
         }
         return this.episodicServiceInstance;
+    }
+
+    private getReflectionEngine(): CognitiveReflectionEngine {
+        if (!this.reflectionEngineInstance) {
+            this.reflectionEngineInstance = this.memory.getCognitiveReflectionEngine();
+        }
+        return this.reflectionEngineInstance;
     }
 
     // ========================================================================
@@ -668,9 +678,10 @@ export class MemoryGovernor {
         const ttlsAssigned = this.setDefaultTTLs();
         const nodesExpired = this.expireNodes();
 
-        // Step 2: Close stale episodes (inactive > 2h) and decay domain gravity
+        // Step 2: Close stale episodes, decay domain gravity, run reflection cycle (throttled)
         const episodesClosed = this.getEpisodicService().closeStaleEpisodes(2);
         const gravitiesDecayed = this.getGravityService().decayAll();
+        const reflectionsUpdated = this.getReflectionEngine().runReflectionCycle();
 
         // Step 3: Decay all confidences
         const decayResult = this.decayAllConfidences();
@@ -691,6 +702,7 @@ export class MemoryGovernor {
             ttlsAssigned,
             gravitiesDecayed,
             episodesClosed,
+            reflectionsUpdated,
             conflictsDetected: conflicts.length,
             conflictsResolved: resolution.resolved,
             factsReinforced: Array.from(this.accessLog.values()).filter(a => a.wasHelpful).length,
