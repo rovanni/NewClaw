@@ -13,6 +13,10 @@ import { classifyDomain } from '../memory/DomainRegistry';
 import type { DomainSummaryService } from '../memory/DomainSummaryService';
 import type { EpisodicMemoryService } from '../memory/EpisodicMemoryService';
 import type { CognitiveReflectionEngine } from '../memory/CognitiveReflectionEngine';
+import { estimateTokens, truncateToChars } from './ContextBudget';
+import { createLogger } from '../shared/AppLogger';
+
+const log = createLogger('ContextBuilder');
 
 // ── Relevance Gate ───────────────────────────────────────────
 // Short greetings and social messages should NOT trigger semantic context injection.
@@ -50,9 +54,18 @@ export class ContextBuilder {
     private domainSummaryService: DomainSummaryService;
     private episodicMemoryService: EpisodicMemoryService;
     private reflectionEngine: CognitiveReflectionEngine;
-    private readonly MAX_NODES = 6;
-    private readonly MAX_SUMMARY = 200;
-    private readonly MAX_RELATIONS = 3;
+
+    // ── Attention Budget ──────────────────────────────────────
+    // Total memory block char cap (~900 tokens, within ContextBudget.memoryMaxTokens=1000).
+    // Per-sub-block allocations ensure no single block starves the others.
+    private readonly MAX_MEMORY_CHARS  = 3200;
+    private readonly BUDGET_REFLECTION = 500;   // meta-cognitive profile block
+    private readonly BUDGET_EPISODIC   = 400;   // recent episodes block
+    private readonly BUDGET_DOMAIN     = 250;   // domain summary block
+    private readonly MIN_NODES_CHARS   = 600;   // minimum chars always reserved for detail nodes
+    private readonly MAX_NODES         = 8;     // absolute upper limit (budget may shrink this)
+    private readonly MAX_SUMMARY       = 200;   // chars per node content
+    private readonly MAX_RELATIONS     = 3;
 
     // Ranking weights
     private readonly W_SIMILARITY = 0.6;
@@ -94,21 +107,37 @@ export class ContextBuilder {
 
             const domainClass = classifyDomain(query);
 
-            // Block 1: cognitive profile (metacognitive reflection — throttled, updated every 24h)
-            const reflectionBlock = this.reflectionEngine.buildReflectionBlock();
+            // ── Block 1: cognitive profile (throttled 24h) ──
+            const reflectionBlock = truncateToChars(
+                this.reflectionEngine.buildReflectionBlock(),
+                this.BUDGET_REFLECTION
+            );
 
-            // Block 2: episodic history (exclude current conversation)
+            // ── Block 2: episodic history ──
             const episodicBlock = conversationId
-                ? this.episodicMemoryService.buildEpisodicPromptBlock(conversationId, 3)
+                ? truncateToChars(
+                    this.episodicMemoryService.buildEpisodicPromptBlock(conversationId, 3),
+                    this.BUDGET_EPISODIC
+                )
                 : '';
 
-            // Block 3: domain summary
+            // ── Block 3: domain summary ──
             let domainBlock = '';
             if (domainClass && domainClass.confidence >= 0.3) {
-                domainBlock = this.domainSummaryService.buildPromptBlock(domainClass.domainId);
+                domainBlock = truncateToChars(
+                    this.domainSummaryService.buildPromptBlock(domainClass.domainId),
+                    this.BUDGET_DOMAIN
+                );
             }
 
-            const ranked = await this.domainAwareRankAndSelect(query);
+            // ── Compute remaining budget for detail nodes ──
+            const headerChars = [reflectionBlock, episodicBlock, domainBlock]
+                .filter(Boolean)
+                .reduce((sum, b) => sum + b.length + 5 /* separator */, 0);
+            const nodesBudget = Math.max(this.MIN_NODES_CHARS, this.MAX_MEMORY_CHARS - headerChars);
+
+            // ── Block 4: semantic detail nodes (budget-aware) ──
+            const ranked = await this.domainAwareRankAndSelect(query, nodesBudget);
 
             // Record accessed nodes in the episode
             if (conversationId && ranked.length > 0) {
@@ -133,7 +162,12 @@ export class ContextBuilder {
 
             const detailsStr = 'Contexto: ' + parts.join('. ');
             const blocks = [reflectionBlock, episodicBlock, domainBlock].filter(Boolean);
-            return blocks.length > 0 ? `${blocks.join('\n---\n')}\n---\n${detailsStr}` : detailsStr;
+            const result = blocks.length > 0
+                ? `${blocks.join('\n---\n')}\n---\n${detailsStr}`
+                : detailsStr;
+
+            log.info(`[BUDGET] memory block: ${estimateTokens(result)} tokens | blocks=${blocks.length} nodes=${ranked.length} chars=${result.length}/${this.MAX_MEMORY_CHARS}`);
+            return result;
         } catch {
             return this.memory.getContext(200);
         }
@@ -142,8 +176,9 @@ export class ContextBuilder {
     /**
      * Domain-aware retrieval: tries domain subgraph first, falls back to global search.
      * Threshold: domain confidence >= 0.5 AND subgraph has >= 2 matching nodes.
+     * charBudget caps total chars of formatted node entries.
      */
-    private async domainAwareRankAndSelect(query: string): Promise<RankedNode[]> {
+    private async domainAwareRankAndSelect(query: string, charBudget: number): Promise<RankedNode[]> {
         const domainClass = classifyDomain(query);
 
         if (domainClass && domainClass.confidence >= 0.5) {
@@ -155,20 +190,22 @@ export class ContextBuilder {
                 const domainFiltered = allSemantic.filter(n => subgraphIds.has(n.id));
 
                 if (domainFiltered.length >= 2) {
-                    return this.rankNodes(domainFiltered);
+                    return this.rankNodes(domainFiltered, charBudget);
                 }
             }
         }
 
         // Fallback: global semantic search
-        return this.rankAndSelect(query);
+        return this.rankAndSelect(query, charBudget);
     }
 
     /**
      * Rank a pre-fetched list of nodes by combined score and select top-K.
+     * Stops adding nodes when charBudget is exhausted (budget-aware MAX_NODES).
      */
-    private rankNodes(nodes: Array<MemoryNode & { score: number; attentionScore?: number }>): RankedNode[] {
-        const ranked: RankedNode[] = nodes.map((node) => {
+    private rankNodes(nodes: Array<MemoryNode & { score: number; attentionScore?: number }>, charBudget: number): RankedNode[] {
+        // Score all candidates
+        const scored: RankedNode[] = nodes.map((node) => {
             const similarity = node.score || node.attentionScore || 0.5;
             const connectivity = this.getConnectivity(node.id);
             const recency = this.getRecency(node.id);
@@ -196,16 +233,30 @@ export class ContextBuilder {
             };
         });
 
-        ranked.sort((a, b) => b.score - a.score);
-        return ranked.slice(0, this.MAX_NODES);
+        scored.sort((a, b) => b.score - a.score);
+
+        // Budget-aware selection: stop when char budget is exhausted
+        const result: RankedNode[] = [];
+        let usedChars = 'Contexto: '.length;
+        for (const n of scored) {
+            if (result.length >= this.MAX_NODES) break;
+            const epistemicPrefix = n.epistemicStatus === 'belief' ? '[crença] '
+                : n.epistemicStatus === 'assumption' ? '[suposição] ' : '';
+            const entryLen = n.name.length + n.type.length + epistemicPrefix.length + n.summary.length
+                + (n.relations.length > 0 ? n.relations.join(', ').length + 4 : 0) + 4; // separators
+            if (result.length >= 2 && usedChars + entryLen > charBudget) break;
+            result.push(n);
+            usedChars += entryLen;
+        }
+        return result;
     }
 
     /**
      * Rank nodes by combined score and select top-K (global search).
      */
-    private async rankAndSelect(query: string): Promise<RankedNode[]> {
+    private async rankAndSelect(query: string, charBudget: number): Promise<RankedNode[]> {
         const semanticResults = await this.semanticSearch(query);
-        return this.rankNodes(semanticResults);
+        return this.rankNodes(semanticResults, charBudget);
     }
 
     /**
