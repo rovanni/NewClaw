@@ -137,8 +137,16 @@ export class AgentLoop {
             'env', 'printenv', 'df', 'du', 'ps', 'uname', 'hostname',
             'id', 'whoami', 'date', 'uptime', 'lsb_release', 'readlink',
         ]);
-        const firstWord = cmd.split(/[\s;|&]/)[0].replace(/^\.\//, '');
-        return SAFE_COMMANDS.has(firstWord);
+
+        // Split on && or ; to get individual sub-commands, then strip leading `cd /path` parts.
+        // A command like `cd /some/dir && ls` is safe if all non-cd parts are safe.
+        const subCmds = cmd.split(/&&|;/).map(s => s.trim()).filter(Boolean);
+        const nonCdSubCmds = subCmds.filter(s => !/^cd(\s|$)/.test(s));
+        if (nonCdSubCmds.length === 0) return false; // pure `cd` offers no read value
+        return nonCdSubCmds.every(sub => {
+            const word = sub.split(/[\s;|&]/)[0].replace(/^\.\//, '');
+            return SAFE_COMMANDS.has(word);
+        });
     }
 
     public getIntentRouter(): UnifiedIntentRouter { return this.intentRouter; }

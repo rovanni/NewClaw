@@ -105,8 +105,13 @@ convert_with_chrome() {
 
 convert_with_wkhtmltopdf() {
   command -v wkhtmltopdf &>/dev/null || return 1
-  wkhtmltopdf --orientation Landscape --quiet "$INPUT" "$OUTPUT" 2>&1
-  return $?
+  # wkhtmltopdf has no JavaScript — inject CSS to force all slides visible before converting
+  local TMP="${OUTPUT%.pdf}_tmp_allslides.html"
+  sed 's|</head>|<style>.slide,.step,section,[class*="slide"],[class*="step"]{display:block!important;visibility:visible!important;opacity:1!important;position:relative!important;}body,html{overflow:visible!important;height:auto!important;}*{animation:none!important;transition:none!important;}</style></head>|i' "$INPUT" > "$TMP"
+  wkhtmltopdf --orientation Landscape --quiet "$TMP" "$OUTPUT" 2>&1
+  local RET=$?
+  rm -f "$TMP"
+  return $RET
 }
 
 # Tentativa 1: Puppeteer instalado
