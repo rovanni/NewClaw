@@ -14,6 +14,8 @@ export interface PendingAction {
     toolName: string;
     arguments: Record<string, any>;
     timestamp: number;
+    /** The original user message that triggered this tool (used to re-inject skill context on resume) */
+    originalUserText?: string;
 }
 
 export interface AuthRequest {
@@ -25,11 +27,12 @@ export class AuthorizationManager {
     private pendingActions = new Map<string, PendingAction>();
 
     /** Add a tool call to the pending queue */
-    addPending(conversationId: string, toolName: string, args: Record<string, any>): void {
+    addPending(conversationId: string, toolName: string, args: Record<string, any>, originalUserText?: string): void {
         this.pendingActions.set(conversationId, {
             toolName,
             arguments: args,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            originalUserText,
         });
         log.info(`[AUTH] Action pending for ${conversationId}: ${toolName}`);
     }

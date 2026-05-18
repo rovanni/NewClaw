@@ -122,10 +122,11 @@ export class AgentLoop {
         if (nonEmptyLines.length > 3) return false;
 
         // Destructive patterns always require auth
-        if (/\brm\s|mkfs|drop\s+table|truncate\s+table|>\s*\/[a-z]/i.test(cmd)) return false;
+        if (/\brm\s+-r|\brm\s+--?\w*r|\bmkfs\b|drop\s+table|truncate\s+table/i.test(cmd)) return false;
 
-        // File writes always require auth (redirect to real path, not /dev/null)
-        if (/\s>(?!>?\s*\/dev\/null)/.test(cmd)) return false;
+        // File writes always require auth — strip null redirects first, then check
+        const cmdWithoutNullRedirects = cmd.replace(/\d*>>?\/dev\/null/g, '');
+        if (/(?<![0-9a-z&|])>>?\s*\/(?!dev\/null)/i.test(cmdWithoutNullRedirects)) return false;
 
         // Pipe into destructive commands always requires auth
         if (/\|\s*(rm|dd|mkfs|shred)\b/.test(cmd)) return false;
@@ -376,41 +377,6 @@ export class AgentLoop {
         };
         move('START_TURN');
 
-        // ── Pre-turn: resolve pending authorization (before LLM) ──────────────
-        const pendingAuth = this.authManager.getPending(conversationId);
-        if (pendingAuth) {
-            const trimmed = userText.trim();
-            const isConfirm = /^(sim|yes|ok|autorizado|confirmar|pode|s|y)$/i.test(trimmed);
-            const isReject  = /^(n[aã]o|cancelar|cancel|n|no|nope)$/i.test(trimmed);
-
-            if (isConfirm) {
-                log.info(`[${this.ts()}] [AUTH] ✅ User confirmed pending action: ${pendingAuth.toolName}`);
-                this.authManager.removePending(conversationId);
-                const tool = this.tools.get(pendingAuth.toolName);
-                if (tool) {
-                    move('TOOL_REQUESTED', { step: 0, tool: pendingAuth.toolName, mode: 'auth_confirmed' });
-                    if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
-                        (tool as unknown as ContextAwareTool).setContext(
-                            channelContext.chatId || '',
-                            channelContext.channel
-                        );
-                    }
-                    const result = await tool.execute(pendingAuth.arguments as Record<string, unknown>);
-                    move('TOOL_COMPLETED', { step: 0, tool: pendingAuth.toolName, success: result.success });
-                    move('FINAL_READY', { step: 0, reason: 'auth_confirmed' });
-                    traceManager.completeTrace(trace, 'completed', result.output);
-                    this.persistTrace(trace, 0, 'completed', result.output, channelContext);
-                    return result.output;
-                }
-            } else if (isReject) {
-                log.info(`[${this.ts()}] [AUTH] ❌ User rejected pending action: ${pendingAuth.toolName}`);
-                this.authManager.removePending(conversationId);
-                move('FINAL_READY', { step: 0, reason: 'auth_rejected' });
-                traceManager.completeTrace(trace, 'cancelled', 'User rejected action');
-                return 'Operação cancelada. ✅';
-            }
-        }
-
         const intentDecision: IntentDecision = this.intentRouter.route(userText, { sessionId: conversationId });
 
         traceManager.addStep(trace, 'intent_classification', {
@@ -488,11 +454,38 @@ export class AgentLoop {
 
         const pending = this.authManager.getPending(conversationId);
         if (pending) {
-            log.info(`[${this.ts()}] [AUTH] Evaluating response for pending action. Intent: ${intentDecision.category}`);
+            const trimmedInput = userText.trim();
+            // Explicit regex wins over intent category for auth resolution
+            const isExplicitConfirm = /^(sim|yes|ok|autorizado|confirmar|pode|s|y)$/i.test(trimmedInput);
+            const isExplicitReject  = /^(n[aã]o|cancelar|cancel|n|no|nope)$/i.test(trimmedInput);
+            const isConfirmed = isExplicitConfirm || intentDecision.category === 'confirmation';
+            const isRejected  = isExplicitReject  || intentDecision.category === 'rejection';
 
-            if (intentDecision.category === 'confirmation') {
-                log.info(`[${this.ts()}] [AUTH] Action APPROVED via Router for ${conversationId}: ${pending.toolName}`);
+            log.info(`[${this.ts()}] [AUTH] Pending "${pending.toolName}" — confirmed=${isConfirmed} rejected=${isRejected} intent=${intentDecision.category}`);
+
+            if (isConfirmed) {
+                log.info(`[${this.ts()}] [AUTH] ✅ Action APPROVED for ${conversationId}: ${pending.toolName}`);
                 this.authManager.removePending(conversationId);
+
+                // Re-inject skill context using the ORIGINAL user text (not "sim")
+                if (pending.originalUserText) {
+                    const resumeSkills = this.skillLoader.loadAll().filter(s =>
+                        s.triggers?.some(t => (pending.originalUserText || '').toLowerCase().includes(t.toLowerCase()))
+                    );
+                    if (resumeSkills.length > 0) {
+                        const resumeBlock = resumeSkills.map(s => `### SKILL MANUAL: ${s.name}\n${s.content}`).join('\n\n');
+                        skillContext = skillContext ? `${skillContext}\n\n${resumeBlock}` : resumeBlock;
+                        log.info(`[SKILL] [AUTH-RESUME] Re-injetando skill(s): ${resumeSkills.map(s => s.name).join(', ')}`);
+                    }
+                }
+
+                // Use a capable model for continuation (not "light" which may not understand tool context)
+                const resumeProfile = this.profileRegistry.getProfileByCategory('code');
+                if (resumeProfile) {
+                    chatProfile.model = resumeProfile.model;
+                    chatProfile.category = resumeProfile.category;
+                    log.info(`[${this.ts()}] [AUTH-RESUME] Overriding model to code profile: ${resumeProfile.model}`);
+                }
 
                 const tool = this.tools.get(pending.toolName);
                 if (tool) {
@@ -536,12 +529,14 @@ export class AgentLoop {
                         loopMessages.push({ role: 'system', content: `[ERRO CRÍTICO] Falha ao executar comando autorizado: ${errorMessage(toolError)}` });
                     }
                 }
-            } else if (intentDecision.category === 'rejection') {
-                log.warn(`[${this.ts()}] [AUTH] Action REJECTED via Router for ${conversationId}: ${pending.toolName}`);
+            } else if (isRejected) {
+                log.warn(`[${this.ts()}] [AUTH] ❌ Action REJECTED for ${conversationId}: ${pending.toolName}`);
                 this.authManager.removePending(conversationId);
-                return { text: `❌ Execução cancelada pelo usuário. Como posso ajudar agora?` };
+                move('FINAL_READY', { step: 0, reason: 'auth_rejected' });
+                traceManager.completeTrace(trace, 'cancelled', 'User rejected action');
+                return { text: `❌ Operação cancelada. Como posso ajudar?` };
             } else {
-                log.info(`[${this.ts()}] [AUTH] Ambiguous response. Keeping ${pending.toolName} pending and proceeding with conversation.`);
+                log.info(`[${this.ts()}] [AUTH] Ambiguous response — keeping ${pending.toolName} pending.`);
             }
         }
 
@@ -695,7 +690,7 @@ export class AgentLoop {
                         const isDangerous = ToolRegistry.isDangerous(toolName) && !this.isSafeExecCommand(toolName, toolCall.arguments);
                         if (isDangerous && !this.isAuthorized(conversationId, toolName, toolCall.arguments)) {
                             log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
-                            this.authManager.addPending(conversationId, toolName, toolCall.arguments);
+                            this.authManager.addPending(conversationId, toolName, toolCall.arguments, userText);
                             move('AUTH_REQUIRED', { step: stepCount, tool: toolName });
                             const authReq = this.authManager.formatRequest(toolName, toolCall.arguments);
                             return { text: authReq.text, options: authReq.options };
