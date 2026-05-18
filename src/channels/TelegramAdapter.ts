@@ -120,10 +120,13 @@ export class TelegramAdapter implements ChannelAdapter {
 
     private started: boolean = false;
     private startRetries: number = 0;
-    private maxStartRetries: number = 3;
+    private maxStartRetries: number = 5;
     private networkRetryCount: number = 0;
     private reconnectTimer: NodeJS.Timeout | null = null;
     private handlersRegistered: boolean = false;
+    /** Track how long the bot stayed connected — if < 30s, it's likely 409 conflict */
+    private botConnectedAt: number = 0;
+    private static readonly STABLE_CONNECTION_MS = 30_000;
 
     async start(): Promise<void> {
         if (!this.config.enabled) {
@@ -167,22 +170,29 @@ export class TelegramAdapter implements ChannelAdapter {
             await this.bot.start({
                 onStart: (info) => {
                     this._isConnected = true;
-                    this.startRetries = 0; // Reset on success
+                    this.botConnectedAt = Date.now();
                     this.networkRetryCount = 0; // Reset network retries on success
                     log.info('bot_started', `🤖 Telegram Bot rodando! botInfo=${JSON.stringify(info).slice(0, 100)}`);
                 },
             });
             // If we reach here, bot.start() resolved (meaning bot was stopped)
-            log.warn('bot_start_resolved', 'bot.start() resolved unexpectedly — bot was stopped');
+            const uptimeMs = this.botConnectedAt ? Date.now() - this.botConnectedAt : 0;
+            const wasStable = uptimeMs > TelegramAdapter.STABLE_CONNECTION_MS;
+            if (wasStable) {
+                // Bot ran for a while then stopped normally — reset retries
+                this.startRetries = 0;
+            }
+            log.warn('bot_start_resolved', `bot.start() resolved unexpectedly — bot was stopped (uptime=${uptimeMs}ms, stable=${wasStable})`);
         } catch (e) {
             if (errorMessage(e)?.includes('409') || errorMessage(e)?.includes('Conflict')) {
-                log.error('bot_start_409_conflict', 'Multiple bot instances detected. Waiting for old instance to stop...');
-                if (this.startRetries < this.maxStartRetries) {
-                    this.startRetries++;
-                    const delay = this.startRetries * 15000; // 15s, 30s, 45s
-                    log.info('bot_start_retry', `Retry ${this.startRetries}/${this.maxStartRetries} in ${delay/1000}s...`);
+                this.startRetries++;
+                log.error('bot_start_409_conflict', `Multiple bot instances detected (attempt ${this.startRetries}/${this.maxStartRetries}). Waiting for old instance to stop...`);
+                if (this.startRetries <= this.maxStartRetries) {
+                    const delay = Math.min(this.startRetries * 20, 120); // 20s, 40s, 60s, 80s, 100s, 120s max
+                    log.info('bot_start_retry', `Retry ${this.startRetries}/${this.maxStartRetries} in ${delay}s...`);
                     this.started = false;
-                    await new Promise(r => setTimeout(r, delay));
+                    this._isConnected = false;
+                    await new Promise(r => setTimeout(r, delay * 1000));
                     return this.start();
                 }
                 log.error('bot_start_409_exhausted', 'All retries exhausted. Another bot instance is still running.');

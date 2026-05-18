@@ -42,6 +42,16 @@ export function safeAddColumn(db: Database.Database, table: string, column: stri
         log.error('migration_safety_violation', 'Invalid SQL type', undefined, { type });
         return;
     }
+
+    // Check if table exists before attempting ALTER TABLE
+    try {
+        const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
+        if (!tableExists) {
+            log.info('migration_skip_table_missing', 'Table does not exist yet — column will be created with table', { table, column });
+            return;
+        }
+    } catch { /* ignore pragma errors */ }
+
     try {
         db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
     } catch (e) {
