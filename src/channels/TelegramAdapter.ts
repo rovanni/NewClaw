@@ -93,7 +93,7 @@ export class TelegramAdapter implements ChannelAdapter {
         if (!file.file_path) throw new Error(`File path not available for fileId=${fileId}`);
         const response = await fetch(
             `https://api.telegram.org/file/bot${this.config.botToken}/${file.file_path}`,
-            { signal: AbortSignal.timeout(60_000) }
+            { signal: AbortSignal.timeout(180_000) }
         );
         if (!response.ok) throw new Error(`Download failed: HTTP ${response.status}`);
         return Buffer.from(await response.arrayBuffer());

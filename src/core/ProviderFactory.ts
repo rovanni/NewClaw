@@ -336,7 +336,7 @@ export class ProviderFactory {
         return undefined;
     }
 
-    async classifyWithFallback(messages: LLMMessage[], timeoutMs: number = 30000): Promise<LLMResponse> {
+    async classifyWithFallback(messages: LLMMessage[], timeoutMs: number = 120000): Promise<LLMResponse> {
         const providerOrder = this.getFallbackOrder();
         const errors: string[] = [];
 

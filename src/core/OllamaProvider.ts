@@ -93,7 +93,7 @@ export class OllamaProvider implements ILLMProvider {
     }
 
     /** Classification call — high priority to avoid blocking the cognitive loop */
-    async classify(messages: LLMMessage[], timeoutMs: number = 60000): Promise<LLMResponse> {
+    async classify(messages: LLMMessage[], timeoutMs: number = 120000): Promise<LLMResponse> {
         return await taskQueue.add(
             () => this._consumeStream(messages, undefined, timeoutMs),
             { priority: TaskPriority.CLASSIFICATION }
