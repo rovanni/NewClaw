@@ -13,8 +13,8 @@
  *   (graph_centrality    * w6)
  */
 
-import { getDomainPriority } from './CognitiveDomains';
 import Database from 'better-sqlite3';
+import { DomainGravityService } from './DomainGravityService';
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -110,12 +110,14 @@ export class AttentionLayer {
     private db: Database.Database;
     private weights: AttentionWeights;
     private contextState: ContextState | null = null;
+    private gravityService: DomainGravityService;
 
     // Max nodes in context window
     private static readonly MAX_CONTEXT_WINDOW = 20;
 
     constructor(db: Database.Database, weights?: Partial<AttentionWeights>) {
         this.db = db;
+        this.gravityService = new DomainGravityService(db);
         this.weights = {
             w1_embedding: 1.0,
             w2_context:   2.0,   // High priority for active context
@@ -415,7 +417,7 @@ export class AttentionLayer {
     calculateDomainPriority(nodeId: string): number {
         const node = this.db.prepare('SELECT domain, type FROM memory_nodes WHERE id = ?').get(nodeId) as NodeDomainRow | undefined;
         if (!node) return 0.3;
-        if (node.domain) return getDomainPriority(node.domain);
+        if (node.domain) return this.gravityService.getGravity(node.domain);
         return TYPE_PRIORITY[node.type] || 0.3;
     }
 
@@ -540,7 +542,18 @@ export class AttentionLayer {
         // Step 4: Return top results
         const results = candidates.slice(0, limit);
 
-        // Step 5: Log search for analytics
+        // Step 5: Update domain gravity for accessed domains (batch query for top results)
+        if (results.length > 0) {
+            const placeholders = results.map(() => '?').join(',');
+            const domainRows = this.db.prepare(
+                `SELECT DISTINCT domain FROM memory_nodes WHERE id IN (${placeholders}) AND domain IS NOT NULL`
+            ).all(...results.map(r => r.nodeId)) as Array<{ domain: string }>;
+            for (const row of domainRows) {
+                this.gravityService.recordAccess(row.domain);
+            }
+        }
+
+        // Step 6: Log search for analytics
         this.logSearch(embeddingResults, results);
 
         return results;

@@ -29,6 +29,7 @@ import { EmbeddingService } from './EmbeddingService';
 import { ClassificationMemory } from './ClassificationMemory';
 import { DecisionMemory } from './DecisionMemory';
 import { DomainSummaryService } from './DomainSummaryService';
+import { EpisodicMemoryService } from './EpisodicMemoryService';
 
 export type { Message, Conversation, MemoryNode, MemoryEdge } from './memoryTypes';
 
@@ -45,6 +46,7 @@ export class MemoryManager {
     private classificationMemoryInstance: ClassificationMemory | null = null;
     private decisionMemoryInstance: DecisionMemory | null = null;
     private domainSummaryServiceInstance: DomainSummaryService | null = null;
+    private episodicMemoryServiceInstance: EpisodicMemoryService | null = null;
     private classifier: ConfidenceClassifier;
     private inverseRelations: Record<string, string> = {};
 
@@ -91,6 +93,11 @@ export class MemoryManager {
     getDomainSummaryService(): DomainSummaryService {
         if (!this.domainSummaryServiceInstance) this.domainSummaryServiceInstance = new DomainSummaryService(this.db);
         return this.domainSummaryServiceInstance;
+    }
+
+    getEpisodicMemoryService(): EpisodicMemoryService {
+        if (!this.episodicMemoryServiceInstance) this.episodicMemoryServiceInstance = new EpisodicMemoryService(this.db);
+        return this.episodicMemoryServiceInstance;
     }
 
     constructor(dbOrPath: string | Database.Database = './data/newclaw.db') {

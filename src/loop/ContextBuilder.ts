@@ -11,6 +11,7 @@ import { MemoryManager, type MemoryNode } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
 import { classifyDomain } from '../memory/DomainRegistry';
 import type { DomainSummaryService } from '../memory/DomainSummaryService';
+import type { EpisodicMemoryService } from '../memory/EpisodicMemoryService';
 
 // ── Relevance Gate ───────────────────────────────────────────
 // Short greetings and social messages should NOT trigger semantic context injection.
@@ -45,6 +46,7 @@ export class ContextBuilder {
     private memory: MemoryManager;
     private memoryFacade: MemoryFacade;
     private domainSummaryService: DomainSummaryService;
+    private episodicMemoryService: EpisodicMemoryService;
     private readonly MAX_NODES = 6;
     private readonly MAX_SUMMARY = 200;
     private readonly MAX_RELATIONS = 3;
@@ -58,6 +60,7 @@ export class ContextBuilder {
         this.memory = memory;
         this.memoryFacade = memory.getFacade();
         this.domainSummaryService = memory.getDomainSummaryService();
+        this.episodicMemoryService = memory.getEpisodicMemoryService();
     }
 
     /**
@@ -67,25 +70,48 @@ export class ContextBuilder {
      * Strategy: domain-first routing (query → detectDomain → subgraph BFS → semantic filter)
      * Fallback: global semantic search when domain confidence is low or subgraph is sparse.
      *
-     * When a domain is detected with confidence >= 0.3, prepends a domain summary block
-     * before the detailed nodes, giving the LLM thematic orientation at low token cost.
+     * Block order in prompt:
+     *   1. Episodic block  — recent conversation history (if conversationId provided)
+     *   2. Domain summary  — thematic orientation (if domain detected with confidence >= 0.3)
+     *   3. Semantic detail — top-K ranked nodes
+     *
+     * @param conversationId Optional — when provided, episodic memory is recorded and injected.
      */
-    async buildContext(query: string): Promise<string> {
-        if (isSocialOrGreeting(query)) return '';
+    async buildContext(query: string, conversationId?: string): Promise<string> {
+        if (isSocialOrGreeting(query)) {
+            // Still record the interaction so the episode stays alive
+            if (conversationId) this.episodicMemoryService.recordInteraction(conversationId);
+            return '';
+        }
 
         try {
+            // Record interaction in the episode
+            if (conversationId) this.episodicMemoryService.recordInteraction(conversationId);
+
             const domainClass = classifyDomain(query);
 
-            // Domain summary block (injected before detail nodes)
+            // Block 1: episodic history (exclude current conversation)
+            const episodicBlock = conversationId
+                ? this.episodicMemoryService.buildEpisodicPromptBlock(conversationId, 3)
+                : '';
+
+            // Block 2: domain summary
             let domainBlock = '';
             if (domainClass && domainClass.confidence >= 0.3) {
                 domainBlock = this.domainSummaryService.buildPromptBlock(domainClass.domainId);
             }
 
             const ranked = await this.domainAwareRankAndSelect(query);
+
+            // Record accessed nodes in the episode
+            if (conversationId && ranked.length > 0) {
+                this.episodicMemoryService.recordNodeAccesses(conversationId, ranked.map(n => n.id));
+            }
+
             if (ranked.length === 0) {
                 const fallback = this.memory.getContext(200);
-                return domainBlock ? `${domainBlock}\n${fallback}` : fallback;
+                const header = [episodicBlock, domainBlock].filter(Boolean).join('\n---\n');
+                return header ? `${header}\n${fallback}` : fallback;
             }
 
             const parts = ranked.map(n => {
@@ -95,7 +121,8 @@ export class ContextBuilder {
             });
 
             const detailsStr = 'Contexto: ' + parts.join('. ');
-            return domainBlock ? `${domainBlock}\n---\n${detailsStr}` : detailsStr;
+            const blocks = [episodicBlock, domainBlock].filter(Boolean);
+            return blocks.length > 0 ? `${blocks.join('\n---\n')}\n---\n${detailsStr}` : detailsStr;
         } catch {
             return this.memory.getContext(200);
         }

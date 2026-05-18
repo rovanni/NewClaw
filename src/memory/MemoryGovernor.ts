@@ -11,6 +11,8 @@
 
 import { MemoryManager, MemoryNode } from './MemoryManager';
 import type { MemoryFacade } from './MemoryFacade';
+import { DomainGravityService } from './DomainGravityService';
+import { EpisodicMemoryService } from './EpisodicMemoryService';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('Memorygovernor');
 
@@ -57,6 +59,8 @@ export interface GovernorStats {
     nodesArchived: number;
     nodesExpired: number;
     ttlsAssigned: number;
+    gravitiesDecayed: number;
+    episodesClosed: number;
     conflictsDetected: number;
     conflictsResolved: number;
     factsReinforced: number;
@@ -85,11 +89,27 @@ export class MemoryGovernor {
     private memoryFacade: MemoryFacade;
     private config: GovernorConfig;
     private accessLog: Map<string, { count: number; lastAccessed: Date; wasHelpful: boolean }> = new Map();
+    private gravityServiceInstance: DomainGravityService | null = null;
+    private episodicServiceInstance: EpisodicMemoryService | null = null;
 
     constructor(memory: MemoryManager, config?: Partial<GovernorConfig>) {
         this.memory = memory;
         this.memoryFacade = memory.getFacade();
         this.config = { ...DEFAULT_CONFIG, ...config };
+    }
+
+    private getGravityService(): DomainGravityService {
+        if (!this.gravityServiceInstance) {
+            this.gravityServiceInstance = new DomainGravityService(this.memory.getDatabase());
+        }
+        return this.gravityServiceInstance;
+    }
+
+    private getEpisodicService(): EpisodicMemoryService {
+        if (!this.episodicServiceInstance) {
+            this.episodicServiceInstance = this.memory.getEpisodicMemoryService();
+        }
+        return this.episodicServiceInstance;
     }
 
     // ========================================================================
@@ -648,14 +668,18 @@ export class MemoryGovernor {
         const ttlsAssigned = this.setDefaultTTLs();
         const nodesExpired = this.expireNodes();
 
-        // Step 2: Decay all confidences
+        // Step 2: Close stale episodes (inactive > 2h) and decay domain gravity
+        const episodesClosed = this.getEpisodicService().closeStaleEpisodes(2);
+        const gravitiesDecayed = this.getGravityService().decayAll();
+
+        // Step 3: Decay all confidences
         const decayResult = this.decayAllConfidences();
 
-        // Step 3: Detect and resolve conflicts
+        // Step 4: Detect and resolve conflicts
         const conflicts = this.detectConflicts();
         const resolution = this.resolveConflicts(conflicts);
 
-        // Step 4: Garbage collect
+        // Step 5: Garbage collect
         const gcResult = this.garbageCollect();
 
         const stats: GovernorStats = {
@@ -665,6 +689,8 @@ export class MemoryGovernor {
             nodesArchived: gcResult.archived,
             nodesExpired,
             ttlsAssigned,
+            gravitiesDecayed,
+            episodesClosed,
             conflictsDetected: conflicts.length,
             conflictsResolved: resolution.resolved,
             factsReinforced: Array.from(this.accessLog.values()).filter(a => a.wasHelpful).length,
