@@ -187,10 +187,14 @@ export function ensureMemorySchema(db: Database.Database): void {
     safeAddColumn(db, 'memory_nodes', 'last_updated', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
     safeAddColumn(db, 'memory_nodes', 'domain', 'TEXT');
     safeAddColumn(db, 'memory_nodes', 'last_accessed', 'DATETIME');
+    safeAddColumn(db, 'memory_nodes', 'lifecycle_state', 'TEXT');
+    safeAddColumn(db, 'memory_nodes', 'expires_at', 'DATETIME');
     safeAddColumn(db, 'memory_edges', 'last_accessed', 'DATETIME');
     safeAddColumn(db, 'memory_edges', 'domain', 'TEXT');
     safeAddColumn(db, 'node_metrics', 'last_accessed', 'DATETIME');
     safeAddColumn(db, 'agent_traces', 'correlation_id', 'TEXT');
+    safeExec(db, 'CREATE INDEX IF NOT EXISTS idx_memory_nodes_lifecycle ON memory_nodes(lifecycle_state)');
+    safeExec(db, 'CREATE INDEX IF NOT EXISTS idx_memory_nodes_expires ON memory_nodes(expires_at)');
     migrateMemoryNodesCheckConstraint(db);
     migrateDomainNodeType(db);
 }

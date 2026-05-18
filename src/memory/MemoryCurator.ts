@@ -5,6 +5,8 @@ import type { MemoryGraphRepository } from './MemoryGraphRepository';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 const log = createLogger('Memorycurator');
+import type { DomainSummaryService } from './DomainSummaryService';
+import { getDomainById } from './DomainRegistry';
 
 interface CuratorResult {
     orphansFixed: number;
@@ -13,11 +15,30 @@ interface CuratorResult {
     details: string[];
 }
 
+interface NodeForConsolidation {
+    id: string;
+    name: string;
+    content: string;
+    type: string;
+    domain: string;
+    weight: number | null;
+    confidence: number | null;
+    last_accessed: string | null;
+    updated_at: string | null;
+}
+
+export interface ConsolidationResult {
+    clustersFound: number;
+    nodesMarkedSummarized: number;
+    summariesCreated: number;
+}
+
 export class MemoryCurator {
     private mm: MemoryManager;
     private repo: MemoryGraphRepository;
     private analytics: GraphAnalytics;
     private embeddingService?: EmbeddingService;
+    private domainSummaryService: DomainSummaryService;
     private intervalId: ReturnType<typeof setInterval> | null = null;
 
     constructor(memoryManager: MemoryManager, embeddingService?: EmbeddingService) {
@@ -25,6 +46,7 @@ export class MemoryCurator {
         this.repo = memoryManager.getGraphRepository();
         this.analytics = new GraphAnalytics(memoryManager);
         this.embeddingService = embeddingService;
+        this.domainSummaryService = memoryManager.getDomainSummaryService();
     }
 
     private addEdgeSafe(from: string, to: string, relation: string): boolean {
@@ -60,7 +82,7 @@ export class MemoryCurator {
         if (trueOrphans.length === 0) {
             this.repo.deleteSelfLoops();
             this.repo.deleteDuplicateDailySystemEdges();
-            
+
             result.details.push('No true orphans found — graph is clean!');
             return result;
         }
@@ -162,9 +184,6 @@ export class MemoryCurator {
         return result;
     }
 
-    /**
-     * Detect and fix unstructured identity nodes as requested.
-     */
     private cleanupInvalidNodes(): { invalidCount: number } {
         let invalidCount = 0;
         const forbiddenPatterns = [/se chama/i, /é o/i, /é a/i, /chamado/i, /meu nome/i, /nome é/i];
@@ -184,11 +203,6 @@ export class MemoryCurator {
         return { invalidCount };
     }
 
-    /**
-     * Enforce storage quotas to prevent exponential database growth.
-     * 1. Delete execution traces older than 3 days.
-     * 2. Limit message history to last 1000 messages per session.
-     */
     private async enforceStorageQuotas(): Promise<{ prunedTraces: number; prunedMessages: number }> {
         try {
             const prunedTraces = this.repo.pruneOldTraces(3);
@@ -209,10 +223,6 @@ export class MemoryCurator {
         }
     }
 
-    /**
-     * Apply temporal decay to edge weights
-     * Edges not accessed in 30 days lose 2% weight (×0.98)
-     */
     private async applyTemporalDecay(): Promise<{ decayed: number }> {
         try {
             this.repo.ensureEdgeLastAccessed();
@@ -223,6 +233,241 @@ export class MemoryCurator {
             log.error('[TemporalDecay] Error:', errorMessage(error));
             return { decayed: 0 };
         }
+    }
+
+    // ── Semantic Consolidation (non-destructive) ─────────────────────────────
+    //
+    // Philosophy: "lossy semantic compression with structural reversibility"
+    //   - Original nodes are PRESERVED, only marked lifecycle_state = SUMMARIZED
+    //   - Summary node tracks full lineage via `summarizes` edges
+    //   - SUMMARIZED nodes are excluded from default retrieval but fully recoverable
+    //   - Supports future: deep recall, replay cognitivo, explainability, re-summarization
+
+    private readonly CONSOLIDATION_MIN_CONFIDENCE = 0.5;
+    private readonly CONSOLIDATION_MAX_WEIGHT = 0.7;         // protect high-weight (important) nodes
+    private readonly CONSOLIDATION_MIN_STALENESS_DAYS = 14;
+    private readonly CONSOLIDATION_MIN_CLUSTER_SIZE = 3;
+    private readonly CONSOLIDATION_SIMILARITY_THRESHOLD = 0.35;
+
+    // Never consolidate: core identity, infra, main projects, preferences, governance
+    private readonly CONSOLIDATION_PROTECTED_DOMAINS = new Set([
+        'core_identity', 'user_modeling', 'governance_safety',
+        'domain_infra', 'domain_projetos', 'domain_preferencias',
+    ]);
+
+    // Preferred targets: ephemeral, repetitive, operational data — looser threshold
+    private readonly CONSOLIDATION_PRIORITY_DOMAINS = new Set([
+        'domain_clima', 'domain_agenda',
+    ]);
+
+    /**
+     * Non-destructive semantic compression.
+     *
+     * For each cluster of stale, low-confidence, similar nodes:
+     *   1. Creates a summary node with rich lineage metadata
+     *   2. Creates `summarizes` edges: summary → each original
+     *   3. Sets lifecycle_state = SUMMARIZED on originals (data fully preserved)
+     *
+     * Safety guards:
+     *   - confidence < 0.5  AND  weight < 0.7  AND  not accessed in 14+ days
+     *   - never touches identity, domain, core_*, domain_*, user_identity*, protected domains
+     *   - requires >= 3 similar nodes to justify consolidation
+     */
+    async consolidateStaleClusters(): Promise<ConsolidationResult> {
+        const result: ConsolidationResult = { clustersFound: 0, nodesMarkedSummarized: 0, summariesCreated: 0 };
+        const db = this.mm.getDatabase();
+        const staleness = this.CONSOLIDATION_MIN_STALENESS_DAYS;
+
+        const staleNodes = db.prepare(`
+            SELECT id, name, content, type, domain, weight, confidence, last_accessed, updated_at
+            FROM memory_nodes
+            WHERE confidence < ?
+              AND (weight IS NULL OR weight < ?)
+              AND type NOT IN ('identity', 'domain', 'legacy_container')
+              AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')
+              AND id NOT LIKE 'core_%'
+              AND id NOT LIKE 'domain_%'
+              AND id NOT LIKE 'user_identity%'
+              AND (last_accessed IS NULL OR last_accessed < datetime('now', '-' || ? || ' days'))
+              AND (updated_at IS NULL OR updated_at < datetime('now', '-' || ? || ' days'))
+              AND domain IS NOT NULL AND domain != ''
+              AND content IS NOT NULL AND content != ''
+            ORDER BY domain, type
+        `).all(
+            this.CONSOLIDATION_MIN_CONFIDENCE,
+            this.CONSOLIDATION_MAX_WEIGHT,
+            staleness,
+            staleness
+        ) as NodeForConsolidation[];
+
+        if (staleNodes.length < this.CONSOLIDATION_MIN_CLUSTER_SIZE) return result;
+
+        // Group by (domain, type) — skip protected domains
+        const groups = new Map<string, NodeForConsolidation[]>();
+        for (const node of staleNodes) {
+            if (this.CONSOLIDATION_PROTECTED_DOMAINS.has(node.domain)) continue;
+            const key = `${node.domain}::${node.type}`;
+            const group = groups.get(key) ?? [];
+            group.push(node);
+            groups.set(key, group);
+        }
+
+        for (const [key, nodes] of groups) {
+            if (nodes.length < this.CONSOLIDATION_MIN_CLUSTER_SIZE) continue;
+
+            const [domainId, type] = key.split('::');
+
+            // Priority domains get looser threshold → more aggressive compression
+            const threshold = this.CONSOLIDATION_PRIORITY_DOMAINS.has(domainId)
+                ? this.CONSOLIDATION_SIMILARITY_THRESHOLD * 0.8
+                : this.CONSOLIDATION_SIMILARITY_THRESHOLD;
+
+            const clusters = this.findSimilarityClusters(nodes, threshold);
+
+            for (const cluster of clusters) {
+                if (cluster.length < this.CONSOLIDATION_MIN_CLUSTER_SIZE) continue;
+
+                result.clustersFound++;
+
+                // 1. Create summary node with lineage metadata
+                const summaryNode = this.buildSummaryNode(cluster, domainId, type);
+                try {
+                    this.mm.addNode(summaryNode, 'consolidation');
+                    this.mm.getFacade().setNodeDomain(summaryNode.id, domainId);
+                    this.addEdgeSafe(domainId, summaryNode.id, 'contains');
+                    result.summariesCreated++;
+                } catch (e) {
+                    log.warn(`[Consolidation] Failed to create summary node: ${errorMessage(e)}`);
+                    continue;
+                }
+
+                // 2. Explicit lineage: summary --summarizes--> each original
+                for (const node of cluster) {
+                    this.addEdgeSafe(summaryNode.id, node.id, 'summarizes');
+                }
+
+                // 3. Mark originals as SUMMARIZED — data preserved, excluded from default retrieval
+                for (const node of cluster) {
+                    try {
+                        const metaRaw = db.prepare(
+                            'SELECT metadata FROM memory_nodes WHERE id = ?'
+                        ).get(node.id) as { metadata: string | null } | undefined;
+
+                        const meta: Record<string, string> = JSON.parse(metaRaw?.metadata ?? '{}');
+                        meta['summarized_into'] = summaryNode.id;
+                        meta['summarized_at'] = new Date().toISOString();
+
+                        db.prepare(`
+                            UPDATE memory_nodes SET lifecycle_state = 'SUMMARIZED', metadata = ? WHERE id = ?
+                        `).run(JSON.stringify(meta), node.id);
+
+                        result.nodesMarkedSummarized++;
+                    } catch (e) {
+                        log.warn(`[Consolidation] Failed to mark node ${node.id}: ${errorMessage(e)}`);
+                    }
+                }
+
+                log.info(`[Consolidation] ${cluster.length} nodes → ${summaryNode.id} [${domainId}/${type}]`);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Union-find clustering with path compression.
+     * Groups nodes where pairwise Jaccard similarity >= threshold.
+     */
+    private findSimilarityClusters(
+        nodes: NodeForConsolidation[],
+        threshold: number = this.CONSOLIDATION_SIMILARITY_THRESHOLD
+    ): NodeForConsolidation[][] {
+        const parent = new Map<string, string>(nodes.map(n => [n.id, n.id]));
+
+        const find = (id: string): string => {
+            if (parent.get(id) !== id) parent.set(id, find(parent.get(id)!));
+            return parent.get(id)!;
+        };
+
+        for (let i = 0; i < nodes.length; i++) {
+            for (let j = i + 1; j < nodes.length; j++) {
+                if (this.jaccardSimilarity(nodes[i].content, nodes[j].content) >= threshold) {
+                    parent.set(find(nodes[i].id), find(nodes[j].id));
+                }
+            }
+        }
+
+        const clusterMap = new Map<string, NodeForConsolidation[]>();
+        for (const node of nodes) {
+            const root = find(node.id);
+            const cluster = clusterMap.get(root) ?? [];
+            cluster.push(node);
+            clusterMap.set(root, cluster);
+        }
+
+        return Array.from(clusterMap.values());
+    }
+
+    private buildSummaryNode(
+        nodes: NodeForConsolidation[],
+        domainId: string,
+        type: string
+    ): { id: string; type: 'fact' | 'preference' | 'skill' | 'knowledge'; name: string; content: string; confidence: number; weight: number; metadata: Record<string, string>; last_updated: string } {
+        const sorted = [...nodes].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
+        const domainName = getDomainById(domainId)?.name ?? domainId.replace('domain_', '').toUpperCase();
+
+        const topContent = sorted
+            .slice(0, 3)
+            .map(n => (n.content || n.name || '').trim().slice(0, 120))
+            .filter(Boolean)
+            .join('. ');
+
+        const avgConfidence = nodes.reduce((s, n) => s + (n.confidence ?? 0.3), 0) / nodes.length;
+        const maxWeight = Math.max(...nodes.map(n => n.weight ?? 0.3));
+        const semanticCoherence = this.computeSemanticCoherence(nodes);
+
+        return {
+            id: `summary_${domainId}_${type}_${Date.now()}`,
+            type: (['preference', 'skill', 'knowledge'].includes(type) ? type : 'fact') as 'fact' | 'preference' | 'skill' | 'knowledge',
+            name: `[Summary] ${domainName} — ${nodes.length} nós (${type})`,
+            content: topContent || `Resumo semântico de ${nodes.length} registros de ${domainName}`,
+            confidence: Math.round(avgConfidence * 100) / 100,
+            weight: Math.round(maxWeight * 100) / 100,
+            metadata: {
+                summary_type: 'semantic_compression',
+                source_count: String(nodes.length),
+                compression_confidence: String(Math.round(avgConfidence * 100) / 100),
+                semantic_coherence: String(semanticCoherence),
+                generated_at: new Date().toISOString(),
+                source_domain: domainId,
+                source_type: type,
+                source_ids: nodes.slice(0, 8).map(n => n.id).join(','),
+            },
+            last_updated: new Date().toISOString(),
+        };
+    }
+
+    /** Average pairwise Jaccard similarity across all cluster members. */
+    private computeSemanticCoherence(nodes: NodeForConsolidation[]): number {
+        if (nodes.length < 2) return 1.0;
+        let total = 0;
+        let pairs = 0;
+        for (let i = 0; i < nodes.length; i++) {
+            for (let j = i + 1; j < nodes.length; j++) {
+                total += this.jaccardSimilarity(nodes[i].content, nodes[j].content);
+                pairs++;
+            }
+        }
+        return pairs > 0 ? Math.round((total / pairs) * 100) / 100 : 1.0;
+    }
+
+    private jaccardSimilarity(a: string, b: string): number {
+        const wordsA = new Set((a ?? '').toLowerCase().split(/\s+/).filter(w => w.length > 3));
+        const wordsB = new Set((b ?? '').toLowerCase().split(/\s+/).filter(w => w.length > 3));
+        if (wordsA.size === 0 || wordsB.size === 0) return 0;
+        const intersection = [...wordsA].filter(w => wordsB.has(w)).length;
+        const union = new Set([...wordsA, ...wordsB]).size;
+        return union === 0 ? 0 : intersection / union;
     }
 
     startAutoCurate(intervalMs: number = 30 * 60 * 1000): void {
@@ -238,7 +483,7 @@ export class MemoryCurator {
                     log.info('[MemoryCurator] Running VACUUM to reclaim disk space...');
                     this.repo.vacuum();
                 }
-                
+
                 // Embed missing nodes (if embedding service available)
                 if (this.embeddingService) {
                     const available = await this.embeddingService.isAvailable();
@@ -247,7 +492,25 @@ export class MemoryCurator {
                         if (embedded > 0) log.info(`[MemoryCurator] Embedded ${embedded} new nodes`);
                     }
                 }
-                
+
+                // Non-destructive semantic consolidation
+                try {
+                    const consolidation = await this.consolidateStaleClusters();
+                    if (consolidation.summariesCreated > 0) {
+                        log.info(`[Consolidation] ${consolidation.summariesCreated} summaries, ${consolidation.nodesMarkedSummarized} nodes marked SUMMARIZED`);
+                    }
+                } catch (e) {
+                    log.warn('[MemoryCurator] Consolidation failed:', errorMessage(e));
+                }
+
+                // Refresh domain summaries after curation
+                try {
+                    const refreshed = this.domainSummaryService.refreshAll();
+                    if (refreshed > 0) log.info(`[MemoryCurator] Domain summaries refreshed: ${refreshed} domains`);
+                } catch (e) {
+                    log.warn('[MemoryCurator] Domain summary refresh failed:', errorMessage(e));
+                }
+
                 if (result.orphansFixed > 0) {
                     log.info(`[MemoryCurator] Auto-curated: ${result.details.join('; ')}`);
                 }
@@ -255,12 +518,13 @@ export class MemoryCurator {
                 log.error('[MemoryCurator] Auto-curation error:', err);
             }
         }, intervalMs);
-        
+
         // Initial run (with 2s delay to let DB stabilize after startup)
         setTimeout(async () => {
             try {
                 const r = await this.curate();
                 await this.analytics.updateMetrics();
+                this.domainSummaryService.refreshAll();
                 if (r.orphansFixed > 0) log.info(`[MemoryCurator] Initial: ${r.details.join('; ')}`);
                 else log.info('[MemoryCurator] Initial: graph clean, metrics updated.');
             } catch (e) {

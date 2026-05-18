@@ -62,7 +62,7 @@ interface ContextStateRow {
     updated_at: string;
 }
 
-interface NodeTypeRow   { type: string }
+interface NodeTypeRow   { type: string; lifecycle_state: string | null }
 interface NodeBasicRow  { id: string; type: string; name: string; content: string }
 interface NodeDomainRow { domain: string | null; type: string }
 interface NodeTimeRow   { last_accessed: string | null; updated_at: string | null }
@@ -83,6 +83,7 @@ const TYPE_PRIORITY: Record<string, number> = {
 const RELATION_STRENGTH: Record<string, number> = {
     depends_on:       1.0,
     causes:          1.0,
+    summarizes:      1.0,  // summary → original: strong semantic lineage
     has_trait:       0.9,
     follows_rule:    0.9,
     enables:         0.8,
@@ -471,23 +472,26 @@ export class AttentionLayer {
      * 3. Calculate attention_score for each candidate
      * 4. Re-rank by attention score
      * 5. Return top results
+     *
+     * @param deepRecall When true, includes SUMMARIZED nodes (for replay/explainability).
+     *                   Default false — SUMMARIZED nodes are excluded from normal retrieval.
      */
     searchWithAttention(
         embeddingResults: Array<{ nodeId: string; score: number }>,
-        limit: number = 5
+        limit: number = 5,
+        deepRecall: boolean = false
     ): AttentionCandidate[] {
         const candidateMap = new Map<string, AttentionCandidate>();
 
         // Step 1: Process embedding candidates
         for (const result of embeddingResults) {
             const node = this.db.prepare(
-                'SELECT type FROM memory_nodes WHERE id = ?'
+                'SELECT type, lifecycle_state FROM memory_nodes WHERE id = ?'
             ).get(result.nodeId) as NodeTypeRow | undefined;
 
             if (!node) continue;
-
-            // Skip legacy containers
             if (node.type === 'legacy_container') continue;
+            if (!deepRecall && (node.lifecycle_state === 'SUMMARIZED' || node.lifecycle_state === 'EXPIRED')) continue;
 
             const candidate = this.calculateAttentionScore({
                 nodeId: result.nodeId,
@@ -500,27 +504,29 @@ export class AttentionLayer {
         // Step 2: Expand neighborhood from context
         if (this.contextState) {
             for (const recentId of this.contextState.recentNodeIds) {
-                // 1-hop neighbors
+                // 1-hop neighbors with lifecycle_state in a single JOIN query
                 const neighbors = this.db.prepare(`
-                    SELECT to_node AS node_id, relation FROM memory_edges WHERE from_node = ?
+                    SELECT e.to_node AS node_id, e.relation, n.type, n.lifecycle_state
+                    FROM memory_edges e
+                    JOIN memory_nodes n ON n.id = e.to_node
+                    WHERE e.from_node = ?
                     UNION ALL
-                    SELECT from_node AS node_id, relation FROM memory_edges WHERE to_node = ?
-                `).all(recentId, recentId) as Array<{ node_id: string; relation: string }>;
+                    SELECT e.from_node AS node_id, e.relation, n.type, n.lifecycle_state
+                    FROM memory_edges e
+                    JOIN memory_nodes n ON n.id = e.from_node
+                    WHERE e.to_node = ?
+                `).all(recentId, recentId) as Array<{ node_id: string; relation: string; type: string; lifecycle_state: string | null }>;
 
                 for (const neighbor of neighbors) {
                     if (candidateMap.has(neighbor.node_id)) continue;
-
-                    const node = this.db.prepare(
-                        'SELECT type FROM memory_nodes WHERE id = ?'
-                    ).get(neighbor.node_id) as NodeTypeRow | undefined;
-
-                    if (!node || node.type === 'legacy_container') continue;
+                    if (neighbor.type === 'legacy_container') continue;
+                    if (!deepRecall && (neighbor.lifecycle_state === 'SUMMARIZED' || neighbor.lifecycle_state === 'EXPIRED')) continue;
 
                     // These nodes have no embedding score, but they're contextually relevant
                     const candidate = this.calculateAttentionScore({
                         nodeId: neighbor.node_id,
-                        nodeType: node.type,
-                        embeddingScore: 0.3, // Low embedding, but may rank high via context
+                        nodeType: neighbor.type,
+                        embeddingScore: 0.3,
                     });
                     candidateMap.set(neighbor.node_id, candidate);
                 }

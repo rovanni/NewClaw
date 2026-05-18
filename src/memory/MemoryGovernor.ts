@@ -55,6 +55,8 @@ export interface GovernorStats {
     nodesDecayed: number;
     nodesGarbageCollected: number;
     nodesArchived: number;
+    nodesExpired: number;
+    ttlsAssigned: number;
     conflictsDetected: number;
     conflictsResolved: number;
     factsReinforced: number;
@@ -552,24 +554,108 @@ export class MemoryGovernor {
     }
 
     // ========================================================================
-    // 5. FULL GOVERNANCE CYCLE
+    // 5. TTL — WORKING MEMORY EXPIRATION
+    // ========================================================================
+
+    /** TTL rules: domain → days until expiration. Null = no TTL. */
+    private static readonly DEFAULT_TTLS: Record<string, number | null> = {
+        active_context:  3,   // Working memory window
+        domain_clima:    7,   // Weather/weather queries
+        domain_agenda:   14,  // Calendar events (facts only)
+    };
+
+    /**
+     * Retroactively assign expires_at to nodes that match a TTL domain
+     * and don't yet have one. Called once per governance cycle.
+     * Returns count of assignments made.
+     */
+    setDefaultTTLs(): number {
+        const db = this.memory.getDatabase();
+        let assigned = 0;
+
+        for (const [domain, days] of Object.entries(MemoryGovernor.DEFAULT_TTLS)) {
+            if (days === null) continue;
+
+            let stmt;
+            if (domain === 'domain_agenda') {
+                // Only expire fact nodes for agenda (keep project/skill nodes)
+                stmt = db.prepare(`
+                    UPDATE memory_nodes
+                    SET expires_at = datetime(COALESCE(created_at, updated_at, 'now'), '+' || ? || ' days')
+                    WHERE domain = ?
+                      AND type = 'fact'
+                      AND expires_at IS NULL
+                      AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')
+                `);
+                const result = stmt.run(days, domain) as { changes: number };
+                assigned += result.changes;
+            } else {
+                stmt = db.prepare(`
+                    UPDATE memory_nodes
+                    SET expires_at = datetime(COALESCE(created_at, updated_at, 'now'), '+' || ? || ' days')
+                    WHERE domain = ?
+                      AND expires_at IS NULL
+                      AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')
+                      AND id NOT LIKE 'core_%'
+                      AND id NOT LIKE 'domain_%'
+                      AND id NOT LIKE 'user_identity%'
+                      AND type NOT IN ('identity', 'domain')
+                `);
+                const result = stmt.run(days, domain) as { changes: number };
+                assigned += result.changes;
+            }
+        }
+
+        if (assigned > 0) log.info(`TTL assignment: ${assigned} nodes received expires_at`);
+        return assigned;
+    }
+
+    /**
+     * Mark expired nodes with lifecycle_state = 'EXPIRED'.
+     * Only touches ACTIVE nodes whose expires_at is in the past.
+     * Returns count of nodes expired.
+     */
+    expireNodes(): number {
+        const db = this.memory.getDatabase();
+        const result = db.prepare(`
+            UPDATE memory_nodes
+            SET lifecycle_state = 'EXPIRED'
+            WHERE expires_at IS NOT NULL
+              AND expires_at < datetime('now')
+              AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')
+              AND id NOT LIKE 'core_%'
+              AND id NOT LIKE 'domain_%'
+              AND id NOT LIKE 'user_identity%'
+              AND type NOT IN ('identity', 'domain')
+        `).run() as { changes: number };
+
+        if (result.changes > 0) log.info(`TTL expiration: ${result.changes} nodes marked EXPIRED`);
+        return result.changes;
+    }
+
+    // ========================================================================
+    // 6. FULL GOVERNANCE CYCLE
     // ========================================================================
 
     /**
-     * Run the full governance cycle: decay → conflict → GC → stats.
+     * Run the full governance cycle: TTL → decay → conflict → GC → stats.
      * Should be called periodically (e.g., on boot or every 24h).
      */
     runGovernanceCycle(): GovernorStats {
         log.info('Starting governance cycle...');
 
-        // Step 1: Decay all confidences
+        // Step 1: Assign TTLs to new nodes, then expire stale ones
+        const ttlsAssigned = this.setDefaultTTLs();
+        const nodesExpired = this.expireNodes();
+
+        // Step 2: Decay all confidences
         const decayResult = this.decayAllConfidences();
 
-        // Step 2: Detect and resolve conflicts
+        // Step 3: Detect and resolve conflicts
         const conflicts = this.detectConflicts();
         const resolution = this.resolveConflicts(conflicts);
 
-        // Step 3: Garbage collect
+        // Step 4: Garbage collect
         const gcResult = this.garbageCollect();
 
         const stats: GovernorStats = {
@@ -577,6 +663,8 @@ export class MemoryGovernor {
             nodesDecayed: decayResult.decayed,
             nodesGarbageCollected: gcResult.removed,
             nodesArchived: gcResult.archived,
+            nodesExpired,
+            ttlsAssigned,
             conflictsDetected: conflicts.length,
             conflictsResolved: resolution.resolved,
             factsReinforced: Array.from(this.accessLog.values()).filter(a => a.wasHelpful).length,

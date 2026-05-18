@@ -72,9 +72,19 @@ export function addNode(db: Database.Database, classifier: ConfidenceClassifier,
         log.warn(`[GraphRepository] Truncated metadata for node ${node.id}: ${metadataJson.length} chars`);
     }
 
+    // ON CONFLICT DO UPDATE preserves lifecycle_state and expires_at — never reset by decay/update cycles
     db.prepare(`
-        INSERT OR REPLACE INTO memory_nodes (id, type, name, content, metadata, weight, confidence, last_updated, updated_at)
+        INSERT INTO memory_nodes (id, type, name, content, metadata, weight, confidence, last_updated, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+            type         = excluded.type,
+            name         = excluded.name,
+            content      = excluded.content,
+            metadata     = excluded.metadata,
+            weight       = excluded.weight,
+            confidence   = excluded.confidence,
+            last_updated = excluded.last_updated,
+            updated_at   = CURRENT_TIMESTAMP
     `).run(
         node.id, node.type, node.name, node.content,
         metadataJson, node.weight ?? 1.0, confidenceScore,

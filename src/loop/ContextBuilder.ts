@@ -10,6 +10,7 @@
 import { MemoryManager, type MemoryNode } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
 import { classifyDomain } from '../memory/DomainRegistry';
+import type { DomainSummaryService } from '../memory/DomainSummaryService';
 
 // ── Relevance Gate ───────────────────────────────────────────
 // Short greetings and social messages should NOT trigger semantic context injection.
@@ -43,6 +44,7 @@ interface RankedNode {
 export class ContextBuilder {
     private memory: MemoryManager;
     private memoryFacade: MemoryFacade;
+    private domainSummaryService: DomainSummaryService;
     private readonly MAX_NODES = 6;
     private readonly MAX_SUMMARY = 200;
     private readonly MAX_RELATIONS = 3;
@@ -55,6 +57,7 @@ export class ContextBuilder {
     constructor(memory: MemoryManager) {
         this.memory = memory;
         this.memoryFacade = memory.getFacade();
+        this.domainSummaryService = memory.getDomainSummaryService();
     }
 
     /**
@@ -63,13 +66,27 @@ export class ContextBuilder {
      *
      * Strategy: domain-first routing (query → detectDomain → subgraph BFS → semantic filter)
      * Fallback: global semantic search when domain confidence is low or subgraph is sparse.
+     *
+     * When a domain is detected with confidence >= 0.3, prepends a domain summary block
+     * before the detailed nodes, giving the LLM thematic orientation at low token cost.
      */
     async buildContext(query: string): Promise<string> {
         if (isSocialOrGreeting(query)) return '';
 
         try {
+            const domainClass = classifyDomain(query);
+
+            // Domain summary block (injected before detail nodes)
+            let domainBlock = '';
+            if (domainClass && domainClass.confidence >= 0.3) {
+                domainBlock = this.domainSummaryService.buildPromptBlock(domainClass.domainId);
+            }
+
             const ranked = await this.domainAwareRankAndSelect(query);
-            if (ranked.length === 0) return this.memory.getContext(200);
+            if (ranked.length === 0) {
+                const fallback = this.memory.getContext(200);
+                return domainBlock ? `${domainBlock}\n${fallback}` : fallback;
+            }
 
             const parts = ranked.map(n => {
                 let entry = `${n.name}(${n.type}): ${n.summary}`;
@@ -77,7 +94,8 @@ export class ContextBuilder {
                 return entry;
             });
 
-            return 'Contexto: ' + parts.join('. ');
+            const detailsStr = 'Contexto: ' + parts.join('. ');
+            return domainBlock ? `${domainBlock}\n---\n${detailsStr}` : detailsStr;
         } catch {
             return this.memory.getContext(200);
         }

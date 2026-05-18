@@ -14,6 +14,9 @@ export interface Conversation {
     updated_at?: string;
 }
 
+/** Lifecycle states for semantic compression pipeline */
+export type LifecycleState = 'ACTIVE' | 'SUMMARIZED' | 'ARCHIVED' | 'EXPIRED' | 'SUPERSEDED';
+
 export interface MemoryNode {
     id: string;
     type: 'identity' | 'preference' | 'project' | 'context' | 'fact' | 'skill' | 'infrastructure' | 'trait' | 'rule' | 'strategy' | 'knowledge' | 'domain';
@@ -28,6 +31,10 @@ export interface MemoryNode {
     last_updated?: string;
     created_at?: string;
     updated_at?: string;
+    /** Lifecycle state for non-destructive compression. NULL/undefined = ACTIVE. */
+    lifecycle_state?: LifecycleState | null;
+    /** Expiration timestamp for TTL-based working memory. NULL = no TTL. Set by MemoryGovernor. */
+    expires_at?: string | null;
 }
 
 export interface MemoryEdge {

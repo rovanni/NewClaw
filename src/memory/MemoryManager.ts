@@ -28,6 +28,7 @@ import { MemoryGraphRepository } from './MemoryGraphRepository';
 import { EmbeddingService } from './EmbeddingService';
 import { ClassificationMemory } from './ClassificationMemory';
 import { DecisionMemory } from './DecisionMemory';
+import { DomainSummaryService } from './DomainSummaryService';
 
 export type { Message, Conversation, MemoryNode, MemoryEdge } from './memoryTypes';
 
@@ -43,6 +44,7 @@ export class MemoryManager {
     private embeddingServiceInstance: EmbeddingService | null = null;
     private classificationMemoryInstance: ClassificationMemory | null = null;
     private decisionMemoryInstance: DecisionMemory | null = null;
+    private domainSummaryServiceInstance: DomainSummaryService | null = null;
     private classifier: ConfidenceClassifier;
     private inverseRelations: Record<string, string> = {};
 
@@ -84,6 +86,11 @@ export class MemoryManager {
     getDecisionMemory(): DecisionMemory {
         if (!this.decisionMemoryInstance) this.decisionMemoryInstance = new DecisionMemory(this.db);
         return this.decisionMemoryInstance;
+    }
+
+    getDomainSummaryService(): DomainSummaryService {
+        if (!this.domainSummaryServiceInstance) this.domainSummaryServiceInstance = new DomainSummaryService(this.db);
+        return this.domainSummaryServiceInstance;
     }
 
     constructor(dbOrPath: string | Database.Database = './data/newclaw.db') {
@@ -265,14 +272,17 @@ export class MemoryManager {
                 for (const item of scored) {
                     if (item.score < 0.3 || results.length >= limit) break;
                     const node = this.getNode(item.nodeId);
-                    if (node) { results.push({ ...node, score: item.score }); foundIds.add(item.nodeId); }
+                    if (node && node.lifecycle_state !== 'SUMMARIZED' && node.lifecycle_state !== 'EXPIRED') {
+                        results.push({ ...node, score: item.score });
+                        foundIds.add(item.nodeId);
+                    }
                 }
             }
         }
 
         if (results.length < limit) {
             for (const node of this.searchNodes(query, limit)) {
-                if (!foundIds.has(node.id) && results.length < limit) {
+                if (!foundIds.has(node.id) && results.length < limit && node.lifecycle_state !== 'SUMMARIZED' && node.lifecycle_state !== 'EXPIRED') {
                     results.push({ ...node, score: 0.4 });
                     foundIds.add(node.id);
                 }
