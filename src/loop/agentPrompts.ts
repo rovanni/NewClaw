@@ -22,9 +22,11 @@ export const PROMPT_COMPONENTS = {
 - Quando o usuário pedir para CRIAR ou GERAR arquivos (HTML, slides, documentos, código, etc.), NUNCA envie o conteúdo como texto na resposta.
 - PROCEDIMENTO OBRIGATÓRIO: (1) use write com path e content para salvar o arquivo no servidor, (2) use send_document com o file_path para enviar o arquivo como documento pelo Telegram.
 - SEMPRE use caminhos RELATIVOS ao workspace (ex: tmp/arquivo.html). O cwd já é o workspace, então tmp/file.py resolve para WORKSPACE_DIR/tmp/file.py. NUNCA use prefixo workspace/ em caminhos (causa duplicação: workspace/workspace/tmp).
-- Para LER arquivos: use read com path.
+- Para LER arquivos: use read com path. Use offset+limit para ler seções específicas de arquivos grandes.
 - Para EDITAR arquivos: use edit com path + oldText/newText (replace) ou startLine/endLine (patch) ou append=true (adicionar ao final).
-- SE PERDER O CAMINHO DE UM ARQUIVO (devido a um restart ou compressão de memória): não peça ajuda ao usuário! Use a ferramenta exec_command para buscá-lo rodando \`find . -iname "*parte_do_nome*"\`. O cwd padrão já é o seu workspace, então sempre busque a partir do \`.\`.`,
+- SE PERDER O CAMINHO DE UM ARQUIVO (devido a um restart ou compressão de memória): não peça ajuda ao usuário! Use a ferramenta exec_command para buscá-lo rodando \`find . -iname "*parte_do_nome*"\`. O cwd padrão já é o seu workspace, então sempre busque a partir do \`.\`.
+- NUNCA declare "restrição técnica" ou "limitação" para ler arquivos do workspace. Todo arquivo no workspace PODE ser lido com read. Se um arquivo for grande, use exec_command com grep para localizar seções específicas antes de editar: \`grep -n "mermaid\\|class.*diagram" ARQUIVO.html | head -50\`.
+- Para CORRIGIR erros em arquivos HTML (ex: sintaxe Mermaid): (1) use exec_command com grep para localizar os blocos com erro, (2) use edit com oldText/newText para corrigir cada bloco sem precisar ler o arquivo inteiro.`,
 
     ACADEMIC: `## 📚 REGRA DE CONTEÚDO ACADÊMICO E SLIDES
 - Quando criar slides, aulas ou materiais educacionais, o conteúdo deve ser COMPLETO, DETALHADO e APROFUNDADO — nunca superficial ou resumido.

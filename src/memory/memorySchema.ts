@@ -110,6 +110,66 @@ export function migrateMemoryNodesCheckConstraint(db: Database.Database): void {
     }
 }
 
+/**
+ * Adds 'domain' type to memory_nodes CHECK constraint.
+ * Follows the same pattern as migrateMemoryNodesCheckConstraint.
+ */
+export function migrateDomainNodeType(db: Database.Database): void {
+    try {
+        const testId = `__domain_test_${Date.now()}`;
+        try {
+            db.prepare("INSERT INTO memory_nodes (id, type, name, content) VALUES (?, 'domain', 'test', 'test')").run(testId);
+            db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(testId);
+            return; // already supports 'domain' type
+        } catch (e) {
+            if (!String(e).includes('CHECK constraint')) return;
+        }
+
+        log.info('migration_start', "Migrating memory_nodes CHECK constraint to support 'domain' type...");
+        db.pragma('foreign_keys = OFF');
+
+        db.exec(`
+            CREATE TABLE memory_nodes_domain (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL CHECK(type IN ('identity', 'preference', 'project', 'context', 'fact', 'skill', 'infrastructure', 'trait', 'rule', 'strategy', 'knowledge', 'domain')),
+                name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                metadata TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                pagerank REAL DEFAULT 0.0,
+                degree INTEGER DEFAULT 0,
+                betweenness REAL DEFAULT 0.0,
+                closeness REAL DEFAULT 0.0,
+                weight REAL DEFAULT 1.0,
+                confidence REAL DEFAULT 1.0,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+                context_type TEXT,
+                classification_score REAL DEFAULT 0,
+                community_id INTEGER DEFAULT 0,
+                domain TEXT,
+                last_accessed DATETIME
+            )
+        `);
+
+        db.exec('INSERT INTO memory_nodes_domain SELECT * FROM memory_nodes');
+        db.exec('DROP TABLE memory_nodes');
+        db.exec('ALTER TABLE memory_nodes_domain RENAME TO memory_nodes');
+
+        safeExec(db, 'CREATE INDEX IF NOT EXISTS idx_memory_nodes_type ON memory_nodes(type)');
+        safeExec(db, 'CREATE INDEX IF NOT EXISTS idx_memory_nodes_name ON memory_nodes(name)');
+        safeExec(db, 'CREATE INDEX IF NOT EXISTS idx_memory_nodes_pagerank ON memory_nodes(pagerank)');
+        safeExec(db, 'CREATE INDEX IF NOT EXISTS idx_memory_nodes_degree ON memory_nodes(degree)');
+
+        db.pragma('foreign_keys = ON');
+        db.pragma('integrity_check');
+        log.info('migration_done', "memory_nodes 'domain' type migration completed successfully.");
+    } catch (e) {
+        log.error('migration_failed', e, "memory_nodes 'domain' type migration failed");
+        try { db.pragma('foreign_keys = ON'); } catch { /* best-effort */ }
+    }
+}
+
 export function ensureMemorySchema(db: Database.Database): void {
     safeAddColumn(db, 'memory_nodes', 'weight', 'REAL DEFAULT 1.0');
     safeAddColumn(db, 'memory_nodes', 'confidence', 'REAL DEFAULT 1.0');
@@ -120,6 +180,7 @@ export function ensureMemorySchema(db: Database.Database): void {
     safeAddColumn(db, 'node_metrics', 'last_accessed', 'DATETIME');
     safeAddColumn(db, 'agent_traces', 'correlation_id', 'TEXT');
     migrateMemoryNodesCheckConstraint(db);
+    migrateDomainNodeType(db);
 }
 
 export function ensureUserProfileSchema(db: Database.Database): void {

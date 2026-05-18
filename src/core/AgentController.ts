@@ -55,6 +55,7 @@ import { LifecycleManager } from './LifecycleManager';
 import { getEventLoopMonitor } from '../shared/EventLoopMonitor';
 import type { NewClawConfig } from './agentControllerTypes';
 import { openDatabase, buildLanguageDirective, buildSystemPrompt } from './agentControllerSetup';
+import { bootstrapDomains } from '../memory/DomainRegistry';
 import { registerCommands } from './agentControllerCommands';
 import {
     transcribeAttachment,
@@ -119,6 +120,7 @@ export class AgentController {
 
         this.memory = new MemoryManager(this.db);
         this.memoryFacade = this.memory.getFacade();
+        bootstrapDomains(this.memory);
         this.providerFactory = new ProviderFactory({
             geminiKey: config.geminiApiKey,
             deepseekKey: config.deepseekApiKey,

@@ -425,7 +425,24 @@ export class AgentLoop {
             s.triggers?.some(t => userText.toLowerCase().includes(t.toLowerCase()))
         );
         if (matchedManual.length > 0) {
-            const manualBlock = matchedManual.map(s => `### SKILL MANUAL: ${s.name}\n${s.content}`).join('\n\n');
+            // Usa conteúdo completo (com seções TASK_ONLY) apenas quando a skill é a
+            // tarefa primária do turno — alta confiança e intent diretamente relacionada.
+            // Em correspondências parciais (trigger presente mas não é o objetivo principal),
+            // injeta globalContent, que omite restrições de escopo de tarefa.
+            const isPrimary = (skillName: string): boolean =>
+                intentDecision.confidence >= 0.75 &&
+                matchedManual.length === 1 &&
+                (intentDecision.intent?.toLowerCase().includes(skillName.toLowerCase()) ||
+                 intentDecision.skillContext?.toLowerCase().includes(skillName.toLowerCase()) ||
+                 false);
+
+            const manualBlock = matchedManual.map(s => {
+                const content = isPrimary(s.name) ? s.content : s.globalContent;
+                const scope = isPrimary(s.name) ? 'primary' : 'context';
+                log.info(`[SKILL] ${s.name} injetado como "${scope}" (confidence=${intentDecision.confidence})`);
+                return `### SKILL MANUAL: ${s.name}\n${content}`;
+            }).join('\n\n');
+
             skillContext = skillContext ? `${skillContext}\n\n${manualBlock}` : manualBlock;
             log.info(`[SKILL] Injetando ${matchedManual.length} skill(s) manual(ais): ${matchedManual.map(s => s.name).join(', ')}`);
         }
@@ -481,6 +498,7 @@ export class AgentLoop {
                         s.triggers?.some(t => (pending.originalUserText || '').toLowerCase().includes(t.toLowerCase()))
                     );
                     if (resumeSkills.length > 0) {
+                        // Na retomada pós-auth, a tarefa original é primária — usa conteúdo completo.
                         const resumeBlock = resumeSkills.map(s => `### SKILL MANUAL: ${s.name}\n${s.content}`).join('\n\n');
                         skillContext = skillContext ? `${skillContext}\n\n${resumeBlock}` : resumeBlock;
                         log.info(`[SKILL] [AUTH-RESUME] Re-injetando skill(s): ${resumeSkills.map(s => s.name).join(', ')}`);

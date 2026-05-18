@@ -20,7 +20,8 @@ export interface SkillMeta {
 }
 
 export interface Skill extends SkillMeta {
-    content: string;  // Conteúdo completo do SKILL.md
+    content: string;       // Conteúdo completo (injetado quando skill é tarefa primária)
+    globalContent: string; // Conteúdo sem seções TASK_ONLY (injetado em contexto parcial)
 }
 
 export class SkillLoader {
@@ -95,10 +96,24 @@ export class SkillLoader {
             return null;
         }
 
+        const fullContent = this.stripFrontmatter(content);
         return {
             ...meta,
-            content: this.stripFrontmatter(content)
+            content: fullContent,
+            globalContent: this.stripTaskOnlySections(fullContent)
         };
+    }
+
+    /**
+     * Remove seções marcadas com <!-- TASK_ONLY_START --> ... <!-- TASK_ONLY_END -->
+     * do conteúdo da skill. Essas seções só são injetadas quando a skill é a
+     * tarefa primária do turno (alta confiança de intenção).
+     */
+    private stripTaskOnlySections(content: string): string {
+        return content
+            .replace(/<!--\s*TASK_ONLY_START\s*-->[\s\S]*?<!--\s*TASK_ONLY_END\s*-->/g, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
     }
 
     /**

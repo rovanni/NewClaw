@@ -14,6 +14,7 @@ import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
 import { errorMessage } from '../shared/errors';
+import { classifyDomain } from '../memory/DomainRegistry';
 
 export class MemoryWriteTool implements ToolExecutor {
     name = 'memory_write';
@@ -136,11 +137,22 @@ export class MemoryWriteTool implements ToolExecutor {
             try { this.memoryManager.addEdge('core_user', id, 'has_identity'); } catch { /* ignore */ }
         }
 
-        if (type !== 'identity' && id !== 'core_user' && id !== 'user_identity') {
-            const userIdentity = this.memoryManager.getNode('user_identity');
-            if (userIdentity) {
-                const relation = this.inferRelation(type, name, content);
-                try { this.memoryManager.addEdge('user_identity', id, relation); } catch { /* ignore */ }
+        // Domain-aware auto-routing: connect via domain hub when confidence >= 0.65,
+        // otherwise fall back to direct user_identity connection (flat graph)
+        if (type !== 'identity' && type !== 'domain' && id !== 'core_user' && id !== 'user_identity') {
+            const domainResult = classifyDomain(`${name} ${content}`);
+            const domainHub = domainResult ? this.memoryManager.getNode(domainResult.domainId) : null;
+
+            if (domainHub && domainResult && domainResult.confidence >= 0.65) {
+                // High-confidence: route via domain hub (reduces flat star graph)
+                try { this.memoryManager.addEdge(domainResult.domainId, id, 'contains'); } catch { /* ignore */ }
+            } else {
+                // Low confidence: keep direct user_identity connection
+                const userIdentity = this.memoryManager.getNode('user_identity');
+                if (userIdentity) {
+                    const relation = this.inferRelation(type, name, content);
+                    try { this.memoryManager.addEdge('user_identity', id, relation); } catch { /* ignore */ }
+                }
             }
         }
 

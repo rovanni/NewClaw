@@ -16,7 +16,7 @@ export interface Conversation {
 
 export interface MemoryNode {
     id: string;
-    type: 'identity' | 'preference' | 'project' | 'context' | 'fact' | 'skill' | 'infrastructure';
+    type: 'identity' | 'preference' | 'project' | 'context' | 'fact' | 'skill' | 'infrastructure' | 'trait' | 'rule' | 'strategy' | 'knowledge' | 'domain';
     name: string;
     content: string;
     metadata?: Record<string, string>;

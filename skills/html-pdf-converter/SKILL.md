@@ -23,12 +23,17 @@ Converte HTML para PDF detectando e instalando automaticamente a melhor ferramen
 
 ---
 
-## ⚠️ REGRAS CRÍTICAS — LEIA ANTES DE EXECUTAR
+## ⚠️ REGRAS GERAIS
 
 1. **NUNCA improvise scripts npm/node.** Use APENAS o script de detecção automática abaixo.
 2. **NUNCA envie o arquivo `.html`.** O `send_document` deve sempre usar o arquivo `.pdf`.
-3. **NÃO leia o conteúdo do arquivo HTML.** Apenas confirme o nome com `ls`.
-4. O script imprime `PDF_GERADO:` seguido do caminho completo. Use EXATAMENTE esse caminho no `send_document`.
+3. O script imprime `PDF_GERADO:` seguido do caminho completo. Use EXATAMENTE esse caminho no `send_document`.
+
+<!-- TASK_ONLY_START -->
+## ⚠️ REGRAS ADICIONAIS — APENAS durante conversão para PDF
+
+4. **NÃO leia o conteúdo do arquivo HTML** — apenas confirme o nome com `ls`. A leitura do conteúdo é desnecessária para conversão e desperdiça contexto.
+<!-- TASK_ONLY_END -->
 
 ---
 

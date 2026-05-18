@@ -9,6 +9,7 @@
 
 import { MemoryManager, type MemoryNode } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
+import { classifyDomain } from '../memory/DomainRegistry';
 
 // ── Relevance Gate ───────────────────────────────────────────
 // Short greetings and social messages should NOT trigger semantic context injection.
@@ -59,44 +60,59 @@ export class ContextBuilder {
     /**
      * Build compact context for LLM prompt.
      * Returns a string of ~500-800 chars with the most relevant information.
+     *
+     * Strategy: domain-first routing (query → detectDomain → subgraph BFS → semantic filter)
+     * Fallback: global semantic search when domain confidence is low or subgraph is sparse.
      */
     async buildContext(query: string): Promise<string> {
-        // ── Relevance Gate ──
-        // Skip semantic context for social messages/greetings.
-        // Prevents stale context (e.g. crypto prices) from hijacking simple interactions.
-        if (isSocialOrGreeting(query)) {
-            return ''; // No context injection for greetings
-        }
+        if (isSocialOrGreeting(query)) return '';
 
         try {
-            const ranked = await this.rankAndSelect(query);
-            if (ranked.length === 0) {
-                return this.memory.getContext(200); // fallback
-            }
+            const ranked = await this.domainAwareRankAndSelect(query);
+            if (ranked.length === 0) return this.memory.getContext(200);
 
             const parts = ranked.map(n => {
                 let entry = `${n.name}(${n.type}): ${n.summary}`;
-                if (n.relations.length > 0) {
-                    entry += ` → ${n.relations.join(', ')}`;
-                }
+                if (n.relations.length > 0) entry += ` → ${n.relations.join(', ')}`;
                 return entry;
             });
 
             return 'Contexto: ' + parts.join('. ');
         } catch {
-            return this.memory.getContext(200); // fallback
+            return this.memory.getContext(200);
         }
     }
 
     /**
-     * Rank nodes by combined score and select top-K.
+     * Domain-aware retrieval: tries domain subgraph first, falls back to global search.
+     * Threshold: domain confidence >= 0.5 AND subgraph has >= 2 matching nodes.
      */
-    private async rankAndSelect(query: string): Promise<RankedNode[]> {
-        // 1. Semantic search (similarity)
-        const semanticResults = await this.semanticSearch(query);
+    private async domainAwareRankAndSelect(query: string): Promise<RankedNode[]> {
+        const domainClass = classifyDomain(query);
 
-        // 2. Calculate combined scores
-        const ranked: RankedNode[] = semanticResults.map((node) => {
+        if (domainClass && domainClass.confidence >= 0.5) {
+            const subgraphNodes = this.memory.getRelatedNodes(domainClass.domainId, 'contains');
+
+            if (subgraphNodes.length >= 2) {
+                const subgraphIds = new Set(subgraphNodes.map(n => n.id));
+                const allSemantic = await this.semanticSearch(query);
+                const domainFiltered = allSemantic.filter(n => subgraphIds.has(n.id));
+
+                if (domainFiltered.length >= 2) {
+                    return this.rankNodes(domainFiltered);
+                }
+            }
+        }
+
+        // Fallback: global semantic search
+        return this.rankAndSelect(query);
+    }
+
+    /**
+     * Rank a pre-fetched list of nodes by combined score and select top-K.
+     */
+    private rankNodes(nodes: Array<MemoryNode & { score: number; attentionScore?: number }>): RankedNode[] {
+        const ranked: RankedNode[] = nodes.map((node) => {
             const similarity = node.score || node.attentionScore || 0.5;
             const connectivity = this.getConnectivity(node.id);
             const recency = this.getRecency(node.id);
@@ -105,9 +121,8 @@ export class ContextBuilder {
                           (connectivity * this.W_CONNECTIVITY) +
                           (recency * this.W_RECENCY);
 
-            // BÔNUS DE TIPO: Preferências e Identidade são "âncoras" de contexto
-            if (node.type === 'preference') score *= 1.5; // +50% de peso
-            if (node.type === 'identity') score *= 1.3;   // +30% de peso
+            if (node.type === 'preference') score *= 1.5;
+            if (node.type === 'identity') score *= 1.3;
 
             return {
                 id: node.id,
@@ -119,9 +134,16 @@ export class ContextBuilder {
             };
         });
 
-        // 3. Sort by score, select top-K
         ranked.sort((a, b) => b.score - a.score);
         return ranked.slice(0, this.MAX_NODES);
+    }
+
+    /**
+     * Rank nodes by combined score and select top-K (global search).
+     */
+    private async rankAndSelect(query: string): Promise<RankedNode[]> {
+        const semanticResults = await this.semanticSearch(query);
+        return this.rankNodes(semanticResults);
     }
 
     /**

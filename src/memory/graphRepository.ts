@@ -14,6 +14,7 @@ export const NODE_TYPES: Record<string, { label: string; description: string }> 
     context:        { label: 'Contexto',        description: 'Infraestrutura, ambiente, configuração' },
     fact:           { label: 'Fato',            description: 'Informações temporais ou eventos' },
     infrastructure: { label: 'Infraestrutura',  description: 'VPS, servidores, exchanges, hosts físicos' },
+    domain:         { label: 'Domínio',         description: 'Hub de domínio cognitivo (CLIMA, CRIPTO, PROJETOS, etc.)' },
 };
 
 export const RELATION_ONTOLOGY: Record<string, { label: string; description: string; allowedFrom: string[]; allowedTo: string[] }> = {
@@ -26,7 +27,7 @@ export const RELATION_ONTOLOGY: Record<string, { label: string; description: str
     references:     { label: 'referencia',          description: 'Referência informativa',            allowedFrom: ['*'],                                   allowedTo: ['*'] },
     related_to:     { label: 'relacionado',         description: 'Relação genérica',                 allowedFrom: ['*'],                                   allowedTo: ['*'] },
     depends_on:     { label: 'depende de',          description: 'Dependência técnica',               allowedFrom: ['project','skill','context','infrastructure'], allowedTo: ['project','skill','context','infrastructure'] },
-    contains:       { label: 'contém',             description: 'Composição hierárquica',             allowedFrom: ['project','context'],                   allowedTo: ['skill','context','fact'] },
+    contains:       { label: 'contém',             description: 'Composição hierárquica',             allowedFrom: ['project','context','domain'],           allowedTo: ['skill','context','fact','preference','project','infrastructure','trait','rule','strategy','knowledge'] },
     created:        { label: 'criou',              description: 'Autoria/criação',                   allowedFrom: ['identity'],                             allowedTo: ['project','fact'] },
     reads:          { label: 'lê',                 description: 'Leitura de dados',                  allowedFrom: ['skill','project'],                      allowedTo: ['skill','context'] },
     writes:         { label: 'escreve',             description: 'Escrita de dados',                 allowedFrom: ['skill','project'],                      allowedTo: ['skill','context'] },
@@ -35,6 +36,8 @@ export const RELATION_ONTOLOGY: Record<string, { label: string; description: str
     has_goal:       { label: 'tem objetivo',        description: 'Objetivo ou meta',                  allowedFrom: ['identity'],                             allowedTo: ['project', 'fact'] },
     has_trait:      { label: 'possui traço',        description: 'Característica ou perícia',         allowedFrom: ['identity'],                             allowedTo: ['fact', 'preference'] },
     has_identity:   { label: 'tem identidade',      description: 'Relaciona usuário ao seu nome/ID', allowedFrom: ['identity'],                             allowedTo: ['identity'] },
+    has_domain:     { label: 'tem domínio',         description: 'Agrupa memórias por domínio cognitivo', allowedFrom: ['identity'],                        allowedTo: ['domain'] },
+    groups:         { label: 'agrupa',              description: 'Domínio agrega nós de memória',     allowedFrom: ['domain'],                               allowedTo: ['*'] },
 };
 
 export function validateRelation(fromType: string, relation: string, toType: string): boolean {
