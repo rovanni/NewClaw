@@ -153,23 +153,32 @@ export class MemoryGovernor {
             // Get source classification from metadata
             const source: FactSource = (node.metadata?.source as FactSource) || 'inferred';
 
-            // Base decay: confidence * decayFactor^days * sourceWeight
-            let newConfidence = (node.confidence || 1.0) * Math.pow(this.config.decayFactor, daysSinceUpdate);
+            // Epistemic-aware decay rate:
+            //   fact       → 0.995/day (~0.5% — essentially stable)
+            //   belief     → config.decayFactor (~2%/day default)
+            //   assumption → 0.95/day (~5%/day — fades quickly)
+            const epistemicDecay =
+                node.epistemic_status === 'fact'       ? 0.995 :
+                node.epistemic_status === 'assumption' ? 0.95  :
+                this.config.decayFactor;
+
+            // Base decay: confidence * epistemicDecay^days
+            let newConfidence = (node.confidence || 1.0) * Math.pow(epistemicDecay, daysSinceUpdate);
 
             // Accelerated decay for stale nodes (not accessed recently)
             const accessInfo = this.accessLog.get(node.id);
             if (!accessInfo && daysSinceUpdate > this.config.staleAfterDays) {
-                // Not accessed at all — extra 50% decay
-                newConfidence *= 0.5;
+                // Not accessed at all — extra 50% decay (beliefs/assumptions only; facts are resilient)
+                if (node.epistemic_status !== 'fact') newConfidence *= 0.5;
             } else if (accessInfo) {
                 const daysSinceAccess = (now.getTime() - accessInfo.lastAccessed.getTime()) / (1000 * 60 * 60 * 24);
                 if (daysSinceAccess > this.config.staleAfterDays) {
-                    newConfidence *= 0.7;
+                    if (node.epistemic_status !== 'fact') newConfidence *= 0.7;
                 }
             }
 
-            // Inferred facts decay faster
-            if (source === 'inferred') {
+            // Legacy: inferred source still decays faster if no epistemic_status assigned yet
+            if (!node.epistemic_status && source === 'inferred') {
                 newConfidence *= 0.95;
             }
 

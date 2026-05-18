@@ -17,6 +17,14 @@ export interface Conversation {
 /** Lifecycle states for semantic compression pipeline */
 export type LifecycleState = 'ACTIVE' | 'SUMMARIZED' | 'ARCHIVED' | 'EXPIRED' | 'SUPERSEDED';
 
+/**
+ * Epistemic status — certainty level of a memory node.
+ * - fact:       explicitly stated by user or confirmed by tool (confident, slow decay)
+ * - belief:     inferred by the agent with moderate confidence (normal decay)
+ * - assumption: speculative or low-confidence inference (fast decay, labeled in context)
+ */
+export type EpistemicStatus = 'fact' | 'belief' | 'assumption';
+
 export interface MemoryNode {
     id: string;
     type: 'identity' | 'preference' | 'project' | 'context' | 'fact' | 'skill' | 'infrastructure' | 'trait' | 'rule' | 'strategy' | 'knowledge' | 'domain';
@@ -35,6 +43,12 @@ export interface MemoryNode {
     lifecycle_state?: LifecycleState | null;
     /** Expiration timestamp for TTL-based working memory. NULL = no TTL. Set by MemoryGovernor. */
     expires_at?: string | null;
+    /**
+     * Epistemic status — certainty level of this memory.
+     * Inferred automatically at write time from confidence + source if not explicit.
+     * Affects decay rate and how the node is labeled in LLM context.
+     */
+    epistemic_status?: EpistemicStatus | null;
 }
 
 export interface MemoryEdge {

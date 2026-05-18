@@ -189,6 +189,7 @@ export function ensureMemorySchema(db: Database.Database): void {
     safeAddColumn(db, 'memory_nodes', 'last_accessed', 'DATETIME');
     safeAddColumn(db, 'memory_nodes', 'lifecycle_state', 'TEXT');
     safeAddColumn(db, 'memory_nodes', 'expires_at', 'DATETIME');
+    safeAddColumn(db, 'memory_nodes', 'epistemic_status', 'TEXT');
     safeAddColumn(db, 'memory_edges', 'last_accessed', 'DATETIME');
     safeAddColumn(db, 'memory_edges', 'domain', 'TEXT');
     safeAddColumn(db, 'node_metrics', 'last_accessed', 'DATETIME');

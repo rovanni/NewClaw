@@ -38,9 +38,10 @@ interface RankedNode {
     id: string;
     name: string;
     type: string;
-    summary: string;    // max 200 chars
-    score: number;      // combined score
-    relations: string[]; // max 3 related node names
+    summary: string;          // max 200 chars
+    score: number;            // combined score
+    relations: string[];      // max 3 related node names
+    epistemicStatus?: string | null; // 'fact' | 'belief' | 'assumption' | null
 }
 
 export class ContextBuilder {
@@ -121,7 +122,11 @@ export class ContextBuilder {
             }
 
             const parts = ranked.map(n => {
-                let entry = `${n.name}(${n.type}): ${n.summary}`;
+                const epistemicPrefix =
+                    n.epistemicStatus === 'belief'     ? '[crença] ' :
+                    n.epistemicStatus === 'assumption' ? '[suposição] ' :
+                    '';
+                let entry = `${n.name}(${n.type}): ${epistemicPrefix}${n.summary}`;
                 if (n.relations.length > 0) entry += ` → ${n.relations.join(', ')}`;
                 return entry;
             });
@@ -175,13 +180,19 @@ export class ContextBuilder {
             if (node.type === 'preference') score *= 1.5;
             if (node.type === 'identity') score *= 1.3;
 
+            // Epistemic weighting: facts are more reliable, assumptions less so
+            const es = (node as MemoryNode & { epistemic_status?: string }).epistemic_status;
+            if (es === 'fact')       score *= 1.1;
+            if (es === 'assumption') score *= 0.8;
+
             return {
                 id: node.id,
                 name: node.name || node.id,
                 type: node.type || 'fact',
                 summary: this.compactContent(node.content),
                 score,
-                relations: this.getTopRelations(node.id)
+                relations: this.getTopRelations(node.id),
+                epistemicStatus: es ?? null,
             };
         });
 

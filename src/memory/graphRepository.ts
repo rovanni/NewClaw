@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
 import { ConfidenceClassifier } from '../core/ConfidenceClassifier';
-import { MemoryNode, MemoryNodeRow } from './memoryTypes';
+import { MemoryNode, MemoryNodeRow, EpistemicStatus } from './memoryTypes';
 import { safeExec } from './memorySchema';
 
 const log = createLogger('GraphRepository');
@@ -49,6 +49,19 @@ export function validateRelation(fromType: string, relation: string, toType: str
     return true;
 }
 
+/**
+ * Infer epistemic status from confidence score and source.
+ * Sources that represent direct user statements or verified tool output → fact.
+ * LLM inferences with moderate confidence → belief.
+ * Low-confidence speculation → assumption.
+ */
+function inferEpistemicStatus(confidence: number, nodeType: string, source: string): EpistemicStatus {
+    const factSources = new Set(['tool_result', 'web_search', 'user_input', 'exec_command', 'read_file', 'ssh_exec', 'weather_api', 'crypto_analysis']);
+    if (factSources.has(source) || nodeType === 'fact' || confidence >= 0.85) return 'fact';
+    if (confidence >= 0.55) return 'belief';
+    return 'assumption';
+}
+
 export function addNode(db: Database.Database, classifier: ConfidenceClassifier, node: MemoryNode, source: string = 'unknown'): void {
     const classification = classifier.classify(node.content, source, node.metadata);
     if (!classifier.shouldPersist(classification.confidence)) {
@@ -72,23 +85,34 @@ export function addNode(db: Database.Database, classifier: ConfidenceClassifier,
         log.warn(`[GraphRepository] Truncated metadata for node ${node.id}: ${metadataJson.length} chars`);
     }
 
-    // ON CONFLICT DO UPDATE preserves lifecycle_state and expires_at — never reset by decay/update cycles
+    // Infer epistemic status if not explicitly provided
+    const epistemicStatus: EpistemicStatus = node.epistemic_status ?? inferEpistemicStatus(confidenceScore, node.type, source);
+
+    // ON CONFLICT DO UPDATE preserves lifecycle_state and expires_at — never reset by decay/update cycles.
+    // epistemic_status: upgrade only (fact > belief > assumption) — never downgrade a confirmed fact.
     db.prepare(`
-        INSERT INTO memory_nodes (id, type, name, content, metadata, weight, confidence, last_updated, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO memory_nodes (id, type, name, content, metadata, weight, confidence, last_updated, updated_at, epistemic_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
         ON CONFLICT(id) DO UPDATE SET
-            type         = excluded.type,
-            name         = excluded.name,
-            content      = excluded.content,
-            metadata     = excluded.metadata,
-            weight       = excluded.weight,
-            confidence   = excluded.confidence,
-            last_updated = excluded.last_updated,
-            updated_at   = CURRENT_TIMESTAMP
+            type             = excluded.type,
+            name             = excluded.name,
+            content          = excluded.content,
+            metadata         = excluded.metadata,
+            weight           = excluded.weight,
+            confidence       = excluded.confidence,
+            last_updated     = excluded.last_updated,
+            updated_at       = CURRENT_TIMESTAMP,
+            epistemic_status = CASE
+                WHEN epistemic_status = 'fact' THEN 'fact'
+                WHEN excluded.epistemic_status = 'fact' THEN 'fact'
+                WHEN epistemic_status = 'belief' OR excluded.epistemic_status = 'belief' THEN 'belief'
+                ELSE 'assumption'
+            END
     `).run(
         node.id, node.type, node.name, node.content,
         metadataJson, node.weight ?? 1.0, confidenceScore,
-        node.last_updated || new Date().toISOString()
+        node.last_updated || new Date().toISOString(),
+        epistemicStatus
     );
 
     try {
