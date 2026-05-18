@@ -8,7 +8,7 @@ import { errorMessage } from '../shared/errors';
 
 export class SendDocumentTool implements ToolExecutor {
     name = 'send_document';
-    description = 'Enviar um arquivo como documento. Suporta Telegram e Discord. Caminhos relativos são resolvidos a partir do workspace.';
+    description = 'Enviar um arquivo como documento ao usuário. Suporta Telegram e Discord. ⚠️ NUNCA envie arquivos .html — se o objetivo é entregar um PDF, passe o caminho do .pdf. Caminhos relativos são resolvidos a partir do workspace.';
     parameters = {
         type: 'object',
         properties: {
@@ -75,6 +75,11 @@ export class SendDocumentTool implements ToolExecutor {
 
         if (!fs.existsSync(resolvedPath)) {
             return { success: false, output: '', error: `Arquivo não encontrado: ${resolvedPath}` };
+        }
+
+        // Safety: reject .html files — the LLM should send .pdf, not .html
+        if (resolvedPath.toLowerCase().endsWith('.html')) {
+            return { success: false, output: '', error: `❌ RECUSADO: Tentativa de enviar arquivo .html ("${path.basename(resolvedPath)}"). Se você converteu um HTML para PDF, use o caminho do .pdf. O send_document NÃO deve enviar arquivos .html.` };
         }
 
         if (this.channel === 'discord') {
