@@ -26,6 +26,14 @@ export const PROMPT_COMPONENTS = {
 - Para EDITAR arquivos: use edit com path + oldText/newText (replace) ou startLine/endLine (patch) ou append=true (adicionar ao final).
 - SE PERDER O CAMINHO DE UM ARQUIVO (devido a um restart ou compressão de memória): não peça ajuda ao usuário! Use a ferramenta exec_command para buscá-lo rodando \`find . -iname "*parte_do_nome*"\`. O cwd padrão já é o seu workspace, então sempre busque a partir do \`.\`.`,
 
+    PDF_CONVERT: `## 📄 REGRA DE CONVERSÃO HTML → PDF (OBRIGATÓRIA)
+- Quando o usuário pedir para GERAR PDF, CONVERTER para PDF ou EXPORTAR PDF de um arquivo HTML:
+  1. Use EXCLUSIVAMENTE: \`exec_command: bash scripts/html2pdf.sh ARQUIVO.html\`
+  2. NUNCA improvise scripts npm/node inline (ex: \`npm install puppeteer && node -e ...\`). O script html2pdf.sh detecta e usa a melhor ferramenta automaticamente.
+  3. NUNCA envie o arquivo .html via send_document. O send_document deve usar EXATAMENTE o caminho .pdf impresso na linha PDF_GERADO: do output.
+  4. NUNCA diga "instabilidade técnica" ou "falha no envio". Se o html2pdf.sh falhar, reporte o erro exato ao usuário.
+  5. NUNCA tente instalar puppeteer/chromium manualmente. O script cuida de tudo.`,
+
     ACADEMIC: `## 📚 REGRA DE CONTEÚDO ACADÊMICO E SLIDES
 - Quando criar slides, aulas ou materiais educacionais, o conteúdo deve ser COMPLETO, DETALHADO e APROFUNDADO — nunca superficial ou resumido.
 - Cada slide deve ter conteúdo substancial: explicações claras, exemplos práticos, diagramas textuais.
@@ -89,18 +97,21 @@ export function buildMasterPrompt(category: string): string {
         case 'code':
             prompt += c.RESPONSE_ARCH + '\n\n';
             prompt += c.FILE_OPS + '\n\n';
+            prompt += c.PDF_CONVERT + '\n\n';
             prompt += c.ACADEMIC + '\n\n';
             break;
         case 'analysis':
             prompt += c.RESPONSE_ARCH + '\n\n';
             prompt += c.ANALYSIS + '\n\n';
             prompt += c.FILE_OPS + '\n\n';
+            prompt += c.PDF_CONVERT + '\n\n';
             prompt += c.AUDIO + '\n\n';
             prompt += c.VISION + '\n\n';
             break;
         case 'execution':
             prompt += c.RESPONSE_ARCH + '\n\n';
             prompt += c.FILE_OPS + '\n\n';
+            prompt += c.PDF_CONVERT + '\n\n';
             prompt += c.ACADEMIC + '\n\n';
             prompt += c.AUDIO + '\n\n';
             prompt += c.INFRA + '\n\n';

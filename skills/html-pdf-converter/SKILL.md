@@ -1,185 +1,59 @@
 ---
 name: html-pdf-converter
-description: Converte arquivos HTML para PDF. Detecta automaticamente a ferramenta disponível; em servidores Linux sem display usa Puppeteer com Chromium embutido.
-version: "2.2"
+description: Converte arquivos HTML para PDF usando o script html2pdf.sh. Suporta slides com JavaScript. Detecta automaticamente a melhor ferramenta disponível.
+version: "3.0"
 triggers: pdf, converter, gerar pdf, transformar em pdf, aula para pdf, slides para pdf, html para pdf, exportar pdf
 tools: exec_command, send_document
 ---
 
-# HTML to PDF Converter Skill
+# HTML to PDF Converter
 
-Converte HTML para PDF detectando e instalando automaticamente a melhor ferramenta disponível.
+Converte HTML para PDF usando o script dedicado `scripts/html2pdf.sh`.
 
-## Contexto por ambiente
+## ⚠️ REGRAS ABSOLUTAS — VIOLAÇÃO = FALHA CRÍTICA
 
-| Ambiente | Ferramenta recomendada |
-|---|---|
-| Ubuntu Server / VPS (sem display) | **Puppeteer** (Chromium embutido, via npm) |
-| Desktop Linux com Chrome/Chromium | Chrome/Chromium headless |
-| macOS | Chrome headless ou wkhtmltopdf |
-| Windows | Chrome headless |
-
-> **Ubuntu Server 24.04**: `chromium-browser` e `chromium` são wrappers Snap e não funcionam em muitas VPS (LXC/OpenVZ). Use Puppeteer.
+1. **USE APENAS** o comando `bash scripts/html2pdf.sh <arquivo.html>`. **NUNCA** improvise scripts npm/node inline.
+2. **NUNCA** envie arquivos `.html` via `send_document`. Envie **APENAS** o `.pdf`.
+3. **NUNCA** leia o conteúdo do HTML. Use `ls` apenas para confirmar o nome.
+4. **NUNCA** instale pacotes npm (`npm install puppeteer` etc.). O script já detecta tudo.
+5. O script imprime `PDF_GERADO: <caminho>`. Use EXATAMENTE esse caminho no `send_document`.
 
 ---
 
-## ⚠️ REGRAS CRÍTICAS — LEIA ANTES DE EXECUTAR
+## Passo 1 — Converter (UM comando apenas)
 
-1. **NUNCA improvise scripts npm/node.** Use APENAS o script de detecção automática abaixo.
-2. **NUNCA envie o arquivo `.html`.** O `send_document` deve sempre usar o arquivo `.pdf`.
-3. **NÃO leia o conteúdo do arquivo HTML.** Apenas confirme o nome com `ls`.
-4. O script imprime `PDF_GERADO:` seguido do caminho completo. Use EXATAMENTE esse caminho no `send_document`.
+Execute o script com o caminho do arquivo HTML:
 
----
-
-## Passo 1 — Identificar o nome do arquivo HTML
-
-```bash
-ls *.html 2>/dev/null || ls workspace/*.html 2>/dev/null
+```
+exec_command: bash scripts/html2pdf.sh NOME.html
 ```
 
-Anote somente o nome base (sem extensão). Exemplo: se existir `slides.html`, o BASENAME é `slides`.
+**Substitua `NOME.html` pelo arquivo real.** Exemplo: `bash scripts/html2pdf.sh Aula_Analise_Lexica_Completa_03.html`
 
----
-
-## Passo 2 — Converter (script de detecção automática)
-
-Execute tudo em **uma única chamada** `exec_command`. Substitua `ARQUIVO` pelo nome base real (sem `.html`):
-
-```bash
-BASENAME="ARQUIVO"
-
-# Detectar INPUT e OUTPUT
-if [ -f "${BASENAME}.html" ]; then
-  INPUT="$(pwd)/${BASENAME}.html"
-  OUTPUT="$(pwd)/${BASENAME}.pdf"
-elif [ -f "workspace/${BASENAME}.html" ]; then
-  INPUT="$(pwd)/workspace/${BASENAME}.html"
-  OUTPUT="$(pwd)/workspace/${BASENAME}.pdf"
-else
-  echo "ERRO: Arquivo ${BASENAME}.html não encontrado"
-  exit 1
-fi
-
-echo "INPUT: $INPUT"
-echo "OUTPUT: $OUTPUT"
-
-convert_with_puppeteer() {
-  local PDIR
-  for PDIR in \
-    "$(npm root -g 2>/dev/null)/puppeteer" \
-    "$(npm root 2>/dev/null)/puppeteer" \
-    "/usr/local/lib/node_modules/puppeteer" \
-    "/usr/lib/node_modules/puppeteer"; do
-    [ -d "$PDIR" ] || continue
-    node -e "
-const p=require('$PDIR');
-(async()=>{
-  const b=await p.launch({args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage']});
-  const pg=await b.newPage();
-  await pg.goto('file://$INPUT',{waitUntil:'networkidle0',timeout:30000});
-  await pg.addStyleTag({content:[
-    '.slide,.step,section,[class*=\"slide\"],[class*=\"step\"]{display:block!important;visibility:visible!important;opacity:1!important;position:relative!important;}',
-    'body,html{overflow:visible!important;height:auto!important;}',
-    '*{animation:none!important;transition:none!important;}'
-  ].join('')});
-  await pg.pdf({path:'$OUTPUT',format:'A4',landscape:true,printBackground:true,
-    margin:{top:'10mm',bottom:'10mm',left:'10mm',right:'10mm'}});
-  await b.close();
-  console.log('ok');
-})().catch(e=>{process.stderr.write(e.message+'\n');process.exit(1)});" 2>&1 && return 0
-  done
-  return 1
-}
-
-convert_with_chrome() {
-  local BIN
-  for BIN in google-chrome google-chrome-stable chromium chromium-browser; do
-    command -v "$BIN" &>/dev/null || continue
-    "$BIN" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
-      --print-to-pdf="$OUTPUT" --print-to-pdf-no-header \
-      "file://$INPUT" 2>&1 && return 0
-  done
-  return 1
-}
-
-convert_with_wkhtmltopdf() {
-  command -v wkhtmltopdf &>/dev/null || return 1
-  # wkhtmltopdf has no JavaScript — inject CSS to force all slides visible before converting
-  local TMP="${OUTPUT%.pdf}_tmp_allslides.html"
-  sed 's|</head>|<style>.slide,.step,section,[class*="slide"],[class*="step"]{display:block!important;visibility:visible!important;opacity:1!important;position:relative!important;}body,html{overflow:visible!important;height:auto!important;}*{animation:none!important;transition:none!important;}</style></head>|i' "$INPUT" > "$TMP"
-  wkhtmltopdf --orientation Landscape --quiet "$TMP" "$OUTPUT" 2>&1
-  local RET=$?
-  rm -f "$TMP"
-  return $RET
-}
-
-# Tentativa 1: Puppeteer instalado
-if convert_with_puppeteer; then
-  SIZE=$(stat -c%s "$OUTPUT" 2>/dev/null || echo 0)
-  if [ "$SIZE" -gt 1000 ]; then
-    echo "PDF_GERADO: $OUTPUT"
-    exit 0
-  fi
-fi
-
-# Tentativa 2: Chrome/Chromium do sistema
-if convert_with_chrome; then
-  SIZE=$(stat -c%s "$OUTPUT" 2>/dev/null || echo 0)
-  if [ "$SIZE" -gt 1000 ]; then
-    echo "PDF_GERADO: $OUTPUT"
-    exit 0
-  fi
-fi
-
-# Tentativa 3: wkhtmltopdf (sem suporte a JS — fallback)
-if convert_with_wkhtmltopdf; then
-  SIZE=$(stat -c%s "$OUTPUT" 2>/dev/null || echo 0)
-  if [ "$SIZE" -gt 1000 ]; then
-    echo "AVISO: PDF gerado com wkhtmltopdf (sem JavaScript — MathJax/KaTeX podem não renderizar)"
-    echo "PDF_GERADO: $OUTPUT"
-    exit 0
-  fi
-fi
-
-# Nenhuma ferramenta encontrada — instalar Puppeteer automaticamente
-echo "Nenhuma ferramenta PDF encontrada. Instalando Puppeteer (pode demorar ~2 min)..."
-npm install -g puppeteer --loglevel=error 2>&1
-if convert_with_puppeteer; then
-  SIZE=$(stat -c%s "$OUTPUT" 2>/dev/null || echo 0)
-  if [ "$SIZE" -gt 1000 ]; then
-    echo "PDF_GERADO: $OUTPUT"
-    exit 0
-  fi
-fi
-
-echo "FALHA: Não foi possível gerar o PDF. Node.js/npm instalados? $(node --version 2>/dev/null || echo 'Node não encontrado')"
-exit 1
+O script detecta automaticamente a melhor ferramenta (puppeteer-core+Chrome > puppeteer > wkhtmltopdf) e imprime:
+```
+PDF_GERADO: /caminho/completo/NOME.pdf
+METODO: puppeteer-core+chrome
+TAMANHO: 12345 bytes
 ```
 
 ---
 
-## Passo 3 — Enviar o PDF
+## Passo 2 — Enviar o PDF
 
-A linha `PDF_GERADO: <caminho>` no output acima indica o caminho exato do arquivo.
-
-Use `send_document` com **EXATAMENTE** esse caminho:
+Use `send_document` com EXATAMENTE o caminho da linha `PDF_GERADO:`:
 
 ```
-send_document(file_path="<caminho da linha PDF_GERADO>")
+send_document: file_path="/caminho/impresso/PDF_GERADO"
 ```
 
-**NÃO use o caminho do `.html`.**
-**NÃO invente o caminho — use o que foi impresso.**
-
-Se o `wkhtmltopdf` foi usado, avise o usuário que JavaScript (MathJax/KaTeX) pode não ter renderizado corretamente.
+Se a linha disser `AVISO: wkhtmltopdf`, informe o usuário que JavaScript pode não ter renderizado.
 
 ---
 
-## Regras
+## O que NÃO fazer
 
-- **NUNCA** improvise scripts npm inline (ex: `npm install puppeteer && node -e "..."`). Use o script acima integralmente.
-- **NUNCA** envie o `.html` — envie APENAS o `.pdf` via `send_document`.
-- **NUNCA** use `npm install puppeteer-core` ou `chromium-browser-headless` — esses pacotes não existem. O único correto é `puppeteer`.
-- O flag `--no-sandbox` é necessário em servidores Linux sem display; é seguro em ambientes controlados.
-- Se a instalação falhar, reporte claramente ao usuário o que está faltando.
+- ❌ `npm install puppeteer && node -e "..."` — NUNCA improvise
+- ❌ `send_document(file_path="arquivo.html")` — NUNCA envie .html
+- ❌ Tentar múltiplos métodos manualmente — o script já faz isso
+- ❌ Ler o conteúdo do HTML — não é necessário
