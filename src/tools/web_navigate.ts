@@ -160,10 +160,35 @@ export class WebNavigateTool implements ToolExecutor {
             return browserDump;
         }
 
-        return {
-            mode: 'html-fallback',
-            content: this.extractReadableText(html, maxChars)
-        };
+        // Try static HTML extraction first
+        const staticContent = this.extractReadableText(html, maxChars);
+
+        // If content is thin (JS-rendered page), try Jina AI Reader
+        if (staticContent.length < 300) {
+            const jinaContent = await this.fetchViaJina(url, maxChars);
+            if (jinaContent) {
+                return { mode: 'html-fallback', content: `[jina-reader]\n${jinaContent}` };
+            }
+        }
+
+        return { mode: 'html-fallback', content: staticContent };
+    }
+
+    private async fetchViaJina(url: string, maxChars: number): Promise<string | null> {
+        try {
+            const resp = await fetch(`https://r.jina.ai/${url}`, {
+                headers: { 'Accept': 'text/plain, text/markdown', 'User-Agent': 'Mozilla/5.0' },
+                signal: AbortSignal.timeout(20000)
+            });
+            if (!resp.ok) return null;
+            const text = (await resp.text()).trim();
+            if (text.length < 100) return null;
+            // Strip metadata header lines
+            const content = text.replace(/^(Title|URL|Published Time):.*$/gm, '').trim();
+            return this.limitOutput(content, maxChars);
+        } catch {
+            return null;
+        }
     }
 
     private async dumpUrlWithTextBrowser(url: string, maxChars: number): Promise<BrowserDumpResult | null> {

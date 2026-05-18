@@ -315,8 +315,38 @@ export class WebSearchTool implements ToolExecutor {
     }
 
     private async readPage(candidate: SearchCandidate): Promise<ReadablePage | null> {
+        // Try direct fetch first
+        const direct = await this.fetchAndExtract(candidate.url);
+        if (direct && direct.content.length >= 200) {
+            return {
+                url: candidate.url,
+                title: direct.title || candidate.title,
+                content: direct.content,
+                excerpt: direct.content.slice(0, 700),
+                source: candidate.source
+            };
+        }
+
+        // Fallback: Jina AI Reader renders JS-heavy pages and returns clean markdown
+        const jina = await this.fetchViaJina(candidate.url);
+        if (jina && jina.length >= 100) {
+            const title = jina.match(/^Title:\s*(.+)$/m)?.[1]?.trim() || candidate.title;
+            const content = jina.replace(/^(Title|URL|Published Time):.*$/gm, '').trim();
+            return {
+                url: candidate.url,
+                title,
+                content: content.slice(0, 3500),
+                excerpt: content.slice(0, 700),
+                source: candidate.source
+            };
+        }
+
+        return null;
+    }
+
+    private async fetchAndExtract(url: string): Promise<{ title: string; content: string } | null> {
         try {
-            const resp = await fetch(candidate.url, {
+            const resp = await fetch(url, {
                 headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
                 redirect: 'follow',
                 signal: AbortSignal.timeout(12000)
@@ -326,15 +356,25 @@ export class WebSearchTool implements ToolExecutor {
 
             const html = await resp.text();
             const extracted = this.extractReadableContent(html);
-            if (!extracted.content) return null;
+            return extracted.content ? extracted : null;
+        } catch {
+            return null;
+        }
+    }
 
-            return {
-                url: candidate.url,
-                title: extracted.title || candidate.title,
-                content: extracted.content,
-                excerpt: extracted.content.slice(0, 700),
-                source: candidate.source
-            };
+    private async fetchViaJina(url: string): Promise<string | null> {
+        try {
+            const jinaUrl = `https://r.jina.ai/${url}`;
+            const resp = await fetch(jinaUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0',
+                    'Accept': 'text/plain, text/markdown'
+                },
+                signal: AbortSignal.timeout(20000)
+            });
+            if (!resp.ok) return null;
+            const text = await resp.text();
+            return text.trim().length > 50 ? text : null;
         } catch {
             return null;
         }
