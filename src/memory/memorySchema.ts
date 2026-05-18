@@ -137,6 +137,7 @@ export function migrateDomainNodeType(db: Database.Database): void {
 
         log.info('migration_start', "Migrating memory_nodes CHECK constraint to support 'domain' type...");
         db.pragma('foreign_keys = OFF');
+        db.exec('DROP TABLE IF EXISTS memory_nodes_domain');
 
         db.exec(`
             CREATE TABLE memory_nodes_domain (
@@ -185,6 +186,7 @@ export function ensureMemorySchema(db: Database.Database): void {
     safeAddColumn(db, 'memory_nodes', 'confidence', 'REAL DEFAULT 1.0');
     safeAddColumn(db, 'memory_nodes', 'last_updated', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
     safeAddColumn(db, 'memory_nodes', 'domain', 'TEXT');
+    safeAddColumn(db, 'memory_nodes', 'last_accessed', 'DATETIME');
     safeAddColumn(db, 'memory_edges', 'last_accessed', 'DATETIME');
     safeAddColumn(db, 'memory_edges', 'domain', 'TEXT');
     safeAddColumn(db, 'node_metrics', 'last_accessed', 'DATETIME');

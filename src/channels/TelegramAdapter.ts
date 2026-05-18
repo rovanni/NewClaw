@@ -224,6 +224,7 @@ export class TelegramAdapter implements ChannelAdapter {
             log.info('reconnect_attempt', 'Attempting to reconnect Telegram bot...');
             this.started = false;
             this._isConnected = false;
+            this.startRetries = 0;
             try {
                 await this.start();
             } catch (e) {
