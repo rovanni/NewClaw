@@ -378,6 +378,63 @@ const DETERMINISTIC_RULES: DeterministicRule[] = [
         toolName: 'edit',
         toolParams: (_input: string) => ({ path: './workspace/' }),
     },
+
+    // ── Weather queries ──
+    {
+        id: 'weather_query',
+        category: 'information',
+        executionMode: 'tool',
+        keywords: [
+            'previsão do tempo', 'previsão de tempo', 'tempo hoje', 'clima hoje',
+            'clima amanhã', 'temperatura hoje', 'vai chover', 'está chovendo',
+            'como está o tempo', 'como esta o tempo', 'como tá o tempo',
+            'clima agora', 'tempo agora',
+        ],
+        patterns: [
+            /(previs[ãa]o\s*(do|de)\s*tempo|como\s+(est[áa]|t[áa])\s+o\s+(tempo|clima)|clima\s+(hoje|amanh[ãa]|agora)|tempo\s+(hoje|amanh[ãa]|agora)|temperatura\s+(atual|de\s+hoje|amanh[ãa])|vai\s+chover|est[áa]\s+chovendo|como\s+est[áa]\s+o\s+clima)/i,
+        ],
+        confidence: 0.93,
+        riskLevel: 'low',
+        cognitiveLoad: 'minimal',
+        requiresReasoning: false,
+        requiresTools: true,
+        requiresMemory: false,
+        requiresPlanning: false,
+        requiresStreaming: false,
+        modelCategory: 'light',
+        terminalAction: false,
+        toolName: 'weather',
+        toolParams: (input: string) => {
+            const cityMatch = input.match(/(?:em|de|para|n[ao])\s+([A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][a-záàãâéêíóõôúç]+(?:\s+[A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][a-záàãâéêíóõôúç]+)*)/);
+            const city = cityMatch?.[1]?.trim();
+            return city ? { city } : {};
+        },
+    },
+
+    // ── Current time/date queries ──
+    {
+        id: 'current_time',
+        category: 'information',
+        executionMode: 'direct',
+        keywords: [
+            'que horas são', 'que horas sao', 'que hora é', 'que hora e',
+            'hora atual', 'horas agora', 'que dia é hoje', 'que dia e hoje',
+            'data de hoje', 'data atual', 'qual a data', 'qual o dia',
+        ],
+        patterns: [
+            /(que\s+hora[s]?\s+(s[ãa]o|[eé])|hora\s+atual|que\s+dia\s+[eé]\s+hoje|data\s+(de\s+hoje|atual)|qual\s+(a\s+data|o\s+dia))/i,
+        ],
+        confidence: 0.95,
+        riskLevel: 'low',
+        cognitiveLoad: 'minimal',
+        requiresReasoning: false,
+        requiresTools: false,
+        requiresMemory: false,
+        requiresPlanning: false,
+        requiresStreaming: false,
+        modelCategory: 'light',
+        terminalAction: false,
+    },
 ];
 
 // ── Semantic categories (used when no deterministic match) ──────────

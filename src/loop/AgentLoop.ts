@@ -176,7 +176,7 @@ export class AgentLoop {
         finalResponse?: string
     ): Promise<void> {
         try {
-            const timeout = new Promise<null>(res => setTimeout(() => res(null), 20000));
+            const timeout = new Promise<null>(res => setTimeout(() => res(null), 60000));
             const validation = await Promise.race([
                 this.observer.validate(userText, intent, toolName, toolOutput, finalResponse ?? ''),
                 timeout
@@ -354,6 +354,74 @@ export class AgentLoop {
         }
     }
 
+    // ── Tool-first fast path ────────────────────────────────────────────────────
+
+    /**
+     * Executes a tool directly without spinning up the LLM cognition loop.
+     * Returns the tool output as the final response, or null to fall back to the full loop.
+     *
+     * FSM transitions on success: TOOL_REQUESTED → EXECUTING_TOOL → TOOL_COMPLETED → FINAL_READY.
+     * On failure (tool not found or tool error): returns null with no FSM changes so the
+     * cognition loop can continue normally from THINKING state.
+     */
+    private async toolFirstFastPath(
+        conversationId: string,
+        userText: string,
+        intentDecision: IntentDecision,
+        channelContext: ChannelContext | undefined,
+        trace: ExecutionTrace,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void
+    ): Promise<string | ProcessedResult | null> {
+        const toolName = intentDecision.toolName!;
+        const tool = this.tools.get(toolName);
+
+        if (!tool) {
+            log.warn(`[FAST-PATH] Tool "${toolName}" not registered — falling back`);
+            return null;
+        }
+
+        const toolArgs = intentDecision.toolParams ?? {};
+        log.info(`[${this.ts()}] [FAST-PATH] Tool-first "${toolName}" args=${JSON.stringify(toolArgs)}`);
+
+        if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
+            (tool as unknown as ContextAwareTool).setContext(channelContext.chatId || '', channelContext.channel);
+        }
+
+        const toolResult = await tool.execute(toolArgs);
+
+        if (!toolResult.success) {
+            log.warn(`[FAST-PATH] Tool "${toolName}" failed (${toolResult.error}) — falling back`);
+            return null; // FSM stays in THINKING — loop proceeds normally
+        }
+
+        log.info(`[${this.ts()}] [FAST-PATH] Tool "${toolName}" succeeded (${toolResult.output.length} chars)`);
+
+        // Commit FSM transitions only after confirmed success
+        move('TOOL_REQUESTED', { step: 1, tool: toolName, mode: 'fast_path' });
+        move('TOOL_COMPLETED', { step: 1, tool: toolName, success: true });
+
+        traceManager.addStep(trace, 'tool_call',   { tool: toolName, input: toolArgs });
+        traceManager.addStep(trace, 'tool_result', { tool: toolName, success: true, output: toolResult.output });
+        this.decisionMemory.recordFromLoop(toolName, true, 0, userText);
+        this.skillLearner.recordPattern(userText, toolName, true, 0);
+
+        this.lastToolExecution = {
+            toolName,
+            toolOutput: toolResult.output,
+            intent: intentDecision.intent,
+            category: intentDecision.category,
+        };
+
+        const finalText = toolResult.output;
+
+        move('FINAL_READY', { step: 1, reason: 'tool_fast_path' });
+        traceManager.completeTrace(trace, 'completed', finalText);
+        this.persistTrace(trace, 1, 'completed', finalText, channelContext);
+        this.schedulePostTurnValidation(userText, finalText, trace.id, conversationId);
+
+        return { text: finalText };
+    }
+
     // ── Core execution loop ────────────────────────────────────────────────────
 
     private async runWithTools(conversationId: string, userText: string, iteration: number, _userId?: string, channelContext?: ChannelContext): Promise<string | ProcessedResult> {
@@ -408,6 +476,37 @@ export class AgentLoop {
             traceManager.completeTrace(trace, 'completed', 'Greeting fast path');
             const greetings = ['Olá! 👋', 'Oi! Como posso ajudar?', 'E aí! 🚀', 'Olá! Tô aqui! 💪', 'Opa! Bora? 😊'];
             return greetings[Math.floor(Math.random() * greetings.length)];
+        }
+
+        // ── Current-time fast path ──
+        // Deterministic direct facts (date/time) — Node.js has the clock, no LLM needed.
+        if (
+            intentDecision.source === 'deterministic' &&
+            intentDecision.executionMode === 'direct' &&
+            intentDecision.cognitiveLoad === 'minimal' &&
+            !intentDecision.requiresTools
+        ) {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+            const dateStr = now.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+            const reply = `🕐 ${timeStr} — ${dateStr}`;
+            log.info(`[${this.ts()}] [FAST-PATH] current_time direct answer`);
+            move('FINAL_READY');
+            traceManager.completeTrace(trace, 'completed', reply);
+            this.persistTrace(trace, 1, 'completed', reply, channelContext);
+            return reply;
+        }
+
+        // ── Tool-first fast path ──
+        // Deterministic tool intents (weather, etc.) bypass the cognition LLM loop entirely.
+        // Falls back to the full loop when the tool is missing or returns an error.
+        if (intentDecision.executionMode === 'tool' && intentDecision.toolName && intentDecision.confidence >= 0.85) {
+            const fastResult = await this.toolFirstFastPath(conversationId, userText, intentDecision, channelContext, trace, move);
+            if (fastResult !== null) {
+                this.activeTurns.delete(conversationId);
+                return fastResult;
+            }
+            log.info(`[${this.ts()}] [FAST-PATH] Tool fast path fell back to cognition loop`);
         }
 
         this.classificationMemory.store(userText, intentDecision.modelCategory, intentDecision.confidence);
@@ -627,7 +726,12 @@ export class AgentLoop {
                 response.attempts?.[0]?.model || 'unknown'
             );
 
-            const structured = this.protocolParser.strictParse(response.content || '');
+            // Detect native tool calls BEFORE strictParse so the parser can skip
+            // content-format validation when the model already communicated via toolCalls[].
+            // (e.g. kimi-k2.6 puts its reasoning in the thinking field, not JSON protocol)
+            const hasNativeToolCalls = (response.toolCalls?.length ?? 0) > 0;
+
+            const structured = this.protocolParser.strictParse(response.content || '', hasNativeToolCalls);
             const atomicData = parseLLMResponse(response.content || '');
             const finalText = extractFinalText(response, atomicData);
 
@@ -638,7 +742,6 @@ export class AgentLoop {
             loopMessages.push({ role: 'assistant', content: response.content, toolCalls: response.toolCalls });
 
             const wantsTool = structured?.type === 'tool_call' || (atomicData?.action?.type === 'tool' && atomicData?.action?.name);
-            const hasNativeToolCalls = response.toolCalls && response.toolCalls.length > 0;
 
             // Track when the model demonstrates native tool capability.
             if (hasNativeToolCalls) {

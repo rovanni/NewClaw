@@ -60,8 +60,18 @@ export class ProtocolParser {
      * Returns null ONLY when the response is genuinely empty.
      * Throws ProtocolViolationError when recovery fails.
      */
-    strictParse(content: string): StructuredAgentResponse | null {
+    strictParse(content: string, hasNativeToolCalls = false): StructuredAgentResponse | null {
         if (!content || !content.trim()) {
+            return null;
+        }
+
+        // ── Stage 0: Native tool calls already extracted by caller ──
+        // When the model communicates via response.toolCalls[] (e.g. kimi-k2.6, qwen),
+        // the content field may contain raw thinking text — not a JSON protocol response.
+        // Skip format validation entirely; the caller handles tool execution.
+        if (hasNativeToolCalls) {
+            this.metrics.recordCompliant();
+            log.info(`[PROTOCOL] ✅ Native tool_call format — skipping content parse, delegating to caller`);
             return null;
         }
 
