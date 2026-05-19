@@ -520,7 +520,10 @@ export class AgentLoop {
         });
         log.info(`[${this.ts()}] [UNIFIED-ROUTER] intent=${intentDecision.intent} mode=${intentDecision.executionMode} category=${intentDecision.category} confidence=${intentDecision.confidence} source=${intentDecision.source} model=${intentDecision.modelCategory}`);
 
-        if (intentDecision.terminalAction && intentDecision.executionMode === 'direct' && intentDecision.category === 'greeting') {
+        // Fast-paths must not fire when there is a pending auth action — the auth check handles those turns.
+        const hasPendingAuth = !!this.authManager.getPending(conversationId);
+
+        if (!hasPendingAuth && intentDecision.terminalAction && intentDecision.executionMode === 'direct' && intentDecision.category === 'greeting') {
             log.info(`[${this.ts()}] [FAST-PATH] Greeting detected — skipping LLM`);
             move('FINAL_READY');
             traceManager.completeTrace(trace, 'completed', 'Greeting fast path');
@@ -531,6 +534,7 @@ export class AgentLoop {
         // ── Current-time fast path ──
         // Deterministic direct facts (date/time) — Node.js has the clock, no LLM needed.
         if (
+            !hasPendingAuth &&
             intentDecision.source === 'deterministic' &&
             intentDecision.executionMode === 'direct' &&
             intentDecision.cognitiveLoad === 'minimal' &&

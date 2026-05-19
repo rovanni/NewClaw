@@ -286,13 +286,12 @@ export class MessageBus {
             const responseText = typeof response === 'string' ? response : response.text;
             const responseOptions = typeof response === 'string' ? undefined : response.options;
 
-            log.info('processing_done', `Duration: ${duration}ms`, { 
+            log.info('processing_done', `Duration: ${duration}ms`, {
                 responseLength: responseText?.length || 0,
                 channel: msg.channel
             });
-            await this.sessionManager.recordAssistantMessage(sessionKey, responseText || '', { model: 'newclaw' });
 
-            // 4. Send response back through the originating channel
+            // 4. Send response back through the originating channel (before DB write so a DB error never blocks the user)
             if (adapter) {
                 const normalizedResponse: NormalizedResponse = {
                     text: responseText || 'Desculpe, não consegui gerar uma resposta.',
@@ -301,6 +300,10 @@ export class MessageBus {
                 };
                 await adapter.send(normalizedResponse, msg.rawContext);
             }
+
+            await this.sessionManager.recordAssistantMessage(sessionKey, responseText || '', { model: 'newclaw' }).catch(err => {
+                log.error('record_assistant_message_failed', err, 'Failed to persist assistant message; response already sent');
+            });
 
         } catch (error) {
             const isTimeout = errorMessage(error)?.includes('Timeout') || errorMessage(error)?.includes('abort');
