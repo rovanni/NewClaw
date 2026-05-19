@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SkillLearner - Auto-skill creation from experience
  * Inspired by Hermes Agent's self-improving learning loop
  *
@@ -124,6 +124,31 @@ export class SkillLearner {
             if (!columns.has(migration.column)) {
                 this.db.exec(migration.sql);
             }
+        }
+
+        this.cleanupCorruptedSkills();
+    }
+
+    private cleanupCorruptedSkills(): void {
+        // Remove skills com encoding corrompido (double-encoded UTF-8)
+        const corrupted = this.db.prepare(
+            `DELETE FROM auto_skills WHERE name LIKE '%Ã%' OR name LIKE '%Â%'`
+        ).run();
+        if (corrupted.changes > 0) {
+            log.info(`Removed ${corrupted.changes} skills with corrupted encoding`);
+        }
+
+        // Remove duplicatas de propostas por nome, mantendo a mais recente
+        const dupes = this.db.prepare(`
+            DELETE FROM auto_skills
+            WHERE rowid NOT IN (
+                SELECT MAX(rowid) FROM auto_skills
+                GROUP BY name, status
+            )
+            AND status = 'proposed'
+        `).run();
+        if (dupes.changes > 0) {
+            log.info(`Removed ${dupes.changes} duplicate proposed skills`);
         }
     }
 
@@ -290,12 +315,12 @@ export class SkillLearner {
     private extractPattern(input: string): string | null {
         const lower = input.toLowerCase().trim();
 
-        if (/(pre[cÃ§]o|cota[cÃ§][aÃ£]o|valor|quanto (custa|vale))/.test(lower)) return 'crypto_price';
+        if (/(pre[cç]o|cota[cç][aã]o|valor|quanto (custa|vale))/.test(lower)) return 'crypto_price';
         if (/(bitcoin|btc|ethereum|eth|solana|sol|cardano|ada|xrp|dogecoin|doge|river)/.test(lower)) return 'crypto_query';
-        if (/(clima|tempo|temperatura|previs[aÃ£]o|chovendo)/.test(lower)) return 'weather';
-        if (/(Ã¡udio|audio|voz|tts|falar|narre)/.test(lower) && /(gerar|criar|enviar|manda|mande|fale)/.test(lower)) return 'audio_request';
+        if (/(clima|tempo|temperatura|previs[aã]o|chovendo)/.test(lower)) return 'weather';
+        if (/(áudio|audio|voz|tts|falar|narre)/.test(lower) && /(gerar|criar|enviar|manda|mande|fale)/.test(lower)) return 'audio_request';
         if (/(lembre|lembrete|guarde|salve|memorize|anote)/.test(lower)) return 'memory_write';
-        if (/(lembra|o que voc[eÃª] sabe|buscar na mem)/.test(lower)) return 'memory_search';
+        if (/(lembra|o que voc[eê] sabe|buscar na mem)/.test(lower)) return 'memory_search';
         if (/(arquivo|html|css|site|p[aáá]gina)/.test(lower)) return 'write';
 
         return null;
@@ -419,6 +444,13 @@ export class SkillLearner {
             const skill = this.createSkillFromPattern(item.pattern, item.tool_name, item.success_count);
             if (!skill) continue;
 
+            // Evita duplicatas por nome (mesmo nome já proposto ou ativo)
+            const nameExists = this.db.prepare(
+                "SELECT id FROM auto_skills WHERE name = ? AND status IN ('active', 'proposed') LIMIT 1"
+            ).get(skill.name) as { id: string } | undefined;
+
+            if (nameExists) continue;
+
             this.db.prepare(
                 `INSERT INTO auto_skills
                  (id, name, trigger, description, prompt, tool_sequence, priority, hits, status, source_pattern, source_tool, created_at, updated_at)
@@ -446,50 +478,50 @@ export class SkillLearner {
     private createSkillFromPattern(pattern: string, toolName: string, successCount: number): Skill | null {
         const skillDefs: Record<string, { name: string; trigger: string; description: string; prompt: string; toolSeq: string[] }> = {
             crypto_price: {
-                name: 'PreÃ§o de Cripto',
-                trigger: '(pre[cÃ§]o|cota[cÃ§][aÃ£]o|valor|quanto).*(bitcoin|btc|ethereum|eth|solana|sol|river|doge|ada|xrp)',
-                description: 'Busca preÃ§o de criptomoedas via web_search com instruÃ§Ã£o focada.',
-                prompt: 'Sempre que perguntarem sobre preÃ§o de criptomoedas, use web_search com {"query": "preÃ§o NOMEMOEDA"}. Formate o resultado com preÃ§o em USD, variaÃ§Ã£o 24h e market cap.',
+                name: 'Preço de Cripto',
+                trigger: '(pre[cç]o|cota[cç][aã]o|valor|quanto).*(bitcoin|btc|ethereum|eth|solana|sol|river|doge|ada|xrp)',
+                description: 'Busca preço de criptomoedas via web_search com instrução focada.',
+                prompt: 'Sempre que perguntarem sobre preço de criptomoedas, use web_search com {"query": "preço NOMEMOEDA"}. Formate o resultado com preço em USD, variação 24h e market cap.',
                 toolSeq: ['web_search']
             },
             crypto_query: {
                 name: 'Consulta Cripto',
                 trigger: '(bitcoin|btc|ethereum|eth|solana|sol|river|doge|ada|xrp)',
                 description: 'Consulta geral sobre criptomoedas com formato consistente.',
-                prompt: 'Use web_search para buscar dados de criptomoedas. Sempre inclua preÃ§o, variaÃ§Ã£o 24h e volume.',
+                prompt: 'Use web_search para buscar dados de criptomoedas. Sempre inclua preço, variação 24h e volume.',
                 toolSeq: ['web_search']
             },
             weather: {
-                name: 'PrevisÃ£o do Tempo',
-                trigger: '(clima|tempo|temperatura|previs[aÃ£]o|chovendo)',
-                description: 'Busca previsÃ£o do tempo com cidade padrÃ£o quando a mensagem nÃ£o especifica local.',
-                prompt: 'Use web_search com {"query": "SÃ£o Paulo Brasil weather"} para clima. Se o usuÃ¡rio citar outra cidade, use essa cidade.',
+                name: 'Previsão do Tempo',
+                trigger: '(clima|tempo|temperatura|previs[aã]o|chovendo)',
+                description: 'Busca previsão do tempo com cidade padrão quando a mensagem não especifica local.',
+                prompt: 'Use web_search com {"query": "São Paulo Brasil weather"} para clima. Se o usuário citar outra cidade, use essa cidade.',
                 toolSeq: ['web_search']
             },
             audio_request: {
-                name: 'Pedido de Ãudio',
-                trigger: '(gerar|criar|enviar|manda|mande|fale).*(Ã¡udio|audio|voz|tts)',
-                description: 'Gera Ã¡udio TTS com conteÃºdo relevante em vez de repetir o pedido do usuÃ¡rio.',
-                prompt: 'Quando pedirem Ã¡udio, NUNCA repita o pedido. Gere o CONTEÃšDO REAL para TTS. Use send_audio com {"text": "conteÃºdo gerado pelo assistente"}. Para Ã¡udio com dados, busque dados primeiro.',
+                name: 'Pedido de Áudio',
+                trigger: '(gerar|criar|enviar|manda|mande|fale).*(áudio|audio|voz|tts)',
+                description: 'Gera áudio TTS com conteúdo relevante em vez de repetir o pedido do usuário.',
+                prompt: 'Quando pedirem áudio, NUNCA repita o pedido. Gere o CONTEÚDO REAL para TTS. Use send_audio com {"text": "conteúdo gerado pelo assistente"}. Para áudio com dados, busque dados primeiro.',
                 toolSeq: ['send_audio']
             },
             memory_write: {
-                name: 'Salvar MemÃ³ria',
+                name: 'Salvar Memória',
                 trigger: '(lembre|lembrete|guarde|salve|memorize|anote)',
-                description: 'Salva informaÃ§Ãµes na memÃ³ria persistente com formato mais consistente.',
+                description: 'Salva informações na memória persistente com formato mais consistente.',
                 prompt: 'Use memory_write com {"action":"create","id":"fact_TIMESTAMP","type":"fact","name":"resumo","content":"texto completo"} para salvar.',
                 toolSeq: ['memory_write']
             },
             memory_search: {
-                name: 'Buscar MemÃ³ria',
-                trigger: '(lembra|o que voc[eÃª] sabe|buscar na mem)',
-                description: 'Busca informaÃ§Ãµes na memÃ³ria semÃ¢ntica.',
-                prompt: 'Use memory_search com {"query": "termo de busca"} para encontrar informaÃ§Ãµes salvas.',
+                name: 'Buscar Memória',
+                trigger: '(lembra|o que voc[eê] sabe|buscar na mem)',
+                description: 'Busca informações na memória semântica.',
+                prompt: 'Use memory_search com {"query": "termo de busca"} para encontrar informações salvas.',
                 toolSeq: ['memory_search']
             },
             write: {
-                name: 'OperaÃ§Ãµes de Arquivo',
-                trigger: '(arquivo|html|css|site|p[aÃ¡]gina)',
+                name: 'Operações de Arquivo',
+                trigger: '(arquivo|html|css|site|p[aá]gina)',
                 description: 'Cria ou sobrescreve arquivos no workspace.',
                 prompt: 'Use write com {"path": "caminho/arquivo.html", "content": "conteudo"} para criar arquivos.',
                 toolSeq: ['write']
