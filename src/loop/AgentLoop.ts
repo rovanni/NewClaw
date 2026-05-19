@@ -607,7 +607,7 @@ export class AgentLoop {
         }));
 
         const chatProfile = await this.profileRegistry.resolveProfile(userText);
-        if (intentDecision.modelCategory && intentDecision.confidence >= 0.8) {
+        if (chatProfile && intentDecision.modelCategory && intentDecision.confidence >= 0.8) {
             const intentProfile = this.profileRegistry.getProfileByCategory(intentDecision.modelCategory);
             if (intentProfile) {
                 chatProfile.model = intentProfile.model;

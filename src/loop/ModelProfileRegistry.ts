@@ -152,7 +152,9 @@ export class ModelProfileRegistry {
             return profile;
         }
 
-        return this.getProfileByCategory('chat')!;
+        return this.getProfileByCategory('chat')
+            ?? this.config.profiles.find(p => p.id === this.config.defaultProfile)
+            ?? this.config.profiles[0];
     }
 
     /**
