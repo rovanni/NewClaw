@@ -390,6 +390,10 @@ export class AgentLoop {
      * On failure (tool not found or tool error): returns null with no FSM changes so the
      * cognition loop can continue normally from THINKING state.
      */
+    // Tools whose output is already a user-ready string — fast path allowed.
+    // All other tools produce raw data and require LLM synthesis.
+    private static readonly FAST_PATH_ALLOWED = new Set(['weather', 'send_audio', 'send_document', 'send_image', 'schedule']);
+
     private async toolFirstFastPath(
         conversationId: string,
         userText: string,
@@ -399,6 +403,12 @@ export class AgentLoop {
         move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void
     ): Promise<string | ProcessedResult | null> {
         const toolName = intentDecision.toolName!;
+
+        if (!AgentLoop.FAST_PATH_ALLOWED.has(toolName)) {
+            log.info(`[FAST-PATH] Tool "${toolName}" requires LLM synthesis — falling back to cognition loop`);
+            return null;
+        }
+
         const tool = this.tools.get(toolName);
 
         if (!tool) {
