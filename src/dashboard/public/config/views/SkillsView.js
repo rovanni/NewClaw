@@ -1,0 +1,138 @@
+import { skillsStore, toolsStore } from '../state.js';
+import { reviewSkill, getSkills, getPatterns, aggregateToolStats } from '../api.js';
+import { showToast } from '../components/Toast.js';
+
+export function render(container) {
+  container.innerHTML = `
+    <div class="page-view">
+      <div class="page-header">
+        <h1>🎓 SkillLearner</h1>
+        <p>Sistema de aprendizado autônomo — skills emergem de padrões de uso real</p>
+      </div>
+
+      <div class="skills-metrics">
+        <div class="skill-metric">
+          <div class="skill-metric-val green" id="sk-active">—</div>
+          <div class="skill-metric-lbl">Ativas</div>
+        </div>
+        <div class="skill-metric">
+          <div class="skill-metric-val warn" id="sk-proposed">—</div>
+          <div class="skill-metric-lbl">Aguardando revisão</div>
+        </div>
+        <div class="skill-metric">
+          <div class="skill-metric-val" id="sk-patterns">—</div>
+          <div class="skill-metric-lbl">Padrões registrados</div>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div>
+          <div class="sec-title">Skills do Agente</div>
+          <div id="sk-skillsList"><div class="empty">Carregando...</div></div>
+        </div>
+        <div>
+          <div class="sec-title">Padrões Detectados</div>
+          <div id="sk-patternsList"><div class="empty">Carregando...</div></div>
+        </div>
+      </div>
+    </div>`;
+
+  function update(s) {
+    const el = id => document.getElementById(id);
+    if (el('sk-active'))   el('sk-active').textContent   = s.activeCount   ?? '—';
+    if (el('sk-proposed')) el('sk-proposed').textContent = s.proposedCount ?? '—';
+    if (el('sk-patterns')) el('sk-patterns').textContent = (s.patterns||[]).length;
+
+    // Skills list
+    const skills = s.skills || [];
+    const sl = el('sk-skillsList');
+    if (sl) {
+      sl.innerHTML = skills.length
+        ? skills.map(sk => {
+            const pct       = Math.min(100, (sk.hits || 0) * 10);
+            const fillCls   = pct >= 70 ? 'high' : pct >= 40 ? 'med' : '';
+            const cardCls   = sk.status === 'active' ? 'active-card' : sk.status === 'rejected' ? 'rejected-card' : 'proposed-card';
+            const actions   = sk.status === 'proposed'
+              ? `<div class="skill-actions">
+                   <button class="s-btn approve" data-id="${sk.id}" data-action="approve">✓ Aprovar</button>
+                   <button class="s-btn reject"  data-id="${sk.id}" data-action="reject">✗ Rejeitar</button>
+                 </div>`
+              : '';
+            return `
+              <div class="skill-card ${cardCls}">
+                <div class="skill-card-header">
+                  <div class="skill-card-name">${sk.name}</div>
+                  <div class="skill-hits">${sk.hits || 0} hits</div>
+                  ${statusBadge(sk.status)}
+                </div>
+                <div class="skill-desc">${sk.description || ''}</div>
+                <div class="skill-meta">prioridade ${sk.priority} · ${safeJsonList(sk.tool_sequence)}</div>
+                <div class="skill-confidence">
+                  <div class="skill-confidence-fill ${fillCls}" style="width:${pct}%"></div>
+                </div>
+                ${actions}
+              </div>`;
+          }).join('')
+        : '<div class="empty">Nenhuma skill registrada ainda.</div>';
+
+      // Delegate approve/reject clicks
+      sl.onclick = async e => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const { id, action } = btn.dataset;
+        try {
+          await reviewSkill(id, action);
+          showToast(action === 'approve' ? '✅ Skill aprovada.' : '🛑 Skill rejeitada.', 'success');
+          const [newSkills, patterns] = await Promise.all([getSkills(), getPatterns()]);
+          const stats = aggregateToolStats(patterns);
+          skillsStore.patch({
+            skills: newSkills,
+            patterns,
+            activeCount:   newSkills.filter(s => s.status === 'active').length,
+            proposedCount: newSkills.filter(s => s.status === 'proposed').length,
+          });
+          toolsStore.set('stats', stats);
+        } catch (err) {
+          showToast('❌ ' + err.message, 'error');
+        }
+      };
+    }
+
+    // Patterns list
+    const patterns = s.patterns || [];
+    const pl = el('sk-patternsList');
+    if (pl) {
+      pl.innerHTML = patterns.length
+        ? patterns.slice(0, 12).map(p => {
+            const total    = (p.success_count||0) + (p.fail_count||0);
+            const rate     = total > 0 ? Math.round(p.success_count / total * 100) : 0;
+            const dotColor = rate >= 80 ? 'var(--success)' : rate >= 50 ? 'var(--warning)' : 'var(--danger)';
+            return `
+              <div class="pattern-card">
+                <div class="pc-dot" style="background:${dotColor}"></div>
+                <div class="pc-pattern">${p.pattern}</div>
+                <div class="pc-tool">${p.tool_name}</div>
+                <div class="pc-stats">${total} · ${rate}% ✓ · ${p.avg_latency_ms}ms</div>
+              </div>`;
+          }).join('')
+        : '<div class="empty">Padrões ainda não detectados.</div>';
+    }
+  }
+
+  update(skillsStore.snap());
+  const unsub = skillsStore.on('*', update);
+  return () => unsub();
+}
+
+function statusBadge(s) {
+  if (s === 'active')   return '<span class="badge badge-active">ATIVA</span>';
+  if (s === 'rejected') return '<span class="badge badge-rejected">REJEITADA</span>';
+  return '<span class="badge badge-proposed">PROPOSTA</span>';
+}
+
+function safeJsonList(v) {
+  try {
+    const p = JSON.parse(v || '[]');
+    return Array.isArray(p) && p.length ? p.join(', ') : '—';
+  } catch { return '—'; }
+}
