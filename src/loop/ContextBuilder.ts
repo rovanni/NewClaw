@@ -19,6 +19,13 @@ import { createLogger } from '../shared/AppLogger';
 
 const log = createLogger('ContextBuilder');
 
+// ── Context Tiers ────────────────────────────────────────────
+// Controls which memory blocks are assembled based on query complexity.
+//   minimal — conversation/simple queries: no reflection, no episodic, ≤3 nodes (~800 chars)
+//   normal  — information/lookup queries: no reflection, episodic yes, ≤5 nodes (~1600 chars)
+//   full    — creation/analysis/system: all blocks, ≤8 nodes (~3200 chars)  [default]
+export type ContextTier = 'minimal' | 'normal' | 'full';
+
 // ── Relevance Gate ───────────────────────────────────────────
 // Short greetings and social messages should NOT trigger semantic context injection.
 // This prevents the LLM from responding with stale context (e.g. crypto prices)
@@ -97,12 +104,20 @@ export class ContextBuilder {
      *
      * @param conversationId Optional — when provided, episodic memory is recorded and injected.
      */
-    async buildContext(query: string, conversationId?: string): Promise<string> {
+    async buildContext(query: string, conversationId?: string, tier: ContextTier = 'full'): Promise<string> {
         if (isSocialOrGreeting(query)) {
             // Still record the interaction so the episode stays alive
             if (conversationId) this.episodicMemoryService.recordInteraction(conversationId);
             return '';
         }
+
+        // Tier-based caps: minimal keeps only a few nodes, no heavy blocks
+        const maxNodes    = tier === 'minimal' ? 3 : tier === 'normal' ? 5 : this.MAX_NODES;
+        const maxMemChars = tier === 'minimal' ? 800 : tier === 'normal' ? 1600 : this.MAX_MEMORY_CHARS;
+        const useReflection = tier === 'full';
+        const useEpisodic   = tier !== 'minimal';
+
+        log.info(`[CONTEXT-TIER] tier=${tier} maxNodes=${maxNodes} maxChars=${maxMemChars} reflection=${useReflection} episodic=${useEpisodic}`);
 
         try {
             // Record interaction in the episode
@@ -110,14 +125,13 @@ export class ContextBuilder {
 
             const domainClass = classifyDomain(query);
 
-            // ── Block 1: cognitive profile (throttled 24h) ──
-            const reflectionBlock = truncateToChars(
-                this.reflectionEngine.buildReflectionBlock(),
-                this.BUDGET_REFLECTION
-            );
+            // ── Block 1: cognitive profile (full tier only) ──
+            const reflectionBlock = useReflection
+                ? truncateToChars(this.reflectionEngine.buildReflectionBlock(), this.BUDGET_REFLECTION)
+                : '';
 
-            // ── Block 2: episodic history ──
-            const episodicBlock = conversationId
+            // ── Block 2: episodic history (normal + full) ──
+            const episodicBlock = (useEpisodic && conversationId)
                 ? truncateToChars(
                     this.episodicMemoryService.buildEpisodicPromptBlock(conversationId, 3),
                     this.BUDGET_EPISODIC
@@ -137,10 +151,10 @@ export class ContextBuilder {
             const headerChars = [reflectionBlock, episodicBlock, domainBlock]
                 .filter(Boolean)
                 .reduce((sum, b) => sum + b.length + 5 /* separator */, 0);
-            const nodesBudget = Math.max(this.MIN_NODES_CHARS, this.MAX_MEMORY_CHARS - headerChars);
+            const nodesBudget = Math.max(this.MIN_NODES_CHARS, maxMemChars - headerChars);
 
-            // ── Block 4: semantic detail nodes (budget-aware) ──
-            const ranked = await this.domainAwareRankAndSelect(query, nodesBudget);
+            // ── Block 4: semantic detail nodes (budget-aware, tier-capped) ──
+            const ranked = (await this.domainAwareRankAndSelect(query, nodesBudget)).slice(0, maxNodes);
 
             // Record accessed nodes in the episode
             if (conversationId && ranked.length > 0) {

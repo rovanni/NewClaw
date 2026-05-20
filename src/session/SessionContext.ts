@@ -57,7 +57,8 @@ export class SessionContext {
         key: SessionKey,
         systemPrompt: string,
         currentMessage: string,
-        skillsBlock?: string
+        skillsBlock?: string,
+        contextTier?: import('../loop/ContextBuilder').ContextTier
     ): Promise<SessionContextResult> {
         const stats = {
             fromCheckpoint: false,
@@ -87,7 +88,7 @@ export class SessionContext {
         // 3. Get semantic memory context (compact, top-K — NOT full graph)
         let memoryContext = '';
         try {
-            memoryContext = await this.contextBuilder.buildContext(currentMessage);
+            memoryContext = await this.contextBuilder.buildContext(currentMessage, undefined, contextTier);
             stats.semanticContextUsed = memoryContext.length > 0;
         } catch (err) {
             log.warn(`SessionContext: semantic context build failed (non-fatal): ${err}`);

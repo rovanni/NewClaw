@@ -703,12 +703,23 @@ export class AgentLoop {
             return '⚠️ Sessão indisponível no momento. Tente novamente em alguns instantes.';
         }
 
+        // Derive context tier from intent: heavier categories need more context.
+        type ContextTierType = import('../loop/ContextBuilder').ContextTier;
+        const FULL_TIER_CATEGORIES = new Set(['creation', 'system_operation', 'data_analysis', 'destructive', 'memory_operation']);
+        const NORMAL_TIER_CATEGORIES = new Set(['information', 'audio', 'vision']);
+        const contextTier: ContextTierType =
+            FULL_TIER_CATEGORIES.has(intentDecision.category) ? 'full' :
+            NORMAL_TIER_CATEGORIES.has(intentDecision.category) ? 'normal' :
+            'minimal';
+        log.info(`[${this.ts()}] [CONTEXT-TIER] category=${intentDecision.category} → tier=${contextTier}`);
+
         const sessionKey: SessionKey = { channel: 'telegram', userId: conversationId };
         const { messages: sessionMessages } = await this.sessionContext.buildLLMMessages(
             sessionKey,
             buildMasterPrompt(chatProfile.category),
             userText,
-            skillContext
+            skillContext,
+            contextTier
         );
         const loopMessages = sessionMessages;
 
