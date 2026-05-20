@@ -2,6 +2,7 @@ import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
 import { errorMessage } from '../shared/errors';
 import type { MemoryFacade } from '../memory/MemoryFacade';
+import { isProtectedNode } from '../memory/MemoryFacade';
 
 export class ManageMemoryTool implements ToolExecutor {
     name = 'manage_memory';
@@ -134,6 +135,9 @@ export class ManageMemoryTool implements ToolExecutor {
             
             if (action === 'delete_node') {
                 if (!args.node_id) return { success: false, error: 'delete_node exige node_id', output: '' };
+                if (isProtectedNode(args.node_id as string)) {
+                    return { success: false, error: `Nó protegido: "${args.node_id}" não pode ser deletado. É um núcleo cognitivo do sistema. Use upsert_node para atualizar seu conteúdo.`, output: '' };
+                }
                 this.facade.removeNode(args.node_id as string);
                 return { success: true, output: `✅ Nó "${args.node_id}" e todas as suas arestas foram deletados permanentemente.` };
             }

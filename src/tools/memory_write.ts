@@ -13,6 +13,7 @@
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
+import { isProtectedNode } from '../memory/MemoryFacade';
 import { errorMessage } from '../shared/errors';
 import { classifyDomain } from '../memory/DomainRegistry';
 
@@ -208,6 +209,10 @@ export class MemoryWriteTool implements ToolExecutor {
         const { id } = args;
         if (!id) return { success: false, output: '', error: 'delete exige: id.' };
 
+        if (isProtectedNode(id as string)) {
+            return { success: false, output: '', error: `Nó protegido: "${id}" não pode ser deletado. É um núcleo cognitivo do sistema. Use action=update para modificar seu conteúdo.` };
+        }
+
         const node = this.memoryManager.getNode(id);
         if (!node) return { success: false, output: '', error: `Nó "${id}" não encontrado.` };
 
@@ -243,9 +248,9 @@ export class MemoryWriteTool implements ToolExecutor {
         const target = this.memoryManager.getNode(id);
         if (!target) return { success: false, output: '', error: `Nó destino "${id}" não encontrado.` };
 
-        // Safety: never merge identity nodes with different names
-        if (target.type === 'identity') {
-            return { success: false, output: '', error: `Segurança: não é possível mesclar nós do tipo "identity". Use update para corrigir.` };
+        // Safety: never merge into a protected node (core cognitive nodes are not targets for merge)
+        if (isProtectedNode(id as string)) {
+            return { success: false, output: '', error: `Segurança: "${id}" é um núcleo cognitivo protegido. Não é possível usá-lo como destino de merge. Use update para modificar seu conteúdo.` };
         }
 
         const results: string[] = [];
@@ -261,9 +266,9 @@ export class MemoryWriteTool implements ToolExecutor {
                 continue;
             }
 
-            // 2. Safety check: never merge identity nodes
-            if (source.type === 'identity') {
-                results.push(`⚠️ "${sourceId}" é identity, ignorado por segurança.`);
+            // 2. Safety check: never use a protected node as merge source (it would be deleted)
+            if (isProtectedNode(sourceId as string)) {
+                results.push(`⚠️ "${sourceId}" é um núcleo cognitivo protegido, ignorado por segurança.`);
                 continue;
             }
 

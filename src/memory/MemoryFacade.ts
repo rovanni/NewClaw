@@ -2,6 +2,42 @@ import type Database from 'better-sqlite3';
 import type { AttentionFeedback } from './AttentionFeedback';
 import type { MemoryManager, MemoryNode } from './MemoryManager';
 
+// ── Protected node registry ───────────────────────────────────────────────
+//
+// Nós que NUNCA devem ser deletados ou mesclados como "source" (descartado).
+// São os núcleos cognitivos do sistema — removê-los quebra o grafo inteiro.
+//
+// Regras de proteção:
+//   1. IDs explícitos neste Set
+//   2. Qualquer ID com prefixo 'core_'   (todos os nós core_ atuais e futuros)
+//   3. Qualquer ID com prefixo 'domain_' (nós estruturais de domínio)
+//
+// Para ATUALIZAR conteúdo desses nós, use MemoryManager.addNode() — que usa
+// ON CONFLICT DO UPDATE e preserva lifecycle_state e identity_scope.
+// A proteção é só contra DELEÇÃO e uso como "source" em merge destrutivo.
+
+export const PROTECTED_NODE_IDS = new Set([
+    'user_identity',
+    'core_user',
+    'core_identity',
+    'core_agent',
+    'core_soul',
+    'core_tools',
+    'core_heartbeat',
+    'core_memory',
+    'ctx_daily_memory',
+    'ctx_system_memory',
+    'ctx_infrastructure',
+]);
+
+export function isProtectedNode(id: string): boolean {
+    return (
+        PROTECTED_NODE_IDS.has(id) ||
+        id.startsWith('core_') ||
+        id.startsWith('domain_')
+    );
+}
+
 export interface EdgeRow {
     from_node: string;
     to_node: string;
@@ -147,6 +183,9 @@ export class SqliteMemoryFacade implements MemoryFacade {
     }
 
     removeNode(nodeId: string): void {
+        if (isProtectedNode(nodeId)) {
+            throw new Error(`Nó protegido: "${nodeId}" não pode ser deletado. Use MemoryManager.addNode() para atualizar.`);
+        }
         this.db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(nodeId, nodeId);
         this.db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(nodeId);
     }
@@ -157,7 +196,7 @@ export class SqliteMemoryFacade implements MemoryFacade {
             SET weight = weight * 0.99
             WHERE last_updated < datetime('now', '-1 day')
             AND id NOT LIKE 'core_%'
-            AND id NOT IN ('identity', 'agent_state', 'core_user', 'system_reflection')
+            AND id NOT IN ('agent_state', 'core_user', 'system_reflection')
         `).run();
     }
 
@@ -212,6 +251,9 @@ export class SqliteMemoryFacade implements MemoryFacade {
     }
 
     deleteNodeFull(id: string): void {
+        if (isProtectedNode(id)) {
+            throw new Error(`Nó protegido: "${id}" não pode ser deletado. Use MemoryManager.addNode() para atualizar.`);
+        }
         this.db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(id, id);
         this.db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(id);
         this.db.prepare('DELETE FROM node_metrics WHERE node_id = ?').run(id);

@@ -92,7 +92,7 @@ export class MemoryGraphRepository {
             SELECT n.id FROM memory_nodes n
             LEFT JOIN memory_edges e ON n.id = e.to_node AND e.from_node = 'core_user'
             WHERE n.type = 'identity'
-              AND n.id NOT IN ('core_user', 'identity', 'core_agent', 'core_identity')
+              AND n.id NOT IN ('core_user', 'core_agent', 'core_identity')
               AND e.from_node IS NULL
         `).all() as Array<{ id: string }>;
     }

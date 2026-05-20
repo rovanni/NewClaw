@@ -203,7 +203,7 @@ export class MemoryCurator {
 
         for (const node of this.repo.getIdentityNodes()) {
             const isUnstructured = node.content.length > 80 || forbiddenPatterns.some(p => p.test(node.content));
-            if (isUnstructured && node.id !== 'core_user' && node.id !== 'identity' && node.id !== 'core_agent') {
+            if (isUnstructured && node.id !== 'core_user' && node.id !== 'core_identity' && node.id !== 'core_agent') {
                 this.repo.updateNodeWeightAndMeta(node.id, 0.2, 0.2);
                 invalidCount++;
             }

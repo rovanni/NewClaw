@@ -273,8 +273,8 @@ export class MemoryManager {
 
     // ── Graph: High-level helpers ──────────────────────────────────────────────
 
-    getIdentity(): import('./memoryTypes').MemoryNode | undefined { return graph.getNode(this.db, 'identity'); }
-    setIdentity(name: string, content: string): void { this.addNode({ id: 'identity', type: 'identity', name, content }); }
+    getIdentity(): import('./memoryTypes').MemoryNode | undefined { return graph.getNode(this.db, 'core_identity'); }
+    setIdentity(name: string, content: string): void { this.addNode({ id: 'core_identity', type: 'identity', name, content }); }
     getPreferences(): import('./memoryTypes').MemoryNode[] { return graph.getNodesByType(this.db, 'preference'); }
     addPreference(name: string, content: string): void { this.addNode({ id: `pref_${name}`, type: 'preference', name, content }); }
 

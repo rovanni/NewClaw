@@ -251,7 +251,7 @@ export function getRelatedNodes(db: Database.Database, nodeId: string, relation?
 }
 
 export function getContext(db: Database.Database): string {
-    const identity = getNode(db, 'identity');
+    const identity = getNode(db, 'core_identity');
     const preferences = getNodesByType(db, 'preference');
     const projects = getNodesByType(db, 'project');
     const allFacts = getNodesByType(db, 'fact');
@@ -284,9 +284,27 @@ export function bootstrapCoreGraph(
     db: Database.Database,
     classifier: ConfidenceClassifier
 ): void {
+    // Migration: consolidate legacy 'identity' node into 'core_identity'
+    const hasLegacyRoot = db.prepare("SELECT 1 FROM memory_nodes WHERE id = 'identity'").get();
+    if (hasLegacyRoot) {
+        db.exec(`
+            UPDATE memory_nodes
+            SET name = 'IDENTITY',
+                content = 'Nó-raiz da identidade cognitiva do NewClaw. Conecta agente, usuário, estilo e princípios.'
+            WHERE id = 'core_identity';
+            DELETE FROM memory_edges
+                WHERE from_node = 'identity' AND to_node = 'core_identity';
+            DELETE FROM memory_edges
+                WHERE to_node = 'identity' AND from_node = 'core_identity';
+            UPDATE OR IGNORE memory_edges SET from_node = 'core_identity' WHERE from_node = 'identity';
+            UPDATE OR IGNORE memory_edges SET to_node = 'core_identity' WHERE to_node = 'identity';
+            DELETE FROM memory_edges WHERE from_node = 'identity' OR to_node = 'identity';
+            DELETE FROM memory_nodes WHERE id = 'identity';
+        `);
+    }
+
     const coreNodes: MemoryNode[] = [
-        { id: 'identity',          type: 'identity', name: 'IDENTITY',          content: 'Nó-raiz da identidade cognitiva do NewClaw. Conecta agente, usuário, estilo e princípios.',                                                         identity_scope: 'USER_MEMORY'   },
-        { id: 'core_identity',     type: 'identity', name: 'IDENTITY CORE',     content: 'Hub estrutural da identidade cognitiva. Mantido para compatibilidade com curadoria e expansão do grafo.',                                              identity_scope: 'USER_MEMORY'   },
+        { id: 'core_identity',     type: 'identity', name: 'IDENTITY',          content: 'Nó-raiz da identidade cognitiva do NewClaw. Conecta agente, usuário, estilo e princípios.',                                                         identity_scope: 'USER_MEMORY'   },
         { id: 'core_agent',        type: 'identity', name: 'AGENTS',            content: 'Representa o agente NewClaw, seu papel como copiloto local, memória persistente e capacidade de agir com ferramentas.',                               identity_scope: 'AGENT_MEMORY'  },
         { id: 'core_soul',         type: 'context',  name: 'SOUL',              content: 'Guarda a personalidade, voz, valores e tom do sistema: útil, acolhedor, direto e persistente.',                                                       identity_scope: 'AGENT_MEMORY'  },
         { id: 'core_tools',        type: 'skill',    name: 'TOOLS',             content: 'Hub das ferramentas disponíveis para pesquisar, editar arquivos, executar comandos, navegar e gerenciar memória.',                                     identity_scope: 'SYSTEM_MEMORY' },
@@ -309,13 +327,9 @@ export function bootstrapCoreGraph(
     }
 
     const baseEdges: Array<[string, string, string]> = [
-        ['identity', 'core_agent', 'related_to'],
-        ['identity', 'core_user', 'related_to'],
-        ['identity', 'core_soul', 'related_to'],
-        ['identity', 'core_memory', 'related_to'],
-        ['identity', 'core_identity', 'related_to'],
         ['core_identity', 'core_agent', 'related_to'],
         ['core_identity', 'core_user', 'related_to'],
+        ['core_identity', 'core_soul', 'related_to'],
         ['core_identity', 'core_memory', 'related_to'],
         ['core_agent', 'core_tools', 'uses'],
         ['core_agent', 'core_memory', 'related_to'],
