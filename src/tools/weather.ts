@@ -97,15 +97,15 @@ export class WeatherTool implements ToolExecutor {
         }
         
         const location = geoData.results[0];
-        const lat = location.latitudeitude;
-        const lon = location.longitudegitude;
+        const lat = location.latitude;
+        const lon = location.longitude;
         
         const adminPart = location.admin1 ? `${location.admin1} - ` : '';
         const countryPart = location.country || '';
         const cityName = `${location.name}, ${adminPart}${countryPart}`.replace(/,\s*$/, '');
 
-        // 2. Weather (current + daily forecast for tomorrow)
-        const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=2`;
+        // 2. Weather (current + 7-day daily forecast for weekend queries)
+        const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=7`;
         const weatherRes = await fetch(weatherUrl, { signal: AbortSignal.timeout(10000) });
         if (!weatherRes.ok) throw new Error('Falha ao buscar o clima na API do open-meteo.');
 
@@ -135,33 +135,39 @@ export class WeatherTool implements ToolExecutor {
         const humidity = `${current.relative_humidity_2m}${units.relative_humidity_2m}`;
         const precip = `${current.precipitation}${units.precipitation}`;
 
-        // Build tomorrow forecast if available
-        let tomorrowForecast = '';
+        // Build multi-day forecast (skip today index 0, already shown as current)
+        const DAYS_PT: Record<number, string> = { 0: 'Dom', 1: 'Seg', 2: 'Ter', 3: 'Qua', 4: 'Qui', 5: 'Sex', 6: 'Sáb' };
+        let dailyForecast = '';
         if (daily && daily.time && daily.time.length > 1) {
-            const tomorrowDate = daily.time[1];
-            const tomorrowCode = daily.weather_code?.[1];
-            const tomorrowMax = daily.temperature_2m_max?.[1];
-            const tomorrowMin = daily.temperature_2m_min?.[1];
-            const tomorrowPrecip = daily.precipitation_probability_max?.[1];
-            if (tomorrowCode !== undefined) {
-                const tomorrowDesc = this.getWeatherDescription(tomorrowCode);
-                tomorrowForecast = `\nAmanhã (${tomorrowDate}): ${tomorrowDesc}`;
-                if (tomorrowMin !== undefined && tomorrowMax !== undefined) tomorrowForecast += `, ${tomorrowMin}°C–${tomorrowMax}°C`;
-                if (tomorrowPrecip !== undefined) tomorrowForecast += `, chuva ${tomorrowPrecip}%`;
+            const lines: string[] = [];
+            for (let i = 1; i < daily.time.length; i++) {
+                const date = daily.time[i];
+                const code = daily.weather_code?.[i];
+                const max = daily.temperature_2m_max?.[i];
+                const min = daily.temperature_2m_min?.[i];
+                const precip = daily.precipitation_probability_max?.[i];
+                if (code === undefined) continue;
+                const dayLabel = i === 1 ? 'Amanhã' : DAYS_PT[new Date(date + 'T12:00:00').getDay()] || date;
+                const dayDesc = this.getWeatherDescription(code);
+                let line = `${dayLabel} (${date}): ${dayDesc}`;
+                if (min !== undefined && max !== undefined) line += `, ${min}°C–${max}°C`;
+                if (precip !== undefined) line += `, chuva ${precip}%`;
+                lines.push(line);
             }
+            dailyForecast = lines.length ? '\n' + lines.join('\n') : '';
         }
 
         let output = '';
         switch (format) {
             case 'simple':
-                output = `${cityName}: ${desc}, ${temp}${tomorrowForecast ? ' | ' + tomorrowForecast.trim() : ''}`;
+                output = `${cityName}: ${desc}, ${temp}${dailyForecast ? ' | ' + dailyForecast.split('\n')[1]?.trim() : ''}`;
                 break;
             case 'full':
-                output = `Previsão completa para ${cityName}:\nCondição: ${desc}\nTemperatura: ${temp} (Sensação de ${feelsLike})\nVento: ${wind}\nUmidade: ${humidity}\nPrecipitação: ${precip}${tomorrowForecast}`;
+                output = `Previsão completa para ${cityName}:\nCondição atual: ${desc}\nTemperatura: ${temp} (Sensação de ${feelsLike})\nVento: ${wind}\nUmidade: ${humidity}\nPrecipitação: ${precip}${dailyForecast}`;
                 break;
             case 'detailed':
             default:
-                output = `${cityName}: ${desc} | Temp: ${temp} | Vento: ${wind} | Umidade: ${humidity}${tomorrowForecast}`;
+                output = `${cityName} agora: ${desc} | ${temp} | Vento: ${wind} | Umidade: ${humidity}${dailyForecast}`;
                 break;
         }
 
@@ -199,27 +205,31 @@ export class WeatherTool implements ToolExecutor {
         const wind = `${current.windspeedKmph} km/h`;
         const desc = current.lang_pt?.[0]?.value || current.weatherDesc?.[0]?.value || 'Indisponível';
 
-        // Tomorrow forecast from wttr.in
-        const tomorrow = data?.weather?.[1];
-        let tomorrowForecast = '';
-        if (tomorrow) {
-            const tMax = tomorrow.maxtempC;
-            const tMin = tomorrow.mintempC;
-            const tDesc = tomorrow.hourly?.[4]?.lang_pt?.[0]?.value || tomorrow.hourly?.[4]?.weatherDesc?.[0]?.value || '';
-            tomorrowForecast = `\nAmanhã: ${tDesc}, ${tMin}°C–${tMax}°C`;
+        // Multi-day forecast from wttr.in (up to 3 days available)
+        const DAYS_PT2: Record<number, string> = { 0: 'Dom', 1: 'Seg', 2: 'Ter', 3: 'Qua', 4: 'Qui', 5: 'Sex', 6: 'Sáb' };
+        const forecastDays = data?.weather || [];
+        const dailyLines: string[] = [];
+        for (let i = 1; i < forecastDays.length; i++) {
+            const day = forecastDays[i];
+            const tMax = day.maxtempC;
+            const tMin = day.mintempC;
+            const tDesc = day.hourly?.[4]?.lang_pt?.[0]?.value || day.hourly?.[4]?.weatherDesc?.[0]?.value || '';
+            const label = i === 1 ? 'Amanhã' : DAYS_PT2[new Date().getDay() + i] || `+${i}d`;
+            dailyLines.push(`${label}: ${tDesc}, ${tMin}°C–${tMax}°C`);
         }
+        const dailyForecast2 = dailyLines.length ? '\n' + dailyLines.join('\n') : '';
 
         let output = '';
         switch (format) {
             case 'simple':
-                output = `${city}: ${desc}, ${temp}${tomorrowForecast ? ' | ' + tomorrowForecast.trim() : ''}`;
+                output = `${city}: ${desc}, ${temp}${dailyLines[0] ? ' | ' + dailyLines[0] : ''}`;
                 break;
             case 'full':
-                output = `Previsão completa para ${city}:\nCondição: ${desc}\nTemperatura: ${temp} (Sensação de ${feelsLike})\nVento: ${wind}\nUmidade: ${humidity}${tomorrowForecast}`;
+                output = `Previsão para ${city}:\nCondição atual: ${desc}\nTemperatura: ${temp} (Sensação de ${feelsLike})\nVento: ${wind}\nUmidade: ${humidity}${dailyForecast2}`;
                 break;
             case 'detailed':
             default:
-                output = `${city}: ${desc} | Temp: ${temp} | Vento: ${wind} | Umidade: ${humidity}${tomorrowForecast}`;
+                output = `${city} agora: ${desc} | ${temp} | Vento: ${wind} | Umidade: ${humidity}${dailyForecast2}`;
                 break;
         }
 
