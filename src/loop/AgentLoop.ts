@@ -35,6 +35,7 @@ import { ModelProfile } from './ModelProfileRegistry';
 import { errorMessage } from '../shared/errors';
 import { ObserverValidator } from './ObserverValidator';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
+import { ProactiveRecovery } from './ProactiveRecovery';
 
 import {
     ToolResult, ToolExecutor, LoopMetrics, ChannelContext,
@@ -75,6 +76,7 @@ export class AgentLoop {
     private reflectionMemory: ReflectionMemory;
     private fsmHistoryStore: FSMHistoryStore;
     private lastToolExecution: { toolName: string; toolOutput: string; intent: string; category: string } | null = null;
+    private readonly proactiveRecovery = new ProactiveRecovery();
 
     constructor(
         providerFactory: ProviderFactory,
@@ -918,25 +920,32 @@ export class AgentLoop {
                         }
 
                         const toolStartTime = Date.now();
-                        const result = await tool.execute(toolCall.arguments);
+                        const recovery = await this.proactiveRecovery.execute(
+                            toolName, toolCall.arguments,
+                            (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined,
+                            usedToolInputs,
+                        );
+                        const result = recovery.result;
+                        const resolvedToolName = recovery.finalToolName;
+                        const resolvedArgs = recovery.finalArgs;
                         const toolDuration = Date.now() - toolStartTime;
 
-                        log.info(`[${this.ts()}] [TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
+                        if (recovery.recoveryNote) log.info(`[${this.ts()}] ${recovery.recoveryNote}`);
+                        log.info(`[${this.ts()}] [TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
 
-                        traceManager.addStep(trace, 'tool_call', { tool: toolName, input: toolCall.arguments });
-                        traceManager.addStep(trace, 'tool_result', { tool: toolName, success: result.success, output: result.output });
-                        this.decisionMemory.recordFromLoop(toolName, result.success, toolDuration, userText);
-                        this.skillLearner.recordPattern(userText, toolName, result.success, toolDuration);
+                        traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
+                        traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output });
+                        this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
+                        this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
 
-                        usedToolInputs.add(inputKey);
-                        cycleHistory.push({ tool: toolName, input: toolInput, status: result.success ? 'success' : 'error' });
+                        cycleHistory.push({ tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
                         loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
 
                         if (!result.success) {
                             toolFailureCount++;
                             loopMessages.push({
                                 role: 'system',
-                                content: `[FALHA] A ferramenta "${toolName}" falhou. Tente uma abordagem diferente ou use seu conhecimento interno.`
+                                content: `[FALHA] A ferramenta "${resolvedToolName}" falhou (alternativas automáticas já tentadas). Tente uma abordagem diferente ou use seu conhecimento interno.`
                             });
                         }
 
@@ -999,25 +1008,32 @@ export class AgentLoop {
                     }
 
                     const toolStartTime = Date.now();
-                    const result = await tool.execute(atomicData.action.input || {});
+                    const atomicRecovery = await this.proactiveRecovery.execute(
+                        toolName, atomicData.action.input || {},
+                        (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined,
+                        usedToolInputs,
+                    );
+                    const result = atomicRecovery.result;
+                    const resolvedToolName = atomicRecovery.finalToolName;
+                    const resolvedArgs = atomicRecovery.finalArgs;
                     const toolDuration = Date.now() - toolStartTime;
 
-                    log.info(`[${this.ts()}] [ATOMIC-TOOL] ${toolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
+                    if (atomicRecovery.recoveryNote) log.info(`[${this.ts()}] ${atomicRecovery.recoveryNote}`);
+                    log.info(`[${this.ts()}] [ATOMIC-TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
 
-                    traceManager.addStep(trace, 'tool_call', { tool: toolName, input: atomicData.action.input });
-                    traceManager.addStep(trace, 'tool_result', { tool: toolName, success: result.success, output: result.output });
-                    this.decisionMemory.recordFromLoop(toolName, result.success, toolDuration, userText);
-                    this.skillLearner.recordPattern(userText, toolName, result.success, toolDuration);
+                    traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
+                    traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output });
+                    this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
+                    this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
 
-                    usedToolInputs.add(inputKey);
-                    cycleHistory.push({ tool: toolName, input: toolInput, status: result.success ? 'success' : 'error' });
+                    cycleHistory.push({ tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
                     loopMessages.push({ role: 'tool', content: result.output });
 
                     if (!result.success) {
                         toolFailureCount++;
                         loopMessages.push({
                             role: 'system',
-                            content: `[FALHA] A ferramenta "${toolName}" falhou. Tente uma abordagem diferente ou use seu conhecimento interno.`
+                            content: `[FALHA] A ferramenta "${resolvedToolName}" falhou (alternativas automáticas já tentadas). Tente uma abordagem diferente ou use seu conhecimento interno.`
                         });
                     }
 
