@@ -174,20 +174,26 @@ export class ProtocolParser {
             }
 
         // Strategy 3: Extract partial content from malformed JSON
+        // Guard: if content looks like a tool call, don't misidentify action.input.content
+        // as a final_answer. This happens when a model embeds large file content (HTML/code)
+        // in a JSON tool call and JSON.parse fails — the "content" key found belongs to the
+        // tool input, not to a final_answer action.
         try {
-            const contentMatch = content.match(/"content"\s*:\s*"([^"]*(?:""[^"]*)*)"/);
-            if (contentMatch?.[1]) {
-                return {
-                    action: {
-                        type: 'final_answer',
-                        content: contentMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"'),
-                    },
-                    evaluation: {
-                        is_complete: true,
-                        confidence: 'low' as ConfidenceLevel,
-                        reason: 'Extracted from partial JSON',
-                    },
-                };
+            if (!/"type"\s*:\s*"tool"/.test(content)) {
+                const contentMatch = content.match(/"content"\s*:\s*"([^"]*(?:""[^"]*)*)"/);
+                if (contentMatch?.[1]) {
+                    return {
+                        action: {
+                            type: 'final_answer',
+                            content: contentMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"'),
+                        },
+                        evaluation: {
+                            is_complete: true,
+                            confidence: 'low' as ConfidenceLevel,
+                            reason: 'Extracted from partial JSON',
+                        },
+                    };
+                }
             }
             } catch {
                 /* Strategy 3 failed: Could not even extract partial content */

@@ -838,7 +838,11 @@ export class AgentLoop {
             const atomicData = parseLLMResponse(response.content || '');
             const finalText = extractFinalText(response, atomicData);
 
-            if (finalText.length > 0) {
+            // Only store deliverable responses as lastBestContent.
+            // Protocol violations (planning/protocolViolation) contain raw protocol
+            // artifacts that must not be delivered to the user if the loop exits early.
+            const isProtocolViolation = structured?.metadata?.protocolViolation === true;
+            if (finalText.length > 0 && !isProtocolViolation) {
                 lastBestContent = finalText;
             }
 
