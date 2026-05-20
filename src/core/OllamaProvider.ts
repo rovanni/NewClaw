@@ -169,7 +169,9 @@ export class OllamaProvider implements ILLMProvider {
             controller.abort();
         }, MAX_TIMEOUT);
 
-        resetActivityTimer();
+        // NOTE: activityTimer starts only after the first chunk — CONNECTION_TIMEOUT covers
+        // the silent prefill period. Starting activityTimer before fetch would abort long-prefill
+        // models (large prompts) before they even begin generating output.
 
         if (externalSignal) {
             externalSignal.addEventListener('abort', () => controller.abort(), { once: true });
