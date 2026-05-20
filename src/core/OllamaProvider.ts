@@ -132,7 +132,10 @@ export class OllamaProvider implements ILLMProvider {
         const numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
         const controller = new AbortController();
 
-        const CONNECTION_TIMEOUT = 30_000;
+        // CONNECTION_TIMEOUT scales with prompt size: Ollama must process all input tokens
+        // (prefill) before yielding the first chunk. Allow ~1s per 80 input tokens, min 45s, max 120s.
+        const approxInputTokens = messages.reduce((sum, m) => sum + Math.ceil((m.content?.length || 0) / 4), 0);
+        const CONNECTION_TIMEOUT = Math.max(45_000, Math.min(120_000, Math.ceil(approxInputTokens / 80) * 1000));
         const ACTIVITY_TIMEOUT = 90_000;
         const MAX_TIMEOUT = customTimeoutMs || 300_000;
 
@@ -188,7 +191,7 @@ export class OllamaProvider implements ILLMProvider {
             })) : undefined
         };
 
-        log.info(`[${streamId}] [STREAM] START model=${this.model} connectionTimeout=${CONNECTION_TIMEOUT}ms activityTimeout=${ACTIVITY_TIMEOUT}ms maxTimeout=${MAX_TIMEOUT}ms`);
+        log.info(`[${streamId}] [STREAM] START model=${this.model} inputTokens≈${approxInputTokens} connectionTimeout=${CONNECTION_TIMEOUT}ms activityTimeout=${ACTIVITY_TIMEOUT}ms maxTimeout=${MAX_TIMEOUT}ms`);
 
         let response: Response;
         try {
