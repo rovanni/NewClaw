@@ -16,6 +16,7 @@
 
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
+import type { MemoryEventLog } from './MemoryEventLog';
 
 const log = createLogger('EpisodicMemory');
 
@@ -72,9 +73,11 @@ function timeAgo(isoDate: string): string {
 
 export class EpisodicMemoryService {
     private db: Database.Database;
+    private eventLog?: MemoryEventLog;
 
-    constructor(db: Database.Database) {
+    constructor(db: Database.Database, eventLog?: MemoryEventLog) {
         this.db = db;
+        this.eventLog = eventLog;
         this.initSchema();
     }
 
@@ -113,10 +116,13 @@ export class EpisodicMemoryService {
 
     /** Ensure an episode row exists for this conversation. */
     private ensureEpisode(conversationId: string): void {
-        this.db.prepare(`
+        const result = this.db.prepare(`
             INSERT OR IGNORE INTO memory_episodes (conversation_id, started_at, last_active)
             VALUES (?, datetime('now'), datetime('now'))
         `).run(conversationId);
+        if (result.changes > 0) {
+            this.eventLog?.log('episode_opened', conversationId, 'episode', {}, 'episodic');
+        }
     }
 
     /**
@@ -203,6 +209,8 @@ export class EpisodicMemoryService {
             WHERE conversation_id = ?
         `).run(title, summary, JSON.stringify(domains), conversationId);
 
+        this.eventLog?.log('episode_closed', conversationId, 'episode',
+            { title, domains, interactionCount: topNodes.length }, 'episodic');
         log.info(`Episode closed: ${conversationId} — "${title}": ${summary}`);
     }
 

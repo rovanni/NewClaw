@@ -656,6 +656,20 @@ export class MemoryGovernor {
      */
     expireNodes(): number {
         const db = this.memory.getDatabase();
+
+        const toExpire = db.prepare(`
+            SELECT id FROM memory_nodes
+            WHERE expires_at IS NOT NULL
+              AND expires_at < datetime('now')
+              AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')
+              AND id NOT LIKE 'core_%'
+              AND id NOT LIKE 'domain_%'
+              AND id NOT LIKE 'user_identity%'
+              AND type NOT IN ('identity', 'domain')
+        `).all() as Array<{ id: string }>;
+
+        if (toExpire.length === 0) return 0;
+
         const result = db.prepare(`
             UPDATE memory_nodes
             SET lifecycle_state = 'EXPIRED'
@@ -668,7 +682,13 @@ export class MemoryGovernor {
               AND type NOT IN ('identity', 'domain')
         `).run() as { changes: number };
 
-        if (result.changes > 0) log.info(`TTL expiration: ${result.changes} nodes marked EXPIRED`);
+        if (result.changes > 0) {
+            log.info(`TTL expiration: ${result.changes} nodes marked EXPIRED`);
+            const eventLog = this.memory.getEventLog();
+            for (const { id } of toExpire) {
+                eventLog.log('node_expired', id, 'node', {}, 'ttl');
+            }
+        }
         return result.changes;
     }
 

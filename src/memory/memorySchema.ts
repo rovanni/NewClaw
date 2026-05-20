@@ -17,6 +17,10 @@ export const INVERSE_RELATIONS: Record<string, string> = {
     created: 'created_by',
     reads: 'read_by',
     writes: 'written_by',
+    teaches: 'taught_by',
+    caused_by: 'causes',
+    learned_from: 'source_of',
+    part_of: 'has_part',
 };
 
 export function safeExec(db: Database.Database, sql: string): void {

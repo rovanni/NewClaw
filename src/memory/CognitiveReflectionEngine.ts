@@ -19,6 +19,7 @@
 
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
+import type { MemoryEventLog } from './MemoryEventLog';
 
 const log = createLogger('CognitiveReflection');
 
@@ -59,9 +60,11 @@ interface GapRow {
 
 export class CognitiveReflectionEngine {
     private db: Database.Database;
+    private eventLog?: MemoryEventLog;
 
-    constructor(db: Database.Database) {
+    constructor(db: Database.Database, eventLog?: MemoryEventLog) {
         this.db = db;
+        this.eventLog = eventLog;
         this.initSchema();
     }
 
@@ -257,6 +260,8 @@ export class CognitiveReflectionEngine {
             "INSERT OR REPLACE INTO memory (key, value, category) VALUES ('last_reflection_at', ?, 'system')"
         ).run(new Date().toISOString());
 
+        this.eventLog?.log('reflection_generated', 'cognitive_profile', 'system',
+            { categoriesUpdated: updated }, 'reflection_engine');
         log.info(`Reflection cycle complete: ${updated} categories updated`);
         return updated;
     }

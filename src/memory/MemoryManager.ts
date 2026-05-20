@@ -31,6 +31,7 @@ import { DecisionMemory } from './DecisionMemory';
 import { DomainSummaryService } from './DomainSummaryService';
 import { EpisodicMemoryService } from './EpisodicMemoryService';
 import { CognitiveReflectionEngine } from './CognitiveReflectionEngine';
+import { MemoryEventLog } from './MemoryEventLog';
 
 export type { Message, Conversation, MemoryNode, MemoryEdge } from './memoryTypes';
 
@@ -49,6 +50,7 @@ export class MemoryManager {
     private domainSummaryServiceInstance: DomainSummaryService | null = null;
     private episodicMemoryServiceInstance: EpisodicMemoryService | null = null;
     private cognitiveReflectionEngineInstance: CognitiveReflectionEngine | null = null;
+    private eventLogInstance: MemoryEventLog | null = null;
     private classifier: ConfidenceClassifier;
     private inverseRelations: Record<string, string> = {};
 
@@ -97,13 +99,20 @@ export class MemoryManager {
         return this.domainSummaryServiceInstance;
     }
 
+    getEventLog(): MemoryEventLog {
+        if (!this.eventLogInstance) this.eventLogInstance = new MemoryEventLog(this.db);
+        return this.eventLogInstance;
+    }
+
     getEpisodicMemoryService(): EpisodicMemoryService {
-        if (!this.episodicMemoryServiceInstance) this.episodicMemoryServiceInstance = new EpisodicMemoryService(this.db);
+        if (!this.episodicMemoryServiceInstance)
+            this.episodicMemoryServiceInstance = new EpisodicMemoryService(this.db, this.getEventLog());
         return this.episodicMemoryServiceInstance;
     }
 
     getCognitiveReflectionEngine(): CognitiveReflectionEngine {
-        if (!this.cognitiveReflectionEngineInstance) this.cognitiveReflectionEngineInstance = new CognitiveReflectionEngine(this.db);
+        if (!this.cognitiveReflectionEngineInstance)
+            this.cognitiveReflectionEngineInstance = new CognitiveReflectionEngine(this.db, this.getEventLog());
         return this.cognitiveReflectionEngineInstance;
     }
 
@@ -222,7 +231,14 @@ export class MemoryManager {
     // ── Graph: Nodes ───────────────────────────────────────────────────────────
 
     addNode(node: import('./memoryTypes').MemoryNode, source: string = 'unknown'): void {
+        const isNew = !this.db.prepare('SELECT 1 FROM memory_nodes WHERE id = ?').get(node.id);
         graph.addNode(this.db, this.classifier, node, source);
+        this.getEventLog().log(
+            isNew ? 'node_added' : 'node_updated',
+            node.id, 'node',
+            { type: node.type, source },
+            source
+        );
     }
 
     getNode(id: string): import('./memoryTypes').MemoryNode | undefined {

@@ -38,6 +38,11 @@ export const RELATION_ONTOLOGY: Record<string, { label: string; description: str
     has_identity:   { label: 'tem identidade',      description: 'Relaciona usuário ao seu nome/ID', allowedFrom: ['identity'],                             allowedTo: ['identity'] },
     has_domain:     { label: 'tem domínio',         description: 'Agrupa memórias por domínio cognitivo', allowedFrom: ['identity'],                        allowedTo: ['domain'] },
     groups:         { label: 'agrupa',              description: 'Domínio agrega nós de memória',     allowedFrom: ['domain'],                               allowedTo: ['*'] },
+    teaches:        { label: 'ensina',              description: 'Pessoa/projeto ensina disciplina, skill ou conceito', allowedFrom: ['identity', 'project'], allowedTo: ['skill', 'knowledge', 'fact'] },
+    scheduled_for:  { label: 'agendado para',       description: 'Evento, tarefa ou projeto agendado para uma data', allowedFrom: ['project', 'fact', 'context'], allowedTo: ['fact'] },
+    caused_by:      { label: 'causado por',         description: 'Efeito ou resultado originado por uma causa', allowedFrom: ['*'],                          allowedTo: ['*'] },
+    learned_from:   { label: 'aprendido de',        description: 'Conhecimento derivado de uma fonte específica', allowedFrom: ['knowledge', 'skill', 'fact'], allowedTo: ['identity', 'project', 'context', 'fact'] },
+    part_of:        { label: 'parte de',            description: 'Componente pertence a um sistema ou projeto maior', allowedFrom: ['*'],                     allowedTo: ['project', 'context', 'infrastructure', 'skill'] },
 };
 
 export function validateRelation(fromType: string, relation: string, toType: string): boolean {
