@@ -37,10 +37,22 @@ export class MessageBus {
     /** Recently processed message IDs to prevent Telegram duplicate delivery */
     private recentMessageIds: Map<string, number> = new Map();
     private readonly MESSAGE_ID_TTL_MS = 5 * 60 * 1000; // 5 minutes
+    private cleanupTimer: NodeJS.Timeout | null = null;
 
     constructor(agentLoop: AgentLoop, sessionManager: SessionManager) {
         this.agentLoop = agentLoop;
         this.sessionManager = sessionManager;
+    }
+
+    private startCleanupTimer(): void {
+        if (this.cleanupTimer) return;
+        this.cleanupTimer = setInterval(() => {
+            const now = Date.now();
+            for (const [key, ts] of this.recentMessageIds) {
+                if (now - ts > this.MESSAGE_ID_TTL_MS) this.recentMessageIds.delete(key);
+            }
+        }, this.MESSAGE_ID_TTL_MS);
+        this.cleanupTimer.unref(); // don't keep the process alive just for cleanup
     }
 
     /** Registrar um canal */
@@ -100,6 +112,7 @@ export class MessageBus {
         }
 
         this.started = true;
+        this.startCleanupTimer();
         log.info('bus_started', `MessageBus started with ${this.adapters.size} adapters`);
     }
 
@@ -143,6 +156,11 @@ export class MessageBus {
 
     /** Parar todos os canais e cancelar reconexões */
     async stopAll(): Promise<void> {
+        if (this.cleanupTimer) {
+            clearInterval(this.cleanupTimer);
+            this.cleanupTimer = null;
+        }
+
         // Cancelar todos os timers de reconexão
         for (const [type, timer] of this.reconnectTimers) {
             clearTimeout(timer);
@@ -228,10 +246,6 @@ export class MessageBus {
                 return;
             }
             this.recentMessageIds.set(dedupeKey, now);
-            // Prune stale entries to prevent unbounded growth
-            for (const [key, ts] of this.recentMessageIds) {
-                if (now - ts > this.MESSAGE_ID_TTL_MS) this.recentMessageIds.delete(key);
-            }
         }
 
         const sessionKey: SessionKey = { channel: msg.channel, userId: msg.userId };
@@ -324,11 +338,14 @@ export class MessageBus {
             });
 
         } catch (error) {
+            // Stop typing before sending error so user doesn't see spinner + error simultaneously
+            this.stopTypingIndicator(typingKey);
+
             const isTimeout = errorMessage(error)?.includes('Timeout') || errorMessage(error)?.includes('abort');
-            const userMessage = isTimeout 
-                ? '⏱️ O modelo demorou mais que o esperado. Tente novamente em alguns instantes.' 
+            const userMessage = isTimeout
+                ? '⏱️ O modelo demorou mais que o esperado. Tente novamente em alguns instantes.'
                 : '⚠️ Erro ao processar mensagem. Tente novamente.';
-            
+
             log.error('message_processing_failed', error, msg.text.slice(0, 50));
             log.error('error_details', undefined, 'Processing failure details', {
                 channel: msg.channel,

@@ -140,10 +140,11 @@ export class ProactiveRecovery {
         args: Record<string, unknown>,
         getTool: (name: string) => ToolExecutorLike | undefined,
         usedInputs: Set<string>,
+        signal?: AbortSignal,
     ): Promise<RecoveryResult> {
 
         // ── Step 1: try with original args (+ retry on transient errors) ────────
-        const step1 = await this.tryWithRetry(toolName, args, getTool, usedInputs);
+        const step1 = await this.tryWithRetry(toolName, args, getTool, usedInputs, signal);
         if (step1.result.success) return { ...step1, recovered: false };
 
         const config = RECOVERY[toolName];
@@ -216,6 +217,7 @@ export class ProactiveRecovery {
         args: Record<string, unknown>,
         getTool: (name: string) => ToolExecutorLike | undefined,
         usedInputs: Set<string>,
+        signal?: AbortSignal,
     ): Promise<Omit<RecoveryResult, 'recovered'>> {
         const tool = getTool(toolName);
         if (!tool) {
@@ -236,10 +238,12 @@ export class ProactiveRecovery {
         let lastResult: ToolResult = { success: false, output: '', error: 'Não executado' };
 
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            if (signal?.aborted) break;
             if (attempt > 0) {
                 const delay = Math.min(400 * Math.pow(2, attempt - 1), 2000);
                 log.info(`[RECOVERY] Retry ${attempt}/${maxRetries} for "${toolName}" after ${delay}ms`);
-                await sleep(delay);
+                await sleep(delay, signal).catch(() => {});
+                if (signal?.aborted) break;
             }
 
             try {
@@ -262,6 +266,10 @@ export class ProactiveRecovery {
     }
 }
 
-function sleep(ms: number): Promise<void> {
-    return new Promise(r => setTimeout(r, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
+        const timer = setTimeout(resolve, ms);
+        signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
+    });
 }

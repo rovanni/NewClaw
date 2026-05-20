@@ -172,7 +172,20 @@ export class AuthorizationManager {
 
     /** Check if an action matches the pending one (for consumption) */
     isMatch(pending: PendingAction, toolName: string, args: Record<string, any>): boolean {
-        return pending.toolName === toolName && 
-               JSON.stringify(pending.arguments) === JSON.stringify(args);
+        if (pending.toolName !== toolName) return false;
+        return deepEqual(pending.arguments, args);
     }
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+    if (a === b) return true;
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+    const aKeys = Object.keys(a as object);
+    const bKeys = Object.keys(b as object);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const key of aKeys) {
+        if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+        if (!deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])) return false;
+    }
+    return true;
 }

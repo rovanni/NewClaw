@@ -212,8 +212,8 @@ export class AgentLoop {
                     content: `[OBSERVER] A ferramenta "${toolName}" pode não ter atendido à solicitação. ${validation.reason} — Sugestão: ${validation.suggestedFix}`
                 });
             }
-        } catch {
-            // validação é não-fatal
+        } catch (err) {
+            log.warn(`[${this.ts()}] [VALIDATE] tryValidateTool failed (non-fatal): ${errorMessage(err)}`);
         }
     }
 
@@ -241,8 +241,8 @@ export class AgentLoop {
                     conversationId,
                     finalResponse
                 );
-            } catch {
-                // não-fatal
+            } catch (err) {
+                log.warn(`[${this.ts()}] [POST-TURN] schedulePostTurnValidation failed (non-fatal): ${errorMessage(err)}`);
             }
         });
     }
@@ -399,8 +399,8 @@ export class AgentLoop {
                     if (m?.[1]) return m[1].trim();
                 }
             }
-        } catch {
-            // non-fatal
+        } catch (err) {
+            log.warn(`[${this.ts()}] [DEFAULT-CITY] Memory search failed (non-fatal): ${errorMessage(err)}`);
         }
         return null;
     }
@@ -657,8 +657,8 @@ export class AgentLoop {
         }
 
         if (!this.sessionContext) {
-            log.error('sessionContext not set — session pipeline is mandatory. Throwing.');
-            throw new Error('SessionContext is required. Set via AgentLoop.setSessionContext() before processing.');
+            log.error('sessionContext not set — session pipeline is mandatory.');
+            return '⚠️ Sessão indisponível no momento. Tente novamente em alguns instantes.';
         }
 
         const sessionKey: SessionKey = { channel: 'telegram', userId: conversationId };
@@ -927,6 +927,7 @@ export class AgentLoop {
                             toolName, toolCall.arguments,
                             (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined,
                             usedToolInputs,
+                            turnSignal,
                         );
                         const result = recovery.result;
                         const resolvedToolName = recovery.finalToolName;
@@ -1015,6 +1016,7 @@ export class AgentLoop {
                         toolName, atomicData.action.input || {},
                         (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined,
                         usedToolInputs,
+                        turnSignal,
                     );
                     const result = atomicRecovery.result;
                     const resolvedToolName = atomicRecovery.finalToolName;

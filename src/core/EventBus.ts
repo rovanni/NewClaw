@@ -254,7 +254,7 @@ export class EventBusClass {
 
     private logEvent(event: AppEvent): void {
         this.eventLog.push(event);
-        if (this.eventLog.length > this.maxLogSize) {
+        if (this.eventLog.length >= this.maxLogSize) {
             this.eventLog.shift();
         }
     }

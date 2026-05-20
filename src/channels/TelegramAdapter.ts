@@ -127,6 +127,8 @@ export class TelegramAdapter implements ChannelAdapter {
     /** Track how long the bot stayed connected — if < 30s, it's likely 409 conflict */
     private botConnectedAt: number = 0;
     private static readonly STABLE_CONNECTION_MS = 30_000;
+    /** Max age for pending messages to be processed after restart (15 minutes) */
+    private static readonly PENDING_MAX_AGE_MS = 15 * 60 * 1000;
 
     async start(): Promise<void> {
         if (!this.config.enabled) {
@@ -141,9 +143,9 @@ export class TelegramAdapter implements ChannelAdapter {
 
         // Pre-check: kill any stale bot instances that would cause 409 Conflict
         // This happens when the process was restarted but the old polling loop is still active
+        // Note: do NOT pass drop_pending_updates so messages received while offline are delivered
         try {
-            // Delete webhook to ensure polling mode works
-            await this.bot.api.deleteWebhook({ drop_pending_updates: true });
+            await this.bot.api.deleteWebhook();
         } catch (e) {
             log.warn('delete_webhook_failed', errorMessage(e));
         }
@@ -163,54 +165,57 @@ export class TelegramAdapter implements ChannelAdapter {
         }
         this.started = true;
 
-        try {
-            log.info('bot_starting', 'Iniciando polling do Telegram...');
-            const pollingInfo = await this.bot.api.getMe();
-            log.info('bot_api_check', `getMe OK: id=${pollingInfo.id} username=${pollingInfo.username}`);
-            await this.bot.start({
-                onStart: (info) => {
-                    this._isConnected = true;
-                    this.botConnectedAt = Date.now();
-                    this.networkRetryCount = 0; // Reset network retries on success
-                    log.info('bot_started', `🤖 Telegram Bot rodando! botInfo=${JSON.stringify(info).slice(0, 100)}`);
-                },
-            });
-            // If we reach here, bot.start() resolved (meaning bot was stopped)
-            const uptimeMs = this.botConnectedAt ? Date.now() - this.botConnectedAt : 0;
-            const wasStable = uptimeMs > TelegramAdapter.STABLE_CONNECTION_MS;
-            if (wasStable) {
-                // Bot ran for a while then stopped normally — reset retries
-                this.startRetries = 0;
-            }
-            log.warn('bot_start_resolved', `bot.start() resolved unexpectedly — bot was stopped (uptime=${uptimeMs}ms, stable=${wasStable})`);
-        } catch (e) {
-            if (errorMessage(e)?.includes('409') || errorMessage(e)?.includes('Conflict')) {
-                this.startRetries++;
-                log.error('bot_start_409_conflict', `Multiple bot instances detected (attempt ${this.startRetries}/${this.maxStartRetries}). Waiting for old instance to stop...`);
-                if (this.startRetries <= this.maxStartRetries) {
-                    const delay = Math.min(this.startRetries * 20, 120); // 20s, 40s, 60s, 80s, 100s, 120s max
-                    log.info('bot_start_retry', `Retry ${this.startRetries}/${this.maxStartRetries} in ${delay}s...`);
+        // Iterative 409-conflict retry loop — avoids stack overflow from recursive this.start() calls
+        while (this.startRetries <= this.maxStartRetries) {
+            try {
+                log.info('bot_starting', `Iniciando polling do Telegram... (attempt ${this.startRetries + 1}/${this.maxStartRetries + 1})`);
+                const pollingInfo = await this.bot.api.getMe();
+                log.info('bot_api_check', `getMe OK: id=${pollingInfo.id} username=${pollingInfo.username}`);
+                await this.bot.start({
+                    onStart: (info) => {
+                        this._isConnected = true;
+                        this.botConnectedAt = Date.now();
+                        this.networkRetryCount = 0;
+                        this.startRetries = 0;
+                        log.info('bot_started', `🤖 Telegram Bot rodando! botInfo=${JSON.stringify(info).slice(0, 100)}`);
+                    },
+                });
+                // bot.start() resolved — bot was stopped externally
+                const uptimeMs = this.botConnectedAt ? Date.now() - this.botConnectedAt : 0;
+                const wasStable = uptimeMs > TelegramAdapter.STABLE_CONNECTION_MS;
+                if (wasStable) this.startRetries = 0;
+                log.warn('bot_start_resolved', `bot.start() resolved unexpectedly (uptime=${uptimeMs}ms, stable=${wasStable})`);
+                return;
+            } catch (e) {
+                const msg = errorMessage(e) || '';
+
+                if (msg.includes('409') || msg.includes('Conflict')) {
+                    this.startRetries++;
+                    if (this.startRetries > this.maxStartRetries) {
+                        log.error('bot_start_409_exhausted', `All ${this.maxStartRetries} retries exhausted. Another bot instance is still running.`);
+                        this.scheduleReconnect(30);
+                        return;
+                    }
+                    const delay = Math.min(this.startRetries * 20, 120);
+                    log.error('bot_start_409_conflict', `Multiple bot instances detected (attempt ${this.startRetries}/${this.maxStartRetries}). Retrying in ${delay}s...`);
                     this.started = false;
                     this._isConnected = false;
                     await new Promise(r => setTimeout(r, delay * 1000));
-                    return this.start();
+                    continue;
                 }
-                log.error('bot_start_409_exhausted', 'All retries exhausted. Another bot instance is still running.');
-                // Schedule background retry instead of giving up completely
-                this.scheduleReconnect(30);
-                return;
+
+                if (msg.includes('Network') || msg.includes('ECONNREFUSED') ||
+                    msg.includes('ENOTFOUND') || msg.includes('ETIMEDOUT') ||
+                    msg.includes('fetch failed') || msg.includes('request failed')) {
+                    this.networkRetryCount++;
+                    const delay = Math.min(this.networkRetryCount * 10, 300);
+                    log.error('bot_start_network_error', `Network error on start (attempt ${this.networkRetryCount}). Scheduling reconnect in ${delay}s...`, msg);
+                    this.scheduleReconnect(delay);
+                    return;
+                }
+
+                throw e;
             }
-            // Network errors — schedule background retry instead of crashing
-            if (errorMessage(e)?.includes('Network') || errorMessage(e)?.includes('ECONNREFUSED') ||
-                errorMessage(e)?.includes('ENOTFOUND') || errorMessage(e)?.includes('ETIMEDOUT') ||
-                errorMessage(e)?.includes('fetch failed') || errorMessage(e)?.includes('request failed')) {
-                this.networkRetryCount++;
-                const delay = Math.min(this.networkRetryCount * 10, 300); // 10s, 20s, 30s... max 5min
-                log.error('bot_start_network_error', `Network error on start (attempt ${this.networkRetryCount}). Scheduling reconnect in ${delay}s...`, errorMessage(e));
-                this.scheduleReconnect(delay);
-                return;
-            }
-            throw e;
         }
     }
 
@@ -427,6 +432,15 @@ export class TelegramAdapter implements ChannelAdapter {
                 return;
             }
 
+            // Filter messages received while the bot was offline
+            const messageAgeMs = Date.now() - ctx.message!.date * 1000;
+            if (messageAgeMs > TelegramAdapter.PENDING_MAX_AGE_MS) {
+                const minutes = Math.round(messageAgeMs / 60000);
+                log.info('stale_message_skipped', `Message ${ctx.message!.message_id} from ${minutes}min ago skipped (userId=${userId})`);
+                ctx.reply(`⏳ Vi sua mensagem de ${minutes} min atrás, mas já passou do prazo de resposta automática. Me manda de novo se ainda precisar! 😊`).catch(() => {});
+                return;
+            }
+
             const text = ctx.message!.text!;
             const msg: NormalizedMessage = {
                 messageId: ctx.message!.message_id.toString(),
@@ -455,6 +469,12 @@ export class TelegramAdapter implements ChannelAdapter {
             const photos = (ctx.message as unknown as TelegramMsg)?.photo;
             if (!photos || photos.length === 0) return;
             const photo = photos[photos.length - 1];
+
+            const photoAgeMs = Date.now() - ctx.message!.date * 1000;
+            if (photoAgeMs > TelegramAdapter.PENDING_MAX_AGE_MS) {
+                ctx.reply(`⏳ Vi sua imagem de ${Math.round(photoAgeMs / 60000)} min atrás. Me manda de novo se ainda precisar! 😊`).catch(() => {});
+                return;
+            }
 
             const msg: NormalizedMessage = {
                 messageId: ctx.message!.message_id.toString(),
@@ -486,6 +506,12 @@ export class TelegramAdapter implements ChannelAdapter {
             const userId = ctx.from!.id.toString();
             log.info('voice_received', `userId=${userId} duration=${ctx.message!.voice?.duration}s`);
             if (!this.config.allowedUserIds.includes(userId)) return;
+
+            const voiceAgeMs = Date.now() - ctx.message!.date * 1000;
+            if (voiceAgeMs > TelegramAdapter.PENDING_MAX_AGE_MS) {
+                ctx.reply(`⏳ Vi seu áudio de ${Math.round(voiceAgeMs / 60000)} min atrás. Me manda de novo se ainda precisar! 😊`).catch(() => {});
+                return;
+            }
 
             const voice = ctx.message!.voice!;
             const msg: NormalizedMessage = {
@@ -519,6 +545,12 @@ export class TelegramAdapter implements ChannelAdapter {
             log.info('audio_received', `userId=${userId} file=${(ctx.message as unknown as TelegramMsg)?.audio?.file_name}`);
             if (!this.config.allowedUserIds.includes(userId)) return;
 
+            const audioAgeMs = Date.now() - ctx.message!.date * 1000;
+            if (audioAgeMs > TelegramAdapter.PENDING_MAX_AGE_MS) {
+                ctx.reply(`⏳ Vi seu áudio de ${Math.round(audioAgeMs / 60000)} min atrás. Me manda de novo se ainda precisar! 😊`).catch(() => {});
+                return;
+            }
+
             const audio = (ctx.message as unknown as TelegramMsg)?.audio;
             if (!audio) return;
 
@@ -550,9 +582,14 @@ export class TelegramAdapter implements ChannelAdapter {
 
         // Documents
         this.bot.on('message:document', async (ctx) => {
-            // ... (keeping existing logic)
             const userId = ctx.from!.id.toString();
             if (!this.config.allowedUserIds.includes(userId)) return;
+
+            const docAgeMs = Date.now() - ctx.message!.date * 1000;
+            if (docAgeMs > TelegramAdapter.PENDING_MAX_AGE_MS) {
+                ctx.reply(`⏳ Vi seu arquivo de ${Math.round(docAgeMs / 60000)} min atrás. Me manda de novo se ainda precisar! 😊`).catch(() => {});
+                return;
+            }
 
             const doc = (ctx.message as unknown as TelegramMsg)?.document;
             if (!doc) return;

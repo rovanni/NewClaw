@@ -80,6 +80,8 @@ export class SessionContext {
         const checkpointSummary = this.sessionManager.getCheckpointSummary(key);
         if (checkpointSummary) {
             stats.fromCheckpoint = true;
+        } else if (stats.totalTranscriptEntries > 50) {
+            log.warn(`SessionContext: no checkpoint for session with ${stats.totalTranscriptEntries} entries — historical context may be missing`);
         }
 
         // 3. Get semantic memory context (compact, top-K — NOT full graph)
@@ -87,8 +89,8 @@ export class SessionContext {
         try {
             memoryContext = await this.contextBuilder.buildContext(currentMessage);
             stats.semanticContextUsed = memoryContext.length > 0;
-        } catch {
-            // Continue without semantic context
+        } catch (err) {
+            log.warn(`SessionContext: semantic context build failed (non-fatal): ${err}`);
         }
 
         // 4. Build state block (short, essential info)

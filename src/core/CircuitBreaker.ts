@@ -131,7 +131,6 @@ export class CircuitBreaker {
             const elapsed = Date.now() - this.lastFailureTime;
             if (elapsed >= this.config.resetTimeoutMs) {
                 this.transitionTo('HALF_OPEN');
-                this.halfOpenAttempted = false;
                 return true;
             }
             this.totalRejected++;
@@ -175,7 +174,6 @@ export class CircuitBreaker {
             const elapsed = Date.now() - this.lastFailureTime;
             if (elapsed >= this.config.resetTimeoutMs) {
                 this.transitionTo('HALF_OPEN');
-                this.halfOpenAttempted = false;
             }
         }
         return this.state;
@@ -279,6 +277,10 @@ export class CircuitBreaker {
         this.state = newState;
         this.lastStateChangeTime = Date.now();
 
+        if (newState === 'HALF_OPEN') {
+            this.halfOpenAttempted = false;
+        }
+
         if (oldState !== newState) {
             log.info(`[${this.config.name}] Circuit ${oldState} → ${newState}`);
 
@@ -314,7 +316,7 @@ export class CircuitBreaker {
                 },
                 source: 'CircuitBreaker',
                 correlationId: `cb-${this.config.name}`,
-            });
+            }).catch(err => log.warn(`[${this.config.name}] emitAppEvent failed (non-fatal): ${err}`));
         }
     }
 
