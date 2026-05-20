@@ -33,6 +33,19 @@ export interface ConsolidationResult {
     summariesCreated: number;
 }
 
+export interface DeduplicationResult {
+    pairsFound: number;
+    nodesSuperseded: number;
+    edgesRetargeted: number;
+}
+
+export interface DistillationResult {
+    nodesPromoted: number;
+    interestsExtracted: number;
+    episodesArchived: number;
+    skipped: boolean;
+}
+
 export class MemoryCurator {
     private mm: MemoryManager;
     private repo: MemoryGraphRepository;
@@ -233,6 +246,359 @@ export class MemoryCurator {
             log.error('[TemporalDecay] Error:', errorMessage(error));
             return { decayed: 0 };
         }
+    }
+
+    /**
+     * Sparse Graph Strategy — remove arestas fracas que poluem o retrieval.
+     *
+     * Executado após decayOldEdges() para que arestas já decaídas abaixo do limiar
+     * sejam imediatamente elegíveis para poda nesta mesma rodada.
+     *
+     * Thresholds:
+     *   - weight < 0.15 AND confidence < 0.30 AND inativa há 30+ dias → deletar
+     *   - grau de saída > 25 arestas por nó → manter apenas as 25 mais fortes
+     *
+     * Relações estruturais protegidas: contains, next, summarizes, has_identity, has_domain, groups
+     */
+    async pruneWeakEdges(): Promise<{ prunedWeak: number; prunedOverflow: number }> {
+        try {
+            const result = this.repo.pruneWeakEdges();
+            if (result.prunedWeak > 0 || result.prunedOverflow > 0) {
+                log.info(`[SparseGraph] ${result.prunedWeak} weak edges removidas, ${result.prunedOverflow} overflow (max-degree enforced)`);
+            }
+            return result;
+        } catch (error) {
+            log.error('[SparseGraph] pruneWeakEdges falhou:', errorMessage(error));
+            return { prunedWeak: 0, prunedOverflow: 0 };
+        }
+    }
+
+    // ── Knowledge Distillation ───────────────────────────────────────────────
+    //
+    // Cristaliza padrões episódicos em conhecimento semântico permanente.
+    // É o "fechamento do loop": CognitiveReflectionEngine observa padrões,
+    // distillKnowledge() os escreve de volta no grafo como nós duráveis.
+    //
+    // Três passos:
+    //   1. Node promotion: nós estáveis (3+ sessões distintas) → boost confidence/weight
+    //   2. Interest extraction: domínios em 5+ das últimas 20 sessões → nó preference USER_MEMORY
+    //   3. Episode archiving: episódios > 30 dias → is_active = -1 (excluídos do prompt, preservados)
+
+    private readonly DISTILLATION_MIN_EPISODES          = 10;  // novas sessões desde última distilação
+    private readonly DISTILLATION_FALLBACK_DAYS         = 7;   // alternativa temporal: 7 dias + 5 sessões
+    private readonly DISTILLATION_FALLBACK_MIN_EP       = 5;
+    private readonly DISTILLATION_NODE_MIN_SESSIONS     = 3;   // nó em N+ sessões distintas → promover
+    private readonly DISTILLATION_INTEREST_MIN_SESSIONS = 5;   // domínio em N+ das últimas 20 → preferência
+    private readonly DISTILLATION_ARCHIVE_DAYS          = 30;  // arquivar episódios mais velhos que isto
+
+    /**
+     * Distila N conversas em conhecimento semântico permanente.
+     *
+     * Throttle: só roda quando há DISTILLATION_MIN_EPISODES novas sessões fechadas
+     * desde a última execução, ou após DISTILLATION_FALLBACK_DAYS dias + 5 sessões.
+     * Idempotente: re-executar não duplica nós (addNode usa ON CONFLICT DO UPDATE).
+     */
+    async distillKnowledge(): Promise<DistillationResult> {
+        const db = this.mm.getDatabase();
+
+        // ── Throttle ──────────────────────────────────────────────────────────
+        const lastRunRow = db.prepare(
+            "SELECT value FROM memory WHERE key = 'last_distillation_at'"
+        ).get() as { value: string } | undefined;
+
+        const closedSince: number = lastRunRow
+            ? (db.prepare(`
+                SELECT COUNT(*) AS cnt FROM memory_episodes
+                WHERE is_active = 0 AND ended_at > ?
+              `).get(lastRunRow.value) as { cnt: number }).cnt
+            : (db.prepare(
+                `SELECT COUNT(*) AS cnt FROM memory_episodes WHERE is_active = 0`
+              ).get() as { cnt: number }).cnt;
+
+        const daysSinceLast = lastRunRow
+            ? (Date.now() - new Date(lastRunRow.value).getTime()) / 86400000
+            : 999;
+
+        const shouldRun =
+            closedSince >= this.DISTILLATION_MIN_EPISODES ||
+            (daysSinceLast >= this.DISTILLATION_FALLBACK_DAYS && closedSince >= this.DISTILLATION_FALLBACK_MIN_EP);
+
+        if (!shouldRun) {
+            return { nodesPromoted: 0, interestsExtracted: 0, episodesArchived: 0, skipped: true };
+        }
+
+        const result: DistillationResult = { nodesPromoted: 0, interestsExtracted: 0, episodesArchived: 0, skipped: false };
+
+        // ── Passo 1: Promover nós estáveis ────────────────────────────────────
+        // confidence ×1.15 (cap 0.95), weight ×1.1 (cap 2.0)
+        // Critério: apareceu em DISTILLATION_NODE_MIN_SESSIONS+ sessões distintas
+        const stableNodes = db.prepare(`
+            SELECT en.node_id
+            FROM episode_nodes en
+            JOIN memory_nodes n ON n.id = en.node_id
+            WHERE (n.lifecycle_state IS NULL OR n.lifecycle_state = 'ACTIVE')
+              AND n.type NOT IN ('domain', 'identity')
+              AND n.id NOT LIKE 'core_%'
+            GROUP BY en.node_id
+            HAVING COUNT(DISTINCT en.conversation_id) >= ?
+        `).all(this.DISTILLATION_NODE_MIN_SESSIONS) as Array<{ node_id: string }>;
+
+        const promoteStmt = db.prepare(`
+            UPDATE memory_nodes
+            SET confidence = MIN(COALESCE(confidence, 0.5) * 1.15, 0.95),
+                weight     = MIN(COALESCE(weight,     1.0) * 1.10, 2.00)
+            WHERE id = ?
+        `);
+
+        for (const { node_id } of stableNodes) {
+            try { promoteStmt.run(node_id); result.nodesPromoted++; } catch { /* keep going */ }
+        }
+
+        // ── Passo 2: Extrair interesses estáveis ──────────────────────────────
+        // Domínio em 5+ das últimas 20 sessões fechadas → nó preference USER_MEMORY
+        // Nó é idempotente: id fixo = 'distilled_interest_<domain>'
+        const recentEpCount = (db.prepare(
+            `SELECT COUNT(*) AS cnt FROM (SELECT 1 FROM memory_episodes WHERE is_active = 0 LIMIT 20)`
+        ).get() as { cnt: number }).cnt;
+
+        if (recentEpCount >= this.DISTILLATION_INTEREST_MIN_SESSIONS) {
+            const stableDomains = db.prepare(`
+                SELECT je.value AS domain, COUNT(*) AS freq
+                FROM (
+                    SELECT domains FROM memory_episodes
+                    WHERE is_active = 0
+                    ORDER BY ended_at DESC LIMIT 20
+                ) recent_ep, json_each(recent_ep.domains) je
+                GROUP BY je.value
+                HAVING freq >= ?
+            `).all(this.DISTILLATION_INTEREST_MIN_SESSIONS) as Array<{ domain: string; freq: number }>;
+
+            for (const { domain, freq } of stableDomains) {
+                const domainLabel = domain.replace(/^domain_/, '').toLowerCase();
+                const nodeId = `distilled_interest_${domain}`;
+                try {
+                    this.mm.addNode({
+                        id: nodeId,
+                        type: 'preference',
+                        name: `Interesse: ${domainLabel}`,
+                        content: `Interesse estável: ${domainLabel} detectado em ${freq}/${recentEpCount} sessões recentes.`,
+                        confidence: 0.8,
+                        weight: 1.2,
+                        metadata: {
+                            distilled: 'true',
+                            source_domain: domain,
+                            episode_frequency: String(freq),
+                            distilled_at: new Date().toISOString(),
+                        },
+                    }, 'distillation');
+
+                    this.mm.getFacade().setNodeDomain(nodeId, domain);
+                    this.addEdgeSafe('core_user', nodeId, 'prefers');
+                    this.addEdgeSafe(domain, nodeId, 'contains');
+
+                    result.interestsExtracted++;
+                } catch (e) {
+                    log.warn(`[Distillation] Falha ao criar interesse para ${domain}: ${errorMessage(e)}`);
+                }
+            }
+        }
+
+        // ── Passo 3: Arquivar episódios antigos ───────────────────────────────
+        // is_active = -1 → arquivado: excluído do prompt, preservado no banco para auditoria
+        result.episodesArchived = db.prepare(`
+            UPDATE memory_episodes
+            SET is_active = -1
+            WHERE is_active = 0
+              AND ended_at < datetime('now', '-' || ? || ' days')
+        `).run(this.DISTILLATION_ARCHIVE_DAYS).changes;
+
+        // ── Registrar timestamp ───────────────────────────────────────────────
+        db.prepare(
+            "INSERT OR REPLACE INTO memory (key, value, category) VALUES ('last_distillation_at', ?, 'system')"
+        ).run(new Date().toISOString());
+
+        log.info(`[Distillation] ${result.nodesPromoted} nós promovidos | ${result.interestsExtracted} interesses | ${result.episodesArchived} episódios arquivados`);
+        return result;
+    }
+
+    // ── Node Deduplication (non-destructive) ─────────────────────────────────
+    //
+    // Complementa a consolidação semântica (que age só em nós stale).
+    // Dedup age em nós ATIVOS — qualquer confidence/weight.
+    //
+    // Dois passos:
+    //   1. Name dedup (O(n)): nome normalizado idêntico → mescla o mais fraco no mais forte
+    //   2. Content dedup (O(n²) boundado): Jaccard > 0.75, mesmo type → mescla
+    //
+    // Merge não-destrutivo:
+    //   - Todas as arestas (entrada/saída) do duplicado são redirecionadas para o canônico
+    //   - Duplicado marcado lifecycle_state = 'SUPERSEDED' (dado preservado, recuperável)
+    //   - Nenhum nó é deletado
+
+    private readonly DEDUP_CONTENT_THRESHOLD = 0.75;
+    private readonly DEDUP_MAX_CANDIDATES = 200; // teto para scan O(n²)
+
+    // Nunca deduplica: hubs estruturais, nós de identidade, core/domain/user_identity
+    private readonly DEDUP_PROTECTED_TYPES = new Set(['identity', 'domain']);
+
+    /**
+     * Detecta e mescla nós ativos near-duplicados.
+     * Canônico = nó com maior weight × confidence × (pagerank + 0.01).
+     * Duplicado = marcado SUPERSEDED; suas arestas migram para o canônico.
+     */
+    async deduplicateNodes(): Promise<DeduplicationResult> {
+        const result: DeduplicationResult = { pairsFound: 0, nodesSuperseded: 0, edgesRetargeted: 0 };
+        const db = this.mm.getDatabase();
+
+        const candidates = db.prepare(`
+            SELECT id, name, content, type, weight, confidence, pagerank
+            FROM memory_nodes
+            WHERE (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')
+              AND content IS NOT NULL AND content != ''
+              AND id NOT LIKE 'core_%'
+              AND id NOT LIKE 'domain_%'
+              AND id NOT LIKE 'user_identity%'
+            ORDER BY (COALESCE(weight, 1.0) * COALESCE(confidence, 1.0)) DESC
+        `).all() as Array<{
+            id: string; name: string; content: string; type: string;
+            weight: number | null; confidence: number | null; pagerank: number | null;
+        }>;
+
+        const normName = (s: string) => s.toLowerCase().trim().replace(/\s+/g, ' ');
+        const nodeScore = (n: { weight: number | null; confidence: number | null; pagerank: number | null }) =>
+            (n.weight ?? 1.0) * (n.confidence ?? 1.0) * ((n.pagerank ?? 0) + 0.01);
+
+        const superseded = new Set<string>();
+
+        // ── Passo 1: Name dedup (O(n)) ─────────────────────────────────
+        const byName = new Map<string, typeof candidates>();
+        for (const node of candidates) {
+            if (this.DEDUP_PROTECTED_TYPES.has(node.type)) continue;
+            const key = normName(node.name);
+            const group = byName.get(key) ?? [];
+            group.push(node);
+            byName.set(key, group);
+        }
+
+        const mergePairs: Array<[typeof candidates[0], typeof candidates[0]]> = [];
+
+        for (const group of byName.values()) {
+            if (group.length < 2) continue;
+            group.sort((a, b) => nodeScore(b) - nodeScore(a));
+            const canonical = group[0];
+            for (let i = 1; i < group.length; i++) {
+                mergePairs.push([canonical, group[i]]);
+            }
+        }
+
+        // ── Passo 2: Content dedup (O(n²) boundado) ────────────────────
+        // Apenas candidatos não-protegidos, limitado por DEDUP_MAX_CANDIDATES
+        const contentCandidates = candidates
+            .filter(n => !this.DEDUP_PROTECTED_TYPES.has(n.type))
+            .slice(0, this.DEDUP_MAX_CANDIDATES);
+
+        for (let i = 0; i < contentCandidates.length; i++) {
+            for (let j = i + 1; j < contentCandidates.length; j++) {
+                const a = contentCandidates[i];
+                const b = contentCandidates[j];
+                if (a.type !== b.type) continue;
+                if (normName(a.name) === normName(b.name)) continue; // já coberto pelo passo 1
+                if (this.jaccardSimilarity(a.content, b.content) >= this.DEDUP_CONTENT_THRESHOLD) {
+                    const canonical = nodeScore(a) >= nodeScore(b) ? a : b;
+                    const dup = canonical === a ? b : a;
+                    mergePairs.push([canonical, dup]);
+                }
+            }
+        }
+
+        // ── Executar merges ─────────────────────────────────────────────
+        for (const [canonical, dup] of mergePairs) {
+            if (superseded.has(dup.id) || superseded.has(canonical.id)) continue;
+
+            result.pairsFound++;
+            result.edgesRetargeted += this.retargetEdges(db, dup.id, canonical.id);
+
+            const metaRaw = db.prepare('SELECT metadata FROM memory_nodes WHERE id = ?')
+                .get(dup.id) as { metadata: string | null } | undefined;
+            const meta = JSON.parse(metaRaw?.metadata ?? '{}') as Record<string, string>;
+            meta['superseded_by'] = canonical.id;
+            meta['superseded_at'] = new Date().toISOString();
+
+            db.prepare(`UPDATE memory_nodes SET lifecycle_state = 'SUPERSEDED', metadata = ? WHERE id = ?`)
+                .run(JSON.stringify(meta), dup.id);
+
+            superseded.add(dup.id);
+            result.nodesSuperseded++;
+
+            log.info(`[Dedup] ${dup.id} → SUPERSEDED (canônico: ${canonical.id})`);
+        }
+
+        return result;
+    }
+
+    /**
+     * Redireciona todas as arestas de `fromId` para `toId` (merge não-destrutivo).
+     * Conflitos de PK são resolvidos deletando a aresta redundante.
+     * Retorna o número de arestas efetivamente redirecionadas.
+     */
+    private retargetEdges(
+        db: ReturnType<typeof this.mm.getDatabase>,
+        fromId: string,
+        toId: string
+    ): number {
+        let count = 0;
+
+        const outEdges = db.prepare(
+            'SELECT to_node, relation FROM memory_edges WHERE from_node = ?'
+        ).all(fromId) as Array<{ to_node: string; relation: string }>;
+
+        const inEdges = db.prepare(
+            'SELECT from_node, relation FROM memory_edges WHERE to_node = ?'
+        ).all(fromId) as Array<{ from_node: string; relation: string }>;
+
+        const hasEdge = db.prepare(
+            'SELECT 1 FROM memory_edges WHERE from_node = ? AND to_node = ? AND relation = ?'
+        );
+        const deleteEdge = db.prepare(
+            'DELETE FROM memory_edges WHERE from_node = ? AND to_node = ? AND relation = ?'
+        );
+        const updateFrom = db.prepare(
+            'UPDATE memory_edges SET from_node = ? WHERE from_node = ? AND to_node = ? AND relation = ?'
+        );
+        const updateTo = db.prepare(
+            'UPDATE memory_edges SET to_node = ? WHERE from_node = ? AND to_node = ? AND relation = ?'
+        );
+
+        const tx = db.transaction(() => {
+            for (const e of outEdges) {
+                if (e.to_node === toId) {
+                    deleteEdge.run(fromId, e.to_node, e.relation);
+                    continue;
+                }
+                if (hasEdge.get(toId, e.to_node, e.relation)) {
+                    deleteEdge.run(fromId, e.to_node, e.relation);
+                } else {
+                    updateFrom.run(toId, fromId, e.to_node, e.relation);
+                    count++;
+                }
+            }
+
+            for (const e of inEdges) {
+                if (e.from_node === toId) {
+                    deleteEdge.run(e.from_node, fromId, e.relation);
+                    continue;
+                }
+                if (hasEdge.get(e.from_node, toId, e.relation)) {
+                    deleteEdge.run(e.from_node, fromId, e.relation);
+                } else {
+                    updateTo.run(toId, e.from_node, fromId, e.relation);
+                    count++;
+                }
+            }
+        });
+        tx();
+
+        return count;
     }
 
     // ── Semantic Consolidation (non-destructive) ─────────────────────────────
@@ -493,6 +859,23 @@ export class MemoryCurator {
                     }
                 }
 
+                // Sparse graph: prune weak edges after decay so limiar já reflecte o peso pós-decaimento
+                try {
+                    await this.pruneWeakEdges();
+                } catch (e) {
+                    log.warn('[MemoryCurator] pruneWeakEdges failed:', errorMessage(e));
+                }
+
+                // Dedup: mesclar nós ativos near-duplicados antes da consolidação semântica
+                try {
+                    const dedup = await this.deduplicateNodes();
+                    if (dedup.nodesSuperseded > 0) {
+                        log.info(`[Dedup] ${dedup.pairsFound} pares, ${dedup.nodesSuperseded} SUPERSEDED, ${dedup.edgesRetargeted} arestas redirecionadas`);
+                    }
+                } catch (e) {
+                    log.warn('[MemoryCurator] deduplicateNodes failed:', errorMessage(e));
+                }
+
                 // Non-destructive semantic consolidation
                 try {
                     const consolidation = await this.consolidateStaleClusters();
@@ -501,6 +884,16 @@ export class MemoryCurator {
                     }
                 } catch (e) {
                     log.warn('[MemoryCurator] Consolidation failed:', errorMessage(e));
+                }
+
+                // Knowledge Distillation: cristaliza padrões episódicos em nós permanentes (throttled)
+                try {
+                    const distill = await this.distillKnowledge();
+                    if (!distill.skipped && (distill.nodesPromoted > 0 || distill.interestsExtracted > 0)) {
+                        log.info(`[Distillation] ${distill.nodesPromoted} promovidos | ${distill.interestsExtracted} interesses | ${distill.episodesArchived} arquivados`);
+                    }
+                } catch (e) {
+                    log.warn('[MemoryCurator] distillKnowledge failed:', errorMessage(e));
                 }
 
                 // Refresh domain summaries after curation

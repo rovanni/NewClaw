@@ -45,7 +45,8 @@ interface RankedNode {
     summary: string;          // max 200 chars
     score: number;            // combined score
     relations: string[];      // max 3 related node names
-    epistemicStatus?: string | null; // 'fact' | 'belief' | 'assumption' | null
+    epistemicStatus?: string | null;  // 'fact' | 'belief' | 'assumption' | null
+    identityScope?: string | null;    // 'USER_MEMORY' | 'AGENT_MEMORY' | 'SYSTEM_MEMORY' | 'TASK_MEMORY'
 }
 
 export class ContextBuilder {
@@ -222,6 +223,13 @@ export class ContextBuilder {
             if (es === 'fact')       score *= 1.1;
             if (es === 'assumption') score *= 0.8;
 
+            // Identity scope weighting: USER and TASK memory are most contextually relevant
+            const scope = (node as MemoryNode & { identity_scope?: string }).identity_scope;
+            if (scope === 'USER_MEMORY')   score *= 1.2;
+            if (scope === 'TASK_MEMORY')   score *= 1.1;
+            if (scope === 'SYSTEM_MEMORY') score *= 0.9;
+            // AGENT_MEMORY: neutral (1.0)
+
             return {
                 id: node.id,
                 name: node.name || node.id,
@@ -230,6 +238,7 @@ export class ContextBuilder {
                 score,
                 relations: this.getTopRelations(node.id),
                 epistemicStatus: es ?? null,
+                identityScope: scope ?? null,
             };
         });
 

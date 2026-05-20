@@ -355,6 +355,74 @@ export class MemoryGraphRepository {
         `).run(factor, minWeight, daysOld, minWeight).changes;
     }
 
+    /**
+     * Sparse Graph Strategy — remove arestas fracas que adicionam ruído ao retrieval.
+     *
+     * Dois passos:
+     *   1. Deletar arestas com weight < minWeight E confidence < minConfidence E inativas há daysInactive+ dias
+     *   2. Limitar grau de saída por nó a maxDegreePerNode — preserva as mais fortes
+     *
+     * Relações estruturais NUNCA são podadas (contains, next, summarizes, has_identity, has_domain, groups).
+     */
+    pruneWeakEdges(opts?: {
+        minWeight?: number;
+        minConfidence?: number;
+        daysInactive?: number;
+        maxDegreePerNode?: number;
+    }): { prunedWeak: number; prunedOverflow: number } {
+        const minWeight       = opts?.minWeight       ?? 0.15;
+        const minConfidence   = opts?.minConfidence   ?? 0.30;
+        const daysInactive    = opts?.daysInactive    ?? 30;
+        const maxDegreePerNode = opts?.maxDegreePerNode ?? 25;
+
+        // These relations are load-bearing — never prune them regardless of weight.
+        const protected_ = `('contains','next','summarizes','has_identity','has_domain','groups')`;
+
+        // Step 1: weak + stale edges — both weight AND confidence must be below threshold
+        const prunedWeak = this.db.prepare(`
+            DELETE FROM memory_edges
+            WHERE weight < ?
+              AND (confidence IS NULL OR confidence < ?)
+              AND last_accessed < datetime('now', '-' || ? || ' days')
+              AND relation NOT IN ${protected_}
+        `).run(minWeight, minConfidence, daysInactive).changes;
+
+        // Step 2: max-degree enforcement — keep top N outgoing edges by weight per node
+        const highDegreeNodes = this.db.prepare(`
+            SELECT from_node
+            FROM memory_edges
+            WHERE relation NOT IN ${protected_}
+            GROUP BY from_node
+            HAVING COUNT(*) > ?
+        `).all(maxDegreePerNode) as Array<{ from_node: string }>;
+
+        let prunedOverflow = 0;
+        if (highDegreeNodes.length > 0) {
+            const edgesStmt = this.db.prepare(`
+                SELECT from_node, to_node, relation
+                FROM memory_edges
+                WHERE from_node = ? AND relation NOT IN ${protected_}
+                ORDER BY weight ASC
+            `);
+            const deleteStmt = this.db.prepare(
+                'DELETE FROM memory_edges WHERE from_node = ? AND to_node = ? AND relation = ?'
+            );
+            const pruneTx = this.db.transaction((nodes: Array<{ from_node: string }>) => {
+                for (const { from_node } of nodes) {
+                    const edges = edgesStmt.all(from_node) as Array<{ from_node: string; to_node: string; relation: string }>;
+                    const toDelete = edges.length - maxDegreePerNode;
+                    for (let i = 0; i < toDelete; i++) {
+                        deleteStmt.run(edges[i].from_node, edges[i].to_node, edges[i].relation);
+                        prunedOverflow++;
+                    }
+                }
+            });
+            pruneTx(highDegreeNodes);
+        }
+
+        return { prunedWeak, prunedOverflow };
+    }
+
     // ── Storage quotas ────────────────────────────────────────────────────────
 
     pruneOldTraces(daysOld: number = 3): number {

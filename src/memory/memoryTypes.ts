@@ -18,6 +18,15 @@ export interface Conversation {
 export type LifecycleState = 'ACTIVE' | 'SUMMARIZED' | 'ARCHIVED' | 'EXPIRED' | 'SUPERSEDED';
 
 /**
+ * Identity scope — whose memory is this?
+ * - USER_MEMORY:   stated by or about the user (preferences, identity, traits)
+ * - AGENT_MEMORY:  inferred or learned by the agent (conclusions, reflections)
+ * - SYSTEM_MEMORY: operational state (config, tools, infrastructure, heartbeat)
+ * - TASK_MEMORY:   short-lived task context (tool outputs, current task state)
+ */
+export type IdentityScope = 'USER_MEMORY' | 'AGENT_MEMORY' | 'SYSTEM_MEMORY' | 'TASK_MEMORY';
+
+/**
  * Epistemic status — certainty level of a memory node.
  * - fact:       explicitly stated by user or confirmed by tool (confident, slow decay)
  * - belief:     inferred by the agent with moderate confidence (normal decay)
@@ -49,6 +58,12 @@ export interface MemoryNode {
      * Affects decay rate and how the node is labeled in LLM context.
      */
     epistemic_status?: EpistemicStatus | null;
+    /**
+     * Identity scope — whose memory this belongs to.
+     * Inferred automatically at write time from nodeType + source if not explicit.
+     * Affects retrieval ranking and context injection strategy.
+     */
+    identity_scope?: IdentityScope | null;
 }
 
 export interface MemoryEdge {

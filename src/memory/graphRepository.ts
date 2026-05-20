@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
 import { ConfidenceClassifier } from '../core/ConfidenceClassifier';
-import { MemoryNode, MemoryNodeRow, EpistemicStatus } from './memoryTypes';
+import { MemoryNode, MemoryNodeRow, EpistemicStatus, IdentityScope } from './memoryTypes';
 import { safeExec } from './memorySchema';
 
 const log = createLogger('GraphRepository');
@@ -50,6 +50,29 @@ export function validateRelation(fromType: string, relation: string, toType: str
 }
 
 /**
+ * Infer identity scope from node type and write source.
+ * Determines whose memory this is: user-stated, agent-inferred, system-operational, or task-transient.
+ */
+function inferIdentityScope(nodeType: string, source: string): IdentityScope {
+    // System-operational: bootstrap nodes, infrastructure config, operational state
+    if (source === 'bootstrap' || source === 'system') return 'SYSTEM_MEMORY';
+    if (nodeType === 'infrastructure' || nodeType === 'rule' || nodeType === 'strategy') return 'SYSTEM_MEMORY';
+
+    // User-stated: explicit user input about preferences, identity, traits
+    if (source === 'user_input') return 'USER_MEMORY';
+    if (nodeType === 'preference' || nodeType === 'trait') return 'USER_MEMORY';
+
+    // Task-transient: tool outputs and execution results (short-lived, high TTL turnover)
+    if (source === 'tool_result' || source === 'exec_command' || source === 'read_file'
+        || source === 'web_search' || source === 'ssh_exec' || source === 'weather_api'
+        || source === 'crypto_analysis') return 'TASK_MEMORY';
+    if (nodeType === 'fact') return 'TASK_MEMORY';
+
+    // Agent-inferred: skills, knowledge, projects and anything else the agent learned
+    return 'AGENT_MEMORY';
+}
+
+/**
  * Infer epistemic status from confidence score and source.
  * Sources that represent direct user statements or verified tool output → fact.
  * LLM inferences with moderate confidence → belief.
@@ -88,11 +111,15 @@ export function addNode(db: Database.Database, classifier: ConfidenceClassifier,
     // Infer epistemic status if not explicitly provided
     const epistemicStatus: EpistemicStatus = node.epistemic_status ?? inferEpistemicStatus(confidenceScore, node.type, source);
 
+    // Infer identity scope if not explicitly provided
+    const identityScope: IdentityScope = node.identity_scope ?? inferIdentityScope(node.type, source);
+
     // ON CONFLICT DO UPDATE preserves lifecycle_state and expires_at — never reset by decay/update cycles.
     // epistemic_status: upgrade only (fact > belief > assumption) — never downgrade a confirmed fact.
+    // identity_scope: COALESCE — explicit scope from caller wins; keep existing if new write omits it.
     db.prepare(`
-        INSERT INTO memory_nodes (id, type, name, content, metadata, weight, confidence, last_updated, updated_at, epistemic_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+        INSERT INTO memory_nodes (id, type, name, content, metadata, weight, confidence, last_updated, updated_at, epistemic_status, identity_scope)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             type             = excluded.type,
             name             = excluded.name,
@@ -107,12 +134,13 @@ export function addNode(db: Database.Database, classifier: ConfidenceClassifier,
                 WHEN excluded.epistemic_status = 'fact' THEN 'fact'
                 WHEN epistemic_status = 'belief' OR excluded.epistemic_status = 'belief' THEN 'belief'
                 ELSE 'assumption'
-            END
+            END,
+            identity_scope   = COALESCE(excluded.identity_scope, identity_scope)
     `).run(
         node.id, node.type, node.name, node.content,
         metadataJson, node.weight ?? 1.0, confidenceScore,
         node.last_updated || new Date().toISOString(),
-        epistemicStatus
+        epistemicStatus, identityScope
     );
 
     try {
@@ -252,16 +280,16 @@ export function bootstrapCoreGraph(
     classifier: ConfidenceClassifier
 ): void {
     const coreNodes: MemoryNode[] = [
-        { id: 'identity',          type: 'identity', name: 'IDENTITY',          content: 'Nó-raiz da identidade cognitiva do NewClaw. Conecta agente, usuário, estilo e princípios.' },
-        { id: 'core_identity',     type: 'identity', name: 'IDENTITY CORE',     content: 'Hub estrutural da identidade cognitiva. Mantido para compatibilidade com curadoria e expansão do grafo.' },
-        { id: 'core_agent',        type: 'identity', name: 'AGENTS',            content: 'Representa o agente NewClaw, seu papel como copiloto local, memória persistente e capacidade de agir com ferramentas.' },
-        { id: 'core_soul',         type: 'context',  name: 'SOUL',              content: 'Guarda a personalidade, voz, valores e tom do sistema: útil, acolhedor, direto e persistente.' },
-        { id: 'core_tools',        type: 'skill',    name: 'TOOLS',             content: 'Hub das ferramentas disponíveis para pesquisar, editar arquivos, executar comandos, navegar e gerenciar memória.' },
-        { id: 'core_user',         type: 'identity', name: 'USER',              content: 'Perfil vivo do usuário. Deve ser enriquecido gradualmente com nome, objetivos, preferências, contexto e histórico.' },
-        { id: 'core_heartbeat',    type: 'fact',     name: 'HEARTBEAT',         content: 'Marca o estado inicial do sistema e serve como trilha de vida do agente: instalação, boot, onboarding e eventos importantes.' },
-        { id: 'core_memory',       type: 'context',  name: 'MEMORY',            content: 'Hub da memória semântica persistente. Organiza nós, relações, contexto relevante e recuperação futura.' },
-        { id: 'system_reflection', type: 'fact',     name: 'system_reflection', content: 'System initialized with base cognitive graph and awaiting user interaction' },
-        { id: 'agent_state',       type: 'context',  name: 'agent_state',       content: JSON.stringify({ mode: 'learning', confidence: 0.5, user_alignment: 0.5, current_focus: 'unknown' }) },
+        { id: 'identity',          type: 'identity', name: 'IDENTITY',          content: 'Nó-raiz da identidade cognitiva do NewClaw. Conecta agente, usuário, estilo e princípios.',                                                         identity_scope: 'USER_MEMORY'   },
+        { id: 'core_identity',     type: 'identity', name: 'IDENTITY CORE',     content: 'Hub estrutural da identidade cognitiva. Mantido para compatibilidade com curadoria e expansão do grafo.',                                              identity_scope: 'USER_MEMORY'   },
+        { id: 'core_agent',        type: 'identity', name: 'AGENTS',            content: 'Representa o agente NewClaw, seu papel como copiloto local, memória persistente e capacidade de agir com ferramentas.',                               identity_scope: 'AGENT_MEMORY'  },
+        { id: 'core_soul',         type: 'context',  name: 'SOUL',              content: 'Guarda a personalidade, voz, valores e tom do sistema: útil, acolhedor, direto e persistente.',                                                       identity_scope: 'AGENT_MEMORY'  },
+        { id: 'core_tools',        type: 'skill',    name: 'TOOLS',             content: 'Hub das ferramentas disponíveis para pesquisar, editar arquivos, executar comandos, navegar e gerenciar memória.',                                     identity_scope: 'SYSTEM_MEMORY' },
+        { id: 'core_user',         type: 'identity', name: 'USER',              content: 'Perfil vivo do usuário. Deve ser enriquecido gradualmente com nome, objetivos, preferências, contexto e histórico.',                                   identity_scope: 'USER_MEMORY'   },
+        { id: 'core_heartbeat',    type: 'fact',     name: 'HEARTBEAT',         content: 'Marca o estado inicial do sistema e serve como trilha de vida do agente: instalação, boot, onboarding e eventos importantes.',                        identity_scope: 'SYSTEM_MEMORY' },
+        { id: 'core_memory',       type: 'context',  name: 'MEMORY',            content: 'Hub da memória semântica persistente. Organiza nós, relações, contexto relevante e recuperação futura.',                                              identity_scope: 'SYSTEM_MEMORY' },
+        { id: 'system_reflection', type: 'fact',     name: 'system_reflection', content: 'System initialized with base cognitive graph and awaiting user interaction',                                                                          identity_scope: 'AGENT_MEMORY'  },
+        { id: 'agent_state',       type: 'context',  name: 'agent_state',       content: JSON.stringify({ mode: 'learning', confidence: 0.5, user_alignment: 0.5, current_focus: 'unknown' }),                                                  identity_scope: 'AGENT_MEMORY'  },
     ];
 
     for (const node of coreNodes) {

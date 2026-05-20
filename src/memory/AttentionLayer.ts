@@ -421,6 +421,14 @@ export class AttentionLayer {
         return TYPE_PRIORITY[node.type] || 0.3;
     }
 
+    // Identity scope multipliers applied to final attention score
+    private static readonly SCOPE_MULTIPLIER: Record<string, number> = {
+        USER_MEMORY:   1.15,  // user's own info is highest priority
+        TASK_MEMORY:   1.10,  // current task context is very relevant
+        AGENT_MEMORY:  1.00,  // agent inferences: neutral baseline
+        SYSTEM_MEMORY: 0.90,  // operational config: slightly deprioritised
+    };
+
     /**
      * Calculate full attention score for a candidate node.
      */
@@ -430,8 +438,8 @@ export class AttentionLayer {
         embeddingScore: number;
     }): AttentionCandidate {
         const node = this.db.prepare(
-            'SELECT id, type, name, content, pagerank FROM memory_nodes WHERE id = ?'
-        ).get(params.nodeId) as (NodeBasicRow & { pagerank?: number }) | undefined;
+            'SELECT id, type, name, content, pagerank, identity_scope FROM memory_nodes WHERE id = ?'
+        ).get(params.nodeId) as (NodeBasicRow & { pagerank?: number; identity_scope?: string | null }) | undefined;
 
         const contextRelevance = this.calculateContextRelevance(params.nodeId);
         const recency = this.calculateRecency(params.nodeId);
@@ -440,13 +448,15 @@ export class AttentionLayer {
         // Normalize pagerank to [0,1]: typical values are ~1/N per node; multiply by 10 and cap.
         const graphCentrality = Math.min(1.0, (node?.pagerank || 0) * 10);
 
-        const attentionScore =
+        const scopeMultiplier = AttentionLayer.SCOPE_MULTIPLIER[node?.identity_scope ?? ''] ?? 1.0;
+        const attentionScore = (
             (params.embeddingScore * this.weights.w1_embedding) +
             (contextRelevance * this.weights.w2_context) +
             (recency * this.weights.w3_recency) +
             (relationStrength * this.weights.w4_relation) +
             (domainPriority * this.weights.w5_domain) +
-            (graphCentrality * this.weights.w6_pagerank);
+            (graphCentrality * this.weights.w6_pagerank)
+        ) * scopeMultiplier;
 
         return {
             nodeId: params.nodeId,
