@@ -371,19 +371,31 @@ export class AgentLoop {
      * Returns null if nothing is found.
      */
     private lookupWeatherCityPreference(): string | null {
+        // City name pattern: one or more capitalized words optionally followed by ", State/UF"
+        const CITY = '([A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][\\wáàãâéêíóõôúçÁÀÃÂÉÊÍÓÕÔÚÇ]+(?:\\s+[A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][\\wáàãâéêíóõôúçÁÀÃÂÉÊÍÓÕÔÚÇ]+)*(?:,\\s*(?:[A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][\\wáàãâéêíóõôúçÁÀÃÂÉÊÍÓÕÔÚÇ]+|[A-Z]{2}))?)';
+        const PATTERNS = [
+            // "considerar [sempre] <Cidade> como cidade/localidade"
+            new RegExp(`considerar\\s+(?:sempre\\s+)?${CITY}\\s+como\\s+(?:cidade|localidade)`, 'i'),
+            // "usar <Cidade> como cidade/localidade/padrão"
+            new RegExp(`usar\\s+${CITY}\\s+como\\s+(?:cidade|localidade|padr[aã]o)`, 'i'),
+            // "cidade padrão[: é] <Cidade>"
+            new RegExp(`cidade\\s+(?:padr[aã]o|default)[:\\sé]+${CITY}`, 'i'),
+            // "<Cidade> como cidade padrão"
+            new RegExp(`${CITY}\\s+como\\s+cidade\\s+padr[aã]o`, 'i'),
+            // "<Cidade> como localidade padrão"
+            new RegExp(`${CITY}\\s+como\\s+localidade\\s+padr[aã]o`, 'i'),
+        ];
         try {
             const nodes = this.memory.keywordSearch(
-                ['previsão do tempo', 'clima', 'cidade padrão', 'considerar'],
-                5
+                ['previsão do tempo', 'clima', 'cidade padrão', 'localidade padrão', 'considerar', 'usar'],
+                10
             );
             for (const node of nodes) {
                 if (!node.content) continue;
-                // Pattern: "considerar <Cidade, Estado> como cidade"
-                const m1 = node.content.match(/considerar\s+([A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][a-záàãâéêíóõôúç]+(?:\s+[A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][a-záàãâéêíóõôúç]+)*(?:,\s*[A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][a-záàãâéêíóõôúç]+)*)\s+como\s+cidade/i);
-                if (m1?.[1]) return m1[1].trim();
-                // Pattern: "cidade padrão: <Cidade>" or "cidade padrão é <Cidade>"
-                const m2 = node.content.match(/cidade\s+(?:padrão|default)[:\sé]+([A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][a-záàãâéêíóõôúç\s,]+?)(?:\.|,|$)/i);
-                if (m2?.[1]) return m2[1].trim();
+                for (const pat of PATTERNS) {
+                    const m = node.content.match(pat);
+                    if (m?.[1]) return m[1].trim();
+                }
             }
         } catch {
             // non-fatal

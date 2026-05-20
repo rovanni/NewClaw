@@ -108,20 +108,29 @@ export class MemoryWriteTool implements ToolExecutor {
             return { success: false, output: '', error: 'create exige pelo menos "content" para criar um nó.' };
         }
         
-        // Auto-generate id if missing
-        if (!id) {
-            const slug = (name || content || 'node').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30);
-            id = `${slug}_${Date.now()}`;
-        }
-        
         // Auto-assign type if missing
         if (!type) {
             type = 'fact';
         }
-        
+
         // Auto-assign name if missing
         if (!name) {
             name = (content as string).slice(0, 50);
+        }
+
+        // Auto-generate id if missing — but first check for semantically similar existing nodes
+        // to avoid creating duplicates of the same fact with different timestamps.
+        if (!id) {
+            const similar = this.findSimilarNode(content as string, type as string);
+            if (similar) {
+                similar.content = content;
+                similar.name = name || similar.name;
+                this.memoryManager.addNode(similar);
+                if (domain) this.facade.setNodeDomain(similar.id, domain as string);
+                return { success: true, output: `✅ Nó "${similar.id}" atualizado (conteúdo similar já existia — duplicata evitada).` };
+            }
+            const slug = (name || content || 'node').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30);
+            id = `${slug}_${Date.now()}`;
         }
 
         const existing = this.memoryManager.getNode(id);
@@ -164,6 +173,47 @@ export class MemoryWriteTool implements ToolExecutor {
         if (domain) this.facade.setNodeDomain(id, domain as string);
 
         return { success: true, output: `✅ Nó "${id}" (${type}) criado e auto-conectado ao grafo. Use action=connect para ligações adicionais.` };
+    }
+
+    // ── SIMILARITY CHECK ──────────────────────────────────────
+
+    /**
+     * Searches for an existing node with content similar to the new one.
+     * Only matches nodes of the same type and that are not system nodes.
+     * Returns null if no sufficiently similar node is found.
+     * Similarity criterion: at least 3 unique meaningful words in common AND
+     * new content length within 3× of the existing node (same scale of information).
+     */
+    private findSimilarNode(content: string, type: string): import('../memory/memoryTypes').MemoryNode | null {
+        try {
+            const stopwords = new Set(['para', 'como', 'sobre', 'quando', 'sempre', 'usar', 'usar', 'informar', 'especificar', 'não', 'sem', 'que', 'uma', 'uns', 'the', 'and', 'com', 'por', 'em']);
+            const words = content.toLowerCase()
+                .replace(/[^a-záàãâéêíóõôúç\s]/g, ' ')
+                .split(/\s+/)
+                .filter(w => w.length >= 5 && !stopwords.has(w));
+            const uniqueWords = [...new Set(words)];
+            if (uniqueWords.length < 3) return null;
+
+            const candidates = this.memoryManager.keywordSearch(uniqueWords.slice(0, 6), 8);
+            for (const node of candidates) {
+                if (!node.content) continue;
+                if (node.type !== type) continue;
+                if (node.id.startsWith('core_') || node.id.startsWith('domain_') || node.id.startsWith('time_')) continue;
+
+                const nodeWords = new Set(
+                    node.content.toLowerCase().replace(/[^a-záàãâéêíóõôúç\s]/g, ' ').split(/\s+/).filter(w => w.length >= 5 && !stopwords.has(w))
+                );
+                const shared = uniqueWords.filter(w => nodeWords.has(w)).length;
+                const lenRatio = content.length / Math.max(node.content.length, 1);
+
+                if (shared >= 3 && lenRatio > 0.33 && lenRatio < 3) {
+                    return node;
+                }
+            }
+        } catch {
+            // non-fatal
+        }
+        return null;
     }
 
     // ── UPDATE ────────────────────────────────────────────────
