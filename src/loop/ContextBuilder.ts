@@ -273,7 +273,8 @@ export class ContextBuilder {
     private getRetriever(): MultiLayerRetriever {
         if (!this.retriever) this.retriever = new MultiLayerRetriever(
             this.memory.getDatabase(),
-            this.memory.getTemporalLayer()
+            this.memory.getTemporalLayer(),
+            this.memory.getProceduralMemory()
         );
         return this.retriever;
     }

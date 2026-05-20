@@ -26,7 +26,10 @@ export type MemoryEventType =
     | 'reflection_generated'
     | 'distillation_run'
     | 'sparse_graph_pruned'
-    | 'dedup_merged';
+    | 'dedup_merged'
+    | 'skill_executed'
+    | 'skill_succeeded'
+    | 'skill_failed';
 
 export type MemoryEntityType = 'node' | 'edge' | 'episode' | 'system';
 

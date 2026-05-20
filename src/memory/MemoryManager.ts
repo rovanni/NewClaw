@@ -33,6 +33,7 @@ import { EpisodicMemoryService } from './EpisodicMemoryService';
 import { CognitiveReflectionEngine } from './CognitiveReflectionEngine';
 import { MemoryEventLog } from './MemoryEventLog';
 import { TemporalLayer } from './TemporalLayer';
+import { ProceduralMemoryService } from './ProceduralMemoryService';
 
 export type { Message, Conversation, MemoryNode, MemoryEdge } from './memoryTypes';
 
@@ -53,6 +54,7 @@ export class MemoryManager {
     private cognitiveReflectionEngineInstance: CognitiveReflectionEngine | null = null;
     private eventLogInstance: MemoryEventLog | null = null;
     private temporalLayerInstance: TemporalLayer | null = null;
+    private proceduralMemoryInstance: ProceduralMemoryService | null = null;
     private classifier: ConfidenceClassifier;
     private inverseRelations: Record<string, string> = {};
 
@@ -109,6 +111,12 @@ export class MemoryManager {
     getTemporalLayer(): TemporalLayer {
         if (!this.temporalLayerInstance) this.temporalLayerInstance = new TemporalLayer(this.db);
         return this.temporalLayerInstance;
+    }
+
+    getProceduralMemory(): ProceduralMemoryService {
+        if (!this.proceduralMemoryInstance)
+            this.proceduralMemoryInstance = new ProceduralMemoryService(this.db, this.getEventLog());
+        return this.proceduralMemoryInstance;
     }
 
     getEpisodicMemoryService(): EpisodicMemoryService {

@@ -15,6 +15,7 @@ import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
 import { isProtectedNode } from '../memory/MemoryFacade';
 import { errorMessage } from '../shared/errors';
+import type { ExecutionOutcome } from '../memory/ProceduralMemoryService';
 import { classifyDomain } from '../memory/DomainRegistry';
 
 export class MemoryWriteTool implements ToolExecutor {
@@ -25,8 +26,8 @@ export class MemoryWriteTool implements ToolExecutor {
         properties: {
             action: {
                 type: 'string',
-                enum: ['create', 'update', 'connect', 'delete', 'merge'],
-                description: 'Ação: create (novo nó), update (atualizar existente), connect (ligar dois nós), delete (remover nó), merge (mesclar duplicatas)'
+                enum: ['create', 'update', 'connect', 'delete', 'merge', 'reinforce'],
+                description: 'Ação: create (novo nó), update (atualizar existente), connect (ligar dois nós), delete (remover nó), merge (mesclar duplicatas), reinforce (registrar resultado de execução de skill/strategy/rule)'
             },
             id: { type: 'string', description: 'ID do nó. Obrigatório para update/connect/delete. Para merge: ID do nó que vai absorver.' },
             type: { type: 'string', enum: ['identity', 'preference', 'project', 'context', 'fact', 'skill', 'infrastructure', 'trait', 'rule', 'strategy', 'knowledge'], description: 'Tipo do nó (apenas para create)' },
@@ -36,7 +37,9 @@ export class MemoryWriteTool implements ToolExecutor {
             to: { type: 'string', description: 'ID do nó de destino (connect)' },
             relation: { type: 'string', description: 'Tipo da relação (connect)' },
             merge_ids: { type: 'array', items: { type: 'string' }, description: 'Lista de IDs a mesclar no nó principal (merge). Esses nós serão removidos.' },
-            domain: { type: 'string', enum: ['core_identity', 'user_modeling', 'memory_graph', 'active_context', 'skills_tools', 'governance_safety', 'cognitive_architecture'], description: 'Domínio cognitivo do nó (create/update)' }
+            domain: { type: 'string', enum: ['core_identity', 'user_modeling', 'memory_graph', 'active_context', 'skills_tools', 'governance_safety', 'cognitive_architecture'], description: 'Domínio cognitivo do nó (create/update)' },
+            outcome: { type: 'string', enum: ['success', 'failure', 'partial'], description: 'Resultado da execução (reinforce)' },
+            context: { type: 'string', description: 'Descrição opcional do contexto de execução (reinforce)' }
         },
         required: ['action']
     };
@@ -87,7 +90,8 @@ export class MemoryWriteTool implements ToolExecutor {
                 case 'connect': return await this.connect(args);
                 case 'delete': return await this.delete(args);
                 case 'merge': return await this.merge(args);
-                default: return { success: false, output: '', error: `Ação "${action}" inválida. Use: create, update, connect, delete, merge.` };
+                case 'reinforce': return this.reinforce(args);
+                default: return { success: false, output: '', error: `Ação "${action}" inválida. Use: create, update, connect, delete, merge, reinforce.` };
             }
         } catch (error) {
             return { success: false, output: '', error: `Erro: ${errorMessage(error)}` };
@@ -220,6 +224,27 @@ export class MemoryWriteTool implements ToolExecutor {
         this.facade.deleteNodeFull(id as string);
 
         return { success: true, output: `✅ Nó "${id}" (${node.type}/${node.name}) removido com ${edgeCount} conexões.` };
+    }
+
+    // ── REINFORCE ─────────────────────────────────────────────
+
+    private reinforce(args: Record<string, any>): ToolResult {
+        const { id, outcome, context } = args;
+        if (!id) return { success: false, output: '', error: 'reinforce exige: id (nó a reforçar).' };
+        if (!outcome || !['success', 'failure', 'partial'].includes(outcome)) {
+            return { success: false, output: '', error: 'reinforce exige: outcome (success | failure | partial).' };
+        }
+
+        const node = this.memoryManager.getNode(id);
+        if (!node) return { success: false, output: '', error: `Nó "${id}" não encontrado.` };
+
+        this.memoryManager.getProceduralMemory().recordExecution(id as string, outcome as ExecutionOutcome, context as string | undefined);
+
+        const emoji = outcome === 'success' ? '✅' : outcome === 'failure' ? '❌' : '⚠️';
+        return {
+            success: true,
+            output: `${emoji} Execução de "${id}" (${node.type}/${node.name}) registrada como ${outcome}.`,
+        };
     }
 
     // ── MERGE (Inteligente) ──────────────────────────────────

@@ -17,12 +17,13 @@
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
 import type { TemporalLayer } from './TemporalLayer';
+import type { ProceduralMemoryService } from './ProceduralMemoryService';
 
 const log = createLogger('MultiLayerRetriever');
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-export type RetrievalLayer = 'keyword' | 'semantic' | 'graph' | 'temporal';
+export type RetrievalLayer = 'keyword' | 'semantic' | 'graph' | 'temporal' | 'procedural';
 
 export interface LayerCandidate {
     nodeId: string;
@@ -49,7 +50,11 @@ export class MultiLayerRetriever {
     // Minimum term length to consider meaningful
     private readonly MIN_TERM_LENGTH       = 3;
 
-    constructor(private db: Database.Database, private temporal?: TemporalLayer) {}
+    constructor(
+        private db: Database.Database,
+        private temporal?: TemporalLayer,
+        private procedural?: ProceduralMemoryService
+    ) {}
 
     // ── Layer 1: Keyword / name search ────────────────────────────────────
 
@@ -250,6 +255,15 @@ export class MultiLayerRetriever {
             .map(c => c.nodeId);
         const graphCandidates = this.graphExpand(topSeeds, graphLimit);
 
+        // Layer 5: procedural — specialized retrieval for "how to" intent
+        const proceduralCandidates: LayerCandidate[] = [];
+        if (this.procedural?.detectIntent(query)) {
+            const hits = this.procedural.retrieve(query, opts?.keywordLimit ?? 8);
+            for (const { nodeId, score } of hits) {
+                proceduralCandidates.push({ nodeId, score, layer: 'procedural' });
+            }
+        }
+
         // Layer 4: temporal — surface nodes from the queried year
         const temporalCandidates: LayerCandidate[] = [];
         if (this.temporal) {
@@ -267,14 +281,14 @@ export class MultiLayerRetriever {
 
         // Fuse all layers
         const fused = this.fuse(
-            [...semanticLayer, ...keywordCandidates, ...graphCandidates, ...temporalCandidates],
+            [...semanticLayer, ...keywordCandidates, ...graphCandidates, ...temporalCandidates, ...proceduralCandidates],
             episodicBoost
         );
 
         log.info(
             `[MLR] keyword=${keywordCandidates.length} semantic=${semanticLayer.length} ` +
             `graph=${graphCandidates.length} temporal=${temporalCandidates.length} ` +
-            `episodicBoost=${episodicBoost.size} → fused=${fused.length}`
+            `procedural=${proceduralCandidates.length} episodicBoost=${episodicBoost.size} → fused=${fused.length}`
         );
 
         return fused;
