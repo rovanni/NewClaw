@@ -534,15 +534,15 @@ export class AgentLoop {
         const trace = traceManager.startTrace(conversationId, userText, correlationId);
         const fsm = new AgentFSM();
         const move = (event: AgentFSMEvent, meta?: Record<string, unknown>) => {
-            try {
-                const transition = fsm.transition(event, meta);
-                log.info(`[${this.ts()}] [AGENT-FSM] ${transition.from} --${event}--> ${transition.to}`);
-                traceManager.addStep(trace, 'fsm_transition', transition);
-                this.fsmHistoryStore.record(transition, trace.id, conversationId);
-            } catch (error) {
-                log.warn(`[${this.ts()}] [AGENT-FSM] Invalid transition ${fsm.getState()} --${event}: ${errorMessage(error)}`);
-            }
+            // Throws on invalid transition — callers must be in the correct FSM state.
+            // The try/catch below (wrapping the rest of runWithTools) handles cleanup.
+            const transition = fsm.transition(event, meta);
+            log.info(`[${this.ts()}] [AGENT-FSM] ${transition.from} --${event}--> ${transition.to}`);
+            traceManager.addStep(trace, 'fsm_transition', transition);
+            this.fsmHistoryStore.record(transition, trace.id, conversationId);
         };
+
+        try {
         move('START_TURN');
 
         const intentDecision: IntentDecision = this.intentRouter.route(userText, { sessionId: conversationId });
@@ -1184,5 +1184,16 @@ export class AgentLoop {
         this.activeTurns.delete(conversationId);
 
         return text;
+
+        } catch (fsmError) {
+            // Only FSM violations (invalid transitions) reach here — all other errors are handled
+            // inside the loop and returned normally. Close the trace so it doesn't leak in the Map.
+            if (trace.status === 'running') {
+                log.error(`[${this.ts()}] [FSM-ERROR] Invalid FSM state — aborting turn: ${errorMessage(fsmError)}`);
+                traceManager.completeTrace(trace, 'error', 'Erro interno de estado');
+                this.persistTrace(trace, 0, 'error', 'Erro interno de estado', channelContext);
+            }
+            throw fsmError;
+        }
     }
 }
