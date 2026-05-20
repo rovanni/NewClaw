@@ -153,18 +153,18 @@ export class DashboardMemoryRepository {
             ).all(...ids) as NodePreview[];
         }
         try {
-            return this.db.prepare(`
+            const ftsResults = this.db.prepare(`
                 SELECT n.id, n.type, n.name, substr(n.content, 1, 200) as content, n.updated_at
                 FROM memory_nodes_fts f
                 JOIN memory_nodes n ON f.rowid = n.rowid
                 WHERE memory_nodes_fts MATCH ?
                 ORDER BY rank LIMIT 50
             `).all(`${q}*`) as NodePreview[];
-        } catch {
-            return this.db.prepare(
-                'SELECT id, type, name, substr(content, 1, 200) as content, updated_at FROM memory_nodes WHERE name LIKE ? OR content LIKE ? ORDER BY updated_at DESC LIMIT 50'
-            ).all(`%${q}%`, `%${q}%`) as NodePreview[];
-        }
+            if (ftsResults.length > 0) return ftsResults;
+        } catch { /* fall through to LIKE */ }
+        return this.db.prepare(
+            'SELECT id, type, name, substr(content, 1, 200) as content, updated_at FROM memory_nodes WHERE name LIKE ? OR content LIKE ? ORDER BY updated_at DESC LIMIT 50'
+        ).all(`%${q}%`, `%${q}%`) as NodePreview[];
     }
 
     // ── Edges ────────────────────────────────────────────────────────────────

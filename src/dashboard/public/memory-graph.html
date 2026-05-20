@@ -545,6 +545,7 @@
     };
 
     let cy = null, allNodes = [], allEdges = [], showLabels = true;
+    let _searchDebounce = null;
     let activeTypes = new Set(Object.keys(TYPE_COLORS));
     let connectMode = false, connectSource = null, selectedNodeId = null;
           document.getElementById('focusBtn').disabled = true;
@@ -1033,18 +1034,34 @@
     function onSearchNodes(query) {
       const dd = document.getElementById('searchDropdown');
       if (!query || query.length < 2) { dd.style.display = 'none'; return; }
-      const q = query.toLowerCase();
-      const matches = allNodes.filter(n => n.name.toLowerCase().includes(q) || (n.content||'').toLowerCase().includes(q) || (n.id||'').toLowerCase().includes(q)).slice(0, 15);
-      if (!matches.length) { dd.innerHTML = '<div style="padding:8px;color:var(--text-muted);font-size:0.75rem;">Nenhum resultado</div>'; dd.style.display = 'block'; return; }
-      dd.innerHTML = matches.map(n => {
-        const color = TYPE_COLORS[n.type] || '#64748b';
-        return `<div onmousedown="jumpToNode('${n.id}')" style="display:flex;align-items:center;gap:6px;">
-          <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0;"></span>
-          <span style="font-weight:600;color:var(--text-main);font-size:0.78rem;">${escHtml(n.name)}</span>
-          <span style="color:var(--text-soft);font-size:0.65rem;">${TYPE_LABELS[n.type]||n.type}</span>
-        </div>`;
-      }).join('');
-      dd.style.display = 'block';
+      clearTimeout(_searchDebounce);
+      _searchDebounce = setTimeout(async () => {
+        try {
+          const r = await newclawFetch(`/api/memory/search?q=${encodeURIComponent(query)}`);
+          const d = await r.json();
+          if (!d.success || !d.nodes) return;
+          const inGraphIds = new Set(allNodes.map(n => n.id));
+          const matches = d.nodes.slice(0, 15);
+          if (!matches.length) {
+            dd.innerHTML = '<div style="padding:8px;color:var(--text-muted);font-size:0.75rem;">Nenhum resultado</div>';
+            dd.style.display = 'block';
+            return;
+          }
+          dd.innerHTML = matches.map(n => {
+            const color = TYPE_COLORS[n.type] || '#64748b';
+            const inGraph = inGraphIds.has(n.id);
+            const action = inGraph ? `jumpToNode('${n.id}')` : `showToast('Nó não está no grafo atual')`;
+            const dimStyle = inGraph ? '' : 'opacity:0.55;cursor:default;';
+            return `<div onmousedown="${action}" style="display:flex;align-items:center;gap:6px;${dimStyle}">
+              <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0;"></span>
+              <span style="font-weight:600;color:var(--text-main);font-size:0.78rem;">${escHtml(n.name)}</span>
+              <span style="color:var(--text-soft);font-size:0.65rem;">${TYPE_LABELS[n.type]||n.type}</span>
+              ${!inGraph ? '<span style="font-size:0.6rem;color:var(--text-soft);margin-left:auto;">fora do grafo</span>' : ''}
+            </div>`;
+          }).join('');
+          dd.style.display = 'block';
+        } catch { /* silent */ }
+      }, 250);
     }
     function jumpToNode(id) {
       document.getElementById('searchDropdown').style.display = 'none';
