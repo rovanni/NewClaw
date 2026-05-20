@@ -1118,7 +1118,7 @@ export class AgentLoop {
             log.info(`[${this.ts()}] [DELIVERY-GUARD] File created but not sent — re-entering loop to deliver: ${writtenPaths.join(', ')}`);
             loopMessages.push({
                 role: 'system',
-                content: `[ENTREGA PENDENTE] Você criou o(s) arquivo(s): ${writtenPaths.join(', ')}\nO usuário ainda NÃO recebeu nada. USE send_document (ou bash scripts/html2pdf.sh para converter HTML antes) para entregar AGORA. A tarefa SÓ está concluída quando o arquivo for enviado.`
+                content: `[ENTREGA PENDENTE] Você criou o(s) arquivo(s): ${writtenPaths.join(', ')}\nO usuário ainda NÃO recebeu nada. USE send_document para entregar AGORA. Para arquivos .html, você pode enviá-los diretamente com send_document ou converter para PDF com bash scripts/html2pdf.sh antes. A tarefa SÓ está concluída quando o arquivo for enviado.`
             });
             // Re-enter the main loop for delivery steps
             while (stepCount < maxSteps) {
