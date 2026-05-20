@@ -748,9 +748,12 @@ export class AgentLoop {
                             this.persistTrace(trace, 0, 'completed', result.output, channelContext);
                             return result.output;
                         }
+                        // Return FSM to THINKING so the main loop can continue normally
+                        move('TOOL_COMPLETED', { step: 0, tool: pending.toolName, success: result.success });
                     } catch (toolError) {
                         log.error(`[AUTH] Error executing approved tool ${pending.toolName}:`, toolError);
                         loopMessages.push({ role: 'system', content: `[ERRO CRÍTICO] Falha ao executar comando autorizado: ${errorMessage(toolError)}` });
+                        move('TOOL_COMPLETED', { step: 0, tool: pending.toolName, success: false });
                     }
                 }
             } else if (isRejected) {

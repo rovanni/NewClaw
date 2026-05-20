@@ -145,6 +145,24 @@ export class ReadTool implements ToolExecutor {
             return { success: false, output: '', error: pathError };
         }
 
+        // Binary file extensions that should never be read as text
+        const BINARY_EXTENSIONS = new Set([
+            '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+            '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.svg',
+            '.mp3', '.mp4', '.wav', '.ogg', '.avi', '.mkv', '.mov',
+            '.zip', '.tar', '.gz', '.rar', '.7z',
+            '.exe', '.bin', '.dll', '.so', '.dylib',
+            '.db', '.sqlite', '.sqlite3',
+        ]);
+
+        const ext = path.extname(rawPath).toLowerCase();
+        if (BINARY_EXTENSIONS.has(ext)) {
+            return { success: false, output: '', error: `Arquivos binários (${ext}) não podem ser lidos como texto. Para PDF/DOC use exec_command com ferramentas como pdftotext ou pandoc.` };
+        }
+
+        // Max readable size: 200 KB — larger files flood the context
+        const MAX_READ_BYTES = 200 * 1024;
+
         try {
             if (!fs.existsSync(filePath)) {
                 const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
@@ -161,6 +179,12 @@ export class ReadTool implements ToolExecutor {
             }
 
             const stat = fs.statSync(filePath);
+
+            // Guard against huge files before reading
+            if (!stat.isDirectory() && stat.size > MAX_READ_BYTES && !args.offset && !args.limit) {
+                const kb = Math.round(stat.size / 1024);
+                return { success: false, output: '', error: `Arquivo muito grande (${kb} KB) para leitura completa. Use os parâmetros offset e limit para leitura parcial, ou exec_command para processar o arquivo.` };
+            }
 
             // Se é diretório, listar
             if (stat.isDirectory()) {
