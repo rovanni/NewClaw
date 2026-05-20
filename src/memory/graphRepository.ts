@@ -43,6 +43,7 @@ export const RELATION_ONTOLOGY: Record<string, { label: string; description: str
     caused_by:      { label: 'causado por',         description: 'Efeito ou resultado originado por uma causa', allowedFrom: ['*'],                          allowedTo: ['*'] },
     learned_from:   { label: 'aprendido de',        description: 'Conhecimento derivado de uma fonte específica', allowedFrom: ['knowledge', 'skill', 'fact'], allowedTo: ['identity', 'project', 'context', 'fact'] },
     part_of:        { label: 'parte de',            description: 'Componente pertence a um sistema ou projeto maior', allowedFrom: ['*'],                     allowedTo: ['project', 'context', 'infrastructure', 'skill'] },
+    occurred_in:    { label: 'ocorreu em',          description: 'Memória associada a um período temporal (nó time_YYYY)', allowedFrom: ['*'],                allowedTo: ['context'] },
 };
 
 export function validateRelation(fromType: string, relation: string, toType: string): boolean {

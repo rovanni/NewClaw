@@ -16,12 +16,13 @@
 
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
+import type { TemporalLayer } from './TemporalLayer';
 
 const log = createLogger('MultiLayerRetriever');
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-export type RetrievalLayer = 'keyword' | 'semantic' | 'graph';
+export type RetrievalLayer = 'keyword' | 'semantic' | 'graph' | 'temporal';
 
 export interface LayerCandidate {
     nodeId: string;
@@ -42,12 +43,13 @@ export class MultiLayerRetriever {
     private readonly KEYWORD_NAME_SCORE    = 0.85;
     private readonly KEYWORD_CONTENT_SCORE = 0.60;
     private readonly GRAPH_NEIGHBOR_SCORE  = 0.50;
+    private readonly TEMPORAL_SCORE        = 0.55;
     // Boost applied to nodes that appeared in recent episodes
     private readonly EPISODIC_BOOST        = 0.15;
     // Minimum term length to consider meaningful
     private readonly MIN_TERM_LENGTH       = 3;
 
-    constructor(private db: Database.Database) {}
+    constructor(private db: Database.Database, private temporal?: TemporalLayer) {}
 
     // ── Layer 1: Keyword / name search ────────────────────────────────────
 
@@ -78,6 +80,7 @@ export class MultiLayerRetriever {
               AND id NOT LIKE 'core_%'
               AND id NOT LIKE 'domain_%'
               AND id NOT LIKE 'user_identity%'
+              AND id NOT LIKE 'time_%'
               AND (LOWER(name) LIKE ? OR LOWER(content) LIKE ?)
             ORDER BY COALESCE(confidence, 0.5) DESC, COALESCE(weight, 1.0) DESC
             LIMIT ?
@@ -132,7 +135,8 @@ export class MultiLayerRetriever {
               AND n.id NOT LIKE 'core_%'
               AND n.id NOT LIKE 'domain_%'
               AND n.id NOT LIKE 'user_identity%'
-              AND e.relation NOT IN ('next', 'contains')
+              AND n.id NOT LIKE 'time_%'
+              AND e.relation NOT IN ('next', 'contains', 'occurred_in')
             ORDER BY COALESCE(e.weight, 1.0) DESC
             LIMIT ?
         `).all(...seedIds, ...seedIds, ...seedIds, limit) as Array<{ id: string }>;
@@ -246,18 +250,31 @@ export class MultiLayerRetriever {
             .map(c => c.nodeId);
         const graphCandidates = this.graphExpand(topSeeds, graphLimit);
 
+        // Layer 4: temporal — surface nodes from the queried year
+        const temporalCandidates: LayerCandidate[] = [];
+        if (this.temporal) {
+            const year = this.temporal.extractYear(query);
+            if (year !== null) {
+                const nodeIds = this.temporal.getNodesForYear(year, 12);
+                for (const nodeId of nodeIds) {
+                    temporalCandidates.push({ nodeId, score: this.TEMPORAL_SCORE, layer: 'temporal' });
+                }
+            }
+        }
+
         // Episodic boost set (synchronous DB read)
         const episodicBoost = this.getEpisodicBoostSet();
 
         // Fuse all layers
         const fused = this.fuse(
-            [...semanticLayer, ...keywordCandidates, ...graphCandidates],
+            [...semanticLayer, ...keywordCandidates, ...graphCandidates, ...temporalCandidates],
             episodicBoost
         );
 
         log.info(
             `[MLR] keyword=${keywordCandidates.length} semantic=${semanticLayer.length} ` +
-            `graph=${graphCandidates.length} episodicBoost=${episodicBoost.size} → fused=${fused.length}`
+            `graph=${graphCandidates.length} temporal=${temporalCandidates.length} ` +
+            `episodicBoost=${episodicBoost.size} → fused=${fused.length}`
         );
 
         return fused;

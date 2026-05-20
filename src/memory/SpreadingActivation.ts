@@ -53,7 +53,7 @@ export class SpreadingActivation {
     private readonly STALE_THRESHOLD = 0.02;
 
     // Structural relations that carry no semantic activation signal
-    private readonly SKIP_RELATIONS = new Set(['next', 'contains', 'has_domain', 'groups']);
+    private readonly SKIP_RELATIONS = new Set(['next', 'contains', 'has_domain', 'groups', 'occurred_in']);
 
     constructor(private db: Database.Database) {
         this.initSchema();

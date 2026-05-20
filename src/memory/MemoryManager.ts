@@ -32,6 +32,7 @@ import { DomainSummaryService } from './DomainSummaryService';
 import { EpisodicMemoryService } from './EpisodicMemoryService';
 import { CognitiveReflectionEngine } from './CognitiveReflectionEngine';
 import { MemoryEventLog } from './MemoryEventLog';
+import { TemporalLayer } from './TemporalLayer';
 
 export type { Message, Conversation, MemoryNode, MemoryEdge } from './memoryTypes';
 
@@ -51,6 +52,7 @@ export class MemoryManager {
     private episodicMemoryServiceInstance: EpisodicMemoryService | null = null;
     private cognitiveReflectionEngineInstance: CognitiveReflectionEngine | null = null;
     private eventLogInstance: MemoryEventLog | null = null;
+    private temporalLayerInstance: TemporalLayer | null = null;
     private classifier: ConfidenceClassifier;
     private inverseRelations: Record<string, string> = {};
 
@@ -102,6 +104,11 @@ export class MemoryManager {
     getEventLog(): MemoryEventLog {
         if (!this.eventLogInstance) this.eventLogInstance = new MemoryEventLog(this.db);
         return this.eventLogInstance;
+    }
+
+    getTemporalLayer(): TemporalLayer {
+        if (!this.temporalLayerInstance) this.temporalLayerInstance = new TemporalLayer(this.db);
+        return this.temporalLayerInstance;
     }
 
     getEpisodicMemoryService(): EpisodicMemoryService {
@@ -239,6 +246,12 @@ export class MemoryManager {
             { type: node.type, source },
             source
         );
+        if (isNew && source !== 'bootstrap'
+            && !node.id.startsWith('core_')
+            && !node.id.startsWith('domain_')
+            && !node.id.startsWith('time_')) {
+            this.getTemporalLayer().attachNode(node.id);
+        }
     }
 
     getNode(id: string): import('./memoryTypes').MemoryNode | undefined {

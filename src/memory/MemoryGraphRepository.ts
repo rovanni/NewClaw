@@ -376,7 +376,7 @@ export class MemoryGraphRepository {
         const maxDegreePerNode = opts?.maxDegreePerNode ?? 25;
 
         // These relations are load-bearing — never prune them regardless of weight.
-        const protected_ = `('contains','next','summarizes','has_identity','has_domain','groups')`;
+        const protected_ = `('contains','next','summarizes','has_identity','has_domain','groups','occurred_in')`;
 
         // Step 1: weak + stale edges — both weight AND confidence must be below threshold
         const prunedWeak = this.db.prepare(`
