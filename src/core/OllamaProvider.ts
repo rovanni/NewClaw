@@ -133,7 +133,7 @@ export class OllamaProvider implements ILLMProvider {
         const controller = new AbortController();
 
         const CONNECTION_TIMEOUT = 30_000;
-        const ACTIVITY_TIMEOUT = 60_000;
+        const ACTIVITY_TIMEOUT = 90_000;
         const MAX_TIMEOUT = customTimeoutMs || 300_000;
 
         // Validate signal BEFORE creating timers to avoid leaking them on early abort

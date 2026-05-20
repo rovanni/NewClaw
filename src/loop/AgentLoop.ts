@@ -311,6 +311,50 @@ export class AgentLoop {
         }
     }
 
+    // ── Tool filtering by intent category ────────────────────────────────────
+
+    // Tools always sent regardless of category (agent always needs these for delivery + memory).
+    private static readonly CORE_TOOLS = new Set([
+        'write', 'read', 'edit',
+        'send_document', 'send_audio', 'send_image',
+        'memory_search', 'memory_write',
+    ]);
+
+    // Extra tools per intent category — combined with CORE_TOOLS.
+    private static readonly CATEGORY_TOOLS: Record<string, string[]> = {
+        creation:         ['exec_command', 'web_search', 'web_navigate', 'memory_admin'],
+        information:      ['web_search', 'web_navigate', 'weather', 'memory_admin'],
+        data_analysis:    ['web_search', 'crypto_analysis', 'exec_command', 'memory_admin'],
+        system_operation: ['exec_command', 'ssh_exec', 'server_config', 'memory_admin'],
+        memory_operation: ['memory_admin'],
+        audio:            ['exec_command'],
+        vision:           ['web_navigate', 'web_search'],
+        conversation:     [],
+        destructive:      ['exec_command', 'ssh_exec', 'server_config'],
+    };
+
+    private buildToolDefs(intent: IntentDecision): ToolDefinition[] {
+        // If SkillLearner provided specific preferred tools with high confidence, use them + core.
+        if (intent.preferredTools && intent.preferredTools.length > 0) {
+            const allowed = new Set([...AgentLoop.CORE_TOOLS, ...intent.preferredTools]);
+            const filtered = Array.from(this.tools.values()).filter(t => allowed.has(t.name));
+            log.info(`[TOOLS] Skill-preferred filter: ${filtered.map(t => t.name).join(', ')} (${filtered.length}/${this.tools.size})`);
+            return filtered.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
+        }
+
+        const extras = AgentLoop.CATEGORY_TOOLS[intent.category] ?? null;
+        // Unknown category or low confidence → send all tools to be safe.
+        if (extras === null || intent.confidence < 0.65) {
+            log.info(`[TOOLS] Sending all tools (category=${intent.category}, confidence=${intent.confidence})`);
+            return Array.from(this.tools.values()).map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
+        }
+
+        const allowed = new Set([...AgentLoop.CORE_TOOLS, ...extras]);
+        const filtered = Array.from(this.tools.values()).filter(t => allowed.has(t.name));
+        log.info(`[TOOLS] Category filter '${intent.category}': ${filtered.map(t => t.name).join(', ')} (${filtered.length}/${this.tools.size})`);
+        return filtered.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
+    }
+
     // ── LLM call with fallback ─────────────────────────────────────────────────
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: ModelProfile, signal?: AbortSignal): Promise<LLMResult> {
@@ -642,11 +686,7 @@ export class AgentLoop {
             log.info(`[SKILL] Injetando ${matchedManual.length} skill(s) manual(ais): ${matchedManual.map(s => s.name).join(', ')}`);
         }
 
-        const toolDefs: ToolDefinition[] = Array.from(this.tools.values()).map(t => ({
-            name: t.name,
-            description: t.description,
-            parameters: t.parameters
-        }));
+        const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision);
 
         const chatProfile = await this.profileRegistry.resolveProfile(userText);
         if (chatProfile && intentDecision.modelCategory && intentDecision.confidence >= 0.8) {
