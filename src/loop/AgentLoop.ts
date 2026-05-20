@@ -768,6 +768,7 @@ export class AgentLoop {
         const maxSteps = 15;
         let hasUsedNativeTools = false;      // true once any native tool call executes
         let consecutiveNonProgressSteps = 0; // non-JSON, no-tool responses in a row
+        const blockedKeyCount = new Map<string, number>(); // tracks repeated block attempts per inputKey
 
         while (stepCount < maxSteps) {
             stepCount++;
@@ -898,10 +899,25 @@ export class AgentLoop {
                     const inputKey = `${toolName}:${toolInput}`;
 
                     if (usedToolInputs.has(inputKey)) {
+                        const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
+                        blockedKeyCount.set(inputKey, blockCount);
+                        log.warn(`[${this.ts()}] [TOOL-DEDUP] Blocked repeated native call: ${toolName} (block #${blockCount})`);
+                        // Use tool role so the LLM protocol sees a proper tool result and doesn't repeat
                         loopMessages.push({
-                            role: 'system',
-                            content: `[AVISO] Você já tentou a ferramenta "${toolName}" com este input. NÃO repita. Mude a estratégia ou responda com o que já sabe.`
+                            role: 'tool',
+                            content: `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos. Esta chamada foi bloqueada. NÃO repita esta ferramenta com os mesmos argumentos — use uma estratégia diferente ou responda com o que já sabe.`,
+                            tool_call_id: toolCall.id,
                         });
+                        if (blockCount >= 3) {
+                            loopMessages.push({
+                                role: 'system',
+                                content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. O loop foi interrompido. Forneça a melhor resposta possível com as informações que você já tem.`,
+                            });
+                            move('FINAL_READY', { step: stepCount, reason: 'tool_dedup_limit', tool: toolName });
+                            traceManager.completeTrace(trace, 'completed', lastBestContent);
+                            this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
+                            return { text: lastBestContent || `Não foi possível completar a tarefa — a ferramenta "${toolName}" entrou em loop.` };
+                        }
                         continue;
                     }
 
@@ -995,11 +1011,23 @@ export class AgentLoop {
                 const inputKey = `${toolName}:${toolInput}`;
 
                 if (usedToolInputs.has(inputKey)) {
-                    log.warn(`[${this.ts()}] [ATOMIC-TOOL] Blocked repeated call: ${toolName}`);
+                    const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
+                    blockedKeyCount.set(inputKey, blockCount);
+                    log.warn(`[${this.ts()}] [ATOMIC-TOOL] Blocked repeated call: ${toolName} (block #${blockCount})`);
                     loopMessages.push({
                         role: 'system',
-                        content: `[AVISO] Você já tentou a ferramenta "${toolName}" com este input. NÃO repita. Mude a estratégia ou responda com o que já sabe.`
+                        content: `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos (bloqueio #${blockCount}). NÃO repita — use uma estratégia diferente ou responda com o que já sabe.`,
                     });
+                    if (blockCount >= 3) {
+                        loopMessages.push({
+                            role: 'system',
+                            content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. Forneça a melhor resposta possível com as informações que você já tem.`,
+                        });
+                        move('FINAL_READY', { step: stepCount, reason: 'tool_dedup_limit', tool: toolName });
+                        traceManager.completeTrace(trace, 'completed', lastBestContent);
+                        this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
+                        return { text: lastBestContent || `Não foi possível completar a tarefa — a ferramenta "${toolName}" entrou em loop.` };
+                    }
                     continue;
                 }
 

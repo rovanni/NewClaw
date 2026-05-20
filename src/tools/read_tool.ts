@@ -147,7 +147,17 @@ export class ReadTool implements ToolExecutor {
 
         try {
             if (!fs.existsSync(filePath)) {
-                return { success: false, output: '', error: `Arquivo não encontrado: ${filePath}` };
+                const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
+                let hint = '';
+                try {
+                    if (fs.existsSync(workspaceDir)) {
+                        const entries = fs.readdirSync(workspaceDir).slice(0, 30);
+                        hint = entries.length > 0
+                            ? ` Arquivos no workspace: ${entries.join(', ')}.`
+                            : ' O workspace está vazio.';
+                    }
+                } catch { /* ignore listing errors */ }
+                return { success: false, output: '', error: `Arquivo não encontrado: ${filePath}.${hint} Se o arquivo ainda não foi criado, use a ferramenta write primeiro.` };
             }
 
             const stat = fs.statSync(filePath);

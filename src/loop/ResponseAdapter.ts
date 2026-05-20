@@ -14,6 +14,7 @@
  */
 
 import type { ParsedLLMResponse } from './ContentExtractor';
+import { sanitizeContent } from './agentOutputParser';
 
 
 // ── Full structured response (AgentLoop, tools, ObserverValidator) ──
@@ -152,5 +153,7 @@ export function extractText(content: string): ExtractedText {
  */
 export function normalizeFromRaw(rawContent: string, parseFn: (content: string) => ParsedLLMResponse | null): NormalizedResponse {
     const parsed = parseFn(rawContent);
-    return normalizeResponse(parsed, rawContent);
+    // Use sanitized content for Case 2 fallback so <think>/<thinking> tags never reach the user
+    const sanitized = sanitizeContent(rawContent);
+    return normalizeResponse(parsed, sanitized);
 }
