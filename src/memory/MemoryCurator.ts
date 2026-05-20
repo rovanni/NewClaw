@@ -226,9 +226,10 @@ export class MemoryCurator {
             }
 
             const prunedEvents = this.mm.getEventLog().pruneOldEvents(30);
+            const prunedProcedural = this.mm.getProceduralMemory().pruneOldExecutions(90);
 
-            if (prunedTraces > 0 || prunedMessages > 0 || prunedEvents > 0) {
-                log.info(`[StorageQuotas] Pruned ${prunedTraces} traces, ${prunedMessages} messages, ${prunedEvents} event logs.`);
+            if (prunedTraces > 0 || prunedMessages > 0 || prunedEvents > 0 || prunedProcedural > 0) {
+                log.info(`[StorageQuotas] Pruned ${prunedTraces} traces, ${prunedMessages} messages, ${prunedEvents} event logs, ${prunedProcedural} procedural executions.`);
             }
 
             return { prunedTraces, prunedMessages };
