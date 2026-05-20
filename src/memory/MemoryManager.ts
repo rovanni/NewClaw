@@ -34,6 +34,7 @@ import { CognitiveReflectionEngine } from './CognitiveReflectionEngine';
 import { MemoryEventLog } from './MemoryEventLog';
 import { TemporalLayer } from './TemporalLayer';
 import { ProceduralMemoryService } from './ProceduralMemoryService';
+import { classifyDomain } from './DomainRegistry';
 
 export type { Message, Conversation, MemoryNode, MemoryEdge } from './memoryTypes';
 
@@ -150,6 +151,37 @@ export class MemoryManager {
         this.inverseRelations = initializeSchema(this.db);
         this.incrementBootCount();
         graph.bootstrapCoreGraph(this.db, this.classifier);
+        this.backfillMissingDomains();
+    }
+
+    private backfillMissingDomains(): void {
+        try {
+            const nodes = this.db.prepare(`
+                SELECT id, name, content FROM memory_nodes
+                WHERE (domain IS NULL OR domain = '')
+                  AND type NOT IN ('identity', 'domain')
+                  AND id NOT LIKE 'core_%'
+                  AND id NOT LIKE 'domain_%'
+                  AND id NOT LIKE 'time_%'
+                  AND id NOT LIKE 'user_identity%'
+                LIMIT 200
+            `).all() as Array<{ id: string; name: string; content: string }>;
+
+            if (nodes.length === 0) return;
+
+            const stmt = this.db.prepare('UPDATE memory_nodes SET domain = ? WHERE id = ?');
+            let tagged = 0;
+            for (const node of nodes) {
+                const result = classifyDomain(`${node.name} ${node.content || ''}`);
+                if (result && result.confidence >= 0.55) {
+                    stmt.run(result.domainId, node.id);
+                    tagged++;
+                }
+            }
+            if (tagged > 0) log.info(`[DomainBackfill] Tagged ${tagged}/${nodes.length} nodes with cognitive domains`);
+        } catch (e) {
+            log.warn(`[DomainBackfill] Failed: ${String(e)}`);
+        }
     }
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -259,6 +291,10 @@ export class MemoryManager {
             && !node.id.startsWith('domain_')
             && !node.id.startsWith('time_')) {
             this.getTemporalLayer().attachNode(node.id);
+            const domainResult = classifyDomain(`${node.name} ${node.content || ''}`);
+            if (domainResult && domainResult.confidence >= 0.65) {
+                this.getFacade().setNodeDomain(node.id, domainResult.domainId);
+            }
         }
     }
 
