@@ -34,6 +34,9 @@ export class MessageBus {
     private commandHandlers: Map<string, (msg: NormalizedMessage) => Promise<string | null>> = new Map();
     /** Custom media handlers */
     private mediaHandlers: Map<string, (msg: NormalizedMessage, attachment: ChannelAttachment) => Promise<string | null>> = new Map();
+    /** Recently processed message IDs to prevent Telegram duplicate delivery */
+    private recentMessageIds: Map<string, number> = new Map();
+    private readonly MESSAGE_ID_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
     constructor(agentLoop: AgentLoop, sessionManager: SessionManager) {
         this.agentLoop = agentLoop;
@@ -216,6 +219,21 @@ export class MessageBus {
      * Chamado pelos adapters quando recebem uma mensagem.
      */
     async processMessage(msg: NormalizedMessage): Promise<void> {
+        // Deduplicate by messageId — Telegram can re-deliver the same update if the bot is slow
+        if (msg.messageId) {
+            const dedupeKey = `${msg.channel}:${msg.messageId}`;
+            const now = Date.now();
+            if (this.recentMessageIds.has(dedupeKey)) {
+                log.warn('duplicate_message_dropped', `messageId=${msg.messageId} already processed`, { channel: msg.channel, userId: msg.userId });
+                return;
+            }
+            this.recentMessageIds.set(dedupeKey, now);
+            // Prune stale entries to prevent unbounded growth
+            for (const [key, ts] of this.recentMessageIds) {
+                if (now - ts > this.MESSAGE_ID_TTL_MS) this.recentMessageIds.delete(key);
+            }
+        }
+
         const sessionKey: SessionKey = { channel: msg.channel, userId: msg.userId };
         const typingKey = `${msg.channel}:${msg.userId}`;
 

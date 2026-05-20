@@ -723,6 +723,9 @@ export class AgentLoop {
                         log.info(`[${this.ts()}] [AUTH] Approved tool ${pending.toolName} executed. Success: ${result.success}`);
                         cycleHistory.push({ tool: pending.toolName, input: JSON.stringify(pending.arguments), status: result.success ? 'success' : 'error' });
 
+                        // Mark as used so the while-loop cannot re-trigger auth for the same call
+                        usedToolInputs.add(`${pending.toolName}:${JSON.stringify(pending.arguments)}`);
+
                         const toolCallId = `auth_${Date.now()}`;
                         loopMessages.push({
                             role: 'assistant',
