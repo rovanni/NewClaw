@@ -66,6 +66,8 @@ export class AgentLoop {
     private metrics: LoopMetrics[] = [];
     private metricsMaxSize = 100;
     private activeTurns: Map<string, AbortController> = new Map();
+    private turnStartTimes: Map<string, number> = new Map();
+    private readonly TURN_STALE_MS = 8 * 60 * 1000; // 8 min — above max LLM timeout
     private classificationMemory: ClassificationMemory;
     private decisionMemory: DecisionMemory;
     private protocolParser: ProtocolParser;
@@ -250,6 +252,7 @@ export class AgentLoop {
         if (ctrl) {
             ctrl.abort();
             this.activeTurns.delete(conversationId);
+            this.turnStartTimes.delete(conversationId);
             log.info(`[${this.ts()}] [AGENT-FSM] Turn cancelled: ${conversationId}`);
         }
     }
@@ -260,7 +263,13 @@ export class AgentLoop {
 
     public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string | ProcessedResult> {
         this.cognitiveWorkspace.reset();
-        return this.runWithTools(conversationId, userText, 0, userId, context);
+        try {
+            return await this.runWithTools(conversationId, userText, 0, userId, context);
+        } finally {
+            // Guarantee cleanup even if runWithTools throws unexpectedly
+            this.activeTurns.delete(conversationId);
+            this.turnStartTimes.delete(conversationId);
+        }
     }
 
     // ── Metrics ───────────────────────────────────────────────────────────────
@@ -478,11 +487,20 @@ export class AgentLoop {
         const correlationId = channelContext?.correlationId;
         const turnLog = correlationId ? log.child({ cid: correlationId.slice(0, 8) }) : log;
 
-        // Guard: reject concurrent turns for the same user to prevent parallel LLM calls.
-        // Fire-and-forget processing in TelegramAdapter means two messages can arrive simultaneously.
+        // Guard: reject truly concurrent turns for the same user.
+        // Also clears stale entries left by unexpected throws (try/finally in run() covers new cases,
+        // but this handles any pre-existing stuck state without requiring a server restart).
         if (iteration === 0 && this.activeTurns.has(conversationId)) {
-            log.warn(`[${this.ts()}] [AGENT] Concurrent turn rejected for ${conversationId}`);
-            return 'Ainda estou processando sua mensagem anterior. Aguarde um momento.';
+            const startedAt = this.turnStartTimes.get(conversationId) || 0;
+            if (Date.now() - startedAt > this.TURN_STALE_MS) {
+                log.warn(`[${this.ts()}] [AGENT] Stale turn cleared for ${conversationId} (started ${Math.round((Date.now() - startedAt) / 1000)}s ago)`);
+                this.activeTurns.get(conversationId)?.abort();
+                this.activeTurns.delete(conversationId);
+                this.turnStartTimes.delete(conversationId);
+            } else {
+                log.warn(`[${this.ts()}] [AGENT] Concurrent turn rejected for ${conversationId}`);
+                return 'Ainda estou processando sua mensagem anterior. Aguarde um momento.';
+            }
         }
 
         turnLog.info('turn_start', `Cycle ${iteration + 1}`, { conversationId });
@@ -494,6 +512,7 @@ export class AgentLoop {
 
         const turnAbort = new AbortController();
         this.activeTurns.set(conversationId, turnAbort);
+        this.turnStartTimes.set(conversationId, Date.now());
         const turnSignal = turnAbort.signal;
 
         const trace = traceManager.startTrace(conversationId, userText, correlationId);
