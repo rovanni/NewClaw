@@ -10,6 +10,7 @@
  * Só retorna `recovered: false` depois que todas as estratégias se esgotaram.
  */
 
+import { createHash } from 'crypto';
 import { ToolResult } from './AgentLoop';
 import { createLogger } from '../shared/AppLogger';
 
@@ -123,6 +124,17 @@ const RECOVERY: Record<string, ToolRecoveryConfig> = {
     },
 };
 
+// ── Dedup key helper ────────────────────────────────────────────────────────────
+// Avoids storing giant serializations in the usedInputs Set when args contain
+// large values (e.g. file contents). Short args keep the readable form; large
+// args are hashed to a compact fingerprint.
+function makeKey(toolName: string, args: Record<string, unknown>): string {
+    const json = JSON.stringify(args);
+    if (json.length <= 256) return `${toolName}:${json}`;
+    const hash = createHash('sha1').update(json).digest('hex').slice(0, 16);
+    return `${toolName}:h:${hash}`;
+}
+
 // ── ProactiveRecovery class ─────────────────────────────────────────────────────
 
 export class ProactiveRecovery {
@@ -155,7 +167,7 @@ export class ProactiveRecovery {
                 const mutatedArgs = mutator(step1.finalArgs);
                 if (!mutatedArgs) continue;
 
-                const mutKey = `${toolName}:${JSON.stringify(mutatedArgs)}`;
+                const mutKey = makeKey(toolName, mutatedArgs);
                 if (usedInputs.has(mutKey)) continue;
 
                 log.info(`[RECOVERY] Trying arg mutation for "${toolName}": ${JSON.stringify(mutatedArgs)}`);
@@ -183,7 +195,7 @@ export class ProactiveRecovery {
                     ? config.adaptArgsForFallback(fallbackName, step1.finalArgs)
                     : step1.finalArgs;
 
-                const fallKey = `${fallbackName}:${JSON.stringify(adaptedArgs)}`;
+                const fallKey = makeKey(fallbackName, adaptedArgs);
                 if (usedInputs.has(fallKey)) continue;
 
                 log.info(`[RECOVERY] "${toolName}" failed — trying fallback "${fallbackName}"`);
@@ -232,7 +244,7 @@ export class ProactiveRecovery {
         const maxRetries = config?.maxRetries ?? 0;
         const retryablePatterns = config?.retryablePatterns ?? [];
 
-        const inputKey = `${toolName}:${JSON.stringify(args)}`;
+        const inputKey = makeKey(toolName, args);
         usedInputs.add(inputKey);
 
         let lastResult: ToolResult = { success: false, output: '', error: 'Não executado' };

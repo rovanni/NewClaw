@@ -107,15 +107,15 @@ export class SessionManager {
         // Update last activity for TTL cleanup
         this.lastActivity.set(sid, Date.now());
 
-        // Timeout protection: if mutex takes > 30s, log warning and proceed
+        // Timeout protection: if mutex takes > 10s, log warning and proceed
         const mutexTimeout = new Promise<void>((_, reject) => {
-            setTimeout(() => reject(new Error(`Mutex timeout for ${sid} after 30s`)), 30_000);
+            setTimeout(() => reject(new Error(`Mutex timeout for ${sid} after 10s`)), 10_000);
         });
 
         try {
             await Promise.race([current, mutexTimeout]);
         } catch (err) {
-            log.error(`Mutex wait timeout for ${sid}, proceeding anyway:`, (err as Error).message);
+            log.warn(`[MUTEX] Timeout waiting for ${sid} — previous operation took >10s, proceeding anyway. This may indicate a deadlock.`);
         }
 
         try {
@@ -481,63 +481,65 @@ export class SessionManager {
      * This prevents unbounded JSONL growth over time.
      */    async compactSession(key: SessionKey): Promise<{ before: number; after: number; saved: number }> {
         const sid = this.sessionKey(key);
-        const transcript = await this.getOrCreateSession(key);
-        const stats = transcript.getStats();
-        const before = stats.totalBytes;
+        return this.withMutex(sid, async () => {
+            const transcript = await this.getOrCreateSession(key);
+            const stats = transcript.getStats();
+            const before = stats.totalBytes;
 
-        // Get checkpoint and recent messages to preserve
-        const checkpoint = this.compressionCheckpoints.get(sid);
-        const { entries } = await transcript.getSinceCheckpoint();
+            // Get checkpoint and recent messages to preserve
+            const checkpoint = this.compressionCheckpoints.get(sid);
+            const { entries } = await transcript.getSinceCheckpoint();
 
-        if (!checkpoint && entries.length === 0) {
-            return { before, after: before, saved: 0 };
-        }
+            if (!checkpoint && entries.length === 0) {
+                return { before, after: before, saved: 0 };
+            }
 
-        // Build compact entries: checkpoint summary + recent messages
-        const compactEntries: TranscriptEntry[] = [];
-        if (checkpoint) {
-            compactEntries.push({
-                ts: checkpoint.compressedAt,
-                seq: 1,
-                role: 'checkpoint',
-                content: checkpoint.summary,
-                meta: { checkpoint: true, compressed_up_to: checkpoint.seq }
-            });
-        }
-        for (const entry of entries) {
-            compactEntries.push({ ...entry, seq: compactEntries.length + 1 });
-        }
+            // Build compact entries: checkpoint summary + recent messages
+            const compactEntries: TranscriptEntry[] = [];
+            if (checkpoint) {
+                compactEntries.push({
+                    ts: checkpoint.compressedAt,
+                    seq: 1,
+                    role: 'checkpoint',
+                    content: checkpoint.summary,
+                    meta: { checkpoint: true, compressed_up_to: checkpoint.seq }
+                });
+            }
+            for (const entry of entries) {
+                compactEntries.push({ ...entry, seq: compactEntries.length + 1 });
+            }
 
-        // Close current transcript, write compact, reinit
-        await transcript.close();
+            // Close current transcript, write compact, reinit
+            await transcript.close();
 
-        // Backup old file
-        const fs = await import('fs');
-        const oldPath = transcript.getFilePath();
-        const bakPath = oldPath + '.bak';
-        if (fs.existsSync(oldPath)) {
-            fs.copyFileSync(oldPath, bakPath);
-        }
+            // Backup old file
+            const fs = await import('fs');
+            const oldPath = transcript.getFilePath();
+            const bakPath = oldPath + '.bak';
+            if (fs.existsSync(oldPath)) {
+                fs.copyFileSync(oldPath, bakPath);
+            }
 
-        // Write compact JSONL
-        const lines = compactEntries.map(e => JSON.stringify(e)).join('\n') + '\n';
-        fs.writeFileSync(oldPath, lines, 'utf-8');
+            // Write compact JSONL
+            const lines = compactEntries.map(e => JSON.stringify(e)).join('\n') + '\n';
+            fs.writeFileSync(oldPath, lines, 'utf-8');
 
-        // Delete index (will rebuild on next init)
-        const idxPath = oldPath.replace('.jsonl', '.idx.json');
-        if (fs.existsSync(idxPath)) {
-            fs.unlinkSync(idxPath);
-        }
+            // Delete index (will rebuild on next init)
+            const idxPath = oldPath.replace('.jsonl', '.idx.json');
+            if (fs.existsSync(idxPath)) {
+                fs.unlinkSync(idxPath);
+            }
 
-        // Reinit transcript
-        const newTranscript = new SessionTranscript(this.config.transcriptDir, sid);
-        await newTranscript.init();
-        this.sessions.set(sid, newTranscript);
+            // Reinit transcript
+            const newTranscript = new SessionTranscript(this.config.transcriptDir, sid);
+            await newTranscript.init();
+            this.sessions.set(sid, newTranscript);
 
-        const afterStats = newTranscript.getStats();
-        log.info(`Compacted ${sid}: ${before} -> ${afterStats.totalBytes} bytes (saved ${before - afterStats.totalBytes})`);
+            const afterStats = newTranscript.getStats();
+            log.info(`Compacted ${sid}: ${before} -> ${afterStats.totalBytes} bytes (saved ${before - afterStats.totalBytes})`);
 
-        return { before, after: afterStats.totalBytes, saved: before - afterStats.totalBytes };
+            return { before, after: afterStats.totalBytes, saved: before - afterStats.totalBytes };
+        });
     }
 
     /**

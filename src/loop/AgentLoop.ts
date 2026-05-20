@@ -68,7 +68,7 @@ export class AgentLoop {
     private metricsMaxSize = 100;
     private activeTurns: Map<string, AbortController> = new Map();
     private turnStartTimes: Map<string, number> = new Map();
-    private readonly TURN_STALE_MS = 8 * 60 * 1000; // 8 min — above max LLM timeout
+    private readonly TURN_STALE_MS = 7 * 60 * 1000; // 7 min — matches MAX_TIMEOUT (420s) + small buffer
     private classificationMemory: ClassificationMemory;
     private decisionMemory: DecisionMemory;
     private protocolParser: ProtocolParser;
@@ -223,12 +223,14 @@ export class AgentLoop {
         userText: string,
         finalResponse: string,
         traceId: string,
-        conversationId: string
+        conversationId: string,
+        signal?: AbortSignal
     ): void {
         const last = this.lastToolExecution;
         if (!last) return;
         // Roda fora do caminho crítico — não bloqueia a resposta ao usuário
         setImmediate(async () => {
+            if (signal?.aborted) return;
             try {
                 await this.tryValidateTool(
                     userText,
@@ -885,7 +887,7 @@ export class AgentLoop {
                 move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : 'is_complete' });
                 traceManager.completeTrace(trace, 'completed', finalText);
                 this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                this.schedulePostTurnValidation(userText, finalText, trace.id, conversationId);
+                this.schedulePostTurnValidation(userText, finalText, trace.id, conversationId, turnSignal);
                 return { text: finalText };
             }
 
@@ -981,7 +983,7 @@ export class AgentLoop {
                     move('FINAL_READY', { step: stepCount, reason: 'no_tools_requested' });
                     traceManager.completeTrace(trace, 'completed', finalText);
                     this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                    this.schedulePostTurnValidation(userText, finalText, trace.id, conversationId);
+                    this.schedulePostTurnValidation(userText, finalText, trace.id, conversationId, turnSignal);
                     return finalText;
                 }
             }
@@ -1107,7 +1109,7 @@ export class AgentLoop {
                 move('FINAL_READY', { step: stepCount, reason: 'synthesis' });
                 traceManager.completeTrace(trace, 'completed', synthesisText);
                 this.persistTrace(trace, stepCount, 'completed', synthesisText, channelContext);
-                this.schedulePostTurnValidation(userText, synthesisText, trace.id, conversationId);
+                this.schedulePostTurnValidation(userText, synthesisText, trace.id, conversationId, turnSignal);
                 return synthesisText;
             }
 
@@ -1118,7 +1120,7 @@ export class AgentLoop {
             move('FINAL_READY', { step: stepCount, reason: 'last_best_content' });
             traceManager.completeTrace(trace, 'completed', lastBestContent);
             this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
-            this.schedulePostTurnValidation(userText, lastBestContent, trace.id, conversationId);
+            this.schedulePostTurnValidation(userText, lastBestContent, trace.id, conversationId, turnSignal);
             return lastBestContent;
         }
 
@@ -1147,7 +1149,7 @@ export class AgentLoop {
         move('FINAL_READY', { step: stepCount, reason: stepCount >= maxSteps ? 'max_iterations' : 'fallback' });
         traceManager.completeTrace(trace, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
         this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text, channelContext);
-        this.schedulePostTurnValidation(userText, text, trace.id, conversationId);
+        this.schedulePostTurnValidation(userText, text, trace.id, conversationId, turnSignal);
         this.activeTurns.delete(conversationId);
 
         return text;
