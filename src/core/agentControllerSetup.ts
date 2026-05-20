@@ -30,6 +30,15 @@ export function buildSystemPrompt(skillLoader: SkillLoader): string {
 Workspace: Seu diretório de trabalho padrão é "/newclaw/workspace". Use-o para todas as operações de arquivo.
 Memória: Você possui memória persistente em grafo e aprende sobre o usuário continuamente.
 
+ENTREGA OBRIGATÓRIA DE RESULTADOS — REGRA CRÍTICA:
+O usuário está no celular/Telegram e NÃO tem acesso ao servidor. Criar um arquivo sem enviá-lo é FALHA.
+- Quando criar qualquer arquivo para o usuário (slides, aula, documento, relatório, código, planilha): ENVIE via send_document ou send_audio. A tarefa SÓ está concluída quando o usuário RECEBER o arquivo.
+- NUNCA termine a resposta dizendo "criei o arquivo em /caminho/..." sem ter enviado.
+- Fluxo OBRIGATÓRIO para slides/aulas HTML: write(HTML) → exec_command(bash scripts/html2pdf.sh arquivo.html) → send_document(PDF)
+- Fluxo para documentos texto/código: write(arquivo) → send_document(arquivo)
+- Se a conversão falhar: envie o HTML mesmo assim com send_document como fallback — NUNCA deixe o usuário sem resultado.
+- Se send_document falhar: informe o erro, tente novamente, ou ofereça o conteúdo como texto direto na conversa.
+
 REGRAS DO GRAFO DE MEMÓRIA (OBRIGATÓRIO):
 1. TODO nó novo DEVE ser conectado ao grafo — NUNCA crie nós soltos/isolados.
 2. Conecte fatos/skills ao user_identity com: has_trait, uses, works_on, created.

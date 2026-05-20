@@ -1100,6 +1100,64 @@ export class AgentLoop {
             }
         }
 
+        // Delivery guard: if a file was written but never sent, the user received nothing.
+        // Re-enter the loop with a delivery instruction before synthesis.
+        const DELIVERABLE_EXTENSIONS = ['.html', '.pdf', '.md', '.txt', '.py', '.js', '.ts', '.csv', '.json', '.docx', '.xlsx'];
+        const wroteFile = cycleHistory.some(h => h.tool === 'write' && h.status === 'success');
+        const sentFile = cycleHistory.some(h => (h.tool === 'send_document' || h.tool === 'send_audio' || h.tool === 'send_image') && h.status === 'success');
+        const writtenPaths = cycleHistory
+            .filter(h => h.tool === 'write' && h.status === 'success')
+            .map(h => { try { return (JSON.parse(h.input) as Record<string, string>).path || ''; } catch { return ''; } })
+            .filter(p => DELIVERABLE_EXTENSIONS.some(ext => p.toLowerCase().endsWith(ext)));
+
+        if (wroteFile && !sentFile && writtenPaths.length > 0 && stepCount < maxSteps) {
+            log.info(`[${this.ts()}] [DELIVERY-GUARD] File created but not sent — re-entering loop to deliver: ${writtenPaths.join(', ')}`);
+            loopMessages.push({
+                role: 'system',
+                content: `[ENTREGA PENDENTE] Você criou o(s) arquivo(s): ${writtenPaths.join(', ')}\nO usuário ainda NÃO recebeu nada. USE send_document (ou bash scripts/html2pdf.sh para converter HTML antes) para entregar AGORA. A tarefa SÓ está concluída quando o arquivo for enviado.`
+            });
+            // Re-enter the main loop for delivery steps
+            while (stepCount < maxSteps) {
+                stepCount++;
+                log.info(`[${this.ts()}] [DELIVERY] Step ${stepCount}...`);
+                move('LLM_REQUEST', { step: stepCount, phase: 'delivery' });
+                const deliveryResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile, turnSignal);
+                move('LLM_RESPONSE', { step: stepCount, phase: 'delivery', status: deliveryResponse.status });
+
+                if (deliveryResponse.status === 'cancelled') { move('CANCEL', { step: stepCount }); this.activeTurns.delete(conversationId); return { text: 'Operação cancelada.' }; }
+                if (deliveryResponse.status === 'timeout' || deliveryResponse.status === 'error') break;
+
+                loopMessages.push({ role: 'assistant', content: deliveryResponse.content, toolCalls: deliveryResponse.toolCalls });
+
+                if (deliveryResponse.toolCalls && deliveryResponse.toolCalls.length > 0) {
+                    for (const toolCall of deliveryResponse.toolCalls) {
+                        const tool = this.tools.get(toolCall.name);
+                        if (!tool) continue;
+                        if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
+                            (tool as unknown as ContextAwareTool).setContext(channelContext.chatId || '', channelContext.channel);
+                        }
+                        move('TOOL_REQUESTED', { step: stepCount, tool: toolCall.name, mode: 'delivery' });
+                        const result = await this.proactiveRecovery.execute(toolCall.name, toolCall.arguments, (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined, usedToolInputs, turnSignal);
+                        log.info(`[${this.ts()}] [DELIVERY] ${toolCall.name} -> ${result.result.success ? '✓' : '✗'}`);
+                        loopMessages.push({ role: 'tool', content: result.result.output, tool_call_id: toolCall.id });
+                        cycleHistory.push({ tool: toolCall.name, input: JSON.stringify(toolCall.arguments), status: result.result.success ? 'success' : 'error' });
+                        const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
+                        if (terminalTools.includes(toolCall.name) && result.result.success) {
+                            move('TOOL_COMPLETED', { step: stepCount, tool: toolCall.name, success: true });
+                            move('FINAL_READY', { step: stepCount, tool: toolCall.name, terminal: true });
+                            traceManager.completeTrace(trace, 'completed', result.result.output);
+                            this.persistTrace(trace, stepCount, 'completed', result.result.output, channelContext);
+                            return result.result.output;
+                        }
+                        move('TOOL_COMPLETED', { step: stepCount, tool: toolCall.name, success: result.result.success });
+                    }
+                    continue;
+                }
+                // No tool calls — model gave up, break out
+                break;
+            }
+        }
+
         // Post-loop synthesis
         const executedToolsInLastStep = cycleHistory.length > 0;
         const hasGoodContent = lastBestContent && lastBestContent.length > 100;
