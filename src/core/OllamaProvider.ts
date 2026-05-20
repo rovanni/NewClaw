@@ -310,7 +310,12 @@ export class OllamaProvider implements ILLMProvider {
 
             log.warn(`[${streamId}] [STREAM] Stream ended WITHOUT explicit 'done' chunk. stats=${JSON.stringify(stats)}, elapsed=${Date.now() - startTime}ms`);
         } catch (streamErr) {
-            log.error(`[${streamId}] [STREAM] ERROR: ${errorMessage(streamErr)}. stats=${JSON.stringify(stats)}`);
+            const isAbort = streamErr instanceof Error && (streamErr.name === 'AbortError' || streamErr.message.includes('aborted'));
+            if (isAbort) {
+                log.warn(`[${streamId}] [STREAM] ABORTED: ${errorMessage(streamErr)}. stats=${JSON.stringify(stats)}`);
+            } else {
+                log.error(`[${streamId}] [STREAM] ERROR: ${errorMessage(streamErr)}. stats=${JSON.stringify(stats)}`);
+            }
             throw streamErr;
         } finally {
             if (connectionTimer) clearTimeout(connectionTimer);

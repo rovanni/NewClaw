@@ -199,10 +199,11 @@ export class AppLogger {
                 errMeta.rawError = '[Circular or Non-Serializable]';
             }
         } else {
-            errMsg = message || 'Unknown error';
+            // Called with a single string (like info/warn): the full message is in event, nothing to append
+            errMsg = message || '';
         }
 
-        writeLog('error', this.component, event, errMsg, errMeta);
+        writeLog('error', this.component, event, errMsg || undefined, errMeta);
     }
 }
 
