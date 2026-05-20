@@ -151,7 +151,7 @@ export class MemoryManager {
         this.inverseRelations = initializeSchema(this.db);
         this.incrementBootCount();
         graph.bootstrapCoreGraph(this.db, this.classifier);
-        this.backfillMissingDomains();
+        setImmediate(() => this.backfillMissingDomains());
     }
 
     private backfillMissingDomains(): void {

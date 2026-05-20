@@ -351,7 +351,7 @@ export class MessageBus {
                 channel: msg.channel,
                 userId: msg.userId,
                 errorMessage: error instanceof Error ? errorMessage(error) : (typeof error === 'object' ? JSON.stringify(error) : String(error)),
-                errorStack: error instanceof Error ? error.stack?.split('\n').slice(0, 5).join(' | ') : 'No stack trace'
+                errorStack: error instanceof Error ? error.stack?.split('\n').slice(0, 15).join(' | ') : 'No stack trace'
             });
             if (adapter) {
                 await adapter.send(
