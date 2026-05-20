@@ -15,6 +15,7 @@
 
 import Database from 'better-sqlite3';
 import { DomainGravityService } from './DomainGravityService';
+import { SpreadingActivation } from './SpreadingActivation';
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -25,6 +26,8 @@ export interface AttentionWeights {
     w4_relation: number;
     w5_domain: number;
     w6_pagerank: number;
+    /** Spreading activation: boost for nodes activated by recent graph traversal */
+    w7_activation: number;
 }
 
 export interface AttentionCandidate {
@@ -111,6 +114,7 @@ export class AttentionLayer {
     private weights: AttentionWeights;
     private contextState: ContextState | null = null;
     private gravityService: DomainGravityService;
+    private spreading: SpreadingActivation;
 
     // Max nodes in context window
     private static readonly MAX_CONTEXT_WINDOW = 20;
@@ -118,13 +122,15 @@ export class AttentionLayer {
     constructor(db: Database.Database, weights?: Partial<AttentionWeights>) {
         this.db = db;
         this.gravityService = new DomainGravityService(db);
+        this.spreading = new SpreadingActivation(db);
         this.weights = {
-            w1_embedding: 1.0,
-            w2_context:   2.0,   // High priority for active context
-            w3_recency:   1.5,
-            w4_relation:  1.0,
-            w5_domain:    0.5,
-            w6_pagerank:  0.5,   // Graph centrality boost for structurally important nodes
+            w1_embedding:  1.0,
+            w2_context:    2.0,  // High priority for active context
+            w3_recency:    1.5,
+            w4_relation:   1.0,
+            w5_domain:     0.5,
+            w6_pagerank:   0.5,  // Graph centrality boost for structurally important nodes
+            w7_activation: 0.8,  // Spreading activation boost
             ...weights,
         };
         this.initSchema();
@@ -447,15 +453,18 @@ export class AttentionLayer {
         const domainPriority = this.calculateDomainPriority(params.nodeId);
         // Normalize pagerank to [0,1]: typical values are ~1/N per node; multiply by 10 and cap.
         const graphCentrality = Math.min(1.0, (node?.pagerank || 0) * 10);
+        // Spreading activation: how strongly this node was activated by recent graph traversal
+        const spreadingScore = this.spreading.getActivation(params.nodeId);
 
         const scopeMultiplier = AttentionLayer.SCOPE_MULTIPLIER[node?.identity_scope ?? ''] ?? 1.0;
         const attentionScore = (
-            (params.embeddingScore * this.weights.w1_embedding) +
-            (contextRelevance * this.weights.w2_context) +
-            (recency * this.weights.w3_recency) +
-            (relationStrength * this.weights.w4_relation) +
-            (domainPriority * this.weights.w5_domain) +
-            (graphCentrality * this.weights.w6_pagerank)
+            (params.embeddingScore    * this.weights.w1_embedding) +
+            (contextRelevance         * this.weights.w2_context) +
+            (recency                  * this.weights.w3_recency) +
+            (relationStrength         * this.weights.w4_relation) +
+            (domainPriority           * this.weights.w5_domain) +
+            (graphCentrality          * this.weights.w6_pagerank) +
+            (spreadingScore           * this.weights.w7_activation)
         ) * scopeMultiplier;
 
         return {
@@ -587,11 +596,25 @@ export class AttentionLayer {
 
     /**
      * Touch multiple nodes at once (after an interaction).
+     * Also triggers spreading activation to 1-hop and 2-hop neighbors.
      */
     touchNodes(nodeIds: string[]): void {
         for (const id of nodeIds) {
             this.touchNode(id);
         }
+        // Spread activation through the graph from all touched nodes
+        if (nodeIds.length > 0) {
+            this.spreading.activate(nodeIds, { source: 'touch' });
+        }
+        // Probabilistic cleanup to avoid accumulating stale rows (~5% of calls)
+        if (Math.random() < 0.05) {
+            this.spreading.pruneStale();
+        }
+    }
+
+    /** Return the spreading activation service for external observability. */
+    getSpreadingActivation(): SpreadingActivation {
+        return this.spreading;
     }
 
     // ── Logging ─────────────────────────────────────────────
