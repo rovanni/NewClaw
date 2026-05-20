@@ -13,6 +13,7 @@ import { classifyDomain } from '../memory/DomainRegistry';
 import type { DomainSummaryService } from '../memory/DomainSummaryService';
 import type { EpisodicMemoryService } from '../memory/EpisodicMemoryService';
 import type { CognitiveReflectionEngine } from '../memory/CognitiveReflectionEngine';
+import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 import { estimateTokens, truncateToChars } from './ContextBudget';
 import { createLogger } from '../shared/AppLogger';
 
@@ -55,6 +56,7 @@ export class ContextBuilder {
     private domainSummaryService: DomainSummaryService;
     private episodicMemoryService: EpisodicMemoryService;
     private reflectionEngine: CognitiveReflectionEngine;
+    private retriever: MultiLayerRetriever | null = null;
 
     // ── Attention Budget ──────────────────────────────────────
     // Total memory block char cap (~900 tokens, within ContextBudget.memoryMaxTokens=1000).
@@ -268,21 +270,68 @@ export class ContextBuilder {
         return this.rankNodes(semanticResults, charBudget);
     }
 
+    private getRetriever(): MultiLayerRetriever {
+        if (!this.retriever) this.retriever = new MultiLayerRetriever(this.memory.getDatabase());
+        return this.retriever;
+    }
+
     /**
-     * Semantic search with attention — returns top results.
+     * Multi-layer semantic search:
+     *   Layer 1 (keyword)  — exact/fuzzy name+content match, no embedding needed
+     *   Layer 2 (semantic) — embedding + attention (existing pipeline)
+     *   Layer 3 (graph)    — 1-hop expansion from top-K query candidates
+     *   Boost  (episodic)  — nodes from recent episodes get +0.15 score
+     *
+     * Results from all layers are fused into a single pool ranked by fusedScore
+     * before the ContextBuilder's own rankNodes() applies the final re-ranking.
      */
     private async semanticSearch(query: string): Promise<Array<MemoryNode & { score: number; attentionScore?: number }>> {
+        // Layer 2: semantic search (async, embedding-based)
+        const rawSemantic: Array<MemoryNode & { score: number; attentionScore?: number }> = [];
         try {
             const results = await this.memory.semanticSearchWithAttention(query, 12);
-            return results || [];
+            rawSemantic.push(...(results || []));
         } catch {
             try {
                 const results = await this.memory.semanticSearch(query, 12);
-                return results || [];
-            } catch {
-                return [];
-            }
+                rawSemantic.push(...(results || []));
+            } catch { /* ignore — will rely on keyword+graph */ }
         }
+
+        // Build semantic candidates for the multi-layer retriever
+        const semanticCandidates = rawSemantic.map(n => ({
+            nodeId: n.id,
+            score: n.score || (n as MemoryNode & { attentionScore?: number }).attentionScore || 0.5,
+        }));
+
+        // Layers 1 + 3 + episodic boost via MultiLayerRetriever
+        const fused = this.getRetriever().retrieve(query, semanticCandidates);
+
+        // Build node lookup map from semantic results already in memory
+        const nodeById = new Map<string, MemoryNode & { score: number; attentionScore?: number }>(
+            rawSemantic.map(n => [n.id, n])
+        );
+
+        // Fetch full node data for keyword/graph candidates not in semantic results
+        const missingIds = fused.map(c => c.nodeId).filter(id => !nodeById.has(id));
+        if (missingIds.length > 0) {
+            const ph = missingIds.map(() => '?').join(',');
+            const rows = this.memory.getDatabase().prepare(`
+                SELECT * FROM memory_nodes
+                WHERE id IN (${ph})
+                  AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')
+            `).all(...missingIds) as MemoryNode[];
+            for (const row of rows) nodeById.set(row.id, { ...row, score: 0 });
+        }
+
+        // Apply fused scores and return in fused rank order
+        return fused
+            .map(c => {
+                const node = nodeById.get(c.nodeId);
+                if (!node) return null;
+                return { ...node, score: c.fusedScore };
+            })
+            .filter((n): n is MemoryNode & { score: number } => n !== null);
     }
 
     /**
