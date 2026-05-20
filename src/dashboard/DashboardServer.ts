@@ -38,6 +38,7 @@ export class DashboardServer {
     private app: express.Express;
     private server?: Server;
     private ctx: DashboardContext;
+    private ownsCurator = false;
 
     constructor(config: NewClawConfig) {
         this.ctx = { config };
@@ -97,6 +98,7 @@ export class DashboardServer {
         // Only start auto-curate if curator was not provided (AgentController manages its own lifecycle)
         if (!curator) {
             this.ctx.memoryCurator.startAutoCurate(30 * 60 * 1000);
+            this.ownsCurator = true;
         }
     }
 
@@ -117,6 +119,11 @@ export class DashboardServer {
     }
 
     public async stop(): Promise<void> {
+        if (this.ownsCurator) {
+            this.ctx.memoryCurator?.stopAutoCurate();
+            this.ownsCurator = false;
+        }
+
         if (!this.server) return;
 
         await new Promise<void>((resolve, reject) => {

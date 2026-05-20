@@ -383,8 +383,16 @@ export class SignalAdapter implements ChannelAdapter {
             this.webhookServer = createServer(async (req, res) => {
                 if (req.method === 'POST' && req.url === '/signal/webhook') {
                     let body = '';
-                    req.on('data', (chunk) => { body += chunk; });
+                    const MAX_BODY_BYTES = 1024 * 1024; // 1 MB
+                    let bodyBytes = 0;
+                    let bodyTooLarge = false;
+                    req.on('data', (chunk: Buffer) => {
+                        bodyBytes += chunk.length;
+                        if (bodyBytes > MAX_BODY_BYTES) { bodyTooLarge = true; req.destroy(); return; }
+                        body += chunk;
+                    });
                     req.on('end', async () => {
+                        if (bodyTooLarge) { res.writeHead(413); res.end('Payload Too Large'); return; }
                         try {
                             const msg: SignalMessage = JSON.parse(body);
                             await this.handleSignalMessage(msg);

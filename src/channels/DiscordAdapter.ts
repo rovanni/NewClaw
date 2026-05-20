@@ -85,6 +85,7 @@ export class DiscordAdapter implements ChannelAdapter {
     private started: boolean = false;
     private reconnectTimer: NodeJS.Timeout | null = null;
     private reconnectAttempts: number = 0;
+    private static readonly MAX_RECONNECT_ATTEMPTS = 20;
 
     async start(): Promise<void> {
         if (!this.config.enabled) {
@@ -119,9 +120,13 @@ export class DiscordAdapter implements ChannelAdapter {
     }
 
     private scheduleReconnect(error: unknown): void {
+        if (this.reconnectAttempts >= DiscordAdapter.MAX_RECONNECT_ATTEMPTS) {
+            log.error('reconnect_abandoned', `Discord reconnect abandoned after ${this.reconnectAttempts} attempts — restart required`, errorMessage(error));
+            return;
+        }
         this.reconnectAttempts++;
         const delay = Math.min(10 * Math.pow(2, this.reconnectAttempts - 1), 300);
-        log.info('reconnect_scheduled', `Discord reconnect attempt ${this.reconnectAttempts} in ${delay}s`, { error: errorMessage(error) });
+        log.info('reconnect_scheduled', `Discord reconnect attempt ${this.reconnectAttempts}/${DiscordAdapter.MAX_RECONNECT_ATTEMPTS} in ${delay}s`, { error: errorMessage(error) });
 
         if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
 

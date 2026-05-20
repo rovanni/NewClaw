@@ -99,7 +99,7 @@ export class ProviderFactory {
         const providerOrder = this.getFallbackOrder(preferredProvider);
         const attemptLog: AttemptInfo[] = [];
         const MAX_RETRIES = 1;
-        const RETRY_BACKOFF_MS = 10000;
+        const RETRY_BACKOFF_MS = 10000 + Math.floor(Math.random() * 3000);
         const requestId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
         const startTime = Date.now();
 
