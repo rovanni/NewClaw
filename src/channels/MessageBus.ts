@@ -267,6 +267,28 @@ export class MessageBus {
             this.startTypingIndicator(adapter, msg.rawContext, action, typingKey);
         }
 
+        // Heartbeat: mensagens periódicas para tarefas longas (>30s)
+        const rawContext = msg.rawContext;
+        const heartbeatTexts = [
+            '⏳ Trabalhando nisso, aguarde...',
+            '⏳ Ainda processando, pode demorar um pouco mais...',
+            '⏳ Quase lá...',
+        ];
+        let heartbeatCount = 0;
+        let heartbeatTimer: NodeJS.Timeout | null = null;
+        const scheduleHeartbeat = () => {
+            const delay = heartbeatCount === 0 ? 30_000 : 60_000;
+            heartbeatTimer = setTimeout(async () => {
+                const text = heartbeatTexts[Math.min(heartbeatCount, heartbeatTexts.length - 1)];
+                heartbeatCount++;
+                if (adapter) {
+                    await adapter.send({ text, format: 'plain' }, rawContext).catch(() => {});
+                }
+                scheduleHeartbeat();
+            }, delay);
+        };
+        scheduleHeartbeat();
+
         try {
             // 1. Handle commands
             if (msg.type === 'command' || msg.text.startsWith('/')) {
@@ -360,7 +382,7 @@ export class MessageBus {
                 ).catch(() => {});
             }
         } finally {
-            // Sempre parar o typing indicator ao finalizar
+            if (heartbeatTimer) clearTimeout(heartbeatTimer);
             this.stopTypingIndicator(typingKey);
         }
     }
