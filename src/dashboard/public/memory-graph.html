@@ -1656,7 +1656,10 @@
       } catch(e) { showToast('Erro ao exportar detalhes'); }
     }
 
-    loadGraph(); renderLegend();
+    loadGraph().then(() => {
+      const focusId = new URLSearchParams(window.location.search).get('node');
+      if (focusId) setTimeout(() => jumpToNode(focusId), 700);
+    }); renderLegend();
     // #3: Initialize drag-to-connect
     setTimeout(() => initDragToConnect(), 1000);
     // #5: Populate empty stats on load

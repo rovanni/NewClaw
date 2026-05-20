@@ -71,6 +71,11 @@ function findDuplicateCandidates(nodes: DashboardNode[]) {
         }));
 }
 
+function isSystemNode(id: string): boolean {
+    return id.startsWith('core_') || id.startsWith('domain_') ||
+           id.startsWith('time_') || id.startsWith('user_identity');
+}
+
 function computeMemoryReview(nodes: DashboardNode[], edges: DashboardEdge[]) {
     const centrality: Record<string, { degree: number; inDegree: number; outDegree: number }> = {};
     for (const node of nodes) centrality[node.id] = { degree: 0, inDegree: 0, outDegree: 0 };
@@ -79,14 +84,17 @@ function computeMemoryReview(nodes: DashboardNode[], edges: DashboardEdge[]) {
         if (centrality[edge.to_node]) { centrality[edge.to_node].inDegree++; centrality[edge.to_node].degree++; }
     }
 
-    const orphanNodes = nodes
+    // Exclude system nodes from orphan/sparse detection — they have structural roles
+    const reviewable = nodes.filter(n => !isSystemNode(n.id));
+
+    const orphanNodes = reviewable
         .filter((node) => (centrality[node.id]?.degree || 0) === 0)
         .map((node) => ({
             id: node.id, type: node.type, name: node.name,
             contentLength: String(node.content || '').trim().length,
         }));
 
-    const sparseNodes = nodes
+    const sparseNodes = reviewable
         .filter((node) => {
             const degree = centrality[node.id]?.degree || 0;
             const contentLength = String(node.content || '').trim().length;
@@ -100,25 +108,19 @@ function computeMemoryReview(nodes: DashboardNode[], edges: DashboardEdge[]) {
         .sort((a, b) => a.contentLength - b.contentLength || a.degree - b.degree)
         .slice(0, 20);
 
-    const duplicateCandidates = findDuplicateCandidates(nodes);
+    const duplicateCandidates = findDuplicateCandidates(reviewable);
 
+    // Issues: only orphans and sparse — duplicates have their own dedicated section in the UI
     const issues = [
         ...orphanNodes.map((node) => ({
             kind: 'orphan', priority: 100, nodeId: node.id,
-            title: node.name || node.id, detail: 'No sem relacoes',
+            title: node.name || node.id, detail: 'Nó sem relações',
         })),
         ...sparseNodes.map((node) => ({
             kind: 'sparse',
             priority: 70 - Math.min(node.contentLength, 60) + (node.degree === 0 ? 10 : 0),
             nodeId: node.id, title: node.name || node.id,
-            detail: `Conteudo curto (${node.contentLength} chars), grau ${node.degree}`,
-        })),
-        ...duplicateCandidates.map((pair) => ({
-            kind: 'duplicate',
-            priority: 80 + Math.round(pair.similarity * 10),
-            nodeId: pair.left.id, secondaryNodeId: pair.right.id,
-            title: `${pair.left.name || pair.left.id} / ${pair.right.name || pair.right.id}`,
-            detail: `Possivel duplicata (${Math.round(pair.similarity * 100)}%)`,
+            detail: `Conteúdo curto (${node.contentLength} chars), grau ${node.degree}`,
         })),
     ]
         .sort((a, b) => b.priority - a.priority)
@@ -250,8 +252,11 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
             const { keepId, mergeId } = req.body || {};
-            if (!keepId || !mergeId) return res.status(400).json({ error: 'keepId and mergeId are required' });
-            if (keepId === mergeId) return res.status(400).json({ error: 'keepId and mergeId must be different' });
+            if (!keepId || !mergeId) return res.status(400).json({ error: 'keepId e mergeId são obrigatórios' });
+            if (keepId === mergeId) return res.status(400).json({ error: 'keepId e mergeId devem ser diferentes' });
+            if (isSystemNode(keepId) || isSystemNode(mergeId)) {
+                return res.status(403).json({ error: `Nós de sistema não podem ser mesclados.` });
+            }
 
             const repo = ctx.memoryManager.getDashboardRepository();
             const snapshotId = ctx.memoryManager.createSnapshot?.(`pre-merge:${keepId}<-${mergeId}`) || null;
