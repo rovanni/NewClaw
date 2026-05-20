@@ -619,12 +619,12 @@ export class AgentLoop {
 
         // ── Current-time fast path ──
         // Deterministic direct facts (date/time) — Node.js has the clock, no LLM needed.
+        // Must check deterministicMatch explicitly — confirmation ('ok', 'sim') also matches direct+minimal+no-tools.
         if (
             !hasPendingAuth &&
+            intentDecision.trace.deterministicMatch === 'current_time' &&
             intentDecision.source === 'deterministic' &&
-            intentDecision.executionMode === 'direct' &&
-            intentDecision.cognitiveLoad === 'minimal' &&
-            !intentDecision.requiresTools
+            intentDecision.executionMode === 'direct'
         ) {
             const now = new Date();
             const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });

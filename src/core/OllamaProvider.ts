@@ -133,9 +133,10 @@ export class OllamaProvider implements ILLMProvider {
         const controller = new AbortController();
 
         // CONNECTION_TIMEOUT scales with prompt size: Ollama must process all input tokens
-        // (prefill) before yielding the first chunk. Allow ~1s per 80 input tokens, min 45s, max 120s.
+        // (prefill) before yielding the first chunk. Allow ~1s per 80 input tokens, min 90s, max 180s.
+        // Floor is 90s to accommodate large cloud models (31B+) with network latency + queue time.
         const approxInputTokens = messages.reduce((sum, m) => sum + Math.ceil((m.content?.length || 0) / 4), 0);
-        const CONNECTION_TIMEOUT = Math.max(45_000, Math.min(120_000, Math.ceil(approxInputTokens / 80) * 1000));
+        const CONNECTION_TIMEOUT = Math.max(90_000, Math.min(180_000, Math.ceil(approxInputTokens / 80) * 1000));
         const ACTIVITY_TIMEOUT = 90_000;
         const MAX_TIMEOUT = customTimeoutMs || 300_000;
 
