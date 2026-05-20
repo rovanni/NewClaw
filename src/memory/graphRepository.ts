@@ -299,6 +299,7 @@ export function bootstrapCoreGraph(
             UPDATE OR IGNORE memory_edges SET from_node = 'core_identity' WHERE from_node = 'identity';
             UPDATE OR IGNORE memory_edges SET to_node = 'core_identity' WHERE to_node = 'identity';
             DELETE FROM memory_edges WHERE from_node = 'identity' OR to_node = 'identity';
+            DELETE FROM memory_metrics_history WHERE node_id = 'identity';
             DELETE FROM memory_nodes WHERE id = 'identity';
         `);
     }
