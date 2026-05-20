@@ -417,8 +417,9 @@ export class TelegramAdapter implements ChannelAdapter {
             return next();
         });
 
-        // Text messages
-        this.bot.on('message:text', async (ctx) => {
+        // Text messages (including commands) — fire-and-forget so grammY stays responsive.
+        // This allows /cancel to be processed immediately even while a turn is running.
+        this.bot.on('message:text', (ctx) => {
             const userId = ctx.from!.id.toString();
             log.info('text_message_received', `userId=${userId} text="${ctx.message?.text?.slice(0, 50)}"`);
             if (!this.config.allowedUserIds.includes(userId)) {
@@ -426,37 +427,13 @@ export class TelegramAdapter implements ChannelAdapter {
                 return;
             }
 
+            const text = ctx.message!.text!;
             const msg: NormalizedMessage = {
                 messageId: ctx.message!.message_id.toString(),
                 channel: 'telegram',
                 userId,
                 userName: ctx.from!.first_name,
-                type: 'text',
-                text: ctx.message!.text!,
-                rawContext: ctx,
-                chatId: ctx.chat!.id.toString(),
-                metadata: {},
-            };
-
-            if (this.bus) {
-                await this.bus.processMessage(msg);
-            }
-        });
-
-        // Commands — only handle slash commands, never intercept media
-        this.bot.on('message:text', async (ctx) => {
-            const text = ctx.message?.text;
-            if (!text || !text.startsWith('/')) return; // Only process commands here
-
-            const userId = ctx.from!.id.toString();
-            if (!this.config.allowedUserIds.includes(userId)) return;
-
-            const msg: NormalizedMessage = {
-                messageId: ctx.message!.message_id.toString(),
-                channel: 'telegram',
-                userId,
-                userName: ctx.from!.first_name,
-                type: 'command',
+                type: text.startsWith('/') ? 'command' : 'text',
                 text,
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
@@ -464,7 +441,9 @@ export class TelegramAdapter implements ChannelAdapter {
             };
 
             if (this.bus) {
-                await this.bus.processMessage(msg);
+                this.bus.processMessage(msg).catch(err =>
+                    log.error('process_message_error', err instanceof Error ? err : undefined, String(err))
+                );
             }
         });
 
@@ -496,7 +475,9 @@ export class TelegramAdapter implements ChannelAdapter {
             };
 
             if (this.bus) {
-                await this.bus.processMessage(msg);
+                this.bus.processMessage(msg).catch(err =>
+                    log.error('process_message_error', err instanceof Error ? err : undefined, String(err))
+                );
             }
         });
 
@@ -526,7 +507,9 @@ export class TelegramAdapter implements ChannelAdapter {
             };
 
             if (this.bus) {
-                await this.bus.processMessage(msg);
+                this.bus.processMessage(msg).catch(err =>
+                    log.error('process_message_error', err instanceof Error ? err : undefined, String(err))
+                );
             }
         });
 
@@ -559,7 +542,9 @@ export class TelegramAdapter implements ChannelAdapter {
             };
 
             if (this.bus) {
-                await this.bus.processMessage(msg);
+                this.bus.processMessage(msg).catch(err =>
+                    log.error('process_message_error', err instanceof Error ? err : undefined, String(err))
+                );
             }
         });
 
@@ -591,7 +576,9 @@ export class TelegramAdapter implements ChannelAdapter {
             };
 
             if (this.bus) {
-                await this.bus.processMessage(msg);
+                this.bus.processMessage(msg).catch(err =>
+                    log.error('process_message_error', err instanceof Error ? err : undefined, String(err))
+                );
             }
         });
 
@@ -622,7 +609,9 @@ export class TelegramAdapter implements ChannelAdapter {
             };
 
             if (this.bus) {
-                await this.bus.processMessage(msg);
+                this.bus.processMessage(msg).catch(err =>
+                    log.error('process_message_error', err instanceof Error ? err : undefined, String(err))
+                );
             }
         });
 

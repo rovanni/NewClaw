@@ -478,6 +478,13 @@ export class AgentLoop {
         const correlationId = channelContext?.correlationId;
         const turnLog = correlationId ? log.child({ cid: correlationId.slice(0, 8) }) : log;
 
+        // Guard: reject concurrent turns for the same user to prevent parallel LLM calls.
+        // Fire-and-forget processing in TelegramAdapter means two messages can arrive simultaneously.
+        if (iteration === 0 && this.activeTurns.has(conversationId)) {
+            log.warn(`[${this.ts()}] [AGENT] Concurrent turn rejected for ${conversationId}`);
+            return 'Ainda estou processando sua mensagem anterior. Aguarde um momento.';
+        }
+
         turnLog.info('turn_start', `Cycle ${iteration + 1}`, { conversationId });
 
         const cycleHistory: Array<{ tool: string; input: string; status: string }> = [];
