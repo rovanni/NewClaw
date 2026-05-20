@@ -86,8 +86,22 @@ export class OllamaProvider implements ILLMProvider {
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         const priority = this.model.includes(':cloud') ? TaskPriority.INTERACTIVE : TaskPriority.BACKGROUND;
+        const queueEntryTime = Date.now();
         return await taskQueue.add(
-            () => this._consumeStream(messages, tools, undefined, options?.signal),
+            () => {
+                const queueWaitMs = Date.now() - queueEntryTime;
+                // Subtract queue wait from the timeout budget so the stream's MAX_TIMEOUT
+                // reflects time actually available from this point, not from when the
+                // attempt timer started in chatWithFallback. Floor at 30s to avoid
+                // immediately timing out tasks that waited a very long time in the queue.
+                const remainingMs = options?.timeoutMs
+                    ? Math.max(30_000, options.timeoutMs - queueWaitMs)
+                    : undefined;
+                if (queueWaitMs > 500) {
+                    log.info(`[STREAM] Queue wait: ${queueWaitMs}ms — remaining budget: ${remainingMs ?? 'default'}ms`);
+                }
+                return this._consumeStream(messages, tools, remainingMs, options?.signal);
+            },
             { priority }
         );
     }
@@ -334,14 +348,21 @@ export class OllamaProvider implements ILLMProvider {
             }
         } catch (streamErr) {
             const elapsed = Date.now() - startTime;
-            if (!content && thinking) {
-                log.warn(`[${consumeId}] [STREAM-CONSUME] Stream failed with ${thinking.length} chars of thinking but NO content — NOT leaking thinking to user`);
+            // Models like deepseek-v4-flash:cloud route their entire response through the thinking
+            // field. When the stream is aborted (timeout, not user cancel) with thinking but no
+            // content, recover the thinking as content — the same heuristic applied on normal
+            // completion at line ~352. User-cancel discarding is handled by the caller (chatWithFallback
+            // checks externalSignal after we return, so no thinking leaks to a cancelled user).
+            if (!content && thinking && thinking.length > 50) {
+                log.info(`[${consumeId}] [STREAM-CONSUME] Aborted with ${thinking.length} chars of thinking, no content — recovering thinking as content`);
+                content = thinking;
+                thinking = '';
             }
             if (!content) {
                 log.error(`[${consumeId}] [STREAM-CONSUME] FAILED after ${chunkCount} chunks, ${elapsed}ms: ${errorMessage(streamErr)}`);
                 throw streamErr;
             }
-            log.warn(`[${consumeId}] [STREAM-CONSUME] Partial content after stream error: ${content.length} chars content, ${thinking.length} chars thinking (thinking discarded)`);
+            log.warn(`[${consumeId}] [STREAM-CONSUME] Recovered from stream abort: ${content.length} chars content after ${chunkCount} chunks, ${elapsed}ms`);
         }
 
         const elapsed = Date.now() - startTime;

@@ -1,5 +1,8 @@
 import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, GeminiChatResponse } from './providerTypes';
 import { taskQueue, TaskPriority } from './providerQueue';
+import { createLogger } from '../shared/AppLogger';
+
+const log = createLogger('GeminiProvider');
 
 export class GeminiProvider implements ILLMProvider {
     name = 'gemini';
@@ -14,7 +17,10 @@ export class GeminiProvider implements ILLMProvider {
     setModel(model: string): void { this.model = model; }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
+        const queueEntryTime = Date.now();
         return await taskQueue.add(async () => {
+            const queueWaitMs = Date.now() - queueEntryTime;
+            if (queueWaitMs > 500) log.info(`Queue wait: ${queueWaitMs}ms (budget: ${options?.timeoutMs ?? 'none'}ms)`);
             const response = await fetch(
                 `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`,
                 {

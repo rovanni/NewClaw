@@ -112,4 +112,7 @@ export interface ILLMProvider {
 
 export interface ChatOptions {
     signal?: AbortSignal;
+    /** Budget (ms) measured from when chatWithFallback started the attempt.
+     *  Each provider subtracts queue-wait time before applying it internally. */
+    timeoutMs?: number;
 }

@@ -171,17 +171,21 @@ export class ProviderFactory {
 
                     log.info(`[${attemptId}] START provider=${providerName}/${modelUsed} timeout=${timeoutMs || 'none'}ms`);
 
-                    const chatOptions: ChatOptions = { signal: currentAbort.signal };
+                    const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs };
                     const chatPromise = provider.chat(messages, tools, chatOptions);
                     let result: LLMResponse;
 
                     if (timeoutMs) {
                         const attemptTimeout = setTimeout(() => currentAbort.abort(), timeoutMs);
+                        // Safety timeout is 15s longer than the abort: gives _consumeStream time to
+                        // recover thinking-as-content after the abort fires (both are async operations
+                        // and the Promise.race reject would otherwise beat the recovery resolution).
+                        const safetyTimeoutMs = timeoutMs + 15000;
                         try {
                             result = await Promise.race([
                                 chatPromise,
                                 new Promise<never>((_, reject) =>
-                                    setTimeout(() => reject(new Error('Timeout')), timeoutMs)
+                                    setTimeout(() => reject(new Error('Timeout')), safetyTimeoutMs)
                                 )
                             ]);
                         } finally {
