@@ -35,6 +35,7 @@ import { MemoryEventLog } from './MemoryEventLog';
 import { TemporalLayer } from './TemporalLayer';
 import { ProceduralMemoryService } from './ProceduralMemoryService';
 import { classifyDomain } from './DomainRegistry';
+import { CognitiveMemoryIndex } from './CognitiveMemoryIndex';
 
 export type { Message, Conversation, MemoryNode, MemoryEdge } from './memoryTypes';
 
@@ -152,6 +153,7 @@ export class MemoryManager {
         this.incrementBootCount();
         graph.bootstrapCoreGraph(this.db, this.classifier);
         setImmediate(() => this.backfillMissingDomains());
+        setImmediate(() => this.warmUpCognitiveIndex());
     }
 
     private backfillMissingDomains(): void {
@@ -181,6 +183,44 @@ export class MemoryManager {
             if (tagged > 0) log.info(`[DomainBackfill] Tagged ${tagged}/${nodes.length} nodes with cognitive domains`);
         } catch (e) {
             log.warn(`[DomainBackfill] Failed: ${String(e)}`);
+        }
+    }
+
+    /**
+     * Indexa nós ainda não presentes em memory_index.
+     * Executado via setImmediate no startup — não bloqueia a inicialização.
+     *
+     * Cobre dois cenários:
+     *   1. Primeira instalação — nenhum nó ainda indexado
+     *   2. Restore de backup — banco tem nós mas índice foi perdido/zerado
+     *
+     * Controle de volume: env COGNITIVE_INDEX_WARMUP_LIMIT (padrão 1000).
+     */
+    private warmUpCognitiveIndex(): void {
+        try {
+            const index = new CognitiveMemoryIndex(this.db);
+
+            const { unindexed, total } = this.db.prepare(`
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (
+                        WHERE id NOT IN (SELECT node_id FROM memory_index)
+                    ) AS unindexed
+                FROM memory_nodes
+                WHERE lifecycle_state NOT IN ('EXPIRED', 'SUMMARIZED')
+            `).get() as { unindexed: number; total: number };
+
+            if (unindexed === 0) {
+                log.info(`[CognitiveIndex] warm-up skipped — all ${total} nodes already indexed`);
+                return;
+            }
+
+            log.info(`[CognitiveIndex] warm-up starting — unindexed=${unindexed} total=${total}`);
+            const limit = parseInt(process.env.COGNITIVE_INDEX_WARMUP_LIMIT ?? '1000', 10);
+            const built = index.rebuildRecent(limit);
+            log.info(`[CognitiveIndex] warm-up complete — built=${built} limit=${limit}`);
+        } catch (e) {
+            log.warn(`[CognitiveIndex] warm-up failed: ${String(e)}`);
         }
     }
 
