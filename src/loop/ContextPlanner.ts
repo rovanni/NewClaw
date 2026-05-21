@@ -217,27 +217,56 @@ const STOP_WORDS = new Set([
 ]);
 
 /**
- * Vocabulário de termos pessoais/familiares em PT-BR.
- * Permite que o extractor detecte entidades em queries como
- * "Qual o nome do meu filho?" sem depender de LLM.
+ * Vocabulário de termos pessoais/familiares — PT-BR, EN, ES.
+ * Todos os termos ficam normalizados sem acento (stripAccents aplicado na comparação),
+ * então "filha", "figlia", "hija" são escritos aqui sem acento quando necessário.
  */
 const PERSONAL_ENTITY_TERMS = new Set([
-    // Família
+    // ── PT-BR: Família ───────────────────────────────────────
     'filho', 'filha', 'filhos', 'filhas',
     'esposa', 'marido', 'conjuge',
     'pai', 'mae', 'pais', 'familia', 'familiar',
     'irmao', 'irma', 'irmaos', 'irmas',
-    'avo', 'avo', 'neto', 'neta', 'sobrinho', 'sobrinha',
+    'avo', 'ava', 'neto', 'neta', 'sobrinho', 'sobrinha',
     'primo', 'prima', 'tio', 'tia',
-    // Identificação pessoal
+    // PT-BR: Identidade
     'nome', 'sobrenome', 'apelido', 'identidade',
     'idade', 'aniversario', 'nascimento',
-    // Finanças pessoais
+    // PT-BR: Finanças
     'carteira', 'portfolio', 'investimento', 'posicao',
     'criptomoeda', 'criptomoedas', 'acao', 'acoes', 'fundos',
-    // Trabalho/projetos
+    // PT-BR: Trabalho
     'projeto', 'empresa', 'trabalho', 'emprego', 'cargo',
     'disciplina', 'aula', 'aluno', 'professor', 'universidade',
+
+    // ── EN: Family ───────────────────────────────────────────
+    'son', 'daughter', 'sons', 'daughters', 'child', 'children', 'baby',
+    'wife', 'husband', 'spouse', 'partner',
+    'father', 'mother', 'parents', 'family',
+    'brother', 'sister', 'brothers', 'sisters',
+    'grandfather', 'grandmother', 'grandpa', 'grandma',
+    'grandson', 'granddaughter', 'nephew', 'niece',
+    'cousin', 'uncle', 'aunt',
+    // EN: Identity
+    'name', 'surname', 'nickname', 'identity', 'age', 'birthday', 'birth',
+    // EN: Finance
+    'wallet', 'investment', 'portfolio', 'position', 'cryptocurrency', 'stock', 'stocks', 'funds',
+    // EN: Work
+    'project', 'company', 'job', 'work', 'role', 'class', 'student', 'teacher', 'university',
+
+    // ── ES: Familia ───────────────────────────────────────────
+    'hijo', 'hija', 'hijos', 'hijas', 'nino', 'nina', 'bebe',
+    'esposa', 'esposo', 'mujer', 'conyuge', 'pareja',
+    'padre', 'madre', 'padres', 'familia', 'familiar',
+    'hermano', 'hermana', 'hermanos', 'hermanas',
+    'abuelo', 'abuela', 'nieto', 'nieta', 'sobrino', 'sobrina',
+    'primo', 'prima', 'tio', 'tia',
+    // ES: Identidad
+    'nombre', 'apellido', 'apodo', 'identidad', 'edad', 'cumpleanos', 'nacimiento',
+    // ES: Finanzas
+    'cartera', 'inversion', 'portafolio', 'posicion', 'criptomoneda', 'accion', 'acciones', 'fondos',
+    // ES: Trabajo
+    'proyecto', 'empresa', 'trabajo', 'empleo', 'cargo', 'clase', 'alumno', 'profesor', 'universidad',
 ]);
 
 /** Remove acentos para comparação normalizada. */
@@ -255,8 +284,8 @@ function tokenize(text: string): string[] {
  * Detecta entidades na query via 4 estratégias determinísticas:
  *   1. Tokens ALL-CAPS (tickers: BTC, ETH, RIVER)
  *   2. Palavras capitalizadas no meio da frase (nomes próprios)
- *   3. Vocabulário de termos pessoais/familiares PT-BR
- *   4. Palavras após possessivos (meu/minha/meus/minhas → filho, esposa…)
+ *   3. Vocabulário de termos pessoais/familiares (PT-BR + EN + ES)
+ *   4. Palavras após possessivos PT/EN/ES (meu/my/mi → filho/son/hijo…)
  *
  * Aceita overrideEntities para injeção de entidades vindas de fallback LLM.
  */
@@ -288,9 +317,10 @@ export function extractEntities(query: string, overrideEntities?: string[]): str
         }
     }
 
-    // 4. Palavras após possessivos: "meu filho" → "filho", "minha esposa" → "esposa"
+    // 4. Palavras após possessivos (PT-BR / EN / ES)
+    //    PT: meu/minha/meus/minhas  EN: my/our  ES: mi/mis/nuestro/nuestra
     const possessiveMatches = query.matchAll(
-        /\b(?:meu|minha|meus|minhas|nosso|nossa|nossos|nossas)\s+(\w+)/gi
+        /\b(?:meu|minha|meus|minhas|nosso|nossa|nossos|nossas|my|our|mi|mis|nuestro|nuestra|nuestros|nuestras)\s+(\w+)/gi
     );
     for (const m of possessiveMatches) {
         const entity = stripAccents(m[1].toLowerCase());
@@ -309,7 +339,8 @@ export function isPersonalMemoryQuery(query: string): boolean {
     for (const term of PERSONAL_ENTITY_TERMS) {
         if (qn.includes(term)) return true;
     }
-    if (/\b(?:meu|minha|meus|minhas)\s+\w+/i.test(query)) return true;
+    // Possessivos PT-BR / EN / ES
+    if (/\b(?:meu|minha|meus|minhas|my|mi|mis)\s+\w+/i.test(query)) return true;
     return false;
 }
 
