@@ -10,12 +10,12 @@
 
 ---
 
-> **Tú:** "Mi hija Laura adora las matemáticas."
+> **Tú:** "Mi hija adora las matemáticas."
 >
 > *Dos días después:*
 >
 > **Tú:** "¿Qué sabes sobre mi familia?"
-> **NewClaw:** "Tu hija Laura adora las matemáticas."
+> **NewClaw:** "Tu hija adora las matemáticas."
 >
 > *Sin fine-tuning. Sin contexto inyectado manualmente. Sin repetirte.*
 
