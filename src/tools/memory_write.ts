@@ -17,6 +17,7 @@ import { isProtectedNode } from '../memory/MemoryFacade';
 import { errorMessage } from '../shared/errors';
 import type { ExecutionOutcome } from '../memory/ProceduralMemoryService';
 import { classifyDomain } from '../memory/DomainRegistry';
+import { CognitiveMemoryIndex } from '../memory/CognitiveMemoryIndex';
 
 export class MemoryWriteTool implements ToolExecutor {
     name = 'memory_write';
@@ -46,10 +47,18 @@ export class MemoryWriteTool implements ToolExecutor {
 
     private memoryManager: MemoryManager;
     private facade: MemoryFacade;
+    private cognitiveIndex: CognitiveMemoryIndex | null = null;
 
     constructor(memoryManager: MemoryManager) {
         this.memoryManager = memoryManager;
         this.facade = memoryManager.getFacade();
+    }
+
+    private getCognitiveIndex(): CognitiveMemoryIndex {
+        if (!this.cognitiveIndex) {
+            this.cognitiveIndex = new CognitiveMemoryIndex(this.memoryManager.getDatabase());
+        }
+        return this.cognitiveIndex;
     }
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
@@ -183,6 +192,10 @@ export class MemoryWriteTool implements ToolExecutor {
 
         if (domain) this.facade.setNodeDomain(id, domain as string);
 
+        // Force immediate indexing so the node is findable in the very next query.
+        // Without this, CognitiveMemoryIndex only indexes lazily → race condition.
+        try { this.getCognitiveIndex().getSummaries([id]); } catch { /* non-fatal */ }
+
         return { success: true, output: `✅ Nó "${id}" (${type}) criado e auto-conectado ao grafo. Use action=connect para ligações adicionais.` };
     }
 
@@ -243,6 +256,9 @@ export class MemoryWriteTool implements ToolExecutor {
         if (domain) this.facade.setNodeDomain(id, domain as string);
 
         await this.regenerateEmbedding(id, node);
+
+        // Force re-indexing so updated content is visible immediately.
+        try { this.getCognitiveIndex().getSummaries([id]); } catch { /* non-fatal */ }
 
         return { success: true, output: `✅ Nó "${id}" atualizado.` };
     }
