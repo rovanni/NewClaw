@@ -22,6 +22,7 @@ import {
 } from './ChannelAdapter';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
+import { ConversationQueueManager } from '../core/ConversationQueueManager';
 
 const log = createLogger('MessageBus');
 
@@ -38,6 +39,8 @@ export class MessageBus {
     private recentMessageIds: Map<string, number> = new Map();
     private readonly MESSAGE_ID_TTL_MS = 5 * 60 * 1000; // 5 minutes
     private cleanupTimer: NodeJS.Timeout | null = null;
+    /** Fila serial por conversa — garante processamento em ordem */
+    private readonly conversationQueues = new ConversationQueueManager();
 
     constructor(agentLoop: AgentLoop, sessionManager: SessionManager) {
         this.agentLoop = agentLoop;
@@ -173,6 +176,8 @@ export class MessageBus {
             this.stopTypingIndicator(key);
         }
 
+        this.conversationQueues.destroy();
+
         for (const [type, adapter] of this.adapters) {
             try {
                 await adapter.stop();
@@ -233,25 +238,22 @@ export class MessageBus {
     }
 
     /**
-     * Processar mensagem de qualquer canal.
-     * Chamado pelos adapters quando recebem uma mensagem.
+     * Portão de entrada: deduplica, envia ACK se necessário e enfileira.
+     * Retorna imediatamente — o processamento real ocorre em background via ConversationQueueManager.
      */
     async processMessage(msg: NormalizedMessage): Promise<void> {
-        // Deduplicate by messageId — Telegram can re-deliver the same update if the bot is slow
+        // Deduplicate by messageId — Telegram pode re-entregar a mesma atualização
         if (msg.messageId) {
             const dedupeKey = `${msg.channel}:${msg.messageId}`;
-            const now = Date.now();
             if (this.recentMessageIds.has(dedupeKey)) {
                 log.warn('duplicate_message_dropped', `messageId=${msg.messageId} already processed`, { channel: msg.channel, userId: msg.userId });
                 return;
             }
-            this.recentMessageIds.set(dedupeKey, now);
+            this.recentMessageIds.set(dedupeKey, Date.now());
         }
 
-        const sessionKey: SessionKey = { channel: msg.channel, userId: msg.userId };
-        const typingKey = `${msg.channel}:${msg.userId}`;
-
         const correlationId = crypto.randomUUID();
+        const adapter = this.adapters.get(msg.channel);
 
         log.info('message_received', msg.text.slice(0, 50), {
             channel: msg.channel,
@@ -260,8 +262,52 @@ export class MessageBus {
             correlationId
         });
 
-        // Iniciar typing indicator antes do processamento
+        // Chave da fila: por canal + usuário — preserva independência entre usuários
+        const queueId = `${msg.channel}:${msg.userId}`;
+
+        const result = this.conversationQueues.enqueue(
+            queueId,
+            () => this.processMessageCore(msg, correlationId)
+        );
+
+        if ('rejected' in result) {
+            log.warn('queue_backpressure', `Rejected message for ${queueId}`, { queueId });
+            if (adapter) {
+                await adapter.send(
+                    {
+                        text: '⚠️ Muitas mensagens pendentes nesta conversa.\nAguarde a conclusão das tarefas atuais antes de enviar mais.',
+                        format: 'plain'
+                    },
+                    msg.rawContext
+                ).catch(() => {});
+            }
+            return;
+        }
+
+        // Envia ACK apenas no primeiro enqueue extra de cada burst
+        if (result.sendAck && adapter) {
+            await adapter.send(
+                {
+                    text: '🧠 Estou concluindo a tarefa anterior.\nSua mensagem já foi adicionada à sequência de processamento. Por favor, aguarde um momento.',
+                    format: 'plain'
+                },
+                msg.rawContext
+            ).catch(() => {});
+        }
+
+        log.debug('message_queued', `queued=${result.queued} position=${result.position}`, { queueId, correlationId });
+    }
+
+    /**
+     * Processamento real da mensagem — executado serialmente pela ConversationQueueManager.
+     * Inclui: comandos, mídia (Whisper/vision/docs), AgentLoop, resposta ao usuário.
+     */
+    private async processMessageCore(msg: NormalizedMessage, correlationId: string): Promise<void> {
+        const sessionKey: SessionKey = { channel: msg.channel, userId: msg.userId };
+        const typingKey = `${msg.channel}:${msg.userId}`;
         const adapter = this.adapters.get(msg.channel);
+
+        // Typing indicator só começa quando a tarefa realmente inicia (não durante espera na fila)
         if (adapter?.sendTypingIndicator) {
             const action = this.getTypingAction(msg);
             this.startTypingIndicator(adapter, msg.rawContext, action, typingKey);
@@ -281,10 +327,12 @@ export class MessageBus {
                         return;
                     }
                 }
-                // If no handler, fall through to AgentLoop
+                // Comando sem handler registrado — cai para o AgentLoop
             }
 
             // 2. Handle media attachments (photo, voice, audio, document)
+            // O preprocessamento (Whisper, vision, download) ocorre dentro da fila,
+            // garantindo que a ordem lógica da conversa seja preservada.
             if (msg.attachments && msg.attachments.length > 0) {
                 const mediaResult = await this.processAttachments(msg, sessionKey);
                 if (mediaResult) {
@@ -301,7 +349,8 @@ export class MessageBus {
             // 3. Text processing through AgentLoop
             await this.sessionManager.recordUserMessage(sessionKey, msg.text);
             const startTime = Date.now();
-            log.info('processing_start', `User: ${msg.text.slice(0, 80)}`, { channel: msg.channel, userId: msg.userId });
+            log.info('processing_start', `User: ${msg.text.slice(0, 80)}`, { channel: msg.channel, userId: msg.userId, correlationId });
+
             const response = await this.agentLoop.process(
                 msg.userId,
                 msg.text,
@@ -314,16 +363,17 @@ export class MessageBus {
                 }
             );
             const duration = Date.now() - startTime;
-            
+
             const responseText = typeof response === 'string' ? response : response.text;
             const responseOptions = typeof response === 'string' ? undefined : response.options;
 
             log.info('processing_done', `Duration: ${duration}ms`, {
                 responseLength: responseText?.length || 0,
-                channel: msg.channel
+                channel: msg.channel,
+                correlationId
             });
 
-            // 4. Send response back through the originating channel (before DB write so a DB error never blocks the user)
+            // 4. Envia resposta antes de gravar no DB — erro de DB nunca bloqueia o usuário
             if (adapter) {
                 const normalizedResponse: NormalizedResponse = {
                     text: responseText || 'Desculpe, não consegui gerar uma resposta.',
@@ -338,7 +388,6 @@ export class MessageBus {
             });
 
         } catch (error) {
-            // Stop typing before sending error so user doesn't see spinner + error simultaneously
             this.stopTypingIndicator(typingKey);
 
             const isTimeout = errorMessage(error)?.includes('Timeout') || errorMessage(error)?.includes('abort');
@@ -350,9 +399,11 @@ export class MessageBus {
             log.error('error_details', undefined, 'Processing failure details', {
                 channel: msg.channel,
                 userId: msg.userId,
+                correlationId,
                 errorMessage: error instanceof Error ? errorMessage(error) : (typeof error === 'object' ? JSON.stringify(error) : String(error)),
                 errorStack: error instanceof Error ? error.stack?.split('\n').slice(0, 15).join(' | ') : 'No stack trace'
             });
+
             if (adapter) {
                 await adapter.send(
                     { text: userMessage, format: 'plain' },
