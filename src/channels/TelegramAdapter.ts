@@ -193,13 +193,17 @@ export class TelegramAdapter implements ChannelAdapter {
                     this.startRetries++;
                     if (this.startRetries > this.maxStartRetries) {
                         log.error('bot_start_409_exhausted', `All ${this.maxStartRetries} retries exhausted. Another bot instance is still running.`);
-                        this.scheduleReconnect(30);
+                        this.scheduleReconnect(60);
                         return;
                     }
-                    const delay = Math.min(this.startRetries * 20, 120);
+                    // Telegram mantém conexões getUpdates ativas por até 30s após o processo morrer.
+                    // Delay mínimo de 35s garante que o ciclo anterior expirou antes de tentar novamente.
+                    const delay = 35 + (this.startRetries - 1) * 20; // 35s, 55s, 75s...
                     log.error('bot_start_409_conflict', `Multiple bot instances detected (attempt ${this.startRetries}/${this.maxStartRetries}). Retrying in ${delay}s...`);
                     this.started = false;
                     this._isConnected = false;
+                    // Tenta forçar liberação do slot de polling no lado do Telegram
+                    try { await this.bot.api.deleteWebhook({ drop_pending_updates: false }); } catch { /* ignore */ }
                     await new Promise(r => setTimeout(r, delay * 1000));
                     continue;
                 }
@@ -254,8 +258,8 @@ export class TelegramAdapter implements ChannelAdapter {
             log.warn('drop_webhook_on_stop_failed', errorMessage(e));
         }
 
-        // Give Telegram a moment to process the drop
-        await new Promise(r => setTimeout(r, 2000));
+        // Aguarda o Telegram processar o drop e liberar a conexão getUpdates (pode levar até 5s)
+        await new Promise(r => setTimeout(r, 5000));
 
         this.bot.stop();
         this._isConnected = false;

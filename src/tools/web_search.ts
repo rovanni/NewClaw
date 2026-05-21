@@ -294,12 +294,24 @@ export class WebSearchTool implements ToolExecutor {
 
     private rankCandidates(candidates: SearchCandidate[], query: string): SearchCandidate[] {
         const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+        // Queries de dados em tempo real — preço, cotação, agora, hoje
+        const isRealTime = /price|preço|preco|cotaç|cotac|valor|hoje|today|agora|now|current|market cap/i.test(query);
 
         return [...candidates]
             .map(candidate => {
                 const haystack = `${candidate.title} ${candidate.snippet}`.toLowerCase();
                 const tokenHits = tokens.filter(token => haystack.includes(token)).length;
-                const domainBoost = /wikipedia|docs|developer|github|gov|org/.test(candidate.url) ? 0.2 : 0;
+
+                let domainBoost = 0;
+                if (/docs\.|developer\.|github\.com|\.gov|stackoverflow/.test(candidate.url)) {
+                    domainBoost = 0.2;  // fontes técnicas/docs
+                } else if (/wikipedia\.org/.test(candidate.url)) {
+                    // Wikipedia é útil para conceitos mas péssima para dados em tempo real
+                    domainBoost = isRealTime ? -0.5 : 0.1;
+                } else if (/coingecko\.com|coinmarketcap\.com|binance\.com|coinbase\.com|cryptonews|cointelegraph|theblock|decrypt\.co/.test(candidate.url)) {
+                    domainBoost = isRealTime ? 0.4 : 0.2;  // fontes de cripto preferidas para dados de mercado
+                }
+
                 return {
                     ...candidate,
                     score: candidate.score + tokenHits * 0.15 + domainBoost

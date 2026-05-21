@@ -12,7 +12,6 @@ import { AgentLoop } from '../loop/AgentLoop';
 import { MemoryManager } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
 import { SkillLoader } from '../skills/SkillLoader';
-import { OnboardingService } from '../services/OnboardingService';
 import { SkillLearner } from '../loop/SkillLearner';
 import { ExecCommandTool } from '../tools/exec_command';
 import { WebSearchTool } from '../tools/web_search';
@@ -76,7 +75,6 @@ export class AgentController {
     private lifecycle = new LifecycleManager();
     private skillLoader: SkillLoader;
     private skillLearner: SkillLearner;
-    private onboardingService: OnboardingService;
     private sessionManager: SessionManager;
     private sessionLearner: SessionLearner;
     private memoryGovernor: MemoryGovernor;
@@ -151,12 +149,6 @@ export class AgentController {
             decisionMemory
         );
 
-        this.onboardingService = new OnboardingService(
-            this.db,
-            this.skillLearner,
-            this.providerFactory,
-            this.agentLoop.getStateManager()
-        );
 
         this.sessionManager = new SessionManager(
             { transcriptDir: './data/sessions' },
@@ -411,11 +403,8 @@ export class AgentController {
 
     async handleWebMessage(sessionId: string, message: string): Promise<string> {
         try {
-            const webUserId = 'web-dashboard-user';
-            if (this.onboardingService.isOnboardingRequired(webUserId)) {
-                const res = await this.onboardingService.handle(webUserId, message);
-                return res.response;
-            }
+            // Web dashboard é interface do operador — onboarding já foi concluído via canal principal
+            // (Telegram/WhatsApp). Nunca redirecionar para onboarding aqui.
             const result = await this.agentLoop.process(sessionId, message);
             return typeof result === 'string' ? result : result.text;
         } catch (err) {

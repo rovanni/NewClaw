@@ -334,9 +334,12 @@ export class AgentLoop {
     };
 
     private buildToolDefs(intent: IntentDecision): ToolDefinition[] {
-        // If SkillLearner provided specific preferred tools with high confidence, use them + core.
+        // Preferred tools from skill + category tools (never exclude domain-appropriate tools).
+        // Skills can add specific preferred tools, but category tools are always merged in so
+        // the model still has access to domain-relevant tools (e.g. crypto_analysis for data_analysis).
         if (intent.preferredTools && intent.preferredTools.length > 0) {
-            const allowed = new Set([...AgentLoop.CORE_TOOLS, ...intent.preferredTools]);
+            const categoryExtras = AgentLoop.CATEGORY_TOOLS[intent.category] ?? [];
+            const allowed = new Set([...AgentLoop.CORE_TOOLS, ...intent.preferredTools, ...categoryExtras]);
             const filtered = Array.from(this.tools.values()).filter(t => allowed.has(t.name));
             log.info(`[TOOLS] Skill-preferred filter: ${filtered.map(t => t.name).join(', ')} (${filtered.length}/${this.tools.size})`);
             return filtered.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
