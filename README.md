@@ -62,6 +62,11 @@ You send a voice note on Telegram in the morning. Later you open the web dashboa
 
 ---
 
+![NewClaw Memory Graph](docs/assets/newclaw-graph-2x.png)
+*Real memory graph — 65 nodes, 167 edges. Labels removed for privacy.*
+
+---
+
 ## Quick Install
 
 **Linux/macOS:**
@@ -107,11 +112,16 @@ irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
 | 🛡️ **Local-First** | No cloud required. No data harvesting. Runs entirely on your hardware |
 | 🎓 **Skill Learning** | Observes how you work and proposes reusable shortcuts over time |
 | 🔄 **Provider Fallback** | Ollama → Gemini → DeepSeek → Groq — switches automatically if one fails |
-| 📊 **Web Dashboard** | Visual memory graph, real-time chat, full configuration interface |
+| 📊 **Web Dashboard** | Visual memory graph, real-time chat, full configuration interface — see below |
 | 🌐 **Web Search** | Researches topics and synthesizes answers from multiple sources |
 | 🖥️ **SSH Exec** | Run commands on remote servers directly from your chat |
 | 📸 **Memory Snapshots** | Version your agent's knowledge — create, restore, and compare states |
 | 🛡️ **Self-Audit** | The agent inspects and fixes its own runtime using `/audit` |
+
+---
+
+![NewClaw Dashboard](docs/assets/dashboard-graph.png)
+*Web Dashboard — interactive graph visualization with node types: Identity, Preference, Project, Context, Fact, Skill.*
 
 ---
 

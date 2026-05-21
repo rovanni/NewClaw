@@ -62,6 +62,11 @@ Envías un audio por Telegram en la mañana. Luego abres el dashboard web. Por l
 
 ---
 
+![Grafo de Memoria NewClaw](docs/assets/newclaw-graph-2x.png)
+*Grafo de memoria real — 65 nodos, 167 aristas. Etiquetas eliminadas por privacidad.*
+
+---
+
 ## Instalación Rápida
 
 **Linux/macOS:**
@@ -112,6 +117,11 @@ irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
 | 🖥️ **SSH Exec** | Ejecuta comandos en servidores remotos directamente desde el chat |
 | 📸 **Snapshots de Memoria** | Versiona el conocimiento del agente — crea, restaura y compara estados |
 | 🛡️ **Auto-Auditoría** | El agente inspecciona y corrige su propio runtime con `/audit` |
+
+---
+
+![Dashboard NewClaw](docs/assets/dashboard-graph.png)
+*Dashboard Web — visualización interactiva del grafo con tipos de nodo: Identidad, Preferencia, Proyecto, Contexto, Hecho, Habilidad.*
 
 ---
 
