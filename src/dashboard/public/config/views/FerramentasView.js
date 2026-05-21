@@ -20,11 +20,11 @@ export function render(container) {
   container.innerHTML = `
     <div class="page-view">
       <div class="page-header">
-        <h1>🛠️ Ferramentas</h1>
-        <p>Módulos operacionais do agente — uso real calculado dos padrões aprendidos</p>
+        <h1>🛠️ ${t('sidebar_tools')}</h1>
+        <p>${t('tools_page_desc')}</p>
       </div>
-      <input type="text" class="tool-search" id="ft-search" placeholder="🔍  Buscar ferramentas...">
-      <div class="module-grid" id="ft-grid"><div class="empty">Carregando módulos...</div></div>
+      <input type="text" class="tool-search" id="ft-search" placeholder="${t('search_tools_placeholder')}">
+      <div class="module-grid" id="ft-grid"><div class="empty">${t('loading_modules')}</div></div>
     </div>`;
 
   let allTools = [];
@@ -34,7 +34,7 @@ export function render(container) {
     const maxC   = Math.max(1, ...tools.map(t => stats[t.name]?.calls || 0));
     const grid   = document.getElementById('ft-grid');
     if (!grid) return;
-    if (!tools.length) { grid.innerHTML = '<div class="empty">Nenhuma ferramenta disponível.</div>'; return; }
+    if (!tools.length) { grid.innerHTML = `<div class="empty">${t('no_tools_available')}</div>`; return; }
     grid.innerHTML = tools.map(t => {
       const icon    = TOOL_ICONS[t.name] || '🔧';
       const catLbl  = CAT_LABEL[TOOL_CAT[t.name] || 'outros'] || 'ETC';
@@ -44,7 +44,7 @@ export function render(container) {
       const rate    = st?.successRate ?? -1;
       const barCls  = rate >= 80 ? 'ok' : rate >= 50 ? 'warn' : 'neutral';
       const modCls  = t.dangerous ? 'is-dangerous' : t.enabled ? 'is-enabled' : 'is-disabled';
-      const statsTxt = calls > 0 ? `${calls} chamadas · ${rate}% ✓ · ${st.avgLat}ms` : 'Sem dados de uso';
+      const statsTxt = calls > 0 ? `${calls} chamadas · ${rate}% ✓ · ${st.avgLat}ms` : t('no_usage_data');
       const warnBadge = t.dangerous ? ' <span class="badge badge-proposed" style="font-size:.55rem">⚠️</span>' : '';
       return `
         <div class="tool-module ${modCls}" data-name="${t.name}">

@@ -24,8 +24,10 @@ const VIEW_MAP = {
 };
 
 let currentCleanup = null;
+let currentPage = 'dashboard';
 
 async function navigate(page) {
+  currentPage = page;
   document.querySelectorAll('#sidebar-nav .nav-item').forEach(n => {
     n.classList.toggle('active', n.dataset.page === page);
   });
@@ -42,6 +44,11 @@ async function navigate(page) {
     container.innerHTML = `<div class="page-view"><div class="empty">Erro ao carregar view: ${e.message}</div></div>`;
   }
 }
+
+window.addEventListener('newclaw-lang-changed', () => {
+  window.newclawApplyI18n?.();
+  navigate(currentPage);
+});
 
 // ── Sidebar nav ──────────────────────────────────────────────────
 document.querySelectorAll('#sidebar-nav .nav-item').forEach(item => {

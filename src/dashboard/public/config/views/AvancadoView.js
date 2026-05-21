@@ -5,29 +5,29 @@ export function render(container) {
   container.innerHTML = `
     <div class="page-view">
       <div class="page-header">
-        <h1>⚙️ Avançado</h1>
-        <p>System prompt e configurações especializadas</p>
+        <h1>⚙️ ${t('sidebar_advanced')}</h1>
+        <p>${t('advanced_page_desc')}</p>
       </div>
 
       <details class="cfg-details" open>
-        <summary>💬 System Prompt</summary>
+        <summary>💬 ${t('system_prompt_title')}</summary>
         <div class="cfg-details-body">
           <div class="form-group">
             <textarea class="form-textarea" id="av-systemPrompt"
-              placeholder="Instruções personalizadas do sistema..."
+              placeholder="${t('system_prompt_placeholder')}"
               style="min-height:160px;"></textarea>
-            <div class="form-hint">Deixe vazio para usar o prompt padrão</div>
+            <div class="form-hint">${t('system_prompt_hint_text')}</div>
           </div>
         </div>
       </details>
 
       <details class="cfg-details">
-        <summary>🔄 Reset de Formulário</summary>
+        <summary>${t('reset_form_title')}</summary>
         <div class="cfg-details-body">
           <p style="font-size:.8rem;color:var(--text-soft);margin-bottom:12px;">
-            Restaura os valores padrão — não salva automaticamente.
+            ${t('reset_form_desc')}
           </p>
-          <button class="btn btn-danger" style="width:auto;" id="av-resetBtn">🔄 Resetar Valores</button>
+          <button class="btn btn-danger" style="width:auto;" id="av-resetBtn">${t('reset_values_btn')}</button>
         </div>
       </details>
     </div>`;
@@ -41,7 +41,7 @@ export function render(container) {
   );
 
   document.getElementById('av-resetBtn').addEventListener('click', () => {
-    if (!confirm('Resetar para valores padrão?')) return;
+    if (!confirm(t('reset_confirm'))) return;
     cs.patch({
       defaultProvider: 'ollama',
       language: 'pt-BR',
@@ -52,6 +52,6 @@ export function render(container) {
       telegramAllowedUserIds: '',
     });
     document.getElementById('av-systemPrompt').value = '';
-    showToast('🔄 Resetado.', 'success');
+    showToast(t('reset_done_toast'), 'success');
   });
 }

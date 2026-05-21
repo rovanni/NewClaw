@@ -6,7 +6,7 @@ export function render(container) {
     <div class="page-view">
       <div class="page-header">
         <h1>🔌 Providers</h1>
-        <p>Conexões com LLMs e gerenciamento de chaves</p>
+        <p>${t('providers_page_desc')}</p>
       </div>
 
       <div class="provider-grid">
@@ -24,7 +24,7 @@ export function render(container) {
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label class="form-label">URL do Servidor</label>
+              <label class="form-label">${t('server_url_label')}</label>
               <input type="text" class="form-input" id="pv-ollamaUrl" placeholder="http://localhost:11434">
             </div>
             <div class="form-group">
@@ -35,7 +35,7 @@ export function render(container) {
               </div>
             </div>
           </div>
-          <button class="btn btn-ghost btn-sm" id="pv-testOllama">🔍 Testar Conexão</button>
+          <button class="btn btn-ghost btn-sm" id="pv-testOllama">${t('test_connection_btn')}</button>
         </div>
 
         <div class="provider-card">
@@ -98,7 +98,7 @@ export function render(container) {
   const ps = providersStore.snap();
   if (ps.ollamaOnline) {
     el('pv-ollamaDot').className = 'dot online';
-    el('pv-ollamaHealth').textContent = ps.ollamaModelCount + ' modelos';
+    el('pv-ollamaHealth').textContent = t('ollama_models_count', { n: ps.ollamaModelCount });
   }
 
   // Bind inputs to configStore
@@ -115,10 +115,10 @@ export function render(container) {
   const unsub = providersStore.on('*', ps => {
     if (ps.ollamaOnline) {
       el('pv-ollamaDot').className = 'dot online';
-      el('pv-ollamaHealth').textContent = ps.ollamaModelCount + ' modelos';
+      el('pv-ollamaHealth').textContent = t('ollama_models_count', { n: ps.ollamaModelCount });
     } else {
       el('pv-ollamaDot').className = 'dot offline';
-      el('pv-ollamaHealth').textContent = 'Offline';
+      el('pv-ollamaHealth').textContent = t('offline');
     }
   });
 
@@ -128,23 +128,23 @@ export function render(container) {
 function setKeyStatus(statusId, dotId, hasKey) {
   const s = document.getElementById(statusId);
   const d = document.getElementById(dotId);
-  if (s) { s.textContent = hasKey ? '✓ OK' : '✗ Ausente'; s.className = 'api-key-status ' + (hasKey ? 'configured' : 'missing'); }
+  if (s) { s.textContent = hasKey ? '✓ OK' : t('key_missing'); s.className = 'api-key-status ' + (hasKey ? 'configured' : 'missing'); }
   if (d) { d.className = 'dot ' + (hasKey ? 'online' : 'offline'); }
 }
 
 async function testOllama() {
   const f = window.newclawFetch || fetch;
-  showToast('🔍 Testando Ollama...', 'success');
+  showToast(t('testing_ollama'), 'success');
   try {
     const res  = await f('/api/providers');
     const data = await res.json();
     if (data.success && data.providers?.ollama) {
       const cnt = data.providers.ollama.models?.length || 0;
-      showToast('✅ Ollama OK — ' + cnt + ' modelos', 'success');
+      showToast(t('ollama_ok', { n: cnt }), 'success');
       document.getElementById('pv-ollamaDot').className   = 'dot online';
-      document.getElementById('pv-ollamaHealth').textContent = cnt + ' modelos';
+      document.getElementById('pv-ollamaHealth').textContent = t('ollama_models_count', { n: cnt });
     } else {
-      showToast('❌ Ollama não encontrado', 'error');
+      showToast(t('ollama_not_found'), 'error');
       document.getElementById('pv-ollamaDot').className = 'dot offline';
     }
   } catch (e) {

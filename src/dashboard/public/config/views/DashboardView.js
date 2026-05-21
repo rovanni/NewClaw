@@ -19,14 +19,14 @@ export function render(container) {
           <div class="agent-hero-name">NewClaw Agent</div>
           <div class="agent-hero-sub">
             <span class="dot" id="heroDot"></span>
-            <span id="heroStatusText">Verificando...</span>
+            <span id="heroStatusText">${t('status_verifying')}</span>
             <span style="color:var(--border-color)">·</span>
             <span id="heroUptime" style="color:var(--text-soft)">—</span>
           </div>
         </div>
         <div class="hero-model-chip">
           <div>
-            <div class="chip-label">modelo ativo</div>
+            <div class="chip-label">${t('active_model_label')}</div>
             <div class="chip-value" id="heroModel">—</div>
           </div>
           <span class="badge" id="heroModelBadge" style="background:rgba(125,211,252,.15);color:var(--accent)">—</span>
@@ -35,33 +35,33 @@ export function render(container) {
 
       <div class="metrics-strip">
         <div class="metric-card"><div class="metric-val accent" id="mRam">—</div><div class="metric-lbl">RAM Heap</div></div>
-        <div class="metric-card"><div class="metric-val green" id="mActiveSkills">—</div><div class="metric-lbl">Skills ativas</div></div>
-        <div class="metric-card"><div class="metric-val warn" id="mProposedSkills">—</div><div class="metric-lbl">Propostas</div></div>
-        <div class="metric-card"><div class="metric-val" id="mPatterns">—</div><div class="metric-lbl">Padrões</div></div>
-        <div class="metric-card"><div class="metric-val accent" id="mTopTool">—</div><div class="metric-lbl">Tool líder</div></div>
+        <div class="metric-card"><div class="metric-val green" id="mActiveSkills">—</div><div class="metric-lbl">${t('metric_active_skills')}</div></div>
+        <div class="metric-card"><div class="metric-val warn" id="mProposedSkills">—</div><div class="metric-lbl">${t('metric_proposed')}</div></div>
+        <div class="metric-card"><div class="metric-val" id="mPatterns">—</div><div class="metric-lbl">${t('metric_patterns')}</div></div>
+        <div class="metric-card"><div class="metric-val accent" id="mTopTool">—</div><div class="metric-lbl">${t('metric_top_tool')}</div></div>
       </div>
 
       <div class="activity-panel">
-        <div class="activity-panel-title"><div class="live-dot"></div>Atividade — Top Ferramentas por Uso</div>
-        <div id="dashToolBars"><div class="empty">Aguardando dados...</div></div>
+        <div class="activity-panel-title"><div class="live-dot"></div>${t('activity_tools_title')}</div>
+        <div id="dashToolBars"><div class="empty">${t('waiting_data')}</div></div>
       </div>
 
       <div class="activity-panel">
-        <div class="activity-panel-title"><div class="live-dot"></div>Padrões Cognitivos Recentes</div>
-        <div id="dashPatterns"><div class="empty">Aguardando dados...</div></div>
+        <div class="activity-panel-title"><div class="live-dot"></div>${t('cognitive_patterns_title')}</div>
+        <div id="dashPatterns"><div class="empty">${t('waiting_data')}</div></div>
       </div>
 
       <div class="activity-panel" id="channelsPanel">
-        <div class="activity-panel-title"><div class="live-dot"></div>Canais</div>
-        <div id="channelsList"><div class="empty">Aguardando dados...</div></div>
+        <div class="activity-panel-title"><div class="live-dot"></div>${t('channels_section_title')}</div>
+        <div id="channelsList"><div class="empty">${t('waiting_data')}</div></div>
       </div>
 
       <details class="cfg-details">
-        <summary>⚙️ Configurações de Comportamento</summary>
+        <summary>⚙️ ${t('behavior_settings')}</summary>
         <div class="cfg-details-body">
           <div class="form-row">
             <div class="form-group">
-              <label class="form-label">Idioma</label>
+              <label class="form-label">${t('lang_label')}</label>
               <select class="form-select" id="f-language">
                 <option value="pt-BR">🇧🇷 Português</option>
                 <option value="en-US">🇺🇸 English</option>
@@ -69,15 +69,15 @@ export function render(container) {
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">Iterações Máximas</label>
+              <label class="form-label">${t('iterations_label')}</label>
               <input type="number" class="form-input" id="f-maxIterations" min="1" max="20">
-              <div class="form-hint">Loops por ciclo de raciocínio (1–20)</div>
+              <div class="form-hint">${t('iterations_hint')}</div>
             </div>
           </div>
           <div class="form-group">
-            <label class="form-label">Janela de Memória</label>
+            <label class="form-label">${t('memory_window_label')}</label>
             <input type="number" class="form-input" id="f-memoryWindowSize" min="5" max="100" style="max-width:180px;">
-            <div class="form-hint">Mensagens mantidas no contexto ativo</div>
+            <div class="form-hint">${t('memory_window_hint')}</div>
           </div>
         </div>
       </details>
@@ -120,7 +120,7 @@ function updateRuntime(s) {
   const dot = el('heroDot');
   if (dot) dot.className = `dot ${online ? 'online' : 'offline'}`;
   const txt = el('heroStatusText');
-  if (txt) txt.textContent = online ? 'Online' : 'Offline';
+  if (txt) txt.textContent = online ? t('online') : t('offline');
   const uptime = el('heroUptime');
   if (uptime) uptime.textContent = s.uptime || '—';
   const ram = el('mRam');
@@ -149,7 +149,7 @@ function updateSkillMetrics(s) {
   const patterns = s.patterns || [];
   const pEl = el('dashPatterns');
   if (!pEl) return;
-  if (!patterns.length) { pEl.innerHTML = '<div class="empty">Padrões surgem com o uso. Nenhum ainda.</div>'; return; }
+  if (!patterns.length) { pEl.innerHTML = `<div class="empty">${t('no_patterns_yet')}</div>`; return; }
   const recent = [...patterns].sort((a, b) => ((b.success_count||0)+(b.fail_count||0)) - ((a.success_count||0)+(a.fail_count||0))).slice(0, 8);
   pEl.innerHTML = recent.map(p => {
     const total = (p.success_count||0)+(p.fail_count||0);
@@ -167,7 +167,7 @@ function updateChannels(tg) {
   if (!el) return;
 
   if (!tg) {
-    el.innerHTML = '<div class="empty">Dados de canal indisponíveis.</div>';
+    el.innerHTML = `<div class="empty">${t('no_channel_data')}</div>`;
     return;
   }
 
@@ -179,11 +179,11 @@ function updateChannels(tg) {
     disconnected: '⚫',
   };
   const STATE_LABEL = {
-    connected:    'Conectado',
-    cooldown:     'Cooldown após conflito',
-    reconnecting: 'Reconectando...',
-    conflict:     'Conflito de polling',
-    disconnected: 'Desconectado',
+    connected:    t('tg_connected'),
+    cooldown:     t('tg_cooldown'),
+    reconnecting: t('tg_reconnecting'),
+    conflict:     t('tg_conflict'),
+    disconnected: t('tg_disconnected'),
   };
 
   const icon  = STATE_ICON[tg.state]  || '⚫';
@@ -218,7 +218,7 @@ function updateActivity() {
   if (!barsEl) return;
 
   if (!entries.length) {
-    barsEl.innerHTML = '<div class="empty">Barras aparecem conforme o agente usa ferramentas.</div>';
+    barsEl.innerHTML = `<div class="empty">${t('waiting_data')}</div>`;
     el('mTopTool') && (el('mTopTool').textContent = '—');
     return;
   }

@@ -7,32 +7,32 @@ export function render(container) {
     <div class="page-view">
       <div class="page-header">
         <h1>🎓 SkillLearner</h1>
-        <p>Sistema de aprendizado autônomo — skills emergem de padrões de uso real</p>
+        <p>${t('skills_page_desc')}</p>
       </div>
 
       <div class="skills-metrics">
         <div class="skill-metric">
           <div class="skill-metric-val green" id="sk-active">—</div>
-          <div class="skill-metric-lbl">Ativas</div>
+          <div class="skill-metric-lbl">${t('metric_active')}</div>
         </div>
         <div class="skill-metric">
           <div class="skill-metric-val warn" id="sk-proposed">—</div>
-          <div class="skill-metric-lbl">Aguardando revisão</div>
+          <div class="skill-metric-lbl">${t('metric_awaiting_review')}</div>
         </div>
         <div class="skill-metric">
           <div class="skill-metric-val" id="sk-patterns">—</div>
-          <div class="skill-metric-lbl">Padrões registrados</div>
+          <div class="skill-metric-lbl">${t('metric_patterns_registered')}</div>
         </div>
       </div>
 
       <div class="two-col">
         <div>
-          <div class="sec-title">Skills do Agente</div>
-          <div id="sk-skillsList"><div class="empty">Carregando...</div></div>
+          <div class="sec-title">${t('agent_skills_title')}</div>
+          <div id="sk-skillsList"><div class="empty">${t('loading')}</div></div>
         </div>
         <div>
-          <div class="sec-title">Padrões Detectados</div>
-          <div id="sk-patternsList"><div class="empty">Carregando...</div></div>
+          <div class="sec-title">${t('detected_patterns_title')}</div>
+          <div id="sk-patternsList"><div class="empty">${t('loading')}</div></div>
         </div>
       </div>
     </div>`;
@@ -56,19 +56,19 @@ export function render(container) {
             let actions = '';
             if (sk.status === 'proposed') {
               actions = `<div class="skill-actions">
-                <button class="s-btn approve" data-id="${sk.id}" data-action="approve">✓ Aprovar</button>
-                <button class="s-btn reject"  data-id="${sk.id}" data-action="reject">✗ Rejeitar</button>
-                <button class="s-btn delete"  data-id="${sk.id}" data-action="delete">🗑 Excluir</button>
+                <button class="s-btn approve" data-id="${sk.id}" data-action="approve">${t('approve_btn')}</button>
+                <button class="s-btn reject"  data-id="${sk.id}" data-action="reject">${t('reject_btn')}</button>
+                <button class="s-btn delete"  data-id="${sk.id}" data-action="delete">${t('delete')}</button>
               </div>`;
             } else if (sk.status === 'active') {
               actions = `<div class="skill-actions">
-                <button class="s-btn deactivate" data-id="${sk.id}" data-action="deactivate">⏸ Desativar</button>
-                <button class="s-btn delete"     data-id="${sk.id}" data-action="delete">🗑 Excluir</button>
+                <button class="s-btn deactivate" data-id="${sk.id}" data-action="deactivate">${t('deactivate_btn')}</button>
+                <button class="s-btn delete"     data-id="${sk.id}" data-action="delete">${t('delete')}</button>
               </div>`;
             } else {
               actions = `<div class="skill-actions">
-                <button class="s-btn approve" data-id="${sk.id}" data-action="activate">▶ Reativar</button>
-                <button class="s-btn delete"  data-id="${sk.id}" data-action="delete">🗑 Excluir</button>
+                <button class="s-btn approve" data-id="${sk.id}" data-action="activate">${t('reactivate_btn')}</button>
+                <button class="s-btn delete"  data-id="${sk.id}" data-action="delete">${t('delete')}</button>
               </div>`;
             }
 
@@ -80,14 +80,14 @@ export function render(container) {
                   ${statusBadge(sk.status)}
                 </div>
                 <div class="skill-desc">${sk.description || ''}</div>
-                <div class="skill-meta">prioridade ${sk.priority} · ${safeJsonList(sk.tool_sequence)}</div>
+                <div class="skill-meta">${t('priority_label')} ${sk.priority} · ${safeJsonList(sk.tool_sequence)}</div>
                 <div class="skill-confidence">
                   <div class="skill-confidence-fill ${fillCls}" style="width:${pct}%"></div>
                 </div>
                 ${actions}
               </div>`;
           }).join('')
-        : '<div class="empty">Nenhuma skill registrada ainda.</div>';
+        : `<div class="empty">${t('no_skills_yet')}</div>`;
 
       sl.onclick = async e => {
         const btn = e.target.closest('[data-action]');
@@ -95,22 +95,22 @@ export function render(container) {
         const { id, action } = btn.dataset;
 
         const confirmDelete = action === 'delete'
-          && !confirm('Excluir esta skill permanentemente?');
+          && !confirm(t('delete_skill_confirm'));
         if (confirmDelete) return;
 
         try {
           if (action === 'approve' || action === 'reject') {
             await reviewSkill(id, action);
-            showToast(action === 'approve' ? '✅ Skill aprovada.' : '🛑 Skill rejeitada.', 'success');
+            showToast(action === 'approve' ? t('skill_approved_toast') : t('skill_rejected_toast'), 'success');
           } else if (action === 'activate') {
             await activateSkill(id);
-            showToast('✅ Skill reativada.', 'success');
+            showToast(t('skill_reactivated_toast'), 'success');
           } else if (action === 'deactivate') {
             await deactivateSkill(id);
-            showToast('⏸ Skill desativada.', 'success');
+            showToast(t('skill_deactivated_toast'), 'success');
           } else if (action === 'delete') {
             await deleteAutoSkill(id);
-            showToast('🗑 Skill excluída.', 'success');
+            showToast(t('skill_deleted_toast'), 'success');
           }
 
           const [newSkills, patterns] = await Promise.all([getSkills(), getPatterns()]);
@@ -145,7 +145,7 @@ export function render(container) {
                 <div class="pc-stats">${total} · ${rate}% ✓ · ${p.avg_latency_ms}ms</div>
               </div>`;
           }).join('')
-        : '<div class="empty">Padrões ainda não detectados.</div>';
+        : `<div class="empty">${t('no_patterns_detected')}</div>`;
     }
   }
 
@@ -155,9 +155,9 @@ export function render(container) {
 }
 
 function statusBadge(s) {
-  if (s === 'active')   return '<span class="badge badge-active">ATIVA</span>';
-  if (s === 'rejected') return '<span class="badge badge-rejected">INATIVA</span>';
-  return '<span class="badge badge-proposed">PROPOSTA</span>';
+  if (s === 'active')   return `<span class="badge badge-active">${t('badge_active')}</span>`;
+  if (s === 'rejected') return `<span class="badge badge-rejected">${t('badge_inactive')}</span>`;
+  return `<span class="badge badge-proposed">${t('badge_proposed')}</span>`;
 }
 
 function safeJsonList(v) {

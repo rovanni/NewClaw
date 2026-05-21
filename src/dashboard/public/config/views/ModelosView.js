@@ -12,26 +12,26 @@ export function render(container) {
   container.innerHTML = `
     <div class="page-view">
       <div class="page-header">
-        <h1>🤖 Modelos</h1>
-        <p>Roteamento inteligente — cada tipo de tarefa usa o modelo mais adequado</p>
+        <h1>🤖 ${t('sidebar_models')}</h1>
+        <p>${t('models_page_desc')}</p>
       </div>
 
       <!-- Pipeline visual -->
       <div class="pipeline-wrap">
-        <div class="pipeline-title">Fluxo de Decisão — ModelRouter</div>
+        <div class="pipeline-title">${t('pipeline_title')}</div>
         <div class="pipeline">
           <div class="pipe-node">
             <div class="pipe-box">
               <div class="pipe-icon">📩</div>
-              <div class="pipe-label">Entrada</div>
-              <div class="pipe-value">Mensagem</div>
+              <div class="pipe-label">${t('pipe_input')}</div>
+              <div class="pipe-value">${t('pipe_message')}</div>
             </div>
           </div>
           <div class="pipe-arrow">→</div>
           <div class="pipe-node" style="min-width:130px;">
             <div class="pipe-box accent">
               <div class="pipe-icon">🔎</div>
-              <div class="pipe-label">Classificador</div>
+              <div class="pipe-label">${t('pipe_classifier')}</div>
               <div class="pipe-value" id="ml-pipeClassifier">—</div>
             </div>
           </div>
@@ -39,43 +39,43 @@ export function render(container) {
           <div class="pipe-node">
             <div class="pipe-box">
               <div class="pipe-icon">📂</div>
-              <div class="pipe-label">Categoria</div>
-              <div class="pipe-value">Detectada</div>
+              <div class="pipe-label">${t('pipe_category')}</div>
+              <div class="pipe-value">${t('pipe_detected')}</div>
             </div>
           </div>
           <div class="pipe-arrow">→</div>
           <div class="pipe-expand">
             <div class="pipe-route"><span class="pipe-route-icon">💬</span><span class="pipe-route-cat">chat</span><span class="pipe-route-model" id="ml-pr-chat">—</span></div>
-            <div class="pipe-route"><span class="pipe-route-icon">💻</span><span class="pipe-route-cat">código</span><span class="pipe-route-model" id="ml-pr-code">—</span></div>
-            <div class="pipe-route"><span class="pipe-route-icon">👁️</span><span class="pipe-route-cat">visão</span><span class="pipe-route-model" id="ml-pr-vision">—</span></div>
-            <div class="pipe-route"><span class="pipe-route-icon">⚡</span><span class="pipe-route-cat">leve</span><span class="pipe-route-model" id="ml-pr-light">—</span></div>
-            <div class="pipe-route"><span class="pipe-route-icon">📊</span><span class="pipe-route-cat">análise</span><span class="pipe-route-model" id="ml-pr-analysis">—</span></div>
-            <div class="pipe-route"><span class="pipe-route-icon">🧠</span><span class="pipe-route-cat">execução</span><span class="pipe-route-model" id="ml-pr-execution">—</span></div>
+            <div class="pipe-route"><span class="pipe-route-icon">💻</span><span class="pipe-route-cat">${t('route_code_cat')}</span><span class="pipe-route-model" id="ml-pr-code">—</span></div>
+            <div class="pipe-route"><span class="pipe-route-icon">👁️</span><span class="pipe-route-cat">${t('route_vision_cat')}</span><span class="pipe-route-model" id="ml-pr-vision">—</span></div>
+            <div class="pipe-route"><span class="pipe-route-icon">⚡</span><span class="pipe-route-cat">${t('route_light_cat')}</span><span class="pipe-route-model" id="ml-pr-light">—</span></div>
+            <div class="pipe-route"><span class="pipe-route-icon">📊</span><span class="pipe-route-cat">${t('route_analysis_cat')}</span><span class="pipe-route-model" id="ml-pr-analysis">—</span></div>
+            <div class="pipe-route"><span class="pipe-route-icon">🧠</span><span class="pipe-route-cat">${t('route_execution_cat')}</span><span class="pipe-route-model" id="ml-pr-execution">—</span></div>
           </div>
         </div>
       </div>
 
       <!-- Route cards -->
       <details class="cfg-details" open>
-        <summary>🎛️ Editar Rotas de Modelo</summary>
+        <summary>${t('edit_routes_title')}</summary>
         <div class="cfg-details-body">
           <div class="route-grid">
-            ${routeCard('modelChat',     '💬', 'Chat',     'Conversas gerais',   'glm-5.1:cloud')}
-            ${routeCard('modelCode',     '💻', 'Código',   'Programação',         'gemma4:e4b')}
-            ${routeCard('modelVision',   '👁️', 'Visão',   'Imagens / OCR',       'gemma4:e4b')}
-            ${routeCard('modelLight',    '⚡', 'Leve',     'Respostas rápidas',   'gemma4:e4b')}
-            ${routeCard('modelAnalysis', '📊', 'Análise',  'Cripto / Mercado',    'glm-5:cloud')}
-            ${routeCard('modelExecution','🧠', 'Execução', 'Tools / Raciocínio',  'kimi-k2.6:cloud')}
+            ${routeCard('modelChat',     '💬', 'Chat',                      t('route_chat_desc'),     'glm-5.1:cloud')}
+            ${routeCard('modelCode',     '💻', t('route_code_cat'),         t('route_code_desc'),     'gemma4:e4b')}
+            ${routeCard('modelVision',   '👁️', t('route_vision_cat'),      t('route_vision_desc'),   'gemma4:e4b')}
+            ${routeCard('modelLight',    '⚡', t('route_light_cat'),        t('route_light_desc'),    'gemma4:e4b')}
+            ${routeCard('modelAnalysis', '📊', t('route_analysis_cat'),     t('route_analysis_desc'), 'glm-5:cloud')}
+            ${routeCard('modelExecution','🧠', t('route_execution_cat'),    t('route_execution_desc'),'kimi-k2.6:cloud')}
           </div>
         </div>
       </details>
 
       <!-- Provider + Classifier -->
       <details class="cfg-details">
-        <summary>🔌 Provider & Classificador</summary>
+        <summary>${t('provider_classifier_title')}</summary>
         <div class="cfg-details-body">
           <div class="form-group">
-            <label class="form-label">Provider Padrão</label>
+            <label class="form-label">${t('default_provider_label')}</label>
             <select class="form-select" id="ml-defaultProvider" style="max-width:280px;">
               <option value="ollama">Ollama (Local + Cloud)</option>
               <option value="gemini">Google Gemini</option>
@@ -85,7 +85,7 @@ export function render(container) {
           </div>
           <div id="ml-ollamaSection">
             <div class="form-group">
-              <label class="form-label">Modelo Ollama Principal <span class="badge badge-cloud">cloud</span></label>
+              <label class="form-label">${t('main_ollama_model_label')} <span class="badge badge-cloud">cloud</span></label>
               <div class="model-select-container" id="container-ollamaModel">
                 <input type="text" class="model-select-input" autocomplete="off" id="ollamaModel" placeholder="glm-5.1:cloud">
                 <svg class="msa" width="11" height="11" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
@@ -93,7 +93,7 @@ export function render(container) {
               </div>
             </div>
             <div class="form-group">
-              <label class="form-label">Download de Modelos</label>
+              <label class="form-label">${t('download_models_label')}</label>
               <div class="chips" style="margin-bottom:8px;">
                 <div class="chip" data-pull="qwen2.5:7b">qwen2.5:7b</div>
                 <div class="chip" data-pull="llama3.1:8b">llama3.1:8b</div>
@@ -110,7 +110,7 @@ export function render(container) {
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label class="form-label">Modelo Classificador</label>
+              <label class="form-label">${t('classifier_model_label')}</label>
               <div class="model-select-container" id="container-classifierModel">
                 <input type="text" class="model-select-input" autocomplete="off" id="classifierModel" placeholder="gemma4:31b-cloud">
                 <svg class="msa" width="11" height="11" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
@@ -118,12 +118,12 @@ export function render(container) {
               </div>
             </div>
             <div class="form-group">
-              <label class="form-label">Servidor Classificador</label>
+              <label class="form-label">${t('classifier_server_label')}</label>
               <input type="text" class="form-input" id="ml-classifierServer" placeholder="http://localhost:11434">
             </div>
           </div>
           <div class="form-group">
-            <label class="form-label">Servidor Visão</label>
+            <label class="form-label">${t('vision_server_label')}</label>
             <input type="text" class="form-input" id="ml-visionServer" placeholder="http://localhost:11434" style="max-width:320px;">
           </div>
         </div>
