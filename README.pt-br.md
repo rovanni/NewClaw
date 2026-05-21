@@ -8,80 +8,146 @@
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue.svg)](https://github.com/rovanni/NewClaw)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/rovanni/NewClaw/pulls)
 
-### Agente cognitivo autônomo com tool-calling nativo, grafo de memória semântica e fallback multi-provider.
+---
 
-![NewClaw Logo Banner](docs/assets/banner.png)
+> **Você:** "Minha filha Laura adora matemática."
+>
+> *Dois dias depois:*
+>
+> **Você:** "O que você sabe sobre minha família?"
+> **NewClaw:** "Sua filha Laura adora matemática."
+>
+> *Sem fine-tuning. Sem contexto injetado manualmente. Sem repetir a mesma coisa.*
 
-O NewClaw é um **Agente Cognitivo Avançado** (100% local e privado), desenvolvido em Node.js (TypeScript). Ele é especializado na execução autônoma de tarefas através de chamadas de ferramentas nativas e gerenciamento de memória semântica de longo prazo.
+---
 
-## 🔀 Arquitetura Multi-Canal
-O NewClaw possui uma **arquitetura baseada em MessageBus** que desacopla o núcleo cognitivo das interfaces de comunicação. Isso permite que o agente mantenha uma única memória e identidade consistente enquanto interage em múltiplas plataformas simultaneamente:
+## O assistente de IA que realmente lembra de você
 
-*   **Pipeline Unificado**: Todas as mensagens são normalizadas antes de chegarem ao agente.
-*   **Identidade Persistente**: O agente é o mesmo no Telegram, Discord ou qualquer outro canal.
-*   **Comandos Multi-Plataforma**: Comandos como `/clear` ou `/skills` funcionam em todos os canais.
-*   **Suporte a Mídia**: Processamento nativo de texto, voz, fotos e documentos em todos os adaptadores.
+Todo assistente de IA hoje esquece tudo assim que a sessão termina. Você se repete constantemente. O contexto que você construiu na semana passada sumiu. O agente nunca aprende quem você é de verdade.
 
-## 🧠 Cognição Atômica: Núcleo de Decisão Unificado
+**O NewClaw é diferente.**
 
-O diferencial do NewClaw é a sua **Arquitetura de Cognição Atômica**. Diferente de agentes tradicionais que seguem uma cadeia lenta e linear de etapas separadas, o NewClaw processa toda a inteligência estratégica em um único turno atômico unificado:
+Ele roda localmente na sua máquina, constrói uma memória persistente sobre quem você é, e continua com você no Telegram, WhatsApp e Discord — mesmo depois de semanas ou meses. O mesmo agente. A mesma memória. Sempre.
 
-1.  **Raciocínio Unificado**: O agente pensa, decide a ação e avalia sua própria completude em uma única resposta JSON estruturada.
-2.  **Eficiência Extrema**: Elimina a latência de múltiplas chamadas LLM sequenciais, resolvendo tarefas em apenas 1 ou 2 ciclos de decisão de alto valor.
-3.  **Auto-Avaliação Nativa**: O cálculo de confiança e a validação de objetivos acontecem naturalmente dentro do raciocínio interno do modelo, sem supervisores externos.
-4.  **Robusto e Resiliente**: Possui parsing avançado de JSON com recuperação automática de erros de formatação e vazamentos de markdown.
-5.  **Limpo e Direto**: Prioriza respostas úteis e baseadas em evidências sobre perfeccionismo estético ou execução excessiva.
+---
 
-Isso garante que o agente **"pense uma vez, mas pense profundo"**, oferecendo autonomia de nível profissional com o mínimo de latência.
+## Veja na prática
 
-## 🚀 O Diferencial NewClaw
+### Memória que persiste ao longo do tempo
 
-O que torna o NewClaw único é o seu foco em **Consistência Cognitiva de Longo Prazo** e **Confiabilidade Estrutural**:
-
-*   🛡️ **Privacidade Local-First**: Seus dados, memórias e modelos permanecem sob seu controle total, sem coleta de dados por terceiros.
-*   🗺️ **Modelo de Mundo Evolutivo**: Diferente de bots reativos, o NewClaw constrói um grafo semântico persistente de suas preferências, projetos e infraestrutura.
-*   🏗️ **Raciocínio Estrutural Nativo**: O agente não "adivinha" como usar ferramentas via texto; ele utiliza chamadas de função nativas para interagir com o sistema com precisão cirúrgica.
-*   🔄 **Resiliência Extrema**: Com uma cadeia de fallback multi-provider e roteamento inteligente, o sistema garante continuidade mesmo se um provedor ou modelo falhar.
-*   🎓 **Auto-Otimização de Skills**: O agente observa padrões em sua própria execução e propõe novas habilidades reutilizáveis para se tornar mais eficiente com o tempo.
-
-### 🔄 Ciclo de Aprendizado
-O NewClaw não apenas armazena dados; ele evolui. O sistema segue um loop contínuo de otimização:
-```mermaid
-graph LR
-    A["👁️ Observe"] --> B["🧠 Learn"]
-    B --> C["💡 Propose"]
-    C --> D["✅ Approve"]
-    D --> E["🚀 Apply"]
 ```
-*Observar padrões → Aprender interações → Propor skills → Aprovação do usuário → Aplicar no futuro.*
+Você: "Estou trabalhando em um projeto chamado Orion — é um sistema de gestão de clientes."
+NewClaw: "Entendido. Adicionei Orion aos seus projetos conhecidos."
 
-## ⚙️ Modos de Operação
-O agente atua em quatro modos distintos dependendo da complexidade da tarefa:
-1.  💬 **Responder**: Conversa natural e raciocínio usando contexto de longo prazo.
-2.  🔍 **Buscar**: Síntese multi-fonte e pesquisa baseada em evidências.
-3.  🧭 **Explorar**: Navegação web ativa e interação profunda com páginas.
-4.  ⚡ **Executar**: Comandos diretos no sistema e operações de arquivo precisas.
+[Uma semana depois]
 
-## ✨ Funcionalidades
+Você: "Quais projetos estou tocando?"
+NewClaw: "Você tem o Orion — um sistema de gestão de clientes que você mencionou semana passada."
+```
 
-| Feature | Descrição |
-|---------|-----------|
-| 🧠 **Memória Semântica** | SQLite + FTS5 + embeddings, 7 tipos de nó, 14+ relações e curadoria avançada. |
-| 👁️ **Camada de Atenção** | Sistema de priorização contextual que reclassifica a memória com base no feedback. |
-| 🔀 **Multi-Canal** | Suporte nativo a **Telegram, Discord, WhatsApp, Signal** e **Web**. |
-| 📞 **Tool Calling Nativo** | Chamada estrutural (Ollama/Gemini) para precisão absoluta sem parsing de texto. |
-| 🧭 **Model Router** | Roteamento inteligente para modelos especializados (Chat, Code, Vision, Analysis). |
-| 🔄 **Provider Fallback** | Resiliência multi-provider: Ollama → Gemini → DeepSeek → Groq. |
-| ⚖️ **Governança de Memória**| Memória auto-regulada com decaimento de confiança e arquivamento reversível. |
-| 🎓 **SkillLearner** | Reconhecimento de padrões que alimenta o **Ciclo de Aprendizado**. |
-| 🌐 **Busca Web** | Pesquisa iterativa multi-fonte com síntese e leitura de páginas. |
-| 🧭 **Exploração Ativa** | Navegação web em modo terminal para interação profunda (suporte a `w3m`). |
-| 📊 **Dashboard Web** | Chat em tempo real, config, curadoria de memória e grafo interativo. |
-| 📸 **Snapshots** | Versionamento do grafo: criar, restaurar, listar e deletar snapshots. |
-| 🖥️ **SSH Exec** | Execução remota de comandos via SSH para infraestrutura multi-servidor. |
-| 🛡️ **Auditor de Auto-Diagnóstico** | Comando `/audit` (owner-only): verifica código, runtime e auto-correção. |
+### Contexto que molda respostas futuras
 
-## 🏗️ Arquitetura
+```
+Você: "Odeio reuniões antes das 10h da manhã."
+
+[Alguns dias depois]
+
+Você: "Marca uma reunião com o time amanhã."
+NewClaw: "Vou sugerir horários depois das 10h, já que você prefere assim."
+```
+
+### O mesmo agente em todo lugar
+
+Você manda um áudio no Telegram de manhã. Mais tarde abre o dashboard web. À noite responde pelo Discord. É o mesmo NewClaw — com a mesma memória e o mesmo contexto — em todos os canais.
+
+---
+
+## Instalação Rápida
+
+**Linux/macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | bash
+```
+
+**Windows (PowerShell como Administrador):**
+```powershell
+irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
+```
+
+---
+
+## Como o NewClaw se compara
+
+| Outros assistentes | NewClaw |
+|---|---|
+| Esquece tudo ao fim de cada sessão | Memória persistente — lembra por dias, semanas, meses |
+| Seus dados ficam nos servidores de terceiros | 100% local — seus dados nunca saem da sua máquina |
+| Uma interface (geralmente só um chat) | Telegram, WhatsApp, Discord, Signal, Web — um único agente |
+| Começa do zero em toda conversa | Constrói um modelo de mundo sobre você que evolui com o tempo |
+| Exige assinaturas caras de API | Roda em modelos locais (Ollama) com cloud como fallback opcional |
+
+---
+
+## O que você pode fazer com ele
+
+- **Perguntar qualquer coisa sobre seu histórico** — preferências, decisões, projetos, pessoas que você mencionou
+- **Usar qualquer canal** — Telegram, WhatsApp, Discord, dashboard web, ou todos ao mesmo tempo
+- **Manter seus dados privados** — 100% local, sem cloud obrigatório
+- **Deixá-lo aprender seus padrões** — ele propõe atalhos com base em como você realmente trabalha
+- **Rodar no seu servidor** — serviço persistente em background, suporte a SSH, multi-instância
+
+---
+
+## Funcionalidades
+
+| Feature | O que faz por você |
+|---|---|
+| 🧠 **Memória Semântica** | Lembra pessoas, preferências, projetos, fatos — e as conexões entre eles |
+| 🔀 **Multi-Canal** | Telegram, Discord, WhatsApp, Signal, Web — um agente em todos os canais |
+| 🛡️ **Local-First** | Sem cloud obrigatório. Sem coleta de dados. Roda no seu hardware |
+| 🎓 **Aprendizado de Skills** | Observa como você trabalha e propõe atalhos reutilizáveis com o tempo |
+| 🔄 **Fallback de Provedores** | Ollama → Gemini → DeepSeek → Groq — troca automaticamente se um falhar |
+| 📊 **Dashboard Web** | Grafo de memória visual, chat em tempo real, configuração completa |
+| 🌐 **Busca Web** | Pesquisa temas e sintetiza respostas a partir de múltiplas fontes |
+| 🖥️ **SSH Exec** | Execute comandos em servidores remotos direto pelo chat |
+| 📸 **Snapshots de Memória** | Versione o conhecimento do agente — crie, restaure e compare estados |
+| 🛡️ **Auto-Auditoria** | O agente inspeciona e corrige seu próprio runtime com `/audit` |
+
+---
+
+## Comandos CLI
+
+| Comando | Descrição |
+|---|---|
+| `newclaw start` | Inicia o agente |
+| `newclaw stop` | Encerra o serviço graciosamente |
+| `newclaw status` | Health check, PID e uptime |
+| `newclaw logs -f` | Logs em tempo real |
+| `newclaw update` | Atualiza e recompila o projeto |
+| `newclaw passwd` | Define ou altera a senha do Dashboard |
+| `newclaw onboard` | Configura provedores e chaves de API |
+| `newclaw channels` | Status dos canais (Telegram, Discord, WhatsApp, Signal) |
+| `newclaw channels enable <nome>` | Ativa um canal |
+| `newclaw channels disable <nome>` | Desativa um canal |
+
+---
+
+## Auditor de Auto-Diagnóstico
+
+O NewClaw consegue inspecionar seu próprio código e comportamento em runtime usando o LLM local.
+
+> **Restrito ao proprietário.** Funciona em qualquer canal (Telegram, Discord, etc.).
+
+| Comando | Descrição | Tempo |
+|---|---|---|
+| `/audit` | Auditoria completa — código, runtime, dados, integrações | ~1-3 min |
+| `/audit fix` | Auto-correção — aplica apenas correções de baixo risco validadas | ~1-5 min |
+| `/cancel` | Cancela a operação em andamento (`/cancelar`, `/stop`, `/pare` também funcionam) | instantâneo |
+
+---
+
+<details>
+<summary>⚙️ Como funciona internamente</summary>
 
 ### Fluxo de Mensagens
 
@@ -121,67 +187,34 @@ flowchart LR
 
 ### Sistema de Sessões (v2)
 
-O NewClaw utiliza uma **arquitetura de sessão baseada em eventos** para garantir continuidade total na conversa:
-
 | Componente | Propósito |
-|-----------|---------|
-| **SessionTranscript** | Log JSONL append-only, cada evento gravado com metadados |
+|---|---|
+| **SessionTranscript** | Log JSONL append-only, cada evento gravado com número de sequência e metadados |
 | **SessionManager** | Mutex por sessão, compressão híbrida (20 msgs OU 3000 tokens) |
-| **SessionContext** | Constrói o contexto LLM: prompt → checkpoint → mensagens → memória |
+| **SessionContext** | Constrói o contexto LLM: prompt → checkpoint → mensagens recentes → memória semântica |
 | **SessionLearner** | Extrai fatos das conversas para o grafo cognitivo |
 
-## 🚀 Instalação
+### Modos de Operação
 
-### Instalação Rápida — Linux/macOS (Recomendado)
+O agente atua em quatro modos dependendo da complexidade da tarefa:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | bash
-```
+1. 💬 **Responder** — Conversa natural usando contexto de longo prazo
+2. 🔍 **Buscar** — Síntese multi-fonte e pesquisa baseada em evidências
+3. 🧭 **Explorar** — Navegação web ativa e interação profunda com páginas
+4. ⚡ **Executar** — Comandos diretos no sistema e operações de arquivo
 
-### Instalação Rápida — Windows 🪟
-
-**Execute o PowerShell como Administrador:**
-
-```powershell
-irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
-```
-
-### Comandos CLI
-
-| Comando | Descrição |
-|---|---|
-| `newclaw start` | Inicia o agente |
-| `newclaw stop` | Encerra o serviço graciosamente |
-| `newclaw status` | Health check e uptime |
-| `newclaw logs -f` | Logs em tempo real |
-| `newclaw update` | Atualiza e recompila o projeto |
-| `newclaw passwd` | Define ou altera a senha do Dashboard web |
-| `newclaw onboard` | Configura provedores e chaves de API |
-| `newclaw channels` | Status dos canais (Telegram, Discord, WhatsApp, Signal) |
-| `newclaw channels enable <nome>` | Configura um canal |
-| `newclaw channels disable <nome>` | Desativa um canal |
+</details>
 
 ---
 
-## 🛡️ Auditor de Auto-Diagnóstico
+## Roadmap
 
-O NewClaw inclui um **Agente de Auto-Diagnóstico** que usa o LLM local para analisar seu próprio código e comportamento.
+O roadmap detalhado está em [docs/ROADMAP.md](docs/ROADMAP.md).
 
-> **💡 Como usar:** O comando `/audit` funciona em **qualquer canal** (Telegram, Discord, etc.). É **restrito ao proprietário**.
+## Licença
 
-| Comando | Descrição | Tempo |
-|---------|-----------|-------|
-| `/audit` | Auditoria completa (código + runtime + dados + integração) | ~1-3 min |
-| `/audit fix` | **Auto-correção** — só aplica correções de baixo risco validadas | ~1-5 min |
-| `/cancel` | Cancela a operação em andamento (`/cancelar`, `/stop`, `/pare` também funcionam) | instantâneo |
+MIT — [opensource.org/licenses/MIT](https://opensource.org/licenses/MIT)
 
 ---
 
-## 🗺️ Roadmap
-O roadmap detalhado do projeto pode ser encontrado em [docs/ROADMAP.md](docs/ROADMAP.md).
-
-## 📄 Licença
-Este projeto está sob a licença MIT.
-
----
-*NewClaw — O Futuro dos Agentes Cognitivos Locais* 🪐
+*NewClaw — A IA que realmente lembra de você.* 🪐
