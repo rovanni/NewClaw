@@ -33,6 +33,29 @@ const SYNONYM_MAP: Record<string, string[]> = {
     // Trabalho/Projeto
     'trabalho': ['projeto', 'tarefa', 'atividade', 'entrega', 'job'],
     'projeto': ['trabalho', 'tarefa', 'atividade', 'entrega', 'desenvolvimento'],
+
+    // Família e relações pessoais
+    'filho': ['filha', 'filhos', 'filhas', 'criança', 'bebe', 'crianças', 'família'],
+    'filha': ['filho', 'filhos', 'filhas', 'criança', 'bebe', 'família'],
+    'filhos': ['filho', 'filha', 'filhas', 'crianças', 'família', 'criança'],
+    'família': ['filho', 'filha', 'filhos', 'esposa', 'marido', 'parentes', 'familiar'],
+    'esposa': ['marido', 'conjuge', 'família', 'casamento', 'casado'],
+    'marido': ['esposa', 'conjuge', 'família', 'casamento', 'casado'],
+    'mae': ['mãe', 'mamãe', 'mama', 'família', 'pais'],
+    'mãe': ['mae', 'mamãe', 'mama', 'família', 'pais'],
+    'pai': ['papai', 'papa', 'família', 'pais'],
+    'parente': ['família', 'familiar', 'irmão', 'irmã', 'primo', 'tio'],
+
+    // Identidade pessoal
+    'nome': ['identidade', 'chamado', 'chama', 'apelido', 'sobrenome', 'chamo'],
+    'aniversario': ['aniversário', 'nascimento', 'data', 'nasceu', 'idade', 'anos'],
+    'aniversário': ['aniversario', 'nascimento', 'data', 'nasceu', 'idade'],
+    'idade': ['anos', 'nascimento', 'nasceu', 'aniversário'],
+
+    // Finanças pessoais
+    'carteira': ['portfolio', 'portfólio', 'investimento', 'posição', 'cripto'],
+    'investimento': ['carteira', 'portfolio', 'posição', 'cripto', 'ativo'],
+    'cripto': ['criptomoeda', 'bitcoin', 'carteira', 'portfolio', 'token'],
 };
 
 /**

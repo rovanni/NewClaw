@@ -5,11 +5,13 @@
  *   1. Identity   — Tier 0: sempre incluído, custo fixo
  *   2. Preference — Tier 1: incluído se relevância > 0 ou importância >= 0.8
  *   3. Entity     — Cluster expansion cross-tier: todos os nós não-selecionados que
- *                   mencionam entidades detectadas na query (tickers ALL-CAPS, nomes próprios)
+ *                   mencionam entidades detectadas na query (tickers ALL-CAPS, nomes próprios,
+ *                   termos pessoais PT-BR, palavras após possessivos)
  *   4. Competitive — Fill restante por pontuação composta (relevância + importância + permanência)
  *
  * Budgets por fase são configuráveis via TierBudgets.
  * Nenhuma chamada LLM — relevância via matching de termos/entidades.
+ * LLM fallback é responsabilidade do ContextBuilder (injetado via overrideEntities).
  */
 
 import { MemoryTier, type MemoryIndexEntry } from '../memory/CognitiveMemoryIndex';
@@ -71,20 +73,25 @@ export class ContextPlanner {
     /**
      * Seleciona os nodeIds mais relevantes respeitando as 4 fases hierárquicas.
      *
-     * @param query       Texto da mensagem do usuário
-     * @param summaries   Entradas do CognitiveMemoryIndex (já carregadas)
-     * @param totalBudget Número máximo de nodeIds a retornar (hard cap)
+     * @param query           Texto da mensagem do usuário
+     * @param summaries       Entradas do CognitiveMemoryIndex (já carregadas)
+     * @param totalBudget     Número máximo de nodeIds a retornar (hard cap)
+     * @param overrideEntities Entidades pré-computadas (ex.: vindas de fallback LLM).
+     *                         Quando fornecidas, o extractor determinístico é ignorado.
      */
     plan(
-        query:       string,
-        summaries:   MemoryIndexEntry[],
-        totalBudget: number,
+        query:            string,
+        summaries:        MemoryIndexEntry[],
+        totalBudget:      number,
+        overrideEntities?: string[],
     ): PlannerResult {
         const t0 = Date.now();
         const selected  = new Map<string, string>(); // nodeId → reason
-        const entities  = extractEntities(query);
+        const entitySource = overrideEntities ? 'llm-override' : 'deterministic';
+        const entities  = extractEntities(query, overrideEntities);
         const queryTerms = tokenize(query);
 
+        log.info('[ENTITY] extracted=[' + (entities.join(',') || 'none') + '] source=' + entitySource);
         log.debug('planner_start',
             `summaries=${summaries.length} budget=${totalBudget} ` +
             `entities=[${entities.join(',') || 'none'}] ` +
@@ -209,6 +216,35 @@ const STOP_WORDS = new Set([
     'the','this','that','was','are','have','has','what','how','can','do','did',
 ]);
 
+/**
+ * Vocabulário de termos pessoais/familiares em PT-BR.
+ * Permite que o extractor detecte entidades em queries como
+ * "Qual o nome do meu filho?" sem depender de LLM.
+ */
+const PERSONAL_ENTITY_TERMS = new Set([
+    // Família
+    'filho', 'filha', 'filhos', 'filhas',
+    'esposa', 'marido', 'conjuge',
+    'pai', 'mae', 'pais', 'familia', 'familiar',
+    'irmao', 'irma', 'irmaos', 'irmas',
+    'avo', 'avo', 'neto', 'neta', 'sobrinho', 'sobrinha',
+    'primo', 'prima', 'tio', 'tia',
+    // Identificação pessoal
+    'nome', 'sobrenome', 'apelido', 'identidade',
+    'idade', 'aniversario', 'nascimento',
+    // Finanças pessoais
+    'carteira', 'portfolio', 'investimento', 'posicao',
+    'criptomoeda', 'criptomoedas', 'acao', 'acoes', 'fundos',
+    // Trabalho/projetos
+    'projeto', 'empresa', 'trabalho', 'emprego', 'cargo',
+    'disciplina', 'aula', 'aluno', 'professor', 'universidade',
+]);
+
+/** Remove acentos para comparação normalizada. */
+function stripAccents(text: string): string {
+    return text.normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
 function tokenize(text: string): string[] {
     return text.toLowerCase()
         .split(/\W+/)
@@ -216,27 +252,65 @@ function tokenize(text: string): string[] {
 }
 
 /**
- * Detecta entidades na query:
- *   - Tokens ALL-CAPS com ≥ 2 chars (tickers: BTC, ETH, RIVER)
- *   - Palavras capitalizadas que não iniciam a frase (substantivos próprios)
+ * Detecta entidades na query via 4 estratégias determinísticas:
+ *   1. Tokens ALL-CAPS (tickers: BTC, ETH, RIVER)
+ *   2. Palavras capitalizadas no meio da frase (nomes próprios)
+ *   3. Vocabulário de termos pessoais/familiares PT-BR
+ *   4. Palavras após possessivos (meu/minha/meus/minhas → filho, esposa…)
+ *
+ * Aceita overrideEntities para injeção de entidades vindas de fallback LLM.
  */
-function extractEntities(query: string): string[] {
-    const results: string[] = [];
+export function extractEntities(query: string, overrideEntities?: string[]): string[] {
+    if (overrideEntities && overrideEntities.length > 0) {
+        return [...new Set(overrideEntities.map(e => e.toLowerCase()))];
+    }
 
-    // ALL-CAPS tickers (BTC, RIVER, ETH)
+    const results = new Set<string>();
+    const queryNorm = stripAccents(query.toLowerCase());
+
+    // 1. ALL-CAPS tickers (BTC, RIVER, ETH, PI)
     const tickers = query.match(/\b[A-Z]{2,}\b/g) ?? [];
-    results.push(...tickers);
+    for (const t of tickers) results.add(t.toLowerCase());
 
-    // Palavras capitalizadas no meio/fim da frase
+    // 2. Palavras capitalizadas no meio/fim da frase (nomes próprios)
     const words = query.split(/\s+/);
     for (let i = 1; i < words.length; i++) {
         const w = words[i].replace(/[^A-Za-zÀ-ú]/g, '');
         if (w.length >= 3 && /^[A-ZÀ-Ú]/.test(w) && !/^[A-Z]{2,}$/.test(w)) {
-            results.push(w.toLowerCase());
+            results.add(w.toLowerCase());
         }
     }
 
-    return [...new Set(results.map(e => e.toLowerCase()))];
+    // 3. Termos pessoais/familiares (dicionário PT-BR, comparação sem acentos)
+    for (const term of PERSONAL_ENTITY_TERMS) {
+        if (queryNorm.includes(term)) {
+            results.add(term);
+        }
+    }
+
+    // 4. Palavras após possessivos: "meu filho" → "filho", "minha esposa" → "esposa"
+    const possessiveMatches = query.matchAll(
+        /\b(?:meu|minha|meus|minhas|nosso|nossa|nossos|nossas)\s+(\w+)/gi
+    );
+    for (const m of possessiveMatches) {
+        const entity = stripAccents(m[1].toLowerCase());
+        if (entity.length >= 3) results.add(entity);
+    }
+
+    return [...results];
+}
+
+/**
+ * Retorna true se a query contém indicadores de memória pessoal/familiar.
+ * Usado pelo ContextBuilder para elevar o tier antes do planner.
+ */
+export function isPersonalMemoryQuery(query: string): boolean {
+    const qn = stripAccents(query.toLowerCase());
+    for (const term of PERSONAL_ENTITY_TERMS) {
+        if (qn.includes(term)) return true;
+    }
+    if (/\b(?:meu|minha|meus|minhas)\s+\w+/i.test(query)) return true;
+    return false;
 }
 
 /** Fração de query-terms que batem na entrada (0..1). */

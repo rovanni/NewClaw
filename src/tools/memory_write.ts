@@ -170,6 +170,17 @@ export class MemoryWriteTool implements ToolExecutor {
             }
         }
 
+        // Fatos sociais/familiares: sempre conectar diretamente ao USER para
+        // garantir Degree > 0 independente da confiança do domínio.
+        if (this.isFamilyOrSocialContent(name as string || '', content as string || '')) {
+            const userNode = this.memoryManager.getNode('user_identity')
+                ?? this.memoryManager.getNode('core_user');
+            if (userNode) {
+                const familyRel = this.inferFamilyRelation(content as string || '');
+                try { this.memoryManager.addEdge(userNode.id, id, familyRel); } catch { /* ignore */ }
+            }
+        }
+
         if (domain) this.facade.setNodeDomain(id, domain as string);
 
         return { success: true, output: `✅ Nó "${id}" (${type}) criado e auto-conectado ao grafo. Use action=connect para ligações adicionais.` };
@@ -445,6 +456,26 @@ export class MemoryWriteTool implements ToolExecutor {
         let intersection = 0;
         for (const w of wordsA) { if (wordsB.has(w)) intersection++; }
         return intersection / Math.max(wordsA.size, wordsB.size);
+    }
+
+    /**
+     * Detecta se o conteúdo é sobre família ou relações pessoais do usuário.
+     * Usado para garantir conexão direta ao USER node (Degree > 0).
+     */
+    private isFamilyOrSocialContent(name: string, content: string): boolean {
+        const text = (name + ' ' + content).toLowerCase();
+        return /\b(filho|filha|filhos|filhas|esposa|marido|familia|familiar|irmao|irma|irmão|irmã|mae|mãe|pai|conjuge|cônjuge|parente|casado|solteiro|crianca|criança|nasceu|aniversario|aniversário|namorad)\b/.test(text);
+    }
+
+    /**
+     * Infere a relação semântica correta para fatos familiares.
+     */
+    private inferFamilyRelation(content: string): string {
+        const text = content.toLowerCase();
+        if (/\b(filho|filha|filhos|filhas|crianca|criança)\b/.test(text)) return 'has_child';
+        if (/\b(esposa|marido|conjuge|cônjuge|namorad|casad)\b/.test(text)) return 'has_spouse';
+        if (/\b(pai|mae|mãe|irmao|irma|irmão|irmã|familiar|familia|família)\b/.test(text)) return 'has_family';
+        return 'has_relation';
     }
 
     /**

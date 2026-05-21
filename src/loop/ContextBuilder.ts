@@ -15,7 +15,7 @@ import type { EpisodicMemoryService } from '../memory/EpisodicMemoryService';
 import type { CognitiveReflectionEngine } from '../memory/CognitiveReflectionEngine';
 import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 import { CognitiveMemoryIndex } from '../memory/CognitiveMemoryIndex';
-import { ContextPlanner } from './ContextPlanner';
+import { ContextPlanner, isPersonalMemoryQuery } from './ContextPlanner';
 import { estimateTokens, truncateToChars } from './ContextBudget';
 import { createLogger } from '../shared/AppLogger';
 
@@ -48,6 +48,17 @@ function isSocialOrGreeting(query: string): boolean {
     return GREETING_PATTERNS.some(p => p.test(trimmed));
 }
 
+/**
+ * Extrator de entidades via LLM (fallback opcional).
+ * Injetado via ContextBuilder.setEntityFallbackExtractor().
+ * Nunca está no hot path — só é chamado quando o extractor
+ * determinístico não encontrou entidades E o planner selecionou 0 nós.
+ */
+export type EntityFallbackExtractor = (query: string) => Promise<{
+    entities: string[];
+    confidence: number;
+}>;
+
 interface RankedNode {
     id: string;
     name: string;
@@ -68,6 +79,7 @@ export class ContextBuilder {
     private retriever: MultiLayerRetriever | null = null;
     private cognitiveIndex: CognitiveMemoryIndex | null = null;
     private contextPlanner: ContextPlanner | null = null;
+    private entityFallbackExtractor?: EntityFallbackExtractor;
 
     // ── Attention Budget ──────────────────────────────────────
     // Total memory block char cap (~900 tokens, within ContextBudget.memoryMaxTokens=1000).
@@ -96,6 +108,11 @@ export class ContextBuilder {
         this.reflectionEngine = memory.getCognitiveReflectionEngine();
     }
 
+    /** Injeta um extractor de entidades via LLM para uso como fallback. */
+    setEntityFallbackExtractor(fn: EntityFallbackExtractor): void {
+        this.entityFallbackExtractor = fn;
+    }
+
     /**
      * Build compact context for LLM prompt.
      * Returns a string of ~500-800 chars with the most relevant information.
@@ -117,13 +134,21 @@ export class ContextBuilder {
             return '';
         }
 
-        // Tier-based caps: minimal keeps only a few nodes, no heavy blocks
-        const maxNodes    = tier === 'minimal' ? 3 : tier === 'normal' ? 5 : this.DEFAULT_MAX_EXPANDED_NODES;
-        const maxMemChars = tier === 'minimal' ? 800 : tier === 'normal' ? 1600 : this.MAX_MEMORY_CHARS;
-        const useReflection = tier === 'full';
-        const useEpisodic   = tier !== 'minimal';
+        // Cognitive Salience Routing: queries sobre memória pessoal/familiar
+        // recebem pelo menos tier=normal, independente da classificação de intent.
+        let effectiveTier = tier;
+        if (tier === 'minimal' && isPersonalMemoryQuery(query)) {
+            effectiveTier = 'normal';
+            log.info('[SALIENCE] personal-memory=true → upgraded tier minimal→normal');
+        }
 
-        log.info(`[CONTEXT-TIER] tier=${tier} maxNodes=${maxNodes} maxChars=${maxMemChars} reflection=${useReflection} episodic=${useEpisodic}`);
+        // Tier-based caps: minimal keeps only a few nodes, no heavy blocks
+        const maxNodes    = effectiveTier === 'minimal' ? 3 : effectiveTier === 'normal' ? 5 : this.DEFAULT_MAX_EXPANDED_NODES;
+        const maxMemChars = effectiveTier === 'minimal' ? 800 : effectiveTier === 'normal' ? 1600 : this.MAX_MEMORY_CHARS;
+        const useReflection = effectiveTier === 'full';
+        const useEpisodic   = effectiveTier !== 'minimal';
+
+        log.info(`[CONTEXT-TIER] tier=${effectiveTier} maxNodes=${maxNodes} maxChars=${maxMemChars} reflection=${useReflection} episodic=${useEpisodic}`);
 
         try {
             // Record interaction in the episode
@@ -242,8 +267,39 @@ export class ContextBuilder {
                 `plannerLatency=${m.plannerLatencyMs}ms`
             );
 
-            const selectedSet = new Set(planResult.selectedNodeIds);
-            const filtered = candidates.filter(c => selectedSet.has(c.id));
+            let selectedSet = new Set(planResult.selectedNodeIds);
+            let filtered = candidates.filter(c => selectedSet.has(c.id));
+
+            // LLM Fallback: acionado apenas quando o planner selecionou 0 nós
+            // E a query é sobre memória pessoal E um extractor foi injetado.
+            // Nunca está no caminho crítico padrão (99% das queries).
+            if (
+                filtered.length === 0 &&
+                isPersonalMemoryQuery(query) &&
+                this.entityFallbackExtractor
+            ) {
+                try {
+                    log.info('[ENTITY-LLM] fallback activated');
+                    const llmResult = await this.entityFallbackExtractor(query);
+                    if (llmResult.entities.length > 0) {
+                        log.info(
+                            `[ENTITY-LLM] entities=[${llmResult.entities.join(',')}] ` +
+                            `confidence=${llmResult.confidence.toFixed(2)}`
+                        );
+                        const fallbackPlan = this.getContextPlanner().plan(
+                            query, summaries, maxNodes, llmResult.entities
+                        );
+                        const fallbackSet = new Set(fallbackPlan.selectedNodeIds);
+                        const fallbackFiltered = candidates.filter(c => fallbackSet.has(c.id));
+                        if (fallbackFiltered.length > 0) {
+                            filtered = fallbackFiltered;
+                            selectedSet = fallbackSet;
+                        }
+                    }
+                } catch (llmErr) {
+                    log.warn('[ENTITY-LLM] fallback failed — using deterministic result: ' + String(llmErr));
+                }
+            }
 
             // Mantém candidatos que o planner selecionou; usa todos se planner ficou sem
             const pool = filtered.length > 0 ? filtered : candidates;
