@@ -1,0 +1,264 @@
+/**
+ * ContextPlanner — Seleção hierárquica de nós de memória por tier cognitivo
+ *
+ * Pipeline (4 fases):
+ *   1. Identity   — Tier 0: sempre incluído, custo fixo
+ *   2. Preference — Tier 1: incluído se relevância > 0 ou importância >= 0.8
+ *   3. Entity     — Cluster expansion cross-tier: todos os nós não-selecionados que
+ *                   mencionam entidades detectadas na query (tickers ALL-CAPS, nomes próprios)
+ *   4. Competitive — Fill restante por pontuação composta (relevância + importância + permanência)
+ *
+ * Budgets por fase são configuráveis via TierBudgets.
+ * Nenhuma chamada LLM — relevância via matching de termos/entidades.
+ */
+
+import { MemoryTier, type MemoryIndexEntry } from '../memory/CognitiveMemoryIndex';
+import { createLogger } from '../shared/AppLogger';
+
+const log = createLogger('ContextPlanner');
+
+// ── Tipos públicos ────────────────────────────────────────────────────────────
+
+/** Máximo de slots por fase do planner. Configurável para tuning futuro. */
+export interface TierBudgets {
+    identity:    number;   // Tier 0 — core identity
+    preference:  number;   // Tier 1 — preferences + traits
+    entity:      number;   // entity-centric cluster expansion (cross-tier)
+    competitive: number;   // fill competitivo (Tiers 2-4 restantes)
+}
+
+export const DEFAULT_TIER_BUDGETS: TierBudgets = {
+    identity:    2,
+    preference:  3,
+    entity:      3,
+    competitive: 4,
+};
+
+/** Métricas cognitivas retornadas pelo planner para logging e observabilidade. */
+export interface PlannerMetrics {
+    tier0Selected:       number;
+    tier1Selected:       number;
+    entityExpansions:    number;
+    competitiveSelected: number;
+    skippedDueBudget:    number;
+    expansionHitRate:    number;   // entityExpansions / entitiesDetected (0 se sem entidades)
+    plannerLatencyMs:    number;
+}
+
+export interface PlannerResult {
+    selectedNodeIds: string[];
+    skippedCount:    number;
+    entityExpanded:  string[];   // entidades únicas que causaram expansão
+    budget: {
+        reserved:    number;     // slots usados em Tier 0+1
+        entity:      number;     // slots usados em entity expansion
+        competitive: number;     // slots usados no fill competitivo
+        total:       number;
+    };
+    reasons: Record<string, string>;   // nodeId → motivo da seleção
+    metrics: PlannerMetrics;
+}
+
+// ── Classe principal ──────────────────────────────────────────────────────────
+
+export class ContextPlanner {
+    private readonly budgets: TierBudgets;
+
+    constructor(budgets: Partial<TierBudgets> = {}) {
+        this.budgets = { ...DEFAULT_TIER_BUDGETS, ...budgets };
+    }
+
+    /**
+     * Seleciona os nodeIds mais relevantes respeitando as 4 fases hierárquicas.
+     *
+     * @param query       Texto da mensagem do usuário
+     * @param summaries   Entradas do CognitiveMemoryIndex (já carregadas)
+     * @param totalBudget Número máximo de nodeIds a retornar (hard cap)
+     */
+    plan(
+        query:       string,
+        summaries:   MemoryIndexEntry[],
+        totalBudget: number,
+    ): PlannerResult {
+        const t0 = Date.now();
+        const selected  = new Map<string, string>(); // nodeId → reason
+        const entities  = extractEntities(query);
+        const queryTerms = tokenize(query);
+
+        log.debug('planner_start',
+            `summaries=${summaries.length} budget=${totalBudget} ` +
+            `entities=[${entities.join(',') || 'none'}] ` +
+            `tierBudgets=${JSON.stringify(this.budgets)}`
+        );
+
+        // ── Fase 1: Core Identity (Tier 0) ──────────────────────────────────
+        const identityCap = Math.min(this.budgets.identity, totalBudget);
+        for (const e of sortByImportance(summaries.filter(e => e.tier === MemoryTier.CORE_IDENTITY))) {
+            if (selected.size >= identityCap) break;
+            selected.set(e.nodeId, `tier0:identity imp=${e.importance.toFixed(2)}`);
+        }
+        const tier0Count = selected.size;
+        log.info('[PLANNER] tier0 selected=' + tier0Count);
+
+        // ── Fase 2: Permanent (Tier 1) ──────────────────────────────────────
+        const permCap = Math.min(this.budgets.identity + this.budgets.preference, totalBudget);
+        for (const e of sortByImportance(summaries.filter(e =>
+            e.tier === MemoryTier.PERMANENT && !selected.has(e.nodeId)
+        ))) {
+            if (selected.size >= permCap) break;
+            const rel = quickRelevance(queryTerms, e);
+            if (rel > 0 || e.importance >= 0.8) {
+                selected.set(e.nodeId,
+                    `tier1:pref rel=${rel.toFixed(2)} imp=${e.importance.toFixed(2)}`
+                );
+            }
+        }
+        const tier1Count = selected.size - tier0Count;
+        log.info('[PLANNER] tier1 selected=' + tier1Count);
+
+        const reservedCount = selected.size;
+
+        // ── Fase 3: Entity Cluster Expansion (cross-tier) ───────────────────
+        // Expande TODOS os tiers não-selecionados que mencionam as entidades detectadas.
+        // Garante que holdings, preferências, estratégias e histórico relacionados
+        // ao tópico entrem no contexto sem depender de similaridade semântica.
+        const entityExpanded: string[] = [];
+        let entityCount = 0;
+
+        if (entities.length > 0 && selected.size < totalBudget) {
+            const entityCap = Math.min(reservedCount + this.budgets.entity, totalBudget);
+
+            const clusterCandidates = summaries
+                .filter(e => !selected.has(e.nodeId) && matchesAnyEntity(entities, e))
+                // Tier menor = prioridade maior (identity > perm > entities > episodic)
+                .sort((a, b) => (b.importance - a.importance) || (a.tier - b.tier));
+
+            for (const e of clusterCandidates) {
+                if (selected.size >= entityCap) break;
+                const matchedEntity = entities.find(en => entryMatchesEntity(en, e)) ?? '';
+                selected.set(e.nodeId,
+                    `tier${e.tier}:entity=${matchedEntity} imp=${e.importance.toFixed(2)}`
+                );
+                entityExpanded.push(matchedEntity);
+                entityCount++;
+            }
+        }
+
+        const expansionHitRate = entities.length > 0
+            ? Math.min(1, entityCount / entities.length)
+            : 0;
+        log.info('[PLANNER] entity expansion=' + entityCount +
+            ' entities=[' + entities.join(',') + ']');
+
+        // ── Fase 4: Competitive fill (Tiers 2-4 restantes) ──────────────────
+        const compCap = Math.min(selected.size + this.budgets.competitive, totalBudget);
+        const competitive = summaries
+            .filter(e => !selected.has(e.nodeId) && e.tier >= MemoryTier.ACTIVE_ENTITIES)
+            .map(e => ({
+                entry: e,
+                score: quickRelevance(queryTerms, e) * 0.6 +
+                       e.importance               * 0.3 +
+                       e.permanence               * 0.1,
+            }))
+            .sort((a, b) => b.score - a.score);
+
+        let compCount = 0;
+        for (const { entry: e, score } of competitive) {
+            if (selected.size >= compCap) break;
+            selected.set(e.nodeId, `tier${e.tier}:comp score=${score.toFixed(2)}`);
+            compCount++;
+        }
+        log.info('[PLANNER] competitive selected=' + compCount);
+
+        const totalSelected = selected.size;
+        const skipped = summaries.length - totalSelected;
+        log.info('[PLANNER] skipped due budget=' + skipped);
+
+        const metrics: PlannerMetrics = {
+            tier0Selected:       tier0Count,
+            tier1Selected:       tier1Count,
+            entityExpansions:    entityCount,
+            competitiveSelected: compCount,
+            skippedDueBudget:    skipped,
+            expansionHitRate,
+            plannerLatencyMs:    Date.now() - t0,
+        };
+
+        return {
+            selectedNodeIds: [...selected.keys()],
+            skippedCount:    skipped,
+            entityExpanded:  [...new Set(entityExpanded)],
+            budget: {
+                reserved:    reservedCount,
+                entity:      entityCount,
+                competitive: compCount,
+                total:       totalSelected,
+            },
+            reasons: Object.fromEntries(selected),
+            metrics,
+        };
+    }
+}
+
+// ── Funções puras (fora da classe para testabilidade) ─────────────────────────
+
+const STOP_WORDS = new Set([
+    'o','a','os','as','de','do','da','dos','das','em','no','na','e','um','uma',
+    'para','com','por','que','não','como','mas','se','já','me','te','você','ele',
+    'ela','eu','is','an','and','or','of','to','in','at','on','as','it','be',
+    'the','this','that','was','are','have','has','what','how','can','do','did',
+]);
+
+function tokenize(text: string): string[] {
+    return text.toLowerCase()
+        .split(/\W+/)
+        .filter(w => w.length >= 3 && !STOP_WORDS.has(w));
+}
+
+/**
+ * Detecta entidades na query:
+ *   - Tokens ALL-CAPS com ≥ 2 chars (tickers: BTC, ETH, RIVER)
+ *   - Palavras capitalizadas que não iniciam a frase (substantivos próprios)
+ */
+function extractEntities(query: string): string[] {
+    const results: string[] = [];
+
+    // ALL-CAPS tickers (BTC, RIVER, ETH)
+    const tickers = query.match(/\b[A-Z]{2,}\b/g) ?? [];
+    results.push(...tickers);
+
+    // Palavras capitalizadas no meio/fim da frase
+    const words = query.split(/\s+/);
+    for (let i = 1; i < words.length; i++) {
+        const w = words[i].replace(/[^A-Za-zÀ-ú]/g, '');
+        if (w.length >= 3 && /^[A-ZÀ-Ú]/.test(w) && !/^[A-Z]{2,}$/.test(w)) {
+            results.push(w.toLowerCase());
+        }
+    }
+
+    return [...new Set(results.map(e => e.toLowerCase()))];
+}
+
+/** Fração de query-terms que batem na entrada (0..1). */
+function quickRelevance(queryTerms: string[], entry: MemoryIndexEntry): number {
+    if (queryTerms.length === 0) return 0;
+    const haystack = `${entry.entity} ${entry.summary} ${entry.keywords.join(' ')}`.toLowerCase();
+    let hits = 0;
+    for (const term of queryTerms) {
+        if (haystack.includes(term)) hits++;
+    }
+    return hits / queryTerms.length;
+}
+
+function entryMatchesEntity(entity: string, entry: MemoryIndexEntry): boolean {
+    const haystack = `${entry.entity} ${entry.keywords.join(' ')} ${entry.summary}`.toLowerCase();
+    return haystack.includes(entity);
+}
+
+function matchesAnyEntity(entities: string[], entry: MemoryIndexEntry): boolean {
+    return entities.some(en => entryMatchesEntity(en, entry));
+}
+
+function sortByImportance(entries: MemoryIndexEntry[]): MemoryIndexEntry[] {
+    return [...entries].sort((a, b) => b.importance - a.importance);
+}

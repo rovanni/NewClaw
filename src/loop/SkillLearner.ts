@@ -423,8 +423,10 @@ export class SkillLearner {
 
     /**
      * Create skill proposals from strong patterns with manual approval.
+     * Disable by setting SKILL_LEARNER_PROPOSALS=false in .env
      */
     private tryCreateSkillProposal(): void {
+        if (process.env.SKILL_LEARNER_PROPOSALS === 'false') return;
         const patterns = this.db.prepare(
             `SELECT pattern, tool_name, success_count, fail_count, avg_latency_ms
              FROM skill_patterns
@@ -444,9 +446,9 @@ export class SkillLearner {
             const skill = this.createSkillFromPattern(item.pattern, item.tool_name, item.success_count);
             if (!skill) continue;
 
-            // Evita duplicatas por nome (mesmo nome já proposto ou ativo)
+            // Evita duplicatas por nome — inclui rejected para não recriar skill já avaliada
             const nameExists = this.db.prepare(
-                "SELECT id FROM auto_skills WHERE name = ? AND status IN ('active', 'proposed') LIMIT 1"
+                "SELECT id FROM auto_skills WHERE name = ? LIMIT 1"
             ).get(skill.name) as { id: string } | undefined;
 
             if (nameExists) continue;

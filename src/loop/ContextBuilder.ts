@@ -14,6 +14,8 @@ import type { DomainSummaryService } from '../memory/DomainSummaryService';
 import type { EpisodicMemoryService } from '../memory/EpisodicMemoryService';
 import type { CognitiveReflectionEngine } from '../memory/CognitiveReflectionEngine';
 import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
+import { CognitiveMemoryIndex } from '../memory/CognitiveMemoryIndex';
+import { ContextPlanner } from './ContextPlanner';
 import { estimateTokens, truncateToChars } from './ContextBudget';
 import { createLogger } from '../shared/AppLogger';
 
@@ -64,6 +66,8 @@ export class ContextBuilder {
     private episodicMemoryService: EpisodicMemoryService;
     private reflectionEngine: CognitiveReflectionEngine;
     private retriever: MultiLayerRetriever | null = null;
+    private cognitiveIndex: CognitiveMemoryIndex | null = null;
+    private contextPlanner: ContextPlanner | null = null;
 
     // ── Attention Budget ──────────────────────────────────────
     // Total memory block char cap (~900 tokens, within ContextBudget.memoryMaxTokens=1000).
@@ -73,7 +77,9 @@ export class ContextBuilder {
     private readonly BUDGET_EPISODIC   = 400;   // recent episodes block
     private readonly BUDGET_DOMAIN     = 250;   // domain summary block
     private readonly MIN_NODES_CHARS   = 600;   // minimum chars always reserved for detail nodes
-    private readonly MAX_NODES         = 8;     // absolute upper limit (budget may shrink this)
+    // ContextPlanner pre-selects by tier/entity; 8 expanded nodes is sufficient —
+    // the planner's cognitive selection replaces the need for a large flat pool.
+    private readonly DEFAULT_MAX_EXPANDED_NODES = 8;
     private readonly MAX_SUMMARY       = 200;   // chars per node content
     private readonly MAX_RELATIONS     = 3;
 
@@ -112,7 +118,7 @@ export class ContextBuilder {
         }
 
         // Tier-based caps: minimal keeps only a few nodes, no heavy blocks
-        const maxNodes    = tier === 'minimal' ? 3 : tier === 'normal' ? 5 : this.MAX_NODES;
+        const maxNodes    = tier === 'minimal' ? 3 : tier === 'normal' ? 5 : this.DEFAULT_MAX_EXPANDED_NODES;
         const maxMemChars = tier === 'minimal' ? 800 : tier === 'normal' ? 1600 : this.MAX_MEMORY_CHARS;
         const useReflection = tier === 'full';
         const useEpisodic   = tier !== 'minimal';
@@ -154,7 +160,7 @@ export class ContextBuilder {
             const nodesBudget = Math.max(this.MIN_NODES_CHARS, maxMemChars - headerChars);
 
             // ── Block 4: semantic detail nodes (budget-aware, tier-capped) ──
-            const ranked = (await this.domainAwareRankAndSelect(query, nodesBudget)).slice(0, maxNodes);
+            const ranked = await this.rankAndSelectHierarchically(query, nodesBudget, maxNodes);
 
             // Record accessed nodes in the episode
             if (conversationId && ranked.length > 0) {
@@ -183,10 +189,68 @@ export class ContextBuilder {
                 ? `${blocks.join('\n---\n')}\n---\n${detailsStr}`
                 : detailsStr;
 
-            log.info(`[BUDGET] memory block: ${estimateTokens(result)} tokens | blocks=${blocks.length} nodes=${ranked.length} chars=${result.length}/${this.MAX_MEMORY_CHARS}`);
+            log.info(`[BUDGET] memory block: ${estimateTokens(result)} tokens | blocks=${blocks.length} nodes=${ranked.length} chars=${result.length}/${this.MAX_MEMORY_CHARS} maxExpandedNodes=${maxNodes}`);
             return result;
         } catch {
             return this.memory.getContext(200);
+        }
+    }
+
+    private getCognitiveIndex(): CognitiveMemoryIndex {
+        if (!this.cognitiveIndex) this.cognitiveIndex = new CognitiveMemoryIndex(this.memory.getDatabase());
+        return this.cognitiveIndex;
+    }
+
+    private getContextPlanner(): ContextPlanner {
+        if (!this.contextPlanner) this.contextPlanner = new ContextPlanner();
+        return this.contextPlanner;
+    }
+
+    /**
+     * Pipeline hierárquico por tier cognitivo:
+     *   semanticSearch → getSummaries (índice) → ContextPlanner → rankNodes
+     *
+     * O ContextPlanner garante que nós de Tier 0 (identity) sempre entram,
+     * Tier 1 (preference/trait) entram por relevância ou importância alta,
+     * e o restante do budget é preenchido competitivamente.
+     *
+     * Em caso de falha, cai no pipeline legado (domainAwareRankAndSelect).
+     */
+    private async rankAndSelectHierarchically(
+        query:     string,
+        charBudget: number,
+        maxNodes:  number,
+    ): Promise<RankedNode[]> {
+        try {
+            const candidates = await this.semanticSearch(query);
+            if (candidates.length === 0) return this.rankAndSelect(query, charBudget);
+
+            const nodeIds = candidates.map(c => c.id);
+            const summaries = this.getCognitiveIndex().getSummaries(nodeIds);
+            log.debug(`[INDEX] summaries retrieved=${summaries.length} from candidates=${candidates.length}`);
+
+            const planResult = this.getContextPlanner().plan(query, summaries, maxNodes);
+            const m = planResult.metrics;
+            log.info(
+                `[COGNITIVE-METRICS] ` +
+                `summariesRetrieved=${summaries.length} summariesSelected=${planResult.budget.total} ` +
+                `nodesExpanded=${planResult.budget.total} ` +
+                `tier0=${m.tier0Selected} tier1=${m.tier1Selected} ` +
+                `entity=${m.entityExpansions} competitive=${m.competitiveSelected} ` +
+                `skipped=${m.skippedDueBudget} ` +
+                `expansionHitRate=${m.expansionHitRate.toFixed(2)} ` +
+                `plannerLatency=${m.plannerLatencyMs}ms`
+            );
+
+            const selectedSet = new Set(planResult.selectedNodeIds);
+            const filtered = candidates.filter(c => selectedSet.has(c.id));
+
+            // Mantém candidatos que o planner selecionou; usa todos se planner ficou sem
+            const pool = filtered.length > 0 ? filtered : candidates;
+            return this.rankNodes(pool, charBudget);
+        } catch (err) {
+            log.warn('hierarchical_fallback', `Falling back to domain pipeline: ${err}`);
+            return this.domainAwareRankAndSelect(query, charBudget);
         }
     }
 
@@ -232,7 +296,7 @@ export class ContextBuilder {
                           (recency * this.W_RECENCY);
 
             if (node.type === 'preference') score *= 1.5;
-            if (node.type === 'identity') score *= 1.3;
+            if (node.type === 'identity')   score *= 1.3;
 
             // Epistemic weighting: facts are more reliable, assumptions less so
             const es = (node as MemoryNode & { epistemic_status?: string }).epistemic_status;
@@ -244,6 +308,7 @@ export class ContextBuilder {
             if (scope === 'USER_MEMORY')   score *= 1.2;
             if (scope === 'TASK_MEMORY')   score *= 1.1;
             if (scope === 'SYSTEM_MEMORY') score *= 0.9;
+
             // AGENT_MEMORY: neutral (1.0)
 
             return {
@@ -264,7 +329,7 @@ export class ContextBuilder {
         const result: RankedNode[] = [];
         let usedChars = 'Contexto: '.length;
         for (const n of scored) {
-            if (result.length >= this.MAX_NODES) break;
+            if (result.length >= this.DEFAULT_MAX_EXPANDED_NODES) break;
             const epistemicPrefix = n.epistemicStatus === 'belief' ? '[crença] '
                 : n.epistemicStatus === 'assumption' ? '[suposição] ' : '';
             const entryLen = n.name.length + n.type.length + epistemicPrefix.length + n.summary.length
