@@ -2,8 +2,14 @@ node_modules/
 dist/
 data/
 tmp/
-docs/
 .env
+
+# docs — apenas assets, ROADMAP e walkthrough são públicos
+docs/Auditorias/
+docs/melhorias/
+docs/issues/
+docs/task.md
+docs/plano-correcao-bugs.md
 
 # SQLite
 *.sqlite
@@ -40,8 +46,7 @@ Thumbs.db
 # Claude Code
 .claude/
 
-# Relatórios e Auditoria
-docs/AUDIT_CHECKLIST_*.md
+# Relatórios de auditoria na raiz (legado)
 ARCHITECTURE_REVIEW.md
 AUDIT_PART*.md
 AUDITORIA_ARQUITETURAL_COMPLETA.md
