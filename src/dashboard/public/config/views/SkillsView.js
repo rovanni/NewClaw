@@ -1,5 +1,5 @@
 import { skillsStore, toolsStore } from '../state.js';
-import { reviewSkill, getSkills, getPatterns, aggregateToolStats } from '../api.js';
+import { reviewSkill, activateSkill, deactivateSkill, deleteAutoSkill, getSkills, getPatterns, aggregateToolStats } from '../api.js';
 import { showToast } from '../components/Toast.js';
 
 export function render(container) {
@@ -49,15 +49,29 @@ export function render(container) {
     if (sl) {
       sl.innerHTML = skills.length
         ? skills.map(sk => {
-            const pct       = Math.min(100, (sk.hits || 0) * 10);
-            const fillCls   = pct >= 70 ? 'high' : pct >= 40 ? 'med' : '';
-            const cardCls   = sk.status === 'active' ? 'active-card' : sk.status === 'rejected' ? 'rejected-card' : 'proposed-card';
-            const actions   = sk.status === 'proposed'
-              ? `<div class="skill-actions">
-                   <button class="s-btn approve" data-id="${sk.id}" data-action="approve">✓ Aprovar</button>
-                   <button class="s-btn reject"  data-id="${sk.id}" data-action="reject">✗ Rejeitar</button>
-                 </div>`
-              : '';
+            const pct     = Math.min(100, (sk.hits || 0) * 10);
+            const fillCls = pct >= 70 ? 'high' : pct >= 40 ? 'med' : '';
+            const cardCls = sk.status === 'active' ? 'active-card' : sk.status === 'rejected' ? 'rejected-card' : 'proposed-card';
+
+            let actions = '';
+            if (sk.status === 'proposed') {
+              actions = `<div class="skill-actions">
+                <button class="s-btn approve" data-id="${sk.id}" data-action="approve">✓ Aprovar</button>
+                <button class="s-btn reject"  data-id="${sk.id}" data-action="reject">✗ Rejeitar</button>
+                <button class="s-btn delete"  data-id="${sk.id}" data-action="delete">🗑 Excluir</button>
+              </div>`;
+            } else if (sk.status === 'active') {
+              actions = `<div class="skill-actions">
+                <button class="s-btn deactivate" data-id="${sk.id}" data-action="deactivate">⏸ Desativar</button>
+                <button class="s-btn delete"     data-id="${sk.id}" data-action="delete">🗑 Excluir</button>
+              </div>`;
+            } else {
+              actions = `<div class="skill-actions">
+                <button class="s-btn approve" data-id="${sk.id}" data-action="activate">▶ Reativar</button>
+                <button class="s-btn delete"  data-id="${sk.id}" data-action="delete">🗑 Excluir</button>
+              </div>`;
+            }
+
             return `
               <div class="skill-card ${cardCls}">
                 <div class="skill-card-header">
@@ -75,14 +89,30 @@ export function render(container) {
           }).join('')
         : '<div class="empty">Nenhuma skill registrada ainda.</div>';
 
-      // Delegate approve/reject clicks
       sl.onclick = async e => {
         const btn = e.target.closest('[data-action]');
         if (!btn) return;
         const { id, action } = btn.dataset;
+
+        const confirmDelete = action === 'delete'
+          && !confirm('Excluir esta skill permanentemente?');
+        if (confirmDelete) return;
+
         try {
-          await reviewSkill(id, action);
-          showToast(action === 'approve' ? '✅ Skill aprovada.' : '🛑 Skill rejeitada.', 'success');
+          if (action === 'approve' || action === 'reject') {
+            await reviewSkill(id, action);
+            showToast(action === 'approve' ? '✅ Skill aprovada.' : '🛑 Skill rejeitada.', 'success');
+          } else if (action === 'activate') {
+            await activateSkill(id);
+            showToast('✅ Skill reativada.', 'success');
+          } else if (action === 'deactivate') {
+            await deactivateSkill(id);
+            showToast('⏸ Skill desativada.', 'success');
+          } else if (action === 'delete') {
+            await deleteAutoSkill(id);
+            showToast('🗑 Skill excluída.', 'success');
+          }
+
           const [newSkills, patterns] = await Promise.all([getSkills(), getPatterns()]);
           const stats = aggregateToolStats(patterns);
           skillsStore.patch({
@@ -126,7 +156,7 @@ export function render(container) {
 
 function statusBadge(s) {
   if (s === 'active')   return '<span class="badge badge-active">ATIVA</span>';
-  if (s === 'rejected') return '<span class="badge badge-rejected">REJEITADA</span>';
+  if (s === 'rejected') return '<span class="badge badge-rejected">INATIVA</span>';
   return '<span class="badge badge-proposed">PROPOSTA</span>';
 }
 

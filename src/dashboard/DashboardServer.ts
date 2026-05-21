@@ -20,7 +20,7 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { MemoryCurator } from '../memory/MemoryCurator';
 import { SkillInstaller } from '../skills/SkillInstaller';
 import { createLogger } from '../shared/AppLogger';
-import { authMiddleware, createAuthRouter, dashboardAuth } from './routes/auth';
+import { authMiddleware, createAuthRouter, dashboardAuth, initAuthPersistence } from './routes/auth';
 import { createConfigRouter } from './routes/config';
 import { createProvidersRouter } from './routes/providers';
 import { createSkillsRouter } from './routes/skills';
@@ -90,6 +90,7 @@ export class DashboardServer {
     public setMemoryManager(mm: MemoryManager, curator?: MemoryCurator) {
         this.ctx.memoryManager = mm;
         this.ctx.memoryCurator = curator || new MemoryCurator(mm);
+        initAuthPersistence(mm.getDatabase());
         this.ctx.embeddingService = mm.getEmbeddingService();
         this.ctx.classificationMemory = mm.getClassificationMemory();
         this.ctx.decisionMemory = mm.getDecisionMemory();

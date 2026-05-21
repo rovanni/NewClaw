@@ -2,6 +2,50 @@ import { Router, Request, Response } from 'express';
 import express from 'express';
 import crypto from 'crypto';
 
+// ── Persistência no SQLite (injetada via initAuthPersistence) ──
+interface SimpleDb {
+    prepare(sql: string): {
+        get(...params: unknown[]): unknown;
+        run(...params: unknown[]): void;
+    };
+}
+let persistDb: SimpleDb | null = null;
+
+function loadPersistedHash(): void {
+    if (!persistDb) return;
+    try {
+        const row = persistDb.prepare(
+            "SELECT value FROM memory WHERE key = 'dashboard_password_hash'"
+        ).get() as { value: string } | undefined;
+        if (row?.value && !process.env.DASHBOARD_PASSWORD) {
+            dashboardAuth.enabled = true;
+            dashboardAuth.passwordHash = row.value;
+        }
+    } catch { /* table pode não existir ainda */ }
+}
+
+function savePersistedHash(hash: string): void {
+    if (!persistDb) return;
+    try {
+        persistDb.prepare(
+            "INSERT OR REPLACE INTO memory (key, value, category) VALUES ('dashboard_password_hash', ?, 'system')"
+        ).run(hash);
+    } catch { /* ignore */ }
+}
+
+function clearPersistedHash(): void {
+    if (!persistDb) return;
+    try {
+        persistDb.prepare("DELETE FROM memory WHERE key = 'dashboard_password_hash'").run();
+    } catch { /* ignore */ }
+}
+
+/** Chamado pelo DashboardServer após ter acesso ao DB. */
+export function initAuthPersistence(db: SimpleDb): void {
+    persistDb = db;
+    loadPersistedHash();
+}
+
 // ── Session tokens (in-memory, cleared on restart) ──
 const API_TOKENS: Set<string> = new Set();
 
@@ -110,13 +154,30 @@ export function createAuthRouter(): Router {
         res.json({ success: true });
     });
 
+    router.get('/status', (_req: Request, res: Response) => {
+        res.json({
+            success: true,
+            auth: { enabled: dashboardAuth.enabled, hasPassword: !!dashboardAuth.passwordHash },
+        });
+    });
+
     router.post('/config', (req: Request, res: Response) => {
         const { enabled, password } = req.body;
         if (typeof enabled === 'boolean') {
             dashboardAuth.enabled = enabled;
+            // Desativando auth: remove hash persistido
+            if (!enabled) {
+                dashboardAuth.passwordHash = '';
+                clearPersistedHash();
+            }
         }
         if (password) {
-            dashboardAuth.passwordHash = hashPassword(password);
+            const hash = hashPassword(password);
+            dashboardAuth.passwordHash = hash;
+            dashboardAuth.enabled = true;
+            savePersistedHash(hash);
+            // Invalida todos os tokens antigos — obriga novo login com a nova senha
+            API_TOKENS.clear();
         }
         res.json({ success: true, auth: { enabled: dashboardAuth.enabled, hasPassword: !!dashboardAuth.passwordHash } });
     });

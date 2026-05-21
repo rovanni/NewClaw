@@ -95,7 +95,36 @@ export async function getPatterns() {
 }
 
 export async function reviewSkill(id, action) {
-  return json(fetch(`/api/skills/auto/${id}/${action}`, { method: 'POST' }));
+  return json(f(`/api/skills/auto/${id}/${action}`, { method: 'POST' }));
+}
+
+export async function activateSkill(id) {
+  return json(f(`/api/skills/auto/${id}/activate`, { method: 'POST' }));
+}
+
+export async function deactivateSkill(id) {
+  return json(f(`/api/skills/auto/${id}/deactivate`, { method: 'POST' }));
+}
+
+export async function deleteAutoSkill(id) {
+  return json(f(`/api/skills/auto/${id}`, { method: 'DELETE' }));
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+export async function getAuthStatus() {
+  try {
+    const d = await json(f('/api/auth/status'));
+    return d.auth;
+  } catch { return { enabled: false, hasPassword: false }; }
+}
+
+export async function changePassword(newPassword, enable) {
+  return json(f('/api/auth/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: newPassword, enabled: enable }),
+  }));
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────

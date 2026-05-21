@@ -345,4 +345,17 @@ export class DashboardMemoryRepository {
         `).run(id);
         return result.changes > 0;
     }
+
+    deactivateAutoSkill(id: string): boolean {
+        const result = this.db.prepare(`
+            UPDATE auto_skills SET status = 'rejected', reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND status = 'active'
+        `).run(id);
+        return result.changes > 0;
+    }
+
+    deleteAutoSkill(id: string): boolean {
+        const result = this.db.prepare('DELETE FROM auto_skills WHERE id = ?').run(id);
+        return result.changes > 0;
+    }
 }
