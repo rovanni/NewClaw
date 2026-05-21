@@ -9,8 +9,6 @@
  */
 
 import { Bot, Context, InputFile, InlineKeyboard } from 'grammy';
-import fs from 'fs';
-import path from 'path';
 import { errorMessage } from '../shared/errors';
 import {
     ChannelAdapter,
@@ -24,6 +22,7 @@ import {
 import { MessageBus } from './MessageBus';
 import { mdToTelegramHTML } from '../shared/TelegramFormatter';
 import { createLogger } from '../shared/AppLogger';
+import { TelegramPollingSupervisor, SupervisorStatus } from './TelegramPollingSupervisor';
 
 const log = createLogger('TelegramAdapter');
 
@@ -55,11 +54,12 @@ interface TelegramMsg {
 export class TelegramAdapter implements ChannelAdapter {
     readonly channelType: ChannelType = 'telegram';
     readonly displayName: string = 'Telegram';
-    private _isConnected: boolean = false;
 
     private bot: Bot;
     private config: TelegramConfig;
     private bus: MessageBus | null = null;
+    private supervisor: TelegramPollingSupervisor;
+    private handlersRegistered = false;
 
     constructor(config: TelegramConfig) {
         this.config = {
@@ -73,10 +73,19 @@ export class TelegramAdapter implements ChannelAdapter {
             ...config
         };
         this.bot = new Bot(config.botToken);
+        this.supervisor = new TelegramPollingSupervisor(
+            this.bot,
+            config.allowedUserIds,
+            './data/telegram.lock',
+        );
     }
 
     get isConnected(): boolean {
-        return this._isConnected;
+        return this.supervisor.getStatus().state === 'connected';
+    }
+
+    getPollingStatus(): SupervisorStatus {
+        return this.supervisor.getStatus();
     }
 
     /** Get grammy Bot instance (for scheduler, etc.) */
@@ -120,60 +129,8 @@ export class TelegramAdapter implements ChannelAdapter {
         );
     }
 
-    private started: boolean = false;
-    private startRetries: number = 0;
-    private maxStartRetries: number = 5;
-    private networkRetryCount: number = 0;
-    private reconnectTimer: NodeJS.Timeout | null = null;
-    private handlersRegistered: boolean = false;
-    /** Track how long the bot stayed connected — if < 30s, it's likely 409 conflict */
-    private botConnectedAt: number = 0;
-    private static readonly STABLE_CONNECTION_MS = 30_000;
     /** Max age for pending messages to be processed after restart (15 minutes) */
     private static readonly PENDING_MAX_AGE_MS = 15 * 60 * 1000;
-    /** File-based PID lock to prevent two instances from polling simultaneously */
-    private readonly lockFile = path.resolve('./data/telegram.lock');
-
-    /**
-     * Tenta adquirir o lock de polling. Retorna false se outro processo vivo já detém o lock.
-     * Se o lock é stale (processo morto), reivindica automaticamente.
-     */
-    private acquireLock(): boolean {
-        try {
-            if (fs.existsSync(this.lockFile)) {
-                const raw = fs.readFileSync(this.lockFile, 'utf8').trim();
-                const pid = parseInt(raw, 10);
-                if (!isNaN(pid) && pid !== process.pid) {
-                    try {
-                        process.kill(pid, 0); // lança se o processo não existe
-                        log.warn('lock_held_by_other', `PID lock held by PID ${pid} (still running) — skipping polling`);
-                        return false;
-                    } catch {
-                        log.info('lock_stale', `Stale lock from PID ${pid} (process dead) — claiming lock`);
-                    }
-                }
-            }
-            fs.mkdirSync(path.dirname(this.lockFile), { recursive: true });
-            fs.writeFileSync(this.lockFile, String(process.pid), 'utf8');
-            log.info('lock_acquired', `Polling lock acquired by PID ${process.pid}`);
-            return true;
-        } catch (e) {
-            log.warn('lock_check_failed', `Could not check/write PID lock: ${errorMessage(e)} — proceeding anyway`);
-            return true;
-        }
-    }
-
-    private releaseLock(): void {
-        try {
-            if (fs.existsSync(this.lockFile)) {
-                const raw = fs.readFileSync(this.lockFile, 'utf8').trim();
-                if (parseInt(raw, 10) === process.pid) {
-                    fs.unlinkSync(this.lockFile);
-                    log.info('lock_released', `Polling lock released by PID ${process.pid}`);
-                }
-            }
-        } catch { /* ignore */ }
-    }
 
     async start(): Promise<void> {
         if (!this.config.enabled) {
@@ -181,141 +138,16 @@ export class TelegramAdapter implements ChannelAdapter {
             return;
         }
 
-        if (!this.acquireLock()) {
-            log.info('polling_skipped', 'Another instance holds the polling lock — this instance will not poll');
-            return;
-        }
-
-        if (this.started && this._isConnected) {
-            log.warn('adapter_already_started', 'Telegram adapter already started and connected');
-            return;
-        }
-
-        // Pre-check: kill any stale bot instances that would cause 409 Conflict
-        // This happens when the process was restarted but the old polling loop is still active
-        // Note: do NOT pass drop_pending_updates so messages received while offline are delivered
-        try {
-            await this.bot.api.deleteWebhook();
-        } catch (e) {
-            log.warn('delete_webhook_failed', errorMessage(e));
-        }
-
-        // Grace period: give Telegram time to release the old polling connection
-        // This is critical during restarts — the old process may still be dying
-        const gracePeriod = parseInt(process.env.TELEGRAM_START_GRACE_MS || '3000', 10);
-        if (gracePeriod > 0) {
-            log.info('startup_grace_period', `Waiting ${gracePeriod}ms for old instance to release...`);
-            await new Promise(r => setTimeout(r, gracePeriod));
-        }
-
-        // Register handlers ONCE — grammY throws if handlers are registered multiple times
         if (!this.handlersRegistered) {
             this.registerHandlers();
             this.handlersRegistered = true;
         }
-        this.started = true;
 
-        // Iterative 409-conflict retry loop — avoids stack overflow from recursive this.start() calls
-        while (this.startRetries <= this.maxStartRetries) {
-            try {
-                log.info('bot_starting', `Iniciando polling do Telegram... (attempt ${this.startRetries + 1}/${this.maxStartRetries + 1})`);
-                const pollingInfo = await this.bot.api.getMe();
-                log.info('bot_api_check', `getMe OK: id=${pollingInfo.id} username=${pollingInfo.username}`);
-                await this.bot.start({
-                    onStart: (info) => {
-                        this._isConnected = true;
-                        this.botConnectedAt = Date.now();
-                        this.networkRetryCount = 0;
-                        this.startRetries = 0;
-                        log.info('bot_started', `🤖 Telegram Bot rodando! botInfo=${JSON.stringify(info).slice(0, 100)}`);
-                    },
-                });
-                // bot.start() resolved — bot was stopped externally
-                const uptimeMs = this.botConnectedAt ? Date.now() - this.botConnectedAt : 0;
-                const wasStable = uptimeMs > TelegramAdapter.STABLE_CONNECTION_MS;
-                if (wasStable) this.startRetries = 0;
-                log.warn('bot_start_resolved', `bot.start() resolved unexpectedly (uptime=${uptimeMs}ms, stable=${wasStable})`);
-                return;
-            } catch (e) {
-                const msg = errorMessage(e) || '';
-
-                if (msg.includes('409') || msg.includes('Conflict')) {
-                    this.startRetries++;
-                    if (this.startRetries > this.maxStartRetries) {
-                        log.error('bot_start_409_exhausted', `All ${this.maxStartRetries} retries exhausted. Another bot instance is still running.`);
-                        this.scheduleReconnect(60);
-                        return;
-                    }
-                    // Telegram mantém conexões getUpdates ativas por até 30s após o processo morrer.
-                    // Delay mínimo de 35s garante que o ciclo anterior expirou antes de tentar novamente.
-                    const delay = 35 + (this.startRetries - 1) * 20; // 35s, 55s, 75s...
-                    log.error('bot_start_409_conflict', `Multiple bot instances detected (attempt ${this.startRetries}/${this.maxStartRetries}). Retrying in ${delay}s...`);
-                    this.started = false;
-                    this._isConnected = false;
-                    // Tenta forçar liberação do slot de polling no lado do Telegram
-                    try { await this.bot.api.deleteWebhook({ drop_pending_updates: false }); } catch { /* ignore */ }
-                    await new Promise(r => setTimeout(r, delay * 1000));
-                    continue;
-                }
-
-                if (msg.includes('Network') || msg.includes('ECONNREFUSED') ||
-                    msg.includes('ENOTFOUND') || msg.includes('ETIMEDOUT') ||
-                    msg.includes('fetch failed') || msg.includes('request failed')) {
-                    this.networkRetryCount++;
-                    const delay = Math.min(this.networkRetryCount * 10, 300);
-                    log.error('bot_start_network_error', `Network error on start (attempt ${this.networkRetryCount}). Scheduling reconnect in ${delay}s...`, msg);
-                    this.scheduleReconnect(delay);
-                    return;
-                }
-
-                throw e;
-            }
-        }
-    }
-
-    /** Schedule a background reconnect attempt */
-    private scheduleReconnect(delaySeconds: number): void {
-        if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-        }
-        log.info('reconnect_scheduled', `Reconnect attempt scheduled in ${delaySeconds}s`);
-        this.reconnectTimer = setTimeout(async () => {
-            log.info('reconnect_attempt', 'Attempting to reconnect Telegram bot...');
-            this.started = false;
-            this._isConnected = false;
-            this.startRetries = 0;
-            try {
-                await this.start();
-            } catch (e) {
-                log.error('reconnect_failed', 'Reconnect attempt failed', errorMessage(e));
-            }
-        }, delaySeconds * 1000);
+        await this.supervisor.start();
     }
 
     async stop(): Promise<void> {
-        // Cancel any pending reconnect
-        if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
-
-        // Graceful shutdown: tell Telegram to drop the polling connection
-        // BEFORE stopping grammY, so the 409 Conflict window is minimized
-        try {
-            await this.bot.api.deleteWebhook({ drop_pending_updates: true });
-            log.info('webhook_dropped', 'Dropped pending updates before stop');
-        } catch (e) {
-            log.warn('drop_webhook_on_stop_failed', errorMessage(e));
-        }
-
-        // Aguarda o Telegram processar o drop e liberar a conexão getUpdates (pode levar até 5s)
-        await new Promise(r => setTimeout(r, 5000));
-
-        this.releaseLock();
-        this.bot.stop();
-        this._isConnected = false;
-        this.started = false;
-        log.info('bot_stopped', 'Telegram Bot stopped gracefully');
+        await this.supervisor.stop();
     }
 
     /** Enviar resposta normalizada via Telegram */

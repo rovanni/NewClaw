@@ -200,6 +200,15 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .pattern-row .pr-tool { color:var(--accent); font-weight:600; min-width:100px; }
 .pattern-row .pr-stat { color:var(--text-soft); font-size:.69rem; min-width:120px; text-align:right; }
 
+/* Channel status row */
+.channel-row {
+  display:flex; align-items:center; gap:10px; padding:6px 0; font-size:.8rem;
+}
+.channel-icon  { font-size:1rem; width:20px; text-align:center; flex-shrink:0; }
+.channel-name  { font-weight:600; width:80px; flex-shrink:0; }
+.channel-status{ color:var(--text-muted); flex:1; }
+.channel-detail{ color:var(--text-soft); font-size:.69rem; text-align:right; }
+
 /* Config collapse (details) */
 .cfg-details {
   background:var(--bg-surface); border:1px solid var(--border-color);

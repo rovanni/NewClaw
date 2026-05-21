@@ -51,6 +51,11 @@ export function render(container) {
         <div id="dashPatterns"><div class="empty">Aguardando dados...</div></div>
       </div>
 
+      <div class="activity-panel" id="channelsPanel">
+        <div class="activity-panel-title"><div class="live-dot"></div>Canais</div>
+        <div id="channelsList"><div class="empty">Aguardando dados...</div></div>
+      </div>
+
       <details class="cfg-details">
         <summary>⚙️ Configurações de Comportamento</summary>
         <div class="cfg-details-body">
@@ -95,6 +100,7 @@ export function render(container) {
   // Subscribe to stores
   const unsubs = [
     runtimeStore.on('*', updateRuntime),
+    runtimeStore.on('*', s => updateChannels(s.telegramChannel)),
     toolsStore.on('stats', () => updateActivity()),
     toolsStore.on('tools', () => updateActivity()),
     skillsStore.on('*', updateSkillMetrics),
@@ -103,6 +109,7 @@ export function render(container) {
   updateRuntime(runtimeStore.snap());
   updateSkillMetrics(skillsStore.snap());
   updateActivity();
+  updateChannels(runtimeStore.get('telegramChannel'));
 
   return () => unsubs.forEach(fn => fn());
 }
@@ -153,6 +160,50 @@ function updateSkillMetrics(s) {
       <span class="pr-stat">${total} · ${p.avg_latency_ms}ms</span>
     </div>`;
   }).join('');
+}
+
+function updateChannels(tg) {
+  const el = document.getElementById('channelsList');
+  if (!el) return;
+
+  if (!tg) {
+    el.innerHTML = '<div class="empty">Dados de canal indisponíveis.</div>';
+    return;
+  }
+
+  const STATE_ICON = {
+    connected:    '🟢',
+    cooldown:     '🟡',
+    reconnecting: '🟡',
+    conflict:     '🔴',
+    disconnected: '⚫',
+  };
+  const STATE_LABEL = {
+    connected:    'Conectado',
+    cooldown:     'Cooldown após conflito',
+    reconnecting: 'Reconectando...',
+    conflict:     'Conflito de polling',
+    disconnected: 'Desconectado',
+  };
+
+  const icon  = STATE_ICON[tg.state]  || '⚫';
+  const label = STATE_LABEL[tg.state] || tg.state;
+  const uptimeTxt  = tg.connectedUptimeMs  ? `uptime ${Math.round(tg.connectedUptimeMs / 1000)}s`  : '';
+  const cooldownTxt= tg.cooldownRemainingMs? `reconecta em ${Math.round(tg.cooldownRemainingMs / 1000)}s` : '';
+  const conflictTxt= tg.conflictCount      ? `conflitos: ${tg.conflictCount}`                         : '';
+  const details = [uptimeTxt, cooldownTxt, conflictTxt, `pid=${tg.instanceId}@${tg.hostname}`].filter(Boolean).join(' · ');
+  const clusterWarn = tg.isClusterMode
+    ? `<div style="color:var(--warn);font-size:.75rem;margin-top:4px">⚠️ PM2 cluster mode detectado — apenas instância 0 faz polling</div>`
+    : '';
+
+  el.innerHTML = `
+    <div class="channel-row">
+      <span class="channel-icon">${icon}</span>
+      <span class="channel-name">Telegram</span>
+      <span class="channel-status">${label}</span>
+      <span class="channel-detail">${details}</span>
+    </div>
+    ${clusterWarn}`;
 }
 
 function updateActivity() {

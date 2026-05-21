@@ -188,9 +188,10 @@ async function loadStatus() {
       status: 'online',
       uptime: s.uptimeHuman || '—',
       ram:    s.memory?.heapUsed || '—',
+      telegramChannel: s.telegramChannel || null,
     });
   } catch {
-    runtimeStore.patch({ status: 'offline', uptime: '—', ram: '—' });
+    runtimeStore.patch({ status: 'offline', uptime: '—', ram: '—', telegramChannel: null });
   }
 }
 

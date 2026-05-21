@@ -80,12 +80,17 @@ export function healthHandler(ctx: DashboardContext) {
     };
 }
 
-export function createStatusRouter(_ctx: DashboardContext): Router {
+export function createStatusRouter(ctx: DashboardContext): Router {
     const router = Router();
 
     router.get('/status', (_req: Request, res: Response) => {
         const uptime = process.uptime();
         const mem = process.memoryUsage();
+
+        const telegramAdapter = ctx.controller?.getTelegramAdapter();
+        const telegramChannel = telegramAdapter
+            ? telegramAdapter.getPollingStatus()
+            : null;
 
         res.json({
             success: true,
@@ -100,6 +105,7 @@ export function createStatusRouter(_ctx: DashboardContext): Router {
                 nodeVersion: process.version,
                 platform: process.platform,
                 pid: process.pid,
+                telegramChannel,
             }
         });
     });
