@@ -9,6 +9,8 @@
  */
 
 import { Bot, Context, InputFile, InlineKeyboard } from 'grammy';
+import fs from 'fs';
+import path from 'path';
 import { errorMessage } from '../shared/errors';
 import {
     ChannelAdapter,
@@ -129,10 +131,58 @@ export class TelegramAdapter implements ChannelAdapter {
     private static readonly STABLE_CONNECTION_MS = 30_000;
     /** Max age for pending messages to be processed after restart (15 minutes) */
     private static readonly PENDING_MAX_AGE_MS = 15 * 60 * 1000;
+    /** File-based PID lock to prevent two instances from polling simultaneously */
+    private readonly lockFile = path.resolve('./data/telegram.lock');
+
+    /**
+     * Tenta adquirir o lock de polling. Retorna false se outro processo vivo já detém o lock.
+     * Se o lock é stale (processo morto), reivindica automaticamente.
+     */
+    private acquireLock(): boolean {
+        try {
+            if (fs.existsSync(this.lockFile)) {
+                const raw = fs.readFileSync(this.lockFile, 'utf8').trim();
+                const pid = parseInt(raw, 10);
+                if (!isNaN(pid) && pid !== process.pid) {
+                    try {
+                        process.kill(pid, 0); // lança se o processo não existe
+                        log.warn('lock_held_by_other', `PID lock held by PID ${pid} (still running) — skipping polling`);
+                        return false;
+                    } catch {
+                        log.info('lock_stale', `Stale lock from PID ${pid} (process dead) — claiming lock`);
+                    }
+                }
+            }
+            fs.mkdirSync(path.dirname(this.lockFile), { recursive: true });
+            fs.writeFileSync(this.lockFile, String(process.pid), 'utf8');
+            log.info('lock_acquired', `Polling lock acquired by PID ${process.pid}`);
+            return true;
+        } catch (e) {
+            log.warn('lock_check_failed', `Could not check/write PID lock: ${errorMessage(e)} — proceeding anyway`);
+            return true;
+        }
+    }
+
+    private releaseLock(): void {
+        try {
+            if (fs.existsSync(this.lockFile)) {
+                const raw = fs.readFileSync(this.lockFile, 'utf8').trim();
+                if (parseInt(raw, 10) === process.pid) {
+                    fs.unlinkSync(this.lockFile);
+                    log.info('lock_released', `Polling lock released by PID ${process.pid}`);
+                }
+            }
+        } catch { /* ignore */ }
+    }
 
     async start(): Promise<void> {
         if (!this.config.enabled) {
             log.info('adapter_disabled', 'Telegram adapter is disabled');
+            return;
+        }
+
+        if (!this.acquireLock()) {
+            log.info('polling_skipped', 'Another instance holds the polling lock — this instance will not poll');
             return;
         }
 
@@ -261,6 +311,7 @@ export class TelegramAdapter implements ChannelAdapter {
         // Aguarda o Telegram processar o drop e liberar a conexão getUpdates (pode levar até 5s)
         await new Promise(r => setTimeout(r, 5000));
 
+        this.releaseLock();
         this.bot.stop();
         this._isConnected = false;
         this.started = false;
