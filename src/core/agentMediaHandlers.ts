@@ -2,10 +2,84 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import type { NormalizedMessage, ChannelAttachment } from '../channels/ChannelAdapter';
 import type { MessageBus } from '../channels/MessageBus';
+import type { MemoryManager } from '../memory/MemoryManager';
+import fsStatic from 'fs';
+import pathStatic from 'path';
 
 const voiceLog = createLogger('VoiceHandler');
 const documentLog = createLogger('DocumentHandler');
 const visionLog = createLogger('VisionHandler');
+
+// ── Workspace Index ───────────────────────────────────────────────────────────
+
+function humanSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function buildWorkspaceTree(dir: string, prefix = '', depth = 0, maxDepth = 3): string {
+    if (depth > maxDepth) return '';
+    let entries: fsStatic.Dirent[];
+    try {
+        entries = fsStatic.readdirSync(dir, { withFileTypes: true });
+    } catch { return ''; }
+
+    entries.sort((a, b) => {
+        // Dirs first, then files alphabetically
+        if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+        return a.name.localeCompare(b.name);
+    });
+
+    const lines: string[] = [];
+    entries.forEach((entry, i) => {
+        const isLast = i === entries.length - 1;
+        const connector = isLast ? '└── ' : '├── ';
+        const childPrefix = prefix + (isLast ? '    ' : '│   ');
+
+        if (entry.isDirectory()) {
+            lines.push(`${prefix}${connector}${entry.name}/`);
+            const sub = buildWorkspaceTree(pathStatic.join(dir, entry.name), childPrefix, depth + 1, maxDepth);
+            if (sub) lines.push(sub);
+        } else {
+            try {
+                const stat = fsStatic.statSync(pathStatic.join(dir, entry.name));
+                const mtime = stat.mtime.toISOString().slice(0, 10);
+                lines.push(`${prefix}${connector}${entry.name}  (${humanSize(stat.size)}, ${mtime})`);
+            } catch {
+                lines.push(`${prefix}${connector}${entry.name}`);
+            }
+        }
+    });
+    return lines.join('\n');
+}
+
+/**
+ * Rebuilds the workspace_index memory node with a fresh directory tree.
+ * Call after any file is added/removed, or at startup.
+ */
+export function refreshWorkspaceIndex(memory: MemoryManager): void {
+    const workspaceDir = process.env.WORKSPACE_DIR || './workspace';
+    try {
+        if (!fsStatic.existsSync(workspaceDir)) return;
+
+        const tree = buildWorkspaceTree(workspaceDir);
+        const content = tree
+            ? `Workspace: ${workspaceDir}\nAtualizado em: ${new Date().toISOString()}\n\n${workspaceDir}/\n${tree}`
+            : `Workspace: ${workspaceDir} (vazio)`;
+
+        memory.addNode({
+            id: 'core_workspace',
+            type: 'context',
+            name: 'WORKSPACE',
+            content,
+            confidence: 1.0,
+        });
+        try { memory.addEdge('core_memory', 'core_workspace', 'contains'); } catch { /* ignore */ }
+    } catch (err) {
+        documentLog.warn('core_workspace_refresh_failed', String(err));
+    }
+}
 
 export interface VisionProfile {
     server: string;
@@ -127,7 +201,8 @@ export async function transcribeAttachment(
 export async function handleDocumentAttachment(
     msg: NormalizedMessage,
     attachment: ChannelAttachment,
-    messageBus: MessageBus
+    messageBus: MessageBus,
+    memory?: MemoryManager
 ): Promise<string | null> {
     try {
         const channel = msg.channel;
@@ -168,6 +243,10 @@ export async function handleDocumentAttachment(
             await fs.writeFile(targetPath, fileBuffer);
             documentLog.info('document_saved', `Saved to ${targetPath}`, { path: targetPath, size: fileBuffer.length });
             msg.text = (msg.text || '') + `\n[ARQUIVO ANEXADO: ${safeFileName} (salvo em workspace/${safeFileName})]\n`;
+
+            // Refresh the workspace index so the model sees all files after this upload.
+            if (memory) refreshWorkspaceIndex(memory);
+
             return null;
         }
 

@@ -41,6 +41,22 @@ export function extractFinalText(response: LLMResult, _atomicData: unknown): str
     if (normalized.type !== 'empty' && normalized.content?.trim()) {
         return normalized.content;
     }
+
     const sanitized = sanitizeContent(response.content || '');
-    return sanitized || 'Desculpe, não consegui gerar uma resposta adequada.';
+    if (sanitized) return sanitized;
+
+    // Last resort: the model returned only thinking-tag content.
+    // Extract the last meaningful sentence from inside the tags rather than silencing it completely.
+    const raw = response.content || '';
+    const thinkMatch = raw.match(/<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi);
+    if (thinkMatch) {
+        const lastThink = thinkMatch[thinkMatch.length - 1].replace(/<[^>]+>/g, '').trim();
+        const sentences = lastThink.split(/[.!?]\s+/).filter(s => s.trim().length > 20);
+        if (sentences.length > 0) {
+            const candidate = sentences[sentences.length - 1].trim();
+            if (candidate.length > 20) return candidate;
+        }
+    }
+
+    return 'Desculpe, não consegui gerar uma resposta. Pode reformular a pergunta?';
 }

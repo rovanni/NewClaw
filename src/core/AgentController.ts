@@ -21,6 +21,7 @@ import { EditTool } from '../tools/edit_tool';
 import { ReadTool } from '../tools/read_tool';
 import { MemorySearchTool } from '../tools/memory_search';
 import { MemoryWriteTool } from '../tools/memory_write';
+import { ReadDocumentTool } from '../tools/read_document';
 import { SendAudioTool } from '../tools/send_audio';
 import { SendDocumentTool } from '../tools/send_document';
 import { MemoryAdminTool } from '../tools/memory_admin';
@@ -61,6 +62,7 @@ import {
     transcribeAttachment,
     handleDocumentAttachment,
     handlePhotoAttachment,
+    refreshWorkspaceIndex,
 } from './agentMediaHandlers';
 
 export type { NewClawConfig };
@@ -122,6 +124,9 @@ export class AgentController {
         this.memory = new MemoryManager(this.db);
         this.memoryFacade = this.memory.getFacade();
         bootstrapDomains(this.memory);
+
+        // Build workspace index at startup so the model always has an up-to-date tree
+        refreshWorkspaceIndex(this.memory);
 
         this.ownerProfileService = new OwnerProfileService(this.db);
         if (config.ownerName) {
@@ -242,7 +247,7 @@ export class AgentController {
         this.messageBus.registerMediaHandler('audio', async (msg, attachment) =>
             transcribeAttachment(msg, attachment, this.messageBus, tmpDir));
         this.messageBus.registerMediaHandler('document', async (msg, attachment) =>
-            handleDocumentAttachment(msg, attachment, this.messageBus));
+            handleDocumentAttachment(msg, attachment, this.messageBus, this.memory));
         this.messageBus.registerMediaHandler('photo', async (msg, attachment) => {
             const profile = this.agentLoop.getProfileRegistry().getProfileByCategory('vision');
             return handlePhotoAttachment(msg, attachment, this.messageBus, profile ?? null);
@@ -435,6 +440,7 @@ export class AgentController {
         ToolRegistry.register(new ReadTool());
         ToolRegistry.register(new MemorySearchTool(this.memory));
         ToolRegistry.register(new MemoryWriteTool(this.memory, this.ownerProfileService));
+        ToolRegistry.register(new ReadDocumentTool());
         ToolRegistry.register(new SendAudioTool(this.messageBus));
         ToolRegistry.register(new SendDocumentTool(this.messageBus));
         ToolRegistry.register(new MemoryAdminTool(this.memory));

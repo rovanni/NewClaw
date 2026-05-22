@@ -313,6 +313,7 @@ export function bootstrapCoreGraph(
         { id: 'core_user',         type: 'identity', name: 'USER',              content: 'Perfil vivo do usuário. Deve ser enriquecido gradualmente com nome, objetivos, preferências, contexto e histórico.',                                   identity_scope: 'USER_MEMORY'   },
         { id: 'core_heartbeat',    type: 'fact',     name: 'HEARTBEAT',         content: 'Marca o estado inicial do sistema e serve como trilha de vida do agente: instalação, boot, onboarding e eventos importantes.',                        identity_scope: 'SYSTEM_MEMORY' },
         { id: 'core_memory',       type: 'context',  name: 'MEMORY',            content: 'Hub da memória semântica persistente. Organiza nós, relações, contexto relevante e recuperação futura.',                                              identity_scope: 'SYSTEM_MEMORY' },
+        { id: 'core_workspace',    type: 'context',  name: 'WORKSPACE',         content: 'Índice do workspace: lista de arquivos e diretórios disponíveis. Atualizado automaticamente a cada novo arquivo enviado.',                               identity_scope: 'SYSTEM_MEMORY' },
         { id: 'system_reflection', type: 'fact',     name: 'system_reflection', content: 'System initialized with base cognitive graph and awaiting user interaction',                                                                          identity_scope: 'AGENT_MEMORY'  },
         { id: 'agent_state',       type: 'context',  name: 'agent_state',       content: JSON.stringify({ mode: 'learning', confidence: 0.5, user_alignment: 0.5, current_focus: 'unknown' }),                                                  identity_scope: 'AGENT_MEMORY'  },
     ];
@@ -340,6 +341,8 @@ export function bootstrapCoreGraph(
         ['core_user', 'pref_workspace', 'prefers'],
         ['core_memory', 'core_heartbeat', 'contains'],
         ['core_memory', 'core_tools', 'contains'],
+        ['core_memory', 'core_workspace', 'contains'],
+        ['core_tools', 'core_workspace', 'contains'],
         ['core_soul', 'core_agent', 'related_to'],
     ];
 

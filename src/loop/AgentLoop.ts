@@ -1292,6 +1292,12 @@ export class AgentLoop {
         if (!text || text.length < 20) {
             text = extractFinalText(finalResponse, parseLLMResponse(rawFinal));
         }
+        // If the final synthesis call also returned nothing useful, fall back to the
+        // best content seen during the turn rather than sending a generic error.
+        if ((!text || text === 'Desculpe, não consegui gerar uma resposta. Pode reformular a pergunta?') && lastBestContent) {
+            log.warn(`[${this.ts()}] [FALLBACK] Final synthesis empty — using lastBestContent (${lastBestContent.length} chars)`);
+            text = lastBestContent;
+        }
 
         move('FINAL_READY', { step: stepCount, reason: stepCount >= maxSteps ? 'max_iterations' : 'fallback' });
         traceManager.completeTrace(trace, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
