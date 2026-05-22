@@ -17,8 +17,10 @@ export class RefreshWorkspaceTool implements ToolExecutor {
         try {
             refreshWorkspaceIndex(this.memory);
             const node = this.memory.getNode('core_workspace');
-            const content = node?.content || '(workspace vazio)';
-            return { success: true, output: `Índice atualizado.\n\n${content}` };
+            return {
+                success: true,
+                output: node?.content || 'Workspace index atualizado.',
+            };
         } catch (err) {
             return { success: false, output: '', error: String(err) };
         }

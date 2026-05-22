@@ -12,61 +12,31 @@ const visionLog = createLogger('VisionHandler');
 
 // ── Workspace Index ───────────────────────────────────────────────────────────
 
-function humanSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function buildWorkspaceTree(dir: string, prefix = '', depth = 0, maxDepth = 3): string {
-    if (depth > maxDepth) return '';
-    let entries: fsStatic.Dirent[];
+function countWorkspace(dir: string): { files: number; dirs: number } {
+    let files = 0; let dirs = 0;
     try {
-        entries = fsStatic.readdirSync(dir, { withFileTypes: true });
-    } catch { return ''; }
-
-    entries.sort((a, b) => {
-        // Dirs first, then files alphabetically
-        if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
-        return a.name.localeCompare(b.name);
-    });
-
-    const lines: string[] = [];
-    entries.forEach((entry, i) => {
-        const isLast = i === entries.length - 1;
-        const connector = isLast ? '└── ' : '├── ';
-        const childPrefix = prefix + (isLast ? '    ' : '│   ');
-
-        if (entry.isDirectory()) {
-            lines.push(`${prefix}${connector}${entry.name}/`);
-            const sub = buildWorkspaceTree(pathStatic.join(dir, entry.name), childPrefix, depth + 1, maxDepth);
-            if (sub) lines.push(sub);
-        } else {
-            try {
-                const stat = fsStatic.statSync(pathStatic.join(dir, entry.name));
-                const mtime = stat.mtime.toISOString().slice(0, 10);
-                lines.push(`${prefix}${connector}${entry.name}  (${humanSize(stat.size)}, ${mtime})`);
-            } catch {
-                lines.push(`${prefix}${connector}${entry.name}`);
-            }
+        const entries = fsStatic.readdirSync(dir, { withFileTypes: true });
+        for (const e of entries) {
+            if (e.isDirectory()) { dirs++; const sub = countWorkspace(pathStatic.join(dir, e.name)); files += sub.files; dirs += sub.dirs; }
+            else files++;
         }
-    });
-    return lines.join('\n');
+    } catch { /* ignore unreadable dirs */ }
+    return { files, dirs };
 }
 
 /**
- * Rebuilds the workspace_index memory node with a fresh directory tree.
- * Call after any file is added/removed, or at startup.
+ * Updates core_workspace with a lightweight summary (no full tree).
+ * The model must use list_workspace tool to explore files on demand.
  */
 export function refreshWorkspaceIndex(memory: MemoryManager): void {
     const workspaceDir = process.env.WORKSPACE_DIR || './workspace';
     try {
         if (!fsStatic.existsSync(workspaceDir)) return;
 
-        const tree = buildWorkspaceTree(workspaceDir);
-        const content = tree
-            ? `Workspace: ${workspaceDir}\nAtualizado em: ${new Date().toISOString()}\n\n${workspaceDir}/\n${tree}`
-            : `Workspace: ${workspaceDir} (vazio)`;
+        const { files, dirs } = countWorkspace(workspaceDir);
+        const content = files === 0
+            ? `Workspace: ${workspaceDir} (vazio)\nAtualizado em: ${new Date().toISOString()}\nUse list_workspace para listar arquivos.`
+            : `Workspace: ${workspaceDir}\nAtualizado em: ${new Date().toISOString()}\nConteúdo: ${files} arquivo(s) em ${dirs} pasta(s).\nUse a ferramenta list_workspace para navegar pastas e localizar arquivos específicos.`;
 
         memory.addNode({
             id: 'core_workspace',
