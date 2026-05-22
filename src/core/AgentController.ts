@@ -22,6 +22,7 @@ import { ReadTool } from '../tools/read_tool';
 import { MemorySearchTool } from '../tools/memory_search';
 import { MemoryWriteTool } from '../tools/memory_write';
 import { ReadDocumentTool } from '../tools/read_document';
+import { RefreshWorkspaceTool } from '../tools/refresh_workspace';
 import { SendAudioTool } from '../tools/send_audio';
 import { SendDocumentTool } from '../tools/send_document';
 import { MemoryAdminTool } from '../tools/memory_admin';
@@ -441,6 +442,7 @@ export class AgentController {
         ToolRegistry.register(new MemorySearchTool(this.memory));
         ToolRegistry.register(new MemoryWriteTool(this.memory, this.ownerProfileService));
         ToolRegistry.register(new ReadDocumentTool());
+        ToolRegistry.register(new RefreshWorkspaceTool(this.memory));
         ToolRegistry.register(new SendAudioTool(this.messageBus));
         ToolRegistry.register(new SendDocumentTool(this.messageBus));
         ToolRegistry.register(new MemoryAdminTool(this.memory));
