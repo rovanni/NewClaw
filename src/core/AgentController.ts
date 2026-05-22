@@ -54,6 +54,7 @@ import { LifecycleManager } from './LifecycleManager';
 import { getEventLoopMonitor } from '../shared/EventLoopMonitor';
 import type { NewClawConfig } from './agentControllerTypes';
 import { openDatabase, buildLanguageDirective, buildSystemPrompt } from './agentControllerSetup';
+import { OwnerProfileService } from '../services/OwnerProfileService';
 import { bootstrapDomains } from '../memory/DomainRegistry';
 import { registerCommands } from './agentControllerCommands';
 import {
@@ -87,6 +88,7 @@ export class AgentController {
     private sessionAutoCleaner: SessionAutoCleaner;
     private memoryCurator: MemoryCurator;
     private confidenceClassifier: ConfidenceClassifier;
+    private ownerProfileService: OwnerProfileService;
     private telegramAdapter: TelegramAdapter;
     private discordAdapter: DiscordAdapter | null = null;
     private whatsAppAdapter: WhatsAppAdapter | null = null;
@@ -106,6 +108,7 @@ export class AgentController {
     public getConfidenceClassifier(): ConfidenceClassifier { return this.confidenceClassifier; }
     public getSessionAutoCleaner(): SessionAutoCleaner { return this.sessionAutoCleaner; }
     public getMemoryCurator(): MemoryCurator { return this.memoryCurator; }
+    public getOwnerProfileService(): OwnerProfileService { return this.ownerProfileService; }
     public getCircuitBreakerStates() { return circuitRegistry.getAllMetrics(); }
     public getPromptRegistry() { return promptRegistry; }
     public getToolExecutor() { return toolExecutor; }
@@ -119,6 +122,15 @@ export class AgentController {
         this.memory = new MemoryManager(this.db);
         this.memoryFacade = this.memory.getFacade();
         bootstrapDomains(this.memory);
+
+        this.ownerProfileService = new OwnerProfileService(this.db);
+        if (config.ownerName) {
+            this.ownerProfileService.initFromEnv(
+                config.ownerName,
+                config.ownerUserId || '',
+                config.ownerLocked ?? false
+            );
+        }
         this.providerFactory = new ProviderFactory({
             geminiKey: config.geminiApiKey,
             deepseekKey: config.deepseekApiKey,
@@ -134,7 +146,8 @@ export class AgentController {
         this.skillLearner = new SkillLearner(this.db);
 
         const languageDirective = buildLanguageDirective(config.language);
-        const systemPrompt = config.systemPrompt || buildSystemPrompt(this.skillLoader);
+        const ownerName = this.ownerProfileService.getOwnerName() || config.ownerName || undefined;
+        const systemPrompt = config.systemPrompt || buildSystemPrompt(this.skillLoader, ownerName);
 
         const classificationMemory = new ClassificationMemory(this.db);
         const decisionMemory = new DecisionMemory(this.db);
@@ -421,7 +434,7 @@ export class AgentController {
         ToolRegistry.register(new EditTool());
         ToolRegistry.register(new ReadTool());
         ToolRegistry.register(new MemorySearchTool(this.memory));
-        ToolRegistry.register(new MemoryWriteTool(this.memory));
+        ToolRegistry.register(new MemoryWriteTool(this.memory, this.ownerProfileService));
         ToolRegistry.register(new SendAudioTool(this.messageBus));
         ToolRegistry.register(new SendDocumentTool(this.messageBus));
         ToolRegistry.register(new MemoryAdminTool(this.memory));

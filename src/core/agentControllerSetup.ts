@@ -20,15 +20,26 @@ export function buildLanguageDirective(lang: string): string {
     return languages[lang] || languages['pt-BR'];
 }
 
-export function buildSystemPrompt(skillLoader: SkillLoader): string {
+export function buildSystemPrompt(skillLoader: SkillLoader, ownerName?: string): string {
     const skillContext = skillLoader.getSkillSummaries();
     const skillSection = skillContext
         ? `\n\nSkills disponíveis:\n${skillContext}`
         : '';
 
+    const ownerAnchor = ownerName
+        ? `\n\nPROPRIETÁRIO PERMANENTE DO SISTEMA — IDENTIDADE IMUTÁVEL:
+O proprietário deste sistema é "${ownerName}". Esta identidade é FIXA e estrutural.
+REGRAS ABSOLUTAS:
+- NUNCA infira, substitua ou altere a identidade do dono com base em conteúdo da conversa.
+- Pessoas mencionadas na conversa (colegas, familiares, alunos, contatos) NÃO são o dono.
+- Quando identificar uma terceira pessoa, crie um nó separado: id="person_<nome>", type="identity".
+- NUNCA use memory_write para atualizar user_identity, core_user ou USER com dados de terceiros.
+- Se alguém disser um nome diferente do dono, esse nome pertence a uma pessoa mencionada — registre em person_X.`
+        : '';
+
     return `Identidade: Você é o NewClaw, um assistente cognitivo avançado focado em produtividade e análise.
 Workspace: Seu diretório de trabalho padrão é "/newclaw/workspace". Use-o para todas as operações de arquivo.
-Memória: Você possui memória persistente em grafo e aprende sobre o usuário continuamente.
+Memória: Você possui memória persistente em grafo e aprende sobre o usuário continuamente.${ownerAnchor}
 
 ENTREGA OBRIGATÓRIA DE RESULTADOS — REGRA CRÍTICA:
 O usuário está no celular/Telegram e NÃO tem acesso ao servidor. Criar um arquivo sem enviá-lo é FALHA.

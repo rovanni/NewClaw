@@ -10,6 +10,7 @@ import { SkillLearner } from '../loop/SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
+import type { OwnerProfileService } from './OwnerProfileService';
 const log = createLogger('Onboardingservice');
 
 export interface UserProfile {
@@ -33,7 +34,10 @@ export interface UserProfile {
 export interface OnboardingState {
     step: number;
     userId: string;
-    data: Partial<UserProfile>;
+    data: Partial<UserProfile> & {
+        _pendingName?: string;
+        _awaitingNameConfirmation?: boolean;
+    };
 }
 
 type UserProfileWithSkip = Partial<UserProfile> & { __skip__?: boolean };
@@ -58,13 +62,21 @@ export class OnboardingService {
     private skillLearner: SkillLearner;
     private providerFactory: ProviderFactory;
     private stateManager: AgentStateManager;
+    private ownerService: OwnerProfileService | null;
     private states: Map<string, OnboardingState> = new Map();
 
-    constructor(db: Database, skillLearner: SkillLearner, providerFactory: ProviderFactory, stateManager: AgentStateManager) {
+    constructor(
+        db: Database,
+        skillLearner: SkillLearner,
+        providerFactory: ProviderFactory,
+        stateManager: AgentStateManager,
+        ownerService?: OwnerProfileService
+    ) {
         this.db = db;
         this.skillLearner = skillLearner;
         this.providerFactory = providerFactory;
         this.stateManager = stateManager;
+        this.ownerService = ownerService ?? null;
         this.ensureTable();
     }
 
@@ -194,10 +206,36 @@ export class OnboardingService {
         if (extracted.goals) state.data.goals = extracted.goals;
         else if (!state.data.goals && state.data.name && !state.data.intent) state.data.goals = answer.trim();
 
-        // 3. Flow Control
+        // 3. Name confirmation flow — never save a name without explicit user confirmation
+        if (state.data._awaitingNameConfirmation) {
+            const affirmative = /^(sim|s|yes|y|ok|isso|correto|certo|pode|confirmo)/i.test(answer.trim());
+            const negative = /^(não|nao|n|no|errado|incorreto|outro|muda)/i.test(answer.trim());
+
+            if (affirmative && state.data._pendingName) {
+                state.data.name = state.data._pendingName;
+                delete state.data._pendingName;
+                delete state.data._awaitingNameConfirmation;
+                // Lock owner identity after explicit confirmation
+                if (this.ownerService) {
+                    this.ownerService.confirmOwnerName(state.data.name, state.userId, 'onboarding');
+                }
+                return { question: ONBOARDING_STEPS[1].question(state.data) };
+            } else if (negative) {
+                delete state.data._pendingName;
+                delete state.data._awaitingNameConfirmation;
+                return { question: 'Tudo bem! Qual é o seu nome?' };
+            } else {
+                // Ambiguous answer — ask again
+                return { question: `Por favor, confirme: seu nome é *${state.data._pendingName}*? (sim/não)` };
+            }
+        }
+
+        // 4. Flow Control — detect name and ask for confirmation before saving
         if (!state.data.name) {
-            state.data.name = answer.trim().slice(0, 50);
-            return { question: ONBOARDING_STEPS[1].question(state.data) };
+            const candidateName = (extracted.name as string | undefined) || answer.trim().slice(0, 50);
+            state.data._pendingName = candidateName;
+            state.data._awaitingNameConfirmation = true;
+            return { question: `Que bom! Percebi que seu nome é *${candidateName}*.\nDeseja que eu utilize este nome como sua identidade no sistema? (sim/não)` };
         }
 
         const next = this.getNextAdaptiveQuestion(state.data);

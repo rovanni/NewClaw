@@ -18,6 +18,7 @@ import { errorMessage } from '../shared/errors';
 import type { ExecutionOutcome } from '../memory/ProceduralMemoryService';
 import { classifyDomain } from '../memory/DomainRegistry';
 import { CognitiveMemoryIndex } from '../memory/CognitiveMemoryIndex';
+import type { OwnerProfileService } from '../services/OwnerProfileService';
 
 export class MemoryWriteTool implements ToolExecutor {
     name = 'memory_write';
@@ -48,10 +49,34 @@ export class MemoryWriteTool implements ToolExecutor {
     private memoryManager: MemoryManager;
     private facade: MemoryFacade;
     private cognitiveIndex: CognitiveMemoryIndex | null = null;
+    private ownerService: OwnerProfileService | null = null;
 
-    constructor(memoryManager: MemoryManager) {
+    // IDs e nomes que representam a identidade do dono — nunca devem ser sobrescritos pelo LLM
+    private static readonly OWNER_IDENTITY_IDS = new Set(['user_identity', 'core_user', 'USER', 'user', 'USUARIO', 'usuario']);
+
+    constructor(memoryManager: MemoryManager, ownerService?: OwnerProfileService) {
         this.memoryManager = memoryManager;
         this.facade = memoryManager.getFacade();
+        this.ownerService = ownerService ?? null;
+    }
+
+    private isOwnerIdentityNode(id: string): boolean {
+        return MemoryWriteTool.OWNER_IDENTITY_IDS.has(id) ||
+               id.toLowerCase().startsWith('user_identity');
+    }
+
+    private checkOwnerLock(id: string, action: string, content: string): ToolResult | null {
+        if (!this.ownerService?.isLocked()) return null;
+        if (!this.isOwnerIdentityNode(id)) return null;
+        if (action !== 'create' && action !== 'update') return null;
+
+        this.ownerService.logBlockedOverwrite(id, content, 'memory_write_tool');
+        return {
+            success: false,
+            output: '',
+            error: `Identidade do proprietário protegida: o nó "${id}" não pode ser alterado automaticamente. ` +
+                   `Para registrar uma pessoa mencionada na conversa, crie um nó separado com id "person_<nome>" e tipo "identity".`
+        };
     }
 
     private getCognitiveIndex(): CognitiveMemoryIndex {
@@ -64,16 +89,29 @@ export class MemoryWriteTool implements ToolExecutor {
     async execute(args: Record<string, any>): Promise<ToolResult> {
         let action = (args.action as string) || (args.content ? 'create' : '');
 
-        // 1. Normalization Layer: Extract structured data if it looks like an identity statement
+        // 1. Normalization Layer: Extract structured data if it looks like an identity statement.
+        //    Only redirect to user_identity when owner is NOT yet locked (i.e., during onboarding).
+        //    When locked, never auto-map a name mention to user_identity.
         if (args.content && !args.name && args.type !== 'identity') {
             const nameMatch = (args.content as string).match(/meu nome é ([\w\s]+)|me chamo ([\w\s]+)|sou o ([\w\s]+)/i);
             if (nameMatch) {
                 const name = (nameMatch[1] || nameMatch[2] || nameMatch[3]).trim();
-                args.name = name;
-                args.type = 'identity';
-                args.id = 'user_identity';
-                args.content = `Nome oficial: ${name}`;
-                action = 'create';
+                if (!this.ownerService?.isLocked()) {
+                    // Owner not yet set — this is the first-run onboarding path
+                    args.name = name;
+                    args.type = 'identity';
+                    args.id = 'user_identity';
+                    args.content = `Nome oficial: ${name}`;
+                    action = 'create';
+                } else {
+                    // Owner already locked — treat as a third-party mention, not the owner
+                    const personId = `person_${name.toLowerCase().replace(/\s+/g, '_')}`;
+                    args.id = personId;
+                    args.type = 'identity';
+                    args.name = name;
+                    args.content = `Pessoa mencionada: ${name}`;
+                    action = 'create';
+                }
             }
         }
 
@@ -83,7 +121,15 @@ export class MemoryWriteTool implements ToolExecutor {
             args.type = args.type || 'fact';
         }
 
-        // 2. Validation Layer: Prevent free-text identity nodes
+        // 2. Owner identity guard — rejeita sobrescrita quando dono está configurado e bloqueado
+        const lockCheck = this.checkOwnerLock(
+            (args.id as string) || '',
+            action,
+            (args.content as string) || ''
+        );
+        if (lockCheck) return lockCheck;
+
+        // 3. Validation Layer: Prevent free-text identity nodes
         if (args.type === 'identity' && action === 'create') {
             const forbiddenPatterns = [/se chama/i, /é o/i, /é a/i, /chamado/i, /usuário/i];
             const isUnstructured = (args.content || '').length > 60 || forbiddenPatterns.some(p => p.test(args.content || ''));

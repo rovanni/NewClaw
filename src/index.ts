@@ -43,6 +43,9 @@ const config = {
     skillsDir: process.env.SKILLS_DIR || './skills',
     tmpDir: process.env.TMP_DIR || './tmp',
     whisperPath: process.env.WHISPER_PATH || '/usr/local/bin/whisper',
+    ownerName: process.env.OWNER_NAME || '',
+    ownerUserId: process.env.OWNER_USER_ID || '',
+    ownerLocked: process.env.OWNER_LOCKED === 'true',
     dashboardPort: parseInt(process.env.DASHBOARD_PORT || '3090'),
     modelRouter: {
         chat: process.env.MODEL_CHAT,

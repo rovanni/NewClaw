@@ -25,6 +25,9 @@ export interface NewClawConfig {
     tmpDir: string;
     whisperPath: string;
     dashboardPort?: number;
+    ownerName?: string;
+    ownerUserId?: string;
+    ownerLocked?: boolean;
     systemPrompt?: string;
     modelRouter?: {
         chat?: string;

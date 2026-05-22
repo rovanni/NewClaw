@@ -6,6 +6,7 @@ import { EmbeddingService } from '../../memory/EmbeddingService';
 import { ClassificationMemory } from '../../memory/ClassificationMemory';
 import { DecisionMemory } from '../../memory/DecisionMemory';
 import { SkillInstaller } from '../../skills/SkillInstaller';
+import type { OwnerProfileService } from '../../services/OwnerProfileService';
 export interface DashboardContext {
     controller?: AgentController;
     providerFactory?: ProviderFactory;
@@ -15,6 +16,7 @@ export interface DashboardContext {
     classificationMemory?: ClassificationMemory;
     decisionMemory?: DecisionMemory;
     skillInstaller?: SkillInstaller;
+    ownerProfileService?: OwnerProfileService;
     config: NewClawConfig;
 }
 

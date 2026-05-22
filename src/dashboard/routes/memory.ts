@@ -362,6 +362,9 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
             const id = String(req.params.id);
+            if (isSystemNode(id)) {
+                return res.status(403).json({ error: `Nó de sistema "${id}" não pode ser modificado via API. Use PUT /api/system/owner-profile para identidade do dono.` });
+            }
             const { type, name, content } = req.body;
             const updated = ctx.memoryManager.getDashboardRepository().updateNode(id, { type, name, content });
             if (!updated) return res.status(404).json({ error: 'Node not found' });
@@ -379,6 +382,9 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
             if (!id || !type || !name || content === undefined) {
                 return res.status(400).json({ error: 'id, type, name, content required' });
             }
+            if (isSystemNode(String(id))) {
+                return res.status(403).json({ error: `Nó de sistema "${id}" não pode ser criado/sobrescrito via API.` });
+            }
             ctx.memoryManager.getDashboardRepository().createNode(id, type, name, content);
             log.info(`Node created: ${id} (${type})`);
             res.json({ success: true });
@@ -391,6 +397,9 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
             const id = String(req.params.id);
+            if (isSystemNode(id)) {
+                return res.status(403).json({ error: `Nó de sistema "${id}" não pode ser deletado via API.` });
+            }
             ctx.memoryManager.getDashboardRepository().deleteNode(id);
             log.info(`Node deleted: ${id}`);
             res.json({ success: true });

@@ -30,6 +30,7 @@ import { createChatRouter } from './routes/chat';
 import { createTracesRouter, sseStreamHandler } from './routes/traces';
 import { createMemoryRouter } from './routes/memory';
 import { createConversationsRouter } from './routes/conversations';
+import { createSystemRouter } from './routes/system';
 import { DashboardContext } from './routes/types';
 
 const log = createLogger('Dashboardserver');
@@ -77,10 +78,12 @@ export class DashboardServer {
         this.app.use('/api/traces', createTracesRouter());
         this.app.use('/api/memory', createMemoryRouter(ctx));
         this.app.use('/api/conversations', createConversationsRouter(ctx));
+        this.app.use('/api/system', createSystemRouter(ctx));
     }
 
     public setController(controller: AgentController) {
         this.ctx.controller = controller;
+        this.ctx.ownerProfileService = controller.getOwnerProfileService();
     }
 
     public setProviderFactory(pf: ProviderFactory) {
