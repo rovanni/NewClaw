@@ -119,6 +119,20 @@ export class ConversationQueueManager {
         return this.queues.size;
     }
 
+    /**
+     * Remove tarefas pendentes (ainda não iniciadas) de uma conversa.
+     * Tarefas já em execução não são afetadas — use AgentLoop.cancel() para isso.
+     * Retorna o número de tarefas descartadas.
+     */
+    clearQueue(conversationId: string): number {
+        const entry = this.queues.get(conversationId);
+        if (!entry) return 0;
+        const pending = entry.queue.size;
+        entry.queue.clear();
+        entry.ackSentForCurrentBurst = false;
+        return pending;
+    }
+
     /** Libera todos os recursos (chame em stopAll) */
     destroy(): void {
         if (this.cleanupTimer) {

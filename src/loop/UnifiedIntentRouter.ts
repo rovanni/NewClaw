@@ -608,6 +608,14 @@ export class UnifiedIntentRouter {
                     if (!wordBound.test(normalized)) continue;
                 }
 
+                // Short keywords (≤4 chars) like 'ada', 'sol', 'eth', 'btc' require word-boundary
+                // to avoid matching substrings in common words (e.g. 'ada' in 'cada').
+                if (kw.length <= 4) {
+                    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const wordBound = new RegExp(`(?:^|[^a-záàãâéêíóõôúç])${escaped}(?:$|[^a-záàãâéêíóõôúç])`, 'i');
+                    if (!wordBound.test(normalized)) continue;
+                }
+
                 if (rule.confidence >= 0.85 || rule.keywords.length < 10) {
                     return rule;
                 }

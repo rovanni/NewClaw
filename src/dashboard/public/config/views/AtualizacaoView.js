@@ -1,7 +1,8 @@
-import { checkUpdate, applyUpdate } from '../api.js';
+import { checkUpdate, applyUpdate, getStatus } from '../api.js';
 import { showToast } from '../components/Toast.js';
 
-const TELEGRAM_WAIT = 30; // segundos fixos — limite do Telegram para liberar polling
+const TELEGRAM_WAIT = 30; // segundos — limite para Telegram liberar polling
+const GENERIC_WAIT  = 5;  // segundos — quando Telegram não está configurado
 
 export function render(container) {
   container.innerHTML = `
@@ -22,15 +23,15 @@ export function render(container) {
           <!-- Progresso da atualização (oculto até iniciar) -->
           <div id="upd-progress-wrap" style="display:none;margin-bottom:16px">
 
-            <!-- Fase 1: Telegram -->
+            <!-- Fase 1: aguardar serviços finalizarem -->
             <div id="upd-phase1">
               <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
-                <span style="font-size:.82rem;color:var(--text-soft)">
-                  📱 Aguardando Telegram liberar conexão…
+                <span id="upd-phase1-label" style="font-size:.82rem;color:var(--text-soft)">
+                  ⏳ Aguardando processos finalizarem…
                 </span>
                 <span id="upd-countdown-num"
                       style="font-size:.9rem;font-weight:700;color:var(--warning);min-width:32px;text-align:right">
-                  ${TELEGRAM_WAIT}s
+                  …
                 </span>
               </div>
               <div style="height:5px;background:var(--border);border-radius:3px;overflow:hidden">
@@ -145,8 +146,18 @@ export function render(container) {
       showToast(t('update_started_toast'), 'success');
       progressWrap.style.display = 'block';
 
-      // ── Fase 1: 30s fixos (Telegram precisa deste tempo para liberar) ─────
-      runPhase1(TELEGRAM_WAIT, () => {
+      // Determina tempo de espera baseado em canais ativos
+      let waitSeconds = GENERIC_WAIT;
+      try {
+        const status = await getStatus();
+        if (status?.telegramChannel !== null && status?.telegramChannel !== undefined) {
+          waitSeconds = TELEGRAM_WAIT;
+          document.getElementById('upd-phase1-label').textContent = '📱 Aguardando Telegram liberar conexão…';
+        }
+      } catch { /* mantém GENERIC_WAIT se API falhar */ }
+
+      // ── Fase 1: aguardar serviços finalizarem ─────────────────────────────
+      runPhase1(waitSeconds, () => {
 
         // ── Fase 2: terminal SSE + poll de fallback ──────────────────────────
         phase1El.style.display = 'none';

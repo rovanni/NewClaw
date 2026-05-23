@@ -26,7 +26,7 @@ export function render(container) {
         <summary>${t('backup_schedule_title')}</summary>
         <div class="cfg-details-body">
           <div id="bkp-scheduleInfo" class="form-hint" style="display:flex;align-items:flex-start;gap:8px">
-            <span>⏳</span><span>Consultando crontab do servidor…</span>
+            <span>⏳</span><span>Verificando agendamento de backup…</span>
           </div>
         </div>
       </details>
@@ -79,17 +79,14 @@ export function render(container) {
     if (s.found) {
       scheduleEl.innerHTML =
         `<span>🕐</span>` +
-        `<span>Backup automático configurado no crontab: ` +
-        `<strong>${esc(s.humanReadable || s.cronExpr)}</strong>` +
-        ` — <code style="font-size:.78rem">${esc(s.cronExpr)}</code>` +
-        `<br><span style="font-size:.78rem;color:var(--text-soft)">${esc(s.raw)}</span></span>`;
+        `<span>Backup automático ativo: <strong>${esc(s.humanReadable || s.cronExpr)}</strong></span>`;
     } else {
       scheduleEl.innerHTML =
-        `<span>ℹ️</span><span>Nenhum agendamento de backup encontrado no crontab do servidor. ` +
+        `<span>ℹ️</span><span>Nenhum agendamento automático configurado. ` +
         `Os backups manuais abaixo continuam funcionando normalmente.</span>`;
     }
   }).catch(() => {
-    scheduleEl.innerHTML = `<span>⚠️</span><span>Não foi possível ler o crontab do servidor.</span>`;
+    scheduleEl.innerHTML = `<span>⚠️</span><span>Não foi possível verificar o agendamento de backup.</span>`;
   });
 
   // ── Retenção ──────────────────────────────────────────────────────────────

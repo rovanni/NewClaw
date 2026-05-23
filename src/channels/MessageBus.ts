@@ -36,6 +36,8 @@ export class MessageBus {
     private goalOrchestrator?: GoalOrchestrator;
     /** Custom command handlers (e.g., /clear, /skills) */
     private commandHandlers: Map<string, (msg: NormalizedMessage) => Promise<string | null>> = new Map();
+    /** Priority command handlers — executam imediatamente, bypassam a fila (e.g., /cancelar) */
+    private priorityCommandHandlers: Map<string, (msg: NormalizedMessage) => Promise<string | null>> = new Map();
     /** Custom media handlers */
     private mediaHandlers: Map<string, (msg: NormalizedMessage, attachment: ChannelAttachment) => Promise<string | null>> = new Map();
     /** Recently processed message IDs to prevent Telegram duplicate delivery */
@@ -81,6 +83,15 @@ export class MessageBus {
     /** Registrar handler de comando (ex: /clear, /skills) */
     registerCommand(command: string, handler: (msg: NormalizedMessage) => Promise<string | null>): void {
         this.commandHandlers.set(command, handler);
+    }
+
+    /**
+     * Registrar comando de prioridade máxima (ex: /cancelar).
+     * Esses comandos bypassam completamente a fila — executam imediatamente mesmo
+     * com uma tarefa longa em andamento e descartam tarefas pendentes na fila.
+     */
+    registerPriorityCommand(command: string, handler: (msg: NormalizedMessage) => Promise<string | null>): void {
+        this.priorityCommandHandlers.set(command, handler);
     }
 
     /** Registrar handler de mídia (ex: photo → vision, voice → whisper) */
@@ -273,6 +284,22 @@ export class MessageBus {
 
         // Chave da fila: por canal + usuário — preserva independência entre usuários
         const queueId = `${msg.channel}:${msg.userId}`;
+
+        // Comandos de prioridade máxima (ex: /cancelar) bypassam a fila completamente.
+        // Executam imediatamente, cancelam a operação em curso e descartam tarefas pendentes.
+        if (msg.text.startsWith('/')) {
+            const commandName = msg.text.split(' ')[0].toLowerCase();
+            const priorityHandler = this.priorityCommandHandlers.get(commandName);
+            if (priorityHandler) {
+                const cleared = this.conversationQueues.clearQueue(queueId);
+                const response = await priorityHandler(msg).catch(() => null);
+                if (response && adapter) {
+                    await adapter.send({ text: response, format: 'plain' }, msg.rawContext).catch(() => {});
+                }
+                log.info('priority_command_executed', `cmd=${commandName} clearedPending=${cleared}`, { queueId, correlationId });
+                return;
+            }
+        }
 
         const result = this.conversationQueues.enqueue(
             queueId,

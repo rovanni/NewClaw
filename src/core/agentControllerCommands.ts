@@ -18,7 +18,7 @@ export function registerCommands(
     agentLoop: AgentLoop
 ): void {
     for (const cmd of ['/cancelar', '/cancel', '/stop', '/pare']) {
-        messageBus.registerCommand(cmd, async (msg) => {
+        messageBus.registerPriorityCommand(cmd, async (msg) => {
             agentLoop.cancel(msg.userId);
             return '⏹ Operação cancelada.';
         });

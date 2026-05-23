@@ -27,7 +27,7 @@ function buildPlanPrompt(goal: Goal): string {
 OBJETIVO: ${goal.objective}
 INTENÇÃO ORIGINAL: ${goal.userIntent}
 
-Ferramentas disponíveis: exec_command, read_file, write_file, web_search, web_navigate, memory_search, read_document, list_workspace
+Ferramentas disponíveis: exec_command, read, write, edit, web_search, web_navigate, memory_search, read_document, list_workspace
 
 Responda APENAS com JSON válido (sem markdown):
 {
