@@ -21,7 +21,7 @@ import {
 
 const log = createLogger('WorkflowEngine');
 
-const TTL_MS = 5 * 60 * 1000; // 5 minutos
+const TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 dias (cleanup do banco apenas — autorização não expira)
 
 type SqliteDb = {
     prepare(sql: string): {
@@ -126,12 +126,6 @@ export class WorkflowEngine {
 
         if (!txn) {
             log.warn(`[WF] not_found ${txnId}`);
-            return undefined;
-        }
-
-        if (Date.now() > txn.expiresAt) {
-            this.deleteTxn(txnId);
-            log.warn(`[WF] expired ${txnId}`);
             return undefined;
         }
 

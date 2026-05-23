@@ -218,7 +218,7 @@ const DETERMINISTIC_RULES: DeterministicRule[] = [
         category: 'memory_operation',
         executionMode: 'tool',
         keywords: ['lembrar', 'lembre', 'memorizar', 'memorize', 'guardar', 'guarde', 'salvar na memória', 'salvar na memoria', 'adicionar nó', 'criar nó', 'conectar nó', 'anote', 'registre'],
-        patterns: [/(guarde|salve|lembre|lembrete|memorize|anote|registre|adicionar|adiciona|guarda)\b/i],
+        patterns: [/(guarde|lembre|lembrete|memorize|anote|registre|adicionar|adiciona|guarda)\b/i],
         confidence: 0.88,
         riskLevel: 'low',
         cognitiveLoad: 'minimal',

@@ -217,6 +217,10 @@ export class ProviderFactory {
                         if (extractedCalls) {
                             log.info(`[${attemptId}] Extracted leaked tool call: ${extractedCalls[0].name}`);
                             result.toolCalls = extractedCalls;
+                        } else {
+                            // Extraction failed (truncated JSON) — strip the artifact from content
+                            // so the user doesn't receive malformed JSON embedded in the response.
+                            result.content = this.stripLeakedToolCallArtifacts(result.content);
                         }
                     }
 
@@ -338,6 +342,27 @@ export class ProviderFactory {
             log.info(`Failed to parse leaked tool call: ${e}`);
         }
         return undefined;
+    }
+
+    /**
+     * Strips truncated/malformed tool call JSON that leaked into plain-text content.
+     * When extractLeakedToolCalls() cannot parse a tool call (e.g. stream cut mid-JSON),
+     * the raw JSON fragment remains in the content and corrupts the response shown to the
+     * user. This method removes it by truncating at the opening marker.
+     */
+    stripLeakedToolCallArtifacts(content: string): string {
+        if (!content) return content;
+        // Find the earliest marker position
+        const markers = [
+            content.search(/\[TOOL_CALL\]/i),
+            content.search(/<tool_call>/i),
+            content.search(/```json\s*\{[\s\S]{0,50}"name"/i),
+        ].filter(pos => pos >= 0);
+        if (markers.length === 0) return content;
+        const cutAt = Math.min(...markers);
+        const cleaned = content.slice(0, cutAt).trimEnd();
+        log.info(`Stripped leaked tool call artifact at position ${cutAt} (content truncated from ${content.length} to ${cleaned.length} chars)`);
+        return cleaned;
     }
 
     async classifyWithFallback(messages: LLMMessage[], timeoutMs: number = 120000): Promise<LLMResponse> {
