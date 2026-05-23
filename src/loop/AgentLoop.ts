@@ -95,7 +95,7 @@ export class AgentLoop {
         this.skillLearner = skillLearner as SkillLearner;
         this.skillLoader = skillLoader as SkillLoader;
         this.profileRegistry = new ModelProfileRegistry(config.modelRouter, providerFactory);
-        this.intentRouter = new UnifiedIntentRouter(this.skillLearner);
+        this.intentRouter = new UnifiedIntentRouter(this.skillLearner, providerFactory);
         this.stateManager = new AgentStateManager(memory);
         this.protocolParser = new ProtocolParser();
         this.classificationMemory = classificationMemory as ClassificationMemory;
@@ -704,7 +704,7 @@ export class AgentLoop {
         try {
         move('START_TURN');
 
-        const intentDecision: IntentDecision = this.intentRouter.route(userText, { sessionId: conversationId });
+        const intentDecision: IntentDecision = await this.intentRouter.route(userText, { sessionId: conversationId });
 
         traceManager.addStep(trace, 'intent_classification', {
             intent: intentDecision.intent,

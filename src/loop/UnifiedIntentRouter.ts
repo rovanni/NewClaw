@@ -12,6 +12,7 @@
 
 import { createLogger } from '../shared/AppLogger';
 import type { SkillLearner } from './SkillLearner';
+import type { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 
 const log = createLogger('UnifiedIntentRouter');
 
@@ -211,51 +212,6 @@ const DETERMINISTIC_RULES: DeterministicRule[] = [
         terminalAction: false,
     },
 
-    // ── Crypto/Market data ──
-    {
-        id: 'crypto_market',
-        category: 'data_analysis',
-        executionMode: 'hybrid',
-        keywords: ['cotação', 'cotacao', 'quanto custa', 'quanto chega', 'chega em quanto', 'cripto', 'crypto', 'bitcoin', 'btc', 'ethereum', 'eth', 'solana', 'sol', 'cardano', 'ada', 'xrp', 'dogecoin', 'doge', 'market cap'],
-        patterns: [/(cota[cç][aã]o|quanto (custa|est[aá]|chega|vale)|bitcoin|btc|ethereum|\beth\b|solana|\bsol\b|cardano|\bada\b|xrp|dogecoin|doge|river|cripto|crypto|market cap)/i],
-        confidence: 0.88,
-        riskLevel: 'low',
-        cognitiveLoad: 'normal',
-        requiresReasoning: true,
-        requiresTools: true,
-        requiresMemory: false,
-        requiresPlanning: false,
-        requiresStreaming: false,
-        modelCategory: 'analysis',
-        terminalAction: false,
-        toolName: 'web_search',
-        toolParams: (input: string) => {
-            const cleanQuery = input.replace(/^(e\s+)?(a\s+)?(qual|[eé]\s+)?/i, '').trim();
-            return { query: cleanQuery || input };
-        },
-    },
-
-    // ── Web search ──
-    {
-        id: 'web_search',
-        category: 'information',
-        executionMode: 'hybrid',
-        keywords: ['buscar na web', 'pesquisar na internet', 'google', 'procure na web', 'search web', 'notícia sobre', 'noticia sobre', 'o que é', 'o que e', 'quem é', 'quem e', 'onde fica', 'como funciona', 'explique', 'defina', 'o que significa'],
-        patterns: [/(buscar na web|pesquisar na internet|google|procure na web|not[ií]cia|o que [eé]|quem [eé]|como funciona|onde fica|explique|defina)/i],
-        confidence: 0.85,
-        riskLevel: 'low',
-        cognitiveLoad: 'normal',
-        requiresReasoning: true,
-        requiresTools: true,
-        requiresMemory: false,
-        requiresPlanning: false,
-        requiresStreaming: false,
-        modelCategory: 'chat',
-        terminalAction: false,
-        toolName: 'web_search',
-        toolParams: (input: string) => ({ query: input }),
-    },
-
     // ── Memory operations ──
     {
         id: 'memory_write',
@@ -318,65 +274,6 @@ const DETERMINISTIC_RULES: DeterministicRule[] = [
         terminalAction: false,
         toolName: 'exec_command',
         toolParams: (input: string) => ({ command: input }),
-    },
-
-    // ── File operations ──
-    {
-        id: 'file_write',
-        category: 'creation',
-        executionMode: 'tool',
-        keywords: ['criar arquivo', 'criar página', 'criar site', 'novo arquivo', 'gerar html', 'salvar'],
-        patterns: [/(criar|novo|gerar|escrever|salvar).*(arquivo|página|pagina|site|html|css)/i],
-        confidence: 0.80,
-        riskLevel: 'low',
-        cognitiveLoad: 'normal',
-        requiresReasoning: true,
-        requiresTools: true,
-        requiresMemory: false,
-        requiresPlanning: false,
-        requiresStreaming: false,
-        modelCategory: 'code',
-        terminalAction: false,
-        toolName: 'write',
-        toolParams: (_input: string) => ({ path: './workspace/tmp/', content: '' }),
-    },
-    {
-        id: 'file_read',
-        category: 'information',
-        executionMode: 'tool',
-        keywords: ['listar arquivos', 'ler arquivo', 'ver arquivo', 'mostrar arquivo', 'listar diretório'],
-        patterns: [/(ler|ver|mostrar|listar).*(arquivo|diretório|diretorio|pasta)/i],
-        confidence: 0.85,
-        riskLevel: 'low',
-        cognitiveLoad: 'minimal',
-        requiresReasoning: false,
-        requiresTools: true,
-        requiresMemory: false,
-        requiresPlanning: false,
-        requiresStreaming: false,
-        modelCategory: 'chat',
-        terminalAction: false,
-        toolName: 'read',
-        toolParams: (_input: string) => ({ path: './workspace/' }),
-    },
-    {
-        id: 'file_edit',
-        category: 'creation',
-        executionMode: 'tool',
-        keywords: ['editar arquivo', 'alterar arquivo', 'mover arquivo', 'deletar arquivo', 'substituir'],
-        patterns: [/(editar|mudar|alterar|substituir|mover|deletar).*(arquivo|file)/i],
-        confidence: 0.82,
-        riskLevel: 'medium',
-        cognitiveLoad: 'normal',
-        requiresReasoning: true,
-        requiresTools: true,
-        requiresMemory: false,
-        requiresPlanning: false,
-        requiresStreaming: false,
-        modelCategory: 'code',
-        terminalAction: false,
-        toolName: 'edit',
-        toolParams: (_input: string) => ({ path: './workspace/' }),
     },
 
     // ── Weather queries ──
@@ -505,16 +402,20 @@ export class UnifiedIntentRouter {
     private classificationCache: Map<string, { decision: IntentDecision; timestamp: number }> = new Map();
     private readonly CACHE_TTL = 300_000; // 5 minutes
     private skillLearner: SkillLearner | null;
+    private providerFactory: ProviderFactory | null;
 
-    constructor(skillLearner?: SkillLearner) {
+    constructor(skillLearner?: SkillLearner, providerFactory?: ProviderFactory) {
         this.skillLearner = skillLearner ?? null;
+        this.providerFactory = providerFactory ?? null;
     }
 
     /**
      * Route a user input through the 3-layer pipeline.
-     * This is the SINGLE source of truth for intent classification.
+     * Layer 1: deterministic gate (regex, zero latency) for unambiguous cases.
+     * Layer 2: LLM classification for everything else (falls back to keyword scoring if no provider).
+     * Layer 3: strategy selection (sync).
      */
-    route(input: string, context?: { lastTask?: string; sessionId?: string }): IntentDecision {
+    async route(input: string, context?: { lastTask?: string; sessionId?: string }): Promise<IntentDecision> {
         const startTime = Date.now();
         const trace: RoutingTrace = {
             inputHash: this.hashInput(input),
@@ -535,9 +436,11 @@ export class UnifiedIntentRouter {
             return this.cacheAndTrace(input, this.enrichWithSkillContext(input, decision));
         }
 
-        // ── Layer 2: Semantic Routing ──
+        // ── Layer 2: LLM Classification (with keyword fallback) ──
         const semStart = Date.now();
-        const semanticResult = this.semanticRoute(input);
+        const semanticResult = this.providerFactory
+            ? await this.llmClassify(input)
+            : this.semanticRoute(input);
         trace.steps.push({ step: 'semantic_routing', durationMs: Date.now() - semStart, result: semanticResult.category });
 
         // ── Layer 3: Strategy Selection ──
@@ -548,22 +451,35 @@ export class UnifiedIntentRouter {
         trace.semanticCategory = semanticResult.category;
         trace.strategyDecision = decision.executionMode;
 
-        log.info(`[UNIFIED-ROUTER] Semantic: ${semanticResult.category} → ${decision.executionMode} (confidence: ${decision.confidence}, model: ${decision.modelCategory})`);
-        const enriched = this.enrichWithSkillContext(input, { ...decision, trace: { ...decision.trace, ...trace, totalTimeMs: Date.now() - startTime } });
+        const source = this.providerFactory ? 'semantic' : 'fallback';
+        log.info(`[UNIFIED-ROUTER] ${source === 'semantic' ? 'LLM' : 'Keyword'}: ${semanticResult.category} → ${decision.executionMode} (confidence: ${decision.confidence}, model: ${decision.modelCategory})`);
+        const enriched = this.enrichWithSkillContext(input, { ...decision, source, trace: { ...decision.trace, ...trace, totalTimeMs: Date.now() - startTime } });
         return this.cacheAndTrace(input, enriched);
     }
 
     /**
-     * Synchronous route (uses cache + deterministic only).
-     * For cases where async is not available.
+     * Synchronous route — uses cache + deterministic gate + keyword fallback only.
+     * Does NOT call LLM. Use for contexts where async is unavailable.
      */
     routeSync(input: string, context?: { lastTask?: string; sessionId?: string }): IntentDecision {
-        // Check cache first
         const cached = this.classificationCache.get(input.trim().toLowerCase());
         if (cached && (Date.now() - cached.timestamp) < this.CACHE_TTL) {
             return cached.decision;
         }
-        return this.route(input, context);
+
+        const startTime = Date.now();
+        const trace: RoutingTrace = { inputHash: this.hashInput(input), inputLength: input.length, totalTimeMs: 0, steps: [] };
+
+        const deterministicMatch = this.deterministicGate(input);
+        if (deterministicMatch) {
+            const decision = this.buildDecisionFromRule(deterministicMatch, input, 'deterministic', trace, startTime);
+            return this.cacheAndTrace(input, this.enrichWithSkillContext(input, decision));
+        }
+
+        const semanticResult = this.semanticRoute(input);
+        const decision = this.strategySelection(input, semanticResult, context);
+        const enriched = this.enrichWithSkillContext(input, { ...decision, source: 'fallback' as const, trace: { ...trace, totalTimeMs: Date.now() - startTime } });
+        return this.cacheAndTrace(input, enriched);
     }
 
     // ── Layer 1: Deterministic Gate ─────────────────────────────────────
@@ -625,7 +541,62 @@ export class UnifiedIntentRouter {
         return null;
     }
 
-    // ── Layer 2: Semantic Routing ────────────────────────────────────────
+    // ── Layer 2a: LLM Classification ─────────────────────────────────────
+
+    private async llmClassify(input: string): Promise<{ category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number }> {
+        const messages: LLMMessage[] = [
+            {
+                role: 'system',
+                content: `You are an intent classifier. Classify the user message into exactly one category.
+
+Categories:
+- greeting: greetings, farewells, thanks, casual social phrases
+- confirmation: explicit yes/proceed/confirm/authorize
+- rejection: explicit no/cancel/stop/abort
+- creation: creating or generating any content — files, slides, HTML, documents, code, presentations, PDFs
+- information: factual questions, web searches, explanations, definitions
+- data_analysis: analyzing data, statistics, crypto/market prices, financial data, reports
+- memory_operation: saving to or retrieving from memory/notes
+- system_operation: shell commands, servers, deployment, infrastructure, SSH
+- audio: generating audio, TTS, voice narration
+- vision: analyzing images, screenshots, OCR
+- destructive: deleting files/databases, formatting disks, dangerous system commands
+- conversation: general chat, opinions, follow-ups, ambiguous requests
+
+Respond with ONLY valid JSON, no other text:
+{"category": "<category>", "cognitiveLoad": "minimal|normal|deep", "confidence": 0.0}`,
+            },
+            { role: 'user', content: input },
+        ];
+
+        try {
+            const result = await this.providerFactory!.chatWithFallback(messages, undefined, undefined, 8000);
+            if (result.status !== 'success' || !result.content) throw new Error('LLM classification failed');
+
+            const raw = result.content.trim().replace(/^```json\s*|\s*```$/g, '');
+            const parsed = JSON.parse(raw) as { category?: string; cognitiveLoad?: string; confidence?: number };
+
+            const VALID_CATEGORIES: IntentCategory[] = ['greeting', 'conversation', 'information', 'creation', 'system_operation', 'data_analysis', 'memory_operation', 'audio', 'vision', 'destructive', 'confirmation', 'rejection'];
+            const category = VALID_CATEGORIES.includes(parsed.category as IntentCategory) ? (parsed.category as IntentCategory) : 'conversation';
+            const cognitiveLoad = (['minimal', 'normal', 'deep'].includes(parsed.cognitiveLoad ?? '') ? parsed.cognitiveLoad : 'normal') as CognitiveLoad;
+            const confidence = typeof parsed.confidence === 'number' ? Math.min(Math.max(parsed.confidence, 0.5), 0.95) : 0.7;
+
+            const MODEL_CATEGORY_MAP: Record<IntentCategory, 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'> = {
+                greeting: 'light', confirmation: 'light', rejection: 'light', conversation: 'chat',
+                information: 'chat', creation: 'code', data_analysis: 'analysis',
+                memory_operation: 'chat', system_operation: 'execution',
+                audio: 'chat', vision: 'vision', destructive: 'execution',
+            };
+
+            log.info(`[UNIFIED-ROUTER] LLM classified: "${input.slice(0, 60)}" → ${category} (confidence: ${confidence})`);
+            return { category, modelCategory: MODEL_CATEGORY_MAP[category], cognitiveLoad, requiresReasoning: cognitiveLoad !== 'minimal', confidence };
+        } catch (err) {
+            log.warn(`[UNIFIED-ROUTER] LLM classification failed, falling back to keyword routing: ${err}`);
+            return this.semanticRoute(input);
+        }
+    }
+
+    // ── Layer 2b: Keyword Semantic Routing (fallback) ─────────────────────
 
     private semanticRoute(input: string): { category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number } {
         const lower = input.toLowerCase().trim();
@@ -926,17 +897,18 @@ export class UnifiedIntentRouter {
 
     /**
      * Get model category for a given input (used by ModelProfileRegistry for profile resolution).
+     * Uses sync routing (cache + deterministic + keyword fallback) — no LLM call.
      */
     getModelCategory(input: string): 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution' {
-        const decision = this.route(input);
-        return decision.modelCategory;
+        return this.routeSync(input).modelCategory;
     }
 
     /**
      * Get the full IntentDecision for observability.
+     * Uses sync routing — no LLM call.
      */
     getDecision(input: string): IntentDecision {
-        return this.route(input);
+        return this.routeSync(input);
     }
 
     /**
