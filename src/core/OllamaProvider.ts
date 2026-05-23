@@ -417,7 +417,7 @@ export class OllamaProvider implements ILLMProvider {
      * Fallback: non-streaming request when streaming fails.
      * Only safe to call as last resort from chatWithFallback.
      */
-    public async _fallbackNonStreaming(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal): Promise<LLMResponse> {
+    public async fallbackNonStreaming(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal): Promise<LLMResponse> {
         const numCtx = this.numCtx;
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;

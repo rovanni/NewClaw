@@ -283,7 +283,7 @@ export class ProviderFactory {
             if (ollamaProvider instanceof OllamaProvider) {
                 log.info(`[${requestId}] All streaming attempts failed — trying non-streaming fallback`);
                 try {
-                    const result = await ollamaProvider._fallbackNonStreaming(messages, tools, timeoutMs);
+                    const result = await ollamaProvider.fallbackNonStreaming(messages, tools, timeoutMs);
                     if (result.content && result.content.trim()) {
                         attemptLog.push({ provider: 'ollama', model: 'non-streaming-fallback', duration: Date.now() - startTime, status: 'success' });
                         return {

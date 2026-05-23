@@ -164,18 +164,32 @@ export class ProtocolParser {
             /* Strategy 1 failed: Not a direct JSON string, moving to block extraction */
         }
 
-        // Strategy 2: Extract JSON block from mixed content
+        // Strategy 2: Extract JSON block from mixed content.
+        // Walks the string char-by-char to find the outermost balanced {} block,
+        // avoiding the greedy-regex pitfall of matching from the first '{' to the
+        // last '}' across multiple disjoint JSON objects or trailing punctuation.
         try {
-            const match = content.match(/\{[\s\S]*\}/);
-            if (match) {
-                let jsonStr = match[0];
-                jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '');
-                jsonStr = jsonStr.replace(/,\s*([\}\]])/g, '$1');
-                return JSON.parse(jsonStr);
+            const start = content.indexOf('{');
+            if (start !== -1) {
+                let depth = 0;
+                let end = -1;
+                for (let i = start; i < content.length; i++) {
+                    if (content[i] === '{') depth++;
+                    else if (content[i] === '}') {
+                        depth--;
+                        if (depth === 0) { end = i; break; }
+                    }
+                }
+                if (end !== -1) {
+                    let jsonStr = content.slice(start, end + 1);
+                    jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '');
+                    jsonStr = jsonStr.replace(/,\s*([\}\]])/g, '$1');
+                    return JSON.parse(jsonStr);
+                }
             }
-            } catch {
-                /* Strategy 2 failed: Block found but not valid JSON, moving to partial extraction */
-            }
+        } catch {
+            /* Strategy 2 failed: Block found but not valid JSON, moving to partial extraction */
+        }
 
         // Strategy 3: Extract partial content from malformed JSON
         // Guard: if content looks like a tool call, don't misidentify action.input.content
