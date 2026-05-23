@@ -249,7 +249,7 @@ export class AgentLoop {
 
         const task = isApproved
             ? result.success
-                ? 'Apresente o resultado ao usuário de forma clara e útil.'
+                ? 'O comando foi executado e o resultado está no campo "toolResult" do JSON acima. Apresente esse conteúdo ao usuário de forma clara e útil. Não peça ao usuário para colar ou informar a saída — você já a possui no campo toolResult.'
                 : 'Informe claramente a falha e sugira uma alternativa se disponível.'
             : 'Informe que a ação foi cancelada e ofereça uma alternativa sem precisar de autorização, se disponível.';
 
