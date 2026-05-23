@@ -296,12 +296,36 @@ export class ProtocolParser {
      * 3. Retry the strict parse
      */
     private semanticRecovery(content: string): StructuredAgentResponse {
-        log.warn(`[PROTOCOL] 🔄 Semantic recovery — wrapping unstructured content as 'planning' with isComplete=false`);
+        const trimmed = content.trim();
 
+        // Substantive plain-text responses (≥500 chars, no tool-call markers) are treated
+        // as final answers. Short fragments (<500 chars) are typically activity-timeout
+        // artifacts — keep them as planning so the loop retries.
+        if (trimmed.length >= 500 && !this.hasNativeToolCallStructure(trimmed)) {
+            log.warn(`[PROTOCOL] 🔄 Semantic recovery — substantive plain-text (${trimmed.length} chars) treated as final_answer`);
+            return {
+                type: 'final_answer',
+                content: trimmed,
+                isComplete: true,
+                confidence: 'low',
+                evaluation: {
+                    is_complete: true,
+                    confidence: 'low',
+                    reason: 'Protocol violation: long unstructured content recovered as final answer.',
+                },
+                metadata: {
+                    protocolViolation: true,
+                    rawContentLength: trimmed.length,
+                    recoveryNeeded: false,
+                },
+            };
+        }
+
+        log.warn(`[PROTOCOL] 🔄 Semantic recovery — wrapping unstructured content as 'planning' with isComplete=false`);
         return {
             type: 'planning',
-            content: content.trim(),
-            isComplete: false, // CRITICAL: Never assume completion from unstructured content
+            content: trimmed,
+            isComplete: false,
             confidence: 'low',
             reasoningRequired: true,
             evaluation: {
@@ -311,7 +335,7 @@ export class ProtocolParser {
             },
             metadata: {
                 protocolViolation: true,
-                rawContentLength: content.length,
+                rawContentLength: trimmed.length,
                 recoveryNeeded: true,
             },
         };

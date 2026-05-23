@@ -137,8 +137,10 @@ export class OllamaProvider implements ILLMProvider {
         // Floor is 90s to accommodate large cloud models (31B+) with network latency + queue time.
         const approxInputTokens = messages.reduce((sum, m) => sum + Math.ceil((m.content?.length || 0) / 4), 0);
         const CONNECTION_TIMEOUT = Math.max(90_000, Math.min(180_000, Math.ceil(approxInputTokens / 80) * 1000));
-        const ACTIVITY_TIMEOUT = 90_000;
         const MAX_TIMEOUT = customTimeoutMs || 300_000;
+        // Scale activity timeout with MAX_TIMEOUT so long-generation tasks (e.g. 385s budget)
+        // aren't killed after 90s of model silence. Cap at 180s to keep a safety ceiling.
+        const ACTIVITY_TIMEOUT = Math.min(180_000, Math.max(90_000, Math.floor(MAX_TIMEOUT * 0.4)));
 
         // Validate signal BEFORE creating timers to avoid leaking them on early abort
         if (externalSignal?.aborted) {
