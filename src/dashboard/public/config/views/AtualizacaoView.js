@@ -1,6 +1,8 @@
 import { checkUpdate, applyUpdate } from '../api.js';
 import { showToast } from '../components/Toast.js';
 
+const TELEGRAM_WAIT = 30; // segundos fixos — limite do Telegram para liberar polling
+
 export function render(container) {
   container.innerHTML = `
     <div class="page-view">
@@ -16,19 +18,66 @@ export function render(container) {
             ${t('update_checking')}
           </div>
           <div id="upd-changelog" style="display:none;margin-bottom:14px"></div>
+
+          <!-- Progresso da atualização (oculto até iniciar) -->
+          <div id="upd-progress-wrap" style="display:none;margin-bottom:16px">
+
+            <!-- Fase 1: Telegram -->
+            <div id="upd-phase1">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+                <span style="font-size:.82rem;color:var(--text-soft)">
+                  📱 Aguardando Telegram liberar conexão…
+                </span>
+                <span id="upd-countdown-num"
+                      style="font-size:.9rem;font-weight:700;color:var(--warning);min-width:32px;text-align:right">
+                  ${TELEGRAM_WAIT}s
+                </span>
+              </div>
+              <div style="height:5px;background:var(--border);border-radius:3px;overflow:hidden">
+                <div id="upd-countdown-bar"
+                     style="height:100%;background:var(--warning);border-radius:3px;width:100%;transition:width 1s linear">
+                </div>
+              </div>
+            </div>
+
+            <!-- Fase 2: Build + reinício (oculto até fase 1 terminar) -->
+            <div id="upd-phase2" style="display:none;margin-top:12px">
+              <div style="display:flex;align-items:center;gap:10px;font-size:.82rem;color:var(--text-soft)">
+                <span id="upd-pulse"
+                      style="width:8px;height:8px;border-radius:50%;background:var(--accent);
+                             display:inline-block;animation:upd-blink 1s infinite">
+                </span>
+                <span>🔧 Compilando e reiniciando… aguardando servidor</span>
+              </div>
+            </div>
+          </div>
+
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
             <button class="btn btn-secondary" id="upd-checkBtn">${t('update_check_btn')}</button>
             <button class="btn btn-primary"   id="upd-applyBtn" style="display:none">${t('update_apply_btn')}</button>
           </div>
         </div>
       </details>
-    </div>`;
+    </div>
 
-  const statusEl    = document.getElementById('upd-status');
-  const changelogEl = document.getElementById('upd-changelog');
-  const checkBtn    = document.getElementById('upd-checkBtn');
-  const applyBtn    = document.getElementById('upd-applyBtn');
+    <style>
+      @keyframes upd-blink {
+        0%,100% { opacity:1; transform:scale(1); }
+        50%      { opacity:.3; transform:scale(.7); }
+      }
+    </style>`;
 
+  const statusEl      = document.getElementById('upd-status');
+  const changelogEl   = document.getElementById('upd-changelog');
+  const checkBtn      = document.getElementById('upd-checkBtn');
+  const applyBtn      = document.getElementById('upd-applyBtn');
+  const progressWrap  = document.getElementById('upd-progress-wrap');
+  const phase1El      = document.getElementById('upd-phase1');
+  const phase2El      = document.getElementById('upd-phase2');
+  const countdownNum  = document.getElementById('upd-countdown-num');
+  const countdownBar  = document.getElementById('upd-countdown-bar');
+
+  // ── Verificar atualização ─────────────────────────────────────────────────
   async function runCheck() {
     checkBtn.disabled = true;
     statusEl.style.color = 'var(--text-soft)';
@@ -76,28 +125,65 @@ export function render(container) {
 
   checkBtn.addEventListener('click', runCheck);
 
+  // ── Fluxo de atualização em duas fases ───────────────────────────────────
   applyBtn.addEventListener('click', async () => {
     if (!confirm(t('update_confirm'))) return;
+
     applyBtn.disabled = true;
     checkBtn.disabled = true;
     changelogEl.style.display = 'none';
     statusEl.innerHTML = `<span style="color:var(--warning)">${t('update_in_progress')}</span>`;
+
     try {
       await applyUpdate();
       showToast(t('update_started_toast'), 'success');
-      let tries = 0;
-      const poll = async () => {
-        try { const r = await fetch('/api/status'); if (r.ok) { location.reload(); return; } } catch {}
-        if (++tries < 60) setTimeout(poll, 3000);
-        else statusEl.innerHTML = `<span style="color:var(--danger)">${t('update_timeout_warn')}</span>`;
-      };
-      setTimeout(poll, 10000);
+      progressWrap.style.display = 'block';
+
+      // ── Fase 1: 30s fixos (Telegram precisa deste tempo para liberar) ─────
+      runPhase1(TELEGRAM_WAIT, () => {
+
+        // ── Fase 2: poll até o servidor responder (build terminou) ──────────
+        phase1El.style.display = 'none';
+        phase2El.style.display = 'block';
+
+        let tries = 0;
+        const poll = async () => {
+          try {
+            const r = await fetch('/api/status');
+            if (r.ok) { location.reload(); return; }
+          } catch {}
+          if (++tries < 60) setTimeout(poll, 3000); // tenta por até 3 minutos
+          else {
+            progressWrap.style.display = 'none';
+            statusEl.innerHTML = `<span style="color:var(--danger)">${t('update_timeout_warn')}</span>`;
+          }
+        };
+        poll();
+      });
+
     } catch (e) {
       showToast('❌ ' + e.message, 'error');
       applyBtn.disabled = false;
       checkBtn.disabled = false;
+      progressWrap.style.display = 'none';
     }
   });
+
+  function runPhase1(seconds, onDone) {
+    let remaining = seconds;
+    countdownNum.textContent = remaining + 's';
+    countdownBar.style.width = '100%';
+    void countdownBar.offsetWidth; // força reflow para a transição CSS iniciar do 100%
+
+    const tick = () => {
+      remaining--;
+      countdownNum.textContent = remaining + 's';
+      countdownBar.style.width = (remaining / seconds * 100) + '%';
+      if (remaining <= 0) { onDone(); return; }
+      setTimeout(tick, 1000);
+    };
+    setTimeout(tick, 1000);
+  }
 
   runCheck();
 }
