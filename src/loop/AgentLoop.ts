@@ -682,6 +682,8 @@ export class AgentLoop {
         let lastBestContent = '';
         let toolFailureCount = 0;
         const usedToolInputs = new Set<string>();
+        // Track filenames confirmed absent from workspace so DEDUP can block path-variant retries
+        const failedReadFilenames = new Set<string>();
 
         const turnAbort = new AbortController();
         this.activeTurns.set(conversationId, turnAbort);
@@ -932,7 +934,8 @@ export class AgentLoop {
 
                 // Generic signal 1: model already used native tools and now has a plain-text answer.
                 // Applies to any model that uses toolCalls[] natively instead of JSON protocol.
-                if (hasUsedNativeTools && finalText.length > 30) {
+                // Skip when recoveryNeeded=true: content is a timeout fragment, not a real final answer.
+                if (hasUsedNativeTools && finalText.length > 30 && !structured?.metadata?.recoveryNeeded) {
                     log.info(`[${this.ts()}] [PROTOCOL-EXIT] Native-tool model → plain-text final answer (step ${stepCount}, len=${finalText.length})`);
                     move('FINAL_READY', { step: stepCount, reason: 'native_tool_final' });
                     traceManager.completeTrace(trace, 'completed', finalText);
@@ -973,6 +976,26 @@ export class AgentLoop {
                     const toolName = toolCall.name;
                     const toolInput = JSON.stringify(toolCall.arguments);
                     const inputKey = `${toolName}:${toolInput}`;
+
+                    // Block read attempts on filenames already confirmed as non-existent,
+                    // regardless of path format (absolute, relative, workspace-prefixed, etc.)
+                    if (toolName === 'read') {
+                        const pathArg = String(toolCall.arguments?.path || '');
+                        const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
+                        if (filename && failedReadFilenames.has(filename)) {
+                            log.warn(`[${this.ts()}] [READ-NOTFOUND-BLOCK] Blocked read of absent file: ${filename}`);
+                            loopMessages.push({
+                                role: 'tool',
+                                content: `[BLOQUEADO] O arquivo "${filename}" já foi confirmado como INEXISTENTE no workspace. Use a ferramenta "write" para criar o arquivo com o conteúdo completo antes de tentar lê-lo.`,
+                                tool_call_id: toolCall.id,
+                            });
+                            loopMessages.push({
+                                role: 'system',
+                                content: `⚠️ "${filename}" NÃO EXISTE no workspace. Ação obrigatória: use "write" com o conteúdo completo para criá-lo. NÃO tente "read" antes de criar o arquivo.`,
+                            });
+                            continue;
+                        }
+                    }
 
                     if (usedToolInputs.has(inputKey)) {
                         const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
@@ -1064,10 +1087,22 @@ export class AgentLoop {
 
                         if (!result.success) {
                             toolFailureCount++;
-                            loopMessages.push({
-                                role: 'system',
-                                content: `[FALHA] A ferramenta "${resolvedToolName}" falhou (alternativas automáticas já tentadas). Tente uma abordagem diferente ou use seu conhecimento interno.`
-                            });
+                            const errorText = result.error ?? result.output ?? '';
+                            const isReadNotFound = resolvedToolName === 'read' && /não encontrado|not found/i.test(errorText);
+                            if (isReadNotFound) {
+                                const pathArg = String(resolvedArgs.path || '');
+                                const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
+                                if (filename) failedReadFilenames.add(filename);
+                                loopMessages.push({
+                                    role: 'system',
+                                    content: `[ARQUIVO INEXISTENTE] "${filename || pathArg}" não existe no workspace. Para criá-lo, use a ferramenta "write" com o conteúdo completo. NÃO tente "read" novamente antes de criar o arquivo com "write".`,
+                                });
+                            } else {
+                                loopMessages.push({
+                                    role: 'system',
+                                    content: `[FALHA] A ferramenta "${resolvedToolName}" falhou (alternativas automáticas já tentadas). Tente uma abordagem diferente ou use seu conhecimento interno.`
+                                });
+                            }
                         }
 
                         const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
