@@ -1,15 +1,18 @@
 /**
  * ProtocolParser — Strict Cognitive Protocol Parser with Semantic Recovery
- * 
+ *
  * Pipeline:
  *   LLM Response → Strict Parse → [parsed=YES] → StructuredAgentResponse
  *                          ↓
- *                   [parsed=NO] → Recovery Prompt → Reparse → [parsed=YES]
- *                                                          ↓
- *                                                   [parsed=NO] → ProtocolViolationError
- * 
- * NEVER falls back to heuristic text interpretation.
- * The runtime operates ONLY on StructuredAgentResponse.
+ *                   [parsed=NO] → semanticRecovery → planning (short) | final_answer (long)
+ *                                        ↓
+ *                              Recovery Prompt → Reparse → [parsed=YES]
+ *                                                      ↓
+ *                                               [parsed=NO] → ProtocolViolationError
+ *
+ * Semantic recovery uses content length as a heuristic: substantive responses
+ * (≥ MIN_FINAL_ANSWER_LENGTH chars) are treated as final answers; short fragments
+ * (typically activity-timeout artifacts) are treated as planning and retried.
  */
 
 import { createLogger } from '../shared/AppLogger';
@@ -36,6 +39,7 @@ CORRIJA IMEDIATAMENTE seguindo o formato:
 Responda APENAS o JSON. Sem texto adicional.`;
 
 const MAX_RECOVERY_ATTEMPTS = 2;
+const MIN_FINAL_ANSWER_LENGTH = 500;
 
 export class ProtocolParser {
     private metrics = new ProtocolMetrics();
@@ -234,7 +238,7 @@ export class ProtocolParser {
         }
 
         // ── Final answer ──
-        if (action.type === 'final_answer' || action.content) {
+        if (action.type === 'final_answer') {
             return {
                 type: 'final_answer',
                 content: action.content || '',
@@ -285,12 +289,12 @@ export class ProtocolParser {
 
     /**
      * SEMANTIC RECOVERY — Convert unstructured content into a StructuredAgentResponse.
-     * 
-     * CRITICAL: This does NOT interpret meaning via regex or heuristics.
-     * It wraps the raw content in a 'planning' type with isComplete=false,
-     * signaling the runtime that this response needs further processing.
-     * 
-     * The runtime should then:
+     *
+     * Uses content length as the primary heuristic:
+     * - ≥ MIN_FINAL_ANSWER_LENGTH chars → final_answer (isComplete=true): model likely finished
+     * - < MIN_FINAL_ANSWER_LENGTH chars → planning (isComplete=false): likely a timeout fragment
+     *
+     * The runtime should then for planning:
      * 1. Inject a recovery prompt
      * 2. Let the LLM restructure its response
      * 3. Retry the strict parse
@@ -301,7 +305,7 @@ export class ProtocolParser {
         // Substantive plain-text responses (≥500 chars, no tool-call markers) are treated
         // as final answers. Short fragments (<500 chars) are typically activity-timeout
         // artifacts — keep them as planning so the loop retries.
-        if (trimmed.length >= 500 && !this.hasNativeToolCallStructure(trimmed)) {
+        if (trimmed.length >= MIN_FINAL_ANSWER_LENGTH && !this.hasNativeToolCallStructure(trimmed)) {
             log.warn(`[PROTOCOL] 🔄 Semantic recovery — substantive plain-text (${trimmed.length} chars) treated as final_answer`);
             return {
                 type: 'final_answer',

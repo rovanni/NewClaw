@@ -72,11 +72,13 @@ export class OllamaProvider implements ILLMProvider {
     private baseUrl: string;
     private model: string;
     private apiKey: string;
+    private readonly numCtx: number;
 
     constructor(baseUrl: string = 'http://localhost:11434', model: string = 'glm-5.1:cloud', apiKey: string = '') {
         this.baseUrl = baseUrl;
         this.model = model;
         this.apiKey = apiKey;
+        this.numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
     }
 
     getBaseUrl(): string { return this.baseUrl; }
@@ -118,14 +120,14 @@ export class OllamaProvider implements ILLMProvider {
      * Streaming generator — yields content/thinking/tool_call tokens as they arrive from Ollama SSE.
      *
      * Timeout architecture:
-     *   - CONNECTION_TIMEOUT (120s): Time to first byte / first chunk
-     *   - ACTIVITY_TIMEOUT (120s): Time since last activity of ANY type
-     *   - MAX_TIMEOUT (default 300s): Hard ceiling safety net
+     *   - CONNECTION_TIMEOUT (90–180s dynamic): Time to first byte, scales with input token count
+     *   - ACTIVITY_TIMEOUT (90–180s dynamic): Time since last chunk, scales with MAX_TIMEOUT (×0.4)
+     *   - MAX_TIMEOUT (default 300s): Hard ceiling passed by AgentLoop, scales with context size
      *
      * Handles partial buffers (lines broken between chunks).
      */
     async *streamChat(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal): AsyncGenerator<StreamChunk> {
-        const streamId = `str-${Date.now().toString(36)}`;
+        const streamId = `str-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
 
@@ -258,8 +260,9 @@ export class OllamaProvider implements ILLMProvider {
 
                     const { text, type } = extractChunkText(chunk);
                     stats.total++;
-                    if (type !== 'unknown' && type !== 'content') stats[type]++;
-                    else if (type === 'content') stats.content++;
+                    if (type === 'content') stats.content++;
+                    else if (type !== 'unknown') stats[type as keyof typeof stats]++;
+                    else stats.unknown++;
 
                     if (isChunkActive(chunk) || text) {
                         resetActivityTimer();
