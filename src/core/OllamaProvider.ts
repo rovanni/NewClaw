@@ -131,7 +131,7 @@ export class OllamaProvider implements ILLMProvider {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
 
-        const numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
+        const numCtx = this.numCtx;
         const controller = new AbortController();
 
         // CONNECTION_TIMEOUT scales with prompt size: Ollama must process all input tokens
@@ -418,7 +418,7 @@ export class OllamaProvider implements ILLMProvider {
      * Only safe to call as last resort from chatWithFallback.
      */
     public async _fallbackNonStreaming(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal): Promise<LLMResponse> {
-        const numCtx = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
+        const numCtx = this.numCtx;
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
 
