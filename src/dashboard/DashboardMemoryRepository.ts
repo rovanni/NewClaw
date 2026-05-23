@@ -334,7 +334,16 @@ export class DashboardMemoryRepository {
 
     approveAutoSkill(id: string): boolean {
         const result = this.db.prepare(`
-            UPDATE auto_skills SET status = 'active', reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+            UPDATE auto_skills SET status = 'active', reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND status = 'proposed'
+        `).run(id);
+        return result.changes > 0;
+    }
+
+    activateAutoSkill(id: string): boolean {
+        const result = this.db.prepare(`
+            UPDATE auto_skills SET status = 'active', reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND status IN ('rejected', 'inactive')
         `).run(id);
         return result.changes > 0;
     }
@@ -348,7 +357,7 @@ export class DashboardMemoryRepository {
 
     deactivateAutoSkill(id: string): boolean {
         const result = this.db.prepare(`
-            UPDATE auto_skills SET status = 'rejected', reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            UPDATE auto_skills SET status = 'inactive', reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
             WHERE id = ? AND status = 'active'
         `).run(id);
         return result.changes > 0;

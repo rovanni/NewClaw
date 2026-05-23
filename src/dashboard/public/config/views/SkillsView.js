@@ -156,7 +156,8 @@ export function render(container) {
 
 function statusBadge(s) {
   if (s === 'active')   return `<span class="badge badge-active">${t('badge_active')}</span>`;
-  if (s === 'rejected') return `<span class="badge badge-rejected">${t('badge_inactive')}</span>`;
+  if (s === 'inactive') return `<span class="badge badge-rejected">${t('badge_inactive')}</span>`;
+  if (s === 'rejected') return `<span class="badge badge-rejected">${t('badge_rejected') || 'REJEITADA'}</span>`;
   return `<span class="badge badge-proposed">${t('badge_proposed')}</span>`;
 }
 

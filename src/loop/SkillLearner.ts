@@ -40,7 +40,7 @@ export interface Skill {
     tool_sequence: string;
     priority: number;
     hits: number;
-    status: 'proposed' | 'active' | 'rejected';
+    status: 'proposed' | 'active' | 'rejected' | 'inactive';
     source_pattern?: string | null;
     source_tool?: string | null;
     reviewed_at?: string | null;
@@ -71,6 +71,7 @@ interface ToolPatternStat {
 
 export class SkillLearner {
     private db: Database.Database;
+    private patternRecordCount = 0;
 
     constructor(db: Database.Database) {
         this.db = db;
@@ -181,7 +182,10 @@ export class SkillLearner {
                 ).run(pattern, toolName, success ? 1 : 0, success ? 0 : 1, latencyMs);
             }
 
-            this.tryCreateSkillProposal();
+            this.patternRecordCount++;
+            if (this.patternRecordCount % 10 === 0) {
+                this.tryCreateSkillProposal();
+            }
         } catch (error) {
             log.error(`Error recording pattern: ${errorMessage(error)}`);
         }
@@ -279,7 +283,7 @@ export class SkillLearner {
         return this.db.prepare(
             `SELECT * FROM auto_skills
              ORDER BY
-                CASE status WHEN 'active' THEN 0 WHEN 'proposed' THEN 1 ELSE 2 END,
+                CASE status WHEN 'active' THEN 0 WHEN 'proposed' THEN 1 WHEN 'inactive' THEN 2 ELSE 3 END,
                 priority DESC,
                 hits DESC,
                 updated_at DESC`
@@ -296,7 +300,7 @@ export class SkillLearner {
         const result = this.db.prepare(
             `UPDATE auto_skills
              SET status = 'active', reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ? AND status != 'active'`
+             WHERE id = ? AND status = 'proposed'`
         ).run(id);
 
         return result.changes > 0;
@@ -306,7 +310,7 @@ export class SkillLearner {
         const result = this.db.prepare(
             `UPDATE auto_skills
              SET status = 'rejected', reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ? AND status != 'rejected'`
+             WHERE id = ? AND status = 'proposed'`
         ).run(id);
 
         return result.changes > 0;
@@ -321,7 +325,7 @@ export class SkillLearner {
         if (/(áudio|audio|voz|tts|falar|narre)/.test(lower) && /(gerar|criar|enviar|manda|mande|fale)/.test(lower)) return 'audio_request';
         if (/(lembre|lembrete|guarde|salve|memorize|anote)/.test(lower)) return 'memory_write';
         if (/(lembra|o que voc[eê] sabe|buscar na mem)/.test(lower)) return 'memory_search';
-        if (/(arquivo|html|css|site|p[aáá]gina)/.test(lower)) return 'write';
+        if (/(arquivo|html|css|site|p[aá]gina)/.test(lower)) return 'write';
 
         return null;
     }
@@ -351,9 +355,9 @@ export class SkillLearner {
         const total = stat.success_count + stat.fail_count;
         if (total <= 0) return 0;
         const successRate = this.computeSuccessRate(stat);
-        const sampleWeight = Math.min(1, total / 5);
+        const sampleWeight = Math.min(1, total / 5); // desconta confiança para poucos dados
         const latencyPenalty = stat.avg_latency_ms > 0 ? Math.min(0.15, stat.avg_latency_ms / 10000) : 0;
-        return Math.max(0, successRate * sampleWeight + successRate * (1 - sampleWeight) - latencyPenalty);
+        return Math.max(0, successRate * sampleWeight - latencyPenalty);
     }
 
     private getTopSkillMatches(userInput: string, maxMatches: number = 2): SkillMatch[] {

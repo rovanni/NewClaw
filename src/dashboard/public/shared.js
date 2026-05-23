@@ -290,6 +290,7 @@ const TRANSLATIONS = {
     skill_deleted_toast: "🗑 Skill excluída.",
     badge_active: "ATIVA",
     badge_inactive: "INATIVA",
+    badge_rejected: "REJEITADA",
     badge_proposed: "PROPOSTA",
     priority_label: "prioridade",
 
@@ -604,6 +605,7 @@ const TRANSLATIONS = {
     skill_deleted_toast: "🗑 Skill deleted.",
     badge_active: "ACTIVE",
     badge_inactive: "INACTIVE",
+    badge_rejected: "REJECTED",
     badge_proposed: "PROPOSED",
     priority_label: "priority",
 
@@ -907,6 +909,7 @@ const TRANSLATIONS = {
     skill_deleted_toast: "🗑 Skill eliminada.",
     badge_active: "ACTIVA",
     badge_inactive: "INACTIVA",
+    badge_rejected: "RECHAZADA",
     badge_proposed: "PROPUESTA",
     priority_label: "prioridad",
 

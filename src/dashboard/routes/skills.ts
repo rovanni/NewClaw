@@ -74,8 +74,8 @@ export function createSkillsRouter(ctx: DashboardContext): Router {
     router.post('/auto/:id/activate', (req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const ok = ctx.memoryManager.getDashboardRepository().approveAutoSkill(String(req.params.id));
-            if (!ok) return res.status(404).json({ success: false, error: 'Skill not found' });
+            const ok = ctx.memoryManager.getDashboardRepository().activateAutoSkill(String(req.params.id));
+            if (!ok) return res.status(404).json({ success: false, error: 'Skill not found or not rejected' });
             res.json({ success: true });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
