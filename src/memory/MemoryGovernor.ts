@@ -494,6 +494,9 @@ export class MemoryGovernor {
             }
 
             // Rule 3: Confidence below 0.5 AND never accessed AND old
+            // Skip preference/trait — accessLog is in-memory and cleared on restart,
+            // so !accessInfo is always true after boot, causing cyclic archiving.
+            if (node.type === 'preference' || node.type === 'trait') continue;
             const accessInfo = this.accessLog.get(node.id);
             if (confidence < 0.5 && !accessInfo && daysSinceUpdate > 14) {
                 if (this.config.archiveEnabled) {
@@ -821,7 +824,8 @@ export class MemoryGovernor {
 
             this.memory.addNode({
                 ...node,
-                type: 'context', // Keep as context type (archived)
+                // Preserve type for preference/trait so getPermanentSummaries() can still find them
+                type: (node.type === 'preference' || node.type === 'trait') ? node.type : 'context',
                 confidence: 0.1, // Minimum confidence
                 weight: 0.1, // Minimum weight
                 metadata,

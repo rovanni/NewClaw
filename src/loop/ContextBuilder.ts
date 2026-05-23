@@ -251,8 +251,14 @@ export class ContextBuilder {
             if (candidates.length === 0) return this.rankAndSelect(query, charBudget);
 
             const nodeIds = candidates.map(c => c.id);
-            const summaries = this.getCognitiveIndex().getSummaries(nodeIds);
-            log.debug(`[INDEX] summaries retrieved=${summaries.length} from candidates=${candidates.length}`);
+            const mlrSummaries = this.getCognitiveIndex().getSummaries(nodeIds);
+            const permanentSummaries = this.getCognitiveIndex().getPermanentSummaries();
+            // Merge: permanent nodes always present; MLR overrides if same nodeId (fresher score)
+            const summaryMap = new Map<string, import('../memory/CognitiveMemoryIndex').MemoryIndexEntry>();
+            for (const s of permanentSummaries) summaryMap.set(s.nodeId, s);
+            for (const s of mlrSummaries) summaryMap.set(s.nodeId, s);
+            const summaries = Array.from(summaryMap.values());
+            log.debug(`[INDEX] summaries retrieved=${summaries.length} (mlr=${mlrSummaries.length} permanent=${permanentSummaries.length}) from candidates=${candidates.length}`);
 
             const planResult = this.getContextPlanner().plan(query, summaries, maxNodes);
             const m = planResult.metrics;

@@ -86,7 +86,7 @@ export class CognitiveMemoryIndex {
                    confidence, identity_scope, lifecycle_state, updated_at
             FROM memory_nodes
             WHERE id IN (${placeholders})
-              AND lifecycle_state NOT IN ('EXPIRED', 'SUMMARIZED')
+              AND lifecycle_state NOT IN ('EXPIRED')
         `).all(...nodeIds) as Array<{
             id: string; type: string; name: string; content: string;
             confidence: number; identity_scope: string;
@@ -139,7 +139,7 @@ export class CognitiveMemoryIndex {
                 OR id LIKE 'core_%'
                 OR id = 'user_identity'
             )
-            AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')
+            AND lifecycle_state NOT IN ('EXPIRED')
             LIMIT 60
         `).all() as Array<{ id: string }>;
 
