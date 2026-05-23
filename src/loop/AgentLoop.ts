@@ -880,10 +880,21 @@ export class AgentLoop {
             if (response.status === 'timeout') {
                 log.warn(`[${this.ts()}] [FALLBACK] Provider timeout at step ${stepCount}`);
                 move('TIMEOUT', { step: stepCount });
-                traceManager.completeTrace(trace, 'timeout', response.fallbackMessage);
-                this.persistTrace(trace, stepCount, 'timeout', response.fallbackMessage || 'Timeout', channelContext);
+                // If tools ran successfully before the timeout, report what was accomplished
+                const successfulWrites = cycleHistory.filter(h => h.tool === 'write' && h.status === 'success');
+                let timeoutMsg = response.fallbackMessage || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
+                if (successfulWrites.length > 0) {
+                    const filePaths = [...new Set(successfulWrites.map(h => {
+                        try { return (JSON.parse(h.input) as Record<string, unknown>).path as string; } catch { return null; }
+                    }).filter(Boolean))];
+                    if (filePaths.length > 0) {
+                        timeoutMsg = `O modelo demorou mais que o esperado ao finalizar. O arquivo foi criado parcialmente em: ${filePaths.join(', ')} — você pode pedir para continuar.`;
+                    }
+                }
+                traceManager.completeTrace(trace, 'timeout', timeoutMsg);
+                this.persistTrace(trace, stepCount, 'timeout', timeoutMsg, channelContext);
                 this.activeTurns.delete(conversationId);
-                return response.fallbackMessage || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
+                return timeoutMsg;
             }
 
             if (response.status === 'error') {
