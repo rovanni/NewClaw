@@ -59,6 +59,7 @@ import type { NewClawConfig } from './agentControllerTypes';
 import { openDatabase, buildLanguageDirective, buildSystemPrompt } from './agentControllerSetup';
 import { OwnerProfileService } from '../services/OwnerProfileService';
 import { bootstrapDomains } from '../memory/DomainRegistry';
+import { WorkflowEngine } from '../loop/WorkflowEngine';
 import { registerCommands } from './agentControllerCommands';
 import {
     transcribeAttachment,
@@ -74,6 +75,7 @@ const log = createLogger('AgentController');
 export class AgentController {
     private config: NewClawConfig;
     private agentLoop: AgentLoop;
+    private workflowEngine!: WorkflowEngine;
     private providerFactory: ProviderFactory;
     private memory: MemoryManager;
     private memoryFacade: MemoryFacade;
@@ -123,6 +125,9 @@ export class AgentController {
         const dbPath = './data/newclaw.db';
         this.db = openDatabase(dbPath);
 
+        // WorkflowEngine com SQLite — sobrevive a restart, sem transações zumbi
+        this.workflowEngine = new WorkflowEngine(this.db);
+
         this.memory = new MemoryManager(this.db);
         this.memoryFacade = this.memory.getFacade();
         bootstrapDomains(this.memory);
@@ -168,6 +173,9 @@ export class AgentController {
             classificationMemory,
             decisionMemory
         );
+
+        // Fase 2: injetar WorkflowEngine no loop (habilita callbacks estruturados)
+        this.agentLoop.setWorkflowEngine(this.workflowEngine);
 
 
         this.sessionManager = new SessionManager(
@@ -243,6 +251,30 @@ export class AgentController {
         this.telegramAdapter.setBus(this.messageBus);
         this.messageBus.registerAdapter(this.telegramAdapter);
 
+        // Fase 2: injetar workflowCallback no TelegramAdapter.
+        // Callbacks "auth:approve|reject:<txnId>" chegam aqui diretamente,
+        // sem passar pelo MessageBus nem pelo pipeline LLM.
+        this.telegramAdapter.workflowCallback = async (userId, txnId, decision, rawCtx) => {
+            log.info(`[WF] callback userId=${userId} txn=${txnId} decision=${decision}`);
+
+            const result = await this.workflowEngine.resume(
+                txnId,
+                decision,
+                (name) => ToolRegistry.get(name)
+            );
+
+            if (!result) {
+                await this.telegramAdapter.send(
+                    { text: '⚠️ Sessão de autorização expirada. Repita o comando.', format: 'plain' },
+                    rawCtx
+                );
+                return;
+            }
+
+            const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
+            await this.telegramAdapter.send({ text: responseText, format: 'markdown' }, rawCtx);
+        };
+
         const { tmpDir } = config;
         this.messageBus.registerMediaHandler('voice', async (msg, attachment) =>
             transcribeAttachment(msg, attachment, this.messageBus, tmpDir));
@@ -264,6 +296,19 @@ export class AgentController {
             });
             this.discordAdapter.setBus(this.messageBus);
             this.messageBus.registerAdapter(this.discordAdapter);
+            this.discordAdapter.workflowCallback = async (userId, txnId, decision, rawCtx) => {
+                log.info(`[WF] discord callback userId=${userId} txn=${txnId} decision=${decision}`);
+                const result = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
+                if (!result) {
+                    await this.discordAdapter!.send(
+                        { text: '⚠️ Sessão de autorização expirada. Repita o comando.', format: 'plain' },
+                        rawCtx
+                    );
+                    return;
+                }
+                const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
+                await this.discordAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
+            };
             log.info('Discord adapter registered');
         }
 
@@ -276,6 +321,19 @@ export class AgentController {
             });
             this.whatsAppAdapter.setBus(this.messageBus);
             this.messageBus.registerAdapter(this.whatsAppAdapter);
+            this.whatsAppAdapter.workflowCallback = async (userId, txnId, decision, rawCtx) => {
+                log.info(`[WF] whatsapp callback userId=${userId} txn=${txnId} decision=${decision}`);
+                const result = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
+                if (!result) {
+                    await this.whatsAppAdapter!.send(
+                        { text: '⚠️ Sessão de autorização expirada. Repita o comando.', format: 'plain' },
+                        rawCtx
+                    );
+                    return;
+                }
+                const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
+                await this.whatsAppAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
+            };
             log.info('WhatsApp adapter registered');
         }
 
@@ -288,6 +346,19 @@ export class AgentController {
             });
             this.signalAdapter.setBus(this.messageBus);
             this.messageBus.registerAdapter(this.signalAdapter);
+            this.signalAdapter.workflowCallback = async (userId, txnId, decision, rawCtx) => {
+                log.info(`[WF] signal callback userId=${userId} txn=${txnId} decision=${decision}`);
+                const result = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
+                if (!result) {
+                    await this.signalAdapter!.send(
+                        { text: '⚠️ Sessão de autorização expirada. Repita o comando.', format: 'plain' },
+                        rawCtx
+                    );
+                    return;
+                }
+                const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
+                await this.signalAdapter!.send({ text: responseText, format: 'plain' }, rawCtx);
+            };
             log.info('Signal adapter registered');
         }
 
@@ -410,6 +481,11 @@ export class AgentController {
                     log.warn(`[CircuitBreaker] ${cb.providerName} state=${cb.state} failures=${cb.totalFailures}`);
                 }
             }
+        }, 60_000);
+
+        this.lifecycle.registerInterval('workflowPurge', () => {
+            const removed = this.workflowEngine.purgeExpired();
+            if (removed > 0) log.info(`[WF] periodic purge removed=${removed}`);
         }, 60_000);
 
         log.info('✅ NewClaw running — multi-channel pipeline active');

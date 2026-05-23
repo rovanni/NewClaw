@@ -15,8 +15,13 @@ import {
     Partials,
     TextChannel,
     AttachmentBuilder,
-    ChannelType as _DiscordChannelType
+    ChannelType as _DiscordChannelType,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ButtonInteraction,
 } from 'discord.js';
+import type { WorkflowCallbackFn, AuthDecision } from '../loop/WorkflowTypes';
 import {
     ChannelAdapter,
     ChannelType,
@@ -46,6 +51,12 @@ export class DiscordAdapter implements ChannelAdapter {
     readonly channelType: ChannelType = 'discord';
     readonly displayName: string = 'Discord';
     private _isConnected: boolean = false;
+
+    /**
+     * Callback injetado pelo AgentController para callbacks estruturados
+     * de autorização via Discord buttons (customId = "auth:approve|reject:<txnId>").
+     */
+    workflowCallback?: WorkflowCallbackFn;
 
     private client: Client;
     private config: DiscordConfig;
@@ -174,6 +185,24 @@ export class DiscordAdapter implements ChannelAdapter {
             // Send text
             if (!response.text || response.text.trim().length === 0) return;
 
+            // Botões nativos Discord quando opções usam protocolo estruturado
+            const hasStructuredOptions = response.options && response.options.length > 0
+                && response.options[0].value.startsWith('auth:');
+
+            if (hasStructuredOptions && response.options) {
+                const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    response.options.map(opt => {
+                        const isApprove = opt.value.includes(':approve:');
+                        return new ButtonBuilder()
+                            .setCustomId(opt.value)
+                            .setLabel(opt.label)
+                            .setStyle(isApprove ? ButtonStyle.Success : ButtonStyle.Danger);
+                    })
+                );
+                await channel.send({ content: response.text.slice(0, 2000), components: [row] });
+                return;
+            }
+
             // Discord limit: 2000 chars
             const maxLen = 2000;
 
@@ -248,6 +277,33 @@ export class DiscordAdapter implements ChannelAdapter {
     private registerHandlers(): void {
         this.client.once('ready', () => {
             log.info('ready', `Logged in as ${this.client.user?.tag}`);
+        });
+
+        // ── Rota estruturada: Discord button interactions ─────────────────────
+        // customId = "auth:approve|reject:<txnId>" — determinístico, sem parsing textual.
+        this.client.on('interactionCreate', async (interaction) => {
+            if (!interaction.isButton()) return;
+            const btn = interaction as ButtonInteraction;
+            const userId = btn.user.id;
+
+            if (this.config.allowedUserIds && this.config.allowedUserIds.length > 0) {
+                if (!this.config.allowedUserIds.includes(userId)) {
+                    await btn.deferUpdate().catch(() => {});
+                    return;
+                }
+            }
+
+            const parts = btn.customId.split(':');
+            if (parts[0] === 'auth' && parts.length === 3 && this.workflowCallback) {
+                const decision: AuthDecision = parts[1] === 'approve' ? 'approved' : 'rejected';
+                const txnId = parts[2];
+                log.info('workflow_callback', `userId=${userId} decision=${decision} txn=${txnId}`);
+                await btn.deferUpdate().catch(() => {}); // remove spinner do botão
+                // NÃO vai para MessageBus
+                this.workflowCallback(userId, txnId, decision, btn.channel as TextChannel).catch(err =>
+                    log.error('workflow_callback_error', errorMessage(err))
+                );
+            }
         });
 
         this.client.on('messageCreate', async (message: Message) => {

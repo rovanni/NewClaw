@@ -23,6 +23,7 @@ import { MessageBus } from './MessageBus';
 import { mdToTelegramHTML } from '../shared/TelegramFormatter';
 import { createLogger } from '../shared/AppLogger';
 import { TelegramPollingSupervisor, SupervisorStatus } from './TelegramPollingSupervisor';
+import type { WorkflowCallbackFn, AuthDecision } from '../loop/WorkflowTypes';
 
 const log = createLogger('TelegramAdapter');
 
@@ -54,6 +55,13 @@ interface TelegramMsg {
 export class TelegramAdapter implements ChannelAdapter {
     readonly channelType: ChannelType = 'telegram';
     readonly displayName: string = 'Telegram';
+
+    /**
+     * Callback injetado pelo AgentController para tratar callbacks estruturados
+     * de autorização ("auth:approve|reject:<txnId>") sem passar pelo pipeline LLM.
+     * Quando não definido, o fluxo legado ("sim"/"cancelar") permanece ativo.
+     */
+    workflowCallback?: WorkflowCallbackFn;
 
     private bot: Bot;
     private config: TelegramConfig;
@@ -511,22 +519,35 @@ export class TelegramAdapter implements ChannelAdapter {
             const userId = ctx.from.id.toString();
             if (!this.config.allowedUserIds.includes(userId)) return;
 
-            const data = ctx.callbackQuery.data;
+            const data = ctx.callbackQuery.data ?? '';
             log.info('callback_received', `userId=${userId} data="${data}"`);
 
             // Answer callback to remove loading state
             await ctx.answerCallbackQuery().catch(() => {});
 
-            // Optional: Edit message to remove buttons or show selection
-            // await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }).catch(() => {});
+            // ── Rota estruturada: protocolo "auth:<decision>:<txnId>" ─────────
+            // Determinístico — sem regex semântico, sem parsing de idioma.
+            // O valor foi gerado pelo próprio sistema; nunca vem do usuário.
+            const parts = data.split(':');
+            if (parts[0] === 'auth' && parts.length === 3 && this.workflowCallback) {
+                const decision: AuthDecision = parts[1] === 'approve' ? 'approved' : 'rejected';
+                const txnId = parts[2];
+                log.info('workflow_callback', `userId=${userId} decision=${decision} txn=${txnId}`);
+                // NÃO envia para MessageBus — bypass completo do pipeline conversacional
+                this.workflowCallback(userId, txnId, decision, ctx).catch(err =>
+                    log.error('workflow_callback_error', err instanceof Error ? err : undefined, String(err))
+                );
+                return;
+            }
 
+            // ── Rota conversacional: qualquer outro callback (fluxo legado) ───
             const msg: NormalizedMessage = {
                 messageId: `cb_${ctx.callbackQuery.id}`,
                 channel: 'telegram',
                 userId,
                 userName: ctx.from.first_name,
                 type: 'text',
-                text: data, // Treat button value as text input
+                text: data,
                 rawContext: ctx,
                 chatId: ctx.chat?.id.toString() || userId,
                 metadata: { isCallback: true },

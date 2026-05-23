@@ -14,8 +14,6 @@ export interface PendingAction {
     toolName: string;
     arguments: Record<string, any>;
     timestamp: number;
-    /** The original user message that triggered this tool (used to re-inject skill context on resume) */
-    originalUserText?: string;
 }
 
 export interface AuthRequest {
@@ -27,12 +25,11 @@ export class AuthorizationManager {
     private pendingActions = new Map<string, PendingAction>();
 
     /** Add a tool call to the pending queue */
-    addPending(conversationId: string, toolName: string, args: Record<string, any>, originalUserText?: string): void {
+    addPending(conversationId: string, toolName: string, args: Record<string, any>): void {
         this.pendingActions.set(conversationId, {
             toolName,
             arguments: args,
             timestamp: Date.now(),
-            originalUserText,
         });
         log.info(`[AUTH] Action pending for ${conversationId}: ${toolName}`);
     }
@@ -47,8 +44,16 @@ export class AuthorizationManager {
         this.pendingActions.delete(conversationId);
     }
 
-    /** Format a request message with interactive buttons */
-    formatRequest(toolName: string, args: Record<string, any>): AuthRequest {
+    /**
+     * Format a request message with interactive buttons.
+     *
+     * Quando txnId é fornecido (novo fluxo WorkflowEngine), os valores dos botões
+     * usam o protocolo estruturado "auth:approve|reject:<txnId>" — determinístico,
+     * independente de idioma, sem regex semântico no receptor.
+     *
+     * Sem txnId (fallback legado), usa "sim"/"cancelar" como antes.
+     */
+    formatRequest(toolName: string, args: Record<string, any>, txnId?: string): AuthRequest {
         const { emoji, action, details, risk } = this.summarize(toolName, args);
 
         const lines = [
@@ -58,15 +63,20 @@ export class AuthorizationManager {
             '',
             risk === 'high'
                 ? '⚠️ _Esta ação pode modificar o sistema. Confirme apenas se esperava isso._'
-                : '_Responda **sim** para autorizar ou **não** para cancelar._',
+                : '_Confirme para autorizar ou cancele para tentar outra abordagem._',
         ];
 
         const text = lines.join('\n');
 
-        const options: ResponseOption[] = [
-            { label: '✅ Sim, pode fazer', value: 'sim' },
-            { label: '❌ Não, cancela', value: 'cancelar' }
-        ];
+        const options: ResponseOption[] = txnId
+            ? [
+                { label: '✅ Sim, pode fazer', value: `auth:approve:${txnId}` },
+                { label: '❌ Não, cancela',    value: `auth:reject:${txnId}` },
+              ]
+            : [
+                { label: '✅ Sim, pode fazer', value: 'sim' },
+                { label: '❌ Não, cancela',    value: 'cancelar' },
+              ];
 
         return { text, options };
     }

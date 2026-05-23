@@ -29,6 +29,7 @@ import {
 } from './ChannelAdapter';
 import { MessageBus } from './MessageBus';
 import { createLogger } from '../shared/AppLogger';
+import type { WorkflowCallbackFn, AuthDecision } from '../loop/WorkflowTypes';
 
 const log = createLogger('SignalAdapter');
 
@@ -70,6 +71,13 @@ export class SignalAdapter implements ChannelAdapter {
     readonly channelType: ChannelType = 'signal';
     readonly displayName: string = 'Signal';
     private _isConnected: boolean = false;
+
+    /**
+     * Callback injetado pelo AgentController para tratar callbacks estruturados
+     * de autorização sem passar pelo pipeline LLM.
+     * Signal não tem botões nativos — o usuário digita/cola o valor exibido no texto.
+     */
+    workflowCallback?: WorkflowCallbackFn;
 
     private config: SignalConfig;
     private bus: MessageBus | null = null;
@@ -175,7 +183,18 @@ export class SignalAdapter implements ChannelAdapter {
             // Send text
             if (!response.text || response.text.trim().length === 0) return;
 
-            const text = response.text;
+            // Signal não tem botões nativos — opções estruturadas viram texto com instruções
+            const hasStructuredOptions = response.options && response.options.length > 0
+                && response.options[0].value.startsWith('auth:');
+
+            let text = response.text;
+            if (hasStructuredOptions && response.options) {
+                const optionsText = response.options
+                    .map(opt => `${opt.label}: ${opt.value}`)
+                    .join('\n');
+                text = `${text}\n\n📋 Copie e envie uma das opções abaixo:\n${optionsText}`;
+            }
+
             const maxLen = 8000; // Signal limit ~8K
 
             if (text.length <= maxLen) {
@@ -319,6 +338,19 @@ export class SignalAdapter implements ChannelAdapter {
 
         if (!text && attachments.length === 0) return;
 
+        // ── Rota estruturada: protocolo "auth:<decision>:<txnId>" ─────────────
+        const parts = text.split(':');
+        if (parts[0] === 'auth' && parts.length === 3 && this.workflowCallback) {
+            const decision: AuthDecision = parts[1] === 'approve' ? 'approved' : 'rejected';
+            const txnId = parts[2];
+            log.info('workflow_callback', `userId=${userId} decision=${decision} txn=${txnId}`);
+            this.workflowCallback(userId, txnId, decision, sourceNumber).catch(err =>
+                log.error('workflow_callback_error', errorMessage(err))
+            );
+            return;
+        }
+
+        // ── Rota conversacional: mensagem normal ───────────────────────────────
         const normalizedMsg: NormalizedMessage = {
             messageId: (dataMessage.timestamp || Date.now()).toString(),
             channel: 'signal',

@@ -36,6 +36,8 @@ import { errorMessage } from '../shared/errors';
 import { ObserverValidator } from './ObserverValidator';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ProactiveRecovery } from './ProactiveRecovery';
+import type { WorkflowEngine } from './WorkflowEngine';
+import type { ContinuationContext, WorkflowStepResult } from './WorkflowTypes';
 
 import {
     ToolResult, ToolExecutor, LoopMetrics, ChannelContext,
@@ -77,6 +79,7 @@ export class AgentLoop {
     private fsmHistoryStore: FSMHistoryStore;
     private lastToolExecution: { toolName: string; toolOutput: string; intent: string; category: string } | null = null;
     private readonly proactiveRecovery = new ProactiveRecovery();
+    private workflowEngine?: WorkflowEngine;
 
     constructor(
         providerFactory: ProviderFactory,
@@ -103,6 +106,12 @@ export class AgentLoop {
     }
 
     // ── Accessors ──────────────────────────────────────────────────────────────
+
+    /** Injeta o WorkflowEngine para habilitar callbacks estruturados (Fase 2). */
+    setWorkflowEngine(engine: WorkflowEngine): void {
+        this.workflowEngine = engine;
+        log.info('[WF] WorkflowEngine registered in AgentLoop');
+    }
 
     private isAuthorized(conversationId: string, toolName: string, args: Record<string, unknown>): boolean {
         const pending = this.authManager.getPending(conversationId);
@@ -167,6 +176,116 @@ export class AgentLoop {
     public registerTool(tool: ToolExecutor): void { this.tools.set(tool.name, tool); }
 
     private ts(): string { return new Date().toLocaleTimeString('pt-BR', { hour12: false }); }
+
+    // ── Helpers para WorkflowEngine ───────────────────────────────────────────
+
+    private inferWorkflowName(intent: string, toolName: string): string {
+        const i = (intent || '').toLowerCase();
+        if (i.includes('pdf') || i.includes('document') || i.includes('resumo')) return 'document_processing';
+        if (i.includes('edit') || i.includes('file') || i.includes('write')) return 'file_operation';
+        if (i.includes('search') || i.includes('web') || i.includes('busca')) return 'web_research';
+        if (i.includes('schedule') || i.includes('agenda')) return 'scheduling';
+        return toolName.replace(/_/g, '-');
+    }
+
+    private extractResourceNames(args: Record<string, unknown>): string[] {
+        const resources: string[] = [];
+        for (const val of Object.values(args)) {
+            if (typeof val === 'string') {
+                // Captura nomes de arquivo (qualquer string com extensão ou path)
+                if (/\.\w{2,5}$/.test(val) || val.includes('/') || val.includes('\\')) {
+                    const name = val.split(/[/\\]/).pop() || val;
+                    if (name) resources.push(name.slice(0, 80));
+                }
+            }
+        }
+        return resources.slice(0, 3);
+    }
+
+    private findSafeAlternatives(dangerousTool: string): string[] {
+        const alternatives: Record<string, string[]> = {
+            'exec_command': ['read_document', 'list_workspace', 'web_navigate'],
+            'ssh_exec':     ['read_document', 'web_navigate'],
+            'write_file':   ['read_tool'],
+            'edit_file':    ['read_tool'],
+        };
+        return alternatives[dangerousTool] ?? [];
+    }
+
+    // ── Síntese pós-workflow (chamado pelo AgentController) ───────────────────
+
+    /**
+     * Recebe o resultado de um passo de workflow já executado pelo WorkflowEngine
+     * e produz uma resposta final para o usuário com uma única chamada compacta ao LLM.
+     *
+     * NÃO usa histórico episódico. NÃO replica o contexto completo da conversa.
+     * O ContinuationContext carrega tudo que o LLM precisa (~200 tokens).
+     */
+    async resumeFromWorkflow(
+        conversationId: string,
+        result: WorkflowStepResult
+    ): Promise<string> {
+        const ctx = result.continuationCtx;
+        const isApproved = result.decision === 'approved';
+
+        log.info(`[WF] resume conv=${conversationId} decision=${result.decision} success=${result.success} workflow=${ctx.workflow}`);
+        // Limpa o safety net legado — o WorkflowEngine já resolveu, authManager não deve disparar
+        this.authManager.removePending(conversationId);
+
+        const systemInstruction = isApproved
+            ? result.success
+                ? `Você executou com sucesso o passo "${ctx.step}" do workflow "${ctx.workflow}".`
+                : `O passo "${ctx.step}" falhou no workflow "${ctx.workflow}".`
+            : `O usuário recusou a ferramenta "${ctx.step}" no workflow "${ctx.workflow}".`;
+
+        const contextPayload: Record<string, unknown> = {
+            workflow: ctx.workflow,
+            step: ctx.step,
+            userGoal: ctx.userGoal,
+            ...(ctx.activeResources?.length ? { activeResources: ctx.activeResources } : {}),
+        };
+
+        if (isApproved && result.success) {
+            contextPayload.toolResult = result.output.slice(0, 4000);
+        } else if (isApproved && !result.success) {
+            contextPayload.error = result.error ?? 'Erro desconhecido';
+            if (ctx.alternativeTools?.length) contextPayload.alternativeTools = ctx.alternativeTools;
+        } else {
+            // Rejeitado
+            contextPayload.rejectedTool = ctx.step;
+            if (ctx.alternativeTools?.length) contextPayload.alternativeTools = ctx.alternativeTools;
+        }
+
+        const task = isApproved
+            ? result.success
+                ? 'Apresente o resultado ao usuário de forma clara e útil.'
+                : 'Informe claramente a falha e sugira uma alternativa se disponível.'
+            : 'Informe que a ação foi cancelada e ofereça uma alternativa sem precisar de autorização, se disponível.';
+
+        const messages: LLMMessage[] = [
+            { role: 'system', content: systemInstruction },
+            { role: 'system', content: '```json\n' + JSON.stringify(contextPayload, null, 2) + '\n```' },
+            { role: 'user',   content: task },
+        ];
+
+        const profile = this.profileRegistry.getProfileByCategory('chat');
+        if (!profile) {
+            log.error('[WF] no chat profile available for resumeFromWorkflow');
+            return '⚠️ Sem perfil de modelo disponível.';
+        }
+
+        try {
+            const response = await this.callLLMWithFallback(
+                messages, [], profile, new AbortController().signal
+            );
+            const text = extractFinalText(response, null);
+            log.info(`[WF] synthesis done conv=${conversationId} chars=${text.length}`);
+            return text || '⚠️ Sem resposta do modelo.';
+        } catch (err) {
+            log.error('[WF] resumeFromWorkflow LLM error:', err);
+            return '⚠️ Erro ao gerar resposta.';
+        }
+    }
 
     private async tryValidateTool(
         userText: string,
@@ -726,101 +845,6 @@ export class AgentLoop {
         );
         const loopMessages = sessionMessages;
 
-        const pending = this.authManager.getPending(conversationId);
-        if (pending) {
-            const trimmedInput = userText.trim();
-            // Explicit regex wins over intent category for auth resolution
-            const isExplicitConfirm = /^(sim|yes|ok|autorizado|confirmar|pode|s|y)$/i.test(trimmedInput);
-            const isExplicitReject  = /^(n[aã]o|cancelar|cancel|n|no|nope)$/i.test(trimmedInput);
-            const isConfirmed = isExplicitConfirm || intentDecision.category === 'confirmation';
-            const isRejected  = isExplicitReject  || intentDecision.category === 'rejection';
-
-            log.info(`[${this.ts()}] [AUTH] Pending "${pending.toolName}" — confirmed=${isConfirmed} rejected=${isRejected} intent=${intentDecision.category}`);
-
-            if (isConfirmed) {
-                log.info(`[${this.ts()}] [AUTH] ✅ Action APPROVED for ${conversationId}: ${pending.toolName}`);
-                this.authManager.removePending(conversationId);
-
-                // Re-inject skill context using the ORIGINAL user text (not "sim")
-                if (pending.originalUserText) {
-                    const resumeSkills = this.skillLoader.loadAll().filter(s =>
-                        s.triggers?.some(t => (pending.originalUserText || '').toLowerCase().includes(t.toLowerCase()))
-                    );
-                    if (resumeSkills.length > 0) {
-                        // Na retomada pós-auth, a tarefa original é primária — usa conteúdo completo.
-                        const resumeBlock = resumeSkills.map(s => `### SKILL MANUAL: ${s.name}\n${s.content}`).join('\n\n');
-                        skillContext = skillContext ? `${skillContext}\n\n${resumeBlock}` : resumeBlock;
-                        log.info(`[SKILL] [AUTH-RESUME] Re-injetando skill(s): ${resumeSkills.map(s => s.name).join(', ')}`);
-                    }
-                }
-
-                // Use a capable model for continuation (not "light" which may not understand tool context)
-                const resumeProfile = this.profileRegistry.getProfileByCategory('code');
-                if (resumeProfile) {
-                    chatProfile.model = resumeProfile.model;
-                    chatProfile.category = resumeProfile.category;
-                    log.info(`[${this.ts()}] [AUTH-RESUME] Overriding model to code profile: ${resumeProfile.model}`);
-                }
-
-                const tool = this.tools.get(pending.toolName);
-                if (tool) {
-                    log.info(`[${this.ts()}] [AUTH] Executing approved tool: ${pending.toolName}`);
-                    move('TOOL_REQUESTED', { step: 0, tool: pending.toolName, mode: 'auth_resume' });
-
-                    if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
-                        (tool as unknown as ContextAwareTool).setContext(
-                            channelContext.chatId || '',
-                            channelContext.channel
-                        );
-                    }
-
-                    try {
-                        const result = await tool.execute(pending.arguments);
-                        log.info(`[${this.ts()}] [AUTH] Approved tool ${pending.toolName} executed. Success: ${result.success}`);
-                        cycleHistory.push({ tool: pending.toolName, input: JSON.stringify(pending.arguments), status: result.success ? 'success' : 'error' });
-
-                        // Mark as used so the while-loop cannot re-trigger auth for the same call
-                        usedToolInputs.add(`${pending.toolName}:${JSON.stringify(pending.arguments)}`);
-
-                        const toolCallId = `auth_${Date.now()}`;
-                        loopMessages.push({
-                            role: 'assistant',
-                            content: `Executando comando autorizado: ${pending.toolName}`,
-                            toolCalls: [{ id: toolCallId, name: pending.toolName, arguments: pending.arguments }]
-                        });
-                        loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCallId });
-
-                        if (!result.success) {
-                            loopMessages.push({ role: 'system', content: `[AVISO] O comando autorizado falhou: ${result.error || 'Erro desconhecido'}` });
-                        }
-
-                        const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
-                        if (terminalTools.includes(pending.toolName) && result.success) {
-                            log.info(`[${this.ts()}] [AUTH] Terminal tool succeeded → finishing turn`);
-                            move('FINAL_READY', { step: 0, tool: pending.toolName, terminal: true });
-                            traceManager.completeTrace(trace, 'completed', result.output);
-                            this.persistTrace(trace, 0, 'completed', result.output, channelContext);
-                            return result.output;
-                        }
-                        // Return FSM to THINKING so the main loop can continue normally
-                        move('TOOL_COMPLETED', { step: 0, tool: pending.toolName, success: result.success });
-                    } catch (toolError) {
-                        log.error(`[AUTH] Error executing approved tool ${pending.toolName}:`, toolError);
-                        loopMessages.push({ role: 'system', content: `[ERRO CRÍTICO] Falha ao executar comando autorizado: ${errorMessage(toolError)}` });
-                        move('TOOL_COMPLETED', { step: 0, tool: pending.toolName, success: false });
-                    }
-                }
-            } else if (isRejected) {
-                log.warn(`[${this.ts()}] [AUTH] ❌ Action REJECTED for ${conversationId}: ${pending.toolName}`);
-                this.authManager.removePending(conversationId);
-                move('FINAL_READY', { step: 0, reason: 'auth_rejected' });
-                traceManager.completeTrace(trace, 'cancelled', 'User rejected action');
-                return { text: `❌ Operação cancelada. Como posso ajudar?` };
-            } else {
-                log.info(`[${this.ts()}] [AUTH] Ambiguous response — keeping ${pending.toolName} pending.`);
-            }
-        }
-
         let stepCount = 0;
         const maxSteps = 15;
         let hasUsedNativeTools = false;      // true once any native tool call executes
@@ -995,9 +1019,32 @@ export class AgentLoop {
                         const isDangerous = ToolRegistry.isDangerous(toolName) && !this.isSafeExecCommand(toolName, toolCall.arguments);
                         if (isDangerous && !this.isAuthorized(conversationId, toolName, toolCall.arguments)) {
                             log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
-                            this.authManager.addPending(conversationId, toolName, toolCall.arguments, userText);
-                            move('AUTH_REQUIRED', { step: stepCount, tool: toolName });
-                            const authReq = this.authManager.formatRequest(toolName, toolCall.arguments);
+
+                            let txnId: string | undefined;
+                            if (this.workflowEngine) {
+                                // Novo fluxo: cria transaction com ID estruturado.
+                                // Canais com workflowCallback (Telegram) rotearão o callback
+                                // diretamente ao WorkflowEngine — sem passar pelo LLM pipeline.
+                                const ctx: ContinuationContext = {
+                                    workflow: this.inferWorkflowName(intentDecision.intent, toolName),
+                                    step: toolName,
+                                    userGoal: userText.slice(0, 200),
+                                    activeResources: this.extractResourceNames(toolCall.arguments),
+                                    alternativeTools: this.findSafeAlternatives(toolName),
+                                };
+                                const txn = this.workflowEngine.createTransaction(
+                                    conversationId, toolName,
+                                    toolCall.arguments as Record<string, unknown>,
+                                    ctx
+                                );
+                                txnId = txn.id;
+                            }
+                            // Registra no authManager para: (1) guardar hasPendingAuth nos fast-paths,
+                            // (2) permitir removePending() no resumeFromWorkflow() após resolução.
+                            this.authManager.addPending(conversationId, toolName, toolCall.arguments);
+
+                            move('AUTH_REQUIRED', { step: stepCount, tool: toolName, txnId });
+                            const authReq = this.authManager.formatRequest(toolName, toolCall.arguments, txnId);
                             return { text: authReq.text, options: authReq.options };
                         }
 

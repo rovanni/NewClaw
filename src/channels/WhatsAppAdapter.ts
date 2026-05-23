@@ -31,6 +31,7 @@ import { createLogger } from '../shared/AppLogger';
 import PQueue from 'p-queue';
 import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { errorMessage } from '../shared/errors';
+import type { WorkflowCallbackFn, AuthDecision } from '../loop/WorkflowTypes';
 
 const log = createLogger('WhatsAppAdapter');
 
@@ -49,6 +50,12 @@ export class WhatsAppAdapter implements ChannelAdapter {
     readonly channelType: ChannelType = 'whatsapp';
     readonly displayName: string = 'WhatsApp';
     private _isConnected: boolean = false;
+
+    /**
+     * Callback injetado pelo AgentController para tratar callbacks estruturados
+     * de autorização sem passar pelo pipeline LLM.
+     */
+    workflowCallback?: WorkflowCallbackFn;
 
     private config: WhatsAppConfig;
     private bus: MessageBus | null = null;
@@ -207,8 +214,25 @@ export class WhatsAppAdapter implements ChannelAdapter {
                 if (!response.text || response.text.trim().length === 0) return;
 
                 const text = this.stripMarkdown(response.text);
-                const maxLen = 4096;
 
+                // Botões nativos WhatsApp quando opções usam protocolo estruturado
+                const hasStructuredOptions = response.options && response.options.length > 0
+                    && response.options[0].value.startsWith('auth:');
+
+                if (hasStructuredOptions && response.options) {
+                    await this.sock!.sendMessage(jid, {
+                        buttons: response.options.map(opt => ({
+                            buttonId: opt.value,
+                            buttonText: { displayText: opt.label },
+                            type: 1 as const,
+                        })),
+                        contentText: text.slice(0, 1024),
+                        headerType: 1 as const,
+                    } as unknown as Parameters<WASocket['sendMessage']>[1]);
+                    return;
+                }
+
+                const maxLen = 4096;
                 if (text.length <= maxLen) {
                     await this.sock!.sendMessage(jid, { text });
                 } else {
@@ -256,7 +280,13 @@ export class WhatsAppAdapter implements ChannelAdapter {
         let text = '';
         const attachments: ChannelAttachment[] = [];
 
-        if (message.conversation) {
+        if (message.buttonsResponseMessage?.selectedButtonId) {
+            // Resposta de botão nativo WhatsApp — pode carregar "auth:approve|reject:<txnId>"
+            text = message.buttonsResponseMessage.selectedButtonId;
+        } else if (message.listResponseMessage?.singleSelectReply?.selectedRowId) {
+            // Resposta de lista WhatsApp — mesmo protocolo
+            text = message.listResponseMessage.singleSelectReply.selectedRowId;
+        } else if (message.conversation) {
             text = message.conversation;
         } else if (message.extendedTextMessage?.text) {
             text = message.extendedTextMessage.text;
@@ -313,6 +343,19 @@ export class WhatsAppAdapter implements ChannelAdapter {
 
         if (!text && attachments.length === 0) return;
 
+        // ── Rota estruturada: protocolo "auth:<decision>:<txnId>" ─────────────
+        const parts = text.split(':');
+        if (parts[0] === 'auth' && parts.length === 3 && this.workflowCallback) {
+            const decision: AuthDecision = parts[1] === 'approve' ? 'approved' : 'rejected';
+            const txnId = parts[2];
+            log.info('workflow_callback', `userId=${userId} decision=${decision} txn=${txnId}`);
+            this.workflowCallback(userId, txnId, decision, jid).catch(err =>
+                log.error('workflow_callback_error', errorMessage(err))
+            );
+            return;
+        }
+
+        // ── Rota conversacional: mensagem normal ───────────────────────────────
         const normalizedMsg: NormalizedMessage = {
             messageId: msg.key?.id || Date.now().toString(),
             channel: 'whatsapp',
