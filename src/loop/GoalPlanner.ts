@@ -14,6 +14,7 @@
 import { createLogger } from '../shared/AppLogger';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
+import { ToolRegistry } from '../core/ToolRegistry';
 import { Goal, GoalBlocker, PlanStep } from './GoalTypes';
 
 const log = createLogger('GoalPlanner');
@@ -176,16 +177,31 @@ export class GoalPlanner {
             const parsed = JSON.parse(cleaned);
             const rawSteps = Array.isArray(parsed.steps) ? parsed.steps : [];
 
-            const steps: PlanStep[] = rawSteps.slice(0, 4).map((s: Record<string, unknown>, i: number) => ({
-                id: String(s.id ?? `step_${i + 1}`),
-                description: String(s.description ?? 'Execute step'),
-                toolName: s.toolName ? String(s.toolName) : undefined,
-                toolArgs: s.toolArgs && typeof s.toolArgs === 'object'
-                    ? s.toolArgs as Record<string, unknown>
-                    : undefined,
-                fallbackSteps: [],
-                status: 'pending' as const,
-            }));
+            const steps: PlanStep[] = rawSteps.slice(0, 4).map((s: Record<string, unknown>, i: number) => {
+                const rawToolName = s.toolName ? String(s.toolName) : undefined;
+
+                // Valida se a tool realmente existe no ToolRegistry.
+                // Se não existe, o step vai para o AgentLoop diretamente (sem toolName),
+                // evitando que o GoalEvaluator classifique como missing_tool e esgote o budget.
+                const resolvedTool = rawToolName && ToolRegistry.get(rawToolName)
+                    ? rawToolName
+                    : undefined;
+
+                if (rawToolName && !resolvedTool) {
+                    log.warn(`[GoalPlanner] tool '${rawToolName}' não existe no ToolRegistry — step será tratado sem tool`);
+                }
+
+                return {
+                    id: String(s.id ?? `step_${i + 1}`),
+                    description: String(s.description ?? 'Execute step'),
+                    toolName: resolvedTool,
+                    toolArgs: resolvedTool && s.toolArgs && typeof s.toolArgs === 'object'
+                        ? s.toolArgs as Record<string, unknown>
+                        : undefined,
+                    fallbackSteps: [],
+                    status: 'pending' as const,
+                };
+            });
 
             return { steps, strategy: String(parsed.strategy ?? '') };
         } catch {

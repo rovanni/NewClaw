@@ -57,6 +57,12 @@ export class GoalExtractor {
 
         if (msg.length < GOAL_LIMITS.MIN_GOAL_MESSAGE_LENGTH) return false;
 
+        // Fragmento de lista sem contexto — Telegram cortou uma mensagem grande.
+        // Começa com bullet/asterisco e não tem verbo de ação → não é goal autônomo.
+        const isListFragment = /^[\*\-•]\s+\w/.test(msg) && msg.split('\n').length <= 15
+            && !GOAL_SIGNALS.some(p => p.test(msg));
+        if (isListFragment) return false;
+
         // Sinais negativos claros → não é goal
         for (const pattern of NOT_GOAL_SIGNALS) {
             if (pattern.test(msg)) return false;

@@ -47,6 +47,10 @@ export function sanitizeContent(content: string): string {
                 result = parsed.action.content;
             } else if (parsed.content && typeof parsed.content === 'string') {
                 result = parsed.content;
+            } else if (parsed.thought && !parsed.action && !parsed.content && !parsed.response) {
+                // JSON com apenas thought — dado interno que não deve chegar ao usuário.
+                // Retorna vazio para o caller usar o fallback adequado.
+                result = '';
             }
         } catch {
             // Not valid JSON, leave as-is
@@ -57,7 +61,24 @@ export function sanitizeContent(content: string): string {
     const codeFenceMatch = result.match(/^```[\s\S]*?```\s*$/);
     if (codeFenceMatch) {
         const inner = result.replace(/^```\w*\n?/, '').replace(/\n?```\s*$/, '');
-        if (inner.length > 0) result = inner;
+        if (inner.length > 0) {
+            // Se o inner é JSON com apenas thought, descartar inteiro
+            const innerTrimmed = inner.trim();
+            if (innerTrimmed.startsWith('{') && innerTrimmed.endsWith('}')) {
+                try {
+                    const parsed = JSON.parse(innerTrimmed);
+                    if (parsed.thought && !parsed.action && !parsed.content && !parsed.response) {
+                        result = '';
+                    } else {
+                        result = inner;
+                    }
+                } catch {
+                    result = inner;
+                }
+            } else {
+                result = inner;
+            }
+        }
     }
 
     // Remove leaked system prompt fragments
@@ -67,8 +88,8 @@ export function sanitizeContent(content: string): string {
     // Remove leftover JSON action blocks that leaked
     result = result.replace(/"action"\s*:\s*\{[^}]*"type"\s*:\s*"tool"[^}]*\}/g, '');
     result = result.replace(/"evaluation"\s*:\s*\{[^}]*\}/g, '');
-    // Clean up "thought" leaks
-    result = result.replace(/"thought"\s*:\s*"[^"]*"[,\s]*/g, '');
+    // Clean up "thought" leaks — inclui strings com qualquer caractere (dotall via [\s\S])
+    result = result.replace(/"thought"\s*:\s*"(?:[^"\\]|\\.)*"[,\s]*/g, '');
 
     return result.trim();
 }
