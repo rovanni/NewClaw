@@ -570,7 +570,7 @@ Respond with ONLY valid JSON, no other text:
         ];
 
         try {
-            const result = await this.providerFactory!.chatWithFallback(messages, undefined, undefined, 8000);
+            const result = await this.providerFactory!.chatWithFallback(messages, undefined, undefined, 15000);
             if (result.status !== 'success' || !result.content) throw new Error('LLM classification failed');
 
             const raw = result.content.trim().replace(/^```json\s*|\s*```$/g, '');

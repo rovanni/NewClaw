@@ -682,6 +682,7 @@ export class AgentLoop {
         let lastBestContent = '';
         let toolFailureCount = 0;
         const usedToolInputs = new Set<string>();
+        const usedToolOutputs = new Map<string, string>(); // stores output of first successful call per inputKey
         // Track filenames confirmed absent from workspace so DEDUP can block path-variant retries
         const failedReadFilenames = new Set<string>();
 
@@ -1013,8 +1014,12 @@ export class AgentLoop {
                         const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
                         blockedKeyCount.set(inputKey, blockCount);
                         log.warn(`[${this.ts()}] [TOOL-DEDUP] Blocked repeated native call: ${toolName} (block #${blockCount})`);
+                        const cachedOutput = usedToolOutputs.get(inputKey);
+                        const contentHint = toolName === 'read' && cachedOutput
+                            ? `\n\n— Início do conteúdo já lido —\n${cachedOutput.slice(0, 600)}\n— (conteúdo completo disponível no histórico) —`
+                            : '';
                         const dedupBlockedMsg = toolName === 'read'
-                            ? `[BLOQUEADO] "read" já foi executado para este arquivo. O conteúdo JÁ ESTÁ disponível no histórico desta conversa — NÃO releia. Próximo passo obrigatório: use exec_command para processar o arquivo, write para salvar resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`
+                            ? `[BLOQUEADO] "read" já foi executado para este arquivo. Use este conteúdo diretamente — NÃO releia.${contentHint}\n\nPróximo passo obrigatório: use exec_command para processar o arquivo, write para salvar resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`
                             : `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos. Esta chamada foi bloqueada. NÃO repita esta ferramenta com os mesmos argumentos — use uma estratégia diferente ou responda com o que já sabe.`;
                         loopMessages.push({
                             role: 'tool',
@@ -1096,6 +1101,7 @@ export class AgentLoop {
 
                         cycleHistory.push({ tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
                         loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
+                        if (result.success) usedToolOutputs.set(inputKey, result.output.slice(0, 2000));
 
                         if (!result.success) {
                             toolFailureCount++;
@@ -1311,9 +1317,12 @@ export class AgentLoop {
             move('SYNTHESIS_REQUIRED', { step: stepCount, tools: cycleHistory.length });
 
             const toolSummary = cycleHistory.map(h => `• ${h.tool}: ${h.status}`).join('\n');
+            const synthesisBody = dedupAbort
+                ? `ATENÇÃO: O loop foi interrompido porque uma ferramenta foi chamada repetidamente.\n\nAções parciais executadas:\n${toolSummary}\n\nExplique HONESTAMENTE ao usuário:\n1. O que foi lido/executado com sucesso\n2. Qual etapa não foi possível completar e por que ficou em loop\n3. Uma sugestão prática de como prosseguir\n\nNÃO diga que houve "instabilidade técnica" nem invente que a tarefa foi concluída. Seja direto sobre o que ficou incompleto.`
+                : `Você executou as seguintes ações:\n${toolSummary}\n\nAgora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específicos das alterações realizadas. Não diga "vou fazer" — você JÁ fez. Confirme as mudanças de forma clara e objetiva.`;
             loopMessages.push({
                 role: 'system',
-                content: `SÍNTESE FINAL OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON, NÃO use formato action/thought):\n\nVocê executou as seguintes ações:\n${toolSummary}\n\nAgora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específicos das alterações realizadas. Não diga "vou fazer" — você JÁ fez. Confirme as mudanças de forma clara e objetiva. Responda DIRETAMENTE em linguagem natural.`
+                content: `SÍNTESE FINAL OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON, NÃO use formato action/thought):\n\n${synthesisBody}\n\nResponda DIRETAMENTE em linguagem natural.`
             });
 
             move('LLM_REQUEST', { step: stepCount, phase: 'synthesis' });
