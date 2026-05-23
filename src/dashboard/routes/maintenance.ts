@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { exec, execSync } from 'child_process';
+import { exec, execSync, spawn } from 'child_process';
 import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import fs from 'fs';
@@ -92,6 +92,63 @@ function enforceRetention(prefix: string, retentionCount: number) {
     } catch {}
 }
 
+// ── Build log streaming ────────────────────────────────────────────────────
+interface LogSub { res: Response; alive: boolean; }
+
+class BuildLogBuffer {
+    private lines: string[] = [];
+    private subs: LogSub[] = [];
+    private _running = false;
+
+    get running() { return this._running; }
+
+    start() {
+        this.lines = [];
+        this.subs = [];
+        this._running = true;
+    }
+
+    push(raw: string) {
+        raw.split('\n').filter(l => l.trim()).forEach(line => {
+            this.lines.push(line);
+            this.subs = this.subs.filter(s => s.alive);
+            for (const s of this.subs) {
+                try { s.res.write(`data: ${JSON.stringify({ line })}\n\n`); }
+                catch { s.alive = false; }
+            }
+        });
+    }
+
+    finish(ok: boolean) {
+        this._running = false;
+        const evt = ok ? 'done' : 'error';
+        this.subs.forEach(s => {
+            try { s.res.write(`event: ${evt}\ndata: {}\n\n`); s.res.end(); } catch {}
+        });
+        this.subs = [];
+    }
+
+    subscribe(res: Response): () => void {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders();
+        for (const line of this.lines) {
+            res.write(`data: ${JSON.stringify({ line })}\n\n`);
+        }
+        if (!this._running) {
+            res.write(`event: done\ndata: {}\n\n`);
+            res.end();
+            return () => {};
+        }
+        const sub: LogSub = { res, alive: true };
+        this.subs.push(sub);
+        return () => { sub.alive = false; };
+    }
+}
+
+const buildLog = new BuildLogBuffer();
+
 export function createMaintenanceRouter(): Router {
     const router = Router();
 
@@ -122,12 +179,32 @@ export function createMaintenanceRouter(): Router {
 
     // POST /api/maintenance/update/apply
     router.post('/update/apply', (_req: Request, res: Response) => {
-        res.json({ success: true, message: 'Atualização iniciada. O sistema será reiniciado automaticamente.' });
+        if (buildLog.running) {
+            return res.status(409).json({ success: false, error: 'Atualização já em andamento.' });
+        }
+        res.json({ success: true, message: 'Atualização iniciada.' });
+
+        buildLog.start();
         const node = process.execPath;
         const cli = path.join(DIR, 'bin', 'newclaw');
-        exec(`"${node}" "${cli}" update restart`, { cwd: DIR }, (err) => {
-            if (err) log.error('Falha na atualização:', errorMessage(err));
+        const child = spawn(node, [cli, 'update', 'restart'], { cwd: DIR });
+
+        child.stdout.on('data', (d: Buffer) => buildLog.push(d.toString()));
+        child.stderr.on('data', (d: Buffer) => buildLog.push(d.toString()));
+        child.on('close', (code) => {
+            log.info(`Update process exited with code ${code}`);
+            buildLog.finish(code === 0);
         });
+        child.on('error', (err) => {
+            buildLog.push(`❌ ${errorMessage(err)}`);
+            buildLog.finish(false);
+        });
+    });
+
+    // GET /api/maintenance/update/stream  (SSE)
+    router.get('/update/stream', (req: Request, res: Response) => {
+        const unsub = buildLog.subscribe(res);
+        req.on('close', unsub);
     });
 
     // GET /api/maintenance/backup/schedule

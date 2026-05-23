@@ -40,14 +40,20 @@ export function render(container) {
               </div>
             </div>
 
-            <!-- Fase 2: Build + reinício (oculto até fase 1 terminar) -->
+            <!-- Fase 2: terminal de logs (oculto até fase 1 terminar) -->
             <div id="upd-phase2" style="display:none;margin-top:12px">
-              <div style="display:flex;align-items:center;gap:10px;font-size:.82rem;color:var(--text-soft)">
+              <div style="display:flex;align-items:center;gap:8px;font-size:.78rem;color:var(--text-soft);margin-bottom:6px">
                 <span id="upd-pulse"
-                      style="width:8px;height:8px;border-radius:50%;background:var(--accent);
-                             display:inline-block;animation:upd-blink 1s infinite">
+                      style="width:7px;height:7px;border-radius:50%;flex-shrink:0;
+                             background:var(--accent);display:inline-block;animation:upd-blink 1s infinite">
                 </span>
-                <span>🔧 Compilando e reiniciando… aguardando servidor</span>
+                <span id="upd-phase2-label">🔧 Compilando e reiniciando…</span>
+              </div>
+              <div id="upd-log-term"
+                   style="background:var(--code-bg,#0d1117);border:1px solid var(--border);
+                          border-radius:6px;padding:10px 12px;font-family:monospace;
+                          font-size:.74rem;line-height:1.55;max-height:220px;overflow-y:auto;
+                          color:#c9d1d9;white-space:pre-wrap;word-break:break-all">
               </div>
             </div>
           </div>
@@ -142,23 +148,62 @@ export function render(container) {
       // ── Fase 1: 30s fixos (Telegram precisa deste tempo para liberar) ─────
       runPhase1(TELEGRAM_WAIT, () => {
 
-        // ── Fase 2: poll até o servidor responder (build terminou) ──────────
+        // ── Fase 2: terminal SSE + poll de fallback ──────────────────────────
         phase1El.style.display = 'none';
         phase2El.style.display = 'block';
 
-        let tries = 0;
-        const poll = async () => {
+        const logTerm    = document.getElementById('upd-log-term');
+        const phase2Lbl  = document.getElementById('upd-phase2-label');
+
+        function appendLog(line, color) {
+          const el = document.createElement('div');
+          if (color) el.style.color = color;
+          el.textContent = line;
+          logTerm.appendChild(el);
+          logTerm.scrollTop = logTerm.scrollHeight;
+        }
+
+        function startPoll() {
+          phase2Lbl.textContent = '🔄 Aguardando servidor reiniciar…';
+          let tries = 0;
+          const poll = async () => {
+            try { const r = await fetch('/api/status'); if (r.ok) { location.reload(); return; } } catch {}
+            if (++tries < 60) setTimeout(poll, 3000);
+            else {
+              progressWrap.style.display = 'none';
+              statusEl.innerHTML = `<span style="color:var(--danger)">${t('update_timeout_warn')}</span>`;
+            }
+          };
+          poll();
+        }
+
+        let hasReceived = false;
+        const es = new EventSource('/api/maintenance/update/stream');
+
+        es.onmessage = (e) => {
+          hasReceived = true;
           try {
-            const r = await fetch('/api/status');
-            if (r.ok) { location.reload(); return; }
+            const { line } = JSON.parse(e.data);
+            const color = /error|❌|fail/i.test(line) ? '#f85149'
+                        : /✅|success|concluíd|done/i.test(line) ? '#3fb950'
+                        : /warn|⚠️/i.test(line) ? '#d29922' : '';
+            appendLog(line, color);
           } catch {}
-          if (++tries < 60) setTimeout(poll, 3000); // tenta por até 3 minutos
-          else {
-            progressWrap.style.display = 'none';
-            statusEl.innerHTML = `<span style="color:var(--danger)">${t('update_timeout_warn')}</span>`;
-          }
         };
-        poll();
+
+        es.addEventListener('done', () => {
+          es.close();
+          appendLog('✅ Build concluído — aguardando PM2 reiniciar…', '#3fb950');
+          startPoll();
+        });
+
+        es.onerror = () => {
+          es.close();
+          if (hasReceived) {
+            appendLog('🔄 Servidor reiniciando…', '#d29922');
+          }
+          startPoll();
+        };
       });
 
     } catch (e) {
