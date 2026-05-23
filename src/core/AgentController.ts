@@ -60,6 +60,8 @@ import { openDatabase, buildLanguageDirective, buildSystemPrompt } from './agent
 import { OwnerProfileService } from '../services/OwnerProfileService';
 import { bootstrapDomains } from '../memory/DomainRegistry';
 import { WorkflowEngine } from '../loop/WorkflowEngine';
+import { GoalOrchestrator } from '../loop/GoalOrchestrator';
+import { GoalStore } from '../loop/GoalStore';
 import { registerCommands } from './agentControllerCommands';
 import {
     transcribeAttachment,
@@ -76,6 +78,8 @@ export class AgentController {
     private config: NewClawConfig;
     private agentLoop: AgentLoop;
     private workflowEngine!: WorkflowEngine;
+    private goalOrchestrator!: GoalOrchestrator;
+    private goalStore!: GoalStore;
     private providerFactory: ProviderFactory;
     private memory: MemoryManager;
     private memoryFacade: MemoryFacade;
@@ -127,6 +131,9 @@ export class AgentController {
 
         // WorkflowEngine com SQLite — sobrevive a restart, sem transações zumbi
         this.workflowEngine = new WorkflowEngine(this.db);
+
+        // GoalStore: tabela goals no mesmo SQLite
+        this.goalStore = new GoalStore(this.db);
 
         this.memory = new MemoryManager(this.db);
         this.memoryFacade = this.memory.getFacade();
@@ -204,6 +211,10 @@ export class AgentController {
         });
 
         this.messageBus = new MessageBus(this.agentLoop, this.sessionManager);
+
+        // GoalOrchestrator: intercepta mensagens de goal antes do AgentLoop
+        this.goalOrchestrator = new GoalOrchestrator(this.agentLoop, this.providerFactory, this.goalStore, this.memory);
+        this.messageBus.setGoalOrchestrator(this.goalOrchestrator);
 
         this.auditor = new AuditorService({
             ollamaUrl: config.ollamaUrl || 'http://localhost:11434',

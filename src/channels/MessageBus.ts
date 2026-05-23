@@ -23,6 +23,7 @@ import {
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { ConversationQueueManager } from '../core/ConversationQueueManager';
+import type { GoalOrchestrator } from '../loop/GoalOrchestrator';
 
 const log = createLogger('MessageBus');
 
@@ -31,6 +32,8 @@ export class MessageBus {
     private agentLoop: AgentLoop;
     private sessionManager: SessionManager;
     private started: boolean = false;
+    /** GoalOrchestrator — quando definido, intercepta mensagens de goal antes do AgentLoop */
+    private goalOrchestrator?: GoalOrchestrator;
     /** Custom command handlers (e.g., /clear, /skills) */
     private commandHandlers: Map<string, (msg: NormalizedMessage) => Promise<string | null>> = new Map();
     /** Custom media handlers */
@@ -67,6 +70,12 @@ export class MessageBus {
     /** Remover um canal */
     unregisterAdapter(channelType: ChannelType): void {
         this.adapters.delete(channelType);
+    }
+
+    /** Injetar GoalOrchestrator após construção (evita dependência circular) */
+    setGoalOrchestrator(orchestrator: GoalOrchestrator): void {
+        this.goalOrchestrator = orchestrator;
+        log.info('goal_orchestrator_registered', 'GoalOrchestrator registered');
     }
 
     /** Registrar handler de comando (ex: /clear, /skills) */
@@ -351,17 +360,17 @@ export class MessageBus {
             const startTime = Date.now();
             log.info('processing_start', `User: ${msg.text.slice(0, 80)}`, { channel: msg.channel, userId: msg.userId, correlationId });
 
-            const response = await this.agentLoop.process(
-                msg.userId,
-                msg.text,
-                msg.userId,
-                {
-                    channel: msg.channel,
-                    chatId: msg.chatId || msg.userId,
-                    metadata: msg.metadata,
-                    correlationId
-                }
-            );
+            const channelCtx = {
+                channel: msg.channel,
+                chatId: msg.chatId || msg.userId,
+                userId: msg.userId,
+                metadata: msg.metadata,
+                correlationId
+            };
+
+            const response = this.goalOrchestrator
+                ? await this.goalOrchestrator.process(msg.userId, msg.text, msg.userId, channelCtx)
+                : await this.agentLoop.process(msg.userId, msg.text, msg.userId, channelCtx);
             const duration = Date.now() - startTime;
 
             const responseText = typeof response === 'string' ? response : response.text;

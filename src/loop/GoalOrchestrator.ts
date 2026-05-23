@@ -1,0 +1,183 @@
+/**
+ * GoalOrchestrator — Camada de coordenação entre mensagem do usuário e execução.
+ *
+ * Responsabilidades:
+ *   1. Classificar se a mensagem é um Goal ou conversa simples
+ *   2. Criar e persistir o goal no GoalStore
+ *   3. Executar via GoalExecutionLoop (ciclo iterativo plan→execute→evaluate→replan)
+ *   4. Fallback para AgentLoop quando não é goal
+ *
+ * Bounded autonomy garantida:
+ *   - Um goal ativo por sessão (goal anterior é abandonado)
+ *   - Goals sempre iniciados por mensagem explícita do usuário
+ *   - TTL de 30 minutos por goal
+ *   - Retries e replans limitados por budget
+ */
+
+import { createLogger } from '../shared/AppLogger';
+import { AgentLoop, ProcessedResult } from './AgentLoop';
+import { GoalStore } from './GoalStore';
+import { GoalExtractor } from './GoalExtractor';
+import { GoalPlanner } from './GoalPlanner';
+import { GoalExecutionLoop } from './GoalExecutionLoop';
+import { ProviderFactory } from '../core/ProviderFactory';
+import { MemoryManager } from '../memory/MemoryManager';
+import { ReflectionMemory } from '../memory/ReflectionMemory';
+import { ToolRegistry } from '../core/ToolRegistry';
+import { GOAL_LIMITS } from './GoalLimits';
+import { ChannelContext } from './agentLoopTypes';
+
+const log = createLogger('GoalOrchestrator');
+
+export class GoalOrchestrator {
+    private readonly goalStore: GoalStore;
+    private readonly extractor: GoalExtractor;
+    private readonly executionLoop: GoalExecutionLoop;
+
+    constructor(
+        private readonly agentLoop: AgentLoop,
+        providerFactory: ProviderFactory,
+        goalStore: GoalStore,
+        memory: MemoryManager,
+    ) {
+        this.goalStore = goalStore;
+        this.extractor = new GoalExtractor(providerFactory);
+
+        const reflectionMemory = new ReflectionMemory(memory);
+        const planner = new GoalPlanner(providerFactory, reflectionMemory);
+
+        this.executionLoop = new GoalExecutionLoop(
+            agentLoop,
+            goalStore,
+            planner,
+            reflectionMemory,
+            ToolRegistry,
+        );
+    }
+
+    /**
+     * Processa uma mensagem do usuário.
+     *
+     * Fluxo:
+     *   1. Expira goals antigos (TTL)
+     *   2. Classifica se é goal ou conversa
+     *   3. Se goal: cria no store, executa via GoalExecutionLoop
+     *   4. Se conversa: passa direto para AgentLoop
+     */
+    async process(
+        conversationId: string,
+        message: string,
+        userId: string,
+        context?: ChannelContext
+    ): Promise<string | ProcessedResult> {
+        // TTL cleanup a cada processamento (query lightweight)
+        this.goalStore.expireStale();
+
+        const sessionKey = context
+            ? `${context.channel}:${context.userId ?? userId}`
+            : `unknown:${userId}`;
+
+        // ── Verificar se há goal ativo aguardando retomada ──────────────────
+        const activeGoal = this.goalStore.getActiveBySession(sessionKey);
+
+        if (activeGoal?.status === 'blocked' && activeGoal.pendingTxnId) {
+            log.info(`[GoalOrchestrator] goal=${activeGoal.id} blocked waiting auth txn=${activeGoal.pendingTxnId}`);
+            // Auth pendente — retomada ocorre via WorkflowEngine callback
+            // Cai para AgentLoop para informar o usuário do estado atual
+        }
+
+        // ── Classificar a mensagem ──────────────────────────────────────────
+        const classification = await this.extractor.classify(
+            message,
+            context ?? { channel: 'unknown', chatId: conversationId }
+        );
+
+        if (!classification.isGoal) {
+            log.debug(`[GoalOrchestrator] not-goal reason=${classification.reason}`);
+            return this.agentLoop.process(conversationId, message, userId, context);
+        }
+
+        log.info(`[GoalOrchestrator] goal confidence=${classification.confidence} message="${message.slice(0, 80)}"`);
+
+        // ── Abandonar goal anterior ───────────────────────────────────────
+        if (activeGoal && !['completed', 'failed', 'abandoned'].includes(activeGoal.status)) {
+            log.info(`[GoalOrchestrator] abandoning goal=${activeGoal.id}`);
+            this.goalStore.setStatus(activeGoal.id, 'abandoned');
+        }
+
+        // ── Criar novo goal ───────────────────────────────────────────────
+        const goal = this.goalStore.create({
+            sessionKey,
+            conversationId,
+            userIntent: message,
+            objective: classification.objective || message,
+            status: 'active',
+            currentPlan: [],
+            attempts: [],
+            blockers: [],
+            toolsTried: [],
+            strategiesTried: [],
+            retryBudget: GOAL_LIMITS.MAX_RETRY_BUDGET,
+            replanBudget: GOAL_LIMITS.MAX_REPLAN_BUDGET,
+            confidence: GOAL_LIMITS.INITIAL_CONFIDENCE,
+            requiresAuth: false,
+            authorizationScope: classification.requiredTools ?? [],
+            expiresAt: Date.now() + GOAL_LIMITS.MAX_GOAL_TTL_MS,
+        });
+
+        log.info(`[GoalOrchestrator] executing goal=${goal.id}`);
+
+        // ── Executar via GoalExecutionLoop ────────────────────────────────
+        const result = await this.executionLoop.executeGoal(
+            goal,
+            context ?? { channel: 'unknown', chatId: conversationId, userId },
+            async (update) => {
+                log.debug(`[GoalOrchestrator] progress goal=${update.goalId} cycle=${update.cycle} event=${update.event}`);
+            }
+        );
+
+        log.info(`[GoalOrchestrator] goal=${goal.id} success=${result.success} cycles=${result.totalCycles} replans=${result.totalReplans}`);
+
+        // Retorna o output final como texto
+        if (result.success) {
+            return result.finalOutput;
+        }
+
+        // Falhou — retorna a explicação gerada pelo GoalEvaluator
+        // e deixa AgentLoop dar uma resposta mais rica se possível
+        if (result.totalCycles > 0) {
+            return result.finalOutput;
+        }
+
+        // Nunca chegou a executar — cai para AgentLoop normal
+        return this.agentLoop.process(conversationId, message, userId, context);
+    }
+
+    /**
+     * Retoma um goal bloqueado após auth aprovada.
+     * Chamado pelo AgentController após WorkflowEngine.resume().
+     */
+    async resumeFromAuth(txnId: string, responseText: string): Promise<void> {
+        const goal = this.goalStore.getByTxnId(txnId);
+        if (!goal) {
+            log.warn(`[GoalOrchestrator] resumeFromAuth: no goal for txn=${txnId}`);
+            return;
+        }
+
+        log.info(`[GoalOrchestrator] resuming goal=${goal.id} after auth`);
+        this.goalStore.update(goal.id, { status: 'active', pendingTxnId: undefined });
+        this.goalStore.addAttempt(goal.id, {
+            id: `att_${Date.now()}`,
+            planStepId: 'auth_resume',
+            toolName: 'workflow_auth',
+            args: { txnId },
+            result: 'success',
+            output: responseText.slice(0, 200),
+            durationMs: 0,
+            executedAt: Date.now(),
+        });
+        this.goalStore.setStatus(goal.id, 'completed');
+    }
+
+    getGoalStore(): GoalStore { return this.goalStore; }
+}
