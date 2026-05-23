@@ -156,21 +156,26 @@ export class WebNavigateTool implements ToolExecutor {
 
     private async getTextView(url: string, html: string, maxChars: number): Promise<BrowserDumpResult> {
         const browserDump = await this.dumpUrlWithTextBrowser(url, maxChars);
-        if (browserDump) {
+
+        // If text browser returned rich content, use it directly
+        if (browserDump && browserDump.content.length >= 300) {
             return browserDump;
         }
 
+        // Text browser failed or returned thin content (SPA/JS-rendered page like React apps)
         // Try static HTML extraction first
         const staticContent = this.extractReadableText(html, maxChars);
 
-        // If content is thin (JS-rendered page), try Jina AI Reader
-        if (staticContent.length < 300) {
+        // If content is still thin, try Jina AI Reader (handles JS-rendered SPAs)
+        if (staticContent.length < 300 || (browserDump && browserDump.content.length < 300)) {
             const jinaContent = await this.fetchViaJina(url, maxChars);
             if (jinaContent) {
                 return { mode: 'html-fallback', content: `[jina-reader]\n${jinaContent}` };
             }
         }
 
+        // Fall back to whatever we have
+        if (browserDump) return browserDump;
         return { mode: 'html-fallback', content: staticContent };
     }
 
