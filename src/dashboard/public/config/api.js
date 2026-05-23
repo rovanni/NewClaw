@@ -121,6 +121,12 @@ export async function applyUpdate() {
   return json(f('/api/maintenance/update/apply', { method: 'POST' }));
 }
 
+export async function getBackupSchedule() {
+  try {
+    return await json(f('/api/maintenance/backup/schedule'));
+  } catch { return { found: false }; }
+}
+
 export async function listBackups() {
   const d = await json(f('/api/maintenance/backup/list'));
   return d.backups;

@@ -1,6 +1,6 @@
 import {
   listBackups, createSystemBackup, createDatabaseBackup, backupDownloadUrl,
-  getBackupConfig, saveBackupConfig,
+  getBackupConfig, saveBackupConfig, getBackupSchedule,
 } from '../api.js';
 import { showToast } from '../components/Toast.js';
 
@@ -25,9 +25,8 @@ export function render(container) {
       <details class="cfg-details" open>
         <summary>${t('backup_schedule_title')}</summary>
         <div class="cfg-details-body">
-          <div class="form-hint" style="display:flex;align-items:flex-start;gap:8px">
-            <span>ℹ️</span>
-            <span>${t('backup_schedule_info')}</span>
+          <div id="bkp-scheduleInfo" class="form-hint" style="display:flex;align-items:flex-start;gap:8px">
+            <span>⏳</span><span>Consultando crontab do servidor…</span>
           </div>
         </div>
       </details>
@@ -73,6 +72,25 @@ export function render(container) {
   const saveRetBtn  = document.getElementById('bkp-saveRetention');
   const sysBtn      = document.getElementById('bkp-systemBtn');
   const dbBtn       = document.getElementById('bkp-dbBtn');
+
+  // ── Agendamento (dinâmico via crontab) ───────────────────────────────────
+  const scheduleEl = document.getElementById('bkp-scheduleInfo');
+  getBackupSchedule().then(s => {
+    if (s.found) {
+      scheduleEl.innerHTML =
+        `<span>🕐</span>` +
+        `<span>Backup automático configurado no crontab: ` +
+        `<strong>${esc(s.humanReadable || s.cronExpr)}</strong>` +
+        ` — <code style="font-size:.78rem">${esc(s.cronExpr)}</code>` +
+        `<br><span style="font-size:.78rem;color:var(--text-soft)">${esc(s.raw)}</span></span>`;
+    } else {
+      scheduleEl.innerHTML =
+        `<span>ℹ️</span><span>Nenhum agendamento de backup encontrado no crontab do servidor. ` +
+        `Os backups manuais abaixo continuam funcionando normalmente.</span>`;
+    }
+  }).catch(() => {
+    scheduleEl.innerHTML = `<span>⚠️</span><span>Não foi possível ler o crontab do servidor.</span>`;
+  });
 
   // ── Retenção ──────────────────────────────────────────────────────────────
   getBackupConfig().then(cfg => {

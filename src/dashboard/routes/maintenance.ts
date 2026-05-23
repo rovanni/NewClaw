@@ -32,6 +32,32 @@ function formatBytes(bytes: number): string {
     return `${size.toFixed(1)} ${units[i]}`;
 }
 
+function parseCronHuman(expr: string): string {
+    const [min, hour, day, month, weekday] = expr.split(' ');
+    if (!min || !hour) return expr;
+
+    if (min === '0' && hour.startsWith('*/') && day === '*' && month === '*' && weekday === '*') {
+        const n = hour.slice(2);
+        return `a cada ${n} hora${n === '1' ? '' : 's'}`;
+    }
+    if (min.startsWith('*/') && hour === '*' && day === '*' && month === '*' && weekday === '*') {
+        const n = min.slice(2);
+        return `a cada ${n} minuto${n === '1' ? '' : 's'}`;
+    }
+    if (/^\d+$/.test(min) && /^\d+$/.test(hour) && day === '*' && month === '*' && weekday === '*') {
+        return `todo dia às ${hour}h${min !== '0' ? min : ''}`;
+    }
+    if (min === '0' && hour === '0' && day === '*' && month === '*' && weekday !== '*') {
+        const days = ['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
+        const d = parseInt(weekday, 10);
+        return `toda ${days[d] ?? weekday} à meia-noite`;
+    }
+    if (min === '0' && hour === '0' && day === '1' && month === '*' && weekday === '*') {
+        return 'todo dia 1 do mês';
+    }
+    return expr; // fallback: mostra a expressão raw
+}
+
 function gitExec(cmd: string): string {
     return execSync(cmd, { cwd: DIR, encoding: 'utf8', timeout: 10000 }).trim();
 }
@@ -101,6 +127,25 @@ export function createMaintenanceRouter(): Router {
         const cli = path.join(DIR, 'bin', 'newclaw');
         exec(`"${node}" "${cli}" update restart`, { cwd: DIR }, (err) => {
             if (err) log.error('Falha na atualização:', errorMessage(err));
+        });
+    });
+
+    // GET /api/maintenance/backup/schedule
+    router.get('/backup/schedule', (_req: Request, res: Response) => {
+        exec('crontab -l 2>/dev/null', (_err, stdout) => {
+            const lines = (stdout || '').split('\n')
+                .filter(l => l.includes('backup_db.sh') && !l.trim().startsWith('#'));
+
+            if (!lines.length) {
+                return res.json({ success: true, found: false, humanReadable: null, cronExpr: null, raw: null });
+            }
+
+            const raw = lines[0].trim();
+            const parts = raw.split(/\s+/);
+            const cronExpr = parts.slice(0, 5).join(' ');
+            const humanReadable = parseCronHuman(cronExpr);
+
+            res.json({ success: true, found: true, raw, cronExpr, humanReadable });
         });
     });
 
