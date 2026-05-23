@@ -113,15 +113,6 @@ export class AgentLoop {
         log.info('[WF] WorkflowEngine registered in AgentLoop');
     }
 
-    private isAuthorized(conversationId: string, toolName: string, args: Record<string, unknown>): boolean {
-        const pending = this.authManager.getPending(conversationId);
-        if (pending && this.authManager.isMatch(pending, toolName, args)) {
-            this.authManager.removePending(conversationId);
-            return true;
-        }
-        return false;
-    }
-
     /**
      * Returns true for exec_command calls that are read-only and safe to run without user authorization.
      * Multi-line scripts and any command with destructive patterns always require authorization.
@@ -1017,13 +1008,13 @@ export class AgentLoop {
                         }
 
                         const isDangerous = ToolRegistry.isDangerous(toolName) && !this.isSafeExecCommand(toolName, toolCall.arguments);
-                        if (isDangerous && !this.isAuthorized(conversationId, toolName, toolCall.arguments)) {
+                        if (isDangerous) {
                             log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
 
                             let txnId: string | undefined;
                             if (this.workflowEngine) {
                                 // Novo fluxo: cria transaction com ID estruturado.
-                                // Canais com workflowCallback (Telegram) rotearão o callback
+                                // Canais com workflowCallback (Telegram, WhatsApp, Discord, Signal) rotearão o callback
                                 // diretamente ao WorkflowEngine — sem passar pelo LLM pipeline.
                                 const ctx: ContinuationContext = {
                                     workflow: this.inferWorkflowName(intentDecision.intent, toolName),

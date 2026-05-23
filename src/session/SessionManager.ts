@@ -14,6 +14,7 @@ import type { MemoryFacade } from '../memory/MemoryFacade';
 import { SessionTranscript, TranscriptEntry, TranscriptMeta } from './SessionTranscript';
 import { ContextCompressor } from '../loop/ContextCompressor';
 import { ProviderFactory } from '../core/ProviderFactory';
+import type { CMIEngine } from '../memory/conversational/CMIEngine';
 import fs from 'fs';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('Sessionmanager');
@@ -79,6 +80,9 @@ export class SessionManager {
     
     // Rastreamento de arquivos ativos por sessão (para manter no contexto mesmo após compressão)
     private activeFiles: Map<string, Set<string>> = new Map();
+
+    // CMI — injetado opcionalmente após construção
+    private cmiEngine: CMIEngine | null = null;
 
     constructor(config: Partial<SessionConfig>, memory: MemoryManager, providerFactory?: ProviderFactory) {
         this.config = { ...DEFAULT_CONFIG, ...config };
@@ -189,6 +193,9 @@ export class SessionManager {
             this.memory.addMessage(this.conversationId(key), 'user', content);
             await this.maybeCompress(key);
             log.info(`${sid} user seq=${seq} len=${content.length}`);
+            // CMI: fire-and-forget, nunca bloqueia o response
+            const entry: TranscriptEntry = { ts: new Date().toISOString(), seq, role: 'user', content, meta };
+            this.cmiEngine?.feedEntry(sid, entry).catch(() => {});
             return seq;
         });
     }
@@ -200,6 +207,9 @@ export class SessionManager {
             const seq = transcript.append('assistant', content, meta);
             this.memory.addMessage(this.conversationId(key), 'assistant', content);
             log.info(`${sid} assistant seq=${seq} len=${content.length} tokens≈${Math.round(estimateTokens(content))}`);
+            // CMI: fire-and-forget
+            const entry: TranscriptEntry = { ts: new Date().toISOString(), seq, role: 'assistant', content, meta };
+            this.cmiEngine?.feedEntry(sid, entry).catch(() => {});
             return seq;
         });
     }
@@ -240,7 +250,14 @@ export class SessionManager {
             }
         }
         
-        return transcript.append('tool_call', `Tool: ${toolName}`, { ...meta, tool_name: toolName, tool_input: input });
+        const seq = transcript.append('tool_call', `Tool: ${toolName}`, { ...meta, tool_name: toolName, tool_input: input });
+        // CMI: registrar tool call (extrai tools_used e entity paths)
+        const toolEntry: TranscriptEntry = {
+            ts: new Date().toISOString(), seq, role: 'tool_call',
+            content: `Tool: ${toolName}`, meta: { ...meta, tool_name: toolName, tool_input: input }
+        };
+        this.cmiEngine?.feedEntry(sid, toolEntry).catch(() => {});
+        return seq;
     }
 
     /**
@@ -258,13 +275,16 @@ export class SessionManager {
 
     async recordToolResult(key: SessionKey, toolName: string, result: string, success: boolean, durationMs?: number, meta?: TranscriptMeta): Promise<number> {
         const transcript = await this.getOrCreateSession(key);
-        return transcript.append('tool_result', result, {
-            ...meta,
-            tool_name: toolName,
-            tool_success: success,
-            tool_duration_ms: durationMs,
-            status: success ? 'success' : 'error'
-        });
+        const sid = this.sessionKey(key);
+        const resultMeta = { ...meta, tool_name: toolName, tool_success: success, tool_duration_ms: durationMs, status: success ? 'success' as const : 'error' as const };
+        const seq = transcript.append('tool_result', result, resultMeta);
+        // CMI: sinaliza conclusão de workflow para terminal tools
+        const resultEntry: TranscriptEntry = {
+            ts: new Date().toISOString(), seq, role: 'tool_result',
+            content: result.slice(0, 200), meta: resultMeta
+        };
+        this.cmiEngine?.feedEntry(sid, resultEntry).catch(() => {});
+        return seq;
     }
 
     /**
@@ -353,6 +373,9 @@ export class SessionManager {
             checkpoint: true,
             compressed_up_to: checkpoint.seq
         });
+
+        // CMI: fronteira semântica natural — flush imediato do buffer
+        this.cmiEngine?.onCheckpointCreated(sid).catch(() => {});
 
         log.info(`Checkpoint: seq=${checkpoint.seq} compressed=${messagesToCompress.length} tokens≈${tokenEstimate}`);
     }
@@ -472,6 +495,12 @@ export class SessionManager {
 
     getMemory(): MemoryManager { return this.memory; }
     getConfig(): SessionConfig { return { ...this.config }; }
+
+    /** Injeta o CMIEngine. Chamado após construção para evitar dependência circular. */
+    setCMIEngine(engine: CMIEngine): void {
+        this.cmiEngine = engine;
+        log.info('setCMIEngine', 'CMIEngine conectado ao SessionManager');
+    }
 
     /**
      * Compact a session's JSONL by keeping only checkpoint + recent messages.

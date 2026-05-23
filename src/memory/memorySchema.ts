@@ -424,6 +424,49 @@ export function initializeSchema(db: Database.Database): Record<string, string> 
 
     ensureUserProfileSchema(db);
     ensureMemorySchema(db);
+    ensureCMISchema(db);
 
     return { ...INVERSE_RELATIONS };
+}
+
+/**
+ * Schema para o Conversational Memory Index (CMI).
+ * Episódios conversacionais indexados semanticamente.
+ * Separado do grafo semântico (memory_nodes) — camada episódica, não factual.
+ */
+export function ensureCMISchema(db: Database.Database): void {
+    try {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS conversation_chunks (
+                id TEXT PRIMARY KEY,
+                session_key TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                start_seq INTEGER NOT NULL,
+                end_seq INTEGER NOT NULL,
+                start_timestamp INTEGER NOT NULL,
+                end_timestamp INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                topics TEXT NOT NULL DEFAULT '[]',
+                entities TEXT NOT NULL DEFAULT '[]',
+                intent TEXT NOT NULL DEFAULT '',
+                messages TEXT NOT NULL DEFAULT '[]',
+                embedding BLOB,
+                workflow_id TEXT,
+                tools_used TEXT NOT NULL DEFAULT '[]',
+                chunk_quality REAL NOT NULL DEFAULT 0.5,
+                cut_trigger TEXT NOT NULL DEFAULT 'window_size',
+                created_at INTEGER NOT NULL,
+                last_accessed_at INTEGER,
+                access_count INTEGER NOT NULL DEFAULT 0,
+                expires_at INTEGER
+            )
+        `);
+        const tryIdx = (sql: string) => { try { db.exec(sql); } catch { /* exists */ } };
+        tryIdx('CREATE INDEX IF NOT EXISTS idx_cmi_session_time ON conversation_chunks(session_key, start_timestamp DESC)');
+        tryIdx('CREATE INDEX IF NOT EXISTS idx_cmi_quality ON conversation_chunks(chunk_quality DESC)');
+        tryIdx('CREATE INDEX IF NOT EXISTS idx_cmi_expires ON conversation_chunks(expires_at)');
+        tryIdx('CREATE INDEX IF NOT EXISTS idx_cmi_created ON conversation_chunks(created_at DESC)');
+    } catch (e) {
+        log.warn('ensureCMISchema', `CMI schema error: ${String(e)}`);
+    }
 }
