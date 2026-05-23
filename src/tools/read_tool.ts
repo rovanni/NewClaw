@@ -200,17 +200,23 @@ export class ReadTool implements ToolExecutor {
             // Se é arquivo, ler conteúdo
             let content = fs.readFileSync(filePath, 'utf-8');
 
+            const filename = path.basename(filePath);
+            const sizeKb = (stat.size / 1024).toFixed(1);
+
             // Suporte a offset e limit (como OpenClaw)
             if (args.offset || args.limit) {
                 const lines = content.split('\n');
                 const startLine = (args.offset as number) || 1;
                 const lineLimit = (args.limit as number) || lines.length;
+                const totalLines = lines.length;
                 const selectedLines = lines.slice(startLine - 1, startLine - 1 + lineLimit);
                 content = selectedLines.join('\n');
-                return { success: true, output: content };
+                const header = `[Arquivo: ${filename} | ${sizeKb}KB | linhas ${startLine}–${startLine + selectedLines.length - 1} de ${totalLines} — use offset/limit para ler outras partes]\n`;
+                return { success: true, output: header + content };
             }
 
-            return { success: true, output: content };
+            const header = `[Arquivo: ${filename} | ${sizeKb}KB | Conteúdo completo — NÃO releia, use este conteúdo para executar a tarefa]\n`;
+            return { success: true, output: header + content };
         } catch (error) {
             return { success: false, output: '', error: errorMessage(error) };
         }

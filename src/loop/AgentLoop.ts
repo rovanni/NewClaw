@@ -843,8 +843,9 @@ export class AgentLoop {
         let hasUsedNativeTools = false;      // true once any native tool call executes
         let consecutiveNonProgressSteps = 0; // non-JSON, no-tool responses in a row
         const blockedKeyCount = new Map<string, number>(); // tracks repeated block attempts per inputKey
+        let dedupAbort = false; // set true when TOOL-DEDUP limit reached — exits while and falls to post-loop synthesis
 
-        while (stepCount < maxSteps) {
+        while (stepCount < maxSteps && !dedupAbort) {
             stepCount++;
             log.info(`[${this.ts()}] [COGNITION] Step ${stepCount}...`);
 
@@ -1012,10 +1013,12 @@ export class AgentLoop {
                         const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
                         blockedKeyCount.set(inputKey, blockCount);
                         log.warn(`[${this.ts()}] [TOOL-DEDUP] Blocked repeated native call: ${toolName} (block #${blockCount})`);
-                        // Use tool role so the LLM protocol sees a proper tool result and doesn't repeat
+                        const dedupBlockedMsg = toolName === 'read'
+                            ? `[BLOQUEADO] "read" já foi executado para este arquivo. O conteúdo JÁ ESTÁ disponível no histórico desta conversa — NÃO releia. Próximo passo obrigatório: use exec_command para processar o arquivo, write para salvar resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`
+                            : `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos. Esta chamada foi bloqueada. NÃO repita esta ferramenta com os mesmos argumentos — use uma estratégia diferente ou responda com o que já sabe.`;
                         loopMessages.push({
                             role: 'tool',
-                            content: `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos. Esta chamada foi bloqueada. NÃO repita esta ferramenta com os mesmos argumentos — use uma estratégia diferente ou responda com o que já sabe.`,
+                            content: dedupBlockedMsg,
                             tool_call_id: toolCall.id,
                         });
                         if (blockCount >= 3) {
@@ -1023,10 +1026,8 @@ export class AgentLoop {
                                 role: 'system',
                                 content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. O loop foi interrompido. Forneça a melhor resposta possível com as informações que você já tem.`,
                             });
-                            move('FINAL_READY', { step: stepCount, reason: 'tool_dedup_limit', tool: toolName });
-                            traceManager.completeTrace(trace, 'completed', lastBestContent);
-                            this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
-                            return { text: lastBestContent || `Não foi possível completar a tarefa — a ferramenta "${toolName}" entrou em loop.` };
+                            dedupAbort = true;
+                            break;
                         }
                         continue;
                     }
@@ -1159,19 +1160,20 @@ export class AgentLoop {
                     const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
                     blockedKeyCount.set(inputKey, blockCount);
                     log.warn(`[${this.ts()}] [ATOMIC-TOOL] Blocked repeated call: ${toolName} (block #${blockCount})`);
+                    const atomicBlockedMsg = toolName === 'read'
+                        ? `[BLOQUEADO] "read" já foi executado para este arquivo. O conteúdo JÁ ESTÁ disponível no histórico desta conversa — NÃO releia. Próximo passo obrigatório: use exec_command para processar o arquivo, write para salvar resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`
+                        : `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos (bloqueio #${blockCount}). NÃO repita — use uma estratégia diferente ou responda com o que já sabe.`;
                     loopMessages.push({
                         role: 'system',
-                        content: `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos (bloqueio #${blockCount}). NÃO repita — use uma estratégia diferente ou responda com o que já sabe.`,
+                        content: atomicBlockedMsg,
                     });
                     if (blockCount >= 3) {
                         loopMessages.push({
                             role: 'system',
                             content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. Forneça a melhor resposta possível com as informações que você já tem.`,
                         });
-                        move('FINAL_READY', { step: stepCount, reason: 'tool_dedup_limit', tool: toolName });
-                        traceManager.completeTrace(trace, 'completed', lastBestContent);
-                        this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
-                        return { text: lastBestContent || `Não foi possível completar a tarefa — a ferramenta "${toolName}" entrou em loop.` };
+                        dedupAbort = true;
+                        break;
                     }
                     continue;
                 }
