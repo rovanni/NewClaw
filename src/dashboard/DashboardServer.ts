@@ -31,6 +31,7 @@ import { createTracesRouter, sseStreamHandler } from './routes/traces';
 import { createMemoryRouter } from './routes/memory';
 import { createConversationsRouter } from './routes/conversations';
 import { createSystemRouter } from './routes/system';
+import { createMaintenanceRouter } from './routes/maintenance';
 import { DashboardContext } from './routes/types';
 
 const log = createLogger('Dashboardserver');
@@ -79,6 +80,7 @@ export class DashboardServer {
         this.app.use('/api/memory', createMemoryRouter(ctx));
         this.app.use('/api/conversations', createConversationsRouter(ctx));
         this.app.use('/api/system', createSystemRouter(ctx));
+        this.app.use('/api/maintenance', createMaintenanceRouter());
     }
 
     public setController(controller: AgentController) {

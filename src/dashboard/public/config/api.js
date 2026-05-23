@@ -110,6 +110,36 @@ export async function deleteAutoSkill(id) {
   return json(f(`/api/skills/auto/${id}`, { method: 'DELETE' }));
 }
 
+// ── Maintenance ───────────────────────────────────────────────────────────────
+
+export async function checkUpdate() {
+  const d = await json(f('/api/maintenance/update/check'));
+  return d;
+}
+
+export async function applyUpdate() {
+  return json(f('/api/maintenance/update/apply', { method: 'POST' }));
+}
+
+export async function listBackups() {
+  const d = await json(f('/api/maintenance/backup/list'));
+  return d.backups;
+}
+
+export async function createSystemBackup() {
+  const d = await json(f('/api/maintenance/backup/system', { method: 'POST' }));
+  return d.backup;
+}
+
+export async function createDatabaseBackup() {
+  const d = await json(f('/api/maintenance/backup/database', { method: 'POST' }));
+  return d.backup;
+}
+
+export function backupDownloadUrl(filename) {
+  return `/api/maintenance/backup/${encodeURIComponent(filename)}`;
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 export async function getAuthStatus() {

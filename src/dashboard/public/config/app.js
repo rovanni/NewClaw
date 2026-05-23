@@ -21,6 +21,7 @@ const VIEW_MAP = {
   skills:      'SkillsView',
   seguranca:   'SegurancaView',
   avancado:    'AvancadoView',
+  sistema:     'SistemaView',
 };
 
 let currentCleanup = null;
