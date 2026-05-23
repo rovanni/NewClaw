@@ -140,6 +140,20 @@ export function backupDownloadUrl(filename) {
   return `/api/maintenance/backup/${encodeURIComponent(filename)}`;
 }
 
+export async function getBackupConfig() {
+  const d = await json(f('/api/maintenance/backup/config'));
+  return d.config;
+}
+
+export async function saveBackupConfig(config) {
+  const d = await json(f('/api/maintenance/backup/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  }));
+  return d.config;
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 export async function getAuthStatus() {

@@ -15,6 +15,7 @@ export function render(container) {
           <div id="upd-status" style="margin-bottom:14px;font-size:.9rem;color:var(--text-soft)">
             Verificando status da atualização...
           </div>
+          <div id="upd-changelog" style="display:none;margin-bottom:14px"></div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
             <button class="btn btn-secondary" id="upd-checkBtn">🔍 Verificar Agora</button>
             <button class="btn btn-primary"   id="upd-applyBtn" style="display:none">⬆️ Atualizar e Reiniciar</button>
@@ -23,27 +24,30 @@ export function render(container) {
       </details>
     </div>`;
 
-  const statusEl = document.getElementById('upd-status');
-  const checkBtn = document.getElementById('upd-checkBtn');
-  const applyBtn = document.getElementById('upd-applyBtn');
+  const statusEl    = document.getElementById('upd-status');
+  const changelogEl = document.getElementById('upd-changelog');
+  const checkBtn    = document.getElementById('upd-checkBtn');
+  const applyBtn    = document.getElementById('upd-applyBtn');
 
   async function runCheck() {
     checkBtn.disabled = true;
     statusEl.style.color = 'var(--text-soft)';
     statusEl.textContent = '🔄 Verificando atualizações…';
+    changelogEl.style.display = 'none';
     try {
       const r = await checkUpdate();
       if (r.hasUpdate) {
-        const commits = r.commitCount > 1 ? ` (${r.commitCount} commits)` : '';
+        const plural = r.commitCount !== 1 ? 'commits' : 'commit';
         statusEl.innerHTML =
-          `<span style="color:var(--warning)">⬆️ Atualização disponível${commits}</span><br>` +
+          `<span style="color:var(--warning)">⬆️ ${r.commitCount} ${plural} disponível para atualização</span><br>` +
           `<span style="font-size:.8rem;color:var(--text-soft)">` +
-          `Local: <code>${r.localSha}</code> → Remoto: <code>${r.remoteSha}</code></span>` +
-          (r.latestCommit ? `<br><span style="font-size:.8rem;color:var(--text-soft)">${esc(r.latestCommit)}</span>` : '');
+          `Local: <code>${r.localSha}</code> → Remoto: <code>${r.remoteSha}</code></span>`;
         applyBtn.style.display = 'inline-flex';
+        renderChangelog(r.commits || []);
       } else {
         statusEl.innerHTML = `<span style="color:var(--success)">✅ Sistema atualizado</span> — versão <code>${r.localSha}</code>`;
         applyBtn.style.display = 'none';
+        changelogEl.style.display = 'none';
       }
     } catch (e) {
       statusEl.innerHTML = `<span style="color:var(--danger)">❌ Erro ao verificar: ${esc(e.message)}</span>`;
@@ -52,12 +56,29 @@ export function render(container) {
     }
   }
 
+  function renderChangelog(commits) {
+    if (!commits.length) return;
+    changelogEl.innerHTML = `
+      <div style="font-size:.8rem;color:var(--text-soft);margin-bottom:6px">O que será atualizado:</div>
+      <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;max-height:220px;overflow-y:auto">
+        ${commits.map((c, i) => `
+          <div style="display:flex;align-items:baseline;gap:8px;padding:6px 10px;
+                      ${i < commits.length - 1 ? 'border-bottom:1px solid var(--border-subtle,rgba(255,255,255,.06))' : ''}">
+            <code style="font-size:.75rem;color:var(--accent);flex-shrink:0">${esc(c.sha)}</code>
+            <span style="font-size:.82rem;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.msg)}</span>
+            <span style="font-size:.75rem;color:var(--text-soft);flex-shrink:0">${esc(c.when)}</span>
+          </div>`).join('')}
+      </div>`;
+    changelogEl.style.display = 'block';
+  }
+
   checkBtn.addEventListener('click', runCheck);
 
   applyBtn.addEventListener('click', async () => {
     if (!confirm('Iniciar atualização e reiniciar o NewClaw?\n\nO sistema ficará indisponível por alguns minutos.')) return;
     applyBtn.disabled = true;
     checkBtn.disabled = true;
+    changelogEl.style.display = 'none';
     statusEl.innerHTML = '<span style="color:var(--warning)">⏳ Atualização em andamento… o sistema será reiniciado automaticamente.</span>';
     try {
       await applyUpdate();
