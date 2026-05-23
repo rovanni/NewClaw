@@ -138,7 +138,7 @@ export function createMaintenanceRouter(): Router {
     router.get('/backup/:filename', (req: Request, res: Response) => {
         try {
             // basename prevents directory traversal
-            const filename = path.basename(req.params.filename);
+            const filename = path.basename(String(req.params.filename));
             const filePath = path.join(BACKUP_DIR, filename);
             if (!fs.existsSync(filePath)) return res.status(404).json({ success: false, error: 'Arquivo não encontrado' });
             res.download(filePath, filename);
