@@ -18,74 +18,61 @@ export function render(container) {
   container.innerHTML = `
     <div class="page-view">
       <div class="page-header">
-        <h1>💾 Backup</h1>
-        <p>Crie backups manuais e configure a retenção automática.</p>
+        <h1>💾 ${t('sidebar_backup')}</h1>
+        <p>${t('backup_page_desc')}</p>
       </div>
 
-      <!-- Agendamento (info apenas) -->
       <details class="cfg-details" open>
-        <summary>🕐 Agendamento</summary>
+        <summary>${t('backup_schedule_title')}</summary>
         <div class="cfg-details-body">
           <div class="form-hint" style="display:flex;align-items:flex-start;gap:8px">
             <span>ℹ️</span>
-            <span>
-              O backup automático do banco é gerenciado pelo <strong>crontab do sistema</strong>
-              (<code>backup_db.sh</code>, a cada 6h). Para alterar o intervalo, edite o crontab no servidor.<br>
-              Os arquivos gerados pelo crontab aparecem automaticamente na lista abaixo.
-            </span>
+            <span>${t('backup_schedule_info')}</span>
           </div>
         </div>
       </details>
 
-      <!-- Retenção -->
       <details class="cfg-details" open>
-        <summary>🗑️ Retenção</summary>
+        <summary>${t('backup_retention_title')}</summary>
         <div class="cfg-details-body">
           <div class="form-group">
-            <label class="form-label">Manter últimos N backups por tipo</label>
+            <label class="form-label">${t('backup_retention_label')}</label>
             <div style="display:flex;gap:8px;align-items:center">
               <input type="number" class="form-input" id="bkp-retention"
                      min="1" max="100" style="width:90px">
-              <button class="btn btn-primary" id="bkp-saveRetention">Salvar</button>
+              <button class="btn btn-primary" id="bkp-saveRetention">${t('backup_retention_save_btn')}</button>
             </div>
-            <div class="form-hint">
-              Ao criar um novo backup, os mais antigos são removidos automaticamente
-              para manter o limite configurado. Conta separado por tipo (sistema e banco de dados).
-            </div>
+            <div class="form-hint">${t('backup_retention_hint')}</div>
           </div>
         </div>
       </details>
 
-      <!-- Backup manual -->
       <details class="cfg-details" open>
-        <summary>📦 Backup Manual</summary>
+        <summary>${t('backup_manual_title')}</summary>
         <div class="cfg-details-body">
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-secondary" id="bkp-systemBtn">📄 Backup do Sistema (.env)</button>
-            <button class="btn btn-secondary" id="bkp-dbBtn">🗄️ Backup do Banco de Dados</button>
+            <button class="btn btn-secondary" id="bkp-systemBtn">${t('backup_system_btn')}</button>
+            <button class="btn btn-secondary" id="bkp-dbBtn">${t('backup_db_btn')}</button>
           </div>
-          <div class="form-hint" style="margin-top:10px">
-            Arquivos salvos em <code>data/backups/</code>.
-          </div>
+          <div class="form-hint" style="margin-top:10px">${t('backup_path_hint')}</div>
         </div>
       </details>
 
-      <!-- Lista -->
       <details class="cfg-details" open>
-        <summary>📋 Backups Disponíveis</summary>
+        <summary>${t('backup_list_title')}</summary>
         <div class="cfg-details-body">
           <div id="bkp-list">
-            <div style="font-size:.85rem;color:var(--text-soft)">Carregando…</div>
+            <div style="font-size:.85rem;color:var(--text-soft)">${t('backup_loading')}</div>
           </div>
         </div>
       </details>
     </div>`;
 
-  const listEl       = document.getElementById('bkp-list');
-  const retentionEl  = document.getElementById('bkp-retention');
-  const saveRetBtn   = document.getElementById('bkp-saveRetention');
-  const sysBtn       = document.getElementById('bkp-systemBtn');
-  const dbBtn        = document.getElementById('bkp-dbBtn');
+  const listEl      = document.getElementById('bkp-list');
+  const retentionEl = document.getElementById('bkp-retention');
+  const saveRetBtn  = document.getElementById('bkp-saveRetention');
+  const sysBtn      = document.getElementById('bkp-systemBtn');
+  const dbBtn       = document.getElementById('bkp-dbBtn');
 
   // ── Retenção ──────────────────────────────────────────────────────────────
   getBackupConfig().then(cfg => {
@@ -94,11 +81,11 @@ export function render(container) {
 
   saveRetBtn.addEventListener('click', async () => {
     const n = parseInt(retentionEl.value, 10);
-    if (!n || n < 1) { showToast('❌ Valor inválido', 'error'); return; }
+    if (!n || n < 1) { showToast(t('backup_invalid_retention'), 'error'); return; }
     saveRetBtn.disabled = true;
     try {
       await saveBackupConfig({ retentionCount: n });
-      showToast(`✅ Retenção salva: últimos ${n} backups por tipo`, 'success');
+      showToast(t('backup_saved_retention', { n }), 'success');
     } catch (e) {
       showToast('❌ ' + e.message, 'error');
     } finally {
@@ -109,16 +96,16 @@ export function render(container) {
   // ── Lista ─────────────────────────────────────────────────────────────────
   function renderList(backups) {
     if (!backups.length) {
-      listEl.innerHTML = '<div style="font-size:.85rem;color:var(--text-soft)">Nenhum backup encontrado.</div>';
+      listEl.innerHTML = `<div style="font-size:.85rem;color:var(--text-soft)">${t('backup_empty')}</div>`;
       return;
     }
     listEl.innerHTML = `
       <table style="width:100%;font-size:.82rem;border-collapse:collapse">
         <thead>
           <tr style="color:var(--text-soft);text-align:left;border-bottom:1px solid var(--border)">
-            <th style="padding:6px 8px">Arquivo</th>
-            <th style="padding:6px 8px">Tamanho</th>
-            <th style="padding:6px 8px">Data</th>
+            <th style="padding:6px 8px">${t('backup_col_file')}</th>
+            <th style="padding:6px 8px">${t('backup_col_size')}</th>
+            <th style="padding:6px 8px">${t('backup_col_date')}</th>
             <th style="padding:6px 8px"></th>
           </tr>
         </thead>
@@ -130,7 +117,7 @@ export function render(container) {
               <td style="padding:6px 8px;color:var(--text-soft)">${fmtDate(b.createdAt)}</td>
               <td style="padding:6px 8px">
                 <a href="${backupDownloadUrl(b.name)}" download="${esc(b.name)}"
-                   style="font-size:.78rem;color:var(--accent);text-decoration:none">⬇️ baixar</a>
+                   style="font-size:.78rem;color:var(--accent);text-decoration:none">${t('backup_download')}</a>
               </td>
             </tr>`).join('')}
         </tbody>
@@ -139,16 +126,16 @@ export function render(container) {
 
   async function loadList() {
     try { renderList(await listBackups()); }
-    catch { listEl.innerHTML = '<div style="font-size:.85rem;color:var(--danger)">Erro ao carregar backups.</div>'; }
+    catch { listEl.innerHTML = `<div style="font-size:.85rem;color:var(--danger)">${t('backup_load_error')}</div>`; }
   }
 
   // ── Backup manual ─────────────────────────────────────────────────────────
   async function doBackup(label, fn, btn) {
     btn.disabled = true;
-    showToast(`⏳ Criando backup do ${label}...`, 'success');
+    showToast(t('backup_creating_toast', { label }), 'success');
     try {
       const b = await fn();
-      showToast(`✅ Backup criado: ${b.name} (${b.sizeHuman})`, 'success');
+      showToast(t('backup_created_toast', { name: b.name, size: b.sizeHuman }), 'success');
       loadList();
     } catch (e) {
       showToast('❌ ' + e.message, 'error');
@@ -157,7 +144,7 @@ export function render(container) {
     }
   }
 
-  sysBtn.addEventListener('click', () => doBackup('sistema', createSystemBackup, sysBtn));
+  sysBtn.addEventListener('click', () => doBackup(t('sidebar_backup') + ' sistema', createSystemBackup, sysBtn));
   dbBtn.addEventListener('click',  () => doBackup('banco de dados', createDatabaseBackup, dbBtn));
 
   loadList();

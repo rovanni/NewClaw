@@ -175,6 +175,8 @@
       <a href="#ch5"><span class="ch-num">5</span> Grafo</a>
       <a href="#ch6"><span class="ch-num">6</span> Ferramentas</a>
       <a href="#ch7"><span class="ch-num">7</span> Avançado</a>
+      <a href="#ch8"><span class="ch-num">8</span> Atualização</a>
+      <a href="#ch9"><span class="ch-num">9</span> Backup</a>
     </div>
 
     <!-- ═══════════════════════════════════════════════════
@@ -700,6 +702,185 @@
 
         <div class="result ok">
           <p><strong>✓ Parabéns!</strong> Se você chegou até aqui, domina o NewClaw. O sistema está configurado, a memória está curada, e você sabe auditar cada decisão do agente.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════
+         CHAPTER 8 — ATUALIZAÇÃO
+         ═══════════════════════════════════════════════════ -->
+    <div class="chapter" id="ch8">
+      <div class="chapter-header" onclick="toggleChapter(this)">
+        <div class="ch-badge c3">⬆️</div>
+        <div class="ch-info">
+          <h2>Capítulo 8 — Atualização do Sistema</h2>
+          <p>Mantenha o NewClaw sempre na versão mais recente sem perder sua configuração.</p>
+        </div>
+        <span class="ch-arrow">▼</span>
+      </div>
+      <div class="chapter-body">
+
+        <div class="ch-section">
+          <h3>Como funciona a atualização</h3>
+          <p style="font-size:0.88rem;color:var(--text-muted)">
+            O NewClaw usa Git para controle de versão. A atualização busca commits novos do repositório principal
+            (<code>origin/main</code>), protege seu <code>.env</code>, aplica as mudanças e recompila o projeto automaticamente.
+          </p>
+          <div class="ch-grid">
+            <div class="ch-grid-card">
+              <h4>✅ O que é preservado</h4>
+              <ul>
+                <li>Arquivo <code>.env</code> (todas as suas chaves e configurações)</li>
+                <li>Banco de dados <code>data/newclaw.db</code></li>
+                <li>Backups em <code>data/backups/</code></li>
+                <li>Skills aprendidas e memória cognitiva</li>
+              </ul>
+            </div>
+            <div class="ch-grid-card">
+              <h4>🔄 O que é atualizado</h4>
+              <ul>
+                <li>Código fonte (TypeScript → build)</li>
+                <li>Dependências npm (se package.json mudou)</li>
+                <li>Assets do dashboard (HTML, JS, CSS)</li>
+                <li>Ferramentas, skills built-in e prompts</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Atualizando pelo Dashboard</h3>
+          <ol class="steps">
+            <li>Abra <a href="/config">Config</a> → clique em <strong>⬆️ Atualização</strong> no menu lateral</li>
+            <li>Clique em <strong>🔍 Verificar Agora</strong> — o sistema consulta o repositório remoto</li>
+            <li>Se houver atualização, uma lista de commits pendentes será exibida</li>
+            <li>Leia o changelog para entender o que vai mudar</li>
+            <li>Clique em <strong>⬆️ Atualizar e Reiniciar</strong> e confirme</li>
+            <li>Aguarde — o dashboard recarregará automaticamente quando o sistema voltar</li>
+          </ol>
+          <div class="hint warn">⚠️ O sistema ficará indisponível por 1–3 minutos durante a atualização. Avise usuários do Telegram se necessário.</div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Atualizando pela linha de comando</h3>
+          <p style="font-size:0.88rem;color:var(--text-muted);margin-bottom:8px">
+            Você também pode atualizar via SSH diretamente no servidor:
+          </p>
+          <pre>newclaw update restart</pre>
+          <p style="font-size:0.82rem;color:var(--text-muted)">
+            Equivalente ao botão do dashboard. Use <code>newclaw update</code> (sem <code>restart</code>) para só compilar sem reiniciar.
+          </p>
+        </div>
+
+        <div class="ch-section">
+          <h3>O que fazer se a atualização falhar</h3>
+          <ol class="steps">
+            <li>O <code>.env</code> é restaurado automaticamente — sua configuração está segura</li>
+            <li>Verifique os logs: <code>newclaw logs</code> ou <a href="/traces">Traces</a> no dashboard</li>
+            <li>Tente novamente com: <code>newclaw update --force restart</code></li>
+            <li>Se persistir, acesse o servidor via SSH e execute <code>git status</code> para diagnosticar</li>
+          </ol>
+        </div>
+
+        <div class="result ok">
+          <p><strong>✓ Resultado:</strong> Sistema atualizado, reiniciado e pronto — com toda sua configuração e memória intactas.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════
+         CHAPTER 9 — BACKUP
+         ═══════════════════════════════════════════════════ -->
+    <div class="chapter" id="ch9">
+      <div class="chapter-header" onclick="toggleChapter(this)">
+        <div class="ch-badge c4">💾</div>
+        <div class="ch-info">
+          <h2>Capítulo 9 — Backup e Recuperação</h2>
+          <p>Proteja seus dados: banco de dados, configurações e memória cognitiva.</p>
+        </div>
+        <span class="ch-arrow">▼</span>
+      </div>
+      <div class="chapter-body">
+
+        <div class="ch-section">
+          <h3>O que precisa de backup</h3>
+          <div class="ch-grid">
+            <div class="ch-grid-card">
+              <h4>🗄️ Banco de dados (<code>newclaw.db</code>)</h4>
+              <p>Contém toda a memória cognitiva do agente: nós, arestas, conversas, padrões aprendidos, skills e configurações. <strong>É o arquivo mais crítico.</strong></p>
+            </div>
+            <div class="ch-grid-card">
+              <h4>📄 Sistema (<code>.env</code>)</h4>
+              <p>Contém todas as chaves de API, tokens do Telegram, configuração de modelo e variáveis de ambiente. Sem ele o sistema não inicia.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Backup automático (crontab)</h3>
+          <p style="font-size:0.88rem;color:var(--text-muted)">
+            O servidor já tem um backup automático configurado via crontab que executa <code>backup_db.sh</code>
+            a cada 6 horas. Os arquivos gerados aparecem automaticamente na aba
+            <a href="/config">Config → 💾 Backup</a>.
+          </p>
+          <p style="font-size:0.88rem;color:var(--text-muted);margin-top:8px">
+            Para verificar ou alterar o agendamento, acesse o servidor e edite o crontab:
+          </p>
+          <pre>crontab -e</pre>
+        </div>
+
+        <div class="ch-section">
+          <h3>Backup manual pelo Dashboard</h3>
+          <ol class="steps">
+            <li>Abra <a href="/config">Config</a> → <strong>💾 Backup</strong> no menu lateral</li>
+            <li>Clique em <strong>📄 Backup do Sistema</strong> para salvar o <code>.env</code></li>
+            <li>Clique em <strong>🗄️ Backup do Banco de Dados</strong> para salvar o <code>newclaw.db</code></li>
+            <li>Os arquivos aparecem na lista com data, tamanho e link de download</li>
+            <li>Clique em <strong>⬇️ baixar</strong> para salvar o arquivo na sua máquina</li>
+          </ol>
+          <div class="hint">💡 Faça backup do banco antes de cada atualização importante e antes de experimentos com memória.</div>
+        </div>
+
+        <div class="ch-section">
+          <h3>Retenção automática</h3>
+          <p style="font-size:0.88rem;color:var(--text-muted)">
+            Configure quantos backups manter por tipo (sistema e banco). Quando um novo backup é criado,
+            os mais antigos são removidos automaticamente para não encher o disco.
+          </p>
+          <ol class="steps">
+            <li>Em <strong>💾 Backup → 🗑️ Retenção</strong>, defina o número máximo de backups</li>
+            <li>O padrão é 10 por tipo — suficiente para ~2,5 dias de histórico automático</li>
+            <li>Clique <strong>Salvar</strong> — a regra é aplicada na próxima criação de backup</li>
+          </ol>
+        </div>
+
+        <div class="ch-section">
+          <h3>Restaurando um backup</h3>
+          <div class="ch-grid">
+            <div class="ch-grid-card">
+              <h4>📄 Restaurar .env</h4>
+              <ol style="padding-left:16px;font-size:0.83rem;color:var(--text-muted)">
+                <li>Baixe o arquivo <code>system-*.bak</code></li>
+                <li>Renomeie para <code>.env</code></li>
+                <li>Copie para a raiz do projeto</li>
+                <li>Execute <code>newclaw restart</code></li>
+              </ol>
+            </div>
+            <div class="ch-grid-card">
+              <h4>🗄️ Restaurar banco</h4>
+              <ol style="padding-left:16px;font-size:0.83rem;color:var(--text-muted)">
+                <li>Pare o NewClaw: <code>newclaw stop</code></li>
+                <li>Baixe o arquivo <code>database-*.db</code></li>
+                <li>Copie para <code>data/newclaw.db</code> (substitua)</li>
+                <li>Inicie novamente: <code>newclaw start</code></li>
+              </ol>
+            </div>
+          </div>
+          <div class="hint warn">⚠️ Pare o NewClaw antes de restaurar o banco. Substituir o arquivo com o processo rodando pode corromper os dados.</div>
+        </div>
+
+        <div class="result ok">
+          <p><strong>✓ Resultado:</strong> Com backup automático + retenção configurada, você tem proteção contínua sem esforço manual e sabe exatamente como restaurar em qualquer cenário.</p>
         </div>
       </div>
     </div>
