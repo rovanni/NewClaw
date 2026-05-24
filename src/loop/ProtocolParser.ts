@@ -286,16 +286,22 @@ export class ProtocolParser {
     /**
      * Detect if content contains native tool_call structure (Ollama/OpenAI format).
      * This is a STRUCTURAL check, not a heuristic — we look for JSON with "function" keys.
+     *
+     * NOTE: [TOOL_CALL] is intentionally NOT checked here. Models like kimi-k2.6 write
+     * "[TOOL_CALL]" as plain text inside their thinking/reasoning field when planning which
+     * tool to call next. That text ends up as content when the provider falls back to the
+     * thinking field (no actual content was emitted). Treating it as a native tool call
+     * would cause semanticRecovery to always return 'planning', creating unnecessary retry
+     * cycles. Real native tool calls arrive via response.toolCalls[] and never reach here.
      */
     private hasNativeToolCallStructure(content: string): boolean {
-        // Native tool calls arrive via response.toolCalls, not in content.
-        // If we're here, the content itself might contain tool call markers.
-        if (content.includes('[TOOL_CALL]') || content.includes('"function_call"')) {
-            return true;
-        }
         // Deepseek DSML format leaked into content (｜ = U+FF5C full-width pipe)
         if (content.includes('<｜DSML｜') || content.includes('<|DSML|')) {
             log.warn('[PROTOCOL] ⚠️ Deepseek DSML tool call leaked into content — stripping');
+            return true;
+        }
+        // Actual JSON function_call structure (OpenAI/Ollama format in content field)
+        if (content.includes('"function_call"') && content.includes('"name"')) {
             return true;
         }
         return false;

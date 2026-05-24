@@ -116,7 +116,7 @@ export class GoalPlanner {
                 messages,
                 undefined,
                 undefined,
-                20_000
+                45_000
             );
 
             if (result.status !== 'success') {
@@ -155,7 +155,7 @@ export class GoalPlanner {
                 messages,
                 undefined,
                 undefined,
-                20_000
+                45_000
             );
 
             if (result.status !== 'success') {
