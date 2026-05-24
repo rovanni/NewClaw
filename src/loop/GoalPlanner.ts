@@ -99,11 +99,12 @@ Responda APENAS com JSON válido (sem markdown):
 Máximo 3 steps. Se o blocker for 'missing_tool', inclua step de instalação como primeiro step.
 
 REGRAS CRÍTICAS para blocker 'environment_limit':
-- Se o blocker mencionar PEP 668, 'externally-managed', ou 'pip install bloqueado':
-  → NÃO use pip install nem --break-system-packages. SEMPRE prefira pandoc.
-  → Estratégia correta: exec_command com "pandoc arquivo.md -o arquivo.pptx"
-- Se o blocker mencionar 'ensurepip' ou 'python3-venv':
-  → NÃO use python3 -m venv. SEMPRE prefira pandoc ou npx marp.
+- Se o blocker mencionar PEP 668 ou 'externally-managed':
+  → NÃO use pip install direto nem --break-system-packages.
+  → Use venv: python3 -m venv /tmp/venv && /tmp/venv/bin/pip install <pacote> && /tmp/venv/bin/python script.py
+  → Alternativa mais simples: pandoc arquivo.md -o arquivo.pptx
+- Se o blocker mencionar 'ensurepip not available' ou 'python3-venv não instalado':
+  → NÃO use python3 -m venv. Use pandoc ou npx marp diretamente.
   → Estratégia correta: exec_command com "pandoc arquivo.md -o arquivo.pptx"`.trim();
 }
 

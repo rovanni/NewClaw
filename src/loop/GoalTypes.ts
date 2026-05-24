@@ -24,7 +24,8 @@ export type GoalStatus =
 // ── Blockers ──────────────────────────────────────────────────────────────────
 
 export type BlockerKind =
-    | 'missing_tool'         // tool não encontrada no sistema (ex: pdftotext)
+    | 'missing_tool'         // tool não encontrada no sistema (ex: pdftotext) — veja needs_dependency para deps instaláveis
+    | 'dependency_missing'   // dependência do sistema não instalada (pandoc, ffmpeg, etc.)
     | 'missing_permission'   // tool requer autorização explícita do usuário
     | 'tool_error'           // tool existe mas falhou repetidamente
     | 'context_insufficient' // informação insuficiente para prosseguir
@@ -106,7 +107,17 @@ export interface Goal {
 
 // ── Resultados ────────────────────────────────────────────────────────────────
 
-export type CycleOutcome = 'success' | 'partial' | 'blocked' | 'failed' | 'needs_auth';
+export type CycleOutcome = 'success' | 'partial' | 'blocked' | 'failed' | 'needs_auth' | 'needs_dependency';
+
+export interface DependencyInfo {
+    /** Nome do pacote/ferramenta (ex: "pandoc", "ffmpeg") */
+    name: string;
+    /** Comando de instalação automática (ex: "sudo apt install pandoc -y") */
+    installCmd: string;
+    /** Instrução legível para o usuário instalar manualmente */
+    manualInstructions: string;
+    type: 'system' | 'python' | 'node';
+}
 
 export interface CycleResult {
     outcome: CycleOutcome;
@@ -116,6 +127,8 @@ export interface CycleResult {
     authTxnId?: string;
     /** Inline keyboard options when outcome=needs_auth (preserves Telegram buttons) */
     authOptions?: { label: string; value: string }[];
+    /** Populated when outcome=needs_dependency — informações da dependência ausente */
+    depInfo?: DependencyInfo;
 }
 
 export interface GoalResult {

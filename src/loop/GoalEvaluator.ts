@@ -14,9 +14,38 @@
 
 import { createLogger } from '../shared/AppLogger';
 import { ToolResult } from './agentLoopTypes';
-import { Goal, PlanStep, CycleResult, GoalBlocker, BlockerKind } from './GoalTypes';
+import { Goal, PlanStep, CycleResult, GoalBlocker, BlockerKind, DependencyInfo } from './GoalTypes';
 
 const log = createLogger('GoalEvaluator');
+
+// ── Mapa de dependências instaláveis automaticamente ─────────────────────────
+// Chave: nome do executável que aparece na mensagem de erro (lowercase)
+
+const KNOWN_DEPS: Record<string, DependencyInfo> = {
+    pandoc:      { name: 'pandoc',                   installCmd: 'sudo apt install pandoc -y',                       manualInstructions: 'No servidor: sudo apt install pandoc -y',                       type: 'system' },
+    ffmpeg:      { name: 'ffmpeg',                   installCmd: 'sudo apt install ffmpeg -y',                       manualInstructions: 'No servidor: sudo apt install ffmpeg -y',                       type: 'system' },
+    convert:     { name: 'imagemagick',              installCmd: 'sudo apt install imagemagick -y',                  manualInstructions: 'No servidor: sudo apt install imagemagick -y',                  type: 'system' },
+    magick:      { name: 'imagemagick',              installCmd: 'sudo apt install imagemagick -y',                  manualInstructions: 'No servidor: sudo apt install imagemagick -y',                  type: 'system' },
+    libreoffice: { name: 'libreoffice',              installCmd: 'sudo apt install libreoffice -y',                  manualInstructions: 'No servidor: sudo apt install libreoffice -y',                  type: 'system' },
+    soffice:     { name: 'libreoffice',              installCmd: 'sudo apt install libreoffice -y',                  manualInstructions: 'No servidor: sudo apt install libreoffice -y',                  type: 'system' },
+    pdftotext:   { name: 'poppler-utils',            installCmd: 'sudo apt install poppler-utils -y',               manualInstructions: 'No servidor: sudo apt install poppler-utils -y',               type: 'system' },
+    pdfimages:   { name: 'poppler-utils',            installCmd: 'sudo apt install poppler-utils -y',               manualInstructions: 'No servidor: sudo apt install poppler-utils -y',               type: 'system' },
+    jq:          { name: 'jq',                       installCmd: 'sudo apt install jq -y',                          manualInstructions: 'No servidor: sudo apt install jq -y',                          type: 'system' },
+    zip:         { name: 'zip',                      installCmd: 'sudo apt install zip -y',                         manualInstructions: 'No servidor: sudo apt install zip -y',                         type: 'system' },
+    unzip:       { name: 'unzip',                    installCmd: 'sudo apt install unzip -y',                       manualInstructions: 'No servidor: sudo apt install unzip -y',                       type: 'system' },
+    curl:        { name: 'curl',                     installCmd: 'sudo apt install curl -y',                        manualInstructions: 'No servidor: sudo apt install curl -y',                        type: 'system' },
+    wget:        { name: 'wget',                     installCmd: 'sudo apt install wget -y',                        manualInstructions: 'No servidor: sudo apt install wget -y',                        type: 'system' },
+    git:         { name: 'git',                      installCmd: 'sudo apt install git -y',                         manualInstructions: 'No servidor: sudo apt install git -y',                         type: 'system' },
+    gs:          { name: 'ghostscript',              installCmd: 'sudo apt install ghostscript -y',                 manualInstructions: 'No servidor: sudo apt install ghostscript -y',                 type: 'system' },
+    ghostscript: { name: 'ghostscript',              installCmd: 'sudo apt install ghostscript -y',                 manualInstructions: 'No servidor: sudo apt install ghostscript -y',                 type: 'system' },
+    exiftool:    { name: 'libimage-exiftool-perl',   installCmd: 'sudo apt install libimage-exiftool-perl -y',      manualInstructions: 'No servidor: sudo apt install libimage-exiftool-perl -y',      type: 'system' },
+    npm:         { name: 'npm',                      installCmd: 'sudo apt install npm -y',                         manualInstructions: 'No servidor: sudo apt install npm -y',                         type: 'node'   },
+    npx:         { name: 'npm',                      installCmd: 'sudo apt install npm -y',                         manualInstructions: 'No servidor: sudo apt install npm -y (npx vem com npm)',        type: 'node'   },
+    node:        { name: 'nodejs',                   installCmd: 'sudo apt install nodejs npm -y',                  manualInstructions: 'No servidor: sudo apt install nodejs npm -y',                  type: 'node'   },
+    marp:        { name: '@marp-team/marp-cli',      installCmd: 'npm install -g @marp-team/marp-cli',              manualInstructions: 'No servidor: npm install -g @marp-team/marp-cli',              type: 'node'   },
+    pip:         { name: 'python3-pip',              installCmd: 'sudo apt install python3-pip -y',                 manualInstructions: 'No servidor: sudo apt install python3-pip -y',                 type: 'python' },
+    pip3:        { name: 'python3-pip',              installCmd: 'sudo apt install python3-pip -y',                 manualInstructions: 'No servidor: sudo apt install python3-pip -y',                 type: 'python' },
+};
 
 // ── Padrões de classificação de erro ─────────────────────────────────────────
 
@@ -107,10 +136,9 @@ const ERROR_PATTERNS: ErrorPattern[] = [
         kind: 'environment_limit',
         description: () => 'Python protegido pelo sistema (PEP 668) — pip install bloqueado',
         suggestedActions: [
-            'NÃO use pip install direto nem --break-system-packages — PEP 668 bloqueia em Debian/Ubuntu',
-            'NÃO tente python3 -m venv sem verificar se ensurepip está disponível',
-            'Usar pandoc para conversão direta: pandoc arquivo.md -o arquivo.pptx',
-            'Usar Node.js/Marp para PPTX: npx @marp-team/marp-cli arquivo.md --pptx',
+            'Criar ambiente virtual e instalar: python3 -m venv /tmp/venv && /tmp/venv/bin/pip install <pacote> && /tmp/venv/bin/python script.py',
+            'Usar pandoc para conversão direta (sem Python): pandoc arquivo.md -o arquivo.pptx',
+            'Usar pipx para ferramentas globais: pipx install <ferramenta>',
         ],
         isRetryable: false,
     },
@@ -160,6 +188,29 @@ export class GoalEvaluator {
         // Auth requerida → pausa para confirmação
         if (blocker.kind === 'missing_permission') {
             return { outcome: 'needs_auth', confidence: 0.85, blocker };
+        }
+
+        // Dependência ausente → perguntar ao usuário / tentar instalar
+        if (blocker.kind === 'missing_tool') {
+            const missingCmd = this.extractMissingToolName(error) ?? '';
+            const dep = KNOWN_DEPS[missingCmd.toLowerCase()];
+            if (dep) {
+                const installKey = `install_dep_${dep.name}`;
+                if (goal.strategiesTried.some(s => s.includes(installKey))) {
+                    // Já tentamos instalar e a falha persiste → instrução manual
+                    const msg = `'${dep.name}' não pôde ser instalado automaticamente.\n${dep.manualInstructions}`;
+                    log.warn(`[GoalEvaluator] dep=${dep.name} install already tried — escalating to failed`);
+                    return {
+                        outcome: 'failed',
+                        confidence: 0.1,
+                        output: msg,
+                        blocker: { ...blocker, description: msg, suggestedActions: [dep.manualInstructions] },
+                        depInfo: dep,
+                    };
+                }
+                log.info(`[GoalEvaluator] dep='${dep.name}' missing and installable — outcome=needs_dependency`);
+                return { outcome: 'needs_dependency', confidence: 0.8, blocker, depInfo: dep };
+            }
         }
 
         // Erro retryável E ainda tem retry budget → partial (tenta de novo)
@@ -226,6 +277,37 @@ export class GoalEvaluator {
             if (pattern.pattern.test(error)) return pattern;
         }
         return null;
+    }
+
+    /**
+     * Extrai o nome do executável que não foi encontrado da mensagem de erro.
+     * Exemplos:
+     *   "bash: pandoc: command not found"  → "pandoc"
+     *   "which: no ffmpeg in (...)"        → "ffmpeg"
+     *   "pandoc: command not found"        → "pandoc"
+     */
+    private extractMissingToolName(error: string): string | undefined {
+        // "bash: pandoc: command not found" / "sh: 1: pandoc: not found"
+        const shellPrefix = error.match(/(?:bash|sh|zsh|dash|fish|cmd):\s*(?:\d+:\s*)?(\w[\w.-]*?):\s*(?:command\s+)?not found/i);
+        if (shellPrefix) return shellPrefix[1];
+
+        // "pandoc: command not found" (sem prefixo de shell)
+        const plainNotFound = error.match(/^(\w[\w.-]*?):\s*command not found/im);
+        if (plainNotFound) return plainNotFound[1];
+
+        // "which: no pandoc in ..."
+        const whichNo = error.match(/which:\s*no\s+(\w[\w.-]*?)\s+in/i);
+        if (whichNo) return whichNo[1];
+
+        // "cannot find 'pandoc'" ou "cannot find pandoc"
+        const cannotFind = error.match(/cannot find ['"]?(\w[\w.-]*?)['"]?(?:\s|$)/i);
+        if (cannotFind) return cannotFind[1];
+
+        // ENOENT no caminho: /usr/bin/pandoc
+        const enoent = error.match(/ENOENT[^']*'([^/']+)'/i);
+        if (enoent) return enoent[1];
+
+        return undefined;
     }
 
     /** Gera texto de explicação para o usuário quando goal falha */

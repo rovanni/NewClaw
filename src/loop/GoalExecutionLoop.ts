@@ -297,6 +297,45 @@ export class GoalExecutionLoop {
                     return { ...goalResult, authOptions: cycleResult.authOptions };
                 }
 
+                case 'needs_dependency': {
+                    const depInfo = cycleResult.depInfo!;
+                    const installKey = `install_dep_${depInfo.name}`;
+
+                    // Registra tentativa de instalação antes de injetar o step
+                    // (previne loop: se o install falhar, GoalEvaluator retornará 'failed' com manual instructions)
+                    this.goalStore.addStrategyTried(currentGoal.id, installKey);
+                    currentGoal = this.goalStore.getById(currentGoal.id)!;
+
+                    const installStepId = `install_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
+                    const installStep: PlanStep = {
+                        id: installStepId,
+                        description: `Instalar '${depInfo.name}' necessário para continuar: ${depInfo.installCmd}`,
+                        // Sem toolName → AgentLoop processa → chama exec_command → WorkflowEngine pede auth ao usuário
+                        status: 'pending',
+                        fallbackSteps: [],
+                    };
+
+                    // Reconstrói o plano: steps já concluídos + installStep + step que falhou + resto
+                    const updatedPlan: PlanStep[] = [
+                        ...currentGoal.currentPlan.filter(s => s.status === 'completed'),
+                        installStep,
+                        pendingStep,
+                        ...currentGoal.currentPlan.filter(s => s.status === 'pending' && s.id !== pendingStep.id),
+                    ];
+
+                    this.goalStore.update(currentGoal.id, { currentPlan: updatedPlan });
+                    currentGoal = this.goalStore.getById(currentGoal.id)!;
+
+                    log.info(`[GoalLoop] dep='${depInfo.name}' missing — injected install step=${installStepId}`);
+                    await onProgress?.({
+                        goalId: currentGoal.id,
+                        cycle: totalCycles,
+                        event: 'replanning',
+                        message: `Dependência '${depInfo.name}' não encontrada — vou instalar antes de continuar`,
+                    });
+                    break;
+                }
+
                 case 'blocked': {
                     if (!cycleResult.blocker) break;
 
@@ -350,7 +389,8 @@ export class GoalExecutionLoop {
 
                 case 'failed': {
                     this.goalStore.setStatus(currentGoal.id, 'failed');
-                    const explanation = this.evaluator.buildFailureExplanation(currentGoal);
+                    // cycleResult.output tem prioridade quando contém mensagem rica (ex: dep install falhou → instrução manual)
+                    const explanation = cycleResult.output ?? this.evaluator.buildFailureExplanation(currentGoal);
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'failed', message: explanation });
                     return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
                 }

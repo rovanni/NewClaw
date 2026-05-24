@@ -21,6 +21,27 @@ import { Goal, PlanStep } from './GoalTypes';
 
 const log = createLogger('RiskAnalyzer');
 
+// Executáveis comumente usados em exec_command que podem não estar instalados.
+// Chave: nome do executável (lowercase). Valor: pacote a instalar.
+const KNOWN_SYSTEM_DEPS: Record<string, string> = {
+    pandoc: 'pandoc',
+    ffmpeg: 'ffmpeg',
+    convert: 'imagemagick',
+    magick: 'imagemagick',
+    libreoffice: 'libreoffice',
+    soffice: 'libreoffice',
+    pdftotext: 'poppler-utils',
+    pdfimages: 'poppler-utils',
+    jq: 'jq',
+    zip: 'zip',
+    unzip: 'unzip',
+    gs: 'ghostscript',
+    ghostscript: 'ghostscript',
+    exiftool: 'libimage-exiftool-perl',
+    marp: '@marp-team/marp-cli (npm)',
+    npx: 'npm',
+};
+
 export interface RiskReport {
     risks: string[];
     adjustedPlan: PlanStep[];
@@ -53,6 +74,23 @@ export class RiskAnalyzer {
             if (hint) {
                 const firstLine = hint.split('\n').find(l => l.startsWith('-')) ?? hint;
                 risks.push(`Step "${step.description}": ${firstLine.slice(0, 120)}`);
+            }
+        }
+
+        // ── 1b. Detecção proativa de dependências em exec_command ────────────
+        // Extrai o primeiro token do comando e verifica se é uma dep conhecida.
+        for (const step of plan) {
+            if (step.toolName !== 'exec_command') continue;
+            const cmdValue = String(step.toolArgs?.command ?? step.toolArgs?.cmd ?? '');
+            if (!cmdValue) continue;
+
+            // Primeiro executável do comando (ignora sudo/env)
+            const tokens = cmdValue.trim().split(/\s+/).filter(t => t !== 'sudo' && t !== 'env' && !t.includes('='));
+            const firstToken = (tokens[0] ?? '').toLowerCase().replace(/^.*\//, ''); // basename
+
+            const pkg = KNOWN_SYSTEM_DEPS[firstToken];
+            if (pkg) {
+                risks.push(`Step "${step.description}": usa '${firstToken}' (pacote: ${pkg}) — pode não estar instalado no servidor`);
             }
         }
 
