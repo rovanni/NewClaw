@@ -3,7 +3,7 @@ module.exports = {
     name: "newclaw",
     script: "./dist/index.js",
     cwd: "/home/venus/newclaw",
-    node_args: "--max-old-space-size=256",
+    node_args: "--max-old-space-size=256 --disable-warning=DEP0040",
     env: {
       NODE_ENV: "production",
     },
