@@ -88,6 +88,18 @@ const ERROR_PATTERNS: ErrorPattern[] = [
         ],
         isRetryable: false,
     },
+    // Python PEP 668 — pip bloqueado pelo sistema operacional
+    {
+        pattern: /externally-managed-environment|PEP 668|This environment is externally managed|--break-system-packages/i,
+        kind: 'environment_limit',
+        description: () => 'Python protegido pelo sistema (PEP 668) — pip install bloqueado',
+        suggestedActions: [
+            'Criar ambiente virtual: python3 -m venv /tmp/venv && source /tmp/venv/bin/activate && pip install <pacote>',
+            'Usar pipx para ferramentas globais: pipx install <ferramenta>',
+            'Usar apt para pacotes do sistema: sudo apt install python3-<pacote>',
+        ],
+        isRetryable: false,
+    },
     // Disco cheio
     {
         pattern: /ENOSPC|no space left|disk full/i,

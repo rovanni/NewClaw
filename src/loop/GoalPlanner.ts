@@ -95,7 +95,9 @@ Responda APENAS com JSON válido (sem markdown):
   "strategy": "descrição de 1 linha da nova estratégia"
 }
 
-Máximo 3 steps. Se o blocker for 'missing_tool', inclua step de instalação como primeiro step.`.trim();
+Máximo 3 steps. Se o blocker for 'missing_tool', inclua step de instalação como primeiro step.
+Se o blocker mencionar PEP 668 ou 'externally-managed-environment', use SEMPRE ambiente virtual:
+  exec_command: "python3 -m venv /tmp/venv && source /tmp/venv/bin/activate && pip install <pacote> && python3 script.py"`.trim();
 }
 
 // ── GoalPlanner ───────────────────────────────────────────────────────────────
