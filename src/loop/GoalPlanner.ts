@@ -21,17 +21,20 @@ const log = createLogger('GoalPlanner');
 
 // ── Prompt templates ─────────────────────────────────────────────────────────
 
-function buildPlanPrompt(goal: Goal, skillContext?: string): string {
+function buildPlanPrompt(goal: Goal, skillContext?: string, runtimeContext?: string): string {
     const skillBlock = skillContext
         ? `\nINSTRUÇÕES DE SKILL ATIVAS (siga rigorosamente):\n${skillContext}\n`
+        : '';
+    const contextBlock = runtimeContext
+        ? `\nCONTEXTO (memória + feedback de ciclos anteriores):\n${runtimeContext}\n`
         : '';
 
     return `Você é um planejador de tarefas. Decomponha o objetivo abaixo em steps executáveis com ferramentas.
 
 OBJETIVO: ${goal.objective}
 INTENÇÃO ORIGINAL: ${goal.userIntent}
-${skillBlock}
-Ferramentas disponíveis: exec_command, read, write, edit, web_search, web_navigate, memory_search, read_document, list_workspace
+${skillBlock}${contextBlock}
+Ferramentas disponíveis: exec_command, read, write, edit, web_search, web_navigate, memory_search, read_document, list_workspace, send_document, send_audio
 
 Responda APENAS com JSON válido (sem markdown):
 {
@@ -54,7 +57,7 @@ Regras:
 - Se não precisar de ferramenta específica, omita toolName e toolArgs`.trim();
 }
 
-function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string): string {
+function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, runtimeContext?: string): string {
     const strategiesBlock = goal.strategiesTried.length > 0
         ? `\nEstratégias já tentadas: ${goal.strategiesTried.join('; ')}\n`
         : '';
@@ -67,12 +70,16 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
         ? `\nHistórico de erros similares:\n${reflectionHint}\n`
         : '';
 
+    const contextBlock = runtimeContext
+        ? `\nCONTEXTO (memória + feedback):\n${runtimeContext}\n`
+        : '';
+
     return `Você é um planejador de tarefas. Um blocker foi detectado. Proponha uma NOVA estratégia.
 
 OBJETIVO: ${goal.objective}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}
-${strategiesBlock}${blockersBlock}${reflectionBlock}
+${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 
 Responda APENAS com JSON válido (sem markdown):
@@ -106,10 +113,10 @@ export class GoalPlanner {
         this.skillContext = context || undefined;
     }
 
-    async plan(goal: Goal): Promise<PlanStep[]> {
+    async plan(goal: Goal, runtimeContext?: string): Promise<PlanStep[]> {
         log.info(`[GoalPlanner] planning goal=${goal.id}`);
 
-        const messages: LLMMessage[] = [{ role: 'user', content: buildPlanPrompt(goal, this.skillContext) }];
+        const messages: LLMMessage[] = [{ role: 'user', content: buildPlanPrompt(goal, this.skillContext, runtimeContext) }];
 
         try {
             const result = await this.providerFactory.chatWithFallback(
@@ -137,7 +144,7 @@ export class GoalPlanner {
         }
     }
 
-    async replan(goal: Goal, blocker: GoalBlocker): Promise<PlanStep[]> {
+    async replan(goal: Goal, blocker: GoalBlocker, runtimeContext?: string): Promise<PlanStep[]> {
         log.info(`[GoalPlanner] replan goal=${goal.id} blocker=${blocker.kind}`);
 
         // Consulta memória de reflexão para evitar erros já conhecidos
@@ -147,7 +154,7 @@ export class GoalPlanner {
 
         const messages: LLMMessage[] = [{
             role: 'user',
-            content: buildReplanPrompt(goal, blocker, reflectionHint)
+            content: buildReplanPrompt(goal, blocker, reflectionHint, runtimeContext)
         }];
 
         try {

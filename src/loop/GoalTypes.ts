@@ -29,7 +29,8 @@ export type BlockerKind =
     | 'tool_error'           // tool existe mas falhou repetidamente
     | 'context_insufficient' // informação insuficiente para prosseguir
     | 'goal_ambiguous'       // intenção do usuário está ambígua
-    | 'environment_limit';   // limitação do sistema (sem internet, sem disco)
+    | 'environment_limit'    // limitação do sistema (sem internet, sem disco)
+    | 'goal_incomplete';     // todos os steps rodaram mas LLM validou que o objetivo não foi atingido
 
 export interface GoalBlocker {
     kind: BlockerKind;

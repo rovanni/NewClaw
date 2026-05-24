@@ -53,6 +53,7 @@ export class GoalOrchestrator {
             reflectionMemory,
             ToolRegistry,
             providerFactory,
+            memory,
         );
     }
 
