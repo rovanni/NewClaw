@@ -719,6 +719,8 @@ export class AgentLoop {
         const usedToolOutputs = new Map<string, string>(); // stores output of first successful call per inputKey
         // Track filenames confirmed absent from workspace so DEDUP can block path-variant retries
         const failedReadFilenames = new Set<string>();
+        // Track binary filenames that failed with "cannot read as text" so retries are blocked early
+        const binaryReadFilenames = new Set<string>();
 
         const turnAbort = new AbortController();
         this.activeTurns.set(conversationId, turnAbort);
@@ -1070,6 +1072,19 @@ export class AgentLoop {
                             });
                             continue;
                         }
+                        if (filename && binaryReadFilenames.has(filename)) {
+                            log.warn(`[${this.ts()}] [BINARY-READ-BLOCK] Blocked repeated read of binary file: ${filename}`);
+                            loopMessages.push({
+                                role: 'tool',
+                                content: `[BLOQUEADO] "${filename}" é um arquivo binário — "read" não consegue processá-lo. Use exec_command com python-pptx, pandoc, pdftotext ou similar para extrair o conteúdo.`,
+                                tool_call_id: toolCall.id,
+                            });
+                            loopMessages.push({
+                                role: 'system',
+                                content: `⚠️ NÃO chame "read" em "${filename}" novamente. Abordagem obrigatória: use exec_command com a ferramenta adequada para o formato ${filename.split('.').pop()?.toUpperCase()}.`,
+                            });
+                            continue;
+                        }
                     }
 
                     if (usedToolInputs.has(inputKey)) {
@@ -1184,6 +1199,7 @@ export class AgentLoop {
                             toolFailureCount++;
                             const errorText = result.error ?? result.output ?? '';
                             const isReadNotFound = resolvedToolName === 'read' && /não encontrado|not found/i.test(errorText);
+                            const isBinaryRead = resolvedToolName === 'read' && /arquivos binários|binary.*não podem|cannot.*binary/i.test(errorText);
                             if (isReadNotFound) {
                                 const pathArg = String(resolvedArgs.path || '');
                                 const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
@@ -1191,6 +1207,14 @@ export class AgentLoop {
                                 loopMessages.push({
                                     role: 'system',
                                     content: `[ARQUIVO INEXISTENTE] "${filename || pathArg}" não existe no workspace. Para criá-lo, use a ferramenta "write" com o conteúdo completo. NÃO tente "read" novamente antes de criar o arquivo com "write".`,
+                                });
+                            } else if (isBinaryRead) {
+                                const pathArg = String(resolvedArgs.path || '');
+                                const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
+                                if (filename) binaryReadFilenames.add(filename);
+                                loopMessages.push({
+                                    role: 'system',
+                                    content: `[ARQUIVO BINÁRIO] "${filename || pathArg}" não pode ser lido com "read". Use exec_command com a ferramenta adequada (python-pptx, pandoc, pdftotext, etc.). NÃO tente "read" neste arquivo novamente.`,
                                 });
                             } else {
                                 loopMessages.push({

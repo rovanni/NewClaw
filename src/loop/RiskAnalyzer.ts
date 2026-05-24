@@ -142,15 +142,23 @@ export class RiskAnalyzer {
 
     /**
      * Verifica se algum step do plano viola uma constraint dura do ReflectionMemory.
-     * Detecta pip install, python3 -m venv, e tools com 100% de falha histórica.
+     *
+     * Lógica: extrai a ferramenta proibida de cada constraint e verifica se ela
+     * está presente no plano. Isso evita falsos positivos de constraints globais
+     * (goal_blocker_*) bloquearem goals que não usam a ferramenta problemática.
      */
     private detectConstraintViolation(plan: PlanStep[], constraints: string[]): boolean {
-        for (const step of plan) {
-            const toolName = step.toolName ?? '';
-            const cmdValue = String(step.toolArgs?.command ?? step.toolArgs?.cmd ?? '');
+        const planTools = new Set(plan.map(s => s.toolName).filter(Boolean) as string[]);
 
-            for (const constraint of constraints) {
-                if (toolName && constraint.includes(`'${toolName}'`)) return true;
+        for (const constraint of constraints) {
+            // Extrai nome da ferramenta de textos como "A ferramenta 'web_search' falhou..."
+            // Só bloqueia se essa ferramenta está efetivamente no plano atual.
+            const toolMatch = constraint.match(/'([a-z][a-z0-9_]*)'/i);
+            if (toolMatch && planTools.has(toolMatch[1])) return true;
+
+            // Casos especiais: pip install e python3 -m venv são detectados via args de exec_command
+            for (const step of plan) {
+                const cmdValue = String(step.toolArgs?.command ?? step.toolArgs?.cmd ?? '');
                 if (/pip install/i.test(constraint) && /pip\s+install/i.test(cmdValue)) return true;
                 if (/python3 -m venv/i.test(constraint) && /python3\s+-m\s+venv/i.test(cmdValue)) return true;
             }
