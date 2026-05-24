@@ -75,12 +75,18 @@ export class GoalExecutionLoop {
         this.goalStore.update(goal.id, { status: 'replanning' });
         const rawPlan = await this.planner.plan(goal, q1Context);
 
-        // ── Q2: Análise de Riscos ─────────────────────────────────────────
-        // Revisa o plano antes de executar: steps faltantes, dependências, tools inválidas
-        const riskReport = await this.riskAnalyzer.analyze(goal, rawPlan);
-        const initialPlan = riskReport.planAdjusted ? riskReport.adjustedPlan : rawPlan;
-        if (riskReport.risks.length > 0) {
-            log.info(`[GoalLoop] Q2 risks (initial): ${riskReport.risks.join(' | ')}`);
+        // ── Q2: Análise de Riscos (apenas planos complexos) ──────────────
+        // Planos simples passam direto; Q2 só vale a latência em tarefas com
+        // dependências entre steps (ex: exec cria arquivo → send_document envia)
+        let initialPlan = rawPlan;
+        if (this.isComplexPlan(rawPlan)) {
+            const riskReport = await this.riskAnalyzer.analyze(goal, rawPlan);
+            initialPlan = riskReport.planAdjusted ? riskReport.adjustedPlan : rawPlan;
+            if (riskReport.risks.length > 0) {
+                log.info(`[GoalLoop] Q2 risks (initial): ${riskReport.risks.join(' | ')}`);
+            }
+        } else {
+            log.debug('[GoalLoop] Q2 skipped — simple plan');
         }
 
         this.goalStore.update(goal.id, { currentPlan: initialPlan, status: 'executing' });
@@ -114,17 +120,36 @@ export class GoalExecutionLoop {
         return this.runLoop(currentGoal, channelContext, onProgress, 0, 0);
     }
 
+    // ── Detecção de complexidade ──────────────────────────────────────────────
+
+    /**
+     * Um plano é "complexo" quando tem dependências de artefato entre steps
+     * (ex: exec_command cria arquivo → send_document envia)
+     * ou quando tem 3+ steps. Nesses casos Q2 vale a latência extra.
+     */
+    private isComplexPlan(plan: PlanStep[]): boolean {
+        if (plan.length >= 3) return true;
+        const hasExec = plan.some(s => s.toolName === 'exec_command');
+        const hasDelivery = plan.some(s => ['send_document', 'send_audio', 'write', 'edit'].includes(s.toolName ?? ''));
+        return hasExec && hasDelivery;
+    }
+
     // ── Helper espiral: Q1+Q2 envolvem cada replan ────────────────────────────
 
     /**
      * Executa Q1 (contextualização) + replan + Q2 (análise de riscos) para um ciclo.
      * Centraliza a lógica de replanejamento com espiral para evitar duplicação.
      */
+    /**
+     * @param forceQ2 - true quando chamado após Q4 falhar: Q2 sempre roda,
+     *                  independente da complexidade do plano.
+     */
     private async planWithSpiral(
         goal: Goal,
         blocker: GoalBlocker,
         priorFeedback: string | undefined,
         cycleNumber: number,
+        forceQ2 = false,
     ): Promise<Goal> {
         // Q1: Contextualização — memória + feedback do ciclo anterior
         const q1Context = await this.contextualizer.contextualize(goal, cycleNumber, priorFeedback);
@@ -132,11 +157,18 @@ export class GoalExecutionLoop {
         // Replan com contexto enriquecido
         const rawPlan = await this.planner.replan(goal, blocker, q1Context);
 
-        // Q2: Análise de Riscos — valida o novo plano antes de executar
-        const riskReport = await this.riskAnalyzer.analyze(goal, rawPlan);
-        const finalPlan = riskReport.planAdjusted ? riskReport.adjustedPlan : rawPlan;
-        if (riskReport.risks.length > 0) {
-            log.info(`[GoalLoop] Q2 risks (replan cycle=${cycleNumber}): ${riskReport.risks.join(' | ')}`);
+        // Q2: Análise de Riscos
+        // Ativo quando: plano complexo (dependências entre steps)
+        //           OU: forçado após Q4 falhar (objetivo não foi entregue)
+        let finalPlan = rawPlan;
+        if (forceQ2 || this.isComplexPlan(rawPlan)) {
+            const riskReport = await this.riskAnalyzer.analyze(goal, rawPlan);
+            finalPlan = riskReport.planAdjusted ? riskReport.adjustedPlan : rawPlan;
+            if (riskReport.risks.length > 0) {
+                log.info(`[GoalLoop] Q2 risks (replan cycle=${cycleNumber} forced=${forceQ2}): ${riskReport.risks.join(' | ')}`);
+            }
+        } else {
+            log.debug(`[GoalLoop] Q2 skipped (replan cycle=${cycleNumber} — simple plan)`);
         }
 
         this.goalStore.update(goal.id, { currentPlan: finalPlan, status: 'executing' });
@@ -211,8 +243,9 @@ export class GoalExecutionLoop {
                     `completed all steps but goal_incomplete: ${(validation.reason ?? '').slice(0, 100)}`);
 
                 // Q4 → Q1: feedback da validação alimenta o próximo ciclo espiral
+                // forceQ2=true: se o objetivo não foi entregue, Q2 sempre revisa o plano
                 priorFeedback = validation.reason;
-                currentGoal = await this.planWithSpiral(currentGoal, blocker, priorFeedback, totalReplans + 1);
+                currentGoal = await this.planWithSpiral(currentGoal, blocker, priorFeedback, totalReplans + 1, true);
                 totalReplans++;
 
                 if (Date.now() > currentGoal.expiresAt) {
