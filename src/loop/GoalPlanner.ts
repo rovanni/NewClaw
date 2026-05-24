@@ -121,6 +121,10 @@ const TOOL_ALIASES: Record<string, string> = {
 
 // ── GoalPlanner ───────────────────────────────────────────────────────────────
 
+// Modelo dedicado ao planning: gera JSON rápido e não entra em extended thinking.
+// kimi-k2.6 e outros thinking models são inadequados pois raciocinam 45s+ sem produzir output.
+const PLANNER_MODEL = 'gemma4:31b-cloud';
+
 export class GoalPlanner {
     private skillContext: string | undefined;
 
@@ -128,6 +132,28 @@ export class GoalPlanner {
         private readonly providerFactory: ProviderFactory,
         private readonly reflectionMemory: ReflectionMemory,
     ) {}
+
+    /**
+     * Chama o LLM usando um modelo fixo para planning (não o default do Ollama).
+     * Retorna { status, content } no mesmo formato que chatWithFallback usa internamente.
+     */
+    private async callPlannerLLM(messages: LLMMessage[], timeoutMs: number): Promise<{ status: string; content: string }> {
+        const provider = this.providerFactory.getProviderWithModel(PLANNER_MODEL);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const response = await provider.chat(messages, undefined, { signal: controller.signal, timeoutMs });
+            return { status: 'success', content: response.content };
+        } catch (err) {
+            const msg = String(err);
+            if (msg.includes('abort') || msg.includes('timed out') || msg.includes('timeout')) {
+                return { status: 'timeout', content: '' };
+            }
+            return { status: 'error', content: '' };
+        } finally {
+            clearTimeout(timer);
+        }
+    }
 
     /** Injeta skill context que será incluído no prompt de planejamento. */
     setSkillContext(context: string): void {
@@ -141,12 +167,7 @@ export class GoalPlanner {
         const messages: LLMMessage[] = [{ role: 'user', content: buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext) }];
 
         try {
-            const result = await this.providerFactory.chatWithFallback(
-                messages,
-                undefined,
-                undefined,
-                45_000
-            );
+            const result = await this.callPlannerLLM(messages, 45_000);
 
             if (result.status !== 'success') {
                 log.warn(`[GoalPlanner] LLM plan failed status=${result.status}`);
@@ -180,12 +201,7 @@ export class GoalPlanner {
         }];
 
         try {
-            const result = await this.providerFactory.chatWithFallback(
-                messages,
-                undefined,
-                undefined,
-                45_000
-            );
+            const result = await this.callPlannerLLM(messages, 45_000);
 
             if (result.status !== 'success') {
                 log.warn(`[GoalPlanner] LLM replan failed status=${result.status}`);
