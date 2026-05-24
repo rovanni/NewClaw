@@ -82,7 +82,7 @@ const DEFAULT_CONFIG: GovernorConfig = {
         inferred: 0.6,
         system: 0.8
     },
-    protectedNodes: ['core_user', 'user_identity'],
+    protectedNodes: ['core_user', 'core_soul', 'core_memory', 'core_tools', 'user_identity', 'user_expertise', 'user_goals'],
     archiveEnabled: true
 };
 
@@ -99,6 +99,20 @@ export class MemoryGovernor {
         this.memory = memory;
         this.memoryFacade = memory.getFacade();
         this.config = { ...DEFAULT_CONFIG, ...config };
+    }
+
+    /**
+     * Check if a node is protected from decay and garbage collection.
+     * Protected: identity type, explicit protectedNodes list, core_* prefix,
+     * user_* prefix, preference/trait types, and context nodes with core_ prefix.
+     */
+    private isProtectedNode(node: MemoryNode): boolean {
+        if (node.type === 'identity') return true;
+        if (this.config.protectedNodes.includes(node.id)) return true;
+        if (node.id.startsWith('core_')) return true;
+        if (node.id.startsWith('user_')) return true;
+        if (node.type === 'preference' || node.type === 'trait') return true;
+        return false;
     }
 
     private getGravityService(): DomainGravityService {
@@ -143,7 +157,7 @@ export class MemoryGovernor {
 
         for (const node of allNodes) {
             // Skip protected nodes
-            if (node.type === 'identity' || this.config.protectedNodes.includes(node.id)) continue;
+            if (this.isProtectedNode(node)) continue;
 
             const lastUpdated = node.last_updated ? new Date(node.last_updated) : (node.created_at ? new Date(node.created_at) : now);
             const daysSinceUpdate = Math.max(0, (now.getTime() - lastUpdated.getTime()) / (1000 * 60 * 60 * 24));
@@ -462,7 +476,7 @@ export class MemoryGovernor {
 
         for (const node of allNodes) {
             // Never garbage collect protected nodes
-            if (node.type === 'identity' || this.config.protectedNodes.includes(node.id)) continue;
+            if (this.isProtectedNode(node)) continue;
 
             const confidence = node.confidence ?? 1.0;
             const weight = node.weight ?? 1.0;

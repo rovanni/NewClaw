@@ -132,14 +132,18 @@ export class CognitiveMemoryIndex {
      * fora do resultado da busca semântica.
      */
     getPermanentSummaries(): MemoryIndexEntry[] {
+        // Include ARCHIVED nodes for permanent types — core identity, preferences and traits
+        // should remain in the index even if MemoryGovernor archived them due to low confidence.
+        // Only truly EXPIRED nodes (TTL-based) are excluded.
         const nodes = this.db.prepare(`
             SELECT id FROM memory_nodes
             WHERE (
                 type IN ('identity', 'preference', 'trait')
                 OR id LIKE 'core_%'
+                OR id LIKE 'user_%'
                 OR id = 'user_identity'
             )
-            AND lifecycle_state NOT IN ('EXPIRED')
+            AND (lifecycle_state IS NULL OR lifecycle_state IN ('ACTIVE', 'ARCHIVED'))
             LIMIT 60
         `).all() as Array<{ id: string }>;
 

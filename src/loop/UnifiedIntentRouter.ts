@@ -570,10 +570,14 @@ Respond with ONLY valid JSON, no other text:
         ];
 
         try {
-            const result = await this.providerFactory!.chatWithFallback(messages, undefined, undefined, 15000);
+            const result = await this.providerFactory!.chatWithFallback(messages, undefined, undefined, 30000);
             if (result.status !== 'success' || !result.content) throw new Error('LLM classification failed');
 
-            const raw = result.content.trim().replace(/^```json\s*|\s*```$/g, '');
+            // Sanitize: strip markdown fences and extract JSON object from potentially mixed content.
+            // Models like kimi-k2.6:cloud sometimes return thinking text around the JSON.
+            let raw = result.content.trim().replace(/^```json\s*|\s*```$/g, '');
+            const jsonMatch = raw.match(/\{[\s\S]*"category"[\s\S]*\}/);
+            if (jsonMatch) raw = jsonMatch[0];
             const parsed = JSON.parse(raw) as { category?: string; cognitiveLoad?: string; confidence?: number };
 
             const VALID_CATEGORIES: IntentCategory[] = ['greeting', 'conversation', 'information', 'creation', 'system_operation', 'data_analysis', 'memory_operation', 'audio', 'vision', 'destructive', 'confirmation', 'rejection'];
