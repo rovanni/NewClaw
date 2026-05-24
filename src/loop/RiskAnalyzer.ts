@@ -107,7 +107,7 @@ OU
                 [{ role: 'user', content: prompt }] as LLMMessage[],
                 undefined,
                 undefined,
-                20_000,
+                45_000,
             );
 
             if (result.status !== 'success') {

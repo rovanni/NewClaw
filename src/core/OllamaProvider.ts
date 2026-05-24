@@ -367,7 +367,7 @@ export class OllamaProvider implements ILLMProvider {
             // Models like deepseek-v4-flash:cloud route their entire response through the thinking
             // field. When the stream is aborted (timeout, not user cancel) with thinking but no
             // content, recover the thinking as content — the same heuristic applied on normal
-            // completion at line ~352. User-cancel discarding is handled by the caller (chatWithFallback
+            // completion below. User-cancel discarding is handled by the caller (chatWithFallback
             // checks externalSignal after we return, so no thinking leaks to a cancelled user).
             if (!content && thinking && thinking.length > 50) {
                 log.info(`[${consumeId}] [STREAM-CONSUME] Aborted with ${thinking.length} chars of thinking, no content — recovering thinking as content`);
@@ -375,11 +375,14 @@ export class OllamaProvider implements ILLMProvider {
                 thinking = '';
             }
             if (!content) {
+                // Nothing to recover — propagate the error so ProviderFactory can retry
                 log.error(`[${consumeId}] [STREAM-CONSUME] FAILED after ${chunkCount} chunks, ${elapsed}ms: ${errorMessage(streamErr)}`);
-            } else {
-                log.warn(`[${consumeId}] [STREAM-CONSUME] Recovered from stream abort: ${content.length} chars content after ${chunkCount} chunks, ${elapsed}ms. Still throwing to notify upstream.`);
+                throw streamErr;
             }
-            throw streamErr; // SEMPRE repassar o erro para o ProviderFactory tratar como timeout/abort
+            // Content was recovered from thinking — fall through to the normal return path.
+            // Same result as if the model had completed normally in thinking-only mode.
+            // Avoids a wasted retry+backoff cycle when valid content is already available.
+            log.warn(`[${consumeId}] [STREAM-CONSUME] Recovered ${content.length} chars from aborted stream after ${chunkCount} chunks, ${elapsed}ms — using recovered content instead of retrying`);
         }
 
         const elapsed = Date.now() - startTime;

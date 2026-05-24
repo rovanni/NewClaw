@@ -506,7 +506,7 @@ Responda APENAS com JSON válido, sem texto adicional:
                 [{ role: 'user', content: prompt }] as LLMMessage[],
                 undefined,
                 undefined,
-                8_000,
+                30_000,
             );
 
             if (result.status !== 'success') {
@@ -602,7 +602,7 @@ OU
                 [{ role: 'user', content: prompt }] as LLMMessage[],
                 undefined,
                 undefined,
-                15_000,
+                45_000,
             );
 
             if (result.status !== 'success') {
