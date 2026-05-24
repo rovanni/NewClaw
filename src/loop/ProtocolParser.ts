@@ -39,7 +39,7 @@ CORRIJA IMEDIATAMENTE seguindo o formato:
 Responda APENAS o JSON. Sem texto adicional.`;
 
 const MAX_RECOVERY_ATTEMPTS = 2;
-const MIN_FINAL_ANSWER_LENGTH = 500;
+const MIN_FINAL_ANSWER_LENGTH = 10;
 
 export class ProtocolParser {
     private metrics = new ProtocolMetrics();

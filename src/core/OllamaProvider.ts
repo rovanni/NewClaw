@@ -376,9 +376,10 @@ export class OllamaProvider implements ILLMProvider {
             }
             if (!content) {
                 log.error(`[${consumeId}] [STREAM-CONSUME] FAILED after ${chunkCount} chunks, ${elapsed}ms: ${errorMessage(streamErr)}`);
-                throw streamErr;
+            } else {
+                log.warn(`[${consumeId}] [STREAM-CONSUME] Recovered from stream abort: ${content.length} chars content after ${chunkCount} chunks, ${elapsed}ms. Still throwing to notify upstream.`);
             }
-            log.warn(`[${consumeId}] [STREAM-CONSUME] Recovered from stream abort: ${content.length} chars content after ${chunkCount} chunks, ${elapsed}ms`);
+            throw streamErr; // SEMPRE repassar o erro para o ProviderFactory tratar como timeout/abort
         }
 
         const elapsed = Date.now() - startTime;
