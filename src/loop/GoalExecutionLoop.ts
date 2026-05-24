@@ -115,8 +115,11 @@ export class GoalExecutionLoop {
                     // Pausa goal — WorkflowEngine callback vai retomar
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'blocked', message: 'Aguardando autorização' });
                     this.goalStore.update(currentGoal.id, { status: 'blocked' });
-                    return this.buildResult(currentGoal, false, totalCycles, totalReplans,
-                        'Aguardando sua autorização para prosseguir.');
+                    // Propaga o texto e os botões do auth request para que o Telegram
+                    // possa exibir o inline keyboard (sem options os botões somem)
+                    const goalResult = this.buildResult(currentGoal, false, totalCycles, totalReplans,
+                        cycleResult.output || 'Aguardando sua autorização para prosseguir.');
+                    return { ...goalResult, authOptions: cycleResult.authOptions };
                 }
 
                 case 'blocked': {
@@ -240,6 +243,25 @@ export class GoalExecutionLoop {
                     channelContext
                 );
                 const text = typeof response === 'string' ? response : response.text;
+                const respOptions = typeof response === 'string' ? undefined : response.options;
+
+                // Se o AgentLoop retornou botões de auth, propaga como needs_auth
+                // em vez de tratar como sucesso (o que faria o step completar sem os botões)
+                const authOpts = respOptions?.filter(o => o.value?.startsWith('auth:'));
+                if (authOpts && authOpts.length > 0) {
+                    this.goalStore.addAttempt(goal.id, {
+                        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+                        planStepId: step.id,
+                        toolName: 'agentloop',
+                        args: {},
+                        result: 'failure',
+                        output: text.slice(0, 300),
+                        durationMs: Date.now() - startMs,
+                        executedAt: Date.now(),
+                    });
+                    return { outcome: 'needs_auth' as const, confidence: 0.9, output: text, authOptions: authOpts };
+                }
+
                 // Heurística de sucesso: resposta sem indicadores de erro
                 const isError = /erro|falhou|não consegui|não foi possível|failed|error/i.test(text) && text.length < 200;
                 toolResult = { success: !isError, output: text };

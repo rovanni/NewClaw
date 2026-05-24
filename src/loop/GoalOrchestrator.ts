@@ -145,6 +145,12 @@ export class GoalOrchestrator {
 
         log.info(`[GoalOrchestrator] goal=${goal.id} success=${result.success} cycles=${result.totalCycles} replans=${result.totalReplans}`);
 
+        // Auth pendente: preserva o texto E os botões do inline keyboard
+        // (sem isso os botões são descartados e o usuário não vê a confirmação)
+        if (!result.success && result.authOptions?.length) {
+            return { text: result.finalOutput, options: result.authOptions };
+        }
+
         // Retorna o output final como texto
         if (result.success) {
             return result.finalOutput;

@@ -153,7 +153,9 @@ export class AgentLoop {
         if (nonCdSubCmds.length === 0) return false; // pure `cd` offers no read value
         return nonCdSubCmds.every(sub => {
             const word = sub.split(/[\s;|&]/)[0].replace(/^\.\//, '');
-            return SAFE_COMMANDS.has(word);
+            // Also check basename so full-path invocations like /usr/local/bin/marp are safe
+            const basename = word.includes('/') ? word.split('/').pop()! : word;
+            return SAFE_COMMANDS.has(word) || SAFE_COMMANDS.has(basename);
         });
     }
 

@@ -113,6 +113,8 @@ export interface CycleResult {
     output?: string;
     blocker?: GoalBlocker;
     authTxnId?: string;
+    /** Inline keyboard options when outcome=needs_auth (preserves Telegram buttons) */
+    authOptions?: { label: string; value: string }[];
 }
 
 export interface GoalResult {
@@ -122,6 +124,8 @@ export interface GoalResult {
     totalCycles: number;
     totalAttempts: number;
     totalReplans: number;
+    /** Preserved from CycleResult when goal was blocked by auth */
+    authOptions?: { label: string; value: string }[];
 }
 
 export interface GoalProgressUpdate {
