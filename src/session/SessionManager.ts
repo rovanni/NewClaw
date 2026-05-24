@@ -158,6 +158,7 @@ export class SessionManager {
                 this.sessionMutexes.delete(sid);
                 this.compressionCheckpoints.delete(sid);
                 this.lastActivity.delete(sid);
+                this.activeFiles.delete(sid);
                 count++;
             }
         }

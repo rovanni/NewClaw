@@ -41,7 +41,7 @@ const DEFAULT_CONFIG: AutoCleanerConfig = {
     compactSizeThreshold: 500 * 1024,    // 500KB
     compactIntervalMs: 3600_000,          // 1h
     backupMaxAgeMs: 7 * 24 * 3600_000,    // 7 dias
-    inactiveThresholdMs: 1800_000,        // 30 min
+    inactiveThresholdMs: 600_000,          // 10 min
     transcriptDir: './data/sessions',
     maxCleanupPerCycle: 10,
 };

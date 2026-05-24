@@ -192,19 +192,24 @@ export class SessionTranscript {
         let totalEntries = 0;
         const checkpoints: SessionIndex['checkpoints'] = [];
 
-        for await (const line of rl) {
-            const lineByteLength = Buffer.byteLength(line + '\n', 'utf-8');
-            if (line.trim()) {
-                try {
-                    const entry = JSON.parse(line) as TranscriptEntry;
-                    if (entry.seq > lastSeq) lastSeq = entry.seq;
-                    totalEntries++;
-                    if (entry.meta?.checkpoint) {
-                        checkpoints.push({ offset, seq: entry.seq, ts: entry.ts });
-                    }
-                } catch { /* skip malformed */ }
+        try {
+            for await (const line of rl) {
+                const lineByteLength = Buffer.byteLength(line + '\n', 'utf-8');
+                if (line.trim()) {
+                    try {
+                        const entry = JSON.parse(line) as TranscriptEntry;
+                        if (entry.seq > lastSeq) lastSeq = entry.seq;
+                        totalEntries++;
+                        if (entry.meta?.checkpoint) {
+                            checkpoints.push({ offset, seq: entry.seq, ts: entry.ts });
+                        }
+                    } catch { /* skip malformed */ }
+                }
+                offset += lineByteLength;
             }
-            offset += lineByteLength;
+        } finally {
+            rl.close();
+            fileStream.destroy();
         }
 
         this.index = {
