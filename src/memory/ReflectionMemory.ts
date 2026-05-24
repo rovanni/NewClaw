@@ -228,6 +228,81 @@ export class ReflectionMemory {
         `).all(minCount, minFailureRate) as PatternAggRow[];
     }
 
+    // ── Constraint Injection ───────────────────────────────────────────
+
+    /**
+     * Retorna constraints duras baseadas em padrões com 100% de falha.
+     *
+     * Diferente de buildContextHint() (que sugere), constraints são proibições
+     * absolutas injetadas no prompt do GoalPlanner como regras a seguir.
+     *
+     * Exemplos de output:
+     *   ["NÃO use pip install direto — PEP 668 bloqueado neste ambiente",
+     *    "NÃO use python3 -m venv — ensurepip ausente neste ambiente"]
+     */
+    buildConstraints(goalContext: string): string[] {
+        try {
+            const patterns = this.getHardFailurePatterns(goalContext);
+            const constraints: string[] = [];
+
+            for (const p of patterns) {
+                const constraint = this.patternToConstraint(p.pattern, p.tool_used, p.top_fix);
+                if (constraint) constraints.push(constraint);
+            }
+
+            return constraints;
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Padrões com taxa de falha = 100% e ao menos 2 registros nos últimos 7 dias.
+     * Esses se tornam constraints duras no planner.
+     */
+    private getHardFailurePatterns(category: string): PatternAggRow[] {
+        return this.db.prepare(`
+            SELECT
+                pattern,
+                tool_used,
+                COUNT(*) AS total,
+                SUM(CASE WHEN approved = 0 THEN 1 ELSE 0 END) AS failures,
+                CAST(SUM(CASE WHEN approved = 0 THEN 1 ELSE 0 END) AS REAL) / COUNT(*) AS failure_rate,
+                (SELECT suggested_fix FROM reflection_annotations r2
+                 WHERE r2.pattern = r1.pattern AND r2.tool_used = r1.tool_used
+                   AND r2.approved = 0 AND r2.suggested_fix IS NOT NULL
+                 ORDER BY r2.created_at DESC LIMIT 1) AS top_fix
+            FROM reflection_annotations r1
+            WHERE (pattern = ? OR pattern LIKE 'goal_blocker_%')
+              AND created_at > datetime('now', '-7 days')
+            GROUP BY pattern, tool_used
+            HAVING total >= 2 AND failure_rate >= 0.90
+            ORDER BY failure_rate DESC, total DESC
+            LIMIT 5
+        `).all(category) as PatternAggRow[];
+    }
+
+    /**
+     * Converte um padrão de falha em texto de constraint para o planner.
+     * Retorna null se o padrão não mapear para uma constraint conhecida.
+     */
+    private patternToConstraint(pattern: string, toolUsed: string, topFix: string | null): string | null {
+        // PEP 668 / pip bloqueado
+        if (/environment_limit|pep.?668|externally.managed/i.test(pattern)) {
+            return `NÃO use 'pip install' direto — bloqueado pelo sistema operacional (PEP 668). Use venv isolado ou alternativa sem pip.`;
+        }
+        // venv / ensurepip ausente
+        if (/ensurepip|python3.?venv/i.test(pattern)) {
+            return `NÃO use 'python3 -m venv' — ensurepip indisponível neste ambiente. Use pandoc, marp ou outra abordagem.`;
+        }
+        // Tool que falhou 100% das vezes
+        if (toolUsed && toolUsed !== 'unknown' && toolUsed !== 'agentloop') {
+            const hint = topFix ? ` Alternativa: ${topFix}` : '';
+            return `A ferramenta '${toolUsed}' falhou em 100% das tentativas recentes.${hint}`;
+        }
+        return null;
+    }
+
     // ── Maintenance ────────────────────────────────────────────────────
 
     /** Remove anotações com mais de N dias. */

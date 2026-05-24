@@ -22,29 +22,29 @@ const log = createLogger('GoalEvaluator');
 // Chave: nome do executável que aparece na mensagem de erro (lowercase)
 
 const KNOWN_DEPS: Record<string, DependencyInfo> = {
-    pandoc:      { name: 'pandoc',                   installCmd: 'sudo apt install pandoc -y',                       manualInstructions: 'No servidor: sudo apt install pandoc -y',                       type: 'system' },
-    ffmpeg:      { name: 'ffmpeg',                   installCmd: 'sudo apt install ffmpeg -y',                       manualInstructions: 'No servidor: sudo apt install ffmpeg -y',                       type: 'system' },
-    convert:     { name: 'imagemagick',              installCmd: 'sudo apt install imagemagick -y',                  manualInstructions: 'No servidor: sudo apt install imagemagick -y',                  type: 'system' },
-    magick:      { name: 'imagemagick',              installCmd: 'sudo apt install imagemagick -y',                  manualInstructions: 'No servidor: sudo apt install imagemagick -y',                  type: 'system' },
-    libreoffice: { name: 'libreoffice',              installCmd: 'sudo apt install libreoffice -y',                  manualInstructions: 'No servidor: sudo apt install libreoffice -y',                  type: 'system' },
-    soffice:     { name: 'libreoffice',              installCmd: 'sudo apt install libreoffice -y',                  manualInstructions: 'No servidor: sudo apt install libreoffice -y',                  type: 'system' },
-    pdftotext:   { name: 'poppler-utils',            installCmd: 'sudo apt install poppler-utils -y',               manualInstructions: 'No servidor: sudo apt install poppler-utils -y',               type: 'system' },
-    pdfimages:   { name: 'poppler-utils',            installCmd: 'sudo apt install poppler-utils -y',               manualInstructions: 'No servidor: sudo apt install poppler-utils -y',               type: 'system' },
-    jq:          { name: 'jq',                       installCmd: 'sudo apt install jq -y',                          manualInstructions: 'No servidor: sudo apt install jq -y',                          type: 'system' },
-    zip:         { name: 'zip',                      installCmd: 'sudo apt install zip -y',                         manualInstructions: 'No servidor: sudo apt install zip -y',                         type: 'system' },
-    unzip:       { name: 'unzip',                    installCmd: 'sudo apt install unzip -y',                       manualInstructions: 'No servidor: sudo apt install unzip -y',                       type: 'system' },
-    curl:        { name: 'curl',                     installCmd: 'sudo apt install curl -y',                        manualInstructions: 'No servidor: sudo apt install curl -y',                        type: 'system' },
-    wget:        { name: 'wget',                     installCmd: 'sudo apt install wget -y',                        manualInstructions: 'No servidor: sudo apt install wget -y',                        type: 'system' },
-    git:         { name: 'git',                      installCmd: 'sudo apt install git -y',                         manualInstructions: 'No servidor: sudo apt install git -y',                         type: 'system' },
-    gs:          { name: 'ghostscript',              installCmd: 'sudo apt install ghostscript -y',                 manualInstructions: 'No servidor: sudo apt install ghostscript -y',                 type: 'system' },
-    ghostscript: { name: 'ghostscript',              installCmd: 'sudo apt install ghostscript -y',                 manualInstructions: 'No servidor: sudo apt install ghostscript -y',                 type: 'system' },
-    exiftool:    { name: 'libimage-exiftool-perl',   installCmd: 'sudo apt install libimage-exiftool-perl -y',      manualInstructions: 'No servidor: sudo apt install libimage-exiftool-perl -y',      type: 'system' },
-    npm:         { name: 'npm',                      installCmd: 'sudo apt install npm -y',                         manualInstructions: 'No servidor: sudo apt install npm -y',                         type: 'node'   },
-    npx:         { name: 'npm',                      installCmd: 'sudo apt install npm -y',                         manualInstructions: 'No servidor: sudo apt install npm -y (npx vem com npm)',        type: 'node'   },
-    node:        { name: 'nodejs',                   installCmd: 'sudo apt install nodejs npm -y',                  manualInstructions: 'No servidor: sudo apt install nodejs npm -y',                  type: 'node'   },
-    marp:        { name: '@marp-team/marp-cli',      installCmd: 'npm install -g @marp-team/marp-cli',              manualInstructions: 'No servidor: npm install -g @marp-team/marp-cli',              type: 'node'   },
-    pip:         { name: 'python3-pip',              installCmd: 'sudo apt install python3-pip -y',                 manualInstructions: 'No servidor: sudo apt install python3-pip -y',                 type: 'python' },
-    pip3:        { name: 'python3-pip',              installCmd: 'sudo apt install python3-pip -y',                 manualInstructions: 'No servidor: sudo apt install python3-pip -y',                 type: 'python' },
+    pandoc:      { name: 'pandoc',                 installCmd: 'sudo apt install pandoc -y',                  manualInstructions: 'Instale com: sudo apt install pandoc -y',                       type: 'system' },
+    ffmpeg:      { name: 'ffmpeg',                 installCmd: 'sudo apt install ffmpeg -y',                  manualInstructions: 'Instale com: sudo apt install ffmpeg -y',                       type: 'system' },
+    convert:     { name: 'imagemagick',            installCmd: 'sudo apt install imagemagick -y',             manualInstructions: 'Instale com: sudo apt install imagemagick -y',                  type: 'system' },
+    magick:      { name: 'imagemagick',            installCmd: 'sudo apt install imagemagick -y',             manualInstructions: 'Instale com: sudo apt install imagemagick -y',                  type: 'system' },
+    libreoffice: { name: 'libreoffice',            installCmd: 'sudo apt install libreoffice -y',             manualInstructions: 'Instale com: sudo apt install libreoffice -y',                  type: 'system' },
+    soffice:     { name: 'libreoffice',            installCmd: 'sudo apt install libreoffice -y',             manualInstructions: 'Instale com: sudo apt install libreoffice -y',                  type: 'system' },
+    pdftotext:   { name: 'poppler-utils',          installCmd: 'sudo apt install poppler-utils -y',           manualInstructions: 'Instale com: sudo apt install poppler-utils -y',               type: 'system' },
+    pdfimages:   { name: 'poppler-utils',          installCmd: 'sudo apt install poppler-utils -y',           manualInstructions: 'Instale com: sudo apt install poppler-utils -y',               type: 'system' },
+    jq:          { name: 'jq',                     installCmd: 'sudo apt install jq -y',                      manualInstructions: 'Instale com: sudo apt install jq -y',                          type: 'system' },
+    zip:         { name: 'zip',                    installCmd: 'sudo apt install zip -y',                     manualInstructions: 'Instale com: sudo apt install zip -y',                         type: 'system' },
+    unzip:       { name: 'unzip',                  installCmd: 'sudo apt install unzip -y',                   manualInstructions: 'Instale com: sudo apt install unzip -y',                       type: 'system' },
+    curl:        { name: 'curl',                   installCmd: 'sudo apt install curl -y',                    manualInstructions: 'Instale com: sudo apt install curl -y',                        type: 'system' },
+    wget:        { name: 'wget',                   installCmd: 'sudo apt install wget -y',                    manualInstructions: 'Instale com: sudo apt install wget -y',                        type: 'system' },
+    git:         { name: 'git',                    installCmd: 'sudo apt install git -y',                     manualInstructions: 'Instale com: sudo apt install git -y',                         type: 'system' },
+    gs:          { name: 'ghostscript',            installCmd: 'sudo apt install ghostscript -y',             manualInstructions: 'Instale com: sudo apt install ghostscript -y',                 type: 'system' },
+    ghostscript: { name: 'ghostscript',            installCmd: 'sudo apt install ghostscript -y',             manualInstructions: 'Instale com: sudo apt install ghostscript -y',                 type: 'system' },
+    exiftool:    { name: 'libimage-exiftool-perl', installCmd: 'sudo apt install libimage-exiftool-perl -y', manualInstructions: 'Instale com: sudo apt install libimage-exiftool-perl -y',      type: 'system' },
+    npm:         { name: 'npm',                    installCmd: 'sudo apt install npm -y',                     manualInstructions: 'Instale com: sudo apt install npm -y',                         type: 'node'   },
+    npx:         { name: 'npm',                    installCmd: 'sudo apt install npm -y',                     manualInstructions: 'Instale npm (inclui npx): sudo apt install npm -y',            type: 'node'   },
+    node:        { name: 'nodejs',                 installCmd: 'sudo apt install nodejs npm -y',              manualInstructions: 'Instale com: sudo apt install nodejs npm -y',                  type: 'node'   },
+    marp:        { name: '@marp-team/marp-cli',    installCmd: 'npm install -g @marp-team/marp-cli',          manualInstructions: 'Instale o marp-cli globalmente: npm install -g @marp-team/marp-cli', type: 'node' },
+    pip:         { name: 'python3-pip',            installCmd: 'sudo apt install python3-pip -y',             manualInstructions: 'Instale com: sudo apt install python3-pip -y',                 type: 'python' },
+    pip3:        { name: 'python3-pip',            installCmd: 'sudo apt install python3-pip -y',             manualInstructions: 'Instale com: sudo apt install python3-pip -y',                 type: 'python' },
 };
 
 // ── Padrões de classificação de erro ─────────────────────────────────────────
@@ -179,6 +179,31 @@ export class GoalEvaluator {
 
         const toolName = planStep.toolName ?? 'unknown';
         const error = toolResult.error ?? toolResult.output ?? '';
+
+        // Item 9: Immediate replan on dedup — se este step+tool já falhou antes,
+        // bloquear imediatamente sem retry para evitar loop de tentativas idênticas.
+        // A verificação é pelo par (planStepId, toolName) nos attempts anteriores.
+        const alreadyFailed = goal.attempts.some(
+            a => a.planStepId === planStep.id && a.toolName === toolName && a.result === 'failure'
+        );
+        if (alreadyFailed) {
+            log.warn(`[GoalEvaluator] dedup step=${planStep.id} tool=${toolName} — replan imediato`);
+            return {
+                outcome: 'blocked',
+                confidence: 0.2,
+                blocker: {
+                    kind: 'repeated_tool_call',
+                    toolName,
+                    description: `'${toolName}' já falhou neste step — mesma chamada não vai produzir resultado diferente`,
+                    suggestedActions: [
+                        'Usar tool diferente para atingir o mesmo objetivo',
+                        'Reformular os argumentos da tool',
+                        'Dividir o step em passos menores',
+                    ],
+                    detectedAt: Date.now(),
+                },
+            };
+        }
 
         // Classificar o tipo de falha
         const blocker = this.classifyError(error, toolName);

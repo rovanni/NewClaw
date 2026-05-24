@@ -108,6 +108,12 @@ REGRAS CRÍTICAS para blocker 'environment_limit':
   → Estratégia correta: exec_command com "pandoc arquivo.md -o arquivo.pptx"`.trim();
 }
 
+// Regex para detectar valores de argumento que são placeholders, não caminhos reais.
+// Quando detectados em toolArgs, o step é convertido para AgentLoop para forçar
+// resolução do caminho real antes de executar (evita exec_command com paths fictícios).
+const PLACEHOLDER_ARG_PATTERN =
+    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo)\b|<[^>]{1,60}>|\{[^}]{1,60}\}|\/path\/to\/|\/caminho\/do\//i;
+
 // ── Aliases de ferramentas: nomes que LLMs inventam → nome real no ToolRegistry ──
 const TOOL_ALIASES: Record<string, string> = {
     provide_file: 'send_document',
@@ -255,7 +261,7 @@ export class GoalPlanner {
                     : undefined;
 
                 // Valida se a tool existe no ToolRegistry.
-                const resolvedTool = canonicalName && ToolRegistry.get(canonicalName)
+                let resolvedTool = canonicalName && ToolRegistry.get(canonicalName)
                     ? canonicalName
                     : undefined;
 
@@ -265,13 +271,29 @@ export class GoalPlanner {
                     log.info(`[GoalPlanner] tool alias '${rawToolName}' → '${canonicalName}'`);
                 }
 
+                // Item 8: Detectar placeholder paths em toolArgs.
+                // Se algum argumento é um placeholder (caminho_do_*, <path>, {file}),
+                // remove toolName/toolArgs para forçar AgentLoop a resolver o caminho real.
+                let toolArgs: Record<string, unknown> | undefined = resolvedTool && s.toolArgs && typeof s.toolArgs === 'object'
+                    ? s.toolArgs as Record<string, unknown>
+                    : undefined;
+
+                if (resolvedTool && toolArgs) {
+                    const placeholderEntry = Object.entries(toolArgs).find(
+                        ([, v]) => typeof v === 'string' && PLACEHOLDER_ARG_PATTERN.test(v)
+                    );
+                    if (placeholderEntry) {
+                        log.warn(`[GoalPlanner] step ${i + 1} has placeholder arg ${placeholderEntry[0]}="${String(placeholderEntry[1]).slice(0, 80)}" — converting to AgentLoop step`);
+                        resolvedTool = undefined;
+                        toolArgs = undefined;
+                    }
+                }
+
                 return {
                     id: String(s.id ?? `step_${i + 1}`),
                     description: String(s.description ?? 'Execute step'),
                     toolName: resolvedTool,
-                    toolArgs: resolvedTool && s.toolArgs && typeof s.toolArgs === 'object'
-                        ? s.toolArgs as Record<string, unknown>
-                        : undefined,
+                    toolArgs,
                     fallbackSteps: [],
                     status: 'pending' as const,
                 };

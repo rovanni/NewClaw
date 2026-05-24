@@ -31,7 +31,12 @@ export type BlockerKind =
     | 'context_insufficient' // informação insuficiente para prosseguir
     | 'goal_ambiguous'       // intenção do usuário está ambígua
     | 'environment_limit'    // limitação do sistema (sem internet, sem disco)
-    | 'goal_incomplete';     // todos os steps rodaram mas LLM validou que o objetivo não foi atingido
+    | 'goal_incomplete'      // todos os steps rodaram mas LLM validou que o objetivo não foi atingido
+    | 'repeated_tool_call'   // mesma tool chamada com mesmos args múltiplas vezes — loop sem progresso
+    | 'placeholder_path'     // step contém path placeholder (ex: "caminho_do_arquivo_identificado")
+    | 'hallucinated_tool'    // tool gerada pelo LLM não existe no ToolRegistry
+    | 'partial_success'      // entregável existe mas pode não ser o formato ideal
+    | 'workspace_missing';   // step precisa de contexto do workspace que não foi coletado
 
 export interface GoalBlocker {
     kind: BlockerKind;
@@ -166,4 +171,18 @@ export interface GoalClassification {
     requiredTools?: string[];
     estimatedSteps?: number;
     reason?: string;
+    /** true quando o objetivo é identificado como goal mas a intenção é ambígua — pedir clarificação */
+    isAmbiguous?: boolean;
+    /** Pergunta de clarificação sugerida quando isAmbiguous=true */
+    clarificationQuestion?: string;
+}
+
+// ── Capabilities do ambiente ──────────────────────────────────────────────────
+
+export interface EnvironmentCapabilities {
+    tools: Record<string, boolean>;
+    pythonPkgs: Record<string, boolean>;
+    probeTimestamp: number;
+    /** Bloco de texto pronto para injeção em prompts de planejamento. */
+    summary: string;
 }

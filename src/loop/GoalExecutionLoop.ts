@@ -23,6 +23,7 @@ import { GoalPlanner } from './GoalPlanner';
 import { GoalEvaluator } from './GoalEvaluator';
 import { GoalContextualizer } from './GoalContextualizer';
 import { RiskAnalyzer } from './RiskAnalyzer';
+import { EnvironmentProbe } from './EnvironmentProbe';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { MemoryManager } from '../memory/MemoryManager';
@@ -39,6 +40,7 @@ export class GoalExecutionLoop {
     private readonly evaluator = new GoalEvaluator();
     private readonly contextualizer: GoalContextualizer;
     private readonly riskAnalyzer: RiskAnalyzer;
+    private readonly envProbe = new EnvironmentProbe();
 
     constructor(
         private readonly agentLoop: AgentLoop,
@@ -71,9 +73,14 @@ export class GoalExecutionLoop {
         // Enriquece o entendimento do objetivo com memória semântica antes de planejar
         const q1Context = await this.contextualizer.contextualize(goal, 1, undefined);
 
+        // ── Item 10: Capabilities probe — injetar no contexto do planner ──
+        // O probe é cacheado 5 minutos; não adiciona latência em goals consecutivos.
+        const envCaps = await this.envProbe.probe();
+        const envContext = envCaps.summary ? `\n${envCaps.summary}` : '';
+
         // ── Planejamento inicial ───────────────────────────────────────────
         this.goalStore.update(goal.id, { status: 'replanning' });
-        const rawPlan = await this.planner.plan(goal, q1Context);
+        const rawPlan = await this.planner.plan(goal, (q1Context ?? '') + envContext);
 
         // ── Q2: Análise de Riscos (apenas planos complexos) ──────────────
         // Planos simples passam direto; Q2 só vale a latência em tarefas com
@@ -81,6 +88,12 @@ export class GoalExecutionLoop {
         let initialPlan = rawPlan;
         if (this.isComplexPlan(rawPlan)) {
             const riskReport = await this.riskAnalyzer.analyze(goal, rawPlan);
+            if (riskReport.blocked) {
+                log.warn(`[GoalLoop] Q2 BLOCKED goal=${goal.id}: ${riskReport.blockReason}`);
+                this.goalStore.setStatus(goal.id, 'failed');
+                return this.buildResult(goal, false, 0, 0,
+                    riskReport.blockReason ?? 'Plano inviável detectado antes da execução.');
+            }
             initialPlan = riskReport.planAdjusted ? riskReport.adjustedPlan : rawPlan;
             if (riskReport.risks.length > 0) {
                 log.info(`[GoalLoop] Q2 risks (initial): ${riskReport.risks.join(' | ')}`);
@@ -154,8 +167,13 @@ export class GoalExecutionLoop {
         // Q1: Contextualização — memória + feedback do ciclo anterior
         const q1Context = await this.contextualizer.contextualize(goal, cycleNumber, priorFeedback);
 
+        // Item 10: Capabilities probe — incluído em cada replan para que o planner
+        // saiba quais ferramentas estão (e não estão) disponíveis após possíveis instalações.
+        const envCaps = await this.envProbe.probe();
+        const envContext = envCaps.summary ? `\n${envCaps.summary}` : '';
+
         // Replan com contexto enriquecido
-        const rawPlan = await this.planner.replan(goal, blocker, q1Context);
+        const rawPlan = await this.planner.replan(goal, blocker, (q1Context ?? '') + envContext);
 
         // Q2: Análise de Riscos
         // Ativo quando: plano complexo (dependências entre steps)
@@ -163,6 +181,20 @@ export class GoalExecutionLoop {
         let finalPlan = rawPlan;
         if (forceQ2 || this.isComplexPlan(rawPlan)) {
             const riskReport = await this.riskAnalyzer.analyze(goal, rawPlan);
+            if (riskReport.blocked) {
+                // Replan também pode ser bloqueado — propaga como goal bloqueado para o loop
+                log.warn(`[GoalLoop] Q2 BLOCKED replan goal=${goal.id}: ${riskReport.blockReason}`);
+                this.goalStore.update(goal.id, {
+                    status: 'replanning',
+                    replanBudget: Math.max(0, goal.replanBudget - 1),
+                });
+                this.goalStore.addBlocker(goal.id, {
+                    kind: 'environment_limit',
+                    description: riskReport.blockReason ?? 'Plano bloqueado por análise de riscos',
+                    suggestedActions: ['Usar abordagem alternativa sem as ferramentas bloqueadas'],
+                    detectedAt: Date.now(),
+                });
+            }
             finalPlan = riskReport.planAdjusted ? riskReport.adjustedPlan : rawPlan;
             if (riskReport.risks.length > 0) {
                 log.info(`[GoalLoop] Q2 risks (replan cycle=${cycleNumber} forced=${forceQ2}): ${riskReport.risks.join(' | ')}`);
@@ -218,6 +250,39 @@ export class GoalExecutionLoop {
                 // LLM diz que o objetivo ainda não foi atingido
                 log.info(`[GoalLoop] goal=${currentGoal.id} not yet complete: ${validation.reason}`);
                 await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'replanning', message: validation.reason });
+
+                // ── Item 2: Deliverable Check ──────────────────────────────
+                // Antes de replanejar, verifica se já existe output no workspace.
+                // Evita o cenário onde 3 arquivos .pptx existem mas o sistema
+                // continua tentando regenerar em vez de enviar o que já tem.
+                if (!currentGoal.strategiesTried.includes('deliverable_check_done')) {
+                    const expectedExts = this.inferExpectedExtensions(currentGoal.userIntent);
+                    if (expectedExts.length > 0) {
+                        const foundFiles = await this.checkDeliverables(expectedExts);
+                        if (foundFiles.length > 0) {
+                            log.info(`[GoalLoop] deliverable_check: ${foundFiles.length} arquivo(s) no workspace — injetando send steps`);
+                            this.goalStore.addStrategyTried(currentGoal.id, 'deliverable_check_done');
+                            currentGoal = this.goalStore.getById(currentGoal.id)!;
+
+                            const sendSteps: PlanStep[] = foundFiles.slice(0, 2).map((filePath, i) => ({
+                                id: `send_del_${Date.now()}_${i}`,
+                                description: `Enviar ao usuário arquivo encontrado no workspace: ${filePath}`,
+                                toolName: 'send_document',
+                                toolArgs: { path: filePath },
+                                status: 'pending' as const,
+                                fallbackSteps: [],
+                            }));
+
+                            const updatedPlan: PlanStep[] = [
+                                ...currentGoal.currentPlan.filter(s => s.status === 'completed'),
+                                ...sendSteps,
+                            ];
+                            this.goalStore.update(currentGoal.id, { currentPlan: updatedPlan, status: 'executing' });
+                            currentGoal = this.goalStore.getById(currentGoal.id)!;
+                            continue;
+                        }
+                    }
+                }
 
                 if (currentGoal.replanBudget <= 0) {
                     this.goalStore.setStatus(currentGoal.id, 'failed');
@@ -571,6 +636,13 @@ Responda APENAS com JSON válido, sem texto adicional:
         );
         this.goalStore.update(goal.id, { currentPlan: updatedPlan });
 
+        // Item 10: Após instalação bem-sucedida de dependência, invalida o cache do
+        // EnvironmentProbe para que o próximo replan detecte a ferramenta recém-instalada.
+        if (step.id.startsWith('install_')) {
+            EnvironmentProbe.invalidateCache();
+            log.info(`[GoalLoop] dep install step=${step.id} completed — envProbe cache invalidated`);
+        }
+
         // Registra attempt de sucesso para que buildResult() encontre o output real
         // (sem isso, resumeGoal() marca o step como concluído mas goal.attempts fica vazio
         // e buildResult() cai no fallback genérico "Objetivo concluído.")
@@ -662,6 +734,47 @@ OU
         } catch (err) {
             log.warn('[GoalLoop] validation error — assuming achieved:', String(err));
             return { achieved: true };
+        }
+    }
+
+    // ── Deliverable Check helpers (Item 2) ───────────────────────────────────
+
+    /**
+     * Infere extensões esperadas a partir das palavras-chave do userIntent.
+     * Retorna lista vazia se não há tipo de arquivo identificável.
+     */
+    private inferExpectedExtensions(userIntent: string): string[] {
+        const lower = userIntent.toLowerCase();
+        const exts: string[] = [];
+        if (/pptx|apresenta|slides?|powerpoint/i.test(lower))  exts.push('.pptx', '.ppt');
+        if (/pdf/i.test(lower))                                 exts.push('.pdf');
+        if (/docx?|word|documento/i.test(lower))               exts.push('.docx', '.doc');
+        if (/xlsx?|excel|planilha/i.test(lower))               exts.push('.xlsx', '.xls');
+        if (/mp4|vídeo|video/i.test(lower))                    exts.push('.mp4', '.avi', '.mkv');
+        if (/mp3|áudio|audio/i.test(lower))                    exts.push('.mp3', '.ogg', '.wav');
+        if (/html|página|pagina/i.test(lower))                 exts.push('.html');
+        if (/zip|comprim/i.test(lower))                        exts.push('.zip');
+        if (/png|jpg|jpeg|imagem|image/i.test(lower))          exts.push('.png', '.jpg', '.jpeg');
+        return exts;
+    }
+
+    /**
+     * Busca arquivos com as extensões esperadas em diretórios comuns do workspace.
+     * Usa exec_command com find; retorna lista de caminhos absolutos (até 5).
+     */
+    private async checkDeliverables(extensions: string[]): Promise<string[]> {
+        const execTool = this.toolRegistry.get('exec_command');
+        if (!execTool) return [];
+
+        const nameTests = extensions.map(e => `-name "*${e}"`).join(' -o ');
+        const cmd = `find /tmp /workspace . -maxdepth 4 \\( ${nameTests} \\) -newer /proc/1 2>/dev/null | head -5`;
+
+        try {
+            const result = await execTool.execute({ command: cmd });
+            if (!result.success || !result.output) return [];
+            return result.output.split('\n').map((l: string) => l.trim()).filter(Boolean);
+        } catch {
+            return [];
         }
     }
 

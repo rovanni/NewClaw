@@ -99,6 +99,16 @@ export class GoalOrchestrator {
             return this.agentLoop.process(conversationId, message, userId, context);
         }
 
+        // ── Item 3: Ambiguity Detection — perguntar antes de criar goal ──────
+        // Objetivos ambíguos ("essa versão não consigo editar", "não está funcionando")
+        // viram perguntas de clarificação em vez de goals, evitando ciclos de replan
+        // que nunca convergem por falta de contexto.
+        if (classification.isAmbiguous) {
+            log.info(`[GoalOrchestrator] goal ambiguous — returning clarification question`);
+            return classification.clarificationQuestion
+                ?? 'Para ajudar melhor, pode dar mais detalhes sobre o que precisa exatamente?';
+        }
+
         log.info(`[GoalOrchestrator] goal confidence=${classification.confidence} message="${message.slice(0, 80)}"`);
 
         // ── Abandonar goal anterior ───────────────────────────────────────

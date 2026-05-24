@@ -46,6 +46,10 @@ export interface RiskReport {
     risks: string[];
     adjustedPlan: PlanStep[];
     planAdjusted: boolean;
+    /** true quando o plano é inviável — GoalExecutionLoop deve abortar em vez de executar */
+    blocked: boolean;
+    /** Motivo do bloqueio (injetado no próximo replan como contexto) */
+    blockReason?: string;
 }
 
 export class RiskAnalyzer {
@@ -57,10 +61,29 @@ export class RiskAnalyzer {
 
     async analyze(goal: Goal, plan: PlanStep[]): Promise<RiskReport> {
         if (plan.length === 0) {
-            return { risks: [], adjustedPlan: plan, planAdjusted: false };
+            return { risks: [], adjustedPlan: plan, planAdjusted: false, blocked: false };
         }
 
         const risks: string[] = [];
+
+        // ── 0. Constraints duras do ReflectionMemory (bloqueantes) ───────────
+        // Ferramentas com ≥90% de falha recente viram proibições absolutas.
+        // Se o plano viola uma constraint, bloqueamos antes de qualquer execução.
+        const constraints = this.reflectionMemory.buildConstraints(goal.objective.slice(0, 150));
+        if (constraints.length > 0) {
+            for (const c of constraints) risks.push(`[CONSTRAINT] ${c}`);
+
+            if (this.detectConstraintViolation(plan, constraints)) {
+                log.warn(`[RiskAnalyzer] goal=${goal.id} BLOCKED by hard constraint: ${constraints[0]}`);
+                return {
+                    risks,
+                    adjustedPlan: plan,
+                    planAdjusted: false,
+                    blocked: true,
+                    blockReason: constraints[0],
+                };
+            }
+        }
 
         // ── 1. Verificação rápida sem LLM ────────────────────────────────────
         for (const step of plan) {
@@ -78,15 +101,13 @@ export class RiskAnalyzer {
         }
 
         // ── 1b. Detecção proativa de dependências em exec_command ────────────
-        // Extrai o primeiro token do comando e verifica se é uma dep conhecida.
         for (const step of plan) {
             if (step.toolName !== 'exec_command') continue;
             const cmdValue = String(step.toolArgs?.command ?? step.toolArgs?.cmd ?? '');
             if (!cmdValue) continue;
 
-            // Primeiro executável do comando (ignora sudo/env)
             const tokens = cmdValue.trim().split(/\s+/).filter(t => t !== 'sudo' && t !== 'env' && !t.includes('='));
-            const firstToken = (tokens[0] ?? '').toLowerCase().replace(/^.*\//, ''); // basename
+            const firstToken = (tokens[0] ?? '').toLowerCase().replace(/^.*\//, '');
 
             const pkg = KNOWN_SYSTEM_DEPS[firstToken];
             if (pkg) {
@@ -101,11 +122,40 @@ export class RiskAnalyzer {
 
         const finalPlan = llmResult.planAdjusted ? llmResult.adjustedPlan : plan;
 
+        // ── 3. Verificar se plano final tem steps viáveis ────────────────────
+        // Se TODAS as tools do plano são inválidas (hallucinations), bloqueamos.
+        const toolSteps = finalPlan.filter(s => s.toolName);
+        const invalidTools = toolSteps.filter(s => s.toolName && !this.toolRegistry.get(s.toolName));
+        if (toolSteps.length > 0 && invalidTools.length === toolSteps.length) {
+            const names = invalidTools.map(s => s.toolName).join(', ');
+            const blockReason = `Plano contém apenas tools inválidas: ${names}`;
+            log.warn(`[RiskAnalyzer] goal=${goal.id} BLOCKED — no viable tools`);
+            return { risks, adjustedPlan: finalPlan, planAdjusted: llmResult.planAdjusted, blocked: true, blockReason };
+        }
+
         if (risks.length > 0) {
             log.info(`[RiskAnalyzer] goal=${goal.id} risks=${risks.length} planAdjusted=${llmResult.planAdjusted}`);
         }
 
-        return { risks, adjustedPlan: finalPlan, planAdjusted: llmResult.planAdjusted };
+        return { risks, adjustedPlan: finalPlan, planAdjusted: llmResult.planAdjusted, blocked: false };
+    }
+
+    /**
+     * Verifica se algum step do plano viola uma constraint dura do ReflectionMemory.
+     * Detecta pip install, python3 -m venv, e tools com 100% de falha histórica.
+     */
+    private detectConstraintViolation(plan: PlanStep[], constraints: string[]): boolean {
+        for (const step of plan) {
+            const toolName = step.toolName ?? '';
+            const cmdValue = String(step.toolArgs?.command ?? step.toolArgs?.cmd ?? '');
+
+            for (const constraint of constraints) {
+                if (toolName && constraint.includes(`'${toolName}'`)) return true;
+                if (/pip install/i.test(constraint) && /pip\s+install/i.test(cmdValue)) return true;
+                if (/python3 -m venv/i.test(constraint) && /python3\s+-m\s+venv/i.test(cmdValue)) return true;
+            }
+        }
+        return false;
     }
 
     private async reviewPlanWithLLM(goal: Goal, plan: PlanStep[]): Promise<{

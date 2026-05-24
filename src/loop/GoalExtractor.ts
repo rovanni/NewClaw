@@ -83,18 +83,23 @@ export class GoalExtractor {
 
     /**
      * Estágio 2: classificação via LLM (apenas quando heurística falhou).
-     * Prompt minimalista para minimizar tokens e latência.
+     * Detecta também ambiguidade de intenção para pedir clarificação antes de criar o goal.
      */
     private async llmClassify(message: string, _context: ChannelContext): Promise<GoalClassification> {
-        const prompt = `Classifique se a mensagem abaixo requer execução de tarefas com ferramentas (is_goal=true) ou é conversa simples/pergunta (is_goal=false).
+        const prompt = `Classifique a mensagem abaixo em duas dimensões:
+1. É um goal (requer execução de tarefas com ferramentas)?
+2. Se for goal, a intenção é AMBÍGUA (não está claro qual arquivo, formato ou ação específica)?
 
 Mensagem: "${message.slice(0, 300)}"
 
 Responda APENAS com JSON válido, sem markdown:
-{"is_goal": boolean, "confidence": 0.0-1.0, "objective": "descrição concisa se for goal", "required_tools": ["tool1"], "reason": "motivo"}
+{"is_goal": boolean, "confidence": 0.0-1.0, "objective": "descrição se for goal", "required_tools": ["tool1"], "reason": "motivo", "is_ambiguous": boolean, "clarification_question": "pergunta ao usuário se is_ambiguous=true"}
 
-Exemplos de is_goal=true: "resumir esse PDF", "criar script Python", "instalar dependência", "editar arquivo config"
-Exemplos de is_goal=false: "o que é machine learning?", "oi tudo bem?", "obrigado", "como você funciona?"`;
+Regras:
+- is_ambiguous=true apenas quando is_goal=true e a intenção é genuinamente vaga
+- Exemplos is_ambiguous=true: "essa versão não consigo editar" (qual arquivo?), "não está funcionando" (o quê?), "pode corrigir?" (o quê?)
+- Exemplos is_ambiguous=false: "criar apresentação sobre Python com 10 slides", "resumir o PDF que enviei"
+- Exemplos is_goal=false: "o que é machine learning?", "oi tudo bem?", "obrigado"`;
 
         try {
             const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
@@ -102,7 +107,7 @@ Exemplos de is_goal=false: "o que é machine learning?", "oi tudo bem?", "obriga
                 messages,
                 undefined,
                 undefined,
-                15_000 // 15s timeout para classificação
+                15_000
             );
 
             if (result.status !== 'success') {
@@ -111,7 +116,7 @@ Exemplos de is_goal=false: "o que é machine learning?", "oi tudo bem?", "obriga
             }
 
             const parsed = this.parseClassificationResponse(result.content);
-            log.info(`[GoalExtractor] LLM classified: isGoal=${parsed.isGoal} confidence=${parsed.confidence}`);
+            log.info(`[GoalExtractor] LLM classified: isGoal=${parsed.isGoal} isAmbiguous=${parsed.isAmbiguous} confidence=${parsed.confidence}`);
             return parsed;
         } catch (err) {
             log.warn('[GoalExtractor] LLM classify error:', String(err));
@@ -121,7 +126,6 @@ Exemplos de is_goal=false: "o que é machine learning?", "oi tudo bem?", "obriga
 
     private parseClassificationResponse(content: string): GoalClassification {
         try {
-            // Remove markdown code blocks se presentes
             const cleaned = content.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
             const parsed = JSON.parse(cleaned);
             return {
@@ -130,6 +134,8 @@ Exemplos de is_goal=false: "o que é machine learning?", "oi tudo bem?", "obriga
                 objective: parsed.objective || undefined,
                 requiredTools: Array.isArray(parsed.required_tools) ? parsed.required_tools : [],
                 reason: parsed.reason || undefined,
+                isAmbiguous: Boolean(parsed.is_ambiguous),
+                clarificationQuestion: parsed.clarification_question || undefined,
             };
         } catch {
             return { isGoal: false, confidence: 0.5, reason: 'parse_error' };
