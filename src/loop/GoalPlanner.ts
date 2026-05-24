@@ -21,7 +21,7 @@ const log = createLogger('GoalPlanner');
 
 // ── Prompt templates ─────────────────────────────────────────────────────────
 
-function buildPlanPrompt(goal: Goal, skillContext?: string, runtimeContext?: string): string {
+function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: string, runtimeContext?: string): string {
     const skillBlock = skillContext
         ? `\nINSTRUÇÕES DE SKILL ATIVAS (siga rigorosamente):\n${skillContext}\n`
         : '';
@@ -34,7 +34,7 @@ function buildPlanPrompt(goal: Goal, skillContext?: string, runtimeContext?: str
 OBJETIVO: ${goal.objective}
 INTENÇÃO ORIGINAL: ${goal.userIntent}
 ${skillBlock}${contextBlock}
-Ferramentas disponíveis: exec_command, read, write, edit, web_search, web_navigate, memory_search, read_document, list_workspace, send_document, send_audio
+Ferramentas disponíveis (use EXATAMENTE esses nomes): ${availableTools.join(', ')}
 
 Responda APENAS com JSON válido (sem markdown):
 {
@@ -54,6 +54,7 @@ Regras:
 - Máximo 4 steps por plano
 - Cada step usa UMA ferramenta
 - toolArgs deve ser um objeto com os argumentos da ferramenta
+- Use APENAS os nomes de ferramenta listados acima — não invente nomes
 - Se não precisar de ferramenta específica, omita toolName e toolArgs`.trim();
 }
 
@@ -100,6 +101,24 @@ Se o blocker mencionar PEP 668 ou 'externally-managed-environment', use SEMPRE a
   exec_command: "python3 -m venv /tmp/venv && source /tmp/venv/bin/activate && pip install <pacote> && python3 script.py"`.trim();
 }
 
+// ── Aliases de ferramentas: nomes que LLMs inventam → nome real no ToolRegistry ──
+const TOOL_ALIASES: Record<string, string> = {
+    provide_file: 'send_document',
+    deliver_file: 'send_document',
+    download_file: 'send_document',
+    upload_file: 'send_document',
+    send_file: 'send_document',
+    file_send: 'send_document',
+    send: 'send_document',
+    run_command: 'exec_command',
+    execute: 'exec_command',
+    execute_command: 'exec_command',
+    shell: 'exec_command',
+    bash: 'exec_command',
+    search_web: 'web_search',
+    browse: 'web_navigate',
+};
+
 // ── GoalPlanner ───────────────────────────────────────────────────────────────
 
 export class GoalPlanner {
@@ -118,7 +137,8 @@ export class GoalPlanner {
     async plan(goal: Goal, runtimeContext?: string): Promise<PlanStep[]> {
         log.info(`[GoalPlanner] planning goal=${goal.id}`);
 
-        const messages: LLMMessage[] = [{ role: 'user', content: buildPlanPrompt(goal, this.skillContext, runtimeContext) }];
+        const availableTools = ToolRegistry.getEnabled().map(t => t.name);
+        const messages: LLMMessage[] = [{ role: 'user', content: buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext) }];
 
         try {
             const result = await this.providerFactory.chatWithFallback(
@@ -200,15 +220,20 @@ export class GoalPlanner {
             const steps: PlanStep[] = rawSteps.slice(0, 4).map((s: Record<string, unknown>, i: number) => {
                 const rawToolName = s.toolName ? String(s.toolName) : undefined;
 
-                // Valida se a tool realmente existe no ToolRegistry.
-                // Se não existe, o step vai para o AgentLoop diretamente (sem toolName),
-                // evitando que o GoalEvaluator classifique como missing_tool e esgote o budget.
-                const resolvedTool = rawToolName && ToolRegistry.get(rawToolName)
-                    ? rawToolName
+                // Resolve alias antes de validar (ex: provide_file → send_document)
+                const canonicalName = rawToolName
+                    ? (TOOL_ALIASES[rawToolName] ?? rawToolName)
+                    : undefined;
+
+                // Valida se a tool existe no ToolRegistry.
+                const resolvedTool = canonicalName && ToolRegistry.get(canonicalName)
+                    ? canonicalName
                     : undefined;
 
                 if (rawToolName && !resolvedTool) {
                     log.warn(`[GoalPlanner] tool '${rawToolName}' não existe no ToolRegistry — step será tratado sem tool`);
+                } else if (canonicalName && canonicalName !== rawToolName) {
+                    log.info(`[GoalPlanner] tool alias '${rawToolName}' → '${canonicalName}'`);
                 }
 
                 return {

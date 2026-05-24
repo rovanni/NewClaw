@@ -107,10 +107,16 @@ export class GoalOrchestrator {
         const currentActiveGoal = this.goalStore.getActiveBySession(sessionKey);
         if (currentActiveGoal && !['completed', 'failed', 'abandoned'].includes(currentActiveGoal.status)) {
             log.info(`[GoalOrchestrator] abandoning goal=${currentActiveGoal.id}`);
+            if (currentActiveGoal.status === 'blocked' && currentActiveGoal.pendingTxnId) {
+                log.warn(`[GoalOrchestrator] goal=${currentActiveGoal.id} was awaiting auth — abandoning due to new request`);
+            }
             this.goalStore.setStatus(currentActiveGoal.id, 'abandoned');
         }
 
         // ── Criar novo goal ───────────────────────────────────────────────
+        // Aviso inline: se havia goal com auth pendente, será anexado à resposta final
+        const abandonedAuthPending = currentActiveGoal?.status === 'blocked' && !!currentActiveGoal.pendingTxnId;
+
         const goal = this.goalStore.create({
             sessionKey,
             conversationId,
@@ -158,6 +164,9 @@ export class GoalOrchestrator {
 
         // Retorna o output final como texto
         if (result.success) {
+            if (abandonedAuthPending) {
+                return `⚠️ *Atenção:* havia uma solicitação pendente de autorização que foi cancelada ao iniciar esta nova tarefa.\n\n${result.finalOutput}`;
+            }
             return result.finalOutput;
         }
 
