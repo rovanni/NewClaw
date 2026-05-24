@@ -37,7 +37,7 @@ import { ObserverValidator } from './ObserverValidator';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ProactiveRecovery } from './ProactiveRecovery';
 import type { WorkflowEngine } from './WorkflowEngine';
-import type { ContinuationContext, WorkflowStepResult } from './WorkflowTypes';
+import type { ContinuationContext, WorkflowStepResult, AuthDecision } from './WorkflowTypes';
 
 import {
     ToolResult, ToolExecutor, LoopMetrics, ChannelContext,
@@ -270,10 +270,14 @@ export class AgentLoop {
                 : failTask
             : 'Informe que a ação foi cancelada e ofereça uma alternativa sem precisar de autorização, se disponível.';
 
+        // Merge into a single system message — some Ollama models discard all but the first
+        // system message, causing the toolResult JSON to be invisible to the LLM.
         const messages: LLMMessage[] = [
-            { role: 'system', content: systemInstruction },
-            { role: 'system', content: '```json\n' + JSON.stringify(contextPayload, null, 2) + '\n```' },
-            { role: 'user',   content: task },
+            {
+                role: 'system',
+                content: `${systemInstruction}\n\nContexto:\n\`\`\`json\n${JSON.stringify(contextPayload, null, 2)}\n\`\`\``,
+            },
+            { role: 'user', content: task },
         ];
 
         const profile = this.profileRegistry.getProfileByCategory('chat');
@@ -755,6 +759,33 @@ export class AgentLoop {
         // Fast-paths must not fire when there is a pending auth action — the auth check handles those turns.
         const hasPendingAuth = !!this.authManager.getPending(conversationId);
 
+        // ── Text-based auth approval fallback ───────────────────────────────
+        // When buttons fail to render (e.g. Telegram HTML parse errors), the user may type
+        // "sim" or "cancelar" as plain text. Intercept these before the LLM loop to avoid
+        // the model misinterpreting the response and generating a second auth request.
+        if (hasPendingAuth && this.workflowEngine) {
+            const trimmed = userText.trim();
+            const isApproval = /^(sim|sim[,.]?\s*(pode|ok|autorizado|confirmado|faça|faz)|yes|ok|pode|autoriza)\b/i.test(trimmed) && trimmed.length < 40;
+            const isRejection = /^(não|nao|n\b|cancel[ar]?|cancela|não\s+pode|nope|recusa)\b/i.test(trimmed) && trimmed.length < 40;
+
+            if (isApproval || isRejection) {
+                const pending = this.authManager.getPending(conversationId);
+                if (pending?.txnId) {
+                    const decision: AuthDecision = isApproval ? 'approved' : 'rejected';
+                    log.info(`[${this.ts()}] [AUTH-TEXT] Text-based ${decision} for txn=${pending.txnId}`);
+                    const wfResult = await this.workflowEngine.resume(
+                        pending.txnId,
+                        decision,
+                        (name) => this.tools.get(name)
+                    );
+                    if (wfResult) {
+                        move('FINAL_READY', { decision, txnId: pending.txnId });
+                        return this.resumeFromWorkflow(conversationId, wfResult);
+                    }
+                }
+            }
+        }
+
         if (!hasPendingAuth && intentDecision.terminalAction && intentDecision.executionMode === 'direct' && intentDecision.category === 'greeting') {
             log.info(`[${this.ts()}] [FAST-PATH] Greeting detected — skipping LLM`);
             move('FINAL_READY');
@@ -1104,7 +1135,8 @@ export class AgentLoop {
                             }
                             // Registra no authManager para: (1) guardar hasPendingAuth nos fast-paths,
                             // (2) permitir removePending() no resumeFromWorkflow() após resolução.
-                            this.authManager.addPending(conversationId, toolName, toolCall.arguments);
+                            // txnId é armazenado para habilitar aprovação por texto ("sim") como fallback.
+                            this.authManager.addPending(conversationId, toolName, toolCall.arguments, txnId);
 
                             move('AUTH_REQUIRED', { step: stepCount, tool: toolName, txnId });
                             const authReq = this.authManager.formatRequest(toolName, toolCall.arguments, txnId);

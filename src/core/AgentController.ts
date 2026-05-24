@@ -267,6 +267,7 @@ export class AgentController {
         // sem passar pelo MessageBus nem pelo pipeline LLM.
         this.telegramAdapter.workflowCallback = async (userId, txnId, decision, rawCtx) => {
             log.info(`[WF] callback userId=${userId} txn=${txnId} decision=${decision}`);
+            const sessionKey = { channel: 'telegram' as const, userId };
 
             const result = await this.workflowEngine.resume(
                 txnId,
@@ -287,11 +288,17 @@ export class AgentController {
             if (pendingGoal) {
                 const responseText = await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
                 await this.telegramAdapter.send({ text: responseText, format: 'markdown' }, rawCtx);
+                this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(err =>
+                    log.error('[WF] record_auth_response_failed', err)
+                );
                 return;
             }
 
             const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
             await this.telegramAdapter.send({ text: responseText, format: 'markdown' }, rawCtx);
+            this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(err =>
+                log.error('[WF] record_workflow_response_failed', err)
+            );
         };
 
         const { tmpDir } = config;
@@ -317,6 +324,7 @@ export class AgentController {
             this.messageBus.registerAdapter(this.discordAdapter);
             this.discordAdapter.workflowCallback = async (userId, txnId, decision, rawCtx) => {
                 log.info(`[WF] discord callback userId=${userId} txn=${txnId} decision=${decision}`);
+                const sessionKey = { channel: 'discord' as const, userId };
                 const result = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
                 if (!result) {
                     await this.discordAdapter!.send(
@@ -329,10 +337,12 @@ export class AgentController {
                 if (pendingGoal) {
                     const responseText = await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
                     await this.discordAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
+                    this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
                     return;
                 }
                 const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
                 await this.discordAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
+                this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
             };
             log.info('Discord adapter registered');
         }
@@ -348,6 +358,7 @@ export class AgentController {
             this.messageBus.registerAdapter(this.whatsAppAdapter);
             this.whatsAppAdapter.workflowCallback = async (userId, txnId, decision, rawCtx) => {
                 log.info(`[WF] whatsapp callback userId=${userId} txn=${txnId} decision=${decision}`);
+                const sessionKey = { channel: 'whatsapp' as const, userId };
                 const result = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
                 if (!result) {
                     await this.whatsAppAdapter!.send(
@@ -360,10 +371,12 @@ export class AgentController {
                 if (pendingGoal) {
                     const responseText = await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
                     await this.whatsAppAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
+                    this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
                     return;
                 }
                 const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
                 await this.whatsAppAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
+                this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
             };
             log.info('WhatsApp adapter registered');
         }
@@ -379,6 +392,7 @@ export class AgentController {
             this.messageBus.registerAdapter(this.signalAdapter);
             this.signalAdapter.workflowCallback = async (userId, txnId, decision, rawCtx) => {
                 log.info(`[WF] signal callback userId=${userId} txn=${txnId} decision=${decision}`);
+                const sessionKey = { channel: 'signal' as const, userId };
                 const result = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
                 if (!result) {
                     await this.signalAdapter!.send(
@@ -391,10 +405,12 @@ export class AgentController {
                 if (pendingGoal) {
                     const responseText = await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
                     await this.signalAdapter!.send({ text: responseText, format: 'plain' }, rawCtx);
+                    this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
                     return;
                 }
                 const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
                 await this.signalAdapter!.send({ text: responseText, format: 'plain' }, rawCtx);
+                this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
             };
             log.info('Signal adapter registered');
         }

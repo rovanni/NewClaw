@@ -101,9 +101,12 @@ export class GoalOrchestrator {
         log.info(`[GoalOrchestrator] goal confidence=${classification.confidence} message="${message.slice(0, 80)}"`);
 
         // ── Abandonar goal anterior ───────────────────────────────────────
-        if (activeGoal && !['completed', 'failed', 'abandoned'].includes(activeGoal.status)) {
-            log.info(`[GoalOrchestrator] abandoning goal=${activeGoal.id}`);
-            this.goalStore.setStatus(activeGoal.id, 'abandoned');
+        // Re-check after the async classify() — another concurrent request may have created
+        // a goal in the gap between the first getActiveBySession() and now.
+        const currentActiveGoal = this.goalStore.getActiveBySession(sessionKey);
+        if (currentActiveGoal && !['completed', 'failed', 'abandoned'].includes(currentActiveGoal.status)) {
+            log.info(`[GoalOrchestrator] abandoning goal=${currentActiveGoal.id}`);
+            this.goalStore.setStatus(currentActiveGoal.id, 'abandoned');
         }
 
         // ── Criar novo goal ───────────────────────────────────────────────

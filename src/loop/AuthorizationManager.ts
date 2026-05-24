@@ -14,6 +14,7 @@ export interface PendingAction {
     toolName: string;
     arguments: Record<string, any>;
     timestamp: number;
+    txnId?: string;
 }
 
 export interface AuthRequest {
@@ -25,13 +26,14 @@ export class AuthorizationManager {
     private pendingActions = new Map<string, PendingAction>();
 
     /** Add a tool call to the pending queue */
-    addPending(conversationId: string, toolName: string, args: Record<string, any>): void {
+    addPending(conversationId: string, toolName: string, args: Record<string, any>, txnId?: string): void {
         this.pendingActions.set(conversationId, {
             toolName,
             arguments: args,
             timestamp: Date.now(),
+            txnId,
         });
-        log.info(`[AUTH] Action pending for ${conversationId}: ${toolName}`);
+        log.info(`[AUTH] Action pending for ${conversationId}: ${toolName}${txnId ? ` txn=${txnId}` : ''}`);
     }
 
     /** Get the pending action for a conversation */

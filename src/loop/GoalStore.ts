@@ -155,7 +155,11 @@ export class GoalStore {
     }
 
     getByTxnId(txnId: string): Goal | null {
-        const row = this.db.prepare('SELECT * FROM goals WHERE pending_txn_id = ?').get(txnId) as GoalRow | undefined;
+        const row = this.db.prepare(`
+            SELECT * FROM goals
+            WHERE pending_txn_id = ?
+            AND status IN ('active', 'executing', 'blocked', 'replanning')
+        `).get(txnId) as GoalRow | undefined;
         return row ? this.rowToGoal(row) : null;
     }
 

@@ -17,8 +17,8 @@ export function mdToTelegramHTML(md: string): string {
         return `<pre>${escapeHtml(code.trim())}</pre>`;
     });
 
-    // 2. Inline code (`code`) → <code>
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // 2. Inline code (`code`) → <code>  (content must be HTML-escaped to avoid parser rejection)
+    html = html.replace(/`([^`]+)`/g, (_m, code) => `<code>${escapeHtml(code)}</code>`);
 
     // 3. Bold (**text** or __text__) → <b>
     html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
