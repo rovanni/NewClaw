@@ -21,12 +21,16 @@ const log = createLogger('GoalPlanner');
 
 // ── Prompt templates ─────────────────────────────────────────────────────────
 
-function buildPlanPrompt(goal: Goal): string {
+function buildPlanPrompt(goal: Goal, skillContext?: string): string {
+    const skillBlock = skillContext
+        ? `\nINSTRUÇÕES DE SKILL ATIVAS (siga rigorosamente):\n${skillContext}\n`
+        : '';
+
     return `Você é um planejador de tarefas. Decomponha o objetivo abaixo em steps executáveis com ferramentas.
 
 OBJETIVO: ${goal.objective}
 INTENÇÃO ORIGINAL: ${goal.userIntent}
-
+${skillBlock}
 Ferramentas disponíveis: exec_command, read, write, edit, web_search, web_navigate, memory_search, read_document, list_workspace
 
 Responda APENAS com JSON válido (sem markdown):
@@ -90,15 +94,22 @@ Máximo 3 steps. Se o blocker for 'missing_tool', inclua step de instalação co
 // ── GoalPlanner ───────────────────────────────────────────────────────────────
 
 export class GoalPlanner {
+    private skillContext: string | undefined;
+
     constructor(
         private readonly providerFactory: ProviderFactory,
         private readonly reflectionMemory: ReflectionMemory,
     ) {}
 
+    /** Injeta skill context que será incluído no prompt de planejamento. */
+    setSkillContext(context: string): void {
+        this.skillContext = context || undefined;
+    }
+
     async plan(goal: Goal): Promise<PlanStep[]> {
         log.info(`[GoalPlanner] planning goal=${goal.id}`);
 
-        const messages: LLMMessage[] = [{ role: 'user', content: buildPlanPrompt(goal) }];
+        const messages: LLMMessage[] = [{ role: 'user', content: buildPlanPrompt(goal, this.skillContext) }];
 
         try {
             const result = await this.providerFactory.chatWithFallback(

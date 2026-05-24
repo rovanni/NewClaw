@@ -127,6 +127,13 @@ export class GoalOrchestrator {
 
         log.info(`[GoalOrchestrator] executing goal=${goal.id}`);
 
+        // ── Injetar skill context no planner ──────────────────────────────
+        const skillContext = this.agentLoop.getSkillContextForQuery(message);
+        if (skillContext) {
+            log.info(`[GoalOrchestrator] skill context injected into planner (${skillContext.length} chars)`);
+            this.executionLoop.setSkillContext(skillContext);
+        }
+
         // ── Executar via GoalExecutionLoop ────────────────────────────────
         const result = await this.executionLoop.executeGoal(
             goal,

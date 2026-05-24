@@ -68,22 +68,24 @@ export class ExecCommandTool implements ToolExecutor {
         try {
             const output = await new Promise<string>((resolve, reject) => {
                 exec(command, execOptions, (error, stdout, stderr) => {
+                    const combined = (stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : '');
                     if (error) {
-                        const partialOutput = (stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : '');
-                        if (partialOutput.trim()) {
-                            resolve(partialOutput + '\n[exit code: ' + (error.code || 'unknown') + ']');
-                        } else {
-                            reject(error);
-                        }
+                        // Non-zero exit is always a failure — reject so the caller sees success: false.
+                        // Preserve stdout/stderr in combinedOutput so GoalEvaluator can classify it.
+                        const exitCode = error.code ?? 'unknown';
+                        const fullOutput = (combined.trim() || error.message) + `\n[exit code: ${exitCode}]`;
+                        reject(Object.assign(error, { combinedOutput: fullOutput.trim() }));
                     } else {
-                        resolve(stdout + (stderr ? '\n' + stderr : ''));
+                        resolve(combined);
                     }
                 });
             });
 
-            return { success: true, output: output.trim().slice(0, 16000) }; // Aumentado limite de output
-        } catch (error) {
-            return { success: false, output: '', error: errorMessage(error) };
+            return { success: true, output: output.trim().slice(0, 16000) };
+        } catch (err) {
+            const e = err as NodeJS.ErrnoException & { combinedOutput?: string };
+            const msg = (e.combinedOutput || errorMessage(err)).slice(0, 16000);
+            return { success: false, output: msg, error: msg };
         }
     }
 }

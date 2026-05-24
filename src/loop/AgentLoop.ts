@@ -375,6 +375,19 @@ export class AgentLoop {
         return this.run(conversationId, userText, conversationId, context);
     }
 
+    /**
+     * Returns the skill context relevant to the given query text.
+     * Used by GoalOrchestrator to inject skill instructions into GoalPlanner.
+     */
+    public getSkillContextForQuery(query: string): string {
+        const skills = this.skillLoader.loadAll();
+        const matched = skills.filter(s =>
+            s.triggers?.some(t => query.toLowerCase().includes(t.toLowerCase()))
+        );
+        if (matched.length === 0) return '';
+        return matched.map(s => `### SKILL: ${s.name}\n${s.globalContent || s.content}`).join('\n\n');
+    }
+
     public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string | ProcessedResult> {
         this.cognitiveWorkspace.reset();
         try {

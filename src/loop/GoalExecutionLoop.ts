@@ -42,6 +42,11 @@ export class GoalExecutionLoop {
         private readonly toolRegistry: typeof ToolRegistry,
     ) {}
 
+    /** Forwards skill context to the planner before planning begins. */
+    setSkillContext(context: string): void {
+        this.planner.setSkillContext(context);
+    }
+
     // ── Ponto de entrada principal ────────────────────────────────────────────
 
     async executeGoal(

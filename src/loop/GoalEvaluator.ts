@@ -29,9 +29,9 @@ interface ErrorPattern {
 }
 
 const ERROR_PATTERNS: ErrorPattern[] = [
-    // Ferramenta não encontrada
+    // Ferramenta não encontrada (inclui exit code 127 = command not found no Unix)
     {
-        pattern: /command not found|not found|no such file|ENOENT|which: no|cannot find/i,
+        pattern: /command not found|not found|no such file|ENOENT|which: no|cannot find|\[exit code: 127\]/i,
         kind: 'missing_tool',
         description: (_, tool) => `Ferramenta '${tool}' não encontrada no sistema`,
         suggestedActions: [
