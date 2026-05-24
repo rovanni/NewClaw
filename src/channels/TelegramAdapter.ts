@@ -337,16 +337,30 @@ export class TelegramAdapter implements ChannelAdapter {
             }
 
             const text = ctx.message!.text!;
+
+            // Capture reply_to_message: when user quotes/replies to a previous message,
+            // prepend the quoted content so the model has full context without needing memory.
+            const replyToText = ctx.message!.reply_to_message?.text;
+            const effectiveText = replyToText && replyToText !== text
+                ? `[Contexto citado]:\n${replyToText}\n\n${text}`
+                : text;
+
+            if (replyToText) {
+                log.info('reply_to_captured', `userId=${userId} quotedLen=${replyToText.length}`);
+            }
+
             const msg: NormalizedMessage = {
                 messageId: ctx.message!.message_id.toString(),
                 channel: 'telegram',
                 userId,
                 userName: ctx.from!.first_name,
                 type: text.startsWith('/') ? 'command' : 'text',
-                text,
+                text: effectiveText,
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
-                metadata: {},
+                metadata: {
+                    ...(replyToText ? { quotedText: replyToText } : {}),
+                },
             };
 
             if (this.bus) {
