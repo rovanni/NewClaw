@@ -52,6 +52,7 @@ export class GoalOrchestrator {
             planner,
             reflectionMemory,
             ToolRegistry,
+            providerFactory,
         );
     }
 
@@ -167,29 +168,38 @@ export class GoalOrchestrator {
     }
 
     /**
-     * Retoma um goal bloqueado após auth aprovada.
-     * Chamado pelo AgentController após WorkflowEngine.resume().
+     * Retoma um goal bloqueado após auth aprovada via WorkflowEngine.
+     * Marca o step pendente como concluído com o output do workflow e continua
+     * o loop de execução a partir do próximo step, sem replanejar.
      */
-    async resumeFromAuth(txnId: string, responseText: string): Promise<void> {
+    async resumeFromAuth(txnId: string, workflowOutput: string): Promise<string> {
         const goal = this.goalStore.getByTxnId(txnId);
         if (!goal) {
             log.warn(`[GoalOrchestrator] resumeFromAuth: no goal for txn=${txnId}`);
-            return;
+            return 'Autorização processada.';
         }
 
-        log.info(`[GoalOrchestrator] resuming goal=${goal.id} after auth`);
-        this.goalStore.update(goal.id, { status: 'active', pendingTxnId: undefined });
-        this.goalStore.addAttempt(goal.id, {
-            id: `att_${Date.now()}`,
-            planStepId: 'auth_resume',
-            toolName: 'workflow_auth',
-            args: { txnId },
-            result: 'success',
-            output: responseText.slice(0, 200),
-            durationMs: 0,
-            executedAt: Date.now(),
-        });
-        this.goalStore.setStatus(goal.id, 'completed');
+        log.info(`[GoalOrchestrator] resuming goal=${goal.id} after auth txn=${txnId}`);
+
+        // Reconstrói channelContext a partir do sessionKey do goal (ex: "telegram:userId")
+        const [channel, sessionUserId] = goal.sessionKey.split(':');
+        const channelContext: ChannelContext = {
+            channel: channel ?? 'unknown',
+            chatId: goal.conversationId,
+            userId: sessionUserId,
+        };
+
+        const result = await this.executionLoop.resumeGoal(
+            goal,
+            channelContext,
+            workflowOutput,
+            async (update) => {
+                log.debug(`[GoalOrchestrator] resume goal=${update.goalId} cycle=${update.cycle} event=${update.event}`);
+            }
+        );
+
+        log.info(`[GoalOrchestrator] goal=${goal.id} resumed success=${result.success} cycles=${result.totalCycles}`);
+        return result.finalOutput;
     }
 
     getGoalStore(): GoalStore { return this.goalStore; }

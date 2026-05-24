@@ -23,6 +23,7 @@ import { GoalPlanner } from './GoalPlanner';
 import { GoalEvaluator } from './GoalEvaluator';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
+import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { Goal, PlanStep, GoalAttempt, GoalResult, GoalProgressUpdate, CycleResult } from './GoalTypes';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext } from './agentLoopTypes';
@@ -40,6 +41,7 @@ export class GoalExecutionLoop {
         private readonly planner: GoalPlanner,
         private readonly reflectionMemory: ReflectionMemory,
         private readonly toolRegistry: typeof ToolRegistry,
+        private readonly providerFactory: ProviderFactory,
     ) {}
 
     /** Forwards skill context to the planner before planning begins. */
@@ -54,19 +56,55 @@ export class GoalExecutionLoop {
         channelContext: ChannelContext,
         onProgress?: ProgressCallback
     ): Promise<GoalResult> {
-        let currentGoal = goal;
-        let totalCycles = 0;
-        let totalReplans = 0;
-
         log.info(`[GoalLoop] start goal=${goal.id} replanBudget=${goal.replanBudget}`);
 
         // ── Planejamento inicial ───────────────────────────────────────────
         this.goalStore.update(goal.id, { status: 'replanning' });
-        const initialPlan = await this.planner.plan(currentGoal);
+        const initialPlan = await this.planner.plan(goal);
         this.goalStore.update(goal.id, { currentPlan: initialPlan, status: 'executing' });
-        currentGoal = this.goalStore.getById(goal.id)!;
+        const currentGoal = this.goalStore.getById(goal.id)!;
 
-        // ── Loop de ciclos ────────────────────────────────────────────────
+        return this.runLoop(currentGoal, channelContext, onProgress, 0, 0);
+    }
+
+    /**
+     * Retoma execução após autorização aprovada via WorkflowEngine.
+     * Marca o step bloqueado como concluído com o output do workflow e continua o loop
+     * a partir do próximo step pendente, sem replanejar.
+     */
+    async resumeGoal(
+        goal: Goal,
+        channelContext: ChannelContext,
+        authStepOutput: string,
+        onProgress?: ProgressCallback
+    ): Promise<GoalResult> {
+        log.info(`[GoalLoop] resuming goal=${goal.id} after auth`);
+
+        // Marca o step que estava aguardando auth como concluído
+        const blockedStep = goal.currentPlan.find(s => s.status === 'pending');
+        if (blockedStep) {
+            this.markStepDone(goal, blockedStep, authStepOutput);
+        }
+
+        this.goalStore.update(goal.id, { status: 'executing', pendingTxnId: undefined });
+        const currentGoal = this.goalStore.getById(goal.id)!;
+
+        return this.runLoop(currentGoal, channelContext, onProgress, 0, 0);
+    }
+
+    // ── Loop de ciclos (compartilhado entre executeGoal e resumeGoal) ─────────
+
+    private async runLoop(
+        goal: Goal,
+        channelContext: ChannelContext,
+        onProgress: ProgressCallback | undefined,
+        initialCycles: number,
+        initialReplans: number,
+    ): Promise<GoalResult> {
+        let currentGoal = goal;
+        let totalCycles = initialCycles;
+        let totalReplans = initialReplans;
+
         while (totalCycles < GOAL_LIMITS.MAX_CYCLES) {
             totalCycles++;
 
@@ -112,11 +150,16 @@ export class GoalExecutionLoop {
                 }
 
                 case 'needs_auth': {
-                    // Pausa goal — WorkflowEngine callback vai retomar
+                    // Extrai txnId dos botões para vincular ao goal (permite retomada via resumeGoal)
+                    const txnId = cycleResult.authOptions
+                        ?.find(o => o.value?.startsWith('auth:'))
+                        ?.value?.split(':').slice(2).join(':');
+
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'blocked', message: 'Aguardando autorização' });
-                    this.goalStore.update(currentGoal.id, { status: 'blocked' });
-                    // Propaga o texto e os botões do auth request para que o Telegram
-                    // possa exibir o inline keyboard (sem options os botões somem)
+                    this.goalStore.update(currentGoal.id, {
+                        status: 'blocked',
+                        pendingTxnId: txnId,
+                    });
                     const goalResult = this.buildResult(currentGoal, false, totalCycles, totalReplans,
                         cycleResult.output || 'Aguardando sua autorização para prosseguir.');
                     return { ...goalResult, authOptions: cycleResult.authOptions };
@@ -236,17 +279,17 @@ export class GoalExecutionLoop {
             } else {
                 // Sem tool específica → chama AgentLoop com prompt focado no step
                 const stepPrompt = `[GOAL STEP] ${step.description}\n\nContexto do objetivo: ${goal.objective}`;
+                const [, sessionUserId] = goal.sessionKey.split(':');
                 const response = await this.agentLoop.process(
                     goal.conversationId,
                     stepPrompt,
-                    undefined,
+                    sessionUserId ?? goal.conversationId,
                     channelContext
                 );
                 const text = typeof response === 'string' ? response : response.text;
                 const respOptions = typeof response === 'string' ? undefined : response.options;
 
                 // Se o AgentLoop retornou botões de auth, propaga como needs_auth
-                // em vez de tratar como sucesso (o que faria o step completar sem os botões)
                 const authOpts = respOptions?.filter(o => o.value?.startsWith('auth:'));
                 if (authOpts && authOpts.length > 0) {
                     this.goalStore.addAttempt(goal.id, {
@@ -262,9 +305,9 @@ export class GoalExecutionLoop {
                     return { outcome: 'needs_auth' as const, confidence: 0.9, output: text, authOptions: authOpts };
                 }
 
-                // Heurística de sucesso: resposta sem indicadores de erro
-                const isError = /erro|falhou|não consegui|não foi possível|failed|error/i.test(text) && text.length < 200;
-                toolResult = { success: !isError, output: text };
+                // LLM avalia se o AgentLoop executou o step com sucesso
+                const success = await this.evaluateAgentStepSuccess(step.description, goal.objective, text);
+                toolResult = { success, output: text };
             }
 
             // Registrar attempt
@@ -302,6 +345,50 @@ export class GoalExecutionLoop {
             this.goalStore.addAttempt(goal.id, attempt);
 
             return this.evaluator.evaluate(goal, step, { success: false, output: '', error: errorMsg });
+        }
+    }
+
+    // ── LLM step success evaluator ────────────────────────────────────────────
+
+    /**
+     * Usa o LLM para avaliar se a resposta do AgentLoop indica sucesso no step.
+     * Substitui a heurística de regex frágil por julgamento semântico.
+     * Fallback conservador para regex se o LLM falhar.
+     */
+    private async evaluateAgentStepSuccess(
+        stepDescription: string,
+        objective: string,
+        response: string,
+    ): Promise<boolean> {
+        const prompt = `Avalie se o resultado abaixo indica SUCESSO no cumprimento da tarefa.
+
+TAREFA: ${stepDescription}
+OBJETIVO: ${objective.slice(0, 200)}
+RESULTADO: ${response.slice(0, 600)}
+
+Responda APENAS com JSON válido, sem texto adicional:
+{"success": true} se a tarefa foi concluída ou progrediu substancialmente.
+{"success": false} se houve erro, incapacidade de executar, ou pedido de informação bloqueante.`;
+
+        try {
+            const result = await this.providerFactory.chatWithFallback(
+                [{ role: 'user', content: prompt }] as LLMMessage[],
+                undefined,
+                undefined,
+                8_000,
+            );
+
+            if (result.status !== 'success') {
+                log.warn('[GoalLoop] LLM step eval failed, using regex fallback');
+                return !/(erro|falhou|não consegui|não foi possível|failed|error)/i.test(response);
+            }
+
+            const cleaned = result.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            const parsed = JSON.parse(cleaned);
+            log.debug(`[GoalLoop] LLM step eval: success=${parsed.success}`);
+            return Boolean(parsed.success);
+        } catch {
+            return !/(erro|falhou|não consegui|não foi possível|failed|error)/i.test(response);
         }
     }
 

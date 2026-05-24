@@ -282,6 +282,14 @@ export class AgentController {
                 return;
             }
 
+            // Se há um goal aguardando esta transação, retoma o loop de execução
+            const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
+            if (pendingGoal) {
+                const responseText = await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
+                await this.telegramAdapter.send({ text: responseText, format: 'markdown' }, rawCtx);
+                return;
+            }
+
             const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
             await this.telegramAdapter.send({ text: responseText, format: 'markdown' }, rawCtx);
         };
@@ -317,6 +325,12 @@ export class AgentController {
                     );
                     return;
                 }
+                const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
+                if (pendingGoal) {
+                    const responseText = await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
+                    await this.discordAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
+                    return;
+                }
                 const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
                 await this.discordAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
             };
@@ -342,6 +356,12 @@ export class AgentController {
                     );
                     return;
                 }
+                const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
+                if (pendingGoal) {
+                    const responseText = await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
+                    await this.whatsAppAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
+                    return;
+                }
                 const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
                 await this.whatsAppAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
             };
@@ -365,6 +385,12 @@ export class AgentController {
                         { text: '⚠️ Sessão de autorização expirada. Repita o comando.', format: 'plain' },
                         rawCtx
                     );
+                    return;
+                }
+                const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
+                if (pendingGoal) {
+                    const responseText = await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
+                    await this.signalAdapter!.send({ text: responseText, format: 'plain' }, rawCtx);
                     return;
                 }
                 const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
