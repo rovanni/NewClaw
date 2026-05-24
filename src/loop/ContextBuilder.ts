@@ -192,6 +192,28 @@ export class ContextBuilder {
                 this.episodicMemoryService.recordNodeAccesses(conversationId, ranked.map(n => n.id));
             }
 
+            // ── Log de nós de memória selecionados ──
+            // Mostra quais memórias foram injetadas no contexto do LLM a cada turno.
+            // Útil para depurar preferências ignoradas, desambiguações incorretas, etc.
+            if (ranked.length > 0) {
+                const TIER_LABEL: Record<string, string> = {
+                    identity: 'tier0:identity', preference: 'tier1:pref',
+                    trait: 'tier1:trait', project: 'tier2:proj',
+                    infrastructure: 'tier2:infra', context: 'tier2:ctx',
+                    fact: 'tier3:fact', skill: 'tier4:skill',
+                    rule: 'tier4:rule', strategy: 'tier4:strat',
+                    knowledge: 'tier4:know', domain: 'tier4:domain',
+                };
+                const lines = ranked.map((n, i) => {
+                    const tier = TIER_LABEL[n.type] ?? `tier?:${n.type}`;
+                    const snippet = n.summary.replace(/\n/g, ' ').slice(0, 90);
+                    return `  ${i + 1}. [${tier}] ${n.name} | score=${n.score.toFixed(2)} | ${snippet}`;
+                }).join('\n');
+                log.info(`[MEMORY-NODES] ${ranked.length} nó(s) injetado(s):\n${lines}`);
+            } else {
+                log.info(`[MEMORY-NODES] nenhum nó selecionado — contexto vazio`);
+            }
+
             if (ranked.length === 0) {
                 const fallback = this.memory.getContext(200);
                 const header = [reflectionBlock, episodicBlock, domainBlock].filter(Boolean).join('\n---\n');

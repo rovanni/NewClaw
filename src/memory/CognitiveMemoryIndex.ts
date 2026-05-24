@@ -93,7 +93,21 @@ export class CognitiveMemoryIndex {
             lifecycle_state: string; updated_at: string;
         }>;
 
-        if (nodes.length === 0) return [];
+        // Quantos dos IDs pedidos foram encontrados (e não-expirados) no banco
+        const missingInDb = nodeIds.length - nodes.length;
+        if (nodes.length === 0) {
+            log.warn(
+                `[NODES] getSummaries: requested=${nodeIds.length} found_in_db=0` +
+                ` — todos os nós estão ausentes ou EXPIRED no memory_nodes`
+            );
+            return [];
+        }
+        if (missingInDb > 0) {
+            log.info(
+                `[NODES] getSummaries: requested=${nodeIds.length} found_in_db=${nodes.length}` +
+                ` missing_or_expired=${missingInDb}`
+            );
+        }
 
         // Carregar entradas de índice existentes
         const existingRows = this.db.prepare(
@@ -123,6 +137,14 @@ export class CognitiveMemoryIndex {
             log.debug('index_refreshed', `Built/updated ${toUpsert.length} entries`);
         }
 
+        // Log resumido: tipos de nós ativos encontrados (ajuda a confirmar que a memória está populada)
+        const byType = nodes.reduce<Record<string, number>>((acc, n) => {
+            acc[n.type] = (acc[n.type] ?? 0) + 1;
+            return acc;
+        }, {});
+        const typeSummary = Object.entries(byType).map(([t, c]) => `${t}×${c}`).join(' ');
+        log.info(`[NODES] getSummaries: returned=${results.length} rebuilt=${toUpsert.length} cached=${results.length - toUpsert.length} types=[${typeSummary}]`);
+
         return results;
     }
 
@@ -146,6 +168,12 @@ export class CognitiveMemoryIndex {
             AND (lifecycle_state IS NULL OR lifecycle_state IN ('ACTIVE', 'ARCHIVED'))
             LIMIT 60
         `).all() as Array<{ id: string }>;
+
+        if (nodes.length === 0) {
+            log.warn(`[NODES] getPermanentSummaries: nenhum nó permanente (identity/preference/trait) encontrado no banco — memória pode estar vazia`);
+        } else {
+            log.info(`[NODES] getPermanentSummaries: ${nodes.length} nó(s) permanente(s) encontrado(s) no banco`);
+        }
 
         return this.getSummaries(nodes.map(n => n.id));
     }
