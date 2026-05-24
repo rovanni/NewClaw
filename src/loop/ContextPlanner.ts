@@ -179,7 +179,7 @@ export class ContextPlanner {
 
         const totalSelected = selected.size;
         const skipped = summaries.length - totalSelected;
-        log.info('[PLANNER] skipped due budget=' + skipped);
+        log.info(`[PLANNER] done: selected=${totalSelected} skipped=${skipped} (summaries_total=${summaries.length})`);
 
         const metrics: PlannerMetrics = {
             tier0Selected:       tier0Count,

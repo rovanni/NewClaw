@@ -260,6 +260,13 @@ export class ContextBuilder {
             const summaries = Array.from(summaryMap.values());
             log.debug(`[INDEX] summaries retrieved=${summaries.length} (mlr=${mlrSummaries.length} permanent=${permanentSummaries.length}) from candidates=${candidates.length}`);
 
+            if (summaries.length === 0) {
+                log.warn(
+                    `[INDEX] CognitiveMemoryIndex returned 0 summaries for ${candidates.length} ` +
+                    `MLR candidates — CognitiveIndex may be unpopulated. Falling back to direct MLR pool.`
+                );
+            }
+
             const planResult = this.getContextPlanner().plan(query, summaries, maxNodes);
             const m = planResult.metrics;
             log.info(
