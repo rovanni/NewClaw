@@ -97,8 +97,14 @@ Responda APENAS com JSON válido (sem markdown):
 }
 
 Máximo 3 steps. Se o blocker for 'missing_tool', inclua step de instalação como primeiro step.
-Se o blocker mencionar PEP 668 ou 'externally-managed-environment', use SEMPRE ambiente virtual:
-  exec_command: "python3 -m venv /tmp/venv && source /tmp/venv/bin/activate && pip install <pacote> && python3 script.py"`.trim();
+
+REGRAS CRÍTICAS para blocker 'environment_limit':
+- Se o blocker mencionar PEP 668, 'externally-managed', ou 'pip install bloqueado':
+  → NÃO use pip install nem --break-system-packages. SEMPRE prefira pandoc.
+  → Estratégia correta: exec_command com "pandoc arquivo.md -o arquivo.pptx"
+- Se o blocker mencionar 'ensurepip' ou 'python3-venv':
+  → NÃO use python3 -m venv. SEMPRE prefira pandoc ou npx marp.
+  → Estratégia correta: exec_command com "pandoc arquivo.md -o arquivo.pptx"`.trim();
 }
 
 // ── Aliases de ferramentas: nomes que LLMs inventam → nome real no ToolRegistry ──
@@ -117,6 +123,12 @@ const TOOL_ALIASES: Record<string, string> = {
     bash: 'exec_command',
     search_web: 'web_search',
     browse: 'web_navigate',
+    read_file: 'read',
+    open_file: 'read',
+    cat_file: 'read',
+    get_file: 'read',
+    list_files: 'list_workspace',
+    ls: 'list_workspace',
 };
 
 // ── GoalPlanner ───────────────────────────────────────────────────────────────

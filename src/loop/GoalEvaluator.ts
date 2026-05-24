@@ -88,15 +88,29 @@ const ERROR_PATTERNS: ErrorPattern[] = [
         ],
         isRetryable: false,
     },
+    // python3-venv não instalado (ensurepip ausente) — venv não pode ser criado
+    {
+        pattern: /ensurepip is not available|python3-venv|ensurepip/i,
+        kind: 'environment_limit',
+        description: () => 'python3-venv não instalado — criação de venv bloqueada (ensurepip ausente)',
+        suggestedActions: [
+            'NÃO tente python3 -m venv — ensurepip não está disponível neste sistema',
+            'Usar pandoc para conversão direta: pandoc arquivo.md -o arquivo.pptx',
+            'Usar Node.js/Marp para PPTX: npx @marp-team/marp-cli arquivo.md --pptx',
+            'Instalar python3-venv: sudo apt install python3-venv (requer sudo)',
+        ],
+        isRetryable: false,
+    },
     // Python PEP 668 — pip bloqueado pelo sistema operacional
     {
-        pattern: /externally-managed-environment|PEP 668|This environment is externally managed|--break-system-packages/i,
+        pattern: /externally-managed-environment|PEP 668|This environment is externally managed/i,
         kind: 'environment_limit',
         description: () => 'Python protegido pelo sistema (PEP 668) — pip install bloqueado',
         suggestedActions: [
-            'Criar ambiente virtual: python3 -m venv /tmp/venv && source /tmp/venv/bin/activate && pip install <pacote>',
-            'Usar pipx para ferramentas globais: pipx install <ferramenta>',
-            'Usar apt para pacotes do sistema: sudo apt install python3-<pacote>',
+            'NÃO use pip install direto nem --break-system-packages — PEP 668 bloqueia em Debian/Ubuntu',
+            'NÃO tente python3 -m venv sem verificar se ensurepip está disponível',
+            'Usar pandoc para conversão direta: pandoc arquivo.md -o arquivo.pptx',
+            'Usar Node.js/Marp para PPTX: npx @marp-team/marp-cli arquivo.md --pptx',
         ],
         isRetryable: false,
     },
