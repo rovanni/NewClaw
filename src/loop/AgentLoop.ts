@@ -135,11 +135,15 @@ export class AgentLoop {
         // Pipe into destructive commands always requires auth
         if (/\|\s*(rm|dd|mkfs|shred)\b/.test(cmd)) return false;
 
+        // Version/help checks are always read-only regardless of the tool name
+        if (/^\S+\s+(--version|-v|-V|--help|-h)$/.test(cmd)) return true;
+
         const SAFE_COMMANDS = new Set([
             'ls', 'cat', 'find', 'pwd', 'echo', 'which', 'command', 'type',
-            'head', 'tail', 'grep', 'wc', 'stat', 'file', 'node', 'npm',
+            'head', 'tail', 'grep', 'wc', 'stat', 'file', 'node', 'npm', 'npx',
             'env', 'printenv', 'df', 'du', 'ps', 'uname', 'hostname',
             'id', 'whoami', 'date', 'uptime', 'lsb_release', 'readlink',
+            'marp',  // file-format converter, not destructive
         ]);
 
         // Split on && or ; to get individual sub-commands, then strip leading `cd /path` parts.
@@ -247,10 +251,21 @@ export class AgentLoop {
             if (ctx.alternativeTools?.length) contextPayload.alternativeTools = ctx.alternativeTools;
         }
 
+        const isCommandNotFound = /command not found|not found|exit code: 127|which: no|cannot find|ENOENT/i
+            .test((result.error ?? '') + (result.output ?? ''));
+        const failTask = isCommandNotFound
+            ? `O passo "${ctx.step}" falhou porque a ferramenta não está instalada no sistema. ` +
+              `O objetivo do usuário é: "${ctx.userGoal}". ` +
+              `Explique o problema ao usuário e oriente-o a instalar a ferramenta necessária ` +
+              `(por exemplo, via "npm install -g <ferramenta>", "pip install", ou gerenciador de pacotes). ` +
+              `Depois instrua-o a repetir o pedido para que a instalação seja feita automaticamente.`
+            : `O passo "${ctx.step}" falhou no workflow "${ctx.workflow}". ` +
+              `O objetivo do usuário é: "${ctx.userGoal}". Informe claramente a falha e sugira como prosseguir.`;
+
         const task = isApproved
             ? result.success
                 ? 'O comando foi executado e o resultado está no campo "toolResult" do JSON acima. Apresente esse conteúdo ao usuário de forma clara e útil. Não peça ao usuário para colar ou informar a saída — você já a possui no campo toolResult.'
-                : 'Informe claramente a falha e sugira uma alternativa se disponível.'
+                : failTask
             : 'Informe que a ação foi cancelada e ofereça uma alternativa sem precisar de autorização, se disponível.';
 
         const messages: LLMMessage[] = [
