@@ -180,7 +180,7 @@ export class GoalPlanner {
     }
 
     async plan(goal: Goal, runtimeContext?: string): Promise<PlanStep[]> {
-        log.info(`[GoalPlanner] planning goal=${goal.id}`);
+        log.info(`[GoalPlanner] plan start goal=${goal.id} model=${PLANNER_MODEL} contextLen=${runtimeContext?.length ?? 0}`);
 
         const availableTools = ToolRegistry.getEnabled().map(t => t.name);
         const messages: LLMMessage[] = [{ role: 'user', content: buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext) }];
@@ -189,30 +189,34 @@ export class GoalPlanner {
             const result = await this.callPlannerLLM(messages, 45_000);
 
             if (result.status !== 'success') {
-                log.warn(`[GoalPlanner] LLM plan failed status=${result.status}`);
+                log.warn(`[GoalPlanner] plan failed: model=${PLANNER_MODEL} status=${result.status} raw="${result.content.slice(0, 150)}"`);
                 return this.fallbackPlan(goal);
             }
 
             const parsed = this.parsePlanResponse(result.content);
             if (parsed.steps.length === 0) {
+                log.warn(`[GoalPlanner] plan empty after parse: model=${PLANNER_MODEL} raw="${result.content.slice(0, 200)}"`);
                 return this.fallbackPlan(goal);
             }
 
-            log.info(`[GoalPlanner] plan=${parsed.steps.length} steps strategy="${parsed.strategy}"`);
+            log.info(`[GoalPlanner] plan ok: steps=${parsed.steps.length} strategy="${parsed.strategy}" tools=[${parsed.steps.map(s => s.toolName ?? 'agentloop').join(',')}]`);
             return parsed.steps;
         } catch (err) {
-            log.warn('[GoalPlanner] plan error:', String(err));
+            log.warn(`[GoalPlanner] plan exception: model=${PLANNER_MODEL} err="${String(err).slice(0, 100)}"`);
             return this.fallbackPlan(goal);
         }
     }
 
     async replan(goal: Goal, blocker: GoalBlocker, runtimeContext?: string): Promise<PlanStep[]> {
-        log.info(`[GoalPlanner] replan goal=${goal.id} blocker=${blocker.kind}`);
+        log.info(`[GoalPlanner] replan start goal=${goal.id} model=${PLANNER_MODEL} blocker=${blocker.kind} contextLen=${runtimeContext?.length ?? 0}`);
 
         // Consulta memória de reflexão para evitar erros já conhecidos
         const reflectionHint = this.reflectionMemory.buildContextHint(
             blocker.toolName ? `tool_${blocker.toolName}` : blocker.kind
         );
+        if (reflectionHint) {
+            log.debug(`[GoalPlanner] reflectionHint injected (${reflectionHint.length} chars)`);
+        }
 
         const messages: LLMMessage[] = [{
             role: 'user',
@@ -223,19 +227,20 @@ export class GoalPlanner {
             const result = await this.callPlannerLLM(messages, 45_000);
 
             if (result.status !== 'success') {
-                log.warn(`[GoalPlanner] LLM replan failed status=${result.status}`);
+                log.warn(`[GoalPlanner] replan failed: model=${PLANNER_MODEL} status=${result.status} raw="${result.content.slice(0, 150)}"`);
                 return this.emergencyFallback(goal, blocker);
             }
 
             const parsed = this.parsePlanResponse(result.content);
             if (parsed.steps.length === 0) {
+                log.warn(`[GoalPlanner] replan empty after parse: model=${PLANNER_MODEL} raw="${result.content.slice(0, 200)}"`);
                 return this.emergencyFallback(goal, blocker);
             }
 
-            log.info(`[GoalPlanner] replan=${parsed.steps.length} steps strategy="${parsed.strategy}"`);
+            log.info(`[GoalPlanner] replan ok: steps=${parsed.steps.length} strategy="${parsed.strategy}" tools=[${parsed.steps.map(s => s.toolName ?? 'agentloop').join(',')}]`);
             return parsed.steps;
         } catch (err) {
-            log.warn('[GoalPlanner] replan error:', String(err));
+            log.warn(`[GoalPlanner] replan exception: model=${PLANNER_MODEL} err="${String(err).slice(0, 100)}"`);
             return this.emergencyFallback(goal, blocker);
         }
     }

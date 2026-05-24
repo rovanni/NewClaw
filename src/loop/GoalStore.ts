@@ -187,13 +187,26 @@ export class GoalStore {
 
         values.push(id);
         this.db.prepare(`UPDATE goals SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+
+        // Loga mudança de status inline (update() é usado tanto quanto setStatus)
+        if (patch.status !== undefined) {
+            log.info(`[GoalStore] goal=${id} → ${patch.status}`);
+        }
+        if (patch.replanBudget !== undefined) {
+            log.debug(`[GoalStore] goal=${id} replanBudget=${patch.replanBudget}`);
+        }
+        if (patch.retryBudget !== undefined) {
+            log.debug(`[GoalStore] goal=${id} retryBudget=${patch.retryBudget}`);
+        }
     }
 
     setStatus(id: string, status: GoalStatus): void {
         const now = Date.now();
+        const prev = (this.db.prepare('SELECT status FROM goals WHERE id = ?').get(id) as { status: string } | undefined)?.status ?? '?';
         const completedAt = (status === 'completed' || status === 'failed' || status === 'abandoned') ? now : null;
         this.db.prepare('UPDATE goals SET status = ?, updated_at = ?, completed_at = COALESCE(completed_at, ?) WHERE id = ?')
             .run(status, now, completedAt, id);
+        log.info(`[GoalStore] goal=${id} ${prev} → ${status}`);
     }
 
     addAttempt(goalId: string, attempt: GoalAttempt): void {
@@ -201,6 +214,7 @@ export class GoalStore {
         if (!goal) return;
         const attempts = [...goal.attempts, attempt];
         this.update(goalId, { attempts, retryBudget: Math.max(0, goal.retryBudget - 1) });
+        log.debug(`[GoalStore] goal=${goalId} attempt: tool=${attempt.toolName} result=${attempt.result} durationMs=${attempt.durationMs}${attempt.error ? ` error="${attempt.error.slice(0, 80)}"` : ''}`);
     }
 
     addBlocker(goalId: string, blocker: GoalBlocker): void {
@@ -208,6 +222,7 @@ export class GoalStore {
         if (!goal) return;
         const blockers = [...goal.blockers, blocker];
         this.update(goalId, { blockers, status: 'blocked' });
+        log.info(`[GoalStore] goal=${goalId} blocker: kind=${blocker.kind} tool=${blocker.toolName ?? 'none'} desc="${blocker.description.slice(0, 100)}"`);
     }
 
     addToolTried(goalId: string, toolName: string): void {

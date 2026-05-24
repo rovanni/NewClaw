@@ -564,10 +564,14 @@ export class GoalExecutionLoop {
                 this.goalStore.addToolTried(goal.id, step.toolName);
             }
 
-            return this.evaluator.evaluate(goal, step, toolResult);
+            const cycleResult = this.evaluator.evaluate(goal, step, toolResult);
+            const durationMs = Date.now() - startMs;
+            log.info(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'agentloop'} outcome=${cycleResult.outcome} durationMs=${durationMs}${cycleResult.blocker ? ` blocker=${cycleResult.blocker.kind}` : ''}`);
+            return cycleResult;
 
         } catch (err) {
             const errorMsg = err instanceof Error ? err.message : String(err);
+            const durationMs = Date.now() - startMs;
             const attempt: GoalAttempt = {
                 id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
                 planStepId: step.id,
@@ -575,12 +579,14 @@ export class GoalExecutionLoop {
                 args: step.toolArgs ?? {},
                 result: 'failure',
                 error: errorMsg,
-                durationMs: Date.now() - startMs,
+                durationMs,
                 executedAt: Date.now(),
             };
             this.goalStore.addAttempt(goal.id, attempt);
 
-            return this.evaluator.evaluate(goal, step, { success: false, output: '', error: errorMsg });
+            const cycleResult = this.evaluator.evaluate(goal, step, { success: false, output: '', error: errorMsg });
+            log.warn(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'unknown'} EXCEPTION durationMs=${durationMs} error="${errorMsg.slice(0, 100)}"`);
+            return cycleResult;
         }
     }
 
@@ -793,6 +799,23 @@ OU
             ?? (lastSuccess?.output || undefined)
             ?? lastCompletedStep?.result
             ?? (success ? 'Tarefa concluída com sucesso.' : this.evaluator.buildFailureExplanation(goal));
+
+        // ── Goal Audit Summary — log estruturado único para forense ──────────
+        // Uma linha que responde: "o que aconteceu neste goal?"
+        const durationMs = goal.completedAt
+            ? goal.completedAt - goal.createdAt
+            : Date.now() - goal.createdAt;
+        const toolsUsed = [...new Set(goal.attempts.map(a => a.toolName))].join(',');
+        const blockerKinds = goal.blockers.map(b => b.kind).join(',');
+        const lastError = [...goal.attempts].reverse().find(a => a.result === 'failure')?.error?.slice(0, 100) ?? '';
+        log.info(
+            `[GoalAudit] id=${goal.id} success=${success}` +
+            ` cycles=${totalCycles} replans=${totalReplans} attempts=${goal.attempts.length}` +
+            ` tools=[${toolsUsed || 'none'}] blockers=[${blockerKinds || 'none'}]` +
+            ` durationMs=${durationMs}` +
+            (lastError ? ` lastError="${lastError}"` : '') +
+            ` intent="${goal.userIntent.slice(0, 80)}"`
+        );
 
         return {
             goal,

@@ -218,6 +218,7 @@ export class GoalEvaluator {
         // Dependência ausente → perguntar ao usuário / tentar instalar
         if (blocker.kind === 'missing_tool') {
             const missingCmd = this.extractMissingToolName(error) ?? '';
+            log.debug(`[GoalEvaluator] missing_tool extracted="${missingCmd || '(not extracted)'}" from error="${error.slice(0, 80)}"`);
             const dep = KNOWN_DEPS[missingCmd.toLowerCase()];
             if (dep) {
                 const installKey = `install_dep_${dep.name}`;
@@ -274,16 +275,19 @@ export class GoalEvaluator {
 
         if (matched) {
             const match = error.match(matched.pattern)!;
+            const description = matched.description(match, toolName);
+            log.debug(`[GoalEvaluator] classify: tool=${toolName} kind=${matched.kind} pattern=/${matched.pattern.source.slice(0, 60)}/ retryable=${matched.isRetryable}`);
             return {
                 kind: matched.kind,
                 toolName,
-                description: matched.description(match, toolName),
+                description,
                 suggestedActions: matched.suggestedActions,
                 detectedAt: Date.now(),
             };
         }
 
-        // Fallback genérico
+        // Fallback genérico — sem padrão reconhecido
+        log.debug(`[GoalEvaluator] classify: tool=${toolName} kind=tool_error (no pattern matched) error="${error.slice(0, 100)}"`);
         return {
             kind: 'tool_error',
             toolName,
