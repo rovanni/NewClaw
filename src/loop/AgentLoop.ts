@@ -845,6 +845,7 @@ export class AgentLoop {
         let consecutiveNonProgressSteps = 0; // non-JSON, no-tool responses in a row
         const blockedKeyCount = new Map<string, number>(); // tracks repeated block attempts per inputKey
         let dedupAbort = false; // set true when TOOL-DEDUP limit reached — exits while and falls to post-loop synthesis
+        let dedupAbortTool = ''; // tracks which tool caused the dedup abort
 
         while (stepCount < maxSteps && !dedupAbort) {
             stepCount++;
@@ -1032,6 +1033,7 @@ export class AgentLoop {
                                 content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. O loop foi interrompido. Forneça a melhor resposta possível com as informações que você já tem.`,
                             });
                             dedupAbort = true;
+                            dedupAbortTool = toolName;
                             break;
                         }
                         continue;
@@ -1102,6 +1104,19 @@ export class AgentLoop {
                         cycleHistory.push({ tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
                         loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
                         if (result.success) usedToolOutputs.set(inputKey, result.output.slice(0, 2000));
+
+                        // After a successful read, inject an explicit directive so the model
+                        // doesn't enter a dedup loop trying to re-read the same file.
+                        if (result.success && resolvedToolName === 'read') {
+                            loopMessages.push({
+                                role: 'system',
+                                content:
+                                    `[LEITURA CONCLUÍDA] O arquivo foi lido com sucesso (${result.output.length} chars). ` +
+                                    `O conteúdo COMPLETO está disponível acima — ⚠️ NÃO chame "read" novamente para este arquivo.\n` +
+                                    `PRÓXIMO PASSO OBRIGATÓRIO: use "exec_command" para executar a conversão/processamento, ` +
+                                    `"write" para salvar um resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`,
+                            });
+                        }
 
                         if (!result.success) {
                             toolFailureCount++;
@@ -1179,6 +1194,7 @@ export class AgentLoop {
                             content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. Forneça a melhor resposta possível com as informações que você já tem.`,
                         });
                         dedupAbort = true;
+                        dedupAbortTool = toolName;
                         break;
                     }
                     continue;
@@ -1317,8 +1333,23 @@ export class AgentLoop {
             move('SYNTHESIS_REQUIRED', { step: stepCount, tools: cycleHistory.length });
 
             const toolSummary = cycleHistory.map(h => `• ${h.tool}: ${h.status}`).join('\n');
+            const dedupSynthesisBody = (() => {
+                const successTools = cycleHistory.filter(h => h.status === 'success').map(h => h.tool);
+                const failedTools  = cycleHistory.filter(h => h.status === 'error').map(h => h.tool);
+                const successLine  = successTools.length > 0 ? `Ferramentas que FUNCIONARAM: ${successTools.join(', ')}` : '';
+                const failLine     = failedTools.length  > 0 ? `Ferramentas que FALHARAM: ${failedTools.join(', ')}` : '';
+                return (
+                    `ATENÇÃO: O loop foi interrompido porque a ferramenta "${dedupAbortTool}" foi chamada repetidamente.\n\n` +
+                    `Resultado real das ações executadas:\n${toolSummary}\n\n` +
+                    (successLine ? `${successLine}\n` : '') +
+                    (failLine    ? `${failLine}\n`    : '') +
+                    `\nIMPORTANTE: NÃO invente falhas para ferramentas listadas como "success" acima.\n` +
+                    `Explique ao usuário: (1) o que foi executado com sucesso, (2) qual etapa ficou pendente e por quê, ` +
+                    `(3) como prosseguir. Seja direto e honesto.`
+                );
+            })();
             const synthesisBody = dedupAbort
-                ? `ATENÇÃO: O loop foi interrompido porque uma ferramenta foi chamada repetidamente.\n\nAções parciais executadas:\n${toolSummary}\n\nExplique HONESTAMENTE ao usuário:\n1. O que foi lido/executado com sucesso\n2. Qual etapa não foi possível completar e por que ficou em loop\n3. Uma sugestão prática de como prosseguir\n\nNÃO diga que houve "instabilidade técnica" nem invente que a tarefa foi concluída. Seja direto sobre o que ficou incompleto.`
+                ? dedupSynthesisBody
                 : `Você executou as seguintes ações:\n${toolSummary}\n\nAgora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específicos das alterações realizadas. Não diga "vou fazer" — você JÁ fez. Confirme as mudanças de forma clara e objetiva.`;
             loopMessages.push({
                 role: 'system',
