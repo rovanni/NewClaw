@@ -53,13 +53,15 @@ export class ExecCommandTool implements ToolExecutor {
 
         // ── Path Resolution ──
         const workspaceDir = path.resolve(process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace'));
-        
+
         // Se workdir for absoluto, resolve em relação ao root; se relativo, em relação ao workspace
         const effectiveWorkdir = workdir ? path.resolve(workspaceDir, workdir) : workspaceDir;
-        
-        // FIX: Prevenir path duplication no comando
+
+        // Strip "workspace/" apenas quando aparece no INÍCIO do comando (path relativo),
+        // nunca no meio de caminhos absolutos (ex: /home/user/newclaw/workspace/jogos).
+        // A regex anterior usava \b que fazia match em /…/workspace/ causando truncamento.
         if (!workdir) {
-            command = command.replace(/\bworkspace\//g, '');
+            command = command.replace(/(?:^|\s)workspace\//g, (m) => m.replace('workspace/', ''));
         }
         
         const execOptions: { timeout: number; cwd?: string } = { timeout };

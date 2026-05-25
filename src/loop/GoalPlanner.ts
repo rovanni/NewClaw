@@ -29,11 +29,16 @@ function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: st
         ? `\nCONTEXTO (memória + feedback de ciclos anteriores):\n${runtimeContext}\n`
         : '';
 
+    const userPaths = extractUnixPaths(goal.userIntent);
+    const pathsBlock = userPaths.length > 0
+        ? `\nPATHS MENCIONADOS PELO USUÁRIO — copie LITERALMENTE para toolArgs (não encurte nem reconstrua):\n${userPaths.map(p => `  ${p}`).join('\n')}\n`
+        : '';
+
     return `Você é um planejador de tarefas. Decomponha o objetivo abaixo em steps executáveis com ferramentas.
 
 OBJETIVO: ${goal.objective}
 INTENÇÃO ORIGINAL: ${goal.userIntent}
-${skillBlock}${contextBlock}
+${pathsBlock}${skillBlock}${contextBlock}
 Ferramentas disponíveis (use EXATAMENTE esses nomes): ${availableTools.join(', ')}
 
 Responda APENAS com JSON válido (sem markdown):
@@ -55,7 +60,8 @@ Regras:
 - Cada step usa UMA ferramenta
 - toolArgs deve ser um objeto com os argumentos da ferramenta
 - Use APENAS os nomes de ferramenta listados acima — não invente nomes
-- Se não precisar de ferramenta específica, omita toolName e toolArgs`.trim();
+- Se não precisar de ferramenta específica, omita toolName e toolArgs
+- CRÍTICO: se o objetivo menciona caminhos de arquivo, use-os EXATAMENTE como listados em "PATHS MENCIONADOS" — não encurte, não reconstrua`.trim();
 }
 
 function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, runtimeContext?: string): string {
@@ -106,6 +112,13 @@ REGRAS CRÍTICAS para blocker 'environment_limit':
 - Se o blocker mencionar 'ensurepip not available' ou 'python3-venv não instalado':
   → NÃO use python3 -m venv. Use pandoc ou npx marp diretamente.
   → Estratégia correta: exec_command com "pandoc arquivo.md -o arquivo.pptx"`.trim();
+}
+
+// Extrai caminhos Unix absolutos do texto (mínimo 2 segmentos: /a/b ou mais).
+// Usado para preservar caminhos literais informados pelo usuário no prompt de planejamento.
+function extractUnixPaths(text: string): string[] {
+    const matches = text.match(/\/[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)+/g) ?? [];
+    return [...new Set(matches)];
 }
 
 // Regex para detectar valores de argumento que são placeholders, não caminhos reais.
@@ -199,8 +212,9 @@ export class GoalPlanner {
                 return this.fallbackPlan(goal);
             }
 
-            log.info(`[GoalPlanner] plan ok: steps=${parsed.steps.length} strategy="${parsed.strategy}" tools=[${parsed.steps.map(s => s.toolName ?? 'agentloop').join(',')}]`);
-            return parsed.steps;
+            const steps = this.prependPathValidation(goal, parsed.steps);
+            log.info(`[GoalPlanner] plan ok: steps=${steps.length} strategy="${parsed.strategy}" tools=[${steps.map(s => s.toolName ?? 'agentloop').join(',')}]`);
+            return steps;
         } catch (err) {
             log.warn(`[GoalPlanner] plan exception: model=${PLANNER_MODEL} err="${String(err).slice(0, 100)}"`);
             return this.fallbackPlan(goal);
@@ -237,8 +251,9 @@ export class GoalPlanner {
                 return this.emergencyFallback(goal, blocker);
             }
 
-            log.info(`[GoalPlanner] replan ok: steps=${parsed.steps.length} strategy="${parsed.strategy}" tools=[${parsed.steps.map(s => s.toolName ?? 'agentloop').join(',')}]`);
-            return parsed.steps;
+            const steps = this.prependPathValidation(goal, parsed.steps);
+            log.info(`[GoalPlanner] replan ok: steps=${steps.length} strategy="${parsed.strategy}" tools=[${steps.map(s => s.toolName ?? 'agentloop').join(',')}]`);
+            return steps;
         } catch (err) {
             log.warn(`[GoalPlanner] replan exception: model=${PLANNER_MODEL} err="${String(err).slice(0, 100)}"`);
             return this.emergencyFallback(goal, blocker);
@@ -308,6 +323,59 @@ export class GoalPlanner {
         } catch {
             return { steps: [], strategy: '' };
         }
+    }
+
+    // ── Injeção determinística de validação de paths ──────────────────────────
+
+    /**
+     * Quando o userIntent menciona caminhos Unix absolutos, injeta um step de
+     * verificação (exec_command ls) ANTES do primeiro step do plano.
+     *
+     * Motivação: o LLM de planejamento frequentemente trunca ou reconstrói paths
+     * (ex: omite "workspace/" do meio do caminho), causando falhas de "No such
+     * file or directory" que consomem todo o replanBudget em navegação de
+     * diretório. Verificar o path com os dados literais do usuário, antes de
+     * qualquer operação de escrita/leitura, falha rápido na primeira tentativa e
+     * direciona o replan com a informação correta.
+     *
+     * Não injeta quando:
+     *   - O plano não tem steps com exec_command/edit/read/write (sem file ops)
+     *   - O primeiro step já é uma verificação de path (test -d, ls, find)
+     *   - Nenhum path Unix foi encontrado no userIntent
+     */
+    private prependPathValidation(goal: Goal, steps: PlanStep[]): PlanStep[] {
+        const userPaths = extractUnixPaths(goal.userIntent);
+        if (userPaths.length === 0) return steps;
+
+        // Só injeta se o plano envolve operações de arquivo
+        const hasFileOps = steps.some(s =>
+            s.toolName === 'exec_command' || s.toolName === 'edit' ||
+            s.toolName === 'read' || s.toolName === 'write'
+        );
+        if (!hasFileOps) return steps;
+
+        // Não injeta se o primeiro step já é uma verificação de path
+        const firstCmd = String(steps[0]?.toolArgs?.command ?? '');
+        if (steps[0]?.toolName === 'exec_command' && /\btest\s+-[de]\b|\bls\s|\bfind\s/.test(firstCmd)) {
+            return steps;
+        }
+
+        const topPaths = userPaths.slice(0, 2);
+        const checkCmd = topPaths
+            .map(p => `ls "${p}" 2>/dev/null && echo "PATH_OK: ${p}" || echo "PATH_MISSING: ${p}"`)
+            .join('; ');
+
+        const validationStep: PlanStep = {
+            id: 'step_path_check',
+            description: `Verificar existência do(s) caminho(s): ${topPaths.join(', ')}`,
+            toolName: 'exec_command',
+            toolArgs: { command: checkCmd },
+            status: 'pending',
+            fallbackSteps: [],
+        };
+
+        log.info(`[GoalPlanner] path validation step injected for ${topPaths.length} path(s): ${topPaths.join(', ')}`);
+        return [validationStep, ...steps];
     }
 
     // ── Fallbacks sem LLM ─────────────────────────────────────────────────────

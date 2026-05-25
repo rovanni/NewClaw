@@ -12,9 +12,9 @@ export const GOAL_LIMITS = {
     /** Tentativas por step antes de considerar bloqueado */
     MAX_RETRY_BUDGET: 5,
     /** Replans totais por goal antes de declarar falha */
-    MAX_REPLAN_BUDGET: 3,
+    MAX_REPLAN_BUDGET: 5,
     /** Ciclos totais (plan+execute+evaluate) antes de encerrar */
-    MAX_CYCLES: 8,
+    MAX_CYCLES: 12,
     /** Tools únicas diferentes que podem ser tentadas */
     MAX_TOOLS_PER_GOAL: 10,
 
