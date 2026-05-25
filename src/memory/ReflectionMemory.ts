@@ -295,6 +295,11 @@ export class ReflectionMemory {
         if (/ensurepip|python3.?venv/i.test(pattern)) {
             return `NÃO use 'python3 -m venv' — ensurepip indisponível neste ambiente. Use pandoc, marp ou outra abordagem.`;
         }
+        // Ferramentas core nunca devem ser bloqueadas por constraints duras.
+        // Falhas pontuais (ex: leitura de arquivo binário, path incorreto) não
+        // representam falha permanente da ferramenta — apenas uso inadequado no contexto.
+        const CORE_TOOLS = new Set(['read', 'write', 'edit', 'exec_command', 'memory_search', 'memory_write']);
+        if (CORE_TOOLS.has(toolUsed)) return null;
         // Tool que falhou 100% das vezes
         if (toolUsed && toolUsed !== 'unknown' && toolUsed !== 'agentloop') {
             const hint = topFix ? ` Alternativa: ${topFix}` : '';

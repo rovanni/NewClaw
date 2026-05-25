@@ -817,10 +817,29 @@ export class MemoryGovernor {
      * Archive a node instead of deleting it.
      * Moves to memory_nodes with type='archived' and very low confidence.
      * Preserves the data for potential future recovery.
-     */    private archiveNode(node: MemoryNode): void {
+     */
+    private archiveNode(node: MemoryNode): void {
         try {
+            // Spread pode lançar "Too many properties to enumerate" se o metadata
+            // estiver corrompido com propriedades excessivas. Se isso acontecer,
+            // removemos o nó diretamente para interromper o ciclo de falha repetida.
+            let rawMetadata: Record<string, any>;
+            try {
+                rawMetadata = { ...node.metadata };
+            } catch {
+                log.warn(`archiveNode ${node.id}: metadata unparseable (too many properties) — removing node directly`);
+                try { this.memoryFacade.removeNode(node.id); } catch { /* ignore */ }
+                return;
+            }
+
+            let metadata: Record<string, any> = {
+                ...rawMetadata,
+                archived: 'true',
+                archived_at: new Date().toISOString(),
+                original_type: node.type,
+            };
+
             // Truncate metadata if too large (prevents "Too many properties to enumerate")
-            let metadata: Record<string, any> = { ...node.metadata, archived: 'true', archived_at: new Date().toISOString(), original_type: node.type };
             const metadataJson = JSON.stringify(metadata);
             if (metadataJson.length > 4000) {
                 // Keep only essential fields + truncated content
@@ -840,10 +859,10 @@ export class MemoryGovernor {
                 ...node,
                 // Preserve type for preference/trait so getPermanentSummaries() can still find them
                 type: (node.type === 'preference' || node.type === 'trait') ? node.type : 'context',
-                confidence: 0.1, // Minimum confidence
-                weight: 0.1, // Minimum weight
+                confidence: 0.1,
+                weight: 0.1,
                 metadata,
-                last_updated: new Date().toISOString()
+                last_updated: new Date().toISOString(),
             });
             log.info(`Archived node: ${node.id} (was ${node.type}, confidence was ${node.confidence})`);
         } catch (err) {

@@ -33,7 +33,8 @@ case "$1" in
     ;;
   restart)
     "$DIR/start.sh" stop
-    sleep 2
+    echo "Aguardando 30s para o Telegram liberar a sessão getUpdates anterior..."
+    sleep 30
     "$DIR/start.sh" start
     ;;
   *)

@@ -1233,6 +1233,12 @@ export class AgentLoop {
                                     role: 'system',
                                     content: `[ARQUIVO BINÁRIO] "${filename || pathArg}" não pode ser lido com "read". Use exec_command com a ferramenta adequada (python-pptx, pandoc, pdftotext, etc.). NÃO tente "read" neste arquivo novamente.`,
                                 });
+                            } else if (resolvedToolName === 'exec_command' && /no such file or directory/i.test(errorText)) {
+                                // Path não existe — sugere explorar o workspace antes de adivinhar caminhos
+                                loopMessages.push({
+                                    role: 'system',
+                                    content: `[PATH INEXISTENTE] O caminho informado não existe. NÃO repita o mesmo comando. Use exec_command com "ls /home/venus/newclaw/workspace" ou "list_workspace" para descobrir a estrutura real antes de prosseguir.`,
+                                });
                             } else {
                                 loopMessages.push({
                                     role: 'system',
