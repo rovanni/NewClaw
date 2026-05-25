@@ -170,10 +170,6 @@ export class RiskAnalyzer {
         return null;
     }
 
-    /** @deprecated Use findViolatingConstraint instead */
-    private detectConstraintViolation(plan: PlanStep[], constraints: string[]): boolean {
-        return this.findViolatingConstraint(plan, constraints) !== null;
-    }
 
     private async reviewPlanWithLLM(goal: Goal, plan: PlanStep[]): Promise<{
         risks: string[];
