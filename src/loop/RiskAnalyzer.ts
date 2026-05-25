@@ -73,14 +73,15 @@ export class RiskAnalyzer {
         if (constraints.length > 0) {
             for (const c of constraints) risks.push(`[CONSTRAINT] ${c}`);
 
-            if (this.detectConstraintViolation(plan, constraints)) {
-                log.warn(`[RiskAnalyzer] goal=${goal.id} BLOCKED by hard constraint: ${constraints[0]}`);
+            const violatingConstraint = this.findViolatingConstraint(plan, constraints);
+            if (violatingConstraint) {
+                log.warn(`[RiskAnalyzer] goal=${goal.id} BLOCKED by hard constraint: ${violatingConstraint}`);
                 return {
                     risks,
                     adjustedPlan: plan,
                     planAdjusted: false,
                     blocked: true,
-                    blockReason: constraints[0],
+                    blockReason: violatingConstraint,
                 };
             }
         }
@@ -141,29 +142,37 @@ export class RiskAnalyzer {
     }
 
     /**
-     * Verifica se algum step do plano viola uma constraint dura do ReflectionMemory.
+     * Retorna a primeira constraint que o plano viola, ou null se nenhuma for violada.
      *
      * Lógica: extrai a ferramenta proibida de cada constraint e verifica se ela
      * está presente no plano. Isso evita falsos positivos de constraints globais
      * (goal_blocker_*) bloquearem goals que não usam a ferramenta problemática.
+     *
+     * Retornar a constraint exata (em vez de boolean) permite que o log informe
+     * qual regra foi violada, não apenas constraints[0] (que era sempre "web_search").
      */
-    private detectConstraintViolation(plan: PlanStep[], constraints: string[]): boolean {
+    private findViolatingConstraint(plan: PlanStep[], constraints: string[]): string | null {
         const planTools = new Set(plan.map(s => s.toolName).filter(Boolean) as string[]);
 
         for (const constraint of constraints) {
             // Extrai nome da ferramenta de textos como "A ferramenta 'web_search' falhou..."
             // Só bloqueia se essa ferramenta está efetivamente no plano atual.
             const toolMatch = constraint.match(/'([a-z][a-z0-9_]*)'/i);
-            if (toolMatch && planTools.has(toolMatch[1])) return true;
+            if (toolMatch && planTools.has(toolMatch[1])) return constraint;
 
             // Casos especiais: pip install e python3 -m venv são detectados via args de exec_command
             for (const step of plan) {
                 const cmdValue = String(step.toolArgs?.command ?? step.toolArgs?.cmd ?? '');
-                if (/pip install/i.test(constraint) && /pip\s+install/i.test(cmdValue)) return true;
-                if (/python3 -m venv/i.test(constraint) && /python3\s+-m\s+venv/i.test(cmdValue)) return true;
+                if (/pip install/i.test(constraint) && /pip\s+install/i.test(cmdValue)) return constraint;
+                if (/python3 -m venv/i.test(constraint) && /python3\s+-m\s+venv/i.test(cmdValue)) return constraint;
             }
         }
-        return false;
+        return null;
+    }
+
+    /** @deprecated Use findViolatingConstraint instead */
+    private detectConstraintViolation(plan: PlanStep[], constraints: string[]): boolean {
+        return this.findViolatingConstraint(plan, constraints) !== null;
     }
 
     private async reviewPlanWithLLM(goal: Goal, plan: PlanStep[]): Promise<{
@@ -199,11 +208,13 @@ OU
 {"risks": [], "plan": null}`;
 
         try {
+            // 90s allows models with extended thinking (kimi-k2.6, gemma4) to finish
+            // JSON output after deep reasoning — 45s caused truncated JSON errors in prod.
             const result = await this.providerFactory.chatWithFallback(
                 [{ role: 'user', content: prompt }] as LLMMessage[],
                 undefined,
                 undefined,
-                45_000,
+                90_000,
             );
 
             if (result.status !== 'success') {

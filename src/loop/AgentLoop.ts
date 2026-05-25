@@ -1049,6 +1049,12 @@ export class AgentLoop {
             }
 
             if (response.toolCalls && response.toolCalls.length > 0) {
+                // Tracks the last successful terminal tool in this batch.
+                // We intentionally do NOT return inside the for loop so that all
+                // send_document / send_audio calls in a single batch are executed
+                // before the turn ends (fixes the "only index.html sent" bug).
+                let terminalBatchResult: string | null = null;
+
                 for (const toolCall of response.toolCalls) {
                     const toolName = toolCall.name;
                     const toolInput = JSON.stringify(toolCall.arguments);
@@ -1230,15 +1236,24 @@ export class AgentLoop {
                             void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
                         }
                         if (terminalTools.includes(toolName) && result.success) {
-                            log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded → task DONE, returning result`);
-                            move('FINAL_READY', { step: stepCount, tool: toolName, terminal: true });
-                            traceManager.completeTrace(trace, 'completed', result.output);
-                            this.persistTrace(trace, stepCount, 'completed', result.output, channelContext);
-                            return result.output;
+                            log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded — continuing batch before closing turn`);
+                            terminalBatchResult = result.output;
+                            move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: true });
+                            continue; // process remaining toolCalls in this batch (e.g. multiple send_document)
                         }
                         move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
                     }
                 }
+
+                // After all toolCalls in the batch are processed, check for a terminal result.
+                if (terminalBatchResult !== null) {
+                    log.info(`[${this.ts()}] [TASK-FSM] Terminal batch done → task DONE, returning result`);
+                    move('FINAL_READY', { step: stepCount, terminal: true });
+                    traceManager.completeTrace(trace, 'completed', terminalBatchResult);
+                    this.persistTrace(trace, stepCount, 'completed', terminalBatchResult, channelContext);
+                    return terminalBatchResult;
+                }
+
                 continue;
             }
 
@@ -1329,6 +1344,7 @@ export class AgentLoop {
 
                     const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
                     if (terminalTools.includes(toolName) && result.success) {
+                        // JSON-action path is always a single tool call per step, so return immediately.
                         log.info(`[${this.ts()}] [TASK-FSM] Terminal atomic tool "${toolName}" succeeded → task DONE, returning result`);
                         move('FINAL_READY', { step: stepCount, tool: toolName, terminal: true });
                         traceManager.completeTrace(trace, 'completed', result.output);
