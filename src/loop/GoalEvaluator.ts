@@ -274,6 +274,27 @@ export class GoalEvaluator {
         const matched = this.findMatchedPattern(error);
 
         if (matched) {
+            // exec_command: "No such file or directory" (exit 2) significa que o PATH do
+            // argumento não existe — não que exec_command em si está ausente (exit 127).
+            // Reclassificar para tool_error evita que o GoalPlanner pense que a ferramenta
+            // shell está faltando e gere replans sem exec_command.
+            if (matched.kind === 'missing_tool' && toolName === 'exec_command') {
+                const isCommandMissing = /command not found|which:\s*no|cannot find|\[exit code: 127\]/i.test(error);
+                if (!isCommandMissing) {
+                    return {
+                        kind: 'tool_error',
+                        toolName,
+                        description: `Caminho não encontrado ao executar '${toolName}': ${error.slice(0, 200)}`,
+                        suggestedActions: [
+                            'Verificar se o caminho existe com list_workspace',
+                            'Listar o diretório pai: exec_command ls /home/venus/newclaw/workspace',
+                            'Corrigir o caminho no próximo passo',
+                        ],
+                        detectedAt: Date.now(),
+                    };
+                }
+            }
+
             const match = error.match(matched.pattern)!;
             const description = matched.description(match, toolName);
             log.debug(`[GoalEvaluator] classify: tool=${toolName} kind=${matched.kind} pattern=/${matched.pattern.source.slice(0, 60)}/ retryable=${matched.isRetryable}`);

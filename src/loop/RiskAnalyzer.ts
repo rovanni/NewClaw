@@ -204,13 +204,14 @@ OU
 {"risks": [], "plan": null}`;
 
         try {
-            // 90s allows models with extended thinking (kimi-k2.6, gemma4) to finish
-            // JSON output after deep reasoning — 45s caused truncated JSON errors in prod.
+            // 150s allows models with extended thinking (kimi-k2.6, gemma4) to finish
+            // JSON output after deep reasoning. 90s caused kimi-k2.6 to time out mid-think
+            // (19k chars of thinking, no output), producing invalid JSON on recovery.
             const result = await this.providerFactory.chatWithFallback(
                 [{ role: 'user', content: prompt }] as LLMMessage[],
                 undefined,
                 undefined,
-                90_000,
+                150_000,
             );
 
             if (result.status !== 'success') {
