@@ -311,12 +311,23 @@ export class AgentLoop {
         finalResponse?: string
     ): Promise<void> {
         try {
-            const timeout = new Promise<null>(res => setTimeout(() => res(null), 60000));
-            const validation = await Promise.race([
-                this.observer.validate(userText, intent, toolName, toolOutput, finalResponse ?? ''),
-                timeout
-            ]);
-            if (!validation) {
+            // AbortController tied to the 60 s timeout.
+            // Passing the signal to observer.validate() ensures the underlying provider
+            // call is cancelled when the timeout fires, preventing the orphaned
+            // "approved=false" log that appeared after the turn had already ended.
+            const abortCtrl = new AbortController();
+            const timeoutHandle = setTimeout(() => abortCtrl.abort(), 60_000);
+
+            let validation: import('./ObserverValidator').ValidationResult;
+            try {
+                validation = await this.observer.validate(
+                    userText, intent, toolName, toolOutput, finalResponse ?? '', abortCtrl.signal
+                );
+            } finally {
+                clearTimeout(timeoutHandle);
+            }
+
+            if (abortCtrl.signal.aborted) {
                 log.info(`[OBSERVER] Validation timed out for ${toolName}`);
                 return;
             }

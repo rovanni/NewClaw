@@ -105,12 +105,18 @@ export class ObserverValidator {
         return null;
     }
 
+    /**
+     * @param signal - AbortSignal tied to the caller's timeout. When the signal fires the
+     *   provider call is abandoned and the method returns a skipped result instead of logging
+     *   a confusing approved=false after the turn already ended.
+     */
     async validate(
         userMessage: string,
         intent: string,
         toolUsed: string,
         toolResult: string,
-        finalResponse: string
+        finalResponse: string,
+        signal?: AbortSignal,
     ): Promise<ValidationResult> {
         // Try deterministic check first — avoids LLM entirely for obvious cases
         const deterministic = this.deterministicCheck(toolUsed, toolResult, finalResponse);
@@ -118,6 +124,10 @@ export class ObserverValidator {
             const tag = deterministic.validationSkipped ? '⏭️ skipped' : deterministic.approved ? '✅' : '❌';
             log.info(`${tag} [DETERMINISTIC] approved=${deterministic.approved} confidence=${deterministic.confidence} reason="${deterministic.reason}"`);
             return deterministic;
+        }
+
+        if (signal?.aborted) {
+            return { approved: true, reason: 'Validation cancelled before LLM call', confidence: 0, validationSkipped: true };
         }
 
         const prompt = OBSERVER_PROMPT
@@ -134,8 +144,16 @@ export class ObserverValidator {
 
         try {
             const startTime = Date.now();
-            const response = await this.providerFactory.getProviderWithModel(this.observerModel).chat(messages);
+            const response = await this.providerFactory.getProviderWithModel(this.observerModel).chat(messages, undefined, { signal });
             const elapsed = Date.now() - startTime;
+
+            // If the signal aborted while the LLM was running, discard the result silently.
+            // This prevents the orphaned "approved=false" log that appears after the timeout
+            // already fired and the turn has ended — confusing but actionless.
+            if (signal?.aborted) {
+                log.info(`[OBSERVER] Result discarded — signal aborted after ${elapsed}ms (post-turn advisory window closed)`);
+                return { approved: true, reason: 'Validation result discarded after abort', confidence: 0, validationSkipped: true };
+            }
 
             const content = (response.content || '').trim();
 
@@ -156,6 +174,9 @@ export class ObserverValidator {
                 suggestedFix: result.suggested_fix || result.suggestedFix || undefined
             };
         } catch (error) {
+            if (signal?.aborted) {
+                return { approved: true, reason: 'Validation aborted', confidence: 0, validationSkipped: true };
+            }
             log.warn(`Validation error: ${errorMessage(error)}, skipping`);
             return { approved: false, reason: `Observer error: ${errorMessage(error)}`, confidence: 0, validationSkipped: true };
         }

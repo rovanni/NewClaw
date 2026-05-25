@@ -34,6 +34,10 @@ const GOAL_SIGNALS: RegExp[] = [
     /\b(implementa[r]?|refatora[r]?|depur[ae]|corrig[ei]|fix[ae]|adiciona[r]?)\b/i,
     // Operações de sistema
     /\b(inicia[r]?|para[r]?|reinicia[r]?|configur[ae]|instala[r]?|desinsta[l])\b/i,
+    // Relatório de erro técnico com código ou caminho específico — sempre é um goal claro,
+    // nunca ambíguo: o erro já identifica o problema e não precisa de clarificação.
+    /\b(ERR_[A-Z_]+|ENOENT|EACCES|failed to load|net::|SyntaxError|ReferenceError|TypeError)\b/i,
+    /\b(está com (vários |muitos )?erros?|deu erro|erro na linha|exception:|traceback)\b/i,
 ];
 
 /** Padrões que indicam CLARAMENTE conversa simples (não goal) */
@@ -68,6 +72,10 @@ export class GoalExtractor {
             if (pattern.test(msg)) return false;
         }
 
+        // Relatório de erro técnico com código específico → goal imediato, sem ambiguidade
+        const ERROR_REPORT = /\b(ERR_[A-Z_]+|ENOENT|EACCES|failed to load|net::|SyntaxError|ReferenceError|TypeError)\b/i;
+        if (ERROR_REPORT.test(msg)) return true;
+
         // Sinais positivos claros → é goal
         let matches = 0;
         for (const pattern of GOAL_SIGNALS) {
@@ -96,9 +104,11 @@ Responda APENAS com JSON válido, sem markdown:
 {"is_goal": boolean, "confidence": 0.0-1.0, "objective": "descrição se for goal", "required_tools": ["tool1"], "reason": "motivo", "is_ambiguous": boolean, "clarification_question": "pergunta ao usuário se is_ambiguous=true"}
 
 Regras:
-- is_ambiguous=true apenas quando is_goal=true e a intenção é genuinamente vaga
-- Exemplos is_ambiguous=true: "essa versão não consigo editar" (qual arquivo?), "não está funcionando" (o quê?), "pode corrigir?" (o quê?)
+- is_ambiguous=true SOMENTE quando is_goal=true E a intenção é genuinamente vaga (sem arquivo, sem erro específico)
+- Relatórios de erro técnico com código ou path específico são NUNCA ambíguos: o erro já identifica o problema
+- Exemplos is_ambiguous=true: "essa versão não consigo editar" (qual arquivo?), "pode corrigir?" (o quê exatamente?)
 - Exemplos is_ambiguous=false: "criar apresentação sobre Python com 10 slides", "resumir o PDF que enviei"
+- Exemplos is_ambiguous=false (erros técnicos): "style.css:1 Failed to load resource: net::ERR_FILE_NOT_FOUND", "TypeError: cannot read property of undefined at line 42", "está com vários erros: SyntaxError no map.js"
 - Exemplos is_goal=false: "o que é machine learning?", "oi tudo bem?", "obrigado"`;
 
         try {
