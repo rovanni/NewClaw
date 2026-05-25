@@ -21,6 +21,10 @@ import { Goal, PlanStep } from './GoalTypes';
 
 const log = createLogger('RiskAnalyzer');
 
+// Modelo dedicado à revisão de riscos: gera JSON rápido e não entra em extended thinking.
+// kimi-k2.6 e outros thinking models são inadequados — raciocinam 150s+ sem produzir output.
+const RISK_REVIEW_MODEL = 'gemma4:31b-cloud';
+
 // Executáveis comumente usados em exec_command que podem não estar instalados.
 // Chave: nome do executável (lowercase). Valor: pacote a instalar.
 const KNOWN_SYSTEM_DEPS: Record<string, string> = {
@@ -171,6 +175,28 @@ export class RiskAnalyzer {
     }
 
 
+    /**
+     * Chama o LLM de revisão de riscos usando modelo fixo (não o default).
+     * Mesmo padrão do GoalPlanner.callPlannerLLM — gemma4 não entra em extended thinking.
+     */
+    private async callRiskLLM(messages: LLMMessage[], timeoutMs: number): Promise<{ status: string; content: string }> {
+        const provider = this.providerFactory.getProviderWithModel(RISK_REVIEW_MODEL);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const response = await provider.chat(messages, undefined, { signal: controller.signal, timeoutMs });
+            return { status: 'success', content: response.content };
+        } catch (err) {
+            const msg = String(err);
+            if (msg.includes('abort') || msg.includes('timed out') || msg.includes('timeout')) {
+                return { status: 'timeout', content: '' };
+            }
+            return { status: 'error', content: '' };
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
     private async reviewPlanWithLLM(goal: Goal, plan: PlanStep[]): Promise<{
         risks: string[];
         adjustedPlan: PlanStep[];
@@ -204,14 +230,11 @@ OU
 {"risks": [], "plan": null}`;
 
         try {
-            // 150s allows models with extended thinking (kimi-k2.6, gemma4) to finish
-            // JSON output after deep reasoning. 90s caused kimi-k2.6 to time out mid-think
-            // (19k chars of thinking, no output), producing invalid JSON on recovery.
-            const result = await this.providerFactory.chatWithFallback(
+            // gemma4:31b-cloud: gera JSON rápido sem extended thinking (60s é sobra).
+            // chatWithFallback usava kimi-k2.6 que travava em 150s de thinking sem output.
+            const result = await this.callRiskLLM(
                 [{ role: 'user', content: prompt }] as LLMMessage[],
-                undefined,
-                undefined,
-                150_000,
+                60_000,
             );
 
             if (result.status !== 'success') {

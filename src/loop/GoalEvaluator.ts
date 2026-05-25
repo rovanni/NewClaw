@@ -180,11 +180,16 @@ export class GoalEvaluator {
         const toolName = planStep.toolName ?? 'unknown';
         const error = toolResult.error ?? toolResult.output ?? '';
 
-        // Item 9: Immediate replan on dedup — se este step+tool já falhou antes,
+        // Item 9: Immediate replan on dedup — se este step+tool+args já falhou antes,
         // bloquear imediatamente sem retry para evitar loop de tentativas idênticas.
-        // A verificação é pelo par (planStepId, toolName) nos attempts anteriores.
-        const alreadyFailed = goal.attempts.some(
-            a => a.planStepId === planStep.id && a.toolName === toolName && a.result === 'failure'
+        // Compara (planStepId, toolName, args) para não bloquear replanos com
+        // comandos diferentes ao mesmo step_id (ex: exec_command com caminhos distintos).
+        const currentArgsStr = JSON.stringify(planStep.toolArgs ?? {});
+        const alreadyFailed = goal.attempts.some(a =>
+            a.planStepId === planStep.id &&
+            a.toolName === toolName &&
+            a.result === 'failure' &&
+            JSON.stringify(a.args ?? {}) === currentArgsStr
         );
         if (alreadyFailed) {
             log.warn(`[GoalEvaluator] dedup step=${planStep.id} tool=${toolName} — replan imediato`);
