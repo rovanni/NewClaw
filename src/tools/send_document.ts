@@ -41,9 +41,10 @@ export class SendDocumentTool implements ToolExecutor {
         this.channel = channel || 'telegram';
     }
 
-    /** Resolve e normaliza caminho dentro do sandbox (workspace) */
+    /** Resolve e valida caminho dentro do sandbox (workspace) */
     private resolvePath(inputPath: string): { resolved: string; error?: string } {
-        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
+        const workspaceDir = path.resolve(process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace'));
+        const homeDir = process.env.HOME || '/root';
         let expanded = inputPath;
 
         if (!expanded.startsWith('/') && expanded.startsWith('workspace/')) {
@@ -51,16 +52,27 @@ export class SendDocumentTool implements ToolExecutor {
         }
 
         if (expanded.startsWith('~/')) {
-            expanded = (process.env.HOME || '/root') + expanded.slice(1);
+            expanded = homeDir + expanded.slice(1);
         }
 
-        if (path.isAbsolute(expanded)) {
-            const normalized = expanded.replace(/\/workspace\/workspace\//, '/workspace/').replace(/\/workspace\/workspace$/, '/workspace');
-            return { resolved: path.normalize(normalized) };
+        // path.resolve elimina travessias (../../), path.normalize não resolve symlinks
+        // antes da checagem de roots — troca necessária para garantir sandbox correto.
+        const normalized = path.resolve(expanded.startsWith('/')
+            ? expanded
+            : path.join(workspaceDir, expanded)
+        );
+
+        const allowedRoots = [workspaceDir, '/tmp', homeDir];
+        const isAllowed = allowedRoots.some(root => {
+            const rel = path.relative(root, normalized);
+            return !rel.startsWith('..') && !path.isAbsolute(rel);
+        });
+
+        if (!isAllowed) {
+            return { resolved: normalized, error: `⛔ Caminho fora do sandbox: ${inputPath}` };
         }
 
-        const resolved = path.resolve(workspaceDir, expanded);
-        return { resolved };
+        return { resolved: normalized };
     }
 
     async execute(args: Record<string, any>): Promise<ToolResult> {

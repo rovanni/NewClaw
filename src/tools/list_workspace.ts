@@ -69,18 +69,44 @@ export class ListWorkspaceTool implements ToolExecutor {
     };
 
     async execute(args: Record<string, unknown>): Promise<ToolResult> {
-        const subPath = ((args.path as string) || '').replace(/\.\./g, '').trim();
+        const rawPath = ((args.path as string) || '').trim();
         const pattern = (args.pattern as string) || '';
         const depth = Math.min(Math.max(Number(args.depth) || 2, 1), 4);
 
-        const targetDir = subPath ? path.join(WORKSPACE, subPath) : WORKSPACE;
+        const workspaceAbs = path.resolve(WORKSPACE);
+        const homeDir = process.env.HOME || '/root';
+
+        let targetDir: string;
+
+        if (!rawPath) {
+            targetDir = workspaceAbs;
+        } else if (path.isAbsolute(rawPath)) {
+            // Caminhos absolutos: usar diretamente se estiver dentro do workspace ou do home.
+            // path.join(WORKSPACE, absPath) concatena literalmente no Node.js e gera paths inválidos.
+            const normalized = path.normalize(rawPath);
+            const inWorkspace = !path.relative(workspaceAbs, normalized).startsWith('..');
+            const inHome = !path.relative(homeDir, normalized).startsWith('..');
+            if (inWorkspace || inHome) {
+                targetDir = normalized;
+            } else {
+                return {
+                    success: false,
+                    output: '',
+                    error: `Pasta "${rawPath}" está fora do workspace. Use um caminho relativo (ex: "jogos/tower_defense") ou um caminho dentro de ${workspaceAbs}.`,
+                };
+            }
+        } else {
+            // Relativo: remover `..` e juntar ao workspace
+            const safe = rawPath.replace(/\.\./g, '').trim();
+            targetDir = path.join(workspaceAbs, safe);
+        }
 
         if (!fs.existsSync(targetDir)) {
-            return { success: false, output: '', error: `Pasta "${subPath || 'workspace'}" não encontrada.` };
+            return { success: false, output: '', error: `Pasta "${rawPath || 'workspace'}" não encontrada.` };
         }
 
         const lines: string[] = [];
-        const header = subPath ? `${WORKSPACE}/${subPath}/` : `${WORKSPACE}/`;
+        const header = `${targetDir}/`;
         lines.push(header);
         listDir(targetDir, '', 0, depth, pattern, lines);
 

@@ -104,6 +104,11 @@ Responda APENAS com JSON válido (sem markdown):
 
 Máximo 3 steps. Se o blocker for 'missing_tool', inclua step de instalação como primeiro step.
 
+REFERÊNCIA DE ARGS OBRIGATÓRIOS:
+- edit: SEMPRE forneça oldText+newText (para substituição) OU startLine+endLine+content (para patch) OU append=true+content. Nunca chame edit sem esses parâmetros.
+- list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") OU absoluto. Passe apenas a subpasta desejada.
+- read: aceita caminho relativo ao workspace ou absoluto. Para diretórios, lista automaticamente o conteúdo.
+
 REGRAS CRÍTICAS para blocker 'environment_limit':
 - Se o blocker mencionar PEP 668 ou 'externally-managed':
   → NÃO use pip install direto nem --break-system-packages.

@@ -28,7 +28,13 @@ function isValidGitUrl(url: string): boolean {
 }
 
 function sanitizeArg(arg: string): string {
-    return arg.replace(/[;&|`$()]/g, '');
+    // Whitelist em vez de blacklist: apenas caracteres válidos em nomes de pacotes npm
+    // (@scope/package, package@version, package-name, ./local-path).
+    // Blacklist é insegura — \n, {}, glob e outros não cobertos escapam facilmente.
+    if (!/^[@a-zA-Z0-9._\-/]+(@[a-zA-Z0-9._\-]+)?$/.test(arg)) {
+        throw new Error(`Argumento inválido para instalação: "${arg.slice(0, 60)}"`);
+    }
+    return arg;
 }
 
 export interface InstallResult {
@@ -79,8 +85,9 @@ export class SkillInstaller {
             // NPM package
             if (options.npm) {
                 const sanitized = sanitizeArg(options.npm);
+                // Aspas ao redor do arg previnem word-splitting mesmo após sanitização
                 await withTimeout(
-                    execAsync(`npm install ${sanitized}`, { cwd: this.workspaceDir }),
+                    execAsync(`npm install "${sanitized}"`, { cwd: this.workspaceDir }),
                     DEFAULT_TIMEOUT
                 );
                 return { success: true, data: { npm: sanitized } };
@@ -90,7 +97,7 @@ export class SkillInstaller {
             if (options.npx) {
                 const sanitized = sanitizeArg(options.npx);
                 await withTimeout(
-                    execAsync(`npx ${sanitized}`, { cwd: this.workspaceDir }),
+                    execAsync(`npx "${sanitized}"`, { cwd: this.workspaceDir }),
                     DEFAULT_TIMEOUT
                 );
                 return { success: true, data: { npx: sanitized } };

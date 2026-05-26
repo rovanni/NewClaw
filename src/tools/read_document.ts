@@ -9,7 +9,7 @@
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { promisify } from 'util';
@@ -17,6 +17,8 @@ import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
 
 const execAsync = promisify(exec);
+// execFile não passa pelo shell — elimina risco de injeção de comandos via args
+const execFileAsync = promisify(execFile);
 const log = createLogger('ReadDocumentTool');
 
 const WORKSPACE = process.env.WORKSPACE_DIR || './workspace';
@@ -106,7 +108,11 @@ export class ReadDocumentTool implements ToolExecutor {
     }
 
     private async extractPdf(filePath: string, pages?: string): Promise<ToolResult> {
-        const pageArg = pages ? `-f ${pages.split('-')[0]} -l ${pages.split('-')[1] || pages.split('-')[0]}` : '';
+        // Valida formato de páginas antes de injetar no comando shell (ex: "1-5" ou "3")
+        const safePages = pages && /^\d+(-\d+)?$/.test(pages.trim()) ? pages.trim() : null;
+        const pageArg = safePages
+            ? `-f ${safePages.split('-')[0]} -l ${safePages.split('-')[1] || safePages.split('-')[0]}`
+            : '';
 
         // 1. pdftotext (best for digital PDFs)
         try {
@@ -127,12 +133,15 @@ export class ReadDocumentTool implements ToolExecutor {
         }
 
         // 2. python3 + pdfminer
+        // O filepath é passado como sys.argv[1] — nunca interpolado no código Python,
+        // eliminando risco de injeção de comandos via nome de arquivo malicioso.
         try {
-            const script = `from pdfminer.high_level import extract_text; print(extract_text('${filePath.replace(/'/g, "\\'")}'))`;
-            const { stdout } = await execAsync(
-                `python3 -c "${script}"`,
-                { timeout: TIMEOUT_MS }
-            );
+            const script = [
+                'import sys',
+                'from pdfminer.high_level import extract_text',
+                'print(extract_text(sys.argv[1]))',
+            ].join('; ');
+            const { stdout } = await execFileAsync('python3', ['-c', script, filePath], { timeout: TIMEOUT_MS });
             const text = stdout.trim();
             if (text.length > 50) {
                 log.info(`read_document: pdfminer OK (${text.length} chars)`);
@@ -161,15 +170,18 @@ export class ReadDocumentTool implements ToolExecutor {
             const texts: string[] = [];
             for (const png of pngs.slice(0, 10)) {
                 try {
-                    const { stdout } = await execAsync(
-                        `tesseract /tmp/${png} stdout -l por+eng`,
-                        { timeout: 30_000 }
+                    // execFile passa o path como argumento direto ao processo —
+                    // nomes de arquivo com caracteres especiais não chegam ao shell.
+                    const { stdout } = await execFileAsync(
+                        'tesseract',
+                        [path.join('/tmp', png), 'stdout', '-l', 'por+eng'],
+                        { timeout: 30_000 },
                     );
                     texts.push(stdout.trim());
                 } catch { /* skip page */ }
             }
             // Cleanup
-            pngs.forEach(f => { try { fs.unlinkSync(`/tmp/${f}`); } catch { /* ignore */ } });
+            pngs.forEach(f => { try { fs.unlinkSync(path.join('/tmp', f)); } catch { /* ignore */ } });
 
             const combined = texts.join('\n\n').trim();
             if (combined.length > 50) {

@@ -165,14 +165,23 @@ export class ReadTool implements ToolExecutor {
 
         try {
             if (!fs.existsSync(filePath)) {
-                const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
+                // Lista a pasta pai do arquivo ausente (mais útil que listar o workspace raiz)
                 let hint = '';
                 try {
-                    if (fs.existsSync(workspaceDir)) {
-                        const entries = fs.readdirSync(workspaceDir).slice(0, 30);
+                    const parentDir = path.dirname(filePath);
+                    if (fs.existsSync(parentDir)) {
+                        const entries = fs.readdirSync(parentDir).slice(0, 30);
                         hint = entries.length > 0
-                            ? ` Arquivos no workspace: ${entries.join(', ')}.`
-                            : ' O workspace está vazio.';
+                            ? ` Arquivos em ${parentDir}: ${entries.join(', ')}.`
+                            : ` Diretório ${parentDir} está vazio.`;
+                    } else {
+                        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
+                        if (fs.existsSync(workspaceDir)) {
+                            const entries = fs.readdirSync(workspaceDir).slice(0, 20);
+                            hint = entries.length > 0
+                                ? ` Arquivos no workspace: ${entries.join(', ')}.`
+                                : ' O workspace está vazio.';
+                        }
                     }
                 } catch { /* ignore listing errors */ }
                 return { success: false, output: '', error: `Arquivo não encontrado: ${filePath}.${hint} Se o arquivo ainda não foi criado, use a ferramenta write primeiro.` };

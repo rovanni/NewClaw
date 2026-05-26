@@ -157,7 +157,9 @@ export async function auditIntegration(config: AuditConfig): Promise<AuditFindin
 
     // 5. Signal
     const signalNumber = process.env.SIGNAL_PHONE_NUMBER;
-    const signalCliPath = process.env.SIGNAL_CLI_PATH || 'signal-cli';
+    const rawSignalPath = process.env.SIGNAL_CLI_PATH || 'signal-cli';
+    // Validar antes de injetar em execSync: apenas caracteres seguros para paths de executável
+    const signalCliPath = /^[a-zA-Z0-9_.\-/]+$/.test(rawSignalPath) ? rawSignalPath : 'signal-cli';
     if (signalNumber) {
         try {
             const signalResult = execSync(`which ${signalCliPath} 2>/dev/null || echo not_found`, { encoding: 'utf-8' }).trim();

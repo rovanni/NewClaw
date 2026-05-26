@@ -48,7 +48,11 @@ export class ExecCommandTool implements ToolExecutor {
             const hostAlias = match[1];
             const remoteCmd = match[2];
             const sshTarget = resolveHost(hostAlias);
-            command = `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new ${sshTarget} "${remoteCmd.replace(/"/g, '\\"')}"`;
+            // Aspas simples impedem TODA expansão de shell local ($(), backticks, $VAR).
+            // Aspas duplas só escapavam ", mas $() continuava sendo interpretado localmente.
+            // Se remoteCmd contém ', usamos o idioma '"'"' para escape dentro de single-quote.
+            const escapedCmd = remoteCmd.replace(/'/g, "'\\''");
+            command = `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new ${sshTarget} '${escapedCmd}'`;
         }
 
         // ── Path Resolution ──
