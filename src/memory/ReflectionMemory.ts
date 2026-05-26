@@ -236,16 +236,27 @@ export class ReflectionMemory {
      * Diferente de buildContextHint() (que sugere), constraints são proibições
      * absolutas injetadas no prompt do GoalPlanner como regras a seguir.
      *
+     * @param planTools Lista de toolNames presentes no plano atual. Quando fornecida,
+     *   constraints de tools que NÃO estão no plano são descartadas — evita noise
+     *   de constraints irrelevantes (ex: web_search bloqueada num plano que não a usa).
+     *
      * Exemplos de output:
      *   ["NÃO use pip install direto — PEP 668 bloqueado neste ambiente",
      *    "NÃO use python3 -m venv — ensurepip ausente neste ambiente"]
      */
-    buildConstraints(goalContext: string): string[] {
+    buildConstraints(goalContext: string, planTools?: string[]): string[] {
         try {
             const patterns = this.getHardFailurePatterns(goalContext);
+            const planToolSet = planTools && planTools.length > 0 ? new Set(planTools) : null;
             const constraints: string[] = [];
 
             for (const p of patterns) {
+                // Se temos a lista de tools do plano, descarta constraints cujas tools
+                // não aparecem no plano — evita que falhas históricas de web_search
+                // poluam plans de edição de arquivo, por exemplo.
+                if (planToolSet && p.tool_used && p.tool_used !== 'unknown' && p.tool_used !== 'agentloop') {
+                    if (!planToolSet.has(p.tool_used)) continue;
+                }
                 const constraint = this.patternToConstraint(p.pattern, p.tool_used, p.top_fix);
                 if (constraint) constraints.push(constraint);
             }

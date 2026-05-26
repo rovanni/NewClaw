@@ -75,7 +75,9 @@ export class RiskAnalyzer {
         // Ferramentas com ≥90% de falha recente viram proibições absolutas.
         // Em vez de bloquear o plano inteiro, removemos os steps que usam a
         // ferramenta proibida. Só bloqueamos se o plano ficar completamente vazio.
-        const constraints = this.reflectionMemory.buildConstraints(goal.objective.slice(0, 150));
+        // Passa planTools para filtrar constraints de tools que não estão no plano.
+        const planTools = plan.map(s => s.toolName).filter((t): t is string => Boolean(t));
+        const constraints = this.reflectionMemory.buildConstraints(goal.objective.slice(0, 150), planTools);
         if (constraints.length > 0) {
             for (const c of constraints) risks.push(`[CONSTRAINT] ${c}`);
 

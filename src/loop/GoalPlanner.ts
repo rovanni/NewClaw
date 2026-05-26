@@ -97,12 +97,30 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
         ? `\nCONTEXTO (memória + feedback):\n${memContext}\n`
         : '';
 
+    // Detecta loop de análise: goal_incomplete + estratégias anteriores todas baseadas em leitura.
+    // Quando detectado, injeta diretiva obrigatória de implementação no topo do prompt.
+    const priorIncompletes = goal.blockers.filter(b => b.kind === 'goal_incomplete').length;
+    const priorAnalysisOnly = goal.strategiesTried.filter(s =>
+        /anali[sz]|leitura|ler |audit|mapear|verificar|identificar|diagnosticar/i.test(s)
+    ).length;
+    const stuckInAnalysis = blocker.kind === 'goal_incomplete' &&
+        (priorIncompletes >= 1 || priorAnalysisOnly >= 2);
+
+    const implementDirective = stuckInAnalysis
+        ? `\nALERTA: LOOP DE ANÁLISE DETECTADO — ciclos anteriores só fizeram leitura sem implementar.
+OBRIGATÓRIO neste replan:
+  1. NÃO planeje mais steps somente de read/exec_command/list_workspace — contexto já foi coletado.
+  2. IMPLEMENTE usando write ou edit para modificar os arquivos necessários.
+  3. ENTREGUE: inclua step final que confirme o resultado ao usuário (send_document ou write com resumo).
+  Um plano que só lê arquivos sem modificar/entregar será rejeitado novamente.\n`
+        : '';
+
     return `Você é um planejador de tarefas. Um blocker foi detectado. Proponha uma NOVA estratégia.
 
 OBJETIVO: ${goal.objective}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}
-${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
+${implementDirective}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 
 Responda APENAS com JSON válido (sem markdown):
