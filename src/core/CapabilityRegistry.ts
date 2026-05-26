@@ -105,6 +105,17 @@ export class CapabilityRegistry {
     private async refreshTools(): Promise<void> {
         try {
             const caps = await this.envProbe.probe();
+
+            // Se o probe retornou tools vazio, exec_command ainda não estava registrado
+            // no ToolRegistry (race de startup: GoalOrchestrator.bootstrap() dispara antes
+            // de AgentController.registerSkills()). Não populamos o cache para que o
+            // próximo ensureFresh() dispare um novo probe com as tools já registradas.
+            // Gravar cache vazio bloquearia o recheck por 20 min.
+            if (Object.keys(caps.tools).length === 0) {
+                log.warn('[Registry] tools probe empty (exec_command not ready) — cache skipped, will retry');
+                return;
+            }
+
             const toolCaps: ToolCapabilities = {};
             for (const [name, available] of Object.entries(caps.tools)) {
                 toolCaps[name] = {
