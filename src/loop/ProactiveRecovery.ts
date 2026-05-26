@@ -35,7 +35,7 @@ interface ToolRecoveryConfig {
     maxRetries: number;
     argMutators: ArgMutator[];
     fallbackTools: string[];
-    adaptArgsForFallback?: (targetTool: string, originalArgs: Record<string, unknown>) => Record<string, unknown>;
+    adaptArgsForFallback?: (targetTool: string, originalArgs: Record<string, unknown>) => Record<string, unknown> | null;
 }
 
 // ── Per-tool recovery configuration ────────────────────────────────────────────
@@ -136,10 +136,12 @@ const RECOVERY: Record<string, ToolRecoveryConfig> = {
         ],
         fallbackTools: ['write'],
         adaptArgsForFallback: (targetTool, orig) => {
-            if (targetTool === 'write' && orig.content) {
+            // Só faz fallback para write se content for uma string não-vazia.
+            // Retorna null para impedir criação de arquivos zerados.
+            if (targetTool === 'write' && orig.content && typeof orig.content === 'string' && orig.content.trim().length > 0) {
                 return { path: orig.path, content: orig.content };
             }
-            return orig;
+            return null;
         }
     }
 };
@@ -214,6 +216,12 @@ export class ProactiveRecovery {
                 const adaptedArgs = config.adaptArgsForFallback
                     ? config.adaptArgsForFallback(fallbackName, step1.finalArgs)
                     : step1.finalArgs;
+
+                // null = adaptArgsForFallback sinalizou que este fallback não é adequado
+                if (adaptedArgs === null) {
+                    log.info(`[RECOVERY] "${toolName}" — fallback "${fallbackName}" ignorado (adaptArgsForFallback retornou null)`);
+                    continue;
+                }
 
                 const fallKey = makeKey(fallbackName, adaptedArgs);
                 if (usedInputs.has(fallKey)) continue;
