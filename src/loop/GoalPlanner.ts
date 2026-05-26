@@ -208,11 +208,14 @@ const TOOL_ALIASES: Record<string, string> = {
 // ── Validação de args obrigatórios ────────────────────────────────────────────
 
 /**
+ * Exportada para ser usada pelo RiskAnalyzer ao parsear planos ajustados via LLM,
+ * que não passam pelo parsePlanResponse do GoalPlanner.
+ *
  * Retorna uma string descrevendo os args faltantes, ou null se tudo ok.
  * Usada em parsePlanResponse para converter steps inválidos em AgentLoop steps
  * antes que cheguem à tool e explodam com erro de parâmetro obrigatório.
  */
-function detectMissingRequiredArgs(tool: string, args: Record<string, unknown>): string | null {
+export function detectMissingRequiredArgs(tool: string, args: Record<string, unknown>): string | null {
     if (tool === 'read' && !args['path']) {
         return "sem 'path' obrigatório";
     }

@@ -19,6 +19,7 @@ import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { Goal, PlanStep } from './GoalTypes';
+import { detectMissingRequiredArgs } from './GoalPlanner';
 
 const log = createLogger('RiskAnalyzer');
 
@@ -394,17 +395,30 @@ OU
             // Valida tools do plano ajustado
             const adjustedPlan: PlanStep[] = parsed.plan.slice(0, 5).map((s: Record<string, unknown>, i: number) => {
                 const rawTool = s.toolName ? String(s.toolName) : undefined;
-                const resolvedTool = rawTool && this.toolRegistry.get(rawTool) ? rawTool : undefined;
+                let resolvedTool = rawTool && this.toolRegistry.get(rawTool) ? rawTool : undefined;
                 if (rawTool && !resolvedTool) {
                     log.warn(`[RiskAnalyzer] tool '${rawTool}' não existe — step sem tool`);
                 }
+                let toolArgs = resolvedTool && s.toolArgs && typeof s.toolArgs === 'object'
+                    ? s.toolArgs as Record<string, unknown>
+                    : undefined;
+
+                // Mesma validação do parsePlanResponse: args obrigatórios ausentes
+                // → converte para AgentLoop (sem toolName) para o LLM resolver com contexto.
+                if (resolvedTool && toolArgs) {
+                    const missing = detectMissingRequiredArgs(resolvedTool, toolArgs);
+                    if (missing) {
+                        log.warn(`[RiskAnalyzer] adjusted step ${i + 1}: '${resolvedTool}' ${missing} — converting to AgentLoop step`);
+                        resolvedTool = undefined;
+                        toolArgs = undefined;
+                    }
+                }
+
                 return {
                     id: String(s.id ?? `step_${i + 1}`),
                     description: String(s.description ?? 'Execute step'),
                     toolName: resolvedTool,
-                    toolArgs: resolvedTool && s.toolArgs && typeof s.toolArgs === 'object'
-                        ? s.toolArgs as Record<string, unknown>
-                        : undefined,
+                    toolArgs,
                     fallbackSteps: [],
                     status: 'pending' as const,
                 };
