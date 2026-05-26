@@ -137,7 +137,7 @@ function extractUnixPaths(text: string): string[] {
 // \{[a-zA-Z_][a-zA-Z0-9_]{0,40}\} — só match em {simple_identifier}, não em código JS
 // como { isPaused = !isPaused; } (que contém espaços e operadores).
 const PLACEHOLDER_ARG_PATTERN =
-    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo)\b|<[^>]{1,60}>|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\//i;
+    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo)\b|<[a-zA-Z_][a-zA-Z0-9_-]{0,29}>|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\//i;
 
 // ── Aliases de ferramentas: nomes que LLMs inventam → nome real no ToolRegistry ──
 const TOOL_ALIASES: Record<string, string> = {

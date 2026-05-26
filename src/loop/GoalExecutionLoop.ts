@@ -469,7 +469,19 @@ export class GoalExecutionLoop {
             }
         }
 
-        // Max cycles atingido
+        // Max cycles atingido — mas se todos os steps completaram, ainda roda a validação final.
+        // Sem esta verificação, o goal falha mesmo quando o último step termina com sucesso
+        // no mesmo ciclo em que MAX_CYCLES é atingido (a iteração de validação nunca roda).
+        const allStepsDone = !currentGoal.currentPlan.find(s => s.status === 'pending');
+        if (allStepsDone) {
+            log.info(`[GoalLoop] goal=${currentGoal.id} MAX_CYCLES=${GOAL_LIMITS.MAX_CYCLES} reached but all steps done — running final validation`);
+            const validation = await this.validateGoalCompletion(currentGoal);
+            if (validation.achieved) {
+                this.goalStore.setStatus(currentGoal.id, 'completed');
+                return this.buildResult(currentGoal, true, totalCycles, totalReplans, validation.summary);
+            }
+            log.info(`[GoalLoop] goal=${currentGoal.id} final validation failed at MAX_CYCLES: ${validation.reason}`);
+        }
         this.goalStore.setStatus(currentGoal.id, 'failed');
         const explanation = this.evaluator.buildFailureExplanation(currentGoal);
         return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);

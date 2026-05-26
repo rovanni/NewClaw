@@ -122,6 +122,26 @@ const RECOVERY: Record<string, ToolRecoveryConfig> = {
         ],
         fallbackTools: [],
     },
+    edit: {
+        retryablePatterns: [],
+        maxRetries: 0,
+        argMutators: [
+            // Se o LLM passou 'content' mas esqueceu de especificar 'append: true' ou outro modo
+            (args) => {
+                if (args.content && args.oldText === undefined && args.newText === undefined && args.startLine === undefined && args.endLine === undefined && args.append === undefined) {
+                    return { ...args, append: true };
+                }
+                return null;
+            }
+        ],
+        fallbackTools: ['write'],
+        adaptArgsForFallback: (targetTool, orig) => {
+            if (targetTool === 'write' && orig.content) {
+                return { path: orig.path, content: orig.content };
+            }
+            return orig;
+        }
+    }
 };
 
 // ── Dedup key helper ────────────────────────────────────────────────────────────
