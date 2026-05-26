@@ -205,6 +205,31 @@ const TOOL_ALIASES: Record<string, string> = {
     ls: 'list_workspace',
 };
 
+// ── Validação de args obrigatórios ────────────────────────────────────────────
+
+/**
+ * Retorna uma string descrevendo os args faltantes, ou null se tudo ok.
+ * Usada em parsePlanResponse para converter steps inválidos em AgentLoop steps
+ * antes que cheguem à tool e explodam com erro de parâmetro obrigatório.
+ */
+function detectMissingRequiredArgs(tool: string, args: Record<string, unknown>): string | null {
+    if (tool === 'read' && !args['path']) {
+        return "sem 'path' obrigatório";
+    }
+    if (tool === 'write' && !args['path']) {
+        return "sem 'path' obrigatório";
+    }
+    if (tool === 'edit') {
+        const hasReplace = args['oldText'] !== undefined && args['newText'] !== undefined;
+        const hasPatch   = args['startLine'] !== undefined && args['endLine'] !== undefined && args['content'] !== undefined;
+        const hasAppend  = args['append'] === true && args['content'] !== undefined;
+        if (!hasReplace && !hasPatch && !hasAppend) {
+            return "sem args obrigatórios (oldText+newText | startLine+endLine+content | append+content)";
+        }
+    }
+    return null;
+}
+
 // ── GoalPlanner ───────────────────────────────────────────────────────────────
 
 // Modelo dedicado ao planning: gera JSON rápido e não entra em extended thinking.
@@ -214,18 +239,28 @@ const PLANNER_MODEL = 'gemma4:31b-cloud';
 export class GoalPlanner {
     private skillContext: string | undefined;
     private readonly skillLoader = new SkillLoader();
+    private skillsSummaryCache: { summary: string; loadedAt: number } | null = null;
+    private static readonly SKILLS_CACHE_TTL_MS = 60_000; // cobre duração típica de um goal
 
     constructor(
         private readonly providerFactory: ProviderFactory,
         private readonly reflectionMemory: ReflectionMemory,
     ) {}
 
-    /** Carrega skills registradas e retorna resumo compacto para injeção no prompt. */
+    /** Carrega skills e retorna resumo compacto para injeção no prompt.
+     *  Cache TTL de 60s: evita releitura de disco a cada plan/replan do mesmo goal. */
     private loadSkillsSummary(): string {
+        if (this.skillsSummaryCache &&
+            Date.now() - this.skillsSummaryCache.loadedAt < GoalPlanner.SKILLS_CACHE_TTL_MS) {
+            return this.skillsSummaryCache.summary;
+        }
         try {
             const skills = this.skillLoader.loadAll();
-            if (skills.length === 0) return '';
-            return skills.map(s => `  - ${s.name}: ${s.description}`).join('\n');
+            const summary = skills.length === 0
+                ? ''
+                : skills.map(s => `  - ${s.name}: ${s.description}`).join('\n');
+            this.skillsSummaryCache = { summary, loadedAt: Date.now() };
+            return summary;
         } catch {
             return '';
         }
@@ -382,6 +417,19 @@ export class GoalPlanner {
                     );
                     if (placeholderEntry) {
                         log.warn(`[GoalPlanner] step ${i + 1} has placeholder arg ${placeholderEntry[0]}="${String(placeholderEntry[1]).slice(0, 80)}" — converting to AgentLoop step`);
+                        resolvedTool = undefined;
+                        toolArgs = undefined;
+                    }
+                }
+
+                // Valida args obrigatórios de ferramentas que falham silenciosamente
+                // quando chamadas sem os parâmetros corretos. Converte para AgentLoop
+                // (sem toolName) para que o LLM resolva com contexto completo, em vez
+                // de deixar a tool explodir com erro de parâmetro obrigatório.
+                if (resolvedTool && toolArgs) {
+                    const missing = detectMissingRequiredArgs(resolvedTool, toolArgs);
+                    if (missing) {
+                        log.warn(`[GoalPlanner] step ${i + 1}: '${resolvedTool}' ${missing} — converting to AgentLoop step`);
                         resolvedTool = undefined;
                         toolArgs = undefined;
                     }

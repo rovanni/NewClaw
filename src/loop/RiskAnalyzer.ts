@@ -26,6 +26,16 @@ const log = createLogger('RiskAnalyzer');
 // kimi-k2.6 e outros thinking models são inadequados — raciocinam 150s+ sem produzir output.
 const RISK_REVIEW_MODEL = 'gemma4:31b-cloud';
 
+// Binários universais presentes em qualquer shell POSIX sem necessidade de instalação.
+// Checar via CapabilityRegistry causaria falso positivo — esses comandos não estão no
+// TOOLS_TO_PROBE do EnvironmentProbe mas funcionam em qualquer ambiente Linux/macOS.
+const SHELL_UNIVERSALS = new Set([
+    'ls', 'cd', 'echo', 'cat', 'grep', 'find', 'pwd', 'mkdir', 'rm', 'cp', 'mv',
+    'chmod', 'chown', 'which', 'test', 'head', 'tail', 'sort', 'uniq', 'wc',
+    'touch', 'sed', 'awk', 'tr', 'cut', 'date', 'env', 'printf', 'tee', 'xargs',
+    'sh', 'bash', 'python3', 'python', 'node', 'true', 'false', 'read',
+]);
+
 // Executáveis comumente usados em exec_command que podem não estar instalados.
 // Chave: nome do executável (lowercase). Valor: pacote a instalar.
 const KNOWN_SYSTEM_DEPS: Record<string, string> = {
@@ -150,7 +160,7 @@ export class RiskAnalyzer {
                 if (cmdValue) {
                     const tokens = cmdValue.trim().split(/\s+/).filter(t => t !== 'sudo' && t !== 'env' && !t.includes('='));
                     const firstToken = (tokens[0] ?? '').toLowerCase().replace(/^.*\//, '');
-                    if (firstToken) {
+                    if (firstToken && !SHELL_UNIVERSALS.has(firstToken)) {
                         const toolOk = capReg.canSync(`tool.${firstToken}`);
                         if (toolOk === false) {
                             risks.push(`Step "${step.description}": binário '${firstToken}' não detectado no ambiente`);
