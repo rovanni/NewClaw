@@ -15,6 +15,7 @@ import { createLogger } from '../shared/AppLogger';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ToolRegistry } from '../core/ToolRegistry';
+import { SkillLoader } from '../skills/SkillLoader';
 import { Goal, GoalBlocker, PlanStep } from './GoalTypes';
 
 const log = createLogger('GoalPlanner');
@@ -26,7 +27,7 @@ const log = createLogger('GoalPlanner');
  * Separa capabilities em seções explícitas com ✓/✗ e injeta regras estratégicas e exemplos.
  * O bloco é posicionado ANTES do contexto/memória para que o LLM o trate como constraint, não histórico.
  */
-function buildCapabilityBlock(capabilityContext: string): string {
+function buildCapabilityBlock(capabilityContext: string, skillsSummary?: string): string {
     const lines = capabilityContext.split('\n').map(l => l.trim()).filter(Boolean);
 
     // ── Extração estruturada do summary ──────────────────────────────────────
@@ -93,8 +94,13 @@ EXEMPLOS OPERACIONAIS:
   - sudo ✗ → instale em /tmp ou ~/.local; NÃO use sudo pip install
   - path externo ✗ → peça para mover ao workspace; NÃO tente acessar /home/outro ou /var/www`;
 
+    // ── Seção de skills registradas ──────────────────────────────────────────
+    const skillsSection = skillsSummary
+        ? `Skills registradas (prefira sobre exec_command bruto):\n${skillsSummary}`
+        : '';
+
     // ── Montagem final ────────────────────────────────────────────────────────
-    const sections = [toolsSection, wsSection, execSection ? `Execução e rede:\n${execSection}` : '']
+    const sections = [toolsSection, wsSection, execSection ? `Execução e rede:\n${execSection}` : '', skillsSection]
         .filter(Boolean)
         .join('\n\n');
 
@@ -107,8 +113,8 @@ ${rules}
 `;
 }
 
-function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: string, runtimeContext?: string, capabilityContext?: string): string {
-    const capBlock     = capabilityContext ? buildCapabilityBlock(capabilityContext) : '';
+function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string): string {
+    const capBlock     = capabilityContext ? buildCapabilityBlock(capabilityContext, skillsSummary) : '';
     const skillBlock   = skillContext
         ? `\nINSTRUÇÕES DE SKILL ATIVAS (siga rigorosamente):\n${skillContext}\n`
         : '';
@@ -156,8 +162,8 @@ ARGS OBRIGATÓRIOS POR FERRAMENTA:
 - read: aceita caminho relativo ao workspace ou absoluto.`.trim();
 }
 
-function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, runtimeContext?: string, capabilityContext?: string): string {
-    const capBlock = capabilityContext ? buildCapabilityBlock(capabilityContext) : '';
+function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string): string {
+    const capBlock = capabilityContext ? buildCapabilityBlock(capabilityContext, skillsSummary) : '';
 
     const strategiesBlock = goal.strategiesTried.length > 0
         ? `\nEstratégias já tentadas: ${goal.strategiesTried.join('; ')}\n`
@@ -273,11 +279,23 @@ const PLANNER_MODEL = 'gemma4:31b-cloud';
 
 export class GoalPlanner {
     private skillContext: string | undefined;
+    private readonly skillLoader = new SkillLoader();
 
     constructor(
         private readonly providerFactory: ProviderFactory,
         private readonly reflectionMemory: ReflectionMemory,
     ) {}
+
+    /** Carrega skills registradas e retorna resumo compacto para injeção no prompt. */
+    private loadSkillsSummary(): string {
+        try {
+            const skills = this.skillLoader.loadAll();
+            if (skills.length === 0) return '';
+            return skills.map(s => `  - ${s.name}: ${s.description}`).join('\n');
+        } catch {
+            return '';
+        }
+    }
 
     /**
      * Chama o LLM usando um modelo fixo para planning (não o default do Ollama).
@@ -310,7 +328,8 @@ export class GoalPlanner {
         log.info(`[GoalPlanner] plan start goal=${goal.id} model=${PLANNER_MODEL} contextLen=${runtimeContext?.length ?? 0}`);
 
         const availableTools = ToolRegistry.getEnabled().map(t => t.name);
-        const messages: LLMMessage[] = [{ role: 'user', content: buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext, capabilityContext) }];
+        const skillsSummary  = this.loadSkillsSummary();
+        const messages: LLMMessage[] = [{ role: 'user', content: buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext, capabilityContext, skillsSummary) }];
 
         try {
             const result = await this.callPlannerLLM(messages, 45_000);
@@ -346,9 +365,10 @@ export class GoalPlanner {
             log.debug(`[GoalPlanner] reflectionHint injected (${reflectionHint.length} chars)`);
         }
 
+        const skillsSummary = this.loadSkillsSummary();
         const messages: LLMMessage[] = [{
             role: 'user',
-            content: buildReplanPrompt(goal, blocker, reflectionHint, runtimeContext, capabilityContext)
+            content: buildReplanPrompt(goal, blocker, reflectionHint, runtimeContext, capabilityContext, skillsSummary)
         }];
 
         try {
