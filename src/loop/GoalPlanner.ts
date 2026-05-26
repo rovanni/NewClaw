@@ -21,8 +21,95 @@ const log = createLogger('GoalPlanner');
 
 // ── Prompt templates ─────────────────────────────────────────────────────────
 
-function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: string, runtimeContext?: string): string {
-    const skillBlock = skillContext
+/**
+ * Converte o summary do CapabilityRegistry num bloco de restrições ativas para o planner.
+ * Separa capabilities em seções explícitas com ✓/✗ e injeta regras estratégicas e exemplos.
+ * O bloco é posicionado ANTES do contexto/memória para que o LLM o trate como constraint, não histórico.
+ */
+function buildCapabilityBlock(capabilityContext: string): string {
+    const lines = capabilityContext.split('\n').map(l => l.trim()).filter(Boolean);
+
+    // ── Extração estruturada do summary ──────────────────────────────────────
+    let availableTools:   string[] = [];
+    let unavailableTools: string[] = [];
+    let workspaceLine    = '';
+    let networkLine      = '';
+    let executionLine    = '';
+
+    for (const line of lines) {
+        if (/indisponíveis/i.test(line)) {
+            const m = line.match(/:\s*(.+)$/);
+            if (m) unavailableTools = m[1].split(',').map(s => s.trim()).filter(Boolean);
+        } else if (/^[•\-]?\s*ferramentas:/i.test(line)) {
+            const m = line.match(/:\s*(.+)$/);
+            if (m) availableTools = m[1].split(',').map(s => s.trim()).filter(Boolean);
+        } else if (/workspace/i.test(line)) {
+            workspaceLine = line.replace(/^[•\-]\s*/, '');
+        } else if (/rede:/i.test(line)) {
+            networkLine = line.replace(/^[•\-]\s*/, '');
+        } else if (/execu/i.test(line)) {
+            executionLine = line.replace(/^[•\-]\s*/, '');
+        }
+    }
+
+    // ── Seção de ferramentas com ✓/✗ por item ────────────────────────────────
+    const toolLines: string[] = [];
+    for (const t of availableTools)   toolLines.push(`  - ${t} ✓`);
+    for (const t of unavailableTools) toolLines.push(`  - ${t} ✗  ← NÃO USE`);
+    const toolsSection = toolLines.length > 0
+        ? `Ferramentas do sistema:\n${toolLines.join('\n')}`
+        : 'Ferramentas do sistema: nenhuma detectada';
+
+    // ── Seção de workspace ────────────────────────────────────────────────────
+    const wsSection = workspaceLine
+        ? `Workspace:\n  ${workspaceLine}`
+        : '';
+
+    // ── Seção de execução e rede ──────────────────────────────────────────────
+    const execSection = [networkLine, executionLine]
+        .filter(Boolean)
+        .map(l => `  ${l}`)
+        .join('\n');
+
+    // ── Regras de planejamento estratégico ────────────────────────────────────
+    const rules = `REGRAS DE PLANEJAMENTO (obrigatórias):
+  - NUNCA gere exec_command usando binários marcados com ✗
+  - NUNCA planeje steps que dependam de capabilities indisponíveis
+  - NUNCA tente instalar binários do sistema (apt-get, brew, yum)
+  - Escolha a estratégia com MAIOR CHANCE DE SUCESSO dado o ambiente acima
+
+ORDEM DE PREFERÊNCIA ESTRATÉGICA:
+  1. Ferramentas disponíveis marcadas com ✓
+  2. Skills registradas ativas (use toolName da skill, não exec_command)
+  3. Bibliotecas já instaladas (python-pptx, node modules, etc.)
+  4. Estratégias sem dependências externas (HTML puro, JS puro, markdown)
+  5. Instalação de pacotes Python/npm (somente se estritamente necessário)
+  6. Estratégias experimentais (último recurso — inclua step de verificação)
+
+EXEMPLOS OPERACIONAIS:
+  - pandoc ✗ → use python-pptx, HTML puro ou markdown; NÃO gere exec_command pandoc
+  - ffmpeg ✗ → use python moviepy/PIL ou peça arquivo já processado; NÃO gere exec_command ffmpeg
+  - marp ✗ → use HTML/CSS puro ou python-pptx; NÃO gere npx marp
+  - sudo ✗ → instale em /tmp ou ~/.local; NÃO use sudo pip install
+  - path externo ✗ → peça para mover ao workspace; NÃO tente acessar /home/outro ou /var/www`;
+
+    // ── Montagem final ────────────────────────────────────────────────────────
+    const sections = [toolsSection, wsSection, execSection ? `Execução e rede:\n${execSection}` : '']
+        .filter(Boolean)
+        .join('\n\n');
+
+    return `
+CAPACIDADES REAIS DO AMBIENTE — restrições absolutas de planejamento (detectadas automaticamente):
+
+${sections}
+
+${rules}
+`;
+}
+
+function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: string, runtimeContext?: string, capabilityContext?: string): string {
+    const capBlock     = capabilityContext ? buildCapabilityBlock(capabilityContext) : '';
+    const skillBlock   = skillContext
         ? `\nINSTRUÇÕES DE SKILL ATIVAS (siga rigorosamente):\n${skillContext}\n`
         : '';
     const contextBlock = runtimeContext
@@ -38,7 +125,7 @@ function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: st
 
 OBJETIVO: ${goal.objective}
 INTENÇÃO ORIGINAL: ${goal.userIntent}
-${pathsBlock}${skillBlock}${contextBlock}
+${pathsBlock}${capBlock}${skillBlock}${contextBlock}
 Ferramentas disponíveis (use EXATAMENTE esses nomes): ${availableTools.join(', ')}
 
 Responda APENAS com JSON válido (sem markdown):
@@ -69,7 +156,9 @@ ARGS OBRIGATÓRIOS POR FERRAMENTA:
 - read: aceita caminho relativo ao workspace ou absoluto.`.trim();
 }
 
-function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, runtimeContext?: string): string {
+function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, runtimeContext?: string, capabilityContext?: string): string {
+    const capBlock = capabilityContext ? buildCapabilityBlock(capabilityContext) : '';
+
     const strategiesBlock = goal.strategiesTried.length > 0
         ? `\nEstratégias já tentadas: ${goal.strategiesTried.join('; ')}\n`
         : '';
@@ -91,7 +180,7 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
 OBJETIVO: ${goal.objective}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}
-${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
+${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 
 Responda APENAS com JSON válido (sem markdown):
@@ -126,9 +215,20 @@ REGRAS CRÍTICAS para blocker 'environment_limit':
 
 // Extrai caminhos Unix absolutos do texto (mínimo 2 segmentos: /a/b ou mais).
 // Usado para preservar caminhos literais informados pelo usuário no prompt de planejamento.
+// Filtra caminhos que vêm de URLs (file://, http://) ou de paths do Windows (C:\, /Users/lucia)
+// para evitar que o planner injete steps de validação com paths fora do servidor.
 function extractUnixPaths(text: string): string[] {
-    const matches = text.match(/\/[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)+/g) ?? [];
-    return [...new Set(matches)];
+    // Remove URLs file:// e http(s):// antes de extrair para não capturar paths locais do usuário
+    const sanitized = text
+        .replace(/file:\/\/\/[^\s"')]+/gi, '')   // remove file:/// URLs (Windows/Mac local)
+        .replace(/https?:\/\/[^\s"')]+/gi, '');   // remove http(s):// URLs
+    const matches = sanitized.match(/\/[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)+/g) ?? [];
+    return [...new Set(matches)].filter(p => {
+        // Rejeita caminhos que claramente pertencem ao ambiente local do usuário (não ao servidor)
+        if (/^\/(Users|home\/(?!venus))[\/]/i.test(p)) return false;
+        if (/^\/(C:|D:|Windows|Program Files)/i.test(p)) return false;
+        return true;
+    });
 }
 
 // Regex para detectar valores de argumento que são placeholders, não caminhos reais.
@@ -206,11 +306,11 @@ export class GoalPlanner {
         this.skillContext = context || undefined;
     }
 
-    async plan(goal: Goal, runtimeContext?: string): Promise<PlanStep[]> {
+    async plan(goal: Goal, runtimeContext?: string, capabilityContext?: string): Promise<PlanStep[]> {
         log.info(`[GoalPlanner] plan start goal=${goal.id} model=${PLANNER_MODEL} contextLen=${runtimeContext?.length ?? 0}`);
 
         const availableTools = ToolRegistry.getEnabled().map(t => t.name);
-        const messages: LLMMessage[] = [{ role: 'user', content: buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext) }];
+        const messages: LLMMessage[] = [{ role: 'user', content: buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext, capabilityContext) }];
 
         try {
             const result = await this.callPlannerLLM(messages, 45_000);
@@ -235,7 +335,7 @@ export class GoalPlanner {
         }
     }
 
-    async replan(goal: Goal, blocker: GoalBlocker, runtimeContext?: string): Promise<PlanStep[]> {
+    async replan(goal: Goal, blocker: GoalBlocker, runtimeContext?: string, capabilityContext?: string): Promise<PlanStep[]> {
         log.info(`[GoalPlanner] replan start goal=${goal.id} model=${PLANNER_MODEL} blocker=${blocker.kind} contextLen=${runtimeContext?.length ?? 0}`);
 
         // Consulta memória de reflexão para evitar erros já conhecidos
@@ -248,7 +348,7 @@ export class GoalPlanner {
 
         const messages: LLMMessage[] = [{
             role: 'user',
-            content: buildReplanPrompt(goal, blocker, reflectionHint, runtimeContext)
+            content: buildReplanPrompt(goal, blocker, reflectionHint, runtimeContext, capabilityContext)
         }];
 
         try {

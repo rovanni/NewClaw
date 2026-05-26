@@ -42,7 +42,8 @@ export class ReadTool implements ToolExecutor {
         const projectRoot = process.cwd();
         const homeDir = process.env.HOME || '/root';
 
-        let expanded = inputPath;
+        // Garante que expanded seja sempre uma string, mesmo que o LLM passe array ou objeto
+        let expanded = Array.isArray(inputPath) ? String(inputPath[0] ?? '') : String(inputPath ?? '');
         
         // Normalizar APENAS prefixo relativo 'workspace/' (sem barra inicial).
         if (!expanded.startsWith('/') && expanded.startsWith('workspace/')) {

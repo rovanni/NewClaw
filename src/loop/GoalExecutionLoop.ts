@@ -23,7 +23,7 @@ import { GoalPlanner } from './GoalPlanner';
 import { GoalEvaluator } from './GoalEvaluator';
 import { GoalContextualizer } from './GoalContextualizer';
 import { RiskAnalyzer } from './RiskAnalyzer';
-import { EnvironmentProbe } from './EnvironmentProbe';
+import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { ProactiveRecovery, ToolExecutorLike } from './ProactiveRecovery';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
@@ -41,7 +41,7 @@ export class GoalExecutionLoop {
     private readonly evaluator = new GoalEvaluator();
     private readonly contextualizer: GoalContextualizer;
     private readonly riskAnalyzer: RiskAnalyzer;
-    private readonly envProbe = new EnvironmentProbe();
+    private readonly capRegistry = CapabilityRegistry.getInstance();
     private readonly proactiveRecovery = new ProactiveRecovery();
 
     constructor(
@@ -75,14 +75,13 @@ export class GoalExecutionLoop {
         // Enriquece o entendimento do objetivo com memória semântica antes de planejar
         const q1Context = await this.contextualizer.contextualize(goal, 1, undefined);
 
-        // ── Item 10: Capabilities probe — injetar no contexto do planner ──
-        // O probe é cacheado 5 minutos; não adiciona latência em goals consecutivos.
-        const envCaps = await this.envProbe.probe();
-        const envContext = envCaps.summary ? `\n${envCaps.summary}` : '';
+        // ── Capabilities summary — injetar no contexto do planner ──────────
+        // Registry usa TTL por categoria; chamadas consecutivas são servidas do cache.
+        const capSummary = await this.capRegistry.getCapabilitySummary();
 
         // ── Planejamento inicial ───────────────────────────────────────────
         this.goalStore.update(goal.id, { status: 'replanning' });
-        const rawPlan = await this.planner.plan(goal, (q1Context ?? '') + envContext);
+        const rawPlan = await this.planner.plan(goal, q1Context ?? '', capSummary);
 
         // ── Q2: Análise de Riscos (apenas planos complexos) ──────────────
         // Planos simples passam direto; Q2 só vale a latência em tarefas com
@@ -169,13 +168,11 @@ export class GoalExecutionLoop {
         // Q1: Contextualização — memória + feedback do ciclo anterior
         const q1Context = await this.contextualizer.contextualize(goal, cycleNumber, priorFeedback);
 
-        // Item 10: Capabilities probe — incluído em cada replan para que o planner
-        // saiba quais ferramentas estão (e não estão) disponíveis após possíveis instalações.
-        const envCaps = await this.envProbe.probe();
-        const envContext = envCaps.summary ? `\n${envCaps.summary}` : '';
+        // Capabilities summary no replan — registry serve do cache (TTL por categoria).
+        const capSummary = await this.capRegistry.getCapabilitySummary();
 
         // Replan com contexto enriquecido
-        const rawPlan = await this.planner.replan(goal, blocker, (q1Context ?? '') + envContext);
+        const rawPlan = await this.planner.replan(goal, blocker, q1Context ?? '', capSummary);
 
         // Q2: Análise de Riscos
         // Ativo quando: plano complexo (dependências entre steps)
@@ -663,11 +660,12 @@ Responda APENAS com JSON válido, sem texto adicional:
         );
         this.goalStore.update(goal.id, { currentPlan: updatedPlan });
 
-        // Item 10: Após instalação bem-sucedida de dependência, invalida o cache do
-        // EnvironmentProbe para que o próximo replan detecte a ferramenta recém-instalada.
+        // Após instalação bem-sucedida de dependência, invalida tools + execution
+        // para que o próximo replan detecte a ferramenta recém-instalada.
         if (step.id.startsWith('install_')) {
-            EnvironmentProbe.invalidateCache();
-            log.info(`[GoalLoop] dep install step=${step.id} completed — envProbe cache invalidated`);
+            this.capRegistry.invalidate('tools');
+            this.capRegistry.invalidate('execution');
+            log.info(`[GoalLoop] dep install step=${step.id} completed — capability cache invalidated`);
         }
 
         // Registra attempt de sucesso para que buildResult() encontre o output real

@@ -33,8 +33,8 @@ export class WriteTool implements ToolExecutor {
         const projectRoot = process.cwd();
         const homeDir = process.env.HOME || '/root';
 
-        let expanded = inputPath;
-        
+        let expanded = Array.isArray(inputPath) ? String(inputPath[0] ?? '') : String(inputPath ?? '');
+
         if (!expanded.startsWith('/') && expanded.startsWith('workspace/')) {
             expanded = expanded.slice(10);
         }

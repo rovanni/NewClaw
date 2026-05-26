@@ -17,6 +17,7 @@ import { createLogger } from '../shared/AppLogger';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
+import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { Goal, PlanStep } from './GoalTypes';
 
 const log = createLogger('RiskAnalyzer');
@@ -70,23 +71,29 @@ export class RiskAnalyzer {
 
         const risks: string[] = [];
 
-        // ── 0. Constraints duras do ReflectionMemory (bloqueantes) ───────────
+        // ── 0. Constraints duras do ReflectionMemory (cirurgia seletiva) ────
         // Ferramentas com ≥90% de falha recente viram proibições absolutas.
-        // Se o plano viola uma constraint, bloqueamos antes de qualquer execução.
+        // Em vez de bloquear o plano inteiro, removemos os steps que usam a
+        // ferramenta proibida. Só bloqueamos se o plano ficar completamente vazio.
         const constraints = this.reflectionMemory.buildConstraints(goal.objective.slice(0, 150));
         if (constraints.length > 0) {
             for (const c of constraints) risks.push(`[CONSTRAINT] ${c}`);
 
-            const violatingConstraint = this.findViolatingConstraint(plan, constraints);
-            if (violatingConstraint) {
-                log.warn(`[RiskAnalyzer] goal=${goal.id} BLOCKED by hard constraint: ${violatingConstraint}`);
-                return {
-                    risks,
-                    adjustedPlan: plan,
-                    planAdjusted: false,
-                    blocked: true,
-                    blockReason: violatingConstraint,
-                };
+            const { prunedPlan, violatedConstraint } = this.pruneConstrainedSteps(plan, constraints);
+            if (violatedConstraint) {
+                if (prunedPlan.length === 0) {
+                    log.warn(`[RiskAnalyzer] goal=${goal.id} BLOCKED by hard constraint (plano vazio): ${violatedConstraint}`);
+                    return {
+                        risks,
+                        adjustedPlan: plan,
+                        planAdjusted: false,
+                        blocked: true,
+                        blockReason: violatedConstraint,
+                    };
+                }
+                // Plano com steps problemáticos removidos — continua a execução
+                log.warn(`[RiskAnalyzer] goal=${goal.id} pruned ${plan.length - prunedPlan.length} step(s) violating constraint: ${violatedConstraint}`);
+                plan = prunedPlan;
             }
         }
 
@@ -120,6 +127,37 @@ export class RiskAnalyzer {
             }
         }
 
+        // ── 1c. Pre-flight via CapabilityRegistry (síncrono, sem LLM) ────────
+        // Verifica capabilities já cacheadas: não faz probe novo se o cache está frio.
+        const capReg = CapabilityRegistry.getInstance();
+
+        for (const step of plan) {
+            if (!step.toolName) continue;
+
+            // Web tools requerem internet
+            if (step.toolName === 'web_search' || step.toolName === 'web_navigate') {
+                const netOk = capReg.canSync('network.outbound');
+                if (netOk === false) {
+                    risks.push(`Step "${step.description}": sem acesso à internet (network.outbound=false)`);
+                }
+            }
+
+            // exec_command: verifica primeiro token do comando nas capabilities de tools
+            if (step.toolName === 'exec_command') {
+                const cmdValue = String(step.toolArgs?.command ?? step.toolArgs?.cmd ?? '');
+                if (cmdValue) {
+                    const tokens = cmdValue.trim().split(/\s+/).filter(t => t !== 'sudo' && t !== 'env' && !t.includes('='));
+                    const firstToken = (tokens[0] ?? '').toLowerCase().replace(/^.*\//, '');
+                    if (firstToken) {
+                        const toolOk = capReg.canSync(`tool.${firstToken}`);
+                        if (toolOk === false) {
+                            risks.push(`Step "${step.description}": binário '${firstToken}' não detectado no ambiente`);
+                        }
+                    }
+                }
+            }
+        }
+
         // ── 2. Revisão LLM do plano completo ────────────────────────────────
         const llmResult = await this.reviewPlanWithLLM(goal, plan);
 
@@ -146,32 +184,57 @@ export class RiskAnalyzer {
     }
 
     /**
-     * Retorna a primeira constraint que o plano viola, ou null se nenhuma for violada.
+     * Remove do plano os steps que violam constraints de ferramentas proibidas.
+     * Retorna o plano podado e a primeira constraint violada encontrada (para log).
      *
-     * Lógica: extrai a ferramenta proibida de cada constraint e verifica se ela
-     * está presente no plano. Isso evita falsos positivos de constraints globais
-     * (goal_blocker_*) bloquearem goals que não usam a ferramenta problemática.
-     *
-     * Retornar a constraint exata (em vez de boolean) permite que o log informe
-     * qual regra foi violada, não apenas constraints[0] (que era sempre "web_search").
+     * Em vez de bloquear o goal inteiro quando um step usa web_search (por exemplo),
+     * apenas esse step é removido do plano, preservando os demais.
+     * Bloqueio total só ocorre se o plano ficar completamente vazio após a poda.
      */
-    private findViolatingConstraint(plan: PlanStep[], constraints: string[]): string | null {
-        const planTools = new Set(plan.map(s => s.toolName).filter(Boolean) as string[]);
+    private pruneConstrainedSteps(plan: PlanStep[], constraints: string[]): {
+        prunedPlan: PlanStep[];
+        violatedConstraint: string | null;
+    } {
+        const prohibitedTools = new Set<string>();
+        let violatedConstraint: string | null = null;
 
         for (const constraint of constraints) {
-            // Extrai nome da ferramenta de textos como "A ferramenta 'web_search' falhou..."
-            // Só bloqueia se essa ferramenta está efetivamente no plano atual.
             const toolMatch = constraint.match(/'([a-z][a-z0-9_]*)'/i);
-            if (toolMatch && planTools.has(toolMatch[1])) return constraint;
-
-            // Casos especiais: pip install e python3 -m venv são detectados via args de exec_command
-            for (const step of plan) {
-                const cmdValue = String(step.toolArgs?.command ?? step.toolArgs?.cmd ?? '');
-                if (/pip install/i.test(constraint) && /pip\s+install/i.test(cmdValue)) return constraint;
-                if (/python3 -m venv/i.test(constraint) && /python3\s+-m\s+venv/i.test(cmdValue)) return constraint;
+            if (toolMatch) {
+                const toolName = toolMatch[1];
+                if (plan.some(s => s.toolName === toolName)) {
+                    prohibitedTools.add(toolName);
+                    violatedConstraint ??= constraint;
+                }
             }
         }
-        return null;
+
+        // Casos especiais via args de exec_command
+        const cmdConstraints: Array<{ pattern: RegExp; cmdPattern: RegExp; constraint: string }> = [];
+        for (const constraint of constraints) {
+            if (/pip install/i.test(constraint)) {
+                cmdConstraints.push({ pattern: /pip install/i, cmdPattern: /pip\s+install/i, constraint });
+            }
+            if (/python3 -m venv/i.test(constraint)) {
+                cmdConstraints.push({ pattern: /python3 -m venv/i, cmdPattern: /python3\s+-m\s+venv/i, constraint });
+            }
+        }
+
+        const prunedPlan = plan.filter(step => {
+            if (step.toolName && prohibitedTools.has(step.toolName)) return false;
+            if (step.toolName === 'exec_command') {
+                const cmdValue = String(step.toolArgs?.command ?? step.toolArgs?.cmd ?? '');
+                for (const cc of cmdConstraints) {
+                    if (cc.cmdPattern.test(cmdValue)) {
+                        violatedConstraint ??= cc.constraint;
+                        return false;
+                    }
+                }
+            }
+            return true;
+        });
+
+        return { prunedPlan, violatedConstraint };
     }
 
 

@@ -24,6 +24,7 @@ import { ProviderFactory } from '../core/ProviderFactory';
 import { MemoryManager } from '../memory/MemoryManager';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ToolRegistry } from '../core/ToolRegistry';
+import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext } from './agentLoopTypes';
 
@@ -55,6 +56,11 @@ export class GoalOrchestrator {
             providerFactory,
             memory,
         );
+
+        // Aquece o CapabilityRegistry em background — não bloqueia a inicialização.
+        CapabilityRegistry.getInstance().bootstrap().catch(err => {
+            log.warn('[GoalOrchestrator] CapabilityRegistry bootstrap failed:', String(err));
+        });
     }
 
     /**
