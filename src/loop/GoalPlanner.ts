@@ -61,7 +61,12 @@ Regras:
 - toolArgs deve ser um objeto com os argumentos da ferramenta
 - Use APENAS os nomes de ferramenta listados acima — não invente nomes
 - Se não precisar de ferramenta específica, omita toolName e toolArgs
-- CRÍTICO: se o objetivo menciona caminhos de arquivo, use-os EXATAMENTE como listados em "PATHS MENCIONADOS" — não encurte, não reconstrua`.trim();
+- CRÍTICO: se o objetivo menciona caminhos de arquivo, use-os EXATAMENTE como listados em "PATHS MENCIONADOS" — não encurte, não reconstrua
+
+ARGS OBRIGATÓRIOS POR FERRAMENTA:
+- edit: SEMPRE forneça oldText+newText (substituição) OU startLine+endLine+content (patch) OU append=true+content. Nunca chame edit sem esses parâmetros.
+- list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") ou absoluto.
+- read: aceita caminho relativo ao workspace ou absoluto.`.trim();
 }
 
 function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, runtimeContext?: string): string {
@@ -129,8 +134,10 @@ function extractUnixPaths(text: string): string[] {
 // Regex para detectar valores de argumento que são placeholders, não caminhos reais.
 // Quando detectados em toolArgs, o step é convertido para AgentLoop para forçar
 // resolução do caminho real antes de executar (evita exec_command com paths fictícios).
+// \{[a-zA-Z_][a-zA-Z0-9_]{0,40}\} — só match em {simple_identifier}, não em código JS
+// como { isPaused = !isPaused; } (que contém espaços e operadores).
 const PLACEHOLDER_ARG_PATTERN =
-    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo)\b|<[^>]{1,60}>|\{[^}]{1,60}\}|\/path\/to\/|\/caminho\/do\//i;
+    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo)\b|<[^>]{1,60}>|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\//i;
 
 // ── Aliases de ferramentas: nomes que LLMs inventam → nome real no ToolRegistry ──
 const TOOL_ALIASES: Record<string, string> = {
