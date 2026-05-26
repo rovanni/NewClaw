@@ -732,6 +732,8 @@ export class AgentLoop {
         const failedReadFilenames = new Set<string>();
         // Track binary filenames that failed with "cannot read as text" so retries are blocked early
         const binaryReadFilenames = new Set<string>();
+        // Track how many times edit was called per file path to prevent append-loop corruption
+        const editPathCount = new Map<string, number>();
 
         const turnAbort = new AbortController();
         this.activeTurns.set(conversationId, turnAbort);
@@ -1175,6 +1177,30 @@ export class AgentLoop {
                             return { text: authReq.text, options: authReq.options };
                         }
 
+                        // Guard: bloqueia edit repetido no mesmo arquivo (previne append-loop)
+                        if (toolName === 'edit') {
+                            const ep = typeof toolCall.arguments?.path === 'string' ? toolCall.arguments.path : undefined;
+                            if (ep) {
+                                const ec = (editPathCount.get(ep) ?? 0) + 1;
+                                editPathCount.set(ep, ec);
+                                if (ec > 4) {
+                                    log.warn(`[${this.ts()}] [EDIT-LOOP] Blocked edit #${ec} to "${ep}" — use write to rewrite`);
+                                    loopMessages.push({
+                                        role: 'tool',
+                                        content: `[BLOQUEADO] "edit" foi chamado ${ec} vezes no mesmo arquivo "${ep}" neste turno. Esta chamada foi bloqueada para evitar corrupção de arquivo por append-loop. Use "write" com o conteúdo completo se precisar reescrever o arquivo inteiro.`,
+                                        tool_call_id: toolCall.id,
+                                    });
+                                    if (ec >= 7) {
+                                        loopMessages.push({ role: 'system', content: `[CRÍTICO] "edit" foi chamado ${ec} vezes no arquivo "${ep}". O loop foi interrompido. Responda ao usuário com o que foi feito até aqui.` });
+                                        dedupAbort = true;
+                                        dedupAbortTool = toolName;
+                                        break;
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+
                         const toolStartTime = Date.now();
                         const recovery = await this.proactiveRecovery.execute(
                             toolName, toolCall.arguments,
@@ -1326,6 +1352,25 @@ export class AgentLoop {
                             channelContext.chatId || '',
                             channelContext.channel
                         );
+                    }
+
+                    // Guard: bloqueia edit repetido no mesmo arquivo (previne append-loop)
+                    if (toolName === 'edit') {
+                        const ep = typeof atomicData.action.input?.path === 'string' ? atomicData.action.input.path : undefined;
+                        if (ep) {
+                            const ec = (editPathCount.get(ep) ?? 0) + 1;
+                            editPathCount.set(ep, ec);
+                            if (ec > 4) {
+                                log.warn(`[${this.ts()}] [EDIT-LOOP] Blocked atomic edit #${ec} to "${ep}" — use write to rewrite`);
+                                loopMessages.push({ role: 'system', content: `[BLOQUEADO] "edit" foi chamado ${ec} vezes no arquivo "${ep}" neste turno. Use "write" com o conteúdo completo.` });
+                                if (ec >= 7) {
+                                    dedupAbort = true;
+                                    dedupAbortTool = toolName;
+                                    break;
+                                }
+                                continue;
+                            }
+                        }
                     }
 
                     const toolStartTime = Date.now();

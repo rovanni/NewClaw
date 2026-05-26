@@ -734,20 +734,21 @@ Responda APENAS com JSON válido (sem markdown):
 OU
 {"achieved": false, "reason": "o que está faltando", "suggestions": ["ação 1", "ação 2"]}`;
 
+        let llmResult: Awaited<ReturnType<typeof this.providerFactory.chatWithFallback>> | undefined;
         try {
-            const result = await this.providerFactory.chatWithFallback(
+            llmResult = await this.providerFactory.chatWithFallback(
                 [{ role: 'user', content: prompt }] as LLMMessage[],
                 undefined,
                 undefined,
                 45_000,
             );
 
-            if (result.status !== 'success') {
+            if (llmResult.status !== 'success') {
                 log.warn('[GoalLoop] LLM validation failed — assuming achieved');
                 return { achieved: true };
             }
 
-            const cleaned = result.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            const cleaned = llmResult.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
             const parsed = JSON.parse(cleaned);
             log.info(`[GoalLoop] LLM validation: achieved=${parsed.achieved}${parsed.reason ? ` reason="${parsed.reason}"` : ''}`);
             return {
@@ -757,6 +758,11 @@ OU
                 suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : undefined,
             };
         } catch (err) {
+            // LLM respondeu em texto livre (ex: thinking recovered de timeout) → não confirma sucesso
+            if (err instanceof SyntaxError && llmResult?.status === 'success' && llmResult.content.length > 50) {
+                log.warn('[GoalLoop] validation response not JSON — treating as goal_incomplete');
+                return { achieved: false, reason: 'LLM de validação não retornou JSON válido' };
+            }
             log.warn('[GoalLoop] validation error — assuming achieved:', String(err));
             return { achieved: true };
         }
