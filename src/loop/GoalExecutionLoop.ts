@@ -24,6 +24,7 @@ import { GoalEvaluator } from './GoalEvaluator';
 import { GoalContextualizer } from './GoalContextualizer';
 import { RiskAnalyzer } from './RiskAnalyzer';
 import { EnvironmentProbe } from './EnvironmentProbe';
+import { ProactiveRecovery, ToolExecutorLike } from './ProactiveRecovery';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { MemoryManager } from '../memory/MemoryManager';
@@ -41,6 +42,7 @@ export class GoalExecutionLoop {
     private readonly contextualizer: GoalContextualizer;
     private readonly riskAnalyzer: RiskAnalyzer;
     private readonly envProbe = new EnvironmentProbe();
+    private readonly proactiveRecovery = new ProactiveRecovery();
 
     constructor(
         private readonly agentLoop: AgentLoop,
@@ -517,12 +519,19 @@ export class GoalExecutionLoop {
             let toolResult: { success: boolean; output: string; error?: string };
 
             if (step.toolName && step.toolArgs) {
-                // Execução direta via ToolRegistry
-                const tool = this.toolRegistry.get(step.toolName);
-                if (!tool) {
+                // Execução via ToolRegistry com ProactiveRecovery (mutação de args + fallback)
+                if (!this.toolRegistry.get(step.toolName)) {
                     toolResult = { success: false, output: '', error: `command not found: ${step.toolName}` };
                 } else {
-                    toolResult = await tool.execute(step.toolArgs);
+                    const getTool = (name: string): ToolExecutorLike | undefined =>
+                        this.toolRegistry.get(name) as ToolExecutorLike | undefined;
+                    const recoveryResult = await this.proactiveRecovery.execute(
+                        step.toolName, step.toolArgs as Record<string, unknown>, getTool, new Set<string>()
+                    );
+                    toolResult = recoveryResult.result;
+                    if (recoveryResult.recovered && recoveryResult.recoveryNote) {
+                        log.info(`[GoalStep] auto-recovery: ${recoveryResult.recoveryNote}`);
+                    }
                 }
             } else {
                 // Sem tool específica → chama AgentLoop com prompt focado no step
