@@ -66,12 +66,62 @@ export interface ExecutionCapabilities {
 }
 
 /**
- * Snapshot completo das capabilities do ambiente.
+ * Sistema operacional e ambiente de shell do host.
+ */
+export interface OSCapabilities {
+    platform: 'windows' | 'linux' | 'macos';
+    architecture: string;
+    shell: string;
+    tempDirectory: string;
+    pathSeparator: string;
+    executableExtension: string;
+    /** Distribuição Linux (ex: ubuntu, debian, alpine). Undefined em outros OS. */
+    distro?: string;
+    /** Gerenciador de pacotes detectado (apt, yum, brew, winget, choco). */
+    packageManager?: string;
+    checkedAt: number;
+}
+
+/**
+ * Hardware disponível no host.
+ * Usado para feasibility-first planning: evita estratégias inviáveis.
+ */
+export interface HardwareCapabilities {
+    cpuCores: number;
+    totalMemoryMB: number;
+    freeMemoryMB: number;
+    /** Espaço livre em disco no volume principal (MB). */
+    diskFreeMB: number;
+    gpuAvailable: boolean;
+    gpuName?: string;
+    gpuMemoryMB?: number;
+    checkedAt: number;
+}
+
+/**
+ * Capacidades e limites do runtime de execução.
+ */
+export interface RuntimeCapabilities {
+    /** true quando rodando dentro de container Docker/Kubernetes/LXC. */
+    containerized: boolean;
+    /** 'docker' | 'kubernetes' | 'lxc' | undefined */
+    virtualization?: string;
+    nodeVersion: string;
+    /** Limite conservador de tamanho de arquivo que o agente deve processar (MB). */
+    maxFileSizeMB: number;
+    checkedAt: number;
+}
+
+/**
+ * Snapshot completo das capabilities do ambiente operacional.
  */
 export interface EnvironmentCapabilities {
+    os:        OSCapabilities;
+    hardware:  HardwareCapabilities;
+    runtime:   RuntimeCapabilities;
     workspace: WorkspaceCapabilities;
-    tools: ToolCapabilities;
-    network: NetworkCapabilities;
+    tools:     ToolCapabilities;
+    network:   NetworkCapabilities;
     execution: ExecutionCapabilities;
     lastFullProbe: number;
 }

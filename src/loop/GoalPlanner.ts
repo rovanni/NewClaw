@@ -16,110 +16,22 @@ import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { SkillLoader } from '../skills/SkillLoader';
+import { PromptComposer } from '../core/PromptComposer';
 import { Goal, GoalBlocker, PlanStep } from './GoalTypes';
 
 const log = createLogger('GoalPlanner');
 
 // ── Prompt templates ─────────────────────────────────────────────────────────
 
-/**
- * Converte o summary do CapabilityRegistry num bloco de restrições ativas para o planner.
- * Separa capabilities em seções explícitas com ✓/✗ e injeta regras estratégicas e exemplos.
- * O bloco é posicionado ANTES do contexto/memória para que o LLM o trate como constraint, não histórico.
- */
-function buildCapabilityBlock(capabilityContext: string, skillsSummary?: string): string {
-    const lines = capabilityContext.split('\n').map(l => l.trim()).filter(Boolean);
-
-    // ── Extração estruturada do summary ──────────────────────────────────────
-    let availableTools:   string[] = [];
-    let unavailableTools: string[] = [];
-    let workspaceLine    = '';
-    let networkLine      = '';
-    let executionLine    = '';
-
-    for (const line of lines) {
-        if (/indisponíveis/i.test(line)) {
-            const m = line.match(/:\s*(.+)$/);
-            if (m) unavailableTools = m[1].split(',').map(s => s.trim()).filter(Boolean);
-        } else if (/^[•\-]?\s*ferramentas:/i.test(line)) {
-            const m = line.match(/:\s*(.+)$/);
-            if (m) availableTools = m[1].split(',').map(s => s.trim()).filter(Boolean);
-        } else if (/workspace/i.test(line)) {
-            workspaceLine = line.replace(/^[•\-]\s*/, '');
-        } else if (/rede:/i.test(line)) {
-            networkLine = line.replace(/^[•\-]\s*/, '');
-        } else if (/execu/i.test(line)) {
-            executionLine = line.replace(/^[•\-]\s*/, '');
-        }
-    }
-
-    // ── Seção de ferramentas com ✓/✗ por item ────────────────────────────────
-    const toolLines: string[] = [];
-    for (const t of availableTools)   toolLines.push(`  - ${t} ✓`);
-    for (const t of unavailableTools) toolLines.push(`  - ${t} ✗  ← NÃO USE`);
-    const toolsSection = toolLines.length > 0
-        ? `Ferramentas do sistema:\n${toolLines.join('\n')}`
-        : 'Ferramentas do sistema: nenhuma detectada';
-
-    // ── Seção de workspace ────────────────────────────────────────────────────
-    const wsSection = workspaceLine
-        ? `Workspace:\n  ${workspaceLine}`
-        : '';
-
-    // ── Seção de execução e rede ──────────────────────────────────────────────
-    const execSection = [networkLine, executionLine]
-        .filter(Boolean)
-        .map(l => `  ${l}`)
-        .join('\n');
-
-    // ── Regras de planejamento estratégico ────────────────────────────────────
-    const rules = `REGRAS DE PLANEJAMENTO (obrigatórias):
-  - NUNCA gere exec_command usando binários marcados com ✗
-  - NUNCA planeje steps que dependam de capabilities indisponíveis
-  - NUNCA tente instalar binários do sistema (apt-get, brew, yum)
-  - Escolha a estratégia com MAIOR CHANCE DE SUCESSO dado o ambiente acima
-
-ORDEM DE PREFERÊNCIA ESTRATÉGICA:
-  1. Ferramentas disponíveis marcadas com ✓
-  2. Skills registradas ativas (use toolName da skill, não exec_command)
-  3. Bibliotecas já instaladas (python-pptx, node modules, etc.)
-  4. Estratégias sem dependências externas (HTML puro, JS puro, markdown)
-  5. Instalação de pacotes Python/npm (somente se estritamente necessário)
-  6. Estratégias experimentais (último recurso — inclua step de verificação)
-
-EXEMPLOS OPERACIONAIS:
-  - pandoc ✗ → use python-pptx, HTML puro ou markdown; NÃO gere exec_command pandoc
-  - ffmpeg ✗ → use python moviepy/PIL ou peça arquivo já processado; NÃO gere exec_command ffmpeg
-  - marp ✗ → use HTML/CSS puro ou python-pptx; NÃO gere npx marp
-  - sudo ✗ → instale em /tmp ou ~/.local; NÃO use sudo pip install
-  - path externo ✗ → peça para mover ao workspace; NÃO tente acessar /home/outro ou /var/www`;
-
-    // ── Seção de skills registradas ──────────────────────────────────────────
-    const skillsSection = skillsSummary
-        ? `Skills registradas (prefira sobre exec_command bruto):\n${skillsSummary}`
-        : '';
-
-    // ── Montagem final ────────────────────────────────────────────────────────
-    const sections = [toolsSection, wsSection, execSection ? `Execução e rede:\n${execSection}` : '', skillsSection]
-        .filter(Boolean)
-        .join('\n\n');
-
-    return `
-CAPACIDADES REAIS DO AMBIENTE — restrições absolutas de planejamento (detectadas automaticamente):
-
-${sections}
-
-${rules}
-`;
-}
-
 function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string): string {
-    const capBlock     = capabilityContext ? buildCapabilityBlock(capabilityContext, skillsSummary) : '';
-    const skillBlock   = skillContext
+    const goalText  = `${goal.objective} ${goal.userIntent}`;
+    const capBlock  = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary);
+    const skillBlock = skillContext
         ? `\nINSTRUÇÕES DE SKILL ATIVAS (siga rigorosamente):\n${skillContext}\n`
         : '';
-    const contextBlock = runtimeContext
-        ? `\nCONTEXTO (memória + feedback de ciclos anteriores):\n${runtimeContext}\n`
+    const memContext = runtimeContext ? PromptComposer.enforceMemoryBudget(runtimeContext) : '';
+    const contextBlock = memContext
+        ? `\nCONTEXTO (memória + feedback de ciclos anteriores):\n${memContext}\n`
         : '';
 
     const userPaths = extractUnixPaths(goal.userIntent);
@@ -131,7 +43,7 @@ function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: st
 
 OBJETIVO: ${goal.objective}
 INTENÇÃO ORIGINAL: ${goal.userIntent}
-${pathsBlock}${capBlock}${skillBlock}${contextBlock}
+${pathsBlock}${capBlock ? `\n${capBlock}\n` : ''}${skillBlock}${contextBlock}
 Ferramentas disponíveis (use EXATAMENTE esses nomes): ${availableTools.join(', ')}
 
 Responda APENAS com JSON válido (sem markdown):
@@ -163,7 +75,9 @@ ARGS OBRIGATÓRIOS POR FERRAMENTA:
 }
 
 function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string): string {
-    const capBlock = capabilityContext ? buildCapabilityBlock(capabilityContext, skillsSummary) : '';
+    const goalText            = `${goal.objective} ${goal.userIntent}`;
+    const compressedRefl      = PromptComposer.compressReflection(reflectionHint);
+    const capBlock            = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary, compressedRefl);
 
     const strategiesBlock = goal.strategiesTried.length > 0
         ? `\nEstratégias já tentadas: ${goal.strategiesTried.join('; ')}\n`
@@ -173,12 +87,14 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
         ? `\nBlockers anteriores: ${goal.blockers.map(b => `${b.kind}: ${b.description}`).join('; ')}\n`
         : '';
 
-    const reflectionBlock = reflectionHint
-        ? `\nHistórico de erros similares:\n${reflectionHint}\n`
+    // Reflection embutida no capBlock — fallback para prosa apenas quando não há capBlock
+    const reflectionBlock = !capBlock && reflectionHint
+        ? `\nHistórico de erros: ${reflectionHint.split('\n').slice(1, 3).join(' | ')}\n`
         : '';
 
-    const contextBlock = runtimeContext
-        ? `\nCONTEXTO (memória + feedback):\n${runtimeContext}\n`
+    const memContext = runtimeContext ? PromptComposer.enforceMemoryBudget(runtimeContext) : '';
+    const contextBlock = memContext
+        ? `\nCONTEXTO (memória + feedback):\n${memContext}\n`
         : '';
 
     return `Você é um planejador de tarefas. Um blocker foi detectado. Proponha uma NOVA estratégia.
@@ -329,7 +245,11 @@ export class GoalPlanner {
 
         const availableTools = ToolRegistry.getEnabled().map(t => t.name);
         const skillsSummary  = this.loadSkillsSummary();
-        const messages: LLMMessage[] = [{ role: 'user', content: buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext, capabilityContext, skillsSummary) }];
+        const prompt         = buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext, capabilityContext, skillsSummary);
+        const capBlock       = PromptComposer.buildCompactEnv(capabilityContext ?? '', `${goal.objective} ${goal.userIntent}`, skillsSummary);
+        const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
+
+        PromptComposer.recordPlan(prompt.length, capBlock.length, 0, runtimeContext?.length ?? 0);
 
         try {
             const result = await this.callPlannerLLM(messages, 45_000);
@@ -347,6 +267,7 @@ export class GoalPlanner {
 
             const steps = this.prependPathValidation(goal, parsed.steps);
             log.info(`[GoalPlanner] plan ok: steps=${steps.length} strategy="${parsed.strategy}" tools=[${steps.map(s => s.toolName ?? 'agentloop').join(',')}]`);
+            PromptComposer.logMetrics();
             return steps;
         } catch (err) {
             log.warn(`[GoalPlanner] plan exception: model=${PLANNER_MODEL} err="${String(err).slice(0, 100)}"`);
@@ -365,11 +286,15 @@ export class GoalPlanner {
             log.debug(`[GoalPlanner] reflectionHint injected (${reflectionHint.length} chars)`);
         }
 
-        const skillsSummary = this.loadSkillsSummary();
-        const messages: LLMMessage[] = [{
-            role: 'user',
-            content: buildReplanPrompt(goal, blocker, reflectionHint, runtimeContext, capabilityContext, skillsSummary)
-        }];
+        const skillsSummary     = this.loadSkillsSummary();
+        const compressedRefl    = PromptComposer.compressReflection(reflectionHint);
+        const goalText          = `${goal.objective} ${goal.userIntent}`;
+        const capBlock          = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary, compressedRefl);
+        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, runtimeContext, capabilityContext, skillsSummary);
+        const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
+
+        PromptComposer.recordReplan();
+        PromptComposer.recordPlan(prompt.length, capBlock.length, compressedRefl.length, runtimeContext?.length ?? 0);
 
         try {
             const result = await this.callPlannerLLM(messages, 45_000);
@@ -387,6 +312,7 @@ export class GoalPlanner {
 
             const steps = this.prependPathValidation(goal, parsed.steps);
             log.info(`[GoalPlanner] replan ok: steps=${steps.length} strategy="${parsed.strategy}" tools=[${steps.map(s => s.toolName ?? 'agentloop').join(',')}]`);
+            PromptComposer.logMetrics();
             return steps;
         } catch (err) {
             log.warn(`[GoalPlanner] replan exception: model=${PLANNER_MODEL} err="${String(err).slice(0, 100)}"`);

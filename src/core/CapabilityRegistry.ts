@@ -24,12 +24,18 @@ import {
     ExecutionCapabilities,
     ToolCapabilities,
     CapabilityStatus,
+    OSCapabilities,
+    HardwareCapabilities,
+    RuntimeCapabilities,
 } from './CapabilityTypes';
 
 const log = createLogger('CapabilityRegistry');
 
 // TTLs por categoria (ms)
 const TTL = {
+    os:         60 * 60 * 1000,   // 1 h  (muda só ao reiniciar)
+    hardware:   2  * 60 * 1000,   // 2 min (RAM/disco flutuam)
+    runtime:    5  * 60 * 1000,   // 5 min
     workspace:  5  * 60 * 1000,   // 5 min
     tools:      20 * 60 * 1000,   // 20 min
     network:    3  * 60 * 1000,   // 3 min
@@ -39,10 +45,13 @@ const TTL = {
 type Category = keyof typeof TTL;
 
 interface CachedData {
-    workspace:  { data: WorkspaceCapabilities;  ts: number } | null;
-    tools:      { data: ToolCapabilities;       ts: number } | null;
-    network:    { data: NetworkCapabilities;    ts: number } | null;
-    execution:  { data: ExecutionCapabilities;  ts: number } | null;
+    os:        { data: OSCapabilities;        ts: number } | null;
+    hardware:  { data: HardwareCapabilities;  ts: number } | null;
+    runtime:   { data: RuntimeCapabilities;   ts: number } | null;
+    workspace: { data: WorkspaceCapabilities; ts: number } | null;
+    tools:     { data: ToolCapabilities;      ts: number } | null;
+    network:   { data: NetworkCapabilities;   ts: number } | null;
+    execution: { data: ExecutionCapabilities; ts: number } | null;
 }
 
 export class CapabilityRegistry {
@@ -52,6 +61,9 @@ export class CapabilityRegistry {
     private readonly envProbe = new EnvironmentProbe();
 
     private cache: CachedData = {
+        os:        null,
+        hardware:  null,
+        runtime:   null,
         workspace: null,
         tools:     null,
         network:   null,
@@ -129,24 +141,56 @@ export class CapabilityRegistry {
         }
     }
 
+    private async refreshOS(): Promise<void> {
+        try {
+            const data = this.probe.probeOS();
+            this.cache.os = { data, ts: Date.now() };
+            log.debug(`[Registry] os refreshed: ${data.platform} ${data.architecture}`);
+        } catch (err) {
+            log.warn('[Registry] os probe failed:', String(err));
+        }
+    }
+
+    private async refreshHardware(): Promise<void> {
+        try {
+            const data = this.probe.probeHardware();
+            this.cache.hardware = { data, ts: Date.now() };
+            log.debug(`[Registry] hardware refreshed: cpu=${data.cpuCores} ram=${data.totalMemoryMB}MB gpu=${data.gpuAvailable}`);
+        } catch (err) {
+            log.warn('[Registry] hardware probe failed:', String(err));
+        }
+    }
+
+    private async refreshRuntime(): Promise<void> {
+        try {
+            const data = this.probe.probeRuntime();
+            this.cache.runtime = { data, ts: Date.now() };
+            log.debug(`[Registry] runtime refreshed: containerized=${data.containerized} node=${data.nodeVersion}`);
+        } catch (err) {
+            log.warn('[Registry] runtime probe failed:', String(err));
+        }
+    }
+
     private async ensureFresh(category: Category): Promise<void> {
         if (!this.isStale(category)) return;
 
-        // Evita refresh paralelo para a mesma categoria
         const existing = this.refreshLocks.get(category);
         if (existing) {
             await existing;
             return;
         }
 
-        const refreshFn = {
-            workspace:  () => this.refreshWorkspace(),
-            tools:      () => this.refreshTools(),
-            network:    () => this.refreshNetwork(),
-            execution:  () => this.refreshExecution(),
-        }[category];
+        const refreshFn: Record<Category, () => Promise<void>> = {
+            os:        () => this.refreshOS(),
+            hardware:  () => this.refreshHardware(),
+            runtime:   () => this.refreshRuntime(),
+            workspace: () => this.refreshWorkspace(),
+            tools:     () => this.refreshTools(),
+            network:   () => this.refreshNetwork(),
+            execution: () => this.refreshExecution(),
+        };
 
-        const promise = refreshFn().finally(() => this.refreshLocks.delete(category));
+        const promise = refreshFn[category]().finally(() => this.refreshLocks.delete(category));
         this.refreshLocks.set(category, promise);
         await promise;
     }
@@ -159,6 +203,9 @@ export class CapabilityRegistry {
      */
     async bootstrap(): Promise<void> {
         await Promise.allSettled([
+            this.refreshOS(),
+            this.refreshHardware(),
+            this.refreshRuntime(),
             this.refreshWorkspace(),
             this.refreshTools(),
             this.refreshNetwork(),
@@ -170,6 +217,9 @@ export class CapabilityRegistry {
     /** Atualiza todas as categorias expiradas (lazy). */
     async refreshAll(): Promise<void> {
         await Promise.allSettled([
+            this.ensureFresh('os'),
+            this.ensureFresh('hardware'),
+            this.ensureFresh('runtime'),
             this.ensureFresh('workspace'),
             this.ensureFresh('tools'),
             this.ensureFresh('network'),
@@ -234,6 +284,9 @@ export class CapabilityRegistry {
      */
     async getCapabilitySummary(): Promise<string> {
         await Promise.allSettled([
+            this.ensureFresh('os'),
+            this.ensureFresh('hardware'),
+            this.ensureFresh('runtime'),
             this.ensureFresh('workspace'),
             this.ensureFresh('tools'),
             this.ensureFresh('network'),
@@ -242,10 +295,32 @@ export class CapabilityRegistry {
 
         const lines: string[] = ['[CAPACIDADES DO AMBIENTE — detectadas automaticamente]'];
 
+        // OS
+        const osData = this.cache.os?.data;
+        if (osData) {
+            const distroStr = osData.distro ? ` (${osData.distro})` : '';
+            const pkgStr    = osData.packageManager ? ` | pkg: ${osData.packageManager}` : '';
+            lines.push(`• OS: ${osData.platform}${distroStr} | shell: ${osData.shell} | arch: ${osData.architecture}${pkgStr}`);
+        }
+
+        // Hardware
+        const hw = this.cache.hardware?.data;
+        if (hw) {
+            const gpuStr = hw.gpuAvailable ? `${hw.gpuName ?? 'gpu'} (${hw.gpuMemoryMB ?? '?'}MB)` : 'nenhuma';
+            lines.push(`• Hardware: cpu:${hw.cpuCores} cores | ram:${hw.totalMemoryMB}MB total / ${hw.freeMemoryMB}MB livre | disk:${hw.diskFreeMB}MB livre | gpu:${gpuStr}`);
+        }
+
+        // Runtime
+        const rt = this.cache.runtime?.data;
+        if (rt) {
+            const containerStr = rt.containerized ? `${rt.virtualization ?? 'container'}` : 'não';
+            lines.push(`• Runtime: node:${rt.nodeVersion} | containerizado:${containerStr}`);
+        }
+
         // Workspace
         const ws = this.cache.workspace?.data;
         if (ws) {
-            const access = [ws.canRead ? 'leitura ✓' : 'leitura ✗', ws.canWrite ? 'escrita ✓' : 'escrita ✗'].join(', ');
+            const access  = [ws.canRead ? 'leitura ✓' : 'leitura ✗', ws.canWrite ? 'escrita ✓' : 'escrita ✗'].join(', ');
             const subdirs = ws.knownSubdirs.length > 0 ? ` | subpastas: ${ws.knownSubdirs.slice(0, 8).join(', ')}` : '';
             lines.push(`• Workspace: ${ws.root} (${access}, ${ws.entryCount} itens${subdirs})`);
         }
@@ -281,6 +356,23 @@ export class CapabilityRegistry {
         }
 
         return lines.join('\n');
+    }
+
+    // ── Acessores sync para OS e Hardware (usados pelo RiskAnalyzer) ──────────
+
+    /** Retorna OS cacheado sem fazer probe. null = cache frio. */
+    getOSSync(): OSCapabilities | null {
+        return this.cache.os?.data ?? null;
+    }
+
+    /** Retorna hardware cacheado sem fazer probe. null = cache frio. */
+    getHardwareSync(): HardwareCapabilities | null {
+        return this.cache.hardware?.data ?? null;
+    }
+
+    /** Retorna runtime cacheado sem fazer probe. null = cache frio. */
+    getRuntimeSync(): RuntimeCapabilities | null {
+        return this.cache.runtime?.data ?? null;
     }
 
     // ── Internos ──────────────────────────────────────────────────────────────

@@ -158,6 +158,71 @@ export class RiskAnalyzer {
             }
         }
 
+        // ── 1d. OS + Hardware feasibility (síncrono, sem LLM) ───────────────
+        const osData  = capReg.getOSSync();
+        const hwData  = capReg.getHardwareSync();
+
+        if (osData) {
+            for (const step of plan) {
+                if (step.toolName !== 'exec_command') continue;
+                const cmdValue = String(step.toolArgs?.command ?? step.toolArgs?.cmd ?? '');
+                if (!cmdValue) continue;
+                const cmdLower = cmdValue.toLowerCase();
+
+                // Comandos Linux/macOS executados em Windows
+                if (osData.platform === 'windows') {
+                    if (/\bapt(?:-get)?\b/.test(cmdLower))
+                        risks.push(`Step "${step.description}": 'apt' não existe no Windows — use winget/choco`);
+                    if (/\byum\b|\bdnf\b|\bpacman\b/.test(cmdLower))
+                        risks.push(`Step "${step.description}": gerenciador de pacotes Linux em ambiente Windows`);
+                    if (/\bchmod\b|\bchown\b/.test(cmdLower))
+                        risks.push(`Step "${step.description}": 'chmod'/'chown' não existem no Windows`);
+                }
+
+                // Comandos Windows executados em Linux/macOS
+                if (osData.platform === 'linux' || osData.platform === 'macos') {
+                    if (/\bpowershell\b|\bpwsh\b/.test(cmdLower))
+                        risks.push(`Step "${step.description}": PowerShell pode não estar disponível em ${osData.platform}`);
+                    if (/\bwinget\b|\bchoco\b/.test(cmdLower))
+                        risks.push(`Step "${step.description}": gerenciador de pacotes Windows em ambiente ${osData.platform}`);
+                }
+            }
+        }
+
+        if (hwData) {
+            for (const step of plan) {
+                if (step.toolName !== 'exec_command') continue;
+                const cmdValue = String(step.toolArgs?.command ?? step.toolArgs?.cmd ?? '');
+                if (!cmdValue) continue;
+                const cmdLower = cmdValue.toLowerCase();
+
+                // Detecção de CUDA sem GPU
+                if (!hwData.gpuAvailable) {
+                    if (/\bcuda\b|\bnvidia-smi\b|\btorch\b.*gpu|\btensorflow-gpu\b/.test(cmdLower)) {
+                        risks.push(`Step "${step.description}": requer GPU/CUDA mas nenhuma GPU detectada no ambiente`);
+                    }
+                }
+
+                // Processos pesados com pouca RAM livre
+                const HEAVY_RAM_MB = 512;
+                if (hwData.freeMemoryMB < HEAVY_RAM_MB) {
+                    const isHeavy = /\bffmpeg\b|\blibreoffice\b|\bsoffice\b|\bchromium\b|\bchrome\b|\bpuppeteer\b/.test(cmdLower);
+                    if (isHeavy) {
+                        risks.push(`Step "${step.description}": processo pesado com apenas ${hwData.freeMemoryMB}MB RAM livre (mínimo recomendado: ${HEAVY_RAM_MB}MB)`);
+                    }
+                }
+
+                // Pouco espaço em disco para downloads/geração de mídia
+                const LOW_DISK_MB = 200;
+                if (hwData.diskFreeMB > 0 && hwData.diskFreeMB < LOW_DISK_MB) {
+                    const isDiskHeavy = /\bffmpeg\b|\bdownload\b|\bcp\b.*\.\b|\bwget\b|\bcurl\b.*-o/.test(cmdLower);
+                    if (isDiskHeavy) {
+                        risks.push(`Step "${step.description}": apenas ${hwData.diskFreeMB}MB livres no disco — operação pode falhar por falta de espaço`);
+                    }
+                }
+            }
+        }
+
         // ── 2. Revisão LLM do plano completo ────────────────────────────────
         const llmResult = await this.reviewPlanWithLLM(goal, plan);
 
