@@ -227,6 +227,12 @@ function detectMissingRequiredArgs(tool: string, args: Record<string, unknown>):
             return "sem args obrigatórios (oldText+newText | startLine+endLine+content | append+content)";
         }
     }
+    if (tool === 'send_document' && !args['file_path']) {
+        return "sem 'file_path' obrigatório";
+    }
+    if (tool === 'send_audio' && !args['file_path']) {
+        return "sem 'file_path' obrigatório";
+    }
     return null;
 }
 
