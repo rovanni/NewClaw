@@ -107,7 +107,9 @@ export class SessionContext {
         const blocks: ContextBlock[] = this.budget.buildMessages({
             systemPrompt,
             stateBlock,
-            memoryBlock: memoryContext ? `[MEMÓRIA]\n${memoryContext}` : undefined,
+            memoryBlock: memoryContext
+                ? `[MEMÓRIA — CONTEXTO PESSOAL DO USUÁRIO]\nAs informações abaixo são fatos e preferências ESPECÍFICAS DO USUÁRIO. Elas SOBRESCREVEM qualquer suposição padrão: se o usuário tem uma preferência explícita aqui, aplique-a acima do conhecimento geral.\n${memoryContext}`
+                : undefined,
             skillsBlock: skillsBlock ? `[HABILIDADES]\n${skillsBlock}` : undefined,
             checkpointBlock: checkpointSummary || undefined,
             recentMessages: transcriptMessages

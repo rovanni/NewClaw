@@ -115,13 +115,31 @@ export class SessionLearner {
         }
 
         // Pattern: User mentions a preference
+        // Use prefMatch[0] (full expression, e.g. "não gosto de futebol") rather than
+        // prefMatch[1] (just the object, e.g. "futebol") so that negative sentiment is preserved.
+        // Storing "Preferência: futebol" loses the "não gosto de" context entirely.
         const prefMatch = content.match(/(?:eu prefiro|gosto mais de|prefiro|adoro|amo|não gosto de|odeio|detesto)\s+(.+?)(?:\.|!|,|$)/i);
         if (prefMatch) {
+            const fullExpr = prefMatch[0].trim();
             facts.push({
                 type: 'preference',
                 name: `pref_${prefMatch[1].slice(0, 30).replace(/\s+/g, '_')}`,
-                content: `Preferência: ${prefMatch[1].trim()}`,
+                content: `Preferência: ${fullExpr.charAt(0).toUpperCase() + fullExpr.slice(1)}`,
                 confidence: 0.7,
+                source,
+                sourceSeq: event.seq
+            });
+        }
+
+        // Pattern: User mentions an investment or asset ownership
+        const investMatch = content.match(/(?:investi em|tenho investido em|comprei|adquiri|possuo|tenho)\s+(.{3,60}?)(?:\s*\.|!|,|$)/i);
+        if (investMatch) {
+            const fullExpr = investMatch[0].trim();
+            facts.push({
+                type: 'fact',
+                name: `invest_${investMatch[1].slice(0, 30).replace(/\s+/g, '_')}`,
+                content: `Investimento/Posse: ${fullExpr.charAt(0).toUpperCase() + fullExpr.slice(1)}`,
+                confidence: 0.75,
                 source,
                 sourceSeq: event.seq
             });

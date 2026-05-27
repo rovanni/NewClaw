@@ -628,27 +628,48 @@ export class AgentLoop {
         // City name pattern: one or more capitalized words optionally followed by ", State/UF"
         const CITY = '([A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][\\wáàãâéêíóõôúçÁÀÃÂÉÊÍÓÕÔÚÇ]+(?:\\s+[A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][\\wáàãâéêíóõôúçÁÀÃÂÉÊÍÓÕÔÚÇ]+)*(?:,\\s*(?:[A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][\\wáàãâéêíóõôúçÁÀÃÂÉÊÍÓÕÔÚÇ]+|[A-Z]{2}))?)';
         const PATTERNS = [
-            // "considerar [sempre] <Cidade> como cidade/localidade"
+            // Explicit preferences: "considerar [sempre] <Cidade> como cidade/localidade"
             new RegExp(`considerar\\s+(?:sempre\\s+)?${CITY}\\s+como\\s+(?:cidade|localidade)`, 'i'),
             // "usar <Cidade> como cidade/localidade/padrão"
             new RegExp(`usar\\s+${CITY}\\s+como\\s+(?:cidade|localidade|padr[aã]o)`, 'i'),
             // "cidade padrão[: é] <Cidade>"
             new RegExp(`cidade\\s+(?:padr[aã]o|default)[:\\sé]+${CITY}`, 'i'),
-            // "<Cidade> como cidade padrão"
-            new RegExp(`${CITY}\\s+como\\s+cidade\\s+padr[aã]o`, 'i'),
-            // "<Cidade> como localidade padrão"
-            new RegExp(`${CITY}\\s+como\\s+localidade\\s+padr[aã]o`, 'i'),
+            // "<Cidade> como cidade padrão/localidade padrão"
+            new RegExp(`${CITY}\\s+como\\s+(?:cidade|localidade)\\s+padr[aã]o`, 'i'),
+            // Natural phrasing: "clima de <Cidade>" / "previsão de <Cidade>" / "tempo em <Cidade>"
+            new RegExp(`(?:clima|previsão|tempo|temperatura)\\s+(?:de|em|para)\\s+${CITY}`, 'i'),
+            // "minha cidade [é|fica em|é] <Cidade>"
+            new RegExp(`minha\\s+cidade\\s+(?:[eé]|fica\\s+em|padr[aã]o\\s+[eé])\\s+${CITY}`, 'i'),
+            // Preference node saved format: "Preferência: sempre <Cidade> para clima"
+            new RegExp(`${CITY}\\s+(?:para|no)\\s+(?:clima|previsão|tempo)`, 'i'),
+            // "falar sobre <Cidade>" / "sobre o clima de <Cidade>"
+            new RegExp(`falar\\s+(?:sobre\\s+(?:o\\s+)?(?:clima\\s+(?:de|em)\\s+)?)?${CITY}`, 'i'),
         ];
         try {
             const nodes = this.memory.keywordSearch(
-                ['previsão do tempo', 'clima', 'cidade padrão', 'localidade padrão', 'considerar', 'usar'],
-                10
+                ['previsão do tempo', 'clima', 'cidade padrão', 'localidade padrão', 'considerar', 'usar', 'sempre', 'minha cidade'],
+                12
             );
             for (const node of nodes) {
                 if (!node.content) continue;
                 for (const pat of PATTERNS) {
                     const m = node.content.match(pat);
                     if (m?.[1]) return m[1].trim();
+                }
+            }
+            // Broader fallback: extract any proper-noun sequence adjacent to a climate keyword.
+            // Covers natural-language saves like "Preferência: Não gosto de clima de outra cidade, sempre X"
+            const CITY_ADJACENT = new RegExp(
+                `(?:clima|previsão|tempo|chuva|temperatura|sempre|previsao)[^.]{0,30}${CITY}|` +
+                `${CITY}[^.]{0,20}(?:clima|previsão|tempo|chuva|temperatura|previsao)`,
+                'i'
+            );
+            for (const node of nodes) {
+                if (!node.content) continue;
+                const m = node.content.match(CITY_ADJACENT);
+                if (m) {
+                    const city = m[1] ?? m[2];
+                    if (city) return city.trim();
                 }
             }
         } catch (err) {
@@ -1593,24 +1614,38 @@ export class AgentLoop {
                     `(3) como prosseguir. Seja direto e honesto.`
                 );
             })();
+            // Distinguish info-retrieval tools from file-operation tools so the synthesis
+            // instruction is context-appropriate: "present the data" vs "confirm changes".
+            const INFO_TOOLS = new Set(['web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request']);
+            const executedTools = new Set(cycleHistory.map(h => h.tool));
+            const isInfoRetrieval = cycleHistory.length > 0 && [...executedTools].every(t => INFO_TOOLS.has(t));
             const synthesisBody = dedupAbort
                 ? dedupSynthesisBody
-                : `Você executou as seguintes ações:\n${toolSummary}\n\nAgora RESUMA para o usuário exatamente O QUE foi feito, com detalhes específicos das alterações realizadas. Não diga "vou fazer" — você JÁ fez. Confirme as mudanças de forma clara e objetiva.`;
-            loopMessages.push({
-                role: 'system',
-                content: `SÍNTESE FINAL OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON, NÃO use formato action/thought):\n\n${synthesisBody}\n\nResponda DIRETAMENTE em linguagem natural.`
-            });
+                : isInfoRetrieval
+                    ? `Você consultou as seguintes fontes:\n${toolSummary}\n\nApresente os dados/resultados encontrados DIRETAMENTE ao usuário, como se estivesse respondendo uma pergunta. Não descreva o que você fez — apresente os dados em si.`
+                    : `Você executou as seguintes ações:\n${toolSummary}\n\nConfirme ao usuário O QUE foi realizado, com detalhes específicos. Não diga "vou fazer" — você JÁ fez.`;
 
             // Trim context for synthesis: the full step history (15+ tool rounds) causes the model
             // to produce massive thinking without content and time out at MAX_TIMEOUT (420s).
-            // The synthesis instruction already embeds toolSummary — only system+user+instruction needed.
-            const _synthInstIdx = loopMessages.length - 1;
-            const _synthLastUser = loopMessages.slice(0, _synthInstIdx).reverse().find(m => m.role === 'user');
+            // Include: system prompt + user message + last tool output (truncated) + synthesis instruction.
+            // The last tool output gives the model real data to reference without flooding the context.
+            const _synthLastUser = loopMessages.slice().reverse().find(m => m.role === 'user');
+            const _synthLastTool = loopMessages.slice().reverse().find(m => m.role === 'tool');
             const synthMessages: LLMMessage[] = [
                 loopMessages[0],
                 ...(_synthLastUser ? [_synthLastUser] : []),
-                loopMessages[_synthInstIdx],
+                ...(_synthLastTool ? [{
+                    role: 'tool' as const,
+                    content: (_synthLastTool.content ?? '').slice(0, 1200) +
+                        ((_synthLastTool.content?.length ?? 0) > 1200 ? '\n...[truncated]' : ''),
+                    tool_call_id: _synthLastTool.tool_call_id,
+                }] : []),
+                {
+                    role: 'system' as const,
+                    content: `SÍNTESE FINAL OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON, NÃO use formato action/thought):\n\n${synthesisBody}\n\nResponda DIRETAMENTE em linguagem natural.`,
+                },
             ];
+
             move('LLM_REQUEST', { step: stepCount, phase: 'synthesis' });
             log.info(`[${this.ts()}] [SYNTHESIS] Trimmed context: ${loopMessages.length} → ${synthMessages.length} messages`);
             const synthesisResponse = await this.callLLMWithFallback(synthMessages, [], chatProfile, turnSignal);
@@ -1652,19 +1687,24 @@ export class AgentLoop {
         }
 
         log.info(`[${this.ts()}] [FALLBACK] Generating final synthesis...`);
-        loopMessages.push({
-            role: 'system',
-            content: 'FINALIZAÇÃO OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON): Forneça uma resposta honesta agora. Se não obteve dados suficientes, admita a limitação claramente. Responda diretamente em linguagem natural.'
-        });
-
         move('SYNTHESIS_REQUIRED', { step: stepCount, reason: 'fallback' });
-        // Same trim as post-loop synthesis to prevent thinking timeout on large contexts
-        const _fbInstIdx = loopMessages.length - 1;
-        const _fbLastUser = loopMessages.slice(0, _fbInstIdx).reverse().find(m => m.role === 'user');
+        // Same trim as post-loop synthesis to prevent thinking timeout on large contexts.
+        // Include last tool output (truncated) so the model has real data to reference.
+        const _fbLastUser = loopMessages.slice().reverse().find(m => m.role === 'user');
+        const _fbLastTool = loopMessages.slice().reverse().find(m => m.role === 'tool');
         const fallbackSynthMessages: LLMMessage[] = [
             loopMessages[0],
             ...(_fbLastUser ? [_fbLastUser] : []),
-            loopMessages[_fbInstIdx],
+            ...(_fbLastTool ? [{
+                role: 'tool' as const,
+                content: (_fbLastTool.content ?? '').slice(0, 1200) +
+                    ((_fbLastTool.content?.length ?? 0) > 1200 ? '\n...[truncated]' : ''),
+                tool_call_id: _fbLastTool.tool_call_id,
+            }] : []),
+            {
+                role: 'system' as const,
+                content: 'FINALIZAÇÃO OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON): Forneça uma resposta honesta agora. Se não obteve dados suficientes, admita a limitação claramente. Responda diretamente em linguagem natural.',
+            },
         ];
         move('LLM_REQUEST', { step: stepCount, phase: 'fallback' });
         log.info(`[${this.ts()}] [FALLBACK] Trimmed context: ${loopMessages.length} → ${fallbackSynthMessages.length} messages`);

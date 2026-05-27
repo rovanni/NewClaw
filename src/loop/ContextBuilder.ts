@@ -277,7 +277,7 @@ export function extractEntities(query: string, overrideEntities?: string[]): str
     for (const t of tickers) results.add(t.toLowerCase());
 
     const words = query.split(/\s+/);
-    for (let i = 1; i < words.length; i++) {
+    for (let i = 0; i < words.length; i++) {
         const w = words[i].replace(/[^A-Za-zÀ-ú]/g, '');
         if (w.length >= 3 && /^[A-ZÀ-Ú]/.test(w) && !/^[A-Z]{2,}$/.test(w)) results.add(w.toLowerCase());
     }
