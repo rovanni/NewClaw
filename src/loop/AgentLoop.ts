@@ -1601,8 +1601,19 @@ export class AgentLoop {
                 content: `SÍNTESE FINAL OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON, NÃO use formato action/thought):\n\n${synthesisBody}\n\nResponda DIRETAMENTE em linguagem natural.`
             });
 
+            // Trim context for synthesis: the full step history (15+ tool rounds) causes the model
+            // to produce massive thinking without content and time out at MAX_TIMEOUT (420s).
+            // The synthesis instruction already embeds toolSummary — only system+user+instruction needed.
+            const _synthInstIdx = loopMessages.length - 1;
+            const _synthLastUser = loopMessages.slice(0, _synthInstIdx).reverse().find(m => m.role === 'user');
+            const synthMessages: LLMMessage[] = [
+                loopMessages[0],
+                ...(_synthLastUser ? [_synthLastUser] : []),
+                loopMessages[_synthInstIdx],
+            ];
             move('LLM_REQUEST', { step: stepCount, phase: 'synthesis' });
-            const synthesisResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile, turnSignal);
+            log.info(`[${this.ts()}] [SYNTHESIS] Trimmed context: ${loopMessages.length} → ${synthMessages.length} messages`);
+            const synthesisResponse = await this.callLLMWithFallback(synthMessages, [], chatProfile, turnSignal);
             move('LLM_RESPONSE', { step: stepCount, phase: 'synthesis', status: synthesisResponse.status });
             if (synthesisResponse.status === 'cancelled') {
                 move('CANCEL', { step: stepCount, phase: 'synthesis' });
@@ -1647,8 +1658,17 @@ export class AgentLoop {
         });
 
         move('SYNTHESIS_REQUIRED', { step: stepCount, reason: 'fallback' });
+        // Same trim as post-loop synthesis to prevent thinking timeout on large contexts
+        const _fbInstIdx = loopMessages.length - 1;
+        const _fbLastUser = loopMessages.slice(0, _fbInstIdx).reverse().find(m => m.role === 'user');
+        const fallbackSynthMessages: LLMMessage[] = [
+            loopMessages[0],
+            ...(_fbLastUser ? [_fbLastUser] : []),
+            loopMessages[_fbInstIdx],
+        ];
         move('LLM_REQUEST', { step: stepCount, phase: 'fallback' });
-        const finalResponse = await this.callLLMWithFallback(loopMessages, [], chatProfile, turnSignal);
+        log.info(`[${this.ts()}] [FALLBACK] Trimmed context: ${loopMessages.length} → ${fallbackSynthMessages.length} messages`);
+        const finalResponse = await this.callLLMWithFallback(fallbackSynthMessages, [], chatProfile, turnSignal);
         move('LLM_RESPONSE', { step: stepCount, phase: 'fallback', status: finalResponse.status });
         if (finalResponse.status === 'cancelled') {
             move('CANCEL', { step: stepCount, phase: 'fallback' });

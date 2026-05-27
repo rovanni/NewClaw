@@ -89,6 +89,7 @@ Regras:
 ${roadmapAdjustmentInstruction}
 ARGS OBRIGATÓRIOS POR FERRAMENTA:
 - edit: SEMPRE forneça oldText+newText (substituição) OU startLine+endLine+content (patch) OU append=true+content. Nunca chame edit sem esses parâmetros.
+- send_document: SEMPRE forneça file_path com o caminho completo do arquivo. Nunca chame send_document sem file_path.
 - list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") ou absoluto.
 - read: aceita caminho relativo ao workspace ou absoluto.`.trim();
 }
@@ -168,6 +169,7 @@ Máximo 3 steps. Se o blocker for 'missing_tool', inclua step de instalação co
 ${roadmapAdjustmentInstruction}
 REFERÊNCIA DE ARGS OBRIGATÓRIOS:
 - edit: SEMPRE forneça oldText+newText (para substituição) OU startLine+endLine+content (para patch) OU append=true+content. Nunca chame edit sem esses parâmetros.
+- send_document: SEMPRE forneça file_path com o caminho completo do arquivo. Nunca chame send_document sem file_path.
 - list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") OU absoluto. Passe apenas a subpasta desejada.
 - read: aceita caminho relativo ao workspace ou absoluto. Para diretórios, lista automaticamente o conteúdo.
 
@@ -507,8 +509,11 @@ export class GoalPlanner {
                 // quando chamadas sem os parâmetros corretos. Converte para AgentLoop
                 // (sem toolName) para que o LLM resolva com contexto completo, em vez
                 // de deixar a tool explodir com erro de parâmetro obrigatório.
-                if (resolvedTool && toolArgs) {
-                    const missing = detectMissingRequiredArgs(resolvedTool, toolArgs);
+                // Validate required args even when toolArgs is absent (e.g. send_document without file_path).
+                // Previously the check was skipped when toolArgs was undefined, letting invalid steps
+                // pass through to the RiskAnalyzer instead of being caught here.
+                if (resolvedTool) {
+                    const missing = detectMissingRequiredArgs(resolvedTool, toolArgs ?? {});
                     if (missing) {
                         log.warn(`[GoalPlanner] step ${i + 1}: '${resolvedTool}' ${missing} — converting to AgentLoop step`);
                         resolvedTool = undefined;

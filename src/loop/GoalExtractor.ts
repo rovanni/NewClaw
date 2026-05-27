@@ -130,7 +130,7 @@ Regras:
                 messages,
                 undefined,
                 undefined,
-                15_000
+                30_000
             );
 
             if (result.status !== 'success') {
