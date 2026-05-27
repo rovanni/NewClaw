@@ -82,9 +82,47 @@ export class GoalExecutionLoop {
         // Registry usa TTL por categoria; chamadas consecutivas são servidas do cache.
         const capSummary = await this.capRegistry.getCapabilitySummary();
 
+        // ── Se for Construction, planeja o roadmap primeiro ──────────────────
+        if (goal.isConstruction && (!goal.roadmap || goal.roadmap.length === 0)) {
+            log.info(`[GoalLoop] goal=${goal.id} is classified as construction. Planning roadmap.`);
+            await onProgress?.({
+                goalId: goal.id,
+                cycle: 0,
+                event: 'replanning',
+                message: 'Analisando o objetivo global e definindo o roadmap de desenvolvimento incremental...'
+            });
+            const roadmap = await this.planner.planRoadmap(goal, q1Context, capSummary);
+            this.goalStore.update(goal.id, {
+                roadmap,
+                currentMilestoneIndex: 0
+            });
+            // Recarrega o goal atualizado do store
+            goal = this.goalStore.getById(goal.id)!;
+
+            await onProgress?.({
+                goalId: goal.id,
+                cycle: 0,
+                event: 'replanning',
+                message: `📍 *Roadmap de Construção Incremental Planejado:*\n\n${roadmap.map((m, i) => `*Marco ${i+1}:* ${m}`).join('\n')}`
+            });
+        }
+
+        const activeMilestone = goal.isConstruction && goal.roadmap && goal.roadmap.length > 0
+            ? goal.roadmap[goal.currentMilestoneIndex ?? 0]
+            : undefined;
+
         // ── Planejamento inicial ───────────────────────────────────────────
         this.goalStore.update(goal.id, { status: 'replanning' });
-        const rawPlan = await this.planner.plan(goal, q1Context ?? '', capSummary);
+        const planResult = await this.planner.plan(goal, q1Context ?? '', capSummary, activeMilestone);
+
+        // Se o roadmap foi ajustado pelo planner durante o planejamento inicial
+        if (goal.isConstruction && planResult.adjustedRoadmap && planResult.adjustedRoadmap.length > 0) {
+            log.info(`[GoalLoop] roadmap adjusted during initial planning.`);
+            this.goalStore.update(goal.id, { roadmap: planResult.adjustedRoadmap });
+            goal = this.goalStore.getById(goal.id)!;
+        }
+
+        let rawPlan = planResult.steps;
 
         // ── Q2: Análise de Riscos (apenas planos complexos) ──────────────
         // Planos simples passam direto; Q2 só vale a latência em tarefas com
@@ -106,7 +144,11 @@ export class GoalExecutionLoop {
             log.debug('[GoalLoop] Q2 skipped — simple plan');
         }
 
-        this.goalStore.update(goal.id, { currentPlan: initialPlan, status: 'executing' });
+        this.goalStore.update(goal.id, {
+            currentPlan: initialPlan,
+            status: 'executing',
+            cycleFocus: planResult.strategy || undefined,
+        });
         const currentGoal = this.goalStore.getById(goal.id)!;
 
         return this.runLoop(currentGoal, channelContext, onProgress, 0, 0);
@@ -174,8 +216,21 @@ export class GoalExecutionLoop {
         // Capabilities summary no replan — registry serve do cache (TTL por categoria).
         const capSummary = await this.capRegistry.getCapabilitySummary();
 
+        const activeMilestone = goal.isConstruction && goal.roadmap && goal.roadmap.length > 0
+            ? goal.roadmap[goal.currentMilestoneIndex ?? 0]
+            : undefined;
+
         // Replan com contexto enriquecido
-        const rawPlan = await this.planner.replan(goal, blocker, q1Context ?? '', capSummary);
+        const planResult = await this.planner.replan(goal, blocker, q1Context ?? '', capSummary, activeMilestone);
+
+        // Se o roadmap foi ajustado pelo planner durante o replanejamento
+        if (goal.isConstruction && planResult.adjustedRoadmap && planResult.adjustedRoadmap.length > 0) {
+            log.info(`[GoalLoop] roadmap adjusted during replanning.`);
+            this.goalStore.update(goal.id, { roadmap: planResult.adjustedRoadmap });
+            goal = this.goalStore.getById(goal.id)!;
+        }
+
+        let rawPlan = planResult.steps;
 
         // Q2: Análise de Riscos
         // Ativo quando: plano complexo (dependências entre steps)
@@ -205,7 +260,11 @@ export class GoalExecutionLoop {
             log.debug(`[GoalLoop] Q2 skipped (replan cycle=${cycleNumber} — simple plan)`);
         }
 
-        this.goalStore.update(goal.id, { currentPlan: finalPlan, status: 'executing' });
+        this.goalStore.update(goal.id, {
+            currentPlan: finalPlan,
+            status: 'executing',
+            cycleFocus: planResult.strategy || undefined,
+        });
         return this.goalStore.getById(goal.id)!;
     }
 
@@ -241,12 +300,73 @@ export class GoalExecutionLoop {
                 log.info(`[GoalLoop] goal=${currentGoal.id} all steps completed — running LLM validation`);
                 await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'tool_completed', message: 'Validando conclusão...' });
 
-                const validation = await this.validateGoalCompletion(currentGoal);
+                const activeMilestone = currentGoal.isConstruction && currentGoal.roadmap && currentGoal.roadmap.length > 0
+                    ? currentGoal.roadmap[currentGoal.currentMilestoneIndex ?? 0]
+                    : undefined;
+
+                const validation = await this.validateGoalCompletion(currentGoal, activeMilestone);
 
                 if (validation.achieved) {
-                    this.goalStore.setStatus(currentGoal.id, 'completed');
-                    log.info(`[GoalLoop] goal=${currentGoal.id} validated as complete`);
-                    return this.buildResult(currentGoal, true, totalCycles, totalReplans, validation.summary);
+                    if (currentGoal.isConstruction && currentGoal.roadmap && (currentGoal.currentMilestoneIndex ?? 0) < currentGoal.roadmap.length - 1) {
+                        const prevMilestone = currentGoal.roadmap[currentGoal.currentMilestoneIndex ?? 0];
+                        const nextIndex = (currentGoal.currentMilestoneIndex ?? 0) + 1;
+                        const nextMilestone = currentGoal.roadmap[nextIndex];
+                        log.info(`[GoalLoop] milestone ${currentGoal.currentMilestoneIndex} achieved: "${prevMilestone}". Advancing to milestone ${nextIndex}: "${nextMilestone}"`);
+
+                        await onProgress?.({
+                            goalId: currentGoal.id,
+                            cycle: totalCycles,
+                            event: 'replanning',
+                            message: `✅ *Marco Concluído:* ${prevMilestone}\n\n👉 *Próximo Marco:* ${nextMilestone}`
+                        });
+
+                        // Avança o marco e limpa o plano atual para forçar replanejamento para o novo marco
+                        this.goalStore.update(currentGoal.id, {
+                            currentMilestoneIndex: nextIndex,
+                            currentPlan: [],
+                        });
+                        currentGoal = this.goalStore.getById(currentGoal.id)!;
+
+                        // Planeja os steps para o próximo marco
+                        const q1Context = await this.contextualize(currentGoal, totalCycles, undefined);
+                        const capSummary = await this.capRegistry.getCapabilitySummary();
+
+                        const planResult = await this.planner.plan(currentGoal, q1Context ?? '', capSummary, nextMilestone);
+                        
+                        // Permite atualizar o roadmap se o planner retornou um ajustado
+                        if (currentGoal.isConstruction && planResult.adjustedRoadmap && planResult.adjustedRoadmap.length > 0) {
+                            log.info(`[GoalLoop] roadmap adjusted during milestone planning transition.`);
+                            this.goalStore.update(currentGoal.id, { roadmap: planResult.adjustedRoadmap });
+                            currentGoal = this.goalStore.getById(currentGoal.id)!;
+                        }
+
+                        let initialPlan = planResult.steps;
+
+                        // Q2: Análise de Riscos para o novo plano
+                        if (this.isComplexPlan(initialPlan)) {
+                            const riskReport = await this.riskAnalyzer.analyze(currentGoal, initialPlan);
+                            if (riskReport.blocked) {
+                                log.warn(`[GoalLoop] Q2 BLOCKED milestone goal=${currentGoal.id}: ${riskReport.blockReason}`);
+                                this.goalStore.setStatus(currentGoal.id, 'failed');
+                                return this.buildResult(currentGoal, false, totalCycles, totalReplans,
+                                    riskReport.blockReason ?? 'Plano inviável detectado para o marco.');
+                            }
+                            initialPlan = riskReport.planAdjusted ? riskReport.adjustedPlan : initialPlan;
+                        }
+
+                        this.goalStore.update(currentGoal.id, {
+                            currentPlan: initialPlan,
+                            status: 'executing',
+                            cycleFocus: planResult.strategy || undefined,
+                        });
+                        currentGoal = this.goalStore.getById(currentGoal.id)!;
+                        continue;
+                    } else {
+                        // Se não for construção, ou se for o último marco
+                        this.goalStore.setStatus(currentGoal.id, 'completed');
+                        log.info(`[GoalLoop] goal=${currentGoal.id} validated as complete`);
+                        return this.buildResult(currentGoal, true, totalCycles, totalReplans, validation.summary);
+                    }
                 }
 
                 // LLM diz que o objetivo ainda não foi atingido
@@ -480,10 +600,18 @@ export class GoalExecutionLoop {
         const allStepsDone = !currentGoal.currentPlan.find(s => s.status === 'pending');
         if (allStepsDone) {
             log.info(`[GoalLoop] goal=${currentGoal.id} MAX_CYCLES=${GOAL_LIMITS.MAX_CYCLES} reached but all steps done — running final validation`);
-            const validation = await this.validateGoalCompletion(currentGoal);
+            const activeMilestone = currentGoal.isConstruction && currentGoal.roadmap && currentGoal.roadmap.length > 0
+                ? currentGoal.roadmap[currentGoal.currentMilestoneIndex ?? 0]
+                : undefined;
+            const validation = await this.validateGoalCompletion(currentGoal, activeMilestone);
             if (validation.achieved) {
-                this.goalStore.setStatus(currentGoal.id, 'completed');
-                return this.buildResult(currentGoal, true, totalCycles, totalReplans, validation.summary);
+                const isLastMilestone = !currentGoal.isConstruction || !currentGoal.roadmap || (currentGoal.currentMilestoneIndex ?? 0) === currentGoal.roadmap.length - 1;
+                if (isLastMilestone) {
+                    this.goalStore.setStatus(currentGoal.id, 'completed');
+                    return this.buildResult(currentGoal, true, totalCycles, totalReplans, validation.summary);
+                } else {
+                    log.warn(`[GoalLoop] goal=${currentGoal.id} completed step but ran out of cycles before final milestone`);
+                }
             }
             log.info(`[GoalLoop] goal=${currentGoal.id} final validation failed at MAX_CYCLES: ${validation.reason}`);
         }
@@ -554,9 +682,13 @@ export class GoalExecutionLoop {
             } else {
                 // Sem tool específica → chama AgentLoop com prompt focado no step
                 const cognitiveBlock = this.buildIncrementalExecutionContext(goal, step);
+                const focusLine = goal.cycleFocus
+                    ? `\nFoco do ciclo: ${goal.cycleFocus}`
+                    : '';
                 const stepPrompt = [
                     `[GOAL STEP] ${step.description}`,
                     `\nContexto do objetivo: ${goal.objective}`,
+                    focusLine,
                     cognitiveBlock ? `\n${cognitiveBlock}` : '',
                 ].join('');
                 const [, sessionUserId] = goal.sessionKey.split(':');
@@ -857,6 +989,21 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
 
         const lines: string[] = ['[CONTEXTO COGNITIVO — leia antes de executar]'];
 
+        if (goal.isConstruction && goal.roadmap && goal.roadmap.length > 0) {
+            lines.push('\n🚧 MODO CONSTRUÇÃO INCREMENTAL ATIVO 🚧');
+            lines.push('Roadmap do projeto:');
+            for (let i = 0; i < goal.roadmap.length; i++) {
+                const marker = i === goal.currentMilestoneIndex ? '👉' : (i < (goal.currentMilestoneIndex ?? 0) ? '✓' : ' ');
+                lines.push(`  ${marker} Marco ${i + 1}: ${goal.roadmap[i]}`);
+            }
+            const activeMilestone = goal.roadmap[goal.currentMilestoneIndex ?? 0];
+            lines.push(`\nFoco atual (MARCO ${ (goal.currentMilestoneIndex ?? 0) + 1 }): ${activeMilestone}`);
+        }
+
+        if (goal.cycleFocus) {
+            lines.push(`\nFoco do ciclo atual: ${goal.cycleFocus}`);
+        }
+
         if (completedSteps.length > 0) {
             lines.push('\nSteps já executados:');
             for (const s of completedSteps) {
@@ -1067,7 +1214,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
      * Pergunta ao LLM se o objetivo foi realmente atingido após todos os steps concluírem.
      * Fallback conservador: assume achieved=true em caso de erro (evita loop infinito).
      */
-    private async validateGoalCompletion(goal: Goal): Promise<{
+    private async validateGoalCompletion(goal: Goal, activeMilestone?: string): Promise<{
         achieved: boolean;
         summary?: string;
         reason?: string;
@@ -1083,24 +1230,30 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             .map(a => `- ${a.toolName}: ${a.output || '(sem output)'}`)
             .join('\n');
 
-        const prompt = `Você é um validador de tarefas. Verifique se o objetivo foi COMPLETAMENTE concluído.
+        const validationTarget = activeMilestone
+            ? `MARCO ATUAL A SER VALIDADO: ${activeMilestone}\n(Objetivo Global do Projeto: ${goal.objective})`
+            : `OBJETIVO: ${goal.objective}`;
 
-OBJETIVO: ${goal.objective}
-INTENÇÃO DO USUÁRIO: ${goal.userIntent}
+        const prompt = `Você é um validador de tarefas de software. Verifique se o objetivo especificado foi COMPLETAMENTE concluído.
 
-STEPS EXECUTADOS:
+ALVO DE VALIDAÇÃO:
+${validationTarget}
+
+INTENÇÃO ORIGINAL DO USUÁRIO: ${goal.userIntent}
+
+STEPS EXECUTADOS RECENTEMENTE:
 ${stepsContext || '(nenhum)'}
 
 RESULTADOS DAS FERRAMENTAS:
 ${attemptsContext || '(nenhum)'}
 
-Análise crítica: o objetivo foi atingido E o resultado entregue ao usuário?
-Exemplo: converter um arquivo e enviar ao usuário são duas coisas distintas — apenas converter não basta.
+Análise crítica: o objetivo ou marco atual foi atingido E o resultado/entregável esperado foi produzido com sucesso?
+Se for um marco de desenvolvimento, verifique se os arquivos/funcionalidades desse marco foram realmente criados e testados.
 
 Responda APENAS com JSON válido (sem markdown):
-{"achieved": true, "summary": "resumo do que foi feito"}
+{"achieved": true, "summary": "resumo do que foi feito e entregue neste marco/objetivo"}
 OU
-{"achieved": false, "reason": "o que está faltando", "suggestions": ["ação 1", "ação 2"]}`;
+{"achieved": false, "reason": "o que está faltando para concluir este marco/objetivo", "suggestions": ["ação 1", "ação 2"]}`;
 
         let llmResult: Awaited<ReturnType<typeof this.providerFactory.chatWithFallback>> | undefined;
         try {
@@ -1206,6 +1359,7 @@ OU
             ` cycles=${totalCycles} replans=${totalReplans} attempts=${goal.attempts.length}` +
             ` tools=[${toolsUsed || 'none'}] blockers=[${blockerKinds || 'none'}]` +
             ` durationMs=${durationMs}` +
+            (goal.cycleFocus ? ` focus="${goal.cycleFocus}"` : '') +
             (lastError ? ` lastError="${lastError}"` : '') +
             ` intent="${goal.userIntent.slice(0, 80)}"`
         );

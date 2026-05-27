@@ -111,6 +111,11 @@ export interface Goal {
     strategiesTried: string[];        // descrições de estratégias tentadas
 
     nextAction?: string;               // próxima ação calculada pelo GoalPlanner
+    cycleFocus?: string;               // foco do ciclo atual (estratégia do planner, ex: "converter via pandoc")
+    isConstruction?: boolean;          // true se o objetivo é classificado como construção incremental
+    roadmap?: string[];                // lista de marcos (milestones) do projeto
+    currentMilestoneIndex?: number;    // índice do marco atualmente ativo
+    allowRoadmapAdjustment?: boolean;  // true se o planner puder ajustar dinamicamente o roadmap em caso de blockers/dependências
 
     retryBudget: number;               // tentativas restantes por step
     replanBudget: number;              // replans restantes
@@ -192,6 +197,7 @@ export interface GoalClassification {
     isAmbiguous?: boolean;
     /** Pergunta de clarificação sugerida quando isAmbiguous=true */
     clarificationQuestion?: string;
+    isConstruction?: boolean;
 }
 
 // ── Avaliação de step (heurística + escalation) ───────────────────────────────

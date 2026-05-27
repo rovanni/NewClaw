@@ -150,6 +150,8 @@ export class GoalOrchestrator {
             requiresAuth: false,
             authorizationScope: classification.requiredTools ?? [],
             expiresAt: Date.now() + GOAL_LIMITS.MAX_GOAL_TTL_MS,
+            isConstruction: classification.isConstruction ?? false,
+            allowRoadmapAdjustment: classification.isConstruction ?? false,
         });
 
         log.info(`[GoalOrchestrator] executing goal=${goal.id}`);

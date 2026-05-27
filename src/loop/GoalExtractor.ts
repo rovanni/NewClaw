@@ -89,19 +89,32 @@ export class GoalExtractor {
         return null; // inconclusivo
     }
 
+    private isConstructionHeuristic(message: string): boolean {
+        const msg = message.toLowerCase();
+        const keywords = [
+            'criar jogo', 'desenvolver jogo', 'construir jogo', 'criar app', 'desenvolver app',
+            'criar sistema', 'desenvolver sistema', 'implementar sistema', 'criar site',
+            'desenvolver site', 'criar tower defense', 'desenvolver tower defense',
+            'construir software', 'desenvolver software', 'escrever código para um',
+            'criar um bot', 'desenvolver um bot'
+        ];
+        return keywords.some(k => msg.includes(k));
+    }
+
     /**
      * Estágio 2: classificação via LLM (apenas quando heurística falhou).
      * Detecta também ambiguidade de intenção para pedir clarificação antes de criar o goal.
      */
     private async llmClassify(message: string, _context: ChannelContext): Promise<GoalClassification> {
-        const prompt = `Classifique a mensagem abaixo em duas dimensões:
+        const prompt = `Classifique a mensagem abaixo em três dimensões:
 1. É um goal (requer execução de tarefas com ferramentas)?
 2. Se for goal, a intenção é AMBÍGUA (não está claro qual arquivo, formato ou ação específica)?
+3. É um projeto de construção de software ou desenvolvimento de funcionalidade complexa (ex: criar um jogo, desenvolver um site, implementar um sistema, criar um módulo ou script complexo)?
 
 Mensagem: "${message.slice(0, 300)}"
 
 Responda APENAS com JSON válido, sem markdown:
-{"is_goal": boolean, "confidence": 0.0-1.0, "objective": "descrição se for goal", "required_tools": ["tool1"], "reason": "motivo", "is_ambiguous": boolean, "clarification_question": "pergunta ao usuário se is_ambiguous=true"}
+{"is_goal": boolean, "confidence": 0.0-1.0, "objective": "descrição se for goal", "required_tools": ["tool1"], "reason": "motivo", "is_ambiguous": boolean, "clarification_question": "pergunta ao usuário se is_ambiguous=true", "is_construction": boolean}
 
 Regras:
 - is_ambiguous=true SOMENTE quando is_goal=true E a intenção é genuinamente vaga (sem arquivo, sem erro específico)
@@ -146,6 +159,7 @@ Regras:
                 reason: parsed.reason || undefined,
                 isAmbiguous: Boolean(parsed.is_ambiguous),
                 clarificationQuestion: parsed.clarification_question || undefined,
+                isConstruction: Boolean(parsed.is_construction),
             };
         } catch {
             return { isGoal: false, confidence: 0.5, reason: 'parse_error' };
@@ -164,6 +178,7 @@ Regras:
                 objective: message.slice(0, 300),
                 requiredTools: [],
                 reason: 'heuristic_positive',
+                isConstruction: this.isConstructionHeuristic(message),
             };
         }
 

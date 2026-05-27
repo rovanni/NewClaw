@@ -35,6 +35,7 @@ interface GoalRow {
     tools_tried: string | null;
     strategies_tried: string | null;
     next_action: string | null;
+    cycle_focus: string | null;
     retry_budget: number;
     replan_budget: number;
     confidence: number;
@@ -45,6 +46,10 @@ interface GoalRow {
     updated_at: number;
     expires_at: number;
     completed_at: number | null;
+    is_construction: number;
+    roadmap: string | null;
+    current_milestone_index: number;
+    allow_roadmap_adjustment: number;
 }
 
 export class GoalStore {
@@ -70,6 +75,7 @@ export class GoalStore {
                 tools_tried        TEXT,
                 strategies_tried   TEXT,
                 next_action        TEXT,
+                cycle_focus        TEXT,
                 retry_budget       INTEGER NOT NULL DEFAULT 5,
                 replan_budget      INTEGER NOT NULL DEFAULT 3,
                 confidence         REAL NOT NULL DEFAULT 0.85,
@@ -79,12 +85,22 @@ export class GoalStore {
                 created_at         INTEGER NOT NULL,
                 updated_at         INTEGER NOT NULL,
                 expires_at         INTEGER NOT NULL,
-                completed_at       INTEGER
+                completed_at       INTEGER,
+                is_construction    INTEGER NOT NULL DEFAULT 0,
+                roadmap            TEXT,
+                current_milestone_index INTEGER NOT NULL DEFAULT 0,
+                allow_roadmap_adjustment INTEGER NOT NULL DEFAULT 1
             );
             CREATE INDEX IF NOT EXISTS idx_goals_session ON goals(session_key, status);
             CREATE INDEX IF NOT EXISTS idx_goals_conversation ON goals(conversation_id, status);
             CREATE INDEX IF NOT EXISTS idx_goals_expires ON goals(expires_at, status);
         `);
+        // Migração retrocompatível: adiciona colunas em bancos existentes
+        try { this.db.exec('ALTER TABLE goals ADD COLUMN cycle_focus TEXT'); } catch { /* já existe */ }
+        try { this.db.exec('ALTER TABLE goals ADD COLUMN is_construction INTEGER NOT NULL DEFAULT 0'); } catch { /* já existe */ }
+        try { this.db.exec('ALTER TABLE goals ADD COLUMN roadmap TEXT'); } catch { /* já existe */ }
+        try { this.db.exec('ALTER TABLE goals ADD COLUMN current_milestone_index INTEGER NOT NULL DEFAULT 0'); } catch { /* já existe */ }
+        try { this.db.exec('ALTER TABLE goals ADD COLUMN allow_roadmap_adjustment INTEGER NOT NULL DEFAULT 1'); } catch { /* já existe */ }
         log.info('[GoalStore] schema ready');
     }
 
@@ -104,10 +120,11 @@ export class GoalStore {
             INSERT INTO goals (
                 id, session_key, conversation_id, user_intent, objective,
                 status, current_plan, attempts, blockers, tools_tried, strategies_tried,
-                next_action, retry_budget, replan_budget, confidence,
+                next_action, cycle_focus, retry_budget, replan_budget, confidence,
                 requires_auth, authorization_scope, pending_txn_id,
-                created_at, updated_at, expires_at, completed_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                created_at, updated_at, expires_at, completed_at,
+                is_construction, roadmap, current_milestone_index, allow_roadmap_adjustment
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         `).run(
             goal.id,
             goal.sessionKey,
@@ -121,6 +138,7 @@ export class GoalStore {
             JSON.stringify(goal.toolsTried ?? []),
             JSON.stringify(goal.strategiesTried ?? []),
             goal.nextAction ?? null,
+            goal.cycleFocus ?? null,
             goal.retryBudget,
             goal.replanBudget,
             goal.confidence,
@@ -131,6 +149,10 @@ export class GoalStore {
             goal.updatedAt,
             goal.expiresAt,
             goal.completedAt ?? null,
+            goal.isConstruction ? 1 : 0,
+            JSON.stringify(goal.roadmap ?? []),
+            goal.currentMilestoneIndex ?? 0,
+            goal.allowRoadmapAdjustment !== false ? 1 : 0,
         );
 
         log.info(`[GoalStore] created goal=${goal.id} session=${goal.sessionKey}`);
@@ -177,6 +199,11 @@ export class GoalStore {
         if (patch.toolsTried !== undefined)        { sets.push('tools_tried = ?');        values.push(JSON.stringify(patch.toolsTried)); }
         if (patch.strategiesTried !== undefined)   { sets.push('strategies_tried = ?');   values.push(JSON.stringify(patch.strategiesTried)); }
         if (patch.nextAction !== undefined)        { sets.push('next_action = ?');        values.push(patch.nextAction); }
+        if (patch.cycleFocus !== undefined)         { sets.push('cycle_focus = ?');         values.push(patch.cycleFocus ?? null); }
+        if (patch.isConstruction !== undefined)    { sets.push('is_construction = ?');    values.push(patch.isConstruction ? 1 : 0); }
+        if (patch.roadmap !== undefined)           { sets.push('roadmap = ?');           values.push(JSON.stringify(patch.roadmap)); }
+        if (patch.currentMilestoneIndex !== undefined) { sets.push('current_milestone_index = ?'); values.push(patch.currentMilestoneIndex); }
+        if (patch.allowRoadmapAdjustment !== undefined) { sets.push('allow_roadmap_adjustment = ?'); values.push(patch.allowRoadmapAdjustment ? 1 : 0); }
         if (patch.retryBudget !== undefined)       { sets.push('retry_budget = ?');       values.push(patch.retryBudget); }
         if (patch.replanBudget !== undefined)      { sets.push('replan_budget = ?');      values.push(patch.replanBudget); }
         if (patch.confidence !== undefined)        { sets.push('confidence = ?');         values.push(patch.confidence); }
@@ -270,6 +297,11 @@ export class GoalStore {
             toolsTried: this.parseJson<string[]>(row.tools_tried, []),
             strategiesTried: this.parseJson<string[]>(row.strategies_tried, []),
             nextAction: row.next_action ?? undefined,
+            cycleFocus: row.cycle_focus ?? undefined,
+            isConstruction: row.is_construction === 1,
+            roadmap: this.parseJson<string[]>(row.roadmap, []),
+            currentMilestoneIndex: row.current_milestone_index ?? 0,
+            allowRoadmapAdjustment: row.allow_roadmap_adjustment === 1,
             retryBudget: row.retry_budget,
             replanBudget: row.replan_budget,
             confidence: row.confidence,

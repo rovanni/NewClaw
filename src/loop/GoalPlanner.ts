@@ -21,9 +21,16 @@ import { Goal, GoalBlocker, PlanStep } from './GoalTypes';
 
 const log = createLogger('GoalPlanner');
 
+/** Resultado do planejamento: steps + estratégia textual (usada como cycleFocus). */
+export interface PlanResult {
+    steps: PlanStep[];
+    strategy: string;
+    adjustedRoadmap?: string[];
+}
+
 // ── Prompt templates ─────────────────────────────────────────────────────────
 
-function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string): string {
+function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string): string {
     const goalText  = `${goal.objective} ${goal.userIntent}`;
     const capBlock  = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary);
     const skillBlock = skillContext
@@ -39,10 +46,21 @@ function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: st
         ? `\nPATHS MENCIONADOS PELO USUÁRIO — copie LITERALMENTE para toolArgs (não encurte nem reconstrua):\n${userPaths.map(p => `  ${p}`).join('\n')}\n`
         : '';
 
+    const milestoneInstruction = activeMilestone
+        ? `\n⚠️ CONSTRUÇÃO INCREMENTAL ATIVA:
+Foque APENAS em planejar passos para resolver o Marco Atual. NÃO tente resolver o objetivo global ou outros marcos do roadmap ainda.
+MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
+        : '';
+
+    const roadmapAdjustmentInstruction = goal.allowRoadmapAdjustment
+        ? `\n- AJUSTE DO ROADMAP: Se você descobrir novas dependências, blockers ou a necessidade de reordenar os marcos, você pode retornar o roadmap inteiro redefinido e atualizado na propriedade JSON "adjustedRoadmap" (máximo de 3 a 5 marcos). Caso contrário, omita essa propriedade.\n`
+        : '';
+
     return `Você é um planejador de tarefas. Decomponha o objetivo abaixo em steps executáveis com ferramentas.
 
-OBJETIVO: ${goal.objective}
+OBJETIVO GLOBAL: ${goal.objective}
 INTENÇÃO ORIGINAL: ${goal.userIntent}
+${milestoneInstruction}
 ${pathsBlock}${capBlock ? `\n${capBlock}\n` : ''}${skillBlock}${contextBlock}
 Ferramentas disponíveis (use EXATAMENTE esses nomes): ${availableTools.join(', ')}
 
@@ -57,7 +75,8 @@ Responda APENAS com JSON válido (sem markdown):
       "fallbackSteps": []
     }
   ],
-  "strategy": "descrição de 1 linha da estratégia geral"
+  "strategy": "descrição de 1 linha da estratégia geral",
+  "adjustedRoadmap": ["Marco 1...", "Marco 2..."]
 }
 
 Regras:
@@ -67,14 +86,14 @@ Regras:
 - Use APENAS os nomes de ferramenta listados acima — não invente nomes
 - Se não precisar de ferramenta específica, omita toolName e toolArgs
 - CRÍTICO: se o objetivo menciona caminhos de arquivo, use-os EXATAMENTE como listados em "PATHS MENCIONADOS" — não encurte, não reconstrua
-
+${roadmapAdjustmentInstruction}
 ARGS OBRIGATÓRIOS POR FERRAMENTA:
 - edit: SEMPRE forneça oldText+newText (substituição) OU startLine+endLine+content (patch) OU append=true+content. Nunca chame edit sem esses parâmetros.
 - list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") ou absoluto.
 - read: aceita caminho relativo ao workspace ou absoluto.`.trim();
 }
 
-function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string): string {
+function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string): string {
     const goalText            = `${goal.objective} ${goal.userIntent}`;
     const compressedRefl      = PromptComposer.compressReflection(reflectionHint);
     const capBlock            = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary, compressedRefl);
@@ -87,7 +106,6 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
         ? `\nBlockers anteriores: ${goal.blockers.map(b => `${b.kind}: ${b.description}`).join('; ')}\n`
         : '';
 
-    // Reflection embutida no capBlock — fallback para prosa apenas quando não há capBlock
     const reflectionBlock = !capBlock && reflectionHint
         ? `\nHistórico de erros: ${reflectionHint.split('\n').slice(1, 3).join(' | ')}\n`
         : '';
@@ -97,8 +115,6 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
         ? `\nCONTEXTO (memória + feedback):\n${memContext}\n`
         : '';
 
-    // Detecta loop de análise: goal_incomplete + estratégias anteriores todas baseadas em leitura.
-    // Quando detectado, injeta diretiva obrigatória de implementação no topo do prompt.
     const priorIncompletes = goal.blockers.filter(b => b.kind === 'goal_incomplete').length;
     const priorAnalysisOnly = goal.strategiesTried.filter(s =>
         /anali[sz]|leitura|ler |audit|mapear|verificar|identificar|diagnosticar/i.test(s)
@@ -115,9 +131,20 @@ OBRIGATÓRIO neste replan:
   Um plano que só lê arquivos sem modificar/entregar será rejeitado novamente.\n`
         : '';
 
+    const milestoneInstruction = activeMilestone
+        ? `\n⚠️ CONSTRUÇÃO INCREMENTAL ATIVA:
+Proponha uma nova estratégia para resolver o Marco Atual. NÃO tente resolver o objetivo global ou outros marcos do roadmap ainda.
+MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
+        : '';
+
+    const roadmapAdjustmentInstruction = goal.allowRoadmapAdjustment
+        ? `\n- AJUSTE DO ROADMAP: Se você descobrir novas dependências, blockers ou a necessidade de reordenar os marcos, você pode sugerir o roadmap inteiro redefinido e atualizado na propriedade JSON "adjustedRoadmap" (máximo de 3 a 5 marcos). Caso contrário, omita essa propriedade.\n`
+        : '';
+
     return `Você é um planejador de tarefas. Um blocker foi detectado. Proponha uma NOVA estratégia.
 
-OBJETIVO: ${goal.objective}
+OBJETIVO GLOBAL: ${goal.objective}
+${milestoneInstruction}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}
 ${implementDirective}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
@@ -133,11 +160,12 @@ Responda APENAS com JSON válido (sem markdown):
       "toolArgs": { "argumento": "valor" }
     }
   ],
-  "strategy": "descrição de 1 linha da nova estratégia"
+  "strategy": "descrição de 1 linha da nova estratégia",
+  "adjustedRoadmap": ["Marco 1...", "Marco 2..."]
 }
 
 Máximo 3 steps. Se o blocker for 'missing_tool', inclua step de instalação como primeiro step.
-
+${roadmapAdjustmentInstruction}
 REFERÊNCIA DE ARGS OBRIGATÓRIOS:
 - edit: SEMPRE forneça oldText+newText (para substituição) OU startLine+endLine+content (para patch) OU append=true+content. Nunca chame edit sem esses parâmetros.
 - list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") OU absoluto. Passe apenas a subpasta desejada.
@@ -151,6 +179,32 @@ REGRAS CRÍTICAS para blocker 'environment_limit':
 - Se o blocker mencionar 'ensurepip not available' ou 'python3-venv não instalado':
   → NÃO use python3 -m venv. Use pandoc ou npx marp diretamente.
   → Estratégia correta: exec_command com "pandoc arquivo.md -o arquivo.pptx"`.trim();
+}
+
+function buildRoadmapPrompt(goal: Goal, availableTools: string[], skillContext?: string, _runtimeContext?: string, capabilityContext?: string, skillsSummary?: string): string {
+    const capBlock = PromptComposer.buildCompactEnv(capabilityContext ?? '', goal.objective, skillsSummary);
+    const skillBlock = skillContext ? `\nINSTRUÇÕES DE SKILL:\n${skillContext}\n` : '';
+    
+    return `Você é um arquiteto de software especialista em desenvolvimento ágil e seguro. Crie um roadmap de desenvolvimento incremental para o objetivo abaixo.
+    
+OBJETIVO GLOBAL DO USUÁRIO: ${goal.objective}
+INTENÇÃO ORIGINAL: ${goal.userIntent}
+${capBlock ? `\n${capBlock}\n` : ''}${skillBlock}
+Ferramentas disponíveis: ${availableTools.join(', ')}
+
+Divida o desenvolvimento em um roadmap de 3 a 5 marcos (milestones) sequenciais e incrementais.
+Regras do Roadmap Incremental:
+1. O Marco 1 DEVE ser de análise de arquitetura, dependências, capabilities do ambiente e estruturação inicial.
+2. Cada marco seguinte deve ser extremamente focado (ex: "criar map.js", "criar tower.js"), contendo apenas uma parte lógica que possa ser executada e validada de forma independente.
+3. Não crie marcos genéricos ou grandes demais. Menos é mais: queremos ciclos pequenos e auditáveis.
+
+Responda APENAS com JSON válido (sem markdown, sem tags, sem texto extra):
+{
+  "roadmap": [
+    "Marco 1: Explorar o ambiente, analisar dependências e estruturar a inicialização do projeto.",
+    "Marco 2: Implementar o mapa..."
+  ]
+}`.trim();
 }
 
 // Extrai caminhos Unix absolutos do texto (mínimo 2 segmentos: /a/b ou mais).
@@ -171,13 +225,6 @@ function extractUnixPaths(text: string): string[] {
     });
 }
 
-// Regex para detectar valores de argumento que são placeholders, não caminhos reais.
-// Quando detectados em toolArgs, o step é convertido para AgentLoop para forçar
-// resolução do caminho real antes de executar (evita exec_command com paths fictícios).
-// \{[a-zA-Z_][a-zA-Z0-9_]{0,40}\} — só match em {simple_identifier}, não em código JS
-// como { isPaused = !isPaused; } (que contém espaços e operadores).
-// NOTA: A cláusula <tag> foi removida pois causava falso positivo com tags HTML legítimas
-// como <html>, <body>, <canvas> — os placeholders reais são cobertos pelos keywords nomeados.
 const PLACEHOLDER_ARG_PATTERN =
     /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo)\b|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\//i;
 
@@ -207,14 +254,6 @@ const TOOL_ALIASES: Record<string, string> = {
 
 // ── Validação de args obrigatórios ────────────────────────────────────────────
 
-/**
- * Exportada para ser usada pelo RiskAnalyzer ao parsear planos ajustados via LLM,
- * que não passam pelo parsePlanResponse do GoalPlanner.
- *
- * Retorna uma string descrevendo os args faltantes, ou null se tudo ok.
- * Usada em parsePlanResponse para converter steps inválidos em AgentLoop steps
- * antes que cheguem à tool e explodam com erro de parâmetro obrigatório.
- */
 export function detectMissingRequiredArgs(tool: string, args: Record<string, unknown>): string | null {
     if (tool === 'read' && !args['path']) {
         return "sem 'path' obrigatório";
@@ -241,23 +280,19 @@ export function detectMissingRequiredArgs(tool: string, args: Record<string, unk
 
 // ── GoalPlanner ───────────────────────────────────────────────────────────────
 
-// Modelo dedicado ao planning: gera JSON rápido e não entra em extended thinking.
-// kimi-k2.6 e outros thinking models são inadequados pois raciocinam 45s+ sem produzir output.
 const PLANNER_MODEL = 'gemma4:31b-cloud';
 
 export class GoalPlanner {
     private skillContext: string | undefined;
     private readonly skillLoader = new SkillLoader();
     private skillsSummaryCache: { summary: string; loadedAt: number } | null = null;
-    private static readonly SKILLS_CACHE_TTL_MS = 60_000; // cobre duração típica de um goal
+    private static readonly SKILLS_CACHE_TTL_MS = 60_000;
 
     constructor(
         private readonly providerFactory: ProviderFactory,
         private readonly reflectionMemory: ReflectionMemory,
     ) {}
 
-    /** Carrega skills e retorna resumo compacto para injeção no prompt.
-     *  Cache TTL de 60s: evita releitura de disco a cada plan/replan do mesmo goal. */
     private loadSkillsSummary(): string {
         if (this.skillsSummaryCache &&
             Date.now() - this.skillsSummaryCache.loadedAt < GoalPlanner.SKILLS_CACHE_TTL_MS) {
@@ -275,10 +310,6 @@ export class GoalPlanner {
         }
     }
 
-    /**
-     * Chama o LLM usando um modelo fixo para planning (não o default do Ollama).
-     * Retorna { status, content } no mesmo formato que chatWithFallback usa internamente.
-     */
     private async callPlannerLLM(messages: LLMMessage[], timeoutMs: number): Promise<{ status: string; content: string }> {
         const provider = this.providerFactory.getProviderWithModel(PLANNER_MODEL);
         const controller = new AbortController();
@@ -297,17 +328,16 @@ export class GoalPlanner {
         }
     }
 
-    /** Injeta skill context que será incluído no prompt de planejamento. */
     setSkillContext(context: string): void {
         this.skillContext = context || undefined;
     }
 
-    async plan(goal: Goal, runtimeContext?: string, capabilityContext?: string): Promise<PlanStep[]> {
+    async plan(goal: Goal, runtimeContext?: string, capabilityContext?: string, activeMilestone?: string): Promise<PlanResult> {
         log.info(`[GoalPlanner] plan start goal=${goal.id} model=${PLANNER_MODEL} contextLen=${runtimeContext?.length ?? 0}`);
 
         const availableTools = ToolRegistry.getEnabled().map(t => t.name);
         const skillsSummary  = this.loadSkillsSummary();
-        const prompt         = buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext, capabilityContext, skillsSummary);
+        const prompt         = buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext, capabilityContext, skillsSummary, activeMilestone);
         const capBlock       = PromptComposer.buildCompactEnv(capabilityContext ?? '', `${goal.objective} ${goal.userIntent}`, skillsSummary);
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
 
@@ -330,17 +360,16 @@ export class GoalPlanner {
             const steps = this.prependPathValidation(goal, parsed.steps);
             log.info(`[GoalPlanner] plan ok: steps=${steps.length} strategy="${parsed.strategy}" tools=[${steps.map(s => s.toolName ?? 'agentloop').join(',')}]`);
             PromptComposer.logMetrics();
-            return steps;
+            return { steps, strategy: parsed.strategy };
         } catch (err) {
             log.warn(`[GoalPlanner] plan exception: model=${PLANNER_MODEL} err="${String(err).slice(0, 100)}"`);
             return this.fallbackPlan(goal);
         }
     }
 
-    async replan(goal: Goal, blocker: GoalBlocker, runtimeContext?: string, capabilityContext?: string): Promise<PlanStep[]> {
+    async replan(goal: Goal, blocker: GoalBlocker, runtimeContext?: string, capabilityContext?: string, activeMilestone?: string): Promise<PlanResult> {
         log.info(`[GoalPlanner] replan start goal=${goal.id} model=${PLANNER_MODEL} blocker=${blocker.kind} contextLen=${runtimeContext?.length ?? 0}`);
 
-        // Consulta memória de reflexão para evitar erros já conhecidos
         const reflectionHint = this.reflectionMemory.buildContextHint(
             blocker.toolName ? `tool_${blocker.toolName}` : blocker.kind
         );
@@ -352,7 +381,7 @@ export class GoalPlanner {
         const compressedRefl    = PromptComposer.compressReflection(reflectionHint);
         const goalText          = `${goal.objective} ${goal.userIntent}`;
         const capBlock          = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary, compressedRefl);
-        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, runtimeContext, capabilityContext, skillsSummary);
+        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, runtimeContext, capabilityContext, skillsSummary, activeMilestone);
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
 
         PromptComposer.recordReplan();
@@ -375,16 +404,58 @@ export class GoalPlanner {
             const steps = this.prependPathValidation(goal, parsed.steps);
             log.info(`[GoalPlanner] replan ok: steps=${steps.length} strategy="${parsed.strategy}" tools=[${steps.map(s => s.toolName ?? 'agentloop').join(',')}]`);
             PromptComposer.logMetrics();
-            return steps;
+            return { steps, strategy: parsed.strategy };
         } catch (err) {
             log.warn(`[GoalPlanner] replan exception: model=${PLANNER_MODEL} err="${String(err).slice(0, 100)}"`);
             return this.emergencyFallback(goal, blocker);
         }
     }
 
+    async planRoadmap(goal: Goal, runtimeContext?: string, capabilityContext?: string): Promise<string[]> {
+        log.info(`[GoalPlanner] planRoadmap start goal=${goal.id} model=${PLANNER_MODEL}`);
+
+        const availableTools = ToolRegistry.getEnabled().map(t => t.name);
+        const skillsSummary  = this.loadSkillsSummary();
+        const prompt         = buildRoadmapPrompt(goal, availableTools, this.skillContext, runtimeContext, capabilityContext, skillsSummary);
+        const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
+
+        try {
+            const result = await this.callPlannerLLM(messages, 45_000);
+
+            if (result.status !== 'success') {
+                log.warn(`[GoalPlanner] planRoadmap failed status=${result.status}`);
+                return this.fallbackRoadmap(goal);
+            }
+
+            const cleaned = result.content
+                .replace(/```json\n?/g, '')
+                .replace(/```\n?/g, '')
+                .trim();
+            const parsed = JSON.parse(cleaned);
+            const roadmap = Array.isArray(parsed.roadmap) ? parsed.roadmap : [];
+            
+            if (roadmap.length === 0) {
+                return this.fallbackRoadmap(goal);
+            }
+            
+            log.info(`[GoalPlanner] planned roadmap with ${roadmap.length} milestones`);
+            return roadmap;
+        } catch (err) {
+            log.warn(`[GoalPlanner] planRoadmap exception: ${String(err)}`);
+            return this.fallbackRoadmap(goal);
+        }
+    }
+
+    private fallbackRoadmap(goal: Goal): string[] {
+        return [
+            "Marco 1: Analisar os requisitos do projeto, dependências do ambiente e preparar a estrutura de diretórios.",
+            `Marco 2: Implementar e testar as funcionalidades necessárias para atingir o objetivo: ${goal.objective}`
+        ];
+    }
+
     // ── Parsing ───────────────────────────────────────────────────────────────
 
-    private parsePlanResponse(content: string): { steps: PlanStep[]; strategy: string } {
+    private parsePlanResponse(content: string): PlanResult {
         try {
             const cleaned = content
                 .replace(/```json\n?/g, '')
@@ -393,6 +464,7 @@ export class GoalPlanner {
 
             const parsed = JSON.parse(cleaned);
             const rawSteps = Array.isArray(parsed.steps) ? parsed.steps : [];
+            const adjustedRoadmap = Array.isArray(parsed.adjustedRoadmap) ? parsed.adjustedRoadmap : undefined;
 
             const steps: PlanStep[] = rawSteps.slice(0, 4).map((s: Record<string, unknown>, i: number) => {
                 const rawToolName = s.toolName ? String(s.toolName) : undefined;
@@ -454,7 +526,7 @@ export class GoalPlanner {
                 };
             });
 
-            return { steps, strategy: String(parsed.strategy ?? '') };
+            return { steps, strategy: String(parsed.strategy ?? ''), adjustedRoadmap };
         } catch {
             return { steps: [], strategy: '' };
         }
@@ -515,43 +587,52 @@ export class GoalPlanner {
 
     // ── Fallbacks sem LLM ─────────────────────────────────────────────────────
 
-    private fallbackPlan(goal: Goal): PlanStep[] {
+    private fallbackPlan(goal: Goal): PlanResult {
         // Plano minimalista: passa o objetivo direto para o AgentLoop sem decomposição
-        return [{
-            id: 'step_direct',
-            description: `Executar diretamente: ${goal.objective.slice(0, 100)}`,
-            status: 'pending',
-            fallbackSteps: [],
-        }];
+        return {
+            steps: [{
+                id: 'step_direct',
+                description: `Executar diretamente: ${goal.objective.slice(0, 100)}`,
+                status: 'pending',
+                fallbackSteps: [],
+            }],
+            strategy: '',
+        };
     }
 
-    private emergencyFallback(goal: Goal, blocker: GoalBlocker): PlanStep[] {
+    private emergencyFallback(goal: Goal, blocker: GoalBlocker): PlanResult {
         // Se o blocker é missing_tool, tenta uma instalação genérica
         if (blocker.kind === 'missing_tool' && blocker.toolName) {
-            return [
-                {
-                    id: 'step_install',
-                    description: `Instalar ${blocker.toolName}`,
-                    toolName: 'exec_command',
-                    toolArgs: { command: `which ${blocker.toolName} || echo "NOT FOUND"` },
-                    status: 'pending',
-                    fallbackSteps: [],
-                },
-                {
-                    id: 'step_retry',
-                    description: `Tentar novamente após verificação`,
-                    status: 'pending',
-                    fallbackSteps: [],
-                },
-            ];
+            return {
+                steps: [
+                    {
+                        id: 'step_install',
+                        description: `Instalar ${blocker.toolName}`,
+                        toolName: 'exec_command',
+                        toolArgs: { command: `which ${blocker.toolName} || echo "NOT FOUND"` },
+                        status: 'pending',
+                        fallbackSteps: [],
+                    },
+                    {
+                        id: 'step_retry',
+                        description: `Tentar novamente após verificação`,
+                        status: 'pending',
+                        fallbackSteps: [],
+                    },
+                ],
+                strategy: `instalar ${blocker.toolName} e retry`,
+            };
         }
 
         // Fallback genérico: tenta o objetivo com instrução diferente
-        return [{
-            id: 'step_fallback',
-            description: `Abordagem alternativa para: ${goal.objective.slice(0, 100)}`,
-            status: 'pending',
-            fallbackSteps: [],
-        }];
+        return {
+            steps: [{
+                id: 'step_fallback',
+                description: `Abordagem alternativa para: ${goal.objective.slice(0, 100)}`,
+                status: 'pending',
+                fallbackSteps: [],
+            }],
+            strategy: '',
+        };
     }
 }
