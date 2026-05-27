@@ -6,6 +6,7 @@
  */
 
 import { EventEmitter } from 'events';
+import type { AgentFSMTransition } from '../loop/AgentFSM';
 
 export type StepType = 'decision' | 'tool_call' | 'tool_result' | 'llm_call' | 'llm_response' | 'fsm_transition' | 'intent_classification' | 'protocol_violation' | 'protocol_recovery' | 'error' | 'final';
 
@@ -32,6 +33,8 @@ export interface ExecutionTrace {
     provider?: string;
     finalResponse?: string;
     status: 'running' | 'completed' | 'error' | 'max_iterations' | 'timeout' | 'cancelled';
+    /** FSM state transitions capturados durante este trace — espelho de FSMHistoryStore para consulta in-memory */
+    stateTransitions?: AgentFSMTransition[];
 }
 
 class ExecutionTraceManager extends EventEmitter {
@@ -64,6 +67,19 @@ class ExecutionTraceManager extends EventEmitter {
             durationMs
         };
         trace.steps.push(step);
+
+        // Espelha transições FSM em stateTransitions para consulta in-memory
+        if (type === 'fsm_transition' && data['from'] && data['to'] && data['event']) {
+            if (!trace.stateTransitions) trace.stateTransitions = [];
+            trace.stateTransitions.push({
+                from: data['from'],
+                to: data['to'],
+                event: data['event'],
+                at: data['at'] ?? new Date().toISOString(),
+                meta: data['meta'],
+            } as AgentFSMTransition);
+        }
+
         this.emit('trace_step', { traceId: trace.id, step });
     }
 

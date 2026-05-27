@@ -11,7 +11,6 @@
  */
 
 import Database from 'better-sqlite3';
-import path from 'path';
 import { createLogger } from '../../shared/AppLogger';
 import { errorMessage } from '../../shared/errors';
 
@@ -21,7 +20,7 @@ import { auditRuntime } from './runtimeChecker';
 import { auditData } from './dataChecker';
 import { auditIntegration } from './integrationChecker';
 import { buildReport, saveReport, formatReport, formatFixReport, getLatestReport as _getLatestReport, getFindings as _getFindings, getReportHistory as _getReportHistory } from './reporter';
-import { runFixPipeline as _runFixPipeline, generatePatch as _generatePatch, validatePatch as _validatePatch, buildConsensus as _buildConsensus, validatePatchSafety as _validatePatchSafety, applyPatch as _applyPatch } from './autoFix';
+// autoFix pipeline removido — patches devem ser aplicados manualmente após revisão humana
 
 export type { AuditFinding, AuditReport, AuditConfig, DbFinding, DbAuditReport, GeneratedPatch, AgentOpinion, PatchValidation, ConsensusResult, PatchSafetyResult, FixResult, FixReport } from './types';
 
@@ -30,7 +29,6 @@ const log = createLogger('AuditorService');
 export class AuditorService {
     private config: AuditConfig;
     private db: Database.Database;
-    private fixLogPath: string;
     /** Timestamp of last audit — used to only read new log lines */
     private lastAuditTimestamp: string | null = null;
     /** Titles from previous report — used for deduplication */
@@ -39,7 +37,6 @@ export class AuditorService {
     constructor(config: AuditConfig, db?: Database.Database) {
         this.config = config;
         this.db = db ?? new Database(config.dbPath);
-        this.fixLogPath = path.join(path.dirname(config.dbPath), 'auditor', 'logs', 'fixes.log');
         this.initTables();
     }
 
@@ -217,19 +214,39 @@ export class AuditorService {
     formatReport(report: AuditReport): string { return formatReport(report); }
     formatFixReport(report: FixReport): string { return formatFixReport(report); }
 
+    /**
+     * Auto-fix pipeline DESATIVADO por segurança arquitetural.
+     * A geração e aplicação de patches via LLM em produção foi identificada
+     * como risco crítico de corrupção silenciosa do sistema.
+     * Patches devem ser aplicados manualmente após revisão humana.
+     */
     async runFixPipeline(): Promise<FixReport> {
-        return _runFixPipeline(this.config, this.db, this.callOllama.bind(this), this.fixLogPath);
+        log.warn('[AuditorService] Auto-fix pipeline está desativado. Aplique patches manualmente.');
+        return {
+            timestamp: new Date().toISOString(),
+            totalAnalyzed: 0,
+            applied: 0,
+            rejected: 0,
+            errors: 0,
+            results: [],
+            durationMs: 0,
+        };
     }
 
-    async generatePatch(finding: AuditFinding | DbFinding): Promise<GeneratedPatch | null> {
-        return _generatePatch(finding, this.config, this.callOllama.bind(this));
+    async generatePatch(_finding: AuditFinding | DbFinding): Promise<GeneratedPatch | null> {
+        log.warn('[AuditorService] generatePatch desativado — use análise manual.');
+        return null;
     }
 
-    async validatePatch(patch: GeneratedPatch, finding: AuditFinding | DbFinding): Promise<PatchValidation> {
-        return _validatePatch(patch, finding, this.callOllama.bind(this));
+    async validatePatch(_patch: GeneratedPatch, _finding: AuditFinding | DbFinding): Promise<PatchValidation> {
+        return { opinions: [] };
     }
 
-    buildConsensus(opinions: AgentOpinion[]): ConsensusResult { return _buildConsensus(opinions); }
-    validatePatchSafety(patch: GeneratedPatch): PatchSafetyResult { return _validatePatchSafety(patch, this.config); }
-    applyPatch(patch: GeneratedPatch): boolean { return _applyPatch(patch, this.config); }
+    buildConsensus(_opinions: AgentOpinion[]): ConsensusResult {
+        return { approved: false, agreement: 0, confidence: 0 };
+    }
+    validatePatchSafety(_patch: GeneratedPatch): PatchSafetyResult {
+        return { safe: false, validSyntax: false, fileExists: false, changeSizeOk: false, riskyChange: true, reasons: ['Auto-fix desativado por segurança'] };
+    }
+    applyPatch(_patch: GeneratedPatch): boolean { return false; }
 }

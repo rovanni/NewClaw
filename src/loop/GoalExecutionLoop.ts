@@ -21,7 +21,6 @@ import { AgentLoop } from './AgentLoop';
 import { GoalStore } from './GoalStore';
 import { GoalPlanner } from './GoalPlanner';
 import { GoalEvaluator } from './GoalEvaluator';
-import { GoalContextualizer } from './GoalContextualizer';
 import { RiskAnalyzer } from './RiskAnalyzer';
 import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { ProactiveRecovery, ToolExecutorLike } from './ProactiveRecovery';
@@ -29,7 +28,7 @@ import { ToolRegistry } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { MemoryManager } from '../memory/MemoryManager';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
-import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult } from './GoalTypes';
+import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext } from './GoalTypes';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext } from './agentLoopTypes';
 
@@ -39,10 +38,12 @@ export type ProgressCallback = (update: GoalProgressUpdate) => Promise<void>;
 
 export class GoalExecutionLoop {
     private readonly evaluator = new GoalEvaluator();
-    private readonly contextualizer: GoalContextualizer;
     private readonly riskAnalyzer: RiskAnalyzer;
     private readonly capRegistry = CapabilityRegistry.getInstance();
     private readonly proactiveRecovery = new ProactiveRecovery();
+
+    /** Contexto cognitivo acumulado durante a execução de um goal (resetado a cada novo goal). */
+    private cognitiveContext: StepCognitiveContext = createEmptyStepCognitiveContext();
 
     constructor(
         private readonly agentLoop: AgentLoop,
@@ -51,9 +52,8 @@ export class GoalExecutionLoop {
         private readonly reflectionMemory: ReflectionMemory,
         private readonly toolRegistry: typeof ToolRegistry,
         private readonly providerFactory: ProviderFactory,
-        memory: MemoryManager,
+        private readonly memory: MemoryManager,
     ) {
-        this.contextualizer = new GoalContextualizer(memory, reflectionMemory);
         this.riskAnalyzer = new RiskAnalyzer(providerFactory, toolRegistry, reflectionMemory);
     }
 
@@ -71,9 +71,12 @@ export class GoalExecutionLoop {
     ): Promise<GoalResult> {
         log.info(`[GoalLoop] start goal=${goal.id} replanBudget=${goal.replanBudget}`);
 
+        // Reinicia o contexto cognitivo para este goal
+        this.cognitiveContext = createEmptyStepCognitiveContext();
+
         // ── Q1: Contextualização ──────────────────────────────────────────
         // Enriquece o entendimento do objetivo com memória semântica antes de planejar
-        const q1Context = await this.contextualizer.contextualize(goal, 1, undefined);
+        const q1Context = await this.contextualize(goal, 1, undefined);
 
         // ── Capabilities summary — injetar no contexto do planner ──────────
         // Registry usa TTL por categoria; chamadas consecutivas são servidas do cache.
@@ -166,7 +169,7 @@ export class GoalExecutionLoop {
         forceQ2 = false,
     ): Promise<Goal> {
         // Q1: Contextualização — memória + feedback do ciclo anterior
-        const q1Context = await this.contextualizer.contextualize(goal, cycleNumber, priorFeedback);
+        const q1Context = await this.contextualize(goal, cycleNumber, priorFeedback);
 
         // Capabilities summary no replan — registry serve do cache (TTL por categoria).
         const capSummary = await this.capRegistry.getCapabilitySummary();
@@ -322,7 +325,7 @@ export class GoalExecutionLoop {
             // ── Executar o step atual ──────────────────────────────────
             await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'tool_executing', message: pendingStep.description });
 
-            const cycleResult = await this.executeStep(currentGoal, pendingStep, channelContext);
+            const cycleResult = await this.executeStep(currentGoal, pendingStep, channelContext, totalCycles);
 
             currentGoal = this.goalStore.getById(currentGoal.id)!;
 
@@ -331,6 +334,7 @@ export class GoalExecutionLoop {
 
                 case 'success': {
                     this.markStepDone(currentGoal, pendingStep, cycleResult.output ?? '');
+                    this.updateCognitiveContext(pendingStep, cycleResult.output ?? '');
                     currentGoal = this.goalStore.getById(currentGoal.id)!;
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'tool_completed' });
                     break;
@@ -404,6 +408,7 @@ export class GoalExecutionLoop {
                     if (!cycleResult.blocker) break;
 
                     this.goalStore.addBlocker(currentGoal.id, cycleResult.blocker);
+                    this.recordFailedStrategy(pendingStep, cycleResult.blocker.description, currentGoal.id);
                     currentGoal = this.goalStore.getById(currentGoal.id)!;
 
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'replanning', message: cycleResult.blocker.description });
@@ -453,6 +458,7 @@ export class GoalExecutionLoop {
 
                 case 'failed': {
                     this.goalStore.setStatus(currentGoal.id, 'failed');
+                    this.recordFailedStrategy(pendingStep, cycleResult.output ?? 'step falhou', currentGoal.id);
                     // cycleResult.output tem prioridade quando contém mensagem rica (ex: dep install falhou → instrução manual)
                     const explanation = cycleResult.output ?? this.evaluator.buildFailureExplanation(currentGoal);
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'failed', message: explanation });
@@ -491,7 +497,8 @@ export class GoalExecutionLoop {
     private async executeStep(
         goal: Goal,
         step: PlanStep,
-        channelContext: ChannelContext
+        channelContext: ChannelContext,
+        cycle = 0,
     ): Promise<CycleResult> {
         const startMs = Date.now();
 
@@ -514,6 +521,8 @@ export class GoalExecutionLoop {
             }
 
             let toolResult: { success: boolean; output: string; error?: string };
+            let stepMutations: import('./GoalTypes').ToolMutation[] | undefined;
+            let stepEvalForAttempt: { confidence: number; reason?: string } | undefined;
 
             if (step.toolName && step.toolArgs) {
                 // Execução via ToolRegistry com ProactiveRecovery (mutação de args + fallback)
@@ -527,12 +536,29 @@ export class GoalExecutionLoop {
                     );
                     toolResult = recoveryResult.result;
                     if (recoveryResult.recovered && recoveryResult.recoveryNote) {
-                        log.info(`[GoalStep] auto-recovery: ${recoveryResult.recoveryNote}`);
+                        const kind = recoveryResult.mutationKind ?? 'arg_mutation';
+                        log.info(
+                            `[MUTATION] tool_mutation:\n  tool: ${recoveryResult.originalToolName ?? step.toolName}\n  kind: ${kind}\n` +
+                            `  original: ${JSON.stringify(recoveryResult.originalArgs ?? {})}\n` +
+                            `  modified: ${JSON.stringify(recoveryResult.finalArgs)}`
+                        );
+                        stepMutations = [{
+                            originalTool: recoveryResult.originalToolName ?? step.toolName,
+                            finalTool: recoveryResult.finalToolName,
+                            originalArgs: recoveryResult.originalArgs ?? step.toolArgs as Record<string, unknown>,
+                            finalArgs: recoveryResult.finalArgs,
+                            kind,
+                        }];
                     }
                 }
             } else {
                 // Sem tool específica → chama AgentLoop com prompt focado no step
-                const stepPrompt = `[GOAL STEP] ${step.description}\n\nContexto do objetivo: ${goal.objective}`;
+                const cognitiveBlock = this.buildIncrementalExecutionContext(goal, step);
+                const stepPrompt = [
+                    `[GOAL STEP] ${step.description}`,
+                    `\nContexto do objetivo: ${goal.objective}`,
+                    cognitiveBlock ? `\n${cognitiveBlock}` : '',
+                ].join('');
                 const [, sessionUserId] = goal.sessionKey.split(':');
                 const response = await this.agentLoop.process(
                     goal.conversationId,
@@ -555,16 +581,23 @@ export class GoalExecutionLoop {
                         output: text.slice(0, 300),
                         durationMs: Date.now() - startMs,
                         executedAt: Date.now(),
+                        cycle,
                     });
                     return { outcome: 'needs_auth' as const, confidence: 0.9, output: text, authOptions: authOpts };
                 }
 
-                // LLM avalia se o AgentLoop executou o step com sucesso
-                const success = await this.evaluateAgentStepSuccess(step.description, goal.objective, text);
-                toolResult = { success, output: text };
+                // Heurística determinística avalia se o step teve sucesso
+                const stepEval = this.evaluateAgentStepSuccess(step, goal.objective, text);
+                let finalSuccess = stepEval.success;
+                if (stepEval.shouldEscalateToLLM) {
+                    log.info(`[GoalStep] heuristic inconclusive (conf=${stepEval.confidence.toFixed(2)}) — escalating to LLM`);
+                    finalSuccess = await this.escalateStepEvalToLLM(step, goal.objective, text);
+                }
+                stepEvalForAttempt = { confidence: stepEval.confidence, reason: stepEval.reason };
+                toolResult = { success: finalSuccess, output: text };
             }
 
-            // Registrar attempt
+            // Registrar attempt com auditoria completa (cycle, mutations, evaluation)
             const attempt: GoalAttempt = {
                 id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
                 planStepId: step.id,
@@ -575,6 +608,9 @@ export class GoalExecutionLoop {
                 error: toolResult.error,
                 durationMs: Date.now() - startMs,
                 executedAt: Date.now(),
+                cycle,
+                mutations: stepMutations,
+                evaluation: stepEvalForAttempt,
             };
             this.goalStore.addAttempt(goal.id, attempt);
 
@@ -599,6 +635,7 @@ export class GoalExecutionLoop {
                 error: errorMsg,
                 durationMs,
                 executedAt: Date.now(),
+                cycle,
             };
             this.goalStore.addAttempt(goal.id, attempt);
 
@@ -608,47 +645,95 @@ export class GoalExecutionLoop {
         }
     }
 
-    // ── LLM step success evaluator ────────────────────────────────────────────
+    // ── Step success evaluator (heurística + LLM escalation) ───────────────────
 
     /**
-     * Usa o LLM para avaliar se a resposta do AgentLoop indica sucesso no step.
-     * Substitui a heurística de regex frágil por julgamento semântico.
-     * Fallback conservador para regex se o LLM falhar.
+     * Avalia via heurística determinística se a resposta do AgentLoop indica sucesso.
+     * Retorna StepEvaluation com confidence e flag de escalation.
+     *
+     * Escalation para LLM ocorre SOMENTE quando:
+     *   - confidence < 0.6 (sinal ambíguo — output misto de erro e sucesso)
+     *   - ferramenta desconhecida sem sinal claro
+     *
+     * Ordem de precedência:
+     *  1. Sinais explícitos de falha → success=false, conf=0.95
+     *  2. Sinais explícitos de sucesso → success=true, conf=0.90
+     *  3. Resposta substancial sem sinal claro → success=true, conf=0.50 → escalation
+     *  4. Resposta vazia/curta → success=false, conf=0.85
      */
-    private async evaluateAgentStepSuccess(
-        stepDescription: string,
-        objective: string,
+    private evaluateAgentStepSuccess(
+        step: PlanStep,
+        _objective: string,
         response: string,
+    ): StepEvaluation {
+        const text = response.slice(0, 500);
+
+        // Sinais explícitos de falha (alta confiança)
+        const failurePattern = /\b(erro|falhou|não consegui|não foi possível|failed|error:|cannot|não pude|sem sucesso|bloqueado|não encontr[ao]d[ao]|command not found|ENOENT|Traceback|permission denied|exit code: [^0])\b/i;
+        if (failurePattern.test(text)) {
+            log.debug(`[GoalLoop] step-heuristic: failure signal tool=${step.toolName ?? 'agentloop'}`);
+            return { success: false, confidence: 0.95, reason: 'failure_signal_detected' };
+        }
+
+        // Sinais explícitos de sucesso (alta confiança)
+        const successPattern = /\b(conclu[íi]d[ao]|✓|✅|criado|gerado|enviado|salvo|feito|pronto|sucesso|executado|funcionou|ok\b|done\b)\b/i;
+        if (successPattern.test(text)) {
+            log.debug(`[GoalLoop] step-heuristic: success signal tool=${step.toolName ?? 'agentloop'}`);
+            return { success: true, confidence: 0.90, reason: 'success_signal_detected' };
+        }
+
+        // Resposta vazia ou muito curta (provavelmente falha silenciosa)
+        if (response.trim().length < 15) {
+            log.debug(`[GoalLoop] step-heuristic: empty/short response tool=${step.toolName ?? 'agentloop'}`);
+            return { success: false, confidence: 0.85, reason: 'empty_response' };
+        }
+
+        // Zona ambígua — resposta substancial sem sinal claro
+        // Escalation para LLM só quando: output >= 15 chars mas sem sinal direto
+        const isAmbiguous = response.trim().length >= 15 && response.trim().length < 200;
+        if (isAmbiguous) {
+            log.debug(`[GoalLoop] step-heuristic: ambiguous (${response.trim().length} chars) → escalation tool=${step.toolName ?? 'agentloop'}`);
+            return { success: false, confidence: 0.50, reason: 'ambiguous_output', shouldEscalateToLLM: true };
+        }
+
+        // Resposta longa sem sinal de falha → assume progresso (conservador)
+        log.debug(`[GoalLoop] step-heuristic: long response — assuming success tool=${step.toolName ?? 'agentloop'}`);
+        return { success: true, confidence: 0.70, reason: 'substantial_response' };
+    }
+
+    /**
+     * Escalation path: usado apenas quando a heurística retorna confidence < 0.6.
+     * Chama LLM com prompt compacto (sem system prompt completo) para decidir sucesso/falha.
+     * Fail-safe: qualquer erro → assume success=true (conservador, evita loops de replan).
+     */
+    private async escalateStepEvalToLLM(
+        step: PlanStep,
+        objective: string,
+        agentResponse: string,
     ): Promise<boolean> {
-        const prompt = `Avalie se o resultado abaixo indica SUCESSO no cumprimento da tarefa.
+        const prompt = `Avalie se o seguinte output indica SUCESSO ou FALHA na execução desta tarefa.
 
-TAREFA: ${stepDescription}
-OBJETIVO: ${objective.slice(0, 200)}
-RESULTADO: ${response.slice(0, 600)}
+TAREFA: ${step.description.slice(0, 200)}
+OBJETIVO: ${objective.slice(0, 150)}
+OUTPUT: ${agentResponse.slice(0, 400)}
 
-Responda APENAS com JSON válido, sem texto adicional:
-{"success": true} se a tarefa foi concluída ou progrediu substancialmente.
-{"success": false} se houve erro, incapacidade de executar, ou pedido de informação bloqueante.`;
+Responda APENAS com JSON: {"success": true} ou {"success": false}`;
 
         try {
             const result = await this.providerFactory.chatWithFallback(
                 [{ role: 'user', content: prompt }] as LLMMessage[],
                 undefined,
                 undefined,
-                30_000,
+                15_000,
             );
-
-            if (result.status !== 'success') {
-                log.warn('[GoalLoop] LLM step eval failed, using regex fallback');
-                return !/(erro|falhou|não consegui|não foi possível|failed|error)/i.test(response);
-            }
-
+            if (result.status !== 'success') return true;
             const cleaned = result.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
             const parsed = JSON.parse(cleaned);
-            log.debug(`[GoalLoop] LLM step eval: success=${parsed.success}`);
+            log.info(`[GoalStep] LLM escalation result: success=${parsed.success} step=${step.id}`);
             return Boolean(parsed.success);
         } catch {
-            return !/(erro|falhou|não consegui|não foi possível|failed|error)/i.test(response);
+            log.warn(`[GoalStep] LLM escalation failed — defaulting to success=true step=${step.id}`);
+            return true;
         }
     }
 
@@ -693,6 +778,289 @@ Responda APENAS com JSON válido, sem texto adicional:
             confidence: 0.9,
             pattern: step.toolName ? `tool_${step.toolName}_success` : 'goal_step_success',
         });
+    }
+
+    // ── Contexto cognitivo persistente (P15 → P16) ───────────────────────────
+
+    /**
+     * Deriva o contexto cognitivo diretamente de `goal.attempts` e `goal.strategiesTried`,
+     * eliminando a dependência do StepCognitiveContext in-memory.
+     *
+     * Vantagem sobre buildPreviousStepsContext: sobrevive a restarts do processo,
+     * pois tudo é derivado do estado persistido no GoalStore (SQLite).
+     *
+     * Mapeamento de toolName → categoria:
+     *   file_read / read_document → filesRead
+     *   write / edit              → filesModified
+     *   send_document / audio     → generatedArtifacts
+     *   exec_command              → executedCommands
+     *   goal.strategiesTried      → failedStrategies
+     *   attempt.discoveries       → discoveries (ProactiveRecovery + step)
+     */
+    private buildIncrementalExecutionContext(goal: Goal, currentStep: PlanStep): string {
+        const attempts = goal.attempts;
+
+        // ── Derivar categorias a partir de goal.attempts ─────────────────────
+        const filesRead: Array<{ path: string; summary?: string }> = [];
+        const filesModified: string[] = [];
+        const generatedArtifacts: string[] = [];
+        const executedCommands: string[] = [];
+        const importantOutputs: string[] = [];
+        const discoveries: string[] = [];
+
+        const seenPaths = new Set<string>();
+
+        for (const attempt of attempts) {
+            if (attempt.result === 'failure') continue; // só attempts bem-sucedidos para contexto positivo
+
+            const pathArg = String(attempt.args['path'] ?? attempt.args['file_path'] ?? '');
+
+            if (['file_read', 'read_document'].includes(attempt.toolName)) {
+                if (pathArg && !seenPaths.has(`read:${pathArg}`)) {
+                    seenPaths.add(`read:${pathArg}`);
+                    filesRead.push({ path: pathArg, summary: attempt.output?.slice(0, 100).replace(/\n/g, ' ') });
+                }
+            } else if (['write', 'edit'].includes(attempt.toolName)) {
+                if (pathArg && !seenPaths.has(`mod:${pathArg}`)) {
+                    seenPaths.add(`mod:${pathArg}`);
+                    filesModified.push(pathArg);
+                }
+            } else if (['send_document', 'send_audio'].includes(attempt.toolName)) {
+                if (pathArg && !seenPaths.has(`art:${pathArg}`)) {
+                    seenPaths.add(`art:${pathArg}`);
+                    generatedArtifacts.push(pathArg);
+                }
+            } else if (attempt.toolName === 'exec_command') {
+                const cmd = String(attempt.args['command'] ?? '');
+                if (cmd && !executedCommands.includes(cmd.slice(0, 120))) {
+                    executedCommands.push(cmd.slice(0, 120));
+                }
+            }
+
+            // Outputs relevantes de attempts recentes bem-sucedidos
+            if (attempt.output && attempt.output.length > 30) {
+                importantOutputs.push(attempt.output.slice(0, 200).replace(/\n+/g, ' '));
+            }
+
+            // Descobertas anotadas explicitamente (campo novo do GoalAttempt)
+            if (attempt.discoveries?.length) {
+                for (const d of attempt.discoveries) {
+                    if (!discoveries.includes(d)) discoveries.push(d);
+                }
+            }
+        }
+
+        // ── Montar bloco de contexto ──────────────────────────────────────────
+        const completedSteps = goal.currentPlan
+            .filter(s => s.status === 'completed' && s.result && s.id !== currentStep.id)
+            .slice(-3);
+
+        const lines: string[] = ['[CONTEXTO COGNITIVO — leia antes de executar]'];
+
+        if (completedSteps.length > 0) {
+            lines.push('\nSteps já executados:');
+            for (const s of completedSteps) {
+                lines.push(`  ✓ ${s.description}: ${(s.result ?? '').slice(0, 150)}`);
+            }
+        }
+
+        if (filesRead.length > 0) {
+            lines.push('\nArquivos já lidos (NÃO reler sem necessidade):');
+            for (const f of filesRead.slice(-8)) {
+                lines.push(`  • ${f.path}${f.summary ? ` — ${f.summary}` : ''}`);
+            }
+        }
+
+        if (filesModified.length > 0) {
+            lines.push('\nArquivos modificados nesta sessão:');
+            for (const f of filesModified.slice(-5)) {
+                lines.push(`  • ${f}`);
+            }
+        }
+
+        if (generatedArtifacts.length > 0) {
+            lines.push('\nArtefatos já gerados (verificar antes de regenerar):');
+            for (const a of generatedArtifacts.slice(-5)) {
+                lines.push(`  • ${a}`);
+            }
+        }
+
+        if (goal.strategiesTried.length > 0) {
+            lines.push('\nEstratégias que falharam (NÃO repetir):');
+            for (const f of goal.strategiesTried.slice(-4)) {
+                lines.push(`  ✗ ${f}`);
+            }
+        }
+
+        if (importantOutputs.length > 0) {
+            lines.push('\nOutputs relevantes dos steps anteriores:');
+            for (const o of importantOutputs.slice(-3)) {
+                lines.push(`  → ${o}`);
+            }
+        }
+
+        if (executedCommands.length > 0) {
+            lines.push('\nComandos executados com sucesso:');
+            for (const c of executedCommands.slice(-5)) {
+                lines.push(`  $ ${c}`);
+            }
+        }
+
+        if (discoveries.length > 0) {
+            lines.push('\nDescobertas automáticas (recovery / mutations):');
+            for (const d of discoveries.slice(-4)) {
+                lines.push(`  ℹ ${d}`);
+            }
+        }
+
+        // Log de observabilidade: mede reuso de contexto
+        const ctxItems = filesRead.length + filesModified.length + generatedArtifacts.length + executedCommands.length;
+        if (ctxItems > 0) {
+            log.debug(`[GoalLoop] ctx_reuse goal=${goal.id} step=${currentStep.id} reads=${filesRead.length} mods=${filesModified.length} artifacts=${generatedArtifacts.length} cmds=${executedCommands.length} strategies=${goal.strategiesTried.length}`);
+        }
+
+        if (lines.length === 1) return '';
+
+        lines.push('\n[FIM DO CONTEXTO COGNITIVO]');
+        return lines.join('\n');
+    }
+
+    /**
+     * Atualiza o cognitiveContext com os resultados de um step concluído.
+     * Extrai via pattern matching: arquivos lidos, comandos, artefatos.
+     */
+    private updateCognitiveContext(step: PlanStep, output: string): void {
+        const ctx = this.cognitiveContext;
+        const text = output.slice(0, 800);
+
+        // Arquivos lidos (via file_read tool ou padrões no output)
+        if (step.toolName === 'file_read' || step.toolName === 'read_document') {
+            const pathArg = step.toolArgs?.path ?? step.toolArgs?.file_path;
+            if (typeof pathArg === 'string' && pathArg) {
+                const alreadyTracked = ctx.filesRead.some(f => f.path === pathArg);
+                if (!alreadyTracked) {
+                    const summary = text.slice(0, 100).replace(/\n/g, ' ');
+                    ctx.filesRead.push({ path: pathArg, summary: summary || undefined });
+                }
+            }
+        }
+
+        // Arquivos modificados (write/edit)
+        if (step.toolName === 'write' || step.toolName === 'edit') {
+            const pathArg = step.toolArgs?.path ?? step.toolArgs?.file_path;
+            if (typeof pathArg === 'string' && pathArg && !ctx.filesModified.includes(pathArg)) {
+                ctx.filesModified.push(pathArg);
+            }
+        }
+
+        // Artefatos gerados (send_document, arquivos com extensão conhecida no output)
+        if (step.toolName === 'send_document' || step.toolName === 'send_audio') {
+            const pathArg = step.toolArgs?.path ?? step.toolArgs?.file_path;
+            if (typeof pathArg === 'string' && pathArg && !ctx.generatedArtifacts.includes(pathArg)) {
+                ctx.generatedArtifacts.push(pathArg);
+            }
+        }
+
+        // Extrai caminhos de arquivos mencionados no output (ex: "criou /workspace/foo.pdf")
+        const artifactMatches = text.matchAll(/(?:criou|gerou|salvo|saved|created?|written?)\s+[`'"]?(\/?[\w./\\-]+\.\w{2,5})[`'"]?/gi);
+        for (const m of artifactMatches) {
+            if (!ctx.generatedArtifacts.includes(m[1])) {
+                ctx.generatedArtifacts.push(m[1]);
+            }
+        }
+
+        // Comandos executados
+        if (step.toolName === 'exec_command') {
+            const cmd = step.toolArgs?.command;
+            if (typeof cmd === 'string' && cmd && !ctx.executedCommands.includes(cmd)) {
+                ctx.executedCommands.push(cmd.slice(0, 120));
+            }
+        }
+
+        // Outputs importantes (sucesso com conteúdo útil)
+        if (text.length > 30) {
+            const shortOutput = text.slice(0, 200).replace(/\n+/g, ' ');
+            ctx.importantOutputs.push(shortOutput);
+            // Limitar a 6 outputs
+            if (ctx.importantOutputs.length > 6) ctx.importantOutputs.shift();
+        }
+
+        // Leitura de arquivos via exec_command (cat, head, etc.)
+        if (step.toolName === 'exec_command') {
+            const catMatch = (step.toolArgs?.command as string | undefined)?.match(/\bcat\s+([^\s|;&]+)/);
+            if (catMatch?.[1] && !ctx.filesRead.some(f => f.path === catMatch[1])) {
+                ctx.filesRead.push({ path: catMatch[1] });
+            }
+        }
+    }
+
+    /**
+     * Q1 — Contextualização espiral: enriquece o entendimento do objetivo antes de cada
+     * ciclo de planejamento, consultando memória semântica e padrões de reflexão.
+     * (Inlined de GoalContextualizer para reduzir fragmentação.)
+     */
+    private async contextualize(goal: Goal, cycleNumber: number, priorFeedback?: string): Promise<string> {
+        const parts: string[] = [];
+
+        // Memória semântica relevante ao objetivo
+        try {
+            const nodes = await this.memory.semanticSearch(goal.userIntent, 3);
+            const relevant = nodes.filter(n => n.content && n.content.trim().length > 10);
+            if (relevant.length > 0) {
+                const lines = relevant.map(n => `- [${n.type}] ${String(n.content).slice(0, 150)}`);
+                parts.push(`Contexto da memória (relevante ao objetivo):\n${lines.join('\n')}`);
+            }
+        } catch (err) {
+            log.warn('[GoalLoop] Q1 memory search error:', String(err));
+        }
+
+        // Padrões de falha conhecidos (tools já tentadas)
+        const failureHints = goal.toolsTried
+            .map(t => this.reflectionMemory.buildContextHint(`tool_${t}`))
+            .filter(Boolean);
+        if (failureHints.length > 0) {
+            parts.push(`Histórico de execuções com ferramentas já usadas:\n${failureHints.join('\n')}`);
+        }
+
+        // Feedback do ciclo anterior (Q4 → Q1)
+        if (priorFeedback && cycleNumber > 1) {
+            parts.push(
+                `Análise do ciclo ${cycleNumber - 1} (o que não funcionou):\n` +
+                `${priorFeedback}\n` +
+                `→ Ajuste a estratégia para resolver especificamente este problema.`
+            );
+        }
+
+        const context = parts.join('\n\n');
+        if (context) {
+            log.info(`[GoalLoop] Q1 cycle=${cycleNumber} context_len=${context.length}`);
+        }
+        return context;
+    }
+
+    /**
+     * Registra uma estratégia que falhou para evitar repetição nos próximos steps.
+     * Persiste em goalStore.strategiesTried (SQLite) para sobreviver a restarts.
+     * O cognitiveContext.failedStrategies é mantido como cache in-memory (compatibilidade).
+     */
+    private recordFailedStrategy(step: PlanStep, reason: string, goalId?: string): void {
+        const strategy = step.toolName
+            ? `${step.toolName}: ${step.description.slice(0, 80)}`
+            : step.description.slice(0, 100);
+        const entry = `${strategy} — ${reason.slice(0, 80)}`;
+
+        // Persiste no GoalStore (durável, read-by buildIncrementalExecutionContext)
+        if (goalId) {
+            this.goalStore.addStrategyTried(goalId, entry);
+        }
+
+        // Cache in-memory para a sessão atual (compatibilidade com código legado)
+        if (!this.cognitiveContext.failedStrategies.includes(entry)) {
+            this.cognitiveContext.failedStrategies.push(entry);
+            if (this.cognitiveContext.failedStrategies.length > 6) {
+                this.cognitiveContext.failedStrategies.shift();
+            }
+        }
     }
 
     /**

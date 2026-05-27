@@ -17,12 +17,124 @@
 
 import { createLogger } from '../shared/AppLogger';
 import type { ParsedLLMResponse } from './ContentExtractor';
-import {
-    StructuredAgentResponse,
-    ConfidenceLevel,
-    ProtocolViolationError,
-    ProtocolMetrics,
-} from './ProtocolTypes';
+
+// ── Protocol Types (inlined from ProtocolTypes.ts) ────────────────────────────
+
+export type AgentActionType =
+    | 'final_answer'    // Task complete, delivering answer
+    | 'tool_call'       // Requesting tool execution
+    | 'planning'        // Reasoning about next steps (no action yet)
+    | 'clarification'  // Asking user for more info
+    | 'error';          // Explicit error state
+
+export type ConfidenceLevel = 'low' | 'medium' | 'high';
+
+export interface StructuredAgentResponse {
+    type: AgentActionType;
+    content?: string;
+    thought?: string;
+    toolCalls?: ToolCallRequest[];
+    isComplete: boolean;
+    confidence: ConfidenceLevel;
+    reasoningRequired?: boolean;
+    evaluation?: {
+        is_complete: boolean;
+        confidence: ConfidenceLevel;
+        reason?: string;
+    };
+    metadata?: Record<string, unknown>;
+}
+
+export interface ToolCallRequest {
+    name: string;
+    input: Record<string, unknown>;
+}
+
+export type ViolationSeverity = 'recoverable' | 'critical';
+
+export interface ProtocolViolationDetails {
+    rawResponse: string;
+    provider: string;
+    model: string;
+    parsingStage: 'strict_parse' | 'recovery_parse' | 'recovery_prompt';
+    recoveryAttempts: number;
+    correlationId: string;
+    timestamp: number;
+}
+
+export class ProtocolViolationError extends Error {
+    public readonly severity: ViolationSeverity;
+    public readonly details: ProtocolViolationDetails;
+
+    constructor(severity: ViolationSeverity, details: ProtocolViolationDetails) {
+        const msg = severity === 'critical'
+            ? `[PROTOCOL-VIOLATION] Critical: LLM failed structured protocol after ${details.recoveryAttempts} recovery attempts (provider=${details.provider}, model=${details.model}, stage=${details.parsingStage})`
+            : `[PROTOCOL-VIOLATION] Recoverable: LLM response did not follow structured protocol (provider=${details.provider}, model=${details.model}, stage=${details.parsingStage})`;
+
+        super(msg);
+        this.name = 'ProtocolViolationError';
+        this.severity = severity;
+        this.details = details;
+    }
+
+    toTraceData(): Record<string, unknown> {
+        return {
+            error_type: 'ProtocolViolationError',
+            severity: this.severity,
+            raw_response_preview: this.details.rawResponse.slice(0, 200),
+            provider: this.details.provider,
+            model: this.details.model,
+            parsing_stage: this.details.parsingStage,
+            recovery_attempts: this.details.recoveryAttempts,
+            correlation_id: this.details.correlationId,
+            timestamp: this.details.timestamp,
+        };
+    }
+}
+
+export interface ProtocolMetricsSnapshot {
+    compliantCount: number;
+    violationCount: number;
+    recoverySuccessCount: number;
+    recoveryFailureCount: number;
+    complianceRate: number;
+    recoverySuccessRate: number;
+    violationsByModel: Record<string, number>;
+    timestamp: number;
+}
+
+export class ProtocolMetrics {
+    private compliantCount = 0;
+    private violationCount = 0;
+    private recoverySuccessCount = 0;
+    private recoveryFailureCount = 0;
+    private violationsByModel: Record<string, number> = {};
+
+    recordCompliant(): void { this.compliantCount++; }
+    recordViolation(model: string): void {
+        this.violationCount++;
+        this.violationsByModel[model] = (this.violationsByModel[model] || 0) + 1;
+    }
+    recordRecoverySuccess(): void { this.recoverySuccessCount++; }
+    recordRecoveryFailure(): void { this.recoveryFailureCount++; }
+
+    snapshot(): ProtocolMetricsSnapshot {
+        const total = this.compliantCount + this.violationCount;
+        const recoveryTotal = this.recoverySuccessCount + this.recoveryFailureCount;
+        return {
+            compliantCount: this.compliantCount,
+            violationCount: this.violationCount,
+            recoverySuccessCount: this.recoverySuccessCount,
+            recoveryFailureCount: this.recoveryFailureCount,
+            complianceRate: total > 0 ? this.compliantCount / total : 1,
+            recoverySuccessRate: recoveryTotal > 0 ? this.recoverySuccessCount / recoveryTotal : 1,
+            violationsByModel: { ...this.violationsByModel },
+            timestamp: Date.now(),
+        };
+    }
+}
+
+// ── End of inlined types ───────────────────────────────────────────────────────
 
 const log = createLogger('ProtocolParser');
 

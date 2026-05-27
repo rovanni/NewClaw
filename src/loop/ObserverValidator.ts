@@ -17,6 +17,19 @@ export interface ValidationResult {
     validationSkipped?: boolean;
 }
 
+/**
+ * Resultado da fase de commit de resposta (Q4 pré-envio).
+ * Determina se a resposta pode ser enviada ao usuário ou deve ser bloqueada/corrigida.
+ */
+export interface ResponseCommit {
+    valid: boolean;
+    hallucinationRisk: number;   // 0.0 – 1.0
+    blocked: boolean;
+    blockReason?: string;
+    correctedResponse?: string;
+    validationMs: number;
+}
+
 const OBSERVER_PROMPT = `Você é um agente observador responsável por validar a qualidade das ações de um assistente virtual.
 
 Analise as informações abaixo:
@@ -180,5 +193,91 @@ export class ObserverValidator {
             log.warn(`Validation error: ${errorMessage(error)}, skipping`);
             return { approved: false, reason: `Observer error: ${errorMessage(error)}`, confidence: 0, validationSkipped: true };
         }
+    }
+
+    // ── Response Commit Phase (Q4 pré-envio) ─────────────────────────────────
+
+    /**
+     * Valida a resposta final ANTES do envio ao usuário.
+     * Detecta alucinações de ação (afirmar sucesso quando a tool falhou).
+     * Corre com timeout externo de 5 s — retorna {blocked:false} em caso de timeout.
+     */
+    async validateResponseCommit(
+        userMessage: string,
+        toolUsed: string,
+        toolResult: string,
+        finalResponse: string,
+        signal?: AbortSignal,
+    ): Promise<ResponseCommit> {
+        const t0 = Date.now();
+
+        // Sem tool → sem risco de alucinação de ação
+        if (!toolUsed || !toolResult) {
+            return { valid: true, hallucinationRisk: 0, blocked: false, validationMs: 0 };
+        }
+
+        // ── Verificação determinística rápida (sem LLM) ────────────────────
+        const deterministic = this.deterministicCheck(toolUsed, toolResult, finalResponse);
+
+        if (deterministic) {
+            const elapsed = Date.now() - t0;
+            if (deterministic.approved || deterministic.validationSkipped) {
+                return { valid: true, hallucinationRisk: 0.1, blocked: false, validationMs: elapsed };
+            }
+            // Tool falhou com alta confiança — verificar se a resposta admite isso
+            const responseAdmitsFailure = /(?:não consegui|não foi possível|falhou|erro|problema|tente novamente|desculpe|lamento|não pude)/i
+                .test(finalResponse.slice(0, 250));
+            if (responseAdmitsFailure) {
+                // Resposta honesta — não bloquear
+                return { valid: true, hallucinationRisk: 0.2, blocked: false, validationMs: elapsed };
+            }
+            // Resposta afirma sucesso mas tool falhou → possível alucinação
+            const hallucinationRisk = deterministic.confidence;
+            const blocked = hallucinationRisk >= 0.7;
+            log.warn(`[COMMIT] Deterministic hallucination check: risk=${hallucinationRisk.toFixed(2)} blocked=${blocked} tool=${toolUsed}`);
+            return {
+                valid: false,
+                hallucinationRisk,
+                blocked,
+                blockReason: deterministic.reason,
+                correctedResponse: blocked
+                    ? this.buildCorrectedResponse(deterministic.reason, deterministic.suggestedFix)
+                    : undefined,
+                validationMs: elapsed,
+            };
+        }
+
+        // ── Verificação via LLM (casos ambíguos) ──────────────────────────
+        if (signal?.aborted) {
+            return { valid: true, hallucinationRisk: 0, blocked: false, validationMs: Date.now() - t0 };
+        }
+
+        const llmResult = await this.validate(userMessage, userMessage, toolUsed, toolResult, finalResponse, signal);
+        const elapsed = Date.now() - t0;
+
+        if (llmResult.approved || llmResult.validationSkipped) {
+            return { valid: true, hallucinationRisk: Math.max(0, 1 - llmResult.confidence) * 0.5, blocked: false, validationMs: elapsed };
+        }
+
+        const hallucinationRisk = llmResult.confidence;
+        const blocked = hallucinationRisk >= 0.7;
+        return {
+            valid: false,
+            hallucinationRisk,
+            blocked,
+            blockReason: llmResult.reason,
+            correctedResponse: blocked
+                ? this.buildCorrectedResponse(llmResult.reason, llmResult.suggestedFix)
+                : undefined,
+            validationMs: elapsed,
+        };
+    }
+
+    private buildCorrectedResponse(reason: string, suggestedFix?: string): string {
+        const base = 'Não consegui completar esta ação corretamente.';
+        if (reason) {
+            return `${base} ${reason}.${suggestedFix ? ` ${suggestedFix}.` : ' Tente reformular a solicitação ou use uma abordagem diferente.'}`;
+        }
+        return `${base} Tente reformular a solicitação ou use uma abordagem diferente.`;
     }
 }

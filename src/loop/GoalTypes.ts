@@ -63,6 +63,15 @@ export interface PlanStep {
 
 // ── Attempts ─────────────────────────────────────────────────────────────────
 
+/** Auditoria de uma mutação feita pelo ProactiveRecovery (arg mutation ou fallback tool). */
+export interface ToolMutation {
+    originalTool: string;
+    finalTool: string;
+    originalArgs: Record<string, unknown>;
+    finalArgs: Record<string, unknown>;
+    kind: 'arg_mutation' | 'fallback_tool';
+}
+
 export interface GoalAttempt {
     id: string;
     planStepId: string;
@@ -73,6 +82,14 @@ export interface GoalAttempt {
     error?: string;
     durationMs: number;
     executedAt: number;
+    /** Ciclo de execução do GoalExecutionLoop em que este attempt ocorreu */
+    cycle?: number;
+    /** Descobertas feitas durante este attempt (ex: conteúdo de arquivo, estrutura detectada) */
+    discoveries?: string[];
+    /** Mutações aplicadas pelo ProactiveRecovery antes do resultado final */
+    mutations?: ToolMutation[];
+    /** Avaliação heurística do resultado */
+    evaluation?: { confidence: number; reason?: string };
 }
 
 // ── Goal ──────────────────────────────────────────────────────────────────────
@@ -175,6 +192,57 @@ export interface GoalClassification {
     isAmbiguous?: boolean;
     /** Pergunta de clarificação sugerida quando isAmbiguous=true */
     clarificationQuestion?: string;
+}
+
+// ── Avaliação de step (heurística + escalation) ───────────────────────────────
+
+/**
+ * Resultado da avaliação determinística de um step.
+ * confidence < 0.6 dispara escalation para LLM (casos ambíguos).
+ */
+export interface StepEvaluation {
+    success: boolean;
+    /** 0.0 – 1.0 — determinado pela heurística; < 0.6 = ambíguo */
+    confidence: number;
+    reason?: string;
+    /** Quando true, o caller deve chamar o LLM para desempate */
+    shouldEscalateToLLM?: boolean;
+}
+
+// ── Contexto cognitivo persistente entre steps ────────────────────────────────
+
+/**
+ * Acumula descobertas entre steps de um mesmo goal.
+ * Permite que cada AgentLoop comece com conhecimento do que já foi feito,
+ * eliminando releituras redundantes e rediscoverys desnecessários.
+ */
+export interface StepCognitiveContext {
+    /** Arquivos lidos por steps anteriores (caminho + hash opcional) */
+    filesRead: Array<{ path: string; summary?: string }>;
+    /** Arquivos criados ou modificados */
+    filesModified: string[];
+    /** Artefatos gerados (relatórios, imagens, documentos) com caminho no workspace */
+    generatedArtifacts: string[];
+    /** Descobertas relevantes (ex: "a pasta /workspace/src tem 3 arquivos .ts") */
+    discoveries: string[];
+    /** Estratégias que falharam — evita repetição */
+    failedStrategies: string[];
+    /** Outputs importantes dos steps anteriores (max 200 chars cada) */
+    importantOutputs: string[];
+    /** Comandos executados com sucesso */
+    executedCommands: string[];
+}
+
+export function createEmptyStepCognitiveContext(): StepCognitiveContext {
+    return {
+        filesRead: [],
+        filesModified: [],
+        generatedArtifacts: [],
+        discoveries: [],
+        failedStrategies: [],
+        importantOutputs: [],
+        executedCommands: [],
+    };
 }
 
 // ── Capabilities do ambiente ──────────────────────────────────────────────────

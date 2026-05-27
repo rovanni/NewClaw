@@ -62,6 +62,7 @@ import { bootstrapDomains } from '../memory/DomainRegistry';
 import { WorkflowEngine } from '../loop/WorkflowEngine';
 import { GoalOrchestrator } from '../loop/GoalOrchestrator';
 import { GoalStore } from '../loop/GoalStore';
+import { getBackgroundQueue } from '../loop/BackgroundCognitionQueue';
 import { registerCommands } from './agentControllerCommands';
 import {
     transcribeAttachment,
@@ -522,6 +523,23 @@ export class AgentController {
 
         this.sessionAutoCleaner.start();
         this.memoryCurator.startAutoCurate();
+
+        // ── Cognição pós-turno (fire-and-forget) ─────────────────────────────────
+        // Após cada resposta entregue, enfileira tarefas de cognição de baixa prioridade.
+        // CognitiveReflectionEngine.runReflectionCycle() tem throttle 24h interno —
+        // mesmo chamada a cada turno, só executa uma vez por dia.
+        const bgQueue = getBackgroundQueue();
+        const memGovernor = this.memoryGovernor;
+        this.agentLoop.setPostTurnCallback(() => {
+            bgQueue.enqueue({
+                type: 'cognitive_reflection',
+                createdAt: Date.now(),
+                timeoutMs: 10_000,
+                run: async () => {
+                    memGovernor.runGovernanceCycle();
+                },
+            });
+        });
 
         this.lifecycle.registerInterval('promptHotReload', () => {
             promptRegistry.reloadIfChanged();

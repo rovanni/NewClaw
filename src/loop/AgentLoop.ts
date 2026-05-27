@@ -33,7 +33,7 @@ import { ToolRegistry } from '../core/ToolRegistry';
 import { SkillLoader } from '../skills/SkillLoader';
 import { ModelProfile } from './ModelProfileRegistry';
 import { errorMessage } from '../shared/errors';
-import { ObserverValidator } from './ObserverValidator';
+import { ObserverValidator, ResponseCommit } from './ObserverValidator';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ProactiveRecovery } from './ProactiveRecovery';
 import type { WorkflowEngine } from './WorkflowEngine';
@@ -80,6 +80,8 @@ export class AgentLoop {
     private lastToolExecution: { toolName: string; toolOutput: string; intent: string; category: string } | null = null;
     private readonly proactiveRecovery = new ProactiveRecovery();
     private workflowEngine?: WorkflowEngine;
+    /** Callback pós-turno: disparado fire-and-forget após cada resposta entregue. */
+    private postTurnCallback: (() => void) | null = null;
 
     constructor(
         providerFactory: ProviderFactory,
@@ -111,6 +113,15 @@ export class AgentLoop {
     setWorkflowEngine(engine: WorkflowEngine): void {
         this.workflowEngine = engine;
         log.info('[WF] WorkflowEngine registered in AgentLoop');
+    }
+
+    /**
+     * Registra callback pós-turno (fire-and-forget).
+     * Disparado via setImmediate após cada resposta entregue.
+     * Usado para enfileirar tarefas de cognição background (reflection, curation).
+     */
+    setPostTurnCallback(cb: () => void): void {
+        this.postTurnCallback = cb;
     }
 
     /**
@@ -359,36 +370,69 @@ export class AgentLoop {
         }
     }
 
-    // ── Post-turn validation (fire-and-forget) ─────────────────────────────────
+    // ── Response Commit Phase (Q4 pré-envio) ─────────────────────────────────
 
-    private schedulePostTurnValidation(
+    /**
+     * Valida a resposta final ANTES do envio ao usuário — fase Q4 do modelo espiral.
+     * Usa Promise.race com timeout de 5 s para não bloquear UX indefinidamente.
+     * Se bloqueada, substitui por resposta corrigida e registra na ReflectionMemory.
+     */
+    private async commitResponse(
+        response: string,
         userText: string,
-        finalResponse: string,
         traceId: string,
         conversationId: string,
-        signal?: AbortSignal
-    ): void {
+        signal?: AbortSignal,
+    ): Promise<string> {
         const last = this.lastToolExecution;
-        if (!last) return;
-        // Roda fora do caminho crítico — não bloqueia a resposta ao usuário
-        setImmediate(async () => {
-            if (signal?.aborted) return;
-            try {
-                await this.tryValidateTool(
+        if (!last) return response; // sem tool executada → sem risco de alucinação de ação
+
+        try {
+            const COMMIT_TIMEOUT_MS = 5_000;
+
+            const commit = await Promise.race<ResponseCommit>([
+                this.observer.validateResponseCommit(
                     userText,
-                    last.intent,
-                    last.category,
                     last.toolName,
                     last.toolOutput,
-                    [],         // sem injeção de mensagem — só persistência
-                    traceId,
-                    conversationId,
-                    finalResponse
-                );
-            } catch (err) {
-                log.warn(`[${this.ts()}] [POST-TURN] schedulePostTurnValidation failed (non-fatal): ${errorMessage(err)}`);
+                    response,
+                    signal,
+                ),
+                new Promise<ResponseCommit>(resolve =>
+                    setTimeout(
+                        () => resolve({ valid: true, hallucinationRisk: 0, blocked: false, validationMs: COMMIT_TIMEOUT_MS }),
+                        COMMIT_TIMEOUT_MS,
+                    )
+                ),
+            ]);
+
+            log.info(`[${this.ts()}] [COMMIT] Q4 tool=${last.toolName} valid=${commit.valid} risk=${commit.hallucinationRisk.toFixed(2)} blocked=${commit.blocked} ms=${commit.validationMs}`);
+
+            // Registrar na ReflectionMemory independente do resultado
+            this.reflectionMemory.record({
+                traceId,
+                conversationId,
+                userInput: userText,
+                intent: last.intent,
+                toolUsed: last.toolName,
+                toolOutput: last.toolOutput.slice(0, 1000),
+                finalResponse: response.slice(0, 500),
+                approved: commit.valid,
+                reason: commit.blockReason ?? (commit.valid ? 'Q4 commit aprovado' : 'Q4 commit: risco de alucinação'),
+                confidence: commit.valid ? 1 - commit.hallucinationRisk : commit.hallucinationRisk,
+                pattern: commit.blocked ? 'hallucination_blocked_pre_commit' : 'commit_approved',
+            });
+
+            if (commit.blocked && commit.correctedResponse) {
+                log.warn(`[${this.ts()}] [COMMIT] Hallucination bloqueada (risk=${commit.hallucinationRisk.toFixed(2)}): ${commit.blockReason}`);
+                return commit.correctedResponse;
             }
-        });
+
+            return response;
+        } catch (err) {
+            log.warn(`[${this.ts()}] [COMMIT] commitResponse falhou (non-fatal): ${errorMessage(err)}`);
+            return response; // fail-safe: nunca bloquear por erro interno de validação
+        }
     }
 
     // ── Entry points ───────────────────────────────────────────────────────────
@@ -425,9 +469,13 @@ export class AgentLoop {
         try {
             return await this.runWithTools(conversationId, userText, 0, userId, context);
         } finally {
-            // Guarantee cleanup even if runWithTools throws unexpectedly
+            // Cleanup: sempre executado mesmo em erros
             this.activeTurns.delete(conversationId);
             this.turnStartTimes.delete(conversationId);
+            // Dispara cognição pós-turno (fire-and-forget — nunca bloqueia resposta)
+            if (this.postTurnCallback) {
+                setImmediate(this.postTurnCallback);
+            }
         }
     }
 
@@ -694,9 +742,8 @@ export class AgentLoop {
         move('FINAL_READY', { step: 1, reason: 'tool_fast_path' });
         traceManager.completeTrace(trace, 'completed', finalText);
         this.persistTrace(trace, 1, 'completed', finalText, channelContext);
-        this.schedulePostTurnValidation(userText, finalText, trace.id, conversationId);
 
-        return { text: finalText };
+        return { text: await this.commitResponse(finalText, userText, trace.id, conversationId) };
     }
 
     // ── Core execution loop ────────────────────────────────────────────────────
@@ -1057,8 +1104,7 @@ export class AgentLoop {
                 move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : 'is_complete' });
                 traceManager.completeTrace(trace, 'completed', finalText);
                 this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                this.schedulePostTurnValidation(userText, finalText, trace.id, conversationId, turnSignal);
-                return { text: finalText };
+                return { text: await this.commitResponse(finalText, userText, trace.id, conversationId, turnSignal) };
             }
 
             if (response.toolCalls && response.toolCalls.length > 0) {
@@ -1213,7 +1259,23 @@ export class AgentLoop {
                         const resolvedArgs = recovery.finalArgs;
                         const toolDuration = Date.now() - toolStartTime;
 
-                        if (recovery.recoveryNote) log.info(`[${this.ts()}] ${recovery.recoveryNote}`);
+                        if (recovery.recovered && recovery.recoveryNote) {
+                            const origTool = recovery.originalToolName ?? toolName;
+                            const kind = recovery.mutationKind ?? 'arg_mutation';
+                            log.info(
+                                `[MUTATION] tool_mutation:\n  tool: ${origTool}\n  kind: ${kind}\n` +
+                                `  original: ${JSON.stringify(recovery.originalArgs ?? {})}\n` +
+                                `  modified: ${JSON.stringify(resolvedArgs)}`
+                            );
+                            loopMessages.push({
+                                role: 'system',
+                                content: kind === 'fallback_tool'
+                                    ? `[RECUPERAÇÃO AUTOMÁTICA] A ferramenta "${origTool}" falhou e foi substituída por "${resolvedToolName}" com argumentos adaptados. ${recovery.recoveryNote}`
+                                    : `[RECUPERAÇÃO AUTOMÁTICA] Os argumentos da ferramenta "${resolvedToolName}" foram ajustados automaticamente para funcionar. ${recovery.recoveryNote}`,
+                            });
+                        } else if (recovery.recoveryNote) {
+                            log.info(`[${this.ts()}] ${recovery.recoveryNote}`);
+                        }
                         log.info(`[${this.ts()}] [TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
 
                         traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
@@ -1310,8 +1372,7 @@ export class AgentLoop {
                     move('FINAL_READY', { step: stepCount, reason: 'no_tools_requested' });
                     traceManager.completeTrace(trace, 'completed', finalText);
                     this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                    this.schedulePostTurnValidation(userText, finalText, trace.id, conversationId, turnSignal);
-                    return finalText;
+                    return await this.commitResponse(finalText, userText, trace.id, conversationId, turnSignal);
                 }
             }
 
@@ -1385,7 +1446,23 @@ export class AgentLoop {
                     const resolvedArgs = atomicRecovery.finalArgs;
                     const toolDuration = Date.now() - toolStartTime;
 
-                    if (atomicRecovery.recoveryNote) log.info(`[${this.ts()}] ${atomicRecovery.recoveryNote}`);
+                    if (atomicRecovery.recovered && atomicRecovery.recoveryNote) {
+                        const origTool = atomicRecovery.originalToolName ?? toolName;
+                        const kind = atomicRecovery.mutationKind ?? 'arg_mutation';
+                        log.info(
+                            `[MUTATION] tool_mutation:\n  tool: ${origTool}\n  kind: ${kind}\n` +
+                            `  original: ${JSON.stringify(atomicRecovery.originalArgs ?? {})}\n` +
+                            `  modified: ${JSON.stringify(resolvedArgs)}`
+                        );
+                        loopMessages.push({
+                            role: 'system',
+                            content: kind === 'fallback_tool'
+                                ? `[RECUPERAÇÃO AUTOMÁTICA] A ferramenta "${origTool}" falhou e foi substituída por "${resolvedToolName}". ${atomicRecovery.recoveryNote}`
+                                : `[RECUPERAÇÃO AUTOMÁTICA] Os argumentos da ferramenta "${resolvedToolName}" foram ajustados automaticamente. ${atomicRecovery.recoveryNote}`,
+                        });
+                    } else if (atomicRecovery.recoveryNote) {
+                        log.info(`[${this.ts()}] ${atomicRecovery.recoveryNote}`);
+                    }
                     log.info(`[${this.ts()}] [ATOMIC-TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
 
                     traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
@@ -1468,7 +1545,11 @@ export class AgentLoop {
                         }
                         move('TOOL_REQUESTED', { step: stepCount, tool: toolCall.name, mode: 'delivery' });
                         const result = await this.proactiveRecovery.execute(toolCall.name, toolCall.arguments, (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined, usedToolInputs, turnSignal);
-                        log.info(`[${this.ts()}] [DELIVERY] ${toolCall.name} -> ${result.result.success ? '✓' : '✗'}`);
+                        if (result.recovered && result.recoveryNote) {
+                            const kind = result.mutationKind ?? 'arg_mutation';
+                            log.info(`[MUTATION] tool_mutation:\n  tool: ${result.originalToolName ?? toolCall.name}\n  kind: ${kind}\n  original: ${JSON.stringify(result.originalArgs ?? {})}\n  modified: ${JSON.stringify(result.finalArgs)}`);
+                        }
+                        log.info(`[${this.ts()}] [DELIVERY] ${result.finalToolName} -> ${result.result.success ? '✓' : '✗'}`);
                         loopMessages.push({ role: 'tool', content: result.result.output, tool_call_id: toolCall.id });
                         cycleHistory.push({ tool: toolCall.name, input: JSON.stringify(toolCall.arguments), status: result.result.success ? 'success' : 'error' });
                         const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
@@ -1546,8 +1627,7 @@ export class AgentLoop {
                 move('FINAL_READY', { step: stepCount, reason: 'synthesis' });
                 traceManager.completeTrace(trace, 'completed', synthesisText);
                 this.persistTrace(trace, stepCount, 'completed', synthesisText, channelContext);
-                this.schedulePostTurnValidation(userText, synthesisText, trace.id, conversationId, turnSignal);
-                return synthesisText;
+                return await this.commitResponse(synthesisText, userText, trace.id, conversationId, turnSignal);
             }
 
             log.warn(`[${this.ts()}] [SYNTHESIS] Failed to extract useful text (raw=${rawSynthesis.length}, extracted=${synthesisText?.length || 0})`);
@@ -1557,8 +1637,7 @@ export class AgentLoop {
             move('FINAL_READY', { step: stepCount, reason: 'last_best_content' });
             traceManager.completeTrace(trace, 'completed', lastBestContent);
             this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
-            this.schedulePostTurnValidation(userText, lastBestContent, trace.id, conversationId, turnSignal);
-            return lastBestContent;
+            return await this.commitResponse(lastBestContent, userText, trace.id, conversationId, turnSignal);
         }
 
         log.info(`[${this.ts()}] [FALLBACK] Generating final synthesis...`);
@@ -1592,10 +1671,9 @@ export class AgentLoop {
         move('FINAL_READY', { step: stepCount, reason: stepCount >= maxSteps ? 'max_iterations' : 'fallback' });
         traceManager.completeTrace(trace, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
         this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text, channelContext);
-        this.schedulePostTurnValidation(userText, text, trace.id, conversationId, turnSignal);
         this.activeTurns.delete(conversationId);
 
-        return text;
+        return await this.commitResponse(text, userText, trace.id, conversationId, turnSignal);
 
         } catch (fsmError) {
             // Only FSM violations (invalid transitions) reach here — all other errors are handled

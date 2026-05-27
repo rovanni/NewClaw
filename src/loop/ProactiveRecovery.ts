@@ -26,6 +26,12 @@ export interface RecoveryResult {
     finalArgs: Record<string, unknown>;
     recovered: boolean;
     recoveryNote?: string;
+    /** Args originais antes de qualquer mutação — preenchido quando recovered=true */
+    originalArgs?: Record<string, unknown>;
+    /** Tool original antes de fallback — preenchido quando finalToolName !== toolName original */
+    originalToolName?: string;
+    /** Categoria da mutação para logging estruturado */
+    mutationKind?: 'arg_mutation' | 'fallback_tool';
 }
 
 type ArgMutator = (args: Record<string, unknown>) => Record<string, unknown> | null;
@@ -202,6 +208,9 @@ export class ProactiveRecovery {
                         finalArgs: mutatedArgs,
                         recovered: true,
                         recoveryNote: `Recuperado: argumentos adaptados automaticamente (${JSON.stringify(mutatedArgs)} em vez de ${JSON.stringify(args)})`,
+                        originalArgs: args,
+                        originalToolName: toolName,
+                        mutationKind: 'arg_mutation',
                     };
                 }
             }
@@ -238,6 +247,9 @@ export class ProactiveRecovery {
                             finalArgs: adaptedArgs,
                             recovered: true,
                             recoveryNote: `Recuperado: "${toolName}" falhou, "${fallbackName}" usado como alternativa automática`,
+                            originalArgs: args,
+                            originalToolName: toolName,
+                            mutationKind: 'fallback_tool',
                         };
                     }
                 } catch (err) {
