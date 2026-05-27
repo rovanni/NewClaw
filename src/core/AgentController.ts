@@ -225,7 +225,6 @@ export class AgentController {
             logsPath: './logs',
             ownerChatId: config.telegramAllowedUserIds[0] || '',
             maxFindingsPerCategory: 20,
-            enableAutoFix: true,
         }, this.db);
 
         registerCommands(this.messageBus, this.memory, this.memoryFacade, this.sessionManager, this.auditor, this.config, this.agentLoop);

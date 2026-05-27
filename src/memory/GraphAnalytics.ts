@@ -1,6 +1,5 @@
 import { MemoryManager } from './MemoryManager';
 import type { MemoryGraphRepository, NodeCentralityUpdate } from './MemoryGraphRepository';
-import { LouvainDetector } from './LouvainDetector';
 import { createLogger } from '../shared/AppLogger';
 
 const log = createLogger('GraphAnalytics');
@@ -150,33 +149,8 @@ export class GraphAnalytics {
         return pr;
     }
 
-    /**
-     * Detect communities using Louvain algorithm and persist community_id
-     */
     async detectCommunities(): Promise<{ communityCount: number; updated: number }> {
-        try {
-            this.repo.addColumnIfNotExists('memory_nodes', 'community_id', 'INTEGER DEFAULT 0');
-
-            const nodeIds = this.repo.getAllNodeIds();
-            const edges = this.repo.getAllEdgesWeighted();
-
-            if (nodeIds.length === 0) return { communityCount: 0, updated: 0 };
-
-            const detector = new LouvainDetector(
-                nodeIds,
-                edges.map(e => ({ from: e.from_node, to: e.to_node, weight: e.weight }))
-            );
-
-            const communities = detector.detect();
-            const summary = detector.summarize(communities);
-
-            await this.repo.withRetry(() => this.repo.updateNodeCommunityIds(communities));
-
-            log.info('communities_detected', undefined, { communityCount: summary.communityCount, nodeCount: nodeIds.length });
-            return { communityCount: summary.communityCount, updated: nodeIds.length };
-        } catch (error) {
-            log.error('community_detection_failed', error);
-            return { communityCount: 0, updated: 0 };
-        }
+        log.info('component_removed', 'community_detection_skipped — LouvainDetector removed');
+        return { communityCount: 0, updated: 0 };
     }
 }

@@ -31,7 +31,6 @@ import { DecisionMemory } from './DecisionMemory';
 import { DomainSummaryService } from './DomainSummaryService';
 import { EpisodicMemoryService } from './EpisodicMemoryService';
 import { CognitiveReflectionEngine } from './CognitiveReflectionEngine';
-import { MemoryEventLog } from './MemoryEventLog';
 import { TemporalLayer } from './TemporalLayer';
 import { ProceduralMemoryService } from './ProceduralMemoryService';
 import { classifyDomain } from './DomainRegistry';
@@ -54,7 +53,6 @@ export class MemoryManager {
     private domainSummaryServiceInstance: DomainSummaryService | null = null;
     private episodicMemoryServiceInstance: EpisodicMemoryService | null = null;
     private cognitiveReflectionEngineInstance: CognitiveReflectionEngine | null = null;
-    private eventLogInstance: MemoryEventLog | null = null;
     private temporalLayerInstance: TemporalLayer | null = null;
     private proceduralMemoryInstance: ProceduralMemoryService | null = null;
     private classifier: ConfidenceClassifier;
@@ -105,11 +103,6 @@ export class MemoryManager {
         return this.domainSummaryServiceInstance;
     }
 
-    getEventLog(): MemoryEventLog {
-        if (!this.eventLogInstance) this.eventLogInstance = new MemoryEventLog(this.db);
-        return this.eventLogInstance;
-    }
-
     getTemporalLayer(): TemporalLayer {
         if (!this.temporalLayerInstance) this.temporalLayerInstance = new TemporalLayer(this.db);
         return this.temporalLayerInstance;
@@ -117,19 +110,19 @@ export class MemoryManager {
 
     getProceduralMemory(): ProceduralMemoryService {
         if (!this.proceduralMemoryInstance)
-            this.proceduralMemoryInstance = new ProceduralMemoryService(this.db, this.getEventLog());
+            this.proceduralMemoryInstance = new ProceduralMemoryService(this.db);
         return this.proceduralMemoryInstance;
     }
 
     getEpisodicMemoryService(): EpisodicMemoryService {
         if (!this.episodicMemoryServiceInstance)
-            this.episodicMemoryServiceInstance = new EpisodicMemoryService(this.db, this.getEventLog());
+            this.episodicMemoryServiceInstance = new EpisodicMemoryService(this.db);
         return this.episodicMemoryServiceInstance;
     }
 
     getCognitiveReflectionEngine(): CognitiveReflectionEngine {
         if (!this.cognitiveReflectionEngineInstance)
-            this.cognitiveReflectionEngineInstance = new CognitiveReflectionEngine(this.db, this.getEventLog());
+            this.cognitiveReflectionEngineInstance = new CognitiveReflectionEngine(this.db);
         return this.cognitiveReflectionEngineInstance;
     }
 
@@ -320,12 +313,7 @@ export class MemoryManager {
     addNode(node: import('./memoryTypes').MemoryNode, source: string = 'unknown'): void {
         const isNew = !this.db.prepare('SELECT 1 FROM memory_nodes WHERE id = ?').get(node.id);
         graph.addNode(this.db, this.classifier, node, source);
-        this.getEventLog().log(
-            isNew ? 'node_added' : 'node_updated',
-            node.id, 'node',
-            { type: node.type, source },
-            source
-        );
+        log.info(isNew ? 'node_added' : 'node_updated', source, { nodeId: node.id, type: node.type });
         if (isNew && source !== 'bootstrap'
             && !node.id.startsWith('core_')
             && !node.id.startsWith('domain_')

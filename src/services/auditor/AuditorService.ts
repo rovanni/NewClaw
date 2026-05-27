@@ -14,15 +14,14 @@ import Database from 'better-sqlite3';
 import { createLogger } from '../../shared/AppLogger';
 import { errorMessage } from '../../shared/errors';
 
-import { AuditFinding, AuditReport, AuditConfig, DbFinding, DbAuditReport, GeneratedPatch, AgentOpinion, PatchValidation, ConsensusResult, PatchSafetyResult, FixReport } from './types';
+import { AuditFinding, AuditReport, AuditConfig, DbFinding, DbAuditReport, FixReport } from './types';
 import { auditCode } from './codeChecker';
 import { auditRuntime } from './runtimeChecker';
 import { auditData } from './dataChecker';
 import { auditIntegration } from './integrationChecker';
 import { buildReport, saveReport, formatReport, formatFixReport, getLatestReport as _getLatestReport, getFindings as _getFindings, getReportHistory as _getReportHistory } from './reporter';
-// autoFix pipeline removido — patches devem ser aplicados manualmente após revisão humana
 
-export type { AuditFinding, AuditReport, AuditConfig, DbFinding, DbAuditReport, GeneratedPatch, AgentOpinion, PatchValidation, ConsensusResult, PatchSafetyResult, FixResult, FixReport } from './types';
+export type { AuditFinding, AuditReport, AuditConfig, DbFinding, DbAuditReport, FixReport } from './types';
 
 const log = createLogger('AuditorService');
 
@@ -233,20 +232,4 @@ export class AuditorService {
         };
     }
 
-    async generatePatch(_finding: AuditFinding | DbFinding): Promise<GeneratedPatch | null> {
-        log.warn('[AuditorService] generatePatch desativado — use análise manual.');
-        return null;
-    }
-
-    async validatePatch(_patch: GeneratedPatch, _finding: AuditFinding | DbFinding): Promise<PatchValidation> {
-        return { opinions: [] };
-    }
-
-    buildConsensus(_opinions: AgentOpinion[]): ConsensusResult {
-        return { approved: false, agreement: 0, confidence: 0 };
-    }
-    validatePatchSafety(_patch: GeneratedPatch): PatchSafetyResult {
-        return { safe: false, validSyntax: false, fileExists: false, changeSizeOk: false, riskyChange: true, reasons: ['Auto-fix desativado por segurança'] };
-    }
-    applyPatch(_patch: GeneratedPatch): boolean { return false; }
 }

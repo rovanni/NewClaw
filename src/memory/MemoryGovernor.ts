@@ -701,9 +701,8 @@ export class MemoryGovernor {
 
         if (result.changes > 0) {
             log.info(`TTL expiration: ${result.changes} nodes marked EXPIRED`);
-            const eventLog = this.memory.getEventLog();
             for (const { id } of toExpire) {
-                eventLog.log('node_expired', id, 'node', {}, 'ttl');
+                log.info('node_expired', 'ttl', { nodeId: id });
             }
         }
         return result.changes;

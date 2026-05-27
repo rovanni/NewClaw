@@ -225,11 +225,10 @@ export class MemoryCurator {
                 prunedMessages += this.repo.pruneOldMessagesForConversation(convId, 1000);
             }
 
-            const prunedEvents = this.mm.getEventLog().pruneOldEvents(30);
             const prunedProcedural = this.mm.getProceduralMemory().pruneOldExecutions(90);
 
-            if (prunedTraces > 0 || prunedMessages > 0 || prunedEvents > 0 || prunedProcedural > 0) {
-                log.info(`[StorageQuotas] Pruned ${prunedTraces} traces, ${prunedMessages} messages, ${prunedEvents} event logs, ${prunedProcedural} procedural executions.`);
+            if (prunedTraces > 0 || prunedMessages > 0 || prunedProcedural > 0) {
+                log.info(`[StorageQuotas] Pruned ${prunedTraces} traces, ${prunedMessages} messages, ${prunedProcedural} procedural executions.`);
             }
 
             return { prunedTraces, prunedMessages };
@@ -268,8 +267,6 @@ export class MemoryCurator {
             const result = this.repo.pruneWeakEdges();
             if (result.prunedWeak > 0 || result.prunedOverflow > 0) {
                 log.info(`[SparseGraph] ${result.prunedWeak} weak edges removidas, ${result.prunedOverflow} overflow (max-degree enforced)`);
-                this.mm.getEventLog().log('sparse_graph_pruned', null, 'system',
-                    { prunedWeak: result.prunedWeak, prunedOverflow: result.prunedOverflow }, 'sparse_graph');
             }
             return result;
         } catch (error) {
@@ -358,7 +355,7 @@ export class MemoryCurator {
         for (const { node_id } of stableNodes) {
             try {
                 promoteStmt.run(node_id);
-                this.mm.getEventLog().log('node_promoted', node_id, 'node', {}, 'distillation');
+                log.info('node_promoted', 'distillation', { nodeId: node_id });
                 result.nodesPromoted++;
             } catch { /* keep going */ }
         }
@@ -426,8 +423,6 @@ export class MemoryCurator {
             "INSERT OR REPLACE INTO memory (key, value, category) VALUES ('last_distillation_at', ?, 'system')"
         ).run(new Date().toISOString());
 
-        this.mm.getEventLog().log('distillation_run', null, 'system',
-            { nodesPromoted: result.nodesPromoted, interestsExtracted: result.interestsExtracted, episodesArchived: result.episodesArchived }, 'distillation');
         log.info(`[Distillation] ${result.nodesPromoted} nós promovidos | ${result.interestsExtracted} interesses | ${result.episodesArchived} episódios arquivados`);
         return result;
     }
@@ -539,8 +534,7 @@ export class MemoryCurator {
                 .run(JSON.stringify(meta), dup.id);
 
             superseded.add(dup.id);
-            this.mm.getEventLog().log('node_superseded', dup.id, 'node',
-                { canonical_id: canonical.id }, 'dedup');
+            log.info('node_superseded', 'dedup', { nodeId: dup.id, canonical_id: canonical.id });
             result.nodesSuperseded++;
 
             log.info(`[Dedup] ${dup.id} → SUPERSEDED (canônico: ${canonical.id})`);
@@ -740,8 +734,7 @@ export class MemoryCurator {
                             UPDATE memory_nodes SET lifecycle_state = 'SUMMARIZED', metadata = ? WHERE id = ?
                         `).run(JSON.stringify(meta), node.id);
 
-                        this.mm.getEventLog().log('node_summarized', node.id, 'node',
-                            { summarized_into: summaryNode.id, domain: domainId }, 'consolidation');
+                        log.info('node_summarized', 'consolidation', { nodeId: node.id, summarized_into: summaryNode.id, domain: domainId });
                         result.nodesMarkedSummarized++;
                     } catch (e) {
                         log.warn(`[Consolidation] Failed to mark node ${node.id}: ${errorMessage(e)}`);

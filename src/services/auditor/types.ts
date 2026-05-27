@@ -40,7 +40,6 @@ export interface AuditConfig {
     logsPath: string;
     ownerChatId: string;
     maxFindingsPerCategory: number;
-    enableAutoFix: boolean;
 }
 
 /** Audit finding row as stored in SQLite (snake_case columns) */
@@ -58,40 +57,6 @@ export interface DbAuditReport {
     critical?: number; warnings?: number; info_count?: number;
     summary?: string; duration_ms?: number;
     [key: string]: unknown;
-}
-
-export interface GeneratedPatch {
-    file: string;
-    before: string;
-    after: string;
-    confidence: number;
-    summary: string;
-}
-
-export interface AgentOpinion {
-    agent: string;
-    approve: boolean;
-    confidence: number;
-    reason: string;
-}
-
-export interface PatchValidation {
-    opinions: AgentOpinion[];
-}
-
-export interface ConsensusResult {
-    agreement: number;
-    confidence: number;
-    approved: boolean;
-}
-
-export interface PatchSafetyResult {
-    validSyntax: boolean;
-    fileExists: boolean;
-    changeSizeOk: boolean;
-    riskyChange: boolean;
-    safe: boolean;
-    reasons: string[];
 }
 
 export interface FixResult {

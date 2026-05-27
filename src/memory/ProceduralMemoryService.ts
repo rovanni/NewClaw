@@ -18,7 +18,6 @@
 
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
-import type { MemoryEventLog } from './MemoryEventLog';
 
 const log = createLogger('ProceduralMemory');
 
@@ -62,10 +61,7 @@ export class ProceduralMemoryService {
         failure: { confidence: 0.92, weight: 1.0  },
     };
 
-    constructor(
-        private db: Database.Database,
-        private eventLog?: MemoryEventLog
-    ) {
+    constructor(private db: Database.Database) {
         this.initSchema();
     }
 
@@ -204,7 +200,7 @@ export class ProceduralMemoryService {
             : outcome === 'failure'             ? 'skill_failed'
             :                                     'skill_executed';
 
-        this.eventLog?.log(eventType, nodeId, 'node', { outcome, context: context?.slice(0, 200) }, 'procedural');
+        log.info(eventType, 'procedural', { nodeId, outcome, context: context?.slice(0, 200) });
         log.info(`[Procedural] ${nodeId} → ${outcome} (reinforcement ${reinforcement > 0 ? '+' : ''}${reinforcement.toFixed(2)})`);
     }
 
