@@ -374,7 +374,16 @@ export class ContextPlanner {
         if (entities.length > 0 && selected.size < totalBudget) {
             const entityCap = Math.min(reservedCount + this.budgets.entity, totalBudget);
             const clusterCandidates = summaries
-                .filter(e => !selected.has(e.nodeId) && matchesAnyEntity(entities, e))
+                .filter(e => {
+                    if (selected.has(e.nodeId) || !matchesAnyEntity(entities, e)) return false;
+                    // Nós KNOWLEDGE_POOL (tier 3+) com baixa importância tendem a ser fatos
+                    // periféricos sobre terceiros (ex: "Jader é professor da UENP") que
+                    // contaminam o contexto quando o nome aparece na query por outro motivo
+                    // (ex: "O slide ficou com o nome de Jader — corrija para meu nome").
+                    // Só inclui tier3+ se importance >= 0.6 (fatos relevantes do próprio usuário).
+                    if (e.tier >= MemoryTier.EPISODIC && e.importance < 0.6) return false;
+                    return true;
+                })
                 .sort((a, b) => (b.importance - a.importance) || (a.tier - b.tier));
             for (const e of clusterCandidates) {
                 if (selected.size >= entityCap) break;

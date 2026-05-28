@@ -116,6 +116,24 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
         ? `\nCONTEXTO (memória + feedback):\n${memContext}\n`
         : '';
 
+    // Detecta loop de pip/venv: se já falhou 2+ vezes por environment_limit relacionado a
+    // pip ou venv, injeta diretiva crítica para forçar abordagem sem instalação de pacotes.
+    // O modelo tende a ignorar as regras gerais de PEP 668 quando o blocker não menciona
+    // explicitamente "ensurepip" — esta diretiva específica quebra o loop.
+    const envLimitPipVenvCount = goal.blockers.filter(b =>
+        b.kind === 'environment_limit' &&
+        /pep\s*668|pip\s*install|venv|ensurepip|externally.managed/i.test(b.description ?? '')
+    ).length;
+    const pipVenvLoopDirective = envLimitPipVenvCount >= 2
+        ? `\n⛔ LOOP DETECTADO (${envLimitPipVenvCount} tentativas pip/venv falharam):
+NÃO use pip install NEM python3 -m venv — ambos estão bloqueados neste ambiente.
+ESTRATÉGIAS VÁLIDAS sem instalação:
+  1. python3 -c "import zipfile, shutil, os; ..." — módulo zipfile é built-in, não precisa de pip
+  2. pandoc arquivo.md -o arquivo.pptx — já disponível no servidor
+  3. sed -i 's/Jader/Novo Nome/g' arquivo.xml — para edição de XML dentro de zips
+Escolha UMA dessas abordagens. Qualquer plano com pip ou venv será bloqueado automaticamente.\n`
+        : '';
+
     const priorIncompletes = goal.blockers.filter(b => b.kind === 'goal_incomplete').length;
     const priorAnalysisOnly = goal.strategiesTried.filter(s =>
         /anali[sz]|leitura|ler |audit|mapear|verificar|identificar|diagnosticar/i.test(s)
@@ -148,7 +166,7 @@ OBJETIVO GLOBAL: ${goal.objective}
 ${milestoneInstruction}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}
-${implementDirective}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
+${pipVenvLoopDirective}${implementDirective}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 
 Responda APENAS com JSON válido (sem markdown):

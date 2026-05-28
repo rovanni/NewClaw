@@ -126,11 +126,14 @@ Regras:
 
         try {
             const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
+            // 45s: kimi-k2.6 pode gastar 30s+ só em thinking antes de gerar output.
+            // Com 30s o stream era abortado e o sistema recuperava o thinking como conteúdo
+            // (fallback funcional mas com latência extra e classificação subótima).
             const result = await this.providerFactory.chatWithFallback(
                 messages,
                 undefined,
                 undefined,
-                30_000
+                45_000
             );
 
             if (result.status !== 'success') {

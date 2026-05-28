@@ -383,8 +383,16 @@ OU
                 return { risks: [], adjustedPlan: plan, planAdjusted: false };
             }
 
-            const cleaned = result.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            const parsed = JSON.parse(cleaned);
+            const stripped = result.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            // Extrai apenas o objeto JSON, ignorando texto antes ou depois.
+            // O modelo ocasionalmente retorna JSON válido seguido de explicações em prosa
+            // que causam SyntaxError: "Unexpected non-whitespace character after JSON".
+            const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) {
+                log.warn('[RiskAnalyzer] LLM review response has no JSON object — using original plan');
+                return { risks: [], adjustedPlan: plan, planAdjusted: false };
+            }
+            const parsed = JSON.parse(jsonMatch[0]);
 
             const detectedRisks: string[] = Array.isArray(parsed.risks) ? parsed.risks : [];
 
@@ -405,8 +413,10 @@ OU
 
                 // Mesma validação do parsePlanResponse: args obrigatórios ausentes
                 // → converte para AgentLoop (sem toolName) para o LLM resolver com contexto.
-                if (resolvedTool && toolArgs) {
-                    const missing = detectMissingRequiredArgs(resolvedTool, toolArgs);
+                // Usa toolArgs ?? {} para capturar também o caso em que toolArgs é undefined
+                // (ex: send_document gerado pelo LLM sem a chave toolArgs).
+                if (resolvedTool) {
+                    const missing = detectMissingRequiredArgs(resolvedTool, toolArgs ?? {});
                     if (missing) {
                         log.warn(`[RiskAnalyzer] adjusted step ${i + 1}: '${resolvedTool}' ${missing} — converting to AgentLoop step`);
                         resolvedTool = undefined;

@@ -90,8 +90,19 @@ export class GoalOrchestrator {
 
         if (activeGoal?.status === 'blocked' && activeGoal.pendingTxnId) {
             log.info(`[GoalOrchestrator] goal=${activeGoal.id} blocked waiting auth txn=${activeGoal.pendingTxnId}`);
-            // Auth pendente — retomada ocorre via WorkflowEngine callback
-            // Cai para AgentLoop para informar o usuário do estado atual
+
+            // Guarda: mensagens curtas de aprovação ("Pode fazer", "sim", "ok", …) chegam como
+            // texto quando o usuário digita em vez de clicar o botão inline. O GoalExtractor
+            // classificaria "pode fazer" como goal (regex `pode\s+fazer`), abandonando o goal
+            // que está aguardando autorização. Interceptamos aqui antes da classificação.
+            const trimmedMsg = message.trim();
+            const isShortApproval = trimmedMsg.length < 80 &&
+                /^(sim|pode|pode\s+fazer|ok|fa[cç]a|faz|confirmo|aprovado|autorizo|pode\s+ir|pode\s+executar|yes|go|proceed|confirm|tá|ta\s+bom|beleza|claro|certo|execute|executar|confirmar)\b/i
+                    .test(trimmedMsg);
+            if (isShortApproval) {
+                log.info(`[GoalOrchestrator] goal=${activeGoal.id} pending auth — short approval message delegated to AgentLoop (not abandoning goal)`);
+                return this.agentLoop.process(conversationId, message, userId, context);
+            }
         }
 
         // ── Classificar a mensagem ──────────────────────────────────────────
