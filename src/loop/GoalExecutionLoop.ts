@@ -631,22 +631,13 @@ export class GoalExecutionLoop {
         const startMs = Date.now();
 
         try {
-            // Verifica se a tool está na authorization scope (se scope definido)
-            if (step.toolName && goal.authorizationScope.length > 0) {
-                if (!goal.authorizationScope.includes(step.toolName)) {
-                    return {
-                        outcome: 'needs_auth',
-                        confidence: 0.9,
-                        blocker: {
-                            kind: 'missing_permission',
-                            toolName: step.toolName,
-                            description: `Tool '${step.toolName}' não está no escopo autorizado`,
-                            suggestedActions: ['Solicitar autorização para esta ferramenta'],
-                            detectedAt: Date.now(),
-                        },
-                    };
-                }
-            }
+            // NOTA: a verificação de authorizationScope foi removida daqui.
+            // O motivo: quando esse check bloqueava um step, ele retornava `needs_auth`
+            // sem criar uma transação no WorkflowEngine e sem `authOptions`, deixando
+            // o goal permanentemente preso com `pendingTxnId = undefined` e nenhum
+            // botão de autorização enviado ao usuário.
+            // A autorização real de ferramentas perigosas (exec_command, etc.) é gerida
+            // corretamente pelo WorkflowEngine via AgentLoop — não precisa deste pre-flight.
 
             let toolResult: { success: boolean; output: string; error?: string };
             let stepMutations: import('./GoalTypes').ToolMutation[] | undefined;
