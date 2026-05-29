@@ -76,7 +76,8 @@ export class GoalOrchestrator {
         conversationId: string,
         message: string,
         userId: string,
-        context?: ChannelContext
+        context?: ChannelContext,
+        recentMessages?: Array<{ role: string; content: string }>
     ): Promise<string | ProcessedResult> {
         // TTL cleanup a cada processamento (query lightweight)
         this.goalStore.expireStale();
@@ -108,7 +109,8 @@ export class GoalOrchestrator {
         // ── Classificar a mensagem ──────────────────────────────────────────
         const classification = await this.extractor.classify(
             message,
-            context ?? { channel: 'unknown', chatId: conversationId }
+            context ?? { channel: 'unknown', chatId: conversationId },
+            recentMessages
         );
 
         if (!classification.isGoal) {

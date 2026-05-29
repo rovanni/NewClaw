@@ -105,13 +105,24 @@ export class GoalExtractor {
      * Estágio 2: classificação via LLM (apenas quando heurística falhou).
      * Detecta também ambiguidade de intenção para pedir clarificação antes de criar o goal.
      */
-    private async llmClassify(message: string, _context: ChannelContext): Promise<GoalClassification> {
+    private async llmClassify(
+        message: string,
+        _context: ChannelContext,
+        recentMessages?: Array<{ role: string; content: string }>
+    ): Promise<GoalClassification> {
+        const conversationSnippet = recentMessages && recentMessages.length > 0
+            ? '\n\nContexto recente da conversa (últimas mensagens antes desta):\n' +
+              recentMessages
+                  .map(m => `${m.role === 'assistant' ? 'Assistente' : 'Usuário'}: ${m.content.slice(0, 300)}`)
+                  .join('\n') +
+              '\n\n'
+            : '\n\n';
+
         const prompt = `Classifique a mensagem abaixo em três dimensões:
 1. É um goal (requer execução de tarefas com ferramentas)?
 2. Se for goal, a intenção é AMBÍGUA (não está claro qual arquivo, formato ou ação específica)?
 3. É um projeto de construção de software ou desenvolvimento de funcionalidade complexa (ex: criar um jogo, desenvolver um site, implementar um sistema, criar um módulo ou script complexo)?
-
-Mensagem: "${message.slice(0, 300)}"
+${conversationSnippet}Mensagem atual do usuário: "${message.slice(0, 300)}"
 
 Responda APENAS com JSON válido, sem markdown:
 {"is_goal": boolean, "confidence": 0.0-1.0, "objective": "descrição se for goal", "required_tools": ["tool1"], "reason": "motivo", "is_ambiguous": boolean, "clarification_question": "pergunta ao usuário se is_ambiguous=true", "is_construction": boolean}
@@ -119,10 +130,11 @@ Responda APENAS com JSON válido, sem markdown:
 Regras:
 - is_ambiguous=true SOMENTE quando is_goal=true E a intenção é genuinamente vaga (sem arquivo, sem erro específico)
 - Relatórios de erro técnico com código ou path específico são NUNCA ambíguos: o erro já identifica o problema
+- Se o contexto recente mostra que o usuário está respondendo a uma lista de opções ou confirmando uma escolha, is_goal=false
 - Exemplos is_ambiguous=true: "essa versão não consigo editar" (qual arquivo?), "pode corrigir?" (o quê exatamente?)
 - Exemplos is_ambiguous=false: "criar apresentação sobre Python com 10 slides", "resumir o PDF que enviei"
 - Exemplos is_ambiguous=false (erros técnicos): "style.css:1 Failed to load resource: net::ERR_FILE_NOT_FOUND", "TypeError: cannot read property of undefined at line 42", "está com vários erros: SyntaxError no map.js"
-- Exemplos is_goal=false: "o que é machine learning?", "oi tudo bem?", "obrigado"`;
+- Exemplos is_goal=false: "o que é machine learning?", "oi tudo bem?", "obrigado", seleção de opção de menu, confirmação de escolha`;
 
         try {
             const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
@@ -170,7 +182,11 @@ Regras:
     }
 
     /** Ponto de entrada principal */
-    async classify(message: string, context: ChannelContext): Promise<GoalClassification> {
+    async classify(
+        message: string,
+        context: ChannelContext,
+        recentMessages?: Array<{ role: string; content: string }>
+    ): Promise<GoalClassification> {
         const quick = this.quickClassify(message);
 
         if (quick === true) {
@@ -190,8 +206,8 @@ Regras:
             return { isGoal: false, confidence: GOAL_LIMITS.QUICK_CLASSIFY_THRESHOLD, reason: 'heuristic_negative' };
         }
 
-        // Inconclusivo — classificação via LLM
+        // Inconclusivo — classificação via LLM com contexto recente da conversa
         log.debug(`[GoalExtractor] inconclusive, calling LLM for "${message.slice(0, 60)}"`);
-        return this.llmClassify(message, context);
+        return this.llmClassify(message, context, recentMessages);
     }
 }

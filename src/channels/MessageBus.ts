@@ -395,8 +395,22 @@ export class MessageBus {
                 correlationId
             };
 
+            // Snapshot das últimas mensagens da sessão para o GoalExtractor avaliar
+            // se a mensagem atual é resposta a um menu/lista do assistente.
+            // Feito apenas quando GoalOrchestrator está ativo para evitar overhead desnecessário.
+            let recentSessionMessages: Array<{ role: string; content: string }> = [];
+            if (this.goalOrchestrator) {
+                try {
+                    const { messages: transcriptEntries } = await this.sessionManager.buildContext(sessionKey, '');
+                    recentSessionMessages = transcriptEntries
+                        .filter(m => m.role === 'user' || m.role === 'assistant')
+                        .slice(-5, -1) // últimas 4 antes da mensagem atual
+                        .map(m => ({ role: m.role as string, content: m.content.slice(0, 400) }));
+                } catch { /* continua sem contexto */ }
+            }
+
             const response = this.goalOrchestrator
-                ? await this.goalOrchestrator.process(msg.userId, msg.text, msg.userId, channelCtx)
+                ? await this.goalOrchestrator.process(msg.userId, msg.text, msg.userId, channelCtx, recentSessionMessages)
                 : await this.agentLoop.process(msg.userId, msg.text, msg.userId, channelCtx);
             const duration = Date.now() - startTime;
 

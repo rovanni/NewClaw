@@ -641,6 +641,29 @@ export class ContextBuilder {
             let selectedSet = new Set(planResult.selectedNodeIds);
             let filtered = candidates.filter(c => selectedSet.has(c.id));
 
+            // Nós selecionados pelo planner a partir de permanentSummaries podem não estar
+            // em candidates (busca semântica não os retornou). Buscamos do banco para garantir
+            // que a seleção do planner seja sempre respeitada.
+            const filteredIds = new Set(filtered.map(c => c.id));
+            const missingSelected = planResult.selectedNodeIds.filter(id => !filteredIds.has(id));
+            if (missingSelected.length > 0) {
+                try {
+                    const ph = missingSelected.map(() => '?').join(',');
+                    const rows = this.memory.getDatabase()
+                        .prepare(`SELECT * FROM memory_nodes WHERE id IN (${ph}) AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')`)
+                        .all(...missingSelected) as MemoryNode[];
+                    for (const row of rows) {
+                        const importance = (row as MemoryNode & { importance?: number }).importance ?? 0.5;
+                        filtered.push({ ...row, score: importance });
+                    }
+                    if (rows.length > 0) {
+                        log.info(`[INDEX] +${rows.length} planner-selected node(s) not in semantic candidates — fetched from DB`);
+                    }
+                } catch (dbErr) {
+                    log.warn('[INDEX] Failed to fetch missing planner-selected nodes: ' + String(dbErr));
+                }
+            }
+
             if (filtered.length === 0 && isPersonalMemoryQuery(query) && this.entityFallbackExtractor) {
                 try {
                     log.info('[ENTITY-LLM] fallback activated');
