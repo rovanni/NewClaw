@@ -47,6 +47,37 @@ export interface GoalBlocker {
     detectedAt: number;
 }
 
+// ── Success Criteria (checklist de conclusão) ─────────────────────────────────
+
+/**
+ * Tipo de verificação determinística que prova que um critério foi cumprido.
+ *
+ * - tool_succeeded      → algum attempt com toolName teve result='success'
+ * - output_not_contains → o output de um attempt bem-sucedido NÃO contém `value`
+ * - output_contains     → o output de um attempt bem-sucedido contém `value`
+ * - file_exists         → exec_command retornou output não-vazio (arquivo encontrado)
+ */
+export type CriterionCheck =
+    | 'tool_succeeded'
+    | 'output_not_contains'
+    | 'output_contains'
+    | 'file_exists';
+
+export interface SuccessCriterion {
+    id: string;
+    description: string;
+    check: CriterionCheck;
+    /** Tool cujo attempt deve ser analisado */
+    tool?: string;
+    /** Texto a verificar para output_contains / output_not_contains */
+    value?: string;
+    /** Resultado da última avaliação determinística */
+    status: 'pending' | 'met' | 'unverifiable';
+    metAt?: number;
+    /** Trecho de evidence que provou o critério */
+    evidence?: string;
+}
+
 // ── Plan ──────────────────────────────────────────────────────────────────────
 
 export interface PlanStep {
@@ -116,6 +147,9 @@ export interface Goal {
     roadmap?: string[];                // lista de marcos (milestones) do projeto
     currentMilestoneIndex?: number;    // índice do marco atualmente ativo
     allowRoadmapAdjustment?: boolean;  // true se o planner puder ajustar dinamicamente o roadmap em caso de blockers/dependências
+
+    /** Checklist de critérios para validar conclusão do goal sem LLM. Gerado no plan inicial e preservado entre replans. */
+    successCriteria: SuccessCriterion[];
 
     retryBudget: number;               // tentativas restantes por step
     replanBudget: number;              // replans restantes

@@ -163,6 +163,7 @@ export class GoalOrchestrator {
             expiresAt: Date.now() + GOAL_LIMITS.MAX_GOAL_TTL_MS,
             isConstruction: classification.isConstruction ?? false,
             allowRoadmapAdjustment: classification.isConstruction ?? false,
+            successCriteria: [],   // preenchido pelo GoalPlanner no plan inicial
         });
 
         log.info(`[GoalOrchestrator] executing goal=${goal.id}`);

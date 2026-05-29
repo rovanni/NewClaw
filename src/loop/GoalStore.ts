@@ -9,7 +9,7 @@
  */
 
 import { createLogger } from '../shared/AppLogger';
-import { Goal, GoalStatus, GoalBlocker, GoalAttempt, PlanStep } from './GoalTypes';
+import { Goal, GoalStatus, GoalBlocker, GoalAttempt, PlanStep, SuccessCriterion } from './GoalTypes';
 
 const log = createLogger('GoalStore');
 
@@ -50,6 +50,7 @@ interface GoalRow {
     roadmap: string | null;
     current_milestone_index: number;
     allow_roadmap_adjustment: number;
+    success_criteria: string | null;
 }
 
 export class GoalStore {
@@ -89,7 +90,8 @@ export class GoalStore {
                 is_construction    INTEGER NOT NULL DEFAULT 0,
                 roadmap            TEXT,
                 current_milestone_index INTEGER NOT NULL DEFAULT 0,
-                allow_roadmap_adjustment INTEGER NOT NULL DEFAULT 1
+                allow_roadmap_adjustment INTEGER NOT NULL DEFAULT 1,
+                success_criteria       TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_goals_session ON goals(session_key, status);
             CREATE INDEX IF NOT EXISTS idx_goals_conversation ON goals(conversation_id, status);
@@ -101,6 +103,7 @@ export class GoalStore {
         try { this.db.exec('ALTER TABLE goals ADD COLUMN roadmap TEXT'); } catch { /* já existe */ }
         try { this.db.exec('ALTER TABLE goals ADD COLUMN current_milestone_index INTEGER NOT NULL DEFAULT 0'); } catch { /* já existe */ }
         try { this.db.exec('ALTER TABLE goals ADD COLUMN allow_roadmap_adjustment INTEGER NOT NULL DEFAULT 1'); } catch { /* já existe */ }
+        try { this.db.exec('ALTER TABLE goals ADD COLUMN success_criteria TEXT'); } catch { /* já existe */ }
         log.info('[GoalStore] schema ready');
     }
 
@@ -123,8 +126,9 @@ export class GoalStore {
                 next_action, cycle_focus, retry_budget, replan_budget, confidence,
                 requires_auth, authorization_scope, pending_txn_id,
                 created_at, updated_at, expires_at, completed_at,
-                is_construction, roadmap, current_milestone_index, allow_roadmap_adjustment
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                is_construction, roadmap, current_milestone_index, allow_roadmap_adjustment,
+                success_criteria
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         `).run(
             goal.id,
             goal.sessionKey,
@@ -153,6 +157,7 @@ export class GoalStore {
             JSON.stringify(goal.roadmap ?? []),
             goal.currentMilestoneIndex ?? 0,
             goal.allowRoadmapAdjustment !== false ? 1 : 0,
+            JSON.stringify(goal.successCriteria ?? []),
         );
 
         log.info(`[GoalStore] created goal=${goal.id} session=${goal.sessionKey}`);
@@ -204,6 +209,7 @@ export class GoalStore {
         if (patch.roadmap !== undefined)           { sets.push('roadmap = ?');           values.push(JSON.stringify(patch.roadmap)); }
         if (patch.currentMilestoneIndex !== undefined) { sets.push('current_milestone_index = ?'); values.push(patch.currentMilestoneIndex); }
         if (patch.allowRoadmapAdjustment !== undefined) { sets.push('allow_roadmap_adjustment = ?'); values.push(patch.allowRoadmapAdjustment ? 1 : 0); }
+        if (patch.successCriteria !== undefined)       { sets.push('success_criteria = ?');       values.push(JSON.stringify(patch.successCriteria)); }
         if (patch.retryBudget !== undefined)       { sets.push('retry_budget = ?');       values.push(patch.retryBudget); }
         if (patch.replanBudget !== undefined)      { sets.push('replan_budget = ?');      values.push(patch.replanBudget); }
         if (patch.confidence !== undefined)        { sets.push('confidence = ?');         values.push(patch.confidence); }
@@ -302,6 +308,7 @@ export class GoalStore {
             roadmap: this.parseJson<string[]>(row.roadmap, []),
             currentMilestoneIndex: row.current_milestone_index ?? 0,
             allowRoadmapAdjustment: row.allow_roadmap_adjustment === 1,
+            successCriteria: this.parseJson<SuccessCriterion[]>(row.success_criteria, []),
             retryBudget: row.retry_budget,
             replanBudget: row.replan_budget,
             confidence: row.confidence,

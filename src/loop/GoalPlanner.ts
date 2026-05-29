@@ -17,7 +17,7 @@ import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { SkillLoader } from '../skills/SkillLoader';
 import { PromptComposer } from '../core/PromptComposer';
-import { Goal, GoalBlocker, PlanStep } from './GoalTypes';
+import { Goal, GoalBlocker, PlanStep, SuccessCriterion, CriterionCheck } from './GoalTypes';
 
 const log = createLogger('GoalPlanner');
 
@@ -26,6 +26,8 @@ export interface PlanResult {
     steps: PlanStep[];
     strategy: string;
     adjustedRoadmap?: string[];
+    /** Checklist de critérios verificáveis que provam a conclusão do goal. Gerado APENAS no plan inicial. */
+    successCriteria?: SuccessCriterion[];
 }
 
 // ── Prompt templates ─────────────────────────────────────────────────────────
@@ -76,8 +78,18 @@ Responda APENAS com JSON válido (sem markdown):
     }
   ],
   "strategy": "descrição de 1 linha da estratégia geral",
-  "adjustedRoadmap": ["Marco 1...", "Marco 2..."]
+  "adjustedRoadmap": ["Marco 1...", "Marco 2..."],
+  "successCriteria": [
+    { "id": "c1", "description": "O que deve ser verdade quando o objetivo estiver concluído", "check": "tool_succeeded|output_contains|output_not_contains|file_exists", "tool": "nome_da_tool", "value": "texto opcional para contains/not_contains" }
+  ]
 }
+
+CRITÉRIOS DE SUCESSO (successCriteria) — máximo 3, verificados deterministicamente:
+- tool_succeeded: algum attempt da tool teve resultado de sucesso. Ex: envio de arquivo → { "check": "tool_succeeded", "tool": "send_document" }
+- output_not_contains: output de attempt bem-sucedido NÃO contém value. Ex: nome substituído → { "check": "output_not_contains", "tool": "exec_command", "value": "NomeAntigo" }
+- output_contains: output contém value. Ex: conteúdo esperado existe → { "check": "output_contains", "tool": "exec_command", "value": "NovoConteudo" }
+- file_exists: exec_command retornou output não-vazio (arquivo encontrado). Ex: arquivo criado → { "check": "file_exists", "tool": "exec_command" }
+Inclua SEMPRE um critério tool_succeeded para send_document quando o objetivo envolve entrega de arquivo.
 
 Regras:
 - Máximo 4 steps por plano
@@ -294,6 +306,9 @@ export function detectMissingRequiredArgs(tool: string, args: Record<string, unk
     }
     if (tool === 'send_audio' && !args['file_path']) {
         return "sem 'file_path' obrigatório";
+    }
+    if (tool === 'read_document' && !args['filename'] && !args['file_path'] && !args['path']) {
+        return "sem 'filename' obrigatório";
     }
     return null;
 }
@@ -549,7 +564,22 @@ export class GoalPlanner {
                 };
             });
 
-            return { steps, strategy: String(parsed.strategy ?? ''), adjustedRoadmap };
+            // Parseia e valida os successCriteria
+            const VALID_CHECKS = new Set<string>(['tool_succeeded', 'output_not_contains', 'output_contains', 'file_exists']);
+            const rawCriteria = Array.isArray(parsed.successCriteria) ? parsed.successCriteria : [];
+            const successCriteria: SuccessCriterion[] = rawCriteria
+                .slice(0, 3)
+                .filter((c: Record<string, unknown>) => c.id && c.description && VALID_CHECKS.has(String(c.check ?? '')))
+                .map((c: Record<string, unknown>): SuccessCriterion => ({
+                    id: String(c.id),
+                    description: String(c.description),
+                    check: String(c.check) as CriterionCheck,
+                    tool: c.tool ? String(c.tool) : undefined,
+                    value: c.value ? String(c.value) : undefined,
+                    status: 'pending',
+                }));
+
+            return { steps, strategy: String(parsed.strategy ?? ''), adjustedRoadmap, successCriteria };
         } catch {
             return { steps: [], strategy: '' };
         }

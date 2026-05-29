@@ -28,7 +28,7 @@ import { ToolRegistry } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { MemoryManager } from '../memory/MemoryManager';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
-import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext } from './GoalTypes';
+import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext, SuccessCriterion } from './GoalTypes';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext } from './agentLoopTypes';
 
@@ -123,6 +123,15 @@ export class GoalExecutionLoop {
         }
 
         let rawPlan = planResult.steps;
+
+        // Persiste os critérios de sucesso gerados no plano inicial.
+        // São definidos UMA VEZ aqui e preservados entre replans (representam
+        // "o que significa estar pronto", não "como fazer").
+        if (planResult.successCriteria && planResult.successCriteria.length > 0) {
+            this.goalStore.update(goal.id, { successCriteria: planResult.successCriteria });
+            goal = this.goalStore.getById(goal.id)!;
+            log.info(`[GoalLoop] successCriteria stored: ${planResult.successCriteria.map(c => `${c.id}(${c.check})`).join(', ')}`);
+        }
 
         // ── Q2: Análise de Riscos (apenas planos complexos) ──────────────
         // Planos simples passam direto; Q2 só vale a latência em tarefas com
@@ -390,7 +399,7 @@ export class GoalExecutionLoop {
                                 id: `send_del_${Date.now()}_${i}`,
                                 description: `Enviar ao usuário arquivo encontrado no workspace: ${filePath}`,
                                 toolName: 'send_document',
-                                toolArgs: { path: filePath },
+                                toolArgs: { file_path: filePath },
                                 status: 'pending' as const,
                                 fallbackSteps: [],
                             }));
@@ -1205,12 +1214,128 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
      * Pergunta ao LLM se o objetivo foi realmente atingido após todos os steps concluírem.
      * Fallback conservador: assume achieved=true em caso de erro (evita loop infinito).
      */
+    /**
+     * Avalia cada critério do checklist deterministicamente contra os attempts do goal.
+     * Retorna os critérios com status atualizado e um indicador global:
+     *   - 'all_met'       → todos cumpridos, sem precisar de LLM
+     *   - 'some_pending'  → pelo menos 1 pendente que não pôde ser determinado
+     *   - 'clearly_unmet' → pelo menos 1 critério visivelmente não cumprido
+     */
+    private evaluateCriteria(goal: Goal): {
+        result: 'all_met' | 'some_pending' | 'clearly_unmet';
+        updated: SuccessCriterion[];
+        metCount: number;
+        summary: string;
+    } {
+        if (!goal.successCriteria || goal.successCriteria.length === 0) {
+            return { result: 'some_pending', updated: [], metCount: 0, summary: '' };
+        }
+
+        const updated: SuccessCriterion[] = goal.successCriteria.map(c => ({ ...c }));
+        const successAttempts = goal.attempts.filter(a => a.result === 'success');
+
+        for (const criterion of updated) {
+            if (criterion.status === 'met') continue; // já confirmado anteriormente
+
+            const relevant = criterion.tool
+                ? successAttempts.filter(a => a.toolName === criterion.tool)
+                : successAttempts;
+
+            switch (criterion.check) {
+                case 'tool_succeeded': {
+                    if (relevant.length > 0) {
+                        criterion.status = 'met';
+                        criterion.metAt = Date.now();
+                        criterion.evidence = relevant[relevant.length - 1].output?.slice(0, 120);
+                    } else {
+                        criterion.status = 'unverifiable';
+                    }
+                    break;
+                }
+                case 'output_contains': {
+                    const match = relevant.find(a => a.output?.includes(criterion.value ?? ''));
+                    if (match) {
+                        criterion.status = 'met';
+                        criterion.metAt = Date.now();
+                        criterion.evidence = match.output?.slice(0, 120);
+                    } else if (relevant.length > 0) {
+                        // Há attempts mas nenhum contém o valor esperado — critério não cumprido
+                        criterion.status = 'unverifiable'; // aguarda mais execução
+                    } else {
+                        criterion.status = 'unverifiable';
+                    }
+                    break;
+                }
+                case 'output_not_contains': {
+                    // Precisa de pelo menos um attempt com output para avaliar
+                    const withOutput = relevant.filter(a => a.output && a.output.trim().length > 0);
+                    if (withOutput.length > 0) {
+                        const lastOutput = withOutput[withOutput.length - 1].output ?? '';
+                        if (!lastOutput.includes(criterion.value ?? '')) {
+                            criterion.status = 'met';
+                            criterion.metAt = Date.now();
+                            criterion.evidence = `"${criterion.value}" não encontrado no output`;
+                        } else {
+                            criterion.status = 'unverifiable'; // ainda presente
+                        }
+                    } else {
+                        criterion.status = 'unverifiable';
+                    }
+                    break;
+                }
+                case 'file_exists': {
+                    // exec_command com output não-vazio = arquivo encontrado
+                    const found = relevant.find(a => a.output && a.output.trim().length > 0);
+                    if (found) {
+                        criterion.status = 'met';
+                        criterion.metAt = Date.now();
+                        criterion.evidence = found.output?.slice(0, 80);
+                    } else {
+                        criterion.status = 'unverifiable';
+                    }
+                    break;
+                }
+            }
+        }
+
+        const metCount = updated.filter(c => c.status === 'met').length;
+        const allMet = metCount === updated.length;
+        const metLabels = updated
+            .map(c => `${c.id}:${c.status === 'met' ? '✅' : '⏳'}`)
+            .join(' ');
+
+        log.info(`[GoalLoop] criteria evaluation: ${metLabels} (${metCount}/${updated.length} met)`);
+
+        return {
+            result: allMet ? 'all_met' : 'some_pending',
+            updated,
+            metCount,
+            summary: updated
+                .filter(c => c.status === 'met')
+                .map(c => c.description)
+                .join('; '),
+        };
+    }
+
     private async validateGoalCompletion(goal: Goal, activeMilestone?: string): Promise<{
         achieved: boolean;
         summary?: string;
         reason?: string;
         suggestions?: string[];
     }> {
+        // ── 1. Verificação determinística via checklist (sem LLM) ─────────────────
+        const criteriaEval = this.evaluateCriteria(goal);
+        if (criteriaEval.result === 'all_met' && criteriaEval.metCount > 0) {
+            // Persiste o estado atualizado dos critérios no store
+            this.goalStore.update(goal.id, { successCriteria: criteriaEval.updated });
+            log.info(`[GoalLoop] LLM validation: todos os critérios cumpridos — achieved=true sem LLM`);
+            return { achieved: true, summary: criteriaEval.summary || 'Todos os critérios do checklist foram satisfeitos.' };
+        }
+        // Persiste atualizações parciais (critérios recém-marcados como met)
+        if (criteriaEval.updated.length > 0) {
+            this.goalStore.update(goal.id, { successCriteria: criteriaEval.updated });
+        }
+
         const stepsContext = goal.currentPlan
             .filter(s => s.status === 'completed')
             .map(s => `- ${s.description}: ${s.result || '(sem output)'}`)
@@ -1237,6 +1362,11 @@ ${stepsContext || '(nenhum)'}
 
 RESULTADOS DAS FERRAMENTAS:
 ${attemptsContext || '(nenhum)'}
+
+IMPORTANTE — INTERPRETAÇÃO DE OUTPUTS:
+- Comandos de edição in-place (sed -i, python3 -c com open().write(), etc.) produzem SAÍDA VAZIA quando bem-sucedidos. Output vazio = SUCESSO para esses comandos.
+- Se o resultado de uma ferramenta exec_command está vazio e não há mensagem de erro, assuma que o comando foi bem-sucedido.
+- Se alguma leitura posterior (read, exec_command grep) mostra o conteúdo modificado, isso confirma a edição.
 
 Análise crítica: o objetivo ou marco atual foi atingido E o resultado/entregável esperado foi produzido com sucesso?
 Se for um marco de desenvolvimento, verifique se os arquivos/funcionalidades desse marco foram realmente criados e testados.
