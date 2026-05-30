@@ -453,6 +453,17 @@ export class UnifiedIntentRouter {
 
         const source = this.providerFactory ? 'semantic' : 'fallback';
         log.info(`[UNIFIED-ROUTER] ${source === 'semantic' ? 'LLM' : 'Keyword'}: ${semanticResult.category} → ${decision.executionMode} (confidence: ${decision.confidence}, model: ${decision.modelCategory})`);
+
+        // Obs #7: log detalhado de decisão do roteador para rastrear frequência e custo do mode=tool
+        const routing_ms = Date.now() - startTime;
+        const modeReason = semanticResult.category === 'information'
+            ? `information + requiresReasoning=${semanticResult.requiresReasoning} → ${decision.executionMode}`
+            : `${semanticResult.category} → ${decision.executionMode}`;
+        log.info(
+            `[ROUTER-DECISION] intent=${decision.intent} mode=${decision.executionMode} ` +
+            `reason="${modeReason}" confidence=${decision.confidence} routing_ms=${routing_ms}`
+        );
+
         const enriched = this.enrichWithSkillContext(input, { ...decision, source, trace: { ...decision.trace, ...trace, totalTimeMs: Date.now() - startTime } });
         return this.cacheAndTrace(input, enriched);
     }

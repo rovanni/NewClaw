@@ -344,6 +344,9 @@ export class GoalExecutionLoop {
         let totalReplans = initialReplans;
         // Feedback do Q4 → Q1: razão pela qual o objetivo não foi atingido no ciclo anterior
         let priorFeedback: string | undefined = initialFeedback;
+        // Fix #2: rastreia caminhos de arquivo já enviados nesta sessão de execução.
+        // Impede que deliverable_check reenvie um artefato já entregue ao usuário.
+        const sentArtifacts = new Set<string>();
 
         while (totalCycles < GOAL_LIMITS.MAX_CYCLES) {
             totalCycles++;
@@ -356,7 +359,15 @@ export class GoalExecutionLoop {
 
             const pendingStep = currentGoal.currentPlan.find(s => s.status === 'pending');
 
-            if (!pendingStep) {
+            // Fix #1: considera o plano "pronto para validar" quando todos os steps
+            // pendentes são send_document. A validação ocorre ANTES da entrega —
+            // artefatos só são enviados ao usuário após achieved=true.
+            const readyToValidate = !pendingStep || (
+                pendingStep.toolName === 'send_document' &&
+                !currentGoal.currentPlan.some(s => s.status === 'pending' && s.toolName !== 'send_document')
+            );
+
+            if (readyToValidate) {
                 // Todos os steps concluídos — LLM valida se o objetivo foi realmente atingido
                 log.info(`[GoalLoop] goal=${currentGoal.id} all steps completed — running LLM validation`);
                 await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'tool_completed', message: 'Validando conclusão...' });
@@ -423,6 +434,21 @@ export class GoalExecutionLoop {
                         currentGoal = this.goalStore.getById(currentGoal.id)!;
                         continue;
                     } else {
+                        // Fix #1: executa steps de send_document diferidos, agora que achieved=true
+                        const deferredSends = currentGoal.currentPlan.filter(
+                            s => s.status === 'pending' && s.toolName === 'send_document'
+                        );
+                        for (const sendStep of deferredSends) {
+                            const sendResult = await this.executeStep(currentGoal, sendStep, channelContext, totalCycles);
+                            currentGoal = this.goalStore.getById(currentGoal.id)!;
+                            if (sendResult.outcome === 'success') {
+                                this.markStepDone(currentGoal, sendStep, sendResult.output ?? '');
+                                currentGoal = this.goalStore.getById(currentGoal.id)!;
+                                if (sendStep.toolArgs?.file_path) {
+                                    sentArtifacts.add(String(sendStep.toolArgs.file_path));
+                                }
+                            }
+                        }
                         // Se não for construção, ou se for o último marco
                         this.goalStore.setStatus(currentGoal.id, 'completed');
                         log.info(`[GoalLoop] goal=${currentGoal.id} validated as complete`);
@@ -442,12 +468,15 @@ export class GoalExecutionLoop {
                     const expectedExts = this.inferExpectedExtensions(currentGoal.userIntent);
                     if (expectedExts.length > 0) {
                         const foundFiles = await this.checkDeliverables(expectedExts, currentGoal.createdAt);
-                        if (foundFiles.length > 0) {
-                            log.info(`[GoalLoop] deliverable_check: ${foundFiles.length} arquivo(s) no workspace — injetando send steps`);
+                        // Fix #2: ignora arquivos já enviados nesta sessão de execução do goal
+                        const unsentFiles = foundFiles.filter(f => !sentArtifacts.has(f));
+                        if (unsentFiles.length > 0) {
+                            const skipped = foundFiles.length - unsentFiles.length;
+                            log.info(`[GoalLoop] deliverable_check: ${unsentFiles.length} arquivo(s) no workspace${skipped > 0 ? ` (${skipped} já enviado(s) ignorado(s))` : ''} — injetando send steps`);
                             this.goalStore.addStrategyTried(currentGoal.id, 'deliverable_check_done');
                             currentGoal = this.goalStore.getById(currentGoal.id)!;
 
-                            const sendSteps: PlanStep[] = foundFiles.slice(0, 2).map((filePath, i) => ({
+                            const sendSteps: PlanStep[] = unsentFiles.slice(0, 2).map((filePath, i) => ({
                                 id: `send_del_${Date.now()}_${i}`,
                                 description: `Enviar ao usuário arquivo encontrado no workspace: ${filePath}`,
                                 toolName: 'send_document',
@@ -522,6 +551,10 @@ export class GoalExecutionLoop {
                 case 'success': {
                     this.markStepDone(currentGoal, pendingStep, cycleResult.output ?? '');
                     this.updateCognitiveContext(pendingStep, cycleResult.output ?? '');
+                    // Fix #2: registra artefatos enviados para evitar reenvio por deliverable_check
+                    if (pendingStep.toolName === 'send_document' && pendingStep.toolArgs?.file_path) {
+                        sentArtifacts.add(String(pendingStep.toolArgs.file_path));
+                    }
                     currentGoal = this.goalStore.getById(currentGoal.id)!;
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'tool_completed' });
                     break;

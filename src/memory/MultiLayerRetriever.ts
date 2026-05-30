@@ -266,26 +266,33 @@ export class MultiLayerRetriever {
         semanticCandidates: Array<{ nodeId: string; score: number }>,
         opts?: { keywordLimit?: number; graphLimit?: number; graphSeeds?: number }
     ): FusedCandidate[] {
+        const t0 = Date.now();
         const keywordLimit = opts?.keywordLimit ?? 8;
         const graphLimit   = opts?.graphLimit   ?? 8;
         const graphSeeds   = opts?.graphSeeds   ?? 4;
 
         // Layer 1: keyword
+        const t_kw0 = Date.now();
         const keywordCandidates = this.keywordSearch(query, keywordLimit);
+        const keyword_ms = Date.now() - t_kw0;
 
-        // Layer 2: semantic (pre-computed)
+        // Layer 2: semantic (pre-computed — tempo medido externamente)
+        const t_sem0 = Date.now();
         const semanticLayer: LayerCandidate[] = semanticCandidates.map(c => ({
             nodeId: c.nodeId,
             score: c.score,
             layer: 'semantic' as const,
         }));
+        const semantic_ms = Date.now() - t_sem0; // só custo de mapeamento; embedding já feito antes
 
         // Layer 3: graph expansion from top semantic+keyword seeds
+        const t_graph0 = Date.now();
         const topSeeds = [...semanticLayer, ...keywordCandidates]
             .sort((a, b) => b.score - a.score)
             .slice(0, graphSeeds)
             .map(c => c.nodeId);
         const graphCandidates = this.graphExpand(topSeeds, graphLimit);
+        const graph_ms = Date.now() - t_graph0;
 
         // Layer 5: procedural — specialized retrieval for "how to" intent
         const proceduralCandidates: LayerCandidate[] = [];
@@ -309,18 +316,27 @@ export class MultiLayerRetriever {
         }
 
         // Episodic boost set (synchronous DB read)
+        const t_ep0 = Date.now();
         const episodicBoost = this.getEpisodicBoostSet();
+        const db_ms = Date.now() - t_ep0;
 
         // Fuse all layers
+        const t_fuse0 = Date.now();
         const fused = this.fuse(
             [...semanticLayer, ...keywordCandidates, ...graphCandidates, ...temporalCandidates, ...proceduralCandidates],
             episodicBoost
         );
+        const fusion_ms = Date.now() - t_fuse0;
 
+        const total_ms = Date.now() - t0;
         log.info(
             `[MLR] keyword=${keywordCandidates.length} semantic=${semanticLayer.length} ` +
             `graph=${graphCandidates.length} temporal=${temporalCandidates.length} ` +
             `procedural=${proceduralCandidates.length} episodicBoost=${episodicBoost.size} → fused=${fused.length}`
+        );
+        log.info(
+            `[MLR-TIMING] semantic_ms=${semantic_ms} keyword_ms=${keyword_ms} graph_ms=${graph_ms} ` +
+            `fusion_ms=${fusion_ms} db_ms=${db_ms} total_ms=${total_ms}`
         );
 
         return fused;

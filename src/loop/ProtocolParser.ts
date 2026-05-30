@@ -219,7 +219,14 @@ export class ProtocolParser {
 
         // Build a StructuredAgentResponse from the violation
         // This is the SEMANTIC RECOVERY — we preserve the content but mark it as unverified
-        return this.semanticRecovery(content);
+        const recovered = this.semanticRecovery(content);
+        // Obs #10: log estruturado de recovery para rastrear frequência e tipo de falha
+        log.info(
+            `[PROTOCOL-RECOVERY] reason="strict_parse_failed" response_length=${content.length} ` +
+            `recovered=${recovered !== null} recovered_as=${recovered?.type ?? 'null'} ` +
+            `model=${this.currentModel ?? 'unknown'}`
+        );
+        return recovered;
     }
 
     /**

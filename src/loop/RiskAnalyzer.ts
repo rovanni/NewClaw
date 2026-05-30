@@ -144,7 +144,14 @@ export class RiskAnalyzer {
 
             const pkg = KNOWN_SYSTEM_DEPS[firstToken];
             if (pkg) {
-                risks.push(`Step "${step.description}": usa '${firstToken}' (pacote: ${pkg}) — pode não estar instalado no servidor`);
+                // Obs #9: verifica se o CapabilityRegistry já tem resultado do probe para este binário
+                const probeResult = CapabilityRegistry.getInstance().canSync(`tool.${firstToken}`);
+                const riskReason = `usa '${firstToken}' (pacote: ${pkg}) — pode não estar instalado no servidor`;
+                log.info(
+                    `[RISK-CHECK] risk_source=1b_KNOWN_DEPS probe_result=${probeResult === null ? 'uncached' : probeResult} ` +
+                    `binary=${firstToken} risk_reason="${riskReason}"`
+                );
+                risks.push(`Step "${step.description}": ${riskReason}`);
             }
         }
 

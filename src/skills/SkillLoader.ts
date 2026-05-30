@@ -37,11 +37,15 @@ export class SkillLoader {
      * Hot-reload: lê do FS a cada request
      */
     loadAll(): Skill[] {
+        const t0 = Date.now();
+        // Obs #8: registra quantas skills estavam em cache antes do clear (hot-reload descarta sempre)
+        const prevCacheSize = this.cache.size;
         this.cache.clear();
 
         const skillsDir = this.resolveSkillsDir();
         if (!skillsDir) {
             log.info('Diretório de skills não encontrado:', this.skillsDir);
+            log.info(`[SKILLLOAD] loaded=0 cached=${prevCacheSize} duration_ms=${Date.now() - t0}`);
             return [];
         }
 
@@ -64,6 +68,8 @@ export class SkillLoader {
             }
         }
 
+        const duration_ms = Date.now() - t0;
+        log.info(`[SKILLLOAD] loaded=${this.cache.size} cached=${prevCacheSize} duration_ms=${duration_ms}`);
         return Array.from(this.cache.values());
     }
 

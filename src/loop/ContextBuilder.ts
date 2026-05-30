@@ -334,6 +334,8 @@ function sortByImportance(entries: MemoryIndexEntry[]): MemoryIndexEntry[] {
  */
 export class ContextPlanner {
     private readonly budgets: TierBudgets;
+    /** Obs #6: razões de seleção do último plan() — exposto para log de retrieval_origin em buildContext. */
+    lastReasons: Record<string, string> = {};
 
     constructor(budgets: Partial<TierBudgets> = {}) {
         this.budgets = { ...DEFAULT_TIER_BUDGETS, ...budgets };
@@ -431,7 +433,9 @@ export class ContextPlanner {
 
         let compCount = 0;
         for (const { entry: e, qRel, finalScore } of competitive) {
-            const willSelect = selected.size < compCap;
+            // Fix #3: nós não-identidade só entram no contexto se tiverem relevância léxica real.
+            // Evita injetar perfil/projetos/cronogramas em consultas sem relação semântica.
+            const willSelect = selected.size < compCap && qRel > 0;
             if (willSelect) {
                 selected.set(e.nodeId, `tier${e.tier}:comp score=${finalScore.toFixed(3)}`);
                 compCount++;
@@ -501,6 +505,9 @@ export class ContextPlanner {
         );
 
         log.info(`[PLANNER] done: selected=${totalSelected} skipped=${skipped} tier0=${tier0Count} tier1=${tier1Count} entity=${entityCount} comp=${compCount}`);
+
+        // Obs #6: persiste razões para que buildContext possa logar retrieval_origin por nó
+        this.lastReasons = Object.fromEntries(selected);
 
         return {
             selectedNodeIds: [...selected.keys()],
@@ -651,14 +658,24 @@ export class ContextBuilder {
                     rule: 'tier4:rule', strategy: 'tier4:strat',
                     knowledge: 'tier4:know', domain: 'tier4:domain',
                 };
+                // Obs #6: razões de seleção da última execução do ContextPlanner
+                const planReasons = this.getContextPlanner().lastReasons;
+
                 const lines = ranked.map((n, i) => {
                     const tier = TIER_LABEL[n.type] ?? `tier?:${n.type}`;
                     const snippet = n.summary.replace(/\n/g, ' ').slice(0, 90);
-                    return `  ${i + 1}. [${tier}] ${n.name} | score=${n.score.toFixed(2)} | ${snippet}`;
+                    const reason = planReasons[n.id] ?? '';
+                    const origin = reason.startsWith('tier0:identity') ? 'DIRECT'
+                        : reason.includes(':entity=')                  ? 'ENTITY'
+                        : reason.includes(':pref')                     ? 'KEYWORD'
+                        : reason.includes(':comp')                     ? 'COMPETITIVE'
+                        : reason.includes(':graph')                    ? 'GRAPH'
+                        : 'UNKNOWN';
+                    return `  ${i + 1}. [${tier}] ${n.name} | score=${n.score.toFixed(2)} | retrieval_origin=${origin} | ${snippet}`;
                 }).join('\n');
                 log.info(`[MEMORY-NODES] ${ranked.length} nó(s) injetado(s):\n${lines}`);
 
-                // [USER-EXPANDED] — auditar conteúdo do nó USER tier0 para detectar vazamentos
+                // [USER-EXPANDED] — audita conteúdo do nó USER tier0 e registra decisão de expansão
                 const userNode = ranked.find(n => n.type === 'identity' && /^(user|USER|perfil)/i.test(n.name));
                 if (userNode) {
                     const fullContent = (userNode.summary || '').replace(/\n/g, ' ');
@@ -666,9 +683,13 @@ export class ContextBuilder {
                     const LEAK_TERMS = ['jader', 'river', 'futebol', 'bandeirantes', 'cornélio', 'cornelio',
                                         'bitcoin', 'cripto', 'uenp', 'coordenador'];
                     const found = LEAK_TERMS.filter(t => fullContent.toLowerCase().includes(t));
+                    const queryTokensArr = tokenize(query);
+                    const hasRelevance = queryTokensArr.some(t => fullContent.toLowerCase().includes(t));
+                    const willTruncate = !hasRelevance && found.length > 0;
                     log.info(
                         `[USER-EXPANDED] chars=${fullContent.length} tokens≈${Math.ceil(fullContent.length / 3.5)} ` +
-                        `leakTerms=[${found.join(',')}] preview="${fullContent.slice(0, 200)}"`
+                        `leakTerms=[${found.join(',')}] relevance=${hasRelevance} truncated=${willTruncate} ` +
+                        `preview="${fullContent.slice(0, 200)}"`
                     );
                 }
             } else {
@@ -681,12 +702,26 @@ export class ContextBuilder {
                 return header ? `${header}\n${fallback}` : fallback;
             }
 
+            // Fix #4: termos da query usados para decidir expansão do nó USER
+            const queryTokens = new Set(tokenize(query));
+
             const parts = ranked.map(n => {
                 const epistemicPrefix =
                     n.epistemicStatus === 'belief'     ? '[crença] ' :
                     n.epistemicStatus === 'assumption' ? '[suposição] ' :
                     '';
-                let entry = `${n.name}(${n.type}): ${epistemicPrefix}${n.summary}`;
+                let summary = n.summary;
+                // Fix #4: expande conteúdo pessoal do nó USER apenas quando há relevância léxica.
+                // Sem relevância, injeta apenas o primeiro segmento genérico — evita vazar
+                // dados como instituição, projetos ou localização em consultas não relacionadas.
+                if (n.type === 'identity' && /^(user|USER|perfil)/i.test(n.name) && queryTokens.size > 0) {
+                    const hasRelevance = [...queryTokens].some(t => summary.toLowerCase().includes(t));
+                    if (!hasRelevance) {
+                        const firstSegment = summary.split(/[.!?\n]/)[0].trim();
+                        if (firstSegment.length >= 20) summary = firstSegment;
+                    }
+                }
+                let entry = `${n.name}(${n.type}): ${epistemicPrefix}${summary}`;
                 if (n.relations.length > 0) entry += ` → ${n.relations.join(', ')}`;
                 return entry;
             });
