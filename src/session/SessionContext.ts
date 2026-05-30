@@ -136,6 +136,19 @@ export class SessionContext {
 
         log.info(`SessionContext: ${stats.tokenEstimate} tokens / ${stats.budgetMax} max, ${stats.recentMessages} recent msgs, memory=${stats.semanticContextUsed}, checkpoint=${stats.fromCheckpoint}`);
 
+        // [FINAL-CONTEXT] — auditoria do contexto final enviado ao LLM
+        const memBlock = blocks.find(b => b.content.includes('[MEMÓRIA'));
+        if (memBlock) {
+            const memChars = memBlock.content.length;
+            // Verificar se termos de alto risco aparecem no bloco de memória
+            const RISK_TERMS = ['jader', 'river', 'futebol', 'bandeirantes', 'cornélio', 'cornelio', 'uenp'];
+            const found = RISK_TERMS.filter(t => memBlock.content.toLowerCase().includes(t));
+            log.info(
+                `[FINAL-CONTEXT] memBlock_chars=${memChars} riskTerms=[${found.join(',') || 'none'}] ` +
+                `total_blocks=${blocks.length} total_tokens=${stats.tokenEstimate}`
+            );
+        }
+
         return { messages: llmMessages, stats };
     }
 

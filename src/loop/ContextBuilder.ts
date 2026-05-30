@@ -363,6 +363,9 @@ export class ContextPlanner {
             const rel = quickRelevance(queryTerms, e);
             if (rel > 0 || e.importance >= 0.8) {
                 selected.set(e.nodeId, `tier1:pref rel=${rel.toFixed(2)} imp=${e.importance.toFixed(2)}`);
+            } else {
+                // [SKIPPED] tier1 — falhou no gate (rel=0 AND importance<0.8)
+                log.info(`[SKIPPED] tier1 nodeId=${e.nodeId} name="${e.entity.slice(0,40)}" quickRel=${rel.toFixed(3)} importance=${e.importance.toFixed(3)} reason="rel=0 AND importance<0.8 (gate tier1)"`);
             }
         }
         const tier1Count = selected.size - tier0Count;
@@ -399,17 +402,53 @@ export class ContextPlanner {
         const compCap = Math.min(selected.size + this.budgets.competitive, totalBudget);
         const competitive = summaries
             .filter(e => !selected.has(e.nodeId) && e.tier >= MemoryTier.ACTIVE_ENTITIES)
-            .map(e => ({ entry: e, score: quickRelevance(queryTerms, e) * 0.6 + e.importance * 0.3 + e.permanence * 0.1 }))
-            .sort((a, b) => b.score - a.score);
+            .map(e => {
+                const qRel       = quickRelevance(queryTerms, e);
+                const finalScore = qRel * 0.6 + e.importance * 0.3 + e.permanence * 0.1;
+                return { entry: e, qRel, finalScore };
+            })
+            .sort((a, b) => b.finalScore - a.finalScore);
+
         let compCount = 0;
-        for (const { entry: e, score } of competitive) {
-            if (selected.size >= compCap) break;
-            selected.set(e.nodeId, `tier${e.tier}:comp score=${score.toFixed(2)}`);
-            compCount++;
+        for (const { entry: e, qRel, finalScore } of competitive) {
+            const willSelect = selected.size < compCap;
+            if (willSelect) {
+                selected.set(e.nodeId, `tier${e.tier}:comp score=${finalScore.toFixed(3)}`);
+                compCount++;
+            }
+            // [COMP] — log TODOS os candidatos (selecionados e descartados)
+            log.info(
+                `[COMP] nodeId=${e.nodeId} tier=${e.tier} name="${e.entity.slice(0, 40)}" ` +
+                `quickRel=${qRel.toFixed(3)} importance=${e.importance.toFixed(3)} permanence=${e.permanence.toFixed(3)} ` +
+                `finalScore=${finalScore.toFixed(3)} selected=${willSelect}`
+            );
         }
 
         const totalSelected = selected.size;
         const skipped = summaries.length - totalSelected;
+
+        // ── Métricas de contaminação ──────────────────────────────────────────
+        const selectedIds = new Set(selected.keys());
+        const selectedEntries = summaries.filter(e => selectedIds.has(e.nodeId));
+        const compSelectedEntries = competitive.filter(c => selectedIds.has(c.entry.nodeId));
+
+        // contaminationRatio: fração de nós selecionados com quickRel < 0.05
+        const contaminated = selectedEntries.filter(e => quickRelevance(queryTerms, e) < 0.05).length;
+        const contaminationRatio = selectedEntries.length > 0 ? contaminated / selectedEntries.length : 0;
+
+        // bestSkipped vs worstSelected (competitive fill only)
+        const compSkipped   = competitive.filter(c => !selectedIds.has(c.entry.nodeId));
+        const bestSkipped   = compSkipped.length   > 0 ? compSkipped[0].finalScore   : 0;
+        const worstSelected = compSelectedEntries.length > 0 ? compSelectedEntries[compSelectedEntries.length - 1].finalScore : 0;
+        const rankingInverted = bestSkipped > worstSelected;
+
+        log.info(
+            `[CONTEXT-QUALITY] selected=${totalSelected} contaminated=${contaminated} ` +
+            `contaminationRatio=${contaminationRatio.toFixed(2)} ` +
+            `bestSkipped=${bestSkipped.toFixed(3)} worstSelected=${worstSelected.toFixed(3)} ` +
+            `rankingInverted=${rankingInverted}`
+        );
+
         log.info(`[PLANNER] done: selected=${totalSelected} skipped=${skipped} tier0=${tier0Count} tier1=${tier1Count} entity=${entityCount} comp=${compCount}`);
 
         return {
@@ -567,6 +606,20 @@ export class ContextBuilder {
                     return `  ${i + 1}. [${tier}] ${n.name} | score=${n.score.toFixed(2)} | ${snippet}`;
                 }).join('\n');
                 log.info(`[MEMORY-NODES] ${ranked.length} nó(s) injetado(s):\n${lines}`);
+
+                // [USER-EXPANDED] — auditar conteúdo do nó USER tier0 para detectar vazamentos
+                const userNode = ranked.find(n => n.type === 'identity' && /^(user|USER|perfil)/i.test(n.name));
+                if (userNode) {
+                    const fullContent = (userNode.summary || '').replace(/\n/g, ' ');
+                    // Termos que, se presentes no USER node, podem contaminar contextos não relacionados
+                    const LEAK_TERMS = ['jader', 'river', 'futebol', 'bandeirantes', 'cornélio', 'cornelio',
+                                        'bitcoin', 'cripto', 'uenp', 'coordenador'];
+                    const found = LEAK_TERMS.filter(t => fullContent.toLowerCase().includes(t));
+                    log.info(
+                        `[USER-EXPANDED] chars=${fullContent.length} tokens≈${Math.ceil(fullContent.length / 3.5)} ` +
+                        `leakTerms=[${found.join(',')}] preview="${fullContent.slice(0, 200)}"`
+                    );
+                }
             } else {
                 log.info('[MEMORY-NODES] nenhum nó selecionado — contexto vazio');
             }
