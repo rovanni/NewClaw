@@ -81,6 +81,15 @@ export class SessionManager {
     // Rastreamento de arquivos ativos por sessão (para manter no contexto mesmo após compressão)
     private activeFiles: Map<string, Set<string>> = new Map();
 
+    // Artefatos entregues via send_document — sobrevivem à compressão de sessão
+    private deliveredArtifacts: Map<string, Array<{ path: string; name: string; deliveredAt: string }>> = new Map();
+
+    // Goals ativos por sessão — usado para telemetria de compressão concorrente
+    private activeGoals: Map<string, string> = new Map();
+
+    // Contadores de ferramentas por turno de AgentLoop — base para validação estrutural de CR#2
+    private turnToolCounts: Map<string, { reads: number; writes: number; edits: number }> = new Map();
+
     // CMI — injetado opcionalmente após construção
     private cmiEngine: CMIEngine | null = null;
 
@@ -159,6 +168,9 @@ export class SessionManager {
                 this.compressionCheckpoints.delete(sid);
                 this.lastActivity.delete(sid);
                 this.activeFiles.delete(sid);
+                this.deliveredArtifacts.delete(sid);
+                this.activeGoals.delete(sid);
+                this.turnToolCounts.delete(sid);
                 count++;
             }
         }
@@ -228,7 +240,18 @@ export class SessionManager {
     async recordToolCall(key: SessionKey, toolName: string, input: string, meta?: TranscriptMeta): Promise<number> {
         const transcript = await this.getOrCreateSession(key);
         const sid = this.sessionKey(key);
-        
+
+        // Contadores por turno de AgentLoop (para validação estrutural de steps de modificação)
+        if (toolName === 'read' || toolName === 'write' || toolName === 'edit') {
+            if (!this.turnToolCounts.has(sid)) {
+                this.turnToolCounts.set(sid, { reads: 0, writes: 0, edits: 0 });
+            }
+            const counts = this.turnToolCounts.get(sid)!;
+            if (toolName === 'read')  counts.reads++;
+            if (toolName === 'write') counts.writes++;
+            if (toolName === 'edit')  counts.edits++;
+        }
+
         // Track active files
         if (toolName === 'read' || toolName === 'write' || toolName === 'edit') {
             try {
@@ -238,7 +261,7 @@ export class SessionManager {
                         this.activeFiles.set(sid, new Set());
                     }
                     this.activeFiles.get(sid)!.add(parsedArgs.path);
-                    
+
                     // Keep maximum of 10 recent files to avoid context bloat
                     if (this.activeFiles.get(sid)!.size > 10) {
                         const arr = Array.from(this.activeFiles.get(sid)!);
@@ -247,6 +270,26 @@ export class SessionManager {
                     }
                 }
             } catch (e) {
+                // Ignore parse errors
+            }
+        }
+
+        // Track delivered artifacts — sobrevivem à compressão de sessão
+        if (toolName === 'send_document') {
+            try {
+                const parsedArgs = JSON.parse(input);
+                const filePath = parsedArgs.file_path ?? parsedArgs.path;
+                if (filePath) {
+                    if (!this.deliveredArtifacts.has(sid)) {
+                        this.deliveredArtifacts.set(sid, []);
+                    }
+                    this.deliveredArtifacts.get(sid)!.push({
+                        path: String(filePath),
+                        name: String(filePath).split('/').pop() ?? String(filePath),
+                        deliveredAt: new Date().toISOString(),
+                    });
+                }
+            } catch {
                 // Ignore parse errors
             }
         }
@@ -269,9 +312,58 @@ export class SessionManager {
         const sid = this.sessionKey(key);
         const files = this.activeFiles.get(sid);
         if (!files || files.size === 0) return null;
-        
+
         const fileList = Array.from(files).map(f => `- ${f}`).join('\n');
         return `ARQUIVOS ATIVOS NESTA SESSÃO (que você manipulou recentemente):\n${fileList}`;
+    }
+
+    /**
+     * Helper para injetar artefatos entregues via send_document no prompt.
+     * Sobrevive à compressão do contexto — evita amnésia pós-compressão.
+     */
+    getDeliveredArtifactsBlock(key: SessionKey): string | null {
+        const sid = this.sessionKey(key);
+        const artifacts = this.deliveredArtifacts.get(sid);
+        if (!artifacts || artifacts.length === 0) return null;
+
+        const list = artifacts.map(a => `- ${a.name} (enviado em ${a.deliveredAt})`).join('\n');
+        return `ARQUIVOS ENVIADOS AO USUÁRIO NESTA SESSÃO:\n${list}`;
+    }
+
+    /**
+     * Registra goal ativo para telemetria de compressão concorrente.
+     * Chamado pelo GoalExecutionLoop no início de runLoop().
+     */
+    setActiveGoal(key: SessionKey, goalId: string): void {
+        const sid = this.sessionKey(key);
+        this.activeGoals.set(sid, goalId);
+    }
+
+    /**
+     * Remove goal ativo ao final de runLoop().
+     */
+    clearActiveGoal(key: SessionKey): void {
+        const sid = this.sessionKey(key);
+        this.activeGoals.delete(sid);
+    }
+
+    /**
+     * Reinicia os contadores de ferramentas para o turno atual.
+     * Deve ser chamado pelo AgentLoop no início de cada turno (process()).
+     */
+    resetTurnToolCounts(key: SessionKey): void {
+        const sid = this.sessionKey(key);
+        this.turnToolCounts.set(sid, { reads: 0, writes: 0, edits: 0 });
+    }
+
+    /**
+     * Retorna os contadores de ferramentas acumulados no turno atual.
+     * Usado pelo GoalExecutionLoop para validar se um step de modificação
+     * realmente executou write/edit (CR#2 — Sprint 3).
+     */
+    getTurnToolCounts(key: SessionKey): { reads: number; writes: number; edits: number } {
+        const sid = this.sessionKey(key);
+        return this.turnToolCounts.get(sid) ?? { reads: 0, writes: 0, edits: 0 };
     }
 
     async recordToolResult(key: SessionKey, toolName: string, result: string, success: boolean, durationMs?: number, meta?: TranscriptMeta): Promise<number> {
@@ -336,6 +428,12 @@ export class SessionManager {
         const compressCount = userAssistantMessages.length - this.config.maxContextMessages;
         if (compressCount <= 0) return;
 
+        // Telemetria: compressão durante execução de goal pode causar perda de contexto
+        const activeGoalId = this.activeGoals.get(sid);
+        if (activeGoalId) {
+            log.warn(`[SESSION] compressDuringGoal=true sid=${sid} goalId=${activeGoalId} msgs=${userAssistantMessages.length} tokens≈${tokenEstimate}`);
+        }
+
         log.info(`Compressing ${userAssistantMessages.length} messages (${tokenEstimate} tokens) for ${sid}`);
 
         const messagesToCompress = entries.slice(0, compressCount);
@@ -348,13 +446,13 @@ export class SessionManager {
                     .map(e => ({ role: e.role as 'user' | 'assistant', content: e.content }));
                 const compressed = await this.contextCompressor.compress(llmMessages);
                 const summaryMsg = compressed.find(m => m.role === 'system');
-                summary = summaryMsg?.content || this.fallbackSummary(messagesToCompress);
+                summary = summaryMsg?.content || this.fallbackSummary(messagesToCompress, sid);
             } catch (err) {
                 log.warn('compression_failed', 'Compression failed, using fallback', { error: String(err) });
-                summary = this.fallbackSummary(messagesToCompress);
+                summary = this.fallbackSummary(messagesToCompress, sid);
             }
         } else {
-            summary = this.fallbackSummary(messagesToCompress);
+            summary = this.fallbackSummary(messagesToCompress, sid);
         }
 
         const checkpoint: CompressionCheckpoint = {
@@ -381,11 +479,17 @@ export class SessionManager {
         log.info(`Checkpoint: seq=${checkpoint.seq} compressed=${messagesToCompress.length} tokens≈${tokenEstimate}`);
     }
 
-    private fallbackSummary(messages: TranscriptEntry[]): string {
+    private fallbackSummary(messages: TranscriptEntry[], sid: string): string {
         const userMsgs = messages.filter(m => m.role === 'user').slice(-8)
             .map(m => `- ${m.content.slice(0, 150)}`).join('\n');
         const assistantCount = messages.filter(m => m.role === 'assistant').length;
-        return `Conversa anterior (${messages.length} msgs, ${assistantCount} respostas):\n${userMsgs}`;
+
+        const artifacts = this.deliveredArtifacts.get(sid) ?? [];
+        const artifactBlock = artifacts.length > 0
+            ? `\nARTEFATOS ENVIADOS NESTA SESSÃO:\n${artifacts.map(a => `- ${a.name} (${a.deliveredAt})`).join('\n')}`
+            : '';
+
+        return `Conversa anterior (${messages.length} msgs, ${assistantCount} respostas):\n${userMsgs}${artifactBlock}`;
     }
 
     private ensureCheckpointSchema(): void {
@@ -458,6 +562,9 @@ export class SessionManager {
             this.sessions.delete(sid);
         }
         this.compressionCheckpoints.delete(sid);
+        this.deliveredArtifacts.delete(sid);
+        this.activeGoals.delete(sid);
+        this.turnToolCounts.delete(sid);
     }
 
     async closeAll(): Promise<void> {

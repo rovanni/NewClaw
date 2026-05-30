@@ -66,6 +66,14 @@ export interface RiskReport {
     blocked: boolean;
     /** Motivo do bloqueio (injetado no próximo replan como contexto) */
     blockReason?: string;
+    /**
+     * true quando >50% dos tool-steps não têm argumentos obrigatórios.
+     * Diferente de `blocked`: não aborta o goal — força o GoalPlanner a replanejar
+     * com feedback estruturado sobre os argumentos faltantes.
+     */
+    planRejected?: boolean;
+    /** Feedback enviado ao GoalPlanner para guiar o próximo replan */
+    rejectionReason?: string;
 }
 
 export class RiskAnalyzer {
@@ -342,6 +350,8 @@ export class RiskAnalyzer {
         risks: string[];
         adjustedPlan: PlanStep[];
         planAdjusted: boolean;
+        planRejected?: boolean;
+        rejectionReason?: string;
     }> {
         const stepsStr = plan
             .map((s, i) => `${i + 1}. [${s.toolName ?? 'agentloop'}] ${s.description}`)
@@ -400,8 +410,37 @@ OU
                 return { risks: detectedRisks, adjustedPlan: plan, planAdjusted: false };
             }
 
+            // ── CR#3: Rejeitar plano quando maioria dos tool-steps tem args inválidos ──
+            const rawSteps: Array<Record<string, unknown>> = parsed.plan.slice(0, 5);
+            const toolStepsCount = rawSteps.filter(s => {
+                const t = s.toolName ? String(s.toolName) : undefined;
+                return t && this.toolRegistry.get(t);
+            }).length;
+            const invalidArgsCount = rawSteps.filter(s => {
+                const t = s.toolName ? String(s.toolName) : undefined;
+                if (!t || !this.toolRegistry.get(t)) return false;
+                const args = (s.toolArgs && typeof s.toolArgs === 'object')
+                    ? s.toolArgs as Record<string, unknown>
+                    : {};
+                return Boolean(detectMissingRequiredArgs(t, args));
+            }).length;
+
+            if (toolStepsCount > 0 && invalidArgsCount / toolStepsCount > 0.5) {
+                const rejectionReason =
+                    `Plano rejeitado: ${invalidArgsCount}/${toolStepsCount} tool-steps sem argumentos obrigatórios. ` +
+                    `Para 'edit' inclua oldText+newText. Para 'send_document' inclua file_path. Para 'read' inclua path.`;
+                log.warn(`[RiskAnalyzer] plan rejected (${invalidArgsCount}/${toolStepsCount} invalid args) — requesting structured replan`);
+                return {
+                    risks: [...detectedRisks, rejectionReason],
+                    adjustedPlan: plan,   // devolve plano original sem degradação silenciosa
+                    planAdjusted: false,
+                    planRejected: true,
+                    rejectionReason,
+                };
+            }
+
             // Valida tools do plano ajustado
-            const adjustedPlan: PlanStep[] = parsed.plan.slice(0, 5).map((s: Record<string, unknown>, i: number) => {
+            const adjustedPlan: PlanStep[] = rawSteps.map((s: Record<string, unknown>, i: number) => {
                 const rawTool = s.toolName ? String(s.toolName) : undefined;
                 let resolvedTool = rawTool && this.toolRegistry.get(rawTool) ? rawTool : undefined;
                 if (rawTool && !resolvedTool) {

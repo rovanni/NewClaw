@@ -31,6 +31,7 @@ import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext, SuccessCriterion } from './GoalTypes';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext } from './agentLoopTypes';
+import type { SessionManager } from '../session/SessionManager';
 
 const log = createLogger('GoalExecutionLoop');
 
@@ -44,6 +45,14 @@ export class GoalExecutionLoop {
 
     /** Contexto cognitivo acumulado durante a execução de um goal (resetado a cada novo goal). */
     private cognitiveContext: StepCognitiveContext = createEmptyStepCognitiveContext();
+
+    /** SessionManager opcional — usado para telemetria de compressão concorrente e artefatos. */
+    private sessionManager: SessionManager | null = null;
+
+    /** Injeta SessionManager após construção para evitar dependência circular. */
+    setSessionManager(sm: SessionManager): void {
+        this.sessionManager = sm;
+    }
 
     constructor(
         private readonly agentLoop: AgentLoop,
@@ -261,6 +270,29 @@ export class GoalExecutionLoop {
                     detectedAt: Date.now(),
                 });
             }
+
+            // CR#3: Plano rejeitado por args inválidos — força novo replan com feedback estruturado
+            if (riskReport.planRejected) {
+                log.warn(`[GoalLoop] Q2 plan rejected goal=${goal.id} — injecting structured feedback for next replan`);
+                this.goalStore.addStrategyTried(goal.id, `plan_rejected: ${(riskReport.rejectionReason ?? '').slice(0, 100)}`);
+                // Injeta o rejectionReason como blocker para alimentar o próximo ciclo Q1
+                this.goalStore.addBlocker(goal.id, {
+                    kind: 'goal_incomplete',
+                    description: riskReport.rejectionReason ?? 'Plano rejeitado por argumentos inválidos',
+                    suggestedActions: [
+                        'Incluir argumentos obrigatórios: path para read/write, oldText+newText para edit, file_path para send_document',
+                    ],
+                    detectedAt: Date.now(),
+                });
+                // Devolve plano vazio para forçar novo ciclo de replanning no runLoop
+                this.goalStore.update(goal.id, {
+                    currentPlan: [],
+                    status: 'replanning',
+                    replanBudget: Math.max(0, goal.replanBudget - 1),
+                });
+                return this.goalStore.getById(goal.id)!;
+            }
+
             finalPlan = riskReport.planAdjusted ? riskReport.adjustedPlan : rawPlan;
             if (riskReport.risks.length > 0) {
                 log.info(`[GoalLoop] Q2 risks (replan cycle=${cycleNumber} forced=${forceQ2}): ${riskReport.risks.join(' | ')}`);
@@ -280,6 +312,26 @@ export class GoalExecutionLoop {
     // ── Loop de ciclos (compartilhado entre executeGoal e resumeGoal) ─────────
 
     private async runLoop(
+        goal: Goal,
+        channelContext: ChannelContext,
+        onProgress: ProgressCallback | undefined,
+        initialCycles: number,
+        initialReplans: number,
+        initialFeedback?: string,
+    ): Promise<GoalResult> {
+        // Telemetria: registra goal ativo para detectar compressão concorrente
+        const [goalChannel, goalUserId] = goal.sessionKey.split(':');
+        const goalSessionKey = { channel: goalChannel ?? 'unknown', userId: goalUserId ?? 'unknown' };
+        this.sessionManager?.setActiveGoal(goalSessionKey, goal.id);
+
+        try {
+        return await this.runLoopInternal(goal, channelContext, onProgress, initialCycles, initialReplans, initialFeedback);
+        } finally {
+            this.sessionManager?.clearActiveGoal(goalSessionKey);
+        }
+    }
+
+    private async runLoopInternal(
         goal: Goal,
         channelContext: ChannelContext,
         onProgress: ProgressCallback | undefined,
@@ -685,10 +737,15 @@ export class GoalExecutionLoop {
                 const focusLine = goal.cycleFocus
                     ? `\nFoco do ciclo: ${goal.cycleFocus}`
                     : '';
+                const targetFile = this.extractTargetFileFromStep(step, goal);
+                const reflectionLine = targetFile
+                    ? `\n[REFLEXÃO] Arquivo alvo desta tarefa: ${targetFile}\nAntes de usar qualquer ferramenta, confirme que o arquivo corresponde ao alvo acima.`
+                    : '';
                 const stepPrompt = [
-                    `[GOAL STEP] ${step.description}`,
+                    `[GOAL STEP] ${this.sanitizeStepDescription(step.description)}`,
                     `\nContexto do objetivo: ${goal.objective}`,
                     focusLine,
+                    reflectionLine,
                     cognitiveBlock ? `\n${cognitiveBlock}` : '',
                 ].join('');
                 const [, sessionUserId] = goal.sessionKey.split(':');
@@ -700,6 +757,26 @@ export class GoalExecutionLoop {
                 );
                 const text = typeof response === 'string' ? response : response.text;
                 const respOptions = typeof response === 'string' ? undefined : response.options;
+
+                // Guarda de saída: step-name usado como path de arquivo (CR#5)
+                const invalidPath = this.detectStepNameAsPath(text);
+                if (invalidPath) {
+                    log.warn(`[GoalStep] step-name-as-path detected: "${invalidPath}" step=${step.id} — marking failure`);
+                    const errorMsg = `Path inválido na resposta: "${invalidPath}" é um identificador de step, não um arquivo.`;
+                    this.goalStore.addAttempt(goal.id, {
+                        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+                        planStepId: step.id,
+                        toolName: 'agentloop',
+                        args: {},
+                        result: 'failure',
+                        output: text.slice(0, 300),
+                        error: errorMsg,
+                        durationMs: Date.now() - startMs,
+                        executedAt: Date.now(),
+                        cycle,
+                    });
+                    return this.evaluator.evaluate(goal, step, { success: false, output: text, error: errorMsg });
+                }
 
                 // Se o AgentLoop retornou botões de auth, propaga como needs_auth
                 const authOpts = respOptions?.filter(o => o.value?.startsWith('auth:'));
@@ -867,6 +944,59 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             log.warn(`[GoalStep] LLM escalation failed — defaulting to success=true step=${step.id}`);
             return true;
         }
+    }
+
+    // ── CR#5: Proteção contra step-name-as-path ───────────────────────────────
+
+    /**
+     * Remove tokens que parecem IDs de step da descrição antes de enviar ao AgentLoop.
+     * Evita que "identificar_no_step_1" seja interpretado como argumento de ferramenta.
+     */
+    private sanitizeStepDescription(description: string): string {
+        return description
+            .replace(/\b(identificar|verificar|analisar|executar|criar|enviar)_no_step_\d+\b/gi, '')
+            .replace(/\bARQUIVO_(ENCONTRADO|ATUAL|ALVO|TARGET)\b/gi, '')
+            .replace(/\bstep_id[:=]\s*\S+/gi, '')
+            .trim();
+    }
+
+    /**
+     * Extrai o arquivo alvo do step para injetar como reflexão no prompt (CR#6).
+     * Tenta toolArgs primeiro, depois padrão de extensão na description,
+     * e como fallback o último write/edit registrado nas attempts do goal.
+     */
+    private extractTargetFileFromStep(step: PlanStep, goal: Goal): string | null {
+        if (step.toolArgs?.path) return String(step.toolArgs.path);
+        if (step.toolArgs?.file_path) return String(step.toolArgs.file_path);
+
+        const fileMatch = step.description.match(/[\w\-/.]+\.(html|js|ts|py|json|css|md|txt|pptx|pdf)/i);
+        if (fileMatch) return fileMatch[0];
+
+        const lastWrite = [...goal.attempts]
+            .reverse()
+            .find(a => (a.toolName === 'write' || a.toolName === 'edit') && a.result === 'success');
+        if (lastWrite?.args?.path) return String(lastWrite.args.path);
+
+        return null;
+    }
+
+    /**
+     * Guarda de saída: detecta quando o AgentLoop usou um nome de step como path de arquivo.
+     * Retorna o token problemático se encontrado, null caso contrário.
+     */
+    private detectStepNameAsPath(agentResponse: string): string | null {
+        const STEP_PATH_PATTERNS: RegExp[] = [
+            /Arquivo não encontrado:[^\n]*\/(identificar_\w+)(?!\.[a-z]{2,4})/i,
+            /Arquivo não encontrado:[^\n]*\/(ARQUIVO_[A-Z_]+)(?!\.[a-z]{2,4})/i,
+            /Arquivo não encontrado:[^\n]*\/(step_\d+)(?!\.[a-z]{2,4})/i,
+            /Arquivo não encontrado:[^\n]*\/(goal_\w+)(?!\.[a-z]{2,4})/i,
+            /ENOENT[^\n]*\/(identificar_\w+)(?!\.[a-z]{2,4})/i,
+        ];
+        for (const pattern of STEP_PATH_PATTERNS) {
+            const match = agentResponse.match(pattern);
+            if (match?.[1]) return match[1];
+        }
+        return null;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
