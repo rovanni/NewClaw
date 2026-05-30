@@ -748,7 +748,9 @@ export class GoalExecutionLoop {
                     reflectionLine,
                     cognitiveBlock ? `\n${cognitiveBlock}` : '',
                 ].join('');
-                const [, sessionUserId] = goal.sessionKey.split(':');
+                const [goalCh, sessionUserId] = goal.sessionKey.split(':');
+                const stepSessionKey = { channel: goalCh ?? 'unknown', userId: sessionUserId ?? goal.conversationId };
+                this.sessionManager?.resetTurnToolCounts(stepSessionKey);
                 const response = await this.agentLoop.process(
                     goal.conversationId,
                     stepPrompt,

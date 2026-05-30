@@ -103,6 +103,11 @@ export class SessionContext {
             stateBlock += `\n\n${activeFiles}`;
         }
 
+        const deliveredArtifacts = this.sessionManager.getDeliveredArtifactsBlock(key);
+        if (deliveredArtifacts) {
+            stateBlock += `\n\n${deliveredArtifacts}`;
+        }
+
         // 5. Build context using ContextBudget (modular, budgeted)
         const blocks: ContextBlock[] = this.budget.buildMessages({
             systemPrompt,

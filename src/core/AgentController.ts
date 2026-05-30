@@ -215,6 +215,7 @@ export class AgentController {
 
         // GoalOrchestrator: intercepta mensagens de goal antes do AgentLoop
         this.goalOrchestrator = new GoalOrchestrator(this.agentLoop, this.providerFactory, this.goalStore, this.memory);
+        this.goalOrchestrator.setSessionManager(this.sessionManager);
         this.messageBus.setGoalOrchestrator(this.goalOrchestrator);
 
         this.auditor = new AuditorService({

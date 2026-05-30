@@ -27,6 +27,7 @@ import { ToolRegistry } from '../core/ToolRegistry';
 import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext } from './agentLoopTypes';
+import type { SessionManager } from '../session/SessionManager';
 
 const log = createLogger('GoalOrchestrator');
 
@@ -65,6 +66,11 @@ export class GoalOrchestrator {
         CapabilityRegistry.getInstance().bootstrap().catch(err => {
             log.warn('[GoalOrchestrator] CapabilityRegistry bootstrap failed:', String(err));
         });
+    }
+
+    /** Conecta SessionManager ao executionLoop para telemetria e artefatos. */
+    setSessionManager(sm: SessionManager): void {
+        this.executionLoop.setSessionManager(sm);
     }
 
     /**
