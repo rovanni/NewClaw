@@ -148,7 +148,18 @@ export class WriteTool implements ToolExecutor {
             const existed = fs.existsSync(finalPath);
             fs.writeFileSync(finalPath, content);
             const verb = existed ? 'Sobrescrito' : 'Criado';
-            return { success: true, output: `${verb}: ${finalPath}` };
+            const chars = content.length;
+            const lines = content.split('\n').length;
+            return {
+                success: true,
+                output: [
+                    `${verb}: ${finalPath}`,
+                    `Tamanho: ${chars} chars | ${lines} linhas`,
+                    '',
+                    '[ARTEFATO REGISTRADO] O arquivo existe e contém conteúdo.',
+                    'Se o objetivo desta etapa foi gerar este arquivo, prossiga para a próxima ferramenta sem reescrever.',
+                ].join('\n'),
+            };
         } catch (error) {
             return { success: false, output: '', error: errorMessage(error) };
         }

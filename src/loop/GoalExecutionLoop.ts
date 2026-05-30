@@ -30,7 +30,7 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext, SuccessCriterion } from './GoalTypes';
 import { GOAL_LIMITS } from './GoalLimits';
-import { ChannelContext } from './agentLoopTypes';
+import { ChannelContext, ContextAwareTool } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
 
 const log = createLogger('GoalExecutionLoop');
@@ -717,6 +717,10 @@ export class GoalExecutionLoop {
                 } else {
                     const getTool = (name: string): ToolExecutorLike | undefined =>
                         this.toolRegistry.get(name) as ToolExecutorLike | undefined;
+                    const toolInstance = this.toolRegistry.get(step.toolName);
+                    if (typeof (toolInstance as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
+                        (toolInstance as unknown as ContextAwareTool).setContext(channelContext.chatId, channelContext.channel);
+                    }
                     const recoveryResult = await this.proactiveRecovery.execute(
                         step.toolName, step.toolArgs as Record<string, unknown>, getTool, new Set<string>()
                     );

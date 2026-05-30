@@ -279,7 +279,7 @@ export function extractEntities(query: string, overrideEntities?: string[]): str
     const words = query.split(/\s+/);
     for (let i = 0; i < words.length; i++) {
         const w = words[i].replace(/[^A-Za-zÀ-ú]/g, '');
-        if (w.length >= 3 && /^[A-ZÀ-Ú]/.test(w) && !/^[A-Z]{2,}$/.test(w)) results.add(w.toLowerCase());
+        if (w.length >= 3 && /^[A-ZÀ-Ú]/.test(w) && !/^[A-Z]{2,}$/.test(w) && !STOP_WORDS.has(w.toLowerCase())) results.add(w.toLowerCase());
     }
 
     for (const term of PERSONAL_ENTITY_TERMS) {
@@ -346,6 +346,7 @@ export class ContextPlanner {
         const entities = extractEntities(query, overrideEntities);
         const queryTerms = tokenize(query);
 
+        log.info(`[QUERY] raw="${query.slice(0, 200).replace(/\n/g, ' ')}${query.length > 200 ? '...' : ''}" terms=${queryTerms.length}`);
         log.info('[ENTITY] extracted=[' + (entities.join(',') || 'none') + '] source=' + entitySource);
 
         // Fase 1: Core Identity (Tier 0)
@@ -451,9 +452,10 @@ export class ContextPlanner {
         const selectedEntries = summaries.filter(e => selectedIds.has(e.nodeId));
         const compSelectedEntries = competitive.filter(c => selectedIds.has(c.entry.nodeId));
 
-        // contaminationRatio: fração de nós selecionados com quickRel < 0.05
-        const contaminated = selectedEntries.filter(e => quickRelevance(queryTerms, e) < 0.05).length;
-        const contaminationRatio = selectedEntries.length > 0 ? contaminated / selectedEntries.length : 0;
+        // contaminationRatio: exclui tier0 (identity nodes são injetados por design, independente de relevância)
+        const nonIdentityEntries = selectedEntries.filter(e => !selected.get(e.nodeId)?.startsWith('tier0:identity'));
+        const contaminated = nonIdentityEntries.filter(e => quickRelevance(queryTerms, e) < 0.05).length;
+        const contaminationRatio = nonIdentityEntries.length > 0 ? contaminated / nonIdentityEntries.length : 0;
 
         // bestSkipped vs worstSelected (competitive fill only)
         const compSkipped   = competitive.filter(c => !selectedIds.has(c.entry.nodeId));
@@ -462,11 +464,29 @@ export class ContextPlanner {
         const rankingInverted = bestSkipped > worstSelected;
 
         log.info(
-            `[CONTEXT-QUALITY] selected=${totalSelected} contaminated=${contaminated} ` +
-            `contaminationRatio=${contaminationRatio.toFixed(2)} ` +
+            `[CONTEXT-QUALITY] selected=${totalSelected} identity=${tier0Count} nonIdentity=${nonIdentityEntries.length} ` +
+            `contaminated=${contaminated} contaminationRatio=${contaminationRatio.toFixed(2)} ` +
             `bestSkipped=${bestSkipped.toFixed(3)} worstSelected=${worstSelected.toFixed(3)} ` +
             `rankingInverted=${rankingInverted}`
         );
+
+        // [COMP-BREAKDOWN] contribuição de cada fator para todos os nós selecionados
+        for (const e of selectedEntries) {
+            const qRel = quickRelevance(queryTerms, e);
+            const rawScore = qRel * 0.6 + e.importance * 0.3 + e.permanence * 0.1;
+            const reason = selected.get(e.nodeId) ?? 'unknown';
+            let relPct = 0, impPct = 0, permPct = 0;
+            if (rawScore > 0) {
+                relPct  = Math.round((qRel * 0.6 / rawScore) * 100);
+                impPct  = Math.round((e.importance * 0.3 / rawScore) * 100);
+                permPct = Math.round((e.permanence * 0.1 / rawScore) * 100);
+            }
+            log.info(
+                `[COMP-BREAKDOWN] nodeId=${e.nodeId} name="${e.entity.slice(0, 30)}" reason="${reason}" ` +
+                `quickRel=${qRel.toFixed(3)} score=${rawScore.toFixed(3)} ` +
+                `relevance_contrib=${relPct}% importance_contrib=${impPct}% permanence_contrib=${permPct}%`
+            );
+        }
 
         // Telemetria PHASE2 — responde: quantos nós entram por cada critério?
         // selected_by_identity   → tier0, sempre injetado
