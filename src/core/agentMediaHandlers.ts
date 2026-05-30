@@ -168,11 +168,14 @@ export async function transcribeAttachment(
     }
 }
 
+const IMAGE_EXTENSIONS = /\.(jpe?g|png|gif|webp|bmp|tiff?)$/i;
+
 export async function handleDocumentAttachment(
     msg: NormalizedMessage,
     attachment: ChannelAttachment,
     messageBus: MessageBus,
-    memory?: MemoryManager
+    memory?: MemoryManager,
+    visionProfile?: VisionProfile | null
 ): Promise<string | null> {
     try {
         const channel = msg.channel;
@@ -212,7 +215,21 @@ export async function handleDocumentAttachment(
             const targetPath = pathMod.join(workspaceDir, safeFileName);
             await fs.writeFile(targetPath, fileBuffer);
             documentLog.info('document_saved', `Saved to ${targetPath}`, { path: targetPath, size: fileBuffer.length });
-            msg.text = (msg.text || '') + `\n[ARQUIVO ANEXADO: ${safeFileName} (salvo em workspace/${safeFileName})]\n`;
+
+            const isImage = visionProfile != null && (
+                (attachment.mimeType != null && attachment.mimeType.startsWith('image/')) ||
+                IMAGE_EXTENSIONS.test(safeFileName)
+            );
+            if (isImage) {
+                const mimeInfo = attachment.mimeType ? ` (${attachment.mimeType})` : '';
+                documentLog.info('image_document_detected', `[VISION] image detected via document: ${safeFileName}${mimeInfo}`);
+                documentLog.info('image_processing', `[VISION] processing image: ${safeFileName}`);
+                const visionDescription = await processVision(fileBuffer, safeFileName, visionProfile);
+                documentLog.info('image_analysis_complete', `[VISION] analysis completed: ${safeFileName} (${visionDescription.length} chars)`);
+                msg.text = (msg.text || '') + `\n[IMAGEM RECEBIDA: ${safeFileName}]\n[DESCRIÇÃO DA VISÃO]: ${visionDescription}\n`;
+            } else {
+                msg.text = (msg.text || '') + `\n[ARQUIVO ANEXADO: ${safeFileName} (salvo em workspace/${safeFileName})]\n`;
+            }
 
             // Refresh the workspace index so the model sees all files after this upload.
             if (memory) refreshWorkspaceIndex(memory);

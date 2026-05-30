@@ -306,8 +306,10 @@ export class AgentController {
             transcribeAttachment(msg, attachment, this.messageBus, tmpDir));
         this.messageBus.registerMediaHandler('audio', async (msg, attachment) =>
             transcribeAttachment(msg, attachment, this.messageBus, tmpDir));
-        this.messageBus.registerMediaHandler('document', async (msg, attachment) =>
-            handleDocumentAttachment(msg, attachment, this.messageBus, this.memory));
+        this.messageBus.registerMediaHandler('document', async (msg, attachment) => {
+            const profile = this.agentLoop.getProfileRegistry().getProfileByCategory('vision');
+            return handleDocumentAttachment(msg, attachment, this.messageBus, this.memory, profile ?? null);
+        });
         this.messageBus.registerMediaHandler('photo', async (msg, attachment) => {
             const profile = this.agentLoop.getProfileRegistry().getProfileByCategory('vision');
             return handlePhotoAttachment(msg, attachment, this.messageBus, profile ?? null);

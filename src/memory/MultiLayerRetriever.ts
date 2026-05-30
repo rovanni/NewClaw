@@ -212,7 +212,24 @@ export class MultiLayerRetriever {
             }
         }
 
-        return Array.from(byNode.values()).sort((a, b) => b.fusedScore - a.fusedScore);
+        const sorted = Array.from(byNode.values()).sort((a, b) => b.fusedScore - a.fusedScore);
+
+        // Telemetria por nó: mostra contribuição de cada camada no top-8
+        sorted.slice(0, 8).forEach(n => {
+            const semantic = candidates.find(c => c.nodeId === n.nodeId && c.layer === 'semantic')?.score ?? 0;
+            const keyword  = candidates.find(c => c.nodeId === n.nodeId && c.layer === 'keyword')?.score ?? 0;
+            const graph    = candidates.find(c => c.nodeId === n.nodeId && c.layer === 'graph')?.score ?? 0;
+            const temporal = candidates.find(c => c.nodeId === n.nodeId && c.layer === 'temporal')?.score ?? 0;
+            const boosted  = episodicBoost.has(n.nodeId);
+            log.debug(
+                `[RETRIEVER] node=${n.nodeId} final=${n.fusedScore.toFixed(3)} ` +
+                `semantic=${semantic.toFixed(3)} keyword=${keyword.toFixed(3)} ` +
+                `graph=${graph.toFixed(3)} temporal=${temporal.toFixed(3)} ` +
+                `layers=[${n.layers.join(',')}]${boosted ? ' +episodic' : ''}`
+            );
+        });
+
+        return sorted;
     }
 
     // ── Main entry point ───────────────────────────────────────────────────

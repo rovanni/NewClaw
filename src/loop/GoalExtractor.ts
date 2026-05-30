@@ -47,6 +47,10 @@ const NOT_GOAL_SIGNALS: RegExp[] = [
     /^(voc[eê]\s+[eé]|quem\s+[eé]\s+voc[eê]|o\s+que\s+voc[eê]\s+pode)\b/i,
     /^(obrigad[ao]|valeu|vlw|entendi|ok|perfeito|show|[oó]timo)\b/i,
     /\?$/, // perguntas simples terminando em ?
+    // Dados suplementares sendo fornecidos pelo usuário — não são comandos
+    /\bconteúdo\s+programático\b/i,
+    /^(turma:|quantidade\s+de\s+alunos:|período:|hor[aá]rio:)/im,
+    /^(Excel|Word|PowerPoint|Calc)\s+(Básico|Intermediário|Avançado)\b/im,
 ];
 
 export class GoalExtractor {
@@ -118,14 +122,15 @@ export class GoalExtractor {
               '\n\n'
             : '\n\n';
 
-        const prompt = `Classifique a mensagem abaixo em três dimensões:
+        const prompt = `Classifique a mensagem abaixo em quatro dimensões:
 1. É um goal (requer execução de tarefas com ferramentas)?
 2. Se for goal, a intenção é AMBÍGUA (não está claro qual arquivo, formato ou ação específica)?
 3. É um projeto de construção de software ou desenvolvimento de funcionalidade complexa (ex: criar um jogo, desenvolver um site, implementar um sistema, criar um módulo ou script complexo)?
+4. Existe evidência textual EXPLÍCITA do objetivo no texto do usuário, ou o objetivo foi inferido a partir dos dados fornecidos?
 ${conversationSnippet}Mensagem atual do usuário: "${message.slice(0, 300)}"
 
 Responda APENAS com JSON válido, sem markdown:
-{"is_goal": boolean, "confidence": 0.0-1.0, "objective": "descrição se for goal", "required_tools": ["tool1"], "reason": "motivo", "is_ambiguous": boolean, "clarification_question": "pergunta ao usuário se is_ambiguous=true", "is_construction": boolean}
+{"is_goal": boolean, "confidence": 0.0-1.0, "objective": "descrição se for goal", "required_tools": ["tool1"], "reason": "motivo", "is_ambiguous": boolean, "clarification_question": "pergunta ao usuário se is_ambiguous=true", "is_construction": boolean, "has_explicit_evidence": boolean}
 
 Regras:
 - is_ambiguous=true SOMENTE quando is_goal=true E a intenção é genuinamente vaga (sem arquivo, sem erro específico)
@@ -134,7 +139,9 @@ Regras:
 - Exemplos is_ambiguous=true: "essa versão não consigo editar" (qual arquivo?), "pode corrigir?" (o quê exatamente?)
 - Exemplos is_ambiguous=false: "criar apresentação sobre Python com 10 slides", "resumir o PDF que enviei"
 - Exemplos is_ambiguous=false (erros técnicos): "style.css:1 Failed to load resource: net::ERR_FILE_NOT_FOUND", "TypeError: cannot read property of undefined at line 42", "está com vários erros: SyntaxError no map.js"
-- Exemplos is_goal=false: "o que é machine learning?", "oi tudo bem?", "obrigado", seleção de opção de menu, confirmação de escolha`;
+- Exemplos is_goal=false: "o que é machine learning?", "oi tudo bem?", "obrigado", seleção de opção de menu, confirmação de escolha
+- has_explicit_evidence=true: "criar cronograma", "gerar relatório", "montar planilha" — objetivo dito explicitamente
+- has_explicit_evidence=false: usuário envia turma/datas/conteúdo sem pedir ação — objetivo inferido dos dados`;
 
         try {
             const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
@@ -175,6 +182,7 @@ Regras:
                 isAmbiguous: Boolean(parsed.is_ambiguous),
                 clarificationQuestion: parsed.clarification_question || undefined,
                 isConstruction: Boolean(parsed.is_construction),
+                hasExplicitEvidence: parsed.has_explicit_evidence !== false,
             };
         } catch {
             return { isGoal: false, confidence: 0.5, reason: 'parse_error' };

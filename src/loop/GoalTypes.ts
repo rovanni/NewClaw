@@ -232,6 +232,8 @@ export interface GoalClassification {
     /** Pergunta de clarificação sugerida quando isAmbiguous=true */
     clarificationQuestion?: string;
     isConstruction?: boolean;
+    /** true quando o objetivo foi explicitamente solicitado; false quando inferido dos dados sem pedido explícito */
+    hasExplicitEvidence?: boolean;
 }
 
 // ── Avaliação de step (heurística + escalation) ───────────────────────────────

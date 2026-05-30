@@ -30,10 +30,14 @@ import { ChannelContext } from './agentLoopTypes';
 
 const log = createLogger('GoalOrchestrator');
 
+const CLARIFICATION_TTL_MS = 10 * 60 * 1000; // 10 min
+
 export class GoalOrchestrator {
     private readonly goalStore: GoalStore;
     private readonly extractor: GoalExtractor;
     private readonly executionLoop: GoalExecutionLoop;
+    /** Tracks sessions waiting for clarification: sessionKey → { originalMessage, timestamp } */
+    private readonly pendingClarifications = new Map<string, { originalMessage: string; timestamp: number }>();
 
     constructor(
         private readonly agentLoop: AgentLoop,
@@ -86,6 +90,20 @@ export class GoalOrchestrator {
             ? `${context.channel}:${context.userId ?? userId}`
             : `unknown:${userId}`;
 
+        // ── Resolver clarificação pendente ──────────────────────────────────
+        const pending = this.pendingClarifications.get(sessionKey);
+        if (pending) {
+            this.pendingClarifications.delete(sessionKey);
+            if (Date.now() - pending.timestamp < CLARIFICATION_TTL_MS) {
+                log.info(`[GoalOrchestrator] [GOAL] clarification pending found — session=${sessionKey}`);
+                message = `${pending.originalMessage}\n\n[RESPOSTA DO USUÁRIO]: ${message}`;
+                log.info(`[GoalOrchestrator] [GOAL] user response attached to existing goal context`);
+                log.info(`[GoalOrchestrator] [GOAL] resuming goal execution with combined context`);
+            } else {
+                log.info(`[GoalOrchestrator] [GOAL] clarification expired — treating as new request`);
+            }
+        }
+
         // ── Verificar se há goal ativo aguardando retomada ──────────────────
         const activeGoal = this.goalStore.getActiveBySession(sessionKey);
 
@@ -123,12 +141,25 @@ export class GoalOrchestrator {
         // viram perguntas de clarificação em vez de goals, evitando ciclos de replan
         // que nunca convergem por falta de contexto.
         if (classification.isAmbiguous) {
-            log.info(`[GoalOrchestrator] goal ambiguous — returning clarification question`);
+            this.pendingClarifications.set(sessionKey, { originalMessage: message, timestamp: Date.now() });
+            log.info(`[GoalOrchestrator] goal ambiguous — clarification stored for session=${sessionKey}`);
             return classification.clarificationQuestion
                 ?? 'Para ajudar melhor, pode dar mais detalhes sobre o que precisa exatamente?';
         }
 
         log.info(`[GoalOrchestrator] goal confidence=${classification.confidence} message="${message.slice(0, 80)}"`);
+
+        // ── Validar evidência explícita do objetivo ───────────────────────
+        const evidenceFound = classification.hasExplicitEvidence !== false;
+        log.info(`[GoalOrchestrator] [PLANNER] inferred objective="${(classification.objective ?? '').slice(0, 80)}"`);
+        log.info(`[GoalOrchestrator] [PLANNER] explicit evidence found=${evidenceFound}`);
+        if (!evidenceFound) {
+            log.warn(`[GoalOrchestrator] [PLANNER] objective inferred from data without explicit user request — proceeding with caution`);
+            if (classification.confidence < 0.85) {
+                this.pendingClarifications.set(sessionKey, { originalMessage: message, timestamp: Date.now() });
+                return 'Recebi os dados, mas não ficou claro o que você gostaria que eu fizesse com eles. Pode me dizer?';
+            }
+        }
 
         // ── Abandonar goal anterior ───────────────────────────────────────
         // Re-check after the async classify() — another concurrent request may have created
