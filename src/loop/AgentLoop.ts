@@ -291,10 +291,17 @@ export class AgentLoop {
             { role: 'user', content: task },
         ];
 
-        const profile = this.profileRegistry.getProfileByCategory('chat');
+        const chatProfile = this.profileRegistry.getProfileByCategory('chat');
+        const profile = chatProfile
+            ?? this.profileRegistry.getProfileByCategory('light')
+            ?? this.profileRegistry.getProfileByCategory('execution');
+        if (!chatProfile && profile) {
+            log.warn(`[WF] [PROFILE-FALLBACK] requested=chat fallback=${profile.category ?? 'unknown'}`);
+        }
         if (!profile) {
-            log.error('[WF] no chat profile available for resumeFromWorkflow');
-            return '⚠️ Sem perfil de modelo disponível.';
+            log.error('[WF] [PROFILE-FALLBACK] requested=chat fallback=none — no model profile available');
+            const status = contextPayload.decision === 'rejected' ? 'Ação cancelada.' : 'Ação executada com sucesso.';
+            return `✅ ${status}`;
         }
 
         try {

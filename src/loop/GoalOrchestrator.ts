@@ -28,6 +28,7 @@ import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
+import type { WorkflowEngine } from './WorkflowEngine';
 
 const log = createLogger('GoalOrchestrator');
 
@@ -39,6 +40,7 @@ export class GoalOrchestrator {
     private readonly executionLoop: GoalExecutionLoop;
     /** Tracks sessions waiting for clarification: sessionKey → { originalMessage, timestamp } */
     private readonly pendingClarifications = new Map<string, { originalMessage: string; timestamp: number }>();
+    private workflowEngine?: WorkflowEngine;
 
     constructor(
         private readonly agentLoop: AgentLoop,
@@ -71,6 +73,11 @@ export class GoalOrchestrator {
     /** Conecta SessionManager ao executionLoop para telemetria e artefatos. */
     setSessionManager(sm: SessionManager): void {
         this.executionLoop.setSessionManager(sm);
+    }
+
+    /** Injeta WorkflowEngine para resolução de auth por texto (sem clique no botão). */
+    setWorkflowEngine(engine: WorkflowEngine): void {
+        this.workflowEngine = engine;
     }
 
     /**
@@ -116,16 +123,29 @@ export class GoalOrchestrator {
         if (activeGoal?.status === 'blocked' && activeGoal.pendingTxnId) {
             log.info(`[GoalOrchestrator] goal=${activeGoal.id} blocked waiting auth txn=${activeGoal.pendingTxnId}`);
 
-            // Guarda: mensagens curtas de aprovação ("Pode fazer", "sim", "ok", …) chegam como
-            // texto quando o usuário digita em vez de clicar o botão inline. O GoalExtractor
-            // classificaria "pode fazer" como goal (regex `pode\s+fazer`), abandonando o goal
-            // que está aguardando autorização. Interceptamos aqui antes da classificação.
-            const trimmedMsg = message.trim();
-            const isShortApproval = trimmedMsg.length < 80 &&
+            const userText = message.trim();
+            const isShortApproval = userText.length < 80 &&
                 /^(sim|pode|pode\s+fazer|ok|fa[cç]a|faz|confirmo|aprovado|autorizo|pode\s+ir|pode\s+executar|yes|go|proceed|confirm|tá|ta\s+bom|beleza|claro|certo|execute|executar|confirmar)\b/i
-                    .test(trimmedMsg);
-            if (isShortApproval) {
-                log.info(`[GoalOrchestrator] goal=${activeGoal.id} pending auth — short approval message delegated to AgentLoop (not abandoning goal)`);
+                    .test(userText);
+            const isShortRejection = userText.length < 80 &&
+                /^(não|nao|no\b|cancela|cancelar|para|stop|recusa|aborta|abortar|negativo)\b/i
+                    .test(userText);
+
+            if (isShortApproval || isShortRejection) {
+                const txnId = activeGoal.pendingTxnId;
+                const decision = isShortApproval ? 'approved' : 'rejected';
+                log.info(`[GoalOrchestrator] [AUTH-DETECTED] goal=${activeGoal.id} txn=${txnId} decision=${decision} source=text channel=${context?.channel ?? 'unknown'}`);
+
+                if (this.workflowEngine) {
+                    const wfResult = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
+                    if (wfResult) {
+                        log.info(`[GoalOrchestrator] [AUTH-RESUMED] goal=${activeGoal.id} txn=${txnId} source=text — [GOAL-EXTRACTION-SKIPPED]`);
+                        return this.resumeFromAuth(txnId, wfResult.output ?? '');
+                    }
+                    log.warn(`[GoalOrchestrator] [AUTH-DETECTED] workflowEngine.resume=null txn=${txnId} — falling back to AgentLoop`);
+                } else {
+                    log.info(`[GoalOrchestrator] [AUTH-DETECTED] workflowEngine not set — delegating to AgentLoop`);
+                }
                 return this.agentLoop.process(conversationId, message, userId, context);
             }
         }

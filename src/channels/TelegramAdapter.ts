@@ -338,13 +338,11 @@ export class TelegramAdapter implements ChannelAdapter {
 
             const text = ctx.message!.text!;
 
-            // Capture reply_to_message: when user quotes/replies to a previous message,
-            // prepend the quoted content so the model has full context without needing memory.
+            // Capture reply_to_message context separately — não embutir no texto da mensagem
+            // para evitar que o contexto citado interfira em detecção de intenção (ex: confirmação
+            // de auth onde o texto citado contém "Executar comando" e seria lido como novo goal).
+            // O histórico de sessão já contém a mensagem anterior do bot, então o LLM tem contexto.
             const replyToText = ctx.message!.reply_to_message?.text;
-            const effectiveText = replyToText && replyToText !== text
-                ? `[Contexto citado]:\n${replyToText}\n\n${text}`
-                : text;
-
             if (replyToText) {
                 log.info('reply_to_captured', `userId=${userId} quotedLen=${replyToText.length}`);
             }
@@ -355,7 +353,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 userId,
                 userName: ctx.from!.first_name,
                 type: text.startsWith('/') ? 'command' : 'text',
-                text: effectiveText,
+                text,
                 rawContext: ctx,
                 chatId: ctx.chat!.id.toString(),
                 metadata: {
