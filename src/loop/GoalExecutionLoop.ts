@@ -441,7 +441,7 @@ export class GoalExecutionLoop {
                 if (!currentGoal.strategiesTried.includes('deliverable_check_done')) {
                     const expectedExts = this.inferExpectedExtensions(currentGoal.userIntent);
                     if (expectedExts.length > 0) {
-                        const foundFiles = await this.checkDeliverables(expectedExts);
+                        const foundFiles = await this.checkDeliverables(expectedExts, currentGoal.createdAt);
                         if (foundFiles.length > 0) {
                             log.info(`[GoalLoop] deliverable_check: ${foundFiles.length} arquivo(s) no workspace — injetando send steps`);
                             this.goalStore.addStrategyTried(currentGoal.id, 'deliverable_check_done');
@@ -508,7 +508,13 @@ export class GoalExecutionLoop {
 
             const cycleResult = await this.executeStep(currentGoal, pendingStep, channelContext, totalCycles);
 
+            // Recarrega o goal — pode ter sido abandonado durante o step (nova mensagem do usuário)
             currentGoal = this.goalStore.getById(currentGoal.id)!;
+            if (currentGoal.status === 'abandoned') {
+                log.info(`[GoalLoop] goal=${currentGoal.id} foi abandonado durante execução do step — saindo do loop`);
+                return this.buildResult(currentGoal, false, totalCycles, totalReplans,
+                    'Goal interrompido: nova mensagem do usuário recebida durante execução.');
+            }
 
             // ── Avaliar resultado ──────────────────────────────────────
             switch (cycleResult.outcome) {
@@ -1559,20 +1565,31 @@ OU
         if (/mp3|áudio|audio/i.test(lower))                    exts.push('.mp3', '.ogg', '.wav');
         if (/html|página|pagina/i.test(lower))                 exts.push('.html');
         if (/zip|comprim/i.test(lower))                        exts.push('.zip');
-        if (/png|jpg|jpeg|imagem|image/i.test(lower))          exts.push('.png', '.jpg', '.jpeg');
+        // Imagens só são entregáveis se o objetivo explícito for produzir imagens.
+        // Excluir quando o intent contém marcadores de VisionHandler ("[IMAGEM RECEBIDA:")
+        // ou quando o intent menciona slides/pptx (foto enviada como feedback, não entregável).
+        const isImageDeliveryIntent =
+            /png|jpg|jpeg|imagem|image/i.test(lower) &&
+            !lower.includes('[imagem recebida:') &&
+            !/slides?|pptx|apresenta|powerpoint/i.test(lower);
+        if (isImageDeliveryIntent) exts.push('.png', '.jpg', '.jpeg');
         return exts;
     }
 
     /**
-     * Busca arquivos com as extensões esperadas em diretórios comuns do workspace.
-     * Usa exec_command com find; retorna lista de caminhos absolutos (até 5).
+     * Busca arquivos criados APÓS o início do goal com as extensões esperadas.
+     * goalCreatedAt garante que arquivos pré-existentes no workspace não sejam
+     * enviados como entregáveis do goal atual (ex: imagens promocionais do sistema).
      */
-    private async checkDeliverables(extensions: string[]): Promise<string[]> {
+    private async checkDeliverables(extensions: string[], goalCreatedAt: number): Promise<string[]> {
         const execTool = this.toolRegistry.get('exec_command');
         if (!execTool) return [];
 
+        // Calcula a idade do goal em minutos + 1 min de buffer para clock skew
+        const ageMinutes = Math.max(1, Math.ceil((Date.now() - goalCreatedAt) / 60_000) + 1);
         const nameTests = extensions.map(e => `-name "*${e}"`).join(' -o ');
-        const cmd = `find /tmp /workspace . -maxdepth 4 \\( ${nameTests} \\) -newer /proc/1 2>/dev/null | head -5`;
+        // -mmin -N: modificado nos últimos N minutos — só arquivos criados durante este goal
+        const cmd = `find /tmp /workspace . -maxdepth 4 -mmin -${ageMinutes} \\( ${nameTests} \\) 2>/dev/null | head -5`;
 
         try {
             const result = await execTool.execute({ command: cmd });

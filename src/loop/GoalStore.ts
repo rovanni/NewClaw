@@ -233,9 +233,30 @@ export class GoalStore {
         }
     }
 
+    // ── Máquina de estados explícita ─────────────────────────────────────────
+    // Cada estado lista exatamente quais transições são permitidas.
+    // Estados terminais (completed, failed, abandoned) não permitem saída.
+    private static readonly ALLOWED_TRANSITIONS: Record<string, GoalStatus[]> = {
+        active:      ['executing', 'abandoned'],
+        executing:   ['blocked', 'replanning', 'completed', 'failed', 'abandoned'],
+        blocked:     ['executing', 'replanning', 'failed', 'abandoned'],
+        replanning:  ['executing', 'failed', 'abandoned'],
+        completed:   [],  // terminal — sem saída
+        failed:      [],  // terminal — sem saída
+        abandoned:   [],  // terminal — sem saída
+    };
+
     setStatus(id: string, status: GoalStatus): void {
         const now = Date.now();
         const prev = (this.db.prepare('SELECT status FROM goals WHERE id = ?').get(id) as { status: string } | undefined)?.status ?? '?';
+
+        // Validação da máquina de estados
+        const allowed = GoalStore.ALLOWED_TRANSITIONS[prev] ?? [];
+        if (prev !== '?' && !allowed.includes(status)) {
+            log.warn(`[GoalStore] blocked invalid transition: ${prev} → ${status} for goal=${id}`);
+            return;
+        }
+
         const completedAt = (status === 'completed' || status === 'failed' || status === 'abandoned') ? now : null;
         this.db.prepare('UPDATE goals SET status = ?, updated_at = ?, completed_at = COALESCE(completed_at, ?) WHERE id = ?')
             .run(status, now, completedAt, id);

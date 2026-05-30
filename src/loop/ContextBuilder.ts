@@ -357,15 +357,34 @@ export class ContextPlanner {
         const tier0Count = selected.size;
 
         // Fase 2: Permanent (Tier 1)
+        // A1 — Gate corrigido para preferências comportamentais:
+        //   - Preferências (type='preference' ou 'trait'): exigem rel > 0 para entrar.
+        //     Remove o backdoor `importance >= 0.8` que injetava River/futebol em
+        //     todos os contextos independente de relevância.
+        //   - Nós não-preferência (identity, context): mantém gate original para
+        //     não afetar fatos fundamentais do usuário.
+        //
+        // Telemetria PHASE2: conta nós por critério de seleção
+        let phase2ByRelevance = 0;   // rel > 0 — relevância léxica real
+        let phase2ByImportance = 0;  // rel=0, importance>=0.8 (restrito a nós não-preferência)
         const permCap = Math.min(this.budgets.identity + this.budgets.preference, totalBudget);
         for (const e of sortByImportance(summaries.filter(e => e.tier === MemoryTier.PERMANENT && !selected.has(e.nodeId)))) {
             if (selected.size >= permCap) break;
             const rel = quickRelevance(queryTerms, e);
-            if (rel > 0 || e.importance >= 0.8) {
-                selected.set(e.nodeId, `tier1:pref rel=${rel.toFixed(2)} imp=${e.importance.toFixed(2)}`);
+
+            // Preferências comportamentais só entram se tiverem relevância léxica real (A1)
+            const isBehavioralPref = e.type === 'preference' || e.type === 'trait';
+            const passesGate = rel > 0 || (!isBehavioralPref && e.importance >= 0.8);
+
+            if (passesGate) {
+                const criterion = rel > 0 ? 'relevance' : 'importance';
+                selected.set(e.nodeId, `tier1:pref rel=${rel.toFixed(2)} imp=${e.importance.toFixed(2)} via=${criterion}`);
+                if (rel > 0) phase2ByRelevance++; else phase2ByImportance++;
             } else {
-                // [SKIPPED] tier1 — falhou no gate (rel=0 AND importance<0.8)
-                log.info(`[SKIPPED] tier1 nodeId=${e.nodeId} name="${e.entity.slice(0,40)}" quickRel=${rel.toFixed(3)} importance=${e.importance.toFixed(3)} reason="rel=0 AND importance<0.8 (gate tier1)"`);
+                const reason = isBehavioralPref
+                    ? `behavioral-pref requires rel>0 (A1) imp=${e.importance.toFixed(3)}`
+                    : `rel=0 AND importance<0.8`;
+                log.info(`[SKIPPED] tier1 nodeId=${e.nodeId} name="${e.entity.slice(0,40)}" quickRel=${rel.toFixed(3)} importance=${e.importance.toFixed(3)} reason="${reason}"`);
             }
         }
         const tier1Count = selected.size - tier0Count;
@@ -447,6 +466,18 @@ export class ContextPlanner {
             `contaminationRatio=${contaminationRatio.toFixed(2)} ` +
             `bestSkipped=${bestSkipped.toFixed(3)} worstSelected=${worstSelected.toFixed(3)} ` +
             `rankingInverted=${rankingInverted}`
+        );
+
+        // Telemetria PHASE2 — responde: quantos nós entram por cada critério?
+        // selected_by_identity   → tier0, sempre injetado
+        // selected_by_relevance  → tier1 via quickRel > 0 (relevância léxica real)
+        // selected_by_importance → tier1 via importance >= 0.8 (backdoor permanente)
+        // Monitorar selected_by_importance ao longo do tempo revela se A1 é necessária.
+        log.info(
+            `[PHASE2] selected_by_identity=${tier0Count} ` +
+            `selected_by_relevance=${phase2ByRelevance} ` +
+            `selected_by_importance=${phase2ByImportance} ` +
+            `by_entity=${entityCount} by_competitive=${compCount}`
         );
 
         log.info(`[PLANNER] done: selected=${totalSelected} skipped=${skipped} tier0=${tier0Count} tier1=${tier1Count} entity=${entityCount} comp=${compCount}`);

@@ -30,6 +30,40 @@ export interface PlanResult {
     successCriteria?: SuccessCriterion[];
 }
 
+// ── Contratos de ferramentas — injetado em todos os prompts de planejamento ──
+//
+// Esclarece três categorias que o LLM frequentemente confunde:
+//   1. Tools registradas: chamáveis pelo nome no plano
+//   2. Binários do sistema: existem no servidor, mas SÓ via exec_command
+//   3. Skills de contexto: instruções comportamentais, NÃO são tools chamáveis
+const TOOL_CONTRACTS = `
+CATEGORIAS DE FERRAMENTAS — leia antes de planejar:
+
+▶ TOOLS CHAMÁVEIS (use o nome exato no campo toolName):
+  exec_command, read, write, edit, send_document, send_audio,
+  list_workspace, memory_search, memory_write, web_search, web_navigate
+
+▶ BINÁRIOS DO SISTEMA (use SEMPRE via exec_command — não são toolNames):
+  python3  → exec_command: {"command": "python3 /workspace/script.py"}
+  pandoc   → exec_command: {"command": "pandoc input.md -o output.html --standalone"}
+  ffmpeg   → exec_command: {"command": "ffmpeg -i entrada.mp4 saida.mp3"}
+  node/npm → exec_command: {"command": "node script.js"}
+
+▶ SKILLS DE CONTEXTO (instruções no prompt — NUNCA são toolNames):
+  pptx-generator, content-validator, html-pdf-converter, system-provisioner
+  → São guias de comportamento. Não aparecem no campo toolName.
+
+SCHEMAS OBRIGATÓRIOS:
+  send_document: {"file_path": "/home/venus/newclaw/workspace/arquivo.pptx"}
+  read:          {"path": "/home/venus/newclaw/workspace/arquivo.html"}
+  write:         {"path": "/home/venus/newclaw/workspace/arquivo.md", "content": "..."}
+  edit:          {"path": "...", "oldText": "...", "newText": "..."}
+  exec_command:  {"command": "pandoc slides.md -o slides.pptx"}
+
+⚠️  send_document SEM file_path será bloqueado automaticamente pelo sistema.
+⚠️  Qualquer toolName que não esteja na lista de TOOLS CHAMÁVEIS será ignorado.
+`.trim();
+
 // ── Prompt templates ─────────────────────────────────────────────────────────
 
 function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string): string {
@@ -65,6 +99,8 @@ INTENÇÃO ORIGINAL: ${goal.userIntent}
 ${milestoneInstruction}
 ${pathsBlock}${capBlock ? `\n${capBlock}\n` : ''}${skillBlock}${contextBlock}
 Ferramentas disponíveis (use EXATAMENTE esses nomes): ${availableTools.join(', ')}
+
+${TOOL_CONTRACTS}
 
 Responda APENAS com JSON válido (sem markdown):
 {
@@ -180,6 +216,8 @@ BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}
 ${pipVenvLoopDirective}${implementDirective}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
+
+${TOOL_CONTRACTS}
 
 Responda APENAS com JSON válido (sem markdown):
 {
