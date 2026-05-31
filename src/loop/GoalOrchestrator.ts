@@ -166,7 +166,11 @@ export class GoalOrchestrator {
         // Objetivos ambíguos ("essa versão não consigo editar", "não está funcionando")
         // viram perguntas de clarificação em vez de goals, evitando ciclos de replan
         // que nunca convergem por falta de contexto.
+        log.info(
+            `[TOOL-ROUTING] intent="${message.slice(0, 80)}" isGoal=${classification.isGoal} isAmbiguous=${classification.isAmbiguous ?? false} reason=${classification.reason ?? 'none'} confidence=${classification.confidence}`
+        );
         if (classification.isAmbiguous) {
+            log.info(`[TOOL-ROUTING] action=clarification_requested intent="${message.slice(0, 80)}"`);
             this.pendingClarifications.set(sessionKey, { originalMessage: message, timestamp: Date.now() });
             log.info(`[GoalOrchestrator] goal ambiguous — clarification stored for session=${sessionKey}`);
             return classification.clarificationQuestion

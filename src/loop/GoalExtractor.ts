@@ -40,6 +40,18 @@ const GOAL_SIGNALS: RegExp[] = [
     /\b(está com (vários |muitos )?erros?|deu erro|erro na linha|exception:|traceback)\b/i,
 ];
 
+/**
+ * Frases que são sempre goals NÃO-AMBÍGUOS porque existe uma tool específica
+ * que as resolve sem precisar de critérios adicionais do usuário.
+ * Curto-circuita o LLM — nenhuma clarificação deve ser pedida.
+ */
+const UNAMBIGUOUS_TOOL_PATTERNS: RegExp[] = [
+    // organize_workspace / analyze_workspace_groups
+    /\b(organiz|reorganiz|arruma)\w*\s+(meu\s+)?(workspace|arquivos|pasta|diret[oó]rio)\b/i,
+    /\banalise?\s+(os\s+)?grupos?\s+(do\s+)?(meu\s+)?workspace\b/i,
+    /\b(organize?|reorganize?)\s+(my\s+)?workspace\b/i,
+];
+
 /** Padrões que indicam CLARAMENTE conversa simples (não goal) */
 const NOT_GOAL_SIGNALS: RegExp[] = [
     /^(oi|ol[aá]|hey|e a[ií]|tudo\s+bem|bom\s+dia|boa\s+tarde|boa\s+noite)\b/i,
@@ -138,6 +150,7 @@ Regras:
 - Se o contexto recente mostra que o usuário está respondendo a uma lista de opções ou confirmando uma escolha, is_goal=false
 - Exemplos is_ambiguous=true: "essa versão não consigo editar" (qual arquivo?), "pode corrigir?" (o quê exatamente?)
 - Exemplos is_ambiguous=false: "criar apresentação sobre Python com 10 slides", "resumir o PDF que enviei"
+- Exemplos is_ambiguous=false (workspace): "organize meu workspace", "reorganize os arquivos", "analise os grupos do workspace", "arrume meu workspace" — existe uma ferramenta específica que resolve sem precisar de critérios adicionais
 - Exemplos is_ambiguous=false (erros técnicos): "style.css:1 Failed to load resource: net::ERR_FILE_NOT_FOUND", "TypeError: cannot read property of undefined at line 42", "está com vários erros: SyntaxError no map.js"
 - Exemplos is_goal=false: "o que é machine learning?", "oi tudo bem?", "obrigado", seleção de opção de menu, confirmação de escolha
 - has_explicit_evidence=true: "criar cronograma", "gerar relatório", "montar planilha" — objetivo dito explicitamente
@@ -212,6 +225,22 @@ Regras:
         if (quick === false) {
             log.debug(`[GoalExtractor] quick=not-goal message="${message.slice(0, 60)}"`);
             return { isGoal: false, confidence: GOAL_LIMITS.QUICK_CLASSIFY_THRESHOLD, reason: 'heuristic_negative' };
+        }
+
+        // Tool-specific shortcut: frases com tool dedicada nunca precisam de clarificação
+        const isUnambiguousTool = UNAMBIGUOUS_TOOL_PATTERNS.some(p => p.test(message.trim()));
+        if (isUnambiguousTool) {
+            log.info(`[GoalExtractor] unambiguous_tool_match — skipping LLM classify for "${message.slice(0, 60)}"`);
+            return {
+                isGoal: true,
+                confidence: 0.90,
+                objective: message.slice(0, 300),
+                requiredTools: [],
+                reason: 'unambiguous_tool_available',
+                isAmbiguous: false,
+                isConstruction: false,
+                hasExplicitEvidence: true,
+            };
         }
 
         // Inconclusivo — classificação via LLM com contexto recente da conversa

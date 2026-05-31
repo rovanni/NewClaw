@@ -64,9 +64,30 @@ SCHEMAS OBRIGATÓRIOS:
 ⚠️  Qualquer toolName que não esteja na lista de TOOLS CHAMÁVEIS será ignorado.
 `.trim();
 
+// ── Tool descriptions (injeta apenas ferramentas não-óbvias pelo nome) ───────
+
+const STANDARD_TOOLS = new Set([
+    'write', 'edit', 'read', 'exec_command', 'web_search', 'web_navigate',
+    'send_document', 'send_audio', 'memory_search', 'memory_write', 'memory_admin',
+    'list_workspace', 'refresh_workspace', 'read_document', 'ssh_exec',
+    'schedule', 'weather', 'crypto_analysis', 'api_request', 'cmi_inspect',
+]);
+
+function buildToolDescriptions(toolNames: string[]): string {
+    const lines: string[] = [];
+    for (const name of toolNames) {
+        if (STANDARD_TOOLS.has(name)) continue; // nome já diz o que faz
+        const tool = ToolRegistry.get(name);
+        if (!tool?.description) continue;
+        const firstSentence = tool.description.split(/[.!?]\s/)[0].trim().slice(0, 150);
+        lines.push(`  ${name}: ${firstSentence}`);
+    }
+    return lines.length > 0 ? `\nFerramentas não-óbvias (leia antes de planejar):\n${lines.join('\n')}\n` : '';
+}
+
 // ── Prompt templates ─────────────────────────────────────────────────────────
 
-function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string): string {
+function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string, toolDescriptions?: string): string {
     const goalText  = `${goal.objective} ${goal.userIntent}`;
     const capBlock  = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary);
     const skillBlock = skillContext
@@ -99,7 +120,7 @@ INTENÇÃO ORIGINAL: ${goal.userIntent}
 ${milestoneInstruction}
 ${pathsBlock}${capBlock ? `\n${capBlock}\n` : ''}${skillBlock}${contextBlock}
 Ferramentas disponíveis (use EXATAMENTE esses nomes): ${availableTools.join(', ')}
-
+${toolDescriptions ?? ''}
 ${TOOL_CONTRACTS}
 
 Responda APENAS com JSON válido (sem markdown):
@@ -414,7 +435,8 @@ export class GoalPlanner {
 
         const availableTools = ToolRegistry.getEnabled().map(t => t.name);
         const skillsSummary  = this.loadSkillsSummary();
-        const prompt         = buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext, capabilityContext, skillsSummary, activeMilestone);
+        const toolDescriptions = buildToolDescriptions(availableTools);
+        const prompt         = buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext, capabilityContext, skillsSummary, activeMilestone, toolDescriptions);
         const capBlock       = PromptComposer.buildCompactEnv(capabilityContext ?? '', `${goal.objective} ${goal.userIntent}`, skillsSummary);
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
 
