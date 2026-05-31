@@ -253,7 +253,7 @@ export function discoverGroups(
 
 export class AnalyzeWorkspaceGroupsTool implements ToolExecutor {
     name = 'analyze_workspace_groups';
-    description = 'Analisa o workspace e descobre grupos de artefatos relacionados (mesmo goal, nome similar, janela temporal). Não move arquivos. Salva resultado em workspace/.newclaw/artifact_groups.json.';
+    description = 'Descobre grupos de artefatos relacionados no workspace (arquivos do mesmo projeto/objetivo). Use ANTES de organizar. Não move arquivos. Retorna JSON com grupos e confiança. Salva em .newclaw/artifact_groups.json.';
     parameters = {
         type: 'object' as const,
         properties: {

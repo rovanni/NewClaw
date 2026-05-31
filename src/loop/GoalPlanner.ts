@@ -139,7 +139,9 @@ ARGS OBRIGATÓRIOS POR FERRAMENTA:
 - edit: SEMPRE forneça oldText+newText (substituição) OU startLine+endLine+content (patch) OU append=true+content. Nunca chame edit sem esses parâmetros.
 - send_document: SEMPRE forneça file_path com o caminho completo do arquivo. Nunca chame send_document sem file_path.
 - list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") ou absoluto.
-- read: aceita caminho relativo ao workspace ou absoluto.`.trim();
+- read: aceita caminho relativo ao workspace ou absoluto.
+- organize_workspace: USE DIRETAMENTE quando o usuário pedir para organizar/arrumar/reorganizar o workspace. Não use list_workspace+write para isso. Arg opcional: dry_run=true (padrão, mostra plano) ou dry_run=false (executa). Não precisa de outros steps antes.
+- analyze_workspace_groups: USE quando o usuário pedir para analisar grupos do workspace. Retorna JSON com grupos identificados. Não move arquivos.`.trim();
 }
 
 function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string): string {
@@ -240,6 +242,8 @@ REFERÊNCIA DE ARGS OBRIGATÓRIOS:
 - send_document: SEMPRE forneça file_path com o caminho completo do arquivo. Nunca chame send_document sem file_path.
 - list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") OU absoluto. Passe apenas a subpasta desejada.
 - read: aceita caminho relativo ao workspace ou absoluto. Para diretórios, lista automaticamente o conteúdo.
+- organize_workspace: USE DIRETAMENTE quando o objetivo envolver organizar/arrumar/reorganizar o workspace. Não substitua por list_workspace+write. Arg opcional: dry_run=true (mostra plano) ou dry_run=false (executa). É um step único.
+- analyze_workspace_groups: USE quando o objetivo envolver analisar grupos do workspace. Retorna JSON. Não move arquivos.
 
 REGRAS CRÍTICAS para blocker 'environment_limit':
 - Se o blocker mencionar PEP 668 ou 'externally-managed':

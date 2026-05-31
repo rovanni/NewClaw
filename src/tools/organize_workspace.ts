@@ -27,7 +27,7 @@ type SqlDb = {
 
 export class OrganizeWorkspaceTool implements ToolExecutor {
     name = 'organize_workspace';
-    description = 'Organiza o workspace criando subpastas por grupos de artefatos relacionados. dry_run=true (padrão) mostra o plano sem mover arquivos. Use dry_run=false para executar a reorganização.';
+    description = 'USE ESTA TOOL quando o usuário pedir para organizar, arrumar ou reorganizar o workspace. Agrupa arquivos relacionados em subpastas automaticamente. dry_run=true (padrão): mostra o plano sem mover nada. dry_run=false: executa. NÃO use list_workspace+write para isso — use esta tool diretamente.';
     parameters = {
         type: 'object' as const,
         properties: {
