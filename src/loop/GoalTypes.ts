@@ -33,10 +33,11 @@ export type BlockerKind =
     | 'environment_limit'    // limitação do sistema (sem internet, sem disco)
     | 'goal_incomplete'      // todos os steps rodaram mas LLM validou que o objetivo não foi atingido
     | 'repeated_tool_call'   // mesma tool chamada com mesmos args múltiplas vezes — loop sem progresso
-    | 'placeholder_path'     // step contém path placeholder (ex: "caminho_do_arquivo_identificado")
-    | 'hallucinated_tool'    // tool gerada pelo LLM não existe no ToolRegistry
-    | 'partial_success'      // entregável existe mas pode não ser o formato ideal
-    | 'workspace_missing';   // step precisa de contexto do workspace que não foi coletado
+    | 'placeholder_path'         // step contém path placeholder (ex: "caminho_do_arquivo_identificado")
+    | 'hallucinated_tool'        // tool gerada pelo LLM não existe no ToolRegistry
+    | 'partial_success'          // entregável existe mas pode não ser o formato ideal
+    | 'workspace_missing'        // step precisa de contexto do workspace que não foi coletado
+    | 'required_artifact_missing'; // artefato obrigatório existe mas está vazio — goal de modificação não pode prosseguir
 
 export interface GoalBlocker {
     kind: BlockerKind;

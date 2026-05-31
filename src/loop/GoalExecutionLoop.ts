@@ -162,6 +162,8 @@ export class GoalExecutionLoop {
             log.debug('[GoalLoop] Q2 skipped — simple plan');
         }
 
+        this.logPlanAnalysis(goal.id, initialPlan, 'initial');
+
         this.goalStore.update(goal.id, {
             currentPlan: initialPlan,
             status: 'executing',
@@ -300,6 +302,8 @@ export class GoalExecutionLoop {
         } else {
             log.debug(`[GoalLoop] Q2 skipped (replan cycle=${cycleNumber} — simple plan)`);
         }
+
+        this.logPlanAnalysis(goal.id, finalPlan, 'replan');
 
         this.goalStore.update(goal.id, {
             currentPlan: finalPlan,
@@ -553,6 +557,11 @@ export class GoalExecutionLoop {
             // ── Executar o step atual ──────────────────────────────────
             await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'tool_executing', message: pendingStep.description });
 
+            // H7: classificar se send_document está sendo executado antes da validação (step regular)
+            if (pendingStep.toolName === 'send_document') {
+                log.info(`[SEND-CLASSIFICATION] goal=${currentGoal.id} step=${pendingStep.id} tool=send_document deferred=false reason=regular_plan_step`);
+            }
+
             const cycleResult = await this.executeStep(currentGoal, pendingStep, channelContext, totalCycles);
 
             // Recarrega o goal — pode ter sido abandonado durante o step (nova mensagem do usuário)
@@ -561,6 +570,36 @@ export class GoalExecutionLoop {
                 log.info(`[GoalLoop] goal=${currentGoal.id} foi abandonado durante execução do step — saindo do loop`);
                 return this.buildResult(currentGoal, false, totalCycles, totalReplans,
                     'Goal interrompido: nova mensagem do usuário recebida durante execução.');
+            }
+
+            // FIX B: detectar arquivo vazio em step de leitura para goals de modificação.
+            // Impede que o sistema replane com "usar memória como substituto" quando o artefato
+            // fonte é um requisito real (o conteúdo precisa existir para ser modificado).
+            if (
+                (pendingStep.toolName === 'read' || pendingStep.toolName === 'read_document') &&
+                cycleResult.outcome !== 'success'
+            ) {
+                const lastAttempt = [...currentGoal.attempts].reverse().find(a => a.planStepId === pendingStep.id);
+                const isEmptyArtifact = lastAttempt?.error?.includes('[ARQUIVO VAZIO]') ?? false;
+                if (isEmptyArtifact && this.isModificationGoal(currentGoal.userIntent)) {
+                    const requiredPath = String(pendingStep.toolArgs?.path ?? pendingStep.toolArgs?.filename ?? '(desconhecido)');
+                    log.warn(
+                        `[ARTIFACT-DEPENDENCY] goal=${currentGoal.id} required="${requiredPath}"` +
+                        ` exists=true empty=true action=fail` +
+                        ` reason="goal de modificação requer conteúdo real no arquivo fonte"`
+                    );
+                    const failMsg = `Arquivo fonte obrigatório "${requiredPath}" está vazio. ` +
+                        `O objetivo requer modificar conteúdo existente — não é possível continuar sem o arquivo original.`;
+                    this.goalStore.setStatus(currentGoal.id, 'failed');
+                    this.goalStore.addBlocker(currentGoal.id, {
+                        kind: 'required_artifact_missing',
+                        description: failMsg,
+                        suggestedActions: ['Verifique se o arquivo correto foi enviado ou criado antes de pedir modificações'],
+                        detectedAt: Date.now(),
+                    });
+                    log.info(`[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey} state=failed reason="required_artifact_missing" cycle=${totalCycles} timestamp=${Date.now()}`);
+                    return this.buildResult(currentGoal, false, totalCycles, totalReplans, failMsg);
+                }
             }
 
             // ── Avaliar resultado ──────────────────────────────────────
@@ -1640,6 +1679,34 @@ OU
     }
 
     // ── Deliverable Check helpers (Item 2) ───────────────────────────────────
+
+    /**
+     * H6: registra análise do plano gerado — detecta writes duplicados para o mesmo path.
+     */
+    private logPlanAnalysis(goalId: string, plan: PlanStep[], phase: 'initial' | 'replan'): void {
+        const writeSteps = plan.filter(s => s.toolName === 'write' || s.toolName === 'edit');
+        const writePaths = writeSteps
+            .map(s => String(s.toolArgs?.path ?? ''))
+            .filter(Boolean);
+        const uniquePaths = new Set(writePaths);
+        const hasDuplicates = writePaths.length > uniquePaths.size;
+        const duplicatePaths = writePaths.filter((p, i) => writePaths.indexOf(p) !== i);
+        log.info(
+            `[PLAN-ANALYSIS] goal=${goalId} phase=${phase} total_steps=${plan.length}` +
+            ` writes=${writeSteps.length} unique_paths=${uniquePaths.size}` +
+            ` duplicate_paths=${hasDuplicates}` +
+            (hasDuplicates ? ` duplicates="${duplicatePaths.join(',')}"` : '')
+        );
+    }
+
+    /**
+     * Retorna true quando o intent descreve modificação de conteúdo existente.
+     * Usado pelo FIX B para bloquear knowledge substitution quando o artefato fonte está vazio.
+     */
+    private isModificationGoal(userIntent: string): boolean {
+        return /\b(modificar|modific|editar|edi[tç]|reorganizar|reorgani[zs]|corrigir|corrij|atualizar|atuali[zs]|converter|convert|dividir|divid|reformular|reformul|melhorar|melhore?|ajustar|ajust|reescrever|reescrev|revisar|revis)\b/i
+            .test(userIntent);
+    }
 
     /**
      * Infere extensões esperadas a partir das palavras-chave do userIntent.

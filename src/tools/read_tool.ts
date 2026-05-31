@@ -13,6 +13,16 @@ import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import fs from 'fs';
 import path from 'path';
 import { errorMessage } from '../shared/errors';
+import { createLogger } from '../shared/AppLogger';
+
+const log = createLogger('ReadTool');
+
+// Padrões de path placeholder que o LLM pode gerar — iguais ao PLACEHOLDER_ARG_PATTERN do GoalPlanner
+const PATH_PLACEHOLDER_PATTERN =
+    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo|caminho\/do)\b|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\//i;
+
+// Limiar para conteúdo suspeito (arquivo quase vazio mas não zero)
+const NEAR_EMPTY_THRESHOLD_BYTES = 50;
 
 export class ReadTool implements ToolExecutor {
     name = 'read';
@@ -141,9 +151,22 @@ export class ReadTool implements ToolExecutor {
             return { success: false, output: '', error: 'Parâmetro "path" é obrigatório' };
         }
 
+        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
         const { resolved: filePath, error: pathError } = this.resolvePath(rawPath);
+
+        // H5: detectar path placeholder antes de tentar abrir o arquivo
+        const isPlaceholder = PATH_PLACEHOLDER_PATTERN.test(rawPath);
+        log.info(`[PATH-QUALITY] tool=read requested="${rawPath}" resolved="${filePath}" workspace_dir="${workspaceDir}" canonical=${filePath.startsWith(workspaceDir)} is_placeholder=${isPlaceholder}`);
+
         if (pathError) {
             return { success: false, output: '', error: pathError };
+        }
+
+        if (isPlaceholder) {
+            return {
+                success: false, output: '',
+                error: `[PATH-PLACEHOLDER] O caminho "${rawPath}" parece ser um placeholder gerado pelo LLM. Informe o caminho real do arquivo.`
+            };
         }
 
         // Binary file extensions that should never be read as text
@@ -212,6 +235,23 @@ export class ReadTool implements ToolExecutor {
 
             const filename = path.basename(filePath);
             const sizeKb = (stat.size / 1024).toFixed(1);
+            const lineCount = content ? content.split('\n').length : 0;
+            const isEmpty = stat.size === 0;
+            const isNearEmpty = !isEmpty && stat.size < NEAR_EMPTY_THRESHOLD_BYTES;
+
+            // FIX A: [READ-RESULT] — registra estado real do arquivo para diagnóstico
+            log.info(
+                `[READ-RESULT] file="${filename}" bytes=${stat.size} lines=${lineCount}` +
+                ` empty=${isEmpty} near_empty=${isNearEmpty} placeholder_injected=false`
+            );
+
+            // FIX A: arquivo completamente vazio — erro explícito, nunca tratado como conteúdo
+            if (isEmpty) {
+                return {
+                    success: false, output: '',
+                    error: `[ARQUIVO VAZIO] "${filename}" existe mas está vazio (0 bytes). Crie o conteúdo com write antes de tentar ler.`
+                };
+            }
 
             // Suporte a offset e limit (como OpenClaw)
             if (args.offset || args.limit) {
@@ -225,8 +265,13 @@ export class ReadTool implements ToolExecutor {
                 return { success: true, output: header + content };
             }
 
+            // Aviso de conteúdo suspeito (não falha, mas informa o LLM)
+            const nearEmptyWarning = isNearEmpty
+                ? `\n⚠️ [CONTEÚDO SUSPEITO] Arquivo tem apenas ${stat.size} bytes (${lineCount} linha(s)). O conteúdo pode ser um placeholder. Verifique se o objetivo foi escrito corretamente antes de usar este conteúdo.`
+                : '';
+
             const header = `[Arquivo: ${filename} | ${sizeKb}KB | Conteúdo completo — NÃO releia, use este conteúdo para executar a tarefa]\n`;
-            return { success: true, output: header + content };
+            return { success: true, output: header + content + nearEmptyWarning };
         } catch (error) {
             return { success: false, output: '', error: errorMessage(error) };
         }

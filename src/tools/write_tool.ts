@@ -14,6 +14,10 @@ import { createLogger } from '../shared/AppLogger';
 
 const log = createLogger('WriteTool');
 
+// H5: mesma lista de padrões usada em read_tool e GoalPlanner
+const PATH_PLACEHOLDER_PATTERN =
+    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo|caminho\/do)\b|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\//i;
+
 export class WriteTool implements ToolExecutor {
     name = 'write';
     description = 'Criar ou sobrescrever um arquivo. Cria diretórios pais automaticamente. Caminhos relativos são resolvidos a partir do workspace.';
@@ -136,7 +140,10 @@ export class WriteTool implements ToolExecutor {
 
         const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
         const { resolved: filePath, error: pathError } = this.resolvePath(rawPath);
+        const isPlaceholder = PATH_PLACEHOLDER_PATTERN.test(rawPath);
         log.info(`[ARTIFACT-PATH] tool=write requested="${rawPath}" resolved="${filePath}" workspace_dir="${workspaceDir}" canonical=${filePath.startsWith(workspaceDir)} exists=${fs.existsSync(filePath)}`);
+        // H5: sinaliza path placeholder — não bloqueia escrita mas registra para análise
+        log.info(`[PATH-QUALITY] tool=write requested="${rawPath}" resolved="${filePath}" is_placeholder=${isPlaceholder} confidence=${isPlaceholder ? 'high' : 'ok'}`);
         if (pathError) {
             return { success: false, output: '', error: pathError };
         }
@@ -158,11 +165,22 @@ export class WriteTool implements ToolExecutor {
                 fs.mkdirSync(dir, { recursive: true });
             }
 
+            // H4: captura tamanho anterior para detectar sobrescrita destrutiva
             const existed = fs.existsSync(finalPath);
+            const charsBefore = existed ? fs.readFileSync(finalPath, 'utf-8').length : 0;
+
             fs.writeFileSync(finalPath, content);
             const verb = existed ? 'Sobrescrito' : 'Criado';
             const chars = content.length;
             const lines = content.split('\n').length;
+
+            // H4: [ARTIFACT-WRITE] — registra a operação para detectar sobrescrita destrutiva
+            log.info(
+                `[ARTIFACT-WRITE] path="${finalPath}" exists_before=${existed}` +
+                ` chars_before=${charsBefore} chars_after=${chars}` +
+                ` overwrite=${existed} append=false` +
+                (existed && chars < charsBefore ? ` ⚠️ DESTRUTIVO chars_delta=${chars - charsBefore}` : '')
+            );
             return {
                 success: true,
                 output: [
