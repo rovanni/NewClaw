@@ -24,6 +24,8 @@ import { MemoryWriteTool } from '../tools/memory_write';
 import { ReadDocumentTool } from '../tools/read_document';
 import { ListWorkspaceTool } from '../tools/list_workspace';
 import { RefreshWorkspaceTool } from '../tools/refresh_workspace';
+import { AnalyzeWorkspaceGroupsTool } from '../tools/analyze_workspace_groups';
+import { OrganizeWorkspaceTool } from '../tools/organize_workspace';
 import { SendAudioTool } from '../tools/send_audio';
 import { SendDocumentTool } from '../tools/send_document';
 import { MemoryAdminTool } from '../tools/memory_admin';
@@ -616,6 +618,8 @@ export class AgentController {
         ToolRegistry.register(new ReadDocumentTool());
         ToolRegistry.register(new ListWorkspaceTool());
         ToolRegistry.register(new RefreshWorkspaceTool(this.memory));
+        ToolRegistry.register(new AnalyzeWorkspaceGroupsTool(this.db));
+        ToolRegistry.register(new OrganizeWorkspaceTool(this.db, this.memory));
         ToolRegistry.register(new SendAudioTool(this.messageBus));
         ToolRegistry.register(new SendDocumentTool(this.messageBus));
         ToolRegistry.register(new MemoryAdminTool(this.memory));
