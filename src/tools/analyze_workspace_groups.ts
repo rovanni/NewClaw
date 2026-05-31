@@ -188,14 +188,19 @@ export function discoverGroups(
         }
     }
 
-    // ── H3: Janela temporal (5 minutos) ───────────────────────────────────────
-    const WINDOW_MS = 5 * 60 * 1000;
-    const sorted = [...files].sort((a, b) => a.mtime - b.mtime);
-    for (let i = 0; i < sorted.length; i++) {
-        for (let j = i + 1; j < sorted.length; j++) {
-            if (sorted[j].mtime - sorted[i].mtime > WINDOW_MS) break;
-            uf.union(sorted[i].relativePath, sorted[j].relativePath);
-            addReason(sorted[i].relativePath, sorted[j].relativePath, 'temporal_window');
+    // ── H3: Janela temporal — apenas reforça grupos H1/H2, não cria novos ───────
+    // Não usa union-find para evitar agrupamento transitivo (A→B→C mesmo que A e C
+    // estejam a 10 min de distância). Só marca 'temporal_window' em pares que JÁ
+    // foram unidos por H1 ou H2.
+    const WINDOW_MS = 3 * 60 * 1000; // 3 minutos — janela mais conservadora
+    const mtimeMap = new Map<string, number>(files.map(f => [f.relativePath, f.mtime]));
+    for (const [pairKey, reasons] of pairReasons) {
+        if (reasons.has('temporal_window')) continue; // já marcado
+        const [a, b] = pairKey.split('||');
+        const ma = mtimeMap.get(a) ?? 0;
+        const mb = mtimeMap.get(b) ?? 0;
+        if (Math.abs(ma - mb) <= WINDOW_MS) {
+            reasons.add('temporal_window');
         }
     }
 
