@@ -165,13 +165,26 @@ export function discoverGroups(
             .map(f => f.relativePath);
 
         for (let i = 0; i < matched.length - 1; i++) {
+            const rootBefore = uf.find(matched[i]);
+            const alreadySame = rootBefore === uf.find(matched[i + 1]);
             uf.union(matched[i], matched[i + 1]);
             addReason(matched[i], matched[i + 1], 'same_goal');
+            if (!alreadySame) {
+                log.info(
+                    `[ARTIFACT-GROUP-MERGE] group_a=${rootBefore} group_b=${uf.find(matched[i])}` +
+                    ` file_a=${matched[i]} file_b=${matched[i + 1]}` +
+                    ` reason=same_goal similarity=1.00 same_goal=true temporal_match=pending` +
+                    ` goal_id=${row.id}`
+                );
+            }
         }
     }
 
     // ── H2: Similaridade de tokens ────────────────────────────────────────────
-    const TOKEN_THRESHOLD = 0.30;
+    // Threshold 0.45: exige que >50% dos tokens únicos sejam compartilhados.
+    // Threshold mais baixo (ex: 0.30) causava agrupamento transitivo em cadeia
+    // onde um arquivo "ponte" (ex: aula_excel.pptx) fundia grupos não relacionados.
+    const TOKEN_THRESHOLD = 0.45;
     const tokenMap = new Map<string, Set<string>>();
     for (const f of files) tokenMap.set(f.relativePath, tokenize(f.relativePath));
 
@@ -181,9 +194,20 @@ export function discoverGroups(
         for (let j = i + 1; j < filePaths.length; j++) {
             const tb = tokenMap.get(filePaths[j])!;
             if (tb.size === 0) continue;
-            if (jaccardTokens(ta, tb) >= TOKEN_THRESHOLD) {
+            const similarity = jaccardTokens(ta, tb);
+            if (similarity >= TOKEN_THRESHOLD) {
+                const rootBefore = uf.find(filePaths[i]);
+                const sameComponentBefore = rootBefore === uf.find(filePaths[j]);
                 uf.union(filePaths[i], filePaths[j]);
                 addReason(filePaths[i], filePaths[j], 'same_prefix');
+                if (!sameComponentBefore) {
+                    log.info(
+                        `[ARTIFACT-GROUP-MERGE] group_a=${rootBefore} group_b=${uf.find(filePaths[i])}` +
+                        ` file_a=${filePaths[i]} file_b=${filePaths[j]}` +
+                        ` reason=token_similarity similarity=${similarity.toFixed(2)}` +
+                        ` same_goal=false temporal_match=pending`
+                    );
+                }
             }
         }
     }

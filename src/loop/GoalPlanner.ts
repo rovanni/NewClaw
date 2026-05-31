@@ -41,7 +41,8 @@ CATEGORIAS DE FERRAMENTAS — leia antes de planejar:
 
 ▶ TOOLS CHAMÁVEIS (use o nome exato no campo toolName):
   exec_command, read, write, edit, send_document, send_audio,
-  list_workspace, memory_search, memory_write, web_search, web_navigate
+  list_workspace, memory_search, memory_write, web_search, web_navigate,
+  organize_workspace, analyze_workspace_groups
 
 ▶ BINÁRIOS DO SISTEMA (use SEMPRE via exec_command — não são toolNames):
   python3  → exec_command: {"command": "python3 /workspace/script.py"}

@@ -895,19 +895,29 @@ export class GoalExecutionLoop {
             // FIX C: acumulador de sends diferidos capturados do AgentLoop
             const deferredSendArgs: Array<Record<string, unknown>> = [];
 
-            if (step.toolName && step.toolArgs) {
+            if (step.toolName) {
                 // Execução via ToolRegistry com ProactiveRecovery (mutação de args + fallback)
-                if (!this.toolRegistry.get(step.toolName)) {
+                // toolArgs pode ser undefined quando a tool não tem args obrigatórios — defaulta para {}
+                const resolvedArgs = step.toolArgs ?? {};
+                const registered = this.toolRegistry.get(step.toolName);
+                log.info(
+                    `[TOOL-DISPATCH] goal=${goal.id} step=${step.id}` +
+                    ` requested_tool=${step.toolName}` +
+                    ` resolved_tool=${registered ? step.toolName : 'none'}` +
+                    ` reason=${registered ? 'tool_found_in_registry' : 'tool_not_registered'}` +
+                    ` args_provided=${step.toolArgs !== undefined}`
+                );
+                if (!registered) {
                     toolResult = { success: false, output: '', error: `command not found: ${step.toolName}` };
                 } else {
                     const getTool = (name: string): ToolExecutorLike | undefined =>
                         this.toolRegistry.get(name) as ToolExecutorLike | undefined;
-                    const toolInstance = this.toolRegistry.get(step.toolName);
+                    const toolInstance = registered;
                     if (typeof (toolInstance as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
                         (toolInstance as unknown as ContextAwareTool).setContext(channelContext.chatId, channelContext.channel);
                     }
                     const recoveryResult = await this.proactiveRecovery.execute(
-                        step.toolName, step.toolArgs as Record<string, unknown>, getTool, new Set<string>()
+                        step.toolName, resolvedArgs, getTool, new Set<string>()
                     );
                     toolResult = recoveryResult.result;
                     if (recoveryResult.recovered && recoveryResult.recoveryNote) {
@@ -920,7 +930,7 @@ export class GoalExecutionLoop {
                         stepMutations = [{
                             originalTool: recoveryResult.originalToolName ?? step.toolName,
                             finalTool: recoveryResult.finalToolName,
-                            originalArgs: recoveryResult.originalArgs ?? step.toolArgs as Record<string, unknown>,
+                            originalArgs: recoveryResult.originalArgs ?? resolvedArgs,
                             finalArgs: recoveryResult.finalArgs,
                             kind,
                         }];
