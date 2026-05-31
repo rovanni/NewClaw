@@ -190,10 +190,12 @@ export function discoverGroups(
 
     for (let i = 0; i < filePaths.length; i++) {
         const ta = tokenMap.get(filePaths[i])!;
-        if (ta.size === 0) continue;
+        // Arquivos com 1 token único (ex: slides.html, main.js, style.css) são nomes
+        // genéricos demais — atuariam como "pontes" transitivas entre grupos não relacionados.
+        if (ta.size < 2) continue;
         for (let j = i + 1; j < filePaths.length; j++) {
             const tb = tokenMap.get(filePaths[j])!;
-            if (tb.size === 0) continue;
+            if (tb.size < 2) continue;
             const similarity = jaccardTokens(ta, tb);
             if (similarity >= TOKEN_THRESHOLD) {
                 const rootBefore = uf.find(filePaths[i]);

@@ -371,7 +371,7 @@ OBJETIVO: ${goal.objective}
 PLANO:
 ${stepsStr}
 
-Ferramentas disponíveis: exec_command, read, write, edit, web_search, web_navigate, memory_search, read_document, list_workspace, send_document, send_audio
+Ferramentas disponíveis: ${this.toolRegistry.getEnabled().map(t => t.name).join(', ')}
 
 Verifique:
 1. Há steps faltando? (ex: criar arquivo → verificar se criou → enviar; não pular o envio)

@@ -36,13 +36,15 @@ export interface PlanResult {
 //   1. Tools registradas: chamáveis pelo nome no plano
 //   2. Binários do sistema: existem no servidor, mas SÓ via exec_command
 //   3. Skills de contexto: instruções comportamentais, NÃO são tools chamáveis
-const TOOL_CONTRACTS = `
+// Gera a seção de contratos de tools dinamicamente a partir da lista real de tools
+// registradas no ToolRegistry — evita hardcode e garante que tools de terceiros
+// (instaladas via plugin/skill) sejam automaticamente reconhecidas pelo planner.
+function buildToolContracts(callableTools: string[]): string {
+    return `
 CATEGORIAS DE FERRAMENTAS — leia antes de planejar:
 
 ▶ TOOLS CHAMÁVEIS (use o nome exato no campo toolName):
-  exec_command, read, write, edit, send_document, send_audio,
-  list_workspace, memory_search, memory_write, web_search, web_navigate,
-  organize_workspace, analyze_workspace_groups
+  ${callableTools.join(', ')}
 
 ▶ BINÁRIOS DO SISTEMA (use SEMPRE via exec_command — não são toolNames):
   python3  → exec_command: {"command": "python3 /workspace/script.py"}
@@ -62,8 +64,8 @@ SCHEMAS OBRIGATÓRIOS:
   exec_command:  {"command": "pandoc slides.md -o slides.pptx"}
 
 ⚠️  send_document SEM file_path será bloqueado automaticamente pelo sistema.
-⚠️  Qualquer toolName que não esteja na lista de TOOLS CHAMÁVEIS será ignorado.
 `.trim();
+}
 
 // ── Tool descriptions (injeta apenas ferramentas não-óbvias pelo nome) ───────
 
@@ -122,7 +124,7 @@ ${milestoneInstruction}
 ${pathsBlock}${capBlock ? `\n${capBlock}\n` : ''}${skillBlock}${contextBlock}
 Ferramentas disponíveis (use EXATAMENTE esses nomes): ${availableTools.join(', ')}
 ${toolDescriptions ?? ''}
-${TOOL_CONTRACTS}
+${buildToolContracts(availableTools)}
 
 Responda APENAS com JSON válido (sem markdown):
 {
@@ -161,12 +163,10 @@ ARGS OBRIGATÓRIOS POR FERRAMENTA:
 - edit: SEMPRE forneça oldText+newText (substituição) OU startLine+endLine+content (patch) OU append=true+content. Nunca chame edit sem esses parâmetros.
 - send_document: SEMPRE forneça file_path com o caminho completo do arquivo. Nunca chame send_document sem file_path.
 - list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") ou absoluto.
-- read: aceita caminho relativo ao workspace ou absoluto.
-- organize_workspace: USE DIRETAMENTE quando o usuário pedir para organizar/arrumar/reorganizar o workspace. Não use list_workspace+write para isso. Arg opcional: dry_run=true (padrão, mostra plano) ou dry_run=false (executa). Não precisa de outros steps antes.
-- analyze_workspace_groups: USE quando o usuário pedir para analisar grupos do workspace. Retorna JSON com grupos identificados. Não move arquivos.`.trim();
+- read: aceita caminho relativo ao workspace ou absoluto.`.trim();
 }
 
-function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string): string {
+function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, availableTools: string[], runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string): string {
     const goalText            = `${goal.objective} ${goal.userIntent}`;
     const compressedRefl      = PromptComposer.compressReflection(reflectionHint);
     const capBlock            = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary, compressedRefl);
@@ -241,7 +241,7 @@ AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}
 ${pipVenvLoopDirective}${implementDirective}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 
-${TOOL_CONTRACTS}
+${buildToolContracts(availableTools)}
 
 Responda APENAS com JSON válido (sem markdown):
 {
@@ -264,8 +264,6 @@ REFERÊNCIA DE ARGS OBRIGATÓRIOS:
 - send_document: SEMPRE forneça file_path com o caminho completo do arquivo. Nunca chame send_document sem file_path.
 - list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") OU absoluto. Passe apenas a subpasta desejada.
 - read: aceita caminho relativo ao workspace ou absoluto. Para diretórios, lista automaticamente o conteúdo.
-- organize_workspace: USE DIRETAMENTE quando o objetivo envolver organizar/arrumar/reorganizar o workspace. Não substitua por list_workspace+write. Arg opcional: dry_run=true (mostra plano) ou dry_run=false (executa). É um step único.
-- analyze_workspace_groups: USE quando o objetivo envolver analisar grupos do workspace. Retorna JSON. Não move arquivos.
 
 REGRAS CRÍTICAS para blocker 'environment_limit':
 - Se o blocker mencionar PEP 668 ou 'externally-managed':
@@ -478,10 +476,11 @@ export class GoalPlanner {
         }
 
         const skillsSummary     = this.loadSkillsSummary();
+        const availableTools    = ToolRegistry.getEnabled().map(t => t.name);
         const compressedRefl    = PromptComposer.compressReflection(reflectionHint);
         const goalText          = `${goal.objective} ${goal.userIntent}`;
         const capBlock          = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary, compressedRefl);
-        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, runtimeContext, capabilityContext, skillsSummary, activeMilestone);
+        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, availableTools, runtimeContext, capabilityContext, skillsSummary, activeMilestone);
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
 
         PromptComposer.recordReplan();
