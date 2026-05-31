@@ -52,6 +52,7 @@ export class ReadDocumentTool implements ToolExecutor {
         const filePath = path.isAbsolute(rawFilename)
             ? rawFilename
             : path.join(WORKSPACE, rawFilename);
+        log.info(`[ARTIFACT-PATH] tool=read_document requested="${rawFilename}" resolved="${filePath}" workspace_dir="${WORKSPACE}" canonical=${filePath.startsWith(WORKSPACE)} exists=${fs.existsSync(filePath)}`);
 
         if (!fs.existsSync(filePath)) {
             // Try to find in workspace by name only

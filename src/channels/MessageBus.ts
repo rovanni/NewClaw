@@ -425,6 +425,8 @@ export class MessageBus {
 
             // 4. Envia resposta antes de gravar no DB — erro de DB nunca bloqueia o usuário
             if (adapter) {
+                // H1 observabilidade: correlaciona mensagem recebida com resposta enviada
+                log.info(`[USER-MESSAGE] message_id=${msg.messageId} session=${msg.channel}:${msg.userId} correlationId=${correlationId} response_len=${responseText?.length ?? 0} duration_ms=${duration}`);
                 const normalizedResponse: NormalizedResponse = {
                     text: responseText || 'Desculpe, não consegui gerar uma resposta.',
                     format: 'markdown',

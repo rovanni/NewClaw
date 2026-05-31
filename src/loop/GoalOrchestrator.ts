@@ -226,6 +226,7 @@ export class GoalOrchestrator {
         });
 
         log.info(`[GoalOrchestrator] executing goal=${goal.id}`);
+        log.info(`[GOAL-LIFECYCLE] goal=${goal.id} session=${sessionKey} state=created intent="${message.slice(0, 80)}" timestamp=${Date.now()}`);
 
         // ── Injetar skill context no planner (sempre, para limpar contexto anterior) ──
         const skillContext = this.agentLoop.getSkillContextForQuery(message);
@@ -244,6 +245,7 @@ export class GoalOrchestrator {
         );
 
         log.info(`[GoalOrchestrator] goal=${goal.id} success=${result.success} cycles=${result.totalCycles} replans=${result.totalReplans}`);
+        log.info(`[USER-MESSAGE] goal=${goal.id} session=${sessionKey} source=${result.success ? 'goal_success' : 'goal_failure'} output_len=${result.finalOutput.length}`);
 
         // Auth pendente: preserva o texto E os botões do inline keyboard
         // (sem isso os botões são descartados e o usuário não vê a confirmação)

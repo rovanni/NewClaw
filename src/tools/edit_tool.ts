@@ -14,6 +14,9 @@ import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import fs from 'fs';
 import path from 'path';
 import { errorMessage } from '../shared/errors';
+import { createLogger } from '../shared/AppLogger';
+
+const log = createLogger('EditTool');
 
 export class EditTool implements ToolExecutor {
     name = 'edit';
@@ -51,6 +54,13 @@ export class EditTool implements ToolExecutor {
             expanded = homeDir + expanded.slice(1);
         } else if (expanded.startsWith('@')) {
             expanded = expanded.slice(1);
+        }
+
+        // FIX #3: Normalização canônica — /workspace/* → WORKSPACE_DIR/*
+        if (expanded.startsWith('/workspace/')) {
+            expanded = path.join(workspaceDir, expanded.slice('/workspace/'.length));
+        } else if (expanded === '/workspace') {
+            expanded = workspaceDir;
         }
 
         // Roots permitidas (Sandbox)
@@ -130,7 +140,9 @@ export class EditTool implements ToolExecutor {
             return { success: false, output: '', error: 'Parâmetro "path" é obrigatório' };
         }
 
+        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
         const { resolved: filePath, error: pathError } = this.resolvePath(rawPath);
+        log.info(`[ARTIFACT-PATH] tool=edit requested="${rawPath}" resolved="${filePath}" workspace_dir="${workspaceDir}" canonical=${filePath.startsWith(workspaceDir)} exists=${fs.existsSync(filePath)}`);
         if (pathError) {
             return { success: false, output: '', error: pathError };
         }

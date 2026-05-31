@@ -4,6 +4,9 @@ import fs from 'fs';
 import { MessageBus } from '../channels/MessageBus';
 import { DiscordAdapter } from '../channels/DiscordAdapter';
 import { errorMessage } from '../shared/errors';
+import { createLogger } from '../shared/AppLogger';
+
+const log = createLogger('SendDocumentTool');
 
 
 export class SendDocumentTool implements ToolExecutor {
@@ -55,6 +58,13 @@ export class SendDocumentTool implements ToolExecutor {
             expanded = homeDir + expanded.slice(1);
         }
 
+        // FIX #3: Normalização canônica — /workspace/* → WORKSPACE_DIR/*
+        if (expanded.startsWith('/workspace/')) {
+            expanded = path.join(workspaceDir, expanded.slice('/workspace/'.length));
+        } else if (expanded === '/workspace') {
+            expanded = workspaceDir;
+        }
+
         // path.resolve elimina travessias (../../), path.normalize não resolve symlinks
         // antes da checagem de roots — troca necessária para garantir sandbox correto.
         const normalized = path.resolve(expanded.startsWith('/')
@@ -82,7 +92,9 @@ export class SendDocumentTool implements ToolExecutor {
             return { success: false, output: '', error: 'file_path é obrigatório.' };
         }
 
+        const workspaceDir = path.resolve(process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace'));
         const { resolved: resolvedPath, error: pathError } = this.resolvePath(file_path);
+        log.info(`[ARTIFACT-PATH] tool=send_document requested="${file_path}" resolved="${resolvedPath}" workspace_dir="${workspaceDir}" canonical=${resolvedPath.startsWith(workspaceDir)} exists=${fs.existsSync(resolvedPath)}`);
         if (pathError) return { success: false, output: '', error: pathError };
 
         if (!fs.existsSync(resolvedPath)) {

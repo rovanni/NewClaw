@@ -370,6 +370,7 @@ export class GoalExecutionLoop {
             if (readyToValidate) {
                 // Todos os steps concluídos — LLM valida se o objetivo foi realmente atingido
                 log.info(`[GoalLoop] goal=${currentGoal.id} all steps completed — running LLM validation`);
+                log.info(`[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey} state=validating cycle=${totalCycles} timestamp=${Date.now()}`);
                 await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'tool_completed', message: 'Validando conclusão...' });
 
                 const activeMilestone = currentGoal.isConstruction && currentGoal.roadmap && currentGoal.roadmap.length > 0
@@ -438,16 +439,31 @@ export class GoalExecutionLoop {
                         const deferredSends = currentGoal.currentPlan.filter(
                             s => s.status === 'pending' && s.toolName === 'send_document'
                         );
+                        let failedSends = 0;
                         for (const sendStep of deferredSends) {
                             const sendResult = await this.executeStep(currentGoal, sendStep, channelContext, totalCycles);
                             currentGoal = this.goalStore.getById(currentGoal.id)!;
-                            if (sendResult.outcome === 'success') {
+                            const sendOk = sendResult.outcome === 'success';
+                            log.info(`[DEFERRED-SEND] goal=${currentGoal.id} file="${String(sendStep.toolArgs?.file_path ?? '(unknown)')}" result=${sendResult.outcome}`);
+                            if (sendOk) {
                                 this.markStepDone(currentGoal, sendStep, sendResult.output ?? '');
                                 currentGoal = this.goalStore.getById(currentGoal.id)!;
                                 if (sendStep.toolArgs?.file_path) {
                                     sentArtifacts.add(String(sendStep.toolArgs.file_path));
                                 }
+                            } else {
+                                failedSends++;
                             }
+                        }
+                        // FIX #2: não marcar goal como completed se algum send_document falhou
+                        const allSendsOk = deferredSends.length === 0 || failedSends === 0;
+                        log.info(`[GOAL-COMPLETE-CHECK] goal=${currentGoal.id} validation_ok=true all_sends_ok=${allSendsOk} deferred_sends=${deferredSends.length} failed_sends=${failedSends} final_state=${allSendsOk ? 'completed' : 'failed'}`);
+                        if (!allSendsOk) {
+                            this.goalStore.setStatus(currentGoal.id, 'failed');
+                            const sendErr = failedSends === deferredSends.length
+                                ? 'Objetivo validado, mas nenhum arquivo pôde ser entregue ao usuário. Verifique o workspace.'
+                                : `Objetivo validado, mas ${failedSends} de ${deferredSends.length} arquivo(s) não foram entregues.`;
+                            return this.buildResult(currentGoal, false, totalCycles, totalReplans, sendErr);
                         }
                         // Se não for construção, ou se for o último marco
                         this.goalStore.setStatus(currentGoal.id, 'completed');
@@ -458,6 +474,7 @@ export class GoalExecutionLoop {
 
                 // LLM diz que o objetivo ainda não foi atingido
                 log.info(`[GoalLoop] goal=${currentGoal.id} not yet complete: ${validation.reason}`);
+                log.info(`[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey} state=replanning reason="${(validation.reason ?? '').slice(0, 100)}" cycle=${totalCycles} timestamp=${Date.now()}`);
                 await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'replanning', message: validation.reason });
 
                 // ── Item 2: Deliverable Check ──────────────────────────────
@@ -499,6 +516,7 @@ export class GoalExecutionLoop {
                 if (currentGoal.replanBudget <= 0) {
                     this.goalStore.setStatus(currentGoal.id, 'failed');
                     const explanation = validation.reason ?? this.evaluator.buildFailureExplanation(currentGoal);
+                    log.info(`[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey} state=failed reason="replan_budget_exhausted" cycle=${totalCycles} timestamp=${Date.now()}`);
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'failed', message: explanation });
                     return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
                 }
@@ -867,6 +885,20 @@ export class GoalExecutionLoop {
                 evaluation: stepEvalForAttempt,
             };
             this.goalStore.addAttempt(goal.id, attempt);
+
+            // FIX #1: Alimenta SessionManager com resultado da tool para popular
+            // activeFiles e deliveredArtifacts — habilita contexto cross-goal de artefatos.
+            if (toolResult.success && step.toolName && this.sessionManager) {
+                const stepSessionKey = {
+                    channel: channelContext.channel,
+                    userId: channelContext.userId ?? goal.conversationId,
+                };
+                this.sessionManager.recordToolCall(
+                    stepSessionKey,
+                    step.toolName,
+                    JSON.stringify(step.toolArgs ?? {}),
+                ).catch(() => {});
+            }
 
             if (step.toolName) {
                 this.goalStore.addToolTried(goal.id, step.toolName);
@@ -1551,6 +1583,19 @@ Responda APENAS com JSON válido (sem markdown):
 OU
 {"achieved": false, "reason": "o que está faltando para concluir este marco/objetivo", "suggestions": ["ação 1", "ação 2"]}`;
 
+        // H2 observabilidade: registra o input exato enviado ao validador LLM
+        const artifactsInAttempts = goal.attempts
+            .filter(a => a.result === 'success' && ['write', 'edit', 'exec_command'].includes(a.toolName))
+            .map(a => String(a.args['path'] ?? a.args['file_path'] ?? ''))
+            .filter(Boolean);
+        log.info(
+            `[VALIDATION-INPUT] goal=${goal.id}` +
+            ` files="${artifactsInAttempts.join(',') || '(none)'}"`  +
+            ` steps_chars=${stepsContext.length}` +
+            ` attempts_chars=${attemptsContext.length}` +
+            ` total_chars=${stepsContext.length + attemptsContext.length}`
+        );
+
         let llmResult: Awaited<ReturnType<typeof this.providerFactory.chatWithFallback>> | undefined;
         try {
             llmResult = await this.providerFactory.chatWithFallback(
@@ -1568,6 +1613,15 @@ OU
             const cleaned = llmResult.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
             const parsed = JSON.parse(cleaned);
             log.info(`[GoalLoop] LLM validation: achieved=${parsed.achieved}${parsed.reason ? ` reason="${parsed.reason}"` : ''}`);
+            // H2 observabilidade: resultado do validador com métricas de contexto
+            const artifactCount = goal.attempts.filter(a => a.result === 'success' && ['write', 'send_document'].includes(a.toolName)).length;
+            log.info(
+                `[VALIDATION] goal=${goal.id}` +
+                ` achieved=${parsed.achieved}` +
+                ` reason="${(parsed.reason ?? parsed.summary ?? '').slice(0, 120)}"` +
+                ` content_chars=${attemptsContext.length}` +
+                ` artifact_count=${artifactCount}`
+            );
             return {
                 achieved: Boolean(parsed.achieved),
                 summary: parsed.summary,
@@ -1652,6 +1706,14 @@ OU
             ?? (lastSuccess?.output || undefined)
             ?? lastCompletedStep?.result
             ?? (success ? 'Tarefa concluída com sucesso.' : this.evaluator.buildFailureExplanation(goal));
+
+        // H1 observabilidade: resultado final estruturado para correlacionar com [USER-MESSAGE]
+        log.info(
+            `[GOAL-RESULT] goal=${goal.id} success=${success}` +
+            ` cycles=${totalCycles} replans=${totalReplans} attempts=${goal.attempts.length}` +
+            ` strategies=${goal.strategiesTried.length}` +
+            ` summary="${(overrideOutput ?? '').slice(0, 100)}"`
+        );
 
         // ── Goal Audit Summary — log estruturado único para forense ──────────
         // Uma linha que responde: "o que aconteceu neste goal?"

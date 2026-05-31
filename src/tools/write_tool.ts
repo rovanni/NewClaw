@@ -10,6 +10,9 @@ import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import fs from 'fs';
 import path from 'path';
 import { errorMessage } from '../shared/errors';
+import { createLogger } from '../shared/AppLogger';
+
+const log = createLogger('WriteTool');
 
 export class WriteTool implements ToolExecutor {
     name = 'write';
@@ -43,6 +46,14 @@ export class WriteTool implements ToolExecutor {
             expanded = homeDir + expanded.slice(1);
         } else if (expanded.startsWith('@')) {
             expanded = expanded.slice(1);
+        }
+
+        // FIX #3: Normalização canônica — /workspace/* → WORKSPACE_DIR/*
+        // Previne gravação em /workspace/ literal quando WORKSPACE_DIR aponta para outro caminho.
+        if (expanded.startsWith('/workspace/')) {
+            expanded = path.join(workspaceDir, expanded.slice('/workspace/'.length));
+        } else if (expanded === '/workspace') {
+            expanded = workspaceDir;
         }
 
         // Roots permitidas (Sandbox)
@@ -123,7 +134,9 @@ export class WriteTool implements ToolExecutor {
             return { success: false, output: '', error: 'Parâmetro "path" é obrigatório' };
         }
 
+        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
         const { resolved: filePath, error: pathError } = this.resolvePath(rawPath);
+        log.info(`[ARTIFACT-PATH] tool=write requested="${rawPath}" resolved="${filePath}" workspace_dir="${workspaceDir}" canonical=${filePath.startsWith(workspaceDir)} exists=${fs.existsSync(filePath)}`);
         if (pathError) {
             return { success: false, output: '', error: pathError };
         }
