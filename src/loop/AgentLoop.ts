@@ -1208,6 +1208,20 @@ export class AgentLoop {
                         continue;
                     }
 
+                    // FIX C: quando em contexto de goal-execution, adiar send_document para pós-validação
+                    if (toolName === 'send_document' && channelContext?.deferSendDocument) {
+                        const filePath = String(toolCall.arguments?.file_path ?? toolCall.arguments?.path ?? '(unknown)');
+                        log.info(`[${this.ts()}] [AGENTLOOP-SEND] deferred=true reason=goal_execution_policy file_path="${filePath}"`);
+                        channelContext.deferSendDocument(toolCall.arguments ?? {});
+                        loopMessages.push({
+                            role: 'tool',
+                            content: `[DIFERIDO] O documento "${filePath}" está agendado para entrega ao usuário após validação final do objetivo. Continue com os próximos passos.`,
+                            tool_call_id: toolCall.id,
+                        });
+                        usedToolInputs.add(inputKey);
+                        continue;
+                    }
+
                     const tool = this.tools.get(toolName);
                     if (tool) {
                         move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'native' });

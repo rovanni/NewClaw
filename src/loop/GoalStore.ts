@@ -190,6 +190,16 @@ export class GoalStore {
         return row ? this.rowToGoal(row) : null;
     }
 
+    /** Retorna todos os goals não-terminais (para log de shutdown e recovery). */
+    getAllActive(): Goal[] {
+        const rows = this.db.prepare(`
+            SELECT * FROM goals
+            WHERE status IN ('active', 'executing', 'blocked', 'replanning')
+            ORDER BY created_at DESC
+        `).all() as GoalRow[];
+        return rows.map(r => this.rowToGoal(r));
+    }
+
     // ── Atualização ───────────────────────────────────────────────────────────
 
     update(id: string, patch: Partial<Goal>): void {

@@ -135,6 +135,14 @@ export class AgentController {
 
         // GoalStore: tabela goals no mesmo SQLite
         this.goalStore = new GoalStore(this.db);
+        // ITEM6: detecta goals em estado não-terminal deixados por shutdown anterior
+        const orphanedGoals = this.goalStore.getAllActive();
+        log.info(
+            `[GOAL-RECOVERY] count=${orphanedGoals.length}` +
+            ` goal_ids="${orphanedGoals.map(g => g.id).join(',') || '(none)'}"` +
+            ` statuses="${orphanedGoals.map(g => g.status).join(',') || '(none)'}"` +
+            ` recovered=false`
+        );
 
         this.memory = new MemoryManager(this.db);
         this.memoryFacade = this.memory.getFacade();
@@ -567,6 +575,19 @@ export class AgentController {
     }
 
     async stop(reason: string = 'shutdown'): Promise<void> {
+        // ITEM6: loga goals ativos antes de desligar para detectar perda de estado
+        try {
+            const activeGoals = this.goalStore.getAllActive();
+            log.info(
+                `[SHUTDOWN-ACTIVE-GOALS] count=${activeGoals.length}` +
+                ` goal_ids="${activeGoals.map(g => g.id).join(',') || '(none)'}"` +
+                ` statuses="${activeGoals.map(g => g.status).join(',') || '(none)'}"` +
+                ` sessions="${activeGoals.map(g => g.sessionKey).join(',') || '(none)'}"` +
+                ` reason=${reason}`
+            );
+        } catch {
+            // GoalStore pode já ter sido destruído; ignorar
+        }
         await this.lifecycle.shutdown(reason);
         log.info('NewClaw stopped');
     }

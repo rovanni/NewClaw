@@ -141,9 +141,18 @@ export class WriteTool implements ToolExecutor {
         const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
         const { resolved: filePath, error: pathError } = this.resolvePath(rawPath);
         const isPlaceholder = PATH_PLACEHOLDER_PATTERN.test(rawPath);
+        const placeholderMatch = isPlaceholder ? (rawPath.match(PATH_PLACEHOLDER_PATTERN)?.[0] ?? '') : '';
         log.info(`[ARTIFACT-PATH] tool=write requested="${rawPath}" resolved="${filePath}" workspace_dir="${workspaceDir}" canonical=${filePath.startsWith(workspaceDir)} exists=${fs.existsSync(filePath)}`);
         // H5: sinaliza path placeholder — não bloqueia escrita mas registra para análise
-        log.info(`[PATH-QUALITY] tool=write requested="${rawPath}" resolved="${filePath}" is_placeholder=${isPlaceholder} confidence=${isPlaceholder ? 'high' : 'ok'}`);
+        log.info(
+            `[PATH-QUALITY] tool=write requested="${rawPath}" resolved="${filePath}"` +
+            ` is_placeholder=${isPlaceholder} confidence=${isPlaceholder ? 'high' : 'ok'}` +
+            (isPlaceholder ? ` matched_pattern="${placeholderMatch}"` : '')
+        );
+        // ITEM5: detecta placeholder para rastreamento de origem
+        if (isPlaceholder) {
+            log.warn(`[PLACEHOLDER-DETECTION] tool=write path="${rawPath}" matched_pattern="${placeholderMatch}"`);
+        }
         if (pathError) {
             return { success: false, output: '', error: pathError };
         }
@@ -168,10 +177,28 @@ export class WriteTool implements ToolExecutor {
             // H4: captura tamanho anterior para detectar sobrescrita destrutiva
             const existed = fs.existsSync(finalPath);
             const charsBefore = existed ? fs.readFileSync(finalPath, 'utf-8').length : 0;
+            const chars = content.length;
+
+            // H4: bloqueia sobrescrita que destruiria >50% do conteúdo existente
+            if (existed && charsBefore > 0 && chars < charsBefore * 0.5) {
+                const reductionPct = Math.round((1 - chars / charsBefore) * 100);
+                log.warn(
+                    `[DESTRUCTIVE-WRITE-BLOCK] path="${finalPath}"` +
+                    ` chars_before=${charsBefore} chars_after=${chars}` +
+                    ` reduction_pct=${reductionPct}`
+                );
+                return {
+                    success: false,
+                    output: '',
+                    error:
+                        `[DESTRUCTIVE-WRITE-BLOCK] Escrita bloqueada: o conteúdo seria reduzido de ` +
+                        `${charsBefore} para ${chars} chars (−${reductionPct}%). ` +
+                        `Use append=true para adicionar ao final, ou a ferramenta edit para modificações parciais.`,
+                };
+            }
 
             fs.writeFileSync(finalPath, content);
             const verb = existed ? 'Sobrescrito' : 'Criado';
-            const chars = content.length;
             const lines = content.split('\n').length;
 
             // H4: [ARTIFACT-WRITE] — registra a operação para detectar sobrescrita destrutiva

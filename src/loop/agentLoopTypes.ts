@@ -38,6 +38,8 @@ export interface ChannelContext {
     userId?: string;
     metadata?: Record<string, unknown>;
     correlationId?: string;
+    /** FIX C: quando presente, send_document no AgentLoop é adiado (não enviado imediatamente) */
+    deferSendDocument?: (args: Record<string, unknown>) => void;
 }
 
 export interface AgentLoopConfig {

@@ -16,6 +16,8 @@
  *   - Nenhum ciclo roda sem trigger explícito (user message ou auth callback)
  */
 
+import * as fs from 'fs';
+import * as crypto from 'crypto';
 import { createLogger } from '../shared/AppLogger';
 import { AgentLoop } from './AgentLoop';
 import { GoalStore } from './GoalStore';
@@ -351,6 +353,8 @@ export class GoalExecutionLoop {
         // Fix #2: rastreia caminhos de arquivo já enviados nesta sessão de execução.
         // Impede que deliverable_check reenvie um artefato já entregue ao usuário.
         const sentArtifacts = new Set<string>();
+        // H4/ITEM4: rastreia writes por path para detectar duplicate writes entre ciclos
+        const writeTraceByPath = new Map<string, { cycle: number; step: string; source: string }>();
 
         while (totalCycles < GOAL_LIMITS.MAX_CYCLES) {
             totalCycles++;
@@ -461,7 +465,31 @@ export class GoalExecutionLoop {
                         }
                         // FIX #2: não marcar goal como completed se algum send_document falhou
                         const allSendsOk = deferredSends.length === 0 || failedSends === 0;
+                        const deliveredArtifacts = deferredSends
+                            .filter((_, i) => i < deferredSends.length - failedSends)
+                            .map(s => String(s.toolArgs?.file_path ?? '(unknown)'));
                         log.info(`[GOAL-COMPLETE-CHECK] goal=${currentGoal.id} validation_ok=true all_sends_ok=${allSendsOk} deferred_sends=${deferredSends.length} failed_sends=${failedSends} final_state=${allSendsOk ? 'completed' : 'failed'}`);
+
+                        // FIX E: [DELIVERY-DECISION] — documenta a decisão de encerramento
+                        log.info(
+                            `[DELIVERY-DECISION] goal=${currentGoal.id}` +
+                            ` artifact="${deliveredArtifacts.join(',') || '(none)'}"` +
+                            ` delivered=${allSendsOk}` +
+                            ` validation=true` +
+                            ` completed=${allSendsOk}` +
+                            ` continue_execution=false` +
+                            ` reason=${allSendsOk ? 'goal_satisfied' : 'send_failed'}`
+                        );
+                        // FIX F: [GOAL-SATISFACTION] — estado final de satisfação do objetivo
+                        log.info(
+                            `[GOAL-SATISFACTION] goal=${currentGoal.id}` +
+                            ` achieved=true` +
+                            ` artifacts=${deferredSends.length}` +
+                            ` delivered=${deferredSends.length - failedSends}` +
+                            ` remaining_steps=0` +
+                            ` reason=${allSendsOk ? 'artifact_delivered' : 'delivery_failed'}`
+                        );
+
                         if (!allSendsOk) {
                             this.goalStore.setStatus(currentGoal.id, 'failed');
                             const sendErr = failedSends === deferredSends.length
@@ -469,7 +497,7 @@ export class GoalExecutionLoop {
                                 : `Objetivo validado, mas ${failedSends} de ${deferredSends.length} arquivo(s) não foram entregues.`;
                             return this.buildResult(currentGoal, false, totalCycles, totalReplans, sendErr);
                         }
-                        // Se não for construção, ou se for o último marco
+                        // FIX E: encerra imediatamente — sem replan, sem novos ciclos
                         this.goalStore.setStatus(currentGoal.id, 'completed');
                         log.info(`[GoalLoop] goal=${currentGoal.id} validated as complete`);
                         return this.buildResult(currentGoal, true, totalCycles, totalReplans, validation.summary);
@@ -479,6 +507,16 @@ export class GoalExecutionLoop {
                 // LLM diz que o objetivo ainda não foi atingido
                 log.info(`[GoalLoop] goal=${currentGoal.id} not yet complete: ${validation.reason}`);
                 log.info(`[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey} state=replanning reason="${(validation.reason ?? '').slice(0, 100)}" cycle=${totalCycles} timestamp=${Date.now()}`);
+                // FIX F: [GOAL-SATISFACTION] — registra estado de não-satisfação para diagnóstico
+                const pendingSendCount = currentGoal.currentPlan.filter(s => s.status === 'pending').length;
+                log.info(
+                    `[GOAL-SATISFACTION] goal=${currentGoal.id}` +
+                    ` achieved=false` +
+                    ` artifacts=${currentGoal.attempts.filter(a => a.result === 'success' && a.toolName === 'write').length}` +
+                    ` delivered=0` +
+                    ` remaining_steps=${pendingSendCount}` +
+                    ` reason=${(validation.reason ?? 'unknown').slice(0, 80)}`
+                );
                 await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'replanning', message: validation.reason });
 
                 // ── Item 2: Deliverable Check ──────────────────────────────
@@ -561,6 +599,26 @@ export class GoalExecutionLoop {
             if (pendingStep.toolName === 'send_document') {
                 log.info(`[SEND-CLASSIFICATION] goal=${currentGoal.id} step=${pendingStep.id} tool=send_document deferred=false reason=regular_plan_step`);
             }
+            // ITEM5: rastrear origem do path em steps de escrita
+            if ((pendingStep.toolName === 'write' || pendingStep.toolName === 'edit') && pendingStep.toolArgs?.path) {
+                const source = totalReplans > 0 ? 'replanner' : 'planner';
+                log.info(
+                    `[PATH-ORIGIN] goal=${currentGoal.id} cycle=${totalCycles}` +
+                    ` path="${pendingStep.toolArgs.path}"` +
+                    ` source=${source} step=${pendingStep.id}`
+                );
+            }
+            // H7: AgentLoop pode chamar send_document internamente sem proteção de deferred
+            if (pendingStep.toolName === 'agentloop' || !pendingStep.toolName) {
+                const hasPendingSends = currentGoal.currentPlan.some(
+                    s => s.status === 'pending' && s.toolName === 'send_document'
+                );
+                log.info(
+                    `[SEND-ORDER] goal=${currentGoal.id} step=${pendingStep.id}` +
+                    ` tool=${pendingStep.toolName ?? 'agentloop'} validation_done=false` +
+                    ` send_allowed=uncontrolled deferred_sends_pending=${hasPendingSends}`
+                );
+            }
 
             const cycleResult = await this.executeStep(currentGoal, pendingStep, channelContext, totalCycles);
 
@@ -611,6 +669,41 @@ export class GoalExecutionLoop {
                     // Fix #2: registra artefatos enviados para evitar reenvio por deliverable_check
                     if (pendingStep.toolName === 'send_document' && pendingStep.toolArgs?.file_path) {
                         sentArtifacts.add(String(pendingStep.toolArgs.file_path));
+                    }
+                    // FIX C: injeta sends diferidos do AgentLoop como steps pendentes no plano
+                    if (cycleResult.deferredSends && cycleResult.deferredSends.length > 0) {
+                        const newSendSteps: PlanStep[] = cycleResult.deferredSends.map((sendArgs, i) => ({
+                            id: `step_deferred_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 5)}`,
+                            description: `Enviar documento "${String(sendArgs['file_path'] ?? sendArgs['path'] ?? '(desconhecido)')}" ao usuário`,
+                            toolName: 'send_document',
+                            toolArgs: sendArgs,
+                            status: 'pending' as const,
+                        }));
+                        const updatedPlan = [...currentGoal.currentPlan, ...newSendSteps];
+                        this.goalStore.update(currentGoal.id, { currentPlan: updatedPlan });
+                        currentGoal = this.goalStore.getById(currentGoal.id)!;
+                        log.info(`[AGENTLOOP-SEND] goal=${currentGoal.id} step=${pendingStep.id} deferred_injected=${newSendSteps.length} reason=goal_execution_policy`);
+                    }
+                    // ITEM4: rastreia writes por path para detectar duplicatas entre ciclos
+                    if ((pendingStep.toolName === 'write' || pendingStep.toolName === 'edit') && pendingStep.toolArgs?.path) {
+                        const writePath = String(pendingStep.toolArgs.path);
+                        const source = pendingStep.toolName === 'write' ? 'planner' : 'planner';
+                        const prior = writeTraceByPath.get(writePath);
+                        if (prior) {
+                            log.warn(
+                                `[DUPLICATE-WRITE-TRACE] goal=${currentGoal.id}` +
+                                ` cycle=${totalCycles} path="${writePath}"` +
+                                ` step=${pendingStep.id} source=${source}` +
+                                ` prev_cycle=${prior.cycle} prev_step=${prior.step}`
+                            );
+                        } else {
+                            log.info(
+                                `[DUPLICATE-WRITE-TRACE] goal=${currentGoal.id}` +
+                                ` cycle=${totalCycles} path="${writePath}"` +
+                                ` step=${pendingStep.id} source=${source} prev_cycle=none`
+                            );
+                        }
+                        writeTraceByPath.set(writePath, { cycle: totalCycles, step: pendingStep.id, source });
                     }
                     currentGoal = this.goalStore.getById(currentGoal.id)!;
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'tool_completed' });
@@ -799,6 +892,8 @@ export class GoalExecutionLoop {
             let toolResult: { success: boolean; output: string; error?: string };
             let stepMutations: import('./GoalTypes').ToolMutation[] | undefined;
             let stepEvalForAttempt: { confidence: number; reason?: string } | undefined;
+            // FIX C: acumulador de sends diferidos capturados do AgentLoop
+            const deferredSendArgs: Array<Record<string, unknown>> = [];
 
             if (step.toolName && step.toolArgs) {
                 // Execução via ToolRegistry com ProactiveRecovery (mutação de args + fallback)
@@ -851,11 +946,16 @@ export class GoalExecutionLoop {
                 const [goalCh, sessionUserId] = goal.sessionKey.split(':');
                 const stepSessionKey = { channel: goalCh ?? 'unknown', userId: sessionUserId ?? goal.conversationId };
                 this.sessionManager?.resetTurnToolCounts(stepSessionKey);
+                // FIX C: captura sends diferidos do AgentLoop para execução pós-validação
+                const goalChannelContext: ChannelContext = {
+                    ...channelContext,
+                    deferSendDocument: (args) => { deferredSendArgs.push(args); },
+                };
                 const response = await this.agentLoop.process(
                     goal.conversationId,
                     stepPrompt,
                     sessionUserId ?? goal.conversationId,
-                    channelContext
+                    goalChannelContext
                 );
                 const text = typeof response === 'string' ? response : response.text;
                 const respOptions = typeof response === 'string' ? undefined : response.options;
@@ -944,8 +1044,12 @@ export class GoalExecutionLoop {
             }
 
             const cycleResult = this.evaluator.evaluate(goal, step, toolResult);
+            // FIX C: propaga sends diferidos capturados do AgentLoop para o loop principal
+            if (deferredSendArgs.length > 0) {
+                cycleResult.deferredSends = deferredSendArgs;
+            }
             const durationMs = Date.now() - startMs;
-            log.info(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'agentloop'} outcome=${cycleResult.outcome} durationMs=${durationMs}${cycleResult.blocker ? ` blocker=${cycleResult.blocker.kind}` : ''}`);
+            log.info(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'agentloop'} outcome=${cycleResult.outcome} durationMs=${durationMs}${cycleResult.blocker ? ` blocker=${cycleResult.blocker.kind}` : ''}${deferredSendArgs.length > 0 ? ` deferred_sends=${deferredSendArgs.length}` : ''}`);
             return cycleResult;
 
         } catch (err) {
@@ -1596,6 +1700,32 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             ? `MARCO ATUAL A SER VALIDADO: ${activeMilestone}\n(Objetivo Global do Projeto: ${goal.objective})`
             : `OBJETIVO: ${goal.objective}`;
 
+        // FIX D: lê o conteúdo real dos artefatos produzidos para injetar no prompt do validador
+        const writtenPaths = [...new Set(
+            goal.attempts
+                .filter(a => a.result === 'success' && ['write', 'edit'].includes(a.toolName))
+                .map(a => String(a.args['path'] ?? a.args['file_path'] ?? ''))
+                .filter(Boolean)
+        )];
+        const artifactLines: string[] = [];
+        for (const filePath of writtenPaths) {
+            try {
+                const content = fs.readFileSync(filePath, 'utf-8');
+                const truncated = content.length > 2000 ? content.slice(0, 2000) + '\n...(truncado)' : content;
+                const hash = crypto.createHash('sha1').update(content).digest('hex').slice(0, 12);
+                log.info(
+                    `[VALIDATION-ARTIFACT] goal=${goal.id}` +
+                    ` path="${filePath}" chars=${content.length} hash=${hash} included=true`
+                );
+                artifactLines.push(`--- ARQUIVO: ${filePath} (${content.length} chars, hash=${hash}) ---\n${truncated}`);
+            } catch {
+                log.warn(`[VALIDATION-ARTIFACT] goal=${goal.id} path="${filePath}" included=false readable=false`);
+            }
+        }
+        const artifactBlock = artifactLines.length > 0
+            ? `\nCONTEÚDO REAL DOS ARTEFATOS EM DISCO:\n${artifactLines.join('\n\n')}`
+            : '';
+
         const prompt = `Você é um validador de tarefas de software. Verifique se o objetivo especificado foi COMPLETAMENTE concluído.
 
 ALVO DE VALIDAÇÃO:
@@ -1607,12 +1737,13 @@ STEPS EXECUTADOS RECENTEMENTE:
 ${stepsContext || '(nenhum)'}
 
 RESULTADOS DAS FERRAMENTAS:
-${attemptsContext || '(nenhum)'}
+${attemptsContext || '(nenhum)'}${artifactBlock}
 
 IMPORTANTE — INTERPRETAÇÃO DE OUTPUTS:
 - Comandos de edição in-place (sed -i, python3 -c com open().write(), etc.) produzem SAÍDA VAZIA quando bem-sucedidos. Output vazio = SUCESSO para esses comandos.
 - Se o resultado de uma ferramenta exec_command está vazio e não há mensagem de erro, assuma que o comando foi bem-sucedido.
 - Se alguma leitura posterior (read, exec_command grep) mostra o conteúdo modificado, isso confirma a edição.
+- Se o conteúdo real do arquivo está disponível acima, use ESSE conteúdo como fonte primária de verdade.
 
 Análise crítica: o objetivo ou marco atual foi atingido E o resultado/entregável esperado foi produzido com sucesso?
 Se for um marco de desenvolvimento, verifique se os arquivos/funcionalidades desse marco foram realmente criados e testados.
@@ -1634,6 +1765,25 @@ OU
             ` attempts_chars=${attemptsContext.length}` +
             ` total_chars=${stepsContext.length + attemptsContext.length}`
         );
+        // H8: snapshot do arquivo em disco no momento da validação — prova que o validador
+        // está avaliando o mesmo artefato que foi escrito (detecta cache/leitura antecipada)
+        const uniqueArtifacts = [...new Set(artifactsInAttempts)];
+        for (const filePath of uniqueArtifacts) {
+            try {
+                const stat = fs.statSync(filePath);
+                const content = fs.readFileSync(filePath, 'utf-8');
+                const hash = crypto.createHash('sha1').update(content).digest('hex').slice(0, 12);
+                log.info(
+                    `[VALIDATION-FILE] goal=${goal.id}` +
+                    ` path="${filePath}"` +
+                    ` size=${content.length}` +
+                    ` mtime=${stat.mtimeMs}` +
+                    ` hash=${hash}`
+                );
+            } catch {
+                log.warn(`[VALIDATION-FILE] goal=${goal.id} path="${filePath}" readable=false`);
+            }
+        }
 
         let llmResult: Awaited<ReturnType<typeof this.providerFactory.chatWithFallback>> | undefined;
         try {

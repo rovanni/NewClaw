@@ -191,6 +191,8 @@ export interface CycleResult {
     authOptions?: { label: string; value: string }[];
     /** Populated when outcome=needs_dependency — informações da dependência ausente */
     depInfo?: DependencyInfo;
+    /** FIX C: send_document diferidos capturados do AgentLoop para execução pós-validação */
+    deferredSends?: Array<Record<string, unknown>>;
 }
 
 export interface GoalResult {
