@@ -1283,7 +1283,8 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
         const attempts = goal.attempts;
 
         // ── Derivar categorias a partir de goal.attempts ─────────────────────
-        const filesRead: Array<{ path: string; summary?: string }> = [];
+        // hash?: extraído do header do read_tool "[Arquivo: ... | hash=<sha1>]"
+        const filesRead: Array<{ path: string; summary?: string; hash?: string }> = [];
         const filesModified: string[] = [];
         const generatedArtifacts: string[] = [];
         const executedCommands: string[] = [];
@@ -1297,10 +1298,17 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
 
             const pathArg = String(attempt.args['path'] ?? attempt.args['file_path'] ?? '');
 
-            if (['file_read', 'read_document'].includes(attempt.toolName)) {
+            // ARTIFACT-DRIFT FIX: incluir 'read' na detecção (antes só file_read/read_document)
+            if (['read', 'file_read', 'read_document'].includes(attempt.toolName)) {
                 if (pathArg && !seenPaths.has(`read:${pathArg}`)) {
                     seenPaths.add(`read:${pathArg}`);
-                    filesRead.push({ path: pathArg, summary: attempt.output?.slice(0, 100).replace(/\n/g, ' ') });
+                    // Extrai hash do header "[Arquivo: ... | hash=<sha1>]"
+                    const hashMatch = attempt.output?.match(/\|\s*hash=([a-f0-9]{8,12})/i);
+                    filesRead.push({
+                        path: pathArg,
+                        summary: attempt.output?.slice(0, 100).replace(/\n/g, ' '),
+                        hash: hashMatch?.[1],
+                    });
                 }
             } else if (['write', 'edit'].includes(attempt.toolName)) {
                 if (pathArg && !seenPaths.has(`mod:${pathArg}`)) {
@@ -1361,9 +1369,38 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             }
         }
 
-        if (filesRead.length > 0) {
-            lines.push('\nArquivos já lidos (NÃO reler sem necessidade):');
-            for (const f of filesRead.slice(-8)) {
+        // ARTIFACT-DRIFT FIX: separa arquivos lidos-e-depois-modificados (stale) dos apenas lidos
+        const staleFiles = filesRead.filter(f => filesModified.includes(f.path));
+        const freshReadFiles = filesRead.filter(f => !filesModified.includes(f.path));
+
+        // [ARTIFACT-STATE]: compara hash do momento da leitura com hash atual em disco
+        for (const stale of staleFiles) {
+            try {
+                const current = fs.readFileSync(stale.path, 'utf-8');
+                const diskHash = crypto.createHash('sha1').update(current).digest('hex').slice(0, 12);
+                const matches = stale.hash ? stale.hash === diskHash : null;
+                log.info(
+                    `[ARTIFACT-STATE] goal=${goal.id}` +
+                    ` path="${stale.path}"` +
+                    ` disk_hash=${diskHash}` +
+                    ` context_hash=${stale.hash ?? '(unknown)'}` +
+                    ` matches=${matches ?? 'unknown'}`
+                );
+            } catch {
+                log.warn(`[ARTIFACT-STATE] goal=${goal.id} path="${stale.path}" readable=false`);
+            }
+        }
+
+        if (staleFiles.length > 0) {
+            lines.push('\n⚠️ ARQUIVOS MODIFICADOS APÓS LEITURA — REQUERE RELEITURA ANTES DE USAR:');
+            for (const f of staleFiles) {
+                lines.push(`  ⚠️ ${f.path} — conteúdo em cache pode estar DESATUALIZADO. Releia antes de qualquer modificação.`);
+            }
+        }
+
+        if (freshReadFiles.length > 0) {
+            lines.push('\nArquivos já lidos neste ciclo (válidos enquanto não modificados):');
+            for (const f of freshReadFiles.slice(-8)) {
                 lines.push(`  • ${f.path}${f.summary ? ` — ${f.summary}` : ''}`);
             }
         }
@@ -1430,23 +1467,32 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
         const ctx = this.cognitiveContext;
         const text = output.slice(0, 800);
 
-        // Arquivos lidos (via file_read tool ou padrões no output)
-        if (step.toolName === 'file_read' || step.toolName === 'read_document') {
+        // ARTIFACT-DRIFT FIX: incluir 'read' no rastreamento (antes só file_read/read_document)
+        if (['read', 'file_read', 'read_document'].includes(step.toolName ?? '')) {
             const pathArg = step.toolArgs?.path ?? step.toolArgs?.file_path;
             if (typeof pathArg === 'string' && pathArg) {
                 const alreadyTracked = ctx.filesRead.some(f => f.path === pathArg);
                 if (!alreadyTracked) {
                     const summary = text.slice(0, 100).replace(/\n/g, ' ');
-                    ctx.filesRead.push({ path: pathArg, summary: summary || undefined });
+                    const hashMatch = output.match(/\|\s*hash=([a-f0-9]{8,12})/i);
+                    ctx.filesRead.push({ path: pathArg, summary: summary || undefined, hash: hashMatch?.[1] });
                 }
             }
         }
 
-        // Arquivos modificados (write/edit)
+        // Arquivos modificados (write/edit): invalidar entrada de filesRead para forçar releitura
         if (step.toolName === 'write' || step.toolName === 'edit') {
             const pathArg = step.toolArgs?.path ?? step.toolArgs?.file_path;
-            if (typeof pathArg === 'string' && pathArg && !ctx.filesModified.includes(pathArg)) {
-                ctx.filesModified.push(pathArg);
+            if (typeof pathArg === 'string' && pathArg) {
+                if (!ctx.filesModified.includes(pathArg)) {
+                    ctx.filesModified.push(pathArg);
+                }
+                // ARTIFACT-DRIFT FIX: remove da lista "já lidos" — o conteúdo em cache está desatualizado
+                const prevRead = ctx.filesRead.find(f => f.path === pathArg);
+                if (prevRead) {
+                    ctx.filesRead = ctx.filesRead.filter(f => f.path !== pathArg);
+                    log.info(`[ARTIFACT-STATE] goal=(cognitiveContext) path="${pathArg}" invalidated=true context_hash=${prevRead.hash ?? '(unknown)'}`);
+                }
             }
         }
 

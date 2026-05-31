@@ -1329,16 +1329,17 @@ export class AgentLoop {
                         loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
                         if (result.success) usedToolOutputs.set(inputKey, result.output.slice(0, 2000));
 
-                        // After a successful read, inject an explicit directive so the model
-                        // doesn't enter a dedup loop trying to re-read the same file.
+                        // After a successful read, inject a directive to prevent re-reading in this turn.
+                        // ARTIFACT-DRIFT FIX: mensagem escrita para NÃO proibir releitura em turnos futuros
+                        // (arquivo pode ser modificado por steps subsequentes do GoalExecutionLoop).
                         if (result.success && resolvedToolName === 'read') {
                             loopMessages.push({
                                 role: 'system',
                                 content:
                                     `[LEITURA CONCLUÍDA] O arquivo foi lido com sucesso (${result.output.length} chars). ` +
-                                    `O conteúdo COMPLETO está disponível acima — ⚠️ NÃO chame "read" novamente para este arquivo.\n` +
-                                    `PRÓXIMO PASSO OBRIGATÓRIO: use "exec_command" para executar a conversão/processamento, ` +
-                                    `"write" para salvar um resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`,
+                                    `O conteúdo está disponível neste turno.\n` +
+                                    `Se o arquivo for modificado (write/edit) em um passo futuro, releia-o antes de usá-lo novamente.\n` +
+                                    `PRÓXIMO PASSO: use "exec_command" para processar, "write" para salvar, ou responda ao usuário.`,
                             });
                         }
 

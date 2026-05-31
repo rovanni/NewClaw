@@ -262,8 +262,8 @@ export interface StepEvaluation {
  * eliminando releituras redundantes e rediscoverys desnecessários.
  */
 export interface StepCognitiveContext {
-    /** Arquivos lidos por steps anteriores (caminho + hash opcional) */
-    filesRead: Array<{ path: string; summary?: string }>;
+    /** Arquivos lidos por steps anteriores (caminho + hash no momento da leitura) */
+    filesRead: Array<{ path: string; summary?: string; hash?: string }>;
     /** Arquivos criados ou modificados */
     filesModified: string[];
     /** Artefatos gerados (relatórios, imagens, documentos) com caminho no workspace */

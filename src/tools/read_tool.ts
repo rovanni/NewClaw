@@ -12,6 +12,7 @@
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import fs from 'fs';
 import path from 'path';
+import * as crypto from 'crypto';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
 
@@ -270,7 +271,13 @@ export class ReadTool implements ToolExecutor {
                 ? `\n⚠️ [CONTEÚDO SUSPEITO] Arquivo tem apenas ${stat.size} bytes (${lineCount} linha(s)). O conteúdo pode ser um placeholder. Verifique se o objetivo foi escrito corretamente antes de usar este conteúdo.`
                 : '';
 
-            const header = `[Arquivo: ${filename} | ${sizeKb}KB | Conteúdo completo — NÃO releia, use este conteúdo para executar a tarefa]\n`;
+            // ARTIFACT-DRIFT FIX: removido "NÃO releia" — essa instrução persistia na sessão via
+            // loopMessages=sessionMessages e bloqueava releituras em ciclos subsequentes do GoalExecutionLoop,
+            // mesmo após o arquivo ter sido modificado. O DEDUP intra-turno do AgentLoop já previne
+            // releituras redundantes dentro do mesmo turno sem precisar desta instrução persistente.
+            const diskHash = crypto.createHash('sha1').update(content).digest('hex').slice(0, 12);
+            log.info(`[ARTIFACT-VERSION] tool=read path="${filePath}" size=${content.length} hash=${diskHash} source=read`);
+            const header = `[Arquivo: ${filename} | ${sizeKb}KB | Conteúdo completo | hash=${diskHash}]\n`;
             return { success: true, output: header + content + nearEmptyWarning };
         } catch (error) {
             return { success: false, output: '', error: errorMessage(error) };
