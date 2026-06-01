@@ -40,6 +40,8 @@ export interface ChannelContext {
     correlationId?: string;
     /** FIX C: quando presente, send_document no AgentLoop é adiado (não enviado imediatamente) */
     deferSendDocument?: (args: Record<string, unknown>) => void;
+    /** P3-DEDUP: verifica se um artefato já foi registrado para deferral nesta execução */
+    isDeferredArtifact?: (filePath: string) => boolean;
 }
 
 export interface AgentLoopConfig {

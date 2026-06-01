@@ -232,12 +232,18 @@ MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
         ? `\n- AJUSTE DO ROADMAP: Se você descobrir novas dependências, blockers ou a necessidade de reordenar os marcos, você pode sugerir o roadmap inteiro redefinido e atualizado na propriedade JSON "adjustedRoadmap" (máximo de 3 a 5 marcos). Caso contrário, omita essa propriedade.\n`
         : '';
 
+    // P4: dica de retry com args corrigidos quando o blocker é de arg inválido/ausente
+    const lastFailedTool = [...(goal.currentPlan ?? [])].reverse().find(s => s.status === 'failed')?.toolName;
+    const retryHint = (blocker.kind === 'goal_incomplete' && lastFailedTool)
+        ? `\n⚡ DICA DE CORREÇÃO: A ferramenta "${lastFailedTool}" foi executada mas não produziu o resultado esperado. Antes de trocar de estratégia, considere se pode reutilizar "${lastFailedTool}" com argumentos corrigidos (ex: dry_run=false, path completo, etc.).\n`
+        : '';
+
     return `Você é um planejador de tarefas. Um blocker foi detectado. Proponha uma NOVA estratégia.
 
 OBJETIVO GLOBAL: ${goal.objective}
 ${milestoneInstruction}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
-AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}
+AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}${retryHint}
 ${pipVenvLoopDirective}${implementDirective}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 
@@ -467,6 +473,24 @@ export class GoalPlanner {
 
     async replan(goal: Goal, blocker: GoalBlocker, runtimeContext?: string, capabilityContext?: string, activeMilestone?: string): Promise<PlanResult> {
         log.info(`[GoalPlanner] replan start goal=${goal.id} model=${PLANNER_MODEL} blocker=${blocker.kind} contextLen=${runtimeContext?.length ?? 0}`);
+
+        // P4 observabilidade: registra a decisão de replanejamento com causa raiz detectável
+        const lastFailedStep = [...(goal.currentPlan ?? [])].reverse()
+            .find(s => s.status === 'failed');
+        const lastTool = lastFailedStep?.toolName;
+        const retryWithCorrectedArgs = blocker.kind === 'goal_incomplete' && lastTool
+            ? `retry ${lastTool} with corrected args`
+            : 'new_strategy';
+        log.info(
+            `[REPLAN-DECISION]` +
+            ` goal=${goal.id}` +
+            ` failed_step=${lastFailedStep?.id ?? 'none'}` +
+            ` failed_tool=${lastTool ?? 'none'}` +
+            ` root_cause=${blocker.kind}` +
+            ` blocker_desc="${blocker.description.slice(0, 120)}"` +
+            ` selected_strategy=${retryWithCorrectedArgs}` +
+            ` replan_budget=${goal.replanBudget}`
+        );
 
         const reflectionHint = this.reflectionMemory.buildContextHint(
             blocker.toolName ? `tool_${blocker.toolName}` : blocker.kind

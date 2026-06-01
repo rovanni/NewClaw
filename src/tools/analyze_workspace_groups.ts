@@ -1,10 +1,16 @@
 /**
  * analyze_workspace_groups — Descobre grupos de artefatos relacionados no workspace.
  *
- * Heurísticas (aplicadas via union-find):
- *   H1 — Mesmo Goal: arquivos criados no mesmo goal (via GoalStore.attempts)
- *   H2 — Similaridade de tokens: nomes de arquivo com overlap de tokens >= 0.30
- *   H3 — Janela temporal: arquivos modificados num intervalo de 5 minutos
+ * Heurísticas (aplicadas via union-find com sistema de score por par):
+ *   H1 — Mesmo Goal: arquivos criados no mesmo goal (matched por caminho relativo completo)
+ *   H2 — Similaridade de tokens: nomes de arquivo com overlap de tokens >= TOKEN_THRESHOLD
+ *   H3 — Janela temporal: arquivos modificados num intervalo de 3 minutos (apenas reforça H1/H2)
+ *
+ * Sistema de score por par (MERGE_THRESHOLD = 0.30):
+ *   same_goal      = +0.30   (par explicitamente criado pelo mesmo goal)
+ *   same_directory = +0.30   (arquivos no mesmo diretório)
+ *   token_similarity         (valor real do Jaccard, escalonado)
+ *   temporal_window = +0.17  (arquivos modificados na mesma janela temporal)
  *
  * Não move arquivos. Apenas identifica grupos e salva em workspace/.newclaw/artifact_groups.json.
  */
@@ -15,6 +21,18 @@ import path from 'path';
 import { createLogger } from '../shared/AppLogger';
 
 const log = createLogger('AnalyzeWorkspaceGroups');
+
+// ── Constantes de score ───────────────────────────────────────────────────────
+
+const SCORE_SAME_GOAL      = 0.30;
+const SCORE_SAME_DIR       = 0.30;
+const SCORE_TEMPORAL       = 0.17;
+const TOKEN_THRESHOLD      = 0.45; // Jaccard mínimo para H2 produzir contribuição de score
+const MERGE_THRESHOLD      = 0.30; // score mínimo para unir dois arquivos
+const WINDOW_MS            = 3 * 60 * 1000; // 3 minutos
+
+// Grupos com mais de N arquivos são marcados como suspeitos no summary
+const SUSPICIOUS_SIZE_THRESHOLD = 8;
 
 type SqlDb = {
     prepare(sql: string): { all(...params: unknown[]): unknown[] };
@@ -35,7 +53,7 @@ export interface FileInfo {
     size: number;
 }
 
-// ── Scan completo do workspace (sem limite de linhas) ─────────────────────────
+// ── Scan completo do workspace ────────────────────────────────────────────────
 
 export function scanWorkspace(dir: string): FileInfo[] {
     const results: FileInfo[] = [];
@@ -44,7 +62,7 @@ export function scanWorkspace(dir: string): FileInfo[] {
         try { entries = fs.readdirSync(current, { withFileTypes: true }); }
         catch { return; }
         for (const entry of entries) {
-            if (entry.name.startsWith('.')) continue; // pula .newclaw e outros ocultos
+            if (entry.name.startsWith('.')) continue;
             const abs = path.join(current, entry.name);
             if (entry.isDirectory()) {
                 walk(abs);
@@ -65,6 +83,26 @@ export function scanWorkspace(dir: string): FileInfo[] {
     return results;
 }
 
+// ── Normalização de caminho para relativo ao workspace ────────────────────────
+//
+// Garante que paths vindos dos GoalAttempts (absolutos, relativos, ou com prefix
+// "workspace/") sejam comparados pelo mesmo espaço de endereço dos FileInfo.
+//
+// Retorna null quando o path está fora do workspace (não deve ser linkado).
+//
+export function normalizeToRelative(p: string, workspaceDir: string): string | null {
+    if (!p) return null;
+    const normalized = p.replace(/\\/g, '/');
+    if (path.isAbsolute(p)) {
+        const rel = path.relative(workspaceDir, p).replace(/\\/g, '/');
+        // ".." no início significa que está fora do workspace
+        if (rel.startsWith('..')) return null;
+        return rel;
+    }
+    // Tira prefix "workspace/" que alguns models geram
+    return normalized.replace(/^workspace\//, '');
+}
+
 // ── Tokenização de nomes de arquivo ──────────────────────────────────────────
 
 function tokenize(filePath: string): Set<string> {
@@ -72,7 +110,7 @@ function tokenize(filePath: string): Set<string> {
         path.basename(filePath, path.extname(filePath))
             .toLowerCase()
             .split(/[_\-\s.]+/)
-            .filter(t => t.length > 2 && !/^\d+$/.test(t)) // ignora tokens numéricos e curtos
+            .filter(t => t.length > 2 && !/^\d+$/.test(t))
     );
 }
 
@@ -90,10 +128,8 @@ function deriveGroupName(files: string[]): string {
     if (files.length === 0) return 'grupo';
     const tokenSets = files.map(f => tokenize(f));
     const first = tokenSets[0];
-    // Tokens presentes em TODOS os arquivos do grupo
     const common = new Set([...first].filter(t => tokenSets.every(s => s.has(t))));
     if (common.size > 0) return [...common].slice(0, 4).join('_');
-    // Fallback: tokens mais frequentes
     const freq = new Map<string, number>();
     for (const ts of tokenSets) for (const t of ts) freq.set(t, (freq.get(t) ?? 0) + 1);
     const sorted = [...freq.entries()].sort((a, b) => b[1] - a[1]);
@@ -125,103 +161,196 @@ function makeUnionFind() {
     return { find, union, getGroups };
 }
 
+// ── Pontuação de par (score-based merge decision) ────────────────────────────
+
+interface PairScore {
+    sameGoal: boolean;
+    sameDirectory: boolean;
+    jaccard: number;
+    temporal: boolean;
+    finalScore: number;
+}
+
+function scorePair(
+    fileA: string,
+    fileB: string,
+    sameGoal: boolean,
+    mtimeA: number,
+    mtimeB: number,
+    tokenA: Set<string>,
+    tokenB: Set<string>,
+): PairScore {
+    const dirA = fileA.includes('/') ? fileA.slice(0, fileA.lastIndexOf('/')) : '';
+    const dirB = fileB.includes('/') ? fileB.slice(0, fileB.lastIndexOf('/')) : '';
+    const sameDirectory = dirA === dirB;
+    const jaccard = jaccardTokens(tokenA, tokenB);
+    const temporal = Math.abs(mtimeA - mtimeB) <= WINDOW_MS;
+
+    let finalScore = 0;
+    if (sameGoal)      finalScore += SCORE_SAME_GOAL;
+    if (sameDirectory) finalScore += SCORE_SAME_DIR;
+    // jaccard contribui proporcionalmente (max +0.20 quando Jaccard = 1.0)
+    if (jaccard > 0)   finalScore += jaccard * 0.20;
+    if (temporal)      finalScore += SCORE_TEMPORAL;
+
+    return { sameGoal, sameDirectory, jaccard, temporal, finalScore };
+}
+
 // ── Descoberta de grupos (exportada para reutilização em organize_workspace) ──
 
 export function discoverGroups(
     files: FileInfo[],
     goalRows: Array<{ id: string; attempts: string | null; user_intent: string; created_at: number }>,
+    workspaceDir?: string,
 ): ArtifactGroup[] {
     if (files.length === 0) return [];
 
     const uf = makeUnionFind();
     const filePaths = files.map(f => f.relativePath);
-    for (const fp of filePaths) uf.find(fp); // inicializa todos no union-find
+    for (const fp of filePaths) uf.find(fp);
 
-    // reasons[pairKey] = set de heurísticas que uniram esse par
     const pairReasons = new Map<string, Set<string>>();
+    const pairScores  = new Map<string, PairScore>();
     function addReason(a: string, b: string, reason: string): void {
         const key = a < b ? `${a}||${b}` : `${b}||${a}`;
         if (!pairReasons.has(key)) pairReasons.set(key, new Set());
         pairReasons.get(key)!.add(reason);
     }
 
-    // ── H1: Mesmo Goal ────────────────────────────────────────────────────────
+    const mtimeMap   = new Map<string, number>(files.map(f => [f.relativePath, f.mtime]));
+    const tokenMap   = new Map<string, Set<string>>();
+    for (const f of files) tokenMap.set(f.relativePath, tokenize(f.relativePath));
+
+    const resolvedWorkspaceDir = workspaceDir ?? (process.env.WORKSPACE_DIR ?? './workspace');
+
+    // ── H1: Mesmo Goal (com matching por caminho relativo completo) ───────────
+    //
+    // Fix crítico: goalBases antes usava path.basename(), causando matches incorretos
+    // entre arquivos em diretórios diferentes com o mesmo nome de arquivo.
+    // Agora usamos o caminho relativo normalizado para garantir identidade real.
+    //
     for (const row of goalRows) {
         if (!row.attempts) continue;
         let attempts: Array<{ toolName?: string; args?: Record<string, unknown>; result?: string }> = [];
         try { attempts = JSON.parse(row.attempts); } catch { continue; }
 
-        const goalBases = new Set<string>();
+        const goalPaths = new Set<string>();
         for (const att of attempts) {
             if (att.result !== 'success') continue;
             if (!['write', 'edit', 'send_document'].includes(att.toolName ?? '')) continue;
             const p = String(att.args?.path ?? att.args?.file_path ?? '');
-            if (p) goalBases.add(path.basename(p));
+            if (!p) continue;
+            const rel = normalizeToRelative(p, resolvedWorkspaceDir);
+            if (rel) goalPaths.add(rel);
         }
-        if (goalBases.size < 2) continue;
+        if (goalPaths.size < 2) continue;
 
+        // Filtra arquivos do workspace que foram criados por este goal (match exato de caminho)
         const matched = files
-            .filter(f => goalBases.has(path.basename(f.relativePath)))
+            .filter(f => goalPaths.has(f.relativePath))
             .map(f => f.relativePath);
 
+        if (matched.length < 2) continue;
+
+        // Avaliação par-a-par com sistema de score
         for (let i = 0; i < matched.length - 1; i++) {
-            const rootBefore = uf.find(matched[i]);
-            const alreadySame = rootBefore === uf.find(matched[i + 1]);
-            uf.union(matched[i], matched[i + 1]);
-            addReason(matched[i], matched[i + 1], 'same_goal');
-            if (!alreadySame) {
+            for (let j = i + 1; j < matched.length; j++) {
+                const fa = matched[i];
+                const fb = matched[j];
+                const pairKey = fa < fb ? `${fa}||${fb}` : `${fb}||${fa}`;
+
+                const ta = tokenMap.get(fa) ?? new Set<string>();
+                const tb = tokenMap.get(fb) ?? new Set<string>();
+                const ps = scorePair(fa, fb, true, mtimeMap.get(fa) ?? 0, mtimeMap.get(fb) ?? 0, ta, tb);
+                pairScores.set(pairKey, ps);
+
+                const decision = ps.finalScore >= MERGE_THRESHOLD ? 'merge' : 'skip';
+
                 log.info(
-                    `[ARTIFACT-GROUP-MERGE] group_a=${rootBefore} group_b=${uf.find(matched[i])}` +
-                    ` file_a=${matched[i]} file_b=${matched[i + 1]}` +
-                    ` reason=same_goal similarity=1.00 same_goal=true temporal_match=pending` +
+                    `[ARTIFACT-GROUP-SCORE]` +
+                    ` file_a=${fa} file_b=${fb}` +
+                    ` same_goal=true` +
+                    ` same_directory=${ps.sameDirectory}` +
+                    ` same_prefix=${ps.jaccard.toFixed(2)}` +
+                    ` jaccard=${ps.jaccard.toFixed(2)}` +
+                    ` temporal=${ps.temporal}` +
+                    ` final_score=${ps.finalScore.toFixed(2)}` +
+                    ` threshold=${MERGE_THRESHOLD}` +
+                    ` decision=${decision}` +
                     ` goal_id=${row.id}`
                 );
+
+                if (decision === 'merge') {
+                    const rootBefore = uf.find(fa);
+                    const alreadySame = rootBefore === uf.find(fb);
+                    uf.union(fa, fb);
+                    addReason(fa, fb, 'same_goal');
+                    if (ps.sameDirectory) addReason(fa, fb, 'same_directory');
+                    if (!alreadySame) {
+                        log.info(
+                            `[ARTIFACT-GROUP-UNION]` +
+                            ` file_a=${fa} file_b=${fb}` +
+                            ` reason=same_goal` +
+                            ` score=${ps.finalScore.toFixed(2)}` +
+                            ` union_source=H1_goal_id:${row.id}`
+                        );
+                    }
+                }
             }
         }
     }
 
     // ── H2: Similaridade de tokens ────────────────────────────────────────────
-    // Threshold 0.45: exige que >50% dos tokens únicos sejam compartilhados.
-    // Threshold mais baixo (ex: 0.30) causava agrupamento transitivo em cadeia
-    // onde um arquivo "ponte" (ex: aula_excel.pptx) fundia grupos não relacionados.
-    const TOKEN_THRESHOLD = 0.45;
-    const tokenMap = new Map<string, Set<string>>();
-    for (const f of files) tokenMap.set(f.relativePath, tokenize(f.relativePath));
-
+    // Threshold 0.45 exige que >50% dos tokens únicos sejam compartilhados.
+    // Arquivos com 1 token único (main.js, style.css) são ignorados — seriam
+    // "pontes" transitivas entre grupos não relacionados.
     for (let i = 0; i < filePaths.length; i++) {
         const ta = tokenMap.get(filePaths[i])!;
-        // Arquivos com 1 token único (ex: slides.html, main.js, style.css) são nomes
-        // genéricos demais — atuariam como "pontes" transitivas entre grupos não relacionados.
         if (ta.size < 2) continue;
         for (let j = i + 1; j < filePaths.length; j++) {
             const tb = tokenMap.get(filePaths[j])!;
             if (tb.size < 2) continue;
             const similarity = jaccardTokens(ta, tb);
             if (similarity >= TOKEN_THRESHOLD) {
-                const rootBefore = uf.find(filePaths[i]);
-                const sameComponentBefore = rootBefore === uf.find(filePaths[j]);
-                uf.union(filePaths[i], filePaths[j]);
-                addReason(filePaths[i], filePaths[j], 'same_prefix');
-                if (!sameComponentBefore) {
+                const fa = filePaths[i];
+                const fb = filePaths[j];
+                const pairKey = fa < fb ? `${fa}||${fb}` : `${fb}||${fa}`;
+
+                const existingScore = pairScores.get(pairKey);
+                const ps = existingScore ?? scorePair(fa, fb, false, mtimeMap.get(fa) ?? 0, mtimeMap.get(fb) ?? 0, ta, tb);
+
+                const rootBefore = uf.find(fa);
+                const alreadySame = rootBefore === uf.find(fb);
+                uf.union(fa, fb);
+                addReason(fa, fb, 'same_prefix');
+                if (!alreadySame) {
                     log.info(
-                        `[ARTIFACT-GROUP-MERGE] group_a=${rootBefore} group_b=${uf.find(filePaths[i])}` +
-                        ` file_a=${filePaths[i]} file_b=${filePaths[j]}` +
-                        ` reason=token_similarity similarity=${similarity.toFixed(2)}` +
-                        ` same_goal=false temporal_match=pending`
+                        `[ARTIFACT-GROUP-SCORE]` +
+                        ` file_a=${fa} file_b=${fb}` +
+                        ` same_goal=${ps.sameGoal}` +
+                        ` same_directory=${ps.sameDirectory}` +
+                        ` same_prefix=${similarity.toFixed(2)}` +
+                        ` jaccard=${similarity.toFixed(2)}` +
+                        ` temporal=${ps.temporal}` +
+                        ` final_score=${(ps.finalScore + similarity * 0.20).toFixed(2)}` +
+                        ` threshold=${MERGE_THRESHOLD}` +
+                        ` decision=merge`
+                    );
+                    log.info(
+                        `[ARTIFACT-GROUP-UNION]` +
+                        ` file_a=${fa} file_b=${fb}` +
+                        ` reason=token_similarity` +
+                        ` score=${similarity.toFixed(2)}` +
+                        ` union_source=H2_jaccard`
                     );
                 }
             }
         }
     }
 
-    // ── H3: Janela temporal — apenas reforça grupos H1/H2, não cria novos ───────
-    // Não usa union-find para evitar agrupamento transitivo (A→B→C mesmo que A e C
-    // estejam a 10 min de distância). Só marca 'temporal_window' em pares que JÁ
-    // foram unidos por H1 ou H2.
-    const WINDOW_MS = 3 * 60 * 1000; // 3 minutos — janela mais conservadora
-    const mtimeMap = new Map<string, number>(files.map(f => [f.relativePath, f.mtime]));
+    // ── H3: Janela temporal — apenas reforça grupos H1/H2, não cria novos ─────
     for (const [pairKey, reasons] of pairReasons) {
-        if (reasons.has('temporal_window')) continue; // já marcado
+        if (reasons.has('temporal_window')) continue;
         const [a, b] = pairKey.split('||');
         const ma = mtimeMap.get(a) ?? 0;
         const mb = mtimeMap.get(b) ?? 0;
@@ -237,7 +366,6 @@ export function discoverGroups(
     for (const [, members] of rawGroups) {
         if (members.length < 2) continue;
 
-        // Agrega razões de todos os pares do grupo
         const reasonSet = new Set<string>();
         for (let i = 0; i < members.length; i++) {
             for (let j = i + 1; j < members.length; j++) {
@@ -249,9 +377,9 @@ export function discoverGroups(
         }
         const reasons = [...reasonSet];
 
-        // Confiança: soma ponderada das heurísticas que contribuíram
         let confidence = 0;
         if (reasons.includes('same_goal'))       confidence += 0.50;
+        if (reasons.includes('same_directory'))  confidence += 0.20;
         if (reasons.includes('same_prefix'))     confidence += 0.33;
         if (reasons.includes('temporal_window')) confidence += 0.17;
         confidence = Math.min(confidence, 0.99);
@@ -268,11 +396,39 @@ export function discoverGroups(
         });
 
         log.info(
-            `[ARTIFACT-GROUP] group=${name} files=${members.join(',')} confidence=${confidence.toFixed(2)} reason=${reasons.join('+')}`
+            `[ARTIFACT-GROUP] group=${name} files=${members.length} confidence=${confidence.toFixed(2)} reason=${reasons.join('+')}`
         );
     }
 
-    return groups.sort((a, b) => b.confidence - a.confidence);
+    const sorted = groups.sort((a, b) => b.confidence - a.confidence);
+
+    // ── [ARTIFACT-GROUP-SUMMARY] ─────────────────────────────────────────────
+    const groupSizes = sorted.map(g => g.files.length);
+    const largestGroup = groupSizes.length > 0 ? Math.max(...groupSizes) : 0;
+    const avgSize = groupSizes.length > 0 ? groupSizes.reduce((a, b) => a + b, 0) / groupSizes.length : 0;
+    const suspiciousGroups = sorted.filter(g => g.files.length >= SUSPICIOUS_SIZE_THRESHOLD);
+
+    log.info(
+        `[ARTIFACT-GROUP-SUMMARY]` +
+        ` groups=${sorted.length}` +
+        ` total_files_grouped=${sorted.reduce((s, g) => s + g.files.length, 0)}` +
+        ` largest_group=${largestGroup}` +
+        ` average_group_size=${avgSize.toFixed(1)}` +
+        ` suspicious_groups=${suspiciousGroups.length}` +
+        (suspiciousGroups.length > 0
+            ? ` suspicious_names=${suspiciousGroups.map(g => g.name).join(',')}`
+            : '')
+    );
+
+    if (suspiciousGroups.length > 0) {
+        log.warn(
+            `[ARTIFACT-GROUP-SUMMARY] ⚠️ ${suspiciousGroups.length} grupo(s) suspeito(s) com ≥${SUSPICIOUS_SIZE_THRESHOLD} arquivos` +
+            ` — possível contaminação por agrupamento transitivo.` +
+            ` Grupos: ${suspiciousGroups.map(g => `${g.name}(${g.files.length})`).join(', ')}`
+        );
+    }
+
+    return sorted;
 }
 
 // ── Tool ─────────────────────────────────────────────────────────────────────
@@ -317,7 +473,7 @@ export class AnalyzeWorkspaceGroupsTool implements ToolExecutor {
             log.warn(`[AnalyzeWorkspaceGroups] GoalStore query skipped: ${String(err)}`);
         }
 
-        const groups = discoverGroups(files, goalRows);
+        const groups = discoverGroups(files, goalRows, workspaceDir);
         const allGrouped = new Set(groups.flatMap(g => g.files));
         const ungrouped = files.map(f => f.relativePath).filter(rp => !allGrouped.has(rp));
 

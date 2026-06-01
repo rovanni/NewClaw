@@ -1211,11 +1211,25 @@ export class AgentLoop {
                     // FIX C: quando em contexto de goal-execution, adiar send_document para pós-validação
                     if (toolName === 'send_document' && channelContext?.deferSendDocument) {
                         const filePath = String(toolCall.arguments?.file_path ?? toolCall.arguments?.path ?? '(unknown)');
-                        log.info(`[${this.ts()}] [AGENTLOOP-SEND] deferred=true reason=goal_execution_policy file_path="${filePath}"`);
-                        channelContext.deferSendDocument(toolCall.arguments ?? {});
+                        const alreadyRegistered = channelContext.isDeferredArtifact?.(filePath) ?? false;
+                        log.info(
+                            `[${this.ts()}] [AGENTLOOP-SEND]` +
+                            ` deferred=true` +
+                            ` reason=goal_execution_policy` +
+                            ` file_path="${filePath}"` +
+                            ` already_registered=${alreadyRegistered}`
+                        );
+                        if (!alreadyRegistered) {
+                            channelContext.deferSendDocument(toolCall.arguments ?? {});
+                        }
+                        // Mensagem semanticamente neutra: não instrui o LLM a "continuar trabalhando"
+                        // pois isso causava loop de re-chamadas ao send_document.
+                        const deferMsg = alreadyRegistered
+                            ? `[DIFERIDO-DEDUP] O documento "${filePath}" já foi registrado para entrega. Não reenvie este artefato. Se não há outras tarefas pendentes, conclua com uma resposta final ao usuário.`
+                            : `[DIFERIDO] Documento "${filePath}" registrado para entrega após validação. Não reenvie este artefato. Continue apenas se ainda existirem tarefas pendentes não relacionadas à entrega deste arquivo.`;
                         loopMessages.push({
                             role: 'tool',
-                            content: `[DIFERIDO] O documento "${filePath}" está agendado para entrega ao usuário após validação final do objetivo. Continue com os próximos passos.`,
+                            content: deferMsg,
                             tool_call_id: toolCall.id,
                         });
                         usedToolInputs.add(inputKey);

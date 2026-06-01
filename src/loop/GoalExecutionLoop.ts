@@ -443,21 +443,42 @@ export class GoalExecutionLoop {
                         currentGoal = this.goalStore.getById(currentGoal.id)!;
                         continue;
                     } else {
-                        // Fix #1: executa steps de send_document diferidos, agora que achieved=true
+                        // Fix #1 + P3-DEDUP: executa steps de send_document diferidos,
+                        // agora que achieved=true. Verifica sentArtifacts ANTES de executar
+                        // para garantir 1 artefato = 1 entrega mesmo após múltiplos replans.
                         const deferredSends = currentGoal.currentPlan.filter(
                             s => s.status === 'pending' && s.toolName === 'send_document'
                         );
                         let failedSends = 0;
                         for (const sendStep of deferredSends) {
+                            const filePath = String(sendStep.toolArgs?.file_path ?? sendStep.toolArgs?.path ?? '');
+                            // Defesa em profundidade: skip se já enviado nesta sessão de goal
+                            if (filePath && sentArtifacts.has(filePath)) {
+                                log.info(
+                                    `[DELIVERY-DEDUP] goal=${currentGoal.id}` +
+                                    ` artifact="${filePath}"` +
+                                    ` reason=already_sent_in_goal_session` +
+                                    ` existing_delivery=sent` +
+                                    ` decision=skip`
+                                );
+                                this.markStepDone(currentGoal, sendStep, '[DEDUP] já entregue nesta sessão');
+                                currentGoal = this.goalStore.getById(currentGoal.id)!;
+                                continue;
+                            }
                             const sendResult = await this.executeStep(currentGoal, sendStep, channelContext, totalCycles);
                             currentGoal = this.goalStore.getById(currentGoal.id)!;
                             const sendOk = sendResult.outcome === 'success';
-                            log.info(`[DEFERRED-SEND] goal=${currentGoal.id} file="${String(sendStep.toolArgs?.file_path ?? '(unknown)')}" result=${sendResult.outcome}`);
+                            log.info(
+                                `[DEFERRED-SEND] goal=${currentGoal.id}` +
+                                ` artifact="${filePath}"` +
+                                ` result=${sendResult.outcome}`
+                            );
                             if (sendOk) {
                                 this.markStepDone(currentGoal, sendStep, sendResult.output ?? '');
                                 currentGoal = this.goalStore.getById(currentGoal.id)!;
-                                if (sendStep.toolArgs?.file_path) {
-                                    sentArtifacts.add(String(sendStep.toolArgs.file_path));
+                                if (filePath) {
+                                    sentArtifacts.add(filePath);
+                                    log.info(`[DELIVERY-REGISTRY] artifact="${filePath}" goal=${currentGoal.id} status=delivered`);
                                 }
                             } else {
                                 failedSends++;
@@ -670,19 +691,57 @@ export class GoalExecutionLoop {
                     if (pendingStep.toolName === 'send_document' && pendingStep.toolArgs?.file_path) {
                         sentArtifacts.add(String(pendingStep.toolArgs.file_path));
                     }
-                    // FIX C: injeta sends diferidos do AgentLoop como steps pendentes no plano
+                    // FIX C + P3-DEDUP: injeta sends diferidos do AgentLoop como steps pendentes.
+                    // Deduplicação adicional: garante que o mesmo file_path não entre duas vezes
+                    // no plano mesmo que a dedup no callback tenha falhado (defesa em profundidade).
                     if (cycleResult.deferredSends && cycleResult.deferredSends.length > 0) {
-                        const newSendSteps: PlanStep[] = cycleResult.deferredSends.map((sendArgs, i) => ({
-                            id: `step_deferred_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 5)}`,
-                            description: `Enviar documento "${String(sendArgs['file_path'] ?? sendArgs['path'] ?? '(desconhecido)')}" ao usuário`,
-                            toolName: 'send_document',
-                            toolArgs: sendArgs,
-                            status: 'pending' as const,
-                        }));
-                        const updatedPlan = [...currentGoal.currentPlan, ...newSendSteps];
-                        this.goalStore.update(currentGoal.id, { currentPlan: updatedPlan });
-                        currentGoal = this.goalStore.getById(currentGoal.id)!;
-                        log.info(`[AGENTLOOP-SEND] goal=${currentGoal.id} step=${pendingStep.id} deferred_injected=${newSendSteps.length} reason=goal_execution_policy`);
+                        const existingPendingSendPaths = new Set(
+                            currentGoal.currentPlan
+                                .filter(s => s.status === 'pending' && s.toolName === 'send_document')
+                                .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
+                        );
+                        const dedupedSends: typeof cycleResult.deferredSends = [];
+                        for (const sendArgs of cycleResult.deferredSends) {
+                            const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
+                            const key = fp || JSON.stringify(sendArgs);
+                            if (existingPendingSendPaths.has(key) || sentArtifacts.has(fp)) {
+                                log.info(
+                                    `[DELIVERY-DEDUP] artifact="${fp}"` +
+                                    ` reason=duplicate_in_plan_injection` +
+                                    ` existing_delivery=${sentArtifacts.has(fp) ? 'already_sent' : 'pending_step'}` +
+                                    ` decision=skip`
+                                );
+                            } else {
+                                dedupedSends.push(sendArgs);
+                                existingPendingSendPaths.add(key);
+                            }
+                        }
+                        if (dedupedSends.length > 0) {
+                            const newSendSteps: PlanStep[] = dedupedSends.map((sendArgs, i) => ({
+                                id: `step_deferred_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 5)}`,
+                                description: `Enviar documento "${String(sendArgs['file_path'] ?? sendArgs['path'] ?? '(desconhecido)')}" ao usuário`,
+                                toolName: 'send_document',
+                                toolArgs: sendArgs,
+                                status: 'pending' as const,
+                                fallbackSteps: [],
+                            }));
+                            const updatedPlan = [...currentGoal.currentPlan, ...newSendSteps];
+                            this.goalStore.update(currentGoal.id, { currentPlan: updatedPlan });
+                            currentGoal = this.goalStore.getById(currentGoal.id)!;
+                            log.info(
+                                `[AGENTLOOP-SEND] goal=${currentGoal.id} step=${pendingStep.id}` +
+                                ` deferred_injected=${newSendSteps.length}` +
+                                ` deferred_skipped=${cycleResult.deferredSends.length - dedupedSends.length}` +
+                                ` reason=goal_execution_policy`
+                            );
+                        } else {
+                            log.info(
+                                `[AGENTLOOP-SEND] goal=${currentGoal.id} step=${pendingStep.id}` +
+                                ` deferred_injected=0` +
+                                ` deferred_skipped=${cycleResult.deferredSends.length}` +
+                                ` reason=all_duplicates`
+                            );
+                        }
                     }
                     // ITEM4: rastreia writes por path para detectar duplicatas entre ciclos
                     if ((pendingStep.toolName === 'write' || pendingStep.toolName === 'edit') && pendingStep.toolArgs?.path) {
@@ -892,8 +951,11 @@ export class GoalExecutionLoop {
             let toolResult: { success: boolean; output: string; error?: string };
             let stepMutations: import('./GoalTypes').ToolMutation[] | undefined;
             let stepEvalForAttempt: { confidence: number; reason?: string } | undefined;
-            // FIX C: acumulador de sends diferidos capturados do AgentLoop
-            const deferredSendArgs: Array<Record<string, unknown>> = [];
+            // FIX C: acumulador de sends diferidos capturados do AgentLoop.
+            // Usa Map<filePath, args> para deduplicar por artefato desde a captura.
+            // Evita que o LLM chame send_document N vezes para o mesmo arquivo.
+            const deferredSendArgsMap = new Map<string, Record<string, unknown>>();
+            const deferredSendArgs: Array<Record<string, unknown>> = []; // view do Map (populado em sync)
 
             if (step.toolName) {
                 // Execução via ToolRegistry com ProactiveRecovery (mutação de args + fallback)
@@ -956,10 +1018,29 @@ export class GoalExecutionLoop {
                 const [goalCh, sessionUserId] = goal.sessionKey.split(':');
                 const stepSessionKey = { channel: goalCh ?? 'unknown', userId: sessionUserId ?? goal.conversationId };
                 this.sessionManager?.resetTurnToolCounts(stepSessionKey);
-                // FIX C: captura sends diferidos do AgentLoop para execução pós-validação
+                // FIX C + P3-DEDUP: captura sends diferidos com deduplicação por file_path.
+                // deferSendDocument só aceita um artefato por caminho único nesta execução.
                 const goalChannelContext: ChannelContext = {
                     ...channelContext,
-                    deferSendDocument: (args) => { deferredSendArgs.push(args); },
+                    deferSendDocument: (args) => {
+                        const fp = String(args['file_path'] ?? args['path'] ?? '');
+                        const key = fp || JSON.stringify(args);
+                        if (deferredSendArgsMap.has(key)) {
+                            log.info(
+                                `[DELIVERY-DEDUP] artifact="${fp}"` +
+                                ` reason=duplicate_defer_in_agentloop` +
+                                ` existing_delivery=pending` +
+                                ` decision=skip`
+                            );
+                            return;
+                        }
+                        deferredSendArgsMap.set(key, args);
+                        deferredSendArgs.push(args);
+                        log.info(`[DELIVERY-REGISTRY] artifact="${fp}" status=deferred_registered`);
+                    },
+                    isDeferredArtifact: (filePath: string) => {
+                        return deferredSendArgsMap.has(filePath);
+                    },
                 };
                 const response = await this.agentLoop.process(
                     goal.conversationId,

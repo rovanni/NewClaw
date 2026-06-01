@@ -2,14 +2,18 @@
  * organize_workspace — Organiza o workspace em subpastas por grupos de artefatos.
  *
  * Comportamento:
- *   - dry_run=true (padrão): mostra plano sem mover nada
- *   - dry_run=false: executa criação de pastas + renomeação
+ *   - SEMPRE executa movimentações (sem dry_run implícito — bug histórico removido).
+ *   - Para previewing sem modificações, use analyze_workspace_groups.
  *
  * Regras:
  *   - Só move arquivos que estão na raiz do workspace (não arquivos já em subpastas)
  *   - Reutiliza discoverGroups de analyze_workspace_groups (sem duplicar lógica)
  *   - Chama refreshWorkspaceIndex após execução para manter core_workspace atualizado
  *   - Salva estado em workspace/.newclaw/artifact_groups.json
+ *
+ * Separação semântica:
+ *   analyze_workspace_groups → somente análise, sem mover nada
+ *   organize_workspace       → sempre executa movimentações reais
  */
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
@@ -27,15 +31,10 @@ type SqlDb = {
 
 export class OrganizeWorkspaceTool implements ToolExecutor {
     name = 'organize_workspace';
-    description = 'USE ESTA TOOL quando o usuário pedir para organizar, arrumar ou reorganizar o workspace. Agrupa arquivos relacionados em subpastas automaticamente. dry_run=true (padrão): mostra o plano sem mover nada. dry_run=false: executa. NÃO use list_workspace+write para isso — use esta tool diretamente.';
+    description = 'USE ESTA TOOL quando o usuário pedir para organizar, arrumar ou reorganizar o workspace. Agrupa arquivos da raiz em subpastas automaticamente. SEMPRE executa as movimentações reais. Para visualizar o plano sem mover arquivos, use analyze_workspace_groups primeiro.';
     parameters = {
         type: 'object' as const,
-        properties: {
-            dry_run: {
-                type: 'boolean',
-                description: 'Se true (padrão), exibe o plano sem mover arquivos. Se false, executa.',
-            },
-        },
+        properties: {},
         required: [],
     };
 
@@ -45,8 +44,15 @@ export class OrganizeWorkspaceTool implements ToolExecutor {
     ) {}
 
     async execute(args: Record<string, unknown>): Promise<ToolResult> {
-        const dryRun = args.dry_run !== false; // default: true
         const workspaceDir = path.resolve(process.env.WORKSPACE_DIR || './workspace');
+
+        // Aviso de compatibilidade para args legados
+        if (args.dry_run === true) {
+            log.warn(
+                `[WORKSPACE-ORGANIZE] dry_run=true foi passado mas é ignorado — organize_workspace` +
+                ` sempre executa. Use analyze_workspace_groups para preview sem modificações.`
+            );
+        }
 
         if (!fs.existsSync(workspaceDir)) {
             return { success: false, output: '', error: 'Workspace não encontrado.' };
@@ -55,6 +61,7 @@ export class OrganizeWorkspaceTool implements ToolExecutor {
         // ── Descoberta ────────────────────────────────────────────────────────
         const files = scanWorkspace(workspaceDir);
         if (files.length === 0) {
+            log.info(`[WORKSPACE-ORGANIZE] workspace_dir=${workspaceDir} files=0 action=skip reason=empty_workspace`);
             return { success: true, output: 'Workspace vazio — nada a organizar.' };
         }
 
@@ -67,14 +74,13 @@ export class OrganizeWorkspaceTool implements ToolExecutor {
             ).all() as typeof goalRows;
         } catch { /* H1 indisponível — continua com H2 e H3 */ }
 
-        const groups = discoverGroups(files, goalRows);
+        const groups = discoverGroups(files, goalRows, workspaceDir);
 
         // ── Filtrar: apenas arquivos na raiz ──────────────────────────────────
         const rootFiles = new Set(
             files.filter(f => !f.relativePath.includes('/')).map(f => f.relativePath)
         );
 
-        // moves: apenas arquivos raiz que pertencem a algum grupo
         const moves: Array<{ from: string; to: string; group: string }> = [];
         for (const group of groups) {
             for (const file of group.files) {
@@ -90,54 +96,55 @@ export class OrganizeWorkspaceTool implements ToolExecutor {
 
         const movedSet = new Set(moves.map(m => m.from));
         const ungroupedRoot = [...rootFiles].filter(f => !movedSet.has(f));
+        const groupsWithRootFiles = groups.filter(g => g.files.some(f => rootFiles.has(f)));
 
-        // ── Montar saída ──────────────────────────────────────────────────────
-        const groupsWithRootFiles = groups.filter(g =>
-            g.files.some(f => rootFiles.has(f))
+        log.info(
+            `[WORKSPACE-ORGANIZE]` +
+            ` workspace_dir=${workspaceDir}` +
+            ` total_files=${files.length}` +
+            ` root_files=${rootFiles.size}` +
+            ` groups_detected=${groups.length}` +
+            ` groups_with_root_files=${groupsWithRootFiles.length}` +
+            ` moves_planned=${moves.length}` +
+            ` ungrouped_root=${ungroupedRoot.length}`
         );
 
         if (moves.length === 0) {
-            return { success: true, output: `✅ Workspace já organizado — nenhum arquivo na raiz para mover. Grupos identificados: ${groups.length}. Arquivos total: ${files.length}.` };
-        }
-
-        if (dryRun) {
-            const lines: string[] = [];
-            lines.push(`📊 *Análise: ${groupsWithRootFiles.length} grupo(s) • ${files.length} arquivo(s) total • ${moves.length} arquivo(s) para mover (dry_run=true)*\n`);
-            for (const group of groupsWithRootFiles) {
-                const rootInGroup = group.files.filter(f => rootFiles.has(f));
-                lines.push(`📁 *${group.name}/* (confiança: ${Math.round(group.confidence * 100)}%)`);
-                for (const f of rootInGroup) {
-                    lines.push(`   ├── ${path.basename(f)}`);
-                }
-                lines.push(`   Motivo: ${group.reasons.join(' + ')}`);
-                lines.push('');
-            }
-            if (ungroupedRoot.length > 0) {
-                lines.push(`📄 *Sem grupo (permanecem na raiz):*`);
-                for (const f of ungroupedRoot) lines.push(`   • ${f}`);
-                lines.push('');
-            }
-            lines.push(`⚠️ *dry_run=true — nenhum arquivo foi movido.*`);
-            lines.push(`Para executar: chame organize_workspace com dry_run=false`);
-            log.info(
-                `[WORKSPACE-ORGANIZE] groups=${groupsWithRootFiles.length} files_to_move=${moves.length} dry_run=true`
-            );
-            return { success: true, output: lines.join('\n') };
+            log.info(`[WORKSPACE-ORGANIZE-RESULT] success=true files_moved=0 directories_created=0 reason=already_organized`);
+            return {
+                success: true,
+                output: `✅ Workspace já organizado — nenhum arquivo na raiz para mover. Grupos identificados: ${groups.length}. Arquivos total: ${files.length}.`,
+            };
         }
 
         // ── Executar movimentação ─────────────────────────────────────────────
         let moved = 0;
+        let directoriesCreated = 0;
         const errors: string[] = [];
+        const createdDirs = new Set<string>();
 
         for (const move of moves) {
             const fromAbs = path.join(workspaceDir, move.from);
             const toAbs = path.join(workspaceDir, move.to);
             try {
-                if (!fs.existsSync(fromAbs)) continue;
-                fs.mkdirSync(path.dirname(toAbs), { recursive: true });
+                if (!fs.existsSync(fromAbs)) {
+                    log.warn(`[WORKSPACE-ORGANIZE] move_skipped from="${move.from}" reason=file_not_found`);
+                    continue;
+                }
+                const toDir = path.dirname(toAbs);
+                if (!createdDirs.has(toDir)) {
+                    const existed = fs.existsSync(toDir);
+                    fs.mkdirSync(toDir, { recursive: true });
+                    if (!existed) {
+                        directoriesCreated++;
+                        createdDirs.add(toDir);
+                    }
+                }
                 fs.renameSync(fromAbs, toAbs);
                 moved++;
-                log.info(`[WORKSPACE-ORGANIZE] moved="${move.from}" → "${move.to}" group=${move.group}`);
+                log.info(
+                    `[WORKSPACE-ORGANIZE] moved="${move.from}" → "${move.to}" group=${move.group}`
+                );
             } catch (err) {
                 const msg = String(err);
                 errors.push(`${move.from}: ${msg}`);
@@ -164,16 +171,21 @@ export class OrganizeWorkspaceTool implements ToolExecutor {
                     ungrouped: ungroupedRoot,
                     executed_at: new Date().toISOString(),
                     files_moved: moved,
+                    directories_created: directoriesCreated,
                 }, null, 2),
                 'utf-8'
             );
         } catch { /* não crítico */ }
 
         log.info(
-            `[WORKSPACE-ORGANIZE] groups=${groupsWithRootFiles.length} files_moved=${moved} dry_run=false`
+            `[WORKSPACE-ORGANIZE-RESULT]` +
+            ` success=${errors.length === 0}` +
+            ` files_moved=${moved}` +
+            ` moves_planned=${moves.length}` +
+            ` directories_created=${directoriesCreated}` +
+            ` errors=${errors.length}`
         );
 
-        // Sumário na primeira linha para sobreviver ao truncamento de 300 chars no GoalAttempt
         const execLines: string[] = [];
         execLines.push(`✅ *Organização concluída: ${moved} arquivo(s) movido(s) em ${groupsWithRootFiles.length} grupo(s).*`);
         if (errors.length > 0) execLines.push(`⚠️ Erros: ${errors.join('; ')}`);
