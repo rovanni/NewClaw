@@ -17,6 +17,10 @@ export interface SkillMeta {
     version?: string;
     triggers?: string[];
     tools?: string[];
+    /** Tags de domínio para capability-based discovery (genéricas, em inglês).
+     *  Ex: ["presentation", "slides", "export", "document-generation"]
+     *  Skills sem tags continuam sendo descobertas apenas por triggers. */
+    tags?: string[];
 }
 
 export interface Skill extends SkillMeta {
@@ -131,8 +135,23 @@ export class SkillLoader {
 
         const frontmatter = match[1];
         const meta: SkillMeta = { name: '', description: '' };
+        let inTagsList = false; // flag para parsear tags em formato lista YAML
 
         for (const line of frontmatter.split('\n')) {
+            // Detectar início de lista de tags (formato multi-linha YAML)
+            if (/^tags:\s*$/.test(line.trim())) {
+                inTagsList = true;
+                meta.tags = [];
+                continue;
+            }
+            if (inTagsList) {
+                const listItem = line.match(/^\s+-\s+(.+)/);
+                if (listItem) {
+                    meta.tags!.push(listItem[1].trim());
+                    continue;
+                }
+                inTagsList = false; // fim da lista
+            }
             const [key, ...values] = line.split(':');
             const value = values.join(':').trim();
             
@@ -152,11 +171,20 @@ export class SkillLoader {
                 case 'tools':
                     meta.tools = value.split(',').map(s => s.trim());
                     break;
+                case 'tags':
+                    // Suporta dois formatos:
+                    //   tags: presentation, slides, export          (linha única CSV)
+                    //   tags:\n  - presentation\n  - slides         (lista YAML)
+                    meta.tags = value
+                        ? value.split(',').map(s => s.trim()).filter(Boolean)
+                        : [];
+                    break;
             }
         }
 
         return meta;
     }
+
 
     /**
      * Remove frontmatter do conteúdo

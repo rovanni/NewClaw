@@ -4,6 +4,7 @@ description: Valida arquivos gerados (HTML, JS, Python, JSON) antes de enviar ao
 version: "1.0"
 triggers: erro, error, syntax error, não abre, não renderiza, diagrama, mermaid, broken, corrija, corrigir, verificar, validar, checar
 tools: exec_command, read, edit
+tags: validation, quality, syntax, check, debug, html, javascript, python, json
 ---
 
 # Content Validator Skill

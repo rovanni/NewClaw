@@ -4,6 +4,7 @@ description: Converte apresentações HTML ou Markdown em arquivos PowerPoint (.
 version: "1.0"
 triggers: powerpoint, pptx, slides editáveis, apresentação editável, converter slides, marp, exportar pptx
 tools: exec_command, write, read, send_document
+tags: presentation, slides, export, office, document-generation, powerpoint, marp, convert
 ---
 
 # PPTX Generator Skill

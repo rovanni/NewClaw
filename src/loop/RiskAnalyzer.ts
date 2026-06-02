@@ -83,7 +83,12 @@ export class RiskAnalyzer {
         private readonly reflectionMemory: ReflectionMemory,
     ) {}
 
-    async analyze(goal: Goal, plan: PlanStep[]): Promise<RiskReport> {
+    async analyze(
+        goal: Goal,
+        plan: PlanStep[],
+        /** Skills disponíveis para detecção de [SKILL-HINT] (Sprint 3.7A). Parâmetro opcional — retrocompatível. */
+        availableSkills?: import('../skills/SkillLoader').Skill[],
+    ): Promise<RiskReport> {
         if (plan.length === 0) {
             return { risks: [], adjustedPlan: plan, planAdjusted: false, blocked: false };
         }
@@ -271,6 +276,31 @@ export class RiskAnalyzer {
 
         if (risks.length > 0) {
             log.info(`[RiskAnalyzer] goal=${goal.id} risks=${risks.length} planAdjusted=${llmResult.planAdjusted}`);
+        }
+
+        // Sprint 3.7A — Q2 Skill Hint: detecta se o plano usa exec_command para algo
+        // que uma skill instalada poderia cobrir com instruções mais especializadas.
+        // Apenas observabilidade — não bloqueia, não modifica o plano.
+        if (availableSkills && availableSkills.length > 0) {
+            const execSteps = finalPlan.filter(s => s.toolName === 'exec_command');
+            for (const step of execSteps) {
+                const cmd = String(step.toolArgs?.command ?? '').toLowerCase();
+                if (!cmd) continue;
+                const coveringSkill = availableSkills.find(skill =>
+                    (skill.tools ?? []).includes('exec_command') &&
+                    (skill.triggers ?? []).some(t => cmd.includes(t.toLowerCase()))
+                );
+                if (coveringSkill) {
+                    log.info(
+                        `[SKILL-HINT]` +
+                        ` goal=${goal.id}` +
+                        ` step=${step.id}` +
+                        ` skill=${coveringSkill.name}` +
+                        ` reason=exec_command_covered_by_skill` +
+                        ` command="${cmd.slice(0, 60)}"`
+                    );
+                }
+            }
         }
 
         return { risks, adjustedPlan: finalPlan, planAdjusted: llmResult.planAdjusted, blocked: false };
@@ -465,6 +495,16 @@ OU
                     const missing = detectMissingRequiredArgs(resolvedTool, toolArgs ?? {});
                     if (missing) {
                         log.warn(`[RiskAnalyzer] adjusted step ${i + 1}: '${resolvedTool}' ${missing} — converting to AgentLoop step`);
+                        // C3: rastrear mutação de step para auditoria de integridade do plano
+                        log.info(
+                            `[STEP-MUTATION]` +
+                            ` step=${String(s.id ?? `step_${i + 1}`)}` +
+                            ` created_by=risk_analyzer` +
+                            ` original_tool=${resolvedTool}` +
+                            ` new_tool=agentloop` +
+                            ` reason="${missing}"` +
+                            ` description="${String(s.description ?? '').slice(0, 80)}"`
+                        );
                         resolvedTool = undefined;
                         toolArgs = undefined;
                     }

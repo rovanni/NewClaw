@@ -461,14 +461,38 @@ export class AgentLoop {
     /**
      * Returns the skill context relevant to the given query text.
      * Used by GoalOrchestrator to inject skill instructions into GoalPlanner.
+     *
+     * Combina dois mecanismos (Sprint 3.7A):
+     *   1. Trigger match (original — mantido sem alteração)
+     *   2. Capability match (novo — usa tags normalizadas via SkillDiscovery)
      */
     public getSkillContextForQuery(query: string): string {
+        const { discoverSkills } = require('../skills/SkillDiscovery') as typeof import('../skills/SkillDiscovery');
         const skills = this.skillLoader.loadAll();
-        const matched = skills.filter(s =>
-            s.triggers?.some(t => query.toLowerCase().includes(t.toLowerCase()))
-        );
-        if (matched.length === 0) return '';
-        return matched.map(s => `### SKILL: ${s.name}\n${s.globalContent || s.content}`).join('\n\n');
+        const discovery = discoverSkills(skills, query);
+
+        // Log para observabilidade
+        if (discovery.byTrigger.length > 0) {
+            for (const s of discovery.byTrigger) {
+                log.info(`[SKILL-MATCH] query="${query.slice(0, 60)}" skill=${s.name} matched_by=trigger`);
+            }
+        }
+        if (discovery.byCapability.length > 0) {
+            for (const m of discovery.byCapability) {
+                log.info(
+                    `[SKILL-MATCH] query="${query.slice(0, 60)}"` +
+                    ` skill=${m.skillName}` +
+                    ` matched_by=tag` +
+                    ` score=${m.score.toFixed(2)}` +
+                    ` terms=${m.matchedTerms.join(',')}`
+                );
+            }
+        }
+
+        if (discovery.all.length === 0) return '';
+        return discovery.all
+            .map(s => `### SKILL: ${s.name}\n${s.globalContent || s.content}`)
+            .join('\n\n');
     }
 
     public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string | ProcessedResult> {

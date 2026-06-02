@@ -4,6 +4,7 @@ description: Instala dependências e configura o ambiente (pip, npm, apt, etc.)
 version: "1.0"
 triggers: instalar, install, configurar, setup, dependência, pip, npm, apt
 tools: exec_command
+tags: install, setup, environment, dependency, package, configure, provision
 ---
 
 # System Provisioner Skill

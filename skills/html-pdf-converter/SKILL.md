@@ -4,6 +4,7 @@ description: Converte arquivos HTML para PDF usando o script html2pdf.sh. Suport
 version: "3.0"
 triggers: pdf, converter, gerar pdf, transformar em pdf, aula para pdf, slides para pdf, html para pdf, exportar pdf
 tools: exec_command, send_document
+tags: pdf, convert, export, html, document, print, publish, slides
 ---
 
 # HTML to PDF Converter

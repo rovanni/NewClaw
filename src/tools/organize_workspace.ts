@@ -43,6 +43,33 @@ export class OrganizeWorkspaceTool implements ToolExecutor {
         private readonly memory?: MemoryManager,
     ) {}
 
+    // C4: lista entradas top-level do workspace de forma compacta (sem recursão profunda)
+    private listTopLevelStructure(workspaceDir: string, limit: number): string[] {
+        try {
+            const entries = fs.readdirSync(workspaceDir, { withFileTypes: true });
+            const lines: string[] = [];
+            let count = 0;
+            for (const entry of entries) {
+                if (entry.name.startsWith('.')) continue;
+                if (count >= limit) { lines.push(`   ... (${entries.length - count} entradas adicionais omitidas)`); break; }
+                if (entry.isDirectory()) {
+                    // Para diretórios, contar arquivos filhos diretos
+                    let childCount = 0;
+                    try {
+                        childCount = fs.readdirSync(path.join(workspaceDir, entry.name)).length;
+                    } catch { /* ok */ }
+                    lines.push(`📁 ${entry.name}/  (${childCount} arquivo(s))`);
+                } else {
+                    lines.push(`📄 ${entry.name}`);
+                }
+                count++;
+            }
+            return lines;
+        } catch {
+            return [];
+        }
+    }
+
     async execute(args: Record<string, unknown>): Promise<ToolResult> {
         const workspaceDir = path.resolve(process.env.WORKSPACE_DIR || './workspace');
 
@@ -186,6 +213,18 @@ export class OrganizeWorkspaceTool implements ToolExecutor {
             ` errors=${errors.length}`
         );
 
+        // C4: incluir estrutura top-level no output para eliminar passo narrativo adicional.
+        // Garante que o validator LLM tenha dados reais e não precise alucinar "a estrutura foi apresentada".
+        const topLevelStructure = this.listTopLevelStructure(workspaceDir, 30);
+
+        log.info(
+            `[WORKSPACE-ORGANIZE-SUMMARY]` +
+            ` files_moved=${moved}` +
+            ` directories_created=${directoriesCreated}` +
+            ` groups=${groupsWithRootFiles.length}` +
+            ` top_level_entries=${topLevelStructure.length}`
+        );
+
         const execLines: string[] = [];
         execLines.push(`✅ *Organização concluída: ${moved} arquivo(s) movido(s) em ${groupsWithRootFiles.length} grupo(s).*`);
         if (errors.length > 0) execLines.push(`⚠️ Erros: ${errors.join('; ')}`);
@@ -197,6 +236,15 @@ export class OrganizeWorkspaceTool implements ToolExecutor {
         }
         if (ungroupedRoot.length > 0) {
             execLines.push(`📄 Na raiz (sem grupo): ${ungroupedRoot.length} arquivo(s)`);
+        }
+
+        // Estrutura final do workspace (top-level apenas — sem recursão para evitar output gigante)
+        if (topLevelStructure.length > 0) {
+            execLines.push('');
+            execLines.push('📂 *Estrutura atual do workspace (top-level):*');
+            for (const entry of topLevelStructure) {
+                execLines.push(`   ${entry}`);
+            }
         }
 
         return { success: true, output: execLines.join('\n') };

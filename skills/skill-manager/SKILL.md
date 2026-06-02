@@ -4,6 +4,7 @@ description: Instala, audita e gerencia skills no NewClaw. Permite buscar skills
 version: "1.0"
 triggers: instalar skill, adicionar skill, nova skill, skills add, skill install, buscar skill, npx skills, skills.sh, habilidade nova, capacidade nova
 tools: exec_command, web_navigate, read, write, memory_write
+tags: skill, install, manage, deploy, capability, extension, plugin
 ---
 
 # Skill Manager

@@ -4,6 +4,7 @@ description: Audita skills de terceiros antes da ativação, verificando prompt 
 version: "1.0"
 triggers: auditar skill, revisar skill, verificar segurança, skill segura, checar skill, skill suspeita, analisar skill, skill-auditor
 tools: exec_command, read
+tags: security, audit, safety, review, skill, prompt-injection, malware
 ---
 
 # Skill Auditor

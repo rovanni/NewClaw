@@ -149,7 +149,7 @@ export class GoalExecutionLoop {
         // dependências entre steps (ex: exec cria arquivo → send_document envia)
         let initialPlan = rawPlan;
         if (this.isComplexPlan(rawPlan)) {
-            const riskReport = await this.riskAnalyzer.analyze(goal, rawPlan);
+            const riskReport = await this.riskAnalyzer.analyze(goal, rawPlan, this.planner.getAvailableSkills());
             if (riskReport.blocked) {
                 log.warn(`[GoalLoop] Q2 BLOCKED goal=${goal.id}: ${riskReport.blockReason}`);
                 this.goalStore.setStatus(goal.id, 'failed');
@@ -259,7 +259,7 @@ export class GoalExecutionLoop {
         //           OU: forçado após Q4 falhar (objetivo não foi entregue)
         let finalPlan = rawPlan;
         if (forceQ2 || this.isComplexPlan(rawPlan)) {
-            const riskReport = await this.riskAnalyzer.analyze(goal, rawPlan);
+            const riskReport = await this.riskAnalyzer.analyze(goal, rawPlan, this.planner.getAvailableSkills());
             if (riskReport.blocked) {
                 // Replan também pode ser bloqueado — propaga como goal bloqueado para o loop
                 log.warn(`[GoalLoop] Q2 BLOCKED replan goal=${goal.id}: ${riskReport.blockReason}`);
@@ -425,7 +425,7 @@ export class GoalExecutionLoop {
 
                         // Q2: Análise de Riscos para o novo plano
                         if (this.isComplexPlan(initialPlan)) {
-                            const riskReport = await this.riskAnalyzer.analyze(currentGoal, initialPlan);
+                            const riskReport = await this.riskAnalyzer.analyze(currentGoal, initialPlan, this.planner.getAvailableSkills());
                             if (riskReport.blocked) {
                                 log.warn(`[GoalLoop] Q2 BLOCKED milestone goal=${currentGoal.id}: ${riskReport.blockReason}`);
                                 this.goalStore.setStatus(currentGoal.id, 'failed');
@@ -1008,11 +1008,35 @@ export class GoalExecutionLoop {
                 const reflectionLine = targetFile
                     ? `\n[REFLEXÃO] Arquivo alvo desta tarefa: ${targetFile}\nAntes de usar qualquer ferramenta, confirme que o arquivo corresponde ao alvo acima.`
                     : '';
+                // C2: detectar intenções que requerem ação observável com dados reais.
+                // Se o step pede "mostrar", "listar", "apresentar", "enviar", etc.,
+                // o AgentLoop DEVE usar uma ferramenta — não produzir narrativa.
+                const OBSERVABLE_PATTERNS = [
+                    /\b(mostr[ae]r?|list[ae]r?|apresentar?|exibir?|visualizar?)\b/i,
+                    /\b(enviar?|exportar?|gerar? arquivo|mostrar? resultado)\b/i,
+                    /\b(apresente|liste|exiba|mostre|envie)\b/i,
+                ];
+                const requiresObservableExecution = OBSERVABLE_PATTERNS.some(p => p.test(step.description));
+                if (requiresObservableExecution) {
+                    log.info(
+                        `[AGENTLOOP-EVIDENCE-CHECK]` +
+                        ` step=${step.id}` +
+                        ` task="${step.description.slice(0, 80)}"` +
+                        ` requires_tool=true` +
+                        ` reason=observable_action_in_step_description`
+                    );
+                }
+                // Diretiva injetada no prompt: previne resposta narrativa quando há ação real a executar
+                const evidenceDirective = requiresObservableExecution
+                    ? `\n\n[REGRA DE EXECUÇÃO] Esta tarefa exige ação observável com dados reais. Chame obrigatoriamente uma ferramenta (list_workspace, read, exec_command, send_document, etc.) antes de responder. Não descreva o resultado sem executar a ferramenta que o produz.`
+                    : '';
+
                 const stepPrompt = [
                     `[GOAL STEP] ${this.sanitizeStepDescription(step.description)}`,
                     `\nContexto do objetivo: ${goal.objective}`,
                     focusLine,
                     reflectionLine,
+                    evidenceDirective,
                     cognitiveBlock ? `\n${cognitiveBlock}` : '',
                 ].join('');
                 const [goalCh, sessionUserId] = goal.sessionKey.split(':');
@@ -1648,6 +1672,47 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             log.warn('[GoalLoop] Q1 memory search error:', String(err));
         }
 
+        // Sprint 3.7A — Q1 Skill Discovery: informa o planner sobre skills relevantes
+        // Usa capability-based matching (SkillDiscovery) para separar linguagem do usuário
+        // dos domínios de capacidade, sem regras hardcoded.
+        try {
+            const { discoverSkills } = await import('../skills/SkillDiscovery');
+            const availableSkills = this.planner.getAvailableSkills();
+            const discovery = discoverSkills(availableSkills, goal.userIntent);
+
+            const relevantSkills = discovery.all;
+            if (relevantSkills.length > 0) {
+                const names = relevantSkills.map(s => s.name).join(', ');
+                parts.push(
+                    `Skills especializadas disponíveis para este objetivo: ${names}.\n` +
+                    `O planner já recebeu as instruções dessas skills. Priorize-as.`
+                );
+                log.info(
+                    `[SKILL-DISCOVERY]` +
+                    ` goal=${goal.id}` +
+                    ` capabilities=${[...new Set(discovery.byCapability.flatMap(m => m.matchedTerms))].join(',') || '(trigger)'}` +
+                    ` matched_skills=${relevantSkills.map(s => s.name).join(',')}` +
+                    ` source=local` +
+                    ` cycle=${cycleNumber}`
+                );
+            } else {
+                // Nenhuma skill local — sugerir skill-manager se o objetivo é especializado
+                const hasComplexIntent = goal.userIntent.split(/\s+/).length >= 4;
+                if (hasComplexIntent && availableSkills.length > 0) {
+                    log.info(
+                        `[SKILL-DISCOVERY]` +
+                        ` goal=${goal.id}` +
+                        ` matched_skills=none` +
+                        ` source=local` +
+                        ` cycle=${cycleNumber}` +
+                        ` note=no_local_skill_for_domain`
+                    );
+                }
+            }
+        } catch (err) {
+            log.warn('[GoalLoop] Q1 skill discovery error:', String(err));
+        }
+
         // Padrões de falha conhecidos (tools já tentadas)
         const failureHints = goal.toolsTried
             .map(t => this.reflectionMemory.buildContextHint(`tool_${t}`))
@@ -1948,6 +2013,56 @@ OU
                 ` content_chars=${attemptsContext.length}` +
                 ` artifact_count=${artifactCount}`
             );
+            // C6: registrar razão de conclusão com evidências de suporte
+            const successToolsList = goal.attempts
+                .filter(a => a.result === 'success')
+                .map(a => a.toolName)
+                .filter((v, i, arr) => arr.indexOf(v) === i)
+                .join(',');
+            log.info(
+                `[GOAL-COMPLETION-REASON]` +
+                ` goal=${goal.id}` +
+                ` achieved=${Boolean(parsed.achieved)}` +
+                ` reason="${(parsed.reason ?? parsed.summary ?? '').slice(0, 100)}"` +
+                ` supporting_tools="${successToolsList.slice(0, 120)}"`
+            );
+
+            // C1/C5: verificação de evidência pós-LLM (anti-alucinação).
+            // Se o LLM afirma achieved=true com claims observáveis ("foi apresentado",
+            // "foi enviado", etc.), verifica se existe attempt correspondente em goal.attempts.
+            // Funciona para qualquer tool — não hardcoded para casos específicos.
+            if (parsed.achieved) {
+                const evidenceCheck = this.checkClaimsAgainstEvidence(
+                    goal,
+                    parsed.summary ?? parsed.reason ?? ''
+                );
+                log.info(
+                    `[GOAL-EVIDENCE-SUMMARY]` +
+                    ` goal=${goal.id}` +
+                    ` claims_detected=${evidenceCheck.claimsChecked}` +
+                    ` evidence_found=${evidenceCheck.satisfied ? evidenceCheck.claimsChecked : Math.max(0, evidenceCheck.claimsChecked - 1)}` +
+                    ` missing_evidence=${evidenceCheck.satisfied ? 'none' : (evidenceCheck.missingTool ?? 'unknown')}` +
+                    ` decision=${evidenceCheck.satisfied ? 'accept' : 'reject'}`
+                );
+                if (!evidenceCheck.satisfied) {
+                    log.warn(
+                        `[UNVERIFIED-CLAIM]` +
+                        ` goal=${goal.id}` +
+                        ` claim="${evidenceCheck.claim}"` +
+                        ` missing_evidence="${evidenceCheck.missingTool}"` +
+                        ` llm_said=achieved_true` +
+                        ` decision=override_to_false`
+                    );
+                    return {
+                        achieved: false,
+                        reason: `Alegação não comprovada: "${evidenceCheck.claim}" — nenhum attempt de "${evidenceCheck.missingTool}" foi encontrado no histórico de execução.`,
+                        suggestions: [
+                            `Execute "${evidenceCheck.missingTool}" para produzir os dados antes de afirmar resultado`,
+                        ],
+                    };
+                }
+            }
+
             return {
                 achieved: Boolean(parsed.achieved),
                 summary: parsed.summary,
@@ -1963,6 +2078,92 @@ OU
             log.warn('[GoalLoop] validation error — assuming achieved:', String(err));
             return { achieved: true };
         }
+    }
+
+    /**
+     * C1/C5 — Anti-alucinação: verifica se afirmações no texto do LLM têm evidência operacional.
+     *
+     * Detecta padrões de claim ("foi apresentado", "foi enviado", etc.) e verifica se
+     * existe um GoalAttempt bem-sucedido com a ferramenta correspondente.
+     * Genérico — funciona para qualquer tool registrada no sistema.
+     *
+     * Não usa regras hardcoded para ferramentas específicas — o mapeamento é baseado
+     * em categorias de ação (apresentação, entrega, exportação, criação, organização).
+     */
+    private checkClaimsAgainstEvidence(
+        goal: Goal,
+        llmSummary: string,
+    ): { satisfied: boolean; claimsChecked: number; claim?: string; missingTool?: string } {
+        // Mapeamento genérico: padrão de alegação → ferramentas que devem ter sido executadas.
+        // "requireNonEmptyOutput": só conta como evidência se a ferramenta retornou dados reais.
+        const CLAIM_RULES: Array<{
+            pattern: RegExp;
+            label: string;
+            requiredTools: string[];
+            requireNonEmptyOutput?: boolean;
+        }> = [
+            {
+                // "foi apresentado / foi exibido / foi mostrado / foi listado"
+                pattern: /foi\s+(apresentad[ao]|exibid[ao]|mostrad[ao]|listado|visualizad[ao])\b/i,
+                label: 'apresentação/listagem de dados reais',
+                requiredTools: ['list_workspace', 'read', 'read_document', 'exec_command', 'organize_workspace'],
+                requireNonEmptyOutput: true,
+            },
+            {
+                // "foi enviado / foi entregue"
+                pattern: /foi\s+(enviado|entregue|transmitid[ao])\b/i,
+                label: 'envio de artefato',
+                requiredTools: ['send_document', 'send_audio'],
+            },
+            {
+                // "foi exportado / foi convertido"
+                pattern: /foi\s+(exportad[ao]|convertid[ao])\b/i,
+                label: 'exportação ou conversão',
+                requiredTools: ['exec_command', 'write', 'send_document'],
+            },
+            {
+                // "foi organizado / foi reorganizado"
+                pattern: /foi\s+(organizad[ao]|reorganizad[ao])\b/i,
+                label: 'organização de arquivos',
+                requiredTools: ['organize_workspace', 'exec_command'],
+            },
+            {
+                // "foi criado / foi gerado"
+                pattern: /foi\s+(criad[ao]|gerado|gerada)\b/i,
+                label: 'criação ou geração de artefato',
+                requiredTools: ['write', 'exec_command'],
+            },
+        ];
+
+        const successfulAttempts = goal.attempts.filter(a => a.result === 'success');
+        let claimsChecked = 0;
+
+        for (const rule of CLAIM_RULES) {
+            if (!rule.pattern.test(llmSummary)) continue;
+            claimsChecked++;
+
+            const evidenceAttempt = successfulAttempts.find(a => {
+                if (!rule.requiredTools.includes(a.toolName)) return false;
+                if (rule.requireNonEmptyOutput) {
+                    return (a.output ?? '').trim().length > 10;
+                }
+                return true;
+            });
+
+            if (!evidenceAttempt) {
+                return { satisfied: false, claimsChecked, claim: rule.label, missingTool: rule.requiredTools[0] };
+            }
+
+            log.info(
+                `[VALIDATION-EVIDENCE]` +
+                ` claim="${rule.label}"` +
+                ` required_tool="${rule.requiredTools.join('|')}"` +
+                ` evidence_found="${evidenceAttempt.toolName}"` +
+                ` decision=accept`
+            );
+        }
+
+        return { satisfied: true, claimsChecked };
     }
 
     // ── Deliverable Check helpers (Item 2) ───────────────────────────────────

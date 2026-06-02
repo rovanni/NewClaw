@@ -435,6 +435,14 @@ export class GoalPlanner {
         this.skillContext = context || undefined;
     }
 
+    /**
+     * Expõe a lista de skills disponíveis para Q1 (contextualize) e Q2 (RiskAnalyzer).
+     * Reutiliza a instância e o cache já existentes — sem nova instância de SkillLoader.
+     */
+    getAvailableSkills(): import('../skills/SkillLoader').Skill[] {
+        return this.skillLoader.loadAll();
+    }
+
     async plan(goal: Goal, runtimeContext?: string, capabilityContext?: string, activeMilestone?: string): Promise<PlanResult> {
         log.info(`[GoalPlanner] plan start goal=${goal.id} model=${PLANNER_MODEL} contextLen=${runtimeContext?.length ?? 0}`);
 
