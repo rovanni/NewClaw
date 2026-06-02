@@ -37,6 +37,46 @@ const SHELL_UNIVERSALS = new Set([
     'sh', 'bash', 'python3', 'python', 'node', 'true', 'false', 'read',
 ]);
 
+/**
+ * Detecta comandos marp/pandoc sem arquivo de entrada posicionado ANTES das flags.
+ * Causa clássica do erro "waiting data from stdin stream" no marp.
+ * Marp aceita apenas .md como entrada; pandoc aceita múltiplos formatos.
+ *
+ * Regra: o arquivo de entrada deve ser o primeiro argumento não-flag após o binário.
+ * Ex correto:   marp entrada.md --no-stdin -o saida.html
+ * Ex errado:    marp --no-stdin -o saida.html          (sem arquivo)
+ *               marp --pdf slides.md                   (flag antes do arquivo)
+ *               npx @marp-team/marp-cli -o output.html (sem arquivo .md)
+ */
+function isMarpWithoutInputFile(command: string): boolean {
+    if (!/\bmarp\b/.test(command)) return false;
+    const tokens = command.trim().split(/\s+/);
+    const marpIdx = tokens.findIndex(t => /^(npx|marp)$/.test(t));
+    if (marpIdx < 0) return false;
+    const start = tokens[marpIdx] === 'npx' ? marpIdx + 2 : marpIdx + 1;
+    let beforeFirstFlag = true;
+    for (const t of tokens.slice(start)) {
+        if (t.startsWith('-')) { beforeFirstFlag = false; continue; }
+        if (beforeFirstFlag && (t.endsWith('.md') || t.endsWith('.marp'))) return false;
+    }
+    return true; // sem arquivo .md antes de qualquer flag
+}
+
+/** Mesma lógica para pandoc: requer arquivo de entrada antes das flags. */
+function isPandocWithoutInputFile(command: string): boolean {
+    if (!/\bpandoc\b/.test(command)) return false;
+    const tokens = command.trim().split(/\s+/);
+    const pandocIdx = tokens.findIndex(t => /^pandoc$/.test(t));
+    if (pandocIdx < 0) return false;
+    const start = pandocIdx + 1;
+    let beforeFirstFlag = true;
+    for (const t of tokens.slice(start)) {
+        if (t.startsWith('-')) { beforeFirstFlag = false; continue; }
+        if (beforeFirstFlag && /\.(md|docx|tex|html|rst|odt|rtf)$/.test(t)) return false;
+    }
+    return true;
+}
+
 // Executáveis comumente usados em exec_command que podem não estar instalados.
 // Chave: nome do executável (lowercase). Valor: pacote a instalar.
 const KNOWN_SYSTEM_DEPS: Record<string, string> = {
@@ -157,6 +197,22 @@ export class RiskAnalyzer {
                     `binary=${firstToken} risk_reason="${riskReason}"`
                 );
                 risks.push(`Step "${step.description}": ${riskReason}`);
+            }
+
+            // Marp input validation (P0.2): detecta marp sem arquivo .md antes das flags
+            if (isMarpWithoutInputFile(cmdValue)) {
+                risks.push(
+                    `Step "${step.description}": marp invocado sem arquivo .md de entrada antes das flags — causará stdin error. ` +
+                    `Formato correto: marp entrada.md --no-stdin -o saida.html`
+                );
+            }
+
+            // Pandoc input validation (P0.2): detecta pandoc sem arquivo de entrada antes das flags
+            if (isPandocWithoutInputFile(cmdValue)) {
+                risks.push(
+                    `Step "${step.description}": pandoc invocado sem arquivo de entrada antes das flags. ` +
+                    `Formato correto: pandoc entrada.md -o saida.html`
+                );
             }
         }
 

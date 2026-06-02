@@ -31,10 +31,17 @@ logs/
 workspace/sites/*.html
 workspace/space-invaders*.html
 
+# Estado de runtime do workspace (persistência local, não versionável)
+workspace/.newclaw/
+workspace/.test_*/
+
 # Scripts e utilitarios ad-hoc
 debug_loop.js
 fetch.js
 scratch/
+
+# Testes de regressão (executados localmente, não parte do build)
+src/__tests__/
 
 # IDE / OS
 .vscode/

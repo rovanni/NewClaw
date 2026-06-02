@@ -1721,6 +1721,23 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             parts.push(`Histórico de execuções com ferramentas já usadas:\n${failureHints.join('\n')}`);
         }
 
+        // Artefatos entregues em goals anteriores da mesma sessão (P1.1)
+        // Permite que o GoalPlanner saiba que um arquivo já foi entregue ao usuário
+        // e não tente re-gerar ou re-ler de um path incorreto.
+        try {
+            if (this.sessionManager && goal.sessionKey) {
+                const [ch, uid] = goal.sessionKey.split(':');
+                const deliveredBlock = this.sessionManager.getDeliveredArtifactsBlock(
+                    { channel: ch ?? 'unknown', userId: uid ?? 'unknown' }
+                );
+                if (deliveredBlock) {
+                    parts.push(deliveredBlock);
+                }
+            }
+        } catch (err) {
+            log.warn('[GoalLoop] Q1 delivered artifacts error:', String(err));
+        }
+
         // Feedback do ciclo anterior (Q4 → Q1)
         if (priorFeedback && cycleNumber > 1) {
             parts.push(

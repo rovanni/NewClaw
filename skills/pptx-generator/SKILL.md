@@ -102,8 +102,13 @@ size: 16:9
 
 ## Passo 3 — Converter para .pptx
 
+> **REGRA ABSOLUTA:** o arquivo de entrada (`.md`) deve vir ANTES de qualquer flag.
+> O arquivo de entrada é OBRIGATÓRIO e deve preceder `--no-stdin`, `--pdf`, `-o` e demais opções.
+> Formato correto: `marp entrada.md --no-stdin -o saida.pptx`
+> Formato ERRADO: `marp --no-stdin -o saida.pptx` (sem arquivo) ou `marp --pdf entrada.md` (flag antes)
+
 ```bash
-# Converter Markdown para PowerPoint
+# Converter Markdown para PowerPoint (arquivo ANTES das flags)
 marp slides.md -o apresentacao.pptx
 
 # Com tema específico

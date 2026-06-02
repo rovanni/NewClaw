@@ -175,8 +175,14 @@ export class ReflectionMemory {
     /**
      * Padrões de falha agrupados por (pattern, tool_used), com taxa de falha >= 30%
      * e ao menos 2 registros — relevantes para o input atual.
+     *
+     * Quando category é 'tool_xxx', também pesquisa registros goal_blocker_* cuja
+     * tool_used seja 'xxx' — corrige o mismatch entre a chave de escrita
+     * (GoalExecutionLoop usa `goal_blocker_${kind}`) e a chave de leitura
+     * (GoalPlanner usa `tool_${toolName}`).
      */
     private getFailurePatterns(category: string): PatternAggRow[] {
+        const toolName = category.startsWith('tool_') ? category.slice(5) : null;
         return this.db.prepare(`
             SELECT
                 pattern,
@@ -189,13 +195,13 @@ export class ReflectionMemory {
                    AND r2.approved = 0 AND r2.suggested_fix IS NOT NULL
                  ORDER BY r2.created_at DESC LIMIT 1) AS top_fix
             FROM reflection_annotations r1
-            WHERE pattern = ?
+            WHERE (pattern = ? OR (? IS NOT NULL AND pattern LIKE 'goal_blocker_%' AND tool_used = ?))
               AND created_at > datetime('now', '-7 days')
             GROUP BY pattern, tool_used
             HAVING total >= 2 AND failure_rate >= 0.30
             ORDER BY failure_rate DESC, total DESC
             LIMIT 3
-        `).all(category) as PatternAggRow[];
+        `).all(category, toolName, toolName) as PatternAggRow[];
     }
 
     /** Retorna as últimas N anotações (para observabilidade/dashboard). */

@@ -147,10 +147,25 @@ export class ArtifactDeliveryRegistry {
     }
 
     /**
-     * Retorna um sumário para injeção no contexto cognitivo do LLM.
+     * Retorna todos os artefatos com status DELIVERED para uma sessão,
+     * incluindo artefatos entregues por goals anteriores na mesma sessão.
+     * Habilita visibilidade cross-goal: Goal B vê o que Goal A já entregou.
      */
-    buildContextBlock(goalId: string): string {
-        const delivered = this.getDeliveredForGoal(goalId);
+    getDeliveredForSession(sessionId: string): ArtifactRecord[] {
+        return [...this.artifacts.values()]
+            .filter(r => r.sessionId === sessionId && r.status === 'DELIVERED');
+    }
+
+    /**
+     * Retorna um sumário para injeção no contexto cognitivo do LLM.
+     * Quando sessionId for fornecido, retorna todos os artefatos entregues
+     * na sessão (cross-goal), permitindo que goals subsequentes saibam
+     * quais arquivos já foram entregues ao usuário anteriormente.
+     */
+    buildContextBlock(goalId: string, sessionId?: string): string {
+        const delivered = sessionId
+            ? this.getDeliveredForSession(sessionId)
+            : this.getDeliveredForGoal(goalId);
         if (delivered.length === 0) return '';
         const lines = ['Artefatos já entregues neste goal (não reenviar):'];
         for (const r of delivered) {

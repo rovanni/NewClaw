@@ -474,6 +474,36 @@ export class ContextPlanner {
             `rankingInverted=${rankingInverted}`
         );
 
+        // Rebalanceamento: quando rankingInverted=true, nós com alta relevância ficaram fora
+        // enquanto nós com qRel=0 foram incluídos por importance gate.
+        // Fix: trocar os piores contaminadores (qRel≈0, não-identity) pelos melhores skipped.
+        if (rankingInverted && compSkipped.length > 0) {
+            // Candidatos à remoção: não-identity, não selecionados por competição, qRel < 0.05
+            const evictCandidates = nonIdentityEntries
+                .map(e => ({ entry: e, qRel: quickRelevance(queryTerms, e) }))
+                .filter(c => c.qRel < 0.05 && !selected.get(c.entry.nodeId)?.startsWith('tier0:identity'))
+                .sort((a, b) => a.entry.importance - b.entry.importance); // menor importância primeiro
+
+            let swapped = 0;
+            for (const worst of evictCandidates) {
+                if (swapped >= compSkipped.length) break;
+                const best = compSkipped[swapped];
+                if (best.finalScore <= 0) break; // só substitui por nós com relevância real
+                selected.delete(worst.entry.nodeId);
+                selected.set(best.entry.nodeId, `tier${best.entry.tier}:comp-rebalanced score=${best.finalScore.toFixed(3)}`);
+                log.info(
+                    `[REBALANCE] evicted nodeId=${worst.entry.nodeId} name="${worst.entry.entity.slice(0, 30)}" ` +
+                    `qRel=${worst.qRel.toFixed(3)} importance=${worst.entry.importance.toFixed(3)} ` +
+                    `added nodeId=${best.entry.nodeId} name="${best.entry.entity.slice(0, 30)}" ` +
+                    `score=${best.finalScore.toFixed(3)}`
+                );
+                swapped++;
+            }
+            if (swapped > 0) {
+                log.info(`[REBALANCE] rankingInverted=true fixed: swapped=${swapped} contaminators replaced with relevant nodes`);
+            }
+        }
+
         // [COMP-BREAKDOWN] contribuição de cada fator para todos os nós selecionados
         for (const e of selectedEntries) {
             const qRel = quickRelevance(queryTerms, e);
