@@ -207,6 +207,27 @@ export const DEFAULT_TIER_BUDGETS: TierBudgets = {
     competitive: 4,
 };
 
+/**
+ * Metadata produced by a single buildContext() call.
+ * Consumed by AgentLoop to build a DecisionContext without additional I/O.
+ * All fields are derived from data already computed inside buildContext —
+ * no extra passes or queries are needed.
+ */
+export interface ContextBuildMetadata {
+    /** True when at least one Tier-1 preference/trait node was selected with quickRel > 0. */
+    hasHighRelevancePreference: boolean;
+    /** True when an entity-cluster match produced at least one node. */
+    hasEntityMatch: boolean;
+    /** Number of memory nodes injected into the context. */
+    selectedCount: number;
+    /** Type of the highest-scoring non-identity node, or null when only identity nodes were selected. */
+    topContentNodeType: string | null;
+    /** Domain class id returned by classifyDomain(), or null when no domain matched. */
+    domainClass: string | null;
+    /** Shorthand: any nodes were selected at all. */
+    memoryUsed: boolean;
+}
+
 export interface PlannerMetrics {
     tier0Selected:       number;
     tier1Selected:       number;
@@ -603,6 +624,12 @@ export class ContextBuilder {
     private contextPlanner: ContextPlanner | null = null;
     private entityFallbackExtractor?: EntityFallbackExtractor;
 
+    /** Cached metadata from the last buildContext() call; read by callers via getLastBuildMetadata(). */
+    private _lastBuildMetadata: ContextBuildMetadata | null = null;
+
+    /** Returns the metadata produced by the most recent buildContext() call, or null before first call. */
+    getLastBuildMetadata(): ContextBuildMetadata | null { return this._lastBuildMetadata; }
+
     private readonly MAX_MEMORY_CHARS  = 3200;
     private readonly BUDGET_REFLECTION = 500;
     private readonly BUDGET_EPISODIC   = 400;
@@ -781,8 +808,31 @@ export class ContextBuilder {
             const result = blocks.join('\n---\n');
 
             log.info(`[BUDGET] memory block: ${estimateTokens(result)} tokens | blocks=${blocks.length} nodes=${ranked.length} chars=${result.length}/${this.MAX_MEMORY_CHARS} maxExpandedNodes=${maxNodes}`);
+
+            // Capture lightweight metadata for upstream consumers (AgentLoop.DecisionContext).
+            // Derived entirely from already-computed data — no extra I/O.
+            const planReasons2 = this.getContextPlanner().lastReasons;
+            const hasHighRelevancePreference = ranked.some(n =>
+                (n.type === 'preference' || n.type === 'trait') &&
+                (planReasons2[n.id]?.includes('tier1:pref') ?? false)
+            );
+            const hasEntityMatch = ranked.some(n =>
+                planReasons2[n.id]?.includes(':entity=') ?? false
+            );
+            const nonIdentityNodes = ranked.filter(n => n.type !== 'identity');
+            const topContentNodeType = nonIdentityNodes[0]?.type ?? null;
+            this._lastBuildMetadata = {
+                hasHighRelevancePreference,
+                hasEntityMatch,
+                selectedCount: ranked.length,
+                topContentNodeType,
+                domainClass: domainClass?.domainId ?? null,
+                memoryUsed: ranked.length > 0,
+            };
+
             return result;
         } catch {
+            this._lastBuildMetadata = { hasHighRelevancePreference: false, hasEntityMatch: false, selectedCount: 0, topContentNodeType: null, domainClass: null, memoryUsed: false };
             return this.memory.getContext(200);
         }
     }

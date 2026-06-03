@@ -47,6 +47,9 @@ export class SessionContext {
         this.budget = new ContextBudget(budgetConfig);
     }
 
+    /** Expose the ContextBuilder so callers (e.g. AgentLoop) can read post-build metadata. */
+    getContextBuilder(): ContextBuilder { return this.contextBuilder; }
+
     /**
      * Build the complete context for an LLM call using ContextBudget.
      * 

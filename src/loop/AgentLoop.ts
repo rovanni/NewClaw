@@ -90,6 +90,66 @@ export function computeToolUtilityScore(userMessage: string, toolOutput: string)
     return Math.round((hits / terms.length) * 100) / 100;
 }
 
+// ── DecisionContext ──────────────────────────────────────────────────────────
+// Aggregates cognitive signals available at turn-start into a single struct
+// consumed by the loop to *orient* (not mandate) agent behaviour.
+// Principle: boost priorities and inject hints — never remove tool options.
+
+export type MemoryConfidence = 'high' | 'medium' | 'low' | 'none';
+
+export interface DecisionContext {
+    memoryConfidence:            MemoryConfidence;
+    hasHighRelevancePreference:  boolean;
+    /** When true: inject memory-first hint (doesn't block external tools). */
+    requiresMemoryFirst:         boolean;
+    /** When non-null: override step budget to this higher ceiling. */
+    extendedStepBudget:          number | null;
+    /** Historical success rate per tool (0–1). Used for cost-aware hints. */
+    toolSuccessRates:            Record<string, number>;
+}
+
+/**
+ * Queries whose answers are likely to be volatile even when in memory.
+ * Applied generically — not specific to any entity, currency, or domain.
+ * Pattern: financial prices, weather, news, legal changes, real-time data.
+ */
+const VOLATILE_QUERY_PATTERN =
+    /\bprice|preço|cotação|cotaçao|clima|weather|notícia|noticia|news|legisla|law|stock|bolsa|dólar|dolar|câmbio|cambio|cripto|crypto|token|coin\b/i;
+
+/**
+ * Compute how much the agent should trust its retrieved memory for this query.
+ *
+ * High  — explicit user preference or stable personal fact (always authoritative).
+ * Medium — entity-matched context or non-volatile domain (use + optionally validate).
+ * Low   — volatile domain (price, weather, news) even if memory exists.
+ * None  — no memory selected.
+ *
+ * NOTE: 'high' confidence for preferences in volatile domains is downgraded to
+ * 'medium' because the preference identifies the subject but the value (price)
+ * still needs external validation.
+ */
+export function computeMemoryConfidence(
+    metadata: import('../loop/ContextBuilder').ContextBuildMetadata | null,
+    query: string,
+): MemoryConfidence {
+    if (!metadata || !metadata.memoryUsed || metadata.selectedCount === 0) return 'none';
+
+    const queryIsVolatile = VOLATILE_QUERY_PATTERN.test(query);
+
+    // Explicit user preference — highest trust, but downgraded if volatile domain
+    if (metadata.hasHighRelevancePreference) {
+        return queryIsVolatile ? 'medium' : 'high';
+    }
+
+    // Entity match in volatile domain → low confidence (stale financial/news data)
+    if (queryIsVolatile) return 'low';
+
+    // Entity match in stable domain → medium (may be outdated, but not inherently volatile)
+    if (metadata.hasEntityMatch) return 'medium';
+
+    return 'low';
+}
+
 export class AgentLoop {
     private providerFactory: ProviderFactory;
     private memory: MemoryManager;
@@ -118,6 +178,12 @@ export class AgentLoop {
     private fsmHistoryStore: FSMHistoryStore;
     private lastToolExecution: { toolName: string; toolOutput: string; intent: string; category: string } | null = null;
     private readonly proactiveRecovery = new ProactiveRecovery();
+    /**
+     * Per-turn observer feedback accumulated asynchronously by tryValidateTool.
+     * Flushed at the top of each while iteration as system hints.
+     * Must be reset at turn start (see runWithTools).
+     */
+    private pendingObserverFeedback: string[] = [];
     private workflowEngine?: WorkflowEngine;
     /** Callback pós-turno: disparado fire-and-forget após cada resposta entregue. */
     private postTurnCallback: (() => void) | null = null;
@@ -405,11 +471,19 @@ export class AgentLoop {
                 pattern: category,
             });
 
-            if (!validation.approved && validation.confidence >= 0.6 && validation.suggestedFix) {
-                messages.push({
-                    role: 'system',
-                    content: `[OBSERVER] A ferramenta "${toolName}" pode não ter atendido à solicitação. ${validation.reason} — Sugestão: ${validation.suggestedFix}`
-                });
+            if (!validation.approved && validation.confidence >= 0.6) {
+                // Push existing in-flight hint (immediate, arrives at next LLM call via messages[]).
+                if (validation.suggestedFix) {
+                    messages.push({
+                        role: 'system',
+                        content: `[OBSERVER] A ferramenta "${toolName}" pode não ter atendido à solicitação. ${validation.reason} — Sugestão: ${validation.suggestedFix}`
+                    });
+                }
+                // Also store structured feedback in the per-turn queue so the next while
+                // iteration can flush it even if this async call completes later than expected.
+                this.pendingObserverFeedback.push(
+                    `[OBSERVER] "${toolName}" — ${validation.reason} (confidence=${validation.confidence.toFixed(2)})`
+                );
             }
         } catch (err) {
             log.warn(`[${this.ts()}] [VALIDATE] tryValidateTool failed (non-fatal): ${errorMessage(err)}`);
@@ -1075,21 +1149,73 @@ export class AgentLoop {
         const getContextChars = () => loopMessages.reduce((s, m) => s + (m.content?.length ?? 0), 0);
         const initialContextChars = getContextChars();
 
+        // ── DecisionContext ─────────────────────────────────────────────────
+        // Build from all cognitive signals available after session context is ready.
+        // Influences loop behaviour via hints and budget adjustment — never via tool removal.
+        this.pendingObserverFeedback = [];   // reset per-turn
+        const ctxMetadata = this.sessionContext.getContextBuilder().getLastBuildMetadata();
+        const memConf = computeMemoryConfidence(ctxMetadata, userText);
+
+        const toolStatsArr = this.decisionMemory.getToolStats();
+        const toolSuccessRates: Record<string, number> = {};
+        for (const s of toolStatsArr) toolSuccessRates[s.toolName] = s.successRate;
+
+        const decisionCtx: DecisionContext = {
+            memoryConfidence:           memConf,
+            hasHighRelevancePreference: ctxMetadata?.hasHighRelevancePreference ?? false,
+            requiresMemoryFirst:        intentDecision.requiresMemory && (memConf === 'high' || memConf === 'medium'),
+            extendedStepBudget:         null, // resolved after maxSteps is computed
+            toolSuccessRates,
+        };
+
         // Adaptive step budget: ceiling scales with execution complexity.
         // Falls back to hybrid budget for unknown modes.
         const executionMode = intentDecision?.executionMode ?? 'hybrid';
-        const maxSteps = STEP_BUDGETS[executionMode] ?? STEP_BUDGETS.hybrid ?? 6;
+        let maxSteps = STEP_BUDGETS[executionMode] ?? STEP_BUDGETS.hybrid ?? 6;
+
+        // requiresPlanning → upgrade to planner budget when router signals explicit planning need
+        // and the current mode hasn't already allocated enough steps.
+        if (intentDecision.requiresPlanning && maxSteps < (STEP_BUDGETS.planner ?? 15)) {
+            const upgraded = STEP_BUDGETS.planner ?? 15;
+            log.info(`[${this.ts()}] [STEP-BUDGET] requiresPlanning=true → upgrading ${maxSteps} → ${upgraded}`);
+            maxSteps = upgraded;
+            decisionCtx.extendedStepBudget = upgraded;
+        }
+
         let stepCount = 0;
-        log.info(`[${this.ts()}] [STEP-BUDGET] mode=${executionMode} maxSteps=${maxSteps}`);
+        log.info(
+            `[${this.ts()}] [STEP-BUDGET] mode=${executionMode} maxSteps=${maxSteps} ` +
+            `memoryConfidence=${decisionCtx.memoryConfidence} requiresMemoryFirst=${decisionCtx.requiresMemoryFirst}`
+        );
         let hasUsedNativeTools = false;      // true once any native tool call executes
         let consecutiveNonProgressSteps = 0; // non-JSON, no-tool responses in a row
         const blockedKeyCount = new Map<string, number>(); // tracks repeated block attempts per inputKey
         let dedupAbort = false; // set true when TOOL-DEDUP limit reached — exits while and falls to post-loop synthesis
         let dedupAbortTool = ''; // tracks which tool caused the dedup abort
 
+        // Pre-loop: inject non-blocking hints derived from DecisionContext.
+        // These orient the LLM without restricting its tool access.
+        if (decisionCtx.requiresMemoryFirst) {
+            const isHighConf = decisionCtx.memoryConfidence === 'high';
+            loopMessages.push({
+                role: 'system',
+                content: isHighConf
+                    ? '[COGNIÇÃO] Memória pessoal com alta confiança disponível. Avalie o bloco de memória ANTES de usar ferramentas externas. Ferramentas externas devem ser usadas apenas se a memória não tiver resposta completa.'
+                    : '[COGNIÇÃO] Memória pessoal disponível, mas pode estar desatualizada para este domínio. Consulte a memória primeiro e valide com fontes externas se necessário.',
+            });
+        }
+
         while (stepCount < maxSteps && !dedupAbort) {
             stepCount++;
             log.info(`[${this.ts()}] [COGNITION] Step ${stepCount}...`);
+
+            // Flush observer feedback from previous step (accumulated asynchronously).
+            if (this.pendingObserverFeedback.length > 0) {
+                for (const fb of this.pendingObserverFeedback) {
+                    loopMessages.push({ role: 'system', content: fb });
+                }
+                this.pendingObserverFeedback = [];
+            }
 
             // Context Growth Guard — two independent limits:
             //   ratio    : relative growth, only meaningful when baseline is large enough.
@@ -1128,6 +1254,22 @@ export class AgentLoop {
                     role: 'system',
                     content: '[CRÍTICO] Múltiplas ferramentas falharam. PARE de tentar ferramentas. Responda AGORA declarando claramente a limitação de dados. Seja honesto e transparente: não invente tendências e não use linguagem vaga. Ofereça uma alternativa útil com base no que já sabemos.'
                 });
+            }
+
+            // DecisionMemory-guided hint: if a tool has a poor historical success rate
+            // AND has already been called multiple times this turn, suggest alternatives.
+            // Generic: works for any tool, not just web_search.
+            if (stepCount > 1) {
+                for (const [toolName, rate] of Object.entries(decisionCtx.toolSuccessRates)) {
+                    const callsThisTurn = cycleHistory.filter(h => h.tool === toolName).length;
+                    if (rate < 0.4 && callsThisTurn >= 2 && decisionCtx.memoryConfidence !== 'none') {
+                        loopMessages.push({
+                            role: 'system',
+                            content: `[COGNIÇÃO] "${toolName}" tem taxa de sucesso histórica de ${(rate * 100).toFixed(0)}% e já foi chamado ${callsThisTurn}x neste turno. Considere usar dados de memória ou uma abordagem diferente.`,
+                        });
+                        break; // one hint at a time to avoid noise
+                    }
+                }
             }
 
             move('LLM_REQUEST', { step: stepCount });
@@ -1825,6 +1967,10 @@ export class AgentLoop {
             log.info(
                 `[${this.ts()}] [TURN-DIAGNOSTICS]\n` +
                 `  steps=${stepCount} mode=${executionMode} budget=${maxSteps}\n` +
+                `  memory:\n` +
+                `    confidence=${decisionCtx.memoryConfidence}\n` +
+                `    requiresMemoryFirst=${decisionCtx.requiresMemoryFirst}\n` +
+                `    hasHighRelevancePref=${decisionCtx.hasHighRelevancePreference}\n` +
                 `  context:\n` +
                 `    initialChars=${initialContextChars}\n` +
                 `    currentChars=${finalContextChars}\n` +
