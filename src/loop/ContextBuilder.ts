@@ -734,8 +734,12 @@ export class ContextBuilder {
 
             // Fix #4: termos da query usados para decidir expansão do nó USER
             const queryTokens = new Set(tokenize(query));
+            const queryTokensArr = [...queryTokens];
 
-            const parts = ranked.map(n => {
+            const disambiguationEntries: string[] = [];
+            const contextEntries: string[] = [];
+
+            for (const n of ranked) {
                 const epistemicPrefix =
                     n.epistemicStatus === 'belief'     ? '[crença] ' :
                     n.epistemicStatus === 'assumption' ? '[suposição] ' :
@@ -745,7 +749,7 @@ export class ContextBuilder {
                 // Sem relevância, injeta apenas o primeiro segmento genérico — evita vazar
                 // dados como instituição, projetos ou localização em consultas não relacionadas.
                 if (n.type === 'identity' && /^(user|USER|perfil)/i.test(n.name) && queryTokens.size > 0) {
-                    const hasRelevance = [...queryTokens].some(t => summary.toLowerCase().includes(t));
+                    const hasRelevance = queryTokensArr.some(t => summary.toLowerCase().includes(t));
                     if (!hasRelevance) {
                         const firstSegment = summary.split(/[.!?\n]/)[0].trim();
                         if (firstSegment.length >= 20) summary = firstSegment;
@@ -753,14 +757,28 @@ export class ContextBuilder {
                 }
                 let entry = `${n.name}(${n.type}): ${epistemicPrefix}${summary}`;
                 if (n.relations.length > 0) entry += ` → ${n.relations.join(', ')}`;
-                return entry;
-            });
 
-            const detailsStr = 'Contexto: ' + parts.join('. ');
-            const blocks = [reflectionBlock, episodicBlock, domainBlock].filter(Boolean);
-            const result = blocks.length > 0
-                ? `${blocks.join('\n---\n')}\n---\n${detailsStr}`
-                : detailsStr;
+                // Preferências com match direto de termo da query vão para o bloco de desambiguação.
+                // Isso garante que preferências do usuário apareçam em destaque ANTES do contexto geral,
+                // evitando que o LLM use conhecimento de treino quando há preferência explícita.
+                if ((n.type === 'preference' || n.type === 'trait') && queryTokensArr.length > 0) {
+                    const haystack = `${n.name} ${summary}`.toLowerCase();
+                    const hasDirectMatch = queryTokensArr.some(t => haystack.includes(t));
+                    if (hasDirectMatch) {
+                        disambiguationEntries.push(summary);
+                        continue;
+                    }
+                }
+                contextEntries.push(entry);
+            }
+
+            const disambiguationBlock = disambiguationEntries.length > 0
+                ? `[INSTRUCOES PERSONALIZADAS — APLICAR ANTES DE RESPONDER]\n${disambiguationEntries.map(e => `• ${e}`).join('\n')}`
+                : '';
+
+            const detailsStr = contextEntries.length > 0 ? 'Contexto: ' + contextEntries.join('. ') : '';
+            const blocks = [disambiguationBlock, reflectionBlock, episodicBlock, domainBlock, detailsStr].filter(Boolean);
+            const result = blocks.join('\n---\n');
 
             log.info(`[BUDGET] memory block: ${estimateTokens(result)} tokens | blocks=${blocks.length} nodes=${ranked.length} chars=${result.length}/${this.MAX_MEMORY_CHARS} maxExpandedNodes=${maxNodes}`);
             return result;
