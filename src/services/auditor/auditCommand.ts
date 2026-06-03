@@ -20,6 +20,9 @@ import { Bot, Context } from 'grammy';
 import { MessageBus } from '../../channels/MessageBus';
 import { NormalizedMessage } from '../../channels/ChannelAdapter';
 import { errorMessage } from '../../shared/errors';
+import { createLogger } from '../../shared/AppLogger';
+
+const log = createLogger('Auditor');
 
 // ============================================
 // MULTI-CHANNEL HANDLER (works on ALL channels)
@@ -84,7 +87,7 @@ export function registerAuditCommand(
         }
     });
 
-    console.log('[AUDITOR] ✅ Comando /audit registrado no MessageBus (multi-canal, owner-only)');
+    log.info('[AUDITOR] ✅ Comando /audit registrado no MessageBus (multi-canal, owner-only)');
 }
 
 // ============================================
@@ -183,5 +186,5 @@ export function registerAuditCommandTelegram(
         }
     });
 
-    console.log('[AUDITOR] ✅ Comando /audit registrado no Telegram/Grammy (owner-only)');
+    log.info('[AUDITOR] ✅ Comando /audit registrado no Telegram/Grammy (owner-only)');
 }

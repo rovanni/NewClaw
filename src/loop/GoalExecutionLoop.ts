@@ -850,7 +850,7 @@ export class GoalExecutionLoop {
                         approved: false,
                         reason: cycleResult.blocker.description,
                         confidence: cycleResult.confidence,
-                        pattern: `goal_blocker_${cycleResult.blocker.kind}`,
+                        pattern: `tool_${pendingStep.toolName ?? cycleResult.blocker.kind}`,
                         suggestedFix: cycleResult.blocker.suggestedActions[0],
                     });
 

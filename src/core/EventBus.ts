@@ -131,7 +131,7 @@ export class EventBusClass {
         try {
             return this.emitter.emit(event, data);
         } catch (err) {
-            console.error(`[EventBus] Error emitting ${String(event)}:`, err);
+            log.error(`[EventBus] Error emitting ${String(event)}:`, err);
             return false;
         }
     }
@@ -146,7 +146,7 @@ export class EventBusClass {
                 try {
                     await (listener as TypedEventHandler<EventBusEvents[T]>)(data);
                 } catch (err) {
-                    console.error(`[EventBus] Async handler error for ${String(event)}:`, err);
+                    log.error(`[EventBus] Async handler error for ${String(event)}:`, err);
                     throw err;
                 }
             })
