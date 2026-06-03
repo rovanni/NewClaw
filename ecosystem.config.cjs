@@ -1,9 +1,12 @@
 module.exports = {
   apps: [{
     name: "newclaw",
-    script: "./dist/index.js",
+    // Wrapper que detecta dist/ desatualizado e rebuilda automaticamente antes de iniciar.
+    // Previne o erro "X is not a function" causado por git pull sem npm run build.
+    // O script node_args abaixo não se aplica aqui (os flags estão dentro do script shell).
+    script: "./scripts/pm2-start.sh",
+    interpreter: "bash",
     cwd: "/home/venus/newclaw",
-    node_args: "--max-old-space-size=256 --disable-warning=DEP0040",
     env: {
       NODE_ENV: "production",
     },

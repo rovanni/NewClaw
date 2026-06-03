@@ -193,6 +193,15 @@ export class AgentController {
         );
 
         // Fase 2: injetar WorkflowEngine no loop (habilita callbacks estruturados)
+        // Guard: detecta dist/ desatualizado (build parcial ou git pull sem rebuild).
+        // Se setWorkflowEngine não existir, o AgentLoop.js no dist é de uma versão antiga.
+        if (typeof (this.agentLoop as any).setWorkflowEngine !== 'function') {
+            throw new Error(
+                '\n[FATAL] dist/ desatualizado — AgentLoop.setWorkflowEngine não existe.\n' +
+                'O dist/ foi compilado de uma versão mais antiga que o AgentController.\n' +
+                'Solução: npm run build && pm2 restart newclaw\n'
+            );
+        }
         this.agentLoop.setWorkflowEngine(this.workflowEngine);
 
 
