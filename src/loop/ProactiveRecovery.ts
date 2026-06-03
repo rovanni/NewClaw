@@ -104,8 +104,29 @@ const RECOVERY: Record<string, ToolRecoveryConfig> = {
         fallbackTools: ['web_search'],
         adaptArgsForFallback: (targetTool, orig) => {
             if (targetTool === 'web_search') {
-                // Extract meaningful query from URL
                 const url = String(orig.url || '');
+                // Navigation path segments that carry no entity meaning — filtered out
+                // so only the actual subject (e.g. "river", "bitcoin") reaches the query.
+                const NAV_SEGMENTS = new Set([
+                    'en','pt','es','fr','de','zh','ja','ko','ru',
+                    'coins','coin','token','tokens','price','prices','currencies','currency',
+                    'index','search','api','v1','v2','v3','www','crypto','cryptocurrency',
+                    'markets','market','assets','asset','exchange','trade','trading',
+                    'usd','eur','btc','eth','about','blog','docs','help','support',
+                    'user','account','profile','home','page','news','overview',
+                ]);
+                try {
+                    const u = new URL(url);
+                    const siteName = u.hostname.replace(/^www\./, '').split('.')[0];
+                    const segments = u.pathname
+                        .split('/')
+                        .map(s => s.replace(/[-_]/g, ' ').trim())
+                        .filter(s => s.length >= 2 && !NAV_SEGMENTS.has(s.toLowerCase()));
+                    // Last 3 meaningful segments + site name as context
+                    const terms = [...new Set([...segments.slice(-3), siteName])].filter(Boolean);
+                    if (terms.length > 0) return { query: terms.join(' ') };
+                } catch { /* invalid URL — fall through */ }
+                // Fallback: strip domain and clean path separators
                 const urlPath = url.replace(/^https?:\/\/[^/]+/, '').replace(/[-_/]/g, ' ').trim();
                 return { query: urlPath || url };
             }

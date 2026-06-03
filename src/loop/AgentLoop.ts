@@ -51,6 +51,45 @@ export type { ToolResult, ToolExecutor, LoopMetrics, ChannelContext, AgentLoopCo
 
 const log = createLogger('Agentloop');
 
+// ── Adaptive Step Budget ─────────────────────────────────────────────────────
+// Maps execution mode (from UnifiedIntentRouter) to a max-step ceiling.
+// Values chosen to match cognitive complexity of each mode:
+//   direct  — LLM answers directly, at most one lookup tool.
+//   tool    — structured tool execution (file ops, APIs).
+//   planner — multi-step goal with explicit planning loops.
+//   hybrid  — default: reasoning + a few tool calls.
+// Extend here when new execution modes are introduced — do not hardcode inside
+// the loop logic.
+export const STEP_BUDGETS: Record<string, number> = {
+    direct:  4,
+    hybrid:  6,
+    tool:   10,
+    planner: 15,
+};
+
+// ── Tool Group Registry ──────────────────────────────────────────────────────
+// Assigns tools to logical groups so the loop can detect cross-tool loops
+// (e.g. web_search ↔ web_navigate alternation).
+// Add new tools here as the tool surface grows — the guard logic is group-aware,
+// not tool-name-aware.
+export const TOOL_GROUP_REGISTRY: Record<string, string> = {
+    web_search:   'search',
+    web_navigate: 'search',
+};
+
+// ── Tool Utility Score ───────────────────────────────────────────────────────
+// Generic keyword-overlap heuristic measuring how relevant a tool's output is
+// to the user's original message. Used for observability only — does NOT affect
+// control flow in this version. Collect data before adding decision logic.
+export function computeToolUtilityScore(userMessage: string, toolOutput: string): number {
+    if (!userMessage || !toolOutput || toolOutput.length < 10) return 0.5;
+    const terms = userMessage.toLowerCase().split(/\W+/).filter(t => t.length >= 4);
+    if (terms.length === 0) return 0.5;
+    const lowerOutput = toolOutput.toLowerCase();
+    const hits = terms.filter(t => lowerOutput.includes(t)).length;
+    return Math.round((hits / terms.length) * 100) / 100;
+}
+
 export class AgentLoop {
     private providerFactory: ProviderFactory;
     private memory: MemoryManager;
@@ -833,6 +872,25 @@ export class AgentLoop {
         const binaryReadFilenames = new Set<string>();
         // Track how many times edit was called per file path to prevent append-loop corruption
         const editPathCount = new Map<string, number>();
+        // Generic per-tool-type call counter: detects when the agent loops on the same tool
+        // regardless of argument variation (which TOOL-DEDUP alone cannot catch).
+        const toolTypeCallCount = new Map<string, number>();
+        const MAX_SAME_TOOL_CALLS = 4;
+
+        // TOOL_GROUP_REGISTRY is defined at module level — use it directly.
+        const groupCallCount = new Map<string, number>();
+        const MAX_GROUP_CALLS = 6;
+
+        // Consecutive failure tracker: resets on any success so persistent errors
+        // (not isolated failures) trigger the abort.
+        let consecutiveToolFailures = 0;
+        const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
+
+        // getContextChars is defined after loopMessages (below) to avoid TDZ.
+        // Diagnostic counters — accumulated across the turn, emitted in TURN-DIAGNOSTICS.
+        let guardsTriggered    = 0;
+        let totalThinkingChars = 0;  // sum of response.thinking lengths across all steps
+        let totalToolCalls     = 0;
 
         const turnAbort = new AbortController();
         this.activeTurns.set(conversationId, turnAbort);
@@ -1013,9 +1071,16 @@ export class AgentLoop {
             contextTier
         );
         const loopMessages = sessionMessages;
+        // Context growth guard helpers — defined here so loopMessages is in scope.
+        const getContextChars = () => loopMessages.reduce((s, m) => s + (m.content?.length ?? 0), 0);
+        const initialContextChars = getContextChars();
 
+        // Adaptive step budget: ceiling scales with execution complexity.
+        // Falls back to hybrid budget for unknown modes.
+        const executionMode = intentDecision?.executionMode ?? 'hybrid';
+        const maxSteps = STEP_BUDGETS[executionMode] ?? STEP_BUDGETS.hybrid ?? 6;
         let stepCount = 0;
-        const maxSteps = 15;
+        log.info(`[${this.ts()}] [STEP-BUDGET] mode=${executionMode} maxSteps=${maxSteps}`);
         let hasUsedNativeTools = false;      // true once any native tool call executes
         let consecutiveNonProgressSteps = 0; // non-JSON, no-tool responses in a row
         const blockedKeyCount = new Map<string, number>(); // tracks repeated block attempts per inputKey
@@ -1025,6 +1090,38 @@ export class AgentLoop {
         while (stepCount < maxSteps && !dedupAbort) {
             stepCount++;
             log.info(`[${this.ts()}] [COGNITION] Step ${stepCount}...`);
+
+            // Context Growth Guard — two independent limits:
+            //   ratio    : relative growth, only meaningful when baseline is large enough.
+            //              A small initial context (fresh session) can triple in size after one
+            //              legitimate file read; ratio alone would produce false positives.
+            //   absolute : hard ceiling on chars added, regardless of baseline size.
+            // MIN_RATIO_BASELINE prevents ratio guard from firing on short initial contexts.
+            const MIN_RATIO_BASELINE = 4_000;   // chars; below this, only absolute limit applies
+            const CONTEXT_RATIO_LIMIT = 2.5;    // 150 % growth cap (when baseline is substantial)
+            const CONTEXT_ABSOLUTE_DELTA = 16_000; // ~4 000 tokens of added content
+            const currentContextChars = getContextChars();
+            const contextGrowthRatio = initialContextChars > 0 ? currentContextChars / initialContextChars : 1;
+            const useRatioGuard = initialContextChars >= MIN_RATIO_BASELINE;
+            const ratioTriggered = useRatioGuard && contextGrowthRatio > CONTEXT_RATIO_LIMIT;
+            const absoluteTriggered = currentContextChars > initialContextChars + CONTEXT_ABSOLUTE_DELTA;
+            if ((ratioTriggered || absoluteTriggered) && stepCount > 1 && !dedupAbort) {
+                const triggerReason = ratioTriggered ? 'ratio_limit' : 'absolute_limit';
+                const triggerValue  = ratioTriggered ? contextGrowthRatio : (currentContextChars - initialContextChars);
+                const threshold     = ratioTriggered ? CONTEXT_RATIO_LIMIT : CONTEXT_ABSOLUTE_DELTA;
+                log.warn(
+                    `[${this.ts()}] [SAFETY-GUARD] type=context_growth reason=${triggerReason} ` +
+                    `value=${triggerValue.toFixed(2)} threshold=${threshold} ` +
+                    `initial=${initialContextChars} current=${currentContextChars}`
+                );
+                loopMessages.push({
+                    role: 'system',
+                    content: '[CONTEXTO EXCESSIVO] O contexto cresceu demais. Use os dados já obtidos para responder agora.',
+                });
+                dedupAbort = true;
+                dedupAbortTool = `context_growth:${triggerReason}`;
+                guardsTriggered++;
+            }
 
             if (toolFailureCount >= 2) {
                 loopMessages.push({
@@ -1039,6 +1136,7 @@ export class AgentLoop {
 
             if (response.thinking && response.thinking.trim().length > 0) {
                 this.cognitiveWorkspace.add(stepCount, response.thinking.trim(), 'reasoning');
+                totalThinkingChars += response.thinking.trim().length;
             }
 
             traceManager.addStep(trace, 'decision', {
@@ -1356,7 +1454,16 @@ export class AgentLoop {
                         } else if (recovery.recoveryNote) {
                             log.info(`[${this.ts()}] ${recovery.recoveryNote}`);
                         }
-                        log.info(`[${this.ts()}] [TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
+                        // Utility score: generic keyword-overlap heuristic — observability only.
+                        // Collect data here; do not use for control flow until patterns emerge.
+                        const utilityScore = result.success
+                            ? computeToolUtilityScore(userText, result.output)
+                            : 0;
+                        log.info(
+                            `[${this.ts()}] [TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'} ` +
+                            `utility=${utilityScore.toFixed(2)}`,
+                            result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200)
+                        );
 
                         traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
                         traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output });
@@ -1366,6 +1473,68 @@ export class AgentLoop {
                         cycleHistory.push({ tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
                         loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
                         if (result.success) usedToolOutputs.set(inputKey, result.output.slice(0, 2000));
+
+                        totalToolCalls++;
+
+                        // Generic loop detector: same tool called too many times in one turn.
+                        const toolTypeCount = (toolTypeCallCount.get(resolvedToolName) ?? 0) + 1;
+                        toolTypeCallCount.set(resolvedToolName, toolTypeCount);
+                        if (toolTypeCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
+                            log.warn(
+                                `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
+                                `value=${toolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
+                            );
+                            loopMessages.push({
+                                role: 'system',
+                                content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${toolTypeCount} vezes neste turno. ` +
+                                    `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
+                            });
+                            dedupAbort = true;
+                            dedupAbortTool = `${resolvedToolName}:loop`;
+                            guardsTriggered++;
+                        }
+
+                        // Related-tool group detector: catches alternation (e.g. web_search ↔ web_navigate).
+                        const toolGroup = TOOL_GROUP_REGISTRY[resolvedToolName];
+                        if (toolGroup) {
+                            const gCount = (groupCallCount.get(toolGroup) ?? 0) + 1;
+                            groupCallCount.set(toolGroup, gCount);
+                            if (gCount >= MAX_GROUP_CALLS && !dedupAbort) {
+                                log.warn(
+                                    `[${this.ts()}] [SAFETY-GUARD] type=tool_group_loop reason=group_limit ` +
+                                    `value=${gCount} threshold=${MAX_GROUP_CALLS} group=${toolGroup}`
+                                );
+                                loopMessages.push({
+                                    role: 'system',
+                                    content: `[LOOP DE GRUPO] O grupo de ferramentas "${toolGroup}" foi usado ${gCount} vezes neste turno. ` +
+                                        `Interrompendo. Responda com os dados disponíveis em memória.`,
+                                });
+                                dedupAbort = true;
+                                dedupAbortTool = `group:${toolGroup}:loop`;
+                                guardsTriggered++;
+                            }
+                        }
+
+                        // Consecutive failure detector: resets on any success.
+                        if (result.success) {
+                            consecutiveToolFailures = 0;
+                        } else {
+                            consecutiveToolFailures++;
+                            if (consecutiveToolFailures >= MAX_CONSECUTIVE_TOOL_FAILURES && !dedupAbort) {
+                                log.warn(
+                                    `[${this.ts()}] [SAFETY-GUARD] type=consecutive_failures reason=failure_limit ` +
+                                    `value=${consecutiveToolFailures} threshold=${MAX_CONSECUTIVE_TOOL_FAILURES}`
+                                );
+                                loopMessages.push({
+                                    role: 'system',
+                                    content: `[FALHAS CONSECUTIVAS] ${consecutiveToolFailures} ferramentas falharam seguidas. ` +
+                                        `Não foi possível obter dados confiáveis após múltiplas tentativas. Responda ao usuário com honestidade sobre essa limitação.`,
+                                });
+                                dedupAbort = true;
+                                dedupAbortTool = 'consecutive_failures';
+                                guardsTriggered++;
+                            }
+                        }
 
                         // After a successful read, inject a directive to prevent re-reading in this turn.
                         // ARTIFACT-DRIFT FIX: mensagem escrita para NÃO proibir releitura em turnos futuros
@@ -1562,6 +1731,64 @@ export class AgentLoop {
                         });
                     }
 
+                    totalToolCalls++;
+
+                    // Generic loop detector (JSON-action path): mirrors the native tool check.
+                    const atomicToolTypeCount = (toolTypeCallCount.get(resolvedToolName) ?? 0) + 1;
+                    toolTypeCallCount.set(resolvedToolName, atomicToolTypeCount);
+                    if (atomicToolTypeCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
+                        log.warn(
+                            `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
+                            `value=${atomicToolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
+                        );
+                        loopMessages.push({
+                            role: 'system',
+                            content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${atomicToolTypeCount} vezes neste turno. ` +
+                                `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
+                        });
+                        dedupAbort = true;
+                        dedupAbortTool = `${resolvedToolName}:loop`;
+                        guardsTriggered++;
+                    }
+
+                    // Group loop + consecutive failures (JSON-action path).
+                    const atomicGroup = TOOL_GROUP_REGISTRY[resolvedToolName];
+                    if (atomicGroup) {
+                        const agCount = (groupCallCount.get(atomicGroup) ?? 0) + 1;
+                        groupCallCount.set(atomicGroup, agCount);
+                        if (agCount >= MAX_GROUP_CALLS && !dedupAbort) {
+                            log.warn(
+                                `[${this.ts()}] [SAFETY-GUARD] type=tool_group_loop reason=group_limit ` +
+                                `value=${agCount} threshold=${MAX_GROUP_CALLS} group=${atomicGroup}`
+                            );
+                            loopMessages.push({
+                                role: 'system',
+                                content: `[LOOP DE GRUPO] O grupo "${atomicGroup}" foi usado ${agCount} vezes. Responda com os dados disponíveis.`,
+                            });
+                            dedupAbort = true;
+                            dedupAbortTool = `group:${atomicGroup}:loop`;
+                            guardsTriggered++;
+                        }
+                    }
+                    if (result.success) {
+                        consecutiveToolFailures = 0;
+                    } else {
+                        consecutiveToolFailures++;
+                        if (consecutiveToolFailures >= MAX_CONSECUTIVE_TOOL_FAILURES && !dedupAbort) {
+                            log.warn(
+                                `[${this.ts()}] [SAFETY-GUARD] type=consecutive_failures reason=failure_limit ` +
+                                `value=${consecutiveToolFailures} threshold=${MAX_CONSECUTIVE_TOOL_FAILURES}`
+                            );
+                            loopMessages.push({
+                                role: 'system',
+                                content: `[FALHAS CONSECUTIVAS] ${consecutiveToolFailures} ferramentas falharam seguidas. Responda ao usuário com honestidade sobre essa limitação.`,
+                            });
+                            dedupAbort = true;
+                            dedupAbortTool = 'consecutive_failures';
+                            guardsTriggered++;
+                        }
+                    }
+
                     const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
                     if (terminalTools.includes(toolName) && result.success) {
                         // JSON-action path is always a single tool call per step, so return immediately.
@@ -1583,9 +1810,37 @@ export class AgentLoop {
             }
 
             if (stepCount >= maxSteps) {
-                log.warn(`[${this.ts()}] [LOOP] Step limit reached. Finalizing...`);
+                log.warn(`[${this.ts()}] [STEP-LIMIT] step=${stepCount + 1} action=force_response`);
                 break;
             }
+        }
+
+        // Structured turn diagnostics — single block per turn, all signals in one place.
+        // Enables post-mortem reconstruction without replaying the full execution log.
+        {
+            const finalContextChars = getContextChars();
+            const finalGrowthRatio  = initialContextChars > 0 ? finalContextChars / initialContextChars : 1;
+            const maxSameToolCalls  = toolTypeCallCount.size > 0 ? Math.max(...toolTypeCallCount.values()) : 0;
+            const maxGroupCalls     = groupCallCount.size   > 0 ? Math.max(...groupCallCount.values())    : 0;
+            log.info(
+                `[${this.ts()}] [TURN-DIAGNOSTICS]\n` +
+                `  steps=${stepCount} mode=${executionMode} budget=${maxSteps}\n` +
+                `  context:\n` +
+                `    initialChars=${initialContextChars}\n` +
+                `    currentChars=${finalContextChars}\n` +
+                `    growthRatio=${finalGrowthRatio.toFixed(2)}\n` +
+                `  tools:\n` +
+                `    totalCalls=${totalToolCalls}\n` +
+                `    sameToolCalls=${maxSameToolCalls}\n` +
+                `    sameGroupCalls=${maxGroupCalls}\n` +
+                `    consecutiveFailures=${consecutiveToolFailures}\n` +
+                `    totalFailures=${toolFailureCount}\n` +
+                `  reasoning:\n` +
+                `    chars=${totalThinkingChars}\n` +
+                `  safety:\n` +
+                `    guardsTriggered=${guardsTriggered}\n` +
+                `    abortReason=${dedupAbortTool || 'none'}`
+            );
         }
 
         // Delivery guard: if a file was written but never sent, the user received nothing.

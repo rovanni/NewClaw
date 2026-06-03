@@ -67,12 +67,29 @@ function isChunkActive(chunk: RawApiChunk): boolean {
     return false;
 }
 
+/**
+ * Abort reasons emitted by the streaming pipeline.
+ * Consumers use this to apply different recovery policies per cause.
+ */
+export const AbortReason = {
+    TIMEOUT:          'timeout',
+    REASONING_BUDGET: 'reasoning_budget',
+    USER_CANCEL:      'user_cancel',
+    PROVIDER_ERROR:   'provider_error',
+} as const;
+export type AbortReason = typeof AbortReason[keyof typeof AbortReason];
+
 export class OllamaProvider implements ILLMProvider {
     name = 'ollama';
     private baseUrl: string;
     private model: string;
     private apiKey: string;
     private readonly numCtx: number;
+    /**
+     * Set by streamChat when the reasoning budget fires; cleared by _consumeStream
+     * before each call. Safe because taskQueue serialises all stream executions.
+     */
+    private _reasoningBudgetAborted = false;
 
     constructor(baseUrl: string = 'http://localhost:11434', model: string = 'glm-5.1:cloud', apiKey: string = '') {
         this.baseUrl = baseUrl;
@@ -156,6 +173,18 @@ export class OllamaProvider implements ILLMProvider {
         let activityTimer: NodeJS.Timeout | null = null;
         let maxTimer: NodeJS.Timeout | null = null;
         let connectionTimer: NodeJS.Timeout | null = null;
+
+        // Generic thinking budget: if model generates thinking without ever producing
+        // content or tool_calls, the reasoning loop is stuck. Abort before MAX_TIMEOUT.
+        // Two independent limits — whichever fires first:
+        //   chars  (~2× normal thinking for a conversational reply)
+        //   time   (absolute wall-clock cap regardless of chunk rate)
+        const MAX_THINKING_BUDGET_CHARS = 8_000;
+        const MAX_THINKING_DURATION_MS  = 60_000;
+        let thinkingYielded = 0;
+        let thinkingStartMs: number | null = null;
+        let hasNonThinkingOutput = false;
+        let thinkingBudgetAbort = false;
 
         const resetActivityTimer = () => {
             if (activityTimer) clearTimeout(activityTimer);
@@ -275,11 +304,33 @@ export class OllamaProvider implements ILLMProvider {
 
                     if (text) {
                         const yieldType = (type === 'thinking' || type === 'reasoning') ? 'thinking' : 'content';
-                        if (yieldType === 'thinking') log.debug(`[${streamId}] [STREAM] Thinking chunk: ${text.length} chars`);
+                        if (yieldType === 'thinking') {
+                            if (thinkingStartMs === null) thinkingStartMs = Date.now();
+                            thinkingYielded += text.length;
+                            const thinkingDurationMs = Date.now() - thinkingStartMs;
+                            log.debug(`[${streamId}] [STREAM] Thinking chunk: ${text.length} chars (total=${thinkingYielded} duration=${thinkingDurationMs}ms)`);
+                            if (!hasNonThinkingOutput && (
+                                thinkingYielded > MAX_THINKING_BUDGET_CHARS ||
+                                thinkingDurationMs > MAX_THINKING_DURATION_MS
+                            )) {
+                                const reason = thinkingYielded > MAX_THINKING_BUDGET_CHARS ? 'chars' : 'duration';
+                                log.warn(
+                                    `[${streamId}] [STREAM] THINKING BUDGET exceeded ` +
+                                    `(${thinkingYielded} chars, ${thinkingDurationMs}ms, reason=${reason}) — aborting`
+                                );
+                                this._reasoningBudgetAborted = true;
+                                controller.abort();
+                                thinkingBudgetAbort = true;
+                                break;
+                            }
+                        } else {
+                            hasNonThinkingOutput = true;
+                        }
                         yield { type: yieldType, value: text } as StreamChunk;
                     }
 
                     if (chunk.message?.tool_calls) {
+                        hasNonThinkingOutput = true;
                         for (const tc of chunk.message.tool_calls) {
                             log.info(`[${streamId}] [STREAM] Tool call: ${tc.function?.name || 'unknown'}`);
                             yield { type: 'tool_call', value: tc } as StreamChunk;
@@ -296,6 +347,7 @@ export class OllamaProvider implements ILLMProvider {
                         return;
                     }
                 }
+                if (thinkingBudgetAbort) break;
             }
 
             // Flush remaining buffer
@@ -351,6 +403,8 @@ export class OllamaProvider implements ILLMProvider {
         const consumeId = `sc-${Date.now().toString(36)}`;
 
         log.info(`[${consumeId}] [STREAM-CONSUME] START timeout=${customTimeoutMs || 'default'}ms`);
+        // Reset per-call abort reason (taskQueue guarantees serial execution).
+        this._reasoningBudgetAborted = false;
 
         try {
             for await (const chunk of this.streamChat(messages, tools, customTimeoutMs, externalSignal)) {
@@ -364,11 +418,26 @@ export class OllamaProvider implements ILLMProvider {
             }
         } catch (streamErr) {
             const elapsed = Date.now() - startTime;
-            // Models like deepseek-v4-flash:cloud route their entire response through the thinking
-            // field. When the stream is aborted (timeout, not user cancel) with thinking but no
-            // content, recover the thinking as content — the same heuristic applied on normal
-            // completion below. User-cancel discarding is handled by the caller (chatWithFallback
-            // checks externalSignal after we return, so no thinking leaks to a cancelled user).
+
+            // REASONING_BUDGET: do NOT expose raw internal reasoning to the caller.
+            // Discard thinking and propagate as an error so ProviderFactory can apply
+            // its normal fallback/timeout policy — same UX as a provider timeout.
+            if (this._reasoningBudgetAborted) {
+                this._reasoningBudgetAborted = false;
+                log.warn(
+                    `[${consumeId}] [STREAM-CONSUME] ${AbortReason.REASONING_BUDGET}: ` +
+                    `discarding ${thinking.length} chars of thinking — propagating as provider error`
+                );
+                throw Object.assign(
+                    new Error(`Reasoning budget exceeded after ${thinking.length} chars`),
+                    { abortReason: AbortReason.REASONING_BUDGET }
+                );
+            }
+
+            // TIMEOUT / PROVIDER_ERROR: models like deepseek-v4-flash:cloud route their entire
+            // response through the thinking field. Recover thinking as content only here.
+            // User-cancel discarding is handled by the caller (chatWithFallback checks
+            // externalSignal after we return, so no thinking leaks to a cancelled user).
             if (!content && thinking && thinking.length > 50) {
                 log.info(`[${consumeId}] [STREAM-CONSUME] Aborted with ${thinking.length} chars of thinking, no content — recovering thinking as content`);
                 content = thinking;
