@@ -428,7 +428,14 @@ const commands = {
       if (env.TELEGRAM_BOT_TOKEN) {
         try { execSync(`curl -s "https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true" > /dev/null 2>&1`); } catch {}
       }
-      pm2(['restart', 'newclaw']);
+      const pm2Status = pm2JStart();
+      if (pm2Status === 'online' || pm2Status === 'stopped' || pm2Status === 'errored') {
+        pm2(['restart', 'newclaw']);
+      } else {
+        // Process not registered in PM2 — do a fresh start instead
+        console.log('⚠️  Processo "newclaw" não encontrado no PM2 — iniciando via ecosystem.config.cjs...');
+        pm2(['start', 'ecosystem.config.cjs']);
+      }
       syncPidFile();
       console.log('✅ NewClaw restarted via PM2');
     } else {
