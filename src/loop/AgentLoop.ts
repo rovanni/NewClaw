@@ -935,7 +935,7 @@ export class AgentLoop {
 
         turnLog.info('turn_start', `Cycle ${iteration + 1}`, { conversationId });
 
-        const cycleHistory: Array<{ tool: string; input: string; status: string }> = [];
+        const cycleHistory: Array<{ step: number; tool: string; input: string; status: string }> = [];
         let lastBestContent = '';
         let toolFailureCount = 0;
         const usedToolInputs = new Set<string>();
@@ -965,6 +965,17 @@ export class AgentLoop {
         let guardsTriggered    = 0;
         let totalThinkingChars = 0;  // sum of response.thinking lengths across all steps
         let totalToolCalls     = 0;
+
+        // Sprint 3.5A — Decision Impact Telemetry (shadow mode, no enforcement)
+        // Tracks whether hints were injected, eligible, and followed by the LLM.
+        // Computed at end-of-turn from cycleHistory + injection flags.
+        let memoryFirstInjected          = false;
+        let observerFeedbackInjected     = false;
+        let toolFailureHintInjected      = false;
+        let toolSuccessHintInjected      = false;
+        let toolFailureHintFirstStep: number | null  = null;
+        let toolSuccessHintFirstStep: number | null  = null;
+        let observerFeedbackFirstStep: number | null = null;
 
         const turnAbort = new AbortController();
         this.activeTurns.set(conversationId, turnAbort);
@@ -1203,6 +1214,7 @@ export class AgentLoop {
                     ? '[COGNIÇÃO] Memória pessoal com alta confiança disponível. Avalie o bloco de memória ANTES de usar ferramentas externas. Ferramentas externas devem ser usadas apenas se a memória não tiver resposta completa.'
                     : '[COGNIÇÃO] Memória pessoal disponível, mas pode estar desatualizada para este domínio. Consulte a memória primeiro e valide com fontes externas se necessário.',
             });
+            memoryFirstInjected = true;
         }
 
         while (stepCount < maxSteps && !dedupAbort) {
@@ -1213,6 +1225,10 @@ export class AgentLoop {
             if (this.pendingObserverFeedback.length > 0) {
                 for (const fb of this.pendingObserverFeedback) {
                     loopMessages.push({ role: 'system', content: fb });
+                }
+                if (!observerFeedbackInjected) {
+                    observerFeedbackInjected = true;
+                    observerFeedbackFirstStep = stepCount;
                 }
                 this.pendingObserverFeedback = [];
             }
@@ -1254,6 +1270,10 @@ export class AgentLoop {
                     role: 'system',
                     content: '[CRÍTICO] Múltiplas ferramentas falharam. PARE de tentar ferramentas. Responda AGORA declarando claramente a limitação de dados. Seja honesto e transparente: não invente tendências e não use linguagem vaga. Ofereça uma alternativa útil com base no que já sabemos.'
                 });
+                if (!toolFailureHintInjected) {
+                    toolFailureHintInjected = true;
+                    toolFailureHintFirstStep = stepCount;
+                }
             }
 
             // DecisionMemory-guided hint: if a tool has a poor historical success rate
@@ -1267,6 +1287,10 @@ export class AgentLoop {
                             role: 'system',
                             content: `[COGNIÇÃO] "${toolName}" tem taxa de sucesso histórica de ${(rate * 100).toFixed(0)}% e já foi chamado ${callsThisTurn}x neste turno. Considere usar dados de memória ou uma abordagem diferente.`,
                         });
+                        if (!toolSuccessHintInjected) {
+                            toolSuccessHintInjected = true;
+                            toolSuccessHintFirstStep = stepCount;
+                        }
                         break; // one hint at a time to avoid noise
                     }
                 }
@@ -1612,7 +1636,7 @@ export class AgentLoop {
                         this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
                         this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
 
-                        cycleHistory.push({ tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
+                        cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
                         loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
                         if (result.success) usedToolOutputs.set(inputKey, result.output.slice(0, 2000));
 
@@ -1862,7 +1886,7 @@ export class AgentLoop {
                     this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
                     this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
 
-                    cycleHistory.push({ tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
+                    cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
                     loopMessages.push({ role: 'tool', content: result.output });
 
                     if (!result.success) {
@@ -1964,6 +1988,90 @@ export class AgentLoop {
             const finalGrowthRatio  = initialContextChars > 0 ? finalContextChars / initialContextChars : 1;
             const maxSameToolCalls  = toolTypeCallCount.size > 0 ? Math.max(...toolTypeCallCount.values()) : 0;
             const maxGroupCalls     = groupCallCount.size   > 0 ? Math.max(...groupCallCount.values())    : 0;
+
+            // ── Sprint 3.5A: Decision Impact Telemetry ──────────────────────────
+            const externalSearchTools = new Set(['web_search', 'web_navigate', 'weather']);
+
+            // eligible = condition was met; injected = hint was actually pushed to loopMessages
+            // eligible=true + injected=false → regression/bug
+            const memoryFirstEligible = decisionCtx.requiresMemoryFirst;
+
+            // compliance: was the hint followed? (derived from cycleHistory with step info)
+            const step1Entries       = cycleHistory.filter(h => h.step === 1);
+            const step1HasMemory     = step1Entries.some(h => h.tool === 'memory_search');
+            const step1HasExternal   = step1Entries.some(h => externalSearchTools.has(h.tool));
+            const memoryFirstFollowed =
+                memoryFirstInjected && step1HasMemory && !step1HasExternal;
+
+            // toolFailureHint: followed if the failing tool wasn't called again after hint step
+            const toolFailureHintFollowed = toolFailureHintInjected && toolFailureHintFirstStep !== null
+                ? !cycleHistory.some(h => h.step > toolFailureHintFirstStep! && h.status === 'error')
+                : false;
+
+            // toolSuccessHint: followed if the flagged tool wasn't called again after hint step
+            const toolSuccessHintFollowed = toolSuccessHintInjected && toolSuccessHintFirstStep !== null
+                ? (() => {
+                    const hintedTool = Object.entries(decisionCtx.toolSuccessRates)
+                        .find(([, rate]) => rate < 0.4)?.[0];
+                    return hintedTool
+                        ? !cycleHistory.some(h => h.step > toolSuccessHintFirstStep! && h.tool === hintedTool)
+                        : false;
+                })()
+                : false;
+
+            // observerFeedback: followed if no new tool failures in steps after hint
+            const observerFeedbackFollowed = observerFeedbackInjected && observerFeedbackFirstStep !== null
+                ? !cycleHistory.some(h => h.step > observerFeedbackFirstStep! && h.status === 'error')
+                : false;
+
+            // hint compliance rate across all injected hints this turn
+            let totalHintsInjected = 0;
+            let totalHintsFollowed = 0;
+            if (memoryFirstEligible)        { totalHintsInjected++; if (memoryFirstFollowed)    totalHintsFollowed++; }
+            if (toolFailureHintInjected)    { totalHintsInjected++; if (toolFailureHintFollowed) totalHintsFollowed++; }
+            if (toolSuccessHintInjected)    { totalHintsInjected++; if (toolSuccessHintFollowed) totalHintsFollowed++; }
+            if (observerFeedbackInjected)   { totalHintsInjected++; if (observerFeedbackFollowed) totalHintsFollowed++; }
+            const hintComplianceRate = totalHintsInjected > 0
+                ? (totalHintsFollowed / totalHintsInjected).toFixed(2)
+                : 'n/a';
+
+            // knowledge-decision gap: memory available but LLM used only external tools
+            const externalCallCount = cycleHistory.filter(h => externalSearchTools.has(h.tool)).length;
+            const memoryCallCount   = cycleHistory.filter(h => h.tool === 'memory_search').length;
+            const knowledgeDecisionGap =
+                decisionCtx.memoryConfidence !== 'none' &&
+                externalCallCount > 2 &&
+                memoryCallCount === 0;
+
+            // shadow enforcement candidates (would-have-triggered, no behavior change)
+            // tool cooldown shadow: first tool with 2 consecutive failures in cycleHistory
+            let shadowCooldown: { triggered: boolean; tool?: string; failures?: number; step?: number } = { triggered: false };
+            {
+                let consecutive = 0;
+                let lastTool    = '';
+                for (const entry of cycleHistory) {
+                    if (entry.status === 'error' && entry.tool === lastTool) {
+                        consecutive++;
+                        if (consecutive >= 2 && !shadowCooldown.triggered) {
+                            shadowCooldown = { triggered: true, tool: entry.tool, failures: consecutive + 1, step: entry.step };
+                        }
+                    } else {
+                        consecutive = entry.status === 'error' ? 1 : 0;
+                        lastTool    = entry.tool;
+                    }
+                }
+            }
+
+            // dedup abort shadow: first tool that would reach MAX_SAME_TOOL_CALLS
+            const shadowDedupTool = [...toolTypeCallCount.entries()]
+                .find(([, count]) => count >= MAX_SAME_TOOL_CALLS);
+            const shadowDedup = shadowDedupTool
+                ? { triggered: true, tool: shadowDedupTool[0], calls: shadowDedupTool[1] }
+                : { triggered: false };
+
+            // memory-first shadow: enforcement would have changed step-1 behavior
+            const shadowMemoryFirst = memoryFirstEligible && !memoryFirstFollowed;
+
             log.info(
                 `[${this.ts()}] [TURN-DIAGNOSTICS]\n` +
                 `  steps=${stepCount} mode=${executionMode} budget=${maxSteps}\n` +
@@ -1985,7 +2093,18 @@ export class AgentLoop {
                 `    chars=${totalThinkingChars}\n` +
                 `  safety:\n` +
                 `    guardsTriggered=${guardsTriggered}\n` +
-                `    abortReason=${dedupAbortTool || 'none'}`
+                `    abortReason=${dedupAbortTool || 'none'}\n` +
+                `  decisionImpact:\n` +
+                `    memoryFirst: eligible=${memoryFirstEligible} injected=${memoryFirstInjected} followed=${memoryFirstFollowed}\n` +
+                `    toolFailureHint: injected=${toolFailureHintInjected} step=${toolFailureHintFirstStep ?? '-'} followed=${toolFailureHintFollowed}\n` +
+                `    toolSuccessHint: injected=${toolSuccessHintInjected} step=${toolSuccessHintFirstStep ?? '-'} followed=${toolSuccessHintFollowed}\n` +
+                `    observerFeedback: injected=${observerFeedbackInjected} step=${observerFeedbackFirstStep ?? '-'} followed=${observerFeedbackFollowed}\n` +
+                `    hintComplianceRate=${hintComplianceRate} (${totalHintsFollowed}/${totalHintsInjected})\n` +
+                `    knowledgeDecisionGap=${knowledgeDecisionGap} (ext=${externalCallCount} mem=${memoryCallCount})\n` +
+                `  shadowEnforcement:\n` +
+                `    cooldown: triggered=${shadowCooldown.triggered}${shadowCooldown.triggered ? ` tool=${shadowCooldown.tool} failures=${shadowCooldown.failures} atStep=${shadowCooldown.step}` : ''}\n` +
+                `    dedup: triggered=${shadowDedup.triggered}${shadowDedup.triggered ? ` tool=${shadowDedup.tool} calls=${shadowDedup.calls}` : ''}\n` +
+                `    memoryFirst: wouldHaveChanged=${shadowMemoryFirst}`
             );
         }
 
@@ -2033,7 +2152,7 @@ export class AgentLoop {
                         }
                         log.info(`[${this.ts()}] [DELIVERY] ${result.finalToolName} -> ${result.result.success ? '✓' : '✗'}`);
                         loopMessages.push({ role: 'tool', content: result.result.output, tool_call_id: toolCall.id });
-                        cycleHistory.push({ tool: toolCall.name, input: JSON.stringify(toolCall.arguments), status: result.result.success ? 'success' : 'error' });
+                        cycleHistory.push({ step: stepCount, tool: toolCall.name, input: JSON.stringify(toolCall.arguments), status: result.result.success ? 'success' : 'error' });
                         const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
                         if (terminalTools.includes(toolCall.name) && result.result.success) {
                             move('TOOL_COMPLETED', { step: stepCount, tool: toolCall.name, success: true });
