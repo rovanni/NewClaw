@@ -1739,6 +1739,24 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             log.warn('[GoalLoop] Q1 delivered artifacts error:', String(err));
         }
 
+        // Estado atual do workspace — paths criados/modificados neste goal.
+        // Injetado em plan() e replan() para garantir consistência de paths entre ciclos.
+        // Sem este bloco o replanner não sabe que landing-page/index.html existe e cria
+        // index.html na raiz, gerando path drift.
+        const priorWrittenPaths = goal.attempts
+            .filter(a => a.result === 'success' && ['write', 'edit'].includes(a.toolName))
+            .map(a => String(a.args['path'] ?? a.args['file_path'] ?? ''))
+            .filter(Boolean);
+        if (priorWrittenPaths.length > 0) {
+            const unique = [...new Set(priorWrittenPaths)];
+            parts.push(
+                `ESTADO ATUAL DO WORKSPACE\n\nArquivos já criados/modificados neste goal:\n` +
+                unique.map(p => `  - ${p}`).join('\n') +
+                `\n\nIMPORTANTE: mantenha estes caminhos exatos. Não recrie os arquivos em ` +
+                `diretórios diferentes. Continue a partir desta estrutura.`
+            );
+        }
+
         // Feedback do ciclo anterior (Q4 → Q1)
         if (priorFeedback && cycleNumber > 1) {
             parts.push(

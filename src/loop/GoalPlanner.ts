@@ -132,8 +132,11 @@ Responda APENAS com JSON válido (sem markdown):
     {
       "id": "step_1",
       "description": "descrição curta do que este step faz",
-      "toolName": "nome_da_ferramenta",
-      "toolArgs": { "argumento": "valor" },
+      "toolName": "write",
+      "toolArgs": {
+        "path": "index.html",
+        "content": "<!DOCTYPE html>\n<html lang=\"pt-BR\">\n<head><meta charset=\"UTF-8\"><title>Título</title></head>\n<body><h1>Conteúdo real aqui</h1></body>\n</html>"
+      },
       "fallbackSteps": []
     }
   ],
@@ -150,6 +153,16 @@ CRITÉRIOS DE SUCESSO (successCriteria) — máximo 3, verificados deterministic
 - output_contains: output contém value. Ex: conteúdo esperado existe → { "check": "output_contains", "tool": "exec_command", "value": "NovoConteudo" }
 - file_exists: exec_command retornou output não-vazio (arquivo encontrado). Ex: arquivo criado → { "check": "file_exists", "tool": "exec_command" }
 Inclua SEMPRE um critério tool_succeeded para send_document quando o objetivo envolve entrega de arquivo.
+
+CRIAÇÃO DE CONTEÚDO — leia obrigatoriamente antes de planejar steps com "write":
+- O campo "content" DEVE conter o conteúdo COMPLETO e funcional do arquivo.
+- O WriteTool grava literalmente o que está em "content" — nenhum sistema posterior irá completar ou expandir o texto.
+- NUNCA use: TODO, placeholder, stub, comentário genérico, "HTML Content", "CSS Content", "JS Content", "conteúdo será adicionado depois".
+- HTML: gere documento completo com <!DOCTYPE>, <head> e <body> totalmente preenchidos.
+- README: gere documentação real, não "# Título\n(em construção)".
+- CSS: gere regras funcionais com seletores e propriedades reais.
+- JavaScript: gere código executável, não "// implementar aqui".
+- Se o artefato for extenso, inclua pelo menos a estrutura completa com conteúdo representativo em cada seção.
 
 Regras:
 - Máximo 4 steps por plano
@@ -596,6 +609,23 @@ export class GoalPlanner {
             const parsed = JSON.parse(cleaned);
             const rawSteps = Array.isArray(parsed.steps) ? parsed.steps : [];
             const adjustedRoadmap = Array.isArray(parsed.adjustedRoadmap) ? parsed.adjustedRoadmap : undefined;
+
+            // P1 — telemetria de truncamento: mede se o limite de 4 steps está descartando
+            // steps relevantes do LLM sem alterar comportamento do slice.
+            const rawCount = rawSteps.length;
+            const truncatedCount = Math.max(0, rawCount - 4);
+            const containsWrite = rawSteps.some((s: Record<string, unknown>) => String(s['toolName'] ?? '') === 'write');
+            const containsWriteInTruncated = rawSteps.slice(4).some((s: Record<string, unknown>) => String(s['toolName'] ?? '') === 'write');
+            if (rawCount > 0) {
+                log.info(
+                    `[PLANNER-METRICS]` +
+                    ` rawSteps=${rawCount}` +
+                    ` truncatedSteps=${truncatedCount}` +
+                    ` wasTruncated=${truncatedCount > 0}` +
+                    ` containsWrite=${containsWrite}` +
+                    ` writeInTruncated=${containsWriteInTruncated}`
+                );
+            }
 
             const steps: PlanStep[] = rawSteps.slice(0, 4).map((s: Record<string, unknown>, i: number) => {
                 const rawToolName = s.toolName ? String(s.toolName) : undefined;
