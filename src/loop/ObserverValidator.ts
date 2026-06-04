@@ -9,6 +9,54 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 const log = createLogger('Observervalidator');
 
+/**
+ * Extrai o primeiro objeto JSON válido contendo a chave "approved" de um conteúdo arbitrário.
+ * Usa contagem de chaves para lidar com objetos aninhados e strings com caracteres especiais —
+ * o regex simples /\{[^}]*"approved"[^}]*\}/ quebrava ao encontrar `}` dentro de reason ou
+ * ao receber o campo thinking do qwen3.5 como fallback de conteúdo.
+ */
+function extractApprovedJson(content: string): Record<string, unknown> | null {
+    // Tentativa direta: conteúdo inteiro é JSON válido
+    try {
+        const parsed = JSON.parse(content) as Record<string, unknown>;
+        if ('approved' in parsed) return parsed;
+    } catch { /* continua */ }
+
+    // Varredura por objetos JSON via contagem de chaves
+    let i = 0;
+    while (i < content.length) {
+        const start = content.indexOf('{', i);
+        if (start === -1) break;
+        let depth = 0;
+        let inString = false;
+        let escape = false;
+        let j = start;
+        while (j < content.length) {
+            const ch = content[j];
+            if (escape) { escape = false; j++; continue; }
+            if (ch === '\\' && inString) { escape = true; j++; continue; }
+            if (ch === '"') { inString = !inString; j++; continue; }
+            if (!inString) {
+                if (ch === '{') depth++;
+                else if (ch === '}') {
+                    depth--;
+                    if (depth === 0) break;
+                }
+            }
+            j++;
+        }
+        if (depth === 0) {
+            const candidate = content.slice(start, j + 1);
+            try {
+                const parsed = JSON.parse(candidate) as Record<string, unknown>;
+                if ('approved' in parsed) return parsed;
+            } catch { /* tenta próximo */ }
+        }
+        i = start + 1;
+    }
+    return null;
+}
+
 export interface ValidationResult {
     approved: boolean;
     reason: string;
@@ -170,21 +218,21 @@ export class ObserverValidator {
 
             const content = (response.content || '').trim();
 
-            // Extract JSON from response
-            const jsonMatch = content.match(/\{[^}]*"approved"[^}]*\}/s);
-            if (!jsonMatch) {
+            // Extrai o primeiro objeto JSON válido que contenha "approved" no conteúdo.
+            // O regex simples [^}]* quebrava com objetos aninhados ou reason com aspas.
+            // Aqui fazemos parse incremental por contagem de chaves para resistir a conteúdo complexo.
+            const result = extractApprovedJson(content);
+            if (!result) {
                 log.warn(`No JSON found in response, skipping validation. Elapsed: ${elapsed}ms`);
                 return { approved: false, reason: 'Observer returned non-JSON', confidence: 0, validationSkipped: true };
             }
-
-            const result = JSON.parse(jsonMatch[0]);
-            log.info(`${result.approved ? '✅' : '❌'} approved=${result.approved} confidence=${result.confidence} reason="${result.reason}" elapsed=${elapsed}ms`);
+            log.info(`${result['approved'] ? '✅' : '❌'} approved=${result['approved']} confidence=${result['confidence']} reason="${result['reason']}" elapsed=${elapsed}ms`);
 
             return {
-                approved: !!result.approved,
-                reason: result.reason || '',
-                confidence: Number(result.confidence) || 0.5,
-                suggestedFix: result.suggested_fix || result.suggestedFix || undefined
+                approved: !!result['approved'],
+                reason: String(result['reason'] || ''),
+                confidence: Number(result['confidence']) || 0.5,
+                suggestedFix: String(result['suggested_fix'] || result['suggestedFix'] || '') || undefined
             };
         } catch (error) {
             if (signal?.aborted) {

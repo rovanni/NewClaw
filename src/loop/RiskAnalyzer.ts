@@ -544,25 +544,64 @@ OU
                     : undefined;
 
                 // Mesma validação do parsePlanResponse: args obrigatórios ausentes
-                // → converte para AgentLoop (sem toolName) para o LLM resolver com contexto.
+                // → para send_document sem file_path, tenta inferir a partir do último write do plano.
+                // → para outros casos, converte para AgentLoop (sem toolName) para o LLM resolver.
                 // Usa toolArgs ?? {} para capturar também o caso em que toolArgs é undefined
                 // (ex: send_document gerado pelo LLM sem a chave toolArgs).
                 if (resolvedTool) {
                     const missing = detectMissingRequiredArgs(resolvedTool, toolArgs ?? {});
                     if (missing) {
-                        log.warn(`[RiskAnalyzer] adjusted step ${i + 1}: '${resolvedTool}' ${missing} — converting to AgentLoop step`);
-                        // C3: rastrear mutação de step para auditoria de integridade do plano
-                        log.info(
-                            `[STEP-MUTATION]` +
-                            ` step=${String(s.id ?? `step_${i + 1}`)}` +
-                            ` created_by=risk_analyzer` +
-                            ` original_tool=${resolvedTool}` +
-                            ` new_tool=agentloop` +
-                            ` reason="${missing}"` +
-                            ` description="${String(s.description ?? '').slice(0, 80)}"`
-                        );
-                        resolvedTool = undefined;
-                        toolArgs = undefined;
+                        // Para send_document sem file_path: tenta inferir do último write anterior no plano.
+                        // Isso evita criar um AgentLoop aninhado só para descobrir qual arquivo enviar.
+                        if (resolvedTool === 'send_document' && missing.includes('file_path')) {
+                            const lastWrite = rawSteps.slice(0, i).reverse().find(
+                                (prev: Record<string, unknown>) =>
+                                    String(prev['toolName'] ?? '') === 'write' &&
+                                    prev['toolArgs'] &&
+                                    typeof prev['toolArgs'] === 'object' &&
+                                    (prev['toolArgs'] as Record<string, unknown>)['path']
+                            );
+                            if (lastWrite) {
+                                const inferredPath = String((lastWrite['toolArgs'] as Record<string, unknown>)['path']);
+                                toolArgs = { ...(toolArgs ?? {}), file_path: inferredPath };
+                                log.info(
+                                    `[STEP-MUTATION]` +
+                                    ` step=${String(s.id ?? `step_${i + 1}`)}` +
+                                    ` created_by=risk_analyzer` +
+                                    ` original_tool=${resolvedTool}` +
+                                    ` new_tool=${resolvedTool}` +
+                                    ` reason="file_path inferred from prior write: ${inferredPath}"` +
+                                    ` description="${String(s.description ?? '').slice(0, 80)}"`
+                                );
+                            } else {
+                                log.warn(`[RiskAnalyzer] adjusted step ${i + 1}: 'send_document' sem file_path e sem write anterior — converting to AgentLoop step`);
+                                log.info(
+                                    `[STEP-MUTATION]` +
+                                    ` step=${String(s.id ?? `step_${i + 1}`)}` +
+                                    ` created_by=risk_analyzer` +
+                                    ` original_tool=${resolvedTool}` +
+                                    ` new_tool=agentloop` +
+                                    ` reason="${missing}"` +
+                                    ` description="${String(s.description ?? '').slice(0, 80)}"`
+                                );
+                                resolvedTool = undefined;
+                                toolArgs = undefined;
+                            }
+                        } else {
+                            log.warn(`[RiskAnalyzer] adjusted step ${i + 1}: '${resolvedTool}' ${missing} — converting to AgentLoop step`);
+                            // C3: rastrear mutação de step para auditoria de integridade do plano
+                            log.info(
+                                `[STEP-MUTATION]` +
+                                ` step=${String(s.id ?? `step_${i + 1}`)}` +
+                                ` created_by=risk_analyzer` +
+                                ` original_tool=${resolvedTool}` +
+                                ` new_tool=agentloop` +
+                                ` reason="${missing}"` +
+                                ` description="${String(s.description ?? '').slice(0, 80)}"`
+                            );
+                            resolvedTool = undefined;
+                            toolArgs = undefined;
+                        }
                     }
                 }
 

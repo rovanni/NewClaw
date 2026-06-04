@@ -17,6 +17,7 @@
  */
 
 import * as fs from 'fs';
+import * as path from 'path';
 import * as crypto from 'crypto';
 import { createLogger } from '../shared/AppLogger';
 import { AgentLoop } from './AgentLoop';
@@ -1926,8 +1927,10 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
                 .map(a => String(a.args['path'] ?? a.args['file_path'] ?? ''))
                 .filter(Boolean)
         )];
+        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
         const artifactLines: string[] = [];
-        for (const filePath of writtenPaths) {
+        for (const rawPath of writtenPaths) {
+            const filePath = path.isAbsolute(rawPath) ? rawPath : path.resolve(workspaceDir, rawPath);
             try {
                 const content = fs.readFileSync(filePath, 'utf-8');
                 const truncated = content.length > 2000 ? content.slice(0, 2000) + '\n...(truncado)' : content;
@@ -1987,7 +1990,8 @@ OU
         // H8: snapshot do arquivo em disco no momento da validação — prova que o validador
         // está avaliando o mesmo artefato que foi escrito (detecta cache/leitura antecipada)
         const uniqueArtifacts = [...new Set(artifactsInAttempts)];
-        for (const filePath of uniqueArtifacts) {
+        for (const rawArtifact of uniqueArtifacts) {
+            const filePath = path.isAbsolute(rawArtifact) ? rawArtifact : path.resolve(workspaceDir, rawArtifact);
             try {
                 const stat = fs.statSync(filePath);
                 const content = fs.readFileSync(filePath, 'utf-8');

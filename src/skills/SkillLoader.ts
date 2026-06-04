@@ -31,17 +31,26 @@ export interface Skill extends SkillMeta {
 export class SkillLoader {
     private skillsDir: string;
     private cache: Map<string, Skill> = new Map();
+    private lastLoadTime = 0;
+    // TTL de 10s: hot-reload ainda funciona para edições de skills entre requests,
+    // mas evita o I/O repetido quando loadAll() é chamado múltiplas vezes no mesmo ciclo de goal.
+    private static readonly CACHE_TTL_MS = 10_000;
 
     constructor(skillsDir: string = './skills') {
         this.skillsDir = skillsDir;
     }
 
     /**
-     * Carrega todas as skills do diretório
-     * Hot-reload: lê do FS a cada request
+     * Carrega todas as skills do diretório.
+     * Hot-reload com TTL: relê do FS a cada 10s. Chamadas dentro do mesmo segundo retornam o cache.
      */
     loadAll(): Skill[] {
         const t0 = Date.now();
+        const cacheAge = t0 - this.lastLoadTime;
+        if (this.cache.size > 0 && cacheAge < SkillLoader.CACHE_TTL_MS) {
+            log.info(`[SKILLLOAD] loaded=${this.cache.size} cached=${this.cache.size} duration_ms=0`);
+            return Array.from(this.cache.values());
+        }
         // Obs #8: registra quantas skills estavam em cache antes do clear (hot-reload descarta sempre)
         const prevCacheSize = this.cache.size;
         this.cache.clear();
@@ -73,6 +82,7 @@ export class SkillLoader {
         }
 
         const duration_ms = Date.now() - t0;
+        this.lastLoadTime = t0;
         log.info(`[SKILLLOAD] loaded=${this.cache.size} cached=${prevCacheSize} duration_ms=${duration_ms}`);
         return Array.from(this.cache.values());
     }
