@@ -17,6 +17,10 @@ import { ChannelContext } from './agentLoopTypes';
 
 const log = createLogger('GoalExtractor');
 
+// P0.4 — timeout dedicado ao classificador: uma resposta binária não justifica 45s.
+// Se o LLM não responder em 8s, o sistema faz fail-open para AgentLoop.
+const GOAL_EXTRACTOR_TIMEOUT_MS = 8_000;
+
 // ── Heurísticas determinísticas ───────────────────────────────────────────────
 
 /** Padrões que indicam claramente um goal (sem LLM) */
@@ -158,27 +162,45 @@ Regras:
 
         try {
             const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
-            // 45s: kimi-k2.6 pode gastar 30s+ só em thinking antes de gerar output.
-            // Com 30s o stream era abortado e o sistema recuperava o thinking como conteúdo
-            // (fallback funcional mas com latência extra e classificação subótima).
+            // P0.4: timeout de 8s — classificação binária não justifica 45s de espera.
+            // P0.1: se o stream expirar e o provider recuperar o campo "thinking" como content,
+            //       parseClassificationResponse não encontrará JSON válido e devolverá reason:'parse_error'.
+            //       Ambos os casos (status!=success e parse_error) caem no fail-open para AgentLoop.
             const result = await this.providerFactory.chatWithFallback(
                 messages,
                 undefined,
                 undefined,
-                45_000
+                GOAL_EXTRACTOR_TIMEOUT_MS
             );
 
             if (result.status !== 'success') {
-                log.warn('[GoalExtractor] LLM classification failed, defaulting to not-goal');
-                return { isGoal: false, confidence: 0.5, reason: 'llm_unavailable' };
+                log.warn(`[GoalExtractor] LLM classification failed status=${result.status} — fail-open to AgentLoop`);
+                return { isGoal: false, confidence: 0.5, reason: 'goal_extractor_timeout', timedOut: true };
+            }
+
+            // P0.1 — verifica se o conteúdo é JSON válido ANTES de usá-lo.
+            // Quando o provider recupera o campo "thinking" como fallback de conteúdo,
+            // o texto começa com linguagem natural ("Vou analisar…"), não com '{'.
+            // Nesse caso descartamos e fazemos fail-open — thinking jamais vira classificação.
+            const trimmed = result.content.trim();
+            const looksLikeJson = trimmed.startsWith('{') || trimmed.startsWith('```');
+            if (!looksLikeJson) {
+                log.warn(`[GoalExtractor] content does not look like JSON (likely recovered thinking) — discarding, fail-open to AgentLoop`);
+                return { isGoal: false, confidence: 0.5, reason: 'goal_extractor_timeout', timedOut: true };
             }
 
             const parsed = this.parseClassificationResponse(result.content);
+            // Se parse falhou (conteúdo era thinking disfarçado de JSON) → fail-open
+            if (parsed.reason === 'parse_error') {
+                log.warn('[GoalExtractor] parse_error — content was not valid classification JSON, fail-open to AgentLoop');
+                return { isGoal: false, confidence: 0.5, reason: 'goal_extractor_timeout', timedOut: true };
+            }
+
             log.info(`[GoalExtractor] LLM classified: isGoal=${parsed.isGoal} isAmbiguous=${parsed.isAmbiguous} confidence=${parsed.confidence}`);
             return parsed;
         } catch (err) {
             log.warn('[GoalExtractor] LLM classify error:', String(err));
-            return { isGoal: false, confidence: 0.5, reason: 'classify_error' };
+            return { isGoal: false, confidence: 0.5, reason: 'goal_extractor_timeout', timedOut: true };
         }
     }
 
@@ -208,11 +230,15 @@ Regras:
         context: ChannelContext,
         recentMessages?: Array<{ role: string; content: string }>
     ): Promise<GoalClassification> {
+        const startMs = Date.now();
+        let usedLLM = false;
+        let result: GoalClassification;
+
         const quick = this.quickClassify(message);
 
         if (quick === true) {
             log.debug(`[GoalExtractor] quick=goal message="${message.slice(0, 60)}"`);
-            return {
+            result = {
                 isGoal: true,
                 confidence: GOAL_LIMITS.QUICK_CLASSIFY_THRESHOLD,
                 objective: message.slice(0, 300),
@@ -220,31 +246,59 @@ Regras:
                 reason: 'heuristic_positive',
                 isConstruction: this.isConstructionHeuristic(message),
             };
-        }
-
-        if (quick === false) {
+        } else if (quick === false) {
             log.debug(`[GoalExtractor] quick=not-goal message="${message.slice(0, 60)}"`);
-            return { isGoal: false, confidence: GOAL_LIMITS.QUICK_CLASSIFY_THRESHOLD, reason: 'heuristic_negative' };
+            result = { isGoal: false, confidence: GOAL_LIMITS.QUICK_CLASSIFY_THRESHOLD, reason: 'heuristic_negative' };
+        } else {
+            // Tool-specific shortcut: frases com tool dedicada nunca precisam de clarificação
+            const isUnambiguousTool = UNAMBIGUOUS_TOOL_PATTERNS.some(p => p.test(message.trim()));
+            if (isUnambiguousTool) {
+                log.info(`[GoalExtractor] unambiguous_tool_match — skipping LLM classify for "${message.slice(0, 60)}"`);
+                result = {
+                    isGoal: true,
+                    confidence: 0.90,
+                    objective: message.slice(0, 300),
+                    requiredTools: [],
+                    reason: 'unambiguous_tool_available',
+                    isAmbiguous: false,
+                    isConstruction: false,
+                    hasExplicitEvidence: true,
+                };
+            } else {
+                // Inconclusivo — classificação via LLM com contexto recente da conversa
+                usedLLM = true;
+                log.debug(`[GoalExtractor] inconclusive, calling LLM for "${message.slice(0, 60)}"`);
+                result = await this.llmClassify(message, context, recentMessages);
+            }
         }
 
-        // Tool-specific shortcut: frases com tool dedicada nunca precisam de clarificação
-        const isUnambiguousTool = UNAMBIGUOUS_TOOL_PATTERNS.some(p => p.test(message.trim()));
-        if (isUnambiguousTool) {
-            log.info(`[GoalExtractor] unambiguous_tool_match — skipping LLM classify for "${message.slice(0, 60)}"`);
-            return {
-                isGoal: true,
-                confidence: 0.90,
-                objective: message.slice(0, 300),
-                requiredTools: [],
-                reason: 'unambiguous_tool_available',
-                isAmbiguous: false,
-                isConstruction: false,
-                hasExplicitEvidence: true,
-            };
-        }
+        // Fase 1 — telemetria estruturada do GoalExtractor.
+        // Emite latência, modelo, rota e resultado para coleta de métricas de produção.
+        const latencyMs = Date.now() - startMs;
+        const modelName = this.getDefaultModelName();
+        const route = result.isGoal ? 'goal_orchestrator' : 'agentloop';
+        log.info(
+            `[GOAL-EXTRACTOR]` +
+            ` model=${modelName}` +
+            ` latencyMs=${latencyMs}` +
+            ` timeout=${result.timedOut ?? false}` +
+            ` parseError=${result.reason === 'parse_error'}` +
+            ` usedLLM=${usedLLM}` +
+            ` route=${route}` +
+            ` confidence=${result.confidence}` +
+            ` reason=${result.reason ?? 'none'}`
+        );
 
-        // Inconclusivo — classificação via LLM com contexto recente da conversa
-        log.debug(`[GoalExtractor] inconclusive, calling LLM for "${message.slice(0, 60)}"`);
-        return this.llmClassify(message, context, recentMessages);
+        return result;
+    }
+
+    /** Retorna o nome do modelo atualmente configurado no provider padrão. */
+    private getDefaultModelName(): string {
+        try {
+            const provider = this.providerFactory.getProvider() as { getModel?: () => string };
+            return provider.getModel?.() ?? 'default';
+        } catch {
+            return 'default';
+        }
     }
 }

@@ -237,6 +237,10 @@ export interface GoalClassification {
     isConstruction?: boolean;
     /** true quando o objetivo foi explicitamente solicitado; false quando inferido dos dados sem pedido explícito */
     hasExplicitEvidence?: boolean;
+    /** true quando o GoalExtractor LLM estourou o timeout ou retornou conteúdo não-JSON (thinking) */
+    timedOut?: boolean;
+    /** true quando o fast path determinístico foi usado — LLM não foi chamado */
+    usedFastPath?: boolean;
 }
 
 // ── Avaliação de step (heurística + escalation) ───────────────────────────────

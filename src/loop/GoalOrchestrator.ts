@@ -151,15 +151,51 @@ export class GoalOrchestrator {
         }
 
         // ── Classificar a mensagem ──────────────────────────────────────────
+        const classifyStart = Date.now();
         const classification = await this.extractor.classify(
             message,
             context ?? { channel: 'unknown', chatId: conversationId },
             recentMessages
         );
+        const classificationMs = Date.now() - classifyStart;
+
+        // P0.2 — Fail-open: GoalExtractor timeout ou conteúdo não-JSON (thinking recuperado).
+        // Em vez de aceitar uma classificação arbitrária, roteamos para AgentLoop
+        // que demonstrou resolver tarefas de criação sem GoalPlanner.
+        if (classification.timedOut) {
+            log.warn(
+                `[GOAL-ROUTING] route=agentloop reason=${classification.reason ?? 'goal_extractor_timeout'}` +
+                ` classificationMs=${classificationMs} timedOut=true usedFastPath=false`
+            );
+            return this.agentLoop.process(conversationId, message, userId, context);
+        }
+
+        // P1 — Telemetria de roteamento: emitida em TODAS as decisões de routing.
+        const route = classification.isGoal ? 'goal_orchestrator' : 'agentloop';
+        log.info(
+            `[GOAL-ROUTING] route=${route}` +
+            ` reason=${classification.reason ?? 'none'}` +
+            ` classificationMs=${classificationMs}` +
+            ` timedOut=false` +
+            ` usedFastPath=${classification.usedFastPath ?? false}` +
+            ` confidence=${classification.confidence}`
+        );
 
         if (!classification.isGoal) {
             log.debug(`[GoalOrchestrator] not-goal reason=${classification.reason}`);
-            return this.agentLoop.process(conversationId, message, userId, context);
+            const roiStart = Date.now();
+            const agentResult = await this.agentLoop.process(conversationId, message, userId, context);
+            log.info(
+                `[GOAL-ROI]` +
+                ` route=agentloop` +
+                ` category=${classification.reason ?? 'heuristic'}` +
+                ` success=true` +
+                ` durationMs=${Date.now() - roiStart}` +
+                ` replans=0` +
+                ` validatorFailures=0` +
+                ` filesCreated=0`
+            );
+            return agentResult;
         }
 
         // ── Item 3: Ambiguity Detection — perguntar antes de criar goal ──────
@@ -240,12 +276,33 @@ export class GoalOrchestrator {
         }
 
         // ── Executar via GoalExecutionLoop ────────────────────────────────
+        const goalRoiStart = Date.now();
         const result = await this.executionLoop.executeGoal(
             goal,
             context ?? { channel: 'unknown', chatId: conversationId, userId },
             async (update) => {
                 log.debug(`[GoalOrchestrator] progress goal=${update.goalId} cycle=${update.cycle} event=${update.event}`);
             }
+        );
+
+        // Fase 3 — ROI audit: métricas de execução via GoalOrchestrator.
+        const goalRoiDurationMs = Date.now() - goalRoiStart;
+        const roiFilesCreated = result.goal.attempts.filter(
+            a => a.result === 'success' && a.toolName === 'write'
+        ).length;
+        const roiValidatorFailures = result.goal.blockers.filter(
+            b => b.kind === 'goal_incomplete'
+        ).length;
+        const roiCategory = result.goal.isConstruction ? 'construction' : 'goal';
+        log.info(
+            `[GOAL-ROI]` +
+            ` route=goal` +
+            ` category=${roiCategory}` +
+            ` success=${result.success}` +
+            ` durationMs=${goalRoiDurationMs}` +
+            ` replans=${result.totalReplans}` +
+            ` validatorFailures=${roiValidatorFailures}` +
+            ` filesCreated=${roiFilesCreated}`
         );
 
         log.info(`[GoalOrchestrator] goal=${goal.id} success=${result.success} cycles=${result.totalCycles} replans=${result.totalReplans}`);
