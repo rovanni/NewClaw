@@ -304,10 +304,12 @@ export class AgentController {
                 return;
             }
 
-            // Se há um goal aguardando esta transação, retoma o loop de execução
+            // Se há um goal aguardando esta transação, retoma ou aborta conforme a decisão
             const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
             if (pendingGoal) {
-                const responseText = await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
+                const responseText = decision === 'rejected'
+                    ? await this.goalOrchestrator.abortGoalFromAuth(txnId)
+                    : await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
                 await this.telegramAdapter.send({ text: responseText, format: 'markdown' }, rawCtx);
                 this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(err =>
                     log.error('[WF] record_auth_response_failed', err)
@@ -358,7 +360,9 @@ export class AgentController {
                 }
                 const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
                 if (pendingGoal) {
-                    const responseText = await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
+                    const responseText = decision === 'rejected'
+                        ? await this.goalOrchestrator.abortGoalFromAuth(txnId)
+                        : await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
                     await this.discordAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
                     this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
                     return;
@@ -392,7 +396,9 @@ export class AgentController {
                 }
                 const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
                 if (pendingGoal) {
-                    const responseText = await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
+                    const responseText = decision === 'rejected'
+                        ? await this.goalOrchestrator.abortGoalFromAuth(txnId)
+                        : await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
                     await this.whatsAppAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
                     this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
                     return;
@@ -426,7 +432,9 @@ export class AgentController {
                 }
                 const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
                 if (pendingGoal) {
-                    const responseText = await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
+                    const responseText = decision === 'rejected'
+                        ? await this.goalOrchestrator.abortGoalFromAuth(txnId)
+                        : await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
                     await this.signalAdapter!.send({ text: responseText, format: 'plain' }, rawCtx);
                     this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
                     return;

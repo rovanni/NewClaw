@@ -139,7 +139,10 @@ export class GoalOrchestrator {
                 if (this.workflowEngine) {
                     const wfResult = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
                     if (wfResult) {
-                        log.info(`[GoalOrchestrator] [AUTH-RESUMED] goal=${activeGoal.id} txn=${txnId} source=text — [GOAL-EXTRACTION-SKIPPED]`);
+                        log.info(`[GoalOrchestrator] [AUTH-RESUMED] goal=${activeGoal.id} txn=${txnId} source=text decision=${decision} — [GOAL-EXTRACTION-SKIPPED]`);
+                        if (decision === 'rejected') {
+                            return this.abortGoalFromAuth(txnId);
+                        }
                         return this.resumeFromAuth(txnId, wfResult.output ?? '');
                     }
                     log.warn(`[GoalOrchestrator] [AUTH-DETECTED] workflowEngine.resume=null txn=${txnId} — falling back to AgentLoop`);
@@ -365,6 +368,21 @@ export class GoalOrchestrator {
 
         log.info(`[GoalOrchestrator] goal=${goal.id} resumed success=${result.success} cycles=${result.totalCycles}`);
         return result.finalOutput;
+    }
+
+    /**
+     * Aborta um goal bloqueado quando o usuário rejeitou a autorização.
+     * Marca o goal como falho e limpa o pendingTxnId — sem replanejar.
+     */
+    async abortGoalFromAuth(txnId: string): Promise<string> {
+        const goal = this.goalStore.getByTxnId(txnId);
+        if (!goal) {
+            log.warn(`[GoalOrchestrator] abortGoalFromAuth: no goal for txn=${txnId}`);
+            return '❌ Ação cancelada.';
+        }
+        log.info(`[GoalOrchestrator] [AUTH-REJECTED] goal=${goal.id} txn=${txnId} — aborting goal`);
+        this.goalStore.update(goal.id, { status: 'failed', pendingTxnId: undefined });
+        return '❌ Ação cancelada. O objetivo foi encerrado sem executar o comando.';
     }
 
     getGoalStore(): GoalStore { return this.goalStore; }

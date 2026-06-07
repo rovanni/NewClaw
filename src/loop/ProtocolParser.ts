@@ -441,6 +441,32 @@ export class ProtocolParser {
     private semanticRecovery(content: string): StructuredAgentResponse {
         const trimmed = content.trim();
 
+        // Guard: se o conteúdo parece JSON interno do protocolo (thought/action vazado),
+        // não enviar ao usuário — injetar recovery prompt para o LLM reformatar.
+        const looksLikeInternalJson =
+            /^\s*\{[\s\S]*?"thought"\s*:/.test(trimmed) ||
+            /^\s*```json[\s\S]*?"thought"\s*:/.test(trimmed);
+        if (looksLikeInternalJson) {
+            log.warn(`[PROTOCOL] 🔄 Semantic recovery — internal protocol JSON detected (thought/action leak) — forcing recovery`);
+            return {
+                type: 'planning',
+                content: trimmed,
+                isComplete: false,
+                confidence: 'low',
+                reasoningRequired: true,
+                evaluation: {
+                    is_complete: false,
+                    confidence: 'low',
+                    reason: 'Protocol violation: internal JSON (thought/action) detected in content — recovery required.',
+                },
+                metadata: {
+                    protocolViolation: true,
+                    rawContentLength: trimmed.length,
+                    recoveryNeeded: true,
+                },
+            };
+        }
+
         // Substantive plain-text responses (≥500 chars, no tool-call markers) are treated
         // as final answers. Short fragments (<500 chars) are typically activity-timeout
         // artifacts — keep them as planning so the loop retries.

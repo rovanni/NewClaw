@@ -30,3 +30,4 @@ Quando o usuário pedir para instalar algo:
 - Usar `pip3` para Python, `npm` para Node.js
 - Para pacotes do sistema (apt), pedir confirmação antes
 - Se falhar, tentar alternativa (ex: pip3 → pip)
+- **TTS com gTTS:** SEMPRE especificar `lang='pt'` — nunca usar sem parâmetro de idioma. Exemplo correto: `gTTS(text=conteudo, lang='pt', slow=False)`

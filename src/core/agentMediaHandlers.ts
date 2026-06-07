@@ -56,6 +56,23 @@ export interface VisionProfile {
     model: string;
 }
 
+/**
+ * Detecta transcrições corrompidas pelo Whisper: palavras repetidas ou padrões
+ * de alucinação típicos de áudio de baixo volume/qualidade.
+ * Retorna true se a transcrição parece inválida e não deve ser processada.
+ */
+function isLikelyHallucination(text: string): boolean {
+    const words = text.trim().toLowerCase().split(/[\s,.\-!?]+/).filter(Boolean);
+    if (words.length < 3) return false;
+    const uniqueWords = new Set(words);
+    // Mais de 60% das palavras são iguais → texto repetitivo (ex: "tente tente tente")
+    if (uniqueWords.size / words.length < 0.4) return true;
+    // Padrão clássico de alucinação Whisper em áudio curto: começa com pronome interrogativo
+    // seguido de poucas palavras sem sentido de resposta
+    if (words.length <= 5 && /^(quando|quanto|que|como|onde|por que|quem)$/.test(words[0])) return true;
+    return false;
+}
+
 export async function transcribeAttachment(
     msg: NormalizedMessage,
     attachment: ChannelAttachment,
@@ -70,12 +87,20 @@ export async function transcribeAttachment(
             return '⚠️ Não foi possível obter o arquivo de áudio (fileId ausente).';
         }
 
-        let audioBuffer: Buffer;
-        try {
-            audioBuffer = await messageBus.downloadFile(msg.channel, fileId);
-        } catch (e) {
-            voiceLog.error('audio_download_failed', e);
-            return '⚠️ Falha ao baixar o arquivo de áudio do Telegram.';
+        let audioBuffer!: Buffer;
+        const MAX_DOWNLOAD_ATTEMPTS = 3;
+        for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
+            try {
+                audioBuffer = await messageBus.downloadFile(msg.channel, fileId);
+                break;
+            } catch (e) {
+                voiceLog.warn('audio_download_failed', `attempt=${attempt}/${MAX_DOWNLOAD_ATTEMPTS} error=${errorMessage(e)}`);
+                if (attempt === MAX_DOWNLOAD_ATTEMPTS) {
+                    voiceLog.error('audio_download_exhausted', e);
+                    return '⚠️ Falha ao baixar o arquivo de áudio do Telegram. Tente reenviar.';
+                }
+                await new Promise(r => setTimeout(r, 1000 * attempt));
+            }
         }
         voiceLog.info('audio_downloaded', `size=${audioBuffer.length} type=${attachment.type}`);
 
@@ -123,6 +148,10 @@ export async function transcribeAttachment(
                     const result = await whisperRes.json() as { text?: string; transcription?: string };
                     const transcription = result?.text || result?.transcription || '';
                     if (transcription.trim()) {
+                        if (isLikelyHallucination(transcription)) {
+                            voiceLog.warn('whisper_hallucination_detected', `text="${transcription.trim().slice(0, 80)}" url=${whisperUrl}`);
+                            return '⚠️ Não consegui entender o áudio (muito baixo ou com ruído). Pode falar novamente ou enviar como texto?';
+                        }
                         voiceLog.info('whisper_transcription_ok', `textLen=${transcription.length}`);
                         msg.text = transcription.trim();
                         return null;
@@ -151,6 +180,10 @@ export async function transcribeAttachment(
             });
             const transcription = output.trim();
             if (transcription) {
+                if (isLikelyHallucination(transcription)) {
+                    voiceLog.warn('whisper_hallucination_detected', `text="${transcription.slice(0, 80)}" source=local`);
+                    return '⚠️ Não consegui entender o áudio (muito baixo ou com ruído). Pode falar novamente ou enviar como texto?';
+                }
                 voiceLog.info('local_whisper_ok', `textLen=${transcription.length}`);
                 msg.text = transcription;
                 return null;
