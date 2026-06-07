@@ -787,53 +787,48 @@ start_newclaw() {
   fi
 }
 
-# ── Serviço systemd ──────────────────────────────────────────
+# ── Autostart via PM2 ────────────────────────────────────────
 
-setup_systemd() {
+setup_pm2_startup() {
   if [ "$SKIP_SYSTEMD" -eq 1 ]; then
-    debug "Pulando systemd (flag --no-systemd)"
+    debug "Pulando autostart (flag --no-systemd)"
     return
   fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    dry "criar serviço systemd"
+    dry "configurar PM2 autostart no boot"
     return
   fi
 
   echo ""
-  if ask_yes "Criar serviço para iniciar com o sistema? (systemd)" "y"; then
-    local username
-    username=$(whoami)
-    local service_file="/etc/systemd/system/newclaw.service"
-
-    if [ "$DRY_RUN" -eq 0 ]; then
-      sudo tee "$service_file" > /dev/null << EOF
-[Unit]
-Description=NewClaw AI Agent
-After=network.target ollama.service
-
-[Service]
-Type=simple
-User=${username}
-WorkingDirectory=${NEWCLAW_DIR}
-ExecStart=/usr/bin/node bin/newclaw start
-Restart=always
-RestartSec=5
-Environment=NODE_ENV=production
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-      sudo systemctl daemon-reload
-      sudo systemctl enable newclaw
-      sudo systemctl start newclaw
-    else
-      dry "criar serviço systemd em ${service_file}"
+  if ask_yes "Configurar início automático no boot? (via PM2)" "y"; then
+    # Instalar PM2 globalmente se não estiver disponível
+    if ! check_cmd pm2; then
+      info "Instalando PM2 globalmente..."
+      run npm install -g pm2
+      ok "PM2 instalado!"
     fi
-    ok "Serviço systemd criado e ativado!"
+
+    info "Configurando PM2 para iniciar com o sistema..."
+
+    # Captura o comando sudo gerado pelo 'pm2 startup' e executa automaticamente
+    local startup_cmd
+    startup_cmd=$(pm2 startup 2>/dev/null | grep -E "^sudo env" | head -1)
+
+    if [ -n "$startup_cmd" ]; then
+      debug "Executando: $startup_cmd"
+      run eval "$startup_cmd"
+    else
+      warn "Não foi possível capturar o comando de startup do PM2."
+      warn "Execute manualmente: pm2 startup && pm2 save"
+      return
+    fi
+
+    # Salva a lista de processos ativos para restaurar no boot
+    run pm2 save
+    ok "Autostart configurado! NewClaw iniciará automaticamente após cada reboot."
   else
-    info "Pulando systemd"
+    info "Pulando autostart"
   fi
 }
 
@@ -910,7 +905,7 @@ main() {
   configure
   setup_cli
   start_newclaw
-  setup_systemd
+  setup_pm2_startup
   setup_firewall
   show_summary
 }
