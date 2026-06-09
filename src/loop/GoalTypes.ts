@@ -37,7 +37,8 @@ export type BlockerKind =
     | 'hallucinated_tool'        // tool gerada pelo LLM não existe no ToolRegistry
     | 'partial_success'          // entregável existe mas pode não ser o formato ideal
     | 'workspace_missing'        // step precisa de contexto do workspace que não foi coletado
-    | 'required_artifact_missing'; // artefato obrigatório existe mas está vazio — goal de modificação não pode prosseguir
+    | 'required_artifact_missing'  // artefato obrigatório existe mas está vazio — goal de modificação não pode prosseguir
+    | 'semantic_mismatch';         // tool retornou sucesso mas output não é relevante para a intenção do step
 
 export interface GoalBlocker {
     kind: BlockerKind;
@@ -292,6 +293,38 @@ export function createEmptyStepCognitiveContext(): StepCognitiveContext {
         importantOutputs: [],
         executedCommands: [],
     };
+}
+
+// ── Progresso dimensional do goal ─────────────────────────────────────────────
+
+/**
+ * Representa o progresso de um componente individual do goal
+ * (ex: "cotação do ZEC", "relatório gerado", "envio ao usuário").
+ *
+ * Populado pelo StepSemanticValidator conforme steps são concluídos
+ * e pela GoalExecutionLoop com base em attempts bem-sucedidos.
+ */
+export interface ProgressComponent {
+    id: string;
+    label: string;
+    status: 'pending' | 'in_progress' | 'completed' | 'failed';
+    /** Trecho de evidência que comprova o status (ex: output truncado) */
+    evidence?: string;
+    completedAt?: number;
+}
+
+/**
+ * Modelo de progresso multidimensional de um goal.
+ * Substitui a avaliação binária (sucesso/falha) por uma visão por componente,
+ * permitindo que o GoalPlanner e GracefulDeliveryOrchestrator saibam
+ * exatamente o que foi e o que não foi entregue.
+ */
+export interface GoalProgressModel {
+    goalId: string;
+    components: ProgressComponent[];
+    /** 0–100: percentual calculado pelo ratio de componentes completed/total */
+    overallPercent: number;
+    updatedAt: number;
 }
 
 // ── Capabilities do ambiente ──────────────────────────────────────────────────

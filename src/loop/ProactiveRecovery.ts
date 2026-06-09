@@ -202,6 +202,8 @@ export class ProactiveRecovery {
         getTool: (name: string) => ToolExecutorLike | undefined,
         usedInputs: Set<string>,
         signal?: AbortSignal,
+        /** Contexto do goal — permite evitar fallbacks já tentados e enriquecer queries */
+        goalContext?: { toolsTried: string[]; userIntent: string },
     ): Promise<RecoveryResult> {
 
         // ── Step 1: try with original args (+ retry on transient errors) ────────
@@ -209,6 +211,32 @@ export class ProactiveRecovery {
         if (step1.result.success) return { ...step1, recovered: false };
 
         const config = RECOVERY[toolName];
+
+        // ── Step 1b: goal-aware query enrichment (web_search / crypto_analysis) ──
+        // Quando a query genérica falha, tenta enriquecer com entidades do objetivo.
+        if (goalContext?.userIntent) {
+            const enriched = this.enrichWithGoalEntities(toolName, args, goalContext.userIntent);
+            if (enriched) {
+                const enrichKey = makeKey(toolName, enriched);
+                if (!usedInputs.has(enrichKey)) {
+                    log.info(`[RECOVERY] Goal-aware enrichment for "${toolName}": ${JSON.stringify(enriched)}`);
+                    const enrichResult = await this.tryWithRetry(toolName, enriched, getTool, usedInputs, signal);
+                    if (enrichResult.result.success) {
+                        log.info(`[RECOVERY] "${toolName}" succeeded after goal-aware enrichment`);
+                        return {
+                            result: enrichResult.result,
+                            finalToolName: toolName,
+                            finalArgs: enriched,
+                            recovered: true,
+                            recoveryNote: `Recuperado: query enriquecida com entidades do objetivo`,
+                            originalArgs: args,
+                            originalToolName: toolName,
+                            mutationKind: 'arg_mutation',
+                        };
+                    }
+                }
+            }
+        }
 
         // ── Step 2: try arg mutations ────────────────────────────────────────────
         if (config?.argMutators?.length) {
@@ -242,6 +270,12 @@ export class ProactiveRecovery {
             for (const fallbackName of config.fallbackTools) {
                 const fallbackTool = getTool(fallbackName);
                 if (!fallbackTool) continue;
+
+                // P3: skip fallbacks já tentados ao nível do goal — evita repetição inútil
+                if (goalContext?.toolsTried.includes(fallbackName)) {
+                    log.info(`[RECOVERY] "${fallbackName}" já tentado no nível do goal — pulando fallback`);
+                    continue;
+                }
 
                 const adaptedArgs = config.adaptArgsForFallback
                     ? config.adaptArgsForFallback(fallbackName, step1.finalArgs)
@@ -281,6 +315,41 @@ export class ProactiveRecovery {
 
         // ── All strategies exhausted ─────────────────────────────────────────────
         return { ...step1, recovered: false };
+    }
+
+    /**
+     * Extrai entidades-chave do objetivo do usuário para enriquecer queries que falharam.
+     * Aplica apenas para web_search (enriquece a query existente).
+     */
+    private enrichWithGoalEntities(
+        toolName: string,
+        args: Record<string, unknown>,
+        userIntent: string,
+    ): Record<string, unknown> | null {
+        if (toolName !== 'web_search' || !args.query) return null;
+
+        const STOPWORDS = new Set([
+            'para', 'com', 'sem', 'uma', 'uns', 'ela', 'ele', 'que', 'não', 'por', 'mas',
+            'como', 'sobre', 'estar', 'ficar', 'além', 'algumas', 'pedir', 'busque',
+            'você', 'memória', 'olho', 'monitorar', 'algumas', 'gostaria', 'poderia',
+            'favor', 'preciso', 'quero', 'queria', 'isso', 'esse', 'esta', 'este',
+        ]);
+
+        const entities = userIntent
+            .toLowerCase()
+            .replace(/[^a-z0-9áéíóúãõâêôçàü\s]/g, ' ')
+            .split(/\s+/)
+            .filter(t => t.length > 2 && !STOPWORDS.has(t))
+            .slice(0, 6);
+
+        if (entities.length === 0) return null;
+
+        const currentQuery = String(args.query).toLowerCase();
+        const newEntities = entities.filter(e => !currentQuery.includes(e));
+        if (newEntities.length === 0) return null;
+
+        const enrichedQuery = `${args.query} ${newEntities.join(' ')}`.trim().slice(0, 200);
+        return { ...args, query: enrichedQuery };
     }
 
     // ── Retry with exponential backoff for transient errors ─────────────────────

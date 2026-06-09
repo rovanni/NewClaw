@@ -555,6 +555,9 @@ OU
             }
 
             // Valida tools do plano ajustado
+            // CR#4: tools críticas com args ausentes rejeitam o plano em vez de virar agentloop silencioso
+            const criticalMutations: string[] = [];
+
             const adjustedPlan: PlanStep[] = rawSteps.map((s: Record<string, unknown>, i: number) => {
                 const rawTool = s.toolName ? String(s.toolName) : undefined;
                 let resolvedTool = rawTool && this.toolRegistry.get(rawTool) ? rawTool : undefined;
@@ -610,8 +613,20 @@ OU
                                 toolArgs = undefined;
                             }
                         } else {
+                            // CR#4: tools críticas (write, edit, exec_command) com args ausentes
+                            // NÃO são convertidas silenciosamente para agentloop — o plano é rejeitado.
+                            // Isso evita que o goal execute steps divergentes onde o agentloop não tem
+                            // contexto suficiente para substituir a tool original corretamente.
+                            const CRITICAL_TOOLS = new Set(['write', 'edit', 'exec_command']);
+                            if (CRITICAL_TOOLS.has(resolvedTool ?? '')) {
+                                criticalMutations.push(`'${resolvedTool}' step ${i + 1}: args ausentes [${missing}]`);
+                                log.warn(
+                                    `[RiskAnalyzer] critical mutation detected:` +
+                                    ` step=${i + 1} tool=${resolvedTool} missing=${missing}` +
+                                    ` — will reject plan`
+                                );
+                            }
                             log.warn(`[RiskAnalyzer] adjusted step ${i + 1}: '${resolvedTool}' ${missing} — converting to AgentLoop step`);
-                            // C3: rastrear mutação de step para auditoria de integridade do plano
                             log.info(
                                 `[STEP-MUTATION]` +
                                 ` step=${String(s.id ?? `step_${i + 1}`)}` +
@@ -636,6 +651,22 @@ OU
                     status: 'pending' as const,
                 };
             });
+
+            // CR#4: rejeitar quando tools críticas precisariam virar agentloop por args ausentes
+            if (criticalMutations.length > 0) {
+                const rejectionReason =
+                    `Plano rejeitado: ${criticalMutations.length} step(s) crítico(s) com argumentos obrigatórios ausentes — ` +
+                    criticalMutations.join('; ') +
+                    '. Replaneje fornecendo os argumentos corretos (path, content, command).';
+                log.warn(`[RiskAnalyzer] plan rejected (critical_mutations): ${criticalMutations.join(', ')}`);
+                return {
+                    risks: [...detectedRisks, rejectionReason],
+                    adjustedPlan: plan,
+                    planAdjusted: false,
+                    planRejected: true,
+                    rejectionReason,
+                };
+            }
 
             const planAdjusted =
                 adjustedPlan.length !== plan.length ||

@@ -31,7 +31,10 @@ import { ToolRegistry } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { MemoryManager } from '../memory/MemoryManager';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
-import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext, SuccessCriterion } from './GoalTypes';
+import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext, SuccessCriterion, GoalProgressModel, ProgressComponent } from './GoalTypes';
+import { StepSemanticValidator } from './StepSemanticValidator';
+import { GracefulDeliveryOrchestrator } from './GracefulDeliveryOrchestrator';
+import { StrategyDiversityGuard } from './StrategyDiversityGuard';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext, ContextAwareTool } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
@@ -43,11 +46,16 @@ export type ProgressCallback = (update: GoalProgressUpdate) => Promise<void>;
 export class GoalExecutionLoop {
     private readonly evaluator = new GoalEvaluator();
     private readonly riskAnalyzer: RiskAnalyzer;
+    private readonly semanticValidator: StepSemanticValidator;
+    private readonly gracefulDelivery = new GracefulDeliveryOrchestrator();
     private readonly capRegistry = CapabilityRegistry.getInstance();
     private readonly proactiveRecovery = new ProactiveRecovery();
 
     /** Contexto cognitivo acumulado durante a execução de um goal (resetado a cada novo goal). */
     private cognitiveContext: StepCognitiveContext = createEmptyStepCognitiveContext();
+
+    /** Modelo de progresso dimensional do goal atual. */
+    private progressModel: GoalProgressModel | null = null;
 
     /** SessionManager opcional — usado para telemetria de compressão concorrente e artefatos. */
     private sessionManager: SessionManager | null = null;
@@ -67,6 +75,7 @@ export class GoalExecutionLoop {
         private readonly memory: MemoryManager,
     ) {
         this.riskAnalyzer = new RiskAnalyzer(providerFactory, toolRegistry, reflectionMemory);
+        this.semanticValidator = new StepSemanticValidator(providerFactory);
     }
 
     /** Forwards skill context to the planner before planning begins. */
@@ -83,8 +92,14 @@ export class GoalExecutionLoop {
     ): Promise<GoalResult> {
         log.info(`[GoalLoop] start goal=${goal.id} replanBudget=${goal.replanBudget}`);
 
-        // Reinicia o contexto cognitivo para este goal
+        // Reinicia o contexto cognitivo e o modelo de progresso para este goal
         this.cognitiveContext = createEmptyStepCognitiveContext();
+        this.progressModel = {
+            goalId: goal.id,
+            components: [],
+            overallPercent: 0,
+            updatedAt: Date.now(),
+        };
 
         // ── Q1: Contextualização ──────────────────────────────────────────
         // Enriquece o entendimento do objetivo com memória semântica antes de planejar
@@ -243,8 +258,8 @@ export class GoalExecutionLoop {
             ? goal.roadmap[goal.currentMilestoneIndex ?? 0]
             : undefined;
 
-        // Replan com contexto enriquecido
-        const planResult = await this.planner.replan(goal, blocker, q1Context ?? '', capSummary, activeMilestone);
+        // Replan com contexto enriquecido (inclui progresso dimensional acumulado)
+        const planResult = await this.planner.replan(goal, blocker, q1Context ?? '', capSummary, activeMilestone, this.progressModel ?? undefined);
 
         // Se o roadmap foi ajustado pelo planner durante o replanejamento
         if (goal.isConstruction && planResult.adjustedRoadmap && planResult.adjustedRoadmap.length > 0) {
@@ -254,6 +269,50 @@ export class GoalExecutionLoop {
         }
 
         let rawPlan = planResult.steps;
+
+        // Fix 3: valida diversidade pós-geração — o LLM pode ignorar as restrições de diversidade
+        // injetadas no prompt e gerar um fingerprint idêntico ao de um plano que já falhou.
+        // Nesse caso, substituímos por um step agentloop com instrução explícita de abordagem nova
+        // em vez de executar silenciosamente um plano que com certeza vai falhar de novo.
+        if (!StrategyDiversityGuard.isDiverse(rawPlan, goal)) {
+            const violationFp = StrategyDiversityGuard.fingerprint(rawPlan);
+            log.warn(
+                `[DIVERSITY-VIOLATION] goal=${goal.id} cycle=${cycleNumber}` +
+                ` fingerprint="${violationFp}"` +
+                ` — LLM ignored diversity constraints; forcing free-form agentloop step`
+            );
+            this.goalStore.addStrategyTried(goal.id, `diversity_violation:${violationFp}`);
+            goal = this.goalStore.getById(goal.id)!;
+            const exhaustedTools = StrategyDiversityGuard.extractExhaustedTools(goal);
+            rawPlan = [{
+                id: `step_diversity_fallback_${Date.now()}`,
+                description: `[DIVERSIDADE FORÇADA] Estratégias anteriores com [${violationFp}] falharam. Use abordagem completamente diferente para: ${goal.objective.slice(0, 150)}${exhaustedTools.length > 0 ? `. Não use: ${exhaustedTools.join(', ')}` : ''}.`,
+                status: 'pending' as const,
+                fallbackSteps: [],
+            }];
+        }
+
+        // P7: replan radical (zero overlap de tools) — mark SuccessCriteria como unverifiable
+        // para forçar validação LLM completa no Q4 em vez de checklist desatualizado
+        if (goal.successCriteria && goal.successCriteria.length > 0 && goal.currentPlan.length > 0) {
+            const prevTools = new Set(goal.currentPlan.map(s => s.toolName ?? 'agentloop'));
+            const newTools  = new Set(rawPlan.map(s => s.toolName ?? 'agentloop'));
+            const hasOverlap = [...prevTools].some(t => newTools.has(t));
+
+            if (!hasOverlap) {
+                log.info(
+                    `[GoalLoop] radical replan detected: goal=${goal.id}` +
+                    ` prev_tools=[${[...prevTools].join(',')}]` +
+                    ` new_tools=[${[...newTools].join(',')}]` +
+                    ` — marking pending SuccessCriteria as unverifiable`
+                );
+                const updatedCriteria = goal.successCriteria.map(c =>
+                    c.status === 'pending' ? { ...c, status: 'unverifiable' as const } : c
+                );
+                this.goalStore.update(goal.id, { successCriteria: updatedCriteria });
+                goal = this.goalStore.getById(goal.id)!;
+            }
+        }
 
         // Q2: Análise de Riscos
         // Ativo quando: plano complexo (dependências entre steps)
@@ -320,6 +379,10 @@ export class GoalExecutionLoop {
             currentPlan: finalPlan,
             status: 'executing',
             cycleFocus: planResult.strategy || undefined,
+            // Restaura retryBudget ao valor inicial — cada novo plano começa com budget completo.
+            // Sem este reset, retries consumidos no plano anterior reduzem artificialmente a
+            // capacidade de recovery dos steps do novo plano.
+            retryBudget: GOAL_LIMITS.MAX_RETRY_BUDGET,
         });
         return this.goalStore.getById(goal.id)!;
     }
@@ -586,9 +649,53 @@ export class GoalExecutionLoop {
                 }
 
                 if (currentGoal.replanBudget <= 0) {
+                    // C: budget adaptativo — se há progresso substancial, concede +1 replan bonus
+                    // focalizado nos componentes pendentes em vez de reiniciar do zero
+                    const progressPct = this.progressModel?.overallPercent ?? 0;
+                    const bonusGranted = progressPct >= 60 && totalReplans <= 1;
+                    if (bonusGranted) {
+                        log.info(
+                            `[ADAPTIVE-BUDGET] goal=${currentGoal.id}` +
+                            ` progress=${progressPct}% >= 60% — granting +1 bonus replan` +
+                            ` cycle=${totalCycles}`
+                        );
+                        this.goalStore.update(currentGoal.id, {
+                            replanBudget: 1,
+                            status: 'replanning',
+                        });
+                        currentGoal = this.goalStore.getById(currentGoal.id)!;
+                        // Blocker focado nos componentes pendentes do progressModel
+                        const pendingComponents = (this.progressModel?.components ?? [])
+                            .filter(c => c.status !== 'completed')
+                            .map(c => c.label)
+                            .join('; ');
+                        const bonusBlocker: GoalBlocker = {
+                            kind: 'goal_incomplete',
+                            description: `[BONUS REPLAN — ${progressPct}% concluído] Complete APENAS os componentes pendentes: ${pendingComponents || (validation.reason ?? 'componentes ainda não entregues')}`,
+                            suggestedActions: ['Foque exclusivamente nos componentes pendentes — não replanejar o que já foi entregue'],
+                            detectedAt: Date.now(),
+                        };
+                        this.goalStore.addBlocker(currentGoal.id, bonusBlocker);
+                        this.goalStore.addStrategyTried(currentGoal.id, `bonus_replan: progress=${progressPct}% pendentes=[${pendingComponents}]`);
+                        currentGoal = await this.planWithSpiral(currentGoal, bonusBlocker, validation.reason, totalReplans + 1, true);
+                        totalReplans++;
+                        continue;
+                    }
+
                     this.goalStore.setStatus(currentGoal.id, 'failed');
-                    const explanation = validation.reason ?? this.evaluator.buildFailureExplanation(currentGoal);
-                    log.info(`[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey} state=failed reason="replan_budget_exhausted" cycle=${totalCycles} timestamp=${Date.now()}`);
+                    const baseExplanation = validation.reason ?? this.evaluator.buildFailureExplanation(currentGoal);
+                    // Entrega parcial: se há conteúdo útil coletado, enriquece a mensagem final
+                    const graceful = this.gracefulDelivery.assess(currentGoal, this.cognitiveContext);
+                    const explanation = graceful.hasPartialContent
+                        ? graceful.partialSummary
+                        : baseExplanation;
+                    log.info(
+                        `[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey}` +
+                        ` state=failed reason="replan_budget_exhausted"` +
+                        ` graceful_delivery=${graceful.hasPartialContent}` +
+                        ` progress=${progressPct}%` +
+                        ` cycle=${totalCycles} timestamp=${Date.now()}`
+                    );
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'failed', message: explanation });
                     return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
                 }
@@ -650,7 +757,7 @@ export class GoalExecutionLoop {
                 );
             }
 
-            const cycleResult = await this.executeStep(currentGoal, pendingStep, channelContext, totalCycles);
+            let cycleResult = await this.executeStep(currentGoal, pendingStep, channelContext, totalCycles);
 
             // Recarrega o goal — pode ter sido abandonado durante o step (nova mensagem do usuário)
             currentGoal = this.goalStore.getById(currentGoal.id)!;
@@ -690,12 +797,91 @@ export class GoalExecutionLoop {
                 }
             }
 
+            // ── Validação semântica: mesmo após 'success' heurístico, verifica se o output
+            // endereça a intenção do step (ex: crypto_analysis retornando ENA/BCH em vez de ZEC/Pi)
+            // P6: cobre também steps agentloop (sem toolName) — output do AgentLoop também é validado
+            if (cycleResult.outcome === 'success' && cycleResult.output) {
+                const semanticValidation = await this.semanticValidator.validate(
+                    pendingStep,
+                    cycleResult.output,
+                    currentGoal.userIntent,
+                );
+                if (semanticValidation.shouldDowngradeToPartial) {
+                    log.warn(
+                        `[SEMANTIC-MISMATCH] goal=${currentGoal.id} step=${pendingStep.id}` +
+                        ` tool=${pendingStep.toolName} confidence=${semanticValidation.confidence.toFixed(2)}` +
+                        ` reason="${(semanticValidation.reason ?? '').slice(0, 100)}"` +
+                        ` action=downgrade_to_partial`
+                    );
+                    this.cognitiveContext.failedStrategies.push(
+                        `${pendingStep.toolName} (step ${pendingStep.id}): output irrelevante para a intenção — ${semanticValidation.reason ?? 'mismatch'}`
+                    );
+                    // P5: persiste na ReflectionMemory para que futuros goals evitem o mesmo padrão
+                    this.reflectionMemory.record({
+                        userInput: currentGoal.userIntent.slice(0, 300),
+                        intent: pendingStep.description.slice(0, 200),
+                        toolUsed: pendingStep.toolName ?? 'agentloop',
+                        toolOutput: cycleResult.output?.slice(0, 500),
+                        approved: false,
+                        reason: `Mismatch semântico: ${semanticValidation.reason ?? 'output não endereça a intenção do step'}`,
+                        confidence: semanticValidation.confidence,
+                        pattern: `tool_${pendingStep.toolName ?? 'agentloop'}`,
+                        suggestedFix: `Use query/abordagem que retorne especificamente: ${pendingStep.description.slice(0, 100)}`,
+                    });
+                    // A: enriquece a descrição do step no plano para que a próxima tentativa
+                    // seja explicitamente guiada pelo motivo do mismatch
+                    const mismatchHint = ` [ATENÇÃO — tentativa anterior com ${pendingStep.toolName ?? 'agentloop'} retornou output irrelevante: ${(semanticValidation.reason ?? 'mismatch').slice(0, 120)}. Use abordagem diferente que retorne especificamente o que o objetivo pede.]`;
+                    const enrichedPlan = currentGoal.currentPlan.map(s =>
+                        s.id === pendingStep.id
+                            ? { ...s, description: (s.description + mismatchHint).slice(0, 500) }
+                            : s
+                    );
+                    this.goalStore.update(currentGoal.id, { currentPlan: enrichedPlan });
+                    currentGoal = this.goalStore.getById(currentGoal.id)!;
+                    if (currentGoal.retryBudget > 0) {
+                        cycleResult = { ...cycleResult, outcome: 'partial' };
+                    } else {
+                        // retryBudget esgotado: loop de retries seria infinito (MAX_CYCLES bounding)
+                        // — escala para 'blocked' para que o loop possa replanejar com nova estratégia
+                        log.warn(
+                            `[SEMANTIC-MISMATCH] goal=${currentGoal.id} step=${pendingStep.id}` +
+                            ` retryBudget=0 — escalating to blocked`
+                        );
+                        cycleResult = {
+                            ...cycleResult,
+                            outcome: 'blocked',
+                            blocker: {
+                                kind: 'semantic_mismatch' as const,
+                                toolName: pendingStep.toolName,
+                                description: `Step '${pendingStep.description.slice(0, 100)}' retornou output irrelevante após esgotar retryBudget: ${semanticValidation.reason ?? 'mismatch semântico'}`,
+                                suggestedActions: [
+                                    'Usar tool diferente para este step',
+                                    'Reformular a query com abordagem completamente alternativa',
+                                ],
+                                detectedAt: Date.now(),
+                            },
+                        };
+                    }
+                } else if (semanticValidation.result === 'mismatch') {
+                    log.info(
+                        `[SEMANTIC-MISMATCH] goal=${currentGoal.id} step=${pendingStep.id}` +
+                        ` tool=${pendingStep.toolName} confidence=${semanticValidation.confidence.toFixed(2)}` +
+                        ` reason="${(semanticValidation.reason ?? '').slice(0, 100)}"` +
+                        ` action=log_only (below downgrade threshold)`
+                    );
+                    this.cognitiveContext.failedStrategies.push(
+                        `${pendingStep.toolName}: possível mismatch semântico — ${semanticValidation.reason ?? 'output pode não ser relevante'}`
+                    );
+                }
+            }
+
             // ── Avaliar resultado ──────────────────────────────────────
             switch (cycleResult.outcome) {
 
                 case 'success': {
                     this.markStepDone(currentGoal, pendingStep, cycleResult.output ?? '');
                     this.updateCognitiveContext(pendingStep, cycleResult.output ?? '');
+                    this.updateProgressModel(pendingStep, 'completed', cycleResult.output);
                     // Fix #2: registra artefatos enviados para evitar reenvio por deliverable_check
                     if (pendingStep.toolName === 'send_document' && pendingStep.toolArgs?.file_path) {
                         sentArtifacts.add(String(pendingStep.toolArgs.file_path));
@@ -847,6 +1033,7 @@ export class GoalExecutionLoop {
 
                     this.goalStore.addBlocker(currentGoal.id, cycleResult.blocker);
                     this.recordFailedStrategy(pendingStep, cycleResult.blocker.description, currentGoal.id);
+                    this.updateProgressModel(pendingStep, 'failed', cycleResult.blocker.description);
                     currentGoal = this.goalStore.getById(currentGoal.id)!;
 
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'replanning', message: cycleResult.blocker.description });
@@ -897,6 +1084,7 @@ export class GoalExecutionLoop {
                 case 'failed': {
                     this.goalStore.setStatus(currentGoal.id, 'failed');
                     this.recordFailedStrategy(pendingStep, cycleResult.output ?? 'step falhou', currentGoal.id);
+                    this.updateProgressModel(pendingStep, 'failed', cycleResult.output);
                     // cycleResult.output tem prioridade quando contém mensagem rica (ex: dep install falhou → instrução manual)
                     const explanation = cycleResult.output ?? this.evaluator.buildFailureExplanation(currentGoal);
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'failed', message: explanation });
@@ -988,7 +1176,9 @@ export class GoalExecutionLoop {
                         (toolInstance as unknown as ContextAwareTool).setContext(channelContext.chatId, channelContext.channel);
                     }
                     const recoveryResult = await this.proactiveRecovery.execute(
-                        step.toolName, resolvedArgs, getTool, new Set<string>()
+                        step.toolName, resolvedArgs, getTool, new Set<string>(),
+                        undefined,
+                        { toolsTried: goal.toolsTried, userIntent: goal.userIntent },
                     );
                     toolResult = recoveryResult.result;
                     if (recoveryResult.recovered && recoveryResult.recoveryNote) {
@@ -1493,6 +1683,27 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             }
         }
 
+        // D: GoalProgressModel — visão dimensional do progresso para o AgentLoop
+        // Elimina re-discovery e orienta o agente para o que ainda falta
+        if (this.progressModel && this.progressModel.components.length > 0) {
+            const pm = this.progressModel;
+            const pending = pm.components.filter(c => c.status !== 'completed');
+            const done = pm.components.filter(c => c.status === 'completed');
+            if (done.length > 0 || pending.length > 0) {
+                lines.push(`\nProgresso do objetivo (${pm.overallPercent}% concluído):`);
+                for (const c of done) {
+                    lines.push(`  ✓ ${c.label}${c.evidence ? ` — ${c.evidence.slice(0, 60)}` : ''}`);
+                }
+                for (const c of pending) {
+                    const icon = c.status === 'failed' ? '✗' : '○';
+                    lines.push(`  ${icon} ${c.label} — PENDENTE`);
+                }
+                if (pending.length > 0) {
+                    lines.push(`  ⚑ Foco: complete ${pending.map(c => c.label).join(', ')}`);
+                }
+            }
+        }
+
         // ARTIFACT-DRIFT FIX: separa arquivos lidos-e-depois-modificados (stale) dos apenas lidos
         const staleFiles = filesRead.filter(f => filesModified.includes(f.path));
         const freshReadFiles = filesRead.filter(f => !filesModified.includes(f.path));
@@ -1659,6 +1870,40 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
                 ctx.filesRead.push({ path: catMatch[1] });
             }
         }
+    }
+
+    /**
+     * Atualiza o GoalProgressModel com o resultado de um step.
+     * Permite rastrear o progresso por componente, não só binário sucesso/falha.
+     */
+    private updateProgressModel(
+        step: PlanStep,
+        status: ProgressComponent['status'],
+        evidence?: string,
+    ): void {
+        if (!this.progressModel) return;
+
+        const componentId = `step_${step.id}`;
+        const existing = this.progressModel.components.find(c => c.id === componentId);
+
+        if (existing) {
+            existing.status = status;
+            existing.evidence = evidence?.slice(0, 200);
+            if (status === 'completed') existing.completedAt = Date.now();
+        } else {
+            this.progressModel.components.push({
+                id: componentId,
+                label: step.description.slice(0, 100),
+                status,
+                evidence: evidence?.slice(0, 200),
+                completedAt: status === 'completed' ? Date.now() : undefined,
+            });
+        }
+
+        const total = this.progressModel.components.length;
+        const done = this.progressModel.components.filter(c => c.status === 'completed').length;
+        this.progressModel.overallPercent = total > 0 ? Math.round((done / total) * 100) : 0;
+        this.progressModel.updatedAt = Date.now();
     }
 
     /**
@@ -1974,13 +2219,25 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             ? `\nCONTEÚDO REAL DOS ARTEFATOS EM DISCO:\n${artifactLines.join('\n\n')}`
             : '';
 
+        // B: injeta GoalProgressModel no prompt de validação — o LLM sabe o que foi e não foi entregue
+        const progressBlock = this.progressModel && this.progressModel.components.length > 0
+            ? (() => {
+                const pm = this.progressModel!;
+                const compLines = pm.components.map(c => {
+                    const icon = c.status === 'completed' ? '✓' : c.status === 'failed' ? '✗' : '○';
+                    return `  ${icon} ${c.label}${c.evidence ? ` — ${c.evidence.slice(0, 80)}` : ''}`;
+                });
+                return `\nPROGRESSO POR COMPONENTE (${pm.overallPercent}% concluído):\n${compLines.join('\n')}\n`;
+            })()
+            : '';
+
         const prompt = `Você é um validador de tarefas de software. Verifique se o objetivo especificado foi COMPLETAMENTE concluído.
 
 ALVO DE VALIDAÇÃO:
 ${validationTarget}
 
 INTENÇÃO ORIGINAL DO USUÁRIO: ${goal.userIntent}
-
+${progressBlock}
 STEPS EXECUTADOS RECENTEMENTE:
 ${stepsContext || '(nenhum)'}
 
@@ -1992,6 +2249,7 @@ IMPORTANTE — INTERPRETAÇÃO DE OUTPUTS:
 - Se o resultado de uma ferramenta exec_command está vazio e não há mensagem de erro, assuma que o comando foi bem-sucedido.
 - Se alguma leitura posterior (read, exec_command grep) mostra o conteúdo modificado, isso confirma a edição.
 - Se o conteúdo real do arquivo está disponível acima, use ESSE conteúdo como fonte primária de verdade.
+- Se PROGRESSO POR COMPONENTE mostra ≥70% concluído, considere entrega parcial como "achieved: true" com summary indicando o que ficou pendente.
 
 Análise crítica: o objetivo ou marco atual foi atingido E o resultado/entregável esperado foi produzido com sucesso?
 Se for um marco de desenvolvimento, verifique se os arquivos/funcionalidades desse marco foram realmente criados e testados.

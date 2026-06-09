@@ -17,7 +17,8 @@ import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { SkillLoader } from '../skills/SkillLoader';
 import { PromptComposer } from '../core/PromptComposer';
-import { Goal, GoalBlocker, PlanStep, SuccessCriterion, CriterionCheck } from './GoalTypes';
+import { Goal, GoalBlocker, PlanStep, SuccessCriterion, CriterionCheck, GoalProgressModel } from './GoalTypes';
+import { StrategyDiversityGuard } from './StrategyDiversityGuard';
 
 const log = createLogger('GoalPlanner');
 
@@ -179,7 +180,27 @@ ARGS OBRIGATÓRIOS POR FERRAMENTA:
 - read: aceita caminho relativo ao workspace ou absoluto.`.trim();
 }
 
-function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, availableTools: string[], runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string, skillContext?: string): string {
+function buildProgressBlock(progressModel: GoalProgressModel): string {
+    if (progressModel.components.length === 0) return '';
+
+    const lines: string[] = [];
+    lines.push('PROGRESSO ATUAL DO OBJETIVO:');
+    for (const c of progressModel.components) {
+        const icon = c.status === 'completed' ? '✓' : c.status === 'failed' ? '✗' : '○';
+        const evidencePart = c.evidence ? ` — ${c.evidence.slice(0, 80)}` : '';
+        lines.push(`  ${icon} ${c.label}${evidencePart}`);
+    }
+    lines.push(`  Progresso: ${progressModel.overallPercent}% (${progressModel.components.filter(c => c.status === 'completed').length}/${progressModel.components.length} componentes)`);
+
+    const pending = progressModel.components.filter(c => c.status !== 'completed');
+    if (pending.length > 0) {
+        lines.push(`FOCO: resolva apenas os componentes pendentes — ${pending.map(c => c.label).join('; ')}`);
+    }
+
+    return lines.join('\n');
+}
+
+function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, availableTools: string[], runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string, skillContext?: string, diversityBlock?: string, progressModel?: GoalProgressModel): string {
     const goalText            = `${goal.objective} ${goal.userIntent}`;
     const compressedRefl      = PromptComposer.compressReflection(reflectionHint);
     const capBlock            = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary, compressedRefl);
@@ -252,13 +273,16 @@ MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
         ? `\n⚡ DICA DE CORREÇÃO: A ferramenta "${lastFailedTool}" foi executada mas não produziu o resultado esperado. Antes de trocar de estratégia, considere se pode reutilizar "${lastFailedTool}" com argumentos corrigidos (ex: dry_run=false, path completo, etc.).\n`
         : '';
 
+    const diversitySection = diversityBlock ? `\n${diversityBlock}\n` : '';
+    const progressSection = progressModel ? `\n${buildProgressBlock(progressModel)}\n` : '';
+
     return `Você é um planejador de tarefas. Um blocker foi detectado. Proponha uma NOVA estratégia.
 
 OBJETIVO GLOBAL: ${goal.objective}
 ${milestoneInstruction}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}${retryHint}
-${pipVenvLoopDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
+${pipVenvLoopDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}${progressSection}${diversitySection}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 
 ${buildToolContracts(availableTools)}
@@ -493,7 +517,7 @@ export class GoalPlanner {
         }
     }
 
-    async replan(goal: Goal, blocker: GoalBlocker, runtimeContext?: string, capabilityContext?: string, activeMilestone?: string): Promise<PlanResult> {
+    async replan(goal: Goal, blocker: GoalBlocker, runtimeContext?: string, capabilityContext?: string, activeMilestone?: string, progressModel?: GoalProgressModel): Promise<PlanResult> {
         log.info(`[GoalPlanner] replan start goal=${goal.id} model=${PLANNER_MODEL} blocker=${blocker.kind} contextLen=${runtimeContext?.length ?? 0}`);
 
         // P4 observabilidade: registra a decisão de replanejamento com causa raiz detectável
@@ -526,7 +550,13 @@ export class GoalPlanner {
         const compressedRefl    = PromptComposer.compressReflection(reflectionHint);
         const goalText          = `${goal.objective} ${goal.userIntent}`;
         const capBlock          = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary, compressedRefl);
-        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, availableTools, runtimeContext, capabilityContext, skillsSummary, activeMilestone, this.skillContext);
+        const diversityConstraints = StrategyDiversityGuard.buildConstraints(goal);
+        log.debug(
+            `[GoalPlanner] diversity constraints:` +
+            ` forbidden=${diversityConstraints.forbiddenFingerprints.length}` +
+            ` exhausted=${diversityConstraints.exhaustedTools.length}`
+        );
+        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, availableTools, runtimeContext, capabilityContext, skillsSummary, activeMilestone, this.skillContext, diversityConstraints.promptBlock, progressModel);
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
 
         PromptComposer.recordReplan();
