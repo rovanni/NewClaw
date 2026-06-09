@@ -172,6 +172,7 @@ CRIAÇÃO DE CONTEÚDO — leia obrigatoriamente antes de planejar steps com "wr
 - CSS: gere regras funcionais com seletores e propriedades reais.
 - JavaScript: gere código executável, não "// implementar aqui".
 - Se o artefato for extenso, inclua pelo menos a estrutura completa com conteúdo representativo em cada seção.
+- SÍNTESE DE DADOS DINÂMICOS: se o step de "write" depende de dados coletados por um step anterior (web_search, read, crypto_analysis, memory_search), NÃO escreva o content com placeholder esperando esses dados. Em vez disso, OMITA toolName no step de síntese — o sistema usará AgentLoop para capturar o output real e gerar o conteúdo. Exemplo: [web_search → {sem toolName, description: "Redija relatório com base nos resultados de busca acima"}].
 
 Regras:
 - Máximo 4 steps por plano
@@ -187,6 +188,12 @@ ARGS OBRIGATÓRIOS POR FERRAMENTA:
 - list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") ou absoluto.
 - read: aceita caminho relativo ao workspace ou absoluto.
 - memory_write: SEMPRE forneça action (create|update|connect|delete|merge|reinforce). Para create: forneça type + name + content. Para update: forneça id + content. Para connect: forneça from + to + relation. Nunca chame memory_write sem action.
+  TIPOS DE NÓ — escolha o correto para garantir persistência:
+    "fact"       → dados pessoais do usuário (portfolio, posições, watchlists, histórico). Decay muito lento. USE ESTE para dados que o usuário forneceu explicitamente.
+    "preference" → preferências e configurações do usuário.
+    "project"    → projetos e objetivos em andamento.
+    "knowledge"  → informações técnicas aprendidas.
+    "context"    → dados efêmeros de sessão (desaparecem em dias). NÃO use para dados que o usuário precisa recuperar depois.
 - crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc", "sol"). Para múltiplas moedas específicas: use steps separados, um por moeda.`.trim();
 }
 
@@ -319,6 +326,7 @@ REFERÊNCIA DE ARGS OBRIGATÓRIOS:
 - list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") OU absoluto. Passe apenas a subpasta desejada.
 - read: aceita caminho relativo ao workspace ou absoluto. Para diretórios, lista automaticamente o conteúdo.
 - memory_write: SEMPRE forneça action (create|update|connect|delete|merge|reinforce). Para create: forneça type + name + content. Para update: forneça id + content. Para connect: forneça from + to + relation.
+  TIPOS — use "fact" para dados pessoais do usuário (portfolio, watchlist, posições); "preference" para preferências; "context" APENAS para dados efêmeros de sessão (some em dias).
 - crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc"). Para múltiplas moedas: use steps separados.
 
 REGRAS CRÍTICAS para blocker 'environment_limit':

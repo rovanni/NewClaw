@@ -196,13 +196,20 @@ class CapabilityProbe {
     async probeNetwork(): Promise<NetworkCapabilities> {
         const now = Date.now();
         let outbound = false;
-        try {
-            await Promise.race([
-                dnsLookup('google.com'),
-                new Promise<never>((_, rej) => setTimeout(() => rej(new Error('dns timeout')), 2500)),
-            ]);
-            outbound = true;
-        } catch { /* sem internet */ }
+        // Try multiple DNS targets — a single host failure (transient, blocked, DNS miss) must not
+        // produce a false negative that poisons the cache for 3 minutes and causes the RiskAnalyzer
+        // to flag all web_search/web_navigate steps as having no internet access.
+        const dnsTargets = ['google.com', 'cloudflare.com', '1.1.1.1'];
+        for (const target of dnsTargets) {
+            try {
+                await Promise.race([
+                    dnsLookup(target),
+                    new Promise<never>((_, rej) => setTimeout(() => rej(new Error('dns timeout')), 3000)),
+                ]);
+                outbound = true;
+                break;
+            } catch { /* try next target */ }
+        }
 
         const port = process.env.PORT ?? '3090';
         const localOut = runSafe(
@@ -554,8 +561,9 @@ export class CapabilityRegistry {
 
     canSync(key: string): boolean | null {
         const status = this.getStatusSync(key);
-        if (status === undefined) return null;
-        return status?.available ?? false;
+        if (status == null) return null;  // undefined (cache miss) or null (no data) → unknown
+        if (status.available == null) return null;  // probe returned without availability info
+        return status.available;
     }
 
     getWorkspaceRoot(): string | null { return this.cache.workspace?.data.root ?? null; }

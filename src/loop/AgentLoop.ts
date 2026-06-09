@@ -1665,21 +1665,37 @@ export class AgentLoop {
                         totalToolCalls++;
 
                         // Generic loop detector: same tool called too many times in one turn.
+                        // Exception: info-retrieval tools called in batch mode (one LLM response,
+                        // each call with a unique argument) are NOT loops — they're valid parallel
+                        // fetches. Use argument diversity to distinguish batch from loop.
                         const toolTypeCount = (toolTypeCallCount.get(resolvedToolName) ?? 0) + 1;
                         toolTypeCallCount.set(resolvedToolName, toolTypeCount);
                         if (toolTypeCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
-                            log.warn(
-                                `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
-                                `value=${toolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
-                            );
-                            loopMessages.push({
-                                role: 'system',
-                                content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${toolTypeCount} vezes neste turno. ` +
-                                    `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
-                            });
-                            dedupAbort = true;
-                            dedupAbortTool = `${resolvedToolName}:loop`;
-                            guardsTriggered++;
+                            const INFO_BATCH_TOOLS = new Set(['web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request']);
+                            const uniqueArgsForTool = new Set(
+                                cycleHistory.filter(h => h.tool === resolvedToolName).map(h => h.input)
+                            ).size;
+                            const uniqueRatio = toolTypeCount > 0 ? uniqueArgsForTool / toolTypeCount : 0;
+                            const isBatch = INFO_BATCH_TOOLS.has(resolvedToolName) && uniqueRatio >= 0.75 && toolTypeCount < 10;
+                            if (isBatch) {
+                                log.warn(
+                                    `[${this.ts()}] [SAFETY-GUARD] type=info_batch tool=${resolvedToolName} ` +
+                                    `calls=${toolTypeCount} unique=${uniqueArgsForTool} ratio=${uniqueRatio.toFixed(2)} — batch mode, continuing`
+                                );
+                            } else {
+                                log.warn(
+                                    `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
+                                    `value=${toolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
+                                );
+                                loopMessages.push({
+                                    role: 'system',
+                                    content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${toolTypeCount} vezes neste turno. ` +
+                                        `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
+                                });
+                                dedupAbort = true;
+                                dedupAbortTool = `${resolvedToolName}:loop`;
+                                guardsTriggered++;
+                            }
                         }
 
                         // Related-tool group detector: catches alternation (e.g. web_search ↔ web_navigate).
@@ -2221,27 +2237,51 @@ export class AgentLoop {
             const INFO_TOOLS = new Set(['web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request']);
             const executedTools = new Set(cycleHistory.map(h => h.tool));
             const isInfoRetrieval = cycleHistory.length > 0 && [...executedTools].every(t => INFO_TOOLS.has(t));
-            const synthesisBody = dedupAbort
-                ? dedupSynthesisBody
-                : isInfoRetrieval
-                    ? `Você consultou as seguintes fontes:\n${toolSummary}\n\nApresente os dados/resultados encontrados DIRETAMENTE ao usuário, como se estivesse respondendo uma pergunta. Não descreva o que você fez — apresente os dados em si.`
+            // For info-retrieval, always present collected data — even when dedup aborted.
+            // dedupSynthesisBody is reserved for file/command loops where "how to proceed" makes sense.
+            const infoRetrievalSynthesisBody = (() => {
+                const failedTools = cycleHistory.filter(h => h.status === 'error');
+                const base = `Você consultou as seguintes fontes:\n${toolSummary}\n\nApresente os dados/resultados das fontes que FUNCIONARAM diretamente ao usuário, como se estivesse respondendo uma pergunta. Não descreva o que você fez — apresente os dados em si.`;
+                if (failedTools.length === 0) return base;
+                return base + ` Para as fontes que falharam, explique brevemente o motivo. NÃO peça ao usuário para repetir ou especificar novamente o que já foi solicitado.`;
+            })();
+            const synthesisBody = isInfoRetrieval
+                ? infoRetrievalSynthesisBody
+                : dedupAbort
+                    ? dedupSynthesisBody
                     : `Você executou as seguintes ações:\n${toolSummary}\n\nConfirme ao usuário O QUE foi realizado, com detalhes específicos. Não diga "vou fazer" — você JÁ fez.`;
 
             // Trim context for synthesis: the full step history (15+ tool rounds) causes the model
             // to produce massive thinking without content and time out at MAX_TIMEOUT (420s).
-            // Include: system prompt + user message + last tool output (truncated) + synthesis instruction.
-            // The last tool output gives the model real data to reference without flooding the context.
+            // For info-retrieval, include ALL tool outputs (budget 2400 chars) so the LLM has actual
+            // data to synthesize — not just the last result (which may be an error).
+            // For other cases, include only the last tool output to keep context lean.
             const _synthLastUser = loopMessages.slice().reverse().find(m => m.role === 'user');
             const _synthLastTool = loopMessages.slice().reverse().find(m => m.role === 'tool');
-            const synthMessages: LLMMessage[] = [
-                loopMessages[0],
-                ...(_synthLastUser ? [_synthLastUser] : []),
-                ...(_synthLastTool ? [{
+            const synthToolMessages: LLMMessage[] = [];
+            if (isInfoRetrieval) {
+                const toolMsgs = loopMessages.filter(m => m.role === 'tool');
+                let budgetLeft = 2400;
+                for (const tm of toolMsgs) {
+                    const content = (tm.content ?? '').slice(0, budgetLeft);
+                    if (content.trim()) {
+                        synthToolMessages.push({ role: 'tool' as const, content, tool_call_id: tm.tool_call_id });
+                        budgetLeft -= content.length;
+                    }
+                    if (budgetLeft <= 0) break;
+                }
+            } else if (_synthLastTool) {
+                synthToolMessages.push({
                     role: 'tool' as const,
                     content: (_synthLastTool.content ?? '').slice(0, 1200) +
                         ((_synthLastTool.content?.length ?? 0) > 1200 ? '\n...[truncated]' : ''),
                     tool_call_id: _synthLastTool.tool_call_id,
-                }] : []),
+                });
+            }
+            const synthMessages: LLMMessage[] = [
+                loopMessages[0],
+                ...(_synthLastUser ? [_synthLastUser] : []),
+                ...synthToolMessages,
                 {
                     role: 'system' as const,
                     content: `SÍNTESE FINAL OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON, NÃO use formato action/thought):\n\n${synthesisBody}\n\nResponda DIRETAMENTE em linguagem natural.`,
