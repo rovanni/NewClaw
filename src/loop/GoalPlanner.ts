@@ -179,10 +179,11 @@ ARGS OBRIGATÓRIOS POR FERRAMENTA:
 - read: aceita caminho relativo ao workspace ou absoluto.`.trim();
 }
 
-function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, availableTools: string[], runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string): string {
+function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, availableTools: string[], runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string, skillContext?: string): string {
     const goalText            = `${goal.objective} ${goal.userIntent}`;
     const compressedRefl      = PromptComposer.compressReflection(reflectionHint);
     const capBlock            = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary, compressedRefl);
+    const skillBlock          = skillContext ? `\nINSTRUÇÕES DE SKILL ATIVAS (siga rigorosamente para este replan):\n${skillContext}\n` : '';
 
     const strategiesBlock = goal.strategiesTried.length > 0
         ? `\nEstratégias já tentadas: ${goal.strategiesTried.join('; ')}\n`
@@ -214,7 +215,7 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
 NÃO use pip install NEM python3 -m venv — ambos estão bloqueados neste ambiente.
 ESTRATÉGIAS VÁLIDAS sem instalação:
   1. python3 -c "import zipfile, shutil, os; ..." — módulo zipfile é built-in, não precisa de pip
-  2. pandoc arquivo.md -o arquivo.pptx — já disponível no servidor
+  2. Use ferramentas nativas disponíveis no ambiente (verifique capabilities antes de planejar)
   3. sed -i 's/Jader/Novo Nome/g' arquivo.xml — para edição de XML dentro de zips
 Escolha UMA dessas abordagens. Qualquer plano com pip ou venv será bloqueado automaticamente.\n`
         : '';
@@ -257,7 +258,7 @@ OBJETIVO GLOBAL: ${goal.objective}
 ${milestoneInstruction}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}${retryHint}
-${pipVenvLoopDirective}${implementDirective}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
+${pipVenvLoopDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 
 ${buildToolContracts(availableTools)}
@@ -288,10 +289,10 @@ REGRAS CRÍTICAS para blocker 'environment_limit':
 - Se o blocker mencionar PEP 668 ou 'externally-managed':
   → NÃO use pip install direto nem --break-system-packages.
   → Use venv: python3 -m venv /tmp/venv && /tmp/venv/bin/pip install <pacote> && /tmp/venv/bin/python script.py
-  → Alternativa mais simples: pandoc arquivo.md -o arquivo.pptx
+  → Se venv também falhar, use módulos built-in do Python (zipfile, json, csv, os, shutil).
 - Se o blocker mencionar 'ensurepip not available' ou 'python3-venv não instalado':
-  → NÃO use python3 -m venv. Use pandoc ou npx marp diretamente.
-  → Estratégia correta: exec_command com "pandoc arquivo.md -o arquivo.pptx"`.trim();
+  → NÃO use python3 -m venv. Use módulos built-in ou skills disponíveis (ver INSTRUÇÕES DE SKILL acima).
+  → Verifique capabilities do ambiente antes de planejar qualquer comando de conversão.`.trim();
 }
 
 function buildRoadmapPrompt(goal: Goal, availableTools: string[], skillContext?: string, _runtimeContext?: string, capabilityContext?: string, skillsSummary?: string): string {
@@ -525,7 +526,7 @@ export class GoalPlanner {
         const compressedRefl    = PromptComposer.compressReflection(reflectionHint);
         const goalText          = `${goal.objective} ${goal.userIntent}`;
         const capBlock          = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary, compressedRefl);
-        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, availableTools, runtimeContext, capabilityContext, skillsSummary, activeMilestone);
+        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, availableTools, runtimeContext, capabilityContext, skillsSummary, activeMilestone, this.skillContext);
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
 
         PromptComposer.recordReplan();

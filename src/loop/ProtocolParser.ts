@@ -446,6 +446,38 @@ export class ProtocolParser {
         const looksLikeInternalJson =
             /^\s*\{[\s\S]*?"thought"\s*:/.test(trimmed) ||
             /^\s*```json[\s\S]*?"thought"\s*:/.test(trimmed);
+
+        // Guard: detecta raciocínio interno auto-referencial do LLM (chain-of-thought leak).
+        // Esses padrões indicam que o LLM está pensando em voz alta sobre o que deve fazer,
+        // não respondendo ao usuário. Ex: "O usuário pediu os slides, mas não usou a ferramenta..."
+        // Tratamos como 'planning' para forçar retry com recovery prompt.
+        const looksLikeSelfDirectedThinking =
+            // Português: LLM se referindo ao usuário na terceira pessoa, planejando ações
+            /^(O usuário|A mensagem|Preciso|Devo|Vou|Já (criei|gerei|fiz|enviei)|Acabei de|Agora vou|Ainda preciso|Neste momento|Parece que preciso)/i.test(trimmed) &&
+            // Confirmação: não é uma resposta ao usuário (sem vocativo ou marcador de resposta)
+            !/^(Ol[aá]|Oi|Claro|Sim|N[aã]o|Ok|Certo|Perfeito|Entendido|Pronto)/i.test(trimmed);
+
+        if (looksLikeSelfDirectedThinking) {
+            log.warn(`[PROTOCOL] 🔄 Semantic recovery — self-directed thinking detected (chain-of-thought leak, ${trimmed.length} chars) — forcing recovery`);
+            return {
+                type: 'planning',
+                content: trimmed,
+                isComplete: false,
+                confidence: 'low',
+                reasoningRequired: true,
+                evaluation: {
+                    is_complete: false,
+                    confidence: 'low',
+                    reason: 'Protocol violation: self-directed chain-of-thought leaked into content — recovery required.',
+                },
+                metadata: {
+                    protocolViolation: true,
+                    rawContentLength: trimmed.length,
+                    recoveryNeeded: true,
+                },
+            };
+        }
+
         if (looksLikeInternalJson) {
             log.warn(`[PROTOCOL] 🔄 Semantic recovery — internal protocol JSON detected (thought/action leak) — forcing recovery`);
             return {

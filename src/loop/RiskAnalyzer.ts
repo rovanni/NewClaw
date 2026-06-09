@@ -114,6 +114,11 @@ export interface RiskReport {
     planRejected?: boolean;
     /** Feedback enviado ao GoalPlanner para guiar o próximo replan */
     rejectionReason?: string;
+    /**
+     * Skills detectadas que cobrem as ferramentas problemáticas do plano.
+     * Cada entrada: { skillName, skillContext } para injetar no próximo replan.
+     */
+    skillHints?: Array<{ skillName: string; skillContext: string }>;
 }
 
 export class RiskAnalyzer {
@@ -189,14 +194,26 @@ export class RiskAnalyzer {
 
             const pkg = KNOWN_SYSTEM_DEPS[firstToken];
             if (pkg) {
-                // Obs #9: verifica se o CapabilityRegistry já tem resultado do probe para este binário
+                // Obs #9: verifica se o CapabilityRegistry já tem resultado do probe para este binário.
+                // probeResult=null significa cache frio (probe não foi executado) — NUNCA assuma disponível.
+                // No ambiente de produção, binários externos raramente estão pré-instalados.
                 const probeResult = CapabilityRegistry.getInstance().canSync(`tool.${firstToken}`);
-                const riskReason = `usa '${firstToken}' (pacote: ${pkg}) — pode não estar instalado no servidor`;
+                const knownUnavailable = probeResult === false;
+                const probeUnknown    = probeResult === null;
+                const riskReason = knownUnavailable
+                    ? `usa '${firstToken}' — CONFIRMADO como NÃO instalado neste servidor (probe retornou false)`
+                    : probeUnknown
+                        ? `usa '${firstToken}' (pacote: ${pkg}) — disponibilidade desconhecida; assuma não instalado até probe confirmar`
+                        : `usa '${firstToken}' (pacote: ${pkg}) — pode não estar instalado no servidor`;
                 log.info(
                     `[RISK-CHECK] risk_source=1b_KNOWN_DEPS probe_result=${probeResult === null ? 'uncached' : probeResult} ` +
-                    `binary=${firstToken} risk_reason="${riskReason}"`
+                    `binary=${firstToken} known_unavailable=${knownUnavailable} risk_reason="${riskReason}"`
                 );
                 risks.push(`Step "${step.description}": ${riskReason}`);
+                // Se binário confirmado ausente, adiciona constraint explícita para o ReflectionMemory
+                if (knownUnavailable || probeUnknown) {
+                    risks.push(`[BLOCK-HINT] Não inclua steps exec_command com '${firstToken}' — use skills ou alternativas nativas`);
+                }
             }
 
             // Marp input validation (P0.2): detecta marp sem arquivo .md antes das flags
@@ -336,13 +353,16 @@ export class RiskAnalyzer {
 
         // Sprint 3.7A — Q2 Skill Hint: detecta se o plano usa exec_command para algo
         // que uma skill instalada poderia cobrir com instruções mais especializadas.
-        // Apenas observabilidade — não bloqueia, não modifica o plano.
+        // Retorna skill hints para o GoalPlanner injetar como skillContext no próximo replan.
+        const skillHints: Array<{ skillName: string; skillContext: string }> = [];
         if (availableSkills && availableSkills.length > 0) {
             const execSteps = finalPlan.filter(s => s.toolName === 'exec_command');
+            const seenSkills = new Set<string>();
             for (const step of execSteps) {
                 const cmd = String(step.toolArgs?.command ?? '').toLowerCase();
                 if (!cmd) continue;
                 const coveringSkill = availableSkills.find(skill =>
+                    !seenSkills.has(skill.name) &&
                     (skill.tools ?? []).includes('exec_command') &&
                     (skill.triggers ?? []).some(t => cmd.includes(t.toLowerCase()))
                 );
@@ -355,11 +375,13 @@ export class RiskAnalyzer {
                         ` reason=exec_command_covered_by_skill` +
                         ` command="${cmd.slice(0, 60)}"`
                     );
+                    seenSkills.add(coveringSkill.name);
+                    skillHints.push({ skillName: coveringSkill.name, skillContext: coveringSkill.content });
                 }
             }
         }
 
-        return { risks, adjustedPlan: finalPlan, planAdjusted: llmResult.planAdjusted, blocked: false };
+        return { risks, adjustedPlan: finalPlan, planAdjusted: llmResult.planAdjusted, blocked: false, skillHints: skillHints.length > 0 ? skillHints : undefined };
     }
 
     /**

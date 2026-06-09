@@ -438,10 +438,14 @@ export class OllamaProvider implements ILLMProvider {
             // response through the thinking field. Recover thinking as content only here.
             // User-cancel discarding is handled by the caller (chatWithFallback checks
             // externalSignal after we return, so no thinking leaks to a cancelled user).
-            if (!content && thinking && thinking.length > 50) {
+            // Do NOT promote thinking when there are also tool calls: the thinking is internal
+            // reasoning accompanying the action and must never reach the user as a response.
+            if (!content && thinking && thinking.length > 50 && toolCalls.length === 0) {
                 log.info(`[${consumeId}] [STREAM-CONSUME] Aborted with ${thinking.length} chars of thinking, no content — recovering thinking as content`);
                 content = thinking;
                 thinking = '';
+            } else if (!content && thinking && toolCalls.length > 0) {
+                log.debug(`[${consumeId}] [STREAM-CONSUME] Aborted with ${thinking.length} chars of thinking alongside tool calls — not promoting (internal reasoning, not deliverable)`);
             }
             if (!content) {
                 // Nothing to recover — propagate the error so ProviderFactory can retry
@@ -458,11 +462,16 @@ export class OllamaProvider implements ILLMProvider {
 
         // Some models (e.g. deepseek-v4-flash:cloud via Ollama) return their full response
         // in message.thinking instead of message.content. When content is empty but thinking
-        // is available, use thinking as the actual response content.
-        if (!content && thinking) {
+        // is available, use thinking as the actual response content — EXCEPT when there are
+        // also tool calls: in that case the thinking is internal reasoning accompanying the
+        // action and must never be stored as a deliverable response (it would leak as the
+        // final answer if the turn is aborted after the tool call fails).
+        if (!content && thinking && toolCalls.length === 0) {
             log.info(`[${consumeId}] [STREAM-CONSUME] No content but ${thinking.length} chars of thinking — using as content (model returned response in thinking field)`);
             content = thinking;
             thinking = '';
+        } else if (!content && thinking && toolCalls.length > 0) {
+            log.debug(`[${consumeId}] [STREAM-CONSUME] Discarded ${thinking.length} chars of thinking alongside tool calls — internal reasoning, not deliverable`);
         } else if (thinking) {
             log.debug(`[${consumeId}] [STREAM-CONSUME] Discarded ${thinking.length} chars of internal thinking from response`);
         }

@@ -202,9 +202,12 @@ export class SessionManager {
         const sid = this.sessionKey(key);
         return this.withMutex(sid, async () => {
             const transcript = await this.getOrCreateSession(key);
+            // Compress BEFORE appending the user message so the checkpoint entry lands at a seq
+            // lower than the user message. getSinceCheckpoint() returns entries after the checkpoint
+            // entry seq, which correctly includes the user message appended below.
+            await this.maybeCompress(key);
             const seq = transcript.append('user', content, meta);
             this.memory.addMessage(this.conversationId(key), 'user', content);
-            await this.maybeCompress(key);
             log.info(`${sid} user seq=${seq} len=${content.length}`);
             // CMI: fire-and-forget, nunca bloqueia o response
             const entry: TranscriptEntry = { ts: new Date().toISOString(), seq, role: 'user', content, meta };

@@ -302,6 +302,14 @@ export class GoalExecutionLoop {
             if (riskReport.risks.length > 0) {
                 log.info(`[GoalLoop] Q2 risks (replan cycle=${cycleNumber} forced=${forceQ2}): ${riskReport.risks.join(' | ')}`);
             }
+            // Sprint 3.7A: skill hints do Q2 → injeta skillContext no planner para o próximo replan
+            // Isso garante que quando exec_command falha com uma ferramenta que tem skill cobrindo,
+            // o GoalPlanner recebe as instruções da skill no próximo ciclo de replanning.
+            if (riskReport.skillHints && riskReport.skillHints.length > 0) {
+                const hint = riskReport.skillHints[0];
+                log.info(`[GoalLoop] Q2 skill context injected: skill=${hint.skillName} for next replan cycle=${cycleNumber}`);
+                this.planner.setSkillContext(hint.skillContext);
+            }
         } else {
             log.debug(`[GoalLoop] Q2 skipped (replan cycle=${cycleNumber} — simple plan)`);
         }

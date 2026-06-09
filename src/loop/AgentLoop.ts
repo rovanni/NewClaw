@@ -497,14 +497,36 @@ export class AgentLoop {
      * Usa Promise.race com timeout de 5 s para não bloquear UX indefinidamente.
      * Se bloqueada, substitui por resposta corrigida e registra na ReflectionMemory.
      */
+    /**
+     * Returns true when the response text contains success claim patterns.
+     * Used to detect the LLM fabricating a positive outcome after tool failures.
+     */
+    private static looksLikeFalseSuccess(text: string): boolean {
+        return /✅\s*\w*(gerado|enviado|criado|concluído|salvo|feito|pronto|completo)/i.test(text)
+            || /\b(gerado|enviado|criado|salvo|concluído)\s+(com\s+sucesso|e enviado|e salvo)/i.test(text)
+            || /\b(arquivo|slides?|documento|relat[oó]rio)\s+(foi\s+)?(gerado|enviado|criado|salvo)/i.test(text)
+            || /\b(foi\s+)?(enviado|gerado|salvo)\s+(com\s+sucesso|para\s+voc[eê])/i.test(text);
+    }
+
     private async commitResponse(
         response: string,
         userText: string,
         traceId: string,
         conversationId: string,
         signal?: AbortSignal,
+        toolFailureCount = 0,
     ): Promise<string> {
         const last = this.lastToolExecution;
+
+        // When no tool succeeded but tools did run and fail, the LLM may fabricate a success
+        // message. The normal validator is skipped when last===null, so we guard here first.
+        if (!last && toolFailureCount > 0 && AgentLoop.looksLikeFalseSuccess(response)) {
+            log.warn(
+                `[${this.ts()}] [COMMIT] False-success detected after ${toolFailureCount} tool failure(s) — blocking response`
+            );
+            return 'Não consegui completar a tarefa: ocorreram erros durante a execução. Por favor, reformule o pedido ou tente novamente.';
+        }
+
         if (!last) return response; // sem tool executada → sem risco de alucinação de ação
 
         try {
@@ -1420,7 +1442,7 @@ export class AgentLoop {
                 move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : 'is_complete' });
                 traceManager.completeTrace(trace, 'completed', finalText);
                 this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                return { text: await this.commitResponse(finalText, userText, trace.id, conversationId, turnSignal) };
+                return { text: await this.commitResponse(finalText, userText, trace.id, conversationId, turnSignal, toolFailureCount) };
             }
 
             if (response.toolCalls && response.toolCalls.length > 0) {
@@ -1788,7 +1810,7 @@ export class AgentLoop {
                     move('FINAL_READY', { step: stepCount, reason: 'no_tools_requested' });
                     traceManager.completeTrace(trace, 'completed', finalText);
                     this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                    return await this.commitResponse(finalText, userText, trace.id, conversationId, turnSignal);
+                    return await this.commitResponse(finalText, userText, trace.id, conversationId, turnSignal, toolFailureCount);
                 }
             }
 
@@ -2253,7 +2275,7 @@ export class AgentLoop {
                 move('FINAL_READY', { step: stepCount, reason: 'synthesis' });
                 traceManager.completeTrace(trace, 'completed', synthesisText);
                 this.persistTrace(trace, stepCount, 'completed', synthesisText, channelContext);
-                return await this.commitResponse(synthesisText, userText, trace.id, conversationId, turnSignal);
+                return await this.commitResponse(synthesisText, userText, trace.id, conversationId, turnSignal, toolFailureCount);
             }
 
             log.warn(`[${this.ts()}] [SYNTHESIS] Failed to extract useful text (raw=${rawSynthesis.length}, extracted=${synthesisText?.length || 0})`);
@@ -2263,7 +2285,7 @@ export class AgentLoop {
             move('FINAL_READY', { step: stepCount, reason: 'last_best_content' });
             traceManager.completeTrace(trace, 'completed', lastBestContent);
             this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
-            return await this.commitResponse(lastBestContent, userText, trace.id, conversationId, turnSignal);
+            return await this.commitResponse(lastBestContent, userText, trace.id, conversationId, turnSignal, toolFailureCount);
         }
 
         log.info(`[${this.ts()}] [FALLBACK] Generating final synthesis...`);
@@ -2313,7 +2335,7 @@ export class AgentLoop {
         this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text, channelContext);
         this.activeTurns.delete(conversationId);
 
-        return await this.commitResponse(text, userText, trace.id, conversationId, turnSignal);
+        return await this.commitResponse(text, userText, trace.id, conversationId, turnSignal, toolFailureCount);
 
         } catch (fsmError) {
             // Only FSM violations (invalid transitions) reach here — all other errors are handled
