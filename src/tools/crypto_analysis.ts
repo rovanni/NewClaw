@@ -213,6 +213,30 @@ export class CryptoAnalysisTool implements ToolExecutor {
         return { success: true, output: report };
     }
 
+    private async searchCoinId(query: string): Promise<string | null> {
+        const searchUrl = `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(query)}`;
+        const cacheKey = `search:${query}`;
+        const cached = cache.get(cacheKey);
+        if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+            return cached.data as string | null;
+        }
+        try {
+            const res = await fetch(searchUrl);
+            if (!res.ok) return null;
+            const json = await res.json() as { coins?: Array<{ id: string; symbol: string; name: string }> };
+            const coins = json.coins ?? [];
+            // Prefere match exato por symbol, depois por name, senão usa o primeiro
+            const exact = coins.find(c => c.symbol.toLowerCase() === query.toLowerCase())
+                ?? coins.find(c => c.name.toLowerCase() === query.toLowerCase())
+                ?? coins[0];
+            const id = exact?.id ?? null;
+            cache.set(cacheKey, { data: id, timestamp: Date.now() });
+            return id;
+        } catch {
+            return null;
+        }
+    }
+
     private async detail(symbol: string): Promise<ToolResult> {
         const coinMap: Record<string, string> = {
             'btc': 'bitcoin', 'eth': 'ethereum', 'sol': 'solana', 'ada': 'cardano',
@@ -220,20 +244,30 @@ export class CryptoAnalysisTool implements ToolExecutor {
             'bnb': 'binancecoin', 'avax': 'avalanche-2', 'matic': 'matic-network',
             'link': 'chainlink', 'uni': 'uniswap', 'atom': 'cosmos', 'ltc': 'litecoin',
             'near': 'near', 'arb': 'arbitrum', 'op': 'optimism', 'mkr': 'maker',
+            'zec': 'zcash', 'pi': 'pi-network-iou', 'river': 'river-boat',
         };
-        const coinId = coinMap[symbol] || symbol;
+        let coinId = coinMap[symbol] || symbol;
 
         const url = `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false`;
-        
+
         let data: CoinGeckoDetail;
         const cached = cache.get(url);
         if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
             data = cached.data as CoinGeckoDetail;
         } else {
-            const response = await fetch(url);
+            let response = await fetch(url);
+            if (!response.ok && response.status === 404 && !(symbol in coinMap)) {
+                // Fallback: busca pelo nome/símbolo na API de search do CoinGecko
+                const foundId = await this.searchCoinId(symbol);
+                if (foundId && foundId !== coinId) {
+                    coinId = foundId;
+                    const fallbackUrl = `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false`;
+                    response = await fetch(fallbackUrl);
+                }
+            }
             if (!response.ok) {
                 if (response.status === 429) return { success: false, output: '', error: 'CoinGecko API limit reached (429)' };
-                return { success: false, output: '', error: `Moeda "${symbol}" não encontrada` };
+                return { success: false, output: '', error: `Moeda "${symbol}" não encontrada na CoinGecko. Verifique o símbolo ou nome correto.` };
             }
             data = await response.json() as CoinGeckoDetail;
             cache.set(url, { data, timestamp: Date.now() });

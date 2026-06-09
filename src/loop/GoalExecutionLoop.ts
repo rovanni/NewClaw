@@ -2267,6 +2267,7 @@ IMPORTANTE — INTERPRETAÇÃO DE OUTPUTS:
 - Se alguma leitura posterior (read, exec_command grep) mostra o conteúdo modificado, isso confirma a edição.
 - Se o conteúdo real do arquivo está disponível acima, use ESSE conteúdo como fonte primária de verdade.
 - Se PROGRESSO POR COMPONENTE mostra ≥70% concluído, considere entrega parcial como "achieved: true" com summary indicando o que ficou pendente.
+- QUALIDADE DE ARTEFATOS: se um arquivo criado pela ferramenta "write" tiver menos de 200 caracteres OU contiver placeholders evidentes ("[Inserir aqui", "TODO", "stub", "conteúdo será adicionado", texto genérico de uma linha sem dados reais), o objetivo NÃO foi atingido — marque achieved=false. Um arquivo de resumo de pesquisa com apenas uma frase genérica não constitui entrega real do objetivo.
 
 Análise crítica: o objetivo ou marco atual foi atingido E o resultado/entregável esperado foi produzido com sucesso?
 Se for um marco de desenvolvimento, verifique se os arquivos/funcionalidades desse marco foram realmente criados e testados.

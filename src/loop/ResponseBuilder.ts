@@ -97,6 +97,9 @@ export function extractText(content: string): ExtractedText {
         if (parsed?.action?.content) return parsed.action.content;
         if (parsed?.content) return parsed.content;
         if (typeof parsed === 'string') return parsed;
+        // thought + tool-action é JSON de controle interno — nunca deve chegar ao usuário
+        if (parsed?.thought && parsed?.action && (parsed.action.type === 'tool' || parsed.action.name)) return '';
+        if (parsed?.thought && parsed?.action?.type === 'final_answer') return parsed.action.content ?? '';
     } catch { /* não é JSON */ }
 
     try {
@@ -105,6 +108,7 @@ export function extractText(content: string): ExtractedText {
             const parsed = JSON.parse(jsonMatch[0]);
             if (parsed?.action?.content) return parsed.action.content;
             if (parsed?.content) return parsed.content;
+            if (parsed?.thought && parsed?.action && (parsed.action.type === 'tool' || parsed.action.name)) return '';
         }
     } catch { /* não é JSON */ }
 

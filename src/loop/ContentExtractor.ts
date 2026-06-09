@@ -49,8 +49,13 @@ export function sanitizeContent(content: string): string {
                 result = parsed.content;
             } else if (parsed.thought && !parsed.action && !parsed.content && !parsed.response) {
                 // JSON com apenas thought — dado interno que não deve chegar ao usuário.
-                // Retorna vazio para o caller usar o fallback adequado.
                 result = '';
+            } else if (parsed.thought && parsed.action && (parsed.action.type === 'tool' || parsed.action.name)) {
+                // JSON de controle interno: thought + tool action — nunca deve chegar ao usuário.
+                // O modelo retornou um step de planejamento no canal de chat.
+                result = '';
+            } else if (parsed.thought && parsed.action?.type === 'final_answer' && typeof parsed.action.content === 'string') {
+                result = parsed.action.content;
             }
         } catch {
             // Not valid JSON, leave as-is

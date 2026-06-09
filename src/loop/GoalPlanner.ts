@@ -58,13 +58,21 @@ CATEGORIAS DE FERRAMENTAS — leia antes de planejar:
   → São guias de comportamento. Não aparecem no campo toolName.
 
 SCHEMAS OBRIGATÓRIOS:
-  send_document: {"file_path": "/home/venus/newclaw/workspace/arquivo.pptx"}
-  read:          {"path": "/home/venus/newclaw/workspace/arquivo.html"}
-  write:         {"path": "/home/venus/newclaw/workspace/arquivo.md", "content": "..."}
-  edit:          {"path": "...", "oldText": "...", "newText": "..."}
-  exec_command:  {"command": "pandoc slides.md -o slides.pptx"}
+  send_document:   {"file_path": "/home/venus/newclaw/workspace/arquivo.pptx"}
+  read:            {"path": "/home/venus/newclaw/workspace/arquivo.html"}
+  write:           {"path": "/home/venus/newclaw/workspace/arquivo.md", "content": "..."}
+  edit:            {"path": "...", "oldText": "...", "newText": "..."}
+  exec_command:    {"command": "pandoc slides.md -o slides.pptx"}
+  memory_write:    {"action": "create", "type": "fact", "name": "nome_do_nó", "content": "conteúdo completo"}
+                   OU {"action": "update", "id": "node_id_existente", "content": "novo conteúdo"}
+                   OU {"action": "connect", "from": "id_origem", "to": "id_destino", "relation": "tipo"}
+  crypto_analysis: {"type": "detail", "symbol": "zec"}
+                   OU {"type": "top100"} OU {"type": "sangrando"} OU {"type": "gainers"} OU {"type": "losers"}
 
 ⚠️  send_document SEM file_path será bloqueado automaticamente pelo sistema.
+⚠️  memory_write SEM action ou com action="" será bloqueado — forneça SEMPRE a action correta.
+⚠️  memory_write com action="create" EXIGE content — nunca chame create sem content.
+⚠️  crypto_analysis com type="detail" EXIGE symbol (ex: "btc", "zec", "sol") — use chamadas separadas por moeda.
 `.trim();
 }
 
@@ -177,7 +185,9 @@ ARGS OBRIGATÓRIOS POR FERRAMENTA:
 - edit: SEMPRE forneça oldText+newText (substituição) OU startLine+endLine+content (patch) OU append=true+content. Nunca chame edit sem esses parâmetros.
 - send_document: SEMPRE forneça file_path com o caminho completo do arquivo. Nunca chame send_document sem file_path.
 - list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") ou absoluto.
-- read: aceita caminho relativo ao workspace ou absoluto.`.trim();
+- read: aceita caminho relativo ao workspace ou absoluto.
+- memory_write: SEMPRE forneça action (create|update|connect|delete|merge|reinforce). Para create: forneça type + name + content. Para update: forneça id + content. Para connect: forneça from + to + relation. Nunca chame memory_write sem action.
+- crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc", "sol"). Para múltiplas moedas específicas: use steps separados, um por moeda.`.trim();
 }
 
 function buildProgressBlock(progressModel: GoalProgressModel): string {
@@ -308,6 +318,8 @@ REFERÊNCIA DE ARGS OBRIGATÓRIOS:
 - send_document: SEMPRE forneça file_path com o caminho completo do arquivo. Nunca chame send_document sem file_path.
 - list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") OU absoluto. Passe apenas a subpasta desejada.
 - read: aceita caminho relativo ao workspace ou absoluto. Para diretórios, lista automaticamente o conteúdo.
+- memory_write: SEMPRE forneça action (create|update|connect|delete|merge|reinforce). Para create: forneça type + name + content. Para update: forneça id + content. Para connect: forneça from + to + relation.
+- crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc"). Para múltiplas moedas: use steps separados.
 
 REGRAS CRÍTICAS para blocker 'environment_limit':
 - Se o blocker mencionar PEP 668 ou 'externally-managed':
