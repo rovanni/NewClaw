@@ -384,6 +384,22 @@ export class GoalExecutionLoop {
             // capacidade de recovery dos steps do novo plano.
             retryBudget: GOAL_LIMITS.MAX_RETRY_BUDGET,
         });
+        // Ao adotar novo plano: descarta componentes 'failed' e 'in_progress' do plano anterior
+        // (tentativas fracassadas já descartadas), preserva apenas os 'completed'.
+        // Recalcula overallPercent como: completed_anteriores / (completed + steps_pendentes_do_novo_plano)
+        // para refletir o progresso real acumulado em relação ao trabalho total que ainda resta.
+        if (this.progressModel) {
+            this.progressModel.components = this.progressModel.components.filter(
+                c => c.status === 'completed'
+            );
+            const completedCount = this.progressModel.components.length;
+            const pendingCount = finalPlan.filter(s => s.status === 'pending').length;
+            const totalWork = completedCount + pendingCount;
+            this.progressModel.overallPercent = totalWork > 0
+                ? Math.round((completedCount / totalWork) * 100)
+                : 0;
+            this.progressModel.updatedAt = Date.now();
+        }
         return this.goalStore.getById(goal.id)!;
     }
 
@@ -965,7 +981,8 @@ export class GoalExecutionLoop {
                 }
 
                 case 'partial': {
-                    // Retryável — diminui retry budget mas não troca de step
+                    // Retryável — registra como 'in_progress' e diminui retry budget
+                    this.updateProgressModel(pendingStep, 'in_progress', cycleResult.output);
                     this.goalStore.update(currentGoal.id, {
                         retryBudget: Math.max(0, currentGoal.retryBudget - 1),
                     });
