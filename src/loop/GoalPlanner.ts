@@ -68,11 +68,16 @@ SCHEMAS OBRIGATÓRIOS:
                    OU {"action": "connect", "from": "id_origem", "to": "id_destino", "relation": "tipo"}
   crypto_analysis: {"type": "detail", "symbol": "zec"}
                    OU {"type": "top100"} OU {"type": "sangrando"} OU {"type": "gainers"} OU {"type": "losers"}
+  web_navigate:    {"action": "search", "query": "texto de busca"}
+                   OU {"action": "open", "url": "https://exemplo.com"}
+                   OU {"action": "follow_link", "url": "https://exemplo.com", "link_text": "texto do link"}
 
 ⚠️  send_document SEM file_path será bloqueado automaticamente pelo sistema.
 ⚠️  memory_write SEM action ou com action="" será bloqueado — forneça SEMPRE a action correta.
 ⚠️  memory_write com action="create" EXIGE content — nunca chame create sem content.
 ⚠️  crypto_analysis com type="detail" EXIGE symbol (ex: "btc", "zec", "sol") — use chamadas separadas por moeda.
+⚠️  web_navigate SEM action ou com action inválida será bloqueado — use EXATAMENTE: search | open | follow_link.
+⚠️  web_navigate action=search EXIGE query. action=open EXIGE url. action=follow_link EXIGE url + link_text.
 `.trim();
 }
 
@@ -194,7 +199,8 @@ ARGS OBRIGATÓRIOS POR FERRAMENTA:
     "project"    → projetos e objetivos em andamento.
     "knowledge"  → informações técnicas aprendidas.
     "context"    → dados efêmeros de sessão (desaparecem em dias). NÃO use para dados que o usuário precisa recuperar depois.
-- crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc", "sol"). Para múltiplas moedas específicas: use steps separados, um por moeda.`.trim();
+- crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc", "sol"). Para múltiplas moedas específicas: use steps separados, um por moeda.
+- web_navigate: SEMPRE forneça action (search|open|follow_link). Para search: forneça query. Para open: forneça url (https://...). Para follow_link: forneça url + link_text.`.trim();
 }
 
 function buildProgressBlock(progressModel: GoalProgressModel): string {
@@ -328,6 +334,7 @@ REFERÊNCIA DE ARGS OBRIGATÓRIOS:
 - memory_write: SEMPRE forneça action (create|update|connect|delete|merge|reinforce). Para create: forneça type + name + content. Para update: forneça id + content. Para connect: forneça from + to + relation.
   TIPOS — use "fact" para dados pessoais do usuário (portfolio, watchlist, posições); "preference" para preferências; "context" APENAS para dados efêmeros de sessão (some em dias).
 - crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc"). Para múltiplas moedas: use steps separados.
+- web_navigate: SEMPRE forneça action (search|open|follow_link). Para search: forneça query. Para open: forneça url (https://...). Para follow_link: forneça url + link_text.
 
 REGRAS CRÍTICAS para blocker 'environment_limit':
 - Se o blocker mencionar PEP 668 ou 'externally-managed':
@@ -435,6 +442,15 @@ export function detectMissingRequiredArgs(tool: string, args: Record<string, unk
     }
     if (tool === 'read_document' && !args['filename'] && !args['file_path'] && !args['path']) {
         return "sem 'filename' obrigatório";
+    }
+    if (tool === 'web_navigate') {
+        const action = String(args['action'] ?? '').trim();
+        const VALID_NAVIGATE_ACTIONS = new Set(['search', 'open', 'follow_link']);
+        if (!action) return "sem 'action' obrigatório (use: search|open|follow_link)";
+        if (!VALID_NAVIGATE_ACTIONS.has(action)) return `action='${action}' inválida — use: search|open|follow_link`;
+        if (action === 'search' && !args['query']) return "action=search exige 'query'";
+        if (action === 'open' && !args['url']) return "action=open exige 'url'";
+        if (action === 'follow_link' && (!args['url'] || !args['link_text'])) return "action=follow_link exige 'url' + 'link_text'";
     }
     return null;
 }

@@ -490,6 +490,12 @@ Verifique:
 Se o plano estiver completo e correto → retorne {"risks": [], "plan": null}
 Se precisar de ajuste → retorne o plano completo corrigido.
 
+⚠️ SCHEMAS OBRIGATÓRIOS ao adicionar ou ajustar steps:
+  write:       {"path": "/home/venus/newclaw/workspace/resultado.txt", "content": "conteúdo completo aqui"}
+               — path e content são OBRIGATÓRIOS. Nunca adicione write sem ambos.
+  web_navigate: {"action": "search", "query": "texto"} OU {"action": "open", "url": "https://..."} OU {"action": "follow_link", "url": "https://...", "link_text": "texto do link"}
+               — action deve ser exatamente search, open ou follow_link. Nunca use outra string.
+
 Responda APENAS com JSON válido (sem markdown, máximo 5 steps):
 {"risks": ["risco 1"], "plan": [{"id": "step_1", "description": "...", "toolName": "...", "toolArgs": {...}}, ...]}
 OU
@@ -613,11 +619,13 @@ OU
                                 toolArgs = undefined;
                             }
                         } else {
-                            // CR#4: tools críticas (write, edit, exec_command) com args ausentes
+                            // CR#4: tools críticas (edit, exec_command) com args ausentes
                             // NÃO são convertidas silenciosamente para agentloop — o plano é rejeitado.
-                            // Isso evita que o goal execute steps divergentes onde o agentloop não tem
-                            // contexto suficiente para substituir a tool original corretamente.
-                            const CRITICAL_TOOLS = new Set(['write', 'edit', 'exec_command']);
+                            // `write` foi removido desta lista: o GoalPlanner.parsePlanResponse() já
+                            // valida e converte write-sem-path para agentloop antes de chegar aqui.
+                            // Qualquer write-sem-path no adjusted plan foi adicionado pelo LLM de risco
+                            // como step de síntese — convertê-lo para agentloop é o comportamento correto.
+                            const CRITICAL_TOOLS = new Set(['edit', 'exec_command']);
                             if (CRITICAL_TOOLS.has(resolvedTool ?? '')) {
                                 criticalMutations.push(`'${resolvedTool}' step ${i + 1}: args ausentes [${missing}]`);
                                 log.warn(
