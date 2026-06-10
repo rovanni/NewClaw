@@ -845,7 +845,11 @@ export class GoalExecutionLoop {
                         suggestedFix: `Use query/abordagem que retorne especificamente: ${pendingStep.description.slice(0, 100)}`,
                     });
                     // A: enriquece a descrição do step no plano para que a próxima tentativa
-                    // seja explicitamente guiada pelo motivo do mismatch
+                    // seja explicitamente guiada pelo motivo do mismatch.
+                    // Se a descrição já contém o marcador [ATENÇÃO —, o step já foi tentado com
+                    // o hint e voltou irrelevante — retry adicional é inútil; escala imediatamente
+                    // para 'blocked' para forçar replan com ferramenta diferente.
+                    const alreadyHinted = (pendingStep.description ?? '').includes('[ATENÇÃO —');
                     const mismatchHint = ` [ATENÇÃO — tentativa anterior com ${pendingStep.toolName ?? 'agentloop'} retornou output irrelevante: ${(semanticValidation.reason ?? 'mismatch').slice(0, 120)}. Use abordagem diferente que retorne especificamente o que o objetivo pede.]`;
                     const enrichedPlan = currentGoal.currentPlan.map(s =>
                         s.id === pendingStep.id
@@ -854,14 +858,16 @@ export class GoalExecutionLoop {
                     );
                     this.goalStore.update(currentGoal.id, { currentPlan: enrichedPlan });
                     currentGoal = this.goalStore.getById(currentGoal.id)!;
-                    if (currentGoal.retryBudget > 0) {
+                    if (currentGoal.retryBudget > 0 && !alreadyHinted) {
+                        // Primeira falha: retry com hint enriquecido
                         cycleResult = { ...cycleResult, outcome: 'partial' };
                     } else {
-                        // retryBudget esgotado: loop de retries seria infinito (MAX_CYCLES bounding)
-                        // — escala para 'blocked' para que o loop possa replanejar com nova estratégia
+                        // Segunda falha para o mesmo step (alreadyHinted) OU retryBudget esgotado:
+                        // retry adicional seria inútil — escala para 'blocked' para replan com nova estratégia
                         log.warn(
                             `[SEMANTIC-MISMATCH] goal=${currentGoal.id} step=${pendingStep.id}` +
-                            ` retryBudget=0 — escalating to blocked`
+                            ` retryBudget=${currentGoal.retryBudget} alreadyHinted=${alreadyHinted}` +
+                            ` — escalating to blocked for replan`
                         );
                         cycleResult = {
                             ...cycleResult,
@@ -869,7 +875,7 @@ export class GoalExecutionLoop {
                             blocker: {
                                 kind: 'semantic_mismatch' as const,
                                 toolName: pendingStep.toolName,
-                                description: `Step '${pendingStep.description.slice(0, 100)}' retornou output irrelevante após esgotar retryBudget: ${semanticValidation.reason ?? 'mismatch semântico'}`,
+                                description: `Step '${pendingStep.description.slice(0, 100)}' retornou output irrelevante ${alreadyHinted ? 'após 2 tentativas' : 'após esgotar retryBudget'}: ${semanticValidation.reason ?? 'mismatch semântico'}`,
                                 suggestedActions: [
                                     'Usar tool diferente para este step',
                                     'Reformular a query com abordagem completamente alternativa',

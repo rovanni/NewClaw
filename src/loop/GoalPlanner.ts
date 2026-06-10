@@ -78,6 +78,10 @@ SCHEMAS OBRIGATÓRIOS:
 ⚠️  crypto_analysis com type="detail" EXIGE symbol (ex: "btc", "zec", "sol") — use chamadas separadas por moeda.
 ⚠️  web_navigate SEM action ou com action inválida será bloqueado — use EXATAMENTE: search | open | follow_link.
 ⚠️  web_navigate action=search EXIGE query. action=open EXIGE url. action=follow_link EXIGE url + link_text.
+⚠️  analyze_workspace_groups: APENAS para agrupar documentos/slides/HTML criados pelo agente para organização.
+    NUNCA use para: analisar dependências de código, buscar referências a bibliotecas (ollama, openai, etc.),
+    listar imports, ou qualquer tarefa de análise de código-fonte.
+    Para essas tarefas use: exec_command com grep/find, ou read para ler arquivos específicos.
 `.trim();
 }
 

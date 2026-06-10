@@ -435,7 +435,7 @@ export function discoverGroups(
 
 export class AnalyzeWorkspaceGroupsTool implements ToolExecutor {
     name = 'analyze_workspace_groups';
-    description = 'Descobre grupos de artefatos relacionados no workspace (arquivos do mesmo projeto/objetivo). Use ANTES de organizar. Não move arquivos. Retorna JSON com grupos e confiança. Salva em .newclaw/artifact_groups.json.';
+    description = 'Agrupa artefatos do workspace do usuário (documentos, slides, HTML, PDFs, imagens) por projeto/objetivo — USO EXCLUSIVO para organização de arquivos gerados pelo agente. NÃO analisa código-fonte, dependências de bibliotecas ou referências a APIs (ex: ollama, openai). Para buscar padrões em código, use exec_command com grep. Não move arquivos. Retorna JSON com grupos e confiança.';
     parameters = {
         type: 'object' as const,
         properties: {

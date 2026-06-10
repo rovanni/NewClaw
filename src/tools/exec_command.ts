@@ -71,14 +71,24 @@ export class ExecCommandTool implements ToolExecutor {
         const execOptions: { timeout: number; cwd?: string } = { timeout };
         execOptions.cwd = effectiveWorkdir;
 
+        // Comandos de busca retornam exit code 1 quando não há resultados — isso é um
+        // resultado válido ("nenhum match"), não um erro. grep, rg, find -quit, etc.
+        const isSearchCommand = /^\s*(grep|rg|find)\b/.test(command.replace(/^ssh[^\s]+\s+/, ''));
+
         try {
             const output = await new Promise<string>((resolve, reject) => {
                 exec(command, execOptions, (error, stdout, stderr) => {
                     const combined = (stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : '');
                     if (error) {
-                        // Non-zero exit is always a failure — reject so the caller sees success: false.
-                        // Preserve stdout/stderr in combinedOutput so GoalEvaluator can classify it.
                         const exitCode = error.code ?? 'unknown';
+                        // Exit code 1 em comandos de busca = "nenhum resultado encontrado" (válido).
+                        // Apenas exit code 2+ indica erro real no grep/rg/find.
+                        if (isSearchCommand && exitCode === 1) {
+                            resolve('Nenhum resultado encontrado.');
+                            return;
+                        }
+                        // Non-zero exit is a failure — reject so the caller sees success: false.
+                        // Preserve stdout/stderr in combinedOutput so GoalEvaluator can classify it.
                         const fullOutput = (combined.trim() || error.message) + `\n[exit code: ${exitCode}]`;
                         reject(Object.assign(error, { combinedOutput: fullOutput.trim() }));
                     } else {
