@@ -180,7 +180,7 @@ CRIAÇÃO DE CONTEÚDO — leia obrigatoriamente antes de planejar steps com "wr
 - SÍNTESE DE DADOS DINÂMICOS: se o step de "write" depende de dados coletados por um step anterior (web_search, read, crypto_analysis, memory_search), NÃO escreva o content com placeholder esperando esses dados. Em vez disso, OMITA toolName no step de síntese — o sistema usará AgentLoop para capturar o output real e gerar o conteúdo. Exemplo: [web_search → {sem toolName, description: "Redija relatório com base nos resultados de busca acima"}].
 
 Regras:
-- Máximo 4 steps por plano
+- Máximo 6 steps por plano
 - Cada step usa UMA ferramenta
 - toolArgs deve ser um objeto com os argumentos da ferramenta
 - Use APENAS os nomes de ferramenta listados acima — não invente nomes
@@ -202,8 +202,8 @@ ARGS OBRIGATÓRIOS POR FERRAMENTA:
 - crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc", "sol"). Para múltiplas moedas específicas: use steps separados, um por moeda.
 - web_navigate: SEMPRE forneça action (search|open|follow_link). Para search: forneça query. Para open: forneça url (https://...). Para follow_link: forneça url + link_text.
 
-COLETA EM LOTE (quando o objetivo exige buscar dados para N itens do mesmo tipo, N > 3):
-- NÃO enumere um step por item — o limite de 4 steps deixaria itens sem cobertura.
+COLETA EM LOTE (quando o objetivo exige buscar dados para N itens do mesmo tipo, N > 6):
+- NÃO enumere um step por item — o limite de 6 steps deixaria itens sem cobertura.
 - Use no máximo 2 steps:
   1. memory_search — verifique o que já está salvo sobre esses itens.
   2. Sem toolName (AgentLoop): inclua na description a lista COMPLETA de itens e instrua explicitamente a iterar sobre todos. Ex: "busque crypto_analysis para BTC, ETH, SOL, River, ZEC e Pi individualmente e consolide os resultados".
@@ -343,8 +343,8 @@ REFERÊNCIA DE ARGS OBRIGATÓRIOS:
 - crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc"). Para múltiplas moedas: use steps separados.
 - web_navigate: SEMPRE forneça action (search|open|follow_link). Para search: forneça query. Para open: forneça url (https://...). Para follow_link: forneça url + link_text.
 
-COLETA EM LOTE (quando o objetivo exige buscar dados para N itens do mesmo tipo, N > 3):
-- NÃO enumere um step por item — o limite de steps deixaria itens sem cobertura.
+COLETA EM LOTE (quando o objetivo exige buscar dados para N itens do mesmo tipo, N > 6):
+- NÃO enumere um step por item — o limite de 6 steps deixaria itens sem cobertura.
 - Use no máximo 2 steps:
   1. memory_search — verifique o que já está salvo sobre esses itens.
   2. Sem toolName (AgentLoop): inclua na description a lista COMPLETA de itens e instrua a iterar sobre todos. Ex: "busque crypto_analysis para BTC, ETH, SOL, River, ZEC e Pi individualmente e consolide".
@@ -691,12 +691,12 @@ export class GoalPlanner {
             const rawSteps = Array.isArray(parsed.steps) ? parsed.steps : [];
             const adjustedRoadmap = Array.isArray(parsed.adjustedRoadmap) ? parsed.adjustedRoadmap : undefined;
 
-            // P1 — telemetria de truncamento: mede se o limite de 4 steps está descartando
+            // P1 — telemetria de truncamento: mede se o limite de 6 steps está descartando
             // steps relevantes do LLM sem alterar comportamento do slice.
             const rawCount = rawSteps.length;
-            const truncatedCount = Math.max(0, rawCount - 4);
+            const truncatedCount = Math.max(0, rawCount - 6);
             const containsWrite = rawSteps.some((s: Record<string, unknown>) => String(s['toolName'] ?? '') === 'write');
-            const containsWriteInTruncated = rawSteps.slice(4).some((s: Record<string, unknown>) => String(s['toolName'] ?? '') === 'write');
+            const containsWriteInTruncated = rawSteps.slice(6).some((s: Record<string, unknown>) => String(s['toolName'] ?? '') === 'write');
             if (rawCount > 0) {
                 log.info(
                     `[PLANNER-METRICS]` +
@@ -708,7 +708,7 @@ export class GoalPlanner {
                 );
             }
 
-            const steps: PlanStep[] = rawSteps.slice(0, 4).map((s: Record<string, unknown>, i: number) => {
+            const steps: PlanStep[] = rawSteps.slice(0, 6).map((s: Record<string, unknown>, i: number) => {
                 const rawToolName = s.toolName ? String(s.toolName) : undefined;
 
                 // Resolve alias antes de validar (ex: provide_file → send_document)

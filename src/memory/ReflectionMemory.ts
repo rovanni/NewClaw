@@ -182,7 +182,6 @@ export class ReflectionMemory {
      * (GoalPlanner usa `tool_${toolName}`).
      */
     private getFailurePatterns(category: string): PatternAggRow[] {
-        const toolName = category.startsWith('tool_') ? category.slice(5) : null;
         return this.db.prepare(`
             SELECT
                 pattern,
@@ -195,7 +194,7 @@ export class ReflectionMemory {
                    AND r2.approved = 0 AND r2.suggested_fix IS NOT NULL
                  ORDER BY r2.created_at DESC LIMIT 1) AS top_fix
             FROM reflection_annotations r1
-            WHERE (pattern = ? OR (? IS NOT NULL AND pattern LIKE 'goal_blocker_%' AND tool_used = ?))
+            WHERE pattern = ?
               AND created_at > datetime('now', '-7 days')
             GROUP BY pattern, tool_used
             HAVING total >= 2 AND failure_rate >= 0.30
@@ -206,7 +205,7 @@ export class ReflectionMemory {
               ) = 0
             ORDER BY failure_rate DESC, total DESC
             LIMIT 3
-        `).all(category, toolName, toolName) as PatternAggRow[];
+        `).all(category) as PatternAggRow[];
     }
 
     /** Retorna as últimas N anotações (para observabilidade/dashboard). */
@@ -295,7 +294,7 @@ export class ReflectionMemory {
                    AND r2.approved = 0 AND r2.suggested_fix IS NOT NULL
                  ORDER BY r2.created_at DESC LIMIT 1) AS top_fix
             FROM reflection_annotations r1
-            WHERE (pattern = ? OR pattern LIKE 'goal_blocker_%')
+            WHERE pattern = ?
               AND created_at > datetime('now', '-7 days')
             GROUP BY pattern, tool_used
             HAVING total >= 2 AND failure_rate >= 0.90

@@ -335,12 +335,13 @@ export class ProactiveRecovery {
             'favor', 'preciso', 'quero', 'queria', 'isso', 'esse', 'esta', 'este',
         ]);
 
-        const entities = userIntent
-            .toLowerCase()
-            .replace(/[^a-z0-9áéíóúãõâêôçàü\s]/g, ' ')
-            .split(/\s+/)
-            .filter(t => t.length > 2 && !STOPWORDS.has(t))
-            .slice(0, 6);
+        const entities = [...new Set(
+            userIntent
+                .toLowerCase()
+                .replace(/[^a-z0-9áéíóúãõâêôçàü\s]/g, ' ')
+                .split(/\s+/)
+                .filter(t => t.length > 2 && !STOPWORDS.has(t))
+        )].slice(0, 6);
 
         if (entities.length === 0) return null;
 
