@@ -1198,6 +1198,16 @@ export class GoalExecutionLoop {
                         { toolsTried: goal.toolsTried, userIntent: goal.userIntent },
                     );
                     toolResult = recoveryResult.result;
+                    if (recoveryResult.recovered) {
+                        const kind = recoveryResult.mutationKind ?? 'arg_mutation';
+                        log.info('RECOVERY_OUTCOME',
+                            `goal=${goal.id} step=${step.id}` +
+                            ` tool=${recoveryResult.originalToolName ?? step.toolName}` +
+                            ` final_tool=${recoveryResult.finalToolName}` +
+                            ` mutation_kind=${kind}` +
+                            ` step_passed=${recoveryResult.result.success}`
+                        );
+                    }
                     if (recoveryResult.recovered && recoveryResult.recoveryNote) {
                         const kind = recoveryResult.mutationKind ?? 'arg_mutation';
                         log.info(

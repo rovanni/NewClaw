@@ -50,7 +50,12 @@ export class FSMHistoryStore {
                 `DELETE FROM fsm_history WHERE id <= (SELECT MAX(id) - ${MAX_ROWS} FROM fsm_history)`
             ).run();
         } catch (err) {
-            log.warn(`Failed to persist FSM transition: ${errorMessage(err)}`);
+            log.warn('SQLITE_WRITE_DROPPED',
+                `[FSM] table=fsm_history operation=INSERT` +
+                ` from_state=${t.from} to_state=${t.to} event=${t.event}` +
+                ` trace_id=${traceId ?? 'none'} conv_id=${conversationId ?? 'none'}` +
+                ` error=${errorMessage(err)}`
+            );
         }
     }
 

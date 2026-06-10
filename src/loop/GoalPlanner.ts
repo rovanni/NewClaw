@@ -628,6 +628,20 @@ export class GoalPlanner {
 
             const steps = this.prependPathValidation(goal, parsed.steps);
             log.info(`[GoalPlanner] replan ok: steps=${steps.length} strategy="${parsed.strategy}" tools=[${steps.map(s => s.toolName ?? 'agentloop').join(',')}]`);
+
+            const prevTools = (goal.currentPlan ?? []).map(s => (s as { toolName?: string }).toolName ?? 'agentloop').join(',');
+            const newTools  = steps.map(s => s.toolName ?? 'agentloop').join(',');
+            const prevStrategy = goal.cycleFocus ?? '';
+            log.info('REPLAN_DIFF',
+                `goal=${goal.id}` +
+                ` prev_tools="${prevTools}"` +
+                ` new_tools="${newTools}"` +
+                ` structurally_identical=${prevTools === newTools}` +
+                ` strategy_changed=${prevStrategy !== parsed.strategy}` +
+                ` prev_strategy="${prevStrategy.slice(0, 80)}"` +
+                ` new_strategy="${parsed.strategy.slice(0, 80)}"`
+            );
+
             PromptComposer.logMetrics();
             return { steps, strategy: parsed.strategy };
         } catch (err) {

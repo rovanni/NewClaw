@@ -74,7 +74,7 @@ export class DecisionMemory {
             return Number(result.lastInsertRowid);
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            log.error('sqlite_write_failed', `[DECISION] DATA LOST: tool_decisions INSERT blocked. tool=${decision.toolName} success=${decision.success} error=${msg}`);
+            log.warn('SQLITE_WRITE_DROPPED', `[DECISION] table=tool_decisions operation=INSERT tool=${decision.toolName} success=${decision.success} error=${msg}`);
             throw err;
         }
     }

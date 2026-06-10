@@ -35,7 +35,7 @@ export function addMessage(
         db.prepare('UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(conversationId);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        log.error('sqlite_write_failed', `[CONV] DATA LOST: messages INSERT blocked. conversationId=${conversationId} role=${role} contentLen=${content.length} error=${msg}`);
+        log.warn('SQLITE_WRITE_DROPPED', `[CONV] table=messages operation=INSERT conversationId=${conversationId} role=${role} contentLen=${content.length} error=${msg}`);
         throw err;
     }
 }

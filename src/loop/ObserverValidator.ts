@@ -184,6 +184,13 @@ export class ObserverValidator {
         if (deterministic) {
             const tag = deterministic.validationSkipped ? '⏭️ skipped' : deterministic.approved ? '✅' : '❌';
             log.info(`${tag} [DETERMINISTIC] approved=${deterministic.approved} confidence=${deterministic.confidence} reason="${deterministic.reason}"`);
+            if (!deterministic.validationSkipped) {
+                log.info('GOAL_VALIDATION_PATH',
+                    `validation_path=deterministic tool=${toolUsed}` +
+                    ` approved=${deterministic.approved} confidence=${deterministic.confidence}` +
+                    ` evidence_rule="${deterministic.reason}"`
+                );
+            }
             return deterministic;
         }
 
@@ -226,12 +233,18 @@ export class ObserverValidator {
                 log.warn(`No JSON found in response, skipping validation. Elapsed: ${elapsed}ms`);
                 return { approved: false, reason: 'Observer returned non-JSON', confidence: 0, validationSkipped: true };
             }
-            log.info(`${result['approved'] ? '✅' : '❌'} approved=${result['approved']} confidence=${result['confidence']} reason="${result['reason']}" elapsed=${elapsed}ms`);
+            const conf = Number(result['confidence']) || 0.5;
+            const llmPath = conf >= 0.7 ? 'llm_high_confidence' : 'llm_low_confidence';
+            log.info(`${result['approved'] ? '✅' : '❌'} approved=${result['approved']} confidence=${conf} reason="${result['reason']}" elapsed=${elapsed}ms`);
+            log.info('GOAL_VALIDATION_PATH',
+                `validation_path=${llmPath} tool=${toolUsed}` +
+                ` approved=${result['approved']} confidence=${conf} elapsed_ms=${elapsed}`
+            );
 
             return {
                 approved: !!result['approved'],
                 reason: String(result['reason'] || ''),
-                confidence: Number(result['confidence']) || 0.5,
+                confidence: conf,
                 suggestedFix: String(result['suggested_fix'] || result['suggestedFix'] || '') || undefined
             };
         } catch (error) {
