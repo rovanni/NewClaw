@@ -335,13 +335,17 @@ export class ProactiveRecovery {
             'favor', 'preciso', 'quero', 'queria', 'isso', 'esse', 'esta', 'este',
         ]);
 
+        // Coleta até 12 tokens — amplia janela para capturar termos de domínio
+        // que aparecem depois dos verbos de tarefa (ex: "criar slides sobre Modelo Incremental...").
+        // Os primeiros tokens frequentemente são verbos genéricos ("criar", "slides")
+        // que já estão na query falha; os termos úteis ficam na cauda da frase.
         const entities = [...new Set(
             userIntent
                 .toLowerCase()
                 .replace(/[^a-z0-9áéíóúãõâêôçàü\s]/g, ' ')
                 .split(/\s+/)
                 .filter(t => t.length > 2 && !STOPWORDS.has(t))
-        )].slice(0, 6);
+        )].slice(0, 12);
 
         if (entities.length === 0) return null;
 

@@ -62,6 +62,21 @@ function isMarpWithoutInputFile(command: string): boolean {
     return true; // sem arquivo .md antes de qualquer flag
 }
 
+/**
+ * Detecta marp com arquivo de entrada mas sem --no-stdin.
+ * Sem --no-stdin, marp bloqueia esperando stdin mesmo quando recebe um arquivo .md.
+ * Deve ser verificado APÓS isMarpWithoutInputFile (que cobre o caso mais grave).
+ */
+function isMarpWithoutNoStdin(command: string): boolean {
+    if (!/\bmarp\b/.test(command)) return false;
+    return !/--no-stdin/.test(command);
+}
+
+/** Injeta --no-stdin imediatamente após o binário marp. */
+function addMarpNoStdin(command: string): string {
+    return command.replace(/(\bmarp\b)(\s)/, '$1 --no-stdin$2');
+}
+
 /** Mesma lógica para pandoc: requer arquivo de entrada antes das flags. */
 function isPandocWithoutInputFile(command: string): boolean {
     if (!/\bpandoc\b/.test(command)) return false;
@@ -75,6 +90,19 @@ function isPandocWithoutInputFile(command: string): boolean {
         if (beforeFirstFlag && /\.(md|docx|tex|html|rst|odt|rtf)$/.test(t)) return false;
     }
     return true;
+}
+
+/**
+ * Detecta pandoc com a flag --no-stdin (que é exclusiva do marp, não existe no pandoc).
+ * O GoalPlanner pode generalizar incorretamente o fix de marp para pandoc.
+ */
+function hasPandocInvalidNoStdin(command: string): boolean {
+    return /\bpandoc\b/.test(command) && /--no-stdin/.test(command);
+}
+
+/** Remove --no-stdin do comando pandoc. */
+function removePandocNoStdin(command: string): string {
+    return command.replace(/\s*--no-stdin\b/g, '').replace(/\s{2,}/g, ' ').trim();
 }
 
 // Executáveis comumente usados em exec_command que podem não estar instalados.
@@ -184,6 +212,9 @@ export class RiskAnalyzer {
         }
 
         // ── 1b. Detecção proativa de dependências em exec_command ────────────
+        // commandFixes: stepId → comando corrigido (aplica-se ao plan após o loop)
+        const commandFixes = new Map<string, string>();
+
         for (const step of plan) {
             if (step.toolName !== 'exec_command') continue;
             const cmdValue = String(step.toolArgs?.command ?? step.toolArgs?.cmd ?? '');
@@ -222,6 +253,17 @@ export class RiskAnalyzer {
                     `Step "${step.description}": marp invocado sem arquivo .md de entrada antes das flags — causará stdin error. ` +
                     `Formato correto: marp entrada.md --no-stdin -o saida.html`
                 );
+            } else if (isMarpWithoutNoStdin(cmdValue)) {
+                // P0.3: marp com arquivo mas sem --no-stdin → bloqueia esperando stdin (60 s timeout)
+                const fixedCmd = addMarpNoStdin(cmdValue);
+                commandFixes.set(step.id, fixedCmd);
+                log.info(
+                    `[AUTO-FIX] step=${step.id} tool=exec_command` +
+                    ` fix=add_marp_no_stdin original="${cmdValue.slice(0, 80)}" fixed="${fixedCmd.slice(0, 80)}"`
+                );
+                risks.push(
+                    `[AUTO-FIXED] Step "${step.description}": --no-stdin adicionado ao marp (ausente causava bloqueio de stdin).`
+                );
             }
 
             // Pandoc input validation (P0.2): detecta pandoc sem arquivo de entrada antes das flags
@@ -230,7 +272,27 @@ export class RiskAnalyzer {
                     `Step "${step.description}": pandoc invocado sem arquivo de entrada antes das flags. ` +
                     `Formato correto: pandoc entrada.md -o saida.html`
                 );
+            } else if (hasPandocInvalidNoStdin(cmdValue)) {
+                // P0.3: --no-stdin é flag exclusiva do marp; pandoc não a reconhece (Unknown option)
+                const fixedCmd = removePandocNoStdin(cmdValue);
+                commandFixes.set(step.id, fixedCmd);
+                log.info(
+                    `[AUTO-FIX] step=${step.id} tool=exec_command` +
+                    ` fix=remove_pandoc_no_stdin original="${cmdValue.slice(0, 80)}" fixed="${fixedCmd.slice(0, 80)}"`
+                );
+                risks.push(
+                    `[AUTO-FIXED] Step "${step.description}": --no-stdin removido do pandoc (flag inválida; exclusiva do marp).`
+                );
             }
+        }
+
+        // Aplica correções de comando coletadas no loop 1b antes da revisão LLM
+        if (commandFixes.size > 0) {
+            plan = plan.map(s =>
+                s.toolName === 'exec_command' && commandFixes.has(s.id)
+                    ? { ...s, toolArgs: { ...s.toolArgs, command: commandFixes.get(s.id) } }
+                    : s
+            );
         }
 
         // ── 1c. Pre-flight via CapabilityRegistry (síncrono, sem LLM) ────────
@@ -347,8 +409,9 @@ export class RiskAnalyzer {
             return { risks, adjustedPlan: finalPlan, planAdjusted: llmResult.planAdjusted, blocked: true, blockReason };
         }
 
+        const planAdjusted = llmResult.planAdjusted || commandFixes.size > 0;
         if (risks.length > 0) {
-            log.info(`[RiskAnalyzer] goal=${goal.id} risks=${risks.length} planAdjusted=${llmResult.planAdjusted}`);
+            log.info(`[RiskAnalyzer] goal=${goal.id} risks=${risks.length} planAdjusted=${planAdjusted}`);
         }
 
         // Sprint 3.7A — Q2 Skill Hint: detecta se o plano usa exec_command para algo
@@ -381,7 +444,7 @@ export class RiskAnalyzer {
             }
         }
 
-        return { risks, adjustedPlan: finalPlan, planAdjusted: llmResult.planAdjusted, blocked: false, skillHints: skillHints.length > 0 ? skillHints : undefined };
+        return { risks, adjustedPlan: finalPlan, planAdjusted, blocked: false, skillHints: skillHints.length > 0 ? skillHints : undefined };
     }
 
     /**

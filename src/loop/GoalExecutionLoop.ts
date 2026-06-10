@@ -2462,9 +2462,10 @@ OU
             },
             {
                 // "foi organizado / foi reorganizado"
+                // write é evidência válida: criar/estruturar arquivos já é "organizar"
                 pattern: /foi\s+(organizad[ao]|reorganizad[ao])\b/i,
                 label: 'organização de arquivos',
-                requiredTools: ['organize_workspace', 'exec_command'],
+                requiredTools: ['organize_workspace', 'exec_command', 'write'],
             },
             {
                 // "foi criado / foi gerado"
@@ -2490,6 +2491,21 @@ OU
             });
 
             if (!evidenceAttempt) {
+                // Step pendente que satisfará esta claim já está no plano — não bloquear.
+                // Evita deadlock onde readyToValidate=true (só send_document pendente) mas
+                // a evidência ainda não existe porque o step ainda não foi despachado.
+                const hasPendingEvidence = goal.currentPlan.some(
+                    s => s.status === 'pending' && rule.requiredTools.includes(s.toolName ?? '')
+                );
+                if (hasPendingEvidence) {
+                    log.info(
+                        `[VALIDATION-EVIDENCE]` +
+                        ` claim="${rule.label}"` +
+                        ` pending_step_satisfies=true` +
+                        ` decision=accept`
+                    );
+                    continue;
+                }
                 return { satisfied: false, claimsChecked, claim: rule.label, missingTool: rule.requiredTools[0] };
             }
 
