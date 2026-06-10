@@ -348,7 +348,9 @@ export class ProactiveRecovery {
         const newEntities = entities.filter(e => !currentQuery.includes(e));
         if (newEntities.length === 0) return null;
 
-        const enrichedQuery = `${args.query} ${newEntities.join(' ')}`.trim().slice(0, 200);
+        // A query original falhou — substituir completamente por entidades do userIntent
+        // (em vez de concatenar) evita queries mistas português+inglês que retornam 0 resultados
+        const enrichedQuery = newEntities.join(' ').slice(0, 200);
         return { ...args, query: enrichedQuery };
     }
 

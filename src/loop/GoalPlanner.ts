@@ -200,7 +200,14 @@ ARGS OBRIGATÓRIOS POR FERRAMENTA:
     "knowledge"  → informações técnicas aprendidas.
     "context"    → dados efêmeros de sessão (desaparecem em dias). NÃO use para dados que o usuário precisa recuperar depois.
 - crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc", "sol"). Para múltiplas moedas específicas: use steps separados, um por moeda.
-- web_navigate: SEMPRE forneça action (search|open|follow_link). Para search: forneça query. Para open: forneça url (https://...). Para follow_link: forneça url + link_text.`.trim();
+- web_navigate: SEMPRE forneça action (search|open|follow_link). Para search: forneça query. Para open: forneça url (https://...). Para follow_link: forneça url + link_text.
+
+COLETA EM LOTE (quando o objetivo exige buscar dados para N itens do mesmo tipo, N > 3):
+- NÃO enumere um step por item — o limite de 4 steps deixaria itens sem cobertura.
+- Use no máximo 2 steps:
+  1. memory_search — verifique o que já está salvo sobre esses itens.
+  2. Sem toolName (AgentLoop): inclua na description a lista COMPLETA de itens e instrua explicitamente a iterar sobre todos. Ex: "busque crypto_analysis para BTC, ETH, SOL, River, ZEC e Pi individualmente e consolide os resultados".
+- O AgentLoop executará a iteração completa automaticamente — não limite a lista.`.trim();
 }
 
 function buildProgressBlock(progressModel: GoalProgressModel): string {
@@ -335,6 +342,13 @@ REFERÊNCIA DE ARGS OBRIGATÓRIOS:
   TIPOS — use "fact" para dados pessoais do usuário (portfolio, watchlist, posições); "preference" para preferências; "context" APENAS para dados efêmeros de sessão (some em dias).
 - crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc"). Para múltiplas moedas: use steps separados.
 - web_navigate: SEMPRE forneça action (search|open|follow_link). Para search: forneça query. Para open: forneça url (https://...). Para follow_link: forneça url + link_text.
+
+COLETA EM LOTE (quando o objetivo exige buscar dados para N itens do mesmo tipo, N > 3):
+- NÃO enumere um step por item — o limite de steps deixaria itens sem cobertura.
+- Use no máximo 2 steps:
+  1. memory_search — verifique o que já está salvo sobre esses itens.
+  2. Sem toolName (AgentLoop): inclua na description a lista COMPLETA de itens e instrua a iterar sobre todos. Ex: "busque crypto_analysis para BTC, ETH, SOL, River, ZEC e Pi individualmente e consolide".
+- O AgentLoop executará a iteração completa — não limite a lista.
 
 REGRAS CRÍTICAS para blocker 'environment_limit':
 - Se o blocker mencionar PEP 668 ou 'externally-managed':

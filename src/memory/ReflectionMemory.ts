@@ -199,6 +199,11 @@ export class ReflectionMemory {
               AND created_at > datetime('now', '-7 days')
             GROUP BY pattern, tool_used
             HAVING total >= 2 AND failure_rate >= 0.30
+              AND (
+                SELECT COUNT(*) FROM reflection_annotations r3
+                WHERE r3.pattern = r1.pattern AND r3.tool_used = r1.tool_used
+                  AND r3.approved = 1 AND r3.created_at > datetime('now', '-3 hours')
+              ) = 0
             ORDER BY failure_rate DESC, total DESC
             LIMIT 3
         `).all(category, toolName, toolName) as PatternAggRow[];
@@ -294,6 +299,11 @@ export class ReflectionMemory {
               AND created_at > datetime('now', '-7 days')
             GROUP BY pattern, tool_used
             HAVING total >= 2 AND failure_rate >= 0.90
+              AND (
+                SELECT COUNT(*) FROM reflection_annotations r3
+                WHERE r3.pattern = r1.pattern AND r3.tool_used = r1.tool_used
+                  AND r3.approved = 1 AND r3.created_at > datetime('now', '-3 hours')
+              ) = 0
             ORDER BY failure_rate DESC, total DESC
             LIMIT 5
         `).all(category) as PatternAggRow[];
