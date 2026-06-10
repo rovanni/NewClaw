@@ -120,22 +120,33 @@ export class SessionManager {
         // Update last activity for TTL cleanup
         this.lastActivity.set(sid, Date.now());
 
-        // Timeout protection: if mutex takes > 10s, log warning and proceed
+        const waitStart = Date.now();
+
         const mutexTimeout = new Promise<void>((_, reject) => {
             setTimeout(() => reject(new Error(`Mutex timeout for ${sid} after 10s`)), 10_000);
         });
 
         try {
             await Promise.race([current, mutexTimeout]);
+            const waitMs = Date.now() - waitStart;
+            if (waitMs > 200) log.warn('mutex_contention', `[MUTEX] sid=${sid} waited=${waitMs}ms for previous operation`);
         } catch (err) {
-            log.warn(`[MUTEX] Timeout waiting for ${sid} — previous operation took >10s, proceeding anyway. This may indicate a deadlock.`);
+            const waitMs = Date.now() - waitStart;
+            log.warn('mutex_timeout', `[MUTEX] sid=${sid} waited=${waitMs}ms — previous operation took >10s, proceeding anyway`);
         }
 
+        const opStart = Date.now();
         try {
             return await fn();
+        } catch (err) {
+            const opMs = Date.now() - opStart;
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error('mutex_op_failed', `[MUTEX] sid=${sid} op failed after ${opMs}ms: ${msg}`);
+            throw err;
         } finally {
+            const opMs = Date.now() - opStart;
+            if (opMs > 2000) log.warn('mutex_held_long', `[MUTEX] sid=${sid} held=${opMs}ms`);
             resolve!();
-            // Clean up stale mutexes after 60s
             setTimeout(() => {
                 if (this.sessionMutexes.get(sid) === next) {
                     this.sessionMutexes.delete(sid);

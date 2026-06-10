@@ -1,5 +1,7 @@
 import Database from 'better-sqlite3';
 import { Message } from './memoryTypes';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('ConversationRepository');
 
 export function getOrCreateConversation(db: Database.Database, userId: string): string {
     const existing = db.prepare(
@@ -28,8 +30,14 @@ export function addMessage(
     role: Message['role'],
     content: string
 ): void {
-    db.prepare('INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)').run(conversationId, role, content);
-    db.prepare('UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(conversationId);
+    try {
+        db.prepare('INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)').run(conversationId, role, content);
+        db.prepare('UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(conversationId);
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error('sqlite_write_failed', `[CONV] DATA LOST: messages INSERT blocked. conversationId=${conversationId} role=${role} contentLen=${content.length} error=${msg}`);
+        throw err;
+    }
 }
 
 export function getRecentMessages(db: Database.Database, conversationId: string, limit: number = 5): Message[] {

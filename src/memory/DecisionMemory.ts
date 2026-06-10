@@ -5,6 +5,8 @@
  * Permite que o agente aprenda com experiências passadas.
  */
 import { Database } from 'better-sqlite3';
+import { createLogger } from '../shared/AppLogger';
+const log = createLogger('DecisionMemory');
 
 export interface ToolDecision {
     id?: number;
@@ -57,18 +59,24 @@ export class DecisionMemory {
      * Record a tool decision
      */
     record(decision: Omit<ToolDecision, 'id' | 'createdAt'>): number {
-        const result = this.db.prepare(`
-            INSERT INTO tool_decisions (tool_name, context, task_type, success, latency_ms, feedback)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `).run(
-            decision.toolName,
-            decision.context,
-            decision.taskType,
-            decision.success ? 1 : 0,
-            decision.latencyMs,
-            decision.feedback || null
-        );
-        return Number(result.lastInsertRowid);
+        try {
+            const result = this.db.prepare(`
+                INSERT INTO tool_decisions (tool_name, context, task_type, success, latency_ms, feedback)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `).run(
+                decision.toolName,
+                decision.context,
+                decision.taskType,
+                decision.success ? 1 : 0,
+                decision.latencyMs,
+                decision.feedback || null
+            );
+            return Number(result.lastInsertRowid);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error('sqlite_write_failed', `[DECISION] DATA LOST: tool_decisions INSERT blocked. tool=${decision.toolName} success=${decision.success} error=${msg}`);
+            throw err;
+        }
     }
 
     /**
