@@ -172,7 +172,18 @@ CRITÉRIOS DE SUCESSO (successCriteria) — máximo 3, verificados deterministic
 - file_exists: exec_command retornou output não-vazio (arquivo encontrado). Ex: arquivo criado → { "check": "file_exists", "tool": "exec_command" }
 Inclua SEMPRE um critério tool_succeeded para send_document quando o objetivo envolve entrega de arquivo.
 
-CRIAÇÃO DE CONTEÚDO — leia obrigatoriamente antes de planejar steps com "write":
+⚠️ GERAÇÃO DE CONTEÚDO EXTENSO (slides, relatórios, HTML completo, documentos) — LEIA PRIMEIRO:
+Quando o objetivo exige criar um artefato extenso (apresentação, relatório, HTML de slides, documento longo):
+  → NÃO coloque o content dentro do toolArgs do step "write".
+  → OMITA toolName no step de síntese — o AgentLoop gerará o conteúdo real em runtime com os dados dos steps anteriores.
+  → Padrão correto para "criar slides HTML sobre Scrum":
+     Step 1: web_search (pesquisar)
+     Step 2: {sem toolName} "Gere o HTML completo dos slides de Scrum com Reveal.js usando os dados pesquisados acima"
+     Step 3: send_document (entregar)
+  → O AgentLoop tem acesso ao output de web_search/read e produzirá o artefato real — você não pode pré-gerar isso no JSON do plano.
+  → Qualquer write step com content curto ou placeholder será BLOQUEADO automaticamente pelo sistema.
+
+CRIAÇÃO DE CONTEÚDO — regras para steps com "write" (conteúdo ESTÁTICO, não depende de pesquisa):
 - O campo "content" DEVE conter o conteúdo COMPLETO e funcional do arquivo.
 - O WriteTool grava literalmente o que está em "content" — nenhum sistema posterior irá completar ou expandir o texto.
 - NUNCA use: TODO, placeholder, stub, comentário genérico, "HTML Content", "CSS Content", "JS Content", "conteúdo será adicionado depois".
@@ -181,7 +192,6 @@ CRIAÇÃO DE CONTEÚDO — leia obrigatoriamente antes de planejar steps com "wr
 - CSS: gere regras funcionais com seletores e propriedades reais.
 - JavaScript: gere código executável, não "// implementar aqui".
 - Se o artefato for extenso, inclua pelo menos a estrutura completa com conteúdo representativo em cada seção.
-- SÍNTESE DE DADOS DINÂMICOS: se o step de "write" depende de dados coletados por um step anterior (web_search, read, crypto_analysis, memory_search), NÃO escreva o content com placeholder esperando esses dados. Em vez disso, OMITA toolName no step de síntese — o sistema usará AgentLoop para capturar o output real e gerar o conteúdo. Exemplo: [web_search → {sem toolName, description: "Redija relatório com base nos resultados de busca acima"}].
 
 Regras:
 - Máximo 6 steps por plano
@@ -275,6 +285,23 @@ ESTRATÉGIAS VÁLIDAS sem instalação:
 Escolha UMA dessas abordagens. Qualquer plano com pip ou venv será bloqueado automaticamente.\n`
         : '';
 
+    // Guard S3: exec_command repetitivo — proíbe a tool quando bloqueou 2+ vezes neste goal.
+    // O modelo tende a voltar para exec_command em replans mesmo após bloqueios repetidos
+    // (missing_tool ou tool_error), porque o StrategyDiversityGuard opera por "estratégia textual"
+    // e não por nome de tool. Esta diretiva é um freio explícito por nome.
+    const execCommandBlockerCount = goal.blockers.filter(
+        b => b.toolName === 'exec_command' || (b.kind === 'tool_error' && /exec_command|marp|pandoc|html2pdf/i.test(b.description))
+    ).length;
+    const execCommandBanDirective = execCommandBlockerCount >= 2
+        ? `\n⛔ exec_command BLOQUEADO (${execCommandBlockerCount} falhas neste goal):
+exec_command falhou repetidamente — NÃO inclua exec_command em nenhum step deste replan.
+ALTERNATIVAS obrigatórias:
+  • Para gerar HTML/slides: use {sem toolName} — AgentLoop sintetiza diretamente com Reveal.js via CDN (sem conversão)
+  • Para converter arquivos: use a skill correspondente via {sem toolName} descrevendo a conversão desejada
+  • Para enviar resultado: use send_document com o arquivo já criado via write ou AgentLoop
+  Qualquer step com toolName="exec_command" será descartado automaticamente.\n`
+        : '';
+
     const priorIncompletes = goal.blockers.filter(b => b.kind === 'goal_incomplete').length;
     const priorAnalysisOnly = goal.strategiesTried.filter(s =>
         /anali[sz]|leitura|ler |audit|mapear|verificar|identificar|diagnosticar/i.test(s)
@@ -332,7 +359,7 @@ OBJETIVO GLOBAL: ${goal.objective}
 ${milestoneInstruction}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}${retryHint}
-${pipVenvLoopDirective}${contentStubDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}${progressSection}${diversitySection}
+${pipVenvLoopDirective}${execCommandBanDirective}${contentStubDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}${progressSection}${diversitySection}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 
 ${buildToolContracts(availableTools)}

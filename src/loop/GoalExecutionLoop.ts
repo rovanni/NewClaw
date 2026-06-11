@@ -637,9 +637,23 @@ export class GoalExecutionLoop {
                     if (expectedExts.length > 0) {
                         const foundFiles = await this.checkDeliverables(expectedExts, currentGoal.createdAt);
                         // Fix #2: ignora arquivos já enviados nesta sessão de execução do goal
-                        const unsentFiles = foundFiles.filter(f => !sentArtifacts.has(f));
+                        // Fix S1: ignora arquivos menores que MIN_DELIVERABLE_SIZE — stubs/placeholders
+                        // não devem ser enviados ao usuário nem consumir replanBudget com sends inúteis.
+                        const MIN_DELIVERABLE_SIZE = 200; // bytes
+                        const substantiveFiles = foundFiles.filter(f => {
+                            try {
+                                return fs.statSync(f).size >= MIN_DELIVERABLE_SIZE;
+                            } catch {
+                                return false; // arquivo desapareceu — ignorar
+                            }
+                        });
+                        const tinyFiles = foundFiles.length - substantiveFiles.length;
+                        if (tinyFiles > 0) {
+                            log.warn(`[GoalLoop] deliverable_check: ${tinyFiles} arquivo(s) ignorado(s) por tamanho < ${MIN_DELIVERABLE_SIZE}B (placeholders)`);
+                        }
+                        const unsentFiles = substantiveFiles.filter(f => !sentArtifacts.has(f));
                         if (unsentFiles.length > 0) {
-                            const skipped = foundFiles.length - unsentFiles.length;
+                            const skipped = substantiveFiles.length - unsentFiles.length;
                             log.info(`[GoalLoop] deliverable_check: ${unsentFiles.length} arquivo(s) no workspace${skipped > 0 ? ` (${skipped} já enviado(s) ignorado(s))` : ''} — injetando send steps`);
                             this.goalStore.addStrategyTried(currentGoal.id, 'deliverable_check_done');
                             currentGoal = this.goalStore.getById(currentGoal.id)!;
