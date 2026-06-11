@@ -38,7 +38,8 @@ export type BlockerKind =
     | 'partial_success'          // entregável existe mas pode não ser o formato ideal
     | 'workspace_missing'        // step precisa de contexto do workspace que não foi coletado
     | 'required_artifact_missing'  // artefato obrigatório existe mas está vazio — goal de modificação não pode prosseguir
-    | 'semantic_mismatch';         // tool retornou sucesso mas output não é relevante para a intenção do step
+    | 'semantic_mismatch'          // tool retornou sucesso mas output não é relevante para a intenção do step
+    | 'content_stub';              // step write gravou placeholder em vez de conteúdo real — usar AgentLoop para síntese
 
 export interface GoalBlocker {
     kind: BlockerKind;

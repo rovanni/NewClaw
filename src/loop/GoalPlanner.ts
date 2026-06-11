@@ -291,6 +291,22 @@ OBRIGATÓRIO neste replan:
   Um plano que só lê arquivos sem modificar/entregar será rejeitado novamente.\n`
         : '';
 
+    // Diretiva específica para content_stub: orienta o modelo a usar AgentLoop (sem toolName)
+    // em vez de tentar escrever content estático no plano JSON. Acionada quando o WriteTool
+    // bloqueou por CONTENT-STUB-GATE ou quando o GoalEvaluator classificou como content_stub.
+    const contentStubCount = goal.blockers.filter(b => b.kind === 'content_stub').length;
+    const contentStubDirective = (contentStubCount >= 1 || blocker.kind === 'content_stub')
+        ? `\n⚠️ ERRO DE CONTEÚDO PLACEHOLDER — tentativas anteriores gravaram stubs em vez de conteúdo real.
+CAUSA: o step "write" teve o campo "content" com um placeholder (ex: "[Conteúdo completo da aula]", "... (HTML completo) ...").
+SOLUÇÃO OBRIGATÓRIA neste replan:
+  1. NÃO use toolName="write" com content estático para documentos extensos (slides, HTML, relatórios).
+  2. OMITA toolName no step de síntese — o AgentLoop gerará o conteúdo REAL com contexto dos steps anteriores.
+  3. Padrão CORRETO:
+     {"id":"step_2","description":"Gere o HTML completo dos slides de Scrum com Reveal.js usando os dados pesquisados acima"} (sem toolName, sem toolArgs)
+  4. O AgentLoop tem acesso ao output de web_search/read e produzirá o artefato final — você NÃO precisa pré-gerar content.
+  Qualquer step com toolName="write" e content curto/placeholder será bloqueado novamente.\n`
+        : '';
+
     const milestoneInstruction = activeMilestone
         ? `\n⚠️ CONSTRUÇÃO INCREMENTAL ATIVA:
 Proponha uma nova estratégia para resolver o Marco Atual. NÃO tente resolver o objetivo global ou outros marcos do roadmap ainda.
@@ -316,7 +332,7 @@ OBJETIVO GLOBAL: ${goal.objective}
 ${milestoneInstruction}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}${retryHint}
-${pipVenvLoopDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}${progressSection}${diversitySection}
+${pipVenvLoopDirective}${contentStubDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}${progressSection}${diversitySection}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 
 ${buildToolContracts(availableTools)}
@@ -410,6 +426,23 @@ function extractUnixPaths(text: string): string[] {
 
 const PLACEHOLDER_ARG_PATTERN =
     /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo)\b|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\//i;
+
+// WRITE-CONTENT-STUB: detecta content placeholder em steps write — converte para AgentLoop.
+// Espelha o CONTENT-STUB-GATE do WriteTool, mas atua antes da execução, durante o parse do plano.
+// O modelo (gemma4:31b-cloud) tende a gerar {"toolName":"write","content":"<67-char-stub>"} em vez de
+// omitir toolName para que o AgentLoop sintetize o conteúdo real a partir de web_search anteriores.
+const WRITE_CONTENT_STUB_PATTERNS: RegExp[] = [
+    /\.\.\.\s*\(.*?conteúdo/i,
+    /\(conteúdo\s+(completo|da\s+aula|real)\b/i,
+    /\[conteúdo\s*(completo|real|aqui|será|abrang)/i,
+    /\[.*?completo.*?abrang/i,
+    /<html>\s*<body>\s*\.\.\./i,
+    /\[TODO[^\]]*\]/i,
+    /\[inserir\s+aqui\]/i,
+    /conteúdo será adicionado depois/i,
+    /\(em\s+construção\)/i,
+    /HTML\s+Content\b|CSS\s+Content\b|JS\s+Content\b/i,
+];
 
 // ── Aliases de ferramentas: nomes que LLMs inventam → nome real no ToolRegistry ──
 const TOOL_ALIASES: Record<string, string> = {
@@ -758,6 +791,26 @@ export class GoalPlanner {
                     );
                     if (placeholderEntry) {
                         log.warn(`[GoalPlanner] step ${i + 1} has placeholder arg ${placeholderEntry[0]}="${String(placeholderEntry[1]).slice(0, 80)}" — converting to AgentLoop step`);
+                        resolvedTool = undefined;
+                        toolArgs = undefined;
+                    }
+                }
+
+                // WRITE-CONTENT-STUB: detecta write steps com conteúdo placeholder e converte para AgentLoop.
+                // Quando o model gera {"toolName":"write","content":"<82-char-stub>"}, a execução
+                // "succeeds" mas grava lixo — o GoalExecutionLoop gasta todo o replanBudget em
+                // exec_command/ssh_exec antes de perceber que o artefato é inválido.
+                // A conversão para AgentLoop faz o LLM sintetizar o conteúdo REAL em runtime,
+                // com acesso ao output dos steps anteriores (web_search, read, etc.).
+                if (resolvedTool === 'write' && toolArgs?.content) {
+                    const contentStr = String(toolArgs.content);
+                    const stubMatch = WRITE_CONTENT_STUB_PATTERNS.find(p => p.test(contentStr));
+                    if (stubMatch) {
+                        log.warn(
+                            `[GoalPlanner] step ${i + 1}: write content stub detectado ` +
+                            `(${contentStr.length} chars, pattern="${stubMatch.source.slice(0, 50)}") ` +
+                            `— convertendo para AgentLoop step`
+                        );
                         resolvedTool = undefined;
                         toolArgs = undefined;
                     }

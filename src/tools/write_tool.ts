@@ -18,6 +18,22 @@ const log = createLogger('WriteTool');
 const PATH_PLACEHOLDER_PATTERN =
     /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo|caminho\/do)\b|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\//i;
 
+// CONTENT-STUB-GATE: detecta placeholder no conteúdo — impede gravação de stubs silenciosa
+// Esses padrões capturam os casos mais comuns gerados por LLMs ao criar planos com conteúdo
+// extenso: a model escreve uma descrição do conteúdo em vez do conteúdo real.
+const CONTENT_STUB_PATTERNS: RegExp[] = [
+    /\.\.\.\s*\(.*?conteúdo/i,                         // "... (conteúdo completo da aula)"
+    /\(conteúdo\s+(completo|da\s+aula|real)\b/i,        // "(conteúdo completo...)"
+    /\[conteúdo\s*(completo|real|aqui|será|abrang)/i,   // "[Conteúdo completo abrangendo...]"
+    /\[.*?completo.*?abrang/i,                          // "[...completo abrangendo...]"
+    /<html>\s*<body>\s*\.\.\./i,                        // "<html><body>..."  (stub de HTML)
+    /\[TODO[^\]]*\]/i,                                  // "[TODO: adicionar aqui]"
+    /\[inserir\s+aqui\]/i,                              // "[inserir aqui]"
+    /conteúdo será adicionado depois/i,                 // "conteúdo será adicionado depois"
+    /\(em\s+construção\)/i,                             // "(em construção)"
+    /HTML\s+Content\b|CSS\s+Content\b|JS\s+Content\b/i, // genéricos de template
+];
+
 export class WriteTool implements ToolExecutor {
     name = 'write';
     description = 'Criar ou sobrescrever um arquivo. Cria diretórios pais automaticamente. Caminhos relativos são resolvidos a partir do workspace.';
@@ -155,6 +171,24 @@ export class WriteTool implements ToolExecutor {
         }
         if (pathError) {
             return { success: false, output: '', error: pathError };
+        }
+
+        // CONTENT-STUB-GATE: falha rápido quando o conteúdo é um placeholder.
+        // Sem este gate, o GoalExecutionLoop aceita o write como "sucesso" e gasta
+        // todo o replanBudget tentando converter um arquivo inexistente (exec_command,
+        // ssh_exec, Marp, etc.) antes de perceber que o artefato é inválido.
+        const stubMatch = CONTENT_STUB_PATTERNS.find(p => p.test(content));
+        if (stubMatch) {
+            log.warn(`[CONTENT-STUB-GATE] path="${rawPath}" chars=${content.length} pattern="${stubMatch.source.slice(0, 60)}"`);
+            return {
+                success: false,
+                output: '',
+                error:
+                    `[CONTENT-STUB] Conteúdo é um placeholder, não foi gravado (${content.length} chars detectados). ` +
+                    `Para gerar documentos extensos (slides HTML, relatórios, código), OMITA 'toolName' no step — ` +
+                    `o AgentLoop sintetizará o conteúdo REAL usando dados dos steps anteriores (web_search, read, etc.). ` +
+                    `Não pré-gere o content no plano JSON quando ele depende de pesquisa ou síntese.`,
+            };
         }
 
         // Auto-fix: HTML files em /sites/ sem extensão

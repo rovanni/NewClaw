@@ -165,6 +165,20 @@ const ERROR_PATTERNS: ErrorPattern[] = [
         ],
         isRetryable: true,
     },
+    // Conteúdo placeholder gravado no write — blocker content_stub
+    // Captura o prefixo emitido pelo CONTENT-STUB-GATE do WriteTool.
+    // Orienta o GoalPlanner a usar AgentLoop (sem toolName) no lugar de write+content fixo.
+    {
+        pattern: /\[CONTENT-STUB\]/,
+        kind: 'content_stub',
+        description: (_, tool) => `Step '${tool}' gerou conteúdo placeholder — usar AgentLoop para síntese real`,
+        suggestedActions: [
+            'OMITA toolName no step de síntese — o AgentLoop gerará o conteúdo REAL com os dados dos steps anteriores',
+            'Estrutura correta: {"description": "Gere o HTML completo de slides..."} (sem toolName, sem toolArgs)',
+            'Não pré-gere content no plano JSON quando ele depende de pesquisa ou síntese',
+        ],
+        isRetryable: false,
+    },
 ];
 
 // ── GoalEvaluator ─────────────────────────────────────────────────────────────
