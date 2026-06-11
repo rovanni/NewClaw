@@ -982,6 +982,14 @@ export class GoalExecutionLoop {
                                 ` reason=all_duplicates`
                             );
                         }
+                        // S10: registra em sentArtifacts TODOS os artefatos diferidos (enviados ou
+                        // agendados para envio) para evitar reenvio pelo deliverable_check.
+                        // O DELIVERY-GUARD do AgentLoop pode enviar diretamente sem passar pela
+                        // dedup de sentArtifacts, causando duplos envios nas iterações seguintes.
+                        for (const sendArgs of cycleResult.deferredSends) {
+                            const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
+                            if (fp) sentArtifacts.add(fp);
+                        }
                     }
                     // ITEM4: rastreia writes por path para detectar duplicatas entre ciclos
                     if ((pendingStep.toolName === 'write' || pendingStep.toolName === 'edit') && pendingStep.toolArgs?.path) {
@@ -1417,6 +1425,26 @@ export class GoalExecutionLoop {
             // FIX C: propaga sends diferidos capturados do AgentLoop para o loop principal
             if (deferredSendArgs.length > 0) {
                 cycleResult.deferredSends = deferredSendArgs;
+                // S8: injeta pseudo-write attempts para artefatos criados pelo AgentLoop.
+                // Writes feitos dentro do AgentLoop são invisíveis para goal.attempts (a camada
+                // exterior só vê o step agentloop como attempt, não os writes internos).
+                // Sem isso, checkClaimsAgainstEvidence derruba achieved=true com [UNVERIFIED-CLAIM]
+                // mesmo quando o arquivo foi criado, DELIVERY-GUARD enviou e o usuário recebeu.
+                for (const sendArgs of deferredSendArgs) {
+                    const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
+                    if (!fp) continue;
+                    this.goalStore.addAttempt(goal.id, {
+                        id: `att_agentloop_write_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+                        planStepId: step.id,
+                        toolName: 'write',
+                        args: { path: fp },
+                        result: 'success',
+                        output: '[AGENTLOOP-WRITE] Arquivo gravado e entregue pelo AgentLoop',
+                        durationMs: 0,
+                        executedAt: Date.now(),
+                        cycle,
+                    });
+                }
             }
             const durationMs = Date.now() - startMs;
             log.info(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'agentloop'} outcome=${cycleResult.outcome} durationMs=${durationMs}${cycleResult.blocker ? ` blocker=${cycleResult.blocker.kind}` : ''}${deferredSendArgs.length > 0 ? ` deferred_sends=${deferredSendArgs.length}` : ''}`);
@@ -2611,22 +2639,37 @@ OU
      * enviados como entregáveis do goal atual (ex: imagens promocionais do sistema).
      */
     private async checkDeliverables(extensions: string[], goalCreatedAt: number): Promise<string[]> {
-        const execTool = this.toolRegistry.get('exec_command');
-        if (!execTool) return [];
+        // S9: scan nativo Node.js em vez de exec_command + find.
+        // Motivo: exec_command pode estar indisponível e, quando disponível, retorna caminhos
+        // relativos ao CWD do shell (diferente do CWD do Node.js) — fs.statSync falha com ENOENT
+        // e todos os arquivos aparecem como < 200B mesmo tendo 8KB+ de conteúdo real.
+        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
+        // 1 min de buffer para clock skew / arquivos iniciados antes do timestamp do goal
+        const cutoff = goalCreatedAt - 60_000;
+        const found: string[] = [];
 
-        // Calcula a idade do goal em minutos + 1 min de buffer para clock skew
-        const ageMinutes = Math.max(1, Math.ceil((Date.now() - goalCreatedAt) / 60_000) + 1);
-        const nameTests = extensions.map(e => `-name "*${e}"`).join(' -o ');
-        // -mmin -N: modificado nos últimos N minutos — só arquivos criados durante este goal
-        const cmd = `find /tmp /workspace . -maxdepth 4 -mmin -${ageMinutes} \\( ${nameTests} \\) 2>/dev/null | head -5`;
+        const scan = (dir: string, depth: number) => {
+            if (depth > 4 || found.length >= 5) return;
+            try {
+                for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                    if (found.length >= 5) break;
+                    const fullPath = path.join(dir, entry.name);
+                    if (entry.isDirectory()) {
+                        scan(fullPath, depth + 1);
+                    } else if (extensions.some(ext => entry.name.endsWith(ext))) {
+                        try {
+                            if (fs.statSync(fullPath).mtimeMs >= cutoff) {
+                                found.push(fullPath);
+                            }
+                        } catch { /* arquivo desapareceu — ignorar */ }
+                    }
+                }
+            } catch { /* diretório inacessível — ignorar */ }
+        };
 
-        try {
-            const result = await execTool.execute({ command: cmd });
-            if (!result.success || !result.output) return [];
-            return result.output.split('\n').map((l: string) => l.trim()).filter(Boolean);
-        } catch {
-            return [];
-        }
+        scan(workspaceDir, 0);
+        if (found.length < 5) scan('/tmp', 0);
+        return found;
     }
 
     private buildResult(

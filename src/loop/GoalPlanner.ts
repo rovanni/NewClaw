@@ -608,7 +608,10 @@ export class GoalPlanner {
         PromptComposer.recordPlan(prompt.length, capBlock.length, 0, runtimeContext?.length ?? 0);
 
         try {
-            const result = await this.callPlannerLLM(messages, 45_000);
+            // S7: 90s para planos iniciais — goals complexos (slides, relatórios, código extenso)
+            // precisam de mais tempo que os 45s originais. O stream aborta com 458 chars e o sistema
+            // cai no fallbackPlan (AgentLoop sem web_search), gerando slides sem pesquisa.
+            const result = await this.callPlannerLLM(messages, 90_000);
 
             if (result.status !== 'success') {
                 log.warn(`[GoalPlanner] plan failed: model=${PLANNER_MODEL} status=${result.status} raw="${result.content.slice(0, 150)}"`);
