@@ -37,6 +37,16 @@ const SHELL_UNIVERSALS = new Set([
     'sh', 'bash', 'python3', 'python', 'node', 'true', 'false', 'read',
 ]);
 
+// S5: ferramentas fundamentais do agente — suas falhas são context-específicas
+// (conteúdo inválido, rede fora, arquivo ausente), não estruturais/recorrentes.
+// Buscar historical failure hints para elas no ReflectionMemory produz falsos positivos
+// no Q2 ("web_search: Falha 100% (9/9)") quando as falhas vieram de contextos completamente
+// diferentes. A CONTENT-STUB-GATE e outros gates já cobrem as falhas reais dessas tools.
+const FUNDAMENTAL_AGENT_TOOLS = new Set([
+    'write', 'read', 'edit', 'web_search', 'send_document', 'send_message',
+    'memory_search', 'memory_write', 'list_workspace', 'analyze_workspace_groups',
+]);
+
 /**
  * Detecta comandos marp/pandoc sem arquivo de entrada posicionado ANTES das flags.
  * Causa clássica do erro "waiting data from stdin stream" no marp.
@@ -204,10 +214,13 @@ export class RiskAnalyzer {
                 risks.push(`Step "${step.description}": tool '${step.toolName}' não registrada`);
             }
 
-            const hint = this.reflectionMemory.buildContextHint(`tool_${step.toolName}`);
-            if (hint) {
-                const firstLine = hint.split('\n').find(l => l.startsWith('-')) ?? hint;
-                risks.push(`Step "${step.description}": ${firstLine.slice(0, 120)}`);
+            // S5: skip ferramentas fundamentais — histórico delas gera falsos positivos
+            if (!FUNDAMENTAL_AGENT_TOOLS.has(step.toolName)) {
+                const hint = this.reflectionMemory.buildContextHint(`tool_${step.toolName}`);
+                if (hint) {
+                    const firstLine = hint.split('\n').find(l => l.startsWith('-')) ?? hint;
+                    risks.push(`Step "${step.description}": ${firstLine.slice(0, 120)}`);
+                }
             }
         }
 

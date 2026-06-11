@@ -364,10 +364,19 @@ export class GoalExecutionLoop {
             // Sprint 3.7A: skill hints do Q2 → injeta skillContext no planner para o próximo replan
             // Isso garante que quando exec_command falha com uma ferramenta que tem skill cobrindo,
             // o GoalPlanner recebe as instruções da skill no próximo ciclo de replanning.
+            // S6: injeta TODAS as skills detectadas (não só a primeira) e prefixa com instrução
+            // explícita de AgentLoop — o modelo LLM tendia a interpretar o contexto da skill
+            // como "script para exec_command" em vez de "instrução de comportamento sem toolName".
             if (riskReport.skillHints && riskReport.skillHints.length > 0) {
-                const hint = riskReport.skillHints[0];
-                log.info(`[GoalLoop] Q2 skill context injected: skill=${hint.skillName} for next replan cycle=${cycleNumber}`);
-                this.planner.setSkillContext(hint.skillContext);
+                const allHintTexts = riskReport.skillHints.map(h =>
+                    `[SKILL: ${h.skillName}]\n` +
+                    `⚠️ USE COMO INSTRUÇÃO DE COMPORTAMENTO: OMITA toolName neste step — NÃO use exec_command para invocar esta skill.\n` +
+                    `O AgentLoop executará as instruções abaixo diretamente, sem subprocess:\n\n` +
+                    h.skillContext
+                ).join('\n\n---\n\n');
+                const skillNames = riskReport.skillHints.map(h => h.skillName).join(', ');
+                log.info(`[GoalLoop] Q2 skill context injected: skills=[${skillNames}] for next replan cycle=${cycleNumber}`);
+                this.planner.setSkillContext(allHintTexts);
             }
         } else {
             log.debug(`[GoalLoop] Q2 skipped (replan cycle=${cycleNumber} — simple plan)`);
@@ -2308,10 +2317,15 @@ OU
 {"achieved": false, "reason": "o que está faltando para concluir este marco/objetivo", "suggestions": ["ação 1", "ação 2"]}`;
 
         // H2 observabilidade: registra o input exato enviado ao validador LLM
-        const artifactsInAttempts = goal.attempts
-            .filter(a => a.result === 'success' && ['write', 'edit', 'exec_command'].includes(a.toolName))
-            .map(a => String(a.args['path'] ?? a.args['file_path'] ?? ''))
-            .filter(Boolean);
+        // S4: dedup — o mesmo arquivo pode aparecer em múltiplas tentativas bem-sucedidas
+        // (ex: write + exec_command no mesmo path). Sem dedup, o log VALIDATION-INPUT
+        // lista o mesmo artefato duas vezes e confunde análises de auditoria.
+        const artifactsInAttempts = [...new Set(
+            goal.attempts
+                .filter(a => a.result === 'success' && ['write', 'edit', 'exec_command'].includes(a.toolName))
+                .map(a => String(a.args['path'] ?? a.args['file_path'] ?? ''))
+                .filter(Boolean)
+        )];
         log.info(
             `[VALIDATION-INPUT] goal=${goal.id}` +
             ` files="${artifactsInAttempts.join(',') || '(none)'}"`  +
