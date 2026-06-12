@@ -535,7 +535,9 @@ export function detectMissingRequiredArgs(tool: string, args: Record<string, unk
 
 // ── GoalPlanner ───────────────────────────────────────────────────────────────
 
-const PLANNER_MODEL = 'gemma4:31b-cloud';
+// Configurável via PLANNER_MODEL — usar nome de modelo compatível com DEFAULT_PROVIDER
+// Ollama: 'gemma4:31b-cloud' | OpenRouter: 'google/gemini-2.0-flash' | Gemini: 'gemini-2.0-flash'
+const PLANNER_MODEL = process.env.PLANNER_MODEL ?? 'gemma4:31b-cloud';
 
 export class GoalPlanner {
     private skillContext: string | undefined;

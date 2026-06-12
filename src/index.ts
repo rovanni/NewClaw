@@ -56,7 +56,14 @@ const config = {
         execution: process.env.MODEL_EXECUTION,
         visionServer: process.env.VISION_SERVER,
         classifierModel: process.env.CLASSIFIER_MODEL,
-        classifierServer: process.env.CLASSIFIER_SERVER
+        classifierServer: process.env.CLASSIFIER_SERVER,
+        // Provider por perfil (opcional — sobrescreve DEFAULT_PROVIDER para aquele perfil)
+        provider_chat:      process.env.PROVIDER_CHAT,
+        provider_code:      process.env.PROVIDER_CODE,
+        provider_vision:    process.env.PROVIDER_VISION,
+        provider_light:     process.env.PROVIDER_LIGHT,
+        provider_analysis:  process.env.PROVIDER_ANALYSIS,
+        provider_execution: process.env.PROVIDER_EXECUTION,
     }
 };
 

@@ -744,9 +744,11 @@ export class AgentLoop {
         log.info(`[${this.ts()}] [TIMEOUT] Dynamic: ${Math.round(timeoutMs / 1000)}s (tokens≈${approxTokens}, chars=${totalChars}, scale=${Math.round(scale / 1000)}s, clamp=[${MIN_TIMEOUT / 1000}-${MAX_TIMEOUT / 1000}]s)`);
 
         if (chatProfile?.model) {
-            const provider = this.providerFactory.getProvider();
+            // Usa o provider do perfil (ex: 'gemini', 'openrouter') — se ausente, usa o defaultProvider
+            const profileProvider = chatProfile.provider;
+            const provider = this.providerFactory.getProvider(profileProvider);
             if (provider) {
-                log.info(`[${this.ts()}] Setting model ${chatProfile.model} on provider ${provider.name}`);
+                log.info(`[${this.ts()}] Setting model ${chatProfile.model} on provider ${provider.name} (profile=${chatProfile.id})`);
                 provider.setModel(chatProfile.model);
             }
         }
@@ -754,7 +756,8 @@ export class AgentLoop {
         const callStart = Date.now();
         try {
             const result = await generationQueue.add(
-                () => this.providerFactory.chatWithFallback(messages, toolDefs, undefined, timeoutMs, signal),
+                // Passa o provider do perfil como preferido — garante que o fallback começa pelo provider certo
+                () => this.providerFactory.chatWithFallback(messages, toolDefs, chatProfile?.provider, timeoutMs, signal),
                 { priority: TaskPriority.INTERACTIVE }
             );
 

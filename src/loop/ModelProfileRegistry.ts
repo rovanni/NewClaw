@@ -17,8 +17,9 @@ const log = createLogger('ModelProfileRegistry');
 // Perfil de modelos por categoria
 export interface ModelProfile {
     id: string;           // Identificador único
-    model: string;        // Nome no provider
-    server: string;       // URL do servidor
+    model: string;        // Nome do modelo no provider (ex: 'gemma4:31b-cloud', 'gpt-4o', 'google/gemini-2.0-flash')
+    server: string;       // URL do servidor (usado apenas para Ollama)
+    provider?: string;    // Provider a usar: 'ollama' | 'openrouter' | 'gemini' | 'groq' | 'deepseek' — undefined = defaultProvider
     category: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution';
     description: string;  // Descrição humana
     maxTokens?: number;   // Limite de contexto (opcional)
@@ -57,12 +58,12 @@ const DEFAULT_CONFIG: ProfileRegistryConfig = {
     classifierModel: "gemma4:31b-cloud",
     classifierServer: 'http://localhost:11434',
     profiles: [
-        { id: 'chat-primary',      model: 'glm-5.1:cloud',    server: 'http://localhost:11434', category: 'chat',      description: 'Conversa geral e raciocínio' },
-        { id: 'code-primary',      model: 'gemma4:31b-cloud',  server: 'http://localhost:11434', category: 'code',      description: 'Programação e criação de conteúdo' },
-        { id: 'light-chat',        model: 'glm-5.1:cloud',    server: 'http://localhost:11434', category: 'light',     description: 'Conversa leve e rápida' },
-        { id: 'vision-primary',    model: 'gemma4:31b-cloud',  server: 'http://localhost:11434', category: 'vision',    description: 'Análise de imagens e OCR' },
-        { id: 'analysis-primary',  model: 'kimi-k2.6:cloud',  server: 'http://localhost:11434', category: 'analysis',  description: 'Análise profunda e cripto' },
-        { id: 'execution-primary', model: 'kimi-k2.6:cloud',  server: 'http://localhost:11434', category: 'execution', description: 'Execução de ferramentas e tarefas complexas' },
+        { id: 'chat-primary',      provider: 'ollama', model: 'glm-5.1:cloud',   server: 'http://localhost:11434', category: 'chat',      description: 'Conversa geral e raciocínio' },
+        { id: 'code-primary',      provider: 'ollama', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'code',      description: 'Programação e criação de conteúdo' },
+        { id: 'light-chat',        provider: 'ollama', model: 'glm-5.1:cloud',   server: 'http://localhost:11434', category: 'light',     description: 'Conversa leve e rápida' },
+        { id: 'vision-primary',    provider: 'ollama', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'vision',    description: 'Análise de imagens e OCR' },
+        { id: 'analysis-primary',  provider: 'ollama', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'analysis',  description: 'Análise profunda e cripto' },
+        { id: 'execution-primary', provider: 'ollama', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'execution', description: 'Execução de ferramentas e tarefas complexas' },
     ],
     fallbackRules: [
         {
@@ -98,15 +99,19 @@ export class ModelProfileRegistry {
         this.providerFactory = providerFactory || null;
 
         if (config) {
-            // Mapeia modelos individuais vindos do Dashboard/Env para os perfis
+            // Mapeia modelos e providers individuais vindos do Dashboard/Env para os perfis
             const categories: Array<Category> = ['chat', 'code', 'vision', 'light', 'analysis', 'execution'];
             for (const cat of categories) {
+                const profile = this.config.profiles.find(p => p.category === cat);
+                if (!profile) continue;
                 if (config[cat]) {
-                    const profile = this.config.profiles.find(p => p.category === cat);
-                    if (profile) {
-                        log.info(`Overriding ${cat} model with: ${config[cat]}`);
-                        profile.model = config[cat];
-                    }
+                    log.info(`Overriding ${cat} model: ${config[cat]}`);
+                    profile.model = config[cat];
+                }
+                const providerKey = `provider_${cat}`;
+                if (config[providerKey]) {
+                    log.info(`Overriding ${cat} provider: ${config[providerKey]}`);
+                    profile.provider = config[providerKey];
                 }
             }
 

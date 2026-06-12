@@ -28,6 +28,15 @@ export class ProviderFactory {
     private providers: Map<string, ILLMProvider> = new Map();
     private defaultProvider: string;
     public readonly circuitBreakers: typeof circuitRegistry;
+    // Credenciais guardadas para criar instâncias per-model sem mutar o provider compartilhado
+    private creds: {
+        geminiKey?: string;
+        deepseekKey?: string;
+        groqKey?: string;
+        openrouterKey?: string;
+        ollamaUrl: string;
+        ollamaApiKey: string;
+    };
 
     constructor(config: {
         geminiKey?: string;
@@ -41,11 +50,19 @@ export class ProviderFactory {
     }) {
         this.defaultProvider = config.defaultProvider || 'gemini';
         this.circuitBreakers = circuitRegistry;
+        this.creds = {
+            geminiKey:      config.geminiKey,
+            deepseekKey:    config.deepseekKey,
+            groqKey:        config.groqKey,
+            openrouterKey:  config.openrouterKey,
+            ollamaUrl:      config.ollamaUrl      || 'http://localhost:11434',
+            ollamaApiKey:   config.ollamaApiKey   || '',
+        };
 
-        if (config.geminiKey) this.providers.set('gemini', new GeminiProvider(config.geminiKey));
-        if (config.deepseekKey) this.providers.set('deepseek', new DeepSeekProvider(config.deepseekKey));
-        if (config.groqKey) this.providers.set('groq', new GroqProvider(config.groqKey));
-        if (config.openrouterKey) this.providers.set('openrouter', new OpenRouterProvider(config.openrouterKey));
+        if (config.geminiKey)      this.providers.set('gemini',      new GeminiProvider(config.geminiKey));
+        if (config.deepseekKey)    this.providers.set('deepseek',    new DeepSeekProvider(config.deepseekKey));
+        if (config.groqKey)        this.providers.set('groq',        new GroqProvider(config.groqKey));
+        if (config.openrouterKey)  this.providers.set('openrouter',  new OpenRouterProvider(config.openrouterKey));
 
         this.providers.set('ollama', new OllamaProvider(
             config.ollamaUrl || 'http://localhost:11434',
@@ -65,10 +82,34 @@ export class ProviderFactory {
         return provider;
     }
 
-    getProviderWithModel(model: string): ILLMProvider {
-        const ollamaProvider = this.providers.get('ollama') as OllamaProvider;
-        if (!ollamaProvider) return this.getProvider();
-        return new OllamaProvider(ollamaProvider.getBaseUrl(), model);
+    /**
+     * Cria uma instância dedicada do provider ativo com o modelo especificado.
+     * Respeita defaultProvider — Gemini, OpenRouter, Groq etc. recebem seu próprio
+     * modelo em vez de sempre criar um OllamaProvider.
+     * providerName opcional permite sobrescrever o provider para um perfil específico.
+     */
+    getProviderWithModel(model: string, providerName?: string): ILLMProvider {
+        const target = providerName ?? this.defaultProvider;
+        switch (target) {
+            case 'openrouter':
+                if (this.creds.openrouterKey)
+                    return new OpenRouterProvider(this.creds.openrouterKey, model);
+                break;
+            case 'gemini':
+                if (this.creds.geminiKey)
+                    return new GeminiProvider(this.creds.geminiKey, model);
+                break;
+            case 'groq':
+                if (this.creds.groqKey)
+                    return new GroqProvider(this.creds.groqKey, model);
+                break;
+            case 'deepseek':
+                if (this.creds.deepseekKey)
+                    return new DeepSeekProvider(this.creds.deepseekKey, model);
+                break;
+        }
+        // Ollama (padrão) ou fallback quando a key do provider alvo não está configurada
+        return new OllamaProvider(this.creds.ollamaUrl, model, this.creds.ollamaApiKey);
     }
 
     getAvailableProviders(): string[] { return Array.from(this.providers.keys()); }

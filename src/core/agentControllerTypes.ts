@@ -39,5 +39,12 @@ export interface NewClawConfig {
         visionServer?: string;
         classifierModel?: string;
         classifierServer?: string;
+        // Provider por perfil — se ausente, usa defaultProvider
+        provider_chat?: string;
+        provider_code?: string;
+        provider_vision?: string;
+        provider_light?: string;
+        provider_analysis?: string;
+        provider_execution?: string;
     };
 }
