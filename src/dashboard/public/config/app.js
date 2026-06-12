@@ -77,10 +77,11 @@ async function doSave() {
   };
 
   // Include API keys only if user typed something
-  if (c.ollamaApiKey)  config.ollamaApiKey  = c.ollamaApiKey;
-  if (c.geminiKey)     config.geminiKey     = c.geminiKey;
-  if (c.deepseekKey)   config.deepseekKey   = c.deepseekKey;
-  if (c.groqKey)       config.groqKey       = c.groqKey;
+  if (c.ollamaApiKey)    config.ollamaApiKey    = c.ollamaApiKey;
+  if (c.geminiKey)       config.geminiKey       = c.geminiKey;
+  if (c.deepseekKey)     config.deepseekKey     = c.deepseekKey;
+  if (c.groqKey)         config.groqKey         = c.groqKey;
+  if (c.openrouterKey)   config.openrouterKey   = c.openrouterKey;
 
   // Auto-pull/register missing models
   const toCheck = new Set();
@@ -180,10 +181,11 @@ async function loadConfig() {
       ollamaUrl:              c.ollamaUrl    || 'http://localhost:11434',
       ollamaModel:            c.ollamaModel  || 'glm-5.1:cloud',
       telegramAllowedUserIds: c.telegramAllowedUserIds || '',
-      hasGeminiKey:           c.hasGeminiKey   || false,
-      hasDeepseekKey:         c.hasDeepseekKey || false,
-      hasGroqKey:             c.hasGroqKey     || false,
-      hasOllamaApiKey:        c.hasOllamaApiKey|| false,
+      hasGeminiKey:           c.hasGeminiKey      || false,
+      hasDeepseekKey:         c.hasDeepseekKey    || false,
+      hasGroqKey:             c.hasGroqKey        || false,
+      hasOpenrouterKey:       c.hasOpenrouterKey  || false,
+      hasOllamaApiKey:        c.hasOllamaApiKey   || false,
       currentModel:           c.currentModel  || c.ollamaModel || '—',
       modelRouter:            c.modelRouter   || {},
     });

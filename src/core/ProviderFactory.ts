@@ -446,6 +446,21 @@ export class ProviderFactory {
         return [...sorted, ...remaining];
     }
 
+    /**
+     * Atualiza uma API key em runtime (chamado pelo dashboard após o usuário salvar).
+     * Substitui a credential em creds e recria a instância do provider no mapa.
+     */
+    updateCredential(key: 'geminiKey' | 'deepseekKey' | 'groqKey' | 'openrouterKey', value: string): void {
+        this.creds[key] = value;
+        switch (key) {
+            case 'geminiKey':     this.providers.set('gemini',     new GeminiProvider(value));        break;
+            case 'deepseekKey':   this.providers.set('deepseek',   new DeepSeekProvider(value));      break;
+            case 'groqKey':       this.providers.set('groq',       new GroqProvider(value));          break;
+            case 'openrouterKey': this.providers.set('openrouter', new OpenRouterProvider(value));    break;
+        }
+        log.info(`Credential updated and provider recreated: ${key.replace('Key', '')}`);
+    }
+
     getOllamaProvider(): OllamaProvider | undefined {
         const p = this.providers.get('ollama');
         return p instanceof OllamaProvider ? p : undefined;

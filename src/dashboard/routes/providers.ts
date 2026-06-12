@@ -54,10 +54,11 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
         res.json({
             success: true,
             providers: {
-                gemini: { available: !!ctx.config.geminiApiKey, name: 'Google Gemini' },
-                deepseek: { available: !!ctx.config.deepseekApiKey, name: 'DeepSeek' },
-                groq: { available: !!ctx.config.groqApiKey, name: 'Groq' },
-                ollama: { available: true, name: 'Ollama (Local/Cloud)', url: ctx.config.ollamaUrl, models: allModels },
+                gemini:      { available: !!ctx.config.geminiApiKey,      name: 'Google Gemini' },
+                deepseek:    { available: !!ctx.config.deepseekApiKey,    name: 'DeepSeek' },
+                groq:        { available: !!ctx.config.groqApiKey,        name: 'Groq' },
+                openrouter:  { available: !!ctx.config.openrouterApiKey,  name: 'OpenRouter' },
+                ollama:      { available: true, name: 'Ollama (Local/Cloud)', url: ctx.config.ollamaUrl, models: allModels },
             },
             currentProvider: ctx.config.defaultProvider,
             currentModel: currentModel || 'unknown'

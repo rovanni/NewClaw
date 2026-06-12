@@ -79,6 +79,20 @@ export function render(container) {
             </div>
           </div>
         </div>
+
+        <div class="provider-card">
+          <div class="provider-head">
+            <div class="provider-name">🔀 OpenRouter</div>
+            <div class="provider-health"><span class="dot" id="pv-openrouterDot"></span></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">API Key</label>
+            <div class="api-key-group">
+              <input type="password" class="form-input" id="pv-openrouterKey" placeholder="sk-or-...">
+              <span class="api-key-status" id="pv-openrouterStatus">—</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>`;
 
@@ -89,10 +103,11 @@ export function render(container) {
   // Populate from configStore
   el('pv-ollamaUrl').value    = s.ollamaUrl    || 'http://localhost:11434';
   el('pv-ollamaApiKey').value = '';
-  setKeyStatus('pv-ollamaKeyStatus', 'pv-ollamaDot', s.hasOllamaApiKey);
-  setKeyStatus('pv-geminiStatus',    'pv-geminiDot',   s.hasGeminiKey);
-  setKeyStatus('pv-deepseekStatus',  'pv-deepseekDot', s.hasDeepseekKey);
-  setKeyStatus('pv-groqStatus',      'pv-groqDot',     s.hasGroqKey);
+  setKeyStatus('pv-ollamaKeyStatus',    'pv-ollamaDot',      s.hasOllamaApiKey);
+  setKeyStatus('pv-geminiStatus',       'pv-geminiDot',      s.hasGeminiKey);
+  setKeyStatus('pv-deepseekStatus',     'pv-deepseekDot',    s.hasDeepseekKey);
+  setKeyStatus('pv-groqStatus',         'pv-groqDot',        s.hasGroqKey);
+  setKeyStatus('pv-openrouterStatus',   'pv-openrouterDot',  s.hasOpenrouterKey);
 
   // Populate Ollama health from providersStore
   const ps = providersStore.snap();
@@ -104,9 +119,10 @@ export function render(container) {
   // Bind inputs to configStore
   el('pv-ollamaUrl').addEventListener('input',    e => cs.set('ollamaUrl', e.target.value));
   el('pv-ollamaApiKey').addEventListener('input', e => cs.set('ollamaApiKey', e.target.value));
-  el('pv-geminiKey').addEventListener('input',    e => cs.set('geminiKey', e.target.value));
-  el('pv-deepseekKey').addEventListener('input',  e => cs.set('deepseekKey', e.target.value));
-  el('pv-groqKey').addEventListener('input',      e => cs.set('groqKey', e.target.value));
+  el('pv-geminiKey').addEventListener('input',      e => cs.set('geminiKey', e.target.value));
+  el('pv-deepseekKey').addEventListener('input',    e => cs.set('deepseekKey', e.target.value));
+  el('pv-groqKey').addEventListener('input',        e => cs.set('groqKey', e.target.value));
+  el('pv-openrouterKey').addEventListener('input',  e => cs.set('openrouterKey', e.target.value));
 
   // Test Ollama button
   el('pv-testOllama').addEventListener('click', testOllama);

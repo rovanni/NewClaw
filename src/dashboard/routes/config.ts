@@ -33,10 +33,23 @@ export function persistConfigToEnv(ctx: DashboardContext): void {
             'VISION_SERVER': ctx.config.modelRouter?.visionServer || '',
             'CLASSIFIER_MODEL': ctx.config.modelRouter?.classifierModel || '',
             'CLASSIFIER_SERVER': ctx.config.modelRouter?.classifierServer || '',
+            'PROVIDER_CHAT':      ctx.config.modelRouter?.provider_chat      || '',
+            'PROVIDER_CODE':      ctx.config.modelRouter?.provider_code      || '',
+            'PROVIDER_VISION':    ctx.config.modelRouter?.provider_vision    || '',
+            'PROVIDER_LIGHT':     ctx.config.modelRouter?.provider_light     || '',
+            'PROVIDER_ANALYSIS':  ctx.config.modelRouter?.provider_analysis  || '',
+            'PROVIDER_EXECUTION': ctx.config.modelRouter?.provider_execution || '',
+            'PLANNER_MODEL':      ctx.config.modelRouter?.plannerModel       || '',
+            'RISK_MODEL':         ctx.config.modelRouter?.riskModel          || '',
+            'OBSERVER_MODEL':     ctx.config.modelRouter?.observerModel      || '',
         };
 
-        if (ctx.config.ollamaApiKey) updates['OLLAMA_API_KEY'] = ctx.config.ollamaApiKey;
-        if (ctx.config.systemPrompt) updates['SYSTEM_PROMPT'] = ctx.config.systemPrompt;
+        if (ctx.config.ollamaApiKey)      updates['OLLAMA_API_KEY']      = ctx.config.ollamaApiKey;
+        if (ctx.config.geminiApiKey)      updates['GEMINI_API_KEY']      = ctx.config.geminiApiKey;
+        if (ctx.config.deepseekApiKey)    updates['DEEPSEEK_API_KEY']    = ctx.config.deepseekApiKey;
+        if (ctx.config.groqApiKey)        updates['GROQ_API_KEY']        = ctx.config.groqApiKey;
+        if (ctx.config.openrouterApiKey)  updates['OPENROUTER_API_KEY']  = ctx.config.openrouterApiKey;
+        if (ctx.config.systemPrompt)      updates['SYSTEM_PROMPT']       = ctx.config.systemPrompt;
 
         try {
             const mm = ctx.controller ? (ctx.controller as unknown as { memory?: { db?: import('better-sqlite3').Database } }).memory : null;
@@ -84,6 +97,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
                 hasGeminiKey: !!ctx.config.geminiApiKey,
                 hasDeepseekKey: !!ctx.config.deepseekApiKey,
                 hasGroqKey: !!ctx.config.groqApiKey,
+                hasOpenrouterKey: !!ctx.config.openrouterApiKey,
                 hasOllamaApiKey: !!ctx.config.ollamaApiKey,
                 modelRouter: ctx.config.modelRouter || {}
             }
@@ -91,7 +105,8 @@ export function createConfigRouter(ctx: DashboardContext): Router {
     });
 
     router.post('/', (req: Request, res: Response) => {
-        const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl, telegramAllowedUserIds, modelRouter } = req.body;
+        const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl, telegramAllowedUserIds, modelRouter,
+                geminiKey, deepseekKey, groqKey, openrouterKey } = req.body;
 
         log.info(`POST /api/config — ollamaModel="${ollamaModel}" provider="${defaultProvider}"`);
 
@@ -145,6 +160,11 @@ export function createConfigRouter(ctx: DashboardContext): Router {
             log.info(`ModelProfileRegistry updated: ${JSON.stringify(ctx.config.modelRouter)}`);
         }
 
+        if (geminiKey)     { ctx.config.geminiApiKey     = geminiKey;     ctx.providerFactory?.updateCredential('geminiKey', geminiKey); }
+        if (deepseekKey)   { ctx.config.deepseekApiKey   = deepseekKey;   ctx.providerFactory?.updateCredential('deepseekKey', deepseekKey); }
+        if (groqKey)       { ctx.config.groqApiKey       = groqKey;       ctx.providerFactory?.updateCredential('groqKey', groqKey); }
+        if (openrouterKey) { ctx.config.openrouterApiKey = openrouterKey; ctx.providerFactory?.updateCredential('openrouterKey', openrouterKey); }
+
         if (ctx.controller) {
             const loop = (ctx.controller as unknown as { agentLoop: { updateConfig?: (cfg: Record<string, unknown>) => void } }).agentLoop;
             if (loop && typeof loop.updateConfig === 'function') {
@@ -171,6 +191,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
             hasGeminiKey: !!ctx.config.geminiApiKey,
             hasDeepseekKey: !!ctx.config.deepseekApiKey,
             hasGroqKey: !!ctx.config.groqApiKey,
+            hasOpenrouterKey: !!ctx.config.openrouterApiKey,
             hasOllamaApiKey: !!ctx.config.ollamaApiKey,
             modelRouter: ctx.config.modelRouter || {}
         };

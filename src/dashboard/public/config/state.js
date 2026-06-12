@@ -36,9 +36,9 @@ export const configStore = new Store({
     chat: '', code: '', vision: '', light: '', analysis: '', execution: '',
     classifierModel: '', classifierServer: '', visionServer: '',
   },
-  hasGeminiKey: false, hasDeepseekKey: false, hasGroqKey: false, hasOllamaApiKey: false,
+  hasGeminiKey: false, hasDeepseekKey: false, hasGroqKey: false, hasOpenrouterKey: false, hasOllamaApiKey: false,
   currentModel: '—',
-  geminiKey: '', deepseekKey: '', groqKey: '',
+  geminiKey: '', deepseekKey: '', groqKey: '', openrouterKey: '',
 });
 
 export const runtimeStore = new Store({
