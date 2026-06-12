@@ -49,9 +49,11 @@ export class MemoryAdminTool implements ToolExecutor {
     };
 
     private repo: MemoryGraphRepository;
+    private memoryManager: MemoryManager;
 
     constructor(memoryManager: MemoryManager) {
         this.repo = memoryManager.getGraphRepository();
+        this.memoryManager = memoryManager;
     }
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
@@ -190,7 +192,7 @@ export class MemoryAdminTool implements ToolExecutor {
         for (const node of nodes) {
             const text = `${node.name}: ${(node.content || '').slice(0, 300)}`;
             try {
-                const resp = await fetch('http://localhost:11434/api/embeddings', {
+                const resp = await fetch(`${this.memoryManager.getOllamaUrl()}/api/embeddings`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ model: 'nomic-embed-text:latest', prompt: text }),

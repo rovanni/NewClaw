@@ -33,6 +33,7 @@ export function persistConfigToEnv(ctx: DashboardContext): void {
             'VISION_SERVER': ctx.config.modelRouter?.visionServer || '',
             'CLASSIFIER_MODEL': ctx.config.modelRouter?.classifierModel || '',
             'CLASSIFIER_SERVER': ctx.config.modelRouter?.classifierServer || '',
+            'CUSTOM_MODELS':      (ctx.config.customModels || []).join(','),
             'PROVIDER_CHAT':      ctx.config.modelRouter?.provider_chat      || '',
             'PROVIDER_CODE':      ctx.config.modelRouter?.provider_code      || '',
             'PROVIDER_VISION':    ctx.config.modelRouter?.provider_vision    || '',

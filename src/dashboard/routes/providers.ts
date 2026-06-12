@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
-import { DashboardContext, ExtendedConfig } from './types';
+import { DashboardContext } from './types';
+import { persistConfigToEnv } from './config';
 
 const log = createLogger('Dashboardserver');
 
@@ -42,7 +43,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
         const currentModel = ctx.providerFactory?.getCurrentModel() || ctx.config.ollamaModel;
         if (currentModel) userModels.push(currentModel);
 
-        const customModels: string[] = (ctx.config as ExtendedConfig).customModels || [];
+        const customModels: string[] = ctx.config.customModels || [];
 
         const allModels = [...new Set([
             ...ollamaModels,
@@ -68,11 +69,12 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
     router.post('/models/add', (req: Request, res: Response) => {
         const { model } = req.body;
         if (!model || !model.trim()) return res.status(400).json({ error: 'Model name required' });
-        const customModels: string[] = (ctx.config as ExtendedConfig).customModels || [];
+        const customModels: string[] = ctx.config.customModels || [];
         const name = model.trim();
         if (!customModels.includes(name)) {
             customModels.push(name);
-            (ctx.config as ExtendedConfig).customModels = customModels;
+            ctx.config.customModels = customModels;
+            persistConfigToEnv(ctx);
         }
         res.json({ success: true, message: `Model "${name}" added to list` });
     });

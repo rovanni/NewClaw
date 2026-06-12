@@ -490,7 +490,7 @@ export class MemoryWriteTool implements ToolExecutor {
     private async regenerateEmbedding(nodeId: string, node: MemoryNode): Promise<void> {
         try {
             const text = `${node.name}: ${(node.content || '').slice(0, 200)}`;
-            const resp = await fetch('http://localhost:11434/api/embeddings', {
+            const resp = await fetch(`${this.memoryManager.getOllamaUrl()}/api/embeddings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model: 'nomic-embed-text:latest', prompt: text }),

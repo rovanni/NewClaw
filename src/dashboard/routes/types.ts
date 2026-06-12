@@ -20,6 +20,6 @@ export interface DashboardContext {
     config: NewClawConfig;
 }
 
-export interface ExtendedConfig extends NewClawConfig { customModels?: string[] }
+export type ExtendedConfig = NewClawConfig
 export interface DashboardNode { id: string; type: string; name: string; content: string; [key: string]: unknown }
 export interface DashboardEdge { from_node: string; to_node: string; relation: string; weight: number; confidence?: number; [key: string]: unknown }

@@ -47,6 +47,7 @@ const config = {
     ownerUserId: process.env.OWNER_USER_ID || '',
     ownerLocked: process.env.OWNER_LOCKED === 'true',
     dashboardPort: parseInt(process.env.DASHBOARD_PORT || '3090'),
+    customModels: (process.env.CUSTOM_MODELS || '').split(',').map(m => m.trim()).filter(m => m.length > 0),
     modelRouter: {
         chat: process.env.MODEL_CHAT,
         code: process.env.MODEL_CODE,

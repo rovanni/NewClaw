@@ -29,6 +29,7 @@ export interface NewClawConfig {
     ownerUserId?: string;
     ownerLocked?: boolean;
     systemPrompt?: string;
+    customModels?: string[];
     modelRouter?: {
         chat?: string;
         code?: string;

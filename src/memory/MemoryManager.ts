@@ -57,6 +57,7 @@ export class MemoryManager {
     private proceduralMemoryInstance: ProceduralMemoryService | null = null;
     private classifier: ConfidenceClassifier;
     private inverseRelations: Record<string, string> = {};
+    private ollamaUrl: string;
 
     // Re-export ontology so external code (e.g. dashboard) can still access them
     static readonly NODE_TYPES = graph.NODE_TYPES;
@@ -126,7 +127,10 @@ export class MemoryManager {
         return this.cognitiveReflectionEngineInstance;
     }
 
-    constructor(dbOrPath: string | Database.Database = './data/newclaw.db') {
+    getOllamaUrl(): string { return this.ollamaUrl; }
+
+    constructor(dbOrPath: string | Database.Database = './data/newclaw.db', ollamaUrl: string = process.env.OLLAMA_URL || 'http://localhost:11434') {
+        this.ollamaUrl = ollamaUrl;
         if (typeof dbOrPath === 'string') {
             const dir = path.dirname(dbOrPath);
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -470,7 +474,7 @@ export class MemoryManager {
 
     private async generateEmbedding(text: string): Promise<Float64Array | null> {
         try {
-            const response = await fetch('http://localhost:11434/api/embeddings', {
+            const response = await fetch(`${this.ollamaUrl}/api/embeddings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model: 'nomic-embed-text:latest', prompt: text })

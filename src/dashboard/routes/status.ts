@@ -41,7 +41,7 @@ export function healthHandler(ctx: DashboardContext) {
 
         let ollamaStatus = 'unknown';
         try {
-            const ollamaRes = await fetch('http://localhost:11434/api/tags', {
+            const ollamaRes = await fetch(`${ctx.config.ollamaUrl || 'http://localhost:11434'}/api/tags`, {
                 signal: AbortSignal.timeout(3000),
             });
             ollamaStatus = ollamaRes.ok ? 'healthy' : 'degraded';

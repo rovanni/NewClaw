@@ -3,6 +3,7 @@ import { errorMessage } from '../shared/errors';
 import type { NormalizedMessage, ChannelAttachment } from '../channels/ChannelAdapter';
 import type { MessageBus } from '../channels/MessageBus';
 import type { MemoryManager } from '../memory/MemoryManager';
+import type { ProviderFactory } from './ProviderFactory';
 import fsStatic from 'fs';
 import pathStatic from 'path';
 
@@ -54,6 +55,7 @@ export function refreshWorkspaceIndex(memory: MemoryManager): void {
 export interface VisionProfile {
     server: string;
     model: string;
+    provider?: string;
 }
 
 /**
@@ -208,7 +210,8 @@ export async function handleDocumentAttachment(
     attachment: ChannelAttachment,
     messageBus: MessageBus,
     memory?: MemoryManager,
-    visionProfile?: VisionProfile | null
+    visionProfile?: VisionProfile | null,
+    providerFactory?: ProviderFactory
 ): Promise<string | null> {
     try {
         const channel = msg.channel;
@@ -257,7 +260,7 @@ export async function handleDocumentAttachment(
                 const mimeInfo = attachment.mimeType ? ` (${attachment.mimeType})` : '';
                 documentLog.info('image_document_detected', `[VISION] image detected via document: ${safeFileName}${mimeInfo}`);
                 documentLog.info('image_processing', `[VISION] processing image: ${safeFileName}`);
-                const visionDescription = await processVision(fileBuffer, safeFileName, visionProfile);
+                const visionDescription = await processVision(fileBuffer, safeFileName, visionProfile, providerFactory);
                 documentLog.info('image_analysis_complete', `[VISION] analysis completed: ${safeFileName} (${visionDescription.length} chars)`);
                 msg.text = (msg.text || '') + `\n[IMAGEM RECEBIDA: ${safeFileName}]\n[DESCRIÇÃO DA VISÃO]: ${visionDescription}\n`;
             } else {
@@ -280,7 +283,8 @@ export async function handleDocumentAttachment(
 export async function processVision(
     fileBuffer: Buffer,
     fileName: string,
-    visionProfile: VisionProfile | null
+    visionProfile: VisionProfile | null,
+    providerFactory?: ProviderFactory
 ): Promise<string> {
     if (!visionProfile) {
         visionLog.warn('vision_not_configured', 'Perfil de visão não encontrado no ModelProfileRegistry.');
@@ -289,8 +293,9 @@ export async function processVision(
     try {
         visionLog.info('vision_start', `Analisando imagem ${fileName} com o modelo ${visionProfile.model}...`);
         const base64Image = fileBuffer.toString('base64');
-        const { OllamaProvider } = await import('./ProviderFactory');
-        const visionProvider = new OllamaProvider(visionProfile.server, visionProfile.model);
+        const visionProvider = providerFactory
+            ? providerFactory.getProviderWithModel(visionProfile.model, visionProfile.provider)
+            : new (await import('./ProviderFactory')).OllamaProvider(visionProfile.server, visionProfile.model);
         const response = await visionProvider.chat([
             {
                 role: 'user',
@@ -311,7 +316,8 @@ export async function handlePhotoAttachment(
     msg: NormalizedMessage,
     attachment: ChannelAttachment,
     messageBus: MessageBus,
-    visionProfile: VisionProfile | null
+    visionProfile: VisionProfile | null,
+    providerFactory?: ProviderFactory
 ): Promise<string | null> {
     try {
         const channel = msg.channel;
@@ -347,7 +353,7 @@ export async function handlePhotoAttachment(
             await fs.writeFile(targetPath, fileBuffer);
             visionLog.info('photo_saved', `Saved to ${targetPath}`, { path: targetPath, size: fileBuffer.length });
 
-            const visionDescription = await processVision(fileBuffer, safeFileName, visionProfile);
+            const visionDescription = await processVision(fileBuffer, safeFileName, visionProfile, providerFactory);
             msg.text = (msg.text || '') + `\n[IMAGEM RECEBIDA: ${safeFileName}]\n[DESCRIÇÃO DA VISÃO]: ${visionDescription}\n`;
             return null;
         }

@@ -230,6 +230,21 @@ export class AgentLoop {
     }
 
     /**
+     * Aplica mudanças de configuração em runtime (chamado pelo dashboard após POST /api/config).
+     * Reconstrói o ModelProfileRegistry quando modelRouter muda para que novos modelos/providers
+     * entrem em vigor sem restart.
+     */
+    updateConfig(cfg: { maxIterations?: number; systemPrompt?: string; modelRouter?: Record<string, string | undefined> }): void {
+        if (cfg.modelRouter) {
+            this.profileRegistry = new ModelProfileRegistry(
+                cfg.modelRouter as Partial<import('./ModelProfileRegistry').ProfileRegistryConfig> & Record<string, string>,
+                this.providerFactory
+            );
+            log.info('[updateConfig] ModelProfileRegistry reloaded with updated modelRouter');
+        }
+    }
+
+    /**
      * Returns true for exec_command calls that are read-only and safe to run without user authorization.
      * Multi-line scripts and any command with destructive patterns always require authorization.
      */

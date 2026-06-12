@@ -146,7 +146,7 @@ export class AgentController {
             ` recovered=false`
         );
 
-        this.memory = new MemoryManager(this.db);
+        this.memory = new MemoryManager(this.db, config.ollamaUrl);
         this.memoryFacade = this.memory.getFacade();
         bootstrapDomains(this.memory);
 
@@ -331,11 +331,11 @@ export class AgentController {
             transcribeAttachment(msg, attachment, this.messageBus, tmpDir));
         this.messageBus.registerMediaHandler('document', async (msg, attachment) => {
             const profile = this.agentLoop.getProfileRegistry().getProfileByCategory('vision');
-            return handleDocumentAttachment(msg, attachment, this.messageBus, this.memory, profile ?? null);
+            return handleDocumentAttachment(msg, attachment, this.messageBus, this.memory, profile ?? null, this.providerFactory);
         });
         this.messageBus.registerMediaHandler('photo', async (msg, attachment) => {
             const profile = this.agentLoop.getProfileRegistry().getProfileByCategory('vision');
-            return handlePhotoAttachment(msg, attachment, this.messageBus, profile ?? null);
+            return handlePhotoAttachment(msg, attachment, this.messageBus, profile ?? null, this.providerFactory);
         });
 
         if (config.discordBotToken) {
