@@ -35,6 +35,9 @@ export const configStore = new Store({
   modelRouter: {
     chat: '', code: '', vision: '', light: '', analysis: '', execution: '',
     classifierModel: '', classifierServer: '', visionServer: '',
+    provider_chat: '', provider_code: '', provider_vision: '',
+    provider_light: '', provider_analysis: '', provider_execution: '',
+    plannerModel: '', riskModel: '', observerModel: '',
   },
   hasGeminiKey: false, hasDeepseekKey: false, hasGroqKey: false, hasOpenrouterKey: false, hasOllamaApiKey: false,
   currentModel: '—',

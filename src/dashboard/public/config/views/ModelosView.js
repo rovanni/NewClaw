@@ -79,6 +79,7 @@ export function render(container) {
             <select class="form-select" id="ml-defaultProvider" style="max-width:280px;">
               <option value="ollama">Ollama (Local + Cloud)</option>
               <option value="gemini">Google Gemini</option>
+              <option value="openrouter">🔀 OpenRouter</option>
               <option value="deepseek">DeepSeek</option>
               <option value="groq">Groq</option>
             </select>
@@ -125,6 +126,48 @@ export function render(container) {
           <div class="form-group">
             <label class="form-label">${t('vision_server_label')}</label>
             <input type="text" class="form-input" id="ml-visionServer" placeholder="http://localhost:11434" style="max-width:320px;">
+          </div>
+        </div>
+      </details>
+
+      <!-- Provider por perfil -->
+      <details class="cfg-details">
+        <summary>${t('provider_per_profile_title') || 'Provider por Perfil (opcional)'}</summary>
+        <div class="cfg-details-body">
+          <div class="form-hint" style="margin-bottom:12px;">
+            ${t('provider_per_profile_hint') || 'Sobrescreve o provider padrão para cada categoria. Deixe em branco para usar o provider padrão.'}
+          </div>
+          <div class="route-grid">
+            ${providerCard('provider_chat',      '💬', 'Chat')}
+            ${providerCard('provider_code',      '💻', t('route_code_cat') || 'Código')}
+            ${providerCard('provider_vision',    '👁️', t('route_vision_cat') || 'Visão')}
+            ${providerCard('provider_light',     '⚡', t('route_light_cat') || 'Leve')}
+            ${providerCard('provider_analysis',  '📊', t('route_analysis_cat') || 'Análise')}
+            ${providerCard('provider_execution', '🧠', t('route_execution_cat') || 'Execução')}
+          </div>
+        </div>
+      </details>
+
+      <!-- Modelos dos componentes internos -->
+      <details class="cfg-details">
+        <summary>${t('internal_models_title') || 'Modelos dos Componentes Internos'}</summary>
+        <div class="cfg-details-body">
+          <div class="form-hint" style="margin-bottom:12px;">
+            ${t('internal_models_hint') || 'Modelos usados pelo GoalPlanner, RiskAnalyzer e ObserverValidator. Compatíveis com o provider padrão.'}
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">GoalPlanner</label>
+              <input type="text" class="form-input" id="ml-plannerModel" placeholder="gemma4:31b-cloud" style="max-width:240px;">
+            </div>
+            <div class="form-group">
+              <label class="form-label">RiskAnalyzer</label>
+              <input type="text" class="form-input" id="ml-riskModel" placeholder="gemma4:31b-cloud" style="max-width:240px;">
+            </div>
+            <div class="form-group">
+              <label class="form-label">ObserverValidator</label>
+              <input type="text" class="form-input" id="ml-observerModel" placeholder="qwen3.5:cloud" style="max-width:240px;">
+            </div>
           </div>
         </div>
       </details>
@@ -183,6 +226,30 @@ export function render(container) {
     cs.set('modelRouter', mr);
   });
 
+  // Bind per-profile provider selects
+  ['chat','code','vision','light','analysis','execution'].forEach(cat => {
+    const sel = el(`ml-prov-${cat}`);
+    if (!sel) return;
+    sel.value = r[`provider_${cat}`] || '';
+    sel.addEventListener('change', e => {
+      const mr = { ...cs.get('modelRouter') };
+      mr[`provider_${cat}`] = e.target.value || undefined;
+      cs.set('modelRouter', mr);
+    });
+  });
+
+  // Bind internal component models
+  el('ml-plannerModel').value  = r.plannerModel  || '';
+  el('ml-riskModel').value     = r.riskModel     || '';
+  el('ml-observerModel').value = r.observerModel || '';
+  ['plannerModel','riskModel','observerModel'].forEach(key => {
+    el(`ml-${key}`).addEventListener('input', e => {
+      const mr = { ...cs.get('modelRouter') };
+      mr[key] = e.target.value;
+      cs.set('modelRouter', mr);
+    });
+  });
+
   // Pull chips
   container.querySelectorAll('.chip[data-pull]').forEach(chip => {
     chip.addEventListener('click', () => doPull(chip.dataset.pull));
@@ -218,6 +285,25 @@ function routeCard(id, icon, label, sub, placeholder) {
         <svg class="msa" width="11" height="11" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
         <div class="model-dropdown" id="dropdown-${id}"></div>
       </div>
+    </div>`;
+}
+
+function providerCard(key, icon, label) {
+  const cat = key.replace('provider_', '');
+  return `
+    <div class="route-card">
+      <div class="route-card-header">
+        <span class="route-card-icon">${icon}</span>
+        <div class="route-card-label">${label}</div>
+      </div>
+      <select class="form-select" id="ml-prov-${cat}" style="font-size:.78rem;">
+        <option value="">— padrão —</option>
+        <option value="ollama">Ollama</option>
+        <option value="openrouter">OpenRouter</option>
+        <option value="gemini">Gemini</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="groq">Groq</option>
+      </select>
     </div>`;
 }
 
