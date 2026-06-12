@@ -132,7 +132,7 @@ export class ProviderFactory {
      * - Only ONE response is returned — the LAST successful attempt.
      * - No partial content from failed attempts is ever included.
      */
-    async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number, externalSignal?: AbortSignal): Promise<LLMResult> {
+    async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number, externalSignal?: AbortSignal, modelOverride?: string): Promise<LLMResult> {
         if (externalSignal?.aborted) {
             return { status: 'cancelled', content: '', fallbackReason: 'cancelled', fallbackMessage: 'Operação cancelada.', attempts: [] };
         }
@@ -168,6 +168,8 @@ export class ProviderFactory {
 
         log.info(`[${requestId}] Active providers after circuit check: [${activeProviders.join(',')}]`);
 
+        const primaryProviderName = activeProviders[0];
+
         for (const providerName of activeProviders) {
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
                 const attemptId = `${requestId}-${providerName}-${attempt}`;
@@ -196,8 +198,13 @@ export class ProviderFactory {
                 }
 
                 try {
-                    const provider = this.providers.get(providerName);
-                    if (!provider) break;
+                    const sharedProvider = this.providers.get(providerName);
+                    if (!sharedProvider) break;
+                    // Use a dedicated per-request instance for the primary provider so concurrent
+                    // requests on different channels don't race to mutate the same shared object.
+                    const provider = (modelOverride && providerName === primaryProviderName)
+                        ? this.getProviderWithModel(modelOverride, providerName)
+                        : sharedProvider;
                     const modelUsed = (provider instanceof OllamaProvider) ? provider.getModel() : (provider as { model?: string }).model || provider.name;
 
                     if (attempt > 0) {
@@ -440,6 +447,9 @@ export class ProviderFactory {
         if (preferred && this.providers.has(preferred)) {
             return [preferred, ...all.filter(p => p !== preferred)];
         }
+        if (preferred) {
+            log.warn(`Provider "${preferred}" requested but not available (missing credential?). Using default fallback order.`);
+        }
         const order = ['ollama', 'openrouter', 'gemini', 'deepseek', 'groq'];
         const sorted = order.filter(p => this.providers.has(p));
         const remaining = all.filter(p => !sorted.includes(p));
@@ -459,6 +469,17 @@ export class ProviderFactory {
             case 'openrouterKey': this.providers.set('openrouter', new OpenRouterProvider(value));    break;
         }
         log.info(`Credential updated and provider recreated: ${key.replace('Key', '')}`);
+    }
+
+    removeCredential(key: 'geminiKey' | 'deepseekKey' | 'groqKey' | 'openrouterKey'): void {
+        this.creds[key] = undefined;
+        switch (key) {
+            case 'geminiKey':     this.providers.delete('gemini');     break;
+            case 'deepseekKey':   this.providers.delete('deepseek');   break;
+            case 'groqKey':       this.providers.delete('groq');       break;
+            case 'openrouterKey': this.providers.delete('openrouter'); break;
+        }
+        log.info(`Credential removed: ${key.replace('Key', '')}`);
     }
 
     getOllamaProvider(): OllamaProvider | undefined {

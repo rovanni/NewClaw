@@ -48,6 +48,7 @@ export function render(container) {
             <div class="api-key-group">
               <input type="password" class="form-input" id="pv-geminiKey" placeholder="AIza...">
               <span class="api-key-status" id="pv-geminiStatus">—</span>
+              <button class="btn btn-ghost btn-sm btn-remove-key" id="pv-geminiRemove" style="display:none" title="Remover chave">✕</button>
             </div>
           </div>
         </div>
@@ -62,6 +63,7 @@ export function render(container) {
             <div class="api-key-group">
               <input type="password" class="form-input" id="pv-deepseekKey" placeholder="sk-...">
               <span class="api-key-status" id="pv-deepseekStatus">—</span>
+              <button class="btn btn-ghost btn-sm btn-remove-key" id="pv-deepseekRemove" style="display:none" title="Remover chave">✕</button>
             </div>
           </div>
         </div>
@@ -76,6 +78,7 @@ export function render(container) {
             <div class="api-key-group">
               <input type="password" class="form-input" id="pv-groqKey" placeholder="gsk_...">
               <span class="api-key-status" id="pv-groqStatus">—</span>
+              <button class="btn btn-ghost btn-sm btn-remove-key" id="pv-groqRemove" style="display:none" title="Remover chave">✕</button>
             </div>
           </div>
         </div>
@@ -90,6 +93,7 @@ export function render(container) {
             <div class="api-key-group">
               <input type="password" class="form-input" id="pv-openrouterKey" placeholder="sk-or-...">
               <span class="api-key-status" id="pv-openrouterStatus">—</span>
+              <button class="btn btn-ghost btn-sm btn-remove-key" id="pv-openrouterRemove" style="display:none" title="Remover chave">✕</button>
             </div>
           </div>
         </div>
@@ -109,6 +113,12 @@ export function render(container) {
   setKeyStatus('pv-groqStatus',         'pv-groqDot',        s.hasGroqKey);
   setKeyStatus('pv-openrouterStatus',   'pv-openrouterDot',  s.hasOpenrouterKey);
 
+  // Show remove buttons only when a key is already configured
+  el('pv-geminiRemove').style.display     = s.hasGeminiKey     ? '' : 'none';
+  el('pv-deepseekRemove').style.display   = s.hasDeepseekKey   ? '' : 'none';
+  el('pv-groqRemove').style.display       = s.hasGroqKey       ? '' : 'none';
+  el('pv-openrouterRemove').style.display = s.hasOpenrouterKey ? '' : 'none';
+
   // Populate Ollama health from providersStore
   const ps = providersStore.snap();
   if (ps.ollamaOnline) {
@@ -123,6 +133,24 @@ export function render(container) {
   el('pv-deepseekKey').addEventListener('input',    e => cs.set('deepseekKey', e.target.value));
   el('pv-groqKey').addEventListener('input',        e => cs.set('groqKey', e.target.value));
   el('pv-openrouterKey').addEventListener('input',  e => cs.set('openrouterKey', e.target.value));
+
+  // Remove key buttons
+  ['gemini', 'deepseek', 'groq', 'openrouter'].forEach(p => {
+    el(`pv-${p}Remove`).addEventListener('click', async () => {
+      if (!confirm(`Remover a API key do ${p}?`)) return;
+      try {
+        const f = window.newclawFetch || fetch;
+        const res = await f(`/api/providers/key/${p}`, { method: 'DELETE' });
+        if ((await res.json()).success) {
+          const hasKey = `has${p.charAt(0).toUpperCase() + p.slice(1)}Key`;
+          cs.set(hasKey, false);
+          setKeyStatus(`pv-${p}Status`, `pv-${p}Dot`, false);
+          el(`pv-${p}Remove`).style.display = 'none';
+          showToast(`Chave ${p} removida`, 'success');
+        }
+      } catch (e) { showToast('Erro ao remover chave: ' + e.message, 'error'); }
+    });
+  });
 
   // Test Ollama button
   el('pv-testOllama').addEventListener('click', testOllama);

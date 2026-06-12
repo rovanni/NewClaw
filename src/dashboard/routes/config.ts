@@ -45,12 +45,12 @@ export function persistConfigToEnv(ctx: DashboardContext): void {
             'OBSERVER_MODEL':     ctx.config.modelRouter?.observerModel      || '',
         };
 
-        if (ctx.config.ollamaApiKey)      updates['OLLAMA_API_KEY']      = ctx.config.ollamaApiKey;
-        if (ctx.config.geminiApiKey)      updates['GEMINI_API_KEY']      = ctx.config.geminiApiKey;
-        if (ctx.config.deepseekApiKey)    updates['DEEPSEEK_API_KEY']    = ctx.config.deepseekApiKey;
-        if (ctx.config.groqApiKey)        updates['GROQ_API_KEY']        = ctx.config.groqApiKey;
-        if (ctx.config.openrouterApiKey)  updates['OPENROUTER_API_KEY']  = ctx.config.openrouterApiKey;
-        if (ctx.config.systemPrompt)      updates['SYSTEM_PROMPT']       = ctx.config.systemPrompt;
+        updates['OLLAMA_API_KEY']     = ctx.config.ollamaApiKey     || '';
+        updates['GEMINI_API_KEY']     = ctx.config.geminiApiKey     || '';
+        updates['DEEPSEEK_API_KEY']   = ctx.config.deepseekApiKey   || '';
+        updates['GROQ_API_KEY']       = ctx.config.groqApiKey       || '';
+        updates['OPENROUTER_API_KEY'] = ctx.config.openrouterApiKey || '';
+        updates['SYSTEM_PROMPT']      = ctx.config.systemPrompt     || '';
 
         try {
             const mm = ctx.controller ? (ctx.controller as unknown as { memory?: { db?: import('better-sqlite3').Database } }).memory : null;

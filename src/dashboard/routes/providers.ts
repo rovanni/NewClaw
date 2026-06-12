@@ -79,6 +79,33 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
         res.json({ success: true, message: `Model "${name}" added to list` });
     });
 
+    router.delete('/key/:provider', (req: Request, res: Response) => {
+        const { provider } = req.params;
+        switch (provider) {
+            case 'gemini':
+                ctx.config.geminiApiKey = undefined;
+                ctx.providerFactory?.removeCredential('geminiKey');
+                break;
+            case 'deepseek':
+                ctx.config.deepseekApiKey = undefined;
+                ctx.providerFactory?.removeCredential('deepseekKey');
+                break;
+            case 'groq':
+                ctx.config.groqApiKey = undefined;
+                ctx.providerFactory?.removeCredential('groqKey');
+                break;
+            case 'openrouter':
+                ctx.config.openrouterApiKey = undefined;
+                ctx.providerFactory?.removeCredential('openrouterKey');
+                break;
+            default:
+                return res.status(400).json({ error: `Unknown provider: ${provider}` });
+        }
+        persistConfigToEnv(ctx);
+        log.info(`API key removed for provider: ${provider}`);
+        res.json({ success: true });
+    });
+
     router.post('/ollama/pull', async (req: Request, res: Response) => {
         const { model } = req.body;
         if (!model) return res.status(400).json({ error: 'Model name required' });
