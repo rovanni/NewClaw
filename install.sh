@@ -474,10 +474,6 @@ check_for_backups() {
     backup_count=$(find "$backup_path" -maxdepth 1 \( -type d -name "newclaw_*" -o -type f -name "newclaw_*.db" \) 2>/dev/null | wc -l)
   fi
 
-  if [ "$backup_count" -eq 0 ] && [ -d "/home/venus/backups" ]; then
-    backup_path="/home/venus/backups"
-    backup_count=$(find "$backup_path" -maxdepth 1 \( -type d -name "newclaw_*" -o -type f -name "newclaw_*.db" \) 2>/dev/null | wc -l)
-  fi
 
   if [ "$backup_count" -gt 0 ]; then
     echo ""
