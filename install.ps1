@@ -413,16 +413,10 @@ function Step-InstallNewClaw {
 
 function Step-CheckForBackups {
     $BackupRoot = Join-Path $env:USERPROFILE "newclaw-backups"
-    $AltBackupRoot = "C:\home\venus\backups"
-
-    $SearchPaths = @($BackupRoot)
-    if (Test-Path $AltBackupRoot) { $SearchPaths += $AltBackupRoot }
 
     $Backups = @()
-    foreach ($path in $SearchPaths) {
-        if (Test-Path $path) {
-            $Backups += Get-ChildItem -Path $path | Where-Object { $_.Name -like "newclaw_*" }
-        }
+    if (Test-Path $BackupRoot) {
+        $Backups += Get-ChildItem -Path $BackupRoot | Where-Object { $_.Name -like "newclaw_*" }
     }
 
     if ($Backups.Count -gt 0) {
