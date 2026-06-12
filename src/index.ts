@@ -64,6 +64,10 @@ const config = {
         provider_light:     process.env.PROVIDER_LIGHT,
         provider_analysis:  process.env.PROVIDER_ANALYSIS,
         provider_execution: process.env.PROVIDER_EXECUTION,
+        // Modelos dos componentes internos
+        plannerModel:  process.env.PLANNER_MODEL,
+        riskModel:     process.env.RISK_MODEL,
+        observerModel: process.env.OBSERVER_MODEL,
     }
 };
 

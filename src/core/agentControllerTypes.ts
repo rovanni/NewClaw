@@ -46,5 +46,9 @@ export interface NewClawConfig {
         provider_light?: string;
         provider_analysis?: string;
         provider_execution?: string;
+        // Modelos dos componentes internos
+        plannerModel?: string;
+        riskModel?: string;
+        observerModel?: string;
     };
 }
