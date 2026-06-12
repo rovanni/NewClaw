@@ -293,10 +293,10 @@ export class GoalEvaluator {
         const matched = this.findMatchedPattern(error);
 
         if (matched) {
-            // exec_command: "No such file or directory" (exit 2) significa que o PATH do
-            // argumento não existe — não que exec_command em si está ausente (exit 127).
-            // Reclassificar para tool_error evita que o GoalPlanner pense que a ferramenta
-            // shell está faltando e gere replans sem exec_command.
+            // exec_command: distingue entre "exec_command ausente" (exit 127 = shell não achou o
+            // binário) e "PATH do argumento não existe" (exit 2 = o arquivo/dir não foi encontrado).
+            // Sem esta distinção, o GoalPlanner acredita que a ferramenta exec_command em si está
+            // faltando e gera replans que evitam exec_command — mas o problema real é o binário interno.
             if (matched.kind === 'missing_tool' && toolName === 'exec_command') {
                 const isCommandMissing = /command not found|which:\s*no|cannot find|\[exit code: 127\]/i.test(error);
                 if (!isCommandMissing) {
@@ -312,6 +312,22 @@ export class GoalEvaluator {
                         detectedAt: Date.now(),
                     };
                 }
+                // exec_command encontrou a shell, mas o BINÁRIO invocado não existe.
+                // Extrair o nome real do binário para dar descrição acionável ao GoalPlanner,
+                // em vez de "exec_command não encontrada" (que é um falso-positivo confuso).
+                const missingBinary = this.extractMissingToolName(error);
+                const binaryLabel = missingBinary ? `'${missingBinary}'` : 'o binário solicitado';
+                return {
+                    kind: 'missing_tool',
+                    toolName,
+                    description: `Binário ${binaryLabel} não encontrado no sistema (chamado via exec_command). Instale-o ou use uma abordagem alternativa que não dependa dele.`,
+                    suggestedActions: [
+                        missingBinary ? `Instalar ${missingBinary} via gerenciador de pacotes` : 'Instalar a dependência ausente',
+                        'Verificar capabilities disponíveis com EnvironmentProbe',
+                        'Usar ferramenta nativa do NewClaw em vez de binário externo',
+                    ],
+                    detectedAt: Date.now(),
+                };
             }
 
             const match = error.match(matched.pattern)!;

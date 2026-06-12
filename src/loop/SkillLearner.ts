@@ -1,11 +1,25 @@
-﻿/**
+/**
  * SkillLearner - Auto-skill creation from experience
  * Inspired by Hermes Agent's self-improving learning loop
  *
  * Stage 2: generate skill proposals from repeated successful patterns,
  * but only approved skills become active in runtime.
+ *
+ * Lifecycle (holistic):
+ *   recordPattern() → tryCreateSkillProposal() → status='proposed'
+ *   approveSkill()  → exports SKILL.md to skillsDir → status='active', file_exported=1
+ *   rejectSkill()   → removes SKILL.md if present → status='rejected', file_exported=0
+ *   deactivateSkill() → removes SKILL.md → status='inactive', file_exported=0
+ *   activateSkill() → re-exports SKILL.md → status='active', file_exported=1
+ *   deleteSkill()   → removes SKILL.md + DB row
+ *
+ * Exported skills are picked up by SkillLoader (hot-reload) and become available
+ * to SkillDiscovery's semantic matching. Skills with file_exported=1 are excluded
+ * from SkillLearner's own DB-based matching to avoid double-injection.
  */
 
+import fs from 'fs';
+import path from 'path';
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
@@ -46,6 +60,8 @@ export interface Skill {
     reviewed_at?: string | null;
     created_at: string;
     updated_at: string;
+    /** 1 when SKILL.md was exported to skillsDir — skill is handled by SkillLoader, not DB matching */
+    file_exported?: number;
 }
 
 export interface SkillMatch {
@@ -71,10 +87,12 @@ interface ToolPatternStat {
 
 export class SkillLearner {
     private db: Database.Database;
+    private skillsDir: string;
     private patternRecordCount = 0;
 
-    constructor(db: Database.Database) {
+    constructor(db: Database.Database, skillsDir: string = './skills') {
         this.db = db;
+        this.skillsDir = skillsDir;
         this.ensureTable();
     }
 
@@ -115,10 +133,11 @@ export class SkillLearner {
         );
 
         const migrations: Array<{ column: string; sql: string }> = [
-            { column: 'status', sql: `ALTER TABLE auto_skills ADD COLUMN status TEXT DEFAULT 'proposed'` },
+            { column: 'status',        sql: `ALTER TABLE auto_skills ADD COLUMN status TEXT DEFAULT 'proposed'` },
             { column: 'source_pattern', sql: `ALTER TABLE auto_skills ADD COLUMN source_pattern TEXT` },
-            { column: 'source_tool', sql: `ALTER TABLE auto_skills ADD COLUMN source_tool TEXT` },
-            { column: 'reviewed_at', sql: `ALTER TABLE auto_skills ADD COLUMN reviewed_at TEXT` }
+            { column: 'source_tool',   sql: `ALTER TABLE auto_skills ADD COLUMN source_tool TEXT` },
+            { column: 'reviewed_at',   sql: `ALTER TABLE auto_skills ADD COLUMN reviewed_at TEXT` },
+            { column: 'file_exported', sql: `ALTER TABLE auto_skills ADD COLUMN file_exported INTEGER DEFAULT 0` }
         ];
 
         for (const migration of migrations) {
@@ -131,7 +150,6 @@ export class SkillLearner {
     }
 
     private cleanupCorruptedSkills(): void {
-        // Remove skills com encoding corrompido (double-encoded UTF-8)
         const corrupted = this.db.prepare(
             `DELETE FROM auto_skills WHERE name LIKE '%Ã%' OR name LIKE '%Â%'`
         ).run();
@@ -139,7 +157,6 @@ export class SkillLearner {
             log.info(`Removed ${corrupted.changes} skills with corrupted encoding`);
         }
 
-        // Remove duplicatas de propostas por nome, mantendo a mais recente
         const dupes = this.db.prepare(`
             DELETE FROM auto_skills
             WHERE rowid NOT IN (
@@ -192,7 +209,9 @@ export class SkillLearner {
     }
 
     /**
-     * Check if any active auto-skill matches the user input
+     * Check if any active auto-skill matches the user input.
+     * Only DB-only skills (file_exported = 0) are checked here;
+     * exported skills are handled by SkillLoader + SkillDiscovery.
      */
     matchSkill(userInput: string): Skill | null {
         const [topMatch] = this.getTopSkillMatches(userInput, 1);
@@ -296,25 +315,110 @@ export class SkillLearner {
         ).all() as PatternStatRow[];
     }
 
+    // ── Lifecycle operations ──────────────────────────────────────────────────
+
+    /**
+     * Approve a proposed skill: writes SKILL.md to skillsDir so SkillLoader picks it up.
+     * After export, skill is excluded from DB-based matching (file_exported=1) to avoid
+     * double-injection alongside SkillLoader's output.
+     */
     approveSkill(id: string): boolean {
+        const skill = this.db.prepare(
+            `SELECT * FROM auto_skills WHERE id = ? AND status = 'proposed'`
+        ).get(id) as Skill | undefined;
+        if (!skill) return false;
+
+        this.exportSkillFile({ ...skill, status: 'active' });
+
         const result = this.db.prepare(
             `UPDATE auto_skills
-             SET status = 'active', reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ? AND status = 'proposed'`
+             SET status = 'active', file_exported = 1,
+                 reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`
         ).run(id);
 
         return result.changes > 0;
     }
 
+    /**
+     * Reject a skill (any status): removes SKILL.md if present.
+     */
     rejectSkill(id: string): boolean {
+        const skill = this.db.prepare(
+            `SELECT * FROM auto_skills WHERE id = ?`
+        ).get(id) as Skill | undefined;
+        if (!skill) return false;
+
+        this.removeSkillFile(skill);
+
         const result = this.db.prepare(
             `UPDATE auto_skills
-             SET status = 'rejected', reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ? AND status = 'proposed'`
+             SET status = 'rejected', file_exported = 0,
+                 reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`
         ).run(id);
 
         return result.changes > 0;
     }
+
+    /**
+     * Re-activate a rejected or inactive skill: re-exports SKILL.md.
+     */
+    activateSkill(id: string): boolean {
+        const skill = this.db.prepare(
+            `SELECT * FROM auto_skills WHERE id = ? AND status IN ('rejected', 'inactive')`
+        ).get(id) as Skill | undefined;
+        if (!skill) return false;
+
+        this.exportSkillFile({ ...skill, status: 'active' });
+
+        const result = this.db.prepare(
+            `UPDATE auto_skills
+             SET status = 'active', file_exported = 1,
+                 reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`
+        ).run(id);
+
+        return result.changes > 0;
+    }
+
+    /**
+     * Deactivate an active skill: removes SKILL.md so SkillLoader stops serving it.
+     */
+    deactivateSkill(id: string): boolean {
+        const skill = this.db.prepare(
+            `SELECT * FROM auto_skills WHERE id = ? AND status = 'active'`
+        ).get(id) as Skill | undefined;
+        if (!skill) return false;
+
+        this.removeSkillFile(skill);
+
+        const result = this.db.prepare(
+            `UPDATE auto_skills
+             SET status = 'inactive', file_exported = 0,
+                 reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`
+        ).run(id);
+
+        return result.changes > 0;
+    }
+
+    /**
+     * Permanently delete a skill: removes SKILL.md and DB row.
+     */
+    deleteSkill(id: string): boolean {
+        const skill = this.db.prepare(
+            `SELECT * FROM auto_skills WHERE id = ?`
+        ).get(id) as Skill | undefined;
+        if (!skill) return false;
+
+        this.removeSkillFile(skill);
+
+        const result = this.db.prepare('DELETE FROM auto_skills WHERE id = ?').run(id);
+        return result.changes > 0;
+    }
+
+    // ── Pattern extraction ────────────────────────────────────────────────────
 
     private extractPattern(input: string): string | null {
         const lower = input.toLowerCase().trim();
@@ -355,18 +459,22 @@ export class SkillLearner {
         const total = stat.success_count + stat.fail_count;
         if (total <= 0) return 0;
         const successRate = this.computeSuccessRate(stat);
-        const sampleWeight = Math.min(1, total / 5); // desconta confiança para poucos dados
+        const sampleWeight = Math.min(1, total / 5);
         const latencyPenalty = stat.avg_latency_ms > 0 ? Math.min(0.15, stat.avg_latency_ms / 10000) : 0;
         return Math.max(0, successRate * sampleWeight - latencyPenalty);
     }
 
+    /**
+     * Returns only DB-resident active skills (file_exported = 0).
+     * Skills with file_exported = 1 are served by SkillLoader and must not be double-injected.
+     */
     private getTopSkillMatches(userInput: string, maxMatches: number = 2): SkillMatch[] {
         const lower = userInput.toLowerCase().trim();
 
         try {
             const skills = this.db.prepare(
                 `SELECT * FROM auto_skills
-                 WHERE status = 'active'
+                 WHERE status = 'active' AND (file_exported = 0 OR file_exported IS NULL)
                  ORDER BY priority DESC, hits DESC`
             ).all() as Skill[];
 
@@ -425,6 +533,8 @@ export class SkillLearner {
         }
     }
 
+    // ── Skill proposals ───────────────────────────────────────────────────────
+
     /**
      * Create skill proposals from strong patterns with manual approval.
      * Disable by setting SKILL_LEARNER_PROPOSALS=false in .env
@@ -448,9 +558,7 @@ export class SkillLearner {
             if (alreadyExists) continue;
 
             const skill = this.createSkillFromPattern(item.pattern, item.tool_name, item.success_count);
-            if (!skill) continue;
 
-            // Evita duplicatas por nome — inclui rejected para não recriar skill já avaliada
             const nameExists = this.db.prepare(
                 "SELECT id FROM auto_skills WHERE name = ? LIMIT 1"
             ).get(skill.name) as { id: string } | undefined;
@@ -481,7 +589,12 @@ export class SkillLearner {
         }
     }
 
-    private createSkillFromPattern(pattern: string, toolName: string, successCount: number): Skill | null {
+    /**
+     * Build a Skill record from an observed pattern.
+     * Known patterns get curated definitions; unknown patterns get a generic template
+     * so learning is never blocked by the absence of a pre-defined entry.
+     */
+    private createSkillFromPattern(pattern: string, toolName: string, successCount: number): Skill {
         const skillDefs: Record<string, { name: string; trigger: string; description: string; prompt: string; toolSeq: string[] }> = {
             crypto_price: {
                 name: 'Preço de Cripto',
@@ -535,15 +648,24 @@ export class SkillLearner {
         };
 
         const def = skillDefs[pattern];
-        if (!def) return null;
+
+        // Generic template for patterns not yet in skillDefs — learning is never blocked
+        const name = def?.name ?? pattern.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const trigger = def?.trigger ?? pattern.replace(/_/g, '|');
+        const description = def?.description ??
+            `Padrão aprendido automaticamente: ${successCount} usos bem-sucedidos com ${toolName}.`;
+        const prompt = def?.prompt ??
+            `Quando detectar este padrão, use ${toolName} para processar a solicitação. ` +
+            `Analise a mensagem do usuário para extrair os parâmetros necessários.`;
+        const toolSeq = def?.toolSeq ?? [toolName];
 
         return {
             id: `skill_${pattern}_${Date.now()}`,
-            name: def.name,
-            trigger: def.trigger,
-            description: def.description,
-            prompt: def.prompt,
-            tool_sequence: JSON.stringify(def.toolSeq),
+            name,
+            trigger,
+            description,
+            prompt,
+            tool_sequence: JSON.stringify(toolSeq),
             priority: Math.min(10, 5 + Math.floor(successCount / 3)),
             hits: 0,
             status: 'proposed',
@@ -554,6 +676,111 @@ export class SkillLearner {
             updated_at: new Date().toISOString()
         };
     }
+
+    // ── SKILL.md export / remove ──────────────────────────────────────────────
+
+    /**
+     * Writes a SKILL.md for the given skill so SkillLoader and SkillDiscovery can use it.
+     * Directory is created if absent. Errors are logged but do not throw.
+     */
+    private exportSkillFile(skill: Skill): void {
+        try {
+            const folderName = this.sanitizeSkillFolderName(skill);
+            const skillDir = path.resolve(this.skillsDir, folderName);
+            fs.mkdirSync(skillDir, { recursive: true });
+            fs.writeFileSync(path.join(skillDir, 'SKILL.md'), this.buildSkillMd(skill), 'utf-8');
+            log.info(`Exported SKILL.md: "${skill.name}" → ${skillDir}`);
+        } catch (error) {
+            log.error(`Failed to export SKILL.md for "${skill.name}": ${errorMessage(error)}`);
+        }
+    }
+
+    /**
+     * Removes the SKILL.md directory for the given skill.
+     * Silently skips if the directory does not exist.
+     */
+    private removeSkillFile(skill: Skill): void {
+        try {
+            const folderName = this.sanitizeSkillFolderName(skill);
+            const skillDir = path.resolve(this.skillsDir, folderName);
+            if (fs.existsSync(skillDir)) {
+                fs.rmSync(skillDir, { recursive: true, force: true });
+                log.info(`Removed SKILL.md: "${skill.name}" ← ${skillDir}`);
+            }
+        } catch (error) {
+            log.error(`Failed to remove SKILL.md for "${skill.name}": ${errorMessage(error)}`);
+        }
+    }
+
+    /**
+     * Generates the SKILL.md content for a skill.
+     * Includes triggers (extracted from regex) and tags (derived from source_pattern and tool)
+     * so SkillDiscovery's semantic matching can work on auto-skills without extra configuration.
+     */
+    private buildSkillMd(skill: Skill): string {
+        const keywords = this.extractTriggerKeywords(skill.trigger);
+        const tools = this.parseToolSequence(skill.tool_sequence);
+        const tags = this.deriveTagsFromSkill(skill);
+
+        const lines: string[] = ['---', `name: ${skill.name}`, `description: ${skill.description}`];
+        if (keywords.length > 0) lines.push(`triggers: ${keywords.join(',')}`);
+        if (tools.length > 0) lines.push(`tools: ${tools.join(',')}`);
+        if (tags.length > 0) {
+            lines.push('tags:');
+            tags.forEach(t => lines.push(`  - ${t}`));
+        }
+        lines.push('---', '', skill.prompt);
+        return lines.join('\n');
+    }
+
+    /**
+     * Extracts plain-text keywords from a regex trigger string.
+     * Used to populate the `triggers:` field in SKILL.md for SkillLoader's simple includes-match.
+     */
+    private extractTriggerKeywords(trigger: string): string[] {
+        return trigger
+            .replace(/\[[^\]]*\]/g, ' ')          // remove char classes [...]
+            .replace(/[().*+?^${}|\\[\]]/g, ' ')  // remove regex metacharacters
+            .split(/\s+/)
+            .map(s => s.trim())
+            .filter(s => s.length >= 3 && !/^\d+$/.test(s))
+            .slice(0, 10);
+    }
+
+    /**
+     * Derives semantic tags for a skill based on its source metadata.
+     * These tags enable SkillDiscovery's capability-based matching for auto-skills.
+     */
+    private deriveTagsFromSkill(skill: Skill): string[] {
+        const tags: string[] = [];
+        if (skill.source_pattern) tags.push(skill.source_pattern.replace(/_/g, '-'));
+        if (skill.source_tool) tags.push(skill.source_tool.replace(/_/g, '-'));
+        const nameWords = skill.name
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[̀-ͯ]/g, '')
+            .split(/\s+/)
+            .filter(w => w.length >= 4);
+        tags.push(...nameWords.slice(0, 3));
+        return [...new Set(tags)];
+    }
+
+    /**
+     * Sanitizes a skill name into a safe filesystem folder name.
+     * Uses source_pattern (already ASCII) when available; falls back to skill name.
+     */
+    private sanitizeSkillFolderName(skill: Skill): string {
+        const base = skill.source_pattern ?? skill.name;
+        return base
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[̀-ͯ]/g, '')
+            .replace(/[^a-z0-9]+/g, '_')
+            .replace(/^_|_$/g, '');
+    }
+
+    // ── System observation ────────────────────────────────────────────────────
+
     /**
      * Observe a meta-event or state change in the system.
      */

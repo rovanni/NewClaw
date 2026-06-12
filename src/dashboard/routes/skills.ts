@@ -6,6 +6,8 @@ import { DashboardContext } from './types';
 export function createSkillsRouter(ctx: DashboardContext): Router {
     const router = Router();
 
+    // ── Filesystem skills (SkillLoader) ───────────────────────────────────────
+
     router.get('/', async (_req: Request, res: Response) => {
         try {
             const fs = await import('fs');
@@ -29,6 +31,8 @@ export function createSkillsRouter(ctx: DashboardContext): Router {
         }
     });
 
+    // ── Auto-skills (SkillLearner) — read ─────────────────────────────────────
+
     router.get('/auto', (_req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
@@ -49,10 +53,29 @@ export function createSkillsRouter(ctx: DashboardContext): Router {
         }
     });
 
+    // ── Auto-skills — lifecycle (SkillLearner owns file export/remove) ─────────
+    //
+    // SkillLearner is the single authority for auto-skill lifecycle so that
+    // approve/reject/activate/deactivate always stay in sync with the filesystem.
+    // If ctx.skillLearner is not wired up yet (e.g. standalone dashboard), we fall
+    // back to DashboardMemoryRepository (DB-only, no file ops) for backward compat.
+
     router.post('/auto/:id/approve', (req: Request, res: Response) => {
+        const id = String(req.params.id);
+
+        if (ctx.skillLearner) {
+            try {
+                const ok = ctx.skillLearner.approveSkill(id);
+                if (!ok) return res.status(404).json({ success: false, error: 'Skill not found or not in proposed state' });
+                return res.json({ success: true });
+            } catch (err) {
+                return res.status(500).json({ error: errorMessage(err) });
+            }
+        }
+
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const ok = ctx.memoryManager.getDashboardRepository().approveAutoSkill(String(req.params.id));
+            const ok = ctx.memoryManager.getDashboardRepository().approveAutoSkill(id);
             if (!ok) return res.status(404).json({ success: false, error: 'Skill not found' });
             res.json({ success: true });
         } catch (err) {
@@ -61,9 +84,21 @@ export function createSkillsRouter(ctx: DashboardContext): Router {
     });
 
     router.post('/auto/:id/reject', (req: Request, res: Response) => {
+        const id = String(req.params.id);
+
+        if (ctx.skillLearner) {
+            try {
+                const ok = ctx.skillLearner.rejectSkill(id);
+                if (!ok) return res.status(404).json({ success: false, error: 'Skill not found' });
+                return res.json({ success: true });
+            } catch (err) {
+                return res.status(500).json({ error: errorMessage(err) });
+            }
+        }
+
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const ok = ctx.memoryManager.getDashboardRepository().rejectAutoSkill(String(req.params.id));
+            const ok = ctx.memoryManager.getDashboardRepository().rejectAutoSkill(id);
             if (!ok) return res.status(404).json({ success: false, error: 'Skill not found' });
             res.json({ success: true });
         } catch (err) {
@@ -72,9 +107,21 @@ export function createSkillsRouter(ctx: DashboardContext): Router {
     });
 
     router.post('/auto/:id/activate', (req: Request, res: Response) => {
+        const id = String(req.params.id);
+
+        if (ctx.skillLearner) {
+            try {
+                const ok = ctx.skillLearner.activateSkill(id);
+                if (!ok) return res.status(404).json({ success: false, error: 'Skill not found or not rejected/inactive' });
+                return res.json({ success: true });
+            } catch (err) {
+                return res.status(500).json({ error: errorMessage(err) });
+            }
+        }
+
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const ok = ctx.memoryManager.getDashboardRepository().activateAutoSkill(String(req.params.id));
+            const ok = ctx.memoryManager.getDashboardRepository().activateAutoSkill(id);
             if (!ok) return res.status(404).json({ success: false, error: 'Skill not found or not rejected' });
             res.json({ success: true });
         } catch (err) {
@@ -83,9 +130,21 @@ export function createSkillsRouter(ctx: DashboardContext): Router {
     });
 
     router.post('/auto/:id/deactivate', (req: Request, res: Response) => {
+        const id = String(req.params.id);
+
+        if (ctx.skillLearner) {
+            try {
+                const ok = ctx.skillLearner.deactivateSkill(id);
+                if (!ok) return res.status(404).json({ success: false, error: 'Skill not found or not active' });
+                return res.json({ success: true });
+            } catch (err) {
+                return res.status(500).json({ error: errorMessage(err) });
+            }
+        }
+
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const ok = ctx.memoryManager.getDashboardRepository().deactivateAutoSkill(String(req.params.id));
+            const ok = ctx.memoryManager.getDashboardRepository().deactivateAutoSkill(id);
             if (!ok) return res.status(404).json({ success: false, error: 'Skill not found or not active' });
             res.json({ success: true });
         } catch (err) {
@@ -94,15 +153,29 @@ export function createSkillsRouter(ctx: DashboardContext): Router {
     });
 
     router.delete('/auto/:id', (req: Request, res: Response) => {
+        const id = String(req.params.id);
+
+        if (ctx.skillLearner) {
+            try {
+                const ok = ctx.skillLearner.deleteSkill(id);
+                if (!ok) return res.status(404).json({ success: false, error: 'Skill not found' });
+                return res.json({ success: true });
+            } catch (err) {
+                return res.status(500).json({ error: errorMessage(err) });
+            }
+        }
+
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
-            const ok = ctx.memoryManager.getDashboardRepository().deleteAutoSkill(String(req.params.id));
+            const ok = ctx.memoryManager.getDashboardRepository().deleteAutoSkill(id);
             if (!ok) return res.status(404).json({ success: false, error: 'Skill not found' });
             res.json({ success: true });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
         }
     });
+
+    // ── SkillInstaller (git / npm / npx) ──────────────────────────────────────
 
     router.post('/install', async (req: Request, res: Response) => {
         if (!ctx.skillInstaller) return res.status(500).json({ error: 'SkillInstaller not available' });

@@ -67,6 +67,15 @@ const NOT_GOAL_SIGNALS: RegExp[] = [
     /\bconteúdo\s+programático\b/i,
     /^(turma:|quantidade\s+de\s+alunos:|período:|hor[aá]rio:)/im,
     /^(Excel|Word|PowerPoint|Calc)\s+(Básico|Intermediário|Avançado)\b/im,
+    // Mensagens de esclarecimento contextual — o usuário está DESCREVENDO algo, não comandando.
+    // Padrão: "X [é/e] um [curso/sistema/projeto] de A, B e C" — definição nominal sem verbo imperativo.
+    // Ex: "Assistente de TI e um curso de montagem e manutenção de computadores, instalação de SO..."
+    // Mesmo que contenham substantivos de ação (instalação, configuração), são listas descritivas.
+    /^[\w\s]+\s+[eé]\s+um[a]?\s+(curso|disciplina|módulo|treinamento|programa|sistema|projeto|aplicativo)\s+(de|sobre|para)\b/i,
+    // Correção/ajuste da mensagem anterior sem novo pedido explícito: "Estava me referindo a..."
+    /^(estava\s+me\s+referindo|me\s+referia|quis\s+dizer|na\s+verdade\s+(é|eu)|só\s+queria|era\s+(sobre|para))\b/i,
+    // Confirmação ou reconhecimento sem novo objetivo
+    /^(isso|exato|exatamente|correto|é\s+isso|isso\s+mesmo|sim\s*,?\s*(é|foi))\b/i,
 ];
 
 export class GoalExtractor {
@@ -100,11 +109,29 @@ export class GoalExtractor {
         let matches = 0;
         for (const pattern of GOAL_SIGNALS) {
             if (pattern.test(msg)) matches++;
-            if (matches >= 2) return true;
         }
 
-        // Mensagem longa com pelo menos 1 sinal positivo → provavelmente goal
-        if (matches >= 1 && msg.length > 50) return true;
+        if (matches >= 1) {
+            // Guardrail anti-nominal (Sugestão 1): padrões como instala[r]? e configur[ae]
+            // disparam para substantivos deverbais ("instalação", "configuração") porque \b em
+            // JavaScript é ASCII-only e trata 'ç'/'ã' como não-palavras. Resultado: "instalação"
+            // coincide com `instala[r]?` via short-match antes do sufixo nominal.
+            // Heurística: se há ≥2 formas nominais (sufixos ção/ões/mento/agem) e nenhum
+            // verbo de ação explícito no infinitivo, a mensagem descreve conteúdo — não comanda.
+            const nominalCount = (msg.match(/\b\w+(?:ção|ções|mento|mentos|agem|agens)\b/gi) ?? []).length;
+            if (nominalCount >= 2 && matches < 3) {
+                const actionVerbCount = (msg.match(
+                    /\b(criar?|fazer?|gerar?|produzir?|executar?|instalar?|baixar?|converter?|processar?|editar?|modificar?|atualizar?|pesquisar?|verificar?|implementar?|configurar?|adicionar?|remover?|copiar?|mover?|analisar?|resumir?)\b/gi
+                ) ?? []).length;
+                if (actionVerbCount === 0) {
+                    log.debug(`[GoalExtractor] nominal_guardrail: nominals=${nominalCount} action_verbs=0 matches=${matches} → null (LLM)`);
+                    return null;
+                }
+            }
+            if (matches >= 2) return true;
+            // Mensagem longa com pelo menos 1 sinal positivo → provavelmente goal
+            if (msg.length > 50) return true;
+        }
 
         return null; // inconclusivo
     }
@@ -138,25 +165,28 @@ export class GoalExtractor {
               '\n\n'
             : '\n\n';
 
-        const prompt = `Classifique a mensagem abaixo em quatro dimensões:
+        const prompt = `Classifique a mensagem abaixo em cinco dimensões:
 1. É um goal (requer execução de tarefas com ferramentas)?
 2. Se for goal, a intenção é AMBÍGUA (não está claro qual arquivo, formato ou ação específica)?
 3. É um projeto de construção de software ou desenvolvimento de funcionalidade complexa (ex: criar um jogo, desenvolver um site, implementar um sistema, criar um módulo ou script complexo)?
 4. Existe evidência textual EXPLÍCITA do objetivo no texto do usuário, ou o objetivo foi inferido a partir dos dados fornecidos?
+5. É uma REFINAMENTO/CLARIFICAÇÃO de um goal recente do contexto (o usuário está complementando ou corrigindo o pedido anterior, sem criar um objetivo completamente novo)?
 ${conversationSnippet}Mensagem atual do usuário: "${message.slice(0, 300)}"
 
 Responda APENAS com JSON válido, sem markdown:
-{"is_goal": boolean, "confidence": 0.0-1.0, "objective": "descrição se for goal", "required_tools": ["tool1"], "reason": "motivo", "is_ambiguous": boolean, "clarification_question": "pergunta ao usuário se is_ambiguous=true", "is_construction": boolean, "has_explicit_evidence": boolean}
+{"is_goal": boolean, "confidence": 0.0-1.0, "objective": "descrição se for goal", "required_tools": ["tool1"], "reason": "motivo", "is_ambiguous": boolean, "clarification_question": "pergunta ao usuário se is_ambiguous=true", "is_construction": boolean, "has_explicit_evidence": boolean, "is_refinement": boolean}
 
 Regras:
 - is_ambiguous=true SOMENTE quando is_goal=true E a intenção é genuinamente vaga (sem arquivo, sem erro específico)
+- is_refinement=true quando: (a) o contexto recente mostra um goal concluído, (b) a mensagem atual é contextual/descritiva sem verbo imperativo novo, e (c) a mensagem complementa o goal anterior em vez de iniciar um objetivo diferente. Neste caso is_goal deve ser false.
+- Exemplo is_refinement=true: contexto="gere discurso de encerramento do curso de TI", mensagem="Assistente de TI é um curso de montagem, instalação de SO e redes" — o usuário está descrevendo o curso para contextualizar o pedido anterior, não pedindo algo novo.
 - Relatórios de erro técnico com código ou path específico são NUNCA ambíguos: o erro já identifica o problema
 - Se o contexto recente mostra que o usuário está respondendo a uma lista de opções ou confirmando uma escolha, is_goal=false
 - Exemplos is_ambiguous=true: "essa versão não consigo editar" (qual arquivo?), "pode corrigir?" (o quê exatamente?)
 - Exemplos is_ambiguous=false: "criar apresentação sobre Python com 10 slides", "resumir o PDF que enviei"
 - Exemplos is_ambiguous=false (workspace): "organize meu workspace", "reorganize os arquivos", "analise os grupos do workspace", "arrume meu workspace" — existe uma ferramenta específica que resolve sem precisar de critérios adicionais
 - Exemplos is_ambiguous=false (erros técnicos): "style.css:1 Failed to load resource: net::ERR_FILE_NOT_FOUND", "TypeError: cannot read property of undefined at line 42", "está com vários erros: SyntaxError no map.js"
-- Exemplos is_goal=false: "o que é machine learning?", "oi tudo bem?", "obrigado", seleção de opção de menu, confirmação de escolha
+- Exemplos is_goal=false: "o que é machine learning?", "oi tudo bem?", "obrigado", seleção de opção de menu, confirmação de escolha, mensagens descritivas/contextuais sem pedido de ação
 - has_explicit_evidence=true: "criar cronograma", "gerar relatório", "montar planilha" — objetivo dito explicitamente
 - has_explicit_evidence=false: usuário envia turma/datas/conteúdo sem pedir ação — objetivo inferido dos dados`;
 
@@ -208,12 +238,13 @@ Regras:
         try {
             const cleaned = content.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
             const parsed = JSON.parse(cleaned);
+            const isRefinement = Boolean(parsed.is_refinement);
             return {
-                isGoal: Boolean(parsed.is_goal),
+                isGoal: isRefinement ? false : Boolean(parsed.is_goal),
                 confidence: Number(parsed.confidence) || 0.5,
                 objective: parsed.objective || undefined,
                 requiredTools: Array.isArray(parsed.required_tools) ? parsed.required_tools : [],
-                reason: parsed.reason || undefined,
+                reason: isRefinement ? 'refinement_of_recent_goal' : (parsed.reason || undefined),
                 isAmbiguous: Boolean(parsed.is_ambiguous),
                 clarificationQuestion: parsed.clarification_question || undefined,
                 isConstruction: Boolean(parsed.is_construction),

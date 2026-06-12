@@ -19,6 +19,7 @@ import { ProviderFactory } from '../core/ProviderFactory';
 import { MemoryManager } from '../memory/MemoryManager';
 import { MemoryCurator } from '../memory/MemoryCurator';
 import { SkillInstaller } from '../skills/SkillInstaller';
+import type { SkillLearner } from '../loop/SkillLearner';
 import { createLogger } from '../shared/AppLogger';
 import { authMiddleware, createAuthRouter, dashboardAuth, initAuthPersistence } from './routes/auth';
 import { createConfigRouter } from './routes/config';
@@ -90,6 +91,10 @@ export class DashboardServer {
 
     public setProviderFactory(pf: ProviderFactory) {
         this.ctx.providerFactory = pf;
+    }
+
+    public setSkillLearner(sl: SkillLearner): void {
+        this.ctx.skillLearner = sl;
     }
 
     public setMemoryManager(mm: MemoryManager, curator?: MemoryCurator) {

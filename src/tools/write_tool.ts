@@ -32,6 +32,15 @@ const CONTENT_STUB_PATTERNS: RegExp[] = [
     /conteúdo será adicionado depois/i,                 // "conteúdo será adicionado depois"
     /\(em\s+construção\)/i,                             // "(em construção)"
     /HTML\s+Content\b|CSS\s+Content\b|JS\s+Content\b/i, // genéricos de template
+    // LLM meta-placeholders — o modelo descreve o que DEVERIA gerar em vez de gerar
+    /\[o\s+(modelo|agente|llm|sistema)\s+(irá|vai|deve|deverá)\s+(gerar|produzir|criar|escrever|completar)/i,
+    /\[.*?(será\s+)?(gerado|produzido|criado|escrito|completado|preenchido)\s*(aqui|abaixo|posteriormente|depois|pelo\s+(modelo|agente|llm))/i,
+    /\[.*?texto\s+(completo|real|será|do\s+discurso|do\s+conteúdo)/i,
+    /\(o\s+(conteúdo|texto|html|slide|relatório)\s+(completo|real|será|aqui)/i,
+    /será\s+preenchido\s+(depois|posteriormente|pelo\s+(modelo|agente))/i,
+    /\[escrever\s+aqui\]|\[preencher\s+aqui\]|\[adicionar\s+aqui\]/i,
+    /\[conteúdo\s+da\s+(aula|disciplina|curso|matéria)\]/i,
+    /placeholder|PLACEHOLDER/,                          // literal "placeholder"
 ];
 
 export class WriteTool implements ToolExecutor {
@@ -213,22 +222,36 @@ export class WriteTool implements ToolExecutor {
             const charsBefore = existed ? fs.readFileSync(finalPath, 'utf-8').length : 0;
             const chars = content.length;
 
-            // H4: bloqueia sobrescrita que destruiria >50% do conteúdo existente
+            // H4: bloqueia sobrescrita que destruiria >50% do conteúdo existente.
+            // Exceção: se o conteúdo EXISTENTE é ele próprio um stub/placeholder, não há conteúdo real
+            // a proteger — a sobrescrita (mesmo com conteúdo menor) é sempre preferível a preservar um stub.
             if (existed && charsBefore > 0 && chars < charsBefore * 0.5) {
-                const reductionPct = Math.round((1 - chars / charsBefore) * 100);
-                log.warn(
-                    `[DESTRUCTIVE-WRITE-BLOCK] path="${finalPath}"` +
-                    ` chars_before=${charsBefore} chars_after=${chars}` +
-                    ` reduction_pct=${reductionPct}`
-                );
-                return {
-                    success: false,
-                    output: '',
-                    error:
-                        `[DESTRUCTIVE-WRITE-BLOCK] Escrita bloqueada: o conteúdo seria reduzido de ` +
-                        `${charsBefore} para ${chars} chars (−${reductionPct}%). ` +
-                        `Use append=true para adicionar ao final, ou a ferramenta edit para modificações parciais.`,
-                };
+                const existingContent = fs.readFileSync(finalPath, 'utf-8');
+                const existingIsStub = CONTENT_STUB_PATTERNS.some(p => p.test(existingContent))
+                    || (charsBefore <= 300 && /^\[.*\]$/.test(existingContent.trim()));
+                if (existingIsStub) {
+                    log.info(
+                        `[DESTRUCTIVE-WRITE-ALLOWED] path="${finalPath}"` +
+                        ` chars_before=${charsBefore} chars_after=${chars}` +
+                        ` reason=existing_content_is_stub`
+                    );
+                    // Continua para a escrita sem retornar erro
+                } else {
+                    const reductionPct = Math.round((1 - chars / charsBefore) * 100);
+                    log.warn(
+                        `[DESTRUCTIVE-WRITE-BLOCK] path="${finalPath}"` +
+                        ` chars_before=${charsBefore} chars_after=${chars}` +
+                        ` reduction_pct=${reductionPct}`
+                    );
+                    return {
+                        success: false,
+                        output: '',
+                        error:
+                            `[DESTRUCTIVE-WRITE-BLOCK] Escrita bloqueada: o conteúdo seria reduzido de ` +
+                            `${charsBefore} para ${chars} chars (−${reductionPct}%). ` +
+                            `Use append=true para adicionar ao final, ou a ferramenta edit para modificações parciais.`,
+                    };
+                }
             }
 
             fs.writeFileSync(finalPath, content);

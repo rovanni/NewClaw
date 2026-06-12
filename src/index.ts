@@ -120,6 +120,7 @@ async function main() {
     dashboard.setController(controller);
     dashboard.setProviderFactory(controller.getProviderFactory());
     dashboard.setMemoryManager(controller.getMemory(), controller.getMemoryCurator());
+    dashboard.setSkillLearner(controller.getSkillLearner());
     dashboard.start(config.dashboardPort);
     log.info(`\n⚙️  Configurações e Whitelist disponíveis em: http://localhost:${config.dashboardPort}/config\n`);
 

@@ -7,6 +7,7 @@ import { ClassificationMemory } from '../../memory/ClassificationMemory';
 import { DecisionMemory } from '../../memory/DecisionMemory';
 import { SkillInstaller } from '../../skills/SkillInstaller';
 import type { OwnerProfileService } from '../../services/OwnerProfileService';
+import type { SkillLearner } from '../../loop/SkillLearner';
 export interface DashboardContext {
     controller?: AgentController;
     providerFactory?: ProviderFactory;
@@ -16,6 +17,7 @@ export interface DashboardContext {
     classificationMemory?: ClassificationMemory;
     decisionMemory?: DecisionMemory;
     skillInstaller?: SkillInstaller;
+    skillLearner?: SkillLearner;
     ownerProfileService?: OwnerProfileService;
     config: NewClawConfig;
 }

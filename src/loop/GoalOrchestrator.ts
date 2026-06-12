@@ -33,6 +33,18 @@ import type { WorkflowEngine } from './WorkflowEngine';
 const log = createLogger('GoalOrchestrator');
 
 const CLARIFICATION_TTL_MS = 10 * 60 * 1000; // 10 min
+// Janela de follow-up: se um goal foi concluído há menos de RECENT_GOAL_TTL_MS, a próxima
+// mensagem pode ser uma refinamento/clarificação — passar o contexto ao GoalExtractor LLM.
+const RECENT_GOAL_TTL_MS = 5 * 60 * 1000; // 5 min
+
+interface RecentCompletedGoal {
+    intent: string;
+    objective: string;
+    /** Output final do goal (máx. 1000 chars) — injetado no contexto de follow-ups/refinamentos */
+    finalOutput: string;
+    completedAt: number;
+    success: boolean;
+}
 
 export class GoalOrchestrator {
     private readonly goalStore: GoalStore;
@@ -40,6 +52,13 @@ export class GoalOrchestrator {
     private readonly executionLoop: GoalExecutionLoop;
     /** Tracks sessions waiting for clarification: sessionKey → { originalMessage, timestamp } */
     private readonly pendingClarifications = new Map<string, { originalMessage: string; timestamp: number }>();
+    /**
+     * Rastreia o último goal concluído (com sucesso ou falha) por sessão.
+     * Usado para detectar mensagens de follow-up/clarificação enviadas logo após um goal completar.
+     * Sem este rastreamento, mensagens contextuais como "o curso abrange X, Y e Z" são
+     * classificadas como novos goals independentes, gerando um ciclo de replan desnecessário.
+     */
+    private readonly recentCompletedGoals = new Map<string, RecentCompletedGoal>();
     private workflowEngine?: WorkflowEngine;
 
     constructor(
@@ -154,11 +173,35 @@ export class GoalOrchestrator {
         }
 
         // ── Classificar a mensagem ──────────────────────────────────────────
+        // Se há um goal recente concluído para esta sessão dentro da janela de follow-up,
+        // injeta seu intent como contexto adicional para o GoalExtractor LLM.
+        // Isso permite que o LLM identifique "esta mensagem é uma clarificação do
+        // que o usuário pediu há 2 minutos" em vez de tratá-la como goal novo.
+        const recentGoal = this.recentCompletedGoals.get(sessionKey);
+        const isWithinFollowUpWindow = recentGoal &&
+            (Date.now() - recentGoal.completedAt) < RECENT_GOAL_TTL_MS;
+
+        let classifyMessages = recentMessages;
+        if (isWithinFollowUpWindow && recentGoal) {
+            const elapsedSec = Math.round((Date.now() - recentGoal.completedAt) / 1000);
+            // Sugestão 3: injeta o output anterior no contexto do GoalExtractor LLM.
+            // Permite que o LLM saiba o que foi gerado e identifique "esta mensagem refina aquilo".
+            const outputSnippet = recentGoal.finalOutput
+                ? ` — output: "${recentGoal.finalOutput.slice(0, 300)}"`
+                : '';
+            const followUpContext = {
+                role: 'assistant',
+                content: `[${elapsedSec}s atrás — goal concluído: "${recentGoal.intent.slice(0, 200)}" — sucesso: ${recentGoal.success}${outputSnippet}]`,
+            };
+            classifyMessages = [followUpContext, ...(recentMessages ?? [])];
+            log.info(`[GoalOrchestrator] recent goal context injected for classification (${elapsedSec}s ago): "${recentGoal.intent.slice(0, 80)}"`);
+        }
+
         const classifyStart = Date.now();
         const classification = await this.extractor.classify(
             message,
             context ?? { channel: 'unknown', chatId: conversationId },
-            recentMessages
+            classifyMessages
         );
         const classificationMs = Date.now() - classifyStart;
 
@@ -228,6 +271,26 @@ export class GoalOrchestrator {
                 this.pendingClarifications.set(sessionKey, { originalMessage: message, timestamp: Date.now() });
                 return 'Recebi os dados, mas não ficou claro o que você gostaria que eu fizesse com eles. Pode me dizer?';
             }
+        }
+
+        // ── Sugestão 2: texto puro sem formato de arquivo → AgentLoop direto ─────
+        // Objetivos de geração de conteúdo textual (discurso, carta, e-mail, poema...)
+        // sem formato de arquivo especificado são respondidos inline pelo AgentLoop.
+        // Isso elimina o ciclo write(stub)→DESTRUCTIVE-WRITE-BLOCK que acontece quando
+        // o GoalExecutionLoop planeja write + send_document para tarefas que o usuário
+        // espera receber como texto no chat, não como arquivo anexo.
+        if (this.isPlainTextGoal(message)) {
+            log.info(`[GOAL-ROUTING] route=agentloop_inline reason=plain_text_goal intent="${message.slice(0, 80)}"`);
+            const inlineResult = await this.agentLoop.process(conversationId, message, userId, context);
+            // Registra como goal concluído para Sugestão 3: follow-ups recebem o output anterior
+            this.recentCompletedGoals.set(sessionKey, {
+                intent: message,
+                objective: classification.objective || message,
+                finalOutput: (typeof inlineResult === 'string' ? inlineResult : '').slice(0, 1000),
+                completedAt: Date.now(),
+                success: true,
+            });
+            return inlineResult;
         }
 
         // ── Abandonar goal anterior ───────────────────────────────────────
@@ -311,6 +374,16 @@ export class GoalOrchestrator {
         log.info(`[GoalOrchestrator] goal=${goal.id} success=${result.success} cycles=${result.totalCycles} replans=${result.totalReplans}`);
         log.info(`[USER-MESSAGE] goal=${goal.id} session=${sessionKey} source=${result.success ? 'goal_success' : 'goal_failure'} output_len=${result.finalOutput.length}`);
 
+        // Registra o goal concluído para detecção de follow-up na próxima mensagem.
+        // A limpeza de entradas expiradas ocorre passivamente: sobrescrita pelo próximo goal.
+        this.recentCompletedGoals.set(sessionKey, {
+            intent: goal.userIntent,
+            objective: goal.objective,
+            finalOutput: result.finalOutput.slice(0, 1000),
+            completedAt: Date.now(),
+            success: result.success,
+        });
+
         // Auth pendente: preserva o texto E os botões do inline keyboard
         // (sem isso os botões são descartados e o usuário não vê a confirmação)
         if (!result.success && result.authOptions?.length) {
@@ -333,6 +406,21 @@ export class GoalOrchestrator {
 
         // Nunca chegou a executar — cai para AgentLoop normal
         return this.agentLoop.process(conversationId, message, userId, context);
+    }
+
+    /**
+     * Sugestão 2: detecta se o objetivo é geração de texto puro (discurso, carta, e-mail, etc.)
+     * sem pedido explícito de formato de arquivo. Nesses casos o AgentLoop responde inline —
+     * sem write + send_document — eliminando o ciclo stub→DESTRUCTIVE-WRITE-BLOCK.
+     *
+     * Regras:
+     * - Se a mensagem pede pdf/pptx/docx/arquivo/slide → false (GoalExecutionLoop cuida)
+     * - Se contém palavras de conteúdo textual puro → true (AgentLoop inline)
+     */
+    private isPlainTextGoal(message: string): boolean {
+        const hasFileFormat = /\b(pdf|pptx|docx|xlsx|arquivo|documento|slide|apresenta[cç][aã]o|planilha|exportar|salvar\s+em)\b/i.test(message);
+        if (hasFileFormat) return false;
+        return /\b(discurso|carta|e-mail|email|mensagem\s+(de\s+)?(texto|whatsapp)|redação|redac[aã]o|poema|hist[oó]ria|roteiro|script\s+(de\s+)?fala|comunicado|par[aá]grafo|conto|haiku|cr[oô]nica)\b/i.test(message);
     }
 
     /**

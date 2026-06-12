@@ -108,6 +108,7 @@ export class AgentController {
     private signalAdapter: SignalAdapter | null = null;
 
     public getMemory(): MemoryManager { return this.memory; }
+    public getSkillLearner(): SkillLearner { return this.skillLearner; }
     public getProviderFactory(): ProviderFactory { return this.providerFactory; }
     public getMemoryGovernor(): MemoryGovernor { return this.memoryGovernor; }
     public getSessionLearner(): SessionLearner { return this.sessionLearner; }
@@ -173,7 +174,7 @@ export class AgentController {
         });
 
         this.skillLoader = new SkillLoader(config.skillsDir);
-        this.skillLearner = new SkillLearner(this.db);
+        this.skillLearner = new SkillLearner(this.db, config.skillsDir);
 
         const languageDirective = buildLanguageDirective(config.language);
         const ownerName = this.ownerProfileService.getOwnerName() || config.ownerName || undefined;
