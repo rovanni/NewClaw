@@ -2,9 +2,9 @@
 name: html-pdf-converter
 description: Converte arquivos HTML para PDF usando o script html2pdf.sh. Suporta slides com JavaScript. Detecta automaticamente a melhor ferramenta disponível.
 version: "3.0"
-triggers: pdf, converter, gerar pdf, transformar em pdf, aula para pdf, slides para pdf, html para pdf, exportar pdf
+triggers: gerar pdf, transformar em pdf, converter para pdf, aula para pdf, slides para pdf, html para pdf, exportar pdf, salvar como pdf
 tools: exec_command, send_document
-tags: pdf, convert, export, html, document, print, publish, slides
+tags: pdf, convert, export, document, print, publish
 ---
 
 # HTML to PDF Converter

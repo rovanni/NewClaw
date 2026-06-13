@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
+import { OperationalMode, isValidMode } from '../core/CapabilityMode';
+import { PermissionRegistry } from '../core/PermissionRegistry';
 
 const log = createLogger('OwnerProfileService');
 
@@ -8,6 +10,7 @@ export interface OwnerProfile {
     locked: boolean;
     ownerName: string | null;
     ownerId: string | null;
+    capabilityMode: OperationalMode;
     createdAt: string;
     updatedAt: string;
 }
@@ -17,7 +20,8 @@ type AuditEvent =
     | 'name_change_confirmed'
     | 'overwrite_blocked'
     | 'lock_toggled'
-    | 'onboarding_confirmed';
+    | 'onboarding_confirmed'
+    | 'capability_mode_changed';
 
 export class OwnerProfileService {
     private db: Database.Database;
@@ -35,10 +39,16 @@ export class OwnerProfileService {
                 owner_user_id TEXT,
                 configured INTEGER DEFAULT 0,
                 locked INTEGER DEFAULT 0,
+                capability_mode TEXT DEFAULT 'safe',
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         `);
+
+        // Migração: adiciona coluna capability_mode em bancos existentes
+        try {
+            this.db.exec(`ALTER TABLE owner_profile ADD COLUMN capability_mode TEXT DEFAULT 'safe'`);
+        } catch { /* coluna já existe — ignorar */ }
 
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS owner_audit_log (
@@ -52,20 +62,56 @@ export class OwnerProfileService {
         `);
 
         this.db.prepare(
-            'INSERT OR IGNORE INTO owner_profile (id, configured, locked) VALUES (1, 0, 0)'
+            `INSERT OR IGNORE INTO owner_profile (id, configured, locked, capability_mode) VALUES (1, 0, 0, 'safe')`
         ).run();
+
+        // Restaura o modo salvo no PermissionRegistry
+        const row = this.db.prepare('SELECT capability_mode FROM owner_profile WHERE id = 1').get() as Record<string, unknown> | undefined;
+        const savedMode = (row?.capability_mode as string) ?? 'safe';
+        PermissionRegistry.getInstance().restoreMode(savedMode);
+
+        // Persiste automaticamente quando o modo muda em runtime
+        PermissionRegistry.getInstance().onChange((newMode) => {
+            try {
+                this.db.prepare(
+                    'UPDATE owner_profile SET capability_mode = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1'
+                ).run(newMode);
+            } catch { /* non-fatal */ }
+        });
     }
 
     getProfile(): OwnerProfile {
         const row = this.db.prepare('SELECT * FROM owner_profile WHERE id = 1').get() as Record<string, unknown>;
+        const savedMode = (row.capability_mode as string) ?? 'safe';
         return {
             configured: row.configured === 1,
             locked: row.locked === 1,
             ownerName: (row.owner_name as string | null) ?? null,
             ownerId: (row.owner_user_id as string | null) ?? null,
+            capabilityMode: isValidMode(savedMode) ? (savedMode as OperationalMode) : OperationalMode.SAFE,
             createdAt: row.created_at as string,
             updatedAt: row.updated_at as string,
         };
+    }
+
+    /**
+     * Altera o modo operacional e persiste no banco.
+     * Requer confirmação explícita para GOD mode.
+     */
+    setCapabilityMode(newMode: OperationalMode, source: string, godModeConfirmed = false): {
+        success: boolean;
+        error?: string;
+    } {
+        const result = PermissionRegistry.getInstance().setMode(newMode, source, godModeConfirmed);
+        if (!result.success) return result;
+
+        this.audit('capability_mode_changed', newMode, source, false);
+        log.info(`capability_mode_changed: ${newMode} (source=${source})`);
+        return { success: true };
+    }
+
+    getCapabilityMode(): OperationalMode {
+        return PermissionRegistry.getInstance().getMode();
     }
 
     isLocked(): boolean {

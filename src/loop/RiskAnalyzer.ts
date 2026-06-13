@@ -18,6 +18,7 @@ import { ToolRegistry } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { CapabilityRegistry } from '../core/CapabilityRegistry';
+import { permissionRegistry } from '../core/PermissionRegistry';
 import { Goal, PlanStep } from './GoalTypes';
 import { detectMissingRequiredArgs } from './GoalPlanner';
 
@@ -182,29 +183,37 @@ export class RiskAnalyzer {
 
         // ── 0. Constraints duras do ReflectionMemory (cirurgia seletiva) ────
         // Ferramentas com ≥90% de falha recente viram proibições absolutas.
-        // Em vez de bloquear o plano inteiro, removemos os steps que usam a
-        // ferramenta proibida. Só bloqueamos se o plano ficar completamente vazio.
-        // Passa planTools para filtrar constraints de tools que não estão no plano.
+        // Em DEVELOPER/GOD mode: constraints ainda são registradas no log para rastreabilidade,
+        // mas não bloqueiam nem removem steps — o agente tem autonomia para tentar mesmo assim.
         const planTools = plan.map(s => s.toolName).filter((t): t is string => Boolean(t));
+        const bypassConstraints = permissionRegistry.can('bypass_reflection_constraints');
         const constraints = this.reflectionMemory.buildConstraints(goal.objective.slice(0, 150), planTools);
         if (constraints.length > 0) {
-            for (const c of constraints) risks.push(`[CONSTRAINT] ${c}`);
+            for (const c of constraints) {
+                risks.push(bypassConstraints
+                    ? `[CONSTRAINT-BYPASSED:${permissionRegistry.getMode()}] ${c}`
+                    : `[CONSTRAINT] ${c}`
+                );
+            }
 
-            const { prunedPlan, violatedConstraint } = this.pruneConstrainedSteps(plan, constraints);
-            if (violatedConstraint) {
-                if (prunedPlan.length === 0) {
-                    log.warn(`[RiskAnalyzer] goal=${goal.id} BLOCKED by hard constraint (plano vazio): ${violatedConstraint}`);
-                    return {
-                        risks,
-                        adjustedPlan: plan,
-                        planAdjusted: false,
-                        blocked: true,
-                        blockReason: violatedConstraint,
-                    };
+            if (!bypassConstraints) {
+                const { prunedPlan, violatedConstraint } = this.pruneConstrainedSteps(plan, constraints);
+                if (violatedConstraint) {
+                    if (prunedPlan.length === 0) {
+                        log.warn(`[RiskAnalyzer] goal=${goal.id} BLOCKED by hard constraint (plano vazio): ${violatedConstraint}`);
+                        return {
+                            risks,
+                            adjustedPlan: plan,
+                            planAdjusted: false,
+                            blocked: true,
+                            blockReason: violatedConstraint,
+                        };
+                    }
+                    log.warn(`[RiskAnalyzer] goal=${goal.id} pruned ${plan.length - prunedPlan.length} step(s) violating constraint: ${violatedConstraint}`);
+                    plan = prunedPlan;
                 }
-                // Plano com steps problemáticos removidos — continua a execução
-                log.warn(`[RiskAnalyzer] goal=${goal.id} pruned ${plan.length - prunedPlan.length} step(s) violating constraint: ${violatedConstraint}`);
-                plan = prunedPlan;
+            } else {
+                log.info(`[RiskAnalyzer] goal=${goal.id} constraints bypassed (mode=${permissionRegistry.getMode()}): ${constraints.length} constraint(s) ignored`);
             }
         }
 
@@ -222,6 +231,15 @@ export class RiskAnalyzer {
                 if (hint) {
                     const firstLine = hint.split('\n').find(l => l.startsWith('-')) ?? hint;
                     risks.push(`Step "${step.description}": ${firstLine.slice(0, 120)}`);
+                    // S7: 100% de falha histórica em exec_command → promove para BLOCK-HINT
+                    // quando bypass_block_hints=false (SAFE/DEVELOPER). GOD mode ignora.
+                    if (step.toolName === 'exec_command' && /100%/.test(firstLine) &&
+                        !permissionRegistry.can('bypass_block_hints')) {
+                        risks.push(
+                            `[BLOCK-HINT] exec_command com 100% de falha histórica neste contexto — ` +
+                            `prefira 'write' + 'send_document' sem subprocess externo`
+                        );
+                    }
                 }
             }
         }

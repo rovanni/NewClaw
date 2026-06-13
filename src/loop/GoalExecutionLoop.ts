@@ -29,6 +29,7 @@ import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { ProactiveRecovery, ToolExecutorLike } from './ProactiveRecovery';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
+import { permissionRegistry } from '../core/PermissionRegistry';
 import { MemoryManager } from '../memory/MemoryManager';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext, SuccessCriterion, GoalProgressModel, ProgressComponent } from './GoalTypes';
@@ -175,6 +176,17 @@ export class GoalExecutionLoop {
             initialPlan = riskReport.planAdjusted ? riskReport.adjustedPlan : rawPlan;
             if (riskReport.risks.length > 0) {
                 log.info(`[GoalLoop] Q2 risks (initial): ${riskReport.risks.join(' | ')}`);
+            }
+            // Sprint 3.7B: BLOCK-HINTs do Q2 inicial → pré-injeta no GoalPlanner.
+            // Se o plano inicial já tem exec_command com 100% de falha, avisa antes de executar.
+            const initialBlockHints = riskReport.risks.filter(r => r.startsWith('[BLOCK-HINT]'));
+            if (initialBlockHints.length > 0 && !(riskReport.skillHints && riskReport.skillHints.length > 0)) {
+                const blockHintText =
+                    `⚠️ RESTRIÇÕES DETECTADAS (padrões de falha histórica):\n` +
+                    initialBlockHints.map(h => `- ${h.replace(/^\[BLOCK-HINT\]\s*/, '')}`).join('\n') +
+                    `\n\nPrefer 'write' + 'send_document' diretamente, sem exec_command.`;
+                log.info(`[GoalLoop] Q2 block-hints pre-injected (initial plan): ${initialBlockHints.length} hint(s)`);
+                this.planner.setSkillContext(blockHintText);
             }
         } else {
             log.debug('[GoalLoop] Q2 skipped — simple plan');
@@ -377,6 +389,17 @@ export class GoalExecutionLoop {
                 const skillNames = riskReport.skillHints.map(h => h.skillName).join(', ');
                 log.info(`[GoalLoop] Q2 skill context injected: skills=[${skillNames}] for next replan cycle=${cycleNumber}`);
                 this.planner.setSkillContext(allHintTexts);
+            }
+            // Sprint 3.7B: BLOCK-HINTs do Q2 → injeta no GoalPlanner quando não há skill cobrindo.
+            // Garante que exec_command com 100% de falha histórica gere instrução ativa no próximo plano.
+            const blockHints = riskReport.risks.filter(r => r.startsWith('[BLOCK-HINT]'));
+            if (blockHints.length > 0 && !(riskReport.skillHints && riskReport.skillHints.length > 0)) {
+                const blockHintText =
+                    `⚠️ RESTRIÇÕES DETECTADAS (padrões de falha histórica):\n` +
+                    blockHints.map(h => `- ${h.replace(/^\[BLOCK-HINT\]\s*/, '')}`).join('\n') +
+                    `\n\nNo próximo plano: use 'write' + 'send_document' diretamente, sem exec_command.`;
+                log.info(`[GoalLoop] Q2 block-hints injected for next replan cycle=${cycleNumber}: ${blockHints.length} hint(s)`);
+                this.planner.setSkillContext(blockHintText);
             }
         } else {
             log.debug(`[GoalLoop] Q2 skipped (replan cycle=${cycleNumber} — simple plan)`);
@@ -1028,7 +1051,18 @@ export class GoalExecutionLoop {
                 }
 
                 case 'needs_auth': {
-                    // Extrai txnId dos botões para vincular ao goal (permite retomada via resumeGoal)
+                    // DEVELOPER/GOD mode: auto-aprovar exec_command sem confirmação por chamada.
+                    // isDestructive() ainda bloqueia comandos perigosos em qualquer modo.
+                    if (permissionRegistry.can('auto_approve_exec')) {
+                        log.info(`[GoalLoop] needs_auth auto-approved (mode=${permissionRegistry.getMode()}) goal=${currentGoal.id}`);
+                        // Resume diretamente: o step volta como pending para ser re-executado
+                        // pelo WorkflowEngine com aprovação implícita via resumeGoal.
+                        this.markStepDone(currentGoal, pendingStep, cycleResult.output ?? '');
+                        currentGoal = this.goalStore.getById(currentGoal.id)!;
+                        break;
+                    }
+
+                    // SAFE mode: pausa e aguarda confirmação do usuário
                     const txnId = cycleResult.authOptions
                         ?.find(o => o.value?.startsWith('auth:'))
                         ?.value?.split(':').slice(2).join(':');
@@ -1047,19 +1081,24 @@ export class GoalExecutionLoop {
                     const depInfo = cycleResult.depInfo!;
                     const installKey = `install_dep_${depInfo.name}`;
 
-                    // Registra tentativa de instalação antes de injetar o step
-                    // (previne loop: se o install falhar, GoalEvaluator retornará 'failed' com manual instructions)
                     this.goalStore.addStrategyTried(currentGoal.id, installKey);
                     currentGoal = this.goalStore.getById(currentGoal.id)!;
 
                     const installStepId = `install_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
+                    const autoInstall = permissionRegistry.can('install_dependencies');
                     const installStep: PlanStep = {
                         id: installStepId,
                         description: `Instalar '${depInfo.name}' necessário para continuar: ${depInfo.installCmd}`,
-                        // Sem toolName → AgentLoop processa → chama exec_command → WorkflowEngine pede auth ao usuário
+                        // DEVELOPER/GOD: toolName explícito → exec_command direto (sem auth gate do WorkflowEngine)
+                        // SAFE: sem toolName → AgentLoop processa → WorkflowEngine pede confirmação
+                        toolName: autoInstall ? 'exec_command' : undefined,
+                        toolArgs: autoInstall ? { command: depInfo.installCmd } : undefined,
                         status: 'pending',
                         fallbackSteps: [],
                     };
+                    if (autoInstall) {
+                        log.info(`[GoalLoop] needs_dependency auto-install approved (mode=${permissionRegistry.getMode()}): ${depInfo.name}`);
+                    }
 
                     // Reconstrói o plano: steps já concluídos + installStep + step que falhou + resto
                     const updatedPlan: PlanStep[] = [

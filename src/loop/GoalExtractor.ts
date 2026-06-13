@@ -18,8 +18,10 @@ import { ChannelContext } from './agentLoopTypes';
 const log = createLogger('GoalExtractor');
 
 // P0.4 — timeout dedicado ao classificador: uma resposta binária não justifica 45s.
-// Se o LLM não responder em 8s, o sistema faz fail-open para AgentLoop.
-const GOAL_EXTRACTOR_TIMEOUT_MS = 8_000;
+// 15s acomoda modelos que emitem thinking tokens antes do JSON (ex: minimax-m3).
+// Abaixo de 8s, modelos com reasoning pipeline ultrapassam o limite e o conteúdo
+// recuperado é o thinking em texto natural, que não é JSON → fail-open indesejado.
+const GOAL_EXTRACTOR_TIMEOUT_MS = 15_000;
 
 // ── Heurísticas determinísticas ───────────────────────────────────────────────
 

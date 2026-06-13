@@ -12,6 +12,7 @@
 
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
+import { permissionRegistry } from '../core/PermissionRegistry';
 import type { MemoryManager } from './MemoryManager';
 
 const log = createLogger('ReflectionMemory');
@@ -321,10 +322,16 @@ export class ReflectionMemory {
         if (/ensurepip|python3.?venv/i.test(pattern)) {
             return `NÃO use 'python3 -m venv' — ensurepip indisponível neste ambiente. Use pandoc, marp ou outra abordagem.`;
         }
-        // Ferramentas core nunca devem ser bloqueadas por constraints duras.
-        // Falhas pontuais (ex: leitura de arquivo binário, path incorreto) não
-        // representam falha permanente da ferramenta — apenas uso inadequado no contexto.
-        const CORE_TOOLS = new Set(['read', 'write', 'edit', 'exec_command', 'memory_search', 'memory_write', 'list_workspace', 'send_document', 'send_audio']);
+        // Ferramentas core nunca devem ser bloqueadas por constraints duras em SAFE/DEVELOPER.
+        // Em GOD mode (bypass_reflection_constraints=true), exec_command pode receber constraints
+        // reais — mas o RiskAnalyzer as marcará como [CONSTRAINT-BYPASSED] sem enforceá-las.
+        // SAFE/DEVELOPER: exec_command permanece protegido de hard-block por CORE_TOOLS.
+        const bypassMode = permissionRegistry.can('bypass_reflection_constraints');
+        const CORE_TOOLS = new Set(
+            bypassMode
+                ? ['read', 'write', 'edit', 'memory_search', 'memory_write', 'list_workspace', 'send_document', 'send_audio']
+                : ['read', 'write', 'edit', 'exec_command', 'memory_search', 'memory_write', 'list_workspace', 'send_document', 'send_audio']
+        );
         if (CORE_TOOLS.has(toolUsed)) return null;
         // Tool que falhou 100% das vezes
         if (toolUsed && toolUsed !== 'unknown' && toolUsed !== 'agentloop') {
