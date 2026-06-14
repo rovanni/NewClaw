@@ -39,6 +39,11 @@ workspace/.test_*/
 debug_loop.js
 fetch.js
 scratch/
+tmp_*.js
+tmp_*.mjs
+tmp_*.txt
+tmp_*.png
+tmp_*.json
 
 # Testes de regressão (executados localmente, não parte do build)
 src/__tests__/
