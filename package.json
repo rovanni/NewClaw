@@ -15,7 +15,7 @@
     "@types/express": "^5.0.6",
     "@types/form-data": "^2.2.1",
     "@types/node": "^20.0.0",
-    "@whiskeysockets/baileys": "^7.0.0-rc11",
+    "@whiskeysockets/baileys": "^7.0.0-rc12",
     "better-sqlite3": "^12.10.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
