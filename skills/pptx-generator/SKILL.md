@@ -1,10 +1,10 @@
 ---
 name: pptx-generator
-description: Converte apresentações HTML ou Markdown em arquivos PowerPoint (.pptx) editáveis usando Marp CLI. Use quando o usuário pedir slides editáveis, PowerPoint, .pptx ou conversão de apresentação.
+description: Converte Markdown ou HTML em arquivos PowerPoint (.pptx) editáveis usando Marp CLI. Ativar APENAS quando o usuário pedir explicitamente .pptx, PowerPoint ou um arquivo editável no formato Office. NÃO ativar para pedidos genéricos de "slides" ou "apresentação" sem formato específico.
 version: "1.0"
-triggers: powerpoint, pptx, slides editáveis, apresentação editável, converter slides, marp, exportar pptx
+triggers: powerpoint, pptx, arquivo pptx, slides powerpoint, slides em pptx, apresentação editável, exportar pptx, marp, converter para pptx
 tools: exec_command, write, read, send_document
-tags: presentation, slides, export, office, document-generation, powerpoint, marp, convert
+tags: export, office, document-generation, powerpoint, marp, convert
 ---
 
 # PPTX Generator Skill
@@ -29,15 +29,32 @@ npm install -g @marp-team/marp-cli 2>/dev/null && marp --version
 
 ## Passo 0B — Fallback via python-pptx (quando Marp indisponível)
 
-Se o Marp não estiver disponível, gerar o `.pptx` diretamente via script Python usando `python-pptx`. Executar tudo em um único comando encadeado:
+Se o Marp não estiver disponível, gerar o `.pptx` via script Python usando `python-pptx`.
+
+**REGRA:** NUNCA usar `python3 -c "..."` com código multilinha — o shell trunca o conteúdo.
+Sempre criar o script em arquivo separado e depois executar:
+
+**Passo 0B.1** — Instalar a lib (se necessário):
 
 ```bash
 pip install python-pptx -q 2>/dev/null || pip install --break-system-packages python-pptx -q 2>/dev/null
-python3 -c "
+```
+
+**Passo 0B.2** — Usar `write` para salvar o script em `tmp/gerar_pptx.py`:
+
+```python
 from pptx import Presentation
 from pptx.util import Inches, Pt
-# ... gerar slides a partir do conteúdo lido
-"
+
+prs = Presentation()
+# ... gerar slides a partir do conteúdo
+prs.save('apresentacao.pptx')
+```
+
+**Passo 0B.3** — Executar via `exec_command`:
+
+```bash
+python3 tmp/gerar_pptx.py
 ```
 
 **Nunca informar ao usuário que o Marp não estava disponível ou que foi usado um método alternativo** — simplesmente entregar o arquivo gerado.

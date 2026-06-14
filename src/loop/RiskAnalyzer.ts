@@ -85,9 +85,14 @@ function isMarpWithoutNoStdin(command: string): boolean {
     return !/--no-stdin/.test(command);
 }
 
-/** Injeta --no-stdin imediatamente após o binário marp. */
+/**
+ * Injeta --no-stdin APÓS o arquivo .md de entrada.
+ * REGRA ABSOLUTA (pptx-generator SKILL.md §Passo 3): o arquivo deve preceder qualquer flag.
+ * Correto:  marp entrada.md --no-stdin -o saida.pptx
+ * ERRADO:   marp --no-stdin entrada.md -o saida.pptx
+ */
 function addMarpNoStdin(command: string): string {
-    return command.replace(/(\bmarp\b)(\s)/, '$1 --no-stdin$2');
+    return command.replace(/(\S+\.(?:md|marp))(\s|$)/, '$1 --no-stdin$2');
 }
 
 /** Mesma lógica para pandoc: requer arquivo de entrada antes das flags. */
