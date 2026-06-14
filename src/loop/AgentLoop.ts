@@ -2202,6 +2202,15 @@ export class AgentLoop {
                         if (terminalTools.includes(toolCall.name) && result.result.success) {
                             move('TOOL_COMPLETED', { step: stepCount, tool: toolCall.name, success: true });
                             move('FINAL_READY', { step: stepCount, tool: toolCall.name, terminal: true });
+                            // CORREÇÃO 1: notifica GoalExecutionLoop que DELIVERY-GUARD entregou
+                            // um artefato diretamente. Sem este callback, sentArtifacts nunca é
+                            // atualizado e o SemanticValidator pode marcar outcome=partial antes
+                            // que S10 execute, causando reentregas redundantes nos ciclos seguintes.
+                            if (toolCall.name === 'send_document') {
+                                const finalArgs = (result.finalArgs ?? toolCall.arguments) as Record<string, unknown>;
+                                const deliveredPath = String(finalArgs['file_path'] ?? finalArgs['path'] ?? '');
+                                if (deliveredPath) channelContext?.onArtifactDelivered?.(deliveredPath);
+                            }
                             traceManager.completeTrace(trace, 'completed', result.result.output);
                             this.persistTrace(trace, stepCount, 'completed', result.result.output, channelContext);
                             return result.result.output;

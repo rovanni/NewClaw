@@ -42,6 +42,11 @@ export interface ChannelContext {
     deferSendDocument?: (args: Record<string, unknown>) => void;
     /** P3-DEDUP: verifica se um artefato já foi registrado para deferral nesta execução */
     isDeferredArtifact?: (filePath: string) => boolean;
+    /** CORREÇÃO 1: callback acionado pelo DELIVERY-GUARD do AgentLoop quando entrega um artefato
+     *  diretamente (sem passar pelo deferSendDocument). Permite que GoalExecutionLoop atualize
+     *  sentArtifacts antes que o ciclo seja avaliado pelo SemanticValidator, evitando reentregas
+     *  redundantes mesmo quando outcome é downgraded para 'partial'. */
+    onArtifactDelivered?: (filePath: string) => void;
 }
 
 export interface AgentLoopConfig {

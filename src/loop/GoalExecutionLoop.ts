@@ -819,7 +819,12 @@ export class GoalExecutionLoop {
                 );
             }
 
-            let cycleResult = await this.executeStep(currentGoal, pendingStep, channelContext, totalCycles);
+            let cycleResult = await this.executeStep(
+                currentGoal, pendingStep, channelContext, totalCycles,
+                // CORREÇÃO 1: passa callback para que DELIVERY-GUARD notifique sentArtifacts
+                // diretamente, sem depender de S10 (que só executa em case 'success').
+                (fp) => { if (fp) sentArtifacts.add(fp); },
+            );
 
             // Recarrega o goal — pode ter sido abandonado durante o step (nova mensagem do usuário)
             currentGoal = this.goalStore.getById(currentGoal.id)!;
@@ -1047,6 +1052,26 @@ export class GoalExecutionLoop {
                         retryBudget: Math.max(0, currentGoal.retryBudget - 1),
                     });
                     currentGoal = this.goalStore.getById(currentGoal.id)!;
+                    // CORREÇÃO 2 (S10-PARTIAL): defense-in-depth para o gap DELIVERY-GUARD.
+                    // Se deferredSends contém paths (capturados pelo intercept do main loop)
+                    // e o DELIVERY-GUARD os entregou antes do downgrade para 'partial',
+                    // a Correção 1 já registrou via callback. Este bloco cobre o caso
+                    // onde o callback falhou silenciosamente ou não foi acionado.
+                    // NÃO injeta steps de send (diferente do S10 em case 'success') —
+                    // apenas garante que sentArtifacts reflita o que foi entregue.
+                    if (cycleResult.deferredSends?.length) {
+                        for (const sendArgs of cycleResult.deferredSends) {
+                            const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
+                            if (fp && !sentArtifacts.has(fp)) {
+                                sentArtifacts.add(fp);
+                                log.info(
+                                    `[S10-PARTIAL] goal=${currentGoal.id}` +
+                                    ` artifact="${fp}"` +
+                                    ` source=deferred_sends_partial_fallback`
+                                );
+                            }
+                        }
+                    }
                     break;
                 }
 
@@ -1226,6 +1251,7 @@ export class GoalExecutionLoop {
         step: PlanStep,
         channelContext: ChannelContext,
         cycle = 0,
+        onArtifactDelivered?: (filePath: string) => void,
     ): Promise<CycleResult> {
         const startMs = Date.now();
 
@@ -1366,6 +1392,22 @@ export class GoalExecutionLoop {
                     },
                     isDeferredArtifact: (filePath: string) => {
                         return deferredSendArgsMap.has(filePath);
+                    },
+                    // CORREÇÃO 1: recebe notificação do DELIVERY-GUARD quando ele entrega
+                    // um artefato diretamente (sem passar pelo deferSendDocument).
+                    // Propaga para o caller (executeGoal) via onArtifactDelivered, que tem
+                    // acesso a sentArtifacts no escopo correto. Isso garante que o path
+                    // seja registrado antes que o SemanticValidator possa fazer downgrade
+                    // para 'partial', bloqueando S10 e causando reentregas redundantes.
+                    onArtifactDelivered: (filePath: string) => {
+                        if (filePath) {
+                            onArtifactDelivered?.(filePath);
+                            log.info(
+                                `[DELIVERY-GUARD-REGISTERED] goal=${goal.id}` +
+                                ` artifact="${filePath}"` +
+                                ` source=delivery_guard_callback`
+                            );
+                        }
                     },
                 };
                 const response = await this.agentLoop.process(
