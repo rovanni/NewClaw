@@ -84,6 +84,12 @@ export class GoalExecutionLoop {
         this.planner.setSkillContext(context);
     }
 
+    /** Propagates hot-reload model changes from the dashboard without restart. */
+    updateInternalModels(plannerModel?: string, riskModel?: string): void {
+        if (plannerModel) this.planner.setModel(plannerModel);
+        if (riskModel)    this.riskAnalyzer.setModel(riskModel);
+    }
+
     // ── Ponto de entrada principal ────────────────────────────────────────────
 
     async executeGoal(
@@ -471,8 +477,14 @@ export class GoalExecutionLoop {
         // Feedback do Q4 → Q1: razão pela qual o objetivo não foi atingido no ciclo anterior
         let priorFeedback: string | undefined = initialFeedback;
         // Fix #2: rastreia caminhos de arquivo já enviados nesta sessão de execução.
-        // Impede que deliverable_check reenvie um artefato já entregue ao usuário.
-        const sentArtifacts = new Set<string>();
+        // Restaurado do GoalStore para sobreviver a restarts (Sprint 3 — cross-restart dedup).
+        const sentArtifacts = new Set<string>(currentGoal.sentArtifacts ?? []);
+        const trackArtifact = (fp: string) => {
+            if (fp && !sentArtifacts.has(fp)) {
+                sentArtifacts.add(fp);
+                this.goalStore.update(currentGoal.id, { sentArtifacts: [...sentArtifacts] });
+            }
+        };
         // H4/ITEM4: rastreia writes por path para detectar duplicate writes entre ciclos
         const writeTraceByPath = new Map<string, { cycle: number; step: string; source: string }>();
 
@@ -597,7 +609,7 @@ export class GoalExecutionLoop {
                                 this.markStepDone(currentGoal, sendStep, sendResult.output ?? '');
                                 currentGoal = this.goalStore.getById(currentGoal.id)!;
                                 if (filePath) {
-                                    sentArtifacts.add(filePath);
+                                    trackArtifact(filePath);
                                     log.info(`[DELIVERY-REGISTRY] artifact="${filePath}" goal=${currentGoal.id} status=delivered`);
                                 }
                             } else {
@@ -823,7 +835,7 @@ export class GoalExecutionLoop {
                 currentGoal, pendingStep, channelContext, totalCycles,
                 // CORREÇÃO 1: passa callback para que DELIVERY-GUARD notifique sentArtifacts
                 // diretamente, sem depender de S10 (que só executa em case 'success').
-                (fp) => { if (fp) sentArtifacts.add(fp); },
+                (fp) => { if (fp) trackArtifact(fp); },
             );
 
             // Recarrega o goal — pode ter sido abandonado durante o step (nova mensagem do usuário)
@@ -957,7 +969,7 @@ export class GoalExecutionLoop {
                     this.updateProgressModel(pendingStep, 'completed', cycleResult.output);
                     // Fix #2: registra artefatos enviados para evitar reenvio por deliverable_check
                     if (pendingStep.toolName === 'send_document' && pendingStep.toolArgs?.file_path) {
-                        sentArtifacts.add(String(pendingStep.toolArgs.file_path));
+                        trackArtifact(String(pendingStep.toolArgs.file_path));
                     }
                     // FIX C + P3-DEDUP: injeta sends diferidos do AgentLoop como steps pendentes.
                     // Deduplicação adicional: garante que o mesmo file_path não entre duas vezes
@@ -1016,7 +1028,7 @@ export class GoalExecutionLoop {
                         // dedup de sentArtifacts, causando duplos envios nas iterações seguintes.
                         for (const sendArgs of cycleResult.deferredSends) {
                             const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
-                            if (fp) sentArtifacts.add(fp);
+                            if (fp) trackArtifact(fp);
                         }
                     }
                     // ITEM4: rastreia writes por path para detectar duplicatas entre ciclos
@@ -1063,7 +1075,7 @@ export class GoalExecutionLoop {
                         for (const sendArgs of cycleResult.deferredSends) {
                             const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
                             if (fp && !sentArtifacts.has(fp)) {
-                                sentArtifacts.add(fp);
+                                trackArtifact(fp);
                                 log.info(
                                     `[S10-PARTIAL] goal=${currentGoal.id}` +
                                     ` artifact="${fp}"` +

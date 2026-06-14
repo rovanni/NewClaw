@@ -174,6 +174,7 @@ export class AgentLoop {
     private decisionMemory: DecisionMemory;
     private protocolParser: ProtocolParser;
     private observer: ObserverValidator;
+    private goalOrchestrator: import('./GoalOrchestrator').GoalOrchestrator | null = null;
     private reflectionMemory: ReflectionMemory;
     private fsmHistoryStore: FSMHistoryStore;
     private lastToolExecution: { toolName: string; toolOutput: string; intent: string; category: string } | null = null;
@@ -220,6 +221,11 @@ export class AgentLoop {
         log.info('[WF] WorkflowEngine registered in AgentLoop');
     }
 
+    /** Registra o GoalOrchestrator para que updateConfig possa propagar modelos internos em runtime. */
+    setGoalOrchestrator(go: import('./GoalOrchestrator').GoalOrchestrator): void {
+        this.goalOrchestrator = go;
+    }
+
     /**
      * Registra callback pós-turno (fire-and-forget).
      * Disparado via setImmediate após cada resposta entregue.
@@ -241,6 +247,16 @@ export class AgentLoop {
                 this.providerFactory
             );
             log.info('[updateConfig] ModelProfileRegistry reloaded with updated modelRouter');
+
+            const { observerModel, plannerModel, riskModel } = cfg.modelRouter;
+            if (observerModel) {
+                this.observer.setModel(observerModel);
+                log.info(`[updateConfig] ObserverValidator model → ${observerModel}`);
+            }
+            if (plannerModel || riskModel) {
+                this.goalOrchestrator?.updateInternalModels(plannerModel, riskModel);
+                log.info(`[updateConfig] internal models → planner=${plannerModel ?? '—'} risk=${riskModel ?? '—'}`);
+            }
         }
     }
 

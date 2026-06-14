@@ -126,9 +126,13 @@ export class ObserverValidator {
     private observerModel: string;
     private providerFactory: ProviderFactory;
 
-    constructor(providerFactory: ProviderFactory, observerModel: string = process.env.OBSERVER_MODEL ?? 'qwen3.5:cloud') {
+    constructor(providerFactory: ProviderFactory, observerModel: string = process.env.OBSERVER_MODEL || 'qwen3.5:cloud') {
         this.providerFactory = providerFactory;
         this.observerModel = observerModel;
+    }
+
+    setModel(model: string): void {
+        if (model) this.observerModel = model;
     }
 
     // ── Deterministic pre-check (no LLM) ─────────────────────────────────────

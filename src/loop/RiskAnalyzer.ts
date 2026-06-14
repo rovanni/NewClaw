@@ -28,7 +28,7 @@ const log = createLogger('RiskAnalyzer');
 // kimi-k2.6 e outros thinking models são inadequados — raciocinam 150s+ sem produzir output.
 // Configurável via RISK_MODEL — usar nome compatível com DEFAULT_PROVIDER
 // Ollama: 'gemma4:31b-cloud' | OpenRouter: 'google/gemini-2.0-flash' | Gemini: 'gemini-2.0-flash'
-const RISK_REVIEW_MODEL = process.env.RISK_MODEL ?? 'gemma4:31b-cloud';
+const RISK_REVIEW_MODEL_DEFAULT = process.env.RISK_MODEL || 'gemma4:31b-cloud';
 
 // Binários universais presentes em qualquer shell POSIX sem necessidade de instalação.
 // Checar via CapabilityRegistry causaria falso positivo — esses comandos não estão no
@@ -168,11 +168,17 @@ export interface RiskReport {
 }
 
 export class RiskAnalyzer {
+    private model: string = RISK_REVIEW_MODEL_DEFAULT;
+
     constructor(
         private readonly providerFactory: ProviderFactory,
         private readonly toolRegistry: typeof ToolRegistry,
         private readonly reflectionMemory: ReflectionMemory,
     ) {}
+
+    setModel(model: string): void {
+        if (model) this.model = model;
+    }
 
     async analyze(
         goal: Goal,
@@ -545,7 +551,7 @@ export class RiskAnalyzer {
      * Mesmo padrão do GoalPlanner.callPlannerLLM — gemma4 não entra em extended thinking.
      */
     private async callRiskLLM(messages: LLMMessage[], timeoutMs: number): Promise<{ status: string; content: string }> {
-        const provider = this.providerFactory.getProviderWithModel(RISK_REVIEW_MODEL);
+        const provider = this.providerFactory.getProviderWithModel(this.model);
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {

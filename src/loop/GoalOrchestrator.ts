@@ -94,6 +94,11 @@ export class GoalOrchestrator {
         this.executionLoop.setSessionManager(sm);
     }
 
+    /** Propaga mudanças de modelo interno do dashboard sem precisar reiniciar. */
+    updateInternalModels(plannerModel?: string, riskModel?: string): void {
+        this.executionLoop.updateInternalModels(plannerModel, riskModel);
+    }
+
     /** Injeta WorkflowEngine para resolução de auth por texto (sem clique no botão). */
     setWorkflowEngine(engine: WorkflowEngine): void {
         this.workflowEngine = engine;

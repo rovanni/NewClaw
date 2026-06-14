@@ -113,6 +113,15 @@ async function main() {
         log.warn('⚠️ TELEGRAM_ALLOWED_USER_IDS vazio — nenhum usuário autorizado no Telegram');
     }
 
+    const missingInternalModels: string[] = [];
+    if (!process.env.PLANNER_MODEL)  missingInternalModels.push('PLANNER_MODEL (GoalPlanner)');
+    if (!process.env.RISK_MODEL)     missingInternalModels.push('RISK_MODEL (RiskAnalyzer)');
+    if (!process.env.OBSERVER_MODEL) missingInternalModels.push('OBSERVER_MODEL (ObserverValidator)');
+    if (missingInternalModels.length > 0) {
+        log.warn(`⚠️  Modelos internos não configurados (usando defaults): ${missingInternalModels.join(', ')}`);
+        log.warn('   → Configure em: Dashboard → Modelos → Modelos dos Componentes Internos → Salvar & Reiniciar');
+    }
+
     const controller = new AgentController(config);
 
     // Start Dashboard

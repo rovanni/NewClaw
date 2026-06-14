@@ -143,6 +143,7 @@ export interface Goal {
 
     toolsTried: string[];              // set de tool names já tentados
     strategiesTried: string[];        // descrições de estratégias tentadas
+    sentArtifacts?: string[];         // paths de artefatos já entregues — persiste entre restarts
 
     nextAction?: string;               // próxima ação calculada pelo GoalPlanner
     cycleFocus?: string;               // foco do ciclo atual (estratégia do planner, ex: "converter via pandoc")

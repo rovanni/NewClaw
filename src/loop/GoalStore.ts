@@ -51,6 +51,7 @@ interface GoalRow {
     current_milestone_index: number;
     allow_roadmap_adjustment: number;
     success_criteria: string | null;
+    sent_artifacts: string | null;
 }
 
 export class GoalStore {
@@ -104,6 +105,7 @@ export class GoalStore {
         try { this.db.exec('ALTER TABLE goals ADD COLUMN current_milestone_index INTEGER NOT NULL DEFAULT 0'); } catch { /* já existe */ }
         try { this.db.exec('ALTER TABLE goals ADD COLUMN allow_roadmap_adjustment INTEGER NOT NULL DEFAULT 1'); } catch { /* já existe */ }
         try { this.db.exec('ALTER TABLE goals ADD COLUMN success_criteria TEXT'); } catch { /* já existe */ }
+        try { this.db.exec('ALTER TABLE goals ADD COLUMN sent_artifacts TEXT'); } catch { /* já existe */ }
         log.info('[GoalStore] schema ready');
     }
 
@@ -220,6 +222,7 @@ export class GoalStore {
         if (patch.currentMilestoneIndex !== undefined) { sets.push('current_milestone_index = ?'); values.push(patch.currentMilestoneIndex); }
         if (patch.allowRoadmapAdjustment !== undefined) { sets.push('allow_roadmap_adjustment = ?'); values.push(patch.allowRoadmapAdjustment ? 1 : 0); }
         if (patch.successCriteria !== undefined)       { sets.push('success_criteria = ?');       values.push(JSON.stringify(patch.successCriteria)); }
+        if (patch.sentArtifacts !== undefined)         { sets.push('sent_artifacts = ?');         values.push(JSON.stringify(patch.sentArtifacts)); }
         if (patch.retryBudget !== undefined)       { sets.push('retry_budget = ?');       values.push(patch.retryBudget); }
         if (patch.replanBudget !== undefined)      { sets.push('replan_budget = ?');      values.push(patch.replanBudget); }
         if (patch.confidence !== undefined)        { sets.push('confidence = ?');         values.push(patch.confidence); }
@@ -350,6 +353,7 @@ export class GoalStore {
             updatedAt: row.updated_at,
             expiresAt: row.expires_at,
             completedAt: row.completed_at ?? undefined,
+            sentArtifacts: this.parseJson<string[]>(row.sent_artifacts, []),
         };
     }
 

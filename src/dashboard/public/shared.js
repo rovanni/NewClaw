@@ -241,6 +241,10 @@ const TRANSLATIONS = {
     classifier_server_label: "Servidor Classificador",
     vision_server_label: "Servidor Visão",
     provider_classifier_title: "🔌 Provider & Classificador",
+    provider_per_profile_title: "🔌 Provider por Perfil (opcional)",
+    provider_per_profile_hint: "Sobrescreve o provider padrão para cada categoria. Deixe em branco para usar o provider padrão.",
+    internal_models_title: "⚙️ Modelos dos Componentes Internos",
+    internal_models_hint: "Modelos usados pelo GoalPlanner, RiskAnalyzer e ObserverValidator. Devem ser compatíveis com o provider padrão.",
 
     // Advanced view
     advanced_page_desc: "System prompt e configurações especializadas",
@@ -556,6 +560,10 @@ const TRANSLATIONS = {
     classifier_server_label: "Classifier Server",
     vision_server_label: "Vision Server",
     provider_classifier_title: "🔌 Provider & Classifier",
+    provider_per_profile_title: "🔌 Provider per Profile (optional)",
+    provider_per_profile_hint: "Overrides the default provider per category. Leave blank to use the default provider.",
+    internal_models_title: "⚙️ Internal Component Models",
+    internal_models_hint: "Models used by GoalPlanner, RiskAnalyzer and ObserverValidator. Must be compatible with the default provider.",
 
     // Advanced view
     advanced_page_desc: "System prompt and specialized settings",
@@ -860,6 +868,10 @@ const TRANSLATIONS = {
     classifier_server_label: "Servidor Clasificador",
     vision_server_label: "Servidor Visión",
     provider_classifier_title: "🔌 Proveedor y Clasificador",
+    provider_per_profile_title: "🔌 Proveedor por Perfil (opcional)",
+    provider_per_profile_hint: "Reemplaza el proveedor predeterminado por categoría. Déjelo en blanco para usar el proveedor predeterminado.",
+    internal_models_title: "⚙️ Modelos de Componentes Internos",
+    internal_models_hint: "Modelos usados por GoalPlanner, RiskAnalyzer y ObserverValidator. Deben ser compatibles con el proveedor predeterminado.",
 
     // Advanced view
     advanced_page_desc: "System prompt y configuraciones especializadas",

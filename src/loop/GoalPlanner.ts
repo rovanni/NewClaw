@@ -537,9 +537,10 @@ export function detectMissingRequiredArgs(tool: string, args: Record<string, unk
 
 // Configurável via PLANNER_MODEL — usar nome de modelo compatível com DEFAULT_PROVIDER
 // Ollama: 'gemma4:31b-cloud' | OpenRouter: 'google/gemini-2.0-flash' | Gemini: 'gemini-2.0-flash'
-const PLANNER_MODEL = process.env.PLANNER_MODEL ?? 'gemma4:31b-cloud';
+const PLANNER_MODEL_DEFAULT = process.env.PLANNER_MODEL || 'gemma4:31b-cloud';
 
 export class GoalPlanner {
+    private model: string = PLANNER_MODEL_DEFAULT;
     private skillContext: string | undefined;
     private readonly skillLoader = new SkillLoader();
     private skillsSummaryCache: { summary: string; loadedAt: number } | null = null;
@@ -549,6 +550,10 @@ export class GoalPlanner {
         private readonly providerFactory: ProviderFactory,
         private readonly reflectionMemory: ReflectionMemory,
     ) {}
+
+    setModel(model: string): void {
+        if (model) this.model = model;
+    }
 
     private loadSkillsSummary(): string {
         if (this.skillsSummaryCache &&
@@ -568,7 +573,7 @@ export class GoalPlanner {
     }
 
     private async callPlannerLLM(messages: LLMMessage[], timeoutMs: number): Promise<{ status: string; content: string }> {
-        const provider = this.providerFactory.getProviderWithModel(PLANNER_MODEL);
+        const provider = this.providerFactory.getProviderWithModel(this.model);
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
@@ -598,7 +603,7 @@ export class GoalPlanner {
     }
 
     async plan(goal: Goal, runtimeContext?: string, capabilityContext?: string, activeMilestone?: string): Promise<PlanResult> {
-        log.info(`[GoalPlanner] plan start goal=${goal.id} model=${PLANNER_MODEL} contextLen=${runtimeContext?.length ?? 0}`);
+        log.info(`[GoalPlanner] plan start goal=${goal.id} model=${this.model} contextLen=${runtimeContext?.length ?? 0}`);
 
         const availableTools = ToolRegistry.getEnabled().map(t => t.name);
         const skillsSummary  = this.loadSkillsSummary();
@@ -616,13 +621,13 @@ export class GoalPlanner {
             const result = await this.callPlannerLLM(messages, 90_000);
 
             if (result.status !== 'success') {
-                log.warn(`[GoalPlanner] plan failed: model=${PLANNER_MODEL} status=${result.status} raw="${result.content.slice(0, 150)}"`);
+                log.warn(`[GoalPlanner] plan failed: model=${this.model} status=${result.status} raw="${result.content.slice(0, 150)}"`);
                 return this.fallbackPlan(goal);
             }
 
             const parsed = this.parsePlanResponse(result.content);
             if (parsed.steps.length === 0) {
-                log.warn(`[GoalPlanner] plan empty after parse: model=${PLANNER_MODEL} raw="${result.content.slice(0, 200)}"`);
+                log.warn(`[GoalPlanner] plan empty after parse: model=${this.model} raw="${result.content.slice(0, 200)}"`);
                 return this.fallbackPlan(goal);
             }
 
@@ -631,13 +636,13 @@ export class GoalPlanner {
             PromptComposer.logMetrics();
             return { steps, strategy: parsed.strategy };
         } catch (err) {
-            log.warn(`[GoalPlanner] plan exception: model=${PLANNER_MODEL} err="${String(err).slice(0, 100)}"`);
+            log.warn(`[GoalPlanner] plan exception: model=${this.model} err="${String(err).slice(0, 100)}"`);
             return this.fallbackPlan(goal);
         }
     }
 
     async replan(goal: Goal, blocker: GoalBlocker, runtimeContext?: string, capabilityContext?: string, activeMilestone?: string, progressModel?: GoalProgressModel): Promise<PlanResult> {
-        log.info(`[GoalPlanner] replan start goal=${goal.id} model=${PLANNER_MODEL} blocker=${blocker.kind} contextLen=${runtimeContext?.length ?? 0}`);
+        log.info(`[GoalPlanner] replan start goal=${goal.id} model=${this.model} blocker=${blocker.kind} contextLen=${runtimeContext?.length ?? 0}`);
 
         // P4 observabilidade: registra a decisão de replanejamento com causa raiz detectável
         const lastFailedStep = [...(goal.currentPlan ?? [])].reverse()
@@ -685,13 +690,13 @@ export class GoalPlanner {
             const result = await this.callPlannerLLM(messages, 45_000);
 
             if (result.status !== 'success') {
-                log.warn(`[GoalPlanner] replan failed: model=${PLANNER_MODEL} status=${result.status} raw="${result.content.slice(0, 150)}"`);
+                log.warn(`[GoalPlanner] replan failed: model=${this.model} status=${result.status} raw="${result.content.slice(0, 150)}"`);
                 return this.emergencyFallback(goal, blocker);
             }
 
             const parsed = this.parsePlanResponse(result.content);
             if (parsed.steps.length === 0) {
-                log.warn(`[GoalPlanner] replan empty after parse: model=${PLANNER_MODEL} raw="${result.content.slice(0, 200)}"`);
+                log.warn(`[GoalPlanner] replan empty after parse: model=${this.model} raw="${result.content.slice(0, 200)}"`);
                 return this.emergencyFallback(goal, blocker);
             }
 
@@ -714,13 +719,13 @@ export class GoalPlanner {
             PromptComposer.logMetrics();
             return { steps, strategy: parsed.strategy };
         } catch (err) {
-            log.warn(`[GoalPlanner] replan exception: model=${PLANNER_MODEL} err="${String(err).slice(0, 100)}"`);
+            log.warn(`[GoalPlanner] replan exception: model=${this.model} err="${String(err).slice(0, 100)}"`);
             return this.emergencyFallback(goal, blocker);
         }
     }
 
     async planRoadmap(goal: Goal, runtimeContext?: string, capabilityContext?: string): Promise<string[]> {
-        log.info(`[GoalPlanner] planRoadmap start goal=${goal.id} model=${PLANNER_MODEL}`);
+        log.info(`[GoalPlanner] planRoadmap start goal=${goal.id} model=${this.model}`);
 
         const availableTools = ToolRegistry.getEnabled().map(t => t.name);
         const skillsSummary  = this.loadSkillsSummary();

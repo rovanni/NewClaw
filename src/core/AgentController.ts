@@ -238,6 +238,7 @@ export class AgentController {
         this.goalOrchestrator.setSessionManager(this.sessionManager);
         this.goalOrchestrator.setWorkflowEngine(this.workflowEngine);
         this.messageBus.setGoalOrchestrator(this.goalOrchestrator);
+        this.agentLoop.setGoalOrchestrator(this.goalOrchestrator);
 
         this.auditor = new AuditorService({
             ollamaUrl: config.ollamaUrl || 'http://localhost:11434',

@@ -149,9 +149,16 @@ export function render(container) {
       </details>
 
       <!-- Modelos dos componentes internos -->
-      <details class="cfg-details">
-        <summary>${t('internal_models_title') || 'Modelos dos Componentes Internos'}</summary>
+      <details class="cfg-details" id="ml-internalDetails">
+        <summary>
+          ${t('internal_models_title') || 'Modelos dos Componentes Internos'}
+          <span id="ml-internalBadge" style="display:none;margin-left:8px;padding:2px 8px;border-radius:10px;font-size:.72rem;font-weight:600;background:rgba(255,160,0,.15);color:#f59e0b;border:1px solid rgba(255,160,0,.3);">⚠️ não configurados</span>
+        </summary>
         <div class="cfg-details-body">
+          <div id="ml-internalWarning" style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:8px;background:rgba(255,160,0,.08);border:1px solid rgba(255,160,0,.3);font-size:.82rem;line-height:1.5;color:var(--text-main);">
+            ⚠️ <strong>Um ou mais modelos internos estão vazios.</strong> O sistema usará defaults, mas pode falhar se o provider ativo não os tiver disponíveis.<br>
+            Preencha os campos abaixo e clique <strong>Salvar &amp; Reiniciar</strong>.
+          </div>
           <div class="form-hint" style="margin-bottom:12px;">
             ${t('internal_models_hint') || 'Modelos usados pelo GoalPlanner, RiskAnalyzer e ObserverValidator. Compatíveis com o provider padrão.'}
           </div>
@@ -242,11 +249,26 @@ export function render(container) {
   el('ml-plannerModel').value  = r.plannerModel  || '';
   el('ml-riskModel').value     = r.riskModel     || '';
   el('ml-observerModel').value = r.observerModel || '';
+
+  // Warn when any internal model is unconfigured
+  function checkInternalModels() {
+    const mr = cs.get('modelRouter') || {};
+    const unconfigured = !mr.plannerModel || !mr.riskModel || !mr.observerModel;
+    const badge   = el('ml-internalBadge');
+    const warning = el('ml-internalWarning');
+    const details = el('ml-internalDetails');
+    if (badge)   badge.style.display   = unconfigured ? 'inline' : 'none';
+    if (warning) warning.style.display = unconfigured ? 'block'  : 'none';
+    if (details && unconfigured) details.open = true;
+  }
+  checkInternalModels();
+
   ['plannerModel','riskModel','observerModel'].forEach(key => {
     el(`ml-${key}`).addEventListener('input', e => {
       const mr = { ...cs.get('modelRouter') };
       mr[key] = e.target.value;
       cs.set('modelRouter', mr);
+      checkInternalModels();
     });
   });
 
