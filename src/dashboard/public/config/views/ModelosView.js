@@ -8,12 +8,42 @@ const ROUTE_MAP = {
   classifierModel: 'classifierModel',
 };
 
+const PROV_LABELS = {
+  ollama: 'Ollama (Local + Cloud)', gemini: 'Google Gemini',
+  openrouter: 'OpenRouter', deepseek: 'DeepSeek', groq: 'Groq',
+};
+
 export function render(container) {
   container.innerHTML = `
     <div class="page-view">
       <div class="page-header">
         <h1>🤖 ${t('sidebar_models')}</h1>
         <p>${t('models_page_desc')}</p>
+      </div>
+
+      <!-- Configuração Efetiva -->
+      <div class="cfg-efetiva">
+        <div class="cfg-efetiva-title">📌 ${t('effective_config_title')}</div>
+        <div class="cfg-efetiva-body">
+          <div class="cfg-efetiva-routes">
+            ${effRouteRow('chat',      '💬', 'Chat')}
+            ${effRouteRow('code',      '💻', t('route_code_cat'))}
+            ${effRouteRow('vision',    '👁️', t('route_vision_cat'))}
+            ${effRouteRow('light',     '⚡', t('route_light_cat'))}
+            ${effRouteRow('analysis',  '📊', t('route_analysis_cat'))}
+            ${effRouteRow('execution', '🧠', t('route_execution_cat'))}
+          </div>
+          <div class="cfg-efetiva-meta">
+            <div class="cfg-efetiva-meta-row">
+              <span class="cfg-efetiva-meta-label">${t('provider_active_label')}</span>
+              <span class="cfg-efetiva-meta-value" id="ml-eff-provider">—</span>
+            </div>
+            <div class="cfg-efetiva-meta-row">
+              <span class="cfg-efetiva-meta-label">${t('classifier_model_label')}</span>
+              <span class="cfg-efetiva-meta-value" id="ml-eff-classifier">—</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Pipeline visual -->
@@ -45,12 +75,12 @@ export function render(container) {
           </div>
           <div class="pipe-arrow">→</div>
           <div class="pipe-expand">
-            <div class="pipe-route"><span class="pipe-route-icon">💬</span><span class="pipe-route-cat">chat</span><span class="pipe-route-model" id="ml-pr-chat">—</span></div>
-            <div class="pipe-route"><span class="pipe-route-icon">💻</span><span class="pipe-route-cat">${t('route_code_cat')}</span><span class="pipe-route-model" id="ml-pr-code">—</span></div>
-            <div class="pipe-route"><span class="pipe-route-icon">👁️</span><span class="pipe-route-cat">${t('route_vision_cat')}</span><span class="pipe-route-model" id="ml-pr-vision">—</span></div>
-            <div class="pipe-route"><span class="pipe-route-icon">⚡</span><span class="pipe-route-cat">${t('route_light_cat')}</span><span class="pipe-route-model" id="ml-pr-light">—</span></div>
-            <div class="pipe-route"><span class="pipe-route-icon">📊</span><span class="pipe-route-cat">${t('route_analysis_cat')}</span><span class="pipe-route-model" id="ml-pr-analysis">—</span></div>
-            <div class="pipe-route"><span class="pipe-route-icon">🧠</span><span class="pipe-route-cat">${t('route_execution_cat')}</span><span class="pipe-route-model" id="ml-pr-execution">—</span></div>
+            ${pipeRoute('chat',      '💬', 'chat')}
+            ${pipeRoute('code',      '💻', t('route_code_cat'))}
+            ${pipeRoute('vision',    '👁️', t('route_vision_cat'))}
+            ${pipeRoute('light',     '⚡', t('route_light_cat'))}
+            ${pipeRoute('analysis',  '📊', t('route_analysis_cat'))}
+            ${pipeRoute('execution', '🧠', t('route_execution_cat'))}
           </div>
         </div>
       </div>
@@ -132,18 +162,16 @@ export function render(container) {
 
       <!-- Provider por perfil -->
       <details class="cfg-details">
-        <summary>${t('provider_per_profile_title') || 'Provider por Perfil (opcional)'}</summary>
+        <summary>${t('provider_per_profile_title')}</summary>
         <div class="cfg-details-body">
-          <div class="form-hint" style="margin-bottom:12px;">
-            ${t('provider_per_profile_hint') || 'Sobrescreve o provider padrão para cada categoria. Deixe em branco para usar o provider padrão.'}
-          </div>
+          <div class="form-hint" style="margin-bottom:12px;">${t('provider_per_profile_hint')}</div>
           <div class="route-grid">
-            ${providerCard('provider_chat',      '💬', 'Chat')}
-            ${providerCard('provider_code',      '💻', t('route_code_cat') || 'Código')}
-            ${providerCard('provider_vision',    '👁️', t('route_vision_cat') || 'Visão')}
-            ${providerCard('provider_light',     '⚡', t('route_light_cat') || 'Leve')}
-            ${providerCard('provider_analysis',  '📊', t('route_analysis_cat') || 'Análise')}
-            ${providerCard('provider_execution', '🧠', t('route_execution_cat') || 'Execução')}
+            ${providerCard('chat',      '💬', 'Chat')}
+            ${providerCard('code',      '💻', t('route_code_cat'))}
+            ${providerCard('vision',    '👁️', t('route_vision_cat'))}
+            ${providerCard('light',     '⚡', t('route_light_cat'))}
+            ${providerCard('analysis',  '📊', t('route_analysis_cat'))}
+            ${providerCard('execution', '🧠', t('route_execution_cat'))}
           </div>
         </div>
       </details>
@@ -151,29 +179,31 @@ export function render(container) {
       <!-- Modelos dos componentes internos -->
       <details class="cfg-details" id="ml-internalDetails">
         <summary>
-          ${t('internal_models_title') || 'Modelos dos Componentes Internos'}
-          <span id="ml-internalBadge" style="display:none;margin-left:8px;padding:2px 8px;border-radius:10px;font-size:.72rem;font-weight:600;background:rgba(255,160,0,.15);color:#f59e0b;border:1px solid rgba(255,160,0,.3);">⚠️ não configurados</span>
+          ${t('internal_models_title')}
+          <span id="ml-internalBadge" style="display:none;margin-left:8px;padding:2px 8px;border-radius:10px;font-size:.72rem;font-weight:600;background:rgba(255,160,0,.15);color:#f59e0b;border:1px solid rgba(255,160,0,.3);">⚠️ ${t('internal_unconfigured_badge')}</span>
         </summary>
         <div class="cfg-details-body">
           <div id="ml-internalWarning" style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:8px;background:rgba(255,160,0,.08);border:1px solid rgba(255,160,0,.3);font-size:.82rem;line-height:1.5;color:var(--text-main);">
             ⚠️ <strong>Um ou mais modelos internos estão vazios.</strong> O sistema usará defaults, mas pode falhar se o provider ativo não os tiver disponíveis.<br>
             Preencha os campos abaixo e clique <strong>Salvar &amp; Reiniciar</strong>.
           </div>
-          <div class="form-hint" style="margin-bottom:12px;">
-            ${t('internal_models_hint') || 'Modelos usados pelo GoalPlanner, RiskAnalyzer e ObserverValidator. Compatíveis com o provider padrão.'}
+          <div class="form-hint" style="margin-bottom:14px;">${t('internal_models_hint')}</div>
+          <div class="internal-comp-grid">
+            ${internalCompCard('ml-plannerModel',  '📋', 'GoalPlanner',       t('internal_planner_desc'),  'gemma4:31b-cloud')}
+            ${internalCompCard('ml-riskModel',     '🛡️', 'RiskAnalyzer',      t('internal_risk_desc'),     'gemma4:31b-cloud')}
+            ${internalCompCard('ml-observerModel', '🔬', 'ObserverValidator', t('internal_observer_desc'), 'qwen3.5:cloud')}
           </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">GoalPlanner</label>
-              <input type="text" class="form-input" id="ml-plannerModel" placeholder="gemma4:31b-cloud" style="max-width:240px;">
-            </div>
-            <div class="form-group">
-              <label class="form-label">RiskAnalyzer</label>
-              <input type="text" class="form-input" id="ml-riskModel" placeholder="gemma4:31b-cloud" style="max-width:240px;">
-            </div>
-            <div class="form-group">
-              <label class="form-label">ObserverValidator</label>
-              <input type="text" class="form-input" id="ml-observerModel" placeholder="qwen3.5:cloud" style="max-width:240px;">
+        </div>
+      </details>
+
+      <!-- Diagnóstico de Roteamento -->
+      <details class="cfg-details" id="ml-diagDetails">
+        <summary>🔍 ${t('routing_diag_title')}</summary>
+        <div class="cfg-details-body">
+          <div id="ml-diagContent">
+            <div class="routing-diag-empty">
+              <span>📡</span>
+              <span>${t('routing_diag_waiting')}</span>
             </div>
           </div>
         </div>
@@ -185,7 +215,7 @@ export function render(container) {
   const r  = s.modelRouter || {};
   const el = id => document.getElementById(id);
 
-  // Populate inputs from configStore
+  // Populate inputs
   el('ml-defaultProvider').value  = s.defaultProvider || 'ollama';
   el('ollamaModel').value         = s.ollamaModel || '';
   el('modelChat').value           = r.chat      || '';
@@ -197,20 +227,30 @@ export function render(container) {
   el('classifierModel').value     = r.classifierModel  || '';
   el('ml-classifierServer').value = r.classifierServer || '';
   el('ml-visionServer').value     = r.visionServer     || '';
+  el('ml-plannerModel').value     = r.plannerModel  || '';
+  el('ml-riskModel').value        = r.riskModel     || '';
+  el('ml-observerModel').value    = r.observerModel || '';
 
   toggleOllamaSection(s.defaultProvider);
   updatePipeline(r);
+  updateEffectiveConfig(r, s.defaultProvider);
+  updateProviderHints(s.defaultProvider);
+  updateModelStatus(providersStore.get('models') || [], r);
+  checkInternalModels();
 
-  // Bind provider select
+  // Provider select
   el('ml-defaultProvider').addEventListener('change', e => {
-    cs.set('defaultProvider', e.target.value);
-    toggleOllamaSection(e.target.value);
+    const prov = e.target.value;
+    cs.set('defaultProvider', prov);
+    toggleOllamaSection(prov);
+    updateProviderHints(prov);
+    updateEffectiveConfig(cs.get('modelRouter') || {}, prov);
   });
 
-  // Bind ollamaModel
+  // Ollama main model
   el('ollamaModel').addEventListener('input', e => cs.set('ollamaModel', e.target.value));
 
-  // Bind route inputs to configStore.modelRouter
+  // Route inputs
   Object.keys(ROUTE_MAP).forEach(inputId => {
     const inputEl = el(inputId);
     if (!inputEl) return;
@@ -221,7 +261,7 @@ export function render(container) {
     });
   });
 
-  // Bind classifier server / vision server
+  // Classifier server / vision server
   el('ml-classifierServer').addEventListener('input', e => {
     const mr = { ...cs.get('modelRouter') };
     mr.classifierServer = e.target.value;
@@ -233,7 +273,7 @@ export function render(container) {
     cs.set('modelRouter', mr);
   });
 
-  // Bind per-profile provider selects
+  // Per-profile provider selects
   ['chat','code','vision','light','analysis','execution'].forEach(cat => {
     const sel = el(`ml-prov-${cat}`);
     if (!sel) return;
@@ -242,27 +282,11 @@ export function render(container) {
       const mr = { ...cs.get('modelRouter') };
       mr[`provider_${cat}`] = e.target.value || undefined;
       cs.set('modelRouter', mr);
+      updateProviderHints(cs.get('defaultProvider'));
     });
   });
 
-  // Bind internal component models
-  el('ml-plannerModel').value  = r.plannerModel  || '';
-  el('ml-riskModel').value     = r.riskModel     || '';
-  el('ml-observerModel').value = r.observerModel || '';
-
-  // Warn when any internal model is unconfigured
-  function checkInternalModels() {
-    const mr = cs.get('modelRouter') || {};
-    const unconfigured = !mr.plannerModel || !mr.riskModel || !mr.observerModel;
-    const badge   = el('ml-internalBadge');
-    const warning = el('ml-internalWarning');
-    const details = el('ml-internalDetails');
-    if (badge)   badge.style.display   = unconfigured ? 'inline' : 'none';
-    if (warning) warning.style.display = unconfigured ? 'block'  : 'none';
-    if (details && unconfigured) details.open = true;
-  }
-  checkInternalModels();
-
+  // Internal component models
   ['plannerModel','riskModel','observerModel'].forEach(key => {
     el(`ml-${key}`).addEventListener('input', e => {
       const mr = { ...cs.get('modelRouter') };
@@ -286,13 +310,65 @@ export function render(container) {
   updateDropdownModels(providersStore.get('models') || []);
   initDropdowns(ddIds);
 
-  // Subscribe to providersStore for model list
-  const unsubModels = providersStore.on('models', models => updateDropdownModels(models));
+  // Subscribe to providersStore
+  const unsubModels = providersStore.on('models', models => {
+    updateDropdownModels(models);
+    updateModelStatus(models, cs.get('modelRouter') || {});
+  });
 
-  // Subscribe to configStore for pipeline updates
-  const unsubRouter = cs.on('modelRouter', mr => updatePipeline(mr));
+  // Subscribe to configStore router
+  const unsubRouter = cs.on('modelRouter', mr => {
+    updatePipeline(mr);
+    updateEffectiveConfig(mr, cs.get('defaultProvider'));
+    updateModelStatus(providersStore.get('models') || [], mr);
+  });
 
-  return () => { unsubModels(); unsubRouter(); };
+  // Routing diagnostics
+  if (window._newclawLastRoutingDecision) {
+    updateRoutingDiag(window._newclawLastRoutingDecision);
+  }
+  const diagHandler = e => updateRoutingDiag(e.detail);
+  window.addEventListener('newclaw-routing-decision', diagHandler);
+
+  return () => {
+    unsubModels();
+    unsubRouter();
+    window.removeEventListener('newclaw-routing-decision', diagHandler);
+  };
+
+  function checkInternalModels() {
+    const mr = cs.get('modelRouter') || {};
+    const trim = v => (v || '').trim();
+    const unconfigured = !trim(mr.plannerModel) || !trim(mr.riskModel) || !trim(mr.observerModel);
+    const badge   = el('ml-internalBadge');
+    const warning = el('ml-internalWarning');
+    const details = el('ml-internalDetails');
+    if (badge)   badge.style.display   = unconfigured ? 'inline' : 'none';
+    if (warning) warning.style.display = unconfigured ? 'block'  : 'none';
+    if (details && unconfigured) details.open = true;
+  }
+}
+
+// ─── HTML helpers ─────────────────────────────────────────────
+
+function effRouteRow(cat, icon, label) {
+  return `
+    <div class="cfg-efetiva-row">
+      <span class="cfg-efetiva-row-icon">${icon}</span>
+      <span class="cfg-efetiva-row-label">${label}</span>
+      <span class="cfg-efetiva-row-arrow">→</span>
+      <span class="cfg-efetiva-row-model" id="ml-eff-${cat}">—</span>
+    </div>`;
+}
+
+function pipeRoute(cat, icon, label) {
+  return `
+    <div class="pipe-route">
+      <span class="pipe-route-icon">${icon}</span>
+      <span class="pipe-route-cat">${label}</span>
+      <span class="pipe-route-model" id="ml-pr-${cat}">—</span>
+      <span class="dot" id="ml-status-${cat}" title=""></span>
+    </div>`;
 }
 
 function routeCard(id, icon, label, sub, placeholder) {
@@ -310,8 +386,7 @@ function routeCard(id, icon, label, sub, placeholder) {
     </div>`;
 }
 
-function providerCard(key, icon, label) {
-  const cat = key.replace('provider_', '');
+function providerCard(cat, icon, label) {
   return `
     <div class="route-card">
       <div class="route-card-header">
@@ -319,14 +394,100 @@ function providerCard(key, icon, label) {
         <div class="route-card-label">${label}</div>
       </div>
       <select class="form-select" id="ml-prov-${cat}" style="font-size:.78rem;">
-        <option value="">— padrão —</option>
+        <option value="">— ${t('prov_inherit_default')} —</option>
         <option value="ollama">Ollama</option>
         <option value="openrouter">OpenRouter</option>
         <option value="gemini">Gemini</option>
         <option value="deepseek">DeepSeek</option>
         <option value="groq">Groq</option>
       </select>
+      <div class="prov-hint" id="ml-prov-hint-${cat}"></div>
     </div>`;
+}
+
+function internalCompCard(id, icon, name, desc, placeholder) {
+  return `
+    <div class="internal-comp-card">
+      <div class="internal-comp-header">
+        <span class="internal-comp-icon">${icon}</span>
+        <div>
+          <div class="internal-comp-name">${name}</div>
+          <div class="internal-comp-desc">${desc}</div>
+        </div>
+      </div>
+      <input type="text" class="form-input" id="${id}" placeholder="${placeholder}" style="font-size:.8rem;">
+    </div>`;
+}
+
+// ─── Reactive update functions ────────────────────────────────
+
+function updateEffectiveConfig(r, defaultProvider) {
+  const s = v => v || '—';
+  ['chat','code','vision','light','analysis','execution'].forEach(cat => {
+    const e = document.getElementById(`ml-eff-${cat}`);
+    if (e) e.textContent = s(r[cat]);
+  });
+  const provEl = document.getElementById('ml-eff-provider');
+  if (provEl) provEl.textContent = PROV_LABELS[defaultProvider] || defaultProvider || '—';
+  const clsEl = document.getElementById('ml-eff-classifier');
+  if (clsEl) clsEl.textContent = s(r.classifierModel);
+}
+
+function updateModelStatus(models, r) {
+  const available = new Set(models || []);
+  const isCloud = m => m && (m.endsWith(':cloud') || m.includes('-cloud'));
+  ['chat','code','vision','light','analysis','execution'].forEach(cat => {
+    const statusEl = document.getElementById(`ml-status-${cat}`);
+    if (!statusEl) return;
+    const model = r ? r[cat] : '';
+    if (!model) {
+      statusEl.className = 'dot';
+      statusEl.title = '';
+    } else if (isCloud(model)) {
+      statusEl.className = 'dot dot-cloud';
+      statusEl.title = 'Cloud';
+    } else if (available.has(model)) {
+      statusEl.className = 'dot online';
+      statusEl.title = 'Disponível (local)';
+    } else {
+      statusEl.className = 'dot dot-missing';
+      statusEl.title = 'Não instalado localmente';
+    }
+  });
+}
+
+function updateProviderHints(defaultProvider) {
+  const provName = PROV_LABELS[defaultProvider] || defaultProvider || '—';
+  ['chat','code','vision','light','analysis','execution'].forEach(cat => {
+    const hint = document.getElementById(`ml-prov-hint-${cat}`);
+    const sel  = document.getElementById(`ml-prov-${cat}`);
+    if (!hint || !sel) return;
+    const val = sel.value;
+    if (!val) {
+      hint.textContent = `↑ ${t('prov_inheriting')}: ${provName}`;
+      hint.className = 'prov-hint prov-hint-inherit';
+    } else {
+      hint.textContent = `↑ ${t('prov_overriding')}: ${PROV_LABELS[val] || val}`;
+      hint.className = 'prov-hint prov-hint-override';
+    }
+  });
+}
+
+function updateRoutingDiag(decision) {
+  const el = document.getElementById('ml-diagContent');
+  if (!el || !decision) return;
+  const esc = s => String(s || '—').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  el.innerHTML = `
+    <div class="routing-diag-grid">
+      <div class="routing-diag-row"><span class="rd-label">${t('rd_message')}</span><span class="rd-value">${esc(decision.message)}</span></div>
+      <div class="routing-diag-row"><span class="rd-label">${t('rd_classifier')}</span><span class="rd-value">${esc(decision.classifier)}</span></div>
+      <div class="routing-diag-row"><span class="rd-label">${t('rd_category')}</span><span class="rd-value rd-cat">${esc(decision.category)}</span></div>
+      <div class="routing-diag-row"><span class="rd-label">${t('rd_model')}</span><span class="rd-value rd-model">${esc(decision.model)}</span></div>
+      <div class="routing-diag-row"><span class="rd-label">${t('rd_provider')}</span><span class="rd-value">${esc(decision.provider)}</span></div>
+      ${decision.elapsed != null ? `<div class="routing-diag-row"><span class="rd-label">${t('rd_elapsed')}</span><span class="rd-value">${esc(decision.elapsed)} ms</span></div>` : ''}
+    </div>`;
+  const details = document.getElementById('ml-diagDetails');
+  if (details) details.open = true;
 }
 
 function toggleOllamaSection(provider) {

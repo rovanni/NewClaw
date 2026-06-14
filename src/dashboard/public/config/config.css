@@ -101,6 +101,8 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .dot.online { background:var(--success); animation:breathe 2.4s ease-in-out infinite; }
 .dot.offline,.dot.err { background:var(--danger); }
 .dot.warn { background:var(--warning); }
+.dot.dot-cloud { background:var(--accent); }
+.dot.dot-missing { background:var(--text-soft); opacity:.45; }
 
 /* ════════════════════════════════════
    DASHBOARD PAGE
@@ -439,6 +441,83 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .toast.show { transform:translateY(0); opacity:1; }
 .toast.success { background:rgba(74,222,128,.15); color:var(--success); border:1px solid var(--success); }
 .toast.error { background:rgba(248,113,113,.15); color:var(--danger); border:1px solid var(--danger); }
+
+/* ════════════════════════════════════
+   MODELOS — Configuração Efetiva
+════════════════════════════════════ */
+
+.cfg-efetiva {
+  background:linear-gradient(135deg, var(--accent-bg) 0%, var(--bg-surface) 100%);
+  border:1px solid rgba(125,211,252,.25); border-radius:14px;
+  padding:18px 22px; margin-bottom:14px;
+}
+.cfg-efetiva-title {
+  font-size:.72rem; font-weight:700; text-transform:uppercase;
+  letter-spacing:.08em; color:var(--accent); margin-bottom:14px;
+}
+.cfg-efetiva-body {
+  display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap;
+}
+.cfg-efetiva-routes { flex:1; min-width:200px; display:flex; flex-direction:column; gap:4px; }
+.cfg-efetiva-row {
+  display:flex; align-items:center; gap:8px; font-size:.78rem; padding:2px 0;
+}
+.cfg-efetiva-row-icon { font-size:.85rem; flex-shrink:0; width:18px; text-align:center; }
+.cfg-efetiva-row-label { color:var(--text-muted); width:68px; flex-shrink:0; font-size:.75rem; }
+.cfg-efetiva-row-arrow { color:var(--text-soft); flex-shrink:0; font-size:.8rem; }
+.cfg-efetiva-row-model { font-weight:700; color:var(--text-main); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.8rem; }
+.cfg-efetiva-meta {
+  display:flex; flex-direction:column; gap:10px;
+  padding:12px 16px; background:var(--bg-input);
+  border:1px solid var(--border-color); border-radius:10px;
+  min-width:170px; flex-shrink:0;
+}
+.cfg-efetiva-meta-row { display:flex; flex-direction:column; gap:2px; }
+.cfg-efetiva-meta-label { font-size:.62rem; text-transform:uppercase; letter-spacing:.05em; color:var(--text-soft); }
+.cfg-efetiva-meta-value { font-size:.82rem; font-weight:700; color:var(--text-main); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* ════════════════════════════════════
+   MODELOS — Provider hints
+════════════════════════════════════ */
+
+.prov-hint { font-size:.67rem; margin-top:5px; min-height:1rem; }
+.prov-hint-inherit { color:var(--success); }
+.prov-hint-override { color:var(--warning); }
+
+/* ════════════════════════════════════
+   MODELOS — Internal component cards
+════════════════════════════════════ */
+
+.internal-comp-grid {
+  display:grid; grid-template-columns:repeat(auto-fill,minmax(215px,1fr)); gap:12px;
+}
+.internal-comp-card {
+  background:var(--bg-input); border:1px solid var(--border-color);
+  border-radius:10px; padding:13px;
+}
+.internal-comp-header { display:flex; align-items:flex-start; gap:10px; margin-bottom:10px; }
+.internal-comp-icon { font-size:1.15rem; flex-shrink:0; margin-top:1px; }
+.internal-comp-name { font-size:.85rem; font-weight:700; color:var(--text-main); margin-bottom:3px; }
+.internal-comp-desc { font-size:.69rem; color:var(--text-soft); line-height:1.45; }
+
+/* ════════════════════════════════════
+   MODELOS — Routing diagnostics
+════════════════════════════════════ */
+
+.routing-diag-empty {
+  display:flex; align-items:center; gap:10px; padding:18px 0;
+  color:var(--text-soft); font-size:.8rem; justify-content:center;
+}
+.routing-diag-grid { display:flex; flex-direction:column; }
+.routing-diag-row {
+  display:flex; gap:12px; align-items:baseline; padding:7px 0;
+  border-bottom:1px solid var(--border-color);
+}
+.routing-diag-row:last-child { border-bottom:none; }
+.rd-label { color:var(--text-muted); width:140px; flex-shrink:0; font-size:.74rem; }
+.rd-value { color:var(--text-main); font-weight:600; flex:1; font-size:.82rem; word-break:break-all; }
+.rd-cat { color:var(--accent); }
+.rd-model { color:var(--success); }
 
 @media(max-width:768px){
   .sidebar { width:50px; }
