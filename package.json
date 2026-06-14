@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/form-data": "^2.2.1",
@@ -28,8 +29,5 @@
     "ts-node": "^10.9.0",
     "typescript": "^6.0.3"
   },
-  "devDependencies": {
-    "@types/cookie-parser": "^1.4.10",
-    "playwright": "^1.60.0"
-  }
+  "devDependencies": {}
 }
