@@ -350,6 +350,14 @@ MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
         ? `\n⚡ DICA DE CORREÇÃO: A ferramenta "${lastFailedTool}" foi executada mas não produziu o resultado esperado. Antes de trocar de estratégia, considere se pode reutilizar "${lastFailedTool}" com argumentos corrigidos (ex: dry_run=false, path completo, etc.).\n`
         : '';
 
+    // Dica específica quando o blocker é estouro de contexto por leitura de arquivo grande
+    const ratioLimitHint = /ratio.?limit|estouro.*contexto|context.*overflow|contexto.*cresceu|limite.*técnico.*sistema|proporção.*contexto/i.test(blocker.description)
+        ? `\n⚡ DICA CRÍTICA (ESTOURO DE CONTEXTO): A estratégia anterior falhou porque ler o arquivo inteiro no contexto excedeu o limite de proporção (ratio_limit). ` +
+          `Para modificar arquivos HTML/texto grandes (> 8KB), use exec_command com Python/sed DIRETO — nunca read + write:\n` +
+          `  Exemplo: exec_command → python3 -c "c=open('workspace/arquivo.html').read(); open('workspace/arquivo.html','w').write('<div>CAPA</div>\\\\n'+c)"\n` +
+          `  Isso processa o arquivo SEM injetar o conteúdo no contexto do LLM.\n`
+        : '';
+
     const diversitySection = diversityBlock ? `\n${diversityBlock}\n` : '';
     const progressSection = progressModel ? `\n${buildProgressBlock(progressModel)}\n` : '';
 
@@ -358,7 +366,7 @@ MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
 OBJETIVO GLOBAL: ${goal.objective}
 ${milestoneInstruction}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
-AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}${retryHint}
+AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}${retryHint}${ratioLimitHint}
 ${pipVenvLoopDirective}${execCommandBanDirective}${contentStubDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}${progressSection}${diversitySection}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 

@@ -1308,6 +1308,9 @@ export class AgentLoop {
                 dedupAbort = true;
                 dedupAbortTool = `context_growth:${triggerReason}`;
                 guardsTriggered++;
+                // Pula a próxima chamada LLM — evita que o modelo crie artefato stub sob pressão
+                // de contexto (que o DELIVERY-GUARD enviaria). Cai diretamente na síntese.
+                continue;
             }
 
             if (toolFailureCount >= 2) {

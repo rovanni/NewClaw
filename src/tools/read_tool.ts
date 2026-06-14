@@ -278,7 +278,13 @@ export class ReadTool implements ToolExecutor {
             const diskHash = crypto.createHash('sha1').update(content).digest('hex').slice(0, 12);
             log.info(`[ARTIFACT-VERSION] tool=read path="${filePath}" size=${content.length} hash=${diskHash} source=read`);
             const header = `[Arquivo: ${filename} | ${sizeKb}KB | Conteúdo completo | hash=${diskHash}]\n`;
-            return { success: true, output: header + content + nearEmptyWarning };
+            // Aviso para arquivos grandes: reler + reescrever provoca estouro de contexto (ratio_limit).
+            // O aviso aparece ANTES do conteúdo para que o modelo o leia antes de processar o arquivo.
+            const LARGE_FILE_ADVISORY_BYTES = 8 * 1024;
+            const largeFileAdvisory = stat.size > LARGE_FILE_ADVISORY_BYTES
+                ? `⚠️ [ARQUIVO GRANDE: ${(stat.size / 1024).toFixed(0)}KB injetado no contexto] Para MODIFICAR este arquivo use exec_command (Python/sed/awk) — nunca read+write em arquivos grandes, pois isso provoca estouro de contexto (ratio_limit). Exemplo: exec_command com python3 -c "c=open('arquivo').read(); open('arquivo','w').write(novo+c)"\n`
+                : '';
+            return { success: true, output: header + largeFileAdvisory + content + nearEmptyWarning };
         } catch (error) {
             return { success: false, output: '', error: errorMessage(error) };
         }
