@@ -243,13 +243,25 @@ export class WriteTool implements ToolExecutor {
                         ` chars_before=${charsBefore} chars_after=${chars}` +
                         ` reduction_pct=${reductionPct}`
                     );
+                    // L-M1: mensagem context-aware — quando o novo conteúdo é muito pequeno
+                    // em relação ao arquivo existente (≥90% redução e < 2000 chars), o padrão
+                    // típico é: GoalPlanner leu o arquivo como referência e tentou sobrescrevê-lo
+                    // com conteúdo gerado parcialmente. O guia correto é criar um NOVO arquivo.
+                    const likelyReferenceOverwrite = reductionPct >= 90 && chars < 2000;
+                    const fileName = path.basename(finalPath);
+                    const errorMsg = likelyReferenceOverwrite
+                        ? `[DESTRUCTIVE-WRITE-BLOCK] Escrita bloqueada: o novo conteúdo (${chars} chars) é ${reductionPct}% menor que "${fileName}" (${charsBefore} chars). ` +
+                          `CAUSA PROVÁVEL: "${fileName}" foi lido como referência, mas o novo conteúdo está sendo escrito NELE, destruindo o arquivo existente. ` +
+                          `SOLUÇÃO OBRIGATÓRIA: crie um arquivo com NOME DIFERENTE para o novo conteúdo ` +
+                          `(ex: se "${fileName}" é uma aula existente e você quer criar uma nova aula, grave em "nova_aula.html" ou similar). ` +
+                          `NUNCA sobrescreva um arquivo de referência com conteúdo gerado.`
+                        : `[DESTRUCTIVE-WRITE-BLOCK] Escrita bloqueada: o conteúdo seria reduzido de ` +
+                          `${charsBefore} para ${chars} chars (−${reductionPct}%). ` +
+                          `Use append=true para adicionar ao final, ou a ferramenta edit para modificações parciais.`;
                     return {
                         success: false,
                         output: '',
-                        error:
-                            `[DESTRUCTIVE-WRITE-BLOCK] Escrita bloqueada: o conteúdo seria reduzido de ` +
-                            `${charsBefore} para ${chars} chars (−${reductionPct}%). ` +
-                            `Use append=true para adicionar ao final, ou a ferramenta edit para modificações parciais.`,
+                        error: errorMsg,
                     };
                 }
             }

@@ -2628,6 +2628,12 @@ OU
         ];
 
         const successfulAttempts = goal.attempts.filter(a => a.result === 'success');
+        // L-M2: quando step_fallback→agentloop executa write+send_document internamente,
+        // os attempts ficam com toolName='agentloop' — invisível para o evidence checker.
+        // goal.sentArtifacts é populado pelo DELIVERY-GUARD callback durante a execução
+        // do agentloop, sendo prova direta de que write+send_document aconteceram.
+        const hasRegisteredDelivery = (goal.sentArtifacts ?? []).length > 0;
+        const DELIVERY_TOOLS = new Set(['write', 'exec_command', 'send_document', 'send_audio']);
         let claimsChecked = 0;
 
         for (const rule of CLAIM_RULES) {
@@ -2643,6 +2649,20 @@ OU
             });
 
             if (!evidenceAttempt) {
+                // L-M2: se agentloop registrou entrega via DELIVERY-GUARD e a claim requer
+                // uma tool de entrega (write, send_document, exec_command), aceitar como evidência.
+                // Isso cobre o padrão step_fallback→agentloop que entrega internamente.
+                if (hasRegisteredDelivery && rule.requiredTools.some(t => DELIVERY_TOOLS.has(t))) {
+                    log.info(
+                        `[VALIDATION-EVIDENCE]` +
+                        ` claim="${rule.label}"` +
+                        ` evidence_found="agentloop_delivery"` +
+                        ` registered_artifacts="${(goal.sentArtifacts ?? []).join(',')}"` +
+                        ` decision=accept`
+                    );
+                    continue;
+                }
+
                 // Step pendente que satisfará esta claim já está no plano — não bloquear.
                 // Evita deadlock onde readyToValidate=true (só send_document pendente) mas
                 // a evidência ainda não existe porque o step ainda não foi despachado.
