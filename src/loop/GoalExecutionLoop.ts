@@ -1740,7 +1740,10 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             executedAt: Date.now(),
         });
 
-        // Registra sucesso na ReflectionMemory
+        // Registra sucesso na ReflectionMemory.
+        // IMPORTANTE: o pattern deve ser `tool_${toolName}` (sem sufixo _success) para que a
+        // query de supressão em getFailurePatterns/getHardFailurePatterns encontre o registro
+        // aprovado e descarte histórico de falhas obsoleto do mesmo tool.
         this.reflectionMemory.record({
             userInput: goal.userIntent,
             intent: goal.objective.slice(0, 100),
@@ -1749,7 +1752,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             approved: true,
             reason: 'step completed successfully',
             confidence: 0.9,
-            pattern: step.toolName ? `tool_${step.toolName}_success` : 'goal_step_success',
+            pattern: step.toolName ? `tool_${step.toolName}` : 'goal_step_success',
         });
     }
 

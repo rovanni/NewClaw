@@ -533,10 +533,12 @@ export class AgentLoop {
      * Used to detect the LLM fabricating a positive outcome after tool failures.
      */
     private static looksLikeFalseSuccess(text: string): boolean {
-        return /✅\s*\w*(gerado|enviado|criado|concluído|salvo|feito|pronto|completo)/i.test(text)
-            || /\b(gerado|enviado|criado|salvo|concluído)\s+(com\s+sucesso|e enviado|e salvo)/i.test(text)
-            || /\b(arquivo|slides?|documento|relat[oó]rio)\s+(foi\s+)?(gerado|enviado|criado|salvo)/i.test(text)
-            || /\b(foi\s+)?(enviado|gerado|salvo)\s+(com\s+sucesso|para\s+voc[eê])/i.test(text);
+        return /✅\s*\w*(gerado|enviado|criado|concluído|salvo|feito|pronto|completo|limpo|corrigido)/i.test(text)
+            || /\b(gerado|enviado|criado|salvo|concluído|limpo|corrigido)\s+(com\s+sucesso|e enviado|e salvo)/i.test(text)
+            || /\b(arquivo|slides?|documento|relat[oó]rio)\s+(foi\s+)?(gerado|enviado|criado|salvo|limpo|corrigido)/i.test(text)
+            || /\b(foi\s+)?(enviado|gerado|salvo|limpo|corrigido)\s+(com\s+sucesso|para\s+voc[eê])/i.test(text)
+            || /\bsem\s+(duplicatas?|capas?\s+duplicadas?)\b/i.test(text)
+            || /\b\d+\s+slides?\s*[,.]?\s*(1|uma)\s+capa/i.test(text);
     }
 
     private async commitResponse(
@@ -556,6 +558,17 @@ export class AgentLoop {
                 `[${this.ts()}] [COMMIT] False-success detected after ${toolFailureCount} tool failure(s) — blocking response`
             );
             return 'Não consegui completar a tarefa: ocorreram erros durante a execução. Por favor, reformule o pedido ou tente novamente.';
+        }
+
+        // Read-only turn with write-claim: last tool was 'read' (no write/edit/exec happened)
+        // but the response claims the file was modified. This happens when ratio_limit fires
+        // after a large-file read and the model hallucinates the completion of a write operation.
+        if (last && last.toolName === 'read' && toolFailureCount === 0 && AgentLoop.looksLikeFalseSuccess(response)) {
+            log.warn(
+                `[${this.ts()}] [COMMIT] False-success after read-only turn (last=read, no write) — blocking hallucinated write claim`
+            );
+            return 'Li o arquivo mas não consegui concluir a modificação: o contexto ficou grande demais para processar read+write no mesmo turno. ' +
+                   'Tente novamente — o sistema usará exec_command com Python para modificar o arquivo diretamente, sem carregar o conteúdo inteiro no contexto.';
         }
 
         if (!last) return response; // sem tool executada → sem risco de alucinação de ação
@@ -1301,9 +1314,23 @@ export class AgentLoop {
                     `value=${triggerValue.toFixed(2)} threshold=${threshold} ` +
                     `initial=${initialContextChars} current=${currentContextChars}`
                 );
+                // Context-aware abort message: when the last tool was 'read', the agent loaded
+                // a file but performed no write/edit. Prevent the model from claiming write success.
+                const lastToolInCycle = cycleHistory.length > 0
+                    ? cycleHistory[cycleHistory.length - 1].tool
+                    : null;
+                const writeToolsUsedThisTurn = cycleHistory.some(h => h.tool === 'write' || h.tool === 'edit' || h.tool === 'exec_command');
+                const ratioAbortMsg = (lastToolInCycle === 'read' && !writeToolsUsedThisTurn)
+                    ? '[CONTEXTO EXCESSIVO — SOMENTE LEITURA] O contexto cresceu demais ao carregar o arquivo. ' +
+                      'ESTADO ATUAL: O arquivo foi lido mas NENHUMA modificação foi realizada — ' +
+                      'a tarefa de editar/salvar o arquivo NÃO foi concluída. ' +
+                      'OBRIGATÓRIO: Informe ao usuário de forma honesta que não foi possível concluir a modificação por limite de contexto. ' +
+                      'PROIBIDO: Afirmar que o arquivo foi editado, salvo, limpo, corrigido ou que a tarefa foi concluída. ' +
+                      'SUGESTÃO: Oriente o usuário a tentar novamente — use exec_command com Python para processar o arquivo diretamente, sem carregá-lo no contexto.'
+                    : '[CONTEXTO EXCESSIVO] O contexto cresceu demais. Use os dados já obtidos para responder agora sem usar mais ferramentas.';
                 loopMessages.push({
                     role: 'system',
-                    content: '[CONTEXTO EXCESSIVO] O contexto cresceu demais. Use os dados já obtidos para responder agora.',
+                    content: ratioAbortMsg,
                 });
                 dedupAbort = true;
                 dedupAbortTool = `context_growth:${triggerReason}`;

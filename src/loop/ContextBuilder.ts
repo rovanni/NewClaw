@@ -327,6 +327,39 @@ export function isPersonalMemoryQuery(query: string): boolean {
     return false;
 }
 
+/**
+ * Detecta perguntas de acompanhamento de tarefa — "Já arrumou?", "Terminou?", "Conseguiu fazer?"
+ * Essas mensagens precisam de tier=normal (com episódico) para acessar o histórico recente
+ * da conversa, mesmo que o roteador as classifique como `conversation`.
+ *
+ * Padrão: verbo no passado de conclusão/verificação + (optionalmente "já")
+ * ou: presença de artefato de trabalho + verbo de status.
+ */
+const TASK_COMPLETION_VERBS_PT =
+    /\b(arrumou|fez|terminou|completou|resolveu|corrigiu|conseguiu|criou|gerou|enviou|salvou|modificou|atualizou|concluiu|finalizou|executou|rodou|processou)\b/i;
+
+const TASK_COMPLETION_VERBS_EN =
+    /\b(fixed|finished|completed|resolved|created|generated|sent|saved|updated|done|ran|processed)\b/i;
+
+const WORK_ARTIFACT_TERMS =
+    /\b(slide|slides|capa|html|arquivo|documento|apresenta[cç][aã]o|aula|planilha|relatorio|relat[oó]rio|script|codigo|c[oó]digo|pdf|pptx|csv)\b/i;
+
+export function isTaskStatusQuery(query: string): boolean {
+    const hasCompletionVerb = TASK_COMPLETION_VERBS_PT.test(query) || TASK_COMPLETION_VERBS_EN.test(query);
+    if (!hasCompletionVerb) return false;
+
+    // "Já <verb>?" — explicit completion check
+    if (/\bja\b/i.test(stripAccents(query))) return true;
+
+    // "<verb> <artifact>?" — checking status of a specific work artifact
+    if (WORK_ARTIFACT_TERMS.test(query)) return true;
+
+    // Short question with completion verb and "?" — high probability of task follow-up
+    if (query.includes('?') && query.split(/\s+/).length <= 8) return true;
+
+    return false;
+}
+
 function quickRelevance(queryTerms: string[], entry: MemoryIndexEntry): number {
     if (queryTerms.length === 0) return 0;
     const haystack = `${entry.entity} ${entry.summary} ${entry.keywords.join(' ')}`.toLowerCase();
@@ -665,6 +698,9 @@ export class ContextBuilder {
         if (tier === 'minimal' && isPersonalMemoryQuery(query)) {
             effectiveTier = 'normal';
             log.info('[SALIENCE] personal-memory=true → upgraded tier minimal→normal');
+        } else if (tier === 'minimal' && isTaskStatusQuery(query)) {
+            effectiveTier = 'normal';
+            log.info('[SALIENCE] task-status=true → upgraded tier minimal→normal (episodic required)');
         }
 
         const maxNodes    = effectiveTier === 'minimal' ? 3 : effectiveTier === 'normal' ? 5 : this.DEFAULT_MAX_EXPANDED_NODES;
