@@ -236,6 +236,22 @@ export class GoalOrchestrator {
             log.debug(`[GoalOrchestrator] not-goal reason=${classification.reason}`);
             const roiStart = Date.now();
             const agentResult = await this.agentLoop.process(conversationId, message, userId, context);
+
+            // Registra intent mesmo para mensagens não-goal (heuristic_negative),
+            // para que follow-ups recebam o tópico correto como contexto.
+            // Sem isso, "Busque os dados do river?" (termina em '?') vai pelo AgentLoop,
+            // e "Quero dados atuais!" chega sem saber que o assunto era RIVER.
+            const agentOutputText = typeof agentResult === 'string'
+                ? agentResult
+                : (agentResult as ProcessedResult)?.text ?? '';
+            this.recentCompletedGoals.set(sessionKey, {
+                intent: message,
+                objective: message.slice(0, 200),
+                finalOutput: agentOutputText.slice(0, 500),
+                completedAt: Date.now(),
+                success: true,
+            });
+
             log.info(
                 `[GOAL-ROI]` +
                 ` route=agentloop` +

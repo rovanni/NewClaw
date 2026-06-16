@@ -58,13 +58,20 @@ const UNAMBIGUOUS_TOOL_PATTERNS: RegExp[] = [
     /\b(organize?|reorganize?)\s+(my\s+)?workspace\b/i,
 ];
 
+/**
+ * Sinal fraco: pergunta terminada em '?' — só bloqueia quando NÃO há verbo de ação.
+ * Mantido como constante separada para comparação por referência em quickClassify:
+ * "Busque os dados do river?" tem verbo 'busque' → não deve ser bloqueada.
+ */
+const TRAILING_QUESTION_SIGNAL = /\?$/;
+
 /** Padrões que indicam CLARAMENTE conversa simples (não goal) */
 const NOT_GOAL_SIGNALS: RegExp[] = [
     /^(oi|ol[aá]|hey|e a[ií]|tudo\s+bem|bom\s+dia|boa\s+tarde|boa\s+noite)\b/i,
     /^(o\s+que\s+[eé]|me\s+explica|como\s+funciona|qual\s+[eé]\s+a\s+diferen[cç]a)\b/i,
     /^(voc[eê]\s+[eé]|quem\s+[eé]\s+voc[eê]|o\s+que\s+voc[eê]\s+pode)\b/i,
     /^(obrigad[ao]|valeu|vlw|entendi|ok|perfeito|show|[oó]timo)\b/i,
-    /\?$/, // perguntas simples terminando em ?
+    TRAILING_QUESTION_SIGNAL, // só bloqueia quando não há verbo de ação (ver quickClassify)
     // Dados suplementares sendo fornecidos pelo usuário — não são comandos
     /\bconteúdo\s+programático\b/i,
     /^(turma:|quantidade\s+de\s+alunos:|período:|hor[aá]rio:)/im,
@@ -98,19 +105,22 @@ export class GoalExtractor {
             && !GOAL_SIGNALS.some(p => p.test(msg));
         if (isListFragment) return false;
 
-        // Sinais negativos claros → não é goal
-        for (const pattern of NOT_GOAL_SIGNALS) {
-            if (pattern.test(msg)) return false;
-        }
-
         // Relatório de erro técnico com código específico → goal imediato, sem ambiguidade
         const ERROR_REPORT = /\b(ERR_[A-Z_]+|ENOENT|EACCES|failed to load|net::|SyntaxError|ReferenceError|TypeError)\b/i;
         if (ERROR_REPORT.test(msg)) return true;
 
-        // Sinais positivos claros → é goal
+        // Contar verbos de ação ANTES de verificar NOT_GOAL_SIGNALS.
+        // TRAILING_QUESTION_SIGNAL (/\?$/) é condicional: não bloqueia mensagens com verbo
+        // de ação explícito — "Busque os dados do river?" tem ação clara e não é pergunta simples.
         let matches = 0;
         for (const pattern of GOAL_SIGNALS) {
             if (pattern.test(msg)) matches++;
+        }
+
+        // Sinais negativos: TRAILING_QUESTION_SIGNAL pulado quando há verbo de ação
+        for (const pattern of NOT_GOAL_SIGNALS) {
+            if (pattern === TRAILING_QUESTION_SIGNAL && matches > 0) continue;
+            if (pattern.test(msg)) return false;
         }
 
         if (matches >= 1) {
@@ -184,8 +194,10 @@ Regras:
 - Exemplo is_refinement=true: contexto="gere discurso de encerramento do curso de TI", mensagem="Assistente de TI é um curso de montagem, instalação de SO e redes" — o usuário está descrevendo o curso para contextualizar o pedido anterior, não pedindo algo novo.
 - Relatórios de erro técnico com código ou path específico são NUNCA ambíguos: o erro já identifica o problema
 - Se o contexto recente mostra que o usuário está respondendo a uma lista de opções ou confirmando uma escolha, is_goal=false
+- REGRA CRÍTICA — Follow-up com tópico estabelecido: se o contexto recente da conversa estabelece claramente o tópico (ex: conversa sobre preço de cripto, previsão de tempo, consulta de dados de um ativo), mensagens como "quero dados atuais", "tente novamente", "quero mais informações", "busque agora" NÃO são ambíguas — o assunto já está determinado pelo contexto. is_ambiguous=false nesses casos.
 - Exemplos is_ambiguous=true: "essa versão não consigo editar" (qual arquivo?), "pode corrigir?" (o quê exatamente?)
 - Exemplos is_ambiguous=false: "criar apresentação sobre Python com 10 slides", "resumir o PDF que enviei"
+- Exemplos is_ambiguous=false (follow-up contextual): contexto mostra conversa sobre preço do token River → mensagem "Quero dados atuais!" — tópico é River, is_ambiguous=false; contexto mostra busca de clima em SP → mensagem "e a previsão?" — tópico é SP, is_ambiguous=false
 - Exemplos is_ambiguous=false (workspace): "organize meu workspace", "reorganize os arquivos", "analise os grupos do workspace", "arrume meu workspace" — existe uma ferramenta específica que resolve sem precisar de critérios adicionais
 - Exemplos is_ambiguous=false (erros técnicos): "style.css:1 Failed to load resource: net::ERR_FILE_NOT_FOUND", "TypeError: cannot read property of undefined at line 42", "está com vários erros: SyntaxError no map.js"
 - Exemplos is_goal=false: "o que é machine learning?", "oi tudo bem?", "obrigado", seleção de opção de menu, confirmação de escolha, mensagens descritivas/contextuais sem pedido de ação
