@@ -48,7 +48,7 @@ interface CoinGeckoDetail {
 
 export class CryptoAnalysisTool implements ToolExecutor {
     name = 'crypto_analysis';
-    description = 'Ferramenta definitiva para buscar DADOS REAIS e PREÇOS de QUALQUER criptomoeda (mesmo pequenas ou fora do top 100). Traz preço atual, market cap, variações e análise de mercado (sangrando, gainers, losers). USE SEMPRE esta ferramenta no lugar de web_search para pesquisar o valor ou dados de um token crypto!';
+    description = 'Ferramenta preferida para buscar DADOS REAIS e PREÇOS de criptomoedas via CoinGecko. Traz preço atual, market cap, variações e análise de mercado (sangrando, gainers, losers). Use type="detail" com symbol para um token específico. Quando esta ferramenta falhar ou retornar erro, use web_search como alternativa.';
     parameters = {
         type: 'object',
         properties: {
@@ -244,7 +244,7 @@ export class CryptoAnalysisTool implements ToolExecutor {
             'bnb': 'binancecoin', 'avax': 'avalanche-2', 'matic': 'matic-network',
             'link': 'chainlink', 'uni': 'uniswap', 'atom': 'cosmos', 'ltc': 'litecoin',
             'near': 'near', 'arb': 'arbitrum', 'op': 'optimism', 'mkr': 'maker',
-            'zec': 'zcash', 'pi': 'pi-network-iou', 'river': 'river-boat',
+            'zec': 'zcash', 'pi': 'pi-network-iou', 'river': 'river',
         };
         let coinId = coinMap[symbol] || symbol;
 
@@ -256,8 +256,9 @@ export class CryptoAnalysisTool implements ToolExecutor {
             data = cached.data as CoinGeckoDetail;
         } else {
             let response = await fetch(url);
-            if (!response.ok && response.status === 404 && !(symbol in coinMap)) {
-                // Fallback: busca pelo nome/símbolo na API de search do CoinGecko
+            if (!response.ok && response.status === 404) {
+                // Fallback: busca pelo nome/símbolo na API de search do CoinGecko.
+                // Sempre tenta — IDs hardcoded no coinMap podem estar desatualizados.
                 const foundId = await this.searchCoinId(symbol);
                 if (foundId && foundId !== coinId) {
                     coinId = foundId;

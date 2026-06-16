@@ -574,7 +574,7 @@ export class AgentLoop {
         if (!last) return response; // sem tool executada → sem risco de alucinação de ação
 
         try {
-            const COMMIT_TIMEOUT_MS = 5_000;
+            const COMMIT_TIMEOUT_MS = 12_000;
 
             const commit = await Promise.race<ResponseCommit>([
                 this.observer.validateResponseCommit(
@@ -737,7 +737,7 @@ export class AgentLoop {
     private static readonly CATEGORY_TOOLS: Record<string, string[]> = {
         creation:         ['exec_command', 'web_search', 'web_navigate', 'memory_admin'],
         information:      ['web_search', 'web_navigate', 'weather', 'memory_admin'],
-        data_analysis:    ['web_search', 'crypto_analysis', 'exec_command', 'memory_admin'],
+        data_analysis:    ['web_search', 'web_navigate', 'crypto_analysis', 'exec_command', 'memory_admin'],
         system_operation: ['exec_command', 'ssh_exec', 'server_config', 'memory_admin'],
         memory_operation: ['memory_admin'],
         audio:            ['exec_command'],
