@@ -236,8 +236,11 @@ const DETERMINISTIC_RULES: DeterministicRule[] = [
         id: 'memory_search',
         category: 'memory_operation',
         executionMode: 'hybrid',
-        keywords: ['buscar na memória', 'buscar na memoria', 'busca semântica', 'busca semantica', 'busca na memória', 'busca na memoria', 'o que você sabe', 'o que voce sabe', 'você lembra', 'voce lembra', 'pesquise', 'pesquisa sobre'],
-        patterns: [/(o que (você|voce) sabe|lembra|buscar na mem[óo]ria|pesquisar|pesquise|busque|procurar|busca (sem[aâ]ntica|na mem|sobre))/i],
+        keywords: ['buscar na memória', 'buscar na memoria', 'busca semântica', 'busca semantica', 'busca na memória', 'busca na memoria', 'o que você sabe', 'o que voce sabe', 'você lembra', 'voce lembra'],
+        // Palavras genéricas como 'busque', 'pesquise', 'procurar' foram removidas — são muito ambíguas
+        // e causam falso positivo em pedidos de dados externos (ex: "busque o preço do river").
+        // Apenas expressões explicitamente ligadas a memória/contexto interno devem disparar esta regra.
+        patterns: [/(o que (você|voce) (sabe|lembra|guardou|salvou)|buscar na mem[óo]ria|pesquisar na mem[óo]ria|busque?\s+na\s+mem[óo]ria|procurar na mem[óo]ria|busca (sem[aâ]ntica|na mem[óo]ria))/i],
         confidence: 0.88,
         riskLevel: 'low',
         cognitiveLoad: 'minimal',

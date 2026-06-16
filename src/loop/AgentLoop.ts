@@ -739,7 +739,7 @@ export class AgentLoop {
         information:      ['web_search', 'web_navigate', 'weather', 'memory_admin'],
         data_analysis:    ['web_search', 'web_navigate', 'crypto_analysis', 'exec_command', 'memory_admin'],
         system_operation: ['exec_command', 'ssh_exec', 'server_config', 'memory_admin'],
-        memory_operation: ['memory_admin'],
+        memory_operation: ['memory_admin', 'crypto_analysis', 'web_search'],
         audio:            ['exec_command'],
         vision:           ['web_navigate', 'web_search'],
         conversation:     [],
@@ -2352,7 +2352,10 @@ export class AgentLoop {
 
             move('LLM_REQUEST', { step: stepCount, phase: 'synthesis' });
             log.info(`[${this.ts()}] [SYNTHESIS] Trimmed context: ${loopMessages.length} → ${synthMessages.length} messages`);
-            const synthesisResponse = await this.callLLMWithFallback(synthMessages, [], chatProfile, turnSignal);
+            // Usa 'execution' profile (kimi-k2.6) em vez de chatProfile (glm-5.1) para síntese:
+            // glm-5.1 com contexto grande produz apenas thinking sem content → chain-of-thought vaza para o usuário.
+            const synthesisProfile = this.profileRegistry.getProfileByCategory('execution') ?? chatProfile;
+            const synthesisResponse = await this.callLLMWithFallback(synthMessages, [], synthesisProfile, turnSignal);
             move('LLM_RESPONSE', { step: stepCount, phase: 'synthesis', status: synthesisResponse.status });
             if (synthesisResponse.status === 'cancelled') {
                 move('CANCEL', { step: stepCount, phase: 'synthesis' });
