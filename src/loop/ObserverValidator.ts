@@ -339,10 +339,10 @@ export class ObserverValidator {
     }
 
     private buildCorrectedResponse(reason: string, suggestedFix?: string): string {
-        const base = 'Não consegui completar esta ação corretamente.';
-        if (reason) {
-            return `${base} ${reason}.${suggestedFix ? ` ${suggestedFix}.` : ' Tente reformular a solicitação ou use uma abordagem diferente.'}`;
-        }
-        return `${base} Tente reformular a solicitação ou use uma abordagem diferente.`;
+        // O reason e suggestedFix são análises internas do validator — nunca expor ao usuário.
+        // Logar para auditoria e retornar mensagem genérica limpa.
+        log.info(`[OBSERVER-BLOCK] reason="${reason}"${suggestedFix ? ` | fix="${suggestedFix}"` : ''}`);
+        return 'Não consegui obter os dados solicitados: as fontes consultadas não retornaram informações confiáveis. ' +
+               'Por favor, tente novamente ou forneça mais detalhes sobre o que está buscando.';
     }
 }

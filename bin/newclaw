@@ -481,44 +481,41 @@ const commands = {
 
   logs(args) {
     const logDir = path.join(DIR, 'logs');
-    const stdoutLog = path.join(logDir, 'newclaw-stdout.log');
     const follow = args?.includes('--follow') || args?.includes('-f');
     const usePM2 = PM2_BIN !== null && isPM2Running();
-    
+
+    // Resolve o arquivo de log real: lê LOG_FILE do .env (consistente com AppLogger)
+    // AppLogger só escreve em arquivo quando LOG_FILE env var está definida
+    const envVars = readEnv();
+    const auditLog = envVars.LOG_FILE || path.join(logDir, 'newclaw-audit.log');
+
     if (usePM2) {
       console.log('📡 Visualizando logs via PM2...');
-      const pm2Args = ['logs', 'newclaw'];
-      if (!follow) pm2Args.push('--lines', '50', '--no-daemon');
-      
+      const pm2Args = ['logs', 'newclaw', '--lines', '50'];
+      if (!follow) pm2Args.push('--no-daemon');
+
       // Usar spawn para manter as cores e o fluxo interativo
       const child = spawn('node', [PM2_BIN, ...pm2Args], { stdio: 'inherit' });
       process.on('SIGINT', () => { child.kill(); process.exit(0); });
       return;
     }
 
-    if (!fs.existsSync(stdoutLog)) {
-      // Fallback to old log location
-      if (fs.existsSync(LOG_FILE)) {
-        if (follow) {
-          const child = spawn('tail', ['-f', LOG_FILE], { stdio: 'inherit' });
-          process.on('SIGINT', () => { child.kill(); process.exit(0); });
-        } else {
-          try {
-            const out = execSync(`tail -50 ${LOG_FILE}`).toString();
-            console.log(out);
-          } catch { console.log('No logs found'); }
-        }
-      } else {
-        console.log('No logs found. Start NewClaw first.');
-      }
+    // Fallback (PM2 em restart_delay ou não disponível): lê diretamente o arquivo de audit log
+    const candidates = [auditLog, LOG_FILE];
+    const logFile = candidates.find(f => fs.existsSync(f));
+
+    if (!logFile) {
+      console.log('No logs found. Start NewClaw first with: newclaw start --daemon');
       return;
     }
-    
+
+    console.log(`📄 Lendo logs de: ${logFile}`);
     if (follow) {
-      tailLog(logDir, false);
+      const child = spawn('tail', ['-f', '-n', '50', logFile], { stdio: 'inherit' });
+      process.on('SIGINT', () => { child.kill(); process.exit(0); });
     } else {
       try {
-        const out = execSync(`tail -50 ${stdoutLog}`).toString();
+        const out = execSync(`tail -50 "${logFile}"`).toString();
         console.log(out);
       } catch { console.log('No logs found'); }
     }
