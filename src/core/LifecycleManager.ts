@@ -27,7 +27,7 @@ export class LifecycleManager {
     registerInterval(name: string, callback: () => void | Promise<void>, intervalMs: number): TimerHandle {
         this.clearTimer(name);
         const timer = setInterval(() => {
-            Promise.resolve(callback()).catch(error => {
+            Promise.resolve().then(() => callback()).catch(error => {
                 log.error('interval_failed', error, name);
             });
         }, intervalMs);

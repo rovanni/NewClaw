@@ -351,7 +351,7 @@ MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
         : '';
 
     // Dica específica quando o blocker é estouro de contexto por leitura de arquivo grande
-    const ratioLimitHint = /ratio.?limit|estouro.*contexto|context.*overflow|contexto.*cresceu|limite.*técnico.*sistema|proporção.*contexto/i.test(blocker.description)
+    const ratioLimitHint = /ratio.?limit|estouro.*contexto|context.*overflow|contexto.*cresceu|limite.*técnico.*sistema|proporção.*contexto|html.*não.*foi.*criado|não.*gerou.*html|apenas.*txt|apenas.*texto.*criado|arquivo.*html.*ausente|entregável.*não.*produzido/i.test(blocker.description)
         ? `\n⚡ DICA CRÍTICA (ESTOURO DE CONTEXTO): A estratégia anterior falhou porque ler o arquivo inteiro no contexto excedeu o limite de proporção (ratio_limit). ` +
           `Para modificar arquivos HTML/texto grandes (> 8KB), use exec_command com Python/sed DIRETO — nunca read + write:\n` +
           `  Exemplo: exec_command → python3 -c "c=open('workspace/arquivo.html').read(); open('workspace/arquivo.html','w').write('<div>CAPA</div>\\\\n'+c)"\n` +
@@ -633,10 +633,12 @@ export class GoalPlanner {
                 return this.fallbackPlan(goal);
             }
 
-            const parsed = this.parsePlanResponse(result.content);
+            let parsed = this.parsePlanResponse(result.content);
             if (parsed.steps.length === 0) {
                 log.warn(`[GoalPlanner] plan empty after parse: model=${this.model} raw="${result.content.slice(0, 200)}"`);
-                return this.fallbackPlan(goal);
+                const retried = await this.retryWithMinimalPrompt(goal, 'plan');
+                if (retried) parsed = retried;
+                else return this.fallbackPlan(goal);
             }
 
             const steps = this.prependPathValidation(goal, parsed.steps);
@@ -702,10 +704,12 @@ export class GoalPlanner {
                 return this.emergencyFallback(goal, blocker);
             }
 
-            const parsed = this.parsePlanResponse(result.content);
+            let parsed = this.parsePlanResponse(result.content);
             if (parsed.steps.length === 0) {
                 log.warn(`[GoalPlanner] replan empty after parse: model=${this.model} raw="${result.content.slice(0, 200)}"`);
-                return this.emergencyFallback(goal, blocker);
+                const retried = await this.retryWithMinimalPrompt(goal, 'replan');
+                if (retried) parsed = retried;
+                else return this.emergencyFallback(goal, blocker);
             }
 
             const steps = this.prependPathValidation(goal, parsed.steps);
@@ -959,6 +963,41 @@ export class GoalPlanner {
 
         log.info(`[GoalPlanner] path validation step injected for ${topPaths.length} path(s): ${topPaths.join(', ')}`);
         return [validationStep, ...steps];
+    }
+
+    // ── Retry minimal — quando o modelo usa thinking-only e o JSON parse falha ──
+
+    private buildMinimalPrompt(goal: Goal): string {
+        const tools = ToolRegistry.getEnabled().map(t => t.name).join(', ');
+        return `Objetivo: ${goal.objective}
+Ferramentas disponíveis: ${tools}
+
+Decomponha em 2-3 steps executáveis. Responda APENAS com JSON válido (sem markdown):
+{"steps":[{"id":"step_1","description":"descrição","toolName":"nome_da_tool","toolArgs":{"arg":"valor"}}],"strategy":"estratégia em 1 linha"}
+
+Regras:
+- Use EXATAMENTE os nomes de ferramenta listados acima
+- Para arquivos grandes use exec_command com Python/sed em vez de read+write
+- O step final deve ser send_document quando o resultado for um arquivo`.trim();
+    }
+
+    private async retryWithMinimalPrompt(goal: Goal, context: 'plan' | 'replan'): Promise<PlanResult | null> {
+        const prompt = this.buildMinimalPrompt(goal);
+        const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
+        log.info(`[GoalPlanner] retry_minimal context=${context} goal=${goal.id} promptLen=${prompt.length}`);
+        try {
+            const result = await this.callPlannerLLM(messages, 30_000);
+            if (result.status !== 'success' || !result.content) return null;
+            const parsed = this.parsePlanResponse(result.content);
+            if (parsed.steps.length === 0) {
+                log.warn(`[GoalPlanner] retry_minimal also empty: raw="${result.content.slice(0, 120)}"`);
+                return null;
+            }
+            log.info(`[GoalPlanner] retry_minimal ok: steps=${parsed.steps.length} strategy="${parsed.strategy}"`);
+            return parsed;
+        } catch {
+            return null;
+        }
     }
 
     // ── Fallbacks sem LLM ─────────────────────────────────────────────────────

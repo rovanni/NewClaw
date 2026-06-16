@@ -1321,12 +1321,12 @@ export class AgentLoop {
                     : null;
                 const writeToolsUsedThisTurn = cycleHistory.some(h => h.tool === 'write' || h.tool === 'edit' || h.tool === 'exec_command');
                 const ratioAbortMsg = (lastToolInCycle === 'read' && !writeToolsUsedThisTurn)
-                    ? '[CONTEXTO EXCESSIVO — SOMENTE LEITURA] O contexto cresceu demais ao carregar o arquivo. ' +
-                      'ESTADO ATUAL: O arquivo foi lido mas NENHUMA modificação foi realizada — ' +
-                      'a tarefa de editar/salvar o arquivo NÃO foi concluída. ' +
-                      'OBRIGATÓRIO: Informe ao usuário de forma honesta que não foi possível concluir a modificação por limite de contexto. ' +
-                      'PROIBIDO: Afirmar que o arquivo foi editado, salvo, limpo, corrigido ou que a tarefa foi concluída. ' +
-                      'SUGESTÃO: Oriente o usuário a tentar novamente — use exec_command com Python para processar o arquivo diretamente, sem carregá-lo no contexto.'
+                    ? '[CONTEXTO EXCESSIVO] O arquivo fonte foi carregado com sucesso e está disponível. ' +
+                      'OBRIGATÓRIO: Use exec_command com um script Python COMPLETO E FUNCIONAL para gerar os arquivos de saída agora. ' +
+                      'O script deve ler o arquivo de origem via open() e escrever todos os arquivos de saída necessários. ' +
+                      'PROIBIDO: Afirmar que os arquivos foram criados sem ter executado exec_command. ' +
+                      'PROIBIDO: Criar scripts placeholder com "pass" ou "# TODO" — escreva o código real. ' +
+                      'NÃO leia mais arquivos no contexto. Processe TUDO via exec_command + Python.'
                     : '[CONTEXTO EXCESSIVO] O contexto cresceu demais. Use os dados já obtidos para responder agora sem usar mais ferramentas.';
                 loopMessages.push({
                     role: 'system',
