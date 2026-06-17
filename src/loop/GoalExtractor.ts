@@ -88,7 +88,16 @@ const NOT_GOAL_SIGNALS: RegExp[] = [
 ];
 
 export class GoalExtractor {
-    constructor(private readonly providerFactory: ProviderFactory) {}
+    private classifierModel?: string;
+
+    constructor(private readonly providerFactory: ProviderFactory, classifierModel?: string) {
+        this.classifierModel = classifierModel;
+    }
+
+    /** Atualiza o modelo usado para classificação LLM (chamado quando o dashboard muda a config). */
+    setClassifierModel(model: string): void {
+        this.classifierModel = model;
+    }
 
     /**
      * Estágio 1: heurística rápida.
@@ -214,7 +223,9 @@ Regras:
                 messages,
                 undefined,
                 undefined,
-                GOAL_EXTRACTOR_TIMEOUT_MS
+                GOAL_EXTRACTOR_TIMEOUT_MS,
+                undefined,
+                this.classifierModel
             );
 
             if (result.status !== 'success') {

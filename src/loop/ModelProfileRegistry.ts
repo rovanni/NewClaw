@@ -162,6 +162,11 @@ export class ModelProfileRegistry {
             ?? this.config.profiles[0];
     }
 
+    /** Retorna o modelo configurado para classificação rápida. */
+    getClassifierModel(): string {
+        return this.config.classifierModel;
+    }
+
     /**
      * Resolução síncrona de perfil (apenas determinístico — para contextos não-async).
      */

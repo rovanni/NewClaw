@@ -68,7 +68,7 @@ export class GoalOrchestrator {
         memory: MemoryManager,
     ) {
         this.goalStore = goalStore;
-        this.extractor = new GoalExtractor(providerFactory);
+        this.extractor = new GoalExtractor(providerFactory, agentLoop.getClassifierModel());
 
         const reflectionMemory = new ReflectionMemory(memory);
         const planner = new GoalPlanner(providerFactory, reflectionMemory);
@@ -95,8 +95,9 @@ export class GoalOrchestrator {
     }
 
     /** Propaga mudanças de modelo interno do dashboard sem precisar reiniciar. */
-    updateInternalModels(plannerModel?: string, riskModel?: string): void {
+    updateInternalModels(plannerModel?: string, riskModel?: string, classifierModel?: string): void {
         this.executionLoop.updateInternalModels(plannerModel, riskModel);
+        if (classifierModel) this.extractor.setClassifierModel(classifierModel);
     }
 
     /** Injeta WorkflowEngine para resolução de auth por texto (sem clique no botão). */

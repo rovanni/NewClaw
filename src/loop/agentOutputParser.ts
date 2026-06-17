@@ -58,5 +58,5 @@ export function extractFinalText(response: LLMResult, _atomicData: unknown): str
         }
     }
 
-    return 'Desculpe, não consegui gerar uma resposta. Pode reformular a pergunta?';
+    return '';
 }

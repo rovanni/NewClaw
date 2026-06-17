@@ -122,10 +122,12 @@ export function buildMasterPrompt(category: string): string {
             prompt += c.AUDIO + '\n\n';
             break;
         case 'code':
+        case 'creation':
             prompt += c.RESPONSE_ARCH + '\n\n';
             prompt += c.FILE_OPS + '\n\n';
             prompt += c.PDF_CONVERT + '\n\n';
             prompt += c.ACADEMIC + '\n\n';
+            prompt += c.AUDIO + '\n\n';
             break;
         case 'analysis':
             prompt += c.RESPONSE_ARCH + '\n\n';

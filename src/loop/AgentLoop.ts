@@ -235,6 +235,11 @@ export class AgentLoop {
         this.postTurnCallback = cb;
     }
 
+    /** Expõe o modelo de classificação configurado no profileRegistry. */
+    getClassifierModel(): string {
+        return this.profileRegistry.getClassifierModel();
+    }
+
     /**
      * Aplica mudanças de configuração em runtime (chamado pelo dashboard após POST /api/config).
      * Reconstrói o ModelProfileRegistry quando modelRouter muda para que novos modelos/providers
@@ -248,14 +253,14 @@ export class AgentLoop {
             );
             log.info('[updateConfig] ModelProfileRegistry reloaded with updated modelRouter');
 
-            const { observerModel, plannerModel, riskModel } = cfg.modelRouter;
+            const { observerModel, plannerModel, riskModel, classifierModel } = cfg.modelRouter;
             if (observerModel) {
                 this.observer.setModel(observerModel);
                 log.info(`[updateConfig] ObserverValidator model → ${observerModel}`);
             }
-            if (plannerModel || riskModel) {
-                this.goalOrchestrator?.updateInternalModels(plannerModel, riskModel);
-                log.info(`[updateConfig] internal models → planner=${plannerModel ?? '—'} risk=${riskModel ?? '—'}`);
+            if (plannerModel || riskModel || classifierModel) {
+                this.goalOrchestrator?.updateInternalModels(plannerModel, riskModel, classifierModel);
+                log.info(`[updateConfig] internal models → planner=${plannerModel ?? '—'} risk=${riskModel ?? '—'} classifier=${classifierModel ?? '—'}`);
             }
         }
     }

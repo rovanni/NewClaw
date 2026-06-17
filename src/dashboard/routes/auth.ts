@@ -74,11 +74,18 @@ function verifyPassword(password: string, stored: string): boolean {
     }
 }
 
-// ── Signed token: survives restarts because it's verifiable from DASHBOARD_PASSWORD ──
+// ── Signed token: survives restarts ──
+// Secret resolution: DASHBOARD_PASSWORD env var (primary) → stored password hash (fallback).
+// Using the stored hash as fallback means tokens survive restart even without .env.
+function getTokenSecret(): string {
+    if (process.env.DASHBOARD_PASSWORD) return process.env.DASHBOARD_PASSWORD;
+    // Derive a stable secret from the stored hash so tokens survive restarts without .env
+    return dashboardAuth.passwordHash || 'newclaw-no-auth';
+}
+
 function createSignedToken(): string {
     const raw = crypto.randomBytes(32).toString('hex');
-    const secret = process.env.DASHBOARD_PASSWORD || '';
-    const signature = crypto.createHmac('sha256', secret).update(raw).digest('hex');
+    const signature = crypto.createHmac('sha256', getTokenSecret()).update(raw).digest('hex');
     const token = `${raw}.${signature}`;
     API_TOKENS.add(token);
     return token;
@@ -92,11 +99,9 @@ function verifySignedToken(token: string): boolean {
     const parts = token.split('.');
     if (parts.length !== 2) return false;
     const [raw, signature] = parts;
-    const secret = process.env.DASHBOARD_PASSWORD || '';
-    const expected = crypto.createHmac('sha256', secret).update(raw).digest('hex');
+    const expected = crypto.createHmac('sha256', getTokenSecret()).update(raw).digest('hex');
     try {
         if (crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex'))) {
-            // Add to in-memory set for fast subsequent lookups
             API_TOKENS.add(token);
             return true;
         }
@@ -115,8 +120,9 @@ export function authMiddleware(req: Request, res: Response, next: express.NextFu
     const cookieToken = req.cookies?.newclaw_session;
     const token = headerToken || cookieToken;
     if (token && verifySignedToken(String(token))) { next(); return; }
+    const normalizedPath = req.path.endsWith('/') && req.path.length > 1 ? req.path.slice(0, -1) : req.path;
     const allowedPaths = ['/', '/config', '/help', '/traces', '/memory', '/memory-graph', '/memory-review', '/shared.js', '/shared.css', '/favicon.ico', '/api/auth/login', '/health'];
-    if (allowedPaths.includes(req.path) || req.path.endsWith('.html') || req.path.endsWith('.js') || req.path.endsWith('.css')) {
+    if (allowedPaths.includes(normalizedPath) || normalizedPath.endsWith('.html') || normalizedPath.endsWith('.js') || normalizedPath.endsWith('.css')) {
         next();
         return;
     }

@@ -35,6 +35,7 @@ const CATEGORY_CONFIG: Record<string, PromptCategoryConfig> = {
     light: { domains: [] },
     chat: { domains: ['response_arch', 'audio'] },
     code: { domains: ['response_arch', 'file_ops', 'academic'] },
+    creation: { domains: ['response_arch', 'file_ops', 'academic', 'audio'] },
     analysis: { domains: ['response_arch', 'analysis', 'file_ops', 'audio', 'vision'] },
     execution: { domains: ['response_arch', 'file_ops', 'academic', 'audio', 'infra', 'analysis', 'vision'] },
 };
