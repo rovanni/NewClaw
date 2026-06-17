@@ -51,11 +51,12 @@ export class DashboardServer {
         this.app.use(cookieParser());
 
         this.app.use(authMiddleware);
-        this.app.use(express.static(path.join(__dirname, 'public')));
+        // redirect:false prevents 301 /config → /config/ (Express detects public/config/ directory)
+        this.app.use(express.static(path.join(__dirname, 'public'), { redirect: false }));
 
         // Static pages
         this.app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-        this.app.get('/config', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'config.html')));
+        this.app.get(['/config', '/config/'], (_req, res) => res.sendFile(path.join(__dirname, 'public', 'config.html')));
         this.app.get('/help', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'help.html')));
         this.app.get('/traces', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'traces.html')));
         this.app.get('/memory', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'memory.html')));
