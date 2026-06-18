@@ -1,23 +1,20 @@
+const path = require('path');
+const isWin = process.platform === 'win32';
+const DIR = path.resolve(__dirname);
+
 module.exports = {
   apps: [{
     name: "newclaw",
-    // Wrapper que detecta dist/ desatualizado e rebuilda automaticamente antes de iniciar.
-    // Previne o erro "X is not a function" causado por git pull sem npm run build.
-    // O script node_args abaixo não se aplica aqui (os flags estão dentro do script shell).
-    script: "./scripts/pm2-start.sh",
-    interpreter: "bash",
-    cwd: "/home/venus/newclaw",
+    script: isWin ? "dist/index.js" : "./scripts/pm2-start.sh",
+    interpreter: isWin ? "node" : "bash",
+    node_args: isWin ? "--max-old-space-size=256 --disable-warning=DEP0040" : undefined,
+    cwd: DIR,
     env: {
       NODE_ENV: "production",
     },
     max_memory_restart: "500M",
     log_date_format: "YYYY-MM-DD HH:mm:ss",
-    // Graceful shutdown: give the app time to call deleteWebhook + stop polling
-    // Aguarda shutdown gracioso completo antes de reiniciar
-    // deleteWebhook + 5s de espera + bot.stop() levam ~8s no total
     kill_timeout: 20000,
-    // Aguarda 40s antes de iniciar o novo processo após restart/crash
-    // Garante que o Telegram liberou a conexão getUpdates da instância anterior (TTL ~30s)
     restart_delay: 40000,
     wait_ready: false,
     listen_timeout: 10000,

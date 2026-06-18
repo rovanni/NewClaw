@@ -87,15 +87,15 @@ function isPM2Running() {
 }
 
 function pm2JStart() {
-  // Get PM2 process status via JSON API (reliable, no string parsing)
+  // pm2 jlist outputs JSON — cross-platform, no shell redirects needed
   try {
-    const out = execSync(`node ${PM2_BIN} jstart 2>/dev/null`, { encoding: 'utf-8', cwd: DIR });
+    const out = pm2(['jlist']);
     const procs = JSON.parse(out);
     const nc = procs.find(p => p.name === 'newclaw');
     if (!nc) return 'not_found';
     return nc.pm2_env?.status || 'unknown';
   } catch {
-    // Fallback to string-based check
+    // Fallback: string parse from pm2 list
     try {
       const out = pm2(['list']);
       if (out.includes('newclaw')) {
@@ -109,31 +109,23 @@ function pm2JStart() {
 }
 
 function getPM2Pid() {
-  // Read PID from PM2's pid file — the most reliable method
-  // pm2 show no longer displays numeric pid in its table output
+  // Primary: pm2 jlist JSON (works cross-platform, no pid file needed)
+  try {
+    const out = pm2(['jlist']);
+    const procs = JSON.parse(out);
+    const nc = procs.find(p => p.name === 'newclaw');
+    if (nc && nc.pid && nc.pid > 0) {
+      try { process.kill(nc.pid, 0); return nc.pid; } catch {}
+      // On Windows, process.kill(pid, 0) throws even for live processes —
+      // if PM2 reports the pid, trust it
+      if (process.platform === 'win32' && nc.pm2_env?.status === 'online') return nc.pid;
+    }
+  } catch {}
+  // Fallback: read .pm2 pid file (Unix-style path)
   const pm2PidFile = path.join(require('os').homedir(), '.pm2', 'pids', 'newclaw-0.pid');
   try {
     const pid = parseInt(fs.readFileSync(pm2PidFile, 'utf8').trim());
-    if (pid > 0 && process.kill(pid, 0)) return pid;
-  } catch {}
-  // Fallback: parse pm2 show (may not have numeric pid in newer versions)
-  try {
-    const out = pm2(['show', 'newclaw']);
-    // Try both old format (│ pid │ 123) and new format
-    const match = out.match(/│\s*pid\s*│\s*(\d+)/) || out.match(/│\s*pid\s+path\s*│\s*([^\s]+)/);
-    if (match) {
-      // If it's a path, read the pid from that file
-      const value = match[1].trim();
-      if (/^\d+$/.test(value)) {
-        const pid = parseInt(value);
-        if (pid > 0 && process.kill(pid, 0)) return pid;
-      }
-      // It's a file path
-      try {
-        const pid = parseInt(fs.readFileSync(value, 'utf8').trim());
-        if (pid > 0 && process.kill(pid, 0)) return pid;
-      } catch {}
-    }
+    if (pid > 0) { try { process.kill(pid, 0); return pid; } catch { if (process.platform === 'win32') return pid; } }
   } catch {}
   return null;
 }
@@ -423,13 +415,15 @@ const commands = {
     if (PM2_BIN) {
       try {
         pm2(['stop', 'newclaw']);
-        // Kill any orphans that PM2 might not track
-        try {
-          const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
-          const pids = out.trim().split('\n').filter(Boolean).map(Number);
-          for (const pid of pids) { try { process.kill(pid, 'SIGTERM'); } catch {} }
-          if (pids.length > 0) console.log(`   Cleaned ${pids.length} orphan process(es)`);
-        } catch {}
+        // Kill any orphans that PM2 might not track (Unix only)
+        if (process.platform !== 'win32') {
+          try {
+            const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
+            const pids = out.trim().split('\n').filter(Boolean).map(Number);
+            for (const pid of pids) { try { process.kill(pid, 'SIGTERM'); } catch {} }
+            if (pids.length > 0) console.log(`   Cleaned ${pids.length} orphan process(es)`);
+          } catch {}
+        }
         try { fs.unlinkSync(PID_FILE); } catch {}
         console.log('🛑 NewClaw stopped (via PM2)');
       } catch {
