@@ -788,6 +788,9 @@ function Show-Summary {
 # ── Main ─────────────────────────────────────────────────────
 
 try {
+    # Allow .ps1 wrappers (npm.ps1, etc.) to run when launched via irm|iex
+    Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
+
     Write-Banner
 
     if ($DryRun) { Write-Warn "MODO DRY-RUN — nenhuma alteração será feita" }
