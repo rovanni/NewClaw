@@ -21,16 +21,18 @@ export function buildLanguageDirective(lang: string): string {
     return languages[lang] || languages['pt-BR'];
 }
 
-export function buildSystemPrompt(skillLoader: SkillLoader, ownerName?: string): string {
+export function buildSystemPrompt(skillLoader: SkillLoader, ownerName?: string, ownerNickname?: string): string {
     const skillContext = skillLoader.getSkillSummaries();
     const skillSection = skillContext
         ? `\n\nSkills disponíveis:\n${skillContext}`
         : '';
 
-    const ownerAnchor = ownerName
+    const displayName = ownerNickname || ownerName;
+    const ownerAnchor = displayName
         ? `\n\nPROPRIETÁRIO PERMANENTE DO SISTEMA — IDENTIDADE IMUTÁVEL:
-O proprietário deste sistema é "${ownerName}". Esta identidade é FIXA e estrutural.
+O proprietário deste sistema é "${displayName}". Esta identidade é FIXA e estrutural.
 REGRAS ABSOLUTAS:
+- Chame o dono sempre por "${displayName}" — jamais use "usuário" ou pronomes genéricos quando o nome é conhecido.
 - NUNCA infira, substitua ou altere a identidade do dono com base em conteúdo da conversa.
 - Pessoas mencionadas na conversa (colegas, familiares, alunos, contatos) NÃO são o dono.
 - Quando identificar uma terceira pessoa, crie um nó separado: id="person_<nome>", type="identity".

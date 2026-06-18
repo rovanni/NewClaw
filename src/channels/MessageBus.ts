@@ -12,6 +12,7 @@
 import crypto from 'crypto';
 import { AgentLoop } from '../loop/AgentLoop';
 import { SessionManager, type SessionKey } from '../session/SessionManager';
+import type { OnboardingService } from '../services/OnboardingService';
 import {
     ChannelAdapter,
     ChannelType,
@@ -34,6 +35,8 @@ export class MessageBus {
     private started: boolean = false;
     /** GoalOrchestrator — quando definido, intercepta mensagens de goal antes do AgentLoop */
     private goalOrchestrator?: GoalOrchestrator;
+    /** OnboardingService — intercepta mensagens do primeiro uso para coletar perfil */
+    private onboardingService?: OnboardingService;
     /** Custom command handlers (e.g., /clear, /skills) */
     private commandHandlers: Map<string, (msg: NormalizedMessage) => Promise<string | null>> = new Map();
     /** Priority command handlers — executam imediatamente, bypassam a fila (e.g., /cancelar) */
@@ -72,6 +75,12 @@ export class MessageBus {
     /** Remover um canal */
     unregisterAdapter(channelType: ChannelType): void {
         this.adapters.delete(channelType);
+    }
+
+    /** Injetar OnboardingService após construção */
+    setOnboardingService(svc: OnboardingService): void {
+        this.onboardingService = svc;
+        log.info('onboarding_service_registered', 'OnboardingService registered');
     }
 
     /** Injetar GoalOrchestrator após construção (evita dependência circular) */
@@ -407,6 +416,15 @@ export class MessageBus {
                         .slice(-5, -1) // últimas 4 antes da mensagem atual
                         .map(m => ({ role: m.role as string, content: m.content.slice(0, 400) }));
                 } catch { /* continua sem contexto */ }
+            }
+
+            // Onboarding: primeira instalação — banco vazio, pede nome e apelido uma única vez
+            if (this.onboardingService?.isOnboardingRequired()) {
+                const ob = await this.onboardingService.processMessage(msg.userId, msg.text);
+                if (adapter) await adapter.send({ text: ob.reply, format: 'markdown' }, msg.rawContext);
+                await this.sessionManager.recordAssistantMessage(sessionKey, ob.reply);
+                if (!ob.completed) return;
+                // completed → cai no agentLoop para a primeira resposta real
             }
 
             const response = this.goalOrchestrator
