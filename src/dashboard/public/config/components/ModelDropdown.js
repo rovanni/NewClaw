@@ -25,13 +25,23 @@ export function initDropdowns(ids, onPull) {
     const container = document.getElementById(`container-${id}`);
     if (!input || !dropdown) continue;
 
-    const show = () => { _renderDropdown(id, input, dropdown, onPull); dropdown.classList.add('show'); };
+    const show = () => {
+      _renderDropdown(id, input, dropdown, onPull);
+      dropdown.classList.remove('drop-up');
+      dropdown.classList.add('show');
+      // Flip upward if dropdown would overflow the viewport bottom
+      const rect = dropdown.getBoundingClientRect();
+      if (rect.bottom > window.innerHeight - 8) dropdown.classList.add('drop-up');
+    };
 
     input.addEventListener('focus', show);
     input.addEventListener('click', show);
     input.addEventListener('input', show);
     document.addEventListener('click', e => {
-      if (container && !container.contains(e.target)) dropdown.classList.remove('show');
+      if (container && !container.contains(e.target)) {
+        dropdown.classList.remove('show');
+        dropdown.classList.remove('drop-up');
+      }
     });
   }
 }
