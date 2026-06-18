@@ -209,6 +209,9 @@ export function createMaintenanceRouter(): Router {
 
     // GET /api/maintenance/backup/schedule
     router.get('/backup/schedule', (_req: Request, res: Response) => {
+        if (process.platform === 'win32') {
+            return res.json({ success: true, found: false, humanReadable: null, cronExpr: null, raw: null, note: 'Agendamento via cron não disponível no Windows. Use o Agendador de Tarefas do Windows (taskschd.msc).' });
+        }
         exec('crontab -l 2>/dev/null', (_err, stdout) => {
             const lines = (stdout || '').split('\n')
                 .filter(l => l.includes('backup_db.sh') && !l.trim().startsWith('#'));

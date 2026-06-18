@@ -42,7 +42,7 @@ const config = {
     memoryWindowSize: parseInt(process.env.MEMORY_WINDOW_SIZE || '20'),
     skillsDir: process.env.SKILLS_DIR || './skills',
     tmpDir: process.env.TMP_DIR || './tmp',
-    whisperPath: process.env.WHISPER_PATH || '/usr/local/bin/whisper',
+    whisperPath: process.env.WHISPER_PATH || 'whisper',
     ownerName: process.env.OWNER_NAME || '',
     ownerUserId: process.env.OWNER_USER_ID || '',
     ownerLocked: process.env.OWNER_LOCKED === 'true',

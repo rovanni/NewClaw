@@ -1,8 +1,8 @@
 import fs from 'fs';
-import { execSync } from 'child_process';
 import { createLogger } from '../../shared/AppLogger';
 import { errorMessage } from '../../shared/errors';
 import { AuditConfig, AuditFinding, OllamaModelsResponse } from './types';
+import { which, diskUsagePercent, countNodeProcesses, isWindows } from '../../utils/crossPlatform';
 
 const log = createLogger('AuditIntegrationChecker');
 
@@ -162,7 +162,7 @@ export async function auditIntegration(config: AuditConfig): Promise<AuditFindin
     const signalCliPath = /^[a-zA-Z0-9_.\-/]+$/.test(rawSignalPath) ? rawSignalPath : 'signal-cli';
     if (signalNumber) {
         try {
-            const signalResult = execSync(`which ${signalCliPath} 2>/dev/null || echo not_found`, { encoding: 'utf-8' }).trim();
+            const signalResult = which(signalCliPath) ? signalCliPath : 'not_found';
             if (signalResult === 'not_found') {
                 channelStatuses.push({ channel: 'Signal', connected: false, detail: 'signal-cli não instalado' });
                 findings.push({
@@ -234,9 +234,8 @@ export async function auditIntegration(config: AuditConfig): Promise<AuditFindin
 
     // Disk usage
     try {
-        const df = execSync("df -h / | tail -1 | awk '{print $5}'", { encoding: 'utf-8' }).trim();
-        const usage = parseInt(df);
-        if (usage > 85) {
+        const usage = diskUsagePercent();
+        if (usage !== null && usage > 85) {
             findings.push({
                 severity: usage > 95 ? 'critical' : 'warning',
                 category: 'runtime',
@@ -268,15 +267,14 @@ export async function auditIntegration(config: AuditConfig): Promise<AuditFindin
 
     // Process health
     try {
-        const result = execSync('ps aux | grep -c "node.*newclaw\\|npm.*start" || echo 0', { encoding: 'utf-8' });
-        const processCount = parseInt(result.trim());
-        if (processCount < 2) {
+        const processCount = countNodeProcesses('newclaw') ?? countNodeProcesses('dist/index') ?? 0;
+        if (processCount < 1) {
             findings.push({
                 severity: 'critical',
                 category: 'integration',
                 title: 'NewClaw pode estar offline',
-                description: `Encontrados apenas ${processCount} processos. Bot pode estar parado.`,
-                suggestion: 'Verificar: ./start.sh restart ou pm2 list',
+                description: 'Nenhum processo newclaw encontrado. Bot pode estar parado.',
+                suggestion: isWindows ? 'Verificar: pm2 list ou newclaw status' : 'Verificar: pm2 list ou ./start.sh restart',
                 autoFixable: false,
                 riskLevel: 'high'
             });

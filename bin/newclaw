@@ -14,7 +14,9 @@ const path = require('path');
 
 const DIR = path.resolve(__dirname, '..');
 const PID_FILE = path.join(DIR, 'newclaw.pid');
-const LOG_FILE = '/tmp/newclaw.log';
+const LOG_FILE = process.platform === 'win32'
+  ? path.join(require('os').tmpdir(), 'newclaw.log')
+  : '/tmp/newclaw.log';
 const ENV_FILE = fs.existsSync(path.join(DIR, 'newclaw.env')) 
   ? path.join(DIR, 'newclaw.env') 
   : path.join(DIR, '.env');
@@ -25,38 +27,53 @@ const ENV_FILE = fs.existsSync(path.join(DIR, 'newclaw.env'))
 const PM2_BIN = findPM2();
 
 function findPM2() {
-  // Check common locations
-  const candidates = [
-    path.join(require('os').homedir(), '.npm/_npx/*/node_modules/pm2/bin/pm2'),
-    '/usr/local/bin/pm2',
-    '/usr/bin/pm2',
-    path.join(require('os').homedir(), '.npm-global/bin/pm2'),
-  ];
-  // Check npx cache
+  const isWin = process.platform === 'win32';
+
+  // Primary: find the actual JS binary via npm global prefix (cross-platform)
   try {
-    const homeDir = require('os').homedir();
-    const npxDirs = execSync(`find ${homeDir}/.npm/_npx -name pm2 -type f -path '*/bin/pm2' 2>/dev/null`, { encoding: 'utf-8' }).trim().split('\n');
-    if (npxDirs[0]) return npxDirs[0];
+    const npmPrefix = execSync('npm prefix -g', {
+      encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    const jsPath = path.join(npmPrefix, 'node_modules', 'pm2', 'bin', 'pm2');
+    if (fs.existsSync(jsPath)) return jsPath;
   } catch {}
-  // Check global npm bin
-  try {
-    const npmBin = execSync('npm bin -g', { encoding: 'utf-8' }).trim();
-    const pm2Path = path.join(npmBin, 'pm2');
-    if (fs.existsSync(pm2Path)) return pm2Path;
-  } catch {}
-  try {
-    return execSync('which pm2', { encoding: 'utf-8' }).trim();
-  } catch {}
+
+  if (isWin) {
+    // Windows fallback: %APPDATA%\npm\node_modules\pm2\bin\pm2
+    try {
+      const jsPath = path.join(process.env.APPDATA || '', 'npm', 'node_modules', 'pm2', 'bin', 'pm2');
+      if (fs.existsSync(jsPath)) return jsPath;
+    } catch {}
+  } else {
+    // Unix: search npx cache
+    try {
+      const homeDir = require('os').homedir();
+      const result = execSync(
+        `find "${homeDir}/.npm/_npx" -name pm2 -type f -path '*/bin/pm2' 2>/dev/null`,
+        { encoding: 'utf-8' }
+      ).trim().split('\n').filter(Boolean)[0];
+      if (result) return result;
+    } catch {}
+
+    // Unix: check known paths
+    for (const p of [
+      '/usr/local/bin/pm2',
+      '/usr/bin/pm2',
+      path.join(require('os').homedir(), '.npm-global/bin/pm2'),
+    ]) {
+      if (fs.existsSync(p)) return p;
+    }
+  }
+
   return null;
 }
 
 function pm2(args = []) {
   if (!PM2_BIN) {
-    console.error('❌ PM2 não encontrado. Instale com: npm install -g pm2');
-    process.exit(1);
+    throw new Error('PM2 não encontrado. Instale com: npm install -g pm2');
   }
   try {
-    return execSync(`node ${PM2_BIN} ${args.join(' ')}`, { encoding: 'utf-8', cwd: DIR, stdio: ['pipe', 'pipe', 'pipe'] });
+    return execSync(`node "${PM2_BIN}" ${args.join(' ')}`, { encoding: 'utf-8', cwd: DIR, stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (e) {
     return e.stdout || '';
   }
@@ -140,6 +157,7 @@ function getPid() {
 }
 
 function findRunningPid() {
+  if (process.platform === 'win32') return null; // rely on PM2 or PID file on Windows
   try {
     const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
     const pids = out.trim().split('\n').filter(Boolean).map(Number);
@@ -153,28 +171,33 @@ function killAllInstances() {
   if (PM2_BIN) {
     try {
       pm2(['stop', 'newclaw']);
-      // Also kill any orphan processes not managed by PM2
-      try {
-        const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
-        const pids = out.trim().split('\n').filter(Boolean).map(Number);
-        let orphans = 0;
-        for (const pid of pids) {
-          try { process.kill(pid, 'SIGTERM'); orphans++; } catch {}
-        }
-        return orphans;
-      } catch { return 0; }
+      if (process.platform !== 'win32') {
+        try {
+          const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
+          const pids = out.trim().split('\n').filter(Boolean).map(Number);
+          let orphans = 0;
+          for (const pid of pids) {
+            try { process.kill(pid, 'SIGTERM'); orphans++; } catch {}
+          }
+          return orphans;
+        } catch {}
+      }
+      return 0;
     } catch {}
   }
-  // Fallback: raw kill (only if PM2 unavailable)
-  try {
-    const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
-    const pids = out.trim().split('\n').filter(Boolean).map(Number);
-    for (const pid of pids) {
-      try { process.kill(pid, 'SIGTERM'); } catch {}
-    }
-    return pids.length;
-  } catch { return 0; }
+  // Fallback: raw kill (only if PM2 unavailable, Unix only)
+  if (process.platform !== 'win32') {
+    try {
+      const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
+      const pids = out.trim().split('\n').filter(Boolean).map(Number);
+      for (const pid of pids) {
+        try { process.kill(pid, 'SIGTERM'); } catch {}
+      }
+      return pids.length;
+    } catch {}
   }
+  return 0;
+}
 
 function isRunning() {
   const pid = getPid();
@@ -268,11 +291,15 @@ const commands = {
     // otherwise we kill the active bot's polling connection
     const env = readEnv();
     try {
-      execSync('curl -s "https://api.telegram.org/bot' + env.TELEGRAM_BOT_TOKEN + '/deleteWebhook?drop_pending_updates=true" >/dev/null 2>\&1');
+      const delUrl = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true`;
+      const curlCmd = process.platform === 'win32'
+        ? `curl.exe -s "${delUrl}" > nul 2>&1`
+        : `curl -s "${delUrl}" >/dev/null 2>&1`;
+      execSync(curlCmd);
     } catch {}
     killAllInstances();
     console.log('⏳ Waiting for cleanup (5s)...');
-    execSync('sleep 5');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000);
 
     if (debug) env.LOG_LEVEL = 'debug';
     const langArg = args.find(a => a.startsWith('--lang='));
@@ -426,7 +453,13 @@ const commands = {
       // Clean up Telegram polling first
       const env = readEnv();
       if (env.TELEGRAM_BOT_TOKEN) {
-        try { execSync(`curl -s "https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true" > /dev/null 2>&1`); } catch {}
+        try {
+          const delUrl = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true`;
+          const curlCmd = process.platform === 'win32'
+            ? `curl.exe -s "${delUrl}" > nul 2>&1`
+            : `curl -s "${delUrl}" > /dev/null 2>&1`;
+          execSync(curlCmd);
+        } catch {}
       }
       const pm2Status = pm2JStart();
       if (pm2Status === 'online' || pm2Status === 'stopped' || pm2Status === 'errored') {
@@ -451,11 +484,30 @@ const commands = {
     
     let uptime = 'unknown';
     try {
-      const out = execSync(`ps -p ${pid} -o etimes=`).toString().trim();
-      const secs = parseInt(out);
-      const m = Math.floor(secs / 60);
-      const h = Math.floor(m / 60);
-      uptime = h > 0 ? `${h}h ${m % 60}m` : `${m}m`;
+      if (process.platform === 'win32') {
+        const out = execSync(
+          `wmic process where ProcessId="${pid}" get CreationDate /value`,
+          { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+        ).trim();
+        const match = out.match(/CreationDate=(\d{14})/);
+        if (match) {
+          const d = match[1];
+          const created = new Date(
+            parseInt(d.slice(0,4)), parseInt(d.slice(4,6))-1, parseInt(d.slice(6,8)),
+            parseInt(d.slice(8,10)), parseInt(d.slice(10,12)), parseInt(d.slice(12,14))
+          );
+          const secs = Math.floor((Date.now() - created.getTime()) / 1000);
+          const m = Math.floor(secs / 60);
+          const h = Math.floor(m / 60);
+          uptime = h > 0 ? `${h}h ${m % 60}m` : `${m}m`;
+        }
+      } else {
+        const out = execSync(`ps -p ${pid} -o etimes=`).toString().trim();
+        const secs = parseInt(out);
+        const m = Math.floor(secs / 60);
+        const h = Math.floor(m / 60);
+        uptime = h > 0 ? `${h}h ${m % 60}m` : `${m}m`;
+      }
     } catch {}
     
     console.log(`🟢 NewClaw running (PID ${pid}, uptime ${uptime})`);
@@ -511,12 +563,32 @@ const commands = {
 
     console.log(`📄 Lendo logs de: ${logFile}`);
     if (follow) {
-      const child = spawn('tail', ['-f', '-n', '50', logFile], { stdio: 'inherit' });
-      process.on('SIGINT', () => { child.kill(); process.exit(0); });
+      // tail -f equivalent: watch file for new content
+      let offset = 0;
+      try { offset = fs.statSync(logFile).size; } catch {}
+      const printLast = (n) => {
+        try {
+          const lines = fs.readFileSync(logFile, 'utf8').split(/\r?\n/).filter(Boolean);
+          console.log(lines.slice(-n).join('\n'));
+        } catch {}
+      };
+      printLast(50);
+      console.log('\n📡 Seguindo logs (Ctrl+C para parar)...\n');
+      const watcher = fs.watchFile(logFile, { interval: 400 }, () => {
+        try {
+          const stats = fs.statSync(logFile);
+          if (stats.size > offset) {
+            const stream = fs.createReadStream(logFile, { encoding: 'utf8', start: offset, end: stats.size - 1 });
+            offset = stats.size;
+            stream.on('data', chunk => process.stdout.write(chunk));
+          }
+        } catch {}
+      });
+      process.on('SIGINT', () => { fs.unwatchFile(logFile); process.exit(0); });
     } else {
       try {
-        const out = execSync(`tail -50 "${logFile}"`).toString();
-        console.log(out);
+        const lines = fs.readFileSync(logFile, 'utf8').split(/\r?\n/).filter(Boolean);
+        console.log(lines.slice(-50).join('\n'));
       } catch { console.log('No logs found'); }
     }
   },
