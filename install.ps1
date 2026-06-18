@@ -87,6 +87,83 @@ function Pause-Exit([int]$code = 0) {
     exit $code
 }
 
+function Invoke-WithSpinner([string]$Label, [scriptblock]$Block) {
+    $frames = [char[]]@(0x280B, 0x2819, 0x2839, 0x2838, 0x283C, 0x2834, 0x2826, 0x2827, 0x2807, 0x280F)
+    $result  = $null
+    $err     = $null
+
+    $job = Start-Job -ScriptBlock {
+        param($bl, $wd)
+        Set-Location $wd
+        try { & ([scriptblock]::Create($bl)) }
+        catch { throw $_ }
+    } -ArgumentList $Block.ToString(), (Get-Location).Path
+
+    $i = 0
+    while ($job.State -eq 'Running') {
+        $frame = $frames[$i % $frames.Length]
+        Write-Host "`r    $frame  $Label..." -NoNewline -ForegroundColor Cyan
+        Start-Sleep -Milliseconds 120
+        $i++
+    }
+
+    $result = Receive-Job $job -Wait -ErrorVariable err 2>&1
+    Remove-Job $job
+
+    if ($job.State -eq 'Failed' -or $err) {
+        Write-Host "`r    ❌ $Label falhou.              " -ForegroundColor Red
+        throw ($err | Select-Object -First 1)
+    }
+    Write-Host "`r    ✅ $Label concluído.              " -ForegroundColor Green
+    return $result
+}
+
+# ── Validações de canal ──────────────────────────────────────
+
+function Test-TelegramToken([string]$tok, [string]$uid) {
+    try {
+        $resp = Invoke-RestMethod -Uri "https://api.telegram.org/bot${tok}/getMe" `
+            -TimeoutSec 6 -ErrorAction Stop
+        if ($resp.ok) {
+            $name = $resp.result.first_name
+            $user = $resp.result.username
+            Write-Ok "Token Telegram válido — bot: $name (@$user)"
+            return $true
+        }
+    } catch {
+        $msg = $_.Exception.Message
+        if ($msg -match "401") {
+            Write-Fail "Token inválido (401 Unauthorized). Verifique com @BotFather."
+        } elseif ($msg -match "timeout|connect") {
+            Write-Warn "Sem conexão com a API do Telegram — token não verificado."
+            return $true  # prosseguir offline
+        } else {
+            Write-Warn "Não foi possível verificar o token: $msg"
+            return $true  # prosseguir mesmo assim
+        }
+    }
+    return $false
+}
+
+function Test-DiscordToken([string]$tok) {
+    if ([string]::IsNullOrWhiteSpace($tok)) { return $true }
+    try {
+        $headers = @{ Authorization = "Bot $tok" }
+        $resp = Invoke-RestMethod -Uri "https://discord.com/api/v10/users/@me" `
+            -Headers $headers -TimeoutSec 6 -ErrorAction Stop
+        Write-Ok "Token Discord válido — bot: $($resp.username)"
+        return $true
+    } catch {
+        $msg = $_.Exception.Message
+        if ($msg -match "401") {
+            Write-Fail "Token Discord inválido (401). Verifique no Developer Portal."
+            return $false
+        }
+        Write-Warn "Não foi possível verificar token Discord: $msg"
+        return $true
+    }
+}
+
 # ── Ajuda ────────────────────────────────────────────────────
 
 if ($Help) {
@@ -323,10 +400,12 @@ function Step-DownloadModel {
         }
     }
 
-    Write-Info "Baixando modelo $Model..."
-    Write-Info "Pode demorar alguns minutos na primeira vez..."
-    Invoke-Step "ollama pull $Model"
-    Write-Ok "Modelo $Model pronto!"
+    if ($DryRun) { Write-Dry "ollama pull $Model"; return }
+    $m = $script:Model
+    Invoke-WithSpinner "Baixando modelo $m (pode demorar na 1ª vez)" {
+        & ollama pull $using:m
+    }
+    Write-Ok "Modelo $m pronto!"
 }
 
 # ── 7. NewClaw ───────────────────────────────────────────────
@@ -407,13 +486,12 @@ function Step-InstallNewClaw {
     if ($DryRun) { Write-Dry "npm install && npm run build em $Dir"; return }
 
     Push-Location $Dir
-    Write-Info "Instalando dependências..."
-    npm install
-    Write-Ok "Dependências instaladas!"
-
-    Write-Info "Compilando código..."
-    npm run build
-    Write-Ok "Código compilado!"
+    Invoke-WithSpinner "Instalando dependências" {
+        npm install --prefer-offline 2>&1
+    }
+    Invoke-WithSpinner "Compilando código TypeScript" {
+        node node_modules/typescript/bin/tsc --noEmit false 2>&1
+    }
     Pop-Location
 }
 
@@ -457,13 +535,22 @@ function Configure-Telegram {
     Write-Host "         Exemplo: 987654321"
     Write-Host ""
 
-    while ([string]::IsNullOrWhiteSpace($script:Token)) {
-        $script:Token = Read-Answer "  Cole o TOKEN do bot (ex: 123456:AAF...)" ""
-        if ([string]::IsNullOrWhiteSpace($script:Token)) {
-            Write-Fail "Token é obrigatório!"
-        } elseif ($script:Token -notlike "*:*") {
-            Write-Warn "Token inválido — deve conter ':'. Tente novamente."
-            $script:Token = ""
+    $tokenOk = $false
+    while (-not $tokenOk) {
+        while ([string]::IsNullOrWhiteSpace($script:Token)) {
+            $script:Token = Read-Answer "  Cole o TOKEN do bot (ex: 123456:AAF...)" ""
+            if ([string]::IsNullOrWhiteSpace($script:Token)) {
+                Write-Fail "Token é obrigatório!"
+            } elseif ($script:Token -notlike "*:*") {
+                Write-Warn "Token inválido — deve conter ':'. Tente novamente."
+                $script:Token = ""
+            }
+        }
+        Write-Info "Verificando token com a API do Telegram..."
+        if (Test-TelegramToken $script:Token "") {
+            $tokenOk = $true
+        } else {
+            $script:Token = ""  # forçar nova entrada
         }
     }
     while ([string]::IsNullOrWhiteSpace($script:UserId)) {
@@ -478,7 +565,6 @@ function Configure-Telegram {
             $script:UserId = ""
         }
     }
-    Write-Ok "Telegram configurado!"
 }
 
 function Configure-Discord {
@@ -486,12 +572,15 @@ function Configure-Discord {
     Write-Host "    ── Discord ──────────────────────────────────────" -ForegroundColor Yellow
     Write-Host "    Acesse: discord.com/developers → Applications → Bot → Token" -ForegroundColor Cyan
     Write-Host ""
-    $script:DiscordToken  = Read-Answer "  Cole o Bot Token do Discord" ""
+    $discordOk = $false
+    while (-not $discordOk) {
+        $script:DiscordToken = Read-Answer "  Cole o Bot Token do Discord" ""
+        if ([string]::IsNullOrWhiteSpace($script:DiscordToken)) { break }
+        Write-Info "Verificando token com a API do Discord..."
+        if (Test-DiscordToken $script:DiscordToken) { $discordOk = $true } else { $script:DiscordToken = "" }
+    }
     $script:DiscordGuilds = Read-Answer "  IDs dos servidores permitidos (vírgula, vazio = todos)" ""
     $script:DiscordUsers  = Read-Answer "  IDs de usuários permitidos (vírgula, vazio = todos)" ""
-    if (-not [string]::IsNullOrWhiteSpace($script:DiscordToken)) {
-        Write-Ok "Discord configurado!"
-    }
 }
 
 function Configure-WhatsApp {
@@ -866,6 +955,28 @@ function Show-Summary {
     Write-Host ""
     Write-Host "    Abra seu canal configurado e mande 'Oi' para o agente! 🎉" -ForegroundColor Yellow
     Write-Host ""
+
+    # Teste pós-instalação — Telegram (se configurado)
+    if (-not $NoPrompt -and -not [string]::IsNullOrWhiteSpace($script:Token) -and -not [string]::IsNullOrWhiteSpace($script:UserId)) {
+        Write-Host ""
+        $testNow = Read-Host "  Quer enviar uma mensagem de teste ao bot agora? [S/n]"
+        if ([string]::IsNullOrWhiteSpace($testNow) -or $testNow -match "^[sSyY]") {
+            Write-Info "Enviando mensagem de teste via Telegram..."
+            try {
+                $msg = "Olá! 👋 Sou o NewClaw. Instalação concluída com sucesso! Estou online e pronto."
+                $url = "https://api.telegram.org/bot$($script:Token)/sendMessage"
+                $body = @{ chat_id = $script:UserId; text = $msg } | ConvertTo-Json
+                $resp = Invoke-RestMethod -Uri $url -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 8
+                if ($resp.ok) {
+                    Write-Ok "Mensagem enviada! Verifique o Telegram — o bot respondeu."
+                } else {
+                    Write-Warn "Bot não conseguiu enviar: $($resp.description)"
+                }
+            } catch {
+                Write-Warn "Não foi possível enviar a mensagem de teste: $($_.Exception.Message)"
+            }
+        }
+    }
 }
 
 # ── Main ─────────────────────────────────────────────────────

@@ -140,8 +140,78 @@ ask_yes() {
   esac
 }
 
+# ── Validações de canal ──────────────────────────────────────
+
+validate_telegram_token() {
+  local tok="$1"
+  local resp
+  resp=$(curl -sf --max-time 6 "https://api.telegram.org/bot${tok}/getMe" 2>/dev/null) || {
+    warn "Sem conexão com a API do Telegram — token não verificado (prosseguindo)."
+    return 0
+  }
+  local ok; ok=$(echo "$resp" | grep -o '"ok":true')
+  if [ -n "$ok" ]; then
+    local name; name=$(echo "$resp" | grep -o '"first_name":"[^"]*"' | cut -d'"' -f4)
+    local uname; uname=$(echo "$resp" | grep -o '"username":"[^"]*"' | cut -d'"' -f4)
+    ok "Token Telegram válido — bot: ${name} (@${uname})"
+    return 0
+  else
+    local desc; desc=$(echo "$resp" | grep -o '"description":"[^"]*"' | cut -d'"' -f4)
+    fail "Token inválido: ${desc:-Unauthorized}. Verifique com @BotFather."
+    return 1
+  fi
+}
+
+validate_discord_token() {
+  local tok="$1"
+  [ -z "$tok" ] && return 0
+  local resp
+  resp=$(curl -sf --max-time 6 -H "Authorization: Bot ${tok}" \
+    "https://discord.com/api/v10/users/@me" 2>/dev/null) || {
+    warn "Sem conexão com a API do Discord — token não verificado (prosseguindo)."
+    return 0
+  }
+  local uname; uname=$(echo "$resp" | grep -o '"username":"[^"]*"' | cut -d'"' -f4)
+  if [ -n "$uname" ]; then
+    ok "Token Discord válido — bot: ${uname}"
+    return 0
+  else
+    fail "Token Discord inválido. Verifique no Developer Portal."
+    return 1
+  fi
+}
+
 check_cmd() {
   command -v "$1" &>/dev/null
+}
+
+# ── Spinner de progresso ──────────────────────────────────────
+
+run_with_spinner() {
+  local label="$1"; shift
+  local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+  local tmpout; tmpout=$(mktemp)
+
+  "$@" >"$tmpout" 2>&1 &
+  local pid=$!
+  local i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    printf "\r    %s  %s..." "${frames[$((i % 10))]}" "$label"
+    sleep 0.12
+    i=$((i + 1))
+  done
+  wait "$pid"
+  local rc=$?
+  if [ $rc -eq 0 ]; then
+    printf "\r    ✅ %s concluído.              \n" "$label"
+  else
+    printf "\r    ❌ %s falhou.                 \n" "$label"
+    cat "$tmpout"
+    rm -f "$tmpout"
+    return $rc
+  fi
+  rm -f "$tmpout"
+  return 0
 }
 
 # ── Ajuda ────────────────────────────────────────────────────
@@ -403,9 +473,7 @@ download_model() {
     esac
   fi
 
-  info "Baixando modelo ${OLLAMA_MODEL}..."
-  info "Pode demorar alguns minutos na primeira vez..."
-  run ollama pull "$OLLAMA_MODEL"
+  run_with_spinner "Baixando modelo ${OLLAMA_MODEL} (pode demorar na 1ª vez)" ollama pull "$OLLAMA_MODEL"
   ok "Modelo ${OLLAMA_MODEL} pronto!"
 }
 
@@ -447,13 +515,8 @@ install_newclaw() {
   # Instalar deps e build
   cd "$NEWCLAW_DIR" || fail "Não foi possível entrar na pasta $NEWCLAW_DIR"
 
-  info "Instalando dependências (npm install)..."
-  npm install
-  ok "Dependências instaladas!"
-
-  info "Compilando código..."
-  npm run build
-  ok "Código compilado!"
+  run_with_spinner "Instalando dependências" npm install --prefer-offline
+  run_with_spinner "Compilando código TypeScript" node node_modules/typescript/bin/tsc --noEmit false
 
   # Garantir permissão de execução em todos os scripts
   info "Configurando permissões de execução..."
@@ -532,10 +595,19 @@ configure() {
     echo -e "    2. ${BOLD}Seu User ID${NC} → Envie /start para @userinfobot"
     echo -e "       Exemplo: 987654321"
     echo ""
-    while [ -z "$BOT_TOKEN" ]; do
-      ask "  Cole o TOKEN do bot (ex: 123456:AAF...)" BOT_TOKEN
-      if [ -n "$BOT_TOKEN" ] && [[ "$BOT_TOKEN" != *":"* ]]; then
-        warn "Token inválido — deve conter ':'. Tente novamente."
+    local token_ok=0
+    while [ $token_ok -eq 0 ]; do
+      while [ -z "$BOT_TOKEN" ]; do
+        ask "  Cole o TOKEN do bot (ex: 123456:AAF...)" BOT_TOKEN
+        if [ -n "$BOT_TOKEN" ] && [[ "$BOT_TOKEN" != *":"* ]]; then
+          warn "Token inválido — deve conter ':'. Tente novamente."
+          BOT_TOKEN=""
+        fi
+      done
+      info "Verificando token com a API do Telegram..."
+      if validate_telegram_token "$BOT_TOKEN"; then
+        token_ok=1
+      else
         BOT_TOKEN=""
       fi
     done
@@ -549,7 +621,6 @@ configure() {
         USER_ID=""
       fi
     done
-    ok "Telegram configurado!"
   }
 
   _configure_discord() {
@@ -557,10 +628,15 @@ configure() {
     echo -e "  ${BOLD}${YELLOW}── Discord ──────────────────────────────────────${NC}"
     echo -e "  ${CYAN}Acesse: discord.com/developers → Applications → Bot → Token${NC}"
     echo ""
-    ask "  Cole o Bot Token do Discord" discord_token
+    local disc_ok=0
+    while [ $disc_ok -eq 0 ]; do
+      ask "  Cole o Bot Token do Discord" discord_token
+      [ -z "$discord_token" ] && break
+      info "Verificando token com a API do Discord..."
+      if validate_discord_token "$discord_token"; then disc_ok=1; else discord_token=""; fi
+    done
     ask "  IDs dos servidores permitidos (vírgula, vazio = todos)" discord_guilds
     ask "  IDs de usuários permitidos (vírgula, vazio = todos)" discord_users
-    [ -n "$discord_token" ] && ok "Discord configurado!"
   }
 
   _configure_whatsapp() {
@@ -932,6 +1008,29 @@ show_summary() {
   echo -e "  ${YELLOW}Abra seu canal configurado e mande 'Oi' para o agente! 🎉${NC}"
   echo -e "  ${CYAN}Dica: ${NC}newclaw channels  — ver status de todos os canais"
   echo ""
+
+  # Teste pós-instalação — Telegram (se configurado)
+  if [ "$NO_PROMPT" -eq 0 ] && [ -n "$BOT_TOKEN" ] && [ -n "$USER_ID" ]; then
+    echo -ne "  Quer enviar uma mensagem de teste ao bot agora? [S/n]: "
+    read -r test_answer < /dev/tty 2>/dev/null || test_answer="s"
+    test_answer="${test_answer:-s}"
+    case "$test_answer" in
+      s|S|y|Y)
+        info "Enviando mensagem de teste via Telegram..."
+        local msg="Olá! 👋 Sou o NewClaw. Instalação concluída com sucesso! Estou online e pronto."
+        local resp
+        resp=$(curl -sf --max-time 8 \
+          -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+          -H 'Content-Type: application/json' \
+          -d "{\"chat_id\":\"${USER_ID}\",\"text\":\"${msg}\"}" 2>/dev/null)
+        if echo "$resp" | grep -q '"ok":true'; then
+          ok "Mensagem enviada! Verifique o Telegram."
+        else
+          warn "Não foi possível enviar a mensagem de teste (bot pode estar iniciando ainda)."
+        fi
+        ;;
+    esac
+  fi
 }
 
 # ── Main ─────────────────────────────────────────────────────

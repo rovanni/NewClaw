@@ -510,18 +510,59 @@ const commands = {
       }
     } catch {}
     
-    console.log(`🟢 NewClaw running (PID ${pid}, uptime ${uptime})`);
-    console.log(`   Model: ${env.OLLAMA_MODEL || 'glm-5.1:cloud'}`);
-    console.log(`   Lang: ${env.APP_LANG || 'pt-BR'}`);
-    console.log(`   Whisper API: ${env.WHISPER_API_URL || 'localhost:8177'}`);
-    console.log(`   Dashboard: http://localhost:${env.DASHBOARD_PORT || 3090}`);
-    
+    // Memory usage from PM2 or process
+    let memMB = null;
+    try {
+      const out = pm2(['show', 'newclaw']);
+      const match = out.match(/memory\s*│\s*([\d.]+)\s*(mb|kb|b)/i);
+      if (match) {
+        const val = parseFloat(match[1]);
+        const unit = match[2].toLowerCase();
+        memMB = unit === 'kb' ? (val / 1024).toFixed(0) : unit === 'b' ? (val / 1048576).toFixed(0) : val.toFixed(0);
+      }
+    } catch {}
+    if (memMB === null && pid) {
+      try { memMB = Math.round(process.memoryUsage().rss / 1048576); } catch {}
+    }
+
+    // Last log line timestamp
+    let lastMsg = null;
+    try {
+      const logPath = path.join(DIR, 'logs', 'newclaw-stdout.log');
+      if (fs.existsSync(logPath)) {
+        const lines = fs.readFileSync(logPath, 'utf8').split(/\r?\n/).filter(Boolean);
+        const recent = lines.slice(-1)[0] || '';
+        const tsMatch = recent.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+        if (tsMatch) {
+          const diff = Math.round((Date.now() - new Date(tsMatch[0]).getTime()) / 1000);
+          lastMsg = diff < 60 ? `há ${diff}s` : diff < 3600 ? `há ${Math.round(diff/60)}min` : `há ${Math.round(diff/3600)}h`;
+        }
+      }
+    } catch {}
+
+    // Active channels from .env
+    const activeChannels = [];
+    if (env.TELEGRAM_BOT_TOKEN) activeChannels.push('Telegram');
+    if (env.DISCORD_BOT_TOKEN) activeChannels.push('Discord');
+    if (env.WHATSAPP_PHONE_NUMBER) activeChannels.push('WhatsApp');
+    if (env.SIGNAL_PHONE_NUMBER) activeChannels.push('Signal');
+
+    console.log('');
+    console.log(`🟢 NewClaw online  (PID ${pid}, uptime ${uptime})`);
+    console.log(`   Canais:     ${activeChannels.length > 0 ? activeChannels.join(', ') : 'nenhum configurado'}`);
+    console.log(`   Modelo:     ${env.OLLAMA_MODEL || env.MODEL_CHAT || 'glm-5.1:cloud'}`);
+    if (memMB) console.log(`   Memória:    ${memMB} MB RSS`);
+    console.log(`   Dashboard:  http://localhost:${env.DASHBOARD_PORT || 3090}`);
+    console.log(`   Lang:       ${env.APP_LANG || 'pt-BR'}`);
+    if (lastMsg) console.log(`   Última log: ${lastMsg}`);
+    console.log('');
+
     const langArg = args?.find(a => a.startsWith('--lang='));
     if (langArg) {
       const lang = langArg.split('=')[1];
       env.APP_LANG = lang;
       writeEnv(env);
-      console.log(`   Lang updated to: ${lang}`);
+      console.log(`   Lang atualizado para: ${lang}`);
     }
   },
 
@@ -865,6 +906,148 @@ const commands = {
     });
   },
 
+  async doctor() {
+    const http = require('http');
+    const https = require('https');
+
+    function check(label, ok, detail) {
+      const icon = ok === true ? '✅' : ok === false ? '❌' : '⚠️ ';
+      console.log(`  ${icon} ${label.padEnd(36)} ${detail || ''}`);
+    }
+
+    function httpGet(url, options = {}) {
+      return new Promise((resolve) => {
+        const mod = url.startsWith('https') ? https : http;
+        const req = mod.get(url, { ...options, timeout: 5000 }, (res) => {
+          let data = '';
+          res.on('data', d => data += d);
+          res.on('end', () => resolve({ status: res.statusCode, body: data }));
+        });
+        req.on('error', (e) => resolve({ status: 0, error: e.message }));
+        req.on('timeout', () => { req.destroy(); resolve({ status: 0, error: 'timeout' }); });
+      });
+    }
+
+    console.log('\n🩺 NewClaw Doctor — Diagnóstico do sistema\n');
+    const env = readEnv();
+
+    // 1. Node.js version
+    const nodeVer = process.version;
+    const nodeMajor = parseInt(nodeVer.slice(1));
+    check('Node.js', nodeMajor >= 18, `${nodeVer}${nodeMajor < 18 ? '  ⚠ requer ≥ 18' : ''}`);
+
+    // 2. PM2
+    check('PM2', PM2_BIN !== null, PM2_BIN ? PM2_BIN.split(/[/\\]/).slice(-3).join('/') : 'não encontrado — npm install -g pm2');
+
+    // 3. .env
+    const envExists = fs.existsSync(ENV_FILE);
+    check('.env / newclaw.env', envExists, envExists ? ENV_FILE : 'não encontrado — rode o instalador');
+
+    // 4. dist/index.js built
+    const distExists = fs.existsSync(path.join(DIR, 'dist', 'index.js'));
+    check('Build (dist/index.js)', distExists, distExists ? 'ok' : 'não compilado — npm run build');
+
+    // 5. Process running
+    const pid = getPid();
+    const pm2Status = pm2JStart();
+    const running = pid !== null || pm2Status === 'online';
+    check('NewClaw em execução', running, running ? `PID ${pid || '?'} (PM2: ${pm2Status})` : 'parado — newclaw start');
+
+    // 6. Ollama
+    const ollamaUrl = env.OLLAMA_URL || 'http://localhost:11434';
+    const ollamaResp = await httpGet(`${ollamaUrl}/api/tags`);
+    const ollamaOk = ollamaResp.status === 200;
+    let ollamaDetail = ollamaOk ? 'respondendo' : `não responde em ${ollamaUrl} — ollama serve`;
+    if (ollamaOk) {
+      try {
+        const models = JSON.parse(ollamaResp.body).models || [];
+        ollamaDetail = models.length > 0 ? `${models.length} modelo(s): ${models.slice(0,3).map(m=>m.name).join(', ')}` : 'sem modelos — ollama pull glm-5:cloud';
+      } catch {}
+    }
+    check('Ollama', ollamaOk, ollamaDetail);
+
+    // 7. Model configured
+    const model = env.OLLAMA_MODEL || env.MODEL_CHAT || '';
+    check('Modelo configurado', !!model, model || 'OLLAMA_MODEL não definido no .env');
+
+    // 8. Channels
+    console.log('');
+    console.log('  📡 Canais:');
+
+    // Telegram
+    const tgToken = env.TELEGRAM_BOT_TOKEN;
+    if (tgToken) {
+      const tgResp = await httpGet(`https://api.telegram.org/bot${tgToken}/getMe`);
+      if (tgResp.status === 200) {
+        try {
+          const d = JSON.parse(tgResp.body);
+          check('  Telegram', d.ok, d.ok ? `@${d.result.username}` : 'token inválido');
+        } catch { check('  Telegram', null, 'resposta inesperada'); }
+      } else {
+        check('  Telegram', false, `HTTP ${tgResp.status || tgResp.error} — token inválido?`);
+      }
+    } else { check('  Telegram', null, 'não configurado (TELEGRAM_BOT_TOKEN)'); }
+
+    // Discord
+    const discToken = env.DISCORD_BOT_TOKEN;
+    if (discToken) {
+      const discResp = await httpGet('https://discord.com/api/v10/users/@me', {
+        headers: { Authorization: `Bot ${discToken}` }
+      });
+      if (discResp.status === 200) {
+        try {
+          const d = JSON.parse(discResp.body);
+          check('  Discord', true, `@${d.username}`);
+        } catch { check('  Discord', null, 'resposta inesperada'); }
+      } else { check('  Discord', false, `HTTP ${discResp.status || discResp.error}`); }
+    } else { check('  Discord', null, 'não configurado (DISCORD_BOT_TOKEN)'); }
+
+    // WhatsApp
+    const waNum = env.WHATSAPP_PHONE_NUMBER;
+    if (waNum) {
+      const authDir = env.WHATSAPP_AUTH_DIR || path.join(DIR, 'data', 'whatsapp-auth');
+      const hasAuth = fs.existsSync(authDir);
+      check('  WhatsApp', hasAuth, hasAuth ? `${waNum} (auth ok)` : 'auth dir ausente — precisa escanear QR');
+    } else { check('  WhatsApp', null, 'não configurado (WHATSAPP_PHONE_NUMBER)'); }
+
+    // Signal
+    const sigNum = env.SIGNAL_PHONE_NUMBER;
+    if (sigNum) {
+      const sigCli = env.SIGNAL_CLI_PATH || 'signal-cli';
+      try {
+        execSync(process.platform === 'win32' ? `where ${sigCli}` : `which ${sigCli}`, { stdio: 'pipe' });
+        check('  Signal', true, `${sigNum} (signal-cli ok)`);
+      } catch { check('  Signal', false, 'signal-cli não encontrado — instale: https://github.com/AsamK/signal-cli'); }
+    } else { check('  Signal', null, 'não configurado (SIGNAL_PHONE_NUMBER)'); }
+
+    // 9. Dashboard
+    console.log('');
+    const dashPort = env.DASHBOARD_PORT || '3090';
+    const dashResp = await httpGet(`http://localhost:${dashPort}/`);
+    check('Dashboard web', dashResp.status === 200, dashResp.status === 200 ? `http://localhost:${dashPort}` : `porta ${dashPort} não responde`);
+
+    // 10. Disk space
+    try {
+      let diskMsg = '';
+      if (process.platform === 'win32') {
+        const out = execSync(`wmic logicaldisk where DeviceID="${path.parse(DIR).root.replace('\\','')}" get FreeSpace,Size /value`, { encoding: 'utf-8', stdio: 'pipe' }).trim();
+        const free = parseInt((out.match(/FreeSpace=(\d+)/) || [])[1] || '0');
+        const total = parseInt((out.match(/Size=(\d+)/) || [])[1] || '1');
+        const pct = Math.round((1 - free / total) * 100);
+        diskMsg = `${pct}% usado`;
+        check('Espaço em disco', pct < 85, diskMsg + (pct >= 85 ? ' ⚠ pouco espaço!' : ''));
+      } else {
+        const out = execSync(`df -h "${DIR}" | tail -1`, { encoding: 'utf-8' }).trim();
+        const cols = out.split(/\s+/);
+        diskMsg = `${cols[4] || '?'} usado (${cols[3] || '?'} livre)`;
+        const pct = parseInt(cols[4] || '0');
+        check('Espaço em disco', pct < 85, diskMsg + (pct >= 85 ? ' ⚠ pouco espaço!' : ''));
+      }
+    } catch { check('Espaço em disco', null, 'não verificado'); }
+
+    console.log('\n  💡 Use "newclaw status" para ver uptime e memória.\n');
+  },
+
   help() {
     console.log(`
 🪐 NewClaw CLI — Referência de Comandos
@@ -873,6 +1056,7 @@ Comando                 Descrição
 ----------------------- ----------------------------------------------------
 newclaw onboard         Configura provedores e chaves de API
 newclaw passwd          Define ou altera a senha do Dashboard web
+newclaw doctor          Diagnóstico completo: Node, PM2, Ollama, canais, disco
 newclaw channels         Status dos canais (telegram, discord, whatsapp, signal)
 newclaw channels enable <canal>   Configura um canal
 newclaw channels disable <canal>  Desativa um canal
