@@ -79,6 +79,14 @@ function Test-Command([string]$cmd) {
     return [bool](Get-Command $cmd -ErrorAction SilentlyContinue)
 }
 
+function Pause-Exit([int]$code = 0) {
+    if (-not $NoPrompt) {
+        Write-Host ""
+        Read-Host "  Pressione Enter para fechar"
+    }
+    exit $code
+}
+
 # ── Ajuda ────────────────────────────────────────────────────
 
 if ($Help) {
@@ -120,7 +128,7 @@ EXEMPLOS:
   # Dry run
   .\install.ps1 -DryRun
 "@
-    exit 0
+    Pause-Exit 0
 }
 
 # ── Verificar privilégios ────────────────────────────────────
@@ -164,7 +172,7 @@ function Step-CheckSystem {
         $freeGB = [math]::Round($disk.Free / 1GB, 1)
         if ($freeGB -lt 5) {
             Write-Fail "Disco: ${freeGB}GB livres — precisa de pelo menos 5GB"
-            exit 1
+            Pause-Exit 1
         }
         Write-Ok "Disco: ${freeGB}GB livres"
     }
@@ -196,7 +204,7 @@ function Step-EnsureWinget {
             Write-Fail "Não foi possível instalar o winget automaticamente."
             Write-Info "Instale manualmente: https://aka.ms/getwinget"
             Write-Info "Depois execute este script novamente."
-            exit 1
+            Pause-Exit 1
         }
     }
 }
@@ -798,8 +806,9 @@ try {
     Step-SetupWindowsService
     Step-SetupFirewall
     Show-Summary
+    Pause-Exit 0
 } catch {
     Write-Fail "Instalação falhou: $_"
     Write-Info "Para mais detalhes, execute com -Verbose"
-    exit 1
+    Pause-Exit 1
 }
