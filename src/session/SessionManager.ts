@@ -340,8 +340,8 @@ export class SessionManager {
         const artifacts = this.deliveredArtifacts.get(sid);
         if (!artifacts || artifacts.length === 0) return null;
 
-        const list = artifacts.map(a => `- ${a.name} (enviado em ${a.deliveredAt})`).join('\n');
-        return `ARQUIVOS ENVIADOS AO USUÁRIO NESTA SESSÃO:\n${list}`;
+        const list = artifacts.map(a => `- ${a.path} (enviado em ${a.deliveredAt})`).join('\n');
+        return `ARQUIVOS ENVIADOS AO USUÁRIO NESTA SESSÃO (use estes paths exatos ao referenciar esses arquivos):\n${list}`;
     }
 
     /**

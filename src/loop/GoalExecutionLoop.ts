@@ -932,17 +932,26 @@ export class GoalExecutionLoop {
                             ` retryBudget=${currentGoal.retryBudget} alreadyHinted=${alreadyHinted}` +
                             ` — escalating to blocked for replan`
                         );
+                        const isDirListing = pendingStep.toolName === 'read' && /📁|📄/.test(cycleResult.output ?? '');
+                        const dirHint = isDirListing
+                            ? ` Listagem do diretório retornada: ${(cycleResult.output ?? '').split('\n').slice(0, 10).join('; ')}`
+                            : '';
                         cycleResult = {
                             ...cycleResult,
                             outcome: 'blocked',
                             blocker: {
                                 kind: 'semantic_mismatch' as const,
                                 toolName: pendingStep.toolName,
-                                description: `Step '${pendingStep.description.slice(0, 100)}' retornou output irrelevante ${alreadyHinted ? 'após 2 tentativas' : 'após esgotar retryBudget'}: ${semanticValidation.reason ?? 'mismatch semântico'}`,
-                                suggestedActions: [
-                                    'Usar tool diferente para este step',
-                                    'Reformular a query com abordagem completamente alternativa',
-                                ],
+                                description: `Step '${pendingStep.description.slice(0, 100)}' retornou output irrelevante ${alreadyHinted ? 'após 2 tentativas' : 'após esgotar retryBudget'}: ${semanticValidation.reason ?? 'mismatch semântico'}${dirHint}`,
+                                suggestedActions: isDirListing
+                                    ? [
+                                        'Usar o path completo de um dos arquivos listados acima em vez do diretório',
+                                        'Verificar nos ARQUIVOS ENVIADOS AO USUÁRIO o path exato do arquivo solicitado',
+                                    ]
+                                    : [
+                                        'Usar tool diferente para este step',
+                                        'Reformular a query com abordagem completamente alternativa',
+                                    ],
                                 detectedAt: Date.now(),
                             },
                         };

@@ -130,6 +130,17 @@ Foque APENAS em planejar passos para resolver o Marco Atual. NÃO tente resolver
 MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
         : '';
 
+    const CONTENT_REF_PATTERN = /\b(esse|aquele|este|aquela|aquele)\s+conteúdo\b|o\s+que\s+eu\s+enviei|com\s+(esse|este|aquele|aquela)\s+conteúdo|usando\s+(aquele|esse|este)\s+conteúdo|\besse\s+material\b|\baquele\s+material\b/i;
+    const hasContentRef = CONTENT_REF_PATTERN.test(goal.userIntent);
+    const contentRefBlock = hasContentRef
+        ? `\n⚠️ REFERÊNCIA A CONTEÚDO ANTERIOR DETECTADA: O usuário está referenciando conteúdo enviado anteriormente nesta conversa ou sessão.
+ESTRATÉGIA OBRIGATÓRIA — siga exatamente esta ordem:
+  1. Use memory_search para recuperar dados relevantes salvos sobre o tema.
+  2. Use read nos arquivos do CONTEXTO (ARQUIVOS ENVIADOS AO USUÁRIO NESTA SESSÃO) que possam conter o conteúdo original — use os paths exatos listados.
+  3. Se não houver arquivos entregues, use read no workspace para localizar arquivos relacionados ao tema.
+  PROIBIDO: NÃO use web_search — o conteúdo referenciado está nas mensagens anteriores ou em arquivos do workspace, não na internet.\n`
+        : '';
+
     const roadmapAdjustmentInstruction = goal.allowRoadmapAdjustment
         ? `\n- AJUSTE DO ROADMAP: Se você descobrir novas dependências, blockers ou a necessidade de reordenar os marcos, você pode retornar o roadmap inteiro redefinido e atualizado na propriedade JSON "adjustedRoadmap" (máximo de 3 a 5 marcos). Caso contrário, omita essa propriedade.\n`
         : '';
@@ -139,7 +150,7 @@ MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
 OBJETIVO GLOBAL: ${goal.objective}
 INTENÇÃO ORIGINAL: ${goal.userIntent}
 ${milestoneInstruction}
-${pathsBlock}${capBlock ? `\n${capBlock}\n` : ''}${skillBlock}${contextBlock}
+${pathsBlock}${contentRefBlock}${capBlock ? `\n${capBlock}\n` : ''}${skillBlock}${contextBlock}
 Ferramentas disponíveis (use EXATAMENTE esses nomes): ${availableTools.join(', ')}
 ${toolDescriptions ?? ''}
 ${buildToolContracts(availableTools)}
