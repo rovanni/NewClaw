@@ -412,6 +412,7 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
   z-index:200; max-height:230px; overflow-y:auto; display:none;
 }
 .model-dropdown.show { display:block; }
+.model-dropdown.drop-up { top:auto; bottom:calc(100% + 4px); }
 .mdg { padding:4px 11px; font-size:.66rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; background:var(--bg-muted); }
 .mi { padding:8px 11px; cursor:pointer; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border-color); font-size:.82rem; transition:background .15s; }
 .mi:last-child { border-bottom:none; }

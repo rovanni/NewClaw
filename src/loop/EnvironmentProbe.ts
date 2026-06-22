@@ -10,6 +10,7 @@
 
 import { createLogger } from '../shared/AppLogger';
 import { ToolRegistry } from '../core/ToolRegistry';
+import { probeToolCmd, probePyPkgCmd } from '../utils/crossPlatform';
 
 const log = createLogger('EnvironmentProbe');
 
@@ -55,15 +56,12 @@ export class EnvironmentProbe {
         }
 
         try {
-            // ── 1. Which probe (ferramentas de sistema) ──────────────────────
-            const whichCmds = TOOLS_TO_PROBE
-                .map(t => `which ${t} >/dev/null 2>&1 && echo "OK:${t}" || echo "MISSING:${t}"`)
-                .join('; ');
+            // ── 1. Tool probe (cross-platform: where on Windows, command -v on Unix) ─
+            const cmdSep  = process.platform === 'win32' ? ' & ' : '; ';
+            const whichCmds = TOOLS_TO_PROBE.map(t => probeToolCmd(t)).join(cmdSep);
 
-            // ── 2. Python package probe ──────────────────────────────────────
-            const pyPkgCmds = PYTHON_PKGS_TO_PROBE
-                .map(p => `python3 -c "import ${p}" 2>/dev/null && echo "PYPKG_OK:${p}" || echo "PYPKG_MISSING:${p}"`)
-                .join('; ');
+            // ── 2. Python package probe (cross-platform) ─────────────────────
+            const pyPkgCmds = PYTHON_PKGS_TO_PROBE.map(p => probePyPkgCmd(p)).join(cmdSep);
 
             const result = await execTool.execute({
                 command: `${whichCmds}; ${pyPkgCmds}`,

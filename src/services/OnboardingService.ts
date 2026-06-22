@@ -1,31 +1,39 @@
 /**
- * OnboardingService - apresentação e questionário inicial do NewClaw.
- * 
- * Transformado em fluxo dinâmico com classificação de intenção via LLM.
+ * OnboardingService — apresentação única na primeira instalação.
+ *
+ * Dispara UMA VEZ quando o banco está vazio (sistema recém-instalado).
+ * Após o usuário informar nome e apelido, grava em DB + grafo de memória
+ * e nunca mais pergunta — independente de canal ou reinício.
+ *
+ * Fluxo:
+ *   Passo 0 → apresentação + pede nome
+ *   Passo 1 → confirma apelido
+ *   Completo → grava user_identity + user_profile → nunca mais dispara
  */
-import { extractText } from '../loop/ResponseAdapter';
+
 import { Database } from 'better-sqlite3';
-import { ProviderFactory } from '../core/ProviderFactory';
-import { SkillLearner } from '../loop/SkillLearner';
-import { AgentStateManager } from '../core/AgentStateManager';
+import { MemoryManager } from '../memory/MemoryManager';
 import { createLogger } from '../shared/AppLogger';
-import { errorMessage } from '../shared/errors';
 import type { OwnerProfileService } from './OwnerProfileService';
-const log = createLogger('Onboardingservice');
+
+const log = createLogger('OnboardingService');
+
+// ── Tipos públicos ────────────────────────────────────────────────────────────
 
 export interface UserProfile {
     user_id: string;
     name: string | null;
-    intent: 'automation' | 'study' | 'projects' | 'curiosity' | 'general' | null;
+    nickname: string | null;
+    intent: string | null;
     assistant_name: string | null;
     expertise: string | null;
     goals: string | null;
-    familiarity: 'beginner' | 'intermediate' | 'advanced' | null;
-    response_style: 'concise' | 'detailed' | 'adaptive';
-    learning_mode: 'enabled' | 'disabled' | 'feedback-only';
-    autonomy_level: 'conservative' | 'balanced' | 'confident';
+    familiarity: string | null;
+    response_style: string;
+    learning_mode: string;
+    autonomy_level: string;
     workspace_path: string | null;
-    language_preference: 'system' | 'english-tech' | 'dynamic';
+    language_preference: string;
     onboarding_completed: number;
     created_at: string;
     updated_at: string;
@@ -34,375 +42,236 @@ export interface UserProfile {
 export interface OnboardingState {
     step: number;
     userId: string;
-    data: Partial<UserProfile> & {
-        _pendingName?: string;
-        _awaitingNameConfirmation?: boolean;
-    };
+    data: { name?: string; nickname?: string };
 }
 
-type UserProfileWithSkip = Partial<UserProfile> & { __skip__?: boolean };
-
-// Removendo heurística para usar extração via LLM
-
-const ONBOARDING_STEPS = [
-    {
-        id: 'name',
-        question: (_data: Partial<UserProfile>) => '👋 Olá! Eu sou o *NewClaw*, seu assistente cognitivo local.\n\nJá inicializei minha memória e estrutura cognitiva. Quero entender como posso ser mais útil pra você.\n\nPara começar, qual é o seu nome?',
-        saveField: 'name'
-    },
-    {
-        id: 'intent',
-        question: (data: Partial<UserProfile>) => `Prazer em te conhecer, *${data.name || 'amigo'}*!\n\nO que te traz ao NewClaw hoje? O que você busca realizar?\n\n_(Ex: automatizar tarefas, estudar algo novo, gerenciar projetos, curiosidade...)_`,
-        saveField: 'intent'
-    }
-];
+// ── OnboardingService ─────────────────────────────────────────────────────────
 
 export class OnboardingService {
     private db: Database;
-    private skillLearner: SkillLearner;
-    private providerFactory: ProviderFactory;
-    private stateManager: AgentStateManager;
+    private memory: MemoryManager;
     private ownerService: OwnerProfileService | null;
-    private states: Map<string, OnboardingState> = new Map();
 
     constructor(
         db: Database,
-        skillLearner: SkillLearner,
-        providerFactory: ProviderFactory,
-        stateManager: AgentStateManager,
+        memory: MemoryManager,
         ownerService?: OwnerProfileService
     ) {
         this.db = db;
-        this.skillLearner = skillLearner;
-        this.providerFactory = providerFactory;
-        this.stateManager = stateManager;
+        this.memory = memory;
         this.ownerService = ownerService ?? null;
-        this.ensureTable();
+        this._ensureSchema();
     }
 
-    private ensureTable(): void {
+    // ── Schema ────────────────────────────────────────────────────────────────
+
+    private _ensureSchema(): void {
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS user_profile (
-                user_id TEXT PRIMARY KEY,
-                name TEXT,
-                intent TEXT,
-                assistant_name TEXT,
-                expertise TEXT,
-                goals TEXT,
-                familiarity TEXT,
-                response_style TEXT DEFAULT 'adaptive',
-                learning_mode TEXT DEFAULT 'enabled',
-                autonomy_level TEXT DEFAULT 'balanced',
-                workspace_path TEXT,
+                user_id             TEXT PRIMARY KEY,
+                name                TEXT,
+                nickname            TEXT,
+                intent              TEXT,
+                assistant_name      TEXT,
+                expertise           TEXT,
+                goals               TEXT,
+                familiarity         TEXT,
+                response_style      TEXT DEFAULT 'adaptive',
+                learning_mode       TEXT DEFAULT 'enabled',
+                autonomy_level      TEXT DEFAULT 'balanced',
+                workspace_path      TEXT,
                 language_preference TEXT DEFAULT 'system',
                 onboarding_completed INTEGER DEFAULT 0,
-                created_at TEXT,
-                updated_at TEXT
-            )
+                created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at          TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS onboarding_state (
+                id      INTEGER PRIMARY KEY CHECK (id = 1),
+                step    INTEGER DEFAULT 0,
+                name    TEXT,
+                user_id TEXT
+            );
         `);
 
-        const columns = new Set(
-            ((this.db.prepare("PRAGMA table_info(user_profile)").all() as Array<{ name: string; [key: string]: unknown }>) || []).map(c => c.name)
+        // Migrations idempotentes
+        const cols = new Set(
+            (this.db.prepare('PRAGMA table_info(user_profile)').all() as Array<{ name: string }>)
+                .map(c => c.name)
         );
-        const addColumn = (sql: string) => { try { this.db.exec(sql); } catch { /* coluna já existe — migration idempotente */ } };
-
-        if (!columns.has('intent')) addColumn("ALTER TABLE user_profile ADD COLUMN intent TEXT");
-        if (!columns.has('assistant_name')) addColumn("ALTER TABLE user_profile ADD COLUMN assistant_name TEXT");
-        if (!columns.has('goals')) addColumn("ALTER TABLE user_profile ADD COLUMN goals TEXT");
-        if (!columns.has('familiarity')) addColumn("ALTER TABLE user_profile ADD COLUMN familiarity TEXT");
-        if (!columns.has('learning_mode')) addColumn("ALTER TABLE user_profile ADD COLUMN learning_mode TEXT DEFAULT 'enabled'");
-        if (!columns.has('autonomy_level')) addColumn("ALTER TABLE user_profile ADD COLUMN autonomy_level TEXT DEFAULT 'balanced'");
-        if (!columns.has('workspace_path')) addColumn("ALTER TABLE user_profile ADD COLUMN workspace_path TEXT");
-        if (!columns.has('language_preference')) addColumn("ALTER TABLE user_profile ADD COLUMN language_preference TEXT DEFAULT 'system'");
-        if (!columns.has('onboarding_completed')) addColumn("ALTER TABLE user_profile ADD COLUMN onboarding_completed INTEGER DEFAULT 0");
-        if (!columns.has('created_at')) addColumn("ALTER TABLE user_profile ADD COLUMN created_at TEXT");
-
-        this.db.exec(`
-            UPDATE user_profile
-            SET created_at = COALESCE(created_at, updated_at, CURRENT_TIMESTAMP),
-                updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP),
-                response_style = COALESCE(response_style, 'adaptive'),
-                learning_mode = COALESCE(learning_mode, 'enabled'),
-                autonomy_level = COALESCE(autonomy_level, 'balanced'),
-                language_preference = COALESCE(language_preference, 'system'),
-                onboarding_completed = COALESCE(onboarding_completed, 0)
-        `);
+        const add = (sql: string) => { try { this.db.exec(sql); } catch { /* já existe */ } };
+        if (!cols.has('nickname'))   add("ALTER TABLE user_profile ADD COLUMN nickname TEXT");
+        if (!cols.has('created_at')) add("ALTER TABLE user_profile ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP");
+        if (!cols.has('onboarding_completed')) add("ALTER TABLE user_profile ADD COLUMN onboarding_completed INTEGER DEFAULT 0");
     }
 
-    isOnboardingRequired(userId: string): boolean {
+    // ── API pública ───────────────────────────────────────────────────────────
+
+    /**
+     * Verifica se onboarding ainda é necessário.
+     * É uma verificação GLOBAL: basta um usuário ter completado para
+     * o sistema nunca mais pedir.
+     */
+    isOnboardingRequired(): boolean {
         try {
-            const profile = this.getUserProfile(userId);
-            
-            if (!profile) {
-                log.info(`No profile found for ${userId}. Onboarding required.`);
-                return true;
+            // Qualquer linha com onboarding_completed = 1 → sistema configurado
+            const done = this.db.prepare(
+                'SELECT 1 FROM user_profile WHERE onboarding_completed = 1 LIMIT 1'
+            ).get();
+            if (done) return false;
+
+            // user_identity com nome real também conta
+            const identityNode = this.memory.getNode('user_identity');
+            if (identityNode?.name && identityNode.name !== 'USER' && identityNode.name.length > 1) {
+                return false;
             }
 
-            if (profile.onboarding_completed !== 1) {
-                log.info(`Profile exists but onboarding not completed for ${userId}.`);
-                return true;
-            }
-
-            // Strict check for essential fields
-            const missingFields = [];
-            if (!profile.name) missingFields.push('name');
-            if (!profile.intent) missingFields.push('intent');
-            if (!profile.response_style) missingFields.push('response_style');
-            if (!profile.autonomy_level) missingFields.push('autonomy_level');
-            
-            if (missingFields.length > 0) {
-                log.info(`Missing essential fields for ${userId}: ${missingFields.join(', ')}. Onboarding required.`);
-                return true;
-            }
-
-            return false;
-        } catch (e) {
-            log.error(`Error checking onboarding status: ${errorMessage(e)}`);
-            return true; // Safe fallback
-        }
-    }
-
-    isOnboardingCompleted(userId: string): boolean {
-        return !this.isOnboardingRequired(userId);
-    }
-
-    getUserProfile(userId: string): UserProfile | null {
-        return this.db.prepare('SELECT * FROM user_profile WHERE user_id = ?').get(userId) as UserProfile | null;
-    }
-
-    startOnboarding(userId: string): { question: string } | null {
-        if (this.isOnboardingCompleted(userId)) return null;
-        const state: OnboardingState = { step: 0, userId, data: {} };
-        this.states.set(userId, state);
-        return { question: ONBOARDING_STEPS[0].question(state.data) };
-    }
-
-    async processAnswer(userId: string, answer: string): Promise<{ question?: string; completed?: boolean; welcomeMessage?: string } | null> {
-        const state = this.states.get(userId);
-        if (!state) return this.startOnboarding(userId);
-
-        const lastQuestion = this.getLastQuestionForState(state);
-
-        // 1. LLM Extraction & Classification Layer (Single Call)
-        const extracted = await this.extractDataViaLLM(answer, state.data, lastQuestion);
-        
-        // 2. Smart Link Logic
-        if (extracted.__skip__ || answer.toLowerCase().includes('já respondi')) {
-            const otherProfile = this.db.prepare('SELECT * FROM user_profile WHERE onboarding_completed = 1 AND user_id != ? LIMIT 1').get(userId) as UserProfile | undefined;
-            if (otherProfile) {
-                const now = new Date().toISOString();
-                this.db.prepare(`
-                    INSERT OR REPLACE INTO user_profile
-                    (user_id, name, intent, expertise, goals, response_style, autonomy_level, onboarding_completed, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                `).run(userId, otherProfile.name, otherProfile.intent, otherProfile.expertise, otherProfile.goals, otherProfile.response_style, otherProfile.autonomy_level, now, now);
-                this.states.delete(userId);
-                return { completed: true, welcomeMessage: `✅ *Reconhecido!* Recuperei seu perfil como *${otherProfile.name}*.\n\nSincronizei suas preferências. Como posso ajudar agora?` };
-            }
-        }
-
-        // Merge all extracted data (including intent if found)
-        Object.assign(state.data, extracted);
-        if (extracted.goals) state.data.goals = extracted.goals;
-        else if (!state.data.goals && state.data.name && !state.data.intent) state.data.goals = answer.trim();
-
-        // 3. Name confirmation flow — never save a name without explicit user confirmation
-        if (state.data._awaitingNameConfirmation) {
-            const affirmative = /^(sim|s|yes|y|ok|isso|correto|certo|pode|confirmo)/i.test(answer.trim());
-            const negative = /^(não|nao|n|no|errado|incorreto|outro|muda)/i.test(answer.trim());
-
-            if (affirmative && state.data._pendingName) {
-                state.data.name = state.data._pendingName;
-                delete state.data._pendingName;
-                delete state.data._awaitingNameConfirmation;
-                // Lock owner identity after explicit confirmation
-                if (this.ownerService) {
-                    this.ownerService.confirmOwnerName(state.data.name, state.userId, 'onboarding');
-                }
-                return { question: ONBOARDING_STEPS[1].question(state.data) };
-            } else if (negative) {
-                delete state.data._pendingName;
-                delete state.data._awaitingNameConfirmation;
-                return { question: 'Tudo bem! Qual é o seu nome?' };
-            } else {
-                // Ambiguous answer — ask again
-                return { question: `Por favor, confirme: seu nome é *${state.data._pendingName}*? (sim/não)` };
-            }
-        }
-
-        // 4. Flow Control — detect name and ask for confirmation before saving
-        if (!state.data.name) {
-            const candidateName = (extracted.name as string | undefined) || answer.trim().slice(0, 50);
-            state.data._pendingName = candidateName;
-            state.data._awaitingNameConfirmation = true;
-            return { question: `Que bom! Percebi que seu nome é *${candidateName}*.\nDeseja que eu utilize este nome como sua identidade no sistema? (sim/não)` };
-        }
-
-        const next = this.getNextAdaptiveQuestion(state.data);
-        if (next === true) {
-            this.completeOnboarding(state);
-            this.createMemoryNodes(state);
-            this.stateManager.initializeAfterOnboarding(state.data.intent || 'general');
-            this.skillLearner.observe('user_onboarding_completed', { userId, intent: state.data.intent });
-            this.states.delete(userId);
-            return { completed: true, welcomeMessage: this.generateWelcomeMessage(state.data) };
-        }
-        
-        return { question: next };
-    }
-
-    private getLastQuestionForState(state: OnboardingState): string {
-        if (!state.data.name) return ONBOARDING_STEPS[0].question(state.data);
-        if (!state.data.intent) return ONBOARDING_STEPS[1].question(state.data);
-        const next = this.getNextAdaptiveQuestion(state.data);
-        return typeof next === 'string' ? next : '';
-    }
-
-    private async extractDataViaLLM(text: string, currentData: Partial<UserProfile>, lastQuestion: string): Promise<UserProfileWithSkip & { goals?: string }> {
-        const prompt = `Analise a resposta do usuário no onboarding e extraia informações para o perfil.
-Responda APENAS um JSON com os campos encontrados.
-
-CONTEXTO:
-Pergunta feita: "${lastQuestion}"
-Resposta do usuário: "${text}"
-Dados já conhecidos: ${JSON.stringify(currentData)}
-
-CAMPOS POSSÍVEIS:
-- name: nome da pessoa
-- intent: "automation", "study", "projects", "curiosity" ou "general"
-- expertise: área de atuação/especialidade mencionada
-- goals: o que o usuário quer realizar (objetivos)
-- response_style: "concise", "detailed" ou "adaptive" (mapeie opções 1, 2, 3 se houver)
-- autonomy_level: "conservative", "balanced" ou "confident" (mapeie opções 1, 2, 3 se houver)
-- __skip__: true se o usuário já respondeu ou quer pular.
-
-JSON:`;
-
-        try {
-            const response = await this.providerFactory.chatWithFallback([
-                { role: 'system', content: 'Você é um assistente de extração de dados JSON preciso.' },
-                { role: 'user', content: prompt }
-            ], []);
-            const content = extractText(response.content || '{}');
-            const jsonStr = content.match(/\{[\s\S]*\}/)?.[0] || '{}';
-            return JSON.parse(jsonStr);
+            return true;
         } catch {
-            return {};
+            return false; // em caso de erro, não bloqueie o usuário
         }
     }
 
-    private getNextAdaptiveQuestion(data: Partial<UserProfile>): string | true {
-        if (!data.expertise) {
-            if (data.intent === 'automation') return 'Legal, automação! Quais ferramentas ou linguagens você costuma usar? E qual seu nível técnico?';
-            if (data.intent === 'study') return 'Foco em estudo! Qual área você quer explorar comigo e qual seu nível atual nela?';
-            if (data.intent === 'projects') return 'Projetos! Em qual projeto você está trabalhando agora e qual o seu papel nele?';
-            return 'Qual é sua área de atuação ou especialidade principal hoje?';
+    /**
+     * Processa a mensagem do usuário dentro do fluxo de onboarding.
+     * Retorna { reply } com a próxima pergunta, ou { reply, completed: true }
+     * quando o onboarding termina.
+     */
+    async processMessage(
+        userId: string,
+        text: string
+    ): Promise<{ reply: string; completed?: boolean }> {
+        const state = this._loadState();
+
+        // Passo 0: primeira mensagem → apresentação + pede nome
+        if (state === null || state.step === 0) {
+            this._saveState({ step: 1, user_id: userId, name: null });
+            return {
+                reply: this._msgPresentation(),
+            };
         }
 
-        if (!data.response_style) {
-            return 'Como você prefere minhas respostas?\n\n1️⃣ Concisas\n2️⃣ Detalhadas\n3️⃣ Adaptativas';
+        // Passo 1: usuário respondeu com o nome
+        if (state.step === 1) {
+            const name = this._extractName(text);
+            this._saveState({ step: 2, user_id: userId, name });
+            return {
+                reply: `Prazer em te conhecer, *${name}*! 😊\n\nComo prefere que eu te chame? Pode confirmar _${name}_ ou me dar um apelido.`,
+            };
         }
 
-        if (!data.autonomy_level) {
-            return 'Quanta autonomia posso ter?\n\n1️⃣ Conservador: pergunto antes de agir\n2️⃣ Balanceado: executo o simples e consulto no sensível\n3️⃣ Confiante: ajo e te aviso';
+        // Passo 2: usuário confirmou/deu apelido
+        if (state.step === 2) {
+            const name     = state.name || this._extractName(text);
+            const nickname = this._extractName(text) || name;
+            this._complete(userId, name, nickname);
+            return {
+                reply: this._msgWelcome(nickname),
+                completed: true,
+            };
         }
 
-        return true;
+        // Fallback: reinicia
+        this._saveState({ step: 1, user_id: userId, name: null });
+        return { reply: this._msgPresentation() };
     }
 
-    private completeOnboarding(state: OnboardingState): void {
-        const now = new Date().toISOString();
+    /** Retorna o perfil do usuário, se existir. */
+    getUserProfile(userId: string): UserProfile | null {
+        return this.db.prepare(
+            'SELECT * FROM user_profile WHERE user_id = ?'
+        ).get(userId) as UserProfile | null;
+    }
+
+    /** Retorna o nome/apelido do dono do sistema (qualquer userId com onboarding completo). */
+    getOwnerNickname(): string | null {
+        const row = this.db.prepare(
+            'SELECT nickname, name FROM user_profile WHERE onboarding_completed = 1 LIMIT 1'
+        ).get() as { nickname: string | null; name: string | null } | undefined;
+        return row?.nickname || row?.name || null;
+    }
+
+    // ── Internos ──────────────────────────────────────────────────────────────
+
+    private _loadState(): { step: number; user_id: string | null; name: string | null } | null {
+        return this.db.prepare('SELECT * FROM onboarding_state WHERE id = 1').get() as
+            { step: number; user_id: string | null; name: string | null } | null;
+    }
+
+    private _saveState(s: { step: number; user_id: string | null; name: string | null }): void {
         this.db.prepare(`
-            INSERT OR REPLACE INTO user_profile
-            (user_id, name, intent, expertise, goals, response_style, autonomy_level, onboarding_completed, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-        `).run(
-            state.userId,
-            state.data.name || 'Usuário',
-            state.data.intent || 'general',
-            state.data.expertise || null,
-            state.data.goals || null,
-            state.data.response_style || 'adaptive',
-            state.data.autonomy_level || 'balanced',
-            now,
-            now
+            INSERT INTO onboarding_state (id, step, user_id, name)
+            VALUES (1, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET step = excluded.step, user_id = excluded.user_id, name = excluded.name
+        `).run(s.step, s.user_id, s.name);
+    }
+
+    private _complete(userId: string, name: string, nickname: string): void {
+        const now = new Date().toISOString();
+
+        // Persiste no user_profile
+        this.db.prepare(`
+            INSERT INTO user_profile (user_id, name, nickname, onboarding_completed, created_at, updated_at)
+            VALUES (?, ?, ?, 1, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                name = excluded.name,
+                nickname = excluded.nickname,
+                onboarding_completed = 1,
+                updated_at = excluded.updated_at
+        `).run(userId, name, nickname, now, now);
+
+        // Persiste no grafo de memória (user_identity)
+        try {
+            this.memory.setUserName(userId, nickname);
+            // Atualiza conteúdo do core_user para o agente saber o nome
+            this.memory.addNode({
+                id: 'core_user',
+                type: 'identity',
+                name: 'USER',
+                content: `Perfil do dono: nome=${name}, apelido preferido=${nickname}. Sempre se refira a ele como ${nickname}.`,
+                confidence: 1.0,
+            });
+            log.info('onboarding_complete', `Usuário identificado: ${name} (${nickname})`);
+        } catch (e) {
+            log.warn('onboarding_memory_write_failed', String(e));
+        }
+
+        // Persiste no OwnerProfileService se disponível
+        if (this.ownerService) {
+            try { this.ownerService.confirmOwnerName(name, userId, 'onboarding'); } catch { /* ok */ }
+        }
+
+        // Limpa estado transitório
+        this.db.prepare('DELETE FROM onboarding_state WHERE id = 1').run();
+    }
+
+    private _extractName(text: string): string {
+        // Dois passes: remove saudação, depois frase introdutória
+        let s = text.trim();
+        s = s.replace(/^(olá[,!.]*\s*|oi[,!.]*\s*|hey[,!.]*\s*)+/i, '').trim();
+        s = s.replace(/^(meu nome é|me chamo|sou o|sou a|pode me chamar de|me chama de)[,\s]*/i, '').trim();
+        return s
+            .split(/\s+/)
+            .slice(0, 3)
+            .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+            .join(' ')
+            || text.trim().slice(0, 40);
+    }
+
+    private _msgPresentation(): string {
+        return (
+            `👋 *Olá! Eu sou o NewClaw* — seu assistente cognitivo local.\n\n` +
+            `Acabei de ser instalado e quero me configurar para te servir melhor.\n\n` +
+            `Para começar: *qual é o seu nome?*`
         );
     }
 
-    private createMemoryNodes(state: OnboardingState): void {
-        try {
-            const insertNode = this.db.prepare(`
-                INSERT OR REPLACE INTO memory_nodes 
-                (id, type, name, content, metadata, weight, confidence, last_updated, updated_at) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            `);
-            const insertEdge = this.db.prepare('INSERT OR REPLACE INTO memory_edges (from_node, to_node, relation, weight, confidence) VALUES (?, ?, ?, 1.0, 1.0)');
-
-            const data = state.data;
-            const userName = data.name || 'Usuário';
-            const now = new Date().toISOString();
-            
-            // Use the new explicit method for name persistence
-            this.stateManager.memory.setUserName(state.userId, userName);
-
-            if (data.response_style) {
-                insertNode.run('pref_style', 'preference', 'Estilo de Resposta', `Preferência: ${data.response_style}`, '{}', 1.0, 0.9, now);
-                insertEdge.run('core_user', 'pref_style', 'has_preference');
-            }
-            if (data.autonomy_level) {
-                insertNode.run('pref_autonomy', 'preference', 'Autonomia', `Preferência: ${data.autonomy_level}`, '{}', 1.0, 0.9, now);
-                insertEdge.run('core_user', 'pref_autonomy', 'has_preference');
-            }
-            if (data.goals) {
-                insertNode.run('user_goals', 'project', 'Metas do Usuário', data.goals, '{}', 1.0, 0.8, now);
-                insertEdge.run('core_user', 'user_goals', 'has_goal');
-            }
-            if (data.expertise) {
-                insertNode.run('user_expertise', 'fact', 'Perfil Técnico', data.expertise, '{}', 1.0, 0.8, now);
-                insertEdge.run('core_user', 'user_expertise', 'has_trait');
-            }
-
-            log.info('[Onboarding] Memory nodes created with semantic connections');
-        } catch (e) {
-            log.error('[Onboarding] Error creating memory nodes:', errorMessage(e));
-        }
-    }
-
-    private generateWelcomeMessage(data: Partial<UserProfile>): string {
-        const name = data.name || 'amigo';
-        const intentMap: Record<string, string> = {
-            automation: 'impulsionar sua automação',
-            study: 'acelerar seu aprendizado',
-            projects: 'gerenciar seus projetos',
-            curiosity: 'explorar novas fronteiras',
-            general: 'te ajudar no dia a dia'
-        };
-        const intentText = intentMap[data.intent || 'general'];
-
-        return `✅ *Tudo pronto, ${name}!* \n\nJá configurei minha memória e estrutura cognitiva com base no seu perfil. Estou pronto para *${intentText}*.\n\nComo podemos começar hoje?`;
-    }
-
-    getOnboardingState(userId: string): OnboardingState | undefined {
-        return this.states.get(userId);
-    }
-
-    async handle(userId: string, text: string): Promise<{ response: string; completed: boolean }> {
-        log.info(`Handling message for ${userId}: "${text.slice(0, 20)}..."`);
-        const state = this.getOnboardingState(userId);
-        
-        if (!state) {
-            log.info(`No active state for ${userId}, starting...`);
-            const first = this.startOnboarding(userId);
-            return { response: first?.question || 'Erro ao iniciar onboarding.', completed: false };
-        }
-
-        const result = await this.processAnswer(userId, text);
-        if (result?.completed) {
-            log.info(`Onboarding completed for ${userId}.`);
-            return { response: result.welcomeMessage || 'Onboarding concluído!', completed: true };
-        }
-        
-        log.info(`Next question for ${userId} generated.`);
-        return { response: result?.question || 'Erro ao processar resposta.', completed: false };
+    private _msgWelcome(nickname: string): string {
+        return (
+            `✅ *Tudo pronto, ${nickname}!*\n\n` +
+            `Já gravei seu perfil na memória. A partir de agora vou me lembrar de você ` +
+            `e personalizar minhas respostas.\n\n` +
+            `Como posso te ajudar hoje?`
+        );
     }
 }

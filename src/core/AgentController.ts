@@ -60,6 +60,7 @@ import { getEventLoopMonitor } from '../shared/EventLoopMonitor';
 import type { NewClawConfig } from './agentControllerTypes';
 import { openDatabase, buildLanguageDirective, buildSystemPrompt } from './agentControllerSetup';
 import { OwnerProfileService } from '../services/OwnerProfileService';
+import { OnboardingService } from '../services/OnboardingService';
 import { bootstrapDomains } from '../memory/DomainRegistry';
 import { WorkflowEngine } from '../loop/WorkflowEngine';
 import { GoalOrchestrator } from '../loop/GoalOrchestrator';
@@ -178,7 +179,11 @@ export class AgentController {
 
         const languageDirective = buildLanguageDirective(config.language);
         const ownerName = this.ownerProfileService.getOwnerName() || config.ownerName || undefined;
-        const systemPrompt = config.systemPrompt || buildSystemPrompt(this.skillLoader, ownerName);
+        // Busca apelido preferido do usuário (definido no onboarding) para personalizar o agente
+        const ownerNickname = (this.db.prepare(
+            'SELECT nickname FROM user_profile WHERE onboarding_completed = 1 LIMIT 1'
+        ).get() as { nickname: string | null } | undefined)?.nickname || undefined;
+        const systemPrompt = config.systemPrompt || buildSystemPrompt(this.skillLoader, ownerName, ownerNickname);
 
         const classificationMemory = new ClassificationMemory(this.db);
         const decisionMemory = new DecisionMemory(this.db);
@@ -232,6 +237,14 @@ export class AgentController {
         });
 
         this.messageBus = new MessageBus(this.agentLoop, this.sessionManager);
+
+        // OnboardingService: apresentação única na primeira instalação (banco vazio)
+        const onboardingService = new OnboardingService(
+            this.db,
+            this.memory,
+            this.ownerProfileService
+        );
+        this.messageBus.setOnboardingService(onboardingService);
 
         // GoalOrchestrator: intercepta mensagens de goal antes do AgentLoop
         this.goalOrchestrator = new GoalOrchestrator(this.agentLoop, this.providerFactory, this.goalStore, this.memory);

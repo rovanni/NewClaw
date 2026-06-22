@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
 import { createLogger } from '../../shared/AppLogger';
+import { countNodeProcesses, isWindows } from '../../utils/crossPlatform';
 import { AuditConfig, AuditFinding, LLMFinding } from './types';
 
 const log = createLogger('AuditRuntimeChecker');
@@ -75,15 +75,16 @@ Respond ONLY in JSON:
     }
 
     try {
-        const result = execSync('ps aux | grep -c "node.*newclaw\\|npm.*start" || echo 0', { encoding: 'utf-8' });
-        const processCount = parseInt(result.trim());
-        if (processCount < 2) {
+        const processCount = countNodeProcesses('newclaw') ?? countNodeProcesses('dist/index') ?? 0;
+        if (processCount < 1) {
             findings.push({
                 severity: 'critical',
                 category: 'runtime',
                 title: 'NewClaw pode estar offline',
-                description: `Encontrados apenas ${processCount} processos. Bot pode estar parado.`,
-                suggestion: 'Verificar: systemctl status newclaw ou pm2 list',
+                description: 'Nenhum processo newclaw encontrado. Bot pode estar parado.',
+                suggestion: isWindows
+                    ? 'Verificar: pm2 list ou newclaw status'
+                    : 'Verificar: pm2 list ou systemctl status newclaw',
                 autoFixable: false,
                 riskLevel: 'high'
             });

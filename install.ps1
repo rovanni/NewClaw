@@ -79,6 +79,91 @@ function Test-Command([string]$cmd) {
     return [bool](Get-Command $cmd -ErrorAction SilentlyContinue)
 }
 
+function Pause-Exit([int]$code = 0) {
+    if (-not $NoPrompt) {
+        Write-Host ""
+        Read-Host "  Pressione Enter para fechar"
+    }
+    exit $code
+}
+
+function Invoke-WithSpinner([string]$Label, [scriptblock]$Block) {
+    $frames = [char[]]@(0x280B, 0x2819, 0x2839, 0x2838, 0x283C, 0x2834, 0x2826, 0x2827, 0x2807, 0x280F)
+    $result  = $null
+    $err     = $null
+
+    $job = Start-Job -ScriptBlock {
+        param($bl, $wd)
+        Set-Location $wd
+        try { & ([scriptblock]::Create($bl)) }
+        catch { throw $_ }
+    } -ArgumentList $Block.ToString(), (Get-Location).Path
+
+    $i = 0
+    while ($job.State -eq 'Running') {
+        $frame = $frames[$i % $frames.Length]
+        Write-Host "`r    $frame  $Label..." -NoNewline -ForegroundColor Cyan
+        Start-Sleep -Milliseconds 120
+        $i++
+    }
+
+    $result = Receive-Job $job -Wait -ErrorVariable err 2>&1
+    Remove-Job $job
+
+    if ($job.State -eq 'Failed' -or $err) {
+        Write-Host "`r    ❌ $Label falhou.              " -ForegroundColor Red
+        throw ($err | Select-Object -First 1)
+    }
+    Write-Host "`r    ✅ $Label concluído.              " -ForegroundColor Green
+    return $result
+}
+
+# ── Validações de canal ──────────────────────────────────────
+
+function Test-TelegramToken([string]$tok, [string]$uid) {
+    try {
+        $resp = Invoke-RestMethod -Uri "https://api.telegram.org/bot${tok}/getMe" `
+            -TimeoutSec 6 -ErrorAction Stop
+        if ($resp.ok) {
+            $name = $resp.result.first_name
+            $user = $resp.result.username
+            Write-Ok "Token Telegram válido — bot: $name (@$user)"
+            return $true
+        }
+    } catch {
+        $msg = $_.Exception.Message
+        if ($msg -match "401") {
+            Write-Fail "Token inválido (401 Unauthorized). Verifique com @BotFather."
+        } elseif ($msg -match "timeout|connect") {
+            Write-Warn "Sem conexão com a API do Telegram — token não verificado."
+            return $true  # prosseguir offline
+        } else {
+            Write-Warn "Não foi possível verificar o token: $msg"
+            return $true  # prosseguir mesmo assim
+        }
+    }
+    return $false
+}
+
+function Test-DiscordToken([string]$tok) {
+    if ([string]::IsNullOrWhiteSpace($tok)) { return $true }
+    try {
+        $headers = @{ Authorization = "Bot $tok" }
+        $resp = Invoke-RestMethod -Uri "https://discord.com/api/v10/users/@me" `
+            -Headers $headers -TimeoutSec 6 -ErrorAction Stop
+        Write-Ok "Token Discord válido — bot: $($resp.username)"
+        return $true
+    } catch {
+        $msg = $_.Exception.Message
+        if ($msg -match "401") {
+            Write-Fail "Token Discord inválido (401). Verifique no Developer Portal."
+            return $false
+        }
+        Write-Warn "Não foi possível verificar token Discord: $msg"
+        return $true
+    }
+}
+
 # ── Ajuda ────────────────────────────────────────────────────
 
 if ($Help) {
@@ -120,7 +205,7 @@ EXEMPLOS:
   # Dry run
   .\install.ps1 -DryRun
 "@
-    exit 0
+    Pause-Exit 0
 }
 
 # ── Verificar privilégios ────────────────────────────────────
@@ -164,7 +249,7 @@ function Step-CheckSystem {
         $freeGB = [math]::Round($disk.Free / 1GB, 1)
         if ($freeGB -lt 5) {
             Write-Fail "Disco: ${freeGB}GB livres — precisa de pelo menos 5GB"
-            exit 1
+            Pause-Exit 1
         }
         Write-Ok "Disco: ${freeGB}GB livres"
     }
@@ -196,7 +281,7 @@ function Step-EnsureWinget {
             Write-Fail "Não foi possível instalar o winget automaticamente."
             Write-Info "Instale manualmente: https://aka.ms/getwinget"
             Write-Info "Depois execute este script novamente."
-            exit 1
+            Pause-Exit 1
         }
     }
 }
@@ -315,10 +400,12 @@ function Step-DownloadModel {
         }
     }
 
-    Write-Info "Baixando modelo $Model..."
-    Write-Info "Pode demorar alguns minutos na primeira vez..."
-    Invoke-Step "ollama pull $Model"
-    Write-Ok "Modelo $Model pronto!"
+    if ($DryRun) { Write-Dry "ollama pull $Model"; return }
+    $m = $script:Model
+    Invoke-WithSpinner "Baixando modelo $m (pode demorar na 1ª vez)" {
+        & ollama pull $using:m
+    }
+    Write-Ok "Modelo $m pronto!"
 }
 
 # ── 7. NewClaw ───────────────────────────────────────────────
@@ -399,13 +486,12 @@ function Step-InstallNewClaw {
     if ($DryRun) { Write-Dry "npm install && npm run build em $Dir"; return }
 
     Push-Location $Dir
-    Write-Info "Instalando dependências..."
-    npm install
-    Write-Ok "Dependências instaladas!"
-
-    Write-Info "Compilando código..."
-    npm run build
-    Write-Ok "Código compilado!"
+    Invoke-WithSpinner "Instalando dependências" {
+        npm install --prefer-offline 2>&1
+    }
+    Invoke-WithSpinner "Compilando código TypeScript" {
+        node node_modules/typescript/bin/tsc --noEmit false 2>&1
+    }
     Pop-Location
 }
 
@@ -439,6 +525,95 @@ function Step-CheckForBackups {
     }
 }
 
+function Configure-Telegram {
+    Write-Host ""
+    Write-Host "    ── Telegram ─────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host "    Você vai precisar de 2 códigos:" -ForegroundColor Cyan
+    Write-Host "      1. Bot Token  → Crie um bot com @BotFather no Telegram"
+    Write-Host "         Exemplo: 123456789:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    Write-Host "      2. Seu User ID → Envie /start para @userinfobot"
+    Write-Host "         Exemplo: 987654321"
+    Write-Host ""
+
+    $tokenOk = $false
+    while (-not $tokenOk) {
+        while ([string]::IsNullOrWhiteSpace($script:Token)) {
+            $script:Token = Read-Answer "  Cole o TOKEN do bot (ex: 123456:AAF...)" ""
+            if ([string]::IsNullOrWhiteSpace($script:Token)) {
+                Write-Fail "Token é obrigatório!"
+            } elseif ($script:Token -notlike "*:*") {
+                Write-Warn "Token inválido — deve conter ':'. Tente novamente."
+                $script:Token = ""
+            }
+        }
+        Write-Info "Verificando token com a API do Telegram..."
+        if (Test-TelegramToken $script:Token "") {
+            $tokenOk = $true
+        } else {
+            $script:Token = ""  # forçar nova entrada
+        }
+    }
+    while ([string]::IsNullOrWhiteSpace($script:UserId)) {
+        $script:UserId = Read-Answer "  Cole o seu USER ID (apenas números)" ""
+        if ([string]::IsNullOrWhiteSpace($script:UserId)) {
+            Write-Fail "User ID é obrigatório!"
+        } elseif ($script:UserId -like "*:*") {
+            Write-Warn "Isso parece um Token, não um ID! O ID vem do @userinfobot."
+            $script:UserId = ""
+        } elseif ($script:UserId -notmatch "^\d+$") {
+            Write-Warn "O ID deve conter apenas números. Tente novamente."
+            $script:UserId = ""
+        }
+    }
+}
+
+function Configure-Discord {
+    Write-Host ""
+    Write-Host "    ── Discord ──────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host "    Acesse: discord.com/developers → Applications → Bot → Token" -ForegroundColor Cyan
+    Write-Host ""
+    $discordOk = $false
+    while (-not $discordOk) {
+        $script:DiscordToken = Read-Answer "  Cole o Bot Token do Discord" ""
+        if ([string]::IsNullOrWhiteSpace($script:DiscordToken)) { break }
+        Write-Info "Verificando token com a API do Discord..."
+        if (Test-DiscordToken $script:DiscordToken) { $discordOk = $true } else { $script:DiscordToken = "" }
+    }
+    $script:DiscordGuilds = Read-Answer "  IDs dos servidores permitidos (vírgula, vazio = todos)" ""
+    $script:DiscordUsers  = Read-Answer "  IDs de usuários permitidos (vírgula, vazio = todos)" ""
+}
+
+function Configure-WhatsApp {
+    Write-Host ""
+    Write-Host "    ── WhatsApp ─────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host "    Usa a biblioteca Baileys — na 1ª execução aparecerá um QR code" -ForegroundColor Cyan
+    Write-Host "    para escanear com o WhatsApp do celular." -ForegroundColor Cyan
+    Write-Host ""
+    $script:WaPhone = Read-Answer "  Número com código do país, sem + (ex: 5511999999999)" ""
+    $script:WaJids  = Read-Answer "  JIDs autorizados (vírgula, vazio = todos os contatos)" ""
+    if (-not [string]::IsNullOrWhiteSpace($script:WaPhone)) {
+        Write-Ok "WhatsApp configurado! Escaneie o QR na 1ª execução."
+    }
+}
+
+function Configure-Signal {
+    Write-Host ""
+    Write-Host "    ── Signal ───────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host "    Requer signal-cli instalado: github.com/AsamK/signal-cli" -ForegroundColor Cyan
+    if (-not (Test-Command "signal-cli")) {
+        Write-Warn "signal-cli não encontrado no PATH agora."
+        Write-Info "  Windows: choco install signal-cli"
+        Write-Info "  Linux/Mac: https://github.com/AsamK/signal-cli/releases"
+        Write-Info "  Você pode instalar depois e configurar via 'newclaw channels enable signal'"
+    }
+    Write-Host ""
+    $script:SignalPhone   = Read-Answer "  Número com código do país (ex: +5511999999999)" ""
+    $script:SignalNumbers = Read-Answer "  Números autorizados (vírgula, vazio = todos)" ""
+    if (-not [string]::IsNullOrWhiteSpace($script:SignalPhone)) {
+        Write-Ok "Signal configurado!"
+    }
+}
+
 function Step-Configure {
     Write-Step "7/8 — Configurando o NewClaw"
 
@@ -458,143 +633,136 @@ function Step-Configure {
         return
     }
 
-    if ([string]::IsNullOrWhiteSpace($Token)) {
+    # ── Variáveis de canal (scope script para as funções Configure-* ────────
+    $script:Token         = $Token
+    $script:UserId        = $UserId
+    $script:DiscordToken  = ""
+    $script:DiscordGuilds = ""
+    $script:DiscordUsers  = ""
+    $script:WaPhone       = ""
+    $script:WaJids        = ""
+    $script:SignalPhone   = ""
+    $script:SignalNumbers = ""
+    $DashboardPassword    = ""
+
+    # ── Modo não-interativo: usa vars de ambiente / parâmetros passados ──────
+    if ($NoPrompt) {
+        if (-not [string]::IsNullOrWhiteSpace($Token)) { Configure-Telegram }
+    } else {
+
+        # ── Menu de escolha de canal ─────────────────────────────────────────
         Write-Host ""
-        Write-Host "    ━━━ Configuração do Telegram ━━━" -ForegroundColor Yellow
+        Write-Host "    ╔══════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "    ║   Qual canal de mensagens você quer usar?    ║" -ForegroundColor Cyan
+        Write-Host "    ╚══════════════════════════════════════════════╝" -ForegroundColor Cyan
         Write-Host ""
-        Write-Host "    Você precisará de 2 códigos diferentes:" -ForegroundColor Cyan
-        Write-Host "    1. Bot Token  → Pegue com o @BotFather (Ex: 12345:AAFF...)"
-        Write-Host "    2. Seu User ID → Pegue com o @userinfobot (Ex: 987654321)"
+        Write-Host "    1) Telegram   — Bot via @BotFather              (recomendado)" -ForegroundColor White
+        Write-Host "    2) Discord    — Bot via Developer Portal" -ForegroundColor White
+        Write-Host "    3) WhatsApp   — Via Baileys (QR code na 1ª vez)" -ForegroundColor White
+        Write-Host "    4) Signal     — Via signal-cli" -ForegroundColor White
+        Write-Host "    5) Múltiplos  — Configurar mais de um canal agora" -ForegroundColor White
+        Write-Host "    6) Pular      — Configurar depois via .env ou Dashboard" -ForegroundColor DarkGray
         Write-Host ""
 
-        while ([string]::IsNullOrWhiteSpace($Token)) {
-            $Token = Read-Answer "1. Cole o TOKEN COMPLETO do bot" ""
-            if ([string]::IsNullOrWhiteSpace($Token)) { 
-                Write-Fail "Token é obrigatório!" 
-            } elseif ($Token -notlike "*:*") {
-                Write-Warn "Isso não parece um Token válido (falta o ':'). Tente novamente."
-                $Token = ""
+        $channelChoice = Read-Answer "    Opção" "1"
+
+        switch ($channelChoice) {
+            "1" { Configure-Telegram }
+            "2" { Configure-Discord }
+            "3" { Configure-WhatsApp }
+            "4" { Configure-Signal }
+            "5" {
+                Write-Host ""
+                Write-Host "    Selecione os canais que deseja configurar agora:" -ForegroundColor Cyan
+                if (Read-YesNo "    Telegram?" "s")  { Configure-Telegram }
+                if (Read-YesNo "    Discord?"  "n")  { Configure-Discord }
+                if (Read-YesNo "    WhatsApp?" "n")  { Configure-WhatsApp }
+                if (Read-YesNo "    Signal?"   "n")  { Configure-Signal }
+            }
+            "6" {
+                Write-Warn "Nenhum canal configurado agora."
+                Write-Info "Configure depois com: newclaw channels enable <telegram|discord|whatsapp|signal>"
+                Write-Info "Ou edite o arquivo: $envFile"
+            }
+            default {
+                Write-Info "Opção não reconhecida — configurando Telegram (padrão)."
+                Configure-Telegram
             }
         }
-    }
 
-    if ([string]::IsNullOrWhiteSpace($UserId)) {
-        while ([string]::IsNullOrWhiteSpace($UserId)) {
-            $UserId = Read-Answer "2. Cole o SEU ID de usuário (números)" ""
-            if ([string]::IsNullOrWhiteSpace($UserId)) {
-                Write-Fail "User ID é obrigatório!"
-            } elseif ($UserId -like "*:*") {
-                Write-Warn "Você colou o Token no lugar do ID! Use o ID do @userinfobot (apenas números)."
-                $UserId = ""
-            } elseif ($UserId -notmatch "^\d+$") {
-                Write-Warn "O ID deve conter apenas números. Tente novamente."
-                $UserId = ""
-            }
-        }
-    }
+        # ── Provedor de IA ───────────────────────────────────────────────────
+        Write-Host ""
+        Write-Host "    ── Provedor de IA ───────────────────────────────" -ForegroundColor Yellow
+        Write-Host "    1) Ollama (Local)      — 100% privado, roda na sua máquina" -ForegroundColor White
+        Write-Host "    2) OpenRouter (Nuvem)  — Claude, GPT-4, Gemini, etc. (requer chave)" -ForegroundColor White
+        Write-Host ""
+    } # end !$NoPrompt
 
-    # Escolha de Provider
     $Provider = "ollama"
     if (-not $NoPrompt) {
-        Write-Host ""
-        Write-Host "    Escolha o provedor de IA padrão:" -ForegroundColor White
-        Write-Host "    1) Ollama (Local)      — 100% privado, roda na sua máquina" -ForegroundColor Cyan
-        Write-Host "    2) OpenRouter (Nuvem)  — Suporte a Claude, GPT-4, etc (requer chave)" -ForegroundColor Cyan
-        $pChoice = Read-Answer "Opção (1-2)" "1"
+        $pChoice = Read-Answer "    Opção" "1"
         if ($pChoice -eq "2") { $Provider = "openrouter" }
     }
 
     $OR_Key = ""
     if ($Provider -eq "openrouter") {
         while ([string]::IsNullOrWhiteSpace($OR_Key)) {
-            $OR_Key = Read-Answer "Cole sua API Key do OpenRouter (sk-or-...)" ""
+            $OR_Key = Read-Answer "    Cole sua API Key do OpenRouter (sk-or-...)" ""
             if ([string]::IsNullOrWhiteSpace($OR_Key)) { Write-Fail "API Key é necessária para OpenRouter!" }
         }
     }
 
-    # ── Canais adicionais ──────────────────────────────────
-    $DiscordToken = ""
-    $DiscordGuilds = ""
-    $DiscordUsers = ""
-    $WaPhone = ""
-    $WaJids = ""
-    $SignalPhone = ""
-    $SignalNumbers = ""
-    $DashboardPassword = ""
-
+    # ── Senha do Dashboard ───────────────────────────────────────────────────
     if (-not $NoPrompt) {
         Write-Host ""
-        Write-Host "    ━━━ Canais Adicionais ━━" -ForegroundColor Yellow
-        Write-Host "    Configure canais opcionais agora ou deixe em branco para configurar depois." -ForegroundColor Cyan
-        Write-Host ""
-
-        # Discord
-        if (Read-YesNo "Configurar Discord? (precisa de bot token)" "n") {
-            $DiscordToken = Read-Answer "  Cole o Bot Token do Discord (Developer Portal → Bot)" ""
-            $DiscordGuilds = Read-Answer "  IDs dos servidores permitidos (vírgula, vazio = todos)" ""
-            $DiscordUsers = Read-Answer "  IDs de usuários permitidos (vírgula, vazio = todos)" ""
-        }
-
-        # WhatsApp
-        if (Read-YesNo "Configurar WhatsApp? (via Baileys, precisa escanear QR)" "n") {
-            $WaPhone = Read-Answer "  Número de telefone com código do país (ex: 5511999999999)" ""
-            $WaJids = Read-Answer "  JIDs permitidos (vírgula, vazio = todos os contatos)" ""
-        }
-
-        # Signal
-        if (Read-YesNo "Configurar Signal? (requer signal-cli instalado)" "n") {
-            $SignalPhone = Read-Answer "  Número de telefone com código do país (ex: +5511999999)" ""
-            $SignalNumbers = Read-Answer "  Números permitidos (vírgula, vazio = todos)" ""
-        }
-
-        # Dashboard password
-        Write-Host ""
-        Write-Host "    ━━━ Dashboard Web ━━━" -ForegroundColor Yellow
-        Write-Host "    Senha para proteger o Dashboard (vazio = sem senha, acesso livre)" -ForegroundColor Cyan
-        $securePw = Read-Host "  Nova senha (mín. 8 chars, Enter para pular)" -AsSecureString
-        $DashboardPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePw))
+        Write-Host "    ── Dashboard Web ────────────────────────────────" -ForegroundColor Yellow
+        Write-Host "    Defina uma senha para proteger o painel (Enter = sem senha)." -ForegroundColor Cyan
+        $securePw = Read-Host "    Nova senha (mín. 8 chars, Enter para pular)" -AsSecureString
+        $DashboardPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+            [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePw))
         if ($DashboardPassword.Length -gt 0 -and $DashboardPassword.Length -lt 8) {
             Write-Warn "Senha muito curta — dashboard ficará sem senha. Use 'newclaw passwd' depois."
             $DashboardPassword = ""
         }
     }
 
+    # ── Gravar .env ──────────────────────────────────────────────────────────
     $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
     $envContent = @"
 # NewClaw — Gerado pelo instalador em $timestamp
 
-# ─── Telegram (canal principal) ──────────────────────────────
-TELEGRAM_BOT_TOKEN=$Token
-TELEGRAM_ALLOWED_USER_IDS=$UserId
+# ─── Telegram ────────────────────────────────────────────────
+TELEGRAM_BOT_TOKEN=$($script:Token)
+TELEGRAM_ALLOWED_USER_IDS=$($script:UserId)
 
-# ─── Discord (opcional) ───────────────────────────────────────
-DISCORD_BOT_TOKEN=$DiscordToken
-DISCORD_ALLOWED_GUILD_IDS=$DiscordGuilds
-DISCORD_ALLOWED_USER_IDS=$DiscordUsers
+# ─── Discord ─────────────────────────────────────────────────
+DISCORD_BOT_TOKEN=$($script:DiscordToken)
+DISCORD_ALLOWED_GUILD_IDS=$($script:DiscordGuilds)
+DISCORD_ALLOWED_USER_IDS=$($script:DiscordUsers)
 
-# ─── WhatsApp (opcional) ─────────────────────────────────────
-WHATSAPP_PHONE_NUMBER=$WaPhone
-WHATSAPP_ALLOWED_JIDS=$WaJids
+# ─── WhatsApp ────────────────────────────────────────────────
+WHATSAPP_PHONE_NUMBER=$($script:WaPhone)
+WHATSAPP_ALLOWED_JIDS=$($script:WaJids)
 WHATSAPP_AUTH_DIR=./data/whatsapp-auth
 
-# ─── Signal (opcional) ───────────────────────────────────────
-SIGNAL_PHONE_NUMBER=$SignalPhone
-SIGNAL_ALLOWED_NUMBERS=$SignalNumbers
+# ─── Signal ──────────────────────────────────────────────────
+SIGNAL_PHONE_NUMBER=$($script:SignalPhone)
+SIGNAL_ALLOWED_NUMBERS=$($script:SignalNumbers)
 SIGNAL_CLI_PATH=signal-cli
 
 # ─── Idioma ───────────────────────────────────────────────────
 APP_LANG=pt-BR
 
-# ─── Provider padrão ─────────────────────────────────────────
+# ─── Provider de IA ──────────────────────────────────────────
 DEFAULT_PROVIDER=$Provider
 
-# ─── API Keys (opcional) ──────────────────────────────────────
+# ─── API Keys ────────────────────────────────────────────────
 GEMINI_API_KEY=
 DEEPSEEK_API_KEY=
 GROQ_API_KEY=
 OPENROUTER_API_KEY=$OR_Key
 
-# ─── Ollama (local / nuvem) ─────────────────────────────────
+# ─── Ollama (local / nuvem) ──────────────────────────────────
 OLLAMA_URL=http://localhost:11434
 OLLAMA_MODEL=$Model
 OLLAMA_API_KEY=
@@ -618,25 +786,37 @@ WHISPER_MODEL=tiny
     Set-Content -Path $envFile -Value $envContent -Encoding UTF8
     Write-Ok "Arquivo .env configurado!"
 
-    # ── Verificar dependências de canais ────────────────────────
+    # ── Verificações pós-configuração ────────────────────────────────────────
     if (-not $DryRun) {
-        if (-not [string]::IsNullOrWhiteSpace($DiscordToken)) {
+        if (-not [string]::IsNullOrWhiteSpace($script:DiscordToken)) {
             Write-Ok "Discord: configurado (discord.js já incluído)"
         }
-        if (-not [string]::IsNullOrWhiteSpace($WaPhone)) {
-            Write-Ok "WhatsApp: configurado ($WaPhone)"
-            $waAuthDir = Join-Path $Dir "data\\whatsapp-auth"
+        if (-not [string]::IsNullOrWhiteSpace($script:WaPhone)) {
+            $waAuthDir = Join-Path $Dir "data\whatsapp-auth"
             if (-not (Test-Path $waAuthDir)) { New-Item -ItemType Directory -Path $waAuthDir | Out-Null }
-            Write-Info "Na primeira execução, escaneie o QR code no terminal"
+            Write-Ok "WhatsApp: configurado — escaneie o QR na 1ª execução"
         }
-        if (-not [string]::IsNullOrWhiteSpace($SignalPhone)) {
+        if (-not [string]::IsNullOrWhiteSpace($script:SignalPhone)) {
             if (Test-Command "signal-cli") {
-                Write-Ok "Signal: configurado ($SignalPhone, signal-cli encontrado)"
+                Write-Ok "Signal: configurado ($($script:SignalPhone), signal-cli encontrado)"
             } else {
-                Write-Warn "Signal: signal-cli não encontrado! Instale: https://github.com/AsamK/signal-cli"
+                Write-Warn "Signal: signal-cli não encontrado — instale antes de iniciar"
                 Write-Info "  Chocolatey: choco install signal-cli"
-                Write-Info "  Ou baixe de: https://github.com/AsamK/signal-cli/releases"
+                Write-Info "  GitHub: https://github.com/AsamK/signal-cli/releases"
             }
+        }
+
+        # Resumo dos canais configurados
+        $canaisOk = @()
+        if (-not [string]::IsNullOrWhiteSpace($script:Token))        { $canaisOk += "Telegram" }
+        if (-not [string]::IsNullOrWhiteSpace($script:DiscordToken)) { $canaisOk += "Discord" }
+        if (-not [string]::IsNullOrWhiteSpace($script:WaPhone))      { $canaisOk += "WhatsApp" }
+        if (-not [string]::IsNullOrWhiteSpace($script:SignalPhone))   { $canaisOk += "Signal" }
+
+        if ($canaisOk.Count -gt 0) {
+            Write-Ok "Canais ativos: $($canaisOk -join ', ')"
+        } else {
+            Write-Warn "Nenhum canal configurado. Use 'newclaw channels enable <canal>' depois."
         }
     }
 }
@@ -773,13 +953,38 @@ function Show-Summary {
     Write-Host "      newclaw stop      — parar" -ForegroundColor Cyan
     Write-Host "      newclaw passwd    — alterar senha do Dashboard" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "    Agora abra o Telegram e mande 'Oi' para seu bot! 🎉" -ForegroundColor Yellow
+    Write-Host "    Abra seu canal configurado e mande 'Oi' para o agente! 🎉" -ForegroundColor Yellow
     Write-Host ""
+
+    # Teste pós-instalação — Telegram (se configurado)
+    if (-not $NoPrompt -and -not [string]::IsNullOrWhiteSpace($script:Token) -and -not [string]::IsNullOrWhiteSpace($script:UserId)) {
+        Write-Host ""
+        $testNow = Read-Host "  Quer enviar uma mensagem de teste ao bot agora? [S/n]"
+        if ([string]::IsNullOrWhiteSpace($testNow) -or $testNow -match "^[sSyY]") {
+            Write-Info "Enviando mensagem de teste via Telegram..."
+            try {
+                $msg = "Olá! 👋 Sou o NewClaw. Instalação concluída com sucesso! Estou online e pronto."
+                $url = "https://api.telegram.org/bot$($script:Token)/sendMessage"
+                $body = @{ chat_id = $script:UserId; text = $msg } | ConvertTo-Json
+                $resp = Invoke-RestMethod -Uri $url -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 8
+                if ($resp.ok) {
+                    Write-Ok "Mensagem enviada! Verifique o Telegram — o bot respondeu."
+                } else {
+                    Write-Warn "Bot não conseguiu enviar: $($resp.description)"
+                }
+            } catch {
+                Write-Warn "Não foi possível enviar a mensagem de teste: $($_.Exception.Message)"
+            }
+        }
+    }
 }
 
 # ── Main ─────────────────────────────────────────────────────
 
 try {
+    # Allow .ps1 wrappers (npm.ps1, etc.) to run when launched via irm|iex
+    Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
+
     Write-Banner
 
     if ($DryRun) { Write-Warn "MODO DRY-RUN — nenhuma alteração será feita" }
@@ -798,8 +1003,9 @@ try {
     Step-SetupWindowsService
     Step-SetupFirewall
     Show-Summary
+    Pause-Exit 0
 } catch {
     Write-Fail "Instalação falhou: $_"
     Write-Info "Para mais detalhes, execute com -Verbose"
-    exit 1
+    Pause-Exit 1
 }

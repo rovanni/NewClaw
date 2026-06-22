@@ -14,7 +14,9 @@ const path = require('path');
 
 const DIR = path.resolve(__dirname, '..');
 const PID_FILE = path.join(DIR, 'newclaw.pid');
-const LOG_FILE = '/tmp/newclaw.log';
+const LOG_FILE = process.platform === 'win32'
+  ? path.join(require('os').tmpdir(), 'newclaw.log')
+  : '/tmp/newclaw.log';
 const ENV_FILE = fs.existsSync(path.join(DIR, 'newclaw.env')) 
   ? path.join(DIR, 'newclaw.env') 
   : path.join(DIR, '.env');
@@ -25,38 +27,53 @@ const ENV_FILE = fs.existsSync(path.join(DIR, 'newclaw.env'))
 const PM2_BIN = findPM2();
 
 function findPM2() {
-  // Check common locations
-  const candidates = [
-    path.join(require('os').homedir(), '.npm/_npx/*/node_modules/pm2/bin/pm2'),
-    '/usr/local/bin/pm2',
-    '/usr/bin/pm2',
-    path.join(require('os').homedir(), '.npm-global/bin/pm2'),
-  ];
-  // Check npx cache
+  const isWin = process.platform === 'win32';
+
+  // Primary: find the actual JS binary via npm global prefix (cross-platform)
   try {
-    const homeDir = require('os').homedir();
-    const npxDirs = execSync(`find ${homeDir}/.npm/_npx -name pm2 -type f -path '*/bin/pm2' 2>/dev/null`, { encoding: 'utf-8' }).trim().split('\n');
-    if (npxDirs[0]) return npxDirs[0];
+    const npmPrefix = execSync('npm prefix -g', {
+      encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    const jsPath = path.join(npmPrefix, 'node_modules', 'pm2', 'bin', 'pm2');
+    if (fs.existsSync(jsPath)) return jsPath;
   } catch {}
-  // Check global npm bin
-  try {
-    const npmBin = execSync('npm bin -g', { encoding: 'utf-8' }).trim();
-    const pm2Path = path.join(npmBin, 'pm2');
-    if (fs.existsSync(pm2Path)) return pm2Path;
-  } catch {}
-  try {
-    return execSync('which pm2', { encoding: 'utf-8' }).trim();
-  } catch {}
+
+  if (isWin) {
+    // Windows fallback: %APPDATA%\npm\node_modules\pm2\bin\pm2
+    try {
+      const jsPath = path.join(process.env.APPDATA || '', 'npm', 'node_modules', 'pm2', 'bin', 'pm2');
+      if (fs.existsSync(jsPath)) return jsPath;
+    } catch {}
+  } else {
+    // Unix: search npx cache
+    try {
+      const homeDir = require('os').homedir();
+      const result = execSync(
+        `find "${homeDir}/.npm/_npx" -name pm2 -type f -path '*/bin/pm2' 2>/dev/null`,
+        { encoding: 'utf-8' }
+      ).trim().split('\n').filter(Boolean)[0];
+      if (result) return result;
+    } catch {}
+
+    // Unix: check known paths
+    for (const p of [
+      '/usr/local/bin/pm2',
+      '/usr/bin/pm2',
+      path.join(require('os').homedir(), '.npm-global/bin/pm2'),
+    ]) {
+      if (fs.existsSync(p)) return p;
+    }
+  }
+
   return null;
 }
 
 function pm2(args = []) {
   if (!PM2_BIN) {
-    console.error('❌ PM2 não encontrado. Instale com: npm install -g pm2');
-    process.exit(1);
+    throw new Error('PM2 não encontrado. Instale com: npm install -g pm2');
   }
   try {
-    return execSync(`node ${PM2_BIN} ${args.join(' ')}`, { encoding: 'utf-8', cwd: DIR, stdio: ['pipe', 'pipe', 'pipe'] });
+    return execSync(`node "${PM2_BIN}" ${args.join(' ')}`, { encoding: 'utf-8', cwd: DIR, stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (e) {
     return e.stdout || '';
   }
@@ -70,15 +87,15 @@ function isPM2Running() {
 }
 
 function pm2JStart() {
-  // Get PM2 process status via JSON API (reliable, no string parsing)
+  // pm2 jlist outputs JSON — cross-platform, no shell redirects needed
   try {
-    const out = execSync(`node ${PM2_BIN} jstart 2>/dev/null`, { encoding: 'utf-8', cwd: DIR });
+    const out = pm2(['jlist']);
     const procs = JSON.parse(out);
     const nc = procs.find(p => p.name === 'newclaw');
     if (!nc) return 'not_found';
     return nc.pm2_env?.status || 'unknown';
   } catch {
-    // Fallback to string-based check
+    // Fallback: string parse from pm2 list
     try {
       const out = pm2(['list']);
       if (out.includes('newclaw')) {
@@ -92,31 +109,23 @@ function pm2JStart() {
 }
 
 function getPM2Pid() {
-  // Read PID from PM2's pid file — the most reliable method
-  // pm2 show no longer displays numeric pid in its table output
+  // Primary: pm2 jlist JSON (works cross-platform, no pid file needed)
+  try {
+    const out = pm2(['jlist']);
+    const procs = JSON.parse(out);
+    const nc = procs.find(p => p.name === 'newclaw');
+    if (nc && nc.pid && nc.pid > 0) {
+      try { process.kill(nc.pid, 0); return nc.pid; } catch {}
+      // On Windows, process.kill(pid, 0) throws even for live processes —
+      // if PM2 reports the pid, trust it
+      if (process.platform === 'win32' && nc.pm2_env?.status === 'online') return nc.pid;
+    }
+  } catch {}
+  // Fallback: read .pm2 pid file (Unix-style path)
   const pm2PidFile = path.join(require('os').homedir(), '.pm2', 'pids', 'newclaw-0.pid');
   try {
     const pid = parseInt(fs.readFileSync(pm2PidFile, 'utf8').trim());
-    if (pid > 0 && process.kill(pid, 0)) return pid;
-  } catch {}
-  // Fallback: parse pm2 show (may not have numeric pid in newer versions)
-  try {
-    const out = pm2(['show', 'newclaw']);
-    // Try both old format (│ pid │ 123) and new format
-    const match = out.match(/│\s*pid\s*│\s*(\d+)/) || out.match(/│\s*pid\s+path\s*│\s*([^\s]+)/);
-    if (match) {
-      // If it's a path, read the pid from that file
-      const value = match[1].trim();
-      if (/^\d+$/.test(value)) {
-        const pid = parseInt(value);
-        if (pid > 0 && process.kill(pid, 0)) return pid;
-      }
-      // It's a file path
-      try {
-        const pid = parseInt(fs.readFileSync(value, 'utf8').trim());
-        if (pid > 0 && process.kill(pid, 0)) return pid;
-      } catch {}
-    }
+    if (pid > 0) { try { process.kill(pid, 0); return pid; } catch { if (process.platform === 'win32') return pid; } }
   } catch {}
   return null;
 }
@@ -140,6 +149,7 @@ function getPid() {
 }
 
 function findRunningPid() {
+  if (process.platform === 'win32') return null; // rely on PM2 or PID file on Windows
   try {
     const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
     const pids = out.trim().split('\n').filter(Boolean).map(Number);
@@ -153,28 +163,33 @@ function killAllInstances() {
   if (PM2_BIN) {
     try {
       pm2(['stop', 'newclaw']);
-      // Also kill any orphan processes not managed by PM2
-      try {
-        const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
-        const pids = out.trim().split('\n').filter(Boolean).map(Number);
-        let orphans = 0;
-        for (const pid of pids) {
-          try { process.kill(pid, 'SIGTERM'); orphans++; } catch {}
-        }
-        return orphans;
-      } catch { return 0; }
+      if (process.platform !== 'win32') {
+        try {
+          const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
+          const pids = out.trim().split('\n').filter(Boolean).map(Number);
+          let orphans = 0;
+          for (const pid of pids) {
+            try { process.kill(pid, 'SIGTERM'); orphans++; } catch {}
+          }
+          return orphans;
+        } catch {}
+      }
+      return 0;
     } catch {}
   }
-  // Fallback: raw kill (only if PM2 unavailable)
-  try {
-    const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
-    const pids = out.trim().split('\n').filter(Boolean).map(Number);
-    for (const pid of pids) {
-      try { process.kill(pid, 'SIGTERM'); } catch {}
-    }
-    return pids.length;
-  } catch { return 0; }
+  // Fallback: raw kill (only if PM2 unavailable, Unix only)
+  if (process.platform !== 'win32') {
+    try {
+      const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
+      const pids = out.trim().split('\n').filter(Boolean).map(Number);
+      for (const pid of pids) {
+        try { process.kill(pid, 'SIGTERM'); } catch {}
+      }
+      return pids.length;
+    } catch {}
   }
+  return 0;
+}
 
 function isRunning() {
   const pid = getPid();
@@ -268,11 +283,15 @@ const commands = {
     // otherwise we kill the active bot's polling connection
     const env = readEnv();
     try {
-      execSync('curl -s "https://api.telegram.org/bot' + env.TELEGRAM_BOT_TOKEN + '/deleteWebhook?drop_pending_updates=true" >/dev/null 2>\&1');
+      const delUrl = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true`;
+      const curlCmd = process.platform === 'win32'
+        ? `curl.exe -s "${delUrl}" > nul 2>&1`
+        : `curl -s "${delUrl}" >/dev/null 2>&1`;
+      execSync(curlCmd);
     } catch {}
     killAllInstances();
     console.log('⏳ Waiting for cleanup (5s)...');
-    execSync('sleep 5');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000);
 
     if (debug) env.LOG_LEVEL = 'debug';
     const langArg = args.find(a => a.startsWith('--lang='));
@@ -396,13 +415,15 @@ const commands = {
     if (PM2_BIN) {
       try {
         pm2(['stop', 'newclaw']);
-        // Kill any orphans that PM2 might not track
-        try {
-          const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
-          const pids = out.trim().split('\n').filter(Boolean).map(Number);
-          for (const pid of pids) { try { process.kill(pid, 'SIGTERM'); } catch {} }
-          if (pids.length > 0) console.log(`   Cleaned ${pids.length} orphan process(es)`);
-        } catch {}
+        // Kill any orphans that PM2 might not track (Unix only)
+        if (process.platform !== 'win32') {
+          try {
+            const out = execSync(`ps aux | grep 'node dist/index.js' | grep -v grep | awk '{print $2}'`, { encoding: 'utf-8' });
+            const pids = out.trim().split('\n').filter(Boolean).map(Number);
+            for (const pid of pids) { try { process.kill(pid, 'SIGTERM'); } catch {} }
+            if (pids.length > 0) console.log(`   Cleaned ${pids.length} orphan process(es)`);
+          } catch {}
+        }
         try { fs.unlinkSync(PID_FILE); } catch {}
         console.log('🛑 NewClaw stopped (via PM2)');
       } catch {
@@ -426,7 +447,13 @@ const commands = {
       // Clean up Telegram polling first
       const env = readEnv();
       if (env.TELEGRAM_BOT_TOKEN) {
-        try { execSync(`curl -s "https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true" > /dev/null 2>&1`); } catch {}
+        try {
+          const delUrl = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true`;
+          const curlCmd = process.platform === 'win32'
+            ? `curl.exe -s "${delUrl}" > nul 2>&1`
+            : `curl -s "${delUrl}" > /dev/null 2>&1`;
+          execSync(curlCmd);
+        } catch {}
       }
       const pm2Status = pm2JStart();
       if (pm2Status === 'online' || pm2Status === 'stopped' || pm2Status === 'errored') {
@@ -451,25 +478,85 @@ const commands = {
     
     let uptime = 'unknown';
     try {
-      const out = execSync(`ps -p ${pid} -o etimes=`).toString().trim();
-      const secs = parseInt(out);
-      const m = Math.floor(secs / 60);
-      const h = Math.floor(m / 60);
-      uptime = h > 0 ? `${h}h ${m % 60}m` : `${m}m`;
+      if (process.platform === 'win32') {
+        const out = execSync(
+          `wmic process where ProcessId="${pid}" get CreationDate /value`,
+          { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+        ).trim();
+        const match = out.match(/CreationDate=(\d{14})/);
+        if (match) {
+          const d = match[1];
+          const created = new Date(
+            parseInt(d.slice(0,4)), parseInt(d.slice(4,6))-1, parseInt(d.slice(6,8)),
+            parseInt(d.slice(8,10)), parseInt(d.slice(10,12)), parseInt(d.slice(12,14))
+          );
+          const secs = Math.floor((Date.now() - created.getTime()) / 1000);
+          const m = Math.floor(secs / 60);
+          const h = Math.floor(m / 60);
+          uptime = h > 0 ? `${h}h ${m % 60}m` : `${m}m`;
+        }
+      } else {
+        const out = execSync(`ps -p ${pid} -o etimes=`).toString().trim();
+        const secs = parseInt(out);
+        const m = Math.floor(secs / 60);
+        const h = Math.floor(m / 60);
+        uptime = h > 0 ? `${h}h ${m % 60}m` : `${m}m`;
+      }
     } catch {}
     
-    console.log(`🟢 NewClaw running (PID ${pid}, uptime ${uptime})`);
-    console.log(`   Model: ${env.OLLAMA_MODEL || 'glm-5.1:cloud'}`);
-    console.log(`   Lang: ${env.APP_LANG || 'pt-BR'}`);
-    console.log(`   Whisper API: ${env.WHISPER_API_URL || 'localhost:8177'}`);
-    console.log(`   Dashboard: http://localhost:${env.DASHBOARD_PORT || 3090}`);
-    
+    // Memory usage from PM2 or process
+    let memMB = null;
+    try {
+      const out = pm2(['show', 'newclaw']);
+      const match = out.match(/memory\s*│\s*([\d.]+)\s*(mb|kb|b)/i);
+      if (match) {
+        const val = parseFloat(match[1]);
+        const unit = match[2].toLowerCase();
+        memMB = unit === 'kb' ? (val / 1024).toFixed(0) : unit === 'b' ? (val / 1048576).toFixed(0) : val.toFixed(0);
+      }
+    } catch {}
+    if (memMB === null && pid) {
+      try { memMB = Math.round(process.memoryUsage().rss / 1048576); } catch {}
+    }
+
+    // Last log line timestamp
+    let lastMsg = null;
+    try {
+      const logPath = path.join(DIR, 'logs', 'newclaw-stdout.log');
+      if (fs.existsSync(logPath)) {
+        const lines = fs.readFileSync(logPath, 'utf8').split(/\r?\n/).filter(Boolean);
+        const recent = lines.slice(-1)[0] || '';
+        const tsMatch = recent.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+        if (tsMatch) {
+          const diff = Math.round((Date.now() - new Date(tsMatch[0]).getTime()) / 1000);
+          lastMsg = diff < 60 ? `há ${diff}s` : diff < 3600 ? `há ${Math.round(diff/60)}min` : `há ${Math.round(diff/3600)}h`;
+        }
+      }
+    } catch {}
+
+    // Active channels from .env
+    const activeChannels = [];
+    if (env.TELEGRAM_BOT_TOKEN) activeChannels.push('Telegram');
+    if (env.DISCORD_BOT_TOKEN) activeChannels.push('Discord');
+    if (env.WHATSAPP_PHONE_NUMBER) activeChannels.push('WhatsApp');
+    if (env.SIGNAL_PHONE_NUMBER) activeChannels.push('Signal');
+
+    console.log('');
+    console.log(`🟢 NewClaw online  (PID ${pid}, uptime ${uptime})`);
+    console.log(`   Canais:     ${activeChannels.length > 0 ? activeChannels.join(', ') : 'nenhum configurado'}`);
+    console.log(`   Modelo:     ${env.OLLAMA_MODEL || env.MODEL_CHAT || 'glm-5.1:cloud'}`);
+    if (memMB) console.log(`   Memória:    ${memMB} MB RSS`);
+    console.log(`   Dashboard:  http://localhost:${env.DASHBOARD_PORT || 3090}`);
+    console.log(`   Lang:       ${env.APP_LANG || 'pt-BR'}`);
+    if (lastMsg) console.log(`   Última log: ${lastMsg}`);
+    console.log('');
+
     const langArg = args?.find(a => a.startsWith('--lang='));
     if (langArg) {
       const lang = langArg.split('=')[1];
       env.APP_LANG = lang;
       writeEnv(env);
-      console.log(`   Lang updated to: ${lang}`);
+      console.log(`   Lang atualizado para: ${lang}`);
     }
   },
 
@@ -511,12 +598,32 @@ const commands = {
 
     console.log(`📄 Lendo logs de: ${logFile}`);
     if (follow) {
-      const child = spawn('tail', ['-f', '-n', '50', logFile], { stdio: 'inherit' });
-      process.on('SIGINT', () => { child.kill(); process.exit(0); });
+      // tail -f equivalent: watch file for new content
+      let offset = 0;
+      try { offset = fs.statSync(logFile).size; } catch {}
+      const printLast = (n) => {
+        try {
+          const lines = fs.readFileSync(logFile, 'utf8').split(/\r?\n/).filter(Boolean);
+          console.log(lines.slice(-n).join('\n'));
+        } catch {}
+      };
+      printLast(50);
+      console.log('\n📡 Seguindo logs (Ctrl+C para parar)...\n');
+      const watcher = fs.watchFile(logFile, { interval: 400 }, () => {
+        try {
+          const stats = fs.statSync(logFile);
+          if (stats.size > offset) {
+            const stream = fs.createReadStream(logFile, { encoding: 'utf8', start: offset, end: stats.size - 1 });
+            offset = stats.size;
+            stream.on('data', chunk => process.stdout.write(chunk));
+          }
+        } catch {}
+      });
+      process.on('SIGINT', () => { fs.unwatchFile(logFile); process.exit(0); });
     } else {
       try {
-        const out = execSync(`tail -50 "${logFile}"`).toString();
-        console.log(out);
+        const lines = fs.readFileSync(logFile, 'utf8').split(/\r?\n/).filter(Boolean);
+        console.log(lines.slice(-50).join('\n'));
       } catch { console.log('No logs found'); }
     }
   },
@@ -793,6 +900,148 @@ const commands = {
     });
   },
 
+  async doctor() {
+    const http = require('http');
+    const https = require('https');
+
+    function check(label, ok, detail) {
+      const icon = ok === true ? '✅' : ok === false ? '❌' : '⚠️ ';
+      console.log(`  ${icon} ${label.padEnd(36)} ${detail || ''}`);
+    }
+
+    function httpGet(url, options = {}) {
+      return new Promise((resolve) => {
+        const mod = url.startsWith('https') ? https : http;
+        const req = mod.get(url, { ...options, timeout: 5000 }, (res) => {
+          let data = '';
+          res.on('data', d => data += d);
+          res.on('end', () => resolve({ status: res.statusCode, body: data }));
+        });
+        req.on('error', (e) => resolve({ status: 0, error: e.message }));
+        req.on('timeout', () => { req.destroy(); resolve({ status: 0, error: 'timeout' }); });
+      });
+    }
+
+    console.log('\n🩺 NewClaw Doctor — Diagnóstico do sistema\n');
+    const env = readEnv();
+
+    // 1. Node.js version
+    const nodeVer = process.version;
+    const nodeMajor = parseInt(nodeVer.slice(1));
+    check('Node.js', nodeMajor >= 18, `${nodeVer}${nodeMajor < 18 ? '  ⚠ requer ≥ 18' : ''}`);
+
+    // 2. PM2
+    check('PM2', PM2_BIN !== null, PM2_BIN ? PM2_BIN.split(/[/\\]/).slice(-3).join('/') : 'não encontrado — npm install -g pm2');
+
+    // 3. .env
+    const envExists = fs.existsSync(ENV_FILE);
+    check('.env / newclaw.env', envExists, envExists ? ENV_FILE : 'não encontrado — rode o instalador');
+
+    // 4. dist/index.js built
+    const distExists = fs.existsSync(path.join(DIR, 'dist', 'index.js'));
+    check('Build (dist/index.js)', distExists, distExists ? 'ok' : 'não compilado — npm run build');
+
+    // 5. Process running
+    const pid = getPid();
+    const pm2Status = pm2JStart();
+    const running = pid !== null || pm2Status === 'online';
+    check('NewClaw em execução', running, running ? `PID ${pid || '?'} (PM2: ${pm2Status})` : 'parado — newclaw start');
+
+    // 6. Ollama
+    const ollamaUrl = env.OLLAMA_URL || 'http://localhost:11434';
+    const ollamaResp = await httpGet(`${ollamaUrl}/api/tags`);
+    const ollamaOk = ollamaResp.status === 200;
+    let ollamaDetail = ollamaOk ? 'respondendo' : `não responde em ${ollamaUrl} — ollama serve`;
+    if (ollamaOk) {
+      try {
+        const models = JSON.parse(ollamaResp.body).models || [];
+        ollamaDetail = models.length > 0 ? `${models.length} modelo(s): ${models.slice(0,3).map(m=>m.name).join(', ')}` : 'sem modelos — ollama pull glm-5:cloud';
+      } catch {}
+    }
+    check('Ollama', ollamaOk, ollamaDetail);
+
+    // 7. Model configured
+    const model = env.OLLAMA_MODEL || env.MODEL_CHAT || '';
+    check('Modelo configurado', !!model, model || 'OLLAMA_MODEL não definido no .env');
+
+    // 8. Channels
+    console.log('');
+    console.log('  📡 Canais:');
+
+    // Telegram
+    const tgToken = env.TELEGRAM_BOT_TOKEN;
+    if (tgToken) {
+      const tgResp = await httpGet(`https://api.telegram.org/bot${tgToken}/getMe`);
+      if (tgResp.status === 200) {
+        try {
+          const d = JSON.parse(tgResp.body);
+          check('  Telegram', d.ok, d.ok ? `@${d.result.username}` : 'token inválido');
+        } catch { check('  Telegram', null, 'resposta inesperada'); }
+      } else {
+        check('  Telegram', false, `HTTP ${tgResp.status || tgResp.error} — token inválido?`);
+      }
+    } else { check('  Telegram', null, 'não configurado (TELEGRAM_BOT_TOKEN)'); }
+
+    // Discord
+    const discToken = env.DISCORD_BOT_TOKEN;
+    if (discToken) {
+      const discResp = await httpGet('https://discord.com/api/v10/users/@me', {
+        headers: { Authorization: `Bot ${discToken}` }
+      });
+      if (discResp.status === 200) {
+        try {
+          const d = JSON.parse(discResp.body);
+          check('  Discord', true, `@${d.username}`);
+        } catch { check('  Discord', null, 'resposta inesperada'); }
+      } else { check('  Discord', false, `HTTP ${discResp.status || discResp.error}`); }
+    } else { check('  Discord', null, 'não configurado (DISCORD_BOT_TOKEN)'); }
+
+    // WhatsApp
+    const waNum = env.WHATSAPP_PHONE_NUMBER;
+    if (waNum) {
+      const authDir = env.WHATSAPP_AUTH_DIR || path.join(DIR, 'data', 'whatsapp-auth');
+      const hasAuth = fs.existsSync(authDir);
+      check('  WhatsApp', hasAuth, hasAuth ? `${waNum} (auth ok)` : 'auth dir ausente — precisa escanear QR');
+    } else { check('  WhatsApp', null, 'não configurado (WHATSAPP_PHONE_NUMBER)'); }
+
+    // Signal
+    const sigNum = env.SIGNAL_PHONE_NUMBER;
+    if (sigNum) {
+      const sigCli = env.SIGNAL_CLI_PATH || 'signal-cli';
+      try {
+        execSync(process.platform === 'win32' ? `where ${sigCli}` : `which ${sigCli}`, { stdio: 'pipe' });
+        check('  Signal', true, `${sigNum} (signal-cli ok)`);
+      } catch { check('  Signal', false, 'signal-cli não encontrado — instale: https://github.com/AsamK/signal-cli'); }
+    } else { check('  Signal', null, 'não configurado (SIGNAL_PHONE_NUMBER)'); }
+
+    // 9. Dashboard
+    console.log('');
+    const dashPort = env.DASHBOARD_PORT || '3090';
+    const dashResp = await httpGet(`http://localhost:${dashPort}/`);
+    check('Dashboard web', dashResp.status === 200, dashResp.status === 200 ? `http://localhost:${dashPort}` : `porta ${dashPort} não responde`);
+
+    // 10. Disk space
+    try {
+      let diskMsg = '';
+      if (process.platform === 'win32') {
+        const out = execSync(`wmic logicaldisk where DeviceID="${path.parse(DIR).root.replace('\\','')}" get FreeSpace,Size /value`, { encoding: 'utf-8', stdio: 'pipe' }).trim();
+        const free = parseInt((out.match(/FreeSpace=(\d+)/) || [])[1] || '0');
+        const total = parseInt((out.match(/Size=(\d+)/) || [])[1] || '1');
+        const pct = Math.round((1 - free / total) * 100);
+        diskMsg = `${pct}% usado`;
+        check('Espaço em disco', pct < 85, diskMsg + (pct >= 85 ? ' ⚠ pouco espaço!' : ''));
+      } else {
+        const out = execSync(`df -h "${DIR}" | tail -1`, { encoding: 'utf-8' }).trim();
+        const cols = out.split(/\s+/);
+        diskMsg = `${cols[4] || '?'} usado (${cols[3] || '?'} livre)`;
+        const pct = parseInt(cols[4] || '0');
+        check('Espaço em disco', pct < 85, diskMsg + (pct >= 85 ? ' ⚠ pouco espaço!' : ''));
+      }
+    } catch { check('Espaço em disco', null, 'não verificado'); }
+
+    console.log('\n  💡 Use "newclaw status" para ver uptime e memória.\n');
+  },
+
   help() {
     console.log(`
 🪐 NewClaw CLI — Referência de Comandos
@@ -801,6 +1050,7 @@ Comando                 Descrição
 ----------------------- ----------------------------------------------------
 newclaw onboard         Configura provedores e chaves de API
 newclaw passwd          Define ou altera a senha do Dashboard web
+newclaw doctor          Diagnóstico completo: Node, PM2, Ollama, canais, disco
 newclaw channels         Status dos canais (telegram, discord, whatsapp, signal)
 newclaw channels enable <canal>   Configura um canal
 newclaw channels disable <canal>  Desativa um canal

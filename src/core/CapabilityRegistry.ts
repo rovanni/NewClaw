@@ -28,6 +28,7 @@ import os from 'os';
 import { promisify } from 'util';
 import { createLogger } from '../shared/AppLogger';
 import { EnvironmentProbe } from '../loop/EnvironmentProbe';
+import { which, isWindows, linuxDistro } from '../utils/crossPlatform';
 
 const log = createLogger('CapabilityRegistry');
 const dnsLookup = promisify(dns.lookup);
@@ -212,11 +213,19 @@ class CapabilityProbe {
         }
 
         const port = process.env.PORT ?? '3090';
-        const localOut = runSafe(
-            `curl -s -o /dev/null -w "%{http_code}" http://localhost:${port}/health --max-time 1`,
-            2000,
-        );
-        const localhostOk = localOut !== null && localOut !== '' && localOut !== '000';
+        const localhostOk = await new Promise<boolean>((resolve) => {
+            try {
+                // eslint-disable-next-line @typescript-eslint/no-require-imports
+                const http = require('http') as typeof import('http');
+                const req = http.get(
+                    `http://localhost:${port}/health`,
+                    { timeout: 1000 },
+                    (res) => resolve((res.statusCode ?? 0) > 0 && (res.statusCode ?? 0) < 500)
+                );
+                req.on('error', () => resolve(false));
+                req.on('timeout', () => { req.destroy(); resolve(false); });
+            } catch { resolve(false); }
+        });
 
         return {
             outboundHttp: makeStatus(outbound),
@@ -229,7 +238,7 @@ class CapabilityProbe {
         const now = Date.now();
         const pipOut  = runSafe('pip3 --version');
         const npmOut  = runSafe('npm --version');
-        const sudoOut = runSafe('sudo -n true 2>/dev/null && echo yes || echo no');
+        const sudoOut = isWindows ? null : runSafe('sudo -n true 2>/dev/null && echo yes || echo no');
         return {
             pip:  makeStatus(pipOut !== null, pipOut ?? undefined),
             npm:  makeStatus(npmOut !== null, npmOut ?? undefined),
@@ -265,24 +274,19 @@ class CapabilityProbe {
             tempDirectory = '/tmp';
             pathSeparator = '/';
             executableExtension = '';
-            packageManager = runSafe('which brew', 1000) ? 'brew' : undefined;
+            packageManager = which('brew') ? 'brew' : undefined;
         } else {
             platform = 'linux';
             shell = process.env['SHELL'] ?? '/bin/bash';
             tempDirectory = '/tmp';
             pathSeparator = '/';
             executableExtension = '';
-            const lsb = runSafe('lsb_release -si 2>/dev/null', 2000);
-            if (lsb) {
-                distro = lsb.toLowerCase().trim();
-            } else {
-                const rel = runSafe('cat /etc/os-release 2>/dev/null | grep "^ID=" | cut -d= -f2', 2000);
-                if (rel) distro = rel.replace(/"/g, '').toLowerCase().trim();
-            }
-            if      (runSafe('which apt-get 2>/dev/null', 1000)) packageManager = 'apt';
-            else if (runSafe('which yum 2>/dev/null', 1000))     packageManager = 'yum';
-            else if (runSafe('which pacman 2>/dev/null', 1000))  packageManager = 'pacman';
-            else if (runSafe('which apk 2>/dev/null', 1000))     packageManager = 'apk';
+            const lsb = runSafe('lsb_release -si', 2000);
+            distro = lsb ? lsb.toLowerCase().trim() : linuxDistro();
+            if      (which('apt-get')) packageManager = 'apt';
+            else if (which('yum'))     packageManager = 'yum';
+            else if (which('pacman'))  packageManager = 'pacman';
+            else if (which('apk'))     packageManager = 'apk';
         }
 
         return { platform, architecture, shell, tempDirectory, pathSeparator, executableExtension, distro, packageManager, checkedAt: now };
@@ -308,7 +312,7 @@ class CapabilityProbe {
         let gpuName: string | undefined;
         let gpuMemoryMB: number | undefined;
 
-        const nvidiaOut = runSafe('nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null', 3000);
+        const nvidiaOut = runSafe('nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits', 3000);
         if (nvidiaOut?.trim()) {
             const parts = nvidiaOut.split(',').map(s => s.trim());
             if (parts[0]) {
@@ -344,7 +348,7 @@ class CapabilityProbe {
             } catch { /* sem permissão */ }
 
             if (!containerized) {
-                const cgroup = runSafe('cat /proc/1/cgroup 2>/dev/null | head -5', 1000) ?? '';
+                const cgroup = runSafe('cat /proc/1/cgroup', 1000) ?? '';
                 if      (cgroup.includes('docker') || cgroup.includes('containerd')) { containerized = true; virtualization = 'docker'; }
                 else if (cgroup.includes('kubepods'))                                  { containerized = true; virtualization = 'kubernetes'; }
                 else if (cgroup.includes('lxc'))                                       { containerized = true; virtualization = 'lxc'; }

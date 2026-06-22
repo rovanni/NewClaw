@@ -127,8 +127,8 @@ ask_yes() {
     esac
   fi
 
-  local default_show="y/N"
-  [ "$default" = "y" ] && default_show="Y/n"
+  local default_show="s/N"
+  [[ "$default" == "y" || "$default" == "Y" || "$default" == "s" || "$default" == "S" ]] && default_show="S/n"
   echo -ne "  ${BOLD}${prompt} [${default_show}]:${NC} "
   if ! read -r answer < /dev/tty 2>/dev/null; then
     read -r answer 2>/dev/null || answer="$default"
@@ -140,8 +140,78 @@ ask_yes() {
   esac
 }
 
+# ── Validações de canal ──────────────────────────────────────
+
+validate_telegram_token() {
+  local tok="$1"
+  local resp
+  resp=$(curl -sf --max-time 6 "https://api.telegram.org/bot${tok}/getMe" 2>/dev/null) || {
+    warn "Sem conexão com a API do Telegram — token não verificado (prosseguindo)."
+    return 0
+  }
+  local ok; ok=$(echo "$resp" | grep -o '"ok":true')
+  if [ -n "$ok" ]; then
+    local name; name=$(echo "$resp" | grep -o '"first_name":"[^"]*"' | cut -d'"' -f4)
+    local uname; uname=$(echo "$resp" | grep -o '"username":"[^"]*"' | cut -d'"' -f4)
+    ok "Token Telegram válido — bot: ${name} (@${uname})"
+    return 0
+  else
+    local desc; desc=$(echo "$resp" | grep -o '"description":"[^"]*"' | cut -d'"' -f4)
+    fail "Token inválido: ${desc:-Unauthorized}. Verifique com @BotFather."
+    return 1
+  fi
+}
+
+validate_discord_token() {
+  local tok="$1"
+  [ -z "$tok" ] && return 0
+  local resp
+  resp=$(curl -sf --max-time 6 -H "Authorization: Bot ${tok}" \
+    "https://discord.com/api/v10/users/@me" 2>/dev/null) || {
+    warn "Sem conexão com a API do Discord — token não verificado (prosseguindo)."
+    return 0
+  }
+  local uname; uname=$(echo "$resp" | grep -o '"username":"[^"]*"' | cut -d'"' -f4)
+  if [ -n "$uname" ]; then
+    ok "Token Discord válido — bot: ${uname}"
+    return 0
+  else
+    fail "Token Discord inválido. Verifique no Developer Portal."
+    return 1
+  fi
+}
+
 check_cmd() {
   command -v "$1" &>/dev/null
+}
+
+# ── Spinner de progresso ──────────────────────────────────────
+
+run_with_spinner() {
+  local label="$1"; shift
+  local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+  local tmpout; tmpout=$(mktemp)
+
+  "$@" >"$tmpout" 2>&1 &
+  local pid=$!
+  local i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    printf "\r    %s  %s..." "${frames[$((i % 10))]}" "$label"
+    sleep 0.12
+    i=$((i + 1))
+  done
+  wait "$pid"
+  local rc=$?
+  if [ $rc -eq 0 ]; then
+    printf "\r    ✅ %s concluído.              \n" "$label"
+  else
+    printf "\r    ❌ %s falhou.                 \n" "$label"
+    cat "$tmpout"
+    rm -f "$tmpout"
+    return $rc
+  fi
+  rm -f "$tmpout"
+  return 0
 }
 
 # ── Ajuda ────────────────────────────────────────────────────
@@ -403,9 +473,7 @@ download_model() {
     esac
   fi
 
-  info "Baixando modelo ${OLLAMA_MODEL}..."
-  info "Pode demorar alguns minutos na primeira vez..."
-  run ollama pull "$OLLAMA_MODEL"
+  run_with_spinner "Baixando modelo ${OLLAMA_MODEL} (pode demorar na 1ª vez)" ollama pull "$OLLAMA_MODEL"
   ok "Modelo ${OLLAMA_MODEL} pronto!"
 }
 
@@ -447,13 +515,8 @@ install_newclaw() {
   # Instalar deps e build
   cd "$NEWCLAW_DIR" || fail "Não foi possível entrar na pasta $NEWCLAW_DIR"
 
-  info "Instalando dependências (npm install)..."
-  npm install
-  ok "Dependências instaladas!"
-
-  info "Compilando código..."
-  npm run build
-  ok "Código compilado!"
+  run_with_spinner "Instalando dependências" npm install --prefer-offline
+  run_with_spinner "Compilando código TypeScript" node node_modules/typescript/bin/tsc --noEmit false
 
   # Garantir permissão de execução em todos os scripts
   info "Configurando permissões de execução..."
@@ -522,99 +585,167 @@ configure() {
     return
   fi
 
-  # Se já temos token e user_id via flags/env, pular perguntas
-  if [ -z "$BOT_TOKEN" ]; then
+  # ── Funções auxiliares de canal ─────────────────────────────
+  _configure_telegram() {
     echo ""
-    echo -e "  ${BOLD}${YELLOW}━━━ Configuração do Telegram ━━━${NC}"
+    echo -e "  ${BOLD}${YELLOW}── Telegram ─────────────────────────────────────${NC}"
+    echo -e "  ${CYAN}Você vai precisar de 2 códigos:${NC}"
+    echo -e "    1. ${BOLD}Bot Token${NC}  → Crie um bot com @BotFather no Telegram"
+    echo -e "       Exemplo: 123456789:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    echo -e "    2. ${BOLD}Seu User ID${NC} → Envie /start para @userinfobot"
+    echo -e "       Exemplo: 987654321"
     echo ""
-    echo -e "  ${CYAN}Você precisará de 2 códigos diferentes:${NC}"
-    echo -e "  1. ${BOLD}Bot Token${NC}  → Pegue com o @BotFather (Ex: 12345:AAFF...)"
-    echo -e "  2. ${BOLD}Seu User ID${NC} → Pegue com o @userinfobot (Ex: 987654321)"
-    echo ""
-
-    # Perguntar Token
-    while [ -z "$BOT_TOKEN" ]; do
-      ask "1. Cole o TOKEN COMPLETO do bot" BOT_TOKEN
-      if [ -n "$BOT_TOKEN" ] && [[ "$BOT_TOKEN" != *":"* ]]; then
-        warn "Isso não parece um Token válido (falta o ':'). Tente novamente."
+    local token_ok=0
+    while [ $token_ok -eq 0 ]; do
+      while [ -z "$BOT_TOKEN" ]; do
+        ask "  Cole o TOKEN do bot (ex: 123456:AAF...)" BOT_TOKEN
+        if [ -n "$BOT_TOKEN" ] && [[ "$BOT_TOKEN" != *":"* ]]; then
+          warn "Token inválido — deve conter ':'. Tente novamente."
+          BOT_TOKEN=""
+        fi
+      done
+      info "Verificando token com a API do Telegram..."
+      if validate_telegram_token "$BOT_TOKEN"; then
+        token_ok=1
+      else
         BOT_TOKEN=""
       fi
     done
-  fi
-
-  if [ -z "$USER_ID" ]; then
     while [ -z "$USER_ID" ]; do
-      ask "2. Cole o SEU ID de usuário (números)" USER_ID
+      ask "  Cole o seu USER ID (apenas números)" USER_ID
       if [[ "$USER_ID" == *":"* ]]; then
-        warn "Você colou o Token no lugar do ID! Use o ID do @userinfobot (apenas números)."
+        warn "Isso parece um Token, não um ID! O ID vem do @userinfobot."
         USER_ID=""
       elif [[ -n "$USER_ID" && ! "$USER_ID" =~ ^[0-9]+$ ]]; then
         warn "O ID deve conter apenas números. Tente novamente."
         USER_ID=""
       fi
     done
-  fi
+  }
 
-  # Escolha de Provider
+  _configure_discord() {
+    echo ""
+    echo -e "  ${BOLD}${YELLOW}── Discord ──────────────────────────────────────${NC}"
+    echo -e "  ${CYAN}Acesse: discord.com/developers → Applications → Bot → Token${NC}"
+    echo ""
+    local disc_ok=0
+    while [ $disc_ok -eq 0 ]; do
+      ask "  Cole o Bot Token do Discord" discord_token
+      [ -z "$discord_token" ] && break
+      info "Verificando token com a API do Discord..."
+      if validate_discord_token "$discord_token"; then disc_ok=1; else discord_token=""; fi
+    done
+    ask "  IDs dos servidores permitidos (vírgula, vazio = todos)" discord_guilds
+    ask "  IDs de usuários permitidos (vírgula, vazio = todos)" discord_users
+  }
+
+  _configure_whatsapp() {
+    echo ""
+    echo -e "  ${BOLD}${YELLOW}── WhatsApp ─────────────────────────────────────${NC}"
+    echo -e "  ${CYAN}Usa a biblioteca Baileys — na 1ª execução aparecerá um QR code${NC}"
+    echo -e "  ${CYAN}para escanear com o WhatsApp do celular.${NC}"
+    echo ""
+    ask "  Número com código do país, sem + (ex: 5511999999999)" wa_phone
+    ask "  JIDs autorizados (vírgula, vazio = todos os contatos)" wa_jids
+    [ -n "$wa_phone" ] && ok "WhatsApp configurado! Escaneie o QR na 1ª execução."
+  }
+
+  _configure_signal() {
+    echo ""
+    echo -e "  ${BOLD}${YELLOW}── Signal ───────────────────────────────────────${NC}"
+    echo -e "  ${CYAN}Requer signal-cli: github.com/AsamK/signal-cli${NC}"
+    if ! command -v signal-cli &>/dev/null; then
+      warn "signal-cli não encontrado no PATH agora."
+      info "  Ubuntu/Debian: sudo apt install signal-cli"
+      info "  macOS: brew install signal-cli"
+      info "  GitHub: https://github.com/AsamK/signal-cli/releases"
+      info "  Você pode instalar depois e configurar via 'newclaw channels enable signal'"
+    fi
+    echo ""
+    ask "  Número com código do país (ex: +5511999999999)" signal_phone
+    ask "  Números autorizados (vírgula, vazio = todos)" signal_numbers
+    [ -n "$signal_phone" ] && ok "Signal configurado!"
+  }
+
+  # ── Variáveis de canal ───────────────────────────────────────
+  local discord_token="" discord_guilds="" discord_users=""
+  local wa_phone="" wa_jids=""
+  local signal_phone="" signal_numbers=""
+
+  # ── Modo não-interativo: usa vars de ambiente / flags passadas ───────────
+  if [ "$NO_PROMPT" -eq 1 ]; then
+    [ -n "$BOT_TOKEN" ] && _configure_telegram
+  else
+    # ── Menu de escolha de canal ──────────────────────────────────────────
+    echo ""
+    echo -e "  ${BOLD}${CYAN}╔══════════════════════════════════════════════╗${NC}"
+    echo -e "  ${BOLD}${CYAN}║   Qual canal de mensagens você quer usar?    ║${NC}"
+    echo -e "  ${BOLD}${CYAN}╚══════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${BOLD}1)${NC} Telegram   — Bot via @BotFather              ${CYAN}(recomendado)${NC}"
+    echo -e "  ${BOLD}2)${NC} Discord    — Bot via Developer Portal"
+    echo -e "  ${BOLD}3)${NC} WhatsApp   — Via Baileys (QR code na 1ª vez)"
+    echo -e "  ${BOLD}4)${NC} Signal     — Via signal-cli"
+    echo -e "  ${BOLD}5)${NC} Múltiplos  — Configurar mais de um canal agora"
+    echo -e "  ${BOLD}6)${NC} Pular      — Configurar depois via .env ou Dashboard"
+    echo ""
+
+    local channel_choice
+    ask "  Opção" channel_choice "1"
+
+    case "$channel_choice" in
+      1) _configure_telegram ;;
+      2) _configure_discord ;;
+      3) _configure_whatsapp ;;
+      4) _configure_signal ;;
+      5)
+        echo ""
+        echo -e "  ${CYAN}Selecione os canais que deseja configurar agora:${NC}"
+        ask_yes "  Telegram?" "s" && _configure_telegram
+        ask_yes "  Discord?"  "n" && _configure_discord
+        ask_yes "  WhatsApp?" "n" && _configure_whatsapp
+        ask_yes "  Signal?"   "n" && _configure_signal
+        ;;
+      6)
+        warn "Nenhum canal configurado agora."
+        info "Configure depois com: newclaw channels enable <telegram|discord|whatsapp|signal>"
+        info "Ou edite o arquivo: ${ENV_FILE}"
+        ;;
+      *)
+        info "Opção não reconhecida — configurando Telegram (padrão)."
+        _configure_telegram
+        ;;
+    esac
+
+    # ── Provedor de IA ────────────────────────────────────────────────────
+    echo ""
+    echo -e "  ${BOLD}${YELLOW}── Provedor de IA ───────────────────────────────${NC}"
+    echo -e "  ${BOLD}1)${NC} Ollama (Local)      — 100% privado, roda na sua máquina"
+    echo -e "  ${BOLD}2)${NC} OpenRouter (Nuvem)  — Claude, GPT-4, Gemini, etc. (requer chave)"
+    echo ""
+  fi # end NO_PROMPT
+
   local provider="ollama"
   local or_key=""
   if [ "$NO_PROMPT" -eq 0 ]; then
-    echo ""
-    echo -e "  ${BOLD}Escolha o provedor de IA padrão:${NC}"
-    echo -e "  ${CYAN}1)${NC} Ollama (Local)      — 100% privado, roda na sua máquina"
-    echo -e "  ${CYAN}2)${NC} OpenRouter (Nuvem)  — Suporte a Claude, GPT-4, etc (requer chave)"
     local p_choice
-    ask "Opção (1-2)" p_choice "1"
+    ask "  Opção" p_choice "1"
     [ "$p_choice" = "2" ] && provider="openrouter"
   fi
 
   if [ "$provider" = "openrouter" ]; then
     while [ -z "$or_key" ]; do
-      ask "Cole sua API Key do OpenRouter (sk-or-...)" or_key
+      ask "  Cole sua API Key do OpenRouter (sk-or-...)" or_key
       [ -z "$or_key" ] && warn "API Key é necessária para OpenRouter!"
     done
   fi
 
-  # ── Canais adicionais ──────────────────────────────────
-  local discord_token=""
-  local discord_guilds=""
-  local discord_users=""
-  local wa_phone=""
-  local wa_jids=""
-  local signal_phone=""
-  local signal_numbers=""
-
+  # ── Senha do Dashboard ────────────────────────────────────────────────────
+  local dashboard_password=""
   if [ "$NO_PROMPT" -eq 0 ]; then
     echo ""
-    echo -e "  ${BOLD}${YELLOW}━━━ Canais Adicionais ━━━${NC}"
-    echo -e "  ${CYAN}Configure canais opcionais agora ou deixe em branco para configurar depois.${NC}"
-    echo ""
-
-    # Discord
-    if ask_yes "Configurar Discord? (precisa de bot token)" "n"; then
-      ask "  Cole o Bot Token do Discord (Discord Developer Portal → Bot)" discord_token
-      ask "  IDs dos servidores permitidos (separados por vírgula, vazio = todos)" discord_guilds
-      ask "  IDs de usuários permitidos (separados por vírgula, vazio = todos)" discord_users
-    fi
-
-    # WhatsApp
-    if ask_yes "Configurar WhatsApp? (via Baileys, precisa escanear QR)" "n"; then
-      ask "  Número de telefone com código do país (ex: 5511999999999)" wa_phone
-      ask "  JIDs permitidos (separados por vírgula, vazio = todos os contatos)" wa_jids
-    fi
-
-    # Signal
-    if ask_yes "Configurar Signal? (requer signal-cli instalado)" "n"; then
-      ask "  Número de telefone com código do país (ex: +5511999999999)" signal_phone
-      ask "  Números permitidos (separados por vírgula, vazio = todos)" signal_numbers
-    fi
-  fi
-
-  # Dashboard password (opcional)
-  dashboard_password=""
-  if [ "$NO_PROMPT" -eq 0 ]; then
-    echo ""
-    echo -e "  ${BOLD}Senha para o Dashboard web${NC} (vazio = sem senha, acesso livre)"
+    echo -e "  ${BOLD}${YELLOW}── Dashboard Web ────────────────────────────────${NC}"
+    echo -e "  ${CYAN}Defina uma senha para proteger o painel (Enter = sem senha).${NC}"
     echo -ne "  Nova senha (mín. 8 caracteres, Enter para pular): "
     stty -echo 2>/dev/null || true
     read -r dashboard_password < /dev/tty 2>/dev/null || read -r dashboard_password 2>/dev/null || dashboard_password=""
@@ -874,8 +1005,32 @@ show_summary() {
   echo -e "    ${CYAN}newclaw stop${NC}             — parar"
   echo -e "    ${CYAN}newclaw passwd${NC}           — alterar senha do Dashboard"
   echo ""
-  echo -e "  ${YELLOW}Agora abra o Telegram e mande 'Oi' para seu bot! 🎉${NC}"
+  echo -e "  ${YELLOW}Abra seu canal configurado e mande 'Oi' para o agente! 🎉${NC}"
+  echo -e "  ${CYAN}Dica: ${NC}newclaw channels  — ver status de todos os canais"
   echo ""
+
+  # Teste pós-instalação — Telegram (se configurado)
+  if [ "$NO_PROMPT" -eq 0 ] && [ -n "$BOT_TOKEN" ] && [ -n "$USER_ID" ]; then
+    echo -ne "  Quer enviar uma mensagem de teste ao bot agora? [S/n]: "
+    read -r test_answer < /dev/tty 2>/dev/null || test_answer="s"
+    test_answer="${test_answer:-s}"
+    case "$test_answer" in
+      s|S|y|Y)
+        info "Enviando mensagem de teste via Telegram..."
+        local msg="Olá! 👋 Sou o NewClaw. Instalação concluída com sucesso! Estou online e pronto."
+        local resp
+        resp=$(curl -sf --max-time 8 \
+          -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+          -H 'Content-Type: application/json' \
+          -d "{\"chat_id\":\"${USER_ID}\",\"text\":\"${msg}\"}" 2>/dev/null)
+        if echo "$resp" | grep -q '"ok":true'; then
+          ok "Mensagem enviada! Verifique o Telegram."
+        else
+          warn "Não foi possível enviar a mensagem de teste (bot pode estar iniciando ainda)."
+        fi
+        ;;
+    esac
+  fi
 }
 
 # ── Main ─────────────────────────────────────────────────────

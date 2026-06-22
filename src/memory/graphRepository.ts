@@ -344,6 +344,8 @@ export function bootstrapCoreGraph(
         ['core_memory', 'core_workspace', 'contains'],
         ['core_tools', 'core_workspace', 'contains'],
         ['core_soul', 'core_agent', 'related_to'],
+        ['core_agent', 'agent_state', 'tracks'],
+        ['core_memory', 'system_reflection', 'contains'],
     ];
 
     for (const [from, to, relation] of baseEdges) {

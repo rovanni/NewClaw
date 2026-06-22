@@ -163,9 +163,10 @@ export class ReadDocumentTool implements ToolExecutor {
     private async pdfOcr(filePath: string): Promise<ToolResult> {
         try {
             // Convert PDF pages to PNG then OCR with tesseract
-            const tmpBase = `/tmp/newclaw_ocr_${Date.now()}`;
+            const osTmp  = require('os').tmpdir() as string;
+            const tmpBase = path.join(osTmp, `newclaw_ocr_${Date.now()}`);
             await execAsync(`pdftoppm -png -r 150 "${filePath}" "${tmpBase}"`, { timeout: 30_000 });
-            const pngs = fs.readdirSync('/tmp').filter(f => f.startsWith(path.basename(tmpBase)));
+            const pngs = fs.readdirSync(osTmp).filter(f => f.startsWith(path.basename(tmpBase)));
             if (pngs.length === 0) return { success: false, output: '', error: 'pdftoppm não produziu imagens' };
 
             const texts: string[] = [];
