@@ -568,12 +568,20 @@ export class AgentLoop {
         // Read-only turn with write-claim: last tool was 'read' (no write/edit/exec happened)
         // but the response claims the file was modified. This happens when ratio_limit fires
         // after a large-file read and the model hallucinates the completion of a write operation.
+        // EXCEPTION: When the user asked for analysis/review/evaluation, success claims like
+        // "a aula está completa" or "30 slides prontos" are legitimate outcomes of a read-only
+        // turn — the read IS the goal, not a prelude to write.
         if (last && last.toolName === 'read' && toolFailureCount === 0 && AgentLoop.looksLikeFalseSuccess(response)) {
-            log.warn(
-                `[${this.ts()}] [COMMIT] False-success after read-only turn (last=read, no write) — blocking hallucinated write claim`
-            );
-            return 'Li o arquivo mas não consegui concluir a modificação: o contexto ficou grande demais para processar read+write no mesmo turno. ' +
-                   'Tente novamente — o sistema usará exec_command com Python para modificar o arquivo diretamente, sem carregar o conteúdo inteiro no contexto.';
+            const isAnalysisIntent = /analis|revis|avali|verifi|checar|conferir|melhorar|melhoria|ordem|estrutura|revisar|feedback|resumo|resumir|review/i.test(userText);
+            if (!isAnalysisIntent) {
+                log.warn(
+                    `[${this.ts()}] [COMMIT] False-success after read-only turn (last=read, no write) — blocking hallucinated write claim`
+                );
+                return 'Li o arquivo mas não consegui concluir a modificação: o contexto ficou grande demais para processar read+write no mesmo turno. ' +
+                       'Tente novamente — o sistema usará exec_command com Python para modificar o arquivo diretamente, sem carregar o conteúdo inteiro no contexto.';
+            }
+            // Analysis intent: success claims are legitimate read outcomes, not hallucinated writes
+            log.info(`[${this.ts()}] [COMMIT] Read-only success-claim allowed for analysis intent: "${userText.slice(0, 80)}"`);
         }
 
         if (!last) return response; // sem tool executada → sem risco de alucinação de ação
@@ -1325,13 +1333,22 @@ export class AgentLoop {
                     ? cycleHistory[cycleHistory.length - 1].tool
                     : null;
                 const writeToolsUsedThisTurn = cycleHistory.some(h => h.tool === 'write' || h.tool === 'edit' || h.tool === 'exec_command');
+                // Adaptar a mensagem de abort ao intent do usuário:
+                // - Análise/review: o read É a ação principal → instruir a apresentar a análise
+                // - Escrita/geração: o read é preâmbulo → instruir a usar exec_command
+                const isAnalysisAbort = /analis|revis|avali|verifi|checar|conferir|melhorar|melhoria|ordem|estrutura|revisar|feedback|resumo|resumir|review/i.test(userText);
                 const ratioAbortMsg = (lastToolInCycle === 'read' && !writeToolsUsedThisTurn)
-                    ? '[CONTEXTO EXCESSIVO] O arquivo fonte foi carregado com sucesso e está disponível. ' +
-                      'OBRIGATÓRIO: Use exec_command com um script Python COMPLETO E FUNCIONAL para gerar os arquivos de saída agora. ' +
-                      'O script deve ler o arquivo de origem via open() e escrever todos os arquivos de saída necessários. ' +
-                      'PROIBIDO: Afirmar que os arquivos foram criados sem ter executado exec_command. ' +
-                      'PROIBIDO: Criar scripts placeholder com "pass" ou "# TODO" — escreva o código real. ' +
-                      'NÃO leia mais arquivos no contexto. Processe TUDO via exec_command + Python.'
+                    ? isAnalysisAbort
+                        ? '[CONTEXTO GRANDE] O arquivo foi lido com sucesso e está no contexto. ' +
+                          'Agora forneça a análise/avaliação solicitada com base no conteúdo que você acabou de ler. ' +
+                          'Responda com suas observações, sugestões de melhoria e avaliação da estrutura. ' +
+                          'NÃO tente ler mais arquivos. NÃO use ferramentas. Responda AGORA com a análise.'
+                        : '[CONTEXTO EXCESSIVO] O arquivo fonte foi carregado com sucesso e está disponível. ' +
+                          'OBRIGATÓRIO: Use exec_command com um script Python COMPLETO E FUNCIONAL para gerar os arquivos de saída agora. ' +
+                          'O script deve ler o arquivo de origem via open() e escrever todos os arquivos de saída necessários. ' +
+                          'PROIBIDO: Afirmar que os arquivos foram criados sem ter executado exec_command. ' +
+                          'PROIBIDO: Criar scripts placeholder com "pass" ou "# TODO" — escreva o código real. ' +
+                          'NÃO leia mais arquivos no contexto. Processe TUDO via exec_command + Python.'
                     : '[CONTEXTO EXCESSIVO] O contexto cresceu demais. Use os dados já obtidos para responder agora sem usar mais ferramentas.';
                 loopMessages.push({
                     role: 'system',

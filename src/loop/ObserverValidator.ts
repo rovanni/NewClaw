@@ -339,10 +339,24 @@ export class ObserverValidator {
     }
 
     private buildCorrectedResponse(reason: string, suggestedFix?: string): string {
-        // O reason e suggestedFix são análises internas do validator — nunca expor ao usuário.
-        // Logar para auditoria e retornar mensagem genérica limpa.
+        // Log completo para auditoria — nunca expor reason/suggestedFix crus ao usuário
         log.info(`[OBSERVER-BLOCK] reason="${reason}"${suggestedFix ? ` | fix="${suggestedFix}"` : ''}`);
-        return 'Não consegui obter os dados solicitados: as fontes consultadas não retornaram informações confiáveis. ' +
-               'Por favor, tente novamente ou forneça mais detalhes sobre o que está buscando.';
+
+        // Classificar o tipo de falha para dar uma resposta contextualizada
+        // em vez de uma mensagem genérica que não ajuda o usuário a entender o que aconteceu.
+        const isIncomplete = /incompleta|truncad|cortad/i.test(reason);
+        const isReadOnly = /apenas leu|não executou.*modificar|não.*ferramenta.*modific/i.test(reason);
+        const isFutureAction = /ação futura|vou fazer|vou ler/i.test(reason);
+
+        if (isIncomplete || isReadOnly) {
+            return 'Não consegui completar: o arquivo é grande demais para processar em um único turno. ' +
+                   'Tente novamente — posso usar uma abordagem diferente para modificá-lo diretamente.';
+        }
+        if (isFutureAction) {
+            return 'Ocorreu um erro interno de processamento. Por favor, repita o pedido que vou tentar novamente.';
+        }
+
+        return 'Não consegui completar a tarefa solicitada. ' +
+               'Por favor, tente novamente ou reformule o pedido com mais detalhes.';
     }
 }
