@@ -180,9 +180,17 @@ export class AgentController {
         const languageDirective = buildLanguageDirective(config.language);
         const ownerName = this.ownerProfileService.getOwnerName() || config.ownerName || undefined;
         // Busca apelido preferido do usuário (definido no onboarding) para personalizar o agente
-        const ownerNickname = (this.db.prepare(
-            'SELECT nickname FROM user_profile WHERE onboarding_completed = 1 LIMIT 1'
-        ).get() as { nickname: string | null } | undefined)?.nickname || undefined;
+        // Query nickname com fallback — a coluna pode não existir se o DB foi
+        // criado antes do OnboardingService rodar sua migration (ex.: primeiro boot
+        // com dist desatualizado). O try/catch evita crash fatal no startup.
+        let ownerNickname: string | undefined;
+        try {
+            ownerNickname = (this.db.prepare(
+                'SELECT nickname FROM user_profile WHERE onboarding_completed = 1 LIMIT 1'
+            ).get() as { nickname: string | null } | undefined)?.nickname || undefined;
+        } catch {
+            // coluna nickname ainda não existe — OnboardingService criará na sequência
+        }
         const systemPrompt = config.systemPrompt || buildSystemPrompt(this.skillLoader, ownerName, ownerNickname);
 
         const classificationMemory = new ClassificationMemory(this.db);

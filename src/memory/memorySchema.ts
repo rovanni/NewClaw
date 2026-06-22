@@ -218,6 +218,8 @@ export function ensureUserProfileSchema(db: Database.Database): void {
         }
     };
 
+    if (!columns.has('nickname'))             addColumn('ALTER TABLE user_profile ADD COLUMN nickname TEXT');
+    if (!columns.has('intent'))               addColumn('ALTER TABLE user_profile ADD COLUMN intent TEXT');
     if (!columns.has('assistant_name'))       addColumn('ALTER TABLE user_profile ADD COLUMN assistant_name TEXT');
     if (!columns.has('goals'))                addColumn('ALTER TABLE user_profile ADD COLUMN goals TEXT');
     if (!columns.has('familiarity'))          addColumn('ALTER TABLE user_profile ADD COLUMN familiarity TEXT');
@@ -415,6 +417,8 @@ export function initializeSchema(db: Database.Database): Record<string, string> 
         CREATE TABLE IF NOT EXISTS user_profile (
             user_id TEXT PRIMARY KEY,
             name TEXT,
+            nickname TEXT,
+            intent TEXT,
             language_preference TEXT DEFAULT 'pt-BR',
             response_style TEXT DEFAULT 'amigável',
             expertise TEXT,
