@@ -30,6 +30,7 @@ import { traceManager, ExecutionTrace } from '../core/ExecutionTrace';
 import { AgentFSM, AgentFSMEvent } from './AgentFSM';
 import { FSMHistoryStore } from './FSMHistoryStore';
 import { ToolRegistry } from '../core/ToolRegistry';
+import { permissionRegistry } from '../core/PermissionRegistry';
 import { SkillLoader } from '../skills/SkillLoader';
 import { ModelProfile } from './ModelProfileRegistry';
 import { errorMessage } from '../shared/errors';
@@ -1631,7 +1632,9 @@ export class AgentLoop {
                             );
                         }
 
-                        const isDangerous = ToolRegistry.isDangerous(toolName) && !this.isSafeExecCommand(toolName, toolCall.arguments);
+                        const isDangerous = ToolRegistry.isDangerous(toolName) 
+                            && !this.isSafeExecCommand(toolName, toolCall.arguments)
+                            && !permissionRegistry.can('auto_approve_exec');
                         if (isDangerous) {
                             log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
 

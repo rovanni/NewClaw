@@ -47,8 +47,7 @@ const puppeteer = require('puppeteer-core');
   await page.goto('file://$INPUT',{waitUntil:'networkidle0',timeout:60000});
   await page.addStyleTag({content:'$SLIDES_CSS'});
   await page.pdf({path:'$OUTPUT',format:'A4',landscape:true,printBackground:true,
-    margin:{top:'10mm',bottom:'10mm',left:'10mm',right:'10mm'},
-    displayBackgroundFod:true
+    margin:{top:'10mm',bottom:'10mm',left:'10mm',right:'10mm'}
   });
   await browser.close();
   console.log('ok');
@@ -92,8 +91,8 @@ convert_wkhtmltopdf() {
   local TMP="${OUTPUT%.pdf}_tmp.html"
   # Injetar CSS antes de </head> para forçar slides visíveis
   sed "s|</head>|<style>$SLIDES_CSS</style></head>|i" "$INPUT" > "$TMP"
-  wkhtmltopdf --orientation Landscape --quiet --enable-local-file-access "$TMP" "$OUTPUT" 2>&1
-  local RET=$?
+  local RET=0
+  wkhtmltopdf --orientation Landscape --quiet --enable-local-file-access "$TMP" "$OUTPUT" 2>&1 || RET=$?
   rm -f "$TMP"
   return $RET
 }
