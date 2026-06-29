@@ -927,7 +927,28 @@ function Step-Start {
     Push-Location $Dir
     Write-Info "Iniciando o bot..."
     node bin/newclaw start --daemon
-    Start-Sleep -Seconds 2
+    $ec = $LASTEXITCODE
+    if ($ec -ne 0) {
+        Pop-Location
+        throw "Falha ao iniciar o bot (exit code $ec). Execute 'newclaw logs' para diagnóstico."
+    }
+
+    # Verificação secundária: confirmar que o processo está vivo após o spawn
+    Start-Sleep -Seconds 3
+    $pidFile = Join-Path $Dir "newclaw.pid"
+    if (Test-Path $pidFile) {
+        $botPid = [int](Get-Content $pidFile -Raw).Trim()
+        $proc = Get-Process -Id $botPid -ErrorAction SilentlyContinue
+        if ($proc) {
+            Write-Ok "Bot iniciado com sucesso (PID $botPid)"
+        } else {
+            Write-Warn "Bot iniciado mas processo (PID $botPid) já encerrou — pode ter falhado logo após o spawn."
+            Write-Info "Verifique com: newclaw logs"
+        }
+    } else {
+        Write-Warn "Bot iniciado mas PID file não encontrado — ainda pode estar inicializando."
+        Write-Info "Verifique com: newclaw status"
+    }
     Pop-Location
 }
 
