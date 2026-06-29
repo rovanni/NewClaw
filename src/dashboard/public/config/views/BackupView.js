@@ -16,7 +16,7 @@ function esc(str) {
 
 export function render(container) {
   container.innerHTML = `
-    <div class="page-view page-view--narrow">
+    <div class="page-view">
       <div class="page-header">
         <h1>💾 ${t('sidebar_backup')}</h1>
         <p>${t('backup_page_desc')}</p>

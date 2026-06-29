@@ -6,7 +6,7 @@ const GENERIC_WAIT  = 5;  // segundos — quando Telegram não está configurado
 
 export function render(container) {
   container.innerHTML = `
-    <div class="page-view page-view--narrow">
+    <div class="page-view">
       <div class="page-header">
         <h1>⬆️ ${t('sidebar_update')}</h1>
         <p>${t('update_page_desc')}</p>
