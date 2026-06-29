@@ -917,6 +917,33 @@ function Step-SetupFirewall {
     }
 }
 
+# ── PM2 ──────────────────────────────────────────────────────
+
+function Step-InstallPM2 {
+    if ($DryRun) { Write-Dry "instalar PM2 globalmente"; return }
+
+    # Verificar se já está instalado
+    try {
+        $pm2Prefix = (npm prefix -g 2>&1)
+        $pm2Path = Join-Path $pm2Prefix "node_modules\pm2\bin\pm2"
+        if (Test-Path $pm2Path) {
+            Write-Ok "PM2 já instalado"
+            return
+        }
+    } catch {}
+
+    Write-Info "Instalando PM2 (gerenciador de processos com auto-restart)..."
+    npm install -g pm2 2>&1 | Out-Null
+    $ec = $LASTEXITCODE
+    if ($ec -ne 0) {
+        Write-Warn "Não foi possível instalar PM2 (exit code $ec)."
+        Write-Warn "O bot iniciará via raw spawn — sem auto-restart em caso de crash."
+        Write-Info "Para instalar manualmente depois: npm install -g pm2"
+        return
+    }
+    Write-Ok "PM2 instalado com sucesso"
+}
+
 # ── Iniciar ──────────────────────────────────────────────────
 
 function Step-Start {
@@ -1024,6 +1051,7 @@ try {
     Step-CheckForBackups
     Step-Configure
     Step-SetupCLI
+    Step-InstallPM2
     Step-Start
     Step-SetupWindowsService
     Step-SetupFirewall
