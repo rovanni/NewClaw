@@ -968,8 +968,23 @@ const commands = {
     // 5. Process running
     const pid = getPid();
     const pm2Status = pm2JStart();
+
+    // Detect stale PID: file exists but no live process was found and PM2 is not online.
+    // Without this check, doctor reports ✅ for a process that crashed after leaving a PID file.
+    let stalePid = false;
+    if (!pid && pm2Status !== 'online') {
+      try {
+        const rawPid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim());
+        if (rawPid > 0) stalePid = true;
+      } catch {}
+    }
+
     const running = pid !== null || pm2Status === 'online';
-    check('NewClaw em execução', running, running ? `PID ${pid || '?'} (PM2: ${pm2Status})` : 'parado — newclaw start');
+    if (stalePid) {
+      check('NewClaw em execução', null, 'PID stale — bot não está em execução (execute: newclaw start)');
+    } else {
+      check('NewClaw em execução', running, running ? `PID ${pid || '?'} (PM2: ${pm2Status})` : 'parado — newclaw start');
+    }
 
     // 6. Ollama
     const ollamaUrl = env.OLLAMA_URL || 'http://localhost:11434';
