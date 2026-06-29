@@ -489,8 +489,8 @@ function Step-InstallNewClaw {
     Invoke-WithSpinner "Instalando dependências" {
         npm install --prefer-offline 2>&1
     }
-    Invoke-WithSpinner "Compilando código TypeScript" {
-        node node_modules/typescript/bin/tsc --noEmit false 2>&1
+    Invoke-WithSpinner "Compilando TypeScript e copiando assets do dashboard" {
+        npm run build 2>&1
     }
     Pop-Location
 }
