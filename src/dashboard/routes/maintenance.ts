@@ -4,6 +4,7 @@ import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import fs from 'fs';
 import path from 'path';
+import Database from 'better-sqlite3';
 
 const log = createLogger('Maintenance');
 const DIR = process.cwd();
@@ -287,13 +288,20 @@ export function createMaintenanceRouter(): Router {
     });
 
     // POST /api/maintenance/backup/database
-    router.post('/backup/database', (_req: Request, res: Response) => {
+    router.post('/backup/database', async (_req: Request, res: Response) => {
         try {
             ensureBackupDir();
             if (!fs.existsSync(DB_FILE)) return res.status(404).json({ success: false, error: 'Banco de dados não encontrado' });
             const ts = timestamp();
             const dest = path.join(BACKUP_DIR, `database-${ts}.db`);
-            fs.copyFileSync(DB_FILE, dest);
+            // Use better-sqlite3's Online Backup API: safely snapshots the DB even in WAL
+            // mode with concurrent writers. fs.copyFileSync would miss the WAL journal.
+            const db = new Database(DB_FILE, { readonly: true });
+            try {
+                await db.backup(dest);
+            } finally {
+                db.close();
+            }
             const { retentionCount } = loadBackupConfig();
             enforceRetention('database-', retentionCount);
             const stat = fs.statSync(dest);
