@@ -3,7 +3,7 @@ import { showToast } from '../components/Toast.js';
 
 export function render(container) {
   container.innerHTML = `
-    <div class="page-view">
+    <div class="page-view page-view--narrow">
       <div class="page-header">
         <h1>🔌 Providers</h1>
         <p>${t('providers_page_desc')}</p>

@@ -32,7 +32,8 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 
 /* ─── Content ─── */
 .content { flex:1; overflow-y:auto; background:var(--bg-base); }
-.page-view { padding:24px 28px; max-width:960px; animation:fade-in .3s ease; }
+.page-view { padding:24px 28px; animation:fade-in .3s ease; }
+.page-view--narrow { max-width:960px; }
 
 /* ─── Buttons ─── */
 .btn {
@@ -299,7 +300,7 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
   width:30px; height:30px; border-radius:7px; background:var(--bg-input);
   display:flex; align-items:center; justify-content:center; font-size:.9rem; flex-shrink:0;
 }
-.tm-name { font-size:.82rem; font-weight:700; flex:1; }
+.tm-name { font-size:.82rem; font-weight:700; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tm-toggle {
   padding:3px 9px; border-radius:5px; font-size:.67rem; font-weight:700;
   cursor:pointer; border:1px solid; transition:all .15s; flex-shrink:0;
