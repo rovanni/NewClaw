@@ -335,7 +335,9 @@ const commands = {
         cwd: DIR,
         stdio: ['ignore', outLog, errLog],
         env: { ...process.env, ...env },
-        detached: false
+        // detached:true breaks the child out of the parent's Windows Job Object,
+        // preventing the OS from killing it when the CLI process (parent) exits.
+        detached: true
       });
       
       fs.writeFileSync(PID_FILE, child.pid.toString());
