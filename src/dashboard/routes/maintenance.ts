@@ -317,8 +317,19 @@ export function createMaintenanceRouter(): Router {
         try {
             const filename = path.basename(String(req.params.filename));
             const filePath = path.join(BACKUP_DIR, filename);
-            if (!fs.existsSync(filePath)) return res.status(404).json({ success: false, error: 'Arquivo não encontrado' });
-            res.download(filePath, filename);
+            if (!fs.existsSync(filePath)) {
+                return res.status(404).json({ success: false, error: `Arquivo não encontrado: ${filename}` });
+            }
+            // Pass error callback: without it, a streaming failure silently closes
+            // the connection, causing "O arquivo não estava disponível no site" in the browser.
+            res.download(filePath, filename, (err) => {
+                if (err && !res.headersSent) {
+                    log.error(`Erro ao enviar backup ${filename}: ${errorMessage(err)}`);
+                    res.status(500).json({ success: false, error: errorMessage(err) });
+                } else if (err) {
+                    log.error(`Erro durante streaming de ${filename}: ${errorMessage(err)}`);
+                }
+            });
         } catch (err) {
             res.status(500).json({ success: false, error: errorMessage(err) });
         }

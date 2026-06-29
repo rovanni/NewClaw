@@ -143,7 +143,12 @@ export async function createDatabaseBackup() {
 }
 
 export function backupDownloadUrl(filename) {
-  return `/api/maintenance/backup/${encodeURIComponent(filename)}`;
+  // Include the auth token in the URL so the browser's native <a download> request
+  // is authenticated without relying on the SameSite:strict cookie, which is not
+  // sent in all download contexts (e.g. retrying from the download bar).
+  const token = window.newclawGetToken?.();
+  const base = `/api/maintenance/backup/${encodeURIComponent(filename)}`;
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
 }
 
 export async function getBackupConfig() {
