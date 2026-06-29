@@ -283,7 +283,7 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
    FERRAMENTAS — Module cards
 ════════════════════════════════════ */
 
-.module-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px; }
+.module-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px; align-items:start; }
 .tool-module {
   background:var(--bg-surface); border:1px solid var(--border-color);
   border-radius:10px; padding:13px 14px;
@@ -308,7 +308,10 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .tm-toggle.on:hover { background:var(--danger); color:#fff; border-color:var(--danger); }
 .tm-toggle.off { background:rgba(74,222,128,.1); color:var(--success); border-color:rgba(74,222,128,.3); }
 .tm-toggle.off:hover { background:var(--success); color:#fff; border-color:var(--success); }
-.tm-desc { font-size:.69rem; color:var(--text-soft); line-height:1.4; }
+.tm-desc {
+  font-size:.69rem; color:var(--text-soft); line-height:1.4;
+  display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden;
+}
 .tm-stats { display:flex; justify-content:space-between; align-items:center; }
 .tm-stats-text { font-size:.67rem; color:var(--text-soft); }
 .tm-bar { height:3px; background:var(--bg-input); border-radius:2px; overflow:hidden; margin-top:2px; }
