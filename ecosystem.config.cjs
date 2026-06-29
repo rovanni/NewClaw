@@ -11,6 +11,7 @@ module.exports = {
     cwd: DIR,
     env: {
       NODE_ENV: "production",
+      LOG_FILE: path.join(DIR, 'logs', 'newclaw-audit.log'),
     },
     max_memory_restart: "500M",
     log_date_format: "YYYY-MM-DD HH:mm:ss",

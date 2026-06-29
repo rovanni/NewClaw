@@ -144,7 +144,7 @@ export class OnboardingService {
         const state = this._loadState();
 
         // Passo 0: primeira mensagem → apresentação + pede nome
-        if (state === null || state.step === 0) {
+        if (state == null || state.step === 0) {
             this._saveState({ step: 1, user_id: userId, name: null });
             return {
                 reply: this._msgPresentation(),
