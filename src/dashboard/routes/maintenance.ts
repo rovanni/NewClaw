@@ -21,6 +21,21 @@ function ensureBackupDir() {
     if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
 }
 
+// Abre o arquivo em modo readonly e executa PRAGMA integrity_check.
+// Lança erro se o arquivo não for um SQLite válido ou estiver corrompido.
+// Usado tanto no upload quanto no restore para evitar que arquivos ruins entrem no sistema.
+function validateSqliteFile(filePath: string): void {
+    const db = new Database(filePath, { readonly: true });
+    try {
+        const row = db.prepare('PRAGMA integrity_check').get() as { integrity_check: string } | undefined;
+        if (row?.integrity_check !== 'ok') {
+            throw new Error(`Arquivo SQLite corrompido: integrity_check retornou "${row?.integrity_check}"`);
+        }
+    } finally {
+        db.close();
+    }
+}
+
 function timestamp(): string {
     return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 }
@@ -337,6 +352,13 @@ export function createMaintenanceRouter(): Router {
                 return res.json({ success: true, message: 'Restauração do sistema concluída. O processo será reiniciado.' });
             }
 
+            // Valida o arquivo antes de tocar no banco atual
+            try {
+                validateSqliteFile(filePath);
+            } catch (validationErr) {
+                return res.status(422).json({ success: false, error: `Backup inválido ou corrompido — restauração cancelada. ${errorMessage(validationErr)}` });
+            }
+
             // Database: cria backup de segurança via Online Backup API, agenda restore via flag
             if (fs.existsSync(DB_FILE)) {
                 const safetyDest = path.join(BACKUP_DIR, `database-pre-restore-${ts}.db`);
@@ -376,7 +398,20 @@ export function createMaintenanceRouter(): Router {
                 }
                 ensureBackupDir();
                 const dest = path.join(BACKUP_DIR, safe);
-                fs.writeFileSync(dest, req.body);
+                const tmp  = dest + '.tmp';
+                fs.writeFileSync(tmp, req.body);
+
+                // Para arquivos .db, valida integridade antes de aceitar
+                if (safe.endsWith('.db')) {
+                    try {
+                        validateSqliteFile(tmp);
+                    } catch (validationErr) {
+                        fs.unlinkSync(tmp);
+                        return res.status(422).json({ success: false, error: `Arquivo SQLite inválido ou corrompido — upload rejeitado. ${errorMessage(validationErr)}` });
+                    }
+                }
+
+                fs.renameSync(tmp, dest);
                 const stat = fs.statSync(dest);
                 log.info(`Backup enviado: ${safe} (${formatBytes(stat.size)})`);
                 res.json({ success: true, backup: { name: safe, size: stat.size, sizeHuman: formatBytes(stat.size), createdAt: stat.mtime.toISOString() } });
