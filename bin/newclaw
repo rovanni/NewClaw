@@ -587,8 +587,13 @@ const commands = {
       return;
     }
 
-    // Fallback (PM2 em restart_delay ou não disponível): lê diretamente o arquivo de audit log
-    const candidates = [auditLog, LOG_FILE];
+    // Fallback (PM2 não disponível): verifica logs do raw spawn daemon e depois o audit log
+    const candidates = [
+      path.join(logDir, 'newclaw-stdout.log'),
+      path.join(logDir, 'newclaw-stderr.log'),
+      auditLog,
+      LOG_FILE,
+    ];
     const logFile = candidates.find(f => fs.existsSync(f));
 
     if (!logFile) {
