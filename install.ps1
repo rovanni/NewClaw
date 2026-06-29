@@ -407,9 +407,9 @@ function Step-DownloadModel {
 
     if ($DryRun) { Write-Dry "ollama pull $Model"; return }
     $m = $script:Model
-    Invoke-WithSpinner "Baixando modelo $m (pode demorar na 1ª vez)" {
-        & ollama pull $using:m
-    }
+    Invoke-WithSpinner "Baixando modelo $m (pode demorar na 1ª vez)" (
+        [scriptblock]::Create("ollama pull $m")
+    )
     Write-Ok "Modelo $m pronto!"
 }
 
