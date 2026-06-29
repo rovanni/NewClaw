@@ -165,6 +165,25 @@ export async function saveBackupConfig(config) {
   return d.config;
 }
 
+export async function restoreBackup(filename) {
+  return json(f('/api/maintenance/backup/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename }),
+  }));
+}
+
+export async function uploadBackup(file) {
+  return json(f('/api/maintenance/backup/upload', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'X-Filename': file.name,
+    },
+    body: file,
+  }));
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 export async function getAuthStatus() {

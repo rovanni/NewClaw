@@ -4,6 +4,8 @@
  */
 
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
 // Carregar .env IMEDIATAMENTE (antes de outros imports que dependem de env vars)
 dotenv.config();
 
@@ -120,6 +122,24 @@ async function main() {
     if (missingInternalModels.length > 0) {
         log.warn(`⚠️  Modelos internos não configurados (usando defaults): ${missingInternalModels.join(', ')}`);
         log.warn('   → Configure em: Dashboard → Modelos → Modelos dos Componentes Internos → Salvar & Reiniciar');
+    }
+
+    // Aplicar restore de banco de dados pendente (agendado pela rota /backup/restore)
+    const dataDir           = path.join(process.cwd(), 'data');
+    const restorePendingFlag = path.join(dataDir, '.restore-pending');
+    const restoreSource      = path.join(dataDir, 'newclaw.db.restore');
+    const dbMain             = path.join(dataDir, 'newclaw.db');
+    if (fs.existsSync(restorePendingFlag) && fs.existsSync(restoreSource)) {
+        log.info('🔄 Restauração de banco de dados pendente — aplicando antes de iniciar...');
+        try {
+            fs.copyFileSync(restoreSource, dbMain);
+            fs.unlinkSync(restoreSource);
+            fs.unlinkSync(restorePendingFlag);
+            log.info('✅ Banco de dados restaurado com sucesso.');
+        } catch (restoreErr) {
+            log.error('restore_failed', restoreErr instanceof Error ? restoreErr : undefined, 'Falha ao restaurar banco — usando banco existente');
+            try { fs.unlinkSync(restorePendingFlag); } catch { /* limpa flag mesmo em erro */ }
+        }
     }
 
     const controller = new AgentController(config);

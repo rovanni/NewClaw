@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import express, { Router, Request, Response } from 'express';
 import { exec, execSync, spawn } from 'child_process';
 import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
@@ -311,6 +311,80 @@ export function createMaintenanceRouter(): Router {
             res.status(500).json({ success: false, error: errorMessage(err) });
         }
     });
+
+    // POST /api/maintenance/backup/restore
+    router.post('/backup/restore', async (req: Request, res: Response) => {
+        try {
+            const { filename } = req.body || {};
+            if (!filename) return res.status(400).json({ success: false, error: 'filename obrigatório' });
+            const safe = path.basename(String(filename));
+            const filePath = path.join(BACKUP_DIR, safe);
+            if (!fs.existsSync(filePath)) return res.status(404).json({ success: false, error: 'Arquivo não encontrado' });
+            const isSystem   = safe.startsWith('system-')   && safe.endsWith('.bak');
+            const isDatabase = safe.startsWith('database-') && safe.endsWith('.db');
+            if (!isSystem && !isDatabase) return res.status(400).json({ success: false, error: 'Tipo de backup inválido' });
+            const ts = timestamp();
+            ensureBackupDir();
+
+            if (isSystem) {
+                const envDest = ENV_CANDIDATES.find(f => fs.existsSync(f)) || ENV_CANDIDATES[ENV_CANDIDATES.length - 1];
+                if (fs.existsSync(envDest)) {
+                    fs.copyFileSync(envDest, path.join(BACKUP_DIR, `system-pre-restore-${ts}.bak`));
+                }
+                fs.copyFileSync(filePath, envDest);
+                log.info(`Sistema restaurado de ${safe} — reiniciando`);
+                setTimeout(() => process.exit(0), 500);
+                return res.json({ success: true, message: 'Restauração do sistema concluída. O processo será reiniciado.' });
+            }
+
+            // Database: cria backup de segurança via Online Backup API, agenda restore via flag
+            if (fs.existsSync(DB_FILE)) {
+                const safetyDest = path.join(BACKUP_DIR, `database-pre-restore-${ts}.db`);
+                const dbSrc = new Database(DB_FILE, { readonly: true });
+                try { await dbSrc.backup(safetyDest); } finally { dbSrc.close(); }
+            }
+            const pendingSource = path.join(DIR, 'data', 'newclaw.db.restore');
+            fs.copyFileSync(filePath, pendingSource);
+            fs.writeFileSync(
+                path.join(DIR, 'data', '.restore-pending'),
+                JSON.stringify({ source: 'newclaw.db.restore', timestamp: ts })
+            );
+            log.info(`Banco de dados agendado para restauração de ${safe} — reiniciando`);
+            setTimeout(() => process.exit(0), 500);
+            return res.json({ success: true, message: 'Restauração do banco agendada. O processo será reiniciado.' });
+        } catch (err) {
+            res.status(500).json({ success: false, error: errorMessage(err) });
+        }
+    });
+
+    // POST /api/maintenance/backup/upload
+    router.post('/backup/upload',
+        (req: Request, res: Response, next) => {
+            // Accept raw binary body (Content-Type: application/octet-stream)
+            // express.raw is applied only for this route to avoid interfering with json body parser
+            express.raw({ type: 'application/octet-stream', limit: '100mb' })(req, res, next);
+        },
+        (req: Request, res: Response) => {
+            try {
+                const rawName = String(req.headers['x-filename'] || '');
+                const safe = path.basename(rawName).replace(/[^a-zA-Z0-9._-]/g, '_');
+                if (!safe || (!safe.endsWith('.bak') && !safe.endsWith('.db'))) {
+                    return res.status(400).json({ success: false, error: 'Arquivo deve ter extensão .bak ou .db' });
+                }
+                if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+                    return res.status(400).json({ success: false, error: 'Corpo da requisição vazio' });
+                }
+                ensureBackupDir();
+                const dest = path.join(BACKUP_DIR, safe);
+                fs.writeFileSync(dest, req.body);
+                const stat = fs.statSync(dest);
+                log.info(`Backup enviado: ${safe} (${formatBytes(stat.size)})`);
+                res.json({ success: true, backup: { name: safe, size: stat.size, sizeHuman: formatBytes(stat.size), createdAt: stat.mtime.toISOString() } });
+            } catch (err) {
+                res.status(500).json({ success: false, error: errorMessage(err) });
+            }
+        }
+    );
 
     // GET /api/maintenance/backup/:filename  (download)
     router.get('/backup/:filename', (req: Request, res: Response) => {
