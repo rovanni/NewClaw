@@ -223,7 +223,7 @@ function Test-Admin {
 # ── 1. Verificar sistema ─────────────────────────────────────
 
 function Step-CheckSystem {
-    Write-Step "1/7 — Verificando o sistema"
+    Write-Step "1/9 — Verificando o sistema"
 
     # OS
     $os = (Get-CimInstance Win32_OperatingSystem)
@@ -270,7 +270,7 @@ function Step-CheckSystem {
 # ── 2. winget ────────────────────────────────────────────────
 
 function Step-EnsureWinget {
-    Write-Step "2/7 — Verificando winget (gerenciador de pacotes)"
+    Write-Step "2/9 — Verificando winget (gerenciador de pacotes)"
 
     if (Test-Command "winget") {
         Write-Ok "winget disponível: $(winget --version)"
@@ -293,7 +293,7 @@ function Step-EnsureWinget {
 # ── 3. Node.js ───────────────────────────────────────────────
 
 function Step-InstallNode {
-    Write-Step "3/7 — Instalando Node.js"
+    Write-Step "3/9 — Instalando Node.js"
 
     if (Test-Command "node") {
         $nodeVer = node --version 2>$null
@@ -322,6 +322,7 @@ function Step-InstallNode {
 # ── 4. Git ───────────────────────────────────────────────────
 
 function Step-InstallGit {
+    Write-Step "4/9 — Instalando Git"
     if (Test-Command "git") {
         Write-Ok "Git encontrado: $(git --version)"
         return
@@ -335,7 +336,7 @@ function Step-InstallGit {
 # ── 5. Ollama ────────────────────────────────────────────────
 
 function Step-InstallOllama {
-    Write-Step "4/8 — Instalando Ollama"
+    Write-Step "5/9 — Instalando Ollama"
 
     if (Test-Command "ollama") {
         Write-Ok "Ollama encontrado!"
@@ -381,7 +382,7 @@ function Step-InstallOllama {
 # ── 6. Modelo ───────────────────────────────────────────────
 
 function Step-DownloadModel {
-    Write-Step "5/8 — Baixando o modelo de IA"
+    Write-Step "6/9 — Baixando o modelo de IA"
 
     if ($DryRun) { Write-Dry "baixar modelo $Model"; return }
 
@@ -415,7 +416,7 @@ function Step-DownloadModel {
 # ── 7. NewClaw ───────────────────────────────────────────────
 
 function Step-InstallNewClaw {
-    Write-Step "6/8 — Baixando o NewClaw"
+    Write-Step "7/9 — Baixando o NewClaw"
 
     if (Test-Path $Dir) {
         Write-Warn "Pasta $Dir já existe!"
@@ -619,7 +620,7 @@ function Configure-Signal {
 }
 
 function Step-Configure {
-    Write-Step "7/8 — Configurando o NewClaw"
+    Write-Step "8/9 — Configurando o NewClaw"
 
     $envFile = Join-Path $Dir ".env"
 
@@ -828,7 +829,7 @@ WHISPER_MODEL=tiny
 # ── 8. Atalhos ───────────────────────────────────────────────
 
 function Step-SetupCLI {
-    Write-Step "8/8 — Configurando comando 'newclaw'"
+    Write-Step "9/9 — Configurando comando 'newclaw'"
 
     if ($DryRun) { Write-Dry "configurar comando global newclaw"; return }
 
