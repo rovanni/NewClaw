@@ -116,6 +116,12 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
    DASHBOARD PAGE
 ════════════════════════════════════ */
 
+/* Dashboard container — gives the page the same padding as .page-view */
+.v-dashboard { padding:24px 28px; }
+
+/* Dashboard inner content constrained to a readable max-width but centered */
+.v-dashboard > * { max-width:1280px; }
+
 /* Agent Hero */
 .agent-hero {
   display:flex; align-items:center; gap:20px;
@@ -153,7 +159,7 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 
 /* Metrics strip */
 .metrics-strip {
-  display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-bottom:14px;
+  display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:10px; margin-bottom:14px;
 }
 .metric-card {
   background:var(--bg-surface); border:1px solid var(--border-color);
