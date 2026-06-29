@@ -95,7 +95,11 @@ function Invoke-WithSpinner([string]$Label, [scriptblock]$Block) {
     $job = Start-Job -ScriptBlock {
         param($bl, $wd)
         Set-Location $wd
-        try { & ([scriptblock]::Create($bl)) }
+        try {
+            & ([scriptblock]::Create($bl))
+            $ec = $LASTEXITCODE
+            if ($ec) { throw "Command failed with exit code $ec" }
+        }
         catch { throw $_ }
     } -ArgumentList $Block.ToString(), (Get-Location).Path
 
