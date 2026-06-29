@@ -932,10 +932,13 @@ function Step-InstallPM2 {
 
     # Verificar se já está instalado
     try {
-        $pm2Prefix = (npm prefix -g 2>$null)
+        $pm2Prefix = (npm prefix -g 2>$null).Trim()
         $pm2Path = Join-Path $pm2Prefix "node_modules\pm2\bin\pm2"
         if (Test-Path $pm2Path) {
             Write-Ok "PM2 já instalado"
+            if ($pm2Prefix -and ($env:PATH -notlike "*$pm2Prefix*")) {
+                $env:PATH = $pm2Prefix + ";" + $env:PATH
+            }
             return
         }
     } catch {}
@@ -950,6 +953,15 @@ function Step-InstallPM2 {
         return
     }
     Write-Ok "PM2 instalado com sucesso"
+    # Atualizar PATH da sessão para que bin/newclaw encontre PM2_BIN imediatamente,
+    # sem exigir novo terminal (npm install -g só altera PATH permanente, não a sessão atual).
+    try {
+        $npmGlobalPrefix = (npm prefix -g 2>$null).Trim()
+        if ($npmGlobalPrefix -and ($env:PATH -notlike "*$npmGlobalPrefix*")) {
+            $env:PATH = $npmGlobalPrefix + ";" + $env:PATH
+            Write-Info "PATH da sessão atualizado: $npmGlobalPrefix"
+        }
+    } catch {}
 }
 
 # ── Iniciar ──────────────────────────────────────────────────
