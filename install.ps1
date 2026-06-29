@@ -984,14 +984,21 @@ function Step-Start {
         throw "Falha ao iniciar o bot (exit code $ec). Execute 'newclaw logs' para diagnóstico."
     }
 
-    # Verificação secundária: confirmar que o processo está vivo após o spawn
-    Start-Sleep -Seconds 3
+    # Verificação secundária: aguardar o processo estabilizar e confirmar que está vivo.
+    # 6s dá tempo para o Node carregar, PM2 registrar o processo e o dashboard iniciar.
+    Start-Sleep -Seconds 6
     $pidFile = Join-Path $Dir "newclaw.pid"
     if (Test-Path $pidFile) {
         $botPid = [int](Get-Content $pidFile -Raw).Trim()
         $proc = Get-Process -Id $botPid -ErrorAction SilentlyContinue
         if ($proc) {
-            Write-Ok "Bot iniciado com sucesso (PID $botPid)"
+            $portListen = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+            if ($portListen) {
+                Write-Ok "Bot iniciado com sucesso (PID $botPid, porta $Port ativa)"
+            } else {
+                Write-Ok "Bot iniciado (PID $botPid) — dashboard ainda subindo na porta $Port"
+                Write-Info "Acesse em instantes: http://localhost:$Port"
+            }
         } else {
             Write-Warn "Bot iniciado mas processo (PID $botPid) já encerrou — pode ter falhado logo após o spawn."
             Write-Info "Verifique com: newclaw logs"
