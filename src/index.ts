@@ -10,6 +10,7 @@ import path from 'path';
 dotenv.config();
 
 import { AgentController } from './core/AgentController';
+import { autoRecoverDatabase } from './core/dbRecovery';
 import { DashboardServer } from './dashboard/DashboardServer';
 import { Logger } from './shared/Logger';
 import { createLogger } from './shared/AppLogger';
@@ -142,7 +143,26 @@ async function main() {
         }
     }
 
-    const controller = new AgentController(config);
+    let controller: AgentController;
+    try {
+        controller = new AgentController(config);
+    } catch (startupErr) {
+        const msg = startupErr instanceof Error ? startupErr.message : String(startupErr);
+        const isCorrupted = /malformed|corrupt|disk image|SQLITE_CORRUPT/i.test(msg);
+        if (!isCorrupted) throw startupErr;
+
+        // Banco corrompido: tenta auto-recuperação antes de desistir
+        const recovered = autoRecoverDatabase(dataDir);
+        if (!recovered) {
+            log.error('startup_aborted', undefined,
+                'Banco corrompido e sem backup válido para recuperação.\n' +
+                'Execute manualmente: node scripts/recover-db.cjs'
+            );
+            process.exit(1);
+        }
+        // Retry após recuperação
+        controller = new AgentController(config);
+    }
 
     // Start Dashboard
     const dashboard = new DashboardServer(config);
