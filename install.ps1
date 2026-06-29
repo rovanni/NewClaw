@@ -407,10 +407,17 @@ function Step-DownloadModel {
 
     if ($DryRun) { Write-Dry "ollama pull $Model"; return }
     $m = $script:Model
-    Invoke-WithSpinner "Baixando modelo $m (pode demorar na 1ª vez)" (
-        [scriptblock]::Create("ollama pull $m")
-    )
-    Write-Ok "Modelo $m pronto!"
+    try {
+        Invoke-WithSpinner "Baixando modelo $m (pode demorar na 1ª vez)" (
+            [scriptblock]::Create("ollama pull $m")
+        )
+        Write-Ok "Modelo $m pronto!"
+    } catch {
+        Write-Warn "Não foi possível baixar o modelo '$m' automaticamente."
+        Write-Warn "  Verifique o nome exato em: https://ollama.com/library"
+        Write-Info "  Para baixar manualmente depois: ollama pull $m"
+        Write-Info "  Ou edite o .env e altere OLLAMA_MODEL para o modelo correto."
+    }
 }
 
 # ── 7. NewClaw ───────────────────────────────────────────────
