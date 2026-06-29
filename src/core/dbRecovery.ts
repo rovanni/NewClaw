@@ -50,9 +50,8 @@ export function autoRecoverDatabase(dataDir: string): boolean {
     if (!best) {
         log.error('auto_recovery_no_backup', undefined,
             '❌ Nenhum backup válido encontrado em data/backups/\n' +
-            '   Recuperação manual:\n' +
-            '   • Windows: node scripts/recover-db.cjs\n' +
-            '   • Linux:   node scripts/recover-db.cjs   (ou bash scripts/restore.sh)'
+            '   Recuperação manual: newclaw restore\n' +
+            '   (se o newclaw CLI não responder: node scripts/recover-db.cjs)'
         );
         return false;
     }

@@ -29,8 +29,11 @@ function Test-SqliteFile([string]$FilePath) {
     $safe = $FilePath.Replace('\', '\\').Replace('"', '\"')
     $code = "try{var db=require('better-sqlite3')(`"$safe`",{readonly:true});var r=db.prepare('PRAGMA integrity_check').get();db.close();process.stdout.write(r&&r.integrity_check||'error');}catch(e){process.stdout.write('error');}"
     Push-Location $NewClawDir
-    $result = node -e $code 2>$null
-    Pop-Location
+    try {
+        $result = node -e $code 2>$null
+    } finally {
+        Pop-Location
+    }
     return $result -eq 'ok'
 }
 
