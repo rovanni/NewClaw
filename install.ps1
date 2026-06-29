@@ -925,7 +925,7 @@ function Step-InstallPM2 {
 
     # Verificar se já está instalado
     try {
-        $pm2Prefix = (npm prefix -g 2>&1)
+        $pm2Prefix = (npm prefix -g 2>$null)
         $pm2Path = Join-Path $pm2Prefix "node_modules\pm2\bin\pm2"
         if (Test-Path $pm2Path) {
             Write-Ok "PM2 já instalado"
