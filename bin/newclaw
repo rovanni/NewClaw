@@ -516,7 +516,24 @@ const commands = {
       }
     } catch {}
     if (memMB === null && pid) {
-      try { memMB = Math.round(process.memoryUsage().rss / 1048576); } catch {}
+      try {
+        if (process.platform === 'win32') {
+          const out = execSync(
+            `powershell -NoProfile -Command "Get-Process -Id ${pid} | Select-Object -ExpandProperty WorkingSet64"`,
+            { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+          );
+          const bytes = parseInt(out.trim());
+          if (!isNaN(bytes)) memMB = Math.round(bytes / 1048576);
+        } else if (process.platform === 'linux') {
+          const status = fs.readFileSync(`/proc/${pid}/status`, 'utf-8');
+          const match = status.match(/VmRSS:\s+(\d+)\s+kB/);
+          if (match) memMB = Math.round(parseInt(match[1]) / 1024);
+        } else {
+          const out = execSync(`ps -o rss= -p ${pid}`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+          const kb = parseInt(out.trim());
+          if (!isNaN(kb)) memMB = Math.round(kb / 1024);
+        }
+      } catch {}
     }
 
     // Last log line timestamp
