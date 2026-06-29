@@ -23,7 +23,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
         }
 
         const knownCloudModels = [
-            'glm-5:cloud', 'glm-5.1:cloud', 'glm-4:cloud',
+            'glm-5.2:cloud', 'glm-5.1:cloud', 'glm-5:cloud', 'glm-4:cloud',
             'kimi-k2:cloud', 'kimi-k2.6:cloud',
             'deepseek-r1:cloud', 'deepseek-v3:cloud',
             'qwen3:cloud', 'qwen3-235b:cloud',

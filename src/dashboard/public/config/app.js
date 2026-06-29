@@ -71,7 +71,7 @@ async function doSave() {
     memoryWindowSize:       Number(c.memoryWindowSize),
     systemPrompt:           c.systemPrompt || '',
     ollamaUrl:              c.ollamaUrl    || 'http://localhost:11434',
-    ollamaModel:            c.ollamaModel  || 'glm-5.1:cloud',
+    ollamaModel:            c.ollamaModel  || 'glm-5.2:cloud',
     telegramAllowedUserIds: c.telegramAllowedUserIds || '',
     modelRouter:            c.modelRouter  || {},
   };
@@ -179,7 +179,7 @@ async function loadConfig() {
       memoryWindowSize:       c.memoryWindowSize,
       systemPrompt:           c.systemPrompt || '',
       ollamaUrl:              c.ollamaUrl    || 'http://localhost:11434',
-      ollamaModel:            c.ollamaModel  || 'glm-5.1:cloud',
+      ollamaModel:            c.ollamaModel  || 'glm-5.2:cloud',
       telegramAllowedUserIds: c.telegramAllowedUserIds || '',
       hasGeminiKey:           c.hasGeminiKey      || false,
       hasDeepseekKey:         c.hasDeepseekKey    || false,

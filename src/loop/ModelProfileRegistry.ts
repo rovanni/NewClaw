@@ -58,9 +58,9 @@ const DEFAULT_CONFIG: ProfileRegistryConfig = {
     classifierModel: "gemma4:31b-cloud",
     classifierServer: 'http://localhost:11434',
     profiles: [
-        { id: 'chat-primary',      provider: 'ollama', model: 'glm-5.1:cloud',   server: 'http://localhost:11434', category: 'chat',      description: 'Conversa geral e raciocínio' },
+        { id: 'chat-primary',      provider: 'ollama', model: 'glm-5.2:cloud',   server: 'http://localhost:11434', category: 'chat',      description: 'Conversa geral e raciocínio' },
         { id: 'code-primary',      provider: 'ollama', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'code',      description: 'Programação e criação de conteúdo' },
-        { id: 'light-chat',        provider: 'ollama', model: 'glm-5.1:cloud',   server: 'http://localhost:11434', category: 'light',     description: 'Conversa leve e rápida' },
+        { id: 'light-chat',        provider: 'ollama', model: 'glm-5.2:cloud',   server: 'http://localhost:11434', category: 'light',     description: 'Conversa leve e rápida' },
         { id: 'vision-primary',    provider: 'ollama', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'vision',    description: 'Análise de imagens e OCR' },
         { id: 'analysis-primary',  provider: 'ollama', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'analysis',  description: 'Análise profunda e cripto' },
         { id: 'execution-primary', provider: 'ollama', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'execution', description: 'Execução de ferramentas e tarefas complexas' },

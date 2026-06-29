@@ -14,7 +14,7 @@
 param(
     [string]$Token       = $env:NEWCLAW_TOKEN,
     [string]$UserId      = $env:NEWCLAW_USER_ID,
-    [string]$Model       = $(if ($env:NEWCLAW_MODEL) { $env:NEWCLAW_MODEL } else { "glm-5:cloud" }),
+    [string]$Model       = $(if ($env:NEWCLAW_MODEL) { $env:NEWCLAW_MODEL } else { "glm-5.2:cloud" }),
     [string]$Dir         = $(if ($env:NEWCLAW_HOME)  { $env:NEWCLAW_HOME  } else { "$env:USERPROFILE\NewClaw" }),
     [int]$Port           = $(if ($env:NEWCLAW_DASHBOARD_PORT) { [int]$env:NEWCLAW_DASHBOARD_PORT } else { 3090 }),
     [switch]$NoPrompt,
@@ -181,7 +181,7 @@ USO:
 OPÇÕES:
   -Token TOKEN       Token do bot do Telegram
   -UserId ID         Seu ID de usuário do Telegram
-  -Model MODEL       Modelo Ollama (padrão: glm-5:cloud)
+  -Model MODEL       Modelo Ollama (padrão: glm-5.2:cloud)
   -Dir PATH          Diretório de instalação (padrão: %USERPROFILE%\NewClaw)
   -Port PORT         Porta do dashboard (padrão: 3090)
 
@@ -388,7 +388,7 @@ function Step-DownloadModel {
 
     if (-not $NoPrompt) {
         Write-Host "    Escolha o modelo:" -ForegroundColor White
-        Write-Host "    1) glm-5:cloud     — Recomendado (grátis, inferência remota)" -ForegroundColor Cyan
+        Write-Host "    1) glm-5.2:cloud     — Recomendado (grátis, inferência remota)" -ForegroundColor Cyan
         Write-Host "    2) llama3.1:8b    — Rápido, uso geral (5GB local)" -ForegroundColor Cyan
         Write-Host "    3) mistral:7b     — Rápido, conversação (4GB local)" -ForegroundColor Cyan
         Write-Host "    4) qwen2.5:3b    — Leve, máquinas modestas (2GB local)" -ForegroundColor Cyan
@@ -400,8 +400,8 @@ function Step-DownloadModel {
             "2" { $script:Model = "llama3.1:8b" }
             "3" { $script:Model = "mistral:7b" }
             "4" { $script:Model = "qwen2.5:3b" }
-            "5" { $script:Model = Read-Answer "Nome do modelo" "glm-5:cloud" }
-            default { $script:Model = "glm-5:cloud" }
+            "5" { $script:Model = Read-Answer "Nome do modelo" "glm-5.2:cloud" }
+            default { $script:Model = "glm-5.2:cloud" }
         }
     }
 

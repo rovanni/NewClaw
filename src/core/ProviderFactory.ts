@@ -66,7 +66,7 @@ export class ProviderFactory {
 
         this.providers.set('ollama', new OllamaProvider(
             config.ollamaUrl || 'http://localhost:11434',
-            config.ollamaModel || 'glm-5.1:cloud',
+            config.ollamaModel || 'glm-5.2:cloud',
             config.ollamaApiKey || ''
         ));
     }

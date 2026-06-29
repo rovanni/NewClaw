@@ -36,7 +36,7 @@ const config = {
     groqApiKey: process.env.GROQ_API_KEY,
     openrouterApiKey: process.env.OPENROUTER_API_KEY,
     ollamaUrl: process.env.OLLAMA_URL || 'http://localhost:11434',
-    ollamaModel: process.env.OLLAMA_MODEL || 'glm-5.1:cloud',
+    ollamaModel: process.env.OLLAMA_MODEL || 'glm-5.2:cloud',
     ollamaApiKey: process.env.OLLAMA_API_KEY || '',
     maxIterations: parseInt(process.env.MAX_ITERATIONS || '5'),
     memoryWindowSize: parseInt(process.env.MEMORY_WINDOW_SIZE || '20'),

@@ -33,7 +33,7 @@ export async function auditIntegration(config: AuditConfig): Promise<AuditFindin
                         category: 'integration',
                         title: 'Nenhum modelo Ollama disponível',
                         description: 'Ollama está rodando mas não tem modelos baixados.',
-                        suggestion: 'Baixar modelo: ollama pull glm-5.1:cloud',
+                        suggestion: 'Baixar modelo: ollama pull glm-5.2:cloud',
                         autoFixable: false,
                         riskLevel: 'medium'
                     });

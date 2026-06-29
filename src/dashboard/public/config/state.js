@@ -29,7 +29,7 @@ export const configStore = new Store({
   memoryWindowSize: 20,
   systemPrompt: '',
   ollamaUrl: 'http://localhost:11434',
-  ollamaModel: 'glm-5.1:cloud',
+  ollamaModel: 'glm-5.2:cloud',
   ollamaApiKey: '',
   telegramAllowedUserIds: '',
   modelRouter: {

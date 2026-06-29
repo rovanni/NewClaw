@@ -61,7 +61,7 @@ async function runSetup() {
     const finalOllamaBin = ollamaBin || currentOllamaBin;
 
     // Modelo
-    const currentModel = currentEnv.MODEL || 'glm-5.1:cloud';
+    const currentModel = currentEnv.MODEL || 'glm-5.2:cloud';
     const model = (await question(`4. Modelo de IA [atual: ${currentModel}]: `)).trim();
     const finalModel = model || currentModel;
 

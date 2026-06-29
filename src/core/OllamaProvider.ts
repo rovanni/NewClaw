@@ -91,7 +91,7 @@ export class OllamaProvider implements ILLMProvider {
      */
     private _reasoningBudgetAborted = false;
 
-    constructor(baseUrl: string = 'http://localhost:11434', model: string = 'glm-5.1:cloud', apiKey: string = '') {
+    constructor(baseUrl: string = 'http://localhost:11434', model: string = 'glm-5.2:cloud', apiKey: string = '') {
         this.baseUrl = baseUrl;
         this.model = model;
         this.apiKey = apiKey;

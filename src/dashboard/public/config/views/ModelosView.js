@@ -90,11 +90,11 @@ export function render(container) {
         <summary>${t('edit_routes_title')}</summary>
         <div class="cfg-details-body">
           <div class="route-grid">
-            ${routeCard('modelChat',     '💬', 'Chat',                      t('route_chat_desc'),     'glm-5.1:cloud')}
+            ${routeCard('modelChat',     '💬', 'Chat',                      t('route_chat_desc'),     'glm-5.2:cloud')}
             ${routeCard('modelCode',     '💻', t('route_code_cat'),         t('route_code_desc'),     'gemma4:e4b')}
             ${routeCard('modelVision',   '👁️', t('route_vision_cat'),      t('route_vision_desc'),   'gemma4:e4b')}
             ${routeCard('modelLight',    '⚡', t('route_light_cat'),        t('route_light_desc'),    'gemma4:e4b')}
-            ${routeCard('modelAnalysis', '📊', t('route_analysis_cat'),     t('route_analysis_desc'), 'glm-5:cloud')}
+            ${routeCard('modelAnalysis', '📊', t('route_analysis_cat'),     t('route_analysis_desc'), 'glm-5.2:cloud')}
             ${routeCard('modelExecution','🧠', t('route_execution_cat'),    t('route_execution_desc'),'kimi-k2.6:cloud')}
           </div>
         </div>
@@ -118,7 +118,7 @@ export function render(container) {
             <div class="form-group">
               <label class="form-label">${t('main_ollama_model_label')} <span class="badge badge-cloud">cloud</span></label>
               <div class="model-select-container" id="container-ollamaModel">
-                <input type="text" class="model-select-input" autocomplete="off" id="ollamaModel" placeholder="glm-5.1:cloud">
+                <input type="text" class="model-select-input" autocomplete="off" id="ollamaModel" placeholder="glm-5.2:cloud">
                 <svg class="msa" width="11" height="11" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
                 <div class="model-dropdown" id="dropdown-ollamaModel"></div>
               </div>
