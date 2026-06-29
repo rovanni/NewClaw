@@ -5,8 +5,9 @@
  * 
  * Commands: start, stop, restart, status, logs, update, help
  * 
- * ⚠️  Process management uses PM2 exclusively.
- *     NEVER use raw kill + spawn — that creates duplicate processes.
+ * ⚠️  Process management uses PM2 when available.
+ *     Falls back to raw spawn when PM2 is not installed.
+ *     NEVER use raw kill + spawn when PM2 is running — that creates duplicate processes.
  */
 const { execSync, spawn, exec } = require('child_process');
 const fs = require('fs');
@@ -247,10 +248,9 @@ function tailLog(logDir, daemon) {
 
 const commands = {
   start(args) {
-    // ⚠️ ALWAYS use PM2 for process management
-    // Raw spawn creates duplicate processes → Telegram 409 Conflict
     const debug = args.includes('--debug');
     const tail = args.includes('--tail');
+    const daemon = args.includes('--daemon');
     const usePM2 = PM2_BIN !== null;
 
     // ─── GUARD 1: PM2 status check (authoritative) ──────────────────
