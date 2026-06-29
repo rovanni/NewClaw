@@ -120,7 +120,9 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .v-dashboard { padding:24px 28px; }
 
 /* Dashboard inner content constrained to a readable max-width but centered */
-.v-dashboard > * { max-width:auto; }
+.v-dashboard > * {   width: 100%;
+  max-width: 100%;
+  margin: 0 auto;}
 
 /* Agent Hero */
 .agent-hero {
