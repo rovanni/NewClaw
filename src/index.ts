@@ -156,7 +156,8 @@ async function main() {
         if (!recovered) {
             log.error('startup_aborted', undefined,
                 'Banco corrompido e sem backup válido para recuperação.\n' +
-                'Execute manualmente: node scripts/recover-db.cjs'
+                'Execute: newclaw restore\n' +
+                '(se o CLI não responder: node scripts/recover-db.cjs)'
             );
             process.exit(1);
         }

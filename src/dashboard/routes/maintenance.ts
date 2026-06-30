@@ -93,10 +93,12 @@ function saveBackupConfig(cfg: BackupConfig) {
     fs.writeFileSync(BACKUP_CONFIG_FILE, JSON.stringify(cfg, null, 2), 'utf8');
 }
 
+// Safety backups (pre-restore) are never subject to retention — they protect against
+// a bad restore and are already limited naturally (one per restore attempt).
 function enforceRetention(prefix: string, retentionCount: number) {
     try {
         const files = fs.readdirSync(BACKUP_DIR)
-            .filter(f => f.startsWith(prefix))
+            .filter(f => f.startsWith(prefix) && !f.includes('pre-restore'))
             .map(f => ({ name: f, mtime: fs.statSync(path.join(BACKUP_DIR, f)).mtime.getTime() }))
             .sort((a, b) => b.mtime - a.mtime);
         files.slice(retentionCount).forEach(({ name }) => {
