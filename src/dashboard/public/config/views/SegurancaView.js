@@ -3,13 +3,15 @@ import { getAuthStatus, changePassword } from '../api.js';
 import { showToast } from '../components/Toast.js';
 
 async function getCapabilityMode() {
-  const res = await fetch('/api/system/capability-mode', { credentials: 'include' });
+  const f = window.newclawFetch || fetch;
+  const res = await f('/api/system/capability-mode', { credentials: 'include' });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 async function setCapabilityMode(mode, godModeConfirmed = false) {
-  const res = await fetch('/api/system/capability-mode', {
+  const f = window.newclawFetch || fetch;
+  const res = await f('/api/system/capability-mode', {
     method: 'PUT',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
