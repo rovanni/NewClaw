@@ -141,35 +141,59 @@ export function migrateDomainNodeType(db: Database.Database): void {
 
         log.info('migration_start', "Migrating memory_nodes CHECK constraint to support 'domain' type...");
         db.pragma('foreign_keys = OFF');
-        db.exec('DROP TABLE IF EXISTS memory_nodes_domain');
 
-        db.exec(`
-            CREATE TABLE memory_nodes_domain (
-                id TEXT PRIMARY KEY,
-                type TEXT NOT NULL CHECK(type IN ('identity', 'preference', 'project', 'context', 'fact', 'skill', 'infrastructure', 'trait', 'rule', 'strategy', 'knowledge', 'domain')),
-                name TEXT NOT NULL,
-                content TEXT NOT NULL,
-                metadata TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                pagerank REAL DEFAULT 0.0,
-                degree INTEGER DEFAULT 0,
-                betweenness REAL DEFAULT 0.0,
-                closeness REAL DEFAULT 0.0,
-                weight REAL DEFAULT 1.0,
-                confidence REAL DEFAULT 1.0,
-                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
-                context_type TEXT,
-                classification_score REAL DEFAULT 0,
-                community_id INTEGER DEFAULT 0,
-                domain TEXT,
-                last_accessed DATETIME
-            )
-        `);
+        // Usa transação para garantir atomicidade: se qualquer passo falhar,
+        // o banco volta ao estado anterior sem tabelas órfãs.
+        const doMigrate = db.transaction(() => {
+            db.exec('DROP TABLE IF EXISTS memory_nodes_domain');
 
-        db.exec('INSERT INTO memory_nodes_domain SELECT * FROM memory_nodes');
-        db.exec('DROP TABLE memory_nodes');
-        db.exec('ALTER TABLE memory_nodes_domain RENAME TO memory_nodes');
+            db.exec(`
+                CREATE TABLE memory_nodes_domain (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL CHECK(type IN ('identity', 'preference', 'project', 'context', 'fact', 'skill', 'infrastructure', 'trait', 'rule', 'strategy', 'knowledge', 'domain')),
+                    name TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    metadata TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    pagerank REAL DEFAULT 0.0,
+                    degree INTEGER DEFAULT 0,
+                    betweenness REAL DEFAULT 0.0,
+                    closeness REAL DEFAULT 0.0,
+                    weight REAL DEFAULT 1.0,
+                    confidence REAL DEFAULT 1.0,
+                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    context_type TEXT,
+                    classification_score REAL DEFAULT 0,
+                    community_id INTEGER DEFAULT 0,
+                    domain TEXT,
+                    last_accessed DATETIME,
+                    lifecycle_state TEXT,
+                    expires_at DATETIME,
+                    epistemic_status TEXT,
+                    identity_scope TEXT
+                )
+            `);
+
+            // INSERT com lista explícita de colunas: copia apenas as que existem em memory_nodes.
+            // Evita falha por mismatch quando o banco fonte tem mais ou menos colunas que o esperado
+            // (cenário comum ao restaurar backup de outra versão do sistema).
+            const srcCols = new Set(
+                (db.prepare('PRAGMA table_info(memory_nodes)').all() as { name: string }[]).map(c => c.name)
+            );
+            const allCols = [
+                'id', 'type', 'name', 'content', 'metadata', 'created_at', 'updated_at',
+                'pagerank', 'degree', 'betweenness', 'closeness', 'weight', 'confidence',
+                'last_updated', 'context_type', 'classification_score', 'community_id',
+                'domain', 'last_accessed', 'lifecycle_state', 'expires_at', 'epistemic_status', 'identity_scope',
+            ];
+            const copyList = allCols.filter(c => srcCols.has(c)).join(', ');
+            db.exec(`INSERT INTO memory_nodes_domain (${copyList}) SELECT ${copyList} FROM memory_nodes`);
+
+            db.exec('DROP TABLE memory_nodes');
+            db.exec('ALTER TABLE memory_nodes_domain RENAME TO memory_nodes');
+        });
+        doMigrate();
 
         safeExec(db, 'CREATE INDEX IF NOT EXISTS idx_memory_nodes_type ON memory_nodes(type)');
         safeExec(db, 'CREATE INDEX IF NOT EXISTS idx_memory_nodes_name ON memory_nodes(name)');

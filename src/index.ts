@@ -133,6 +133,12 @@ async function main() {
     if (fs.existsSync(restorePendingFlag) && fs.existsSync(restoreSource)) {
         log.info('🔄 Restauração de banco de dados pendente — aplicando antes de iniciar...');
         try {
+            // Remove o WAL/SHM do banco ATUAL antes de substituí-lo.
+            // Se não limparmos, o SQLite ao abrir o banco restaurado encontra um WAL
+            // de outro banco e tenta aplicar os frames — resultado: "disk image is malformed"
+            // e o autoRecoverDatabase reverte o restore silenciosamente.
+            try { fs.unlinkSync(dbMain + '-wal'); } catch { /* ok se não existe */ }
+            try { fs.unlinkSync(dbMain + '-shm'); } catch { /* ok se não existe */ }
             fs.copyFileSync(restoreSource, dbMain);
             fs.unlinkSync(restoreSource);
             fs.unlinkSync(restorePendingFlag);
