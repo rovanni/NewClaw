@@ -588,7 +588,11 @@ const commands = {
   logs(args) {
     const logDir = path.join(DIR, 'logs');
     const follow = args?.includes('--follow') || args?.includes('-f');
-    const usePM2 = PM2_BIN !== null && isPM2Running();
+    // Para logs, basta o binário PM2 existir — pm2 logs funciona mesmo com
+    // processo em estado errored/stopped (ex: durante crash loop de restauração).
+    // isPM2Running() verifica se o processo está 'online', mas isso não é necessário
+    // para ler o histórico de logs armazenado pelo PM2.
+    const usePM2 = PM2_BIN !== null;
 
     // Resolve o arquivo de log real: lê LOG_FILE do .env (consistente com AppLogger)
     // AppLogger só escreve em arquivo quando LOG_FILE env var está definida
