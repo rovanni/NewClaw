@@ -16,7 +16,7 @@ const log = createLogger('WriteTool');
 
 // H5: mesma lista de padrões usada em read_tool e GoalPlanner
 const PATH_PLACEHOLDER_PATTERN =
-    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo|caminho\/do)\b|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\//i;
+    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo|caminho\/do)\b|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\/|\{\{step_\d+\.output\}\}/i;
 
 // CONTENT-STUB-GATE: detecta placeholder no conteúdo — impede gravação de stubs silenciosa
 // Esses padrões capturam os casos mais comuns gerados por LLMs ao criar planos com conteúdo

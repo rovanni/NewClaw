@@ -57,11 +57,11 @@ CATEGORIAS DE FERRAMENTAS — leia antes de planejar:
   pptx-generator, content-validator, html-pdf-converter, system-provisioner
   → São guias de comportamento. Não aparecem no campo toolName.
 
-SCHEMAS OBRIGATÓRIOS:
-  send_document:   {"file_path": "/home/venus/newclaw/workspace/arquivo.pptx"}
-  read:            {"path": "/home/venus/newclaw/workspace/arquivo.html"}
-  write:           {"path": "/home/venus/newclaw/workspace/arquivo.md", "content": "..."}
-  edit:            {"path": "...", "oldText": "...", "newText": "..."}
+SCHEMAS OBRIGATÓRIOS (use caminhos RELATIVOS ao workspace — sem prefixo de servidor):
+  send_document:   {"file_path": "arquivo.pptx"}
+  read:            {"path": "arquivo.html"}
+  write:           {"path": "arquivo.md", "content": "..."}
+  edit:            {"path": "arquivo.md", "oldText": "...", "newText": "..."}
   exec_command:    {"command": "pandoc slides.md -o slides.pptx"}
   memory_write:    {"action": "create", "type": "fact", "name": "nome_do_nó", "content": "conteúdo completo"}
                    OU {"action": "update", "id": "node_id_existente", "content": "novo conteúdo"}
@@ -471,7 +471,7 @@ function extractUnixPaths(text: string): string[] {
 }
 
 const PLACEHOLDER_ARG_PATTERN =
-    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo)\b|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\//i;
+    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo)\b|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\/|\{\{step_\d+\.output\}\}/i;
 
 // WRITE-CONTENT-STUB: detecta content placeholder em steps write — converte para AgentLoop.
 // Espelha o CONTENT-STUB-GATE do WriteTool, mas atua antes da execução, durante o parse do plano.

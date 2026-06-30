@@ -1297,7 +1297,8 @@ export class GoalExecutionLoop {
             if (step.toolName) {
                 // Execução via ToolRegistry com ProactiveRecovery (mutação de args + fallback)
                 // toolArgs pode ser undefined quando a tool não tem args obrigatórios — defaulta para {}
-                const resolvedArgs = step.toolArgs ?? {};
+                // Resolve referências {{step_N.output}} antes de executar (ex: write com content de exec anterior)
+                const resolvedArgs = this.resolveStepRefs(step.toolArgs ?? {}, goal);
                 const registered = this.toolRegistry.get(step.toolName);
                 log.info(
                     `[TOOL-DISPATCH] goal=${goal.id} step=${step.id}` +
@@ -1572,6 +1573,46 @@ export class GoalExecutionLoop {
             log.warn(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'unknown'} EXCEPTION durationMs=${durationMs} error="${errorMsg.slice(0, 100)}"`);
             return cycleResult;
         }
+    }
+
+    // ── Step arg template resolution ─────────────────────────────────────────────
+
+    /**
+     * Resolve referências {{step_N.output}} nos toolArgs do step antes da execução.
+     * O GoalPlanner pode gerar planos onde um step usa o output de step anterior como arg
+     * (ex: write com content="{{step_1.output}}"). Sem resolução, o placeholder é escrito
+     * literalmente — o arquivo gerado contém o texto "{{step_1.output}}" em vez do conteúdo real.
+     */
+    private resolveStepRefs(
+        toolArgs: Record<string, unknown>,
+        goal: Goal,
+    ): Record<string, unknown> {
+        const STEP_REF = /\{\{(step_\d+)\.output\}\}/g;
+
+        // Build map: planStepId → output do último attempt bem-sucedido
+        const stepOutputs = new Map<string, string>();
+        for (const attempt of goal.attempts) {
+            if (attempt.result === 'success' && attempt.output) {
+                stepOutputs.set(attempt.planStepId, attempt.output);
+            }
+        }
+
+        if (stepOutputs.size === 0) return toolArgs;
+
+        const resolve = (v: unknown): unknown => {
+            if (typeof v !== 'string') return v;
+            if (!STEP_REF.test(v)) return v;
+            STEP_REF.lastIndex = 0;
+            const resolved = v.replace(STEP_REF, (_, stepId: string) => stepOutputs.get(stepId) ?? '');
+            if (resolved !== v) {
+                log.info(`[STEP-REF-RESOLVED] replaced "{{${v.match(/\{\{([^}]+)\}\}/)?.[1] ?? '?'}}}" with ${resolved.length} chars from prior step output`);
+            }
+            return resolved;
+        };
+
+        return Object.fromEntries(
+            Object.entries(toolArgs).map(([k, v]) => [k, resolve(v)])
+        );
     }
 
     // ── Step success evaluator (heurística + LLM escalation) ───────────────────
