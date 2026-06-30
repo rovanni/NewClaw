@@ -361,18 +361,41 @@ export function createMaintenanceRouter(): Router {
                 return res.status(422).json({ success: false, error: `Backup inválido ou corrompido — restauração cancelada. ${errorMessage(validationErr)}` });
             }
 
-            // Database: cria backup de segurança via Online Backup API, agenda restore via flag
+            // Database: cria backup de segurança via Online Backup API, depois aplica restore
             if (fs.existsSync(DB_FILE)) {
                 const safetyDest = path.join(BACKUP_DIR, `database-pre-restore-${ts}.db`);
                 const dbSrc = new Database(DB_FILE, { readonly: true });
                 try { await dbSrc.backup(safetyDest); } finally { dbSrc.close(); }
             }
-            const pendingSource = path.join(DIR, 'data', 'newclaw.db.restore');
+
+            // Estágio 1: copia o backup para newclaw.db.restore + flag (fallback para index.ts startup check)
+            const dataDir = path.join(DIR, 'data');
+            const pendingSource = path.join(dataDir, 'newclaw.db.restore');
             fs.copyFileSync(filePath, pendingSource);
             fs.writeFileSync(
-                path.join(DIR, 'data', '.restore-pending'),
+                path.join(dataDir, '.restore-pending'),
                 JSON.stringify({ source: 'newclaw.db.restore', timestamp: ts })
             );
+
+            // Estágio 2: helper process detached que aplica o restore diretamente após o exit.
+            // PM2 tem restart_delay de 40 s — o helper conclui bem antes disso.
+            // Não depende do index.ts startup check (compatível com dist/index.js desatualizado).
+            const helperCode = [
+                'const fs=require("fs"),p=require("path");',
+                `const d=${JSON.stringify(dataDir)};`,
+                'setTimeout(()=>{',
+                '  const src=p.join(d,"newclaw.db.restore");',
+                '  const dst=p.join(d,"newclaw.db");',
+                '  const flag=p.join(d,".restore-pending");',
+                '  if(!fs.existsSync(src))return;',
+                '  try{fs.unlinkSync(dst+"-wal");}catch{}',
+                '  try{fs.unlinkSync(dst+"-shm");}catch{}',
+                '  try{fs.copyFileSync(src,dst);fs.unlinkSync(src);fs.unlinkSync(flag);}catch(e){console.error("restore-helper:",e.message);}',
+                '},2000);',
+            ].join('');
+            const helper = spawn(process.execPath, ['-e', helperCode], { detached: true, stdio: 'ignore' });
+            helper.unref();
+
             log.info(`Banco de dados agendado para restauração de ${safe} — reiniciando`);
             setTimeout(() => process.exit(0), 500);
             return res.json({ success: true, message: 'Restauração do banco agendada. O processo será reiniciado.' });
