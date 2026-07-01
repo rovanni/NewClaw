@@ -7,7 +7,6 @@
 
 import Database from 'better-sqlite3';
 import { ProviderFactory } from './ProviderFactory';
-import { errorMessage } from '../shared/errors';
 import { AgentLoop } from '../loop/AgentLoop';
 import { MemoryManager } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
@@ -43,6 +42,7 @@ import { SessionLearner } from '../session/SessionLearner';
 import { MemoryGovernor } from '../memory/MemoryGovernor';
 import { createLogger } from '../shared/AppLogger';
 import { MessageBus } from '../channels/MessageBus';
+import { WebChannelAdapter } from '../channels/WebChannelAdapter';
 import { TelegramAdapter } from '../channels/TelegramAdapter';
 import { DiscordAdapter } from '../channels/DiscordAdapter';
 import { WhatsAppAdapter } from '../channels/WhatsAppAdapter';
@@ -104,6 +104,7 @@ export class AgentController {
     private confidenceClassifier: ConfidenceClassifier;
     private ownerProfileService: OwnerProfileService;
     private telegramAdapter: TelegramAdapter;
+    private webAdapter: WebChannelAdapter;
     private discordAdapter: DiscordAdapter | null = null;
     private whatsAppAdapter: WhatsAppAdapter | null = null;
     private signalAdapter: SignalAdapter | null = null;
@@ -114,6 +115,7 @@ export class AgentController {
     public getMemoryGovernor(): MemoryGovernor { return this.memoryGovernor; }
     public getSessionLearner(): SessionLearner { return this.sessionLearner; }
     public getMessageBus(): MessageBus { return this.messageBus; }
+    public getWebAdapter(): WebChannelAdapter { return this.webAdapter; }
     public getEventBus() { return this._eventBus; }
     public getCircuitBreakers() { return this.circuitBreakers; }
     public getTelegramAdapter(): TelegramAdapter { return this.telegramAdapter; }
@@ -305,6 +307,11 @@ export class AgentController {
         });
         this.telegramAdapter.setBus(this.messageBus);
         this.messageBus.registerAdapter(this.telegramAdapter);
+
+        // Dashboard web (localhost:3090) é apenas mais um canal — mesmo pipeline
+        // (NormalizedMessage → ChannelAttachment[] → agentMediaHandlers) do Telegram/Discord/etc.
+        this.webAdapter = new WebChannelAdapter();
+        this.messageBus.registerAdapter(this.webAdapter);
 
         // Fase 2: injetar workflowCallback no TelegramAdapter.
         // Callbacks "auth:approve|reject:<txnId>" chegam aqui diretamente,
@@ -632,18 +639,6 @@ export class AgentController {
         }
         await this.lifecycle.shutdown(reason);
         log.info('NewClaw stopped');
-    }
-
-    async handleWebMessage(sessionId: string, message: string): Promise<string> {
-        try {
-            // Web dashboard é interface do operador — onboarding já foi concluído via canal principal
-            // (Telegram/WhatsApp). Nunca redirecionar para onboarding aqui.
-            const result = await this.agentLoop.process(sessionId, message);
-            return typeof result === 'string' ? result : result.text;
-        } catch (err) {
-            log.error('Web message error:', errorMessage(err));
-            return `Erro: ${errorMessage(err)}`;
-        }
     }
 
     private registerSkills(): void {

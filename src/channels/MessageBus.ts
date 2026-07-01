@@ -418,8 +418,9 @@ export class MessageBus {
                 } catch { /* continua sem contexto */ }
             }
 
-            // Onboarding: primeira instalação — banco vazio, pede nome e apelido uma única vez
-            if (this.onboardingService?.isOnboardingRequired()) {
+            // Onboarding: primeira instalação — banco vazio, pede nome e apelido uma única vez.
+            // Dashboard web é interface do operador (onboarding já concluído via canal principal) — nunca redireciona.
+            if (msg.channel !== 'web' && this.onboardingService?.isOnboardingRequired()) {
                 const ob = await this.onboardingService.processMessage(msg.userId, msg.text);
                 if (adapter) await adapter.send({ text: ob.reply, format: 'markdown' }, msg.rawContext);
                 await this.sessionManager.recordAssistantMessage(sessionKey, ob.reply);

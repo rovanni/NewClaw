@@ -37,7 +37,8 @@ export interface NormalizedMessage {
 
 export interface ChannelAttachment {
     type: 'photo' | 'audio' | 'voice' | 'document' | 'video';
-    fileId: string;
+    /** ID do arquivo no canal de origem (Telegram etc). Ausente em canais que enviam o conteúdo inline (ex: web via `data`). */
+    fileId?: string;
     mimeType?: string;
     fileName?: string;
     width?: number;

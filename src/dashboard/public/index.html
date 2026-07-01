@@ -108,6 +108,24 @@
     .input-btn.tts { background: var(--btn-icon-bg); color: var(--text-muted); }
     .input-btn.tts:hover { background: var(--btn-icon-hover); color: var(--text-main); }
     .input-btn.tts.active { background: var(--accent-bg); color: var(--accent); }
+    .input-btn.attach { background: var(--btn-icon-bg); color: var(--text-muted); }
+    .input-btn.attach:hover { background: var(--btn-icon-hover); color: var(--text-main); }
+
+    /* Attachments */
+    .attach-preview { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+    .attach-chip {
+      display: flex; align-items: center; gap: 6px; padding: 4px 8px 4px 4px;
+      background: var(--bg-input); border: 1px solid var(--border-color);
+      border-radius: 8px; font-size: 0.72rem; color: var(--text-muted); max-width: 220px;
+    }
+    .attach-chip img { width: 22px; height: 22px; object-fit: cover; border-radius: 4px; }
+    .attach-chip .attach-icon { font-size: 1rem; }
+    .attach-chip .attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .attach-chip .attach-remove { cursor: pointer; color: var(--text-soft); font-weight: bold; padding: 0 2px; }
+    .attach-chip .attach-remove:hover { color: var(--danger); }
+    .input-area.drag-over { outline: 2px dashed var(--accent); outline-offset: -4px; background: var(--accent-bg); }
+    .chat-message .msg-attach { display: block; font-size: 0.76rem; opacity: 0.8; margin-top: 4px; }
+    .chat-message .msg-attach img { max-width: 220px; max-height: 220px; border-radius: 8px; display: block; margin-top: 4px; }
 
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 
@@ -154,9 +172,12 @@
     <div class="chat-main">
       <div class="chat-container" id="chatContainer"></div>
 
-      <div class="input-area">
+      <div class="input-area" id="inputArea">
         <div class="listening-bar" id="listeningBar">🎤 Ouvindo...</div>
+        <div class="attach-preview" id="attachPreview"></div>
+        <input type="file" id="fileInput" style="display:none" multiple accept="image/*,audio/*,.pdf,.txt,.md,.doc,.docx,.csv,.json,.js,.ts,.tsx,.jsx,.py,.java,.c,.cpp,.h,.go,.rs,.rb,.php,.html,.css,.yml,.yaml,.xml,.sh,.log">
         <div class="input-row">
+          <button class="input-btn attach" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="Anexar arquivo">📎</button>
           <button class="input-btn mic" id="micBtn" onclick="startVoiceInput()" data-i18n-title="mic_title" title="Falar">🎤</button>
           <textarea id="messageInput" data-i18n-placeholder="msg_placeholder" placeholder="Digite sua mensagem..." rows="1"></textarea>
           <button class="input-btn tts" id="ttsBtn" onclick="toggleTTS()" data-i18n-title="tts_title" title="Ouvir respostas">🔊</button>
@@ -331,6 +352,71 @@
     messageInput.addEventListener('input', () => { messageInput.style.height = 'auto'; messageInput.style.height = Math.min(messageInput.scrollHeight, 140) + 'px'; });
     messageInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
 
+    // === Attachments ===
+    // Enviados como multipart/form-data (campo "files") — o backend classifica o tipo
+    // (photo/audio/document) pelo mimetype e roda o mesmo pipeline usado por Telegram/Discord.
+    const MAX_ATTACHMENTS = 5;
+    const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024; // 20MB por arquivo (mesmo limite do multer no backend)
+    let pendingAttachments = []; // { file, fileName, mimeType, type, previewUrl }
+
+    function classifyAttachmentType(mimeType) {
+      if (mimeType.startsWith('image/')) return 'photo';
+      if (mimeType.startsWith('audio/')) return 'audio';
+      return 'document';
+    }
+    function addAttachment(file) {
+      if (pendingAttachments.length >= MAX_ATTACHMENTS) { alert(`⚠️ Máximo de ${MAX_ATTACHMENTS} anexos por mensagem`); return; }
+      if (file.size > MAX_ATTACHMENT_BYTES) { alert(`⚠️ Arquivo muito grande: ${file.name}`); return; }
+      const mimeType = file.type || 'application/octet-stream';
+      const type = classifyAttachmentType(mimeType);
+      const previewUrl = type === 'photo' ? URL.createObjectURL(file) : null;
+      pendingAttachments.push({ file, fileName: file.name, mimeType, type, previewUrl });
+      renderAttachPreview();
+    }
+    function removeAttachment(idx) {
+      const [removed] = pendingAttachments.splice(idx, 1);
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+      renderAttachPreview();
+    }
+    function clearAttachments() {
+      pendingAttachments.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
+      pendingAttachments = [];
+      renderAttachPreview();
+    }
+    function renderAttachPreview() {
+      const box = document.getElementById('attachPreview');
+      box.innerHTML = pendingAttachments.map((a, idx) => `
+        <div class="attach-chip">
+          ${a.previewUrl ? `<img src="${a.previewUrl}">` : `<span class="attach-icon">${a.type === 'audio' ? '🎵' : '📄'}</span>`}
+          <span class="attach-name" title="${esc(a.fileName)}">${esc(a.fileName)}</span>
+          <span class="attach-remove" onclick="removeAttachment(${idx})">✕</span>
+        </div>`).join('');
+    }
+
+    document.getElementById('fileInput').addEventListener('change', (e) => {
+      Array.from(e.target.files).forEach(addAttachment);
+      e.target.value = '';
+    });
+
+    // Drag and drop no painel de input
+    const inputArea = document.getElementById('inputArea');
+    ['dragenter', 'dragover'].forEach(evt => inputArea.addEventListener(evt, (e) => { e.preventDefault(); inputArea.classList.add('drag-over'); }));
+    ['dragleave', 'drop'].forEach(evt => inputArea.addEventListener(evt, (e) => { e.preventDefault(); inputArea.classList.remove('drag-over'); }));
+    inputArea.addEventListener('drop', (e) => {
+      Array.from(e.dataTransfer?.files || []).forEach(addAttachment);
+    });
+
+    // Colar imagem/arquivo do clipboard
+    messageInput.addEventListener('paste', (e) => {
+      const fileItems = Array.from(e.clipboardData?.items || []).filter(it => it.kind === 'file');
+      if (fileItems.length === 0) return;
+      e.preventDefault();
+      for (const item of fileItems) {
+        const file = item.getAsFile();
+        if (file) addAttachment(file);
+      }
+    });
+
     function renderChat() {
       const conv = getConv();
       if (!conv || conv.messages.length === 0) {
@@ -344,7 +430,10 @@
           <button class="msg-btn" onclick="speakMsg(${idx})" title="Ouvir">🔊</button>
           <button class="msg-btn" onclick="copyMsg(${idx})" title="Copiar">📋</button>
         </div>` : '';
-        return `<div class="chat-message ${m.role}" data-idx="${idx}">${actions}${content}<div class="msg-time">${time}</div></div>`;
+        const attachHtml = (m.attachments || []).map(a =>
+          `<span class="msg-attach">${a.type === 'photo' ? '🖼️' : a.type === 'audio' ? '🎵' : '📄'} ${esc(a.fileName)}</span>`
+        ).join('');
+        return `<div class="chat-message ${m.role}" data-idx="${idx}">${actions}${content}${attachHtml}<div class="msg-time">${time}</div></div>`;
       }).join('');
       chatContainer.scrollTop = chatContainer.scrollHeight;
     }
@@ -371,10 +460,10 @@
       }
     }
 
-    function addMsg(role, content) {
+    function addMsg(role, content, attachments) {
       if (!currentConvId) newConversation();
       const conv = getConv(); if (!conv) return;
-      conv.messages.push({role, content, timestamp: Date.now()});
+      conv.messages.push({role, content, timestamp: Date.now(), attachments: attachments && attachments.length ? attachments : undefined});
       conv.updatedAt = Date.now();
       if (role === 'user' && conv.messages.filter(m => m.role === 'user').length === 1) {
         conv.title = content.slice(0, 50) + (content.length > 50 ? '...' : '');
@@ -383,12 +472,21 @@
     }
 
     async function sendMessage() {
-      const msg = messageInput.value.trim(); if (!msg) return;
-      addMsg('user', msg); messageInput.value = ''; messageInput.style.height = 'auto'; sendBtn.disabled = true;
+      const msg = messageInput.value.trim();
+      const attachments = pendingAttachments;
+      if (!msg && attachments.length === 0) return;
+      addMsg('user', msg || '📎 (anexo)', attachments.map(a => ({ fileName: a.fileName, type: a.type })));
+      messageInput.value = ''; messageInput.style.height = 'auto'; sendBtn.disabled = true;
+      clearAttachments();
       showStatus('thinking', t('status_thinking'));
       try {
         showStatus('sending', t('status_sending'));
-        const res = await newclawFetch('/api/chat', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({message: msg, sessionId: currentConvId || 'web-session'}) });
+        const formData = new FormData();
+        formData.append('message', msg);
+        formData.append('sessionId', currentConvId || 'web-session');
+        attachments.forEach(a => formData.append('files', a.file, a.fileName));
+        // Sem header Content-Type: o browser define o boundary multipart automaticamente.
+        const res = await newclawFetch('/api/chat', { method: 'POST', body: formData });
         showStatus('receiving', t('status_receiving'));
         const data = await res.json();
         hideStatus();

@@ -84,27 +84,33 @@ export async function transcribeAttachment(
     try {
         const fileId = attachment.fileId;
 
-        if (!fileId) {
-            voiceLog.error('missing_file_id', 'fileId ausente no attachment');
-            return '⚠️ Não foi possível obter o arquivo de áudio (fileId ausente).';
-        }
-
         let audioBuffer!: Buffer;
-        const MAX_DOWNLOAD_ATTEMPTS = 3;
-        for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
-            try {
-                audioBuffer = await messageBus.downloadFile(msg.channel, fileId);
-                break;
-            } catch (e) {
-                voiceLog.warn('audio_download_failed', `attempt=${attempt}/${MAX_DOWNLOAD_ATTEMPTS} error=${errorMessage(e)}`);
-                if (attempt === MAX_DOWNLOAD_ATTEMPTS) {
-                    voiceLog.error('audio_download_exhausted', e);
-                    return '⚠️ Falha ao baixar o arquivo de áudio do Telegram. Tente reenviar.';
-                }
-                await new Promise(r => setTimeout(r, 1000 * attempt));
+        if (attachment.data) {
+            // Canais sem download por fileId (ex: web) enviam o conteúdo já em base64.
+            audioBuffer = Buffer.from(attachment.data, 'base64');
+            voiceLog.info('audio_from_inline_data', `size=${audioBuffer.length} type=${attachment.type}`);
+        } else {
+            if (!fileId) {
+                voiceLog.error('missing_file_id', 'fileId ausente no attachment');
+                return '⚠️ Não foi possível obter o arquivo de áudio (fileId ausente).';
             }
+
+            const MAX_DOWNLOAD_ATTEMPTS = 3;
+            for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
+                try {
+                    audioBuffer = await messageBus.downloadFile(msg.channel, fileId);
+                    break;
+                } catch (e) {
+                    voiceLog.warn('audio_download_failed', `attempt=${attempt}/${MAX_DOWNLOAD_ATTEMPTS} error=${errorMessage(e)}`);
+                    if (attempt === MAX_DOWNLOAD_ATTEMPTS) {
+                        voiceLog.error('audio_download_exhausted', e);
+                        return '⚠️ Falha ao baixar o arquivo de áudio do Telegram. Tente reenviar.';
+                    }
+                    await new Promise(r => setTimeout(r, 1000 * attempt));
+                }
+            }
+            voiceLog.info('audio_downloaded', `size=${audioBuffer.length} type=${attachment.type}`);
         }
-        voiceLog.info('audio_downloaded', `size=${audioBuffer.length} type=${attachment.type}`);
 
         // Convert OGG/OGA (Telegram Opus) to WAV 16kHz mono — whisper.cpp requires WAV
         const fs = await import('fs/promises');
@@ -345,6 +351,8 @@ export async function handlePhotoAttachment(
         } else if (channel === 'discord' && attachment.url) {
             const imgRes = await fetch(attachment.url);
             if (imgRes.ok) fileBuffer = Buffer.from(await imgRes.arrayBuffer());
+        } else if (attachment.data) {
+            fileBuffer = Buffer.from(attachment.data, 'base64');
         }
 
         if (fileBuffer) {
