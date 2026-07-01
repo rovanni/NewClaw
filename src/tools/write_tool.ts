@@ -9,6 +9,7 @@
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import fs from 'fs';
 import path from 'path';
+import { resolvePath, selfEditError } from '../utils/crossPlatform';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
 
@@ -55,106 +56,6 @@ export class WriteTool implements ToolExecutor {
         required: ['path', 'content']
     };
 
-    /**
-     * Resolve e valida caminho dentro do sandbox (workspace).
-     * Multi-candidato: tenta absoluto, depois workspace-relativo.
-     * Para escrita, retorna o primeiro candidato permitido (arquivo pode não existir ainda).
-     */
-    private resolvePath(inputPath: string): { resolved: string; error?: string } {
-        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
-        const projectRoot = process.cwd();
-        const homeDir = process.env.HOME || '/root';
-
-        let expanded = Array.isArray(inputPath) ? String(inputPath[0] ?? '') : String(inputPath ?? '');
-
-        if (!expanded.startsWith('/') && expanded.startsWith('workspace/')) {
-            expanded = expanded.slice(10);
-        }
-
-        if (expanded.startsWith('~/')) {
-            expanded = homeDir + expanded.slice(1);
-        } else if (expanded.startsWith('@')) {
-            expanded = expanded.slice(1);
-        }
-
-        // FIX #3: Normalização canônica — /workspace/* → WORKSPACE_DIR/*
-        // Previne gravação em /workspace/ literal quando WORKSPACE_DIR aponta para outro caminho.
-        if (expanded.startsWith('/workspace/')) {
-            expanded = path.join(workspaceDir, expanded.slice('/workspace/'.length));
-        } else if (expanded === '/workspace') {
-            expanded = workspaceDir;
-        }
-
-        // Roots permitidas (Sandbox)
-        const allowedRoots = [
-            workspaceDir,
-            '/tmp',
-            '/workspace',
-            path.join(projectRoot, 'workspace'),
-            path.join(projectRoot, 'logs'),
-            path.join(projectRoot, 'data'),
-            homeDir,
-        ];
-
-        const checkAllowed = (p: string): boolean => {
-            return allowedRoots.some(root => {
-                const rel = path.relative(root, p);
-                if (rel === '') return true;
-                return !rel.startsWith('..') && !path.isAbsolute(rel);
-            });
-        };
-
-        // Construir lista de candidatos
-        const candidates: string[] = [];
-
-        if (path.isAbsolute(expanded)) {
-            candidates.push(path.normalize(expanded));
-            candidates.push(path.resolve(workspaceDir, expanded.slice(1)));
-            if (expanded.startsWith('/workspace/')) {
-                candidates.push(path.resolve(workspaceDir, expanded.slice(11)));
-            }
-        } else {
-            candidates.push(path.resolve(workspaceDir, expanded));
-        }
-
-        // Fase 1: primeiro candidato permitido E existente no disco
-        for (const candidate of candidates) {
-            if (checkAllowed(candidate) && fs.existsSync(candidate)) {
-                return this.checkSelfEdit(candidate, inputPath, projectRoot);
-            }
-        }
-
-        // Fase 2: primeiro candidato permitido (para criação de arquivo)
-        for (const candidate of candidates) {
-            if (checkAllowed(candidate)) {
-                return this.checkSelfEdit(candidate, inputPath, projectRoot);
-            }
-        }
-
-        return {
-            resolved: candidates[0] || inputPath,
-            error: `⛔ Caminho fora do sandbox: ${inputPath} → tentados: ${candidates.join(', ')}. Allowed roots: ${allowedRoots.join(', ')}`
-        };
-    }
-
-    /** Bloquear edição de código próprio do NewClaw */
-    private checkSelfEdit(resolved: string, inputPath: string, projectRoot: string): { resolved: string; error?: string } {
-        const blockedPaths = [
-            path.join(projectRoot, 'src'),
-            path.join(projectRoot, 'dist'),
-            path.join(projectRoot, 'bin'),
-            path.join(projectRoot, '.env')
-        ];
-        const isSelfEdit = blockedPaths.some(p => resolved.startsWith(p));
-        if (isSelfEdit) {
-            return {
-                resolved,
-                error: `⛔ BLOCKED: Não pode modificar código próprio do NewClaw (${inputPath})`
-            };
-        }
-        return { resolved };
-    }
-
     async execute(args: Record<string, any>): Promise<ToolResult> {
         const rawPath = args.path as string;
         const content = (args.content as string) || '';
@@ -163,23 +64,25 @@ export class WriteTool implements ToolExecutor {
             return { success: false, output: '', error: 'Parâmetro "path" é obrigatório' };
         }
 
-        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
-        const { resolved: filePath, error: pathError } = this.resolvePath(rawPath);
+        const workspaceDir = path.resolve(process.env.WORKSPACE_DIR ?? path.join(process.cwd(), 'workspace'));
+        const { resolved: filePath, error: pathError } = resolvePath(rawPath);
+        const selfErr = selfEditError(filePath);
         const isPlaceholder = PATH_PLACEHOLDER_PATTERN.test(rawPath);
         const placeholderMatch = isPlaceholder ? (rawPath.match(PATH_PLACEHOLDER_PATTERN)?.[0] ?? '') : '';
         log.info(`[ARTIFACT-PATH] tool=write requested="${rawPath}" resolved="${filePath}" workspace_dir="${workspaceDir}" canonical=${filePath.startsWith(workspaceDir)} exists=${fs.existsSync(filePath)}`);
-        // H5: sinaliza path placeholder — não bloqueia escrita mas registra para análise
         log.info(
             `[PATH-QUALITY] tool=write requested="${rawPath}" resolved="${filePath}"` +
             ` is_placeholder=${isPlaceholder} confidence=${isPlaceholder ? 'high' : 'ok'}` +
             (isPlaceholder ? ` matched_pattern="${placeholderMatch}"` : '')
         );
-        // ITEM5: detecta placeholder para rastreamento de origem
         if (isPlaceholder) {
             log.warn(`[PLACEHOLDER-DETECTION] tool=write path="${rawPath}" matched_pattern="${placeholderMatch}"`);
         }
         if (pathError) {
             return { success: false, output: '', error: pathError };
+        }
+        if (selfErr) {
+            return { success: false, output: '', error: selfErr };
         }
 
         // CONTENT-STUB-GATE: falha rápido quando o conteúdo é um placeholder.

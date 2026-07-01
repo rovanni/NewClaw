@@ -4,6 +4,10 @@
  * Substitui chamadas Unix-only (which, ps aux, df, /tmp, etc.) por
  * equivalentes Node.js portáveis. Importe daqui em vez de usar execSync
  * com comandos de shell específicos de plataforma.
+ *
+ * Também exporta resolvePath() — resolução unificada de caminhos para todos os
+ * tools de arquivo (write, read, edit, send_document, list_workspace).
+ * Usa apenas APIs nativas do Node.js: path.*, os.homedir(), os.tmpdir().
  */
 
 import { execSync, execFileSync } from 'child_process';
@@ -144,4 +148,127 @@ export function linuxDistro(): string | undefined {
  */
 export function sleepSync(ms: number): void {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// ─── Resolução de caminhos de arquivo ────────────────────────────────────────
+//
+// Implementação única compartilhada por write_tool, read_tool, edit_tool,
+// send_document e list_workspace. Usa apenas APIs nativas do Node.js.
+//
+// Estratégia multi-candidato:
+//   1. Path absoluto como fornecido (se existir no disco)
+//   2. Path relativo ao workspaceDir (strip da barra inicial)
+//   3. Fallback /workspace/ → workspaceDir (evita nesting workspace/workspace/)
+//   Retorna o primeiro candidato (a) permitido pelo sandbox E (b) existente,
+//   ou o primeiro permitido quando o arquivo ainda não existe (operações de escrita).
+
+/**
+ * Resolve e valida um caminho dentro do sandbox do workspace.
+ *
+ * @param inputPath  Caminho bruto recebido do LLM (absoluto, relativo, com ~, com workspace/).
+ * @param extraRoots Roots adicionais a permitir no sandbox (ex: ['/custom/dir']).
+ * @returns { resolved } ou { resolved, error } quando fora do sandbox.
+ */
+export function resolvePath(
+    inputPath: string,
+    { extraRoots = [] }: { extraRoots?: string[] } = {}
+): { resolved: string; error?: string } {
+    const workspaceDir = path.resolve(process.env.WORKSPACE_DIR ?? path.join(process.cwd(), 'workspace'));
+    const homeDir      = os.homedir();
+    const tmpDirectory = os.tmpdir();
+
+    let expanded = Array.isArray(inputPath) ? String((inputPath as string[])[0] ?? '') : String(inputPath ?? '');
+
+    // Strip prefixo relativo 'workspace/' (sem barra inicial)
+    if (!expanded.startsWith('/') && !expanded.startsWith('\\') && expanded.startsWith('workspace/')) {
+        expanded = expanded.slice(10);
+    }
+
+    // Expansão ~/
+    if (expanded.startsWith('~/')) {
+        expanded = path.join(homeDir, expanded.slice(2));
+    } else if (expanded.startsWith('@')) {
+        expanded = expanded.slice(1);
+    }
+
+    // ── COMPATIBILIDADE LEGADA ────────────────────────────────────────────────
+    // Problema de dados, não de plataforma: o LLM gera caminhos do workspace de
+    // outra máquina (VPS, macOS, Windows) que ficam persistidos na memória.
+    // Regra: qualquer path absoluto contendo /workspace/ que NÃO pertença ao
+    // workspaceDir atual é tratado como "path relativo ao workspace".
+    // Ex.: /home/X/Y/workspace/Z  → workspaceDir/Z  (Linux VPS)
+    //      /Users/X/Y/workspace/Z → workspaceDir/Z  (macOS)
+    //      /workspace/Z           → workspaceDir/Z  (canônico)
+    // Ubuntu sem regressão: /home/X/Y/workspace/Z onde workspaceDir=/home/X/Y/workspace
+    //   → startsWith(workspaceDir + sep) = true → nenhuma transformação ocorre.
+    // Remoção: quando a memória não contiver mais paths absolutos de ambientes legados.
+    const wsIdx = expanded.lastIndexOf('/workspace/');
+    const alreadyLocal = expanded.startsWith(workspaceDir + path.sep) || expanded === workspaceDir;
+    if (wsIdx !== -1 && !alreadyLocal) {
+        expanded = path.join(workspaceDir, expanded.slice(wsIdx + '/workspace/'.length));
+    } else if (expanded === '/workspace') {
+        expanded = workspaceDir;
+    }
+    // ── /COMPATIBILIDADE LEGADA ───────────────────────────────────────────────
+
+    const allowedRoots = [
+        workspaceDir,
+        tmpDirectory,
+        path.join(process.cwd(), 'workspace'),
+        path.join(process.cwd(), 'logs'),
+        path.join(process.cwd(), 'data'),
+        homeDir,
+        ...extraRoots,
+    ];
+
+    const checkAllowed = (p: string): boolean =>
+        allowedRoots.some(root => {
+            const rel = path.relative(root, p);
+            return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+        });
+
+    const candidates: string[] = path.isAbsolute(expanded)
+        ? [
+            path.normalize(expanded),
+            path.resolve(workspaceDir, expanded.slice(1)),
+            ...(expanded.startsWith('/workspace/')
+                ? [path.resolve(workspaceDir, expanded.slice(11))]
+                : []),
+          ]
+        : [path.resolve(workspaceDir, expanded)];
+
+    const unique = [...new Set(candidates)];
+
+    // Fase 1: candidato permitido que já existe no disco
+    for (const c of unique) {
+        if (checkAllowed(c) && fs.existsSync(c)) return { resolved: c };
+    }
+    // Fase 2: candidato permitido (arquivo ainda não existe — operações de escrita)
+    for (const c of unique) {
+        if (checkAllowed(c)) return { resolved: c };
+    }
+
+    return {
+        resolved: unique[0] ?? inputPath,
+        error: `⛔ Caminho fora do sandbox: ${inputPath} → tentados: ${unique.join(', ')}`,
+    };
+}
+
+/**
+ * Verifica se o caminho resolvido aponta para o código-fonte do próprio NewClaw.
+ * Retorna string de erro se bloqueado, null se permitido.
+ * Usado por write_tool e edit_tool para impedir auto-edição.
+ */
+export function selfEditError(resolved: string): string | null {
+    const root = process.cwd();
+    const blocked = [
+        path.join(root, 'src'),
+        path.join(root, 'dist'),
+        path.join(root, 'bin'),
+        path.join(root, '.env'),
+    ];
+    if (blocked.some(b => resolved === b || resolved.startsWith(b + path.sep))) {
+        return `⛔ BLOCKED: Não pode modificar código próprio do NewClaw (${resolved})`;
+    }
+    return null;
 }

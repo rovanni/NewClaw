@@ -136,7 +136,7 @@ const ERROR_PATTERNS: ErrorPattern[] = [
         kind: 'environment_limit',
         description: () => 'Python protegido pelo sistema (PEP 668) — pip install bloqueado',
         suggestedActions: [
-            'Criar ambiente virtual e instalar: python3 -m venv /tmp/venv && /tmp/venv/bin/pip install <pacote> && /tmp/venv/bin/python script.py',
+            'Criar ambiente virtual e instalar: python3 -m venv venv && venv/bin/pip install <pacote> && venv/bin/python script.py',
             'Usar pandoc para conversão direta (sem Python): pandoc arquivo.md -o arquivo.pptx',
             'Usar pipx para ferramentas globais: pipx install <ferramenta>',
         ],
@@ -306,7 +306,7 @@ export class GoalEvaluator {
                         description: `Caminho não encontrado ao executar '${toolName}': ${error.slice(0, 200)}`,
                         suggestedActions: [
                             'Verificar se o caminho existe com list_workspace',
-                            'Listar o diretório pai: exec_command ls /home/venus/newclaw/workspace',
+                            'Listar o workspace: list_workspace',
                             'Corrigir o caminho no próximo passo',
                         ],
                         detectedAt: Date.now(),

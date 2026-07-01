@@ -1857,7 +1857,7 @@ export class AgentLoop {
                                 // Path não existe — sugere explorar o workspace antes de adivinhar caminhos
                                 loopMessages.push({
                                     role: 'system',
-                                    content: `[PATH INEXISTENTE] O caminho informado não existe. NÃO repita o mesmo comando. Use exec_command com "ls /home/venus/newclaw/workspace" ou "list_workspace" para descobrir a estrutura real antes de prosseguir.`,
+                                    content: `[PATH INEXISTENTE] O caminho informado não existe. NÃO repita o mesmo comando. Use "list_workspace" para descobrir a estrutura real do workspace antes de prosseguir.`,
                                 });
                             } else {
                                 loopMessages.push({

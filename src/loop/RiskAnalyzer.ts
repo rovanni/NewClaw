@@ -598,7 +598,7 @@ Se o plano estiver completo e correto → retorne {"risks": [], "plan": null}
 Se precisar de ajuste → retorne o plano completo corrigido.
 
 ⚠️ SCHEMAS OBRIGATÓRIOS ao adicionar ou ajustar steps:
-  write:       {"path": "/home/venus/newclaw/workspace/resultado.txt", "content": "conteúdo completo aqui"}
+  write:       {"path": "resultado.txt", "content": "conteúdo completo aqui"}
                — path e content são OBRIGATÓRIOS. Nunca adicione write sem ambos.
   web_navigate: {"action": "search", "query": "texto"} OU {"action": "open", "url": "https://..."} OU {"action": "follow_link", "url": "https://...", "link_text": "texto do link"}
                — action deve ser exatamente search, open ou follow_link. Nunca use outra string.

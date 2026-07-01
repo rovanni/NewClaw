@@ -13,6 +13,7 @@ import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import fs from 'fs';
 import path from 'path';
 import * as crypto from 'crypto';
+import { resolvePath } from '../utils/crossPlatform';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
 
@@ -38,113 +39,6 @@ export class ReadTool implements ToolExecutor {
         required: ['path']
     };
 
-    /**
-     * Resolve e valida caminho dentro do sandbox (workspace).
-     *
-     * Estratégia multi-candidato:
-     * 1. Resolver o caminho como fornecido (absoluto ou relativo ao workspace)
-     * 2. Se absoluto e não existir no disco, tentar como relativo ao workspace
-     *    Exemplo: "/uenp" → tenta "/uenp", depois "WORKSPACE_DIR/uenp"
-     * 3. Retornar o primeiro candidato que (a) é permitido E (b) existe no disco
-     * 4. Se nenhum existir, retornar o primeiro permitido (para operações de escrita)
-     */
-    private resolvePath(inputPath: string): { resolved: string; error?: string } {
-        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
-        const projectRoot = process.cwd();
-        const homeDir = process.env.HOME || '/root';
-
-        // Garante que expanded seja sempre uma string, mesmo que o LLM passe array ou objeto
-        let expanded = Array.isArray(inputPath) ? String(inputPath[0] ?? '') : String(inputPath ?? '');
-        
-        // Normalizar APENAS prefixo relativo 'workspace/' (sem barra inicial).
-        if (!expanded.startsWith('/') && expanded.startsWith('workspace/')) {
-            expanded = expanded.slice(10);
-        }
-
-        if (expanded.startsWith('~/')) {
-            expanded = homeDir + expanded.slice(1);
-        } else if (expanded.startsWith('@')) {
-            expanded = expanded.slice(1);
-        }
-
-        // Roots permitidas (Sandbox)
-        const allowedRoots = [
-            workspaceDir,
-            '/tmp',
-            '/workspace',
-            path.join(projectRoot, 'workspace'),
-            path.join(projectRoot, 'logs'),
-            path.join(projectRoot, 'data'),
-            homeDir,
-        ];
-
-        const checkAllowed = (p: string): boolean => {
-            return allowedRoots.some(root => {
-                const rel = path.relative(root, p);
-                if (rel === '') return true;
-                return !rel.startsWith('..') && !path.isAbsolute(rel);
-            });
-        };
-
-        // Construir lista de candidatos (ordem de prioridade)
-        // IMPORTANT: Most specific/direct paths first, then fallbacks.
-        // Avoid nested workspace/workspace/ paths by preferring direct paths.
-        const candidates: string[] = [];
-
-        if (path.isAbsolute(expanded)) {
-            // 1. Absolute path as-is (highest priority)
-            //    But skip if it's under WORKSPACE_DIR/workspace/ (nested, likely wrong)
-            const directPath = path.normalize(expanded);
-            const nestedWorkspace = path.join(workspaceDir, 'workspace');
-            if (!directPath.startsWith(nestedWorkspace + path.sep) && directPath !== nestedWorkspace) {
-                candidates.push(directPath);
-            }
-            
-            // 2. Fallback: treat as relative to workspace (strip leading /)
-            //    /uenp → WORKSPACE_DIR/uenp
-            const relativeToWorkspace = path.resolve(workspaceDir, expanded.slice(1));
-            candidates.push(relativeToWorkspace);
-            
-            // 3. Fallback for /workspace/ prefix:
-            //    /workspace/tmp/x → WORKSPACE_DIR/tmp/x (not WORKSPACE_DIR/workspace/tmp/x)
-            if (expanded.startsWith('/workspace/')) {
-                candidates.push(path.resolve(workspaceDir, expanded.slice(11)));
-            }
-        } else {
-            // Relative: resolve from workspace
-            candidates.push(path.resolve(workspaceDir, expanded));
-        }
-
-        // De-duplicate candidates (preserve order)
-        const seen = new Set<string>();
-        const uniqueCandidates = candidates.filter(c => {
-            if (seen.has(c)) return false;
-            seen.add(c);
-            return true;
-        });
-
-        // Phase 1: find the first candidate that is allowed AND exists on disk
-        for (const candidate of uniqueCandidates) {
-            if (checkAllowed(candidate) && fs.existsSync(candidate)) {
-                return { resolved: candidate };
-            }
-        }
-
-        // Phase 2: no candidate exists — return the first allowed candidate
-        // (needed for write operations where the file doesn't exist yet)
-        for (const candidate of uniqueCandidates) {
-            if (checkAllowed(candidate)) {
-                return { resolved: candidate };
-            }
-        }
-
-        // No candidate is allowed
-        return {
-            resolved: uniqueCandidates[0] || inputPath,
-            error: `⛔ Caminho fora do sandbox: ${inputPath} → tentados: ${uniqueCandidates.join(', ')}. Allowed roots: ${allowedRoots.join(', ')}`
-        };
-    }
-
     async execute(args: Record<string, any>): Promise<ToolResult> {
         const rawPath = args.path as string;
 
@@ -152,8 +46,8 @@ export class ReadTool implements ToolExecutor {
             return { success: false, output: '', error: 'Parâmetro "path" é obrigatório' };
         }
 
-        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
-        const { resolved: filePath, error: pathError } = this.resolvePath(rawPath);
+        const workspaceDir = path.resolve(process.env.WORKSPACE_DIR ?? path.join(process.cwd(), 'workspace'));
+        const { resolved: filePath, error: pathError } = resolvePath(rawPath);
 
         // H5: detectar path placeholder antes de tentar abrir o arquivo
         const isPlaceholder = PATH_PLACEHOLDER_PATTERN.test(rawPath);
@@ -200,7 +94,7 @@ export class ReadTool implements ToolExecutor {
                             ? ` Arquivos em ${parentDir}: ${entries.join(', ')}.`
                             : ` Diretório ${parentDir} está vazio.`;
                     } else {
-                        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
+                        const workspaceDir = path.resolve(process.env.WORKSPACE_DIR ?? path.join(process.cwd(), 'workspace'));
                         if (fs.existsSync(workspaceDir)) {
                             const entries = fs.readdirSync(workspaceDir).slice(0, 20);
                             hint = entries.length > 0

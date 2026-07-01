@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import path from 'path';
 import { createLogger } from '../shared/AppLogger';
 import { ConfidenceClassifier } from '../core/ConfidenceClassifier';
 import { MemoryNode, MemoryNodeRow, EpistemicStatus, IdentityScope } from './memoryTypes';
@@ -325,7 +326,7 @@ export function bootstrapCoreGraph(
     }
 
     if (!getNode(db, 'pref_workspace')) {
-        const defaultPath = process.env.WORKSPACE_DIR || '/newclaw/workspace';
+        const defaultPath = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
         addNode(db, classifier, { id: 'pref_workspace', type: 'preference', name: 'Workspace', content: `Workspace principal do NewClaw em ${defaultPath}` }, 'bootstrap');
     }
 

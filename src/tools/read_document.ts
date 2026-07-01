@@ -176,14 +176,14 @@ export class ReadDocumentTool implements ToolExecutor {
                     // nomes de arquivo com caracteres especiais não chegam ao shell.
                     const { stdout } = await execFileAsync(
                         'tesseract',
-                        [path.join('/tmp', png), 'stdout', '-l', 'por+eng'],
+                        [path.join(osTmp, png), 'stdout', '-l', 'por+eng'],
                         { timeout: 30_000 },
                     );
                     texts.push(stdout.trim());
                 } catch { /* skip page */ }
             }
             // Cleanup
-            pngs.forEach(f => { try { fs.unlinkSync(path.join('/tmp', f)); } catch { /* ignore */ } });
+            pngs.forEach(f => { try { fs.unlinkSync(path.join(osTmp, f)); } catch { /* ignore */ } });
 
             const combined = texts.join('\n\n').trim();
             if (combined.length > 50) {
@@ -208,7 +208,7 @@ export class ReadDocumentTool implements ToolExecutor {
 
         // Try LibreOffice headless text export
         try {
-            const outDir = '/tmp';
+            const outDir = require('os').tmpdir() as string;
             await execAsync(`libreoffice --headless --convert-to txt "${filePath}" --outdir "${outDir}"`, { timeout: TIMEOUT_MS });
             const txtPath = path.join(outDir, path.basename(filePath, path.extname(filePath)) + '.txt');
             if (fs.existsSync(txtPath)) {

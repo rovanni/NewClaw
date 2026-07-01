@@ -71,7 +71,7 @@ export class OrganizeWorkspaceTool implements ToolExecutor {
     }
 
     async execute(args: Record<string, unknown>): Promise<ToolResult> {
-        const workspaceDir = path.resolve(process.env.WORKSPACE_DIR || './workspace');
+        const workspaceDir = path.resolve(process.env.WORKSPACE_DIR ?? path.join(process.cwd(), 'workspace'));
 
         // Aviso de compatibilidade para args legados
         if (args.dry_run === true) {

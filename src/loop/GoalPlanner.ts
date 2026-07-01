@@ -11,6 +11,7 @@
  * Output: PlanStep[] — lista de steps com toolName, toolArgs e fallbackSteps.
  */
 
+import path from 'path';
 import { createLogger } from '../shared/AppLogger';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
@@ -419,7 +420,7 @@ COLETA EM LOTE (quando o objetivo exige buscar dados para N itens do mesmo tipo,
 REGRAS CRÍTICAS para blocker 'environment_limit':
 - Se o blocker mencionar PEP 668 ou 'externally-managed':
   → NÃO use pip install direto nem --break-system-packages.
-  → Use venv: python3 -m venv /tmp/venv && /tmp/venv/bin/pip install <pacote> && /tmp/venv/bin/python script.py
+  → Use venv: python3 -m venv venv && venv/bin/pip install <pacote> && venv/bin/python script.py
   → Se venv também falhar, use módulos built-in do Python (zipfile, json, csv, os, shutil).
 - Se o blocker mencionar 'ensurepip not available' ou 'python3-venv não instalado':
   → NÃO use python3 -m venv. Use módulos built-in ou skills disponíveis (ver INSTRUÇÕES DE SKILL acima).
@@ -454,19 +455,20 @@ Responda APENAS com JSON válido (sem markdown, sem tags, sem texto extra):
 
 // Extrai caminhos Unix absolutos do texto (mínimo 2 segmentos: /a/b ou mais).
 // Usado para preservar caminhos literais informados pelo usuário no prompt de planejamento.
-// Filtra caminhos que vêm de URLs (file://, http://) ou de paths do Windows (C:\, /Users/lucia)
-// para evitar que o planner injete steps de validação com paths fora do servidor.
+// Aceita um caminho se, após normalização, ele apontar para dentro do WORKSPACE_DIR.
+// Rejeita apenas caminhos fora do workspace ou tentativas de path traversal.
 function extractUnixPaths(text: string): string[] {
-    // Remove URLs file:// e http(s):// antes de extrair para não capturar paths locais do usuário
+    const workspaceDir = path.resolve(process.env.WORKSPACE_DIR ?? path.join(process.cwd(), 'workspace'));
+    // Remove URLs antes de extrair para não capturar paths locais embutidos em URLs
     const sanitized = text
-        .replace(/file:\/\/\/[^\s"')]+/gi, '')   // remove file:/// URLs (Windows/Mac local)
-        .replace(/https?:\/\/[^\s"')]+/gi, '');   // remove http(s):// URLs
+        .replace(/file:\/\/\/[^\s"')]+/gi, '')
+        .replace(/https?:\/\/[^\s"')]+/gi, '');
     const matches = sanitized.match(/\/[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)+/g) ?? [];
     return [...new Set(matches)].filter(p => {
-        // Rejeita caminhos que claramente pertencem ao ambiente local do usuário (não ao servidor)
-        if (/^\/(Users|home\/(?!venus))[\/]/i.test(p)) return false;
-        if (/^\/(C:|D:|Windows|Program Files)/i.test(p)) return false;
-        return true;
+        // Aceita somente se o path, após normalização, pertencer ao WORKSPACE_DIR.
+        // Rejeita paths de outras máquinas, paths de sistema e tentativas de traversal.
+        const rel = path.relative(workspaceDir, path.normalize(p));
+        return !rel.startsWith('..') && !path.isAbsolute(rel);
     });
 }
 

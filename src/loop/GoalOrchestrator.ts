@@ -44,6 +44,8 @@ interface RecentCompletedGoal {
     finalOutput: string;
     completedAt: number;
     success: boolean;
+    /** true = roteado pelo GoalExecutionLoop; false = resposta direta do AgentLoop (não-goal) */
+    isGoal: boolean;
 }
 
 export class GoalOrchestrator {
@@ -242,16 +244,25 @@ export class GoalOrchestrator {
             // para que follow-ups recebam o tópico correto como contexto.
             // Sem isso, "Busque os dados do river?" (termina em '?') vai pelo AgentLoop,
             // e "Quero dados atuais!" chega sem saber que o assunto era RIVER.
+            // PRESERVAÇÃO: não sobrescreve se há um GOAL recente (sucesso ou falha) na janela.
+            // Sem isso, a resposta ao texto secundário apaga o contexto do goal falho e
+            // o follow-up ("Conseguiu criar os slides?") perde a referência ao goal anterior.
+            const existingGoal = this.recentCompletedGoals.get(sessionKey);
+            const existingIsRecentGoal = existingGoal?.isGoal &&
+                (Date.now() - existingGoal.completedAt) < RECENT_GOAL_TTL_MS;
             const agentOutputText = typeof agentResult === 'string'
                 ? agentResult
                 : (agentResult as ProcessedResult)?.text ?? '';
-            this.recentCompletedGoals.set(sessionKey, {
-                intent: message,
-                objective: message.slice(0, 200),
-                finalOutput: agentOutputText.slice(0, 500),
-                completedAt: Date.now(),
-                success: true,
-            });
+            if (!existingIsRecentGoal) {
+                this.recentCompletedGoals.set(sessionKey, {
+                    intent: message,
+                    objective: message.slice(0, 200),
+                    finalOutput: agentOutputText.slice(0, 500),
+                    completedAt: Date.now(),
+                    success: true,
+                    isGoal: false,
+                });
+            }
 
             log.info(
                 `[GOAL-ROI]` +
@@ -304,13 +315,15 @@ export class GoalOrchestrator {
         if (this.isPlainTextGoal(message)) {
             log.info(`[GOAL-ROUTING] route=agentloop_inline reason=plain_text_goal intent="${message.slice(0, 80)}"`);
             const inlineResult = await this.agentLoop.process(conversationId, message, userId, context);
-            // Registra como goal concluído para Sugestão 3: follow-ups recebem o output anterior
+            // Registra como goal concluído para Sugestão 3: follow-ups recebem o output anterior.
+            // isGoal=true porque passou pela classificação de goal (mesmo que roteado inline).
             this.recentCompletedGoals.set(sessionKey, {
                 intent: message,
                 objective: classification.objective || message,
                 finalOutput: (typeof inlineResult === 'string' ? inlineResult : '').slice(0, 1000),
                 completedAt: Date.now(),
                 success: true,
+                isGoal: true,
             });
             return inlineResult;
         }
@@ -404,6 +417,7 @@ export class GoalOrchestrator {
             finalOutput: result.finalOutput.slice(0, 1000),
             completedAt: Date.now(),
             success: result.success,
+            isGoal: true,
         });
 
         // Auth pendente: preserva o texto E os botões do inline keyboard

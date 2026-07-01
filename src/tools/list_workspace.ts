@@ -1,8 +1,9 @@
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import fs from 'fs';
 import path from 'path';
+import * as os from 'os';
+import { resolvePath } from '../utils/crossPlatform';
 
-const WORKSPACE = process.env.WORKSPACE_DIR || './workspace';
 const MAX_LINES = 200;
 
 function humanSize(bytes: number): string {
@@ -73,32 +74,25 @@ export class ListWorkspaceTool implements ToolExecutor {
         const pattern = (args.pattern as string) || '';
         const depth = Math.min(Math.max(Number(args.depth) || 2, 1), 4);
 
-        const workspaceAbs = path.resolve(WORKSPACE);
-        const homeDir = process.env.HOME || '/root';
+        // Resolve workspace a cada execução (não singleton) usando a mesma lógica das outras tools.
+        const workspaceAbs = path.resolve(process.env.WORKSPACE_DIR ?? path.join(process.cwd(), 'workspace'));
 
         let targetDir: string;
 
         if (!rawPath) {
             targetDir = workspaceAbs;
-        } else if (path.isAbsolute(rawPath)) {
-            // Caminhos absolutos: usar diretamente se estiver dentro do workspace ou do home.
-            // path.join(WORKSPACE, absPath) concatena literalmente no Node.js e gera paths inválidos.
-            const normalized = path.normalize(rawPath);
-            const inWorkspace = !path.relative(workspaceAbs, normalized).startsWith('..');
-            const inHome = !path.relative(homeDir, normalized).startsWith('..');
-            if (inWorkspace || inHome) {
-                targetDir = normalized;
-            } else {
+        } else {
+            // Usa resolvePath para garantir sandbox idêntico ao das outras tools (VPS, ~/, /workspace/).
+            // Substitui o rawPath.replace(/\.\./g, '') (fraco) e a checagem manual de inWorkspace/inHome.
+            const { resolved, error } = resolvePath(rawPath, { extraRoots: [os.homedir()] });
+            if (error) {
                 return {
                     success: false,
                     output: '',
                     error: `Pasta "${rawPath}" está fora do workspace. Use um caminho relativo (ex: "jogos/tower_defense") ou um caminho dentro de ${workspaceAbs}.`,
                 };
             }
-        } else {
-            // Relativo: remover `..` e juntar ao workspace
-            const safe = rawPath.replace(/\.\./g, '').trim();
-            targetDir = path.join(workspaceAbs, safe);
+            targetDir = resolved;
         }
 
         if (!fs.existsSync(targetDir)) {

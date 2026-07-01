@@ -1,6 +1,7 @@
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import path from 'path';
 import fs from 'fs';
+import { resolvePath } from '../utils/crossPlatform';
 import { MessageBus } from '../channels/MessageBus';
 import { DiscordAdapter } from '../channels/DiscordAdapter';
 import { errorMessage } from '../shared/errors';
@@ -44,47 +45,6 @@ export class SendDocumentTool implements ToolExecutor {
         this.channel = channel || 'telegram';
     }
 
-    /** Resolve e valida caminho dentro do sandbox (workspace) */
-    private resolvePath(inputPath: string): { resolved: string; error?: string } {
-        const workspaceDir = path.resolve(process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace'));
-        const homeDir = process.env.HOME || '/root';
-        let expanded = inputPath;
-
-        if (!expanded.startsWith('/') && expanded.startsWith('workspace/')) {
-            expanded = expanded.slice('workspace/'.length);
-        }
-
-        if (expanded.startsWith('~/')) {
-            expanded = homeDir + expanded.slice(1);
-        }
-
-        // FIX #3: Normalização canônica — /workspace/* → WORKSPACE_DIR/*
-        if (expanded.startsWith('/workspace/')) {
-            expanded = path.join(workspaceDir, expanded.slice('/workspace/'.length));
-        } else if (expanded === '/workspace') {
-            expanded = workspaceDir;
-        }
-
-        // path.resolve elimina travessias (../../), path.normalize não resolve symlinks
-        // antes da checagem de roots — troca necessária para garantir sandbox correto.
-        const normalized = path.resolve(expanded.startsWith('/')
-            ? expanded
-            : path.join(workspaceDir, expanded)
-        );
-
-        const allowedRoots = [workspaceDir, '/tmp', homeDir];
-        const isAllowed = allowedRoots.some(root => {
-            const rel = path.relative(root, normalized);
-            return !rel.startsWith('..') && !path.isAbsolute(rel);
-        });
-
-        if (!isAllowed) {
-            return { resolved: normalized, error: `⛔ Caminho fora do sandbox: ${inputPath}` };
-        }
-
-        return { resolved: normalized };
-    }
-
     async execute(args: Record<string, any>): Promise<ToolResult> {
         const { file_path, caption, filename } = args;
 
@@ -92,8 +52,8 @@ export class SendDocumentTool implements ToolExecutor {
             return { success: false, output: '', error: 'file_path é obrigatório.' };
         }
 
-        const workspaceDir = path.resolve(process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace'));
-        const { resolved: resolvedPath, error: pathError } = this.resolvePath(file_path);
+        const workspaceDir = path.resolve(process.env.WORKSPACE_DIR ?? path.join(process.cwd(), 'workspace'));
+        const { resolved: resolvedPath, error: pathError } = resolvePath(file_path);
         log.info(`[ARTIFACT-PATH] tool=send_document requested="${file_path}" resolved="${resolvedPath}" workspace_dir="${workspaceDir}" canonical=${resolvedPath.startsWith(workspaceDir)} exists=${fs.existsSync(resolvedPath)}`);
         if (pathError) return { success: false, output: '', error: pathError };
 

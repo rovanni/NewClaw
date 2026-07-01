@@ -36,6 +36,7 @@ import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdat
 import { StepSemanticValidator } from './StepSemanticValidator';
 import { GracefulDeliveryOrchestrator } from './GracefulDeliveryOrchestrator';
 import { StrategyDiversityGuard } from './StrategyDiversityGuard';
+import { resolvePath } from '../utils/crossPlatform';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext, ContextAwareTool } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
@@ -2149,7 +2150,17 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             const nodes = await this.memory.semanticSearch(goal.userIntent, 3);
             const relevant = nodes.filter(n => n.content && n.content.trim().length > 10);
             if (relevant.length > 0) {
-                const lines = relevant.map(n => `- [${n.type}] ${String(n.content).slice(0, 150)}`);
+                const lines = relevant.map(n => {
+                    // COMPATIBILIDADE LEGADA: remove prefixos de paths absolutos de outros
+                    // ambientes que ficaram gravados na memória (VPS, outra máquina).
+                    // Ex.: "pasta /home/X/Y/workspace/uenp" → "pasta uenp"
+                    // Remoção: quando memória não contiver mais paths de ambientes legados.
+                    const content = String(n.content).replace(
+                        /\/(?:home|Users)\/[^\s/]+\/[^\s/]+\/workspace\/([^\s,;'")\]]*)/g,
+                        '$1'
+                    );
+                    return `- [${n.type}] ${content.slice(0, 150)}`;
+                });
                 parts.push(`Contexto da memória (relevante ao objetivo):\n${lines.join('\n')}`);
             }
         } catch (err) {
@@ -2428,10 +2439,9 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
                 .map(a => String(a.args['path'] ?? a.args['file_path'] ?? ''))
                 .filter(Boolean)
         )];
-        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
         const artifactLines: string[] = [];
         for (const rawPath of writtenPaths) {
-            const filePath = path.isAbsolute(rawPath) ? rawPath : path.resolve(workspaceDir, rawPath);
+            const { resolved: filePath } = resolvePath(rawPath);
             try {
                 const content = fs.readFileSync(filePath, 'utf-8');
                 const truncated = content.length > 2000 ? content.slice(0, 2000) + '\n...(truncado)' : content;
@@ -2511,7 +2521,7 @@ OU
         // está avaliando o mesmo artefato que foi escrito (detecta cache/leitura antecipada)
         const uniqueArtifacts = [...new Set(artifactsInAttempts)];
         for (const rawArtifact of uniqueArtifacts) {
-            const filePath = path.isAbsolute(rawArtifact) ? rawArtifact : path.resolve(workspaceDir, rawArtifact);
+            const { resolved: filePath } = resolvePath(rawArtifact);
             try {
                 const stat = fs.statSync(filePath);
                 const content = fs.readFileSync(filePath, 'utf-8');
