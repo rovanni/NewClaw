@@ -123,7 +123,15 @@
     .attach-chip .attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .attach-chip .attach-remove { cursor: pointer; color: var(--text-soft); font-weight: bold; padding: 0 2px; }
     .attach-chip .attach-remove:hover { color: var(--danger); }
-    .input-area.drag-over { outline: 2px dashed var(--accent); outline-offset: -4px; background: var(--accent-bg); }
+    .chat-main { position: relative; }
+    .chat-main.drag-over::after {
+      content: '📎 Solte o arquivo aqui';
+      position: absolute; inset: 0; z-index: 10;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--accent-bg); outline: 3px dashed var(--accent); outline-offset: -6px;
+      color: var(--accent); font-size: 1.1rem; font-weight: 600;
+      pointer-events: none;
+    }
     .chat-message .msg-attach { display: block; font-size: 0.76rem; opacity: 0.8; margin-top: 4px; }
     .chat-message .msg-attach img { max-width: 220px; max-height: 220px; border-radius: 8px; display: block; margin-top: 4px; }
 
@@ -169,7 +177,7 @@
     </div>
 
     <!-- Chat -->
-    <div class="chat-main">
+    <div class="chat-main" id="chatMain">
       <div class="chat-container" id="chatContainer"></div>
 
       <div class="input-area" id="inputArea">
@@ -398,11 +406,27 @@
       e.target.value = '';
     });
 
-    // Drag and drop no painel de input
-    const inputArea = document.getElementById('inputArea');
-    ['dragenter', 'dragover'].forEach(evt => inputArea.addEventListener(evt, (e) => { e.preventDefault(); inputArea.classList.add('drag-over'); }));
-    ['dragleave', 'drop'].forEach(evt => inputArea.addEventListener(evt, (e) => { e.preventDefault(); inputArea.classList.remove('drag-over'); }));
-    inputArea.addEventListener('drop', (e) => {
+    // Drag and drop na janela do chat inteira (não só na barra de input, que é um alvo
+    // pequeno demais). Bloqueia o comportamento padrão do browser (abrir o arquivo) em toda
+    // a página, senão soltar fora da zona reconhecida navega a aba para o arquivo.
+    const chatMain = document.getElementById('chatMain');
+    let dragDepth = 0;
+    ['dragenter', 'dragover', 'drop'].forEach(evt => window.addEventListener(evt, (e) => e.preventDefault()));
+    chatMain.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      dragDepth++;
+      chatMain.classList.add('drag-over');
+    });
+    chatMain.addEventListener('dragover', (e) => e.preventDefault());
+    chatMain.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) chatMain.classList.remove('drag-over');
+    });
+    chatMain.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dragDepth = 0;
+      chatMain.classList.remove('drag-over');
       Array.from(e.dataTransfer?.files || []).forEach(addAttachment);
     });
 
