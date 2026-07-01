@@ -195,6 +195,9 @@ flowchart LR
     C --> U
 ```
 
+For the full architectural philosophy behind this (why channels never touch AI logic, what's
+forbidden to import where, how to add a new channel), see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ### Session System (v2)
 
 | Component | Purpose |

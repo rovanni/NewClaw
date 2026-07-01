@@ -89,6 +89,15 @@ export async function transcribeAttachment(
             // Canais sem download por fileId (ex: web) enviam o conteúdo já em base64.
             audioBuffer = Buffer.from(attachment.data, 'base64');
             voiceLog.info('audio_from_inline_data', `size=${audioBuffer.length} type=${attachment.type}`);
+        } else if (attachment.url) {
+            // Discord entrega o áudio via CDN URL — sem fileId/downloadFile por adapter.
+            const audioRes = await fetch(attachment.url);
+            if (!audioRes.ok) {
+                voiceLog.error('audio_url_download_failed', `status=${audioRes.status} url=${attachment.url}`);
+                return `⚠️ Falha ao baixar o arquivo de áudio do canal ${msg.channel}. Tente reenviar.`;
+            }
+            audioBuffer = Buffer.from(await audioRes.arrayBuffer());
+            voiceLog.info('audio_from_url', `size=${audioBuffer.length} type=${attachment.type}`);
         } else {
             if (!fileId) {
                 voiceLog.error('missing_file_id', 'fileId ausente no attachment');
@@ -104,7 +113,7 @@ export async function transcribeAttachment(
                     voiceLog.warn('audio_download_failed', `attempt=${attempt}/${MAX_DOWNLOAD_ATTEMPTS} error=${errorMessage(e)}`);
                     if (attempt === MAX_DOWNLOAD_ATTEMPTS) {
                         voiceLog.error('audio_download_exhausted', e);
-                        return '⚠️ Falha ao baixar o arquivo de áudio do Telegram. Tente reenviar.';
+                        return `⚠️ Falha ao baixar o arquivo de áudio do canal ${msg.channel}. Tente reenviar.`;
                     }
                     await new Promise(r => setTimeout(r, 1000 * attempt));
                 }

@@ -195,6 +195,10 @@ flowchart LR
     C --> U
 ```
 
+Para la filosofía arquitectónica completa detrás de esto (por qué los canales nunca tocan lógica
+de IA, qué está prohibido importar dónde, cómo agregar un canal nuevo), ver
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ### Sistema de Sesiones (v2)
 
 | Componente | Propósito |

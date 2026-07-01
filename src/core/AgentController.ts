@@ -42,6 +42,8 @@ import { SessionLearner } from '../session/SessionLearner';
 import { MemoryGovernor } from '../memory/MemoryGovernor';
 import { createLogger } from '../shared/AppLogger';
 import { MessageBus } from '../channels/MessageBus';
+import type { ChannelAdapter, ChannelType } from '../channels/ChannelAdapter';
+import type { WorkflowCallbackFn } from '../loop/WorkflowTypes';
 import { WebChannelAdapter } from '../channels/WebChannelAdapter';
 import { TelegramAdapter } from '../channels/TelegramAdapter';
 import { DiscordAdapter } from '../channels/DiscordAdapter';
@@ -313,46 +315,11 @@ export class AgentController {
         this.webAdapter = new WebChannelAdapter();
         this.messageBus.registerAdapter(this.webAdapter);
 
-        // Fase 2: injetar workflowCallback no TelegramAdapter.
+        // Fase 2: injetar workflowCallback nos adapters de canal.
         // Callbacks "auth:approve|reject:<txnId>" chegam aqui diretamente,
-        // sem passar pelo MessageBus nem pelo pipeline LLM.
-        this.telegramAdapter.workflowCallback = async (userId, txnId, decision, rawCtx) => {
-            log.info(`[WF] callback userId=${userId} txn=${txnId} decision=${decision}`);
-            const sessionKey = { channel: 'telegram' as const, userId };
-
-            const result = await this.workflowEngine.resume(
-                txnId,
-                decision,
-                (name) => ToolRegistry.get(name)
-            );
-
-            if (!result) {
-                await this.telegramAdapter.send(
-                    { text: '⚠️ Sessão de autorização expirada. Repita o comando.', format: 'plain' },
-                    rawCtx
-                );
-                return;
-            }
-
-            // Se há um goal aguardando esta transação, retoma ou aborta conforme a decisão
-            const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
-            if (pendingGoal) {
-                const responseText = decision === 'rejected'
-                    ? await this.goalOrchestrator.abortGoalFromAuth(txnId)
-                    : await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
-                await this.telegramAdapter.send({ text: responseText, format: 'markdown' }, rawCtx);
-                this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(err =>
-                    log.error('[WF] record_auth_response_failed', err)
-                );
-                return;
-            }
-
-            const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
-            await this.telegramAdapter.send({ text: responseText, format: 'markdown' }, rawCtx);
-            this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(err =>
-                log.error('[WF] record_workflow_response_failed', err)
-            );
-        };
+        // sem passar pelo MessageBus nem pelo pipeline LLM — é uma ação de UI
+        // (clique de botão), não uma mensagem de chat a ser interpretada pelo LLM.
+        this.telegramAdapter.workflowCallback = this.createWorkflowCallback(this.telegramAdapter, 'telegram');
 
         const { tmpDir } = config;
         this.messageBus.registerMediaHandler('voice', async (msg, attachment) =>
@@ -377,30 +344,7 @@ export class AgentController {
             });
             this.discordAdapter.setBus(this.messageBus);
             this.messageBus.registerAdapter(this.discordAdapter);
-            this.discordAdapter.workflowCallback = async (userId, txnId, decision, rawCtx) => {
-                log.info(`[WF] discord callback userId=${userId} txn=${txnId} decision=${decision}`);
-                const sessionKey = { channel: 'discord' as const, userId };
-                const result = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
-                if (!result) {
-                    await this.discordAdapter!.send(
-                        { text: '⚠️ Sessão de autorização expirada. Repita o comando.', format: 'plain' },
-                        rawCtx
-                    );
-                    return;
-                }
-                const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
-                if (pendingGoal) {
-                    const responseText = decision === 'rejected'
-                        ? await this.goalOrchestrator.abortGoalFromAuth(txnId)
-                        : await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
-                    await this.discordAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
-                    this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
-                    return;
-                }
-                const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
-                await this.discordAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
-                this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
-            };
+            this.discordAdapter.workflowCallback = this.createWorkflowCallback(this.discordAdapter, 'discord');
             log.info('Discord adapter registered');
         }
 
@@ -413,30 +357,7 @@ export class AgentController {
             });
             this.whatsAppAdapter.setBus(this.messageBus);
             this.messageBus.registerAdapter(this.whatsAppAdapter);
-            this.whatsAppAdapter.workflowCallback = async (userId, txnId, decision, rawCtx) => {
-                log.info(`[WF] whatsapp callback userId=${userId} txn=${txnId} decision=${decision}`);
-                const sessionKey = { channel: 'whatsapp' as const, userId };
-                const result = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
-                if (!result) {
-                    await this.whatsAppAdapter!.send(
-                        { text: '⚠️ Sessão de autorização expirada. Repita o comando.', format: 'plain' },
-                        rawCtx
-                    );
-                    return;
-                }
-                const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
-                if (pendingGoal) {
-                    const responseText = decision === 'rejected'
-                        ? await this.goalOrchestrator.abortGoalFromAuth(txnId)
-                        : await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
-                    await this.whatsAppAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
-                    this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
-                    return;
-                }
-                const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
-                await this.whatsAppAdapter!.send({ text: responseText, format: 'markdown' }, rawCtx);
-                this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
-            };
+            this.whatsAppAdapter.workflowCallback = this.createWorkflowCallback(this.whatsAppAdapter, 'whatsapp');
             log.info('WhatsApp adapter registered');
         }
 
@@ -449,30 +370,8 @@ export class AgentController {
             });
             this.signalAdapter.setBus(this.messageBus);
             this.messageBus.registerAdapter(this.signalAdapter);
-            this.signalAdapter.workflowCallback = async (userId, txnId, decision, rawCtx) => {
-                log.info(`[WF] signal callback userId=${userId} txn=${txnId} decision=${decision}`);
-                const sessionKey = { channel: 'signal' as const, userId };
-                const result = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
-                if (!result) {
-                    await this.signalAdapter!.send(
-                        { text: '⚠️ Sessão de autorização expirada. Repita o comando.', format: 'plain' },
-                        rawCtx
-                    );
-                    return;
-                }
-                const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
-                if (pendingGoal) {
-                    const responseText = decision === 'rejected'
-                        ? await this.goalOrchestrator.abortGoalFromAuth(txnId)
-                        : await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
-                    await this.signalAdapter!.send({ text: responseText, format: 'plain' }, rawCtx);
-                    this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
-                    return;
-                }
-                const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
-                await this.signalAdapter!.send({ text: responseText, format: 'plain' }, rawCtx);
-                this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(() => {});
-            };
+            // Signal não renderiza markdown — respostas em texto puro.
+            this.signalAdapter.workflowCallback = this.createWorkflowCallback(this.signalAdapter, 'signal', 'plain');
             log.info('Signal adapter registered');
         }
 
@@ -639,6 +538,44 @@ export class AgentController {
         }
         await this.lifecycle.shutdown(reason);
         log.info('NewClaw stopped');
+    }
+
+    /**
+     * Fábrica compartilhada do workflowCallback injetado em cada ChannelAdapter — resume uma
+     * transação de autorização pendente (aprovação/rejeição de ferramenta perigosa) e envia a
+     * resposta de volta ao canal de origem. Único ponto de implementação para Telegram/Discord/
+     * WhatsApp/Signal (antes duplicado 4x, um bloco quase idêntico por canal).
+     */
+    private createWorkflowCallback(adapter: ChannelAdapter, channel: ChannelType, format: 'markdown' | 'plain' = 'markdown'): WorkflowCallbackFn {
+        return async (userId, txnId, decision, rawCtx) => {
+            log.info(`[WF] ${channel} callback userId=${userId} txn=${txnId} decision=${decision}`);
+            const sessionKey = { channel, userId };
+
+            const result = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
+            if (!result) {
+                await adapter.send({ text: '⚠️ Sessão de autorização expirada. Repita o comando.', format: 'plain' }, rawCtx);
+                return;
+            }
+
+            // Se há um goal aguardando esta transação, retoma ou aborta conforme a decisão
+            const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
+            if (pendingGoal) {
+                const responseText = decision === 'rejected'
+                    ? await this.goalOrchestrator.abortGoalFromAuth(txnId)
+                    : await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
+                await adapter.send({ text: responseText, format }, rawCtx);
+                this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(err =>
+                    log.error('[WF] record_auth_response_failed', err)
+                );
+                return;
+            }
+
+            const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
+            await adapter.send({ text: responseText, format }, rawCtx);
+            this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(err =>
+                log.error('[WF] record_workflow_response_failed', err)
+            );
+        };
     }
 
     private registerSkills(): void {
