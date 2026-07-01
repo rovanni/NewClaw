@@ -20,7 +20,7 @@ import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { permissionRegistry } from '../core/PermissionRegistry';
 import { Goal, PlanStep } from './GoalTypes';
-import { detectMissingRequiredArgs } from './GoalPlanner';
+import { detectMissingRequiredArgs, PLACEHOLDER_ARG_PATTERN, WRITE_CONTENT_STUB_PATTERNS } from './GoalPlanner';
 
 const log = createLogger('RiskAnalyzer');
 
@@ -121,6 +121,28 @@ function hasPandocInvalidNoStdin(command: string): boolean {
 /** Remove --no-stdin do comando pandoc. */
 function removePandocNoStdin(command: string): string {
     return command.replace(/\s*--no-stdin\b/g, '').replace(/\s{2,}/g, ' ').trim();
+}
+
+// Cmdlets do PowerShell seguem a convenção Verbo-Substantivo (Get-ChildItem, Where-Object,
+// Remove-Item...). exec_command roda via child_process.exec, que no Windows usa cmd.exe
+// (ComSpec) como shell por padrão — cmd.exe não reconhece cmdlets do PowerShell, causando
+// "'X' não é reconhecido como um comando interno" mesmo em planos que assumem PowerShell
+// disponível (correto: PowerShell ESTÁ disponível no SO, mas não é o shell do exec_command).
+const POWERSHELL_CMDLET_PATTERN = /\b[A-Z][a-zA-Z]*-[A-Z][a-zA-Z]+\b/;
+
+function needsPowerShellWrap(command: string): boolean {
+    if (/^\s*(powershell|pwsh)(\.exe)?\b/i.test(command)) return false; // já encaminhado
+    return POWERSHELL_CMDLET_PATTERN.test(command);
+}
+
+/**
+ * Encaminha o comando para powershell.exe via -EncodedCommand (Base64 UTF-16LE).
+ * Evita o inferno de escaping de aspas entre cmd.exe (shell externo) e PowerShell
+ * (shell alvo) — Base64 não precisa de escaping algum.
+ */
+function wrapForWindowsPowerShell(command: string): string {
+    const encoded = Buffer.from(command, 'utf16le').toString('base64');
+    return `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
 }
 
 // Executáveis comumente usados em exec_command que podem não estar instalados.
@@ -326,6 +348,28 @@ export class RiskAnalyzer {
                 );
                 risks.push(
                     `[AUTO-FIXED] Step "${step.description}": --no-stdin removido do pandoc (flag inválida; exclusiva do marp).`
+                );
+            }
+
+            // PowerShell cmdlet sob cmd.exe (Windows): exec_command usa cmd.exe como shell,
+            // que não reconhece cmdlets Verbo-Substantivo (Get-ChildItem, Where-Object, etc.).
+            // Encaminha automaticamente para powershell.exe em vez de deixar o comando falhar
+            // com "não é reconhecido como um comando interno" — erro que o GoalPlanner então
+            // interpreta erroneamente como "PowerShell indisponível" e evita a estratégia certa.
+            if (
+                CapabilityRegistry.getInstance().getOSSync()?.platform === 'windows' &&
+                needsPowerShellWrap(cmdValue) &&
+                !commandFixes.has(step.id)
+            ) {
+                const fixedCmd = wrapForWindowsPowerShell(cmdValue);
+                commandFixes.set(step.id, fixedCmd);
+                log.info(
+                    `[AUTO-FIX] step=${step.id} tool=exec_command` +
+                    ` fix=wrap_powershell original="${cmdValue.slice(0, 80)}"`
+                );
+                risks.push(
+                    `[AUTO-FIXED] Step "${step.description}": comando PowerShell encaminhado via ` +
+                    `'powershell -EncodedCommand' (exec_command usa cmd.exe como shell no Windows).`
                 );
             }
         }
@@ -680,6 +724,33 @@ OU
                 let toolArgs = resolvedTool && s.toolArgs && typeof s.toolArgs === 'object'
                     ? s.toolArgs as Record<string, unknown>
                     : undefined;
+
+                // Mesma checagem de parsePlanResponse (GoalPlanner): args placeholder gerados pelo LLM
+                // (ex: "{output_step_1}", "/path/to/arquivo"). Sem isso aqui, um placeholder que o
+                // GoalPlanner original não gerou — mas que este ajuste de risco introduziu ou manteve —
+                // sobrevive ao Q2 e só é pego tarde demais, em runtime, pelo ReadTool/WriteTool.
+                if (resolvedTool && toolArgs) {
+                    const placeholderEntry = Object.entries(toolArgs).find(
+                        ([, v]) => typeof v === 'string' && PLACEHOLDER_ARG_PATTERN.test(v)
+                    );
+                    if (placeholderEntry) {
+                        log.warn(`[RiskAnalyzer] adjusted step ${i + 1} has placeholder arg ${placeholderEntry[0]}="${String(placeholderEntry[1]).slice(0, 80)}" — converting to AgentLoop step`);
+                        resolvedTool = undefined;
+                        toolArgs = undefined;
+                    }
+                }
+
+                // Mesma checagem de WRITE-CONTENT-STUB do parsePlanResponse: conteúdo placeholder
+                // em steps 'write' introduzidos/ajustados pelo próprio LLM de risco.
+                if (resolvedTool === 'write' && toolArgs?.content) {
+                    const contentStr = String(toolArgs.content);
+                    const stubMatch = WRITE_CONTENT_STUB_PATTERNS.find(p => p.test(contentStr));
+                    if (stubMatch) {
+                        log.warn(`[RiskAnalyzer] adjusted step ${i + 1}: write content stub detectado — converting to AgentLoop step`);
+                        resolvedTool = undefined;
+                        toolArgs = undefined;
+                    }
+                }
 
                 // Mesma validação do parsePlanResponse: args obrigatórios ausentes
                 // → para send_document sem file_path, tenta inferir a partir do último write do plano.

@@ -472,14 +472,18 @@ function extractUnixPaths(text: string): string[] {
     });
 }
 
-const PLACEHOLDER_ARG_PATTERN =
+// Exportado: RiskAnalyzer.analyzeAndAdjust() reconstrói steps de forma independente
+// (seu próprio adjustedPlan) e precisa da MESMA detecção de placeholder, senão um
+// arg como "{output_step_1}" sobrevive ao ajuste de risco e só é pego tarde demais,
+// pelo ReadTool/WriteTool em runtime (ver PATH-PLACEHOLDER em read_tool.ts).
+export const PLACEHOLDER_ARG_PATTERN =
     /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo)\b|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\/|\{\{step_\d+\.output\}\}/i;
 
 // WRITE-CONTENT-STUB: detecta content placeholder em steps write — converte para AgentLoop.
 // Espelha o CONTENT-STUB-GATE do WriteTool, mas atua antes da execução, durante o parse do plano.
 // O modelo (gemma4:31b-cloud) tende a gerar {"toolName":"write","content":"<67-char-stub>"} em vez de
 // omitir toolName para que o AgentLoop sintetize o conteúdo real a partir de web_search anteriores.
-const WRITE_CONTENT_STUB_PATTERNS: RegExp[] = [
+export const WRITE_CONTENT_STUB_PATTERNS: RegExp[] = [
     /\.\.\.\s*\(.*?conteúdo/i,
     /\(conteúdo\s+(completo|da\s+aula|real)\b/i,
     /\[conteúdo\s*(completo|real|aqui|será|abrang)/i,

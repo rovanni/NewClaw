@@ -98,9 +98,8 @@ export class StepSemanticValidator {
         };
     }
 
-    private fastPathCheck(step: PlanStep, output: string): Omit<StepSemanticValidation, 'shouldDowngradeToPartial'> {
+    private extractKeyTerms(step: PlanStep): string[] {
         const descLower = step.description.toLowerCase();
-        const outputLower = output.toLowerCase();
 
         const tokens = descLower
             .replace(/[^a-z0-9áéíóúãõâêôçàü\s]/g, ' ')
@@ -118,7 +117,39 @@ export class StepSemanticValidator {
             }
         }
 
-        const allKeyTerms = [...new Set([...tokens, ...argTokens])].slice(0, 20);
+        return [...new Set([...tokens, ...argTokens])].slice(0, 20);
+    }
+
+    /**
+     * Recorta o output para caber no prompt do LLM sem descartar a parte relevante.
+     * Um slice(0, N) ingênuo perde o conteúdo quando ele aparece depois do corte —
+     * ex: list_workspace lista diretórios (recursivos) antes de arquivos da raiz, então
+     * um arquivo específico buscado pelo step pode só aparecer bem depois do byte 600.
+     * Isso fez o validador LLM ver um trecho sem o arquivo e reportar 'mismatch' mesmo
+     * com o arquivo presente no output completo (falso positivo de downgrade).
+     */
+    private extractRelevantSnippet(output: string, keyTerms: string[], maxLen: number): string {
+        if (output.length <= maxLen) return output;
+
+        const head = output.slice(0, maxLen);
+        const headLower = head.toLowerCase();
+        const outputLower = output.toLowerCase();
+
+        // Termos genéricos (ex: "workspace") tendem a aparecer logo no cabeçalho do output
+        // mesmo quando o termo que realmente importa (ex: "sanitize_memory") só aparece
+        // depois do corte. Por isso não basta pegar o match mais cedo entre todos os termos —
+        // o que importa é achar um termo que exista no texto completo mas NÃO no corte padrão.
+        const missingTerm = keyTerms.find(t => outputLower.includes(t) && !headLower.includes(t));
+        if (!missingTerm) return head;
+
+        const idx = outputLower.indexOf(missingTerm);
+        const start = Math.max(0, idx - Math.floor(maxLen / 3));
+        return output.slice(start, start + maxLen);
+    }
+
+    private fastPathCheck(step: PlanStep, output: string): Omit<StepSemanticValidation, 'shouldDowngradeToPartial'> {
+        const outputLower = output.toLowerCase();
+        const allKeyTerms = this.extractKeyTerms(step);
         if (allKeyTerms.length === 0) {
             return {
                 result: 'unverifiable',
@@ -153,7 +184,7 @@ export class StepSemanticValidator {
         toolOutput: string,
         goalIntent?: string,
     ): Promise<Omit<StepSemanticValidation, 'shouldDowngradeToPartial'>> {
-        const truncatedOutput = toolOutput.slice(0, 600);
+        const truncatedOutput = this.extractRelevantSnippet(toolOutput, this.extractKeyTerms(step), 600);
         const lines = [
             'Você é um validador de relevância de resultado de ferramentas.',
             '',

@@ -64,8 +64,13 @@ export class ExecCommandTool implements ToolExecutor {
         // Normaliza paths absolutos de outro servidor para o workspace local.
         // O GoalPlanner pode gerar comandos com paths de outra instalação que falham no ambiente atual.
         // Exemplo: "python /home/<user>/<repo>/workspace/script.py" → "python C:/Users/.../workspace/script.py"
+        // Lookahead (?=[\/\s]|$) em vez de exigir "/" literal depois de "workspace": cobre também
+        // referências ao próprio diretório sem conteúdo depois (ex: "mkdir /home/user/repo/workspace",
+        // "cd /home/user/repo/workspace"). Sem isso, um "mkdir /home/x/y/workspace" passava intocado e,
+        // no Windows, criava fisicamente a árvore de pastas home\x\y\workspace dentro do workspace local
+        // (path.isAbsolute('/home/...') é true no win32 — resolve como raiz do drive atual, não rejeitado).
         const wsForwardSlash = workspaceDir.replace(/\\/g, '/');
-        command = command.replace(/\/home\/[^/]+\/[^/]+\/workspace\//g, wsForwardSlash + '/');
+        command = command.replace(/\/home\/[^/]+\/[^/]+\/workspace(?=[/\s]|$)/g, wsForwardSlash);
 
         // Strip "workspace/" apenas quando aparece no INÍCIO do comando (path relativo),
         // nunca no meio de caminhos absolutos (ex: /home/user/newclaw/workspace/jogos).
