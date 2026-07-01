@@ -2151,10 +2151,27 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             const relevant = nodes.filter(n => n.content && n.content.trim().length > 10);
             if (relevant.length > 0) {
                 const lines = relevant.map(n => {
-                    // COMPATIBILIDADE LEGADA: remove prefixos de paths absolutos de outros
-                    // ambientes que ficaram gravados na memória (VPS, outra máquina).
-                    // Ex.: "pasta /home/X/Y/workspace/uenp" → "pasta uenp"
-                    // Remoção: quando memória não contiver mais paths de ambientes legados.
+                    /**
+                     * COMPATIBILIDADE LEGADA
+                     *
+                     * Remove prefixos de paths absolutos de outros ambientes
+                     * que ficaram gravados na memória persistida do sistema.
+                     *
+                     * Exemplo de dado afetado:
+                     *   "mantém a pasta /home/X/Y/workspace/arquivos para..."
+                     *   → "mantém a pasta arquivos para..."
+                     *
+                     * Objetivo: impedir que o LLM aprenda a gerar paths absolutos
+                     * da VPS a partir de memórias antigas, causando geração de
+                     * caminhos inválidos no ambiente atual.
+                     *
+                     * Meta de longo prazo: migrar memórias persistidas para
+                     * conterem apenas caminhos relativos ou nomes de arquivo.
+                     *
+                     * QUANDO REMOVER:
+                     * Quando todos os nós de memória relevantes já contiverem
+                     * apenas caminhos relativos ou não contiverem paths.
+                     */
                     const content = String(n.content).replace(
                         /\/(?:home|Users)\/[^\s/]+\/[^\s/]+\/workspace\/([^\s,;'")\]]*)/g,
                         '$1'

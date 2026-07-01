@@ -61,9 +61,9 @@ export class ExecCommandTool implements ToolExecutor {
         // Se workdir for absoluto, resolve em relação ao root; se relativo, em relação ao workspace
         const effectiveWorkdir = workdir ? path.resolve(workspaceDir, workdir) : workspaceDir;
 
-        // Normaliza paths Linux do servidor (ex: /home/venus/newclaw/workspace/) para o workspace local.
-        // O GoalPlanner pode gerar comandos com paths absolutos do VPS que falham no Windows.
-        // Exemplo: "python /home/venus/newclaw/workspace/script.py" → "python C:/Users/.../workspace/script.py"
+        // Normaliza paths absolutos de outro servidor para o workspace local.
+        // O GoalPlanner pode gerar comandos com paths de outra instalação que falham no ambiente atual.
+        // Exemplo: "python /home/<user>/<repo>/workspace/script.py" → "python C:/Users/.../workspace/script.py"
         const wsForwardSlash = workspaceDir.replace(/\\/g, '/');
         command = command.replace(/\/home\/[^/]+\/[^/]+\/workspace\//g, wsForwardSlash + '/');
 

@@ -73,7 +73,7 @@ Você é um agente pró-ativo. Quando algo falhar, NUNCA pare — encontre outro
 
     INFRA: `## 🖥️ REGRA DE INFRAESTRUTURA E SSH
 - Quando precisar diagnosticar servidores remotos, use ssh_exec.
-- Servidores disponíveis: sol (GPU), marte (localhost), atlas (Selenium), venus (NewClaw).
+- Servidores disponíveis: configure os hosts no arquivo .env ou nas configurações do sistema.
 - NUNCA exponha IPs ou credenciais em respostas ao usuário.
 - NUNCA use jargão técnico como "nós de memória", "embedding", "FTS5" ou "score de similaridade" em respostas ao usuário. Fale em linguagem natural.`,
 

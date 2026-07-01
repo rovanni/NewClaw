@@ -456,9 +456,9 @@ export class ContextPlanner {
                 .filter(e => {
                     if (selected.has(e.nodeId) || !matchesAnyEntity(entities, e)) return false;
                     // Nós KNOWLEDGE_POOL (tier 3+) com baixa importância tendem a ser fatos
-                    // periféricos sobre terceiros (ex: "Jader é professor da UENP") que
+                    // periféricos sobre terceiros (ex: "Pessoa X é professora da Universidade Y") que
                     // contaminam o contexto quando o nome aparece na query por outro motivo
-                    // (ex: "O slide ficou com o nome de Jader — corrija para meu nome").
+                    // (ex: "O slide ficou com o nome errado — corrija para meu nome").
                     // Só inclui tier3+ se importance >= 0.6 (fatos relevantes do próprio usuário).
                     if (e.tier >= MemoryTier.EPISODIC && e.importance < 0.6) return false;
                     return true;
@@ -773,8 +773,8 @@ export class ContextBuilder {
                 if (userNode) {
                     const fullContent = (userNode.summary || '').replace(/\n/g, ' ');
                     // Termos que, se presentes no USER node, podem contaminar contextos não relacionados
-                    const LEAK_TERMS = ['jader', 'river', 'futebol', 'bandeirantes', 'cornélio', 'cornelio',
-                                        'bitcoin', 'cripto', 'uenp', 'coordenador'];
+                    const LEAK_TERMS = ['river', 'futebol', 'bandeirantes', 'cornélio', 'cornelio',
+                                        'bitcoin', 'cripto', 'coordenador'];
                     const found = LEAK_TERMS.filter(t => fullContent.toLowerCase().includes(t));
                     const queryTokensArr = tokenize(query);
                     const hasRelevance = queryTokensArr.some(t => fullContent.toLowerCase().includes(t));

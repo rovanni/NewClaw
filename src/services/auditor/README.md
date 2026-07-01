@@ -6,7 +6,7 @@
 
 Este módulo está no `.gitignore` e **não deve ser enviado ao repositório público**.
 
-## Comandos (Owner-Only — só Luciano)
+## Comandos (Owner-Only — só o owner)
 
 | Comando | Descrição |
 |---------|-----------|
@@ -126,7 +126,7 @@ Formato: `[timestamp] finding=#ID result=applied|rejected reason="..."`
 
 ## Segurança
 
-- **Owner-only**: Apenas o chat_id do Luciano pode disparar
+- **Owner-only**: Apenas o chat_id do o owner pode disparar
 - **LLM local**: Usa Ollama, nenhum dado sai do servidor
 - **Logs locais**: Relatórios ficam no SQLite + fixes.log
 - **gitignore**: Todo o diretório `src/services/auditor/` está no .gitignore

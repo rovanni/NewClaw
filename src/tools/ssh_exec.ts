@@ -31,7 +31,7 @@ export class SshExecTool implements ToolExecutor {
         properties: {
             host: {
                 type: 'string',
-                description: 'Target server: sol, marte, atlas, venus, or a custom user@host'
+                description: 'Target server alias (configured in .env) or a custom user@host'
             },
             command: {
                 type: 'string',

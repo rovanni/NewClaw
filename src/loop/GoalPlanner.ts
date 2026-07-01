@@ -293,7 +293,7 @@ NÃO use pip install NEM python3 -m venv — ambos estão bloqueados neste ambie
 ESTRATÉGIAS VÁLIDAS sem instalação:
   1. python3 -c "import zipfile, shutil, os; ..." — módulo zipfile é built-in, não precisa de pip
   2. Use ferramentas nativas disponíveis no ambiente (verifique capabilities antes de planejar)
-  3. sed -i 's/Jader/Novo Nome/g' arquivo.xml — para edição de XML dentro de zips
+  3. sed -i 's/NomeAntigo/NovoNome/g' arquivo.xml — para edição de XML dentro de zips
 Escolha UMA dessas abordagens. Qualquer plano com pip ou venv será bloqueado automaticamente.\n`
         : '';
 

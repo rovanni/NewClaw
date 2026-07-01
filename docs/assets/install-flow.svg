@@ -29,7 +29,7 @@
 
   <!-- Title -->
   <text x="400" y="38" text-anchor="middle" fill="#00d4aa" font-size="20" font-weight="bold">🪐 NewClaw — Fluxo de Instalação</text>
-  <text x="400" y="58" text-anchor="middle" fill="#94a3b8" font-size="12">curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | bash</text>
+  <text x="400" y="58" text-anchor="middle" fill="#94a3b8" font-size="12">curl -fsSL https://raw.githubusercontent.com/your-username/NewClaw/main/install.sh | bash</text>
 
   <!-- Step 1 -->
   <rect x="150" y="78" width="500" height="52" rx="8" fill="#1e293b" stroke="#00d4aa" stroke-width="2" filter="url(#shadow2)"/>

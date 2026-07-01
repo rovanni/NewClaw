@@ -152,7 +152,7 @@ curl -X POST http://localhost:3090/api/memory/dashboard/record-snapshot
 
 ## ⚠️ Próximos passos
 
-1. Pull `nomic-embed-text` na Vênus: `ssh venus 'ollama pull nomic-embed-text'`
+1. Pull `nomic-embed-text` no servidor: `ssh <servidor> 'ollama pull nomic-embed-text'`
 2. Testar busca semântica real
 3. Adicionar gráficos de evolução no frontend (memory-graph.html)
 4. Considerar sqlite-vss para busca vetorial nativa (performance)

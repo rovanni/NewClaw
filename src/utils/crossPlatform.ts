@@ -8,6 +8,28 @@
  * Também exporta resolvePath() — resolução unificada de caminhos para todos os
  * tools de arquivo (write, read, edit, send_document, list_workspace).
  * Usa apenas APIs nativas do Node.js: path.*, os.homedir(), os.tmpdir().
+ *
+ * ── Filosofia de implementação ────────────────────────────────────────────
+ *
+ * O NewClaw mantém uma única implementação de resolução de caminhos
+ * para Linux, Windows e macOS.
+ *
+ * Regras de decisão (nessa ordem):
+ *   1. O Node.js já resolve? Use path.*, os.*, fs.* — não reimplemente.
+ *   2. Já existe função equivalente no projeto? Reutilize.
+ *   3. O comportamento realmente difere entre plataformas? Só então use
+ *      process.platform — e documente por que é necessário.
+ *
+ * Diferenças reais de plataforma (aceitáveis com process.platform):
+ *   bash vs CMD/PowerShell, chmod, executáveis .exe, /dev/null vs NUL.
+ *
+ * Problemas de dados NÃO são problemas de plataforma:
+ *   paths absolutos vindos de memória persistida, caminhos gerados pelo
+ *   LLM, paths de outra instalação — devem ser tratados na origem do dado,
+ *   não com detecção de SO.
+ *
+ * Compatibilidade histórica permanece isolada e marcada como temporária.
+ * ──────────────────────────────────────────────────────────────────────────
  */
 
 import { execSync, execFileSync } from 'child_process';
@@ -191,17 +213,30 @@ export function resolvePath(
         expanded = expanded.slice(1);
     }
 
-    // ── COMPATIBILIDADE LEGADA ────────────────────────────────────────────────
-    // Problema de dados, não de plataforma: o LLM gera caminhos do workspace de
-    // outra máquina (VPS, macOS, Windows) que ficam persistidos na memória.
-    // Regra: qualquer path absoluto contendo /workspace/ que NÃO pertença ao
-    // workspaceDir atual é tratado como "path relativo ao workspace".
-    // Ex.: /home/X/Y/workspace/Z  → workspaceDir/Z  (Linux VPS)
-    //      /Users/X/Y/workspace/Z → workspaceDir/Z  (macOS)
-    //      /workspace/Z           → workspaceDir/Z  (canônico)
-    // Ubuntu sem regressão: /home/X/Y/workspace/Z onde workspaceDir=/home/X/Y/workspace
-    //   → startsWith(workspaceDir + sep) = true → nenhuma transformação ocorre.
-    // Remoção: quando a memória não contiver mais paths absolutos de ambientes legados.
+    /**
+     * COMPATIBILIDADE LEGADA
+     *
+     * Esta lógica existe apenas para suportar caminhos absolutos
+     * gerados por versões antigas do NewClaw ou persistidos em
+     * memória de sessões anteriores em outra máquina.
+     *
+     * Origem dos dados afetados:
+     * - memórias persistidas com paths da VPS (/home/X/Y/workspace/)
+     * - memórias com paths de macOS (/Users/X/Y/workspace/)
+     * - paths canônicos históricos (/workspace/Z)
+     *
+     * Esta NÃO é a lógica principal de resolução de caminhos.
+     * A lógica principal usa WORKSPACE_DIR + APIs nativas do Node.js.
+     *
+     * Garantia de não-regressão (Ubuntu/Linux):
+     * Quando o path já pertence ao workspaceDir atual, alreadyLocal=true
+     * e nenhuma transformação ocorre — o path é retornado sem alteração.
+     *
+     * QUANDO REMOVER:
+     * Quando a memória persistida não contiver mais nenhum nó com
+     * paths do tipo /home/.../workspace/ ou /Users/.../workspace/.
+     * Verificação: memory_admin + busca por conteúdo com '/workspace/'.
+     */
     const wsIdx = expanded.lastIndexOf('/workspace/');
     const alreadyLocal = expanded.startsWith(workspaceDir + path.sep) || expanded === workspaceDir;
     if (wsIdx !== -1 && !alreadyLocal) {
@@ -209,7 +244,6 @@ export function resolvePath(
     } else if (expanded === '/workspace') {
         expanded = workspaceDir;
     }
-    // ── /COMPATIBILIDADE LEGADA ───────────────────────────────────────────────
 
     const allowedRoots = [
         workspaceDir,

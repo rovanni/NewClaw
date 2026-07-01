@@ -144,7 +144,7 @@ export class SessionContext {
         if (memBlock) {
             const memChars = memBlock.content.length;
             // Verificar se termos de alto risco aparecem no bloco de memória
-            const RISK_TERMS = ['jader', 'river', 'futebol', 'bandeirantes', 'cornélio', 'cornelio', 'uenp'];
+            const RISK_TERMS = ['river', 'futebol', 'bandeirantes', 'cornélio', 'cornelio'];
             const found = RISK_TERMS.filter(t => memBlock.content.toLowerCase().includes(t));
             log.info(
                 `[FINAL-CONTEXT] memBlock_chars=${memChars} riskTerms=[${found.join(',') || 'none'}] ` +
