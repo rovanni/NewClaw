@@ -187,7 +187,7 @@ OPÇÕES:
 
   -NoPrompt          Modo não-interativo
   -NoOnboard         Pular configuração do Telegram
-  -NoService         Pular criação de serviço Windows
+  -NoService         Pular criação da tarefa agendada de auto-início
   -NoFirewall        Pular configuração do firewall
   -DryRun            Simular sem executar
   -Help              Mostrar esta ajuda
@@ -868,41 +868,69 @@ function Step-SetupCLI {
     }
 }
 
-# ── Serviço Windows ──────────────────────────────────────────
+# ── Auto-início (Tarefa Agendada) ─────────────────────────────
 
 function Step-SetupWindowsService {
     if ($NoService) { return }
-    if ($DryRun)    { Write-Dry "criar serviço Windows"; return }
+    if ($DryRun)    { Write-Dry "criar tarefa agendada de auto-início"; return }
 
     Write-Host ""
-    if (Read-YesNo "Criar serviço Windows para auto-iniciar com o sistema?" "y") {
-        if (-not (Test-Admin)) {
-            Write-Warn "Privilégios de administrador necessários para criar serviço."
-            Write-Info "Execute este script como Administrador e rode:"
-            Write-Info "  .\install.ps1 -NoPrompt -NoOnboard -NoFirewall"
-            return
+    if (Read-YesNo "Criar tarefa agendada para auto-iniciar com o Windows?" "y") {
+        # Tarefa Agendada em vez de Serviço Windows nativo (mudança de 02/07/2026).
+        #
+        # POR QUÊ: um Serviço Windows nativo (sc.exe create) exige que o processo
+        # lançado implemente o protocolo de controle de serviço do Win32 — chamar
+        # StartServiceCtrlDispatcher e FICAR RESIDENTE respondendo ao SCM. `newclaw
+        # start` não faz isso: ele só dispara o PM2 (ou um processo destacado) e
+        # retorna — é um CLI comum, feito pra rodar e sair, não um executável de
+        # serviço. O SCM via esse retorno como "o serviço parou inesperadamente"
+        # segundos depois de iniciar (tipicamente erro 1053), e o bot nunca volta
+        # sozinho depois de reiniciar o Windows — mesmo com o serviço "criado com
+        # sucesso" durante a instalação (o bot só parecia funcionar porque
+        # Step-Start já tinha iniciado ele manualmente segundos antes, na mesma
+        # sessão de instalação).
+        #
+        # Bônus: sc.exe create roda como LocalSystem por padrão, uma conta que não
+        # necessariamente enxerga $env:USERPROFILE do usuário que instalou — outra
+        # fonte possível de falha silenciosa. Uma Tarefa Agendada "ao fazer logon"
+        # roda no contexto do próprio usuário, sem essa ambiguidade, e não exige
+        # processo residente — bate exatamente com o jeito que newclaw start já se
+        # comporta (dispara e sai). Também não precisa de admin, diferente do
+        # sc.exe create.
+        $taskName = "NewClaw"
+        $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($existingTask) {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        # Remove um serviço nativo de instalações antigas, se existir — evita os dois
+        # mecanismos tentando iniciar o bot ao mesmo tempo.
+        $existingSvc = Get-Service -Name $taskName -ErrorAction SilentlyContinue
+        if ($existingSvc) {
+            Stop-Service -Name $taskName -ErrorAction SilentlyContinue
+            sc.exe delete $taskName | Out-Null
         }
 
         $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
         $nodePath = if ($nodeCmd) { $nodeCmd.Source } else { "node" }
 
-        $svcName = "NewClaw"
-        $existing = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-        if ($existing) {
-            Stop-Service -Name $svcName -ErrorAction SilentlyContinue
-            sc.exe delete $svcName | Out-Null
+        try {
+            $action    = New-ScheduledTaskAction -Execute $nodePath -Argument "`"$Dir\bin\newclaw`" start" -WorkingDirectory $Dir
+            $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+            $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+            $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+                -Principal $principal -Settings $settings `
+                -Description "NewClaw — Agente Cognitivo Local com Memória Semântica (inicia ao fazer logon)" `
+                -ErrorAction Stop | Out-Null
+
+            Write-Ok "Tarefa agendada '$taskName' criada — NewClaw vai iniciar automaticamente no próximo logon!"
+            Write-Info "Gerenciar: taskschd.msc  ou  Get-ScheduledTask -TaskName $taskName"
+        } catch {
+            Write-Warn "Não foi possível criar a tarefa agendada: $($_.Exception.Message)"
+            Write-Info "Você pode iniciar manualmente com: newclaw start"
         }
-
-        # Usar sc.exe para criar serviço nativo
-        $binPath = "`"$nodePath`" `"$Dir\bin\newclaw`" start"
-        sc.exe create $svcName binPath= $binPath start= auto DisplayName= "NewClaw AI Agent" | Out-Null
-        sc.exe description $svcName "NewClaw — Agente Cognitivo Local com Memória Semântica" | Out-Null
-        sc.exe start $svcName | Out-Null
-
-        Write-Ok "Serviço '$svcName' criado e iniciado!"
-        Write-Info "Gerenciar: services.msc  ou  sc.exe query NewClaw"
     } else {
-        Write-Info "Pulando criação de serviço"
+        Write-Info "Pulando criação de tarefa agendada"
     }
 }
 

@@ -182,7 +182,13 @@ function Step-ShowInventory {
         Write-Info "Configuração: .env presente"
     }
 
-    # Serviço Windows
+    # Tarefa agendada de auto-início
+    $task = Get-ScheduledTask -TaskName "NewClaw" -ErrorAction SilentlyContinue
+    if ($task) {
+        Write-Info "Tarefa agendada: instalada (Status: $($task.State))"
+    }
+
+    # Serviço Windows (instalações antigas, anteriores a 02/07/2026 — ver install.ps1)
     $svc = Get-Service -Name "NewClaw" -ErrorAction SilentlyContinue
     if ($svc) {
         Write-Info "Serviço Windows: instalado (Status: $($svc.Status))"
@@ -351,7 +357,15 @@ function Step-StopServices {
         Write-Ok "Processos restantes encerrados"
     }
 
-    # Remover serviço Windows
+    # Remover tarefa agendada de auto-início
+    $task = Get-ScheduledTask -TaskName "NewClaw" -ErrorAction SilentlyContinue
+    if ($task) {
+        Write-Info "Removendo tarefa agendada..."
+        Unregister-ScheduledTask -TaskName "NewClaw" -Confirm:$false -ErrorAction SilentlyContinue
+        Write-Ok "Tarefa agendada removida"
+    }
+
+    # Remover serviço Windows (instalações antigas, anteriores a 02/07/2026)
     $svc = Get-Service -Name "NewClaw" -ErrorAction SilentlyContinue
     if ($svc) {
         Write-Info "Removendo serviço Windows..."
