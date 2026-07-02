@@ -328,6 +328,23 @@ export class RiskAnalyzer {
 
         if (llmResult.risks.length > 0) risks.push(...llmResult.risks);
 
+        // Propaga a rejeição computada por reviewPlanWithLLM() (CR#3/CR#4) — antes ficava
+        // presa no método privado e nunca chegava no RiskReport público retornado por
+        // analyze(), então nenhum chamador via GoalExecutionLoop recebia o sinal de fato
+        // (só o texto de aviso, dentro de risks[], sobrevivia). Bug pré-existente confirmado
+        // (git show HEAD), documentado em sessão anterior — este é o fix mínimo: só
+        // propagação do estado já calculado, nenhuma regra de decisão nova.
+        if (llmResult.planRejected) {
+            return {
+                risks,
+                adjustedPlan: plan,
+                planAdjusted: false,
+                blocked: false,
+                planRejected: true,
+                rejectionReason: llmResult.rejectionReason,
+            };
+        }
+
         const finalPlan = llmResult.planAdjusted ? llmResult.adjustedPlan : plan;
 
         // ── 3. Verificar se plano final tem steps viáveis ────────────────────
