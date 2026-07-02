@@ -32,9 +32,12 @@ const log = createLogger('RiskAnalyzer');
 // Ollama: 'gemma4:31b-cloud' | OpenRouter: 'google/gemini-2.0-flash' | Gemini: 'gemini-2.0-flash'
 const RISK_REVIEW_MODEL_DEFAULT = process.env.RISK_MODEL || 'gemma4:31b-cloud';
 
-// Binários universais presentes em qualquer shell POSIX sem necessidade de instalação.
-// Checar via CapabilityRegistry causaria falso positivo — esses comandos não estão no
-// TOOLS_TO_PROBE do EnvironmentProbe mas funcionam em qualquer ambiente Linux/macOS.
+// Binários universais presentes em qualquer shell POSIX sem necessidade de instalação —
+// válido apenas para Linux/macOS. No Windows a MAIORIA destes não existe no cmd.exe (shell
+// padrão do exec_command), ver checagem POSIX_ONLY_NO_WIN_EQUIVALENT logo abaixo, que cobre
+// esse gap especificamente para osData.platform==='windows'. Checar via CapabilityRegistry
+// causaria falso positivo em Linux/macOS — esses comandos não estão no TOOLS_TO_PROBE do
+// EnvironmentProbe mas funcionam em qualquer ambiente Linux/macOS.
 const SHELL_UNIVERSALS = new Set([
     'ls', 'cd', 'echo', 'cat', 'grep', 'find', 'pwd', 'mkdir', 'rm', 'cp', 'mv',
     'chmod', 'chown', 'which', 'test', 'head', 'tail', 'sort', 'uniq', 'wc',
@@ -277,6 +280,25 @@ export class RiskAnalyzer {
                         risks.push(`Step "${step.description}": gerenciador de pacotes Linux em ambiente Windows`);
                     if (/\bchmod\b|\bchown\b/.test(cmdLower))
                         risks.push(`Step "${step.description}": 'chmod'/'chown' não existem no Windows`);
+
+                    // Utilitários POSIX de SHELL_UNIVERSALS (ver acima) que NÃO existem no
+                    // cmd.exe (shell padrão do exec_command no Windows) e que exec_command.ts
+                    // não traduz automaticamente hoje — só cmdlets PowerShell Verbo-Substantivo
+                    // são encaminhados (needsPowerShellWrap). Reproduzido ao vivo em produção:
+                    // 'ls'/'cat'/'head'/'grep'/'which'/'find' falhando com "não é reconhecido
+                    // como um comando interno" repetidas vezes, sem que o Q2 sinalizasse nada —
+                    // esses binários estavam em SHELL_UNIVERSALS (linha ~38) e pulavam o
+                    // capability-check por serem tratados como "universais", quando na
+                    // realidade só são universais em shells POSIX.
+                    const firstToken = cmdLower.trim().split(/\s+/)[0]?.replace(/^.*[\\/]/, '');
+                    const POSIX_ONLY_NO_WIN_EQUIVALENT = new Set([
+                        'ls', 'cat', 'grep', 'find', 'rm', 'cp', 'mv', 'which', 'test',
+                        'head', 'tail', 'sort', 'uniq', 'wc', 'touch', 'sed', 'awk', 'tr',
+                        'cut', 'printf', 'tee', 'xargs', 'sh', 'bash', 'read', 'env',
+                    ]);
+                    if (firstToken && POSIX_ONLY_NO_WIN_EQUIVALENT.has(firstToken)) {
+                        risks.push(`Step "${step.description}": '${firstToken}' é um comando POSIX sem equivalente nativo no cmd.exe — use o cmdlet PowerShell equivalente (ex: Get-ChildItem, Get-Content, Select-String, Get-Command) para que exec_command o encaminhe automaticamente`);
+                    }
                 }
 
                 // Comandos Windows executados em Linux/macOS

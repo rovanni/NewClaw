@@ -18,6 +18,7 @@ Após salvar qualquer arquivo com `write`, execute a verificação correspondent
 ### HTML com diagramas (Mermaid, KaTeX, etc.)
 
 ```bash
+# Linux/macOS
 # 1. Confirmar que o arquivo existe e tem tamanho razoável
 ls -lh ARQUIVO.html
 
@@ -28,11 +29,25 @@ grep -c '</html>' ARQUIVO.html && grep -c '</body>' ARQUIVO.html
 grep -n 'class="mermaid"' ARQUIVO.html | head -20
 ```
 
+```powershell
+# Windows: grep/head/ls -lh não existem no shell padrão — use os cmdlets equivalentes
+# (exec_command encaminha automaticamente comandos com cmdlets Verbo-Substantivo para powershell.exe)
+Get-Item ARQUIVO.html | Select-Object Name, Length
+(Select-String -Path ARQUIVO.html -Pattern '</html>').Count
+(Select-String -Path ARQUIVO.html -Pattern '</body>').Count
+Select-String -Path ARQUIVO.html -Pattern 'class="mermaid"' | Select-Object -First 20
+```
+
 Se o usuário reportar "Syntax error in text" do Mermaid, extraia o bloco problemático:
 
 ```bash
-# Encontrar e exibir os blocos mermaid do arquivo
+# Linux/macOS
 grep -n -A 20 'class="mermaid"' ARQUIVO.html | head -100
+```
+
+```powershell
+# Windows
+Select-String -Path ARQUIVO.html -Pattern 'class="mermaid"' -Context 0,20 | Select-Object -First 100
 ```
 
 <!-- TASK_ONLY_START -->
@@ -87,11 +102,18 @@ sequenceDiagram
 Para corrigir um bloco com erro sem ler o arquivo inteiro:
 
 ```bash
+# Linux/macOS
 # 1. Localizar a linha do bloco com problema
 grep -n 'class="mermaid"' ARQUIVO.html
 
 # 2. Ver o conteúdo do bloco (substituir NNN pelo número da linha)
 sed -n 'NNN,+30p' ARQUIVO.html
+```
+
+```powershell
+# Windows
+Select-String -Path ARQUIVO.html -Pattern 'class="mermaid"'
+Get-Content ARQUIVO.html | Select-Object -Skip (NNN-1) -First 30
 ```
 
 Depois use `edit` com `oldText`/`newText` para corrigir apenas o bloco problemático.
@@ -106,6 +128,8 @@ node --check arquivo.js
 ### Python
 
 ```bash
+# Linux/macOS: binário costuma ser python3. Windows: costuma ser python (sem o "3").
+# Se um comando falhar com "não é reconhecido"/"command not found", tente o outro nome.
 python3 -m py_compile arquivo.py && echo "OK" || echo "ERRO DE SINTAXE"
 ```
 
@@ -117,4 +141,4 @@ node -e "JSON.parse(require('fs').readFileSync('arquivo.json','utf8')); console.
 
 ## Regra Geral
 
-**NUNCA declare incapacidade de ler ou editar arquivos do workspace.** Se um arquivo existe no workspace, `read` e `edit` funcionam. Se não souber o caminho, use `find . -iname "*nome*"` para localizá-lo.
+**NUNCA declare incapacidade de ler ou editar arquivos do workspace.** Se um arquivo existe no workspace, `read` e `edit` funcionam. Se não souber o caminho, use `exec_command` para localizá-lo: no Linux/macOS, `find . -iname "*nome*"`; no Windows, `Get-ChildItem -Recurse -Filter "*nome*"`.

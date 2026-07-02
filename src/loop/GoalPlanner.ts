@@ -23,6 +23,7 @@ import { StrategyDiversityGuard } from './StrategyDiversityGuard';
 import { PLACEHOLDER_ARG_PATTERN } from '../shared/placeholderPatterns';
 import { CONTENT_STUB_PATTERNS as WRITE_CONTENT_STUB_PATTERNS } from '../shared/contentStubPatterns';
 import { sanitizePlanSteps } from './planning/sanitizePlanSteps';
+import { isWindows } from '../utils/crossPlatform';
 
 const log = createLogger('GoalPlanner');
 
@@ -854,14 +855,18 @@ export class GoalPlanner {
 
         // Não injeta se o primeiro step já é uma verificação de path
         const firstCmd = String(steps[0]?.toolArgs?.command ?? '');
-        if (steps[0]?.toolName === 'exec_command' && /\btest\s+-[de]\b|\bls\s|\bfind\s/.test(firstCmd)) {
+        if (steps[0]?.toolName === 'exec_command' && /\btest\s+-[de]\b|\bls\s|\bfind\s|\bif exist\b/.test(firstCmd)) {
             return steps;
         }
 
+        // ls/2>/dev/null são sintaxe do shell POSIX — não existem no cmd.exe (shell padrão
+        // do exec_command no Windows, ver exec_command.ts). "if exist" é o equivalente nativo.
         const topPaths = userPaths.slice(0, 2);
         const checkCmd = topPaths
-            .map(p => `ls "${p}" 2>/dev/null && echo "PATH_OK: ${p}" || echo "PATH_MISSING: ${p}"`)
-            .join('; ');
+            .map(p => isWindows
+                ? `if exist "${p}" (echo PATH_OK: ${p}) else (echo PATH_MISSING: ${p})`
+                : `ls "${p}" 2>/dev/null && echo "PATH_OK: ${p}" || echo "PATH_MISSING: ${p}"`)
+            .join(isWindows ? ' & ' : '; ');
 
         const validationStep: PlanStep = {
             id: 'step_path_check',
@@ -935,7 +940,10 @@ Regras:
                         id: 'step_install',
                         description: `Instalar ${blocker.toolName}`,
                         toolName: 'exec_command',
-                        toolArgs: { command: `which ${blocker.toolName} || echo "NOT FOUND"` },
+                        // 'which' não existe no cmd.exe (Windows) — 'where' é o equivalente nativo.
+                        toolArgs: { command: isWindows
+                            ? `where ${blocker.toolName} || echo "NOT FOUND"`
+                            : `which ${blocker.toolName} || echo "NOT FOUND"` },
                         status: 'pending',
                         fallbackSteps: [],
                     },

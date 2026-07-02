@@ -1,3 +1,18 @@
+import { isWindows } from '../utils/crossPlatform';
+
+// exec_command roda no shell nativo do host (cmd.exe no Windows). Comandos POSIX como
+// find/grep/head não existem lá e falham com "não é reconhecido como um comando interno" —
+// visto repetidamente em produção (find, grep, head, ls, which, todos falhando). Os cmdlets
+// PowerShell abaixo (Verbo-Substantivo) são reconhecidos automaticamente por
+// needsPowerShellWrap() em exec_command.ts, que os encaminha para powershell.exe sem esforço
+// extra. No Linux/macOS o comando original continua sendo o correto.
+const FIND_FILE_HINT = isWindows
+    ? 'Get-ChildItem -Recurse -Filter "*parte_do_nome*"'
+    : 'find . -iname "*parte_do_nome*"';
+const GREP_HEAD_HINT = isWindows
+    ? 'Select-String -Path ARQUIVO.html -Pattern "mermaid|class.*diagram" | Select-Object -First 50'
+    : 'grep -n "mermaid\\|class.*diagram" ARQUIVO.html | head -50';
+
 export const PROMPT_COMPONENTS = {
     IDENTITY: `Você é o núcleo cognitivo do sistema NewClaw: um analista profissional, eficiente e seguro.
 
@@ -35,7 +50,7 @@ Você é um agente pró-ativo. Quando algo falhar, NUNCA pare — encontre outro
 **Exemplos de comportamento pró-ativo:**
 - weather falhou para "Bandeirantes, PR" → tente "Bandeirantes" sem o estado
 - web_search retornou pouco → tente query mais curta, ou acesse a fonte diretamente com web_navigate
-- Arquivo não encontrado → use exec_command para buscar: \`find . -iname "*parte_do_nome*"\`
+- Arquivo não encontrado → use exec_command para buscar: \`${FIND_FILE_HINT}\`
 - API de clima fora → use web_search com "previsão Climatempo [cidade]"
 - Dados insuficientes → declare o que encontrou parcialmente e complete com conhecimento interno
 
@@ -47,8 +62,8 @@ Você é um agente pró-ativo. Quando algo falhar, NUNCA pare — encontre outro
 - SEMPRE use caminhos RELATIVOS ao workspace (ex: tmp/arquivo.html). O cwd já é o workspace, então tmp/file.py resolve para WORKSPACE_DIR/tmp/file.py. NUNCA use prefixo workspace/ em caminhos (causa duplicação: workspace/workspace/tmp).
 - Para LER arquivos: use read com path. Use offset+limit para ler seções específicas de arquivos grandes.
 - Para EDITAR arquivos: use edit com path + oldText/newText (replace) ou startLine/endLine (patch) ou append=true (adicionar ao final).
-- SE PERDER O CAMINHO DE UM ARQUIVO (devido a um restart ou compressão de memória): não peça ajuda ao usuário! Use a ferramenta exec_command para buscá-lo rodando \`find . -iname "*parte_do_nome*"\`. O cwd padrão já é o seu workspace, então sempre busque a partir do \`.\`.
-- NUNCA declare "restrição técnica" ou "limitação" para ler arquivos do workspace. Todo arquivo no workspace PODE ser lido com read. Se um arquivo for grande, use exec_command com grep para localizar seções específicas antes de editar: \`grep -n "mermaid\\|class.*diagram" ARQUIVO.html | head -50\`.
+- SE PERDER O CAMINHO DE UM ARQUIVO (devido a um restart ou compressão de memória): não peça ajuda ao usuário! Use a ferramenta exec_command para buscá-lo rodando \`${FIND_FILE_HINT}\`. O cwd padrão já é o seu workspace, então sempre busque a partir do \`.\`.
+- NUNCA declare "restrição técnica" ou "limitação" para ler arquivos do workspace. Todo arquivo no workspace PODE ser lido com read. Se um arquivo for grande, use exec_command para localizar seções específicas antes de editar: \`${GREP_HEAD_HINT}\`.
 - Para CORRIGIR erros em arquivos HTML (ex: sintaxe Mermaid): (1) use exec_command com grep para localizar os blocos com erro, (2) use edit com oldText/newText para corrigir cada bloco sem precisar ler o arquivo inteiro.`,
 
     PDF_CONVERT: `## 📄 REGRA DE CONVERSÃO HTML → PDF (OBRIGATÓRIA)

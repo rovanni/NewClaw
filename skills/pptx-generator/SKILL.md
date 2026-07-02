@@ -219,8 +219,12 @@ print(saudacao("Turma"))
 Quando o arquivo HTML usa Reveal.js ou estrutura de seções:
 
 ```bash
-# Ver estrutura do HTML
+# Ver estrutura do HTML (Linux/macOS)
 grep -n '<section\|<h1\|<h2\|<h3\|<li\|<p' arquivo.html | head -80
+
+# Windows: grep/head não existem no shell padrão — use o cmdlet PowerShell equivalente
+# (exec_command encaminha automaticamente comandos com cmdlets Verbo-Substantivo para powershell.exe)
+Select-String -Path arquivo.html -Pattern '<section|<h1|<h2|<h3|<li|<p' | Select-Object -First 80
 ```
 
 Extrair o conteúdo relevante e montar o .md manualmente, slide a slide.
