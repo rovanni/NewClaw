@@ -710,8 +710,15 @@ const commands = {
           execSync('git stash pop', { cwd: DIR, stdio: 'ignore' });
           console.log('📦 Alterações locais restauradas');
         } catch {
-          // Conflicts — keep stash, user can recover with `git stash list`
-          console.log('⚠️  Conflitos ao restaurar alterações locais (salvas em `git stash list`)');
+          // Conflict: `git stash pop` leaves literal <<<<<<< markers written directly
+          // into the working tree files (including bin/newclaw itself), NOT just a
+          // preserved stash — the CLI becomes unparseable until resolved. Discard the
+          // partial merge so the install always ends update() in a known-good state
+          // matching origin/main; the stash itself is untouched by `reset --hard` and
+          // stays available for manual recovery.
+          execSync('git reset --hard HEAD', { cwd: DIR, stdio: 'ignore' });
+          console.log('⚠️  Conflito ao restaurar alterações locais — descartadas para manter o sistema íntegro.');
+          console.log('   Alterações preservadas em `git stash list` (recupere manualmente se precisar).');
         }
       }
 
