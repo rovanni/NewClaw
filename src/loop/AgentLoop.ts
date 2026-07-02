@@ -24,6 +24,7 @@ import { extractText } from './ResponseAdapter';
 import { AuthorizationManager } from './AuthorizationManager';
 import { ProtocolParser } from './ProtocolParser';
 import { createLogger } from '../shared/AppLogger';
+import { ANALYSIS_INTENT_PATTERN } from '../shared/analysisIntentPattern';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
 import { traceManager, ExecutionTrace } from '../core/ExecutionTrace';
@@ -573,7 +574,7 @@ export class AgentLoop {
         // "a aula está completa" or "30 slides prontos" are legitimate outcomes of a read-only
         // turn — the read IS the goal, not a prelude to write.
         if (last && last.toolName === 'read' && toolFailureCount === 0 && AgentLoop.looksLikeFalseSuccess(response)) {
-            const isAnalysisIntent = /analis|revis|avali|verifi|checar|conferir|melhorar|melhoria|ordem|estrutura|revisar|feedback|resumo|resumir|review/i.test(userText);
+            const isAnalysisIntent = ANALYSIS_INTENT_PATTERN.test(userText);
             if (!isAnalysisIntent) {
                 log.warn(
                     `[${this.ts()}] [COMMIT] False-success after read-only turn (last=read, no write) — blocking hallucinated write claim`
@@ -1337,7 +1338,7 @@ export class AgentLoop {
                 // Adaptar a mensagem de abort ao intent do usuário:
                 // - Análise/review: o read É a ação principal → instruir a apresentar a análise
                 // - Escrita/geração: o read é preâmbulo → instruir a usar exec_command
-                const isAnalysisAbort = /analis|revis|avali|verifi|checar|conferir|melhorar|melhoria|ordem|estrutura|revisar|feedback|resumo|resumir|review/i.test(userText);
+                const isAnalysisAbort = ANALYSIS_INTENT_PATTERN.test(userText);
                 const ratioAbortMsg = (lastToolInCycle === 'read' && !writeToolsUsedThisTurn)
                     ? isAnalysisAbort
                         ? '[CONTEXTO GRANDE] O arquivo foi lido com sucesso e está no contexto. ' +

@@ -20,7 +20,9 @@ import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { permissionRegistry } from '../core/PermissionRegistry';
 import { Goal, PlanStep } from './GoalTypes';
-import { detectMissingRequiredArgs, PLACEHOLDER_ARG_PATTERN, WRITE_CONTENT_STUB_PATTERNS } from './GoalPlanner';
+import { detectMissingRequiredArgs, WRITE_CONTENT_STUB_PATTERNS } from './GoalPlanner';
+import { sanitizePlanSteps } from './planning/sanitizePlanSteps';
+import { resolveToolAlias } from './planning/toolAliasResolver';
 
 const log = createLogger('RiskAnalyzer');
 
@@ -49,101 +51,6 @@ const FUNDAMENTAL_AGENT_TOOLS = new Set([
     'write', 'read', 'edit', 'web_search', 'send_document', 'send_message',
     'memory_search', 'memory_write', 'list_workspace', 'analyze_workspace_groups',
 ]);
-
-/**
- * Detecta comandos marp/pandoc sem arquivo de entrada posicionado ANTES das flags.
- * Causa clássica do erro "waiting data from stdin stream" no marp.
- * Marp aceita apenas .md como entrada; pandoc aceita múltiplos formatos.
- *
- * Regra: o arquivo de entrada deve ser o primeiro argumento não-flag após o binário.
- * Ex correto:   marp entrada.md --no-stdin -o saida.html
- * Ex errado:    marp --no-stdin -o saida.html          (sem arquivo)
- *               marp --pdf slides.md                   (flag antes do arquivo)
- *               npx @marp-team/marp-cli -o output.html (sem arquivo .md)
- */
-function isMarpWithoutInputFile(command: string): boolean {
-    if (!/\bmarp\b/.test(command)) return false;
-    const tokens = command.trim().split(/\s+/);
-    const marpIdx = tokens.findIndex(t => /^(npx|marp)$/.test(t));
-    if (marpIdx < 0) return false;
-    const start = tokens[marpIdx] === 'npx' ? marpIdx + 2 : marpIdx + 1;
-    let beforeFirstFlag = true;
-    for (const t of tokens.slice(start)) {
-        if (t.startsWith('-')) { beforeFirstFlag = false; continue; }
-        if (beforeFirstFlag && (t.endsWith('.md') || t.endsWith('.marp'))) return false;
-    }
-    return true; // sem arquivo .md antes de qualquer flag
-}
-
-/**
- * Detecta marp com arquivo de entrada mas sem --no-stdin.
- * Sem --no-stdin, marp bloqueia esperando stdin mesmo quando recebe um arquivo .md.
- * Deve ser verificado APÓS isMarpWithoutInputFile (que cobre o caso mais grave).
- */
-function isMarpWithoutNoStdin(command: string): boolean {
-    if (!/\bmarp\b/.test(command)) return false;
-    return !/--no-stdin/.test(command);
-}
-
-/**
- * Injeta --no-stdin APÓS o arquivo .md de entrada.
- * REGRA ABSOLUTA (pptx-generator SKILL.md §Passo 3): o arquivo deve preceder qualquer flag.
- * Correto:  marp entrada.md --no-stdin -o saida.pptx
- * ERRADO:   marp --no-stdin entrada.md -o saida.pptx
- */
-function addMarpNoStdin(command: string): string {
-    return command.replace(/(\S+\.(?:md|marp))(\s|$)/, '$1 --no-stdin$2');
-}
-
-/** Mesma lógica para pandoc: requer arquivo de entrada antes das flags. */
-function isPandocWithoutInputFile(command: string): boolean {
-    if (!/\bpandoc\b/.test(command)) return false;
-    const tokens = command.trim().split(/\s+/);
-    const pandocIdx = tokens.findIndex(t => /^pandoc$/.test(t));
-    if (pandocIdx < 0) return false;
-    const start = pandocIdx + 1;
-    let beforeFirstFlag = true;
-    for (const t of tokens.slice(start)) {
-        if (t.startsWith('-')) { beforeFirstFlag = false; continue; }
-        if (beforeFirstFlag && /\.(md|docx|tex|html|rst|odt|rtf)$/.test(t)) return false;
-    }
-    return true;
-}
-
-/**
- * Detecta pandoc com a flag --no-stdin (que é exclusiva do marp, não existe no pandoc).
- * O GoalPlanner pode generalizar incorretamente o fix de marp para pandoc.
- */
-function hasPandocInvalidNoStdin(command: string): boolean {
-    return /\bpandoc\b/.test(command) && /--no-stdin/.test(command);
-}
-
-/** Remove --no-stdin do comando pandoc. */
-function removePandocNoStdin(command: string): string {
-    return command.replace(/\s*--no-stdin\b/g, '').replace(/\s{2,}/g, ' ').trim();
-}
-
-// Cmdlets do PowerShell seguem a convenção Verbo-Substantivo (Get-ChildItem, Where-Object,
-// Remove-Item...). exec_command roda via child_process.exec, que no Windows usa cmd.exe
-// (ComSpec) como shell por padrão — cmd.exe não reconhece cmdlets do PowerShell, causando
-// "'X' não é reconhecido como um comando interno" mesmo em planos que assumem PowerShell
-// disponível (correto: PowerShell ESTÁ disponível no SO, mas não é o shell do exec_command).
-const POWERSHELL_CMDLET_PATTERN = /\b[A-Z][a-zA-Z]*-[A-Z][a-zA-Z]+\b/;
-
-function needsPowerShellWrap(command: string): boolean {
-    if (/^\s*(powershell|pwsh)(\.exe)?\b/i.test(command)) return false; // já encaminhado
-    return POWERSHELL_CMDLET_PATTERN.test(command);
-}
-
-/**
- * Encaminha o comando para powershell.exe via -EncodedCommand (Base64 UTF-16LE).
- * Evita o inferno de escaping de aspas entre cmd.exe (shell externo) e PowerShell
- * (shell alvo) — Base64 não precisa de escaping algum.
- */
-function wrapForWindowsPowerShell(command: string): string {
-    const encoded = Buffer.from(command, 'utf16le').toString('base64');
-    return `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
-}
 
 // Executáveis comumente usados em exec_command que podem não estar instalados.
 // Chave: nome do executável (lowercase). Valor: pacote a instalar.
@@ -278,9 +185,6 @@ export class RiskAnalyzer {
         }
 
         // ── 1b. Detecção proativa de dependências em exec_command ────────────
-        // commandFixes: stepId → comando corrigido (aplica-se ao plan após o loop)
-        const commandFixes = new Map<string, string>();
-
         for (const step of plan) {
             if (step.toolName !== 'exec_command') continue;
             const cmdValue = String(step.toolArgs?.command ?? step.toolArgs?.cmd ?? '');
@@ -313,74 +217,14 @@ export class RiskAnalyzer {
                 }
             }
 
-            // Marp input validation (P0.2): detecta marp sem arquivo .md antes das flags
-            if (isMarpWithoutInputFile(cmdValue)) {
-                risks.push(
-                    `Step "${step.description}": marp invocado sem arquivo .md de entrada antes das flags — causará stdin error. ` +
-                    `Formato correto: marp entrada.md --no-stdin -o saida.html`
-                );
-            } else if (isMarpWithoutNoStdin(cmdValue)) {
-                // P0.3: marp com arquivo mas sem --no-stdin → bloqueia esperando stdin (60 s timeout)
-                const fixedCmd = addMarpNoStdin(cmdValue);
-                commandFixes.set(step.id, fixedCmd);
-                log.info(
-                    `[AUTO-FIX] step=${step.id} tool=exec_command` +
-                    ` fix=add_marp_no_stdin original="${cmdValue.slice(0, 80)}" fixed="${fixedCmd.slice(0, 80)}"`
-                );
-                risks.push(
-                    `[AUTO-FIXED] Step "${step.description}": --no-stdin adicionado ao marp (ausente causava bloqueio de stdin).`
-                );
-            }
-
-            // Pandoc input validation (P0.2): detecta pandoc sem arquivo de entrada antes das flags
-            if (isPandocWithoutInputFile(cmdValue)) {
-                risks.push(
-                    `Step "${step.description}": pandoc invocado sem arquivo de entrada antes das flags. ` +
-                    `Formato correto: pandoc entrada.md -o saida.html`
-                );
-            } else if (hasPandocInvalidNoStdin(cmdValue)) {
-                // P0.3: --no-stdin é flag exclusiva do marp; pandoc não a reconhece (Unknown option)
-                const fixedCmd = removePandocNoStdin(cmdValue);
-                commandFixes.set(step.id, fixedCmd);
-                log.info(
-                    `[AUTO-FIX] step=${step.id} tool=exec_command` +
-                    ` fix=remove_pandoc_no_stdin original="${cmdValue.slice(0, 80)}" fixed="${fixedCmd.slice(0, 80)}"`
-                );
-                risks.push(
-                    `[AUTO-FIXED] Step "${step.description}": --no-stdin removido do pandoc (flag inválida; exclusiva do marp).`
-                );
-            }
-
-            // PowerShell cmdlet sob cmd.exe (Windows): exec_command usa cmd.exe como shell,
-            // que não reconhece cmdlets Verbo-Substantivo (Get-ChildItem, Where-Object, etc.).
-            // Encaminha automaticamente para powershell.exe em vez de deixar o comando falhar
-            // com "não é reconhecido como um comando interno" — erro que o GoalPlanner então
-            // interpreta erroneamente como "PowerShell indisponível" e evita a estratégia certa.
-            if (
-                CapabilityRegistry.getInstance().getOSSync()?.platform === 'windows' &&
-                needsPowerShellWrap(cmdValue) &&
-                !commandFixes.has(step.id)
-            ) {
-                const fixedCmd = wrapForWindowsPowerShell(cmdValue);
-                commandFixes.set(step.id, fixedCmd);
-                log.info(
-                    `[AUTO-FIX] step=${step.id} tool=exec_command` +
-                    ` fix=wrap_powershell original="${cmdValue.slice(0, 80)}"`
-                );
-                risks.push(
-                    `[AUTO-FIXED] Step "${step.description}": comando PowerShell encaminhado via ` +
-                    `'powershell -EncodedCommand' (exec_command usa cmd.exe como shell no Windows).`
-                );
-            }
-        }
-
-        // Aplica correções de comando coletadas no loop 1b antes da revisão LLM
-        if (commandFixes.size > 0) {
-            plan = plan.map(s =>
-                s.toolName === 'exec_command' && commandFixes.has(s.id)
-                    ? { ...s, toolArgs: { ...s.toolArgs, command: commandFixes.get(s.id) } }
-                    : s
-            );
+            // NOTA: as correções de marp/pandoc (--no-stdin ausente/inválido, arquivo de
+            // entrada faltando) e o encaminhamento de cmdlets PowerShell foram movidos pra
+            // dentro do próprio exec_command.ts (execute()). Viviam aqui e só rodavam quando
+            // isComplexPlan() no GoalExecutionLoop decidia acionar o Q2 (>=3 steps, ou
+            // exec_command+write/send juntos) — um plano de 1 step só com exec_command (o caso
+            // mais comum) pulava o Q2 inteiro e as correções nunca eram aplicadas.
+            // exec_command.ts roda incondicionalmente pra toda chamada, então é o único lugar
+            // que garante a correção sempre.
         }
 
         // ── 1c. Pre-flight via CapabilityRegistry (síncrono, sem LLM) ────────
@@ -497,7 +341,7 @@ export class RiskAnalyzer {
             return { risks, adjustedPlan: finalPlan, planAdjusted: llmResult.planAdjusted, blocked: true, blockReason };
         }
 
-        const planAdjusted = llmResult.planAdjusted || commandFixes.size > 0;
+        const planAdjusted = llmResult.planAdjusted;
         if (risks.length > 0) {
             log.info(`[RiskAnalyzer] goal=${goal.id} risks=${risks.length} planAdjusted=${planAdjusted}`);
         }
@@ -711,132 +555,81 @@ OU
                 };
             }
 
-            // Valida tools do plano ajustado
-            // CR#4: tools críticas com args ausentes rejeitam o plano em vez de virar agentloop silencioso
-            const criticalMutations: string[] = [];
-
-            const adjustedPlan: PlanStep[] = rawSteps.map((s: Record<string, unknown>, i: number) => {
+            // Pré-processamento específico do RiskAnalyzer, ANTES da sanitização comum:
+            // send_document sem file_path tenta inferir do último 'write' anterior no mesmo
+            // batch de steps — evita criar um AgentLoop aninhado só pra descobrir qual arquivo
+            // enviar. Muta rawSteps diretamente para que sanitizePlanSteps() já veja o
+            // file_path preenchido (e portanto não gere uma mutation de 'missing_args' para
+            // este step). resolveToolAlias() aqui é uma melhoria pequena e deliberada: antes
+            // desta consolidação, RiskAnalyzer não resolvia alias em NENHUM lugar, então um
+            // 'provide_file' sem file_path nem chegava a tentar essa inferência.
+            rawSteps.forEach((s, i) => {
                 const rawTool = s.toolName ? String(s.toolName) : undefined;
-                let resolvedTool = rawTool && this.toolRegistry.get(rawTool) ? rawTool : undefined;
-                if (rawTool && !resolvedTool) {
-                    log.warn(`[RiskAnalyzer] tool '${rawTool}' não existe — step sem tool`);
-                }
-                let toolArgs = resolvedTool && s.toolArgs && typeof s.toolArgs === 'object'
-                    ? s.toolArgs as Record<string, unknown>
-                    : undefined;
+                if (!rawTool || resolveToolAlias(rawTool) !== 'send_document') return;
+                const toolArgs = (s.toolArgs && typeof s.toolArgs === 'object') ? s.toolArgs as Record<string, unknown> : undefined;
+                if (toolArgs?.file_path) return;
 
-                // Mesma checagem de parsePlanResponse (GoalPlanner): args placeholder gerados pelo LLM
-                // (ex: "{output_step_1}", "/path/to/arquivo"). Sem isso aqui, um placeholder que o
-                // GoalPlanner original não gerou — mas que este ajuste de risco introduziu ou manteve —
-                // sobrevive ao Q2 e só é pego tarde demais, em runtime, pelo ReadTool/WriteTool.
-                if (resolvedTool && toolArgs) {
-                    const placeholderEntry = Object.entries(toolArgs).find(
-                        ([, v]) => typeof v === 'string' && PLACEHOLDER_ARG_PATTERN.test(v)
-                    );
-                    if (placeholderEntry) {
-                        log.warn(`[RiskAnalyzer] adjusted step ${i + 1} has placeholder arg ${placeholderEntry[0]}="${String(placeholderEntry[1]).slice(0, 80)}" — converting to AgentLoop step`);
-                        resolvedTool = undefined;
-                        toolArgs = undefined;
-                    }
-                }
+                const lastWrite = rawSteps.slice(0, i).reverse().find(
+                    (prev: Record<string, unknown>) =>
+                        String(prev['toolName'] ?? '') === 'write' &&
+                        prev['toolArgs'] &&
+                        typeof prev['toolArgs'] === 'object' &&
+                        (prev['toolArgs'] as Record<string, unknown>)['path']
+                );
+                if (!lastWrite) return; // sem write anterior: sanitizePlanSteps vai converter pra AgentLoop normalmente
 
-                // Mesma checagem de WRITE-CONTENT-STUB do parsePlanResponse: conteúdo placeholder
-                // em steps 'write' introduzidos/ajustados pelo próprio LLM de risco.
-                if (resolvedTool === 'write' && toolArgs?.content) {
-                    const contentStr = String(toolArgs.content);
-                    const stubMatch = WRITE_CONTENT_STUB_PATTERNS.find(p => p.test(contentStr));
-                    if (stubMatch) {
-                        log.warn(`[RiskAnalyzer] adjusted step ${i + 1}: write content stub detectado — converting to AgentLoop step`);
-                        resolvedTool = undefined;
-                        toolArgs = undefined;
-                    }
-                }
-
-                // Mesma validação do parsePlanResponse: args obrigatórios ausentes
-                // → para send_document sem file_path, tenta inferir a partir do último write do plano.
-                // → para outros casos, converte para AgentLoop (sem toolName) para o LLM resolver.
-                // Usa toolArgs ?? {} para capturar também o caso em que toolArgs é undefined
-                // (ex: send_document gerado pelo LLM sem a chave toolArgs).
-                if (resolvedTool) {
-                    const missing = detectMissingRequiredArgs(resolvedTool, toolArgs ?? {});
-                    if (missing) {
-                        // Para send_document sem file_path: tenta inferir do último write anterior no plano.
-                        // Isso evita criar um AgentLoop aninhado só para descobrir qual arquivo enviar.
-                        if (resolvedTool === 'send_document' && missing.includes('file_path')) {
-                            const lastWrite = rawSteps.slice(0, i).reverse().find(
-                                (prev: Record<string, unknown>) =>
-                                    String(prev['toolName'] ?? '') === 'write' &&
-                                    prev['toolArgs'] &&
-                                    typeof prev['toolArgs'] === 'object' &&
-                                    (prev['toolArgs'] as Record<string, unknown>)['path']
-                            );
-                            if (lastWrite) {
-                                const inferredPath = String((lastWrite['toolArgs'] as Record<string, unknown>)['path']);
-                                toolArgs = { ...(toolArgs ?? {}), file_path: inferredPath };
-                                log.info(
-                                    `[STEP-MUTATION]` +
-                                    ` step=${String(s.id ?? `step_${i + 1}`)}` +
-                                    ` created_by=risk_analyzer` +
-                                    ` original_tool=${resolvedTool}` +
-                                    ` new_tool=${resolvedTool}` +
-                                    ` reason="file_path inferred from prior write: ${inferredPath}"` +
-                                    ` description="${String(s.description ?? '').slice(0, 80)}"`
-                                );
-                            } else {
-                                log.warn(`[RiskAnalyzer] adjusted step ${i + 1}: 'send_document' sem file_path e sem write anterior — converting to AgentLoop step`);
-                                log.info(
-                                    `[STEP-MUTATION]` +
-                                    ` step=${String(s.id ?? `step_${i + 1}`)}` +
-                                    ` created_by=risk_analyzer` +
-                                    ` original_tool=${resolvedTool}` +
-                                    ` new_tool=agentloop` +
-                                    ` reason="${missing}"` +
-                                    ` description="${String(s.description ?? '').slice(0, 80)}"`
-                                );
-                                resolvedTool = undefined;
-                                toolArgs = undefined;
-                            }
-                        } else {
-                            // CR#4: tools críticas (edit, exec_command) com args ausentes
-                            // NÃO são convertidas silenciosamente para agentloop — o plano é rejeitado.
-                            // `write` foi removido desta lista: o GoalPlanner.parsePlanResponse() já
-                            // valida e converte write-sem-path para agentloop antes de chegar aqui.
-                            // Qualquer write-sem-path no adjusted plan foi adicionado pelo LLM de risco
-                            // como step de síntese — convertê-lo para agentloop é o comportamento correto.
-                            const CRITICAL_TOOLS = new Set(['edit', 'exec_command']);
-                            if (CRITICAL_TOOLS.has(resolvedTool ?? '')) {
-                                criticalMutations.push(`'${resolvedTool}' step ${i + 1}: args ausentes [${missing}]`);
-                                log.warn(
-                                    `[RiskAnalyzer] critical mutation detected:` +
-                                    ` step=${i + 1} tool=${resolvedTool} missing=${missing}` +
-                                    ` — will reject plan`
-                                );
-                            }
-                            log.warn(`[RiskAnalyzer] adjusted step ${i + 1}: '${resolvedTool}' ${missing} — converting to AgentLoop step`);
-                            log.info(
-                                `[STEP-MUTATION]` +
-                                ` step=${String(s.id ?? `step_${i + 1}`)}` +
-                                ` created_by=risk_analyzer` +
-                                ` original_tool=${resolvedTool}` +
-                                ` new_tool=agentloop` +
-                                ` reason="${missing}"` +
-                                ` description="${String(s.description ?? '').slice(0, 80)}"`
-                            );
-                            resolvedTool = undefined;
-                            toolArgs = undefined;
-                        }
-                    }
-                }
-
-                return {
-                    id: String(s.id ?? `step_${i + 1}`),
-                    description: String(s.description ?? 'Execute step'),
-                    toolName: resolvedTool,
-                    toolArgs,
-                    fallbackSteps: [],
-                    status: 'pending' as const,
-                };
+                const inferredPath = String((lastWrite['toolArgs'] as Record<string, unknown>)['path']);
+                s.toolArgs = { ...(toolArgs ?? {}), file_path: inferredPath };
+                log.info(
+                    `[STEP-MUTATION]` +
+                    ` step=${String(s.id ?? `step_${i + 1}`)}` +
+                    ` created_by=risk_analyzer` +
+                    ` original_tool=send_document` +
+                    ` new_tool=send_document` +
+                    ` reason="file_path inferred from prior write: ${inferredPath}"` +
+                    ` description="${String(s.description ?? '').slice(0, 80)}"`
+                );
             });
+
+            const sanitized = sanitizePlanSteps(
+                rawSteps,
+                this.toolRegistry,
+                '[RiskAnalyzer] adjusted step',
+                detectMissingRequiredArgs,
+                WRITE_CONTENT_STUB_PATTERNS,
+            );
+            const adjustedPlan: PlanStep[] = sanitized.steps;
+
+            // Pós-processamento específico do RiskAnalyzer: tools críticas (edit, exec_command)
+            // com args ausentes NÃO são convertidas silenciosamente para agentloop — o plano é
+            // rejeitado. `write` fica de fora: GoalPlanner.parsePlanResponse() já valida e
+            // converte write-sem-path para agentloop antes de chegar aqui — qualquer write-sem-
+            // path no adjusted plan foi adicionado pelo LLM de risco como step de síntese, e
+            // convertê-lo para agentloop é o comportamento correto (não crítico).
+            // [STEP-MUTATION] é emitido para toda mutation de 'missing_args' (crítica ou não) —
+            // mesmo comportamento que existia antes desta consolidação.
+            const CRITICAL_TOOLS = new Set(['edit', 'exec_command']);
+            const criticalMutations: string[] = [];
+            for (const m of sanitized.mutations) {
+                if (m.reason !== 'missing_args') continue;
+                log.info(
+                    `[STEP-MUTATION]` +
+                    ` step=${m.stepId}` +
+                    ` created_by=risk_analyzer` +
+                    ` original_tool=${m.originalTool}` +
+                    ` new_tool=agentloop` +
+                    ` reason="${m.detail}"` +
+                    ` description="${m.description.slice(0, 80)}"`
+                );
+                if (CRITICAL_TOOLS.has(m.originalTool)) {
+                    criticalMutations.push(`'${m.originalTool}' ${m.stepId}: args ausentes [${m.detail}]`);
+                    log.warn(
+                        `[RiskAnalyzer] critical mutation detected:` +
+                        ` step=${m.stepId} tool=${m.originalTool} missing=${m.detail}` +
+                        ` — will reject plan`
+                    );
+                }
+            }
 
             // CR#4: rejeitar quando tools críticas precisariam virar agentloop por args ausentes
             if (criticalMutations.length > 0) {

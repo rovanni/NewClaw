@@ -20,6 +20,9 @@ import { SkillLoader } from '../skills/SkillLoader';
 import { PromptComposer } from '../core/PromptComposer';
 import { Goal, GoalBlocker, PlanStep, SuccessCriterion, CriterionCheck, GoalProgressModel } from './GoalTypes';
 import { StrategyDiversityGuard } from './StrategyDiversityGuard';
+import { PLACEHOLDER_ARG_PATTERN } from '../shared/placeholderPatterns';
+import { CONTENT_STUB_PATTERNS as WRITE_CONTENT_STUB_PATTERNS } from '../shared/contentStubPatterns';
+import { sanitizePlanSteps } from './planning/sanitizePlanSteps';
 
 const log = createLogger('GoalPlanner');
 
@@ -472,53 +475,16 @@ function extractUnixPaths(text: string): string[] {
     });
 }
 
-// Exportado: RiskAnalyzer.analyzeAndAdjust() reconstrói steps de forma independente
-// (seu próprio adjustedPlan) e precisa da MESMA detecção de placeholder, senão um
-// arg como "{output_step_1}" sobrevive ao ajuste de risco e só é pego tarde demais,
-// pelo ReadTool/WriteTool em runtime (ver PATH-PLACEHOLDER em read_tool.ts).
-export const PLACEHOLDER_ARG_PATTERN =
-    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo)\b|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\/|\{\{step_\d+\.output\}\}/i;
+// PLACEHOLDER_ARG_PATTERN vem de shared/placeholderPatterns.ts (fonte única, também usada
+// por RiskAnalyzer e por read_tool/write_tool em runtime — antes eram 3 cópias divergentes).
+// Re-exportado aqui por compatibilidade com quem já importa de GoalPlanner.
+export { PLACEHOLDER_ARG_PATTERN };
 
-// WRITE-CONTENT-STUB: detecta content placeholder em steps write — converte para AgentLoop.
-// Espelha o CONTENT-STUB-GATE do WriteTool, mas atua antes da execução, durante o parse do plano.
-// O modelo (gemma4:31b-cloud) tende a gerar {"toolName":"write","content":"<67-char-stub>"} em vez de
-// omitir toolName para que o AgentLoop sintetize o conteúdo real a partir de web_search anteriores.
-export const WRITE_CONTENT_STUB_PATTERNS: RegExp[] = [
-    /\.\.\.\s*\(.*?conteúdo/i,
-    /\(conteúdo\s+(completo|da\s+aula|real)\b/i,
-    /\[conteúdo\s*(completo|real|aqui|será|abrang)/i,
-    /\[.*?completo.*?abrang/i,
-    /<html>\s*<body>\s*\.\.\./i,
-    /\[TODO[^\]]*\]/i,
-    /\[inserir\s+aqui\]/i,
-    /conteúdo será adicionado depois/i,
-    /\(em\s+construção\)/i,
-    /HTML\s+Content\b|CSS\s+Content\b|JS\s+Content\b/i,
-];
-
-// ── Aliases de ferramentas: nomes que LLMs inventam → nome real no ToolRegistry ──
-const TOOL_ALIASES: Record<string, string> = {
-    provide_file: 'send_document',
-    deliver_file: 'send_document',
-    download_file: 'send_document',
-    upload_file: 'send_document',
-    send_file: 'send_document',
-    file_send: 'send_document',
-    send: 'send_document',
-    run_command: 'exec_command',
-    execute: 'exec_command',
-    execute_command: 'exec_command',
-    shell: 'exec_command',
-    bash: 'exec_command',
-    search_web: 'web_search',
-    browse: 'web_navigate',
-    read_file: 'read',
-    open_file: 'read',
-    cat_file: 'read',
-    get_file: 'read',
-    list_files: 'list_workspace',
-    ls: 'list_workspace',
-};
+// WRITE_CONTENT_STUB_PATTERNS vem de shared/contentStubPatterns.ts (fonte única, também usada
+// por WriteTool em runtime — antes eram 2 listas divergentes: write_tool.ts tinha 8 padrões de
+// "LLM meta-placeholder" que esta lista não tinha). Re-exportado aqui por compatibilidade com
+// RiskAnalyzer/sanitizePlanSteps, que já importam esse nome de GoalPlanner.
+export { WRITE_CONTENT_STUB_PATTERNS };
 
 // ── Validação de args obrigatórios ────────────────────────────────────────────
 
@@ -825,88 +791,16 @@ export class GoalPlanner {
                 );
             }
 
-            const steps: PlanStep[] = rawSteps.slice(0, 6).map((s: Record<string, unknown>, i: number) => {
-                const rawToolName = s.toolName ? String(s.toolName) : undefined;
-
-                // Resolve alias antes de validar (ex: provide_file → send_document)
-                const canonicalName = rawToolName
-                    ? (TOOL_ALIASES[rawToolName] ?? rawToolName)
-                    : undefined;
-
-                // Valida se a tool existe no ToolRegistry.
-                let resolvedTool = canonicalName && ToolRegistry.get(canonicalName)
-                    ? canonicalName
-                    : undefined;
-
-                if (rawToolName && !resolvedTool) {
-                    log.warn(`[GoalPlanner] tool '${rawToolName}' não existe no ToolRegistry — step será tratado sem tool`);
-                } else if (canonicalName && canonicalName !== rawToolName) {
-                    log.info(`[GoalPlanner] tool alias '${rawToolName}' → '${canonicalName}'`);
-                }
-
-                // Item 8: Detectar placeholder paths em toolArgs.
-                // Se algum argumento é um placeholder (caminho_do_*, <path>, {file}),
-                // remove toolName/toolArgs para forçar AgentLoop a resolver o caminho real.
-                let toolArgs: Record<string, unknown> | undefined = resolvedTool && s.toolArgs && typeof s.toolArgs === 'object'
-                    ? s.toolArgs as Record<string, unknown>
-                    : undefined;
-
-                if (resolvedTool && toolArgs) {
-                    const placeholderEntry = Object.entries(toolArgs).find(
-                        ([, v]) => typeof v === 'string' && PLACEHOLDER_ARG_PATTERN.test(v)
-                    );
-                    if (placeholderEntry) {
-                        log.warn(`[GoalPlanner] step ${i + 1} has placeholder arg ${placeholderEntry[0]}="${String(placeholderEntry[1]).slice(0, 80)}" — converting to AgentLoop step`);
-                        resolvedTool = undefined;
-                        toolArgs = undefined;
-                    }
-                }
-
-                // WRITE-CONTENT-STUB: detecta write steps com conteúdo placeholder e converte para AgentLoop.
-                // Quando o model gera {"toolName":"write","content":"<82-char-stub>"}, a execução
-                // "succeeds" mas grava lixo — o GoalExecutionLoop gasta todo o replanBudget em
-                // exec_command/ssh_exec antes de perceber que o artefato é inválido.
-                // A conversão para AgentLoop faz o LLM sintetizar o conteúdo REAL em runtime,
-                // com acesso ao output dos steps anteriores (web_search, read, etc.).
-                if (resolvedTool === 'write' && toolArgs?.content) {
-                    const contentStr = String(toolArgs.content);
-                    const stubMatch = WRITE_CONTENT_STUB_PATTERNS.find(p => p.test(contentStr));
-                    if (stubMatch) {
-                        log.warn(
-                            `[GoalPlanner] step ${i + 1}: write content stub detectado ` +
-                            `(${contentStr.length} chars, pattern="${stubMatch.source.slice(0, 50)}") ` +
-                            `— convertendo para AgentLoop step`
-                        );
-                        resolvedTool = undefined;
-                        toolArgs = undefined;
-                    }
-                }
-
-                // Valida args obrigatórios de ferramentas que falham silenciosamente
-                // quando chamadas sem os parâmetros corretos. Converte para AgentLoop
-                // (sem toolName) para que o LLM resolva com contexto completo, em vez
-                // de deixar a tool explodir com erro de parâmetro obrigatório.
-                // Validate required args even when toolArgs is absent (e.g. send_document without file_path).
-                // Previously the check was skipped when toolArgs was undefined, letting invalid steps
-                // pass through to the RiskAnalyzer instead of being caught here.
-                if (resolvedTool) {
-                    const missing = detectMissingRequiredArgs(resolvedTool, toolArgs ?? {});
-                    if (missing) {
-                        log.warn(`[GoalPlanner] step ${i + 1}: '${resolvedTool}' ${missing} — converting to AgentLoop step`);
-                        resolvedTool = undefined;
-                        toolArgs = undefined;
-                    }
-                }
-
-                return {
-                    id: String(s.id ?? `step_${i + 1}`),
-                    description: String(s.description ?? 'Execute step'),
-                    toolName: resolvedTool,
-                    toolArgs,
-                    fallbackSteps: [],
-                    status: 'pending' as const,
-                };
-            });
+            // Etapa 2 da consolidação do pipeline de planejamento: sanitização de steps
+            // extraída para sanitizePlanSteps.ts (compartilhada com RiskAnalyzer na Etapa 3).
+            // Comportamento idêntico ao que existia inline aqui antes.
+            const { steps } = sanitizePlanSteps(
+                rawSteps.slice(0, 6),
+                ToolRegistry,
+                '[GoalPlanner]',
+                detectMissingRequiredArgs,
+                WRITE_CONTENT_STUB_PATTERNS,
+            );
 
             // Parseia e valida os successCriteria
             const VALID_CHECKS = new Set<string>(['tool_succeeded', 'output_not_contains', 'output_contains', 'file_exists']);

@@ -12,37 +12,10 @@ import path from 'path';
 import { resolvePath, selfEditError } from '../utils/crossPlatform';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
+import { PLACEHOLDER_ARG_PATTERN as PATH_PLACEHOLDER_PATTERN } from '../shared/placeholderPatterns';
+import { CONTENT_STUB_PATTERNS } from '../shared/contentStubPatterns';
 
 const log = createLogger('WriteTool');
-
-// H5: mesma lista de padrões usada em read_tool e GoalPlanner
-const PATH_PLACEHOLDER_PATTERN =
-    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo|caminho\/do)\b|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\/|\{\{step_\d+\.output\}\}/i;
-
-// CONTENT-STUB-GATE: detecta placeholder no conteúdo — impede gravação de stubs silenciosa
-// Esses padrões capturam os casos mais comuns gerados por LLMs ao criar planos com conteúdo
-// extenso: a model escreve uma descrição do conteúdo em vez do conteúdo real.
-const CONTENT_STUB_PATTERNS: RegExp[] = [
-    /\.\.\.\s*\(.*?conteúdo/i,                         // "... (conteúdo completo da aula)"
-    /\(conteúdo\s+(completo|da\s+aula|real)\b/i,        // "(conteúdo completo...)"
-    /\[conteúdo\s*(completo|real|aqui|será|abrang)/i,   // "[Conteúdo completo abrangendo...]"
-    /\[.*?completo.*?abrang/i,                          // "[...completo abrangendo...]"
-    /<html>\s*<body>\s*\.\.\./i,                        // "<html><body>..."  (stub de HTML)
-    /\[TODO[^\]]*\]/i,                                  // "[TODO: adicionar aqui]"
-    /\[inserir\s+aqui\]/i,                              // "[inserir aqui]"
-    /conteúdo será adicionado depois/i,                 // "conteúdo será adicionado depois"
-    /\(em\s+construção\)/i,                             // "(em construção)"
-    /HTML\s+Content\b|CSS\s+Content\b|JS\s+Content\b/i, // genéricos de template
-    // LLM meta-placeholders — o modelo descreve o que DEVERIA gerar em vez de gerar
-    /\[o\s+(modelo|agente|llm|sistema)\s+(irá|vai|deve|deverá)\s+(gerar|produzir|criar|escrever|completar)/i,
-    /\[.*?(será\s+)?(gerado|produzido|criado|escrito|completado|preenchido)\s*(aqui|abaixo|posteriormente|depois|pelo\s+(modelo|agente|llm))/i,
-    /\[.*?texto\s+(completo|real|será|do\s+discurso|do\s+conteúdo)/i,
-    /\(o\s+(conteúdo|texto|html|slide|relatório)\s+(completo|real|será|aqui)/i,
-    /será\s+preenchido\s+(depois|posteriormente|pelo\s+(modelo|agente))/i,
-    /\[escrever\s+aqui\]|\[preencher\s+aqui\]|\[adicionar\s+aqui\]/i,
-    /\[conteúdo\s+da\s+(aula|disciplina|curso|matéria)\]/i,
-    /placeholder|PLACEHOLDER/,                          // literal "placeholder"
-];
 
 export class WriteTool implements ToolExecutor {
     name = 'write';

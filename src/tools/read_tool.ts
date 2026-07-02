@@ -16,12 +16,9 @@ import * as crypto from 'crypto';
 import { resolvePath } from '../utils/crossPlatform';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
+import { PLACEHOLDER_ARG_PATTERN as PATH_PLACEHOLDER_PATTERN } from '../shared/placeholderPatterns';
 
 const log = createLogger('ReadTool');
-
-// Padrões de path placeholder que o LLM pode gerar — iguais ao PLACEHOLDER_ARG_PATTERN do GoalPlanner
-const PATH_PLACEHOLDER_PATTERN =
-    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo|caminho\/do)\b|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|\/path\/to\/|\/caminho\/do\/|\{\{step_\d+\.output\}\}/i;
 
 // Limiar para conteúdo suspeito (arquivo quase vazio mas não zero)
 const NEAR_EMPTY_THRESHOLD_BYTES = 50;

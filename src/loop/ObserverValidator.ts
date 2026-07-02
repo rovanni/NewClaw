@@ -7,6 +7,7 @@
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
+import { ANALYSIS_INTENT_PATTERN } from '../shared/analysisIntentPattern';
 const log = createLogger('Observervalidator');
 
 /**
@@ -306,7 +307,7 @@ export class ObserverValidator {
                 blocked,
                 blockReason: deterministic.reason,
                 correctedResponse: blocked
-                    ? this.buildCorrectedResponse(deterministic.reason, deterministic.suggestedFix)
+                    ? this.buildCorrectedResponse(deterministic.reason, deterministic.suggestedFix, userMessage)
                     : undefined,
                 validationMs: elapsed,
             };
@@ -332,23 +333,44 @@ export class ObserverValidator {
             blocked,
             blockReason: llmResult.reason,
             correctedResponse: blocked
-                ? this.buildCorrectedResponse(llmResult.reason, llmResult.suggestedFix)
+                ? this.buildCorrectedResponse(llmResult.reason, llmResult.suggestedFix, userMessage)
                 : undefined,
             validationMs: elapsed,
         };
     }
 
-    private buildCorrectedResponse(reason: string, suggestedFix?: string): string {
+    private buildCorrectedResponse(reason: string, suggestedFix: string | undefined, userMessage: string): string {
         // Log completo para auditoria — nunca expor reason/suggestedFix crus ao usuário
         log.info(`[OBSERVER-BLOCK] reason="${reason}"${suggestedFix ? ` | fix="${suggestedFix}"` : ''}`);
 
         // Classificar o tipo de falha para dar uma resposta contextualizada
         // em vez de uma mensagem genérica que não ajuda o usuário a entender o que aconteceu.
+        //
+        // isIncomplete e isReadOnly eram tratados como o MESMO caso ("arquivo grande demais"),
+        // mas são sintomas diferentes:
+        //  - isIncomplete: a RESPOSTA FINAL (texto gerado pelo LLM) foi cortada no meio —
+        //    ex: "termina abruptamente em 'resiliência'". Isso é limite de tamanho de SAÍDA
+        //    (geração), não tem relação com o arquivo lido ser grande ou pequeno. Confirmado
+        //    ao vivo 3x: um dos casos era pedido de resumo de arquivo de 1.000 B (usuário disse
+        //    isso explicitamente) — "arquivo grande demais" era uma alegação falsa.
+        //  - isReadOnly: nenhuma tool de modificação rodou apesar do pedido exigir uma — esse
+        //    caso É plausivelmente ligado a arquivo grande (read+write no mesmo turno,
+        //    mesmo cenário que AgentLoop.ts já trata com mensagem similar).
         const isIncomplete = /incompleta|truncad|cortad/i.test(reason);
         const isReadOnly = /apenas leu|não executou.*modificar|não.*ferramenta.*modific/i.test(reason);
         const isFutureAction = /ação futura|vou fazer|vou ler/i.test(reason);
 
-        if (isIncomplete || isReadOnly) {
+        if (isIncomplete) {
+            return 'Minha resposta anterior foi cortada antes de terminar. Tente novamente — ' +
+                   'vou tentar responder de forma mais direta e completa.';
+        }
+        if (isReadOnly) {
+            // Mantém a hipótese de "arquivo grande" só para este caso mais específico, mas evita
+            // afirmá-la quando o pedido original era de leitura/análise pura (ler É o resultado
+            // esperado nesse caso) — mesma distinção que AgentLoop.ts já faz para o mesmo problema.
+            if (ANALYSIS_INTENT_PATTERN.test(userMessage)) {
+                return 'Não consegui confirmar que a tarefa foi concluída. Tente novamente ou peça de forma mais específica.';
+            }
             return 'Não consegui completar: o arquivo é grande demais para processar em um único turno. ' +
                    'Tente novamente — posso usar uma abordagem diferente para modificá-lo diretamente.';
         }
