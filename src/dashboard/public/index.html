@@ -186,6 +186,15 @@
     .msg-attach { display: block; font-size: 0.78rem; opacity: 0.85; margin-top: 6px; }
     .msg-attach img { max-width: 220px; max-height: 220px; border-radius: 8px; display: block; margin-top: 4px; }
     .attach-tag { font-family: var(--font-mono); font-size: 0.625rem; font-weight: 700; background: var(--bg-muted); color: var(--text-muted); padding: 1px 5px; border-radius: 4px; margin-right: 4px; letter-spacing: 0.02em; }
+    .msg-attach-link {
+      display: inline-flex; align-items: center; gap: 4px; text-decoration: none;
+      color: var(--accent); opacity: 1; cursor: pointer; padding: 3px 8px 3px 2px;
+      border-radius: var(--radius-sm); border: 1px solid var(--accent-border); background: var(--accent-bg);
+      max-width: 100%;
+    }
+    .msg-attach-link:hover { background: var(--accent); color: #fff; }
+    .msg-attach-link:hover .attach-tag { background: rgba(255,255,255,0.25); color: #fff; }
+    .msg-attach-link .dl-icon { font-size: 0.7rem; }
 
     .msg-actions-row {
       display: flex; gap: 2px; margin-top: 8px; opacity: 0; transition: opacity 0.15s; pointer-events: none;
@@ -547,7 +556,29 @@
       save(); renderSidebar(); renderChat();
     }
     function getConv() { return conversations.find(c => c.id === currentConvId); }
-    function save() { localStorage.setItem(SKEY + SKEY_VERSION + 'conversations', JSON.stringify(conversations)); localStorage.setItem(SKEY + SKEY_VERSION + 'current_conv', currentConvId || ''); }
+    function save() {
+      try {
+        localStorage.setItem(SKEY + SKEY_VERSION + 'conversations', JSON.stringify(conversations));
+        localStorage.setItem(SKEY + SKEY_VERSION + 'current_conv', currentConvId || '');
+      } catch (err) {
+        // Anexos gerados pelo agente carregam base64 nas conversas — em excesso podem estourar
+        // a quota do localStorage (~5-10MB). Fallback: salva o histórico sem o binário dos
+        // anexos (mantém texto/metadados) em vez de perder a conversa inteira silenciosamente.
+        console.warn('[SAVE] localStorage quota excedida, salvando sem dados binários de anexos:', err);
+        try {
+          const stripped = conversations.map(c => ({
+            ...c,
+            messages: c.messages.map(m => m.attachments
+              ? { ...m, attachments: m.attachments.map(a => ({ ...a, data: undefined })) }
+              : m)
+          }));
+          localStorage.setItem(SKEY + SKEY_VERSION + 'conversations', JSON.stringify(stripped));
+          localStorage.setItem(SKEY + SKEY_VERSION + 'current_conv', currentConvId || '');
+        } catch (err2) {
+          console.error('[SAVE] Falha persistente ao salvar conversas:', err2);
+        }
+      }
+    }
 
     // === Chat ===
     const chatContainer = document.getElementById('chatContainer');
@@ -679,9 +710,15 @@
       const rows = conv.messages.map((m, idx) => {
         const time = new Date(m.timestamp).toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
         const content = md(m.content);
-        const attachHtml = (m.attachments || []).map(a =>
-          `<span class="msg-attach">${a.type === 'photo' ? '🖼️' : a.type === 'audio' ? '🎵' : `<span class="attach-tag mono">${fileExt(a.fileName)}</span>`} ${esc(a.fileName)}</span>`
-        ).join('');
+        const attachHtml = (m.attachments || []).map((a, ai) => {
+          const icon = a.type === 'photo' ? '🖼️' : a.type === 'audio' ? '🎵' : `<span class="attach-tag mono">${fileExt(a.fileName)}</span>`;
+          // a.data (base64) só existe em anexos gerados pelo agente (send_document/send_audio
+          // no canal web) — anexos enviados PELO usuário não ecoam o binário de volta.
+          if (a.data) {
+            return `<a class="msg-attach msg-attach-link" href="javascript:void(0)" onclick="downloadAttachment(${idx}, ${ai})">${icon} ${esc(a.fileName)} <span class="dl-icon">⬇</span></a>`;
+          }
+          return `<span class="msg-attach">${icon} ${esc(a.fileName)}</span>`;
+        }).join('');
 
         if (m.role === 'user') {
           return `<div class="msg-row user" data-idx="${idx}">
@@ -734,6 +771,42 @@
       a.click(); URL.revokeObjectURL(a.href);
     }
 
+    // Anexos gerados pelo agente (send_document/send_audio) chegam como base64 dentro da
+    // mensagem (ver mapServerAttachments) — convertido pra Blob só no clique, não guardamos
+    // Blob/Object URL em localStorage (viram inválidas após reload da página).
+    function downloadAttachment(msgIdx, attIdx) {
+      const conv = getConv();
+      const a = conv?.messages?.[msgIdx]?.attachments?.[attIdx];
+      if (!a || !a.data) return;
+      try {
+        const byteChars = atob(a.data);
+        const bytes = new Uint8Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+        const blob = new Blob([bytes], { type: a.mimeType || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url; link.download = a.fileName || 'arquivo';
+        document.body.appendChild(link); link.click(); document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+      } catch (err) {
+        console.error('[DOWNLOAD] Falha ao gerar arquivo:', err);
+        showToast('❌ Falha ao baixar anexo');
+      }
+    }
+
+    // Normaliza data.attachments (vindos de /api/chat) pro mesmo formato que addMsg já aceita
+    // ({fileName, type, mimeType, data}) — mesma estrutura usada pelos anexos do usuário,
+    // só que com `data` (base64) presente, o que ativa o link de download em renderChat().
+    function mapServerAttachments(atts) {
+      if (!atts || !atts.length) return undefined;
+      return atts.map(a => ({
+        fileName: a.fileName || 'arquivo',
+        type: a.type === 'audio' ? 'audio' : a.type === 'photo' ? 'photo' : 'document',
+        mimeType: a.mimeType,
+        data: a.data,
+      }));
+    }
+
     async function regenerateMsg(idx) {
       const conv = getConv();
       if (!conv || !conv.messages[idx] || conv.messages[idx].role !== 'bot') return;
@@ -752,7 +825,7 @@
         const data = await res.json();
         hideStatus();
         const response = data.error ? `⚠️ Erro: ${data.error}` : (data.response || '...');
-        conv.messages[idx] = { role: 'bot', content: response, timestamp: Date.now() };
+        conv.messages[idx] = { role: 'bot', content: response, timestamp: Date.now(), attachments: mapServerAttachments(data.attachments) };
         conv.updatedAt = Date.now();
         save(); renderChat(); renderSidebar();
         speakText(response.replace(/```[\s\S]*?```/g,'(código)').replace(/[*#`_]/g,'').slice(0,500));
@@ -790,7 +863,7 @@
         const data = await res.json();
         hideStatus();
         const response = data.error ? `⚠️ Erro: ${data.error}` : (data.response || '...');
-        addMsg('bot', response);
+        addMsg('bot', response, mapServerAttachments(data.attachments));
         speakText(response.replace(/```[\s\S]*?```/g,'(código)').replace(/[*#`_]/g,'').slice(0,500));
       } catch (err) { hideStatus(); addMsg('bot', `⚠️ Falha: ${err.message}`); }
       sendBtn.disabled = false; messageInput.focus();

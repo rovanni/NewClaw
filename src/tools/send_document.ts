@@ -12,7 +12,7 @@ const log = createLogger('SendDocumentTool');
 
 export class SendDocumentTool implements ToolExecutor {
     name = 'send_document';
-    description = 'Enviar um arquivo como documento ao usuário. Suporta Telegram e Discord. Caminhos relativos são resolvidos a partir do workspace.';
+    description = 'Enviar um arquivo como documento ao usuário. Suporta Telegram, Discord e o chat do Dashboard web. Caminhos relativos são resolvidos a partir do workspace.';
     parameters = {
         type: 'object',
         properties: {
@@ -63,6 +63,8 @@ export class SendDocumentTool implements ToolExecutor {
 
         if (this.channel === 'discord') {
             return this.sendToDiscord(resolvedPath, this.chatId, caption, filename);
+        } else if (this.channel === 'web') {
+            return this.sendToWeb(resolvedPath, this.chatId, caption, filename);
         } else {
             return this.sendToTelegram(resolvedPath, this.chatId, caption, filename);
         }
@@ -88,6 +90,31 @@ export class SendDocumentTool implements ToolExecutor {
             return { success: true, output: `✅ Documento "${displayName}" enviado com sucesso ao Discord.` };
         } catch (error) {
             return { success: false, output: '', error: `Erro Discord: ${errorMessage(error)}` };
+        }
+    }
+
+    private async sendToWeb(resolvedPath: string, chatId: string, caption?: string, filename?: string): Promise<ToolResult> {
+        const stats = fs.statSync(resolvedPath);
+        // Mesmo limite do upload de anexos do dashboard (chat.ts multer) — o arquivo trafega
+        // como base64 dentro do JSON de resposta (ver WebChannelAdapter), sem endpoint de
+        // streaming próprio, então mantemos o mesmo teto pra não gerar payloads gigantes.
+        const MAX_WEB_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+        if (stats.size > MAX_WEB_ATTACHMENT_BYTES) {
+            return { success: false, output: '', error: `Arquivo excede 20MB (limite do chat do Dashboard web): ${(stats.size / 1024 / 1024).toFixed(1)}MB` };
+        }
+
+        if (!chatId) {
+            return { success: false, output: '', error: 'Contexto de sessão web incompleto.' };
+        }
+
+        const displayName = filename || path.basename(resolvedPath);
+
+        try {
+            const fileBuffer = fs.readFileSync(resolvedPath);
+            await this.bus.sendDocument('web', chatId, fileBuffer, displayName, caption);
+            return { success: true, output: `✅ Documento "${displayName}" anexado à resposta do chat.` };
+        } catch (error) {
+            return { success: false, output: '', error: `Erro ao anexar documento no chat web: ${errorMessage(error)}` };
         }
     }
 
