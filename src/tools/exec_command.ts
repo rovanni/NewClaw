@@ -12,8 +12,41 @@ import { resolveHost, isDestructive } from './server_config';
 import path from 'path';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
+import { resolvePath } from '../utils/crossPlatform';
 
 const log = createLogger('ExecCommandTool');
+
+// Referência a um "workspace" de outra instalação embutida no texto do comando (ex: o
+// GoalPlanner gerou "python /home/<user>/<repo>/workspace/script.py" copiando um path de outra
+// máquina/sessão). Só dispara pra tokens com um segmento de path literalmente chamado
+// "workspace" — nunca para paths absolutos genéricos (ex: /etc/passwd), que exec_command
+// acessa sem sandbox por design ("Acesso total ao shell").
+//
+// `allowRelativePrefix` corresponde ao antigo `if (!workdir)`: o prefixo relativo "workspace/"
+// (sem barra inicial) só faz sentido reescrever quando o cwd do processo É o workspaceDir — se
+// um `workdir` customizado foi passado, "workspace/foo" deve continuar relativo A ELE, não virar
+// um path absoluto pra raiz do workspace. Já o caso absoluto ("/home/.../workspace/...") não
+// depende disso — um path absoluto é inequívoco não importa qual seja o cwd.
+function looksLikeForeignWorkspaceReference(token: string, allowRelativePrefix: boolean): boolean {
+    if (path.isAbsolute(token) && /[\\/]workspace(?:[\\/]|$)/.test(token)) return true;
+    if (allowRelativePrefix && /^workspace\//.test(token)) return true;
+    return false;
+}
+
+/**
+ * Remapeia toda referência a um "workspace" de outra instalação, token por token, delegando a
+ * decisão de qual é o path local correto para resolvePath() — a mesma implementação usada por
+ * read/write/list_workspace/send_document. Antes, exec_command tinha sua própria reimplementação
+ * (regex + path.sep + candidatos manuais) que já divergiu 2x da resolvePath() real (barra errada
+ * pro cmd.exe, falso-positivo "workspace2") — delegar elimina essa classe inteira de divergência.
+ */
+function remapForeignWorkspacePaths(command: string, allowRelativePrefix: boolean): string {
+    return command.replace(/\S+/g, (token) => {
+        if (!looksLikeForeignWorkspaceReference(token, allowRelativePrefix)) return token;
+        const { resolved, error } = resolvePath(token);
+        return error ? token : resolved;
+    });
+}
 
 // Cmdlets do PowerShell seguem a convenção Verbo-Substantivo (Get-ChildItem, Where-Object,
 // Remove-Item...). child_process.exec usa cmd.exe como shell padrão no Windows (ComSpec) —
@@ -168,36 +201,13 @@ export class ExecCommandTool implements ToolExecutor {
         // Se workdir for absoluto, resolve em relação ao root; se relativo, em relação ao workspace
         const effectiveWorkdir = workdir ? path.resolve(workspaceDir, workdir) : workspaceDir;
 
-        // Normaliza paths absolutos de outro servidor para o workspace local.
-        // O GoalPlanner pode gerar comandos com paths de outra instalação que falham no ambiente atual.
-        // Exemplo: "python /home/<user>/<repo>/workspace/script.py" → "python C:/Users/.../workspace/script.py"
-        // Lookahead (?=[\/\s]|$) em vez de exigir "/" literal depois de "workspace": cobre também
-        // referências ao próprio diretório sem conteúdo depois (ex: "mkdir /home/user/repo/workspace",
-        // "cd /home/user/repo/workspace"). Sem isso, um "mkdir /home/x/y/workspace" passava intocado e,
-        // no Windows, criava fisicamente a árvore de pastas home\x\y\workspace dentro do workspace local
-        // (path.isAbsolute('/home/...') é true no win32 — resolve como raiz do drive atual, não rejeitado).
-        // workspaceDir já vem no separador nativo do SO via path.resolve (barra invertida no
-        // Windows, barra normal no POSIX). Testado ao vivo no Windows: builtins do cmd.exe
-        // (mkdir/md, type) rejeitam QUALQUER barra normal no argumento — "A sintaxe do comando
-        // está incorreta" — inclusive num path MISTO tipo "D:\ws\pasta/arquivo.txt" (só a parte
-        // depois de "workspace" ficando com barra normal já é suficiente pra falhar). Por isso o
-        // sufixo capturado (o que vem depois de "workspace/", ex: "/sanitize_memory.py") também
-        // precisa ter suas barras convertidas — não basta trocar só o prefixo "workspace".
-        // (?!\w) depois de "workspace": sem isso, "/home/x/y/workspace2/..." casava só o
-        // prefixo "workspace" (o "2" sobra fora do grupo opcional) e virava
-        // "<workspaceDir>2/..." — um path errado apontando pra uma pasta "workspace2" que
-        // nada tem a ver com o workspace real.
-        command = command.replace(
-            /\/home\/[^/]+\/[^/]+\/workspace(?!\w)(\/[^\s]*)?/g,
-            (_m, suffix?: string) => workspaceDir + (suffix ? suffix.split('/').join(path.sep) : '')
-        );
-
-        // Strip "workspace/" apenas quando aparece no INÍCIO do comando (path relativo),
-        // nunca no meio de caminhos absolutos (ex: /home/user/newclaw/workspace/jogos).
-        // A regex anterior usava \b que fazia match em /…/workspace/ causando truncamento.
-        if (!workdir) {
-            command = command.replace(/(?:^|\s)workspace\//g, (m) => m.replace('workspace/', ''));
-        }
+        // Normaliza referências a um "workspace" de outra instalação (ex: o GoalPlanner gerou
+        // "python /home/<user>/<repo>/workspace/script.py" copiando um path de outra máquina)
+        // delegando para resolvePath() — mesma implementação usada por read/write/list_workspace.
+        // "workspace/" relativo só é reescrito quando NÃO há workdir customizado (cwd já é o
+        // workspaceDir nesse caso — com workdir custom, "workspace/foo" deve continuar relativo
+        // a ele, não virar um path absoluto pra raiz do workspace).
+        command = remapForeignWorkspacePaths(command, !workdir);
 
         // marp/pandoc: falha rápido quando não há arquivo de entrada (evita ficar preso
         // esperando stdin até o timeout), e corrige automaticamente a flag --no-stdin

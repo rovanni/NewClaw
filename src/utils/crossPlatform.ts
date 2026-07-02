@@ -236,13 +236,22 @@ export function resolvePath(
      * Quando a memória persistida não contiver mais nenhum nó com
      * paths do tipo /home/.../workspace/ ou /Users/.../workspace/.
      * Verificação: memory_admin + busca por conteúdo com '/workspace/'.
+     *
+     * Regex em vez de lastIndexOf('/workspace/'): o lastIndexOf exigia "/workspace/" com barra
+     * final, então um path SEM nada depois de "workspace" (ex: "/home/x/y/workspace", uma
+     * referência ao diretório em si, sem arquivo) não casava — caía no fallback genérico mais
+     * abaixo e virava "<workspaceDir>/home/x/y/workspace" (pasta aninhada de verdade dentro do
+     * workspace real). Reproduzido ao vivo via exec_command em 01/07 (mesmo bug, correção já
+     * validada lá — replicada aqui na fonte canônica). `.*` guloso preserva o comportamento de
+     * lastIndexOf de pegar a ÚLTIMA ocorrência de "/workspace". O grupo `(?:\/(.*))?$` só casa
+     * quando o que segue "/workspace" é "/resto" ou fim de string — isso sozinho já evita casar
+     * dentro de "workspace2" (nome de pasta diferente, não é o workspace real): nem "/" nem fim
+     * de string vêm logo depois do "e" de "workspace2".
      */
-    const wsIdx = expanded.lastIndexOf('/workspace/');
+    const wsMatch = expanded.match(/^(.*)\/workspace(?:\/(.*))?$/);
     const alreadyLocal = expanded.startsWith(workspaceDir + path.sep) || expanded === workspaceDir;
-    if (wsIdx !== -1 && !alreadyLocal) {
-        expanded = path.join(workspaceDir, expanded.slice(wsIdx + '/workspace/'.length));
-    } else if (expanded === '/workspace') {
-        expanded = workspaceDir;
+    if (wsMatch && !alreadyLocal) {
+        expanded = path.join(workspaceDir, wsMatch[2] ?? '');
     }
 
     const allowedRoots = [
