@@ -696,7 +696,15 @@ export class GoalExecutionLoop {
                         if (tinyFiles > 0) {
                             log.warn(`[GoalLoop] deliverable_check: ${tinyFiles} arquivo(s) ignorado(s) por tamanho < ${MIN_DELIVERABLE_SIZE}B (placeholders)`);
                         }
-                        const unsentFiles = substantiveFiles.filter(f => !sentArtifacts.has(f));
+                        // Exclui também arquivos que já têm um send_document PENDENTE no plano atual
+                        // (agendado mas ainda não executado) — sem isso, deliverable_check injetava um
+                        // segundo send step pro mesmo arquivo enquanto o primeiro ainda não tinha rodado.
+                        const pendingSendPaths = new Set(
+                            currentGoal.currentPlan
+                                .filter(s => s.status === 'pending' && s.toolName === 'send_document')
+                                .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
+                        );
+                        const unsentFiles = substantiveFiles.filter(f => !sentArtifacts.has(f) && !pendingSendPaths.has(f));
                         if (unsentFiles.length > 0) {
                             const skipped = substantiveFiles.length - unsentFiles.length;
                             log.info(`[GoalLoop] deliverable_check: ${unsentFiles.length} arquivo(s) no workspace${skipped > 0 ? ` (${skipped} já enviado(s) ignorado(s))` : ''} — injetando send steps`);
@@ -1032,14 +1040,20 @@ export class GoalExecutionLoop {
                                 ` reason=all_duplicates`
                             );
                         }
-                        // S10: registra em sentArtifacts TODOS os artefatos diferidos (enviados ou
-                        // agendados para envio) para evitar reenvio pelo deliverable_check.
-                        // O DELIVERY-GUARD do AgentLoop pode enviar diretamente sem passar pela
-                        // dedup de sentArtifacts, causando duplos envios nas iterações seguintes.
-                        for (const sendArgs of cycleResult.deferredSends) {
-                            const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
-                            if (fp) trackArtifact(fp);
-                        }
+                        // REMOVIDO (02/07/2026): este loop chamava trackArtifact() pra TODO
+                        // deferredSend, marcando em sentArtifacts arquivos que só foram AGENDADOS
+                        // (ainda não enviados de verdade). Isso conflava "agendado" com "enviado" no
+                        // mesmo Set — o loop de execução dos sends diferidos (mais abaixo, "agora que
+                        // achieved=true") checa `sentArtifacts.has(filePath)` pra decidir se pula o
+                        // send como duplicata; como o arquivo já constava ali (marcado aqui, cedo
+                        // demais), o send real nunca rodava — goal reportava success=true e
+                        // "delivered=1" sem o arquivo ter saído de fato. Reproduzido ao vivo em
+                        // 02/07 (usuário: "faltou me enviar o arquivo!"). A proteção que este loop
+                        // pretendia dar (evitar deliverable_check reagendar um arquivo já agendado)
+                        // agora é feita corretamente no próprio deliverable_check, checando
+                        // send_document pendente no currentPlan — não mais poluindo sentArtifacts.
+                        // DELIVERY-GUARD (entrega direta do AgentLoop, fora do plano) continua
+                        // marcando sentArtifacts corretamente via callback onArtifactDelivered.
                     }
                     // ITEM4: rastreia writes por path para detectar duplicatas entre ciclos
                     if ((pendingStep.toolName === 'write' || pendingStep.toolName === 'edit') && pendingStep.toolArgs?.path) {
