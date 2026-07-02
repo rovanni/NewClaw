@@ -25,12 +25,19 @@ const TRANSLATIONS = {
     status_bar_model: "Modelo",
     status_bar_uptime: "Uptime",
     status_bar_memory: "Memória",
+    reasoning_chip_label: "Raciocinou por {n}s",
+    reasoning_chip_label_generic: "Raciocinou",
+    today_label: "Hoje",
 
     // Chat
-    conv_sidebar_title: "📋 Conversas",
-    new_conv: "+ Nova",
+    conv_sidebar_title: "Recentes",
+    new_conv: "Nova conversa",
+    search_conv_placeholder: "Buscar conversas",
+    agent_active_label: "Agente ativo",
+    no_conversations_found: "Nenhuma conversa encontrada",
+    composer_disclaimer: "NewClaw pode cometer erros. Considere verificar informações importantes.",
     mic_title: "Falar",
-    msg_placeholder: "Digite sua mensagem...",
+    msg_placeholder: "Pergunte ao NewClaw…",
     tts_title: "Ouvir respostas",
     send_title: "Enviar",
 
@@ -371,12 +378,19 @@ const TRANSLATIONS = {
     status_bar_model: "Model",
     status_bar_uptime: "Uptime",
     status_bar_memory: "Memory",
+    reasoning_chip_label: "Reasoned for {n}s",
+    reasoning_chip_label_generic: "Reasoned",
+    today_label: "Today",
     
     // Chat
-    conv_sidebar_title: "📋 Conversations",
-    new_conv: "+ New",
+    conv_sidebar_title: "Recent",
+    new_conv: "New conversation",
+    search_conv_placeholder: "Search conversations",
+    agent_active_label: "Agent active",
+    no_conversations_found: "No conversations found",
+    composer_disclaimer: "NewClaw can make mistakes. Consider checking important information.",
     mic_title: "Speak",
-    msg_placeholder: "Type your message...",
+    msg_placeholder: "Ask NewClaw…",
     tts_title: "Listen to responses",
     send_title: "Send",
 
@@ -708,10 +722,15 @@ const TRANSLATIONS = {
     lang_toggle: "Cambiar Idioma",
 
     // Chat
-    conv_sidebar_title: "📋 Conversaciones",
-    new_conv: "+ Nueva",
+    conv_sidebar_title: "Recientes",
+    today_label: "Hoy",
+    new_conv: "Nueva conversación",
+    search_conv_placeholder: "Buscar conversaciones",
+    agent_active_label: "Agente activo",
+    no_conversations_found: "No se encontraron conversaciones",
+    composer_disclaimer: "NewClaw puede cometer errores. Considere verificar la información importante.",
     mic_title: "Hablar",
-    msg_placeholder: "Escribe tu mensaje...",
+    msg_placeholder: "Pregúntale a NewClaw…",
     tts_title: "Escuchar respuestas",
     send_title: "Enviar",
 
@@ -1098,33 +1117,34 @@ function newclawHeader(activePage) {
     { href: '/traces', label: t('traces'), id: 'traces' },
     { href: '/memory', label: t('memory'), id: 'memory' },
     { href: '/memory-graph', label: t('graph'), id: 'memory-graph' },
-    { href: '/memory-review', label: t('review'), id: 'memory-review' },
-    { href: '/help', label: t('help'), id: 'help' },
   ];
 
-  const navLinks = pages.map(p =>
-    `<a href="${p.href}" ${p.id === activePage ? 'class="active"' : ''}>${p.label}</a>`
+  const navLinks = pages.map(p => {
+    const label = p.label.replace(/^\S+\s+/, ''); // strip leading emoji from translation string
+    return `<a href="${p.href}" ${p.id === activePage ? 'class="active"' : ''}>${label}</a>`;
+  }).join('');
+
+  const langShort = { 'pt-BR': 'PT-BR', 'en-US': 'EN-US', 'es-ES': 'ES-ES' };
+  const langOptions = Object.keys(TRANSLATIONS).map(l =>
+    `<option value="${l}" ${l === CURRENT_LANG ? 'selected' : ''}>${langShort[l] || l}</option>`
   ).join('');
 
-  const langOptions = Object.keys(TRANSLATIONS).map(l =>
-    `<option value="${l}" ${l === CURRENT_LANG ? 'selected' : ''}>${l === 'pt-BR' ? '🇧🇷 PT' : l === 'en-US' ? '🇺🇸 EN' : '🇪🇸 ES'}</option>`
-  ).join('');
+  const initials = 'U';
 
   return '<div class="newclaw-header">' +
     '<div class="newclaw-header-left">' +
-      '<div class="newclaw-header-logo">🪐</div>' +
-      '<div>' +
-        '<div class="newclaw-header-title">NewClaw</div>' +
-      '</div>' +
+      '<div class="newclaw-header-logo">N</div>' +
+      '<div class="newclaw-header-title">NewClaw</div>' +
     '</div>' +
+    '<nav class="newclaw-tabs">' + navLinks + '</nav>' +
     '<div class="newclaw-header-right">' +
-      '<div class="newclaw-nav">' + navLinks + '</div>' +
       '<div class="newclaw-lang-selector">' +
         '<select onchange="newclawSetLang(this.value)">' +
           langOptions +
         '</select>' +
       '</div>' +
       '<button class="newclaw-btn-icon" id="newclaw-theme-btn" onclick="newclawToggleTheme()" data-i18n-title="theme_toggle" title="' + t('theme_toggle') + '">' + themeIcon + '</button>' +
+      '<div class="newclaw-avatar" title="' + t('chat') + '">' + initials + '</div>' +
     '</div>' +
   '</div>';
 }
