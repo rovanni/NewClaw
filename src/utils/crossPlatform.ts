@@ -261,10 +261,19 @@ export function resolvePath(
             return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
         });
 
+    // "slice(1)" assume um path estilo Unix (/etc/passwd → etc/passwd, tentado dentro do
+    // sandbox). Um path Windows com drive letter (D:\...) NÃO deve gerar esse candidato:
+    // slice(1) cortaria a letra do drive (não a barra), produzindo "​:\resto\do\path" — que
+    // path.resolve(workspaceDir, ...) junta como se fosse relativo, criando um candidato
+    // absurdo mas que cai (por acidente) dentro do workspaceDir e passa no checkAllowed.
+    // Isso permitia que um path absoluto real apontando para fora do sandbox (ex: o próprio
+    // src/ do NewClaw) escapasse tanto da rejeição de sandbox quanto do selfEditError, que só
+    // inspeciona o path resolvido — nunca alcançado porque o candidato errado "resolvia" antes.
+    const hasWindowsDriveLetter = /^[a-zA-Z]:/.test(expanded);
     const candidates: string[] = path.isAbsolute(expanded)
         ? [
             path.normalize(expanded),
-            path.resolve(workspaceDir, expanded.slice(1)),
+            ...(hasWindowsDriveLetter ? [] : [path.resolve(workspaceDir, expanded.slice(1))]),
             ...(expanded.startsWith('/workspace/')
                 ? [path.resolve(workspaceDir, expanded.slice(11))]
                 : []),
