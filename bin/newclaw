@@ -789,6 +789,25 @@ const commands = {
     }
   },
 
+  repair() {
+    const isWin = process.platform === 'win32';
+
+    if (!isWin) {
+      console.log('ℹ️  "newclaw repair" corrige o auto-início no Windows (Tarefa Agendada).');
+      console.log('   No Linux, o auto-início é gerenciado via systemd (deploy/newclaw.service) — nada a reparar aqui.');
+      return;
+    }
+
+    const scriptPath = path.join(DIR, 'scripts', 'fix-windows-autostart.ps1');
+    if (!fs.existsSync(scriptPath)) {
+      console.error(`❌ Erro: Script de reparo não encontrado em ${scriptPath}`);
+      return;
+    }
+
+    console.log('🔧 Corrigindo auto-início no Windows...');
+    spawn('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-File', scriptPath], { stdio: 'inherit' });
+  },
+
   onboard() {
     const readline = require('readline').createInterface({
       input: process.stdin,
@@ -1082,6 +1101,35 @@ const commands = {
       }
     } catch { check('Espaço em disco', null, 'não verificado'); }
 
+    // 11. Auto-início no Windows (Tarefa Agendada) — o bot pode estar ✅ em tudo acima
+    // (rodando agora, via start manual ou PM2) e ainda assim não voltar sozinho depois de
+    // reiniciar o Windows, se o mecanismo de auto-início nunca foi configurado ou ficou no
+    // Serviço Windows nativo antigo (quebrado — ver install.ps1, fix de 02/07/2026:
+    // sc.exe create exige que o processo implemente o protocolo de controle de serviço do
+    // Win32, e `newclaw start` não faz isso). Sem esta checagem, doctor reportava tudo ✅
+    // mesmo quando o bot não sobreviveria ao próximo reboot.
+    if (process.platform === 'win32') {
+      try {
+        const taskState = execSync(
+          `powershell -NoProfile -Command "(Get-ScheduledTask -TaskName 'NewClaw' -ErrorAction SilentlyContinue).State"`,
+          { encoding: 'utf-8', stdio: 'pipe' }
+        ).trim();
+        if (taskState) {
+          check('Auto-início (Tarefa Agendada)', true, `estado: ${taskState}`);
+        } else {
+          let hasOldService = false;
+          try { execSync('sc.exe query NewClaw', { stdio: 'pipe' }); hasOldService = true; } catch {}
+          check(
+            'Auto-início (Tarefa Agendada)',
+            false,
+            hasOldService
+              ? 'usando Serviço Windows antigo (quebrado) — rode: newclaw repair'
+              : 'não configurado — bot não volta sozinho após reiniciar. Rode: newclaw repair'
+          );
+        }
+      } catch { check('Auto-início (Tarefa Agendada)', null, 'não verificado'); }
+    }
+
     console.log('\n  💡 Use "newclaw status" para ver uptime e memória.\n');
   },
 
@@ -1094,6 +1142,7 @@ Comando                 Descrição
 newclaw onboard         Configura provedores e chaves de API
 newclaw passwd          Define ou altera a senha do Dashboard web
 newclaw doctor          Diagnóstico completo: Node, PM2, Ollama, canais, disco
+newclaw repair          Corrige o auto-início no Windows (Tarefa Agendada)
 newclaw channels         Status dos canais (telegram, discord, whatsapp, signal)
 newclaw channels enable <canal>   Configura um canal
 newclaw channels disable <canal>  Desativa um canal

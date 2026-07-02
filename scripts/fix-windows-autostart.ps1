@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #  NewClaw — Corrige auto-início no Windows (Tarefa Agendada)
 #
 #  Para instalações EXISTENTES que ainda usam o Serviço Windows
