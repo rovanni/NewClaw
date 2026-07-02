@@ -36,9 +36,9 @@ const TRANSLATIONS = {
     agent_active_label: "Agente ativo",
     no_conversations_found: "Nenhuma conversa encontrada",
     composer_disclaimer: "NewClaw pode cometer erros. Considere verificar informações importantes.",
-    mic_title: "Falar",
+    mic_title: "Ditar",
     msg_placeholder: "Pergunte ao NewClaw…",
-    tts_title: "Ouvir respostas",
+    tts_title: "Ouvir resposta",
     send_title: "Enviar",
 
     // Memory
@@ -389,9 +389,9 @@ const TRANSLATIONS = {
     agent_active_label: "Agent active",
     no_conversations_found: "No conversations found",
     composer_disclaimer: "NewClaw can make mistakes. Consider checking important information.",
-    mic_title: "Speak",
+    mic_title: "Dictate",
     msg_placeholder: "Ask NewClaw…",
-    tts_title: "Listen to responses",
+    tts_title: "Listen to response",
     send_title: "Send",
 
     // Memory
@@ -729,9 +729,9 @@ const TRANSLATIONS = {
     agent_active_label: "Agente activo",
     no_conversations_found: "No se encontraron conversaciones",
     composer_disclaimer: "NewClaw puede cometer errores. Considere verificar la información importante.",
-    mic_title: "Hablar",
+    mic_title: "Dictar",
     msg_placeholder: "Pregúntale a NewClaw…",
-    tts_title: "Escuchar respuestas",
+    tts_title: "Escuchar respuesta",
     send_title: "Enviar",
 
     // Memory

@@ -16,9 +16,9 @@
     .sidebar {
       width: 270px; background: var(--bg-surface); border-right: 1px solid var(--border-color);
       display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
-      transition: width 0.22s ease, margin-left 0.22s ease;
+      transition: width 0.22s ease;
     }
-    .sidebar.collapsed { width: 0; margin-left: -270px; border-right: none; }
+    .sidebar.collapsed { width: 0; border-right: none; }
     .sidebar-inner { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 14px 12px 8px; gap: 12px; min-width: 270px; }
 
     .sidebar-top { display: flex; align-items: center; gap: 8px; }
@@ -93,7 +93,7 @@
     .sidebar-footer b { color: var(--text-muted); font-weight: 600; }
 
     .sidebar-expand-btn {
-      position: absolute; left: 10px; top: 10px; width: 34px; height: 34px; border-radius: var(--radius-sm);
+      position: absolute; left: 14px; top: 14px; width: 34px; height: 34px; border-radius: var(--radius-sm);
       border: 1px solid var(--border-color-strong); background: var(--bg-surface); color: var(--text-muted);
       display: none; align-items: center; justify-content: center; cursor: pointer; z-index: 15; box-shadow: var(--shadow-sm);
       font-size: 0.85rem;
@@ -103,7 +103,6 @@
 
     @media (max-width: 900px) {
       .sidebar { position: absolute; z-index: 20; height: 100%; box-shadow: var(--shadow-lg); }
-      .sidebar.collapsed { margin-left: -270px; }
     }
 
     /* ── Chat ────────────────────────────────────────────────── */
@@ -209,7 +208,7 @@
     /* Empty state */
     .empty-state {
       display: flex; flex-direction: column; align-items: center;
-      justify-content: center; flex: 1; gap: 8px; color: var(--text-soft); min-height: 100%;
+      justify-content: center; gap: 8px; color: var(--text-soft); padding: 32px 0 8px;
     }
     .empty-state .icon {
       width: 44px; height: 44px; border-radius: var(--radius-avatar);
@@ -248,13 +247,8 @@
       display: flex; align-items: center; justify-content: center; transition: all 0.15s; flex-shrink: 0;
     }
     .composer-icon-btn:hover { background: var(--btn-icon-hover); color: var(--text-main); }
-    .composer-icon-btn.active { background: var(--accent-bg); color: var(--accent); }
-    .composer-icon-btn.mic.active { background: var(--danger-bg); color: var(--danger); animation: pulse 1.5s infinite; }
-    .model-chip {
-      display: flex; align-items: center; gap: 5px; height: 30px; padding: 0 11px;
-      border: 1px solid var(--border-color-strong); border-radius: var(--radius-pill); background: transparent;
-      color: var(--text-muted); font-size: 0.71875rem; font-weight: 700; white-space: nowrap;
-    }
+    .composer-icon-btn.active { background: var(--accent-bg); color: #1a73e8; }
+    .composer-icon-btn.mic.active { animation: pulse 1.5s infinite; }
     .send-btn {
       width: 40px; height: 40px; border: none; border-radius: 12px; cursor: pointer; flex-shrink: 0;
       background: var(--accent); color: #fff; font-size: 1.05rem; display: flex; align-items: center; justify-content: center;
@@ -346,10 +340,10 @@
         <span class="status-dot"></span> <span data-i18n="agent_active_label">Agente ativo</span>
       </div>
     </div>
-    <button class="sidebar-expand-btn" id="sidebarExpandBtn" onclick="toggleSidebar()" title="Expandir">›</button>
 
     <!-- Chat -->
     <div class="chat-main" id="chatMain">
+      <button class="sidebar-expand-btn" id="sidebarExpandBtn" onclick="toggleSidebar()" title="Expandir">›</button>
       <div class="chat-scroll" id="chatContainer">
         <div class="chat-col" id="chatCol"></div>
       </div>
@@ -365,9 +359,12 @@
             <div class="composer-toolbar">
               <button class="composer-icon-btn attach" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="Anexar arquivo">＋</button>
               <div class="composer-toolbar-right">
-                <button class="composer-icon-btn mic" id="micBtn" onclick="startVoiceInput()" data-i18n-title="mic_title" title="Falar">🎤</button>
-                <button class="composer-icon-btn tts" id="ttsBtn" onclick="toggleTTS()" data-i18n-title="tts_title" title="Ouvir respostas">🔊</button>
-                <div class="model-chip"><span>◇</span><span id="modelChipLabel">—</span></div>
+                <button class="composer-icon-btn mic" id="micBtn" onclick="startVoiceInput()" data-i18n-title="mic_title" title="Ditar">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                </button>
+                <button class="composer-icon-btn tts" id="ttsBtn" onclick="toggleTTS()" data-i18n-title="tts_title" title="Ouvir resposta">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                </button>
                 <button class="send-btn" id="sendBtn" onclick="sendMessage()" data-i18n-title="send_title" title="Enviar">↑</button>
               </div>
             </div>
@@ -435,9 +432,7 @@
       if (!ttsEnabled) window.speechSynthesis.cancel();
     }
     function updateTTSIcon() {
-      const btn = document.getElementById('ttsBtn');
-      btn.textContent = ttsEnabled ? '🔊' : '🔇';
-      btn.classList.toggle('active', ttsEnabled);
+      document.getElementById('ttsBtn').classList.toggle('active', ttsEnabled);
     }
     function speakText(text) {
       if (!ttsEnabled || !('speechSynthesis' in window) || !text) return;
@@ -704,7 +699,7 @@
     function renderChat() {
       const conv = getConv();
       if (!conv || conv.messages.length === 0) {
-        chatCol.innerHTML = `<div class="empty-state"><div class="icon">N</div><h3>NewClaw está online</h3><p>Envie uma mensagem ou 🎤 fale para começar.</p></div>`;
+        chatCol.innerHTML = `<div class="empty-state"><div class="icon">N</div><h3>NewClaw está online</h3><p>Envie uma mensagem ou <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg> fale para começar.</p></div>`;
         return;
       }
       const rows = conv.messages.map((m, idx) => {
@@ -950,8 +945,6 @@
       const uptime = s.uptimeHuman || '—';
       const heapMb = (Number(s.memory?.heapUsed?.replace(' MB','')) || 0).toFixed(0);
       bar.innerHTML = `<span class="status-dot"></span> <span data-i18n="agent_active_label">${t('agent_active_label')}</span> · ${uptime} · ${heapMb} MB`;
-      const modelLabel = document.getElementById('modelChipLabel');
-      if (modelLabel && s.model) modelLabel.textContent = s.model;
     }
     function pollStatus() {
       newclawFetch('/api/status').then(r=>r.json()).then(d => { if (d.success) updateStatusUI(d.status); }).catch(() => {});

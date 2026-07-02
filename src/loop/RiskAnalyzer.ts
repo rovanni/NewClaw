@@ -282,23 +282,17 @@ export class RiskAnalyzer {
                         risks.push(`Step "${step.description}": 'chmod'/'chown' não existem no Windows`);
 
                     // Utilitários POSIX de SHELL_UNIVERSALS (ver acima) que NÃO existem no
-                    // cmd.exe (shell padrão do exec_command no Windows) e que exec_command.ts
-                    // não traduz automaticamente hoje — só cmdlets PowerShell Verbo-Substantivo
-                    // são encaminhados (needsPowerShellWrap). Reproduzido ao vivo em produção:
-                    // 'ls'/'cat'/'head'/'grep'/'which'/'find' falhando com "não é reconhecido
-                    // como um comando interno" repetidas vezes, sem que o Q2 sinalizasse nada —
-                    // esses binários estavam em SHELL_UNIVERSALS (linha ~38) e pulavam o
-                    // capability-check por serem tratados como "universais", quando na
-                    // realidade só são universais em shells POSIX.
-                    const firstToken = cmdLower.trim().split(/\s+/)[0]?.replace(/^.*[\\/]/, '');
-                    const POSIX_ONLY_NO_WIN_EQUIVALENT = new Set([
-                        'ls', 'cat', 'grep', 'find', 'rm', 'cp', 'mv', 'which', 'test',
-                        'head', 'tail', 'sort', 'uniq', 'wc', 'touch', 'sed', 'awk', 'tr',
-                        'cut', 'printf', 'tee', 'xargs', 'sh', 'bash', 'read', 'env',
-                    ]);
-                    if (firstToken && POSIX_ONLY_NO_WIN_EQUIVALENT.has(firstToken)) {
-                        risks.push(`Step "${step.description}": '${firstToken}' é um comando POSIX sem equivalente nativo no cmd.exe — use o cmdlet PowerShell equivalente (ex: Get-ChildItem, Get-Content, Select-String, Get-Command) para que exec_command o encaminhe automaticamente`);
-                    }
+                    // cmd.exe (shell padrão do exec_command no Windows) — 'ls'/'cat'/'head'/
+                    // 'grep'/'which'/'find' etc. Até 02/07 isso só gerava um aviso aqui (o
+                    // Q2), sem correção de fato: exec_command.ts (needsPowerShellWrap) só
+                    // encaminhava para powershell.exe cmdlets Verbo-Substantivo (Get-ChildItem),
+                    // nunca esses binários POSIX — reproduzido ao vivo em produção, 'ls' falhando
+                    // repetidas vezes mesmo com este aviso presente no plano. O aviso não
+                    // impedia a falha, só a documentava depois do fato.
+                    // Fix real: exec_command.ts agora encaminha esses binários para o
+                    // PowerShell incondicionalmente (mesma lista, ver POSIX_ONLY_NO_WIN_EQUIVALENT
+                    // em exec_command.ts) — não depende do LLM reescrever o comando, então não
+                    // há mais risco a reportar aqui.
                 }
 
                 // Comandos Windows executados em Linux/macOS

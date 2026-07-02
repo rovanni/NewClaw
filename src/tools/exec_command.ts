@@ -54,9 +54,61 @@ function remapForeignWorkspacePaths(command: string, allowRelativePrefix: boolea
 // comando interno" mesmo quando PowerShell ESTÁ instalado no SO (só não é o shell usado aqui).
 const POWERSHELL_CMDLET_PATTERN = /\b[A-Z][a-zA-Z]*-[A-Z][a-zA-Z]+\b/;
 
+// Binários POSIX comuns que o LLM emite (treinado majoritariamente em ambientes Linux/macOS)
+// e que o cmd.exe também não reconhece — mas que o powershell.exe TEM via alias/cmdlet nativo
+// (ls→Get-ChildItem, cat→Get-Content, rm→Remove-Item...), então encaminhar resolve sem
+// reescrever o texto do comando. Mesma lista que já existia em RiskAnalyzer.ts (usada lá só
+// para AVISAR no plano) — reproduzido ao vivo em produção (log de auditoria, 02/07): 'ls'
+// falhando repetidas vezes com "não é reconhecido como um comando interno" mesmo com o aviso
+// do Q2 presente, porque POWERSHELL_CMDLET_PATTERN (só cmdlets Verbo-Substantivo) nunca cobria
+// esses binários — o aviso nunca virava correção de fato.
+const POSIX_ONLY_NO_WIN_EQUIVALENT = new Set([
+    'ls', 'cat', 'grep', 'find', 'rm', 'cp', 'mv', 'which', 'test',
+    'head', 'tail', 'sort', 'uniq', 'wc', 'touch', 'sed', 'awk', 'tr',
+    'cut', 'printf', 'tee', 'xargs', 'sh', 'bash', 'read', 'env',
+]);
+
+// Operadores usados para separar comandos numa mesma linha (cmdA && cmdB | cmdC). Precisamos
+// inspecionar o primeiro token de CADA segmento, não só do comando inteiro — "marp x.md -o
+// x.pptx && ls -lh x.pptx" tem 'ls' no segundo segmento, não no primeiro.
+const COMMAND_SEPARATOR = /&&|\|\||;|\|/;
+
 export function needsPowerShellWrap(command: string): boolean {
     if (/^\s*(powershell|pwsh)(\.exe)?\b/i.test(command)) return false; // já encaminhado
-    return POWERSHELL_CMDLET_PATTERN.test(command);
+    if (POWERSHELL_CMDLET_PATTERN.test(command)) return true;
+    return command.split(COMMAND_SEPARATOR).some(segment => {
+        const firstToken = segment.trim().split(/\s+/)[0]?.toLowerCase().replace(/^.*[\\/]/, '');
+        return firstToken ? POSIX_ONLY_NO_WIN_EQUIVALENT.has(firstToken) : false;
+    });
+}
+
+// O powershell.exe padrão do Windows é o Windows PowerShell 5.1, que NÃO suporta os
+// operadores && / || (só chegaram no PowerShell 7+/pwsh) — um comando encaminhado como
+// "cmdA && cmdB" quebraria com erro de parse. Traduz para os equivalentes nativos do 5.1
+// ($? = sucesso do último comando). Reconstrói da direita para a esquerda para preservar a
+// semântica de curto-circuito em cadeias com mais de 2 comandos.
+export function translateChainOperatorsForPowerShell(command: string): string {
+    const parts = command.split(/\s(&&|\|\|)\s/);
+    if (parts.length === 1) return command;
+    let acc = parts[parts.length - 1];
+    for (let i = parts.length - 3; i >= 0; i -= 2) {
+        const cmd = parts[i];
+        const op = parts[i + 1];
+        acc = op === '&&'
+            ? `${cmd}; if ($?) { ${acc} }`
+            : `${cmd}; if (-not $?) { ${acc} }`;
+    }
+    return acc;
+}
+
+// "2>/dev/null" (silenciar stderr) é um idioma POSIX comum no que o LLM gera. O PowerShell
+// não tem /dev/null — trata "/dev/null" como um path relativo literal e tenta CRIAR o arquivo
+// "<cwd>\dev\null" pra redirecionar stderr, falhando com DirectoryNotFoundException quando a
+// pasta "dev" não existe (reproduzido ao vivo: "out-file : Não foi possível localizar uma parte
+// do caminho 'D:\dev\null'"). $null é o equivalente nativo do PowerShell — um "buraco negro"
+// que não exige nenhum diretório existir.
+export function translateDevNullForPowerShell(command: string): string {
+    return command.replace(/\/dev\/null\b/g, '$null');
 }
 
 /**
@@ -65,7 +117,8 @@ export function needsPowerShellWrap(command: string): boolean {
  * (shell alvo) — Base64 não precisa de escaping algum.
  */
 export function wrapForWindowsPowerShell(command: string): string {
-    const encoded = Buffer.from(command, 'utf16le').toString('base64');
+    const translated = translateDevNullForPowerShell(translateChainOperatorsForPowerShell(command));
+    const encoded = Buffer.from(translated, 'utf16le').toString('base64');
     return `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
 }
 
