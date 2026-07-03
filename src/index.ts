@@ -108,8 +108,8 @@ async function main() {
     log.info('   EventLoopMonitor: started (warn=500ms, critical=2000ms)');
 
     if (!config.telegramBotToken && !config.discordBotToken && !config.whatsappPhoneNumber && !config.signalPhoneNumber) {
-        log.error('❌ Nenhum canal configurado! Configure TELEGRAM_BOT_TOKEN, DISCORD_BOT_TOKEN, WHATSAPP_PHONE_NUMBER ou SIGNAL_PHONE_NUMBER');
-        process.exit(1);
+        log.warn('⚠️ Nenhum canal externo configurado (Telegram/Discord/WhatsApp/Signal) — operando apenas via Dashboard Web');
+        log.warn('   → Configure um canal em: Dashboard → Config, ou via TELEGRAM_BOT_TOKEN/DISCORD_BOT_TOKEN/etc. no .env');
     }
 
     if (config.telegramBotToken && config.telegramAllowedUserIds.length === 0) {

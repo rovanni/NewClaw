@@ -79,6 +79,34 @@ curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | b
 irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
 ```
 
+### Requisitos
+
+- Windows 10 (1809+) / Windows 11, o Linux/macOS
+- Node.js 22+ (el instalador lo instala automáticamente si falta)
+- 2GB+ de RAM, 5GB+ de espacio libre en disco
+- No se necesita ningún canal de chat para empezar — NewClaw funciona de forma
+  independiente a través del Dashboard Web local (`http://localhost:3090`). Agrega
+  Telegram, Discord, WhatsApp o Signal más adelante con `newclaw channels enable <canal>`.
+
+### Solución de problemas de instalación
+
+- **Windows — "no se puede cargar porque la ejecución de scripts está deshabilitada en este
+  sistema"**: esto solo ocurre si descargaste el archivo y ejecutaste `.\install.ps1`
+  directamente, en vez del comando `irm | iex` de arriba (que no sufre esta restricción).
+  Solucionalo una vez con:
+  ```powershell
+  Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+  ```
+  Esto afecta solo tu cuenta de usuario, no toda la máquina, y también evita el mismo
+  bloqueo en comandos `npm` más adelante. El instalador ya verifica y corrige esto
+  automáticamente cuando logra ejecutarse.
+- **Windows — PM2 no conecta / el bot no se mantiene activo**: normalmente es un daemon de
+  PM2 iniciado con otro nivel de privilegios, dejado atrás (error `EPERM` en el named pipe).
+  Ejecuta `newclaw doctor` para un diagnóstico completo, o usa `npm start` como alternativa
+  (sin auto-restart, pero funciona).
+- **En cualquier momento**: ejecuta `newclaw doctor` para revisar Node, PM2, Ollama, canales
+  configurados, espacio en disco y el auto-inicio en Windows, todo de una vez.
+
 ---
 
 ## Cómo se compara NewClaw

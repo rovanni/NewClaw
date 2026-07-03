@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #  NewClaw — Script de Restauração Inteligente para Windows
 #
 #  Fontes de backup suportadas:

@@ -313,6 +313,22 @@ const commands = {
         // Fresh start — use ecosystem.config.cjs for consistency
         pm2(['start', 'ecosystem.config.cjs']);
       }
+
+      // ─── Verify: don't report success if PM2 didn't actually register the process ──
+      // pm2() swallows exec failures (returns e.stdout instead of throwing), so a broken
+      // PM2 daemon connection (e.g. Windows EPERM on \\.\pipe\rpc.sock when PM2 was
+      // started under a different privilege context) used to fall through silently and
+      // print success anyway.
+      const verifyStatus = pm2JStart();
+      if (verifyStatus !== 'online') {
+        console.log(`⚠️  PM2 não confirmou o processo online (status: ${verifyStatus}).`);
+        console.log('   Isso pode indicar falha de conexão com o daemon PM2 (no Windows, costuma');
+        console.log('   ser EPERM no named pipe quando o PM2 foi iniciado em outra sessão/privilégio).');
+        console.log('   Tente: pm2 kill   (e rode "newclaw start" de novo)');
+        console.log('   Ou rode sem PM2: npm start');
+        return;
+      }
+
       syncPidFile();
       console.log('🚀 NewClaw started via PM2');
       console.log(`   Mode: ${debug ? 'debug' : 'normal'}`);
@@ -1107,6 +1123,30 @@ const commands = {
         check('Espaço em disco', pct < 85, diskMsg + (pct >= 85 ? ' ⚠ pouco espaço!' : ''));
       }
     } catch { check('Espaço em disco', null, 'não verificado'); }
+
+    // 10.5. Política de execução do PowerShell (usuário atual) — instaladores e
+    // `newclaw update`/`restore`/`repair` rodam via .ps1, e npm no Windows resolve
+    // `npm`/`npm.ps1`. Se a política do usuário estiver Restricted/Undefined/AllSigned,
+    // esses comandos falham com "não pode ser carregado porque a execução de scripts foi
+    // desabilitada" mesmo que o bot já esteja rodando — install.ps1 tenta corrigir isso
+    // na instalação, mas essa checagem cobre quem instalou manualmente ou teve a política
+    // resetada depois (ex: política de grupo).
+    if (process.platform === 'win32') {
+      try {
+        const policy = execSync(
+          `powershell -NoProfile -Command "Get-ExecutionPolicy -Scope CurrentUser"`,
+          { encoding: 'utf-8', stdio: 'pipe' }
+        ).trim();
+        const restrictive = ['Restricted', 'Undefined', 'AllSigned'].includes(policy);
+        check(
+          'Política de execução PowerShell',
+          !restrictive,
+          restrictive
+            ? `${policy} — rode: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`
+            : policy
+        );
+      } catch { check('Política de execução PowerShell', null, 'não verificado'); }
+    }
 
     // 11. Auto-início no Windows (Tarefa Agendada) — o bot pode estar ✅ em tudo acima
     // (rodando agora, via start manual ou PM2) e ainda assim não voltar sozinho depois de

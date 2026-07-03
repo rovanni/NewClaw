@@ -105,7 +105,7 @@ export class AgentController {
     private memoryCurator: MemoryCurator;
     private confidenceClassifier: ConfidenceClassifier;
     private ownerProfileService: OwnerProfileService;
-    private telegramAdapter: TelegramAdapter;
+    private telegramAdapter: TelegramAdapter | null = null;
     private webAdapter: WebChannelAdapter;
     private discordAdapter: DiscordAdapter | null = null;
     private whatsAppAdapter: WhatsAppAdapter | null = null;
@@ -120,7 +120,7 @@ export class AgentController {
     public getWebAdapter(): WebChannelAdapter { return this.webAdapter; }
     public getEventBus() { return this._eventBus; }
     public getCircuitBreakers() { return this.circuitBreakers; }
-    public getTelegramAdapter(): TelegramAdapter { return this.telegramAdapter; }
+    public getTelegramAdapter(): TelegramAdapter | null { return this.telegramAdapter; }
     public getDiscordAdapter(): DiscordAdapter | null { return this.discordAdapter; }
     public getWhatsAppAdapter(): WhatsAppAdapter | null { return this.whatsAppAdapter; }
     public getSignalAdapter(): SignalAdapter | null { return this.signalAdapter; }
@@ -301,25 +301,28 @@ export class AgentController {
 
         this.memoryCurator = new MemoryCurator(this.memory);
 
-        this.telegramAdapter = new TelegramAdapter({
-            enabled: true,
-            botToken: config.telegramBotToken,
-            allowedUserIds: config.telegramAllowedUserIds,
-            tmpDir: config.tmpDir,
-        });
-        this.telegramAdapter.setBus(this.messageBus);
-        this.messageBus.registerAdapter(this.telegramAdapter);
+        if (config.telegramBotToken) {
+            this.telegramAdapter = new TelegramAdapter({
+                enabled: true,
+                botToken: config.telegramBotToken,
+                allowedUserIds: config.telegramAllowedUserIds,
+                tmpDir: config.tmpDir,
+            });
+            this.telegramAdapter.setBus(this.messageBus);
+            this.messageBus.registerAdapter(this.telegramAdapter);
+
+            // Fase 2: injetar workflowCallback nos adapters de canal.
+            // Callbacks "auth:approve|reject:<txnId>" chegam aqui diretamente,
+            // sem passar pelo MessageBus nem pelo pipeline LLM — é uma ação de UI
+            // (clique de botão), não uma mensagem de chat a ser interpretada pelo LLM.
+            this.telegramAdapter.workflowCallback = this.createWorkflowCallback(this.telegramAdapter, 'telegram');
+            log.info('Telegram adapter registered');
+        }
 
         // Dashboard web (localhost:3090) é apenas mais um canal — mesmo pipeline
         // (NormalizedMessage → ChannelAttachment[] → agentMediaHandlers) do Telegram/Discord/etc.
         this.webAdapter = new WebChannelAdapter();
         this.messageBus.registerAdapter(this.webAdapter);
-
-        // Fase 2: injetar workflowCallback nos adapters de canal.
-        // Callbacks "auth:approve|reject:<txnId>" chegam aqui diretamente,
-        // sem passar pelo MessageBus nem pelo pipeline LLM — é uma ação de UI
-        // (clique de botão), não uma mensagem de chat a ser interpretada pelo LLM.
-        this.telegramAdapter.workflowCallback = this.createWorkflowCallback(this.telegramAdapter, 'telegram');
 
         const { tmpDir } = config;
         this.messageBus.registerMediaHandler('voice', async (msg, attachment) =>

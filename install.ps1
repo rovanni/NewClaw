@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #  NewClaw — Instalador Interativo para Windows
 #
 #  Uso:
@@ -265,6 +265,26 @@ function Step-CheckSystem {
     } catch {
         Write-Warn "Internet: sem conexão — algumas etapas podem falhar"
     }
+
+    # Política de execução do PowerShell (usuário atual)
+    # npm no Windows resolve `npm`/`npm.ps1` — se a política do usuário estiver
+    # Restricted/Undefined/AllSigned, QUALQUER terminal novo (não só este instalador)
+    # falha ao rodar `npm install -g X`, `npm run build`, etc. com
+    # "não pode ser carregado porque a execução de scripts foi desabilitada".
+    # RemoteSigned resolve isso sem exigir admin nem afetar a política da máquina.
+    $currentUserPolicy = Get-ExecutionPolicy -Scope CurrentUser
+    if ($currentUserPolicy -in @('Restricted', 'Undefined', 'AllSigned')) {
+        try {
+            Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction Stop
+            Write-Ok "Política de execução PowerShell: $currentUserPolicy → RemoteSigned (ajustado para o usuário atual)"
+        } catch {
+            Write-Warn "Política de execução PowerShell: $currentUserPolicy — não foi possível ajustar automaticamente"
+            Write-Info "  Rode manualmente: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
+            Write-Info "  (sem isso, comandos npm podem falhar em terminais futuros)"
+        }
+    } else {
+        Write-Ok "Política de execução PowerShell: $currentUserPolicy — ok"
+    }
 }
 
 # ── 2. winget ────────────────────────────────────────────────
@@ -425,6 +445,13 @@ function Step-DownloadModel {
 function Step-InstallNewClaw {
     Write-Step "7/9 — Baixando o NewClaw"
 
+    if ($DryRun) {
+        if (Test-Path $Dir) { Write-Dry "atualizar repositório existente em $Dir (git fetch/stash/pull/pop)" }
+        else { Write-Dry "clonar repositório em $Dir" }
+        Write-Dry "npm install && npm run build em $Dir"
+        return
+    }
+
     if (Test-Path $Dir) {
         Write-Warn "Pasta $Dir já existe!"
         if (Read-YesNo "Atualizar código do GitHub?" "y") {
@@ -494,8 +521,6 @@ function Step-InstallNewClaw {
         Invoke-Step "git clone https://github.com/rovanni/NewClaw.git `"$Dir`""
         Write-Ok "Código baixado!"
     }
-
-    if ($DryRun) { Write-Dry "npm install && npm run build em $Dir"; return }
 
     Push-Location $Dir
     Invoke-WithSpinner "Instalando dependências" {
@@ -1089,7 +1114,9 @@ function Show-Summary {
 # ── Main ─────────────────────────────────────────────────────
 
 try {
-    # Allow .ps1 wrappers (npm.ps1, etc.) to run when launched via irm|iex
+    # Allow .ps1 wrappers (npm.ps1, etc.) to run during this installer's own execution.
+    # The durable CurrentUser-scope fix (for the user's own future terminals) is checked
+    # and reported visibly in Step-CheckSystem, alongside the other system checks.
     Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
 
     Write-Banner
