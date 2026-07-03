@@ -746,18 +746,33 @@ const commands = {
       }
 
       // 8. Install deps if package.json changed
+      // Instala TODAS as deps (incluindo devDependencies como @types/* e typescript) —
+      // `npm run build` no passo 9 roda tsc, que precisa delas para compilar. `--production`
+      // pulava justamente as devDependencies novas (ex: @types/multer), quebrando o build em
+      // todo update que adicionasse uma — mesmo bug já corrigido em update.sh (que também faz
+      // `npm prune --omit=dev` depois do build para manter o node_modules enxuto).
+      let depsChanged = false;
       try {
         const diff = execSync(`git diff ${local}..${remote} --name-only`, { cwd: DIR }).toString();
         if (diff.includes('package.json') || diff.includes('package-lock.json')) {
-          console.log('📦 Dependências alteradas, instalando...');
-          execSync('npm install --production', { cwd: DIR, stdio: 'inherit' });
+          depsChanged = true;
+          console.log('📦 Dependências alteradas, instalando (incluindo dev para build)...');
+          execSync('npm install', { cwd: DIR, stdio: 'inherit' });
         }
       } catch { /* ignore */ }
 
       // 9. Build
       console.log('🔧 Compilando projeto...');
       execSync('npm run build', { cwd: DIR, stdio: 'inherit' });
-      
+
+      // 9b. Prune devDeps pós-build (mantém node_modules slim em produção)
+      if (depsChanged) {
+        try {
+          console.log('🧹 Removendo devDependencies pós-build...');
+          execSync('npm prune --omit=dev', { cwd: DIR, stdio: 'inherit' });
+        } catch { /* não crítico */ }
+      }
+
       if (restart) {
         console.log('🔄 Reiniciando...');
         commands.restart(['--daemon']);
