@@ -745,33 +745,33 @@ const commands = {
         console.log('🔒 .env restaurado com sucesso');
       }
 
-      // 8. Install deps if package.json changed
-      // Instala TODAS as deps (incluindo devDependencies como @types/* e typescript) —
-      // `npm run build` no passo 9 roda tsc, que precisa delas para compilar. `--production`
-      // pulava justamente as devDependencies novas (ex: @types/multer), quebrando o build em
-      // todo update que adicionasse uma — mesmo bug já corrigido em update.sh (que também faz
-      // `npm prune --omit=dev` depois do build para manter o node_modules enxuto).
-      let depsChanged = false;
+      // 8. Install deps — SEMPRE, incondicional (não depende de git diff).
+      // Antes só rodava `npm install` quando o diff ENTRE ESSE PULL ESPECÍFICO incluía
+      // package.json — heurística frágil: se um install já tivesse falhado/pulado uma
+      // devDependency em qualquer update anterior (ex: bug do --production, já corrigido),
+      // nenhum update FUTURO detectaria isso de novo (o diff daquele pull específico não
+      // toca mais package.json) e o node_modules ficava quebrado PARA SEMPRE, exigindo
+      // intervenção manual que um usuário comum não tem como saber que precisa fazer.
+      // `npm install` sem mudança real em package.json/lock é praticamente no-op — o custo
+      // de rodar sempre é desprezível perto do risco de silenciosamente nunca resincronizar.
+      console.log('📦 Sincronizando dependências...');
       try {
-        const diff = execSync(`git diff ${local}..${remote} --name-only`, { cwd: DIR }).toString();
-        if (diff.includes('package.json') || diff.includes('package-lock.json')) {
-          depsChanged = true;
-          console.log('📦 Dependências alteradas, instalando (incluindo dev para build)...');
-          execSync('npm install', { cwd: DIR, stdio: 'inherit' });
-        }
-      } catch { /* ignore */ }
+        execSync('npm install', { cwd: DIR, stdio: 'inherit' });
+      } catch (installErr) {
+        console.error('❌ npm install falhou:', installErr.message);
+        throw installErr;
+      }
 
       // 9. Build
       console.log('🔧 Compilando projeto...');
       execSync('npm run build', { cwd: DIR, stdio: 'inherit' });
 
-      // 9b. Prune devDeps pós-build (mantém node_modules slim em produção)
-      if (depsChanged) {
-        try {
-          console.log('🧹 Removendo devDependencies pós-build...');
-          execSync('npm prune --omit=dev', { cwd: DIR, stdio: 'inherit' });
-        } catch { /* não crítico */ }
-      }
+      // 9b. Prune devDeps pós-build (mantém node_modules slim em produção) — também
+      // incondicional, mesma lógica: idempotente quando não há nada para remover.
+      try {
+        console.log('🧹 Removendo devDependencies pós-build...');
+        execSync('npm prune --omit=dev', { cwd: DIR, stdio: 'inherit' });
+      } catch { /* não crítico */ }
 
       if (restart) {
         console.log('🔄 Reiniciando...');

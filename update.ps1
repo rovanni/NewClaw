@@ -144,22 +144,21 @@ try {
         Write-Ok ".env restaurado"
     }
 
-    # 8. Install deps if changed
-    try {
-        $diff = git diff "$local..$remote" --name-only 2>&1
-        if ($diff -match "package(-lock)?\.json") {
-            Write-Info "Dependências alteradas, instalando..."
-            # --production pulava devDependencies (ex: @types/multer) — o passo 9 roda
-            # `npm run build` (tsc), que precisa delas para compilar. update.sh (Linux) já
-            # instala completo; aqui ficou divergente e quebrava o build após todo update que
-            # adicionasse uma devDependency nova.
-            npm install
-        }
-    } catch {}
+    # 8. Install deps — SEMPRE, incondicional (não depende de git diff).
+    # Detectar "package.json mudou NESSE pull" é frágil: se um install já pulou uma
+    # devDependency em qualquer update anterior, nenhum update FUTURO detecta isso de novo
+    # (o diff daquele pull específico não toca mais package.json) e o node_modules fica
+    # quebrado pra sempre, sem forma de um usuário comum saber que precisa reinstalar na mão.
+    # `npm install` sem mudança real é praticamente no-op — custo desprezível.
+    Write-Info "Sincronizando dependências..."
+    npm install
 
     # 9. Build
     Write-Info "Compilando projeto..."
     npm run build
+
+    # 9b. Prune devDeps pós-build (mantém node_modules slim em produção)
+    try { npm prune --omit=dev } catch {}
     Write-Ok "Build concluído!"
 
     # 10. Restart if requested

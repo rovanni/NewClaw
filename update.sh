@@ -71,27 +71,23 @@ if [ -f "$ENV_BACKUP" ]; then
     echo "🔒 .env restaurado"
 fi
 
-# 7. Install deps if changed
-# Instala TODAS as deps (incluindo devDeps como @types/* e typescript),
-# porque o build precisa do tsc e dos tipos. Depois do build, faz prune
-# para devolver o node_modules ao estado de produção.
-DIFF=$(git diff $LOCAL..$REMOTE --name-only 2>/dev/null || true)
-DEPS_CHANGED=0
-if echo "$DIFF" | grep -qE 'package(-lock)?\.json'; then
-    DEPS_CHANGED=1
-    echo "📦 Instalando dependências (incluindo dev para build)..."
-    npm install
-fi
+# 7. Install deps — SEMPRE, incondicional (não depende de git diff).
+# Detectar "package.json mudou NESSE pull" é frágil: se um install já pulou uma
+# devDependency em qualquer update anterior, nenhum update FUTURO detecta isso de novo (o
+# diff daquele pull específico não toca mais package.json) e o node_modules fica quebrado
+# pra sempre, sem forma de um usuário comum saber que precisa reinstalar na mão. `npm
+# install` sem mudança real é praticamente no-op — custo desprezível. Depois do build, faz
+# prune para devolver o node_modules ao estado de produção.
+echo "📦 Sincronizando dependências..."
+npm install
 
 # 8. Build
 echo "🔧 Compilando..."
 npm run build
 
-# 8b. Prune devDeps se foram instaladas (mantém node_modules slim em produção)
-if [ "$DEPS_CHANGED" -eq 1 ]; then
-    echo "🧹 Removendo devDependencies pós-build..."
-    npm prune --omit=dev
-fi
+# 8b. Prune devDeps pós-build (mantém node_modules slim em produção)
+echo "🧹 Removendo devDependencies pós-build..."
+npm prune --omit=dev
 
 # 9. Restart if requested
 if [ "$1" = "restart" ] || [ "$1" = "-r" ]; then
