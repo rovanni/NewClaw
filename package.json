@@ -8,7 +8,9 @@
     "build": "tsc && node -e \"const fs=require('fs'); const path=require('path'); const src=path.join('src','dashboard','public'); const dest=path.join('dist','dashboard','public'); fs.mkdirSync(path.dirname(dest), {recursive:true}); fs.cpSync(src, dest, {recursive:true, force:true}); console.log('Dashboard static files copied to dist/')\"",
     "start": "node dist/index.js",
     "start:debug": "node --inspect dist/index.js",
-    "recover": "node scripts/recover-db.cjs"
+    "recover": "node scripts/recover-db.cjs",
+    "test:regression": "node scripts/run-regression-tests.cjs",
+    "test:regression:selftest": "node scripts/run-regression-tests.cjs --selftest"
   },
   "dependencies": {
     "@types/better-sqlite3": "^7.6.13",

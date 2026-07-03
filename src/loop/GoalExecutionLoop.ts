@@ -29,6 +29,7 @@ import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { ProactiveRecovery, ToolExecutorLike } from './ProactiveRecovery';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
+import { CaseMemory } from '../memory/CaseMemory';
 import { permissionRegistry } from '../core/PermissionRegistry';
 import { MemoryManager } from '../memory/MemoryManager';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
@@ -75,6 +76,7 @@ export class GoalExecutionLoop {
         private readonly toolRegistry: typeof ToolRegistry,
         private readonly providerFactory: ProviderFactory,
         private readonly memory: MemoryManager,
+        private readonly caseMemory: CaseMemory,
     ) {
         this.riskAnalyzer = new RiskAnalyzer(providerFactory, toolRegistry, reflectionMemory);
         this.semanticValidator = new StepSemanticValidator(providerFactory);
@@ -99,6 +101,21 @@ export class GoalExecutionLoop {
         onProgress?: ProgressCallback
     ): Promise<GoalResult> {
         log.info(`[GoalLoop] start goal=${goal.id} replanBudget=${goal.replanBudget}`);
+
+        // S6/S7 (modo sombra): consulta de similaridade de PROBLEMA + Applicability Gate —
+        // "já resolvi algo suficientemente relacionado a ESTE objetivo, com uma operação
+        // compatível?" — disparada aqui porque goal.objective já existe e nenhum plano foi
+        // escolhido ainda (a pergunta não pode depender do plano). findApplicableCasesShadow
+        // reaproveita findRelevantCasesShadow internamente (mesma busca semântica, sem
+        // duplicar) e só anota operationalIntent/operationalCompatibility por cima — ver
+        // CaseMemory.ts para a justificativa completa (S7). Fire-and-forget: nunca aguardada,
+        // nunca bloqueia a execução real do goal — latência de embedding (Ollama) e falhas de
+        // rede ficam inteiramente isoladas do caminho crítico.
+        void this.caseMemory.findApplicableCasesShadow(goal.objective).catch(() => []);
+        // S6.5a: reaproveita o mesmo gatilho (início de todo goal) para tentar recuperar, em
+        // lote pequeno, Casos que ficaram sem embedding por falha do provider — sem scheduler
+        // novo, sem bloquear a execução real (também fire-and-forget).
+        void this.caseMemory.backfillMissingEmbeddings().catch(() => {});
 
         // Reinicia o contexto cognitivo e o modelo de progresso para este goal
         this.cognitiveContext = createEmptyStepCognitiveContext();
@@ -149,6 +166,19 @@ export class GoalExecutionLoop {
         // ── Planejamento inicial ───────────────────────────────────────────
         this.goalStore.update(goal.id, { status: 'replanning' });
         const planResult = await this.planner.plan(goal, q1Context ?? '', capSummary, activeMilestone);
+
+        // S5 (modo sombra): consulta DIAGNÓSTICA — mede quantos Casos anteriores têm a mesma
+        // assinatura de estratégia. Puramente observacional: o resultado NUNCA é usado para
+        // alterar planResult.steps, o prompt já foi montado e enviado pelo planner acima.
+        if (planResult.steps.length > 0) {
+            const shadowCandidates = this.caseMemory.findSimilarShadow(planResult.steps);
+            if (shadowCandidates.length > 0) {
+                log.debug(
+                    `[CASE-SHADOW-RECOVERY] goal=${goal.id} candidates=${shadowCandidates.length}` +
+                    ` fingerprint="${StrategyDiversityGuard.fingerprint(planResult.steps)}"`
+                );
+            }
+        }
 
         // Se o roadmap foi ajustado pelo planner durante o planejamento inicial
         if (goal.isConstruction && planResult.adjustedRoadmap && planResult.adjustedRoadmap.length > 0) {
@@ -654,6 +684,9 @@ export class GoalExecutionLoop {
                         // FIX E: encerra imediatamente — sem replan, sem novos ciclos
                         this.goalStore.setStatus(currentGoal.id, 'completed');
                         log.info(`[GoalLoop] goal=${currentGoal.id} validated as complete`);
+                        // S5 (modo sombra): captura Caso só se houver evidência de nível de goal
+                        // (successCriteria met OU sentArtifacts real) — nunca influencia o resultado.
+                        this.caseMemory.captureIfEligible(this.goalStore.getById(currentGoal.id)!);
                         return this.buildResult(currentGoal, true, totalCycles, totalReplans, validation.summary);
                     }
                 }
@@ -905,6 +938,10 @@ export class GoalExecutionLoop {
                         `${pendingStep.toolName} (step ${pendingStep.id}): output irrelevante para a intenção — ${semanticValidation.reason ?? 'mismatch'}`
                     );
                     // P5: persiste na ReflectionMemory para que futuros goals evitem o mesmo padrão
+                    // S2a: outcome='partial' (não 'failure') — a ferramenta rodou e produziu
+                    // output real, só não endereçou a intenção do step. É exatamente o caso que
+                    // shouldDowngradeToPartial já nomeia; evidência objetiva, não interpretação.
+                    // failureType='semantic_mismatch' — BlockerKind já tem esse valor exato.
                     this.reflectionMemory.record({
                         userInput: currentGoal.userIntent.slice(0, 300),
                         intent: pendingStep.description.slice(0, 200),
@@ -915,6 +952,8 @@ export class GoalExecutionLoop {
                         confidence: semanticValidation.confidence,
                         pattern: `tool_${pendingStep.toolName ?? 'agentloop'}`,
                         suggestedFix: `Use query/abordagem que retorne especificamente: ${pendingStep.description.slice(0, 100)}`,
+                        outcome: 'partial',
+                        failureType: 'semantic_mismatch',
                     });
                     // A: enriquece a descrição do step no plano para que a próxima tentativa
                     // seja explicitamente guiada pelo motivo do mismatch.
@@ -1193,6 +1232,8 @@ export class GoalExecutionLoop {
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'replanning', message: cycleResult.blocker.description });
 
                     // Registra falha na ReflectionMemory para aprendizado futuro
+                    // S2a: failureType=cycleResult.blocker.kind — já é um BlockerKind tipado,
+                    // vindo direto do objeto blocker. Zero inferência: é o dado real do call site.
                     this.reflectionMemory.record({
                         userInput: currentGoal.userIntent,
                         intent: currentGoal.objective.slice(0, 100),
@@ -1202,6 +1243,8 @@ export class GoalExecutionLoop {
                         confidence: cycleResult.confidence,
                         pattern: `tool_${pendingStep.toolName ?? cycleResult.blocker.kind}`,
                         suggestedFix: cycleResult.blocker.suggestedActions[0],
+                        outcome: 'failure',
+                        failureType: cycleResult.blocker.kind,
                     });
 
                     // Verificar se ainda tem replan budget
@@ -1268,6 +1311,8 @@ export class GoalExecutionLoop {
                 const isLastMilestone = !currentGoal.isConstruction || !currentGoal.roadmap || (currentGoal.currentMilestoneIndex ?? 0) === currentGoal.roadmap.length - 1;
                 if (isLastMilestone) {
                     this.goalStore.setStatus(currentGoal.id, 'completed');
+                    // S5 (modo sombra): mesma captura condicionada a evidência do outro call site.
+                    this.caseMemory.captureIfEligible(this.goalStore.getById(currentGoal.id)!);
                     return this.buildResult(currentGoal, true, totalCycles, totalReplans, validation.summary);
                 } else {
                     log.warn(`[GoalLoop] goal=${currentGoal.id} completed step but ran out of cycles before final milestone`);
@@ -1809,6 +1854,8 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
         // IMPORTANTE: o pattern deve ser `tool_${toolName}` (sem sufixo _success) para que a
         // query de supressão em getFailurePatterns/getHardFailurePatterns encontre o registro
         // aprovado e descarte histórico de falhas obsoleto do mesmo tool.
+        // S2a: outcome='success' — markStepDone só é chamado para conclusão confirmada
+        // (o addAttempt logo acima já registra result:'success' no mesmo evento).
         this.reflectionMemory.record({
             userInput: goal.userIntent,
             intent: goal.objective.slice(0, 100),
@@ -1818,6 +1865,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             reason: 'step completed successfully',
             confidence: 0.9,
             pattern: step.toolName ? `tool_${step.toolName}` : 'goal_step_success',
+            outcome: 'success',
         });
     }
 
@@ -2579,8 +2627,16 @@ OU
             );
 
             if (llmResult.status !== 'success') {
-                log.warn('[GoalLoop] LLM validation failed — assuming achieved');
-                return { achieved: true };
+                // S5.5a (Outcome Integrity): falha TÉCNICA da chamada de validação não é evidência
+                // de sucesso — antes assumia achieved=true aqui, confundindo "não consegui verificar"
+                // com "confirmei que foi atingido". Mesma reação de caller já usada e comprovada
+                // segura pelo caminho de parse inválido (mais abaixo): achieved=false + reason
+                // técnico, bloqueado por replanBudget finito (sem risco de loop infinito).
+                log.warn(`[OUTCOME-INTEGRITY] goal=${goal.id} validator_call_status=${llmResult.status} — tratando como NÃO verificado (achieved=false), não como sucesso`);
+                return {
+                    achieved: false,
+                    reason: 'Validação técnica indisponível (chamada ao LLM de validação falhou) — objetivo não pôde ser confirmado como concluído.',
+                };
             }
 
             const cleaned = llmResult.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
@@ -2657,8 +2713,14 @@ OU
                 log.warn('[GoalLoop] validation response not JSON — treating as goal_incomplete');
                 return { achieved: false, reason: 'LLM de validação não retornou JSON válido' };
             }
-            log.warn('[GoalLoop] validation error — assuming achieved:', String(err));
-            return { achieved: true };
+            // S5.5a (Outcome Integrity): exceção técnica não tratada durante a validação (rede,
+            // parsing inesperado, etc.) não é evidência de sucesso — antes assumia achieved=true
+            // aqui. Mesma reação de caller já comprovada segura pelo caminho de SyntaxError acima.
+            log.warn(`[OUTCOME-INTEGRITY] goal=${goal.id} validator_exception="${String(err)}" — tratando como NÃO verificado (achieved=false), não como sucesso`);
+            return {
+                achieved: false,
+                reason: 'Erro técnico durante a validação de conclusão — objetivo não pôde ser confirmado como concluído.',
+            };
         }
     }
 

@@ -94,8 +94,13 @@ export class EmbeddingService {
 
     /**
      * Cosine similarity between two vectors
+     *
+     * Público (S6, roadmap de aprendizado orientado a objetivos): função pura, sem estado
+     * (não referencia `this`) — reaproveitada por CaseMemory.findRelevantCasesShadow() para
+     * similaridade de objetivo, em vez de duplicar a mesma matemática pela terceira vez no
+     * projeto (já existia uma cópia divergente em MemoryManager.cosineSimilarity).
      */
-    private cosineSimilarity(a: number[], b: number[]): number {
+    cosineSimilarity(a: number[], b: number[]): number {
         let dot = 0, normA = 0, normB = 0;
         for (let i = 0; i < a.length; i++) {
             dot += a[i] * b[i];

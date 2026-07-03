@@ -15,7 +15,7 @@ import { CognitiveWorkspace } from '../cognitive/CognitiveWorkspace';
 import { SessionContext } from '../session/SessionContext';
 import type { SessionKey } from '../session/SessionManager';
 import { ModelProfileRegistry } from './ModelProfileRegistry';
-import { UnifiedIntentRouter, IntentDecision } from './UnifiedIntentRouter';
+import { UnifiedIntentRouter, IntentDecision, IntentCategory } from './UnifiedIntentRouter';
 import { generationQueue, TaskPriority } from '../core/providerQueue';
 import { MemoryManager } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
@@ -463,7 +463,7 @@ export class AgentLoop {
     private async tryValidateTool(
         userText: string,
         intent: string,
-        category: string,
+        category: IntentCategory,
         toolName: string,
         toolOutput: string,
         messages: LLMMessage[],
@@ -494,6 +494,10 @@ export class AgentLoop {
             }
             log.info(`[OBSERVER] ${validation.validationSkipped ? '⚠️ skipped' : validation.approved ? '✅' : '❌'} ${toolName} confidence=${validation.confidence} reason="${validation.reason}"`);
 
+            // S2b: outcome binário — ValidationResult só tem {approved, reason, confidence},
+            // sem sinal de parcial. category vem de intentDecision.category nos 2 call sites
+            // (já IntentCategory tipado) — fonte real, não inferida. failureType ausente:
+            // ValidationResult não tem taxonomia de tipo de falha, não vou inventar uma.
             if (!validation.validationSkipped) this.reflectionMemory.record({
                 traceId,
                 conversationId,
@@ -507,6 +511,8 @@ export class AgentLoop {
                 confidence: validation.confidence,
                 suggestedFix: validation.suggestedFix,
                 pattern: category,
+                outcome: validation.approved ? 'success' : 'failure',
+                category,
             });
 
             if (!validation.approved && validation.confidence >= 0.6) {
@@ -591,6 +597,20 @@ export class AgentLoop {
         try {
             const COMMIT_TIMEOUT_MS = 12_000;
 
+            // S3c — Opção B (conexão conservadora, com escopo limitado e documentado):
+            // ResponseCommit não tem failureType confiável (ver S2c) — não dá pra saber
+            // SE este tool tende a "alegar sucesso falso" vs. "responder truncado" vs.
+            // "prometer e não executar". O que É real e confiável é tool_used (sempre
+            // populado corretamente, inclusive em dados anteriores à S2). Por isso a
+            // conexão aqui é só por ferramenta, e só OBSERVACIONAL: não altera
+            // commit.valid/commit.blocked nem entra no prompt do LLM — apenas correlaciona
+            // e loga, para medir antes de decidir se vale conectar de forma mais ativa
+            // numa Sprint futura ("conectar corretamente, depois medir").
+            const toolHistoryHint = this.reflectionMemory.findToolFailures(last.toolName);
+            if (toolHistoryHint) {
+                log.info(`[${this.ts()}] [COMMIT] Padrão histórico conhecido para tool=${last.toolName} (correlação observacional, não altera a decisão de commit): ${toolHistoryHint.split('\n')[1] ?? ''}`);
+            }
+
             const commit = await Promise.race<ResponseCommit>([
                 this.observer.validateResponseCommit(
                     userText,
@@ -610,6 +630,14 @@ export class AgentLoop {
             log.info(`[${this.ts()}] [COMMIT] Q4 tool=${last.toolName} valid=${commit.valid} risk=${commit.hallucinationRisk.toFixed(2)} blocked=${commit.blocked} ms=${commit.validationMs}`);
 
             // Registrar na ReflectionMemory independente do resultado
+            // S2c (ponto de maior risco, feito por último): outcome binário direto de
+            // commit.valid — ResponseCommit não distingue partial. failureType e category
+            // DELIBERADAMENTE ausentes: ResponseCommit = {valid, hallucinationRisk,
+            // blocked, blockReason?} não tem taxonomia (não dá pra distinguir "alegação
+            // falsa de sucesso" de "artefato não produzido" de "resposta truncada" etc. —
+            // ver relatório da S2). Mapear blockReason para um BlockerKind por conveniência
+            // seria inventar classificação sem base real — reason (texto livre, já rico)
+            // e pattern legado continuam preservando essa informação sem distorção.
             this.reflectionMemory.record({
                 traceId,
                 conversationId,
@@ -622,6 +650,7 @@ export class AgentLoop {
                 reason: commit.blockReason ?? (commit.valid ? 'Q4 commit aprovado' : 'Q4 commit: risco de alucinação'),
                 confidence: commit.valid ? 1 - commit.hallucinationRisk : commit.hallucinationRisk,
                 pattern: commit.blocked ? 'hallucination_blocked_pre_commit' : 'commit_approved',
+                outcome: commit.valid ? 'success' : 'failure',
             });
 
             if (commit.blocked && commit.correctedResponse) {
@@ -1161,7 +1190,13 @@ export class AgentLoop {
 
         let skillContext = intentDecision.skillContext ?? '';
 
-        const reflectionHint = this.reflectionMemory.buildContextHint(intentDecision.category);
+        // S3c: "Que tipo de problema geral tende a acontecer neste tipo de pedido?"
+        // findCategoryHints() agrega pela categoria inteira (não mais fragmentada por
+        // ferramenta) e inclui fallback para registros legados com a categoria
+        // smuggled em `pattern` — corrige o caso documentado no S16 (20 registros/30%
+        // falha agregada retornando vazio por fragmentação de GROUP BY).
+        const reflectionHint = this.reflectionMemory.findCategoryHints(intentDecision.category);
+        const reflectionHintInjected = reflectionHint.length > 0;
         if (reflectionHint) {
             skillContext = skillContext ? `${skillContext}\n\n${reflectionHint}` : reflectionHint;
         }
@@ -2141,6 +2176,17 @@ export class AgentLoop {
                 ? !cycleHistory.some(h => h.step > observerFeedbackFirstStep! && h.status === 'error')
                 : false;
 
+            // reflectionHint (ReflectionMemory.buildContextHint): injetado uma única vez, antes
+            // do step 1 — não tem "primeiro passo" dinâmico como os outros hints. "Seguido" aqui
+            // significa: o turno não terminou em erro de ferramenta nem em bloqueio de commit
+            // (mesma semântica de observerFeedbackFollowed, adaptada por não ter step de início).
+            // S0.5 (roadmap de aprendizado): esta é a peça que faltava no mecanismo de
+            // hint-compliance já existente — sem isso não há como medir se o conhecimento
+            // recuperado da ReflectionMemory está de fato influenciando o turno.
+            const reflectionHintFollowed = reflectionHintInjected
+                ? !cycleHistory.some(h => h.status === 'error')
+                : false;
+
             // hint compliance rate across all injected hints this turn
             let totalHintsInjected = 0;
             let totalHintsFollowed = 0;
@@ -2148,6 +2194,7 @@ export class AgentLoop {
             if (toolFailureHintInjected)    { totalHintsInjected++; if (toolFailureHintFollowed) totalHintsFollowed++; }
             if (toolSuccessHintInjected)    { totalHintsInjected++; if (toolSuccessHintFollowed) totalHintsFollowed++; }
             if (observerFeedbackInjected)   { totalHintsInjected++; if (observerFeedbackFollowed) totalHintsFollowed++; }
+            if (reflectionHintInjected)     { totalHintsInjected++; if (reflectionHintFollowed)   totalHintsFollowed++; }
             const hintComplianceRate = totalHintsInjected > 0
                 ? (totalHintsFollowed / totalHintsInjected).toFixed(2)
                 : 'n/a';
@@ -2216,6 +2263,7 @@ export class AgentLoop {
                 `    toolFailureHint: injected=${toolFailureHintInjected} step=${toolFailureHintFirstStep ?? '-'} followed=${toolFailureHintFollowed}\n` +
                 `    toolSuccessHint: injected=${toolSuccessHintInjected} step=${toolSuccessHintFirstStep ?? '-'} followed=${toolSuccessHintFollowed}\n` +
                 `    observerFeedback: injected=${observerFeedbackInjected} step=${observerFeedbackFirstStep ?? '-'} followed=${observerFeedbackFollowed}\n` +
+                `    reflectionHint: injected=${reflectionHintInjected} category=${intentDecision.category} followed=${reflectionHintFollowed}\n` +
                 `    hintComplianceRate=${hintComplianceRate} (${totalHintsFollowed}/${totalHintsInjected})\n` +
                 `    knowledgeDecisionGap=${knowledgeDecisionGap} (ext=${externalCallCount} mem=${memoryCallCount})\n` +
                 `  shadowEnforcement:\n` +

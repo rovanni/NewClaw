@@ -106,12 +106,22 @@ export interface ToolMutation {
     kind: 'arg_mutation' | 'fallback_tool';
 }
 
+/**
+ * Resultado de 3 vias de uma tentativa — sucesso, falha, ou parcial (a ferramenta
+ * rodou mas não satisfez completamente a intenção). Extraído como tipo nomeado
+ * (S1 do roadmap de aprendizado) para que outros consumidores de "o que aconteceu"
+ * — a começar pela ReflectionMemory em S2 — reusem o mesmo vocabulário em vez de
+ * reinventar um enum paralelo. Nenhuma mudança de valor: os 3 literais já existiam
+ * aqui, só ganharam nome.
+ */
+export type AttemptOutcome = 'success' | 'failure' | 'partial';
+
 export interface GoalAttempt {
     id: string;
     planStepId: string;
     toolName: string;
     args: Record<string, unknown>;
-    result: 'success' | 'failure' | 'partial';
+    result: AttemptOutcome;
     output?: string;
     error?: string;
     durationMs: number;

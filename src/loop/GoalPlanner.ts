@@ -598,13 +598,35 @@ export class GoalPlanner {
         log.info(`[GoalPlanner] plan start goal=${goal.id} model=${this.model} contextLen=${runtimeContext?.length ?? 0}`);
 
         const availableTools = ToolRegistry.getEnabled().map(t => t.name);
+
+        // S4: "Existe evidência histórica de alta confiança relevante para a primeira
+        // tentativa?" — reaproveita findHardConstraints() (S3a, mesmo método que já
+        // serve o RiskAnalyzer), não uma API nova. Só a camada de CONSTRAINT (90% de
+        // falha) se aplica aqui: não há blocker ainda (findBlockerLessons não cabe),
+        // nenhuma tool foi escolhida (findToolFailures isolado não tem alvo), e
+        // IntentCategory não existe no caminho de goal — é exclusivo do AgentLoop
+        // direto (findCategoryHints não se aplica). Sucesso local (step/tool/commit)
+        // deliberadamente NÃO é usado — nenhum deles comprova que uma ESTRATÉGIA
+        // atingiu o objetivo do usuário, só que uma peça isolada funcionou (decisão
+        // documentada no relatório da S4; memória de estratégias bem-sucedidas é a S5).
+        // Enquadrado como evidência histórica, não ordem — mas como findHardConstraints
+        // já filtra por 90% de falha, manter a linguagem direta ("NÃO use X") é
+        // apropriado aqui (é o caso que as instruções da S4 já permitem).
+        const priorEvidence = this.reflectionMemory.findHardConstraints(availableTools);
+        let enrichedContext = runtimeContext ?? '';
+        if (priorEvidence.length > 0) {
+            log.debug(`[GoalPlanner] plan: evidência histórica injetada (${priorEvidence.length} restrição(ões))`);
+            const evidenceBlock = `[EVIDÊNCIA HISTÓRICA — sinal a considerar antes de escolher a ferramenta]\n${priorEvidence.map(c => `- ${c}`).join('\n')}`;
+            enrichedContext = enrichedContext ? `${enrichedContext}\n\n${evidenceBlock}` : evidenceBlock;
+        }
+
         const skillsSummary  = this.loadSkillsSummary();
         const toolDescriptions = buildToolDescriptions(availableTools);
-        const prompt         = buildPlanPrompt(goal, availableTools, this.skillContext, runtimeContext, capabilityContext, skillsSummary, activeMilestone, toolDescriptions);
+        const prompt         = buildPlanPrompt(goal, availableTools, this.skillContext, enrichedContext, capabilityContext, skillsSummary, activeMilestone, toolDescriptions);
         const capBlock       = PromptComposer.buildCompactEnv(capabilityContext ?? '', `${goal.objective} ${goal.userIntent}`, skillsSummary);
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
 
-        PromptComposer.recordPlan(prompt.length, capBlock.length, 0, runtimeContext?.length ?? 0);
+        PromptComposer.recordPlan(prompt.length, capBlock.length, 0, enrichedContext.length);
 
         try {
             // S7: 90s para planos iniciais — goals complexos (slides, relatórios, código extenso)
@@ -656,9 +678,14 @@ export class GoalPlanner {
             ` replan_budget=${goal.replanBudget}`
         );
 
-        const reflectionHint = this.reflectionMemory.buildContextHint(
-            blocker.toolName ? `tool_${blocker.toolName}` : blocker.kind
-        );
+        // S3b: "Dado o que acabou de bloquear/falhar, o que já aprendemos que evita
+        // repetir a mesma estratégia?" — findBlockerLessons() decide internamente
+        // se busca por tool_used (blocker.toolName presente) ou por failure_type
+        // (blocker.kind, quando não há ferramenta específica) — elimina de vez o
+        // mismatch de prefixo entre escrita (sempre tool_-prefixado) e leitura
+        // (fallback sem prefixo) que existia aqui: a nova consulta não usa prefixo
+        // de string em lugar nenhum, só colunas tipadas.
+        const reflectionHint = this.reflectionMemory.findBlockerLessons(blocker);
         if (reflectionHint) {
             log.debug(`[GoalPlanner] reflectionHint injected (${reflectionHint.length} chars)`);
         }

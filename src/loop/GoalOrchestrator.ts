@@ -23,6 +23,7 @@ import { GoalExecutionLoop } from './GoalExecutionLoop';
 import { ProviderFactory } from '../core/ProviderFactory';
 import { MemoryManager } from '../memory/MemoryManager';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
+import { CaseMemory } from '../memory/CaseMemory';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { GOAL_LIMITS } from './GoalLimits';
@@ -73,6 +74,7 @@ export class GoalOrchestrator {
         this.extractor = new GoalExtractor(providerFactory, agentLoop.getClassifierModel());
 
         const reflectionMemory = new ReflectionMemory(memory);
+        const caseMemory = new CaseMemory(memory);
         const planner = new GoalPlanner(providerFactory, reflectionMemory);
 
         this.executionLoop = new GoalExecutionLoop(
@@ -83,6 +85,7 @@ export class GoalOrchestrator {
             ToolRegistry,
             providerFactory,
             memory,
+            caseMemory,
         );
 
         // Aquece o CapabilityRegistry em background — não bloqueia a inicialização.

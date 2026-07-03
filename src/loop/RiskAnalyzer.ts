@@ -128,9 +128,13 @@ export class RiskAnalyzer {
         // Ferramentas com ≥90% de falha recente viram proibições absolutas.
         // Em DEVELOPER/GOD mode: constraints ainda são registradas no log para rastreabilidade,
         // mas não bloqueiam nem removem steps — o agente tem autonomia para tentar mesmo assim.
+        // S3a: "Para as ferramentas deste plano, existem falhas recorrentes de alta
+        // confiança que deveriam virar constraint?" — antes passava texto livre do
+        // objetivo do usuário como se fosse chave técnica (achado crítico da auditoria);
+        // agora consulta por ferramenta real, uma pergunta por tool do plano.
         const planTools = plan.map(s => s.toolName).filter((t): t is string => Boolean(t));
         const bypassConstraints = permissionRegistry.can('bypass_reflection_constraints');
-        const constraints = this.reflectionMemory.buildConstraints(goal.objective.slice(0, 150), planTools);
+        const constraints = this.reflectionMemory.findHardConstraints(planTools);
         if (constraints.length > 0) {
             for (const c of constraints) {
                 risks.push(bypassConstraints
@@ -169,8 +173,9 @@ export class RiskAnalyzer {
             }
 
             // S5: skip ferramentas fundamentais — histórico delas gera falsos positivos
+            // S3a: "Existe falha recorrente para esta ferramenta especificamente?"
             if (!FUNDAMENTAL_AGENT_TOOLS.has(step.toolName)) {
-                const hint = this.reflectionMemory.buildContextHint(`tool_${step.toolName}`);
+                const hint = this.reflectionMemory.findToolFailures(step.toolName);
                 if (hint) {
                     const firstLine = hint.split('\n').find(l => l.startsWith('-')) ?? hint;
                     risks.push(`Step "${step.description}": ${firstLine.slice(0, 120)}`);
