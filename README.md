@@ -102,6 +102,15 @@ irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
 - **Windows — PM2 fails to connect / the bot doesn't stay running**: usually a leftover PM2
   daemon started under a different privilege level (`EPERM` on the named pipe). Run
   `newclaw doctor` for a full diagnosis, or fall back to `npm start` (no auto-restart, but works).
+- **`newclaw update` fails to compile (TypeScript error about a missing module)**: `npm install`
+  is run automatically on every update, so this should be rare — but if it happens (e.g. a
+  flaky network mid-install, or a native dependency that failed to build), fix it by hand:
+  ```bash
+  cd <your NewClaw install folder>
+  npm install
+  npm run build
+  newclaw restart --daemon
+  ```
 - **Anytime**: run `newclaw doctor` to check Node, PM2, Ollama, configured channels, disk space,
   and Windows auto-start in one pass.
 

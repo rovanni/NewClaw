@@ -103,6 +103,16 @@ irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
   iniciado sob outro nível de privilégio, deixado para trás (erro `EPERM` no named pipe).
   Rode `newclaw doctor` para um diagnóstico completo, ou use `npm start` como alternativa
   (sem auto-restart, mas funciona).
+- **`newclaw update` falha ao compilar (erro do TypeScript sobre um módulo faltando)**: o
+  `npm install` roda automaticamente em todo update, então isso deve ser raro — mas se
+  acontecer (ex: rede instável no meio da instalação, ou uma dependência nativa que falhou
+  ao compilar), resolva na mão:
+  ```bash
+  cd <sua pasta de instalação do NewClaw>
+  npm install
+  npm run build
+  newclaw restart --daemon
+  ```
 - **A qualquer momento**: rode `newclaw doctor` para checar Node, PM2, Ollama, canais
   configurados, espaço em disco e auto-início no Windows, tudo de uma vez.
 
