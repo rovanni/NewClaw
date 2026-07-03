@@ -111,14 +111,34 @@ export function translateDevNullForPowerShell(command: string): string {
     return command.replace(/\/dev\/null\b/g, '$null');
 }
 
+// `ls -la`/`ls -lh`/etc. (flags POSIX combinadas de "formato longo, todos os arquivos, tamanho
+// legível") não têm equivalente quando encaminhados via alias `ls` do PowerShell — Get-ChildItem
+// não aceita essas flags de jeito nenhum, e o erro de parâmetro que ele gera vem serializado como
+// CLIXML (ilegível) em vez de mensagem de texto. Reproduzido ao vivo (log de auditoria, 02/07):
+// `ls -la <path>` bloqueou um step de goal com "#< CLIXML" como saída inteira do erro, forçando
+// um replan não planejado. Todo uso de `ls <flags> <path>` neste projeto é uma checagem simples
+// de "o arquivo existe / qual o tamanho", então descartar as flags e mapear para
+// `Get-ChildItem <path>` (sem flags) preserva a intenção sem precisar traduzir flag por flag.
+export function translateLsFlagsForPowerShell(command: string): string {
+    return command.replace(/\bls\s+-[lah]+(?=\s|$)/gi, 'Get-ChildItem');
+}
+
 /**
  * Encaminha o comando para powershell.exe via -EncodedCommand (Base64 UTF-16LE).
  * Evita o inferno de escaping de aspas entre cmd.exe (shell externo) e PowerShell
  * (shell alvo) — Base64 não precisa de escaping algum.
+ *
+ * $ProgressPreference = 'SilentlyContinue': sem host interativo (-NonInteractive), o
+ * PowerShell não tem como desenhar uma barra de progresso — em vez de simplesmente omitir,
+ * ele serializa o progress stream como CLIXML bruto na stdout (ex: "Preparando módulos para
+ * primeiro uso"). Reproduzido ao vivo: mesmo um `Get-ChildItem` bem-sucedido vinha com
+ * "#< CLIXML\n<Objs...>" anexado à saída, poluindo o resultado que volta pro LLM/validador.
+ * Setar a preferência ANTES do comando real elimina esse stream na origem.
  */
 export function wrapForWindowsPowerShell(command: string): string {
-    const translated = translateDevNullForPowerShell(translateChainOperatorsForPowerShell(command));
-    const encoded = Buffer.from(translated, 'utf16le').toString('base64');
+    const translated = translateLsFlagsForPowerShell(translateDevNullForPowerShell(translateChainOperatorsForPowerShell(command)));
+    const withoutProgressNoise = `$ProgressPreference = 'SilentlyContinue'; ${translated}`;
+    const encoded = Buffer.from(withoutProgressNoise, 'utf16le').toString('base64');
     return `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
 }
 

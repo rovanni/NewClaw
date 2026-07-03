@@ -1,7 +1,7 @@
 ---
 name: pptx-generator
-description: Converte Markdown ou HTML em arquivos PowerPoint (.pptx) editáveis usando Marp CLI. Ativar APENAS quando o usuário pedir explicitamente .pptx, PowerPoint ou um arquivo editável no formato Office. NÃO ativar para pedidos genéricos de "slides" ou "apresentação" sem formato específico.
-version: "1.0"
+description: Converte Markdown ou HTML em arquivos PowerPoint (.pptx). Ativar APENAS quando o usuário pedir explicitamente .pptx, PowerPoint ou um arquivo editável no formato Office. NÃO ativar para pedidos genéricos de "slides" ou "apresentação" sem formato específico. Quando o pedido exigir texto REALMENTE editável (não apenas um .pptx que abre no PowerPoint), usar o caminho python-pptx (Passo 0B), não o Marp CLI — ver aviso abaixo.
+version: "1.1"
 triggers: powerpoint, pptx, arquivo pptx, slides powerpoint, slides em pptx, apresentação editável, exportar pptx, marp, converter para pptx
 tools: exec_command, write, read, send_document
 tags: export, office, document-generation, powerpoint, marp, convert
@@ -9,9 +9,30 @@ tags: export, office, document-generation, powerpoint, marp, convert
 
 # PPTX Generator Skill
 
-Converte conteúdo em arquivos PowerPoint (.pptx) editáveis usando **Marp CLI**.
+Converte conteúdo em arquivos PowerPoint (.pptx) usando **Marp CLI** ou **python-pptx**,
+dependendo do que o usuário realmente precisa (ver aviso abaixo).
 
-## Passo 0 — Verificar Marp
+## ⚠️ AVISO IMPORTANTE: o `.pptx` gerado pelo Marp CLI NÃO é editável
+
+**Verificado diretamente no arquivo gerado (não é suposição):** o Marp CLI renderiza cada slide
+como uma imagem PNG de página inteira e a embute como plano de fundo do slide
+(`<p:bg><p:bgPr><a:blipFill>`). O `<p:spTree>` (árvore de formas) fica vazio — zero caixas de
+texto, zero `<a:t>`. O arquivo abre normalmente no PowerPoint e parece correto visualmente, mas
+**nenhum texto pode ser clicado ou editado** — é uma imagem por slide, não uma apresentação
+nativa.
+
+**Isso significa:**
+- Se o usuário pedir só "gerar um .pptx" ou "exportar para PowerPoint" (sem enfatizar edição),
+  o Marp CLI (Passo 1-4 abaixo) é aceitável — é rápido e o resultado abre e projeta bem.
+- Se o usuário pedir explicitamente algo **editável** ("slides editáveis", "quero poder mudar o
+  texto depois", "preciso editar no PowerPoint"), **use python-pptx desde o início (Passo 0B)**
+  — não tente o Marp CLI primeiro. Gerar via Marp e descobrir depois que não é editável só
+  desperdiça um ciclo inteiro.
+- **Se o usuário já recebeu um `.pptx` (gerado por este skill ou não) e disser que "não está
+  editando", "não consigo mudar o texto", ou algo equivalente**: NÃO gere de novo com Marp CLI —
+  o resultado será idêntico (imagem por slide). Vá direto para o Passo 0B (python-pptx).
+
+## Passo 0 — Verificar Marp (apenas se for usar o caminho Marp CLI)
 
 Antes de qualquer conversão, verificar se o Marp está disponível:
 
@@ -27,9 +48,15 @@ npm install -g @marp-team/marp-cli 2>/dev/null && marp --version
 
 **Se a instalação falhar:** não mencionar o erro ao usuário e não revelar detalhes de infraestrutura (como "no servidor", "no ambiente", caminhos internos ou comandos de instalação). Usar automaticamente o fallback via `python-pptx` (Passo 0B) sem comentários.
 
-## Passo 0B — Fallback via python-pptx (quando Marp indisponível)
+## Passo 0B — python-pptx (quando o usuário precisa de texto realmente editável, ou quando o Marp está indisponível)
 
-Se o Marp não estiver disponível, gerar o `.pptx` via script Python usando `python-pptx`.
+Para gerar um `.pptx` com texto nativo editável — ou quando o Marp não está disponível — usar um script Python com `python-pptx`.
+
+**REGRA CRÍTICA:** escrever o script com `write` **não é o fim da tarefa**. O arquivo `.pptx`
+só existe depois que o script for **executado** com `exec_command`. Uma resposta que diz "gerei
+os slides" sem antes ter rodado o script é uma alucinação — o usuário não recebeu nada. Sempre
+faça: `write` do script → `exec_command` para rodá-lo → confirmar que o `.pptx` foi criado →
+`send_document`.
 
 **REGRA:** NUNCA usar `python3 -c "..."` com código multilinha — o shell trunca o conteúdo.
 Sempre criar o script em arquivo separado e depois executar:
@@ -58,6 +85,13 @@ python3 tmp/gerar_pptx.py
 ```
 
 **Nunca informar ao usuário que o Marp não estava disponível ou que foi usado um método alternativo** — simplesmente entregar o arquivo gerado.
+
+---
+
+## Passos 1-4 — Caminho Marp CLI (rápido, mas NÃO gera texto editável — ver aviso no topo)
+
+Use este caminho apenas quando o usuário não pediu explicitamente edição de texto, ou quando
+ainda não tentou e falhou com o Marp CLI antes.
 
 ## Passo 1 — Identificar o conteúdo fonte
 
@@ -237,8 +271,13 @@ Extrair o conteúdo relevante e montar o .md manualmente, slide a slide.
 | `.pptx` com 0 bytes | Verificar se o .md tem frontmatter `marp: true` |
 | Slides sem separação | Adicionar `---` entre cada slide |
 | Fonte não encontrada | Usar apenas fontes CSS padrão no `style:` |
+| Usuário diz "não está editando" após receber `.pptx` do Marp | Não gere de novo com Marp — vá para o Passo 0B (python-pptx) e EXECUTE o script antes de responder |
 <!-- TASK_ONLY_END -->
 
 ## Regra Geral
 
 **Nunca declare que não é possível gerar .pptx.** O Marp está disponível no sistema ou pode ser instalado com um único comando npm. Se o usuário tem um HTML de slides, extraia o conteúdo e converta — não rejeite a tarefa sem tentar.
+
+**Nunca diga que o resultado é "editável" a menos que tenha usado o caminho python-pptx (Passo 0B).** Um `.pptx` gerado pelo Marp CLI existir e ter tamanho adequado não significa que o texto é editável — são coisas diferentes (ver aviso no topo).
+
+**Escrever o script de geração não é entregar o resultado.** Se você usou o Passo 0B, o `.pptx` só existe depois do `exec_command` que roda o script. Nunca finalize a resposta dizendo que os slides foram gerados se o script ainda não foi executado.

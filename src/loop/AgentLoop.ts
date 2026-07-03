@@ -2227,22 +2227,47 @@ export class AgentLoop {
 
         // Delivery guard: if a file was written but never sent, the user received nothing.
         // Re-enter the loop with a delivery instruction before synthesis.
-        const DELIVERABLE_EXTENSIONS = ['.html', '.pdf', '.md', '.txt', '.py', '.js', '.ts', '.csv', '.json', '.docx', '.xlsx'];
+        //
+        // Scripts (.py/.sh) are a special case: they aren't the deliverable, they're the
+        // MEANS to produce one (e.g. a python-pptx generator script). Telling the agent to
+        // `send_document` an unexecuted generator script is wrong — the file the user asked
+        // for doesn't exist yet. Evidence: 2026-07-02 audit log, goal "gerar slides editáveis" —
+        // the agent wrote tmp/gerar_slides_senac.py and workspace/gen_pptx.py in two separate
+        // turns, never executed either, and both times ran out of step budget before this guard
+        // could even fire (see the `stepCount < maxSteps` note below).
+        const DELIVERABLE_EXTENSIONS = ['.html', '.pdf', '.md', '.txt', '.js', '.ts', '.csv', '.json', '.docx', '.xlsx'];
+        const EXECUTABLE_SCRIPT_EXTENSIONS = ['.py', '.sh'];
         const wroteFile = cycleHistory.some(h => h.tool === 'write' && h.status === 'success');
         const sentFile = cycleHistory.some(h => (h.tool === 'send_document' || h.tool === 'send_audio' || h.tool === 'send_image') && h.status === 'success');
-        const writtenPaths = cycleHistory
+        const writtenFilePaths = cycleHistory
             .filter(h => h.tool === 'write' && h.status === 'success')
-            .map(h => { try { return (JSON.parse(h.input) as Record<string, string>).path || ''; } catch { return ''; } })
+            .map(h => { try { return (JSON.parse(h.input) as Record<string, string>).path || ''; } catch { return ''; } });
+        const writtenPaths = writtenFilePaths
             .filter(p => DELIVERABLE_EXTENSIONS.some(ext => p.toLowerCase().endsWith(ext)));
+        const writtenScriptPaths = writtenFilePaths
+            .filter(p => EXECUTABLE_SCRIPT_EXTENSIONS.some(ext => p.toLowerCase().endsWith(ext)));
+        // A script counts as "already executed" if any successful exec_command in this cycle
+        // referenced its basename — good enough since exec_command commands are shell strings,
+        // not structured paths.
+        const executedScriptPaths = writtenScriptPaths.filter(scriptPath => {
+            const base = scriptPath.split(/[\\/]/).pop() || scriptPath;
+            return cycleHistory.some(h => h.tool === 'exec_command' && h.status === 'success' && h.input.includes(base));
+        });
+        const unexecutedScriptPaths = writtenScriptPaths.filter(p => !executedScriptPaths.includes(p));
 
-        if (wroteFile && !sentFile && writtenPaths.length > 0 && stepCount < maxSteps) {
-            log.info(`[${this.ts()}] [DELIVERY-GUARD] File created but not sent — re-entering loop to deliver: ${writtenPaths.join(', ')}`);
-            loopMessages.push({
-                role: 'system',
-                content: `[ENTREGA PENDENTE] Você criou o(s) arquivo(s): ${writtenPaths.join(', ')}\nO usuário ainda NÃO recebeu nada. USE send_document para entregar AGORA. Para arquivos .html, você pode enviá-los diretamente com send_document ou converter para PDF com bash scripts/html2pdf.sh antes. A tarefa SÓ está concluída quando o arquivo for enviado.`
-            });
-            // Re-enter the main loop for delivery steps
-            while (stepCount < maxSteps) {
+        // Extra budget dedicated to this guard: the failure this fixes is precisely "ran out
+        // of steps right after writing the file" (direct/conversation mode caps maxSteps=4),
+        // so gating re-entry on remaining main-loop budget defeats the guard's own purpose.
+        const deliveryStepCap = maxSteps + 2;
+
+        if (wroteFile && !sentFile && (writtenPaths.length > 0 || unexecutedScriptPaths.length > 0) && stepCount < deliveryStepCap) {
+            const guardMessage = unexecutedScriptPaths.length > 0
+                ? `[EXECUÇÃO PENDENTE] Você criou o script ${unexecutedScriptPaths.join(', ')} mas ainda NÃO o executou. O usuário ainda NÃO recebeu nenhum arquivo. USE exec_command para RODAR o script AGORA (ex: python <script> ou bash <script>), depois entregue o arquivo gerado por ele com send_document. A tarefa SÓ está concluída quando o arquivo final for gerado e enviado.`
+                : `[ENTREGA PENDENTE] Você criou o(s) arquivo(s): ${writtenPaths.join(', ')}\nO usuário ainda NÃO recebeu nada. USE send_document para entregar AGORA. Para arquivos .html, você pode enviá-los diretamente com send_document ou converter para PDF com bash scripts/html2pdf.sh antes. A tarefa SÓ está concluída quando o arquivo for enviado.`;
+            log.info(`[${this.ts()}] [DELIVERY-GUARD] ${unexecutedScriptPaths.length > 0 ? 'Script created but not executed' : 'File created but not sent'} — re-entering loop: ${(unexecutedScriptPaths.length > 0 ? unexecutedScriptPaths : writtenPaths).join(', ')}`);
+            loopMessages.push({ role: 'system', content: guardMessage });
+            // Re-enter the main loop for delivery/execution steps
+            while (stepCount < deliveryStepCap) {
                 stepCount++;
                 log.info(`[${this.ts()}] [DELIVERY] Step ${stepCount}...`);
                 move('LLM_REQUEST', { step: stepCount, phase: 'delivery' });
