@@ -149,7 +149,11 @@ try {
         $diff = git diff "$local..$remote" --name-only 2>&1
         if ($diff -match "package(-lock)?\.json") {
             Write-Info "Dependências alteradas, instalando..."
-            npm install --production
+            # --production pulava devDependencies (ex: @types/multer) — o passo 9 roda
+            # `npm run build` (tsc), que precisa delas para compilar. update.sh (Linux) já
+            # instala completo; aqui ficou divergente e quebrava o build após todo update que
+            # adicionasse uma devDependency nova.
+            npm install
         }
     } catch {}
 
