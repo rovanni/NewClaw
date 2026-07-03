@@ -75,7 +75,7 @@ function parseCronHuman(expr: string): string {
 }
 
 function gitExec(cmd: string): string {
-    return execSync(cmd, { cwd: DIR, encoding: 'utf8', timeout: 10000 }).trim();
+    return execSync(cmd, { cwd: DIR, encoding: 'utf8', timeout: 10000, windowsHide: true }).trim();
 }
 
 function loadBackupConfig(): BackupConfig {
@@ -172,7 +172,7 @@ export function createMaintenanceRouter(): Router {
 
     // GET /api/maintenance/update/check
     router.get('/update/check', (_req: Request, res: Response) => {
-        exec('git fetch origin main', { cwd: DIR, timeout: 20000 }, (fetchErr) => {
+        exec('git fetch origin main', { cwd: DIR, timeout: 20000, windowsHide: true }, (fetchErr) => {
             try {
                 if (fetchErr) throw new Error(`git fetch falhou: ${errorMessage(fetchErr)}`);
                 const local = gitExec('git rev-parse HEAD');
@@ -205,7 +205,7 @@ export function createMaintenanceRouter(): Router {
         buildLog.start();
         const node = process.execPath;
         const cli = path.join(DIR, 'bin', 'newclaw');
-        const child = spawn(node, [cli, 'update', 'restart'], { cwd: DIR });
+        const child = spawn(node, [cli, 'update', 'restart'], { cwd: DIR, windowsHide: true });
 
         child.stdout.on('data', (d: Buffer) => buildLog.push(d.toString()));
         child.stderr.on('data', (d: Buffer) => buildLog.push(d.toString()));
@@ -230,7 +230,7 @@ export function createMaintenanceRouter(): Router {
         if (process.platform === 'win32') {
             return res.json({ success: true, found: false, humanReadable: null, cronExpr: null, raw: null, note: 'Agendamento via cron não disponível no Windows. Use o Agendador de Tarefas do Windows (taskschd.msc).' });
         }
-        exec('crontab -l 2>/dev/null', (_err, stdout) => {
+        exec('crontab -l 2>/dev/null', { windowsHide: true }, (_err, stdout) => {
             const lines = (stdout || '').split('\n')
                 .filter(l => l.includes('backup_db.sh') && !l.trim().startsWith('#'));
 
@@ -393,7 +393,7 @@ export function createMaintenanceRouter(): Router {
                 '  try{fs.copyFileSync(src,dst);fs.unlinkSync(src);fs.unlinkSync(flag);}catch(e){console.error("restore-helper:",e.message);}',
                 '},2000);',
             ].join('');
-            const helper = spawn(process.execPath, ['-e', helperCode], { detached: true, stdio: 'ignore' });
+            const helper = spawn(process.execPath, ['-e', helperCode], { detached: true, stdio: 'ignore', windowsHide: true });
             helper.unref();
 
             log.info(`Banco de dados agendado para restauração de ${safe} — reiniciando`);

@@ -49,6 +49,7 @@ export function which(cmd: string): string | null {
             encoding: 'utf-8',
             stdio: ['pipe', 'pipe', 'pipe'],
             timeout: 3000,
+            windowsHide: true,
         }).trim().split(/\r?\n/)[0].trim();
         return result || null;
     } catch {
@@ -106,7 +107,7 @@ export function diskUsagePercent(targetPath: string = os.homedir()): number | nu
             const drive    = path.parse(resolved).root.replace(/\\/g, '').replace(':', '');
             const out = execSync(
                 `wmic logicaldisk where "DeviceID='${drive}:'" get Size,FreeSpace /value`,
-                { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 4000 }
+                { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 4000, windowsHide: true }
             );
             const free  = parseInt((out.match(/FreeSpace=(\d+)/)  ?? [])[1] ?? '0');
             const total = parseInt((out.match(/Size=(\d+)/)        ?? [])[1] ?? '0');
@@ -134,7 +135,7 @@ export function countNodeProcesses(pattern: string): number | null {
         if (isWindows) {
             const out = execSync(
                 "wmic process where \"Name='node.exe'\" get CommandLine /value",
-                { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 4000 }
+                { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 4000, windowsHide: true }
             );
             const lines = out.split('\n').filter(l =>
                 l.startsWith('CommandLine=') && l.toLowerCase().includes(pattern.toLowerCase())

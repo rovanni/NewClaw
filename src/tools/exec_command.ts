@@ -290,7 +290,10 @@ export class ExecCommandTool implements ToolExecutor {
             log.info(`[AUTO-FIX] fix=remove_pandoc_no_stdin original="${original.slice(0, 120)}"`);
         }
 
-        const execOptions: { timeout: number; cwd?: string } = { timeout };
+        // windowsHide evita que cada comando abra uma janela de console visível no Windows —
+        // o processo do bot roda sem console próprio (PM2/Tarefa Agendada), então sem essa
+        // flag o Windows aloca uma janela nova a cada chamada, piscando na tela do usuário.
+        const execOptions: { timeout: number; cwd?: string; windowsHide: boolean } = { timeout, windowsHide: true };
         execOptions.cwd = effectiveWorkdir;
 
         // Comandos de busca retornam exit code 1 quando não há resultados — isso é um

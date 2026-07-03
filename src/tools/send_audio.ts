@@ -155,7 +155,7 @@ export class SendAudioTool implements ToolExecutor {
      */
     private runCommand(command: string, args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
         return new Promise((resolve, reject) => {
-            execFile(command, args, { timeout: timeoutMs, encoding: 'utf-8' }, (err, stdout, stderr) => {
+            execFile(command, args, { timeout: timeoutMs, encoding: 'utf-8', windowsHide: true }, (err, stdout, stderr) => {
                 if (err) {
                     reject(err);
                 } else {

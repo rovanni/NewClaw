@@ -134,6 +134,7 @@ export async function transcribeAttachment(
             await new Promise<void>((resolve, reject) => {
                 execFile('ffmpeg', ['-y', '-i', tmpOgg, '-ar', '16000', '-ac', '1', tmpWav], {
                     timeout: 30_000,
+                    windowsHide: true,
                 }, (err) => err ? reject(err) : resolve());
             });
             wavBuffer = await fs.readFile(tmpWav);
@@ -193,6 +194,7 @@ export async function transcribeAttachment(
                 execFile2(whisperPath, [localWavFile, '--language', 'pt'], {
                     timeout: 120_000,
                     encoding: 'utf-8',
+                    windowsHide: true,
                 }, (err, stdout) => err ? reject(err) : resolve(stdout));
             });
             const transcription = output.trim();

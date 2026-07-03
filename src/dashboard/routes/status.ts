@@ -112,7 +112,7 @@ export function createStatusRouter(ctx: DashboardContext): Router {
 
     router.post('/restart', (_req: Request, res: Response) => {
         res.json({ success: true, message: 'Restarting...' });
-        exec('bash ./start.sh restart', (err) => {
+        exec('bash ./start.sh restart', { windowsHide: true }, (err) => {
             if (err) log.error('Restart error:', errorMessage(err));
         });
     });

@@ -72,7 +72,7 @@ export class SkillInstaller {
                 const dest = path.join(this.skillsDir, 'public', repoName);
 
                 await withTimeout(
-                    execAsync(`git clone "${gitUrl}" "${dest}"`, { cwd: this.workspaceDir }),
+                    execAsync(`git clone "${gitUrl}" "${dest}"`, { cwd: this.workspaceDir, windowsHide: true }),
                     DEFAULT_TIMEOUT
                 );
 
@@ -87,7 +87,7 @@ export class SkillInstaller {
                 const sanitized = sanitizeArg(options.npm);
                 // Aspas ao redor do arg previnem word-splitting mesmo após sanitização
                 await withTimeout(
-                    execAsync(`npm install "${sanitized}"`, { cwd: this.workspaceDir }),
+                    execAsync(`npm install "${sanitized}"`, { cwd: this.workspaceDir, windowsHide: true }),
                     DEFAULT_TIMEOUT
                 );
                 return { success: true, data: { npm: sanitized } };
@@ -97,7 +97,7 @@ export class SkillInstaller {
             if (options.npx) {
                 const sanitized = sanitizeArg(options.npx);
                 await withTimeout(
-                    execAsync(`npx "${sanitized}"`, { cwd: this.workspaceDir }),
+                    execAsync(`npx "${sanitized}"`, { cwd: this.workspaceDir, windowsHide: true }),
                     DEFAULT_TIMEOUT
                 );
                 return { success: true, data: { npx: sanitized } };

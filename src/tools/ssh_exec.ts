@@ -76,7 +76,7 @@ export class SshExecTool implements ToolExecutor {
 
         try {
             const output = await new Promise<string>((resolve, reject) => {
-                exec(sshCommand, { timeout }, (error, stdout, stderr) => {
+                exec(sshCommand, { timeout, windowsHide: true }, (error, stdout, stderr) => {
                     if (error) {
                         const partial = (stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : '');
                         if (partial.trim()) {

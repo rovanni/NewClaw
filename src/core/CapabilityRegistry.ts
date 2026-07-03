@@ -136,6 +136,7 @@ function runSafe(cmd: string, timeoutMs = 3000): string | null {
             timeout: timeoutMs,
             stdio: ['ignore', 'pipe', 'ignore'],
             encoding: 'utf8',
+            windowsHide: true,
         }).trim();
     } catch {
         return null;

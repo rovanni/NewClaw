@@ -258,6 +258,7 @@ export class SignalAdapter implements ChannelAdapter {
             const child = execFile(signalPath, args, {
                 maxBuffer: 10 * 1024 * 1024,
                 timeout: 120000,
+                windowsHide: true,
             }, (error: { code?: string | number | null; killed?: boolean; message?: string } | null, stdout: string) => {
                 if (error && error.code !== 0 && !error.killed) {
                     log.warn('receive_timeout', 'Signal receive timeout (normal for long-polling)');
@@ -455,6 +456,7 @@ export class SignalAdapter implements ChannelAdapter {
             execFile(signalPath, args, {
                 timeout: 30000,
                 maxBuffer: 5 * 1024 * 1024,
+                windowsHide: true,
             }, (error: { code?: string | number | null; message?: string } | null, stdout: string, _stderr: string) => {
                 if (error) {
                     reject(error);

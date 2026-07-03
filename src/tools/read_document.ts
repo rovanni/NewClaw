@@ -119,7 +119,7 @@ export class ReadDocumentTool implements ToolExecutor {
         try {
             const { stdout, stderr } = await execAsync(
                 `pdftotext ${pageArg} "${filePath}" -`,
-                { timeout: TIMEOUT_MS }
+                { timeout: TIMEOUT_MS, windowsHide: true }
             );
             const text = stdout.trim();
             if (text.length > 50) {
@@ -142,7 +142,7 @@ export class ReadDocumentTool implements ToolExecutor {
                 'from pdfminer.high_level import extract_text',
                 'print(extract_text(sys.argv[1]))',
             ].join('; ');
-            const { stdout } = await execFileAsync('python3', ['-c', script, filePath], { timeout: TIMEOUT_MS });
+            const { stdout } = await execFileAsync('python3', ['-c', script, filePath], { timeout: TIMEOUT_MS, windowsHide: true });
             const text = stdout.trim();
             if (text.length > 50) {
                 log.info(`read_document: pdfminer OK (${text.length} chars)`);
@@ -165,7 +165,7 @@ export class ReadDocumentTool implements ToolExecutor {
             // Convert PDF pages to PNG then OCR with tesseract
             const osTmp  = require('os').tmpdir() as string;
             const tmpBase = path.join(osTmp, `newclaw_ocr_${Date.now()}`);
-            await execAsync(`pdftoppm -png -r 150 "${filePath}" "${tmpBase}"`, { timeout: 30_000 });
+            await execAsync(`pdftoppm -png -r 150 "${filePath}" "${tmpBase}"`, { timeout: 30_000, windowsHide: true });
             const pngs = fs.readdirSync(osTmp).filter(f => f.startsWith(path.basename(tmpBase)));
             if (pngs.length === 0) return { success: false, output: '', error: 'pdftoppm não produziu imagens' };
 
@@ -177,7 +177,7 @@ export class ReadDocumentTool implements ToolExecutor {
                     const { stdout } = await execFileAsync(
                         'tesseract',
                         [path.join(osTmp, png), 'stdout', '-l', 'por+eng'],
-                        { timeout: 30_000 },
+                        { timeout: 30_000, windowsHide: true },
                     );
                     texts.push(stdout.trim());
                 } catch { /* skip page */ }
@@ -199,7 +199,7 @@ export class ReadDocumentTool implements ToolExecutor {
     private async extractOffice(filePath: string): Promise<ToolResult> {
         // Try pandoc first
         try {
-            const { stdout } = await execAsync(`pandoc "${filePath}" -t plain`, { timeout: TIMEOUT_MS });
+            const { stdout } = await execAsync(`pandoc "${filePath}" -t plain`, { timeout: TIMEOUT_MS, windowsHide: true });
             const text = stdout.trim();
             if (text.length > 50) {
                 return { success: true, output: this.formatOutput(text, filePath, 'pandoc') };
@@ -209,7 +209,7 @@ export class ReadDocumentTool implements ToolExecutor {
         // Try LibreOffice headless text export
         try {
             const outDir = require('os').tmpdir() as string;
-            await execAsync(`libreoffice --headless --convert-to txt "${filePath}" --outdir "${outDir}"`, { timeout: TIMEOUT_MS });
+            await execAsync(`libreoffice --headless --convert-to txt "${filePath}" --outdir "${outDir}"`, { timeout: TIMEOUT_MS, windowsHide: true });
             const txtPath = path.join(outDir, path.basename(filePath, path.extname(filePath)) + '.txt');
             if (fs.existsSync(txtPath)) {
                 const text = fs.readFileSync(txtPath, 'utf-8').trim();
@@ -225,7 +225,7 @@ export class ReadDocumentTool implements ToolExecutor {
         try {
             const { stdout } = await execAsync(
                 `tesseract "${filePath}" stdout -l por+eng`,
-                { timeout: TIMEOUT_MS }
+                { timeout: TIMEOUT_MS, windowsHide: true }
             );
             const text = stdout.trim();
             if (text.length > 10) {
@@ -241,7 +241,7 @@ export class ReadDocumentTool implements ToolExecutor {
         try {
             const { stdout } = await execAsync(
                 `strings "${filePath}" | grep -E '.{20,}' | head -200`,
-                { timeout: 15_000 }
+                { timeout: 15_000, windowsHide: true }
             );
             const text = stdout.trim();
             if (text.length > 50) {
