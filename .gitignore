@@ -27,6 +27,13 @@ backups/
 logs/
 *.pid
 
+# Bloqueia arquivos soltos na raiz do workspace (scratch pessoal / gerado por
+# agentes) — não deve ser versionado por padrão. A negação abaixo só reabre
+# a navegação nas subpastas; as regras específicas logo em seguida (que vêm
+# DEPOIS, portanto têm precedência) voltam a ignorar o que deve ficar de fora.
+/workspace/*
+!/workspace/*/
+
 # Workspace gerado
 workspace/sites/*.html
 workspace/space-invaders*.html
