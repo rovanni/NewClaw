@@ -607,14 +607,27 @@ OU
                 const toolArgs = (s.toolArgs && typeof s.toolArgs === 'object') ? s.toolArgs as Record<string, unknown> : undefined;
                 if (toolArgs?.file_path) return;
 
-                const lastWrite = rawSteps.slice(0, i).reverse().find(
-                    (prev: Record<string, unknown>) =>
-                        String(prev['toolName'] ?? '') === 'write' &&
-                        prev['toolArgs'] &&
-                        typeof prev['toolArgs'] === 'object' &&
-                        (prev['toolArgs'] as Record<string, unknown>)['path']
-                );
-                if (!lastWrite) return; // sem write anterior: sanitizePlanSteps vai converter pra AgentLoop normalmente
+                // Para a busca (sem inferir) assim que encontrar um exec_command/agentloop no
+                // caminho de volta: esses steps podem produzir um artefato DIFERENTE do que foi
+                // escrito antes deles — ex.: escrever um script "gerar_slides.py" e depois
+                // executá-lo gera "aula_excel.pptx", um arquivo distinto. Inferir o script como
+                // anexo final manda o arquivo errado ao usuário (BUG real: campanha 03/07/2026,
+                // usuário recebeu gerar_slides.py em vez do .pptx que o script gerou).
+                let lastWrite: Record<string, unknown> | undefined;
+                for (let j = i - 1; j >= 0; j--) {
+                    const prevTool = String(rawSteps[j]['toolName'] ?? '');
+                    if (prevTool === 'exec_command' || prevTool === 'agentloop') break;
+                    if (
+                        prevTool === 'write' &&
+                        rawSteps[j]['toolArgs'] &&
+                        typeof rawSteps[j]['toolArgs'] === 'object' &&
+                        (rawSteps[j]['toolArgs'] as Record<string, unknown>)['path']
+                    ) {
+                        lastWrite = rawSteps[j];
+                        break;
+                    }
+                }
+                if (!lastWrite) return; // sem write anterior confiável: sanitizePlanSteps vai converter pra AgentLoop normalmente
 
                 const inferredPath = String((lastWrite['toolArgs'] as Record<string, unknown>)['path']);
                 s.toolArgs = { ...(toolArgs ?? {}), file_path: inferredPath };
