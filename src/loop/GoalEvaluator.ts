@@ -15,6 +15,7 @@
 import { createLogger } from '../shared/AppLogger';
 import { ToolResult } from './agentLoopTypes';
 import { Goal, PlanStep, CycleResult, GoalBlocker, BlockerKind, DependencyInfo } from './GoalTypes';
+import { extractMissingExecutable } from './planning/extractMissingExecutable';
 
 const log = createLogger('GoalEvaluator');
 
@@ -265,7 +266,7 @@ export class GoalEvaluator {
 
         // Dependência ausente → perguntar ao usuário / tentar instalar
         if (blocker.kind === 'missing_tool') {
-            const missingCmd = this.extractMissingToolName(error) ?? '';
+            const missingCmd = extractMissingExecutable(error) ?? '';
             log.debug(`[GoalEvaluator] missing_tool extracted="${missingCmd || '(not extracted)'}" from error="${error.slice(0, 80)}"`);
             const dep = KNOWN_DEPS[missingCmd.toLowerCase()];
             if (dep) {
@@ -327,8 +328,14 @@ export class GoalEvaluator {
             // Sem esta distinção, o GoalPlanner acredita que a ferramenta exec_command em si está
             // faltando e gera replans que evitam exec_command — mas o problema real é o binário interno.
             if (matched.kind === 'missing_tool' && toolName === 'exec_command') {
-                const isCommandMissing = /command not found|which:\s*no|cannot find|\[exit code: 127\]/i.test(error);
-                if (!isCommandMissing) {
+                // extractMissingExecutable() é a mesma função usada no lookup de KNOWN_DEPS logo
+                // abaixo (em evaluate()) — antes desta unificação, este branch usava uma regex
+                // local própria que não reconhecia "is not recognized as an internal or external
+                // command" (texto do cmd.exe no Windows para um binário ausente do PATH),
+                // reclassificando incorretamente esse caso como "caminho não encontrado" em vez
+                // de "binário ausente".
+                const missingBinary = extractMissingExecutable(error);
+                if (!missingBinary) {
                     return {
                         kind: 'tool_error',
                         toolName,
@@ -342,10 +349,7 @@ export class GoalEvaluator {
                     };
                 }
                 // exec_command encontrou a shell, mas o BINÁRIO invocado não existe.
-                // Extrair o nome real do binário para dar descrição acionável ao GoalPlanner,
-                // em vez de "exec_command não encontrada" (que é um falso-positivo confuso).
-                const missingBinary = this.extractMissingToolName(error);
-                const binaryLabel = missingBinary ? `'${missingBinary}'` : 'o binário solicitado';
+                const binaryLabel = `'${missingBinary}'`;
                 return {
                     kind: 'missing_tool',
                     toolName,
@@ -391,65 +395,6 @@ export class GoalEvaluator {
             if (pattern.pattern.test(error)) return pattern;
         }
         return null;
-    }
-
-    /**
-     * Extrai o nome do executável que não foi encontrado da mensagem de erro.
-     * Exemplos:
-     *   "bash: pandoc: command not found"  → "pandoc"
-     *   "which: no ffmpeg in (...)"        → "ffmpeg"
-     *   "pandoc: command not found"        → "pandoc"
-     *   "spawn edge-tts ENOENT"            → "edge-tts"
-     *   "spawnSync edge-tts ENOENT"        → "edge-tts"
-     *   "'edge-tts' is not recognized..."  → "edge-tts"
-     */
-    private extractMissingToolName(error: string): string | undefined {
-        // Node child_process: "spawn <cmd> ENOENT" / "spawnSync <cmd> ENOENT" — mensagem
-        // gerada pelo próprio runtime (exec/execFile usam "spawn" internamente;
-        // execFileSync/spawnSync usam "spawnSync"). É a evidência mais forte e genérica de
-        // executável ausente: só ocorre quando o SO falhou ao localizar o processo a rodar
-        // (nunca aparece em erros de fs como open/scandir, que têm formato diferente — ver
-        // o padrão de exclusão em ERROR_PATTERNS). Cobre qualquer binário, não só edge-tts.
-        const spawnEnoent = error.match(/\bspawn(?:Sync)?\s+(.+?)\s+ENOENT\b/i);
-        if (spawnEnoent) return this.normalizeExecutableName(spawnEnoent[1]);
-
-        // "bash: pandoc: command not found" / "sh: 1: pandoc: not found"
-        const shellPrefix = error.match(/(?:bash|sh|zsh|dash|fish|cmd):\s*(?:\d+:\s*)?(\w[\w.-]*?):\s*(?:command\s+)?not found/i);
-        if (shellPrefix) return shellPrefix[1];
-
-        // "pandoc: command not found" (sem prefixo de shell)
-        const plainNotFound = error.match(/^(\w[\w.-]*?):\s*command not found/im);
-        if (plainNotFound) return plainNotFound[1];
-
-        // "which: no pandoc in ..."
-        const whichNo = error.match(/which:\s*no\s+(\w[\w.-]*?)\s+in/i);
-        if (whichNo) return whichNo[1];
-
-        // "cannot find 'pandoc'" ou "cannot find pandoc"
-        const cannotFind = error.match(/cannot find ['"]?(\w[\w.-]*?)['"]?(?:\s|$)/i);
-        if (cannotFind) return cannotFind[1];
-
-        // cmd.exe (Windows): "'edge-tts' is not recognized as an internal or external command"
-        const winNotRecognized = error.match(/'([^']+)'\s+is not recognized as an internal or external command/i);
-        if (winNotRecognized) return this.normalizeExecutableName(winNotRecognized[1]);
-
-        // ENOENT no caminho: /usr/bin/pandoc
-        const enoent = error.match(/ENOENT[^']*'([^/']+)'/i);
-        if (enoent) return enoent[1];
-
-        return undefined;
-    }
-
-    /**
-     * Normaliza um nome/caminho de executável extraído para uma chave estável de lookup
-     * em KNOWN_DEPS: remove diretório (basename) e extensão executável do Windows (.exe/
-     * .cmd/.bat/.com). Não normaliza outras extensões — um nome como "script.py" continua
-     * "script.py" (extensão não reconhecida como sufixo de executável).
-     */
-    private normalizeExecutableName(raw: string): string {
-        const trimmed = raw.trim().replace(/^['"]|['"]$/g, '');
-        const basename = trimmed.split(/[\\/]/).pop() || trimmed;
-        return basename.replace(/\.(exe|cmd|bat|com)$/i, '');
     }
 
     /** Gera texto de explicação para o usuário quando goal falha */

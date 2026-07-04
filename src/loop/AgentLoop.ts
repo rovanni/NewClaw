@@ -48,6 +48,7 @@ import {
 import { buildMasterPrompt } from './agentPrompts';
 import { parseLLMResponse, extractFinalText } from './agentOutputParser';
 import { buildLoopMetric, summarizeMetrics } from './agentMetrics';
+import { extractMissingExecutable } from './planning/extractMissingExecutable';
 
 export type { ToolResult, ToolExecutor, LoopMetrics, ChannelContext, AgentLoopConfig, ProcessedResult };
 
@@ -407,8 +408,12 @@ export class AgentLoop {
             if (ctx.alternativeTools?.length) contextPayload.alternativeTools = ctx.alternativeTools;
         }
 
-        const isCommandNotFound = /command not found|not found|exit code: 127|which: no|cannot find|ENOENT/i
-            .test((result.error ?? '') + (result.output ?? ''));
+        // extractMissingExecutable() distingue evidência real de executável ausente (spawn
+        // ENOENT, "command not found", cmd.exe "is not recognized"...) de ENOENT de arquivo/
+        // diretório (ex: input ausente) — a regex anterior aqui usava "ENOENT" bare, então um
+        // erro de arquivo/diretório ausente virava "a ferramenta não está instalada" de forma
+        // enganosa para o usuário.
+        const isCommandNotFound = extractMissingExecutable((result.error ?? '') + (result.output ?? '')) !== null;
         const failTask = isCommandNotFound
             ? `O passo "${ctx.step}" falhou porque a ferramenta não está instalada no sistema. ` +
               `O objetivo do usuário é: "${ctx.userGoal}". ` +
