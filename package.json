@@ -10,7 +10,8 @@
     "start:debug": "node --inspect dist/index.js",
     "recover": "node scripts/recover-db.cjs",
     "test:regression": "node scripts/run-regression-tests.cjs",
-    "test:regression:selftest": "node scripts/run-regression-tests.cjs --selftest"
+    "test:regression:selftest": "node scripts/run-regression-tests.cjs --selftest",
+    "test:integration": "ts-node scripts/testes/integration-campaign-runner.ts"
   },
   "dependencies": {
     "@types/better-sqlite3": "^7.6.13",

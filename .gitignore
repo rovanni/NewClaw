@@ -30,6 +30,10 @@ logs/
 # Workspace gerado
 workspace/sites/*.html
 workspace/space-invaders*.html
+workspace/_campaign_scratch/
+
+# Evidência gerada pela campanha de validação integrada (output, não fonte)
+scripts/testes/integration-campaign-evidence.json
 
 # Estado de runtime do workspace (persistência local, não versionável)
 workspace/.newclaw/
