@@ -27,27 +27,12 @@ backups/
 logs/
 *.pid
 
-# Bloqueia arquivos soltos na raiz do workspace (scratch pessoal / gerado por
-# agentes) — não deve ser versionado por padrão. A negação abaixo só reabre
-# a navegação nas subpastas; as regras específicas logo em seguida (que vêm
-# DEPOIS, portanto têm precedência) voltam a ignorar o que deve ficar de fora.
-/workspace/*
-!/workspace/*/
-
-# Workspace gerado
-# sites/ e uenp/ guardam conteúdo pessoal (acompanhamento de criptomoedas e
-# material de curso) — ignorados por completo, não deve ser público.
-workspace/sites/
-workspace/uenp/
-workspace/space-invaders*.html
-workspace/_campaign_scratch/
+# Workspace: ambiente de trabalho/scratch do agente (arquivos gerados,
+# conteúdo pessoal do usuário) — nunca versionado, sem exceções.
+workspace/
 
 # Evidência gerada pela campanha de validação integrada (output, não fonte)
 scripts/testes/integration-campaign-evidence.json
-
-# Estado de runtime do workspace (persistência local, não versionável)
-workspace/.newclaw/
-workspace/.test_*/
 
 # Scripts e utilitarios ad-hoc
 debug_loop.js
