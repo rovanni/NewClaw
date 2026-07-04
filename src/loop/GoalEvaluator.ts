@@ -48,6 +48,14 @@ const KNOWN_DEPS: Record<string, DependencyInfo> = {
     marp:        { name: '@marp-team/marp-cli',    installByPlatform: { windows: 'npm install -g @marp-team/marp-cli', linux: 'npm install -g @marp-team/marp-cli', macos: 'npm install -g @marp-team/marp-cli' }, manualInstructions: 'Instale o marp-cli globalmente: npm install -g @marp-team/marp-cli', type: 'node' },
     pip:         { name: 'python3-pip',            installCmd: 'sudo apt install python3-pip -y',             manualInstructions: 'Instale com: sudo apt install python3-pip -y',                 type: 'python' },
     pip3:        { name: 'python3-pip',            installCmd: 'sudo apt install python3-pip -y',             manualInstructions: 'Instale com: sudo apt install python3-pip -y',                 type: 'python' },
+    // edge-tts: SEM installCmd/installByPlatform de propósito nesta rodada. O execution loop
+    // (GoalExecutionLoop.ts, needs_dependency) resolve o comando via resolveInstallCommand()
+    // e o executa direto via exec_command sem antes checar se o runtime Python (python3/pip3)
+    // está presente — declarar aqui um comando "python -m pip install edge-tts" apenas
+    // moveria a falha para um segundo ENOENT (agora de 'python'), sem ganho real. Por ora,
+    // edge-tts é reconhecido, classificado e vira needs_dependency com instrução manual;
+    // auto-install fica para uma rodada futura que valide o runtime antes de auto-instalar.
+    'edge-tts':  { name: 'edge-tts',               manualInstructions: 'Instale o edge-tts (requer Python 3 + pip) — Windows: python -m pip install edge-tts | Linux: python3 -m pip install edge-tts | macOS: python3 -m pip install edge-tts', type: 'python' },
 };
 
 // ── Padrões de classificação de erro ─────────────────────────────────────────
@@ -61,9 +69,27 @@ interface ErrorPattern {
 }
 
 const ERROR_PATTERNS: ErrorPattern[] = [
-    // Ferramenta não encontrada (inclui exit code 127 = command not found no Unix)
+    // ENOENT de operação de arquivo/diretório (fs: open/scandir/stat/...), NÃO de processo.
+    // Precisa vir ANTES do padrão de missing_tool: "ENOENT: no such file or directory, open
+    // 'input.mp3'" contém tanto "ENOENT" quanto "no such file" — sem esta exclusão explícita,
+    // TODO ENOENT de fs (arquivo de entrada ou diretório ausente) seria confundido com
+    // executável ausente. O shape do Node distingue os dois: erro de spawn é "spawn <cmd>
+    // ENOENT" (ENOENT no final, sem vírgula); erro de fs é "ENOENT: no such file or directory,
+    // <syscall> '<path>'" (ENOENT no início, com o verbo de syscall depois da vírgula).
     {
-        pattern: /command not found|not found|no such file|ENOENT|which: no|cannot find|\[exit code: 127\]/i,
+        pattern: /ENOENT:\s*no such file or directory,\s*(?:open|scandir|lstat|stat|access|unlink|mkdir|rmdir|readdir|rename|copyfile|realpath)/i,
+        kind: 'tool_error',
+        description: (_, tool) => `Arquivo ou diretório não encontrado ao executar '${tool}'`,
+        suggestedActions: [
+            'Verificar se o caminho existe com list_workspace',
+            'Corrigir o caminho no próximo passo',
+        ],
+        isRetryable: false,
+    },
+    // Ferramenta não encontrada (inclui exit code 127 = command not found no Unix e o
+    // texto literal do cmd.exe no Windows quando um executável não existe no PATH)
+    {
+        pattern: /command not found|not found|no such file|ENOENT|which: no|cannot find|\[exit code: 127\]|is not recognized as an internal or external command/i,
         kind: 'missing_tool',
         description: (_, tool) => `Ferramenta '${tool}' não encontrada no sistema`,
         suggestedActions: [
@@ -373,8 +399,20 @@ export class GoalEvaluator {
      *   "bash: pandoc: command not found"  → "pandoc"
      *   "which: no ffmpeg in (...)"        → "ffmpeg"
      *   "pandoc: command not found"        → "pandoc"
+     *   "spawn edge-tts ENOENT"            → "edge-tts"
+     *   "spawnSync edge-tts ENOENT"        → "edge-tts"
+     *   "'edge-tts' is not recognized..."  → "edge-tts"
      */
     private extractMissingToolName(error: string): string | undefined {
+        // Node child_process: "spawn <cmd> ENOENT" / "spawnSync <cmd> ENOENT" — mensagem
+        // gerada pelo próprio runtime (exec/execFile usam "spawn" internamente;
+        // execFileSync/spawnSync usam "spawnSync"). É a evidência mais forte e genérica de
+        // executável ausente: só ocorre quando o SO falhou ao localizar o processo a rodar
+        // (nunca aparece em erros de fs como open/scandir, que têm formato diferente — ver
+        // o padrão de exclusão em ERROR_PATTERNS). Cobre qualquer binário, não só edge-tts.
+        const spawnEnoent = error.match(/\bspawn(?:Sync)?\s+(.+?)\s+ENOENT\b/i);
+        if (spawnEnoent) return this.normalizeExecutableName(spawnEnoent[1]);
+
         // "bash: pandoc: command not found" / "sh: 1: pandoc: not found"
         const shellPrefix = error.match(/(?:bash|sh|zsh|dash|fish|cmd):\s*(?:\d+:\s*)?(\w[\w.-]*?):\s*(?:command\s+)?not found/i);
         if (shellPrefix) return shellPrefix[1];
@@ -391,11 +429,27 @@ export class GoalEvaluator {
         const cannotFind = error.match(/cannot find ['"]?(\w[\w.-]*?)['"]?(?:\s|$)/i);
         if (cannotFind) return cannotFind[1];
 
+        // cmd.exe (Windows): "'edge-tts' is not recognized as an internal or external command"
+        const winNotRecognized = error.match(/'([^']+)'\s+is not recognized as an internal or external command/i);
+        if (winNotRecognized) return this.normalizeExecutableName(winNotRecognized[1]);
+
         // ENOENT no caminho: /usr/bin/pandoc
         const enoent = error.match(/ENOENT[^']*'([^/']+)'/i);
         if (enoent) return enoent[1];
 
         return undefined;
+    }
+
+    /**
+     * Normaliza um nome/caminho de executável extraído para uma chave estável de lookup
+     * em KNOWN_DEPS: remove diretório (basename) e extensão executável do Windows (.exe/
+     * .cmd/.bat/.com). Não normaliza outras extensões — um nome como "script.py" continua
+     * "script.py" (extensão não reconhecida como sufixo de executável).
+     */
+    private normalizeExecutableName(raw: string): string {
+        const trimmed = raw.trim().replace(/^['"]|['"]$/g, '');
+        const basename = trimmed.split(/[\\/]/).pop() || trimmed;
+        return basename.replace(/\.(exe|cmd|bat|com)$/i, '');
     }
 
     /** Gera texto de explicação para o usuário quando goal falha */
