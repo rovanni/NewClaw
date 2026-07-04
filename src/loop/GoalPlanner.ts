@@ -186,7 +186,7 @@ CRITÉRIOS DE SUCESSO (successCriteria) — máximo 3, verificados deterministic
 - output_not_contains: output de attempt bem-sucedido NÃO contém value. Ex: nome substituído → { "check": "output_not_contains", "tool": "exec_command", "value": "NomeAntigo" }
 - output_contains: output contém value. Ex: conteúdo esperado existe → { "check": "output_contains", "tool": "exec_command", "value": "NovoConteudo" }
 - file_exists: exec_command retornou output não-vazio (arquivo encontrado). Ex: arquivo criado → { "check": "file_exists", "tool": "exec_command" }
-Inclua SEMPRE um critério tool_succeeded para send_document quando o objetivo envolve entrega de arquivo.
+Inclua SEMPRE um critério tool_succeeded para send_document quando o objetivo envolve entrega de arquivo, e um critério tool_succeeded para send_audio quando o objetivo envolve entrega de áudio. Isso é reforço de qualidade — mesmo que você esqueça, o sistema garante esses critérios automaticamente com base nas tools do plano final.
 
 ⚠️ GERAÇÃO DE CONTEÚDO EXTENSO (slides, relatórios, HTML completo, documentos) — LEIA PRIMEIRO:
 Quando o objetivo exige criar um artefato extenso (apresentação, relatório, HTML de slides, documento longo):

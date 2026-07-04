@@ -38,6 +38,7 @@ import { StepSemanticValidator } from './StepSemanticValidator';
 import { GracefulDeliveryOrchestrator } from './GracefulDeliveryOrchestrator';
 import { StrategyDiversityGuard } from './StrategyDiversityGuard';
 import { resolvePath } from '../utils/crossPlatform';
+import { ensureDeliverySuccessCriteria, AUTO_DELIVERY_CRITERION_IDS } from './planning/ensureDeliverySuccessCriteria';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext, ContextAwareTool } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
@@ -189,15 +190,6 @@ export class GoalExecutionLoop {
 
         let rawPlan = planResult.steps;
 
-        // Persiste os critérios de sucesso gerados no plano inicial.
-        // São definidos UMA VEZ aqui e preservados entre replans (representam
-        // "o que significa estar pronto", não "como fazer").
-        if (planResult.successCriteria && planResult.successCriteria.length > 0) {
-            this.goalStore.update(goal.id, { successCriteria: planResult.successCriteria });
-            goal = this.goalStore.getById(goal.id)!;
-            log.info(`[GoalLoop] successCriteria stored: ${planResult.successCriteria.map(c => `${c.id}(${c.check})`).join(', ')}`);
-        }
-
         // ── Q2: Análise de Riscos (apenas planos complexos) ──────────────
         // Planos simples passam direto; Q2 só vale a latência em tarefas com
         // dependências entre steps (ex: exec cria arquivo → send_document envia)
@@ -231,10 +223,21 @@ export class GoalExecutionLoop {
 
         this.logPlanAnalysis(goal.id, initialPlan, 'initial');
 
+        // Critérios de sucesso calculados sobre o plano FINAL (pós Q2/RiskAnalyzer) — nunca
+        // sobre o rawPlan pré-ajuste, que pode ter tools diferentes das que vão executar de
+        // verdade. ensureDeliverySuccessCriteria garante determinsticamente um critério
+        // tool_succeeded para send_document/send_audio quando presentes no plano final,
+        // independente de o LLM ter lembrado de incluir isso em successCriteria.
+        const initialCriteria = ensureDeliverySuccessCriteria(initialPlan, planResult.successCriteria ?? []);
+        if (initialCriteria.length > 0) {
+            log.info(`[GoalLoop] successCriteria stored: ${initialCriteria.map(c => `${c.id}(${c.check})`).join(', ')}`);
+        }
+
         this.goalStore.update(goal.id, {
             currentPlan: initialPlan,
             status: 'executing',
             cycleFocus: planResult.strategy || undefined,
+            successCriteria: initialCriteria,
         });
         const currentGoal = this.goalStore.getById(goal.id)!;
 
@@ -444,6 +447,22 @@ export class GoalExecutionLoop {
 
         this.logPlanAnalysis(goal.id, finalPlan, 'replan');
 
+        // Funde os critérios semânticos preservados (tudo que NÃO é auto-injetado de entrega —
+        // sobrevive a replans por design, ver comentário histórico removido de executeGoal()) com
+        // o que a LLM desta replan devolveu, depois recalcula os critérios de entrega do zero a
+        // partir do plano FINAL deste ciclo. Isso garante que um replan legítimo que abandona
+        // send_audio/send_document não deixe um critério de entrega "preso" exigindo uma tool que
+        // a estratégia atual nem usa mais — sem apagar critérios semânticos legítimos do Goal.
+        const preservedCriteria = (goal.successCriteria ?? []).filter(c =>
+            c.id !== AUTO_DELIVERY_CRITERION_IDS.send_document &&
+            c.id !== AUTO_DELIVERY_CRITERION_IDS.send_audio
+        );
+        const mergedCriteria = [...preservedCriteria];
+        for (const c of (planResult.successCriteria ?? [])) {
+            if (!mergedCriteria.some(existing => existing.id === c.id)) mergedCriteria.push(c);
+        }
+        const replanCriteria = ensureDeliverySuccessCriteria(finalPlan, mergedCriteria);
+
         this.goalStore.update(goal.id, {
             currentPlan: finalPlan,
             status: 'executing',
@@ -452,6 +471,7 @@ export class GoalExecutionLoop {
             // Sem este reset, retries consumidos no plano anterior reduzem artificialmente a
             // capacidade de recovery dos steps do novo plano.
             retryBudget: GOAL_LIMITS.MAX_RETRY_BUDGET,
+            successCriteria: replanCriteria,
         });
         // Ao adotar novo plano: descarta componentes 'failed' e 'in_progress' do plano anterior
         // (tentativas fracassadas já descartadas), preserva apenas os 'completed'.
