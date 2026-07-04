@@ -46,13 +46,18 @@ export class SendAudioTool implements ToolExecutor {
     }
 
     async execute(args: Record<string, unknown>): Promise<ToolResult> {
-        // Debounce: prevent duplicate sends within 10 seconds
+        // Debounce: prevent duplicate sends within 10 seconds. lastSendTime só é atualizado
+        // APÓS um envio bem-sucedido (ver bus.sendVoice() abaixo) — nunca no início da
+        // tentativa. Setar aqui incondicionalmente fazia uma falha real (ex.: edge-tts ausente)
+        // ser mascarada por um "sucesso" falso na tentativa seguinte dentro da janela de 10s,
+        // porque o debounce respondia success:true achando que já tinha enviado de verdade.
+        // Bug real: goal de áudio marcado completed sem NENHUM áudio jamais gerado (edge-tts
+        // ENOENT em todas as tentativas) — usuário nunca recebeu nada.
         const now = Date.now();
         if (now - this.lastSendTime < SendAudioTool.MIN_INTERVAL_MS) {
             log.info('Debounced — audio already sent recently, skipping.');
             return { success: true, output: '🔊 Áudio já enviado recentemente.' };
         }
-        this.lastSendTime = now;
         let text = args.text as string;
         const voice = (args.voice as string) || 'pt-BR-AntonioNeural';
         if (!text) return { success: false, output: '', error: 'Texto não fornecido.' };
@@ -133,6 +138,7 @@ export class SendAudioTool implements ToolExecutor {
                 const fileBuffer = readFileSync(oggFile);
                 await this.bus.sendVoice(this.channel, this.chatId, fileBuffer, 'voice.ogg');
                 log.info(`Upload done in ${Date.now() - uploadStart}ms`);
+                this.lastSendTime = Date.now();
             } catch (uploadError) {
                 log.error('Upload error:', errorMessage(uploadError));
                 return { success: false, output: '', error: `Upload failed: ${errorMessage(uploadError)}` };
