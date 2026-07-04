@@ -187,8 +187,23 @@ export type CycleOutcome = 'success' | 'partial' | 'blocked' | 'failed' | 'needs
 export interface DependencyInfo {
     /** Nome do pacote/ferramenta (ex: "pandoc", "ffmpeg") */
     name: string;
-    /** Comando de instalação automática (ex: "sudo apt install pandoc -y") */
-    installCmd: string;
+    /**
+     * Comando de instalação legado (histórico: sempre apt/Linux, ex: "sudo apt install pandoc -y").
+     * Opcional para permitir entradas cross-platform que só usam installByPlatform.
+     * NUNCA executado fora de Linux automaticamente — ver resolveInstallCommand()
+     * (src/loop/planning/resolveInstallCommand.ts): sem entrada explícita em installByPlatform
+     * para a plataforma atual, não-Linux sempre resolve para undefined, nunca cai neste campo.
+     */
+    installCmd?: string;
+    /**
+     * Comando de instalação por plataforma — chaves espelham OSCapabilities.platform
+     * (CapabilityRegistry.ts), não process.platform. Tem precedência sobre installCmd legado.
+     */
+    installByPlatform?: {
+        windows?: string;
+        linux?: string;
+        macos?: string;
+    };
     /** Instrução legível para o usuário instalar manualmente */
     manualInstructions: string;
     type: 'system' | 'python' | 'node';

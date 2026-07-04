@@ -39,6 +39,7 @@ import { GracefulDeliveryOrchestrator } from './GracefulDeliveryOrchestrator';
 import { StrategyDiversityGuard } from './StrategyDiversityGuard';
 import { resolvePath } from '../utils/crossPlatform';
 import { ensureDeliverySuccessCriteria, AUTO_DELIVERY_CRITERION_IDS } from './planning/ensureDeliverySuccessCriteria';
+import { resolveInstallCommand } from './planning/resolveInstallCommand';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext, ContextAwareTool } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
@@ -1205,19 +1206,32 @@ export class GoalExecutionLoop {
                     currentGoal = this.goalStore.getById(currentGoal.id)!;
 
                     const installStepId = `install_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
-                    const autoInstall = permissionRegistry.can('install_dependencies');
+                    // Resolve o comando just-in-time, pela plataforma REAL detectada — nunca usa
+                    // depInfo.installCmd diretamente (histórico: sempre apt/Linux, executaria
+                    // "sudo apt install..." também num Windows). Sem comando seguro para este SO,
+                    // resolvedCommand fica undefined e o step cai no caminho manual/permission-gated
+                    // (toolName undefined) mesmo em modo DEVELOPER/GOD — nunca cria exec_command
+                    // vazio nem assume que a instalação ocorreu.
+                    const resolvedCommand = resolveInstallCommand(depInfo, this.capRegistry.getOSSync());
+                    const autoInstall = permissionRegistry.can('install_dependencies') && resolvedCommand !== undefined;
                     const installStep: PlanStep = {
                         id: installStepId,
-                        description: `Instalar '${depInfo.name}' necessário para continuar: ${depInfo.installCmd}`,
-                        // DEVELOPER/GOD: toolName explícito → exec_command direto (sem auth gate do WorkflowEngine)
-                        // SAFE: sem toolName → AgentLoop processa → WorkflowEngine pede confirmação
+                        description: autoInstall
+                            ? `Instalar '${depInfo.name}' necessário para continuar: ${resolvedCommand}`
+                            : `Instalar '${depInfo.name}' necessário para continuar (sem comando automático seguro para este sistema operacional — ${depInfo.manualInstructions})`,
+                        // DEVELOPER/GOD com comando resolvido: toolName explícito → exec_command direto
+                        // (sem auth gate do WorkflowEngine). Sem comando resolvido (SO sem entrada
+                        // segura) OU modo SAFE: sem toolName → AgentLoop processa → WorkflowEngine
+                        // pede confirmação / orienta instalação manual.
                         toolName: autoInstall ? 'exec_command' : undefined,
-                        toolArgs: autoInstall ? { command: depInfo.installCmd } : undefined,
+                        toolArgs: autoInstall ? { command: resolvedCommand } : undefined,
                         status: 'pending',
                         fallbackSteps: [],
                     };
                     if (autoInstall) {
                         log.info(`[GoalLoop] needs_dependency auto-install approved (mode=${permissionRegistry.getMode()}): ${depInfo.name}`);
+                    } else if (resolvedCommand === undefined) {
+                        log.info(`[GoalLoop] needs_dependency: sem comando de instalação seguro para este SO (dep=${depInfo.name}) — caminho manual/AgentLoop`);
                     }
 
                     // Reconstrói o plano: steps já concluídos + installStep + step que falhou + resto

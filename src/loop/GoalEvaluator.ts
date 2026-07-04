@@ -42,7 +42,10 @@ const KNOWN_DEPS: Record<string, DependencyInfo> = {
     npm:         { name: 'npm',                    installCmd: 'sudo apt install npm -y',                     manualInstructions: 'Instale com: sudo apt install npm -y',                         type: 'node'   },
     npx:         { name: 'npm',                    installCmd: 'sudo apt install npm -y',                     manualInstructions: 'Instale npm (inclui npx): sudo apt install npm -y',            type: 'node'   },
     node:        { name: 'nodejs',                 installCmd: 'sudo apt install nodejs npm -y',              manualInstructions: 'Instale com: sudo apt install nodejs npm -y',                  type: 'node'   },
-    marp:        { name: '@marp-team/marp-cli',    installCmd: 'npm install -g @marp-team/marp-cli',          manualInstructions: 'Instale o marp-cli globalmente: npm install -g @marp-team/marp-cli', type: 'node' },
+    // marp é a única entrada hoje cujo comando (npm install -g) já é genuinamente cross-platform
+    // — migrada para installByPlatform explícito em vez de installCmd legado, para não depender
+    // do fallback "só Linux" e não perder a instalação automática em Windows/macOS.
+    marp:        { name: '@marp-team/marp-cli',    installByPlatform: { windows: 'npm install -g @marp-team/marp-cli', linux: 'npm install -g @marp-team/marp-cli', macos: 'npm install -g @marp-team/marp-cli' }, manualInstructions: 'Instale o marp-cli globalmente: npm install -g @marp-team/marp-cli', type: 'node' },
     pip:         { name: 'python3-pip',            installCmd: 'sudo apt install python3-pip -y',             manualInstructions: 'Instale com: sudo apt install python3-pip -y',                 type: 'python' },
     pip3:        { name: 'python3-pip',            installCmd: 'sudo apt install python3-pip -y',             manualInstructions: 'Instale com: sudo apt install python3-pip -y',                 type: 'python' },
 };
