@@ -35,9 +35,10 @@ logs/
 !/workspace/*/
 
 # Workspace gerado
-# sites/ guarda estrutura pessoal de acompanhamento (ex.: criptomoedas) —
-# ignorada por completo, não só os .html.
+# sites/ e uenp/ guardam conteúdo pessoal (acompanhamento de criptomoedas e
+# material de curso) — ignorados por completo, não deve ser público.
 workspace/sites/
+workspace/uenp/
 workspace/space-invaders*.html
 workspace/_campaign_scratch/
 
