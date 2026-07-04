@@ -521,8 +521,10 @@ export class MessageBus {
     async sendVoice(channel: ChannelType, chatId: string, buffer: Buffer, filename?: string): Promise<void> {
         const adapter = this.adapters.get(channel);
         if (!adapter?.sendVoice) {
-            log.warn('send_voice_unsupported', `Adapter "${channel}" does not support sendVoice`);
-            return;
+            // Lança em vez de retornar silenciosamente: um warn+return aqui fazia send_audio.ts
+            // acreditar que o áudio foi entregue quando na verdade nenhum canal real o recebeu
+            // (achado real: goal marcado completed sem áudio nenhum ter chegado ao usuário).
+            throw new Error(`Adapter "${channel}" does not support sendVoice`);
         }
         await adapter.sendVoice(chatId, buffer, filename);
     }

@@ -100,8 +100,10 @@ export class WebChannelAdapter implements ChannelAdapter {
     async sendDocument(chatId: string, buffer: Buffer, filename: string, _caption?: string): Promise<void> {
         const p = this.findPendingByChatId(chatId);
         if (!p) {
-            log.warn('send_document_no_pending', `Nenhuma requisição HTTP pendente para chatId=${chatId} — anexo descartado`);
-            return;
+            // Lança em vez de descartar silenciosamente: sem isso, send_document.ts acreditava
+            // que o anexo tinha sido entregue quando na verdade não havia requisição HTTP viva
+            // para acumulá-lo — mesma classe de falso-sucesso corrigida em sendVoice abaixo.
+            throw new Error(`Nenhuma requisição HTTP pendente para chatId=${chatId} — anexo descartado`);
         }
         p.attachments.push({ type: 'document', data: buffer, fileName: filename });
     }
@@ -110,8 +112,9 @@ export class WebChannelAdapter implements ChannelAdapter {
     async sendVoice(chatId: string, buffer: Buffer, filename: string = 'voice.ogg'): Promise<void> {
         const p = this.findPendingByChatId(chatId);
         if (!p) {
-            log.warn('send_voice_no_pending', `Nenhuma requisição HTTP pendente para chatId=${chatId} — anexo descartado`);
-            return;
+            // Lança em vez de descartar silenciosamente (ver bug real documentado em send_audio.ts:
+            // goal marcado completed sem áudio nenhum ter chegado ao usuário).
+            throw new Error(`Nenhuma requisição HTTP pendente para chatId=${chatId} — anexo descartado`);
         }
         p.attachments.push({ type: 'audio', data: buffer, fileName: filename });
     }
