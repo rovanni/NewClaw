@@ -35,7 +35,9 @@ logs/
 !/workspace/*/
 
 # Workspace gerado
-workspace/sites/*.html
+# sites/ guarda estrutura pessoal de acompanhamento (ex.: criptomoedas) —
+# ignorada por completo, não só os .html.
+workspace/sites/
 workspace/space-invaders*.html
 workspace/_campaign_scratch/
 
