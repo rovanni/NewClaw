@@ -27,10 +27,13 @@ export interface EnvironmentCapabilities {
 }
 
 // Executáveis a verificar. Mantido pequeno para que o probe caiba em <500ms.
+// edge-tts adicionado após bug real (04/07/2026): send_audio dependia dele silenciosamente —
+// sem entrar neste probe, o planner nunca via "INDISPONÍVEL" e só descobria via ENOENT em
+// runtime, depois de já ter tentado (e, por um bug relacionado no debounce, mascarado a falha).
 const TOOLS_TO_PROBE = [
     'pandoc', 'marp', 'python3', 'pip3', 'node', 'npm',
     'ffmpeg', 'convert', 'libreoffice', 'pdftotext',
-    'git', 'zip', 'wget', 'curl',
+    'git', 'zip', 'wget', 'curl', 'edge-tts',
 ];
 
 const PYTHON_PKGS_TO_PROBE = ['pptx', 'docx', 'PIL', 'markdown'];
