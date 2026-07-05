@@ -32,6 +32,7 @@ import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { CaseMemory } from '../memory/CaseMemory';
 import { permissionRegistry } from '../core/PermissionRegistry';
 import { MemoryManager } from '../memory/MemoryManager';
+import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext, SuccessCriterion, GoalProgressModel, ProgressComponent } from './GoalTypes';
 import { StepSemanticValidator } from './StepSemanticValidator';
@@ -45,6 +46,16 @@ import { ChannelContext, ContextAwareTool } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
 
 const log = createLogger('GoalExecutionLoop');
+
+// Fallback quando nenhum critério "de conteúdo" (não auto-delivery) foi satisfeito — usado em
+// validateGoalCompletion() E checado em buildResult() (mesma constante, não duplicar o literal)
+// para preferir a saída real da última tool bem-sucedida quando disponível. Evidência real
+// (05/07/2026, goal_1783273986121_ptyfp e goal_1783274167642_xqep6): usuário recebeu
+// literalmente esta frase genérica como resposta a dois pedidos diferentes (análise de cripto
+// com áudio, previsão do tempo com áudio) — nenhuma informação sobre o que foi de fato
+// entregue, mesmo a tool (send_audio) já tendo retornado uma mensagem legível
+// ("🔊 Áudio enviado com sucesso!").
+const GENERIC_CRITERIA_SUMMARY = 'Todos os critérios do checklist foram satisfeitos.';
 
 export type ProgressCallback = (update: GoalProgressUpdate) => Promise<void>;
 
@@ -2257,8 +2268,39 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
         try {
             const nodes = await this.memory.semanticSearch(goal.userIntent, 3);
             const relevant = nodes.filter(n => n.content && n.content.trim().length > 10);
-            if (relevant.length > 0) {
-                const lines = relevant.map(n => {
+
+            // Complementa a busca semântica pura (só embedding, limit=3) com a camada de
+            // KEYWORD do MultiLayerRetriever — a mesma que o ContextBuilder já usa dentro dos
+            // turnos do AgentLoop. Evidência real (05/07/2026): a preferência "Sempre que
+            // Luciano perguntar sobre previsão do tempo ou clima sem informar a cidade,
+            // considerar Cornélio Procópio" tinha score alto (8.08) via camada KEYWORD quando o
+            // AgentLoop consultava o contexto do step de send_audio — mas o PLANNER nunca via
+            // essa preferência, porque contextualize() só fazia semanticSearch (puro embedding,
+            // sem boost de keyword, sem tier de preferência). Resultado: o step de "weather" foi
+            // planejado sem cidade, e a previsão saiu para uma cidade errada (São Paulo) em vez
+            // do padrão salvo pelo usuário.
+            const alreadyIncluded = new Set(relevant.map(n => n.id));
+            let keywordRelevant: Array<{ id: string; type: string; content: string }> = [];
+            try {
+                const retriever = new MultiLayerRetriever(this.memory.getDatabase());
+                const keywordCandidateIds = retriever.keywordSearch(goal.userIntent, 5)
+                    .filter(c => !alreadyIncluded.has(c.nodeId))
+                    .slice(0, 3)
+                    .map(c => c.nodeId);
+                if (keywordCandidateIds.length > 0) {
+                    const placeholders = keywordCandidateIds.map(() => '?').join(',');
+                    const rows = this.memory.getDatabase().prepare(
+                        `SELECT id, type, content FROM memory_nodes WHERE id IN (${placeholders}) AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')`
+                    ).all(...keywordCandidateIds) as Array<{ id: string; type: string; content: string }>;
+                    keywordRelevant = rows.filter(r => r.content && r.content.trim().length > 10);
+                }
+            } catch (err) {
+                log.warn('[GoalLoop] Q1 keyword memory search error:', String(err));
+            }
+
+            const allRelevant = [...relevant, ...keywordRelevant];
+            if (allRelevant.length > 0) {
+                const lines = allRelevant.map(n => {
                     /**
                      * COMPATIBILIDADE LEGADA
                      *
@@ -2545,7 +2587,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             // Persiste o estado atualizado dos critérios no store
             this.goalStore.update(goal.id, { successCriteria: criteriaEval.updated });
             log.info(`[GoalLoop] LLM validation: todos os critérios cumpridos — achieved=true sem LLM`);
-            return { achieved: true, summary: criteriaEval.summary || 'Todos os critérios do checklist foram satisfeitos.' };
+            return { achieved: true, summary: criteriaEval.summary || GENERIC_CRITERIA_SUMMARY };
         }
         // Persiste atualizações parciais (critérios recém-marcados como met)
         if (criteriaEval.updated.length > 0) {
@@ -3006,11 +3048,17 @@ OU
         const lastSuccess = [...goal.attempts].reverse().find(a => a.result === 'success');
         // Fallback extra: resultado armazenado no plan step (via markStepDone)
         const lastCompletedStep = [...goal.currentPlan].reverse().find(s => s.status === 'completed');
+        // GENERIC_CRITERIA_SUMMARY não carrega nenhuma informação sobre o que foi entregue —
+        // quando validateGoalCompletion cai nesse fallback (nenhum critério "de conteúdo" restou
+        // após filtrar os de auto-delivery), prefira a saída real da última tool bem-sucedida
+        // (ex: "🔊 Áudio enviado com sucesso!") em vez de repetir a frase genérica ao usuário.
+        // Evidência real: 2026-07-05, goal_1783273986121_ptyfp e goal_1783274167642_xqep6.
+        const hasGenericSummary = overrideOutput === GENERIC_CRITERIA_SUMMARY;
         // Usa || para tratar string vazia como ausente (exec_command com outputLen=0)
-        const finalOutput = overrideOutput
+        const finalOutput = (hasGenericSummary ? undefined : overrideOutput)
             ?? (lastSuccess?.output || undefined)
             ?? lastCompletedStep?.result
-            ?? (success ? 'Tarefa concluída com sucesso.' : this.evaluator.buildFailureExplanation(goal));
+            ?? (success ? overrideOutput ?? 'Tarefa concluída com sucesso.' : this.evaluator.buildFailureExplanation(goal));
 
         // H1 observabilidade: resultado final estruturado para correlacionar com [USER-MESSAGE]
         log.info(
