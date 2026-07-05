@@ -2345,8 +2345,29 @@ export class AgentLoop {
         const writtenFilePaths = cycleHistory
             .filter(h => h.tool === 'write' && h.status === 'success')
             .map(h => { try { return (JSON.parse(h.input) as Record<string, string>).path || ''; } catch { return ''; } });
+        // A .html write has a PENDING (unresolved) conversion when cycleHistory proves an
+        // explicit `html2pdf.sh` attempt against that exact path failed, with no later success
+        // for the same path. Evidence: 2026-07-05 audit log, goal "capacidades_newclaw.html" —
+        // `bash scripts/html2pdf.sh` failed (WSL/bash unavailable on this Windows machine),
+        // SAFETY-GUARD capped further exec_command retries, and this guard's own message then
+        // told the agent it could send the raw `.html` directly — delivering an unconverted
+        // slide deck the active skill (html-pdf-converter) explicitly forbids sending via
+        // send_document. Scoped ONLY to html2pdf.sh (the one conversion command the skill
+        // mandates), matched against the exact write path (not just basename) since that string
+        // is already available from the same `write` call args — no new tracking added.
+        const htmlConversionPending = (htmlPath: string): boolean => {
+            const isHtml2pdfAttempt = (h: { tool: string; input: string }) =>
+                h.tool === 'exec_command' && h.input.includes(htmlPath) && h.input.toLowerCase().includes('html2pdf');
+            let lastFailureIdx = -1;
+            for (let i = 0; i < cycleHistory.length; i++) {
+                if (isHtml2pdfAttempt(cycleHistory[i]) && cycleHistory[i].status === 'error') lastFailureIdx = i;
+            }
+            if (lastFailureIdx === -1) return false;
+            return !cycleHistory.some((h, idx) => idx > lastFailureIdx && isHtml2pdfAttempt(h) && h.status === 'success');
+        };
         const writtenPaths = writtenFilePaths
-            .filter(p => DELIVERABLE_EXTENSIONS.some(ext => p.toLowerCase().endsWith(ext)));
+            .filter(p => DELIVERABLE_EXTENSIONS.some(ext => p.toLowerCase().endsWith(ext)))
+            .filter(p => !(p.toLowerCase().endsWith('.html') && htmlConversionPending(p)));
         const writtenScriptPaths = writtenFilePaths
             .filter(p => EXECUTABLE_SCRIPT_EXTENSIONS.some(ext => p.toLowerCase().endsWith(ext)));
         // A script counts as "already executed" if any successful exec_command in this cycle
