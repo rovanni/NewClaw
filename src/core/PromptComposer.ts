@@ -70,7 +70,13 @@ export interface MetricsSnapshot {
 const LAYER_PATTERNS: Record<GoalLayer, RegExp> = {
     workspace: /\b(arquivo|file|pasta|folder|diret[oó]rio|workspace|salvar|criar|escrever|ler|editar|texto|conte[uú]do)\b/i,
     network:   /\b(download|url|https?|web|p[aá]gina|site|scrape|internet|buscar|navegar|acessar|curl|wget)\b/i,
-    media:     /\b(v[ií]deo|[aá]udio|mp4|mp3|ffmpeg|imagem|gif|convert|m[ií]dia|m[uú]sica|foto|webm|avi)\b/i,
+    // Sem "\b" inicial: "\b" no JS (sem flag "u") só reconhece [A-Za-z0-9_] como caractere de
+    // palavra — "á" de "áudio" não conta, então "\b[aá]udio" nunca casava o início de "áudio"
+    // precedido por espaço/início-de-string (mesma classe de bug de shared/contentStubPatterns.ts).
+    // "(?<!\w)" assevera "não precedido por caractere de palavra" sem depender da classificação
+    // \w do caractere seguinte, corrigindo "áudio" e preservando o comportamento para as demais
+    // alternativas (todas começam em ASCII, onde "(?<!\w)" e "\b" à esquerda são equivalentes).
+    media:     /(?<!\w)(v[ií]deo|[aá]udio|mp4|mp3|ffmpeg|imagem|gif|convert|m[ií]dia|m[uú]sica|foto|webm|avi)\b/i,
     document:  /\b(pdf|pptx|docx|markdown|apresenta[cç][aã]o|pandoc|relat[oó]rio|word|powerpoint|excel|xlsx)\b/i,
     code:      /\b(c[oó]digo|script|python|node|npm|pip|biblioteca|package|m[oó]dulo|programar|executar)\b/i,
     install:   /\b(instalar|install|depend[eê]ncia|pacote|pip install|npm install)\b/i,
