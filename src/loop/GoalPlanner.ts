@@ -76,8 +76,12 @@ SCHEMAS OBRIGATÓRIOS (use caminhos RELATIVOS ao workspace — sem prefixo de se
   web_navigate:    {"action": "search", "query": "texto de busca"}
                    OU {"action": "open", "url": "https://exemplo.com"}
                    OU {"action": "follow_link", "url": "https://exemplo.com", "link_text": "texto do link"}
+  weather:         {"city": "Nome da cidade"} — NUNCA troque por web_search para clima.
+  send_audio:      {"text": "conteúdo completo para narrar em português"} — NÃO use "file_path".
 
 ⚠️  send_document SEM file_path será bloqueado automaticamente pelo sistema.
+⚠️  weather SEM city será bloqueado automaticamente pelo sistema.
+⚠️  send_audio SEM text será bloqueado automaticamente pelo sistema — "file_path" NÃO é um argumento válido para send_audio.
 ⚠️  memory_write SEM action ou com action="" será bloqueado — forneça SEMPRE a action correta.
 ⚠️  memory_write com action="create" EXIGE content — nunca chame create sem content.
 ⚠️  crypto_analysis com type="detail" EXIGE symbol (ex: "btc", "zec", "sol") — use chamadas separadas por moeda.
@@ -507,8 +511,11 @@ export function detectMissingRequiredArgs(tool: string, args: Record<string, unk
     if (tool === 'send_document' && !args['file_path']) {
         return "sem 'file_path' obrigatório";
     }
-    if (tool === 'send_audio' && !args['file_path']) {
-        return "sem 'file_path' obrigatório";
+    if (tool === 'send_audio' && !args['text']) {
+        return "sem 'text' obrigatório";
+    }
+    if (tool === 'weather' && !args['city']) {
+        return "sem 'city' obrigatório";
     }
     if (tool === 'read_document' && !args['filename'] && !args['file_path'] && !args['path']) {
         return "sem 'filename' obrigatório";

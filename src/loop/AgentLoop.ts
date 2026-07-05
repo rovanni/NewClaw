@@ -1901,9 +1901,15 @@ export class AgentLoop {
                                     content: `[PATH INEXISTENTE] O caminho informado não existe. NÃO repita o mesmo comando. Use "list_workspace" para descobrir a estrutura real do workspace antes de prosseguir.`,
                                 });
                             } else {
+                                // errorText é computado acima (result.error ?? result.output ?? '') mas até aqui
+                                // nunca chegava ao LLM nos casos fora dos 3 padrões especiais acima — a mensagem
+                                // genérica ("tente uma abordagem diferente") não informa POR QUE a tool falhou,
+                                // fazendo o LLM adivinhar variações de frase às cegas em vez de corrigir a causa
+                                // real (ex: argumento obrigatório ausente, dependência não instalada).
+                                const reason = errorText.trim().slice(0, 300) || 'sem detalhes do erro retornados pela ferramenta';
                                 loopMessages.push({
                                     role: 'system',
-                                    content: `[FALHA] A ferramenta "${resolvedToolName}" falhou (alternativas automáticas já tentadas). Tente uma abordagem diferente ou use seu conhecimento interno.`
+                                    content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${reason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`
                                 });
                             }
                         }
@@ -2048,9 +2054,14 @@ export class AgentLoop {
 
                     if (!result.success) {
                         toolFailureCount++;
+                        // Mesma correção do caminho de tool-calling nativo acima: sem o texto real do
+                        // erro (result.error), o LLM só via "tente uma abordagem diferente" e adivinhava
+                        // variações de frase às cegas em vez de corrigir a causa real da falha.
+                        const atomicReason = (result.error ?? result.output ?? '').trim().slice(0, 300)
+                            || 'sem detalhes do erro retornados pela ferramenta';
                         loopMessages.push({
                             role: 'system',
-                            content: `[FALHA] A ferramenta "${resolvedToolName}" falhou (alternativas automáticas já tentadas). Tente uma abordagem diferente ou use seu conhecimento interno.`
+                            content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${atomicReason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`
                         });
                     }
 

@@ -528,6 +528,10 @@ Se precisar de ajuste → retorne o plano completo corrigido.
                — path e content são OBRIGATÓRIOS. Nunca adicione write sem ambos.
   web_navigate: {"action": "search", "query": "texto"} OU {"action": "open", "url": "https://..."} OU {"action": "follow_link", "url": "https://...", "link_text": "texto do link"}
                — action deve ser exatamente search, open ou follow_link. Nunca use outra string.
+  weather:     {"city": "Nome da cidade"}
+               — city é OBRIGATÓRIO. Ao trocar web_search por weather para clima, sempre inclua city extraído do objetivo.
+  send_audio:  {"text": "conteúdo completo para narrar em português"}
+               — text é OBRIGATÓRIO. NÃO use "file_path" (send_audio gera o áudio a partir de texto, não lê arquivo).
 
 Responda APENAS com JSON válido (sem markdown, máximo 5 steps):
 {"risks": ["risco 1"], "plan": [{"id": "step_1", "description": "...", "toolName": "...", "toolArgs": {...}}, ...]}
