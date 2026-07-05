@@ -1423,7 +1423,21 @@ export class GoalExecutionLoop {
                     ` reason=${registered ? 'tool_found_in_registry' : 'tool_not_registered'}` +
                     ` args_provided=${step.toolArgs !== undefined}`
                 );
-                if (!registered) {
+                if (step.toolName === 'send_audio' && isAudioAlreadySent?.()) {
+                    // Mesmo guard já usado no caminho agentloop (AgentLoop.ts, checks de
+                    // channelContext.isAudioAlreadySent() antes de chamar send_audio). Esse
+                    // dispatch direto (step.toolName vindo de um replan do GoalPlanner, sem
+                    // passar por agentloop) nunca consultava o mesmo sinal — permitindo que um
+                    // replan por falha em OUTRO step (ex.: extração de PPTX) reenviasse áudio
+                    // já entregue com sucesso em um ciclo anterior do mesmo goal.
+                    log.info(
+                        `[DELIVERY-DEDUP] goal=${goal.id} step=${step.id}` +
+                        ` artifact="__send_audio_delivered__"` +
+                        ` reason=already_sent_in_goal_session` +
+                        ` decision=skip`
+                    );
+                    toolResult = { success: true, output: '🔊 Áudio já enviado nesta execução do objetivo — reenvio evitado.' };
+                } else if (!registered) {
                     toolResult = { success: false, output: '', error: `command not found: ${step.toolName}` };
                 } else {
                     const getTool = (name: string): ToolExecutorLike | undefined =>
