@@ -30,6 +30,14 @@ import { resolveToolAlias } from './toolAliasResolver';
 
 const log = createLogger('SanitizePlanSteps');
 
+// Tools cujo argumento livre carrega o CONTEÚDO FINAL gerado pelo LLM (texto que o usuário vai
+// ler/ouvir), não metadados/parâmetros estruturais — candidatos reais a conteúdo-stub. Mapeia
+// tool → nome do argumento a checar contra writeContentStubPatterns.
+const CONTENT_BEARING_ARG: Record<string, string> = {
+    write: 'content',
+    send_audio: 'text',
+};
+
 export type StepMutationReason = 'tool_not_found' | 'placeholder' | 'content_stub' | 'missing_args';
 
 export interface StepMutation {
@@ -115,18 +123,25 @@ export function sanitizePlanSteps(
             }
         }
 
-        // WRITE-CONTENT-STUB: detecta write steps com conteúdo placeholder e converte para AgentLoop.
-        // Quando o model gera {"toolName":"write","content":"<82-char-stub>"}, a execução
-        // "succeeds" mas grava lixo — o GoalExecutionLoop gasta todo o replanBudget em
-        // exec_command/ssh_exec antes de perceber que o artefato é inválido.
-        // A conversão para AgentLoop faz o LLM sintetizar o conteúdo REAL em runtime,
-        // com acesso ao output dos steps anteriores (web_search, read, etc.).
-        if (resolvedTool === 'write' && toolArgs?.content) {
-            const contentStr = String(toolArgs.content);
+        // CONTENT-STUB: detecta steps com conteúdo placeholder (descrição do que deveria ser
+        // gerado, em vez do conteúdo real) e converte para AgentLoop. Quando o model gera
+        // {"toolName":"write","content":"<82-char-stub>"}, a execução "succeeds" mas grava lixo
+        // — o GoalExecutionLoop gasta todo o replanBudget em exec_command/ssh_exec antes de
+        // perceber que o artefato é inválido. A conversão para AgentLoop faz o LLM sintetizar o
+        // conteúdo REAL em runtime, com acesso ao output dos steps anteriores (web_search, read,
+        // etc.). CONTENT_BEARING_ARG cobre qualquer tool cujo argumento livre carregue conteúdo
+        // final gerado pelo LLM (não só write.content) — send_audio.text adicionado após
+        // reprodução ao vivo (04/07/2026): o RiskAnalyzer (Q2) reescreveu um step de agentloop
+        // para send_audio com text="...Um ser ir dado os obtidos no step 1" (prosa referenciando
+        // o step sem os dados reais) e essa checagem, restrita a 'write', nunca viu o argumento —
+        // o usuário recebeu um áudio incompreensível.
+        const contentBearingField = CONTENT_BEARING_ARG[resolvedTool ?? ''];
+        if (resolvedTool && contentBearingField && toolArgs?.[contentBearingField]) {
+            const contentStr = String(toolArgs[contentBearingField]);
             const stubMatch = writeContentStubPatterns.find(p => p.test(contentStr));
             if (stubMatch) {
                 log.warn(
-                    `${logPrefix} step ${i + 1}: write content stub detectado ` +
+                    `${logPrefix} step ${i + 1}: '${resolvedTool}.${contentBearingField}' content stub detectado ` +
                     `(${contentStr.length} chars, pattern="${stubMatch.source.slice(0, 50)}") ` +
                     `— convertendo para AgentLoop step`
                 );

@@ -33,5 +33,10 @@ export const CONTENT_STUB_PATTERNS: RegExp[] = [
     /\[.*?gerado\s+a\s+partir/i,                        // "[X gerado a partir de/do Y]"
     // Referência a um step_N interno do plano vazando pro conteúdo final é sempre um sinal de
     // que o LLM descreveu o processo em vez de produzir o resultado — nunca conteúdo legítimo.
-    /\bstep_\d+\b/i,
+    // "step[_\s-]?\d+" cobre step_1/step-1 (formato interno) E "step 1" em prosa livre —
+    // reproduzido ao vivo (04/07/2026): um step de send_audio.text gerado pelo RiskAnalyzer
+    // (revisão Q2) escapou do padrão antigo (só "step_1", com underscore obrigatório) porque a
+    // frase gerada dizia "obtidos no step 1" (com espaço) — foi direto pro TTS e o usuário
+    // recebeu um áudio incompreensível em vez do conteúdo real da previsão do tempo.
+    /\bstep[_\s-]?\d+\b/i,
 ];
