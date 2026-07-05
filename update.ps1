@@ -137,6 +137,16 @@ try {
         }
     }
 
+    # 6.5. package.json/package-lock.json NUNCA devem divergir do HEAD recém-atualizado: são
+    # o contrato de dependências do projeto, não um arquivo de customização do usuário
+    # (diferente do .env). Achado real: `npm audit fix --force` rodado localmente reescreve
+    # os dois pra "resolver" uma vulnerabilidade via downgrade de major version (ex:
+    # discord.js 14→13, quebrando a API usada em DiscordAdapter.ts) sem nunca ser commitado
+    # — o stash acima preserva essa mudança e o pop a reintroduz por cima do pull,
+    # corrompendo as dependências a cada update. Forçar de volta ao HEAD fecha esse ciclo
+    # antes do npm install.
+    try { git checkout HEAD -- package.json package-lock.json 2>&1 | Out-Null } catch {}
+
     # 7. Always restore .env
     if (Test-Path $EnvBackup) {
         Copy-Item $EnvBackup $EnvFile -Force
