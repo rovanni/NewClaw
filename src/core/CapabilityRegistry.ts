@@ -20,7 +20,7 @@
  *   const summary = await registry.getCapabilitySummary();
  */
 
-import { execSync } from 'child_process';
+import { execSync, execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import dns from 'dns';
@@ -28,7 +28,7 @@ import os from 'os';
 import { promisify } from 'util';
 import { createLogger } from '../shared/AppLogger';
 import { EnvironmentProbe } from '../loop/EnvironmentProbe';
-import { which, isWindows, linuxDistro } from '../utils/crossPlatform';
+import { which, isWindows, linuxDistro, resolvePython3Runtime, defaultPython3Candidates, Python3Runtime } from '../utils/crossPlatform';
 
 const log = createLogger('CapabilityRegistry');
 const dnsLookup = promisify(dns.lookup);
@@ -147,6 +147,25 @@ function makeStatus(available: boolean, details?: string): CapabilityStatus {
     return { available, confidence: 0.99, source: 'probe', checkedAt: Date.now(), details };
 }
 
+const PIP_PROBE_TIMEOUT_MS = 3000;
+
+/**
+ * Roda `<runtime> -m pip --version` via execFile (array de args, sem shell) — nunca invoca um
+ * `pip3` solto do PATH, que pode pertencer a um Python diferente do runtime resolvido pela
+ * política (defaultPython3Candidates/resolvePython3Runtime, ver crossPlatform.ts). Decide por
+ * exit code, nunca por parsing de stdout.
+ */
+function runPipCheck(runtime: Python3Runtime): Promise<boolean> {
+    return new Promise((resolve) => {
+        execFile(
+            runtime.command,
+            [...runtime.argsPrefix, '-m', 'pip', '--version'],
+            { timeout: PIP_PROBE_TIMEOUT_MS, windowsHide: true },
+            (error) => resolve(!error),
+        );
+    });
+}
+
 /**
  * CapabilityProbe — Sondas leves do ambiente de execução.
  *
@@ -235,13 +254,31 @@ class CapabilityProbe {
         };
     }
 
-    probeExecution(): ExecutionCapabilities {
+    async probeExecution(): Promise<ExecutionCapabilities> {
         const now = Date.now();
-        const pipOut  = runSafe('pip3 --version');
         const npmOut  = runSafe('npm --version');
         const sudoOut = isWindows ? null : runSafe('sudo -n true 2>/dev/null && echo yes || echo no');
+
+        // pip é sondado sobre o MESMO runtime Python 3 que a política do projeto escolheria
+        // (defaultPython3Candidates/resolvePython3Runtime) — nunca via `pip3` solto do PATH,
+        // que pode pertencer a uma instalação Python diferente (comprovado empiricamente: em
+        // ambientes com mais de um Python 3, `pip3` e `py -3 -m pip` podem resolver para
+        // instalações distintas). Ausência de pip não rebaixa Python como capacidade — são
+        // sondadas e reportadas separadamente.
+        const pythonRuntime = await resolvePython3Runtime(defaultPython3Candidates());
+        let pip: CapabilityStatus;
+        if (!pythonRuntime) {
+            pip = makeStatus(false, 'sem runtime Python 3 resolvido — pip não pôde ser testado');
+        } else {
+            const runtimeLabel = [pythonRuntime.command, ...pythonRuntime.argsPrefix].join(' ');
+            const pipOk = await runPipCheck(pythonRuntime);
+            pip = makeStatus(pipOk, pipOk
+                ? `pip operacional via '${runtimeLabel} -m pip'`
+                : `'${runtimeLabel} -m pip --version' falhou — pip pode não estar instalado neste runtime`);
+        }
+
         return {
-            pip:  makeStatus(pipOut !== null, pipOut ?? undefined),
+            pip,
             npm:  makeStatus(npmOut !== null, npmOut ?? undefined),
             sudo: makeStatus(sudoOut?.trim() === 'yes'),
             checkedAt: now,
@@ -461,7 +498,7 @@ export class CapabilityRegistry {
 
     private async refreshExecution(): Promise<void> {
         try {
-            const data = this.probe.probeExecution();
+            const data = await this.probe.probeExecution();
             this.cache.execution = { data, ts: Date.now() };
             log.debug('[Registry] execution refreshed');
         } catch (err) {
