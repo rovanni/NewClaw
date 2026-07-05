@@ -58,12 +58,15 @@ function extractApprovedJson(content: string): Record<string, unknown> | null {
     return null;
 }
 
+export type FailureType = 'incomplete_response' | 'read_only' | 'future_action' | 'tool_error' | 'other' | 'none';
+
 export interface ValidationResult {
     approved: boolean;
     reason: string;
     confidence: number;
     suggestedFix?: string;
     validationSkipped?: boolean;
+    failureType?: FailureType;
 }
 
 /**
@@ -77,6 +80,7 @@ export interface ResponseCommit {
     blockReason?: string;
     correctedResponse?: string;
     validationMs: number;
+    failureType?: FailureType;
 }
 
 const OBSERVER_PROMPT = `Você é um agente observador responsável por validar a qualidade das ações de um assistente virtual.
@@ -101,7 +105,7 @@ Analise as informações abaixo:
 Avalie se a ação executada está correta e se a resposta atende plenamente à solicitação do usuário.
 
 Responda APENAS em JSON:
-{"approved": true/false, "reason": "explicação curta", "confidence": 0.0-1.0, "suggested_fix": "ação sugerida caso não aprovado"}`;
+{"approved": true/false, "reason": "explicação curta", "confidence": 0.0-1.0, "suggested_fix": "ação sugerida caso não aprovado", "failure_type": "incomplete_response | read_only | future_action | tool_error | other | none"}`;
 
 // ── Deterministic pre-checks ─────────────────────────────────────────────────
 // Short-circuits LLM validation for obvious cases (~80% of tool calls).
@@ -146,24 +150,24 @@ export class ObserverValidator {
 
         // 1. Tool returned an explicit error or empty result
         if (TOOL_ERROR_PATTERN.test(toolResult.trim()) || toolResult.trim().length < 3) {
-            return { approved: false, reason: 'Ferramenta retornou erro ou resultado vazio', confidence: 0.95, suggestedFix: 'Tentar abordagem alternativa' };
+            return { approved: false, reason: 'Ferramenta retornou erro ou resultado vazio', confidence: 0.95, suggestedFix: 'Tentar abordagem alternativa', failureType: 'tool_error' };
         }
 
         // 2. No final response yet (inline call before loop finishes) — skip LLM
         if (!finalResponse || finalResponse.trim().length < 15) {
-            return { approved: true, reason: 'Ferramenta executou com saída disponível (resposta ainda não gerada)', confidence: 0.6, validationSkipped: true };
+            return { approved: true, reason: 'Ferramenta executou com saída disponível (resposta ainda não gerada)', confidence: 0.6, validationSkipped: true, failureType: 'none' };
         }
 
         // 3. Final response is clearly an error or refusal
         if (/^(desculp|lament|infelizmente|não (consig|poss)|sorry|I (can't|cannot))/i.test(finalResponse.trim().slice(0, 60))) {
-            return { approved: false, reason: 'Resposta final indica falha ou recusa', confidence: 0.85, suggestedFix: 'Verificar disponibilidade da ferramenta ou usar alternativa' };
+            return { approved: false, reason: 'Resposta final indica falha ou recusa', confidence: 0.85, suggestedFix: 'Verificar disponibilidade da ferramenta ou usar alternativa', failureType: 'other' };
         }
 
         // 4. Known-good tool + valid result + adequate response
         for (const rule of KNOWN_GOOD_TOOLS) {
             const toolMatches = typeof rule.tool === 'string' ? toolUsed === rule.tool : rule.tool.test(toolUsed);
             if (toolMatches && rule.resultPattern.test(toolResult) && finalResponse.length >= rule.minResponseLen) {
-                return { approved: true, reason: rule.reason, confidence: rule.confidence };
+                return { approved: true, reason: rule.reason, confidence: rule.confidence, failureType: 'none' };
             }
         }
 
@@ -250,14 +254,15 @@ export class ObserverValidator {
                 approved: !!result['approved'],
                 reason: String(result['reason'] || ''),
                 confidence: conf,
-                suggestedFix: String(result['suggested_fix'] || result['suggestedFix'] || '') || undefined
+                suggestedFix: String(result['suggested_fix'] || result['suggestedFix'] || '') || undefined,
+                failureType: (result['failure_type'] as FailureType) || 'other'
             };
         } catch (error) {
             if (signal?.aborted) {
-                return { approved: true, reason: 'Validation aborted', confidence: 0, validationSkipped: true };
+                return { approved: true, reason: 'Validation aborted', confidence: 0, validationSkipped: true, failureType: 'none' };
             }
             log.warn(`Validation error: ${errorMessage(error)}, skipping`);
-            return { approved: false, reason: `Observer error: ${errorMessage(error)}`, confidence: 0, validationSkipped: true };
+            return { approved: false, reason: `Observer error: ${errorMessage(error)}`, confidence: 0, validationSkipped: true, failureType: 'other' };
         }
     }
 
@@ -306,8 +311,9 @@ export class ObserverValidator {
                 hallucinationRisk,
                 blocked,
                 blockReason: deterministic.reason,
+                failureType: deterministic.failureType,
                 correctedResponse: blocked
-                    ? this.buildCorrectedResponse(deterministic.reason, deterministic.suggestedFix, userMessage)
+                    ? this.buildCorrectedResponse(deterministic.failureType || 'other', deterministic.reason, deterministic.suggestedFix, userMessage)
                     : undefined,
                 validationMs: elapsed,
             };
@@ -325,60 +331,38 @@ export class ObserverValidator {
             return { valid: true, hallucinationRisk: Math.max(0, 1 - llmResult.confidence) * 0.5, blocked: false, validationMs: elapsed };
         }
 
-        const hallucinationRisk = llmResult.confidence;
-        const blocked = hallucinationRisk >= 0.7;
+        // O LLM rejeitou a qualidade (ex: não atendeu plenamente).
+        // Isso NÃO é necessariamente uma alucinação de ação, apenas uma resposta insatisfatória.
+        // Bloquear a resposta esconde a interação do usuário e gera loops de "erro interno/cortada".
+        // Só sinalizamos valid=false para métricas/memória, mas NÃO bloqueamos a mensagem.
+        const hallucinationRisk = llmResult.confidence * 0.5;
+        const blocked = false;
+        
         return {
             valid: false,
             hallucinationRisk,
             blocked,
             blockReason: llmResult.reason,
-            correctedResponse: blocked
-                ? this.buildCorrectedResponse(llmResult.reason, llmResult.suggestedFix, userMessage)
-                : undefined,
             validationMs: elapsed,
         };
     }
 
-    private buildCorrectedResponse(reason: string, suggestedFix: string | undefined, userMessage: string): string {
+    private buildCorrectedResponse(failureType: FailureType, reason: string, suggestedFix: string | undefined, userMessage: string): string {
         // Log completo para auditoria — nunca expor reason/suggestedFix crus ao usuário
-        log.info(`[OBSERVER-BLOCK] reason="${reason}"${suggestedFix ? ` | fix="${suggestedFix}"` : ''}`);
+        log.info(`[OBSERVER-BLOCK] type="${failureType}" reason="${reason}"${suggestedFix ? ` | fix="${suggestedFix}"` : ''}`);
 
-        // Classificar o tipo de falha para dar uma resposta contextualizada
-        // em vez de uma mensagem genérica que não ajuda o usuário a entender o que aconteceu.
-        //
-        // isIncomplete e isReadOnly eram tratados como o MESMO caso ("arquivo grande demais"),
-        // mas são sintomas diferentes:
-        //  - isIncomplete: a RESPOSTA FINAL (texto gerado pelo LLM) foi cortada no meio —
-        //    ex: "termina abruptamente em 'resiliência'". Isso é limite de tamanho de SAÍDA
-        //    (geração), não tem relação com o arquivo lido ser grande ou pequeno. Confirmado
-        //    ao vivo 3x: um dos casos era pedido de resumo de arquivo de 1.000 B (usuário disse
-        //    isso explicitamente) — "arquivo grande demais" era uma alegação falsa.
-        //  - isReadOnly: nenhuma tool de modificação rodou apesar do pedido exigir uma — esse
-        //    caso É plausivelmente ligado a arquivo grande (read+write no mesmo turno,
-        //    mesmo cenário que AgentLoop.ts já trata com mensagem similar).
-        const isIncomplete = /incompleta|truncad|cortad/i.test(reason);
-        const isReadOnly = /apenas leu|não executou.*modificar|não.*ferramenta.*modific/i.test(reason);
-        const isFutureAction = /ação futura|vou fazer|vou ler/i.test(reason);
-
-        if (isIncomplete) {
+        if (failureType === 'incomplete_response') {
             return 'Minha resposta anterior foi cortada antes de terminar. Tente novamente — ' +
                    'vou tentar responder de forma mais direta e completa.';
         }
-        if (isReadOnly) {
-            // Mantém a hipótese de "arquivo grande" só para este caso mais específico, mas evita
-            // afirmá-la quando o pedido original era de leitura/análise pura (ler É o resultado
-            // esperado nesse caso) — mesma distinção que AgentLoop.ts já faz para o mesmo problema.
+        if (failureType === 'read_only') {
             if (ANALYSIS_INTENT_PATTERN.test(userMessage)) {
                 return 'Não consegui confirmar que a tarefa foi concluída. Tente novamente ou peça de forma mais específica.';
             }
             return 'Não consegui completar: o arquivo é grande demais para processar em um único turno. ' +
                    'Tente novamente — posso usar uma abordagem diferente para modificá-lo diretamente.';
         }
-        if (isFutureAction) {
-            // Não é um erro interno: a ferramenta já rodou (ex: write/exec_command), só a
-            // resposta final descreveu a ação como algo ainda por fazer ("vou recriar...") sem
-            // confirmar que o resultado pedido foi de fato alcançado. Dizer "erro interno" some
-            // com o fato de que já houve trabalho real e deixa o usuário sem saber o que checar.
+        if (failureType === 'future_action') {
             return 'Fiz alterações, mas não consegui confirmar que o resultado final atende ao que você pediu. ' +
                    'Peça para eu revisar e confirmar o que foi aplicado, ou repita o pedido com mais detalhes.';
         }
