@@ -596,7 +596,11 @@ export class MemoryWriteTool implements ToolExecutor {
             case 'fact':
                 // Smart: analyze what kind of fact
                 if (text.match(/criei|criou|desenvolvi|autor|built|made|fiz|construí/i)) return 'created';
-                if (text.match(/prefiro|gosto|adoro|amo|favorit/i)) return 'prefers';
+                // "amo" sem boundary casava como substring de "namorado"/"namorada" (ex: "meu
+                // namorado mora em Londrina" → 'prefers', errado). Só "amo" precisa de \b — é a
+                // única palavra desta lista que colide com uma palavra natural não relacionada
+                // (prefiro/gosto/adoro/favorit não têm esse problema, mantidos como estavam).
+                if (text.match(/prefiro|gosto|adoro|\bamo\b|favorit/i)) return 'prefers';
                 if (text.match(/objetivo|meta|goal|plano|planejo/i)) return 'has_goal';
                 if (text.match(/traço|característica|habilidade|skill|trait/i)) return 'has_trait';
                 // Default for facts: has_trait is valid (identity→fact)

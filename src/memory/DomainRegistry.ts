@@ -105,7 +105,16 @@ export function classifyDomain(text: string): DomainClassification | null {
     for (const domain of DOMAIN_DEFINITIONS) {
         let hits = 0;
         for (const keyword of domain.keywords) {
-            if (normalized.includes(keyword)) hits++;
+            // "amo" (keyword de domain_preferencias) casa como substring de "namorado"/"namorada"
+            // via .includes() — não é o verbo "amar", é uma colisão acidental que fazia
+            // classifyDomain preferir domain_preferencias sobre domain_social para qualquer
+            // menção a namoro (confiança 0.6455 vs 0.6064, decidido pela normalização por
+            // sqrt(keywords.length), não pelo conteúdo real). Reproduzido: "meu namorado mora
+            // em Londrina" → domain_preferencias. Só "amo" precisa de boundary — é a única
+            // keyword de todo o registro que colide com uma palavra natural não relacionada;
+            // as demais keywords continuam usando .includes() sem alteração.
+            const matched = keyword === 'amo' ? /\bamo\b/.test(normalized) : normalized.includes(keyword);
+            if (matched) hits++;
         }
         if (hits === 0) continue;
         const score = hits / Math.sqrt(domain.keywords.length);
