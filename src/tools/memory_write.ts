@@ -535,7 +535,15 @@ export class MemoryWriteTool implements ToolExecutor {
         // corrige os dois problemas ao mesmo tempo. Mesma classe de bug de PromptComposer.ts
         // (commit f281c9c), mas na borda oposta: lá "á" era o primeiro caractere após o "\b"
         // de abertura; aqui "ã" é o último caractere antes do "\b" de fechamento.
-        return /\b(filho|filha|filhos|filhas|esposa|marido|familia|familiar|irmao|irma|irmão|irmã|mae|mãe|pai|conjuge|cônjuge|parente|casado|solteiro|crianca|criança|nasceu|aniversario|aniversário|namorad)(?!\w)/.test(text);
+        // "irmaos|irmas|irmãos|irmãs": regressão encontrada em auditoria pós-patch — "irmã"
+        // sozinha (sem "s") casava "irmãs"/"irmãos" antes por acidente (como prefixo, mesmo bug
+        // de boundary corrigido acima); a correção do boundary fechou esse acidente, mas o plural
+        // nunca esteve no léxico como forma própria, ao contrário de "filho/filha/filhos/filhas"
+        // (que já cobre singular E plural deliberadamente). Adicionado aqui para restaurar a
+        // cobertura de plural que "irmão/irmã" sempre deveria ter tido, seguindo o mesmo padrão
+        // já estabelecido no léxico — não é expansão de vocabulário nova, é correção de uma
+        // assimetria pré-existente exposta pelo fix do "\b".
+        return /\b(filho|filha|filhos|filhas|esposa|marido|familia|familiar|irmao|irma|irmão|irmã|irmaos|irmas|irmãos|irmãs|mae|mãe|pai|conjuge|cônjuge|parente|casado|solteiro|crianca|criança|nasceu|aniversario|aniversário|namorad)(?!\w)/.test(text);
     }
 
     /**
@@ -546,8 +554,9 @@ export class MemoryWriteTool implements ToolExecutor {
         if (/\b(filho|filha|filhos|filhas|crianca|criança)\b/.test(text)) return 'has_child';
         if (/\b(esposa|marido|conjuge|cônjuge|namorad|casad)\b/.test(text)) return 'has_spouse';
         // Mesmo defeito de "\b" final + "irmã" do isFamilyOrSocialContent acima (regex
-        // independente, mesmo termo, mesma causa raiz) — corrigido da mesma forma.
-        if (/\b(pai|mae|mãe|irmao|irma|irmão|irmã|familiar|familia|família)(?!\w)/.test(text)) return 'has_family';
+        // independente, mesmo termo, mesma causa raiz) — corrigido da mesma forma. Mesmo plural
+        // ausente ("irmaos|irmas|irmãos|irmãs") adicionado pela mesma razão (ver comentário acima).
+        if (/\b(pai|mae|mãe|irmao|irma|irmão|irmã|irmaos|irmas|irmãos|irmãs|familiar|familia|família)(?!\w)/.test(text)) return 'has_family';
         return 'has_relation';
     }
 
