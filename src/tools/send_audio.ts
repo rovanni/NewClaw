@@ -15,6 +15,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { MessageBus } from '../channels/MessageBus';
 import { ChannelType } from '../channels/ChannelAdapter';
+import { resolvePython3Runtime, defaultPython3Candidates } from '../utils/crossPlatform';
 
 const log = createLogger('SendAudio');
 
@@ -87,12 +88,13 @@ export class SendAudioTool implements ToolExecutor {
 
         try {
             // Generate audio with edge-tts (ASYNC — non-blocking)
-            const edgeTtsPath = process.env.EDGE_TTS_PATH || 'edge-tts';
+            const edgeTtsCmd = await this.resolveEdgeTtsCommand();
 
             log.info(`Generating MP3 with voice=${voice}...`);
             const ttsStart = Date.now();
             try {
-                await this.runCommand(edgeTtsPath, [
+                await this.runCommand(edgeTtsCmd.command, [
+                    ...edgeTtsCmd.argsPrefix,
                     '--voice', voice,
                     '--text', text,
                     '--write-media', mp3File
@@ -101,7 +103,8 @@ export class SendAudioTool implements ToolExecutor {
                 log.error(`edge-tts failed with voice ${voice}:`, errorMessage(ttsErr));
                 if (voice !== 'pt-BR-AntonioNeural') {
                     log.info('Falling back to pt-BR-AntonioNeural...');
-                    await this.runCommand(edgeTtsPath, [
+                    await this.runCommand(edgeTtsCmd.command, [
+                        ...edgeTtsCmd.argsPrefix,
                         '--voice', 'pt-BR-AntonioNeural',
                         '--text', text,
                         '--write-media', mp3File
@@ -153,6 +156,37 @@ export class SendAudioTool implements ToolExecutor {
             this.cleanupFiles([mp3File, oggFile]);
             return { success: false, output: '', error: `Erro ao gerar áudio: ${errorMessage(error)}` };
         }
+    }
+
+    /**
+     * Resolve como invocar edge-tts sem depender de um binário solto no PATH.
+     *
+     * Bug real (04/07/2026): `pip install edge-tts` reporta sucesso e o pacote fica
+     * instalado, mas no Windows o script de console (edge-tts.exe) é gravado em
+     * AppData\Roaming\Python\PythonXXX\Scripts — uma pasta que o instalador do
+     * Python NÃO adiciona ao PATH por padrão. Resultado: `spawn edge-tts ENOENT`
+     * persiste mesmo depois da instalação "bem-sucedida", pois o processo Node
+     * nunca tinha essa pasta no seu PATH herdado (nem um restart resolveria, já
+     * que o PATH persistido do usuário também não a contém).
+     *
+     * Correção: mesmo princípio já usado para o probe de pip (CapabilityRegistry)
+     * — não confiar em um nome de binário solto no PATH; resolver o runtime
+     * Python 3 real (resolvePython3Runtime/defaultPython3Candidates, já
+     * aprovados) e invocar o pacote como módulo (`<runtime> -m edge_tts`), que
+     * funciona independente de qualquer diretório de Scripts estar no PATH.
+     * EDGE_TTS_PATH continua disponível como escape hatch explícito.
+     */
+    private async resolveEdgeTtsCommand(): Promise<{ command: string; argsPrefix: string[] }> {
+        const override = process.env.EDGE_TTS_PATH;
+        if (override) return { command: override, argsPrefix: [] };
+
+        const runtime = await resolvePython3Runtime(defaultPython3Candidates());
+        if (runtime) return { command: runtime.command, argsPrefix: [...runtime.argsPrefix, '-m', 'edge_tts'] };
+
+        // Nenhum runtime Python 3 resolvido — mantém o comportamento histórico
+        // (binário solto no PATH) como último recurso, sem regredir ambientes
+        // onde edge-tts já funciona via PATH sem essa resolução.
+        return { command: 'edge-tts', argsPrefix: [] };
     }
 
     /**
