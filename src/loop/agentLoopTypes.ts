@@ -47,6 +47,14 @@ export interface ChannelContext {
      *  sentArtifacts antes que o ciclo seja avaliado pelo SemanticValidator, evitando reentregas
      *  redundantes mesmo quando outcome é downgraded para 'partial'. */
     onArtifactDelivered?: (filePath: string) => void;
+    /** Verifica se send_audio já entregou áudio nesta execução de goal. send_audio não tem
+     *  file_path estável (cada chamada gera um mp3/ogg temporário com timestamp único), então
+     *  não pode reusar o dedup por path de onArtifactDelivered/isDeferredArtifact — precisa de
+     *  checagem própria. Sem isso, um replan por mismatch semântico que re-executa um step
+     *  "agentloop" já bem-sucedido reexecuta send_audio de novo, gerando e enviando áudio
+     *  duplicado ao usuário a cada tentativa (evidência: 2026-07-05, goal_1783269002590_inaml —
+     *  4 áudios enviados em sequência pelo mesmo pedido). */
+    isAudioAlreadySent?: () => boolean;
 }
 
 export interface AgentLoopConfig {

@@ -537,6 +537,15 @@ export class GoalExecutionLoop {
                 this.goalStore.update(currentGoal.id, { sentArtifacts: [...sentArtifacts] });
             }
         };
+        // send_audio não tem file_path estável (cada chamada gera um mp3/ogg temporário com
+        // timestamp único) — reusa o mesmo Set/coluna sent_artifacts de trackArtifact com uma
+        // chave sentinela fixa em vez de criar um mecanismo de dedup paralelo. Evidência
+        // (2026-07-05, goal_1783269002590_inaml): um step "agentloop" que já tinha enviado áudio
+        // com sucesso era re-executado do zero a cada replan por mismatch semântico — nada
+        // impedia o novo áudio de ser gerado e reenviado, pois o dedup existente só reconhece
+        // send_document (chave = caminho do arquivo).
+        const AUDIO_DELIVERED_KEY = '__send_audio_delivered__';
+        const isAudioAlreadySent = () => sentArtifacts.has(AUDIO_DELIVERED_KEY);
         // H4/ITEM4: rastreia writes por path para detectar duplicate writes entre ciclos
         const writeTraceByPath = new Map<string, { cycle: number; step: string; source: string }>();
 
@@ -899,6 +908,7 @@ export class GoalExecutionLoop {
                 // CORREÇÃO 1: passa callback para que DELIVERY-GUARD notifique sentArtifacts
                 // diretamente, sem depender de S10 (que só executa em case 'success').
                 (fp) => { if (fp) trackArtifact(fp); },
+                isAudioAlreadySent,
             );
 
             // Recarrega o goal — pode ter sido abandonado durante o step (nova mensagem do usuário)
@@ -1367,6 +1377,7 @@ export class GoalExecutionLoop {
         channelContext: ChannelContext,
         cycle = 0,
         onArtifactDelivered?: (filePath: string) => void,
+        isAudioAlreadySent?: () => boolean,
     ): Promise<CycleResult> {
         const startMs = Date.now();
 
@@ -1525,6 +1536,7 @@ export class GoalExecutionLoop {
                             );
                         }
                     },
+                    isAudioAlreadySent: () => isAudioAlreadySent?.() ?? false,
                 };
                 const response = await this.agentLoop.process(
                     goal.conversationId,

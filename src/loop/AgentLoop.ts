@@ -1663,6 +1663,25 @@ export class AgentLoop {
                         continue;
                     }
 
+                    // send_audio não tem file_path estável (cada chamada gera um mp3/ogg com
+                    // timestamp único), então não pode usar o dedup por path de send_document
+                    // acima. Sem este guard, um step "agentloop" que já entregou áudio com
+                    // sucesso e é re-executado do zero por um replan (ex: SemanticValidator
+                    // rejeitando o texto final por mismatch) gera e envia um NOVO áudio a cada
+                    // tentativa — o TTS/upload já aconteceu de verdade, não há como "desfazer".
+                    // Evidência: 2026-07-05, goal_1783269002590_inaml — 4 áudios enviados em
+                    // sequência pelo mesmo pedido do usuário.
+                    if (toolName === 'send_audio' && channelContext?.isAudioAlreadySent?.()) {
+                        log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal`);
+                        loopMessages.push({
+                            role: 'tool',
+                            content: `[JÁ ENVIADO] O áudio para este objetivo já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
+                            tool_call_id: toolCall.id,
+                        });
+                        usedToolInputs.add(inputKey);
+                        continue;
+                    }
+
                     const tool = this.tools.get(toolName);
                     if (tool) {
                         move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'native' });
@@ -1919,6 +1938,9 @@ export class AgentLoop {
                             this.lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
                             void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
                         }
+                        if (toolName === 'send_audio' && result.success) {
+                            channelContext?.onArtifactDelivered?.('__send_audio_delivered__');
+                        }
                         if (terminalTools.includes(toolName) && result.success) {
                             log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded — continuing batch before closing turn`);
                             terminalBatchResult = result.output;
@@ -2013,6 +2035,20 @@ export class AgentLoop {
                         }
                     }
 
+                    // Mesmo guard do caminho de tool-calling nativo (linha ~1645): send_audio
+                    // não tem file_path estável, então não pode reusar o dedup de send_document.
+                    // Sem isso, um step "agentloop" que já entregou áudio e é re-executado do
+                    // zero por um replan reenviaria áudio de novo também quando o modelo usa o
+                    // protocolo JSON de ação em vez de tool-calling nativo.
+                    if (toolName === 'send_audio' && channelContext?.isAudioAlreadySent?.()) {
+                        log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal path=json_action`);
+                        loopMessages.push({
+                            role: 'tool',
+                            content: `[JÁ ENVIADO] O áudio para este objetivo já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
+                        });
+                        continue;
+                    }
+
                     const toolStartTime = Date.now();
                     const atomicRecovery = await this.proactiveRecovery.execute(
                         toolName, atomicData.action.input || {},
@@ -2024,6 +2060,9 @@ export class AgentLoop {
                     const resolvedToolName = atomicRecovery.finalToolName;
                     const resolvedArgs = atomicRecovery.finalArgs;
                     const toolDuration = Date.now() - toolStartTime;
+                    if (toolName === 'send_audio' && result.success) {
+                        channelContext?.onArtifactDelivered?.('__send_audio_delivered__');
+                    }
 
                     if (atomicRecovery.recovered && atomicRecovery.recoveryNote) {
                         const origTool = atomicRecovery.originalToolName ?? toolName;
