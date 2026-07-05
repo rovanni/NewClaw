@@ -2513,12 +2513,21 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
 
         log.info(`[GoalLoop] criteria evaluation: ${metLabels} (${metCount}/${updated.length} met)`);
 
+        // Critérios auto-injetados por ensureDeliverySuccessCriteria (AUTO_DELIVERY_CRITERION_IDS)
+        // têm description = rótulo interno de auditoria ("Entrega confirmada via send_audio"),
+        // nunca prosa pra usuário. Esse summary vira overrideOutput em buildResult() — que tem
+        // prioridade sobre o output real da tool (ex: "🔊 Áudio enviado com sucesso!") — então,
+        // sem filtrar, o rótulo interno vaza verbatim como resposta final ao usuário quando o
+        // único critério satisfeito é um de entrega automática. Evidência real: 2026-07-05,
+        // goal_1783272571191_4y62y — usuário recebeu literalmente "Entrega confirmada via
+        // send_audio" como resposta a um pedido de análise de cripto.
+        const AUTO_DELIVERY_IDS = new Set(Object.values(AUTO_DELIVERY_CRITERION_IDS) as string[]);
         return {
             result: allMet ? 'all_met' : 'some_pending',
             updated,
             metCount,
             summary: updated
-                .filter(c => c.status === 'met')
+                .filter(c => c.status === 'met' && !AUTO_DELIVERY_IDS.has(c.id))
                 .map(c => c.description)
                 .join('; '),
         };

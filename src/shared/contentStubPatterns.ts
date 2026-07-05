@@ -50,4 +50,13 @@ export const CONTENT_STUB_PATTERNS: RegExp[] = [
     // caractere de palavra — "á" de "áudio" não conta, então "\báudio\b" nunca casa o início
     // de "áudio" (não há transição \w↔\W entre o espaço e o "á", ambos tratados como \W).
     /(conteúdo|texto|resposta|áudio|resultado)\s+(será|vai\s+ser)\s+(gerado|gerada|criado|criada|produzido|produzida)\b/i,
+    // Reproduzido ao vivo (05/07/2026): RiskAnalyzer (Q2) reescreveu um step de send_audio.text
+    // como "Os preços e variações coletados nas etapas anteriores devem ser inseridos aqui..." —
+    // foi direto pro TTS e o usuário recebeu um áudio incompreensível. Escapou de TODOS os
+    // padrões acima porque usa vocabulário diferente dos já cobertos: "etapas anteriores" (não
+    // "step_N"/"step N") e modal "devem ser" + verbo "inseridos" (não "será/vai ser" +
+    // "gerado/criado/produzido"). Dois padrões novos, mesma classe semântica de sempre —
+    // descrição do processo em vez do resultado real:
+    /\betapas?\s+anterior(es)?\b|\bpassos?\s+anterior(es)?\b|\bfases?\s+anterior(es)?\b/i,
+    /(deve[m]?)\s+ser\s+(inserid[oa]s?|preenchid[oa]s?|adicionad[oa]s?|colocad[oa]s?)\b/i,
 ];
