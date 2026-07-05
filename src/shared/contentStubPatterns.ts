@@ -59,4 +59,13 @@ export const CONTENT_STUB_PATTERNS: RegExp[] = [
     // descrição do processo em vez do resultado real:
     /\betapas?\s+anterior(es)?\b|\bpassos?\s+anterior(es)?\b|\bfases?\s+anterior(es)?\b/i,
     /(deve[m]?)\s+ser\s+(inserid[oa]s?|preenchid[oa]s?|adicionad[oa]s?|colocad[oa]s?)\b/i,
+    // Reproduzido ao vivo (05/07/2026): send_audio.text = "conteúdo gerado pelo assistente." —
+    // foi direto pro TTS e o usuário ouviu essa frase em vez da previsão do tempo real. Escapou
+    // de TODOS os padrões acima por dois motivos ao mesmo tempo: (1) sem colchetes, sem "será/vai
+    // ser" — é uma oração elíptica sem verbo auxiliar, só "[substantivo] [particípio] pelo [X]";
+    // (2) a palavra usada foi "assistente", que não está na lista fechada (modelo|agente|llm)
+    // do padrão da linha 24/47. Este padrão cobre a mesma classe semântica (algo descrito como
+    // produzido por uma entidade de IA, em vez de SER o conteúdo) independente de tempo verbal,
+    // colchetes, ou qual palavra é usada pra a entidade (assistente/modelo/agente/sistema/IA/bot):
+    /\b(gerad[oa]|produzid[oa]|criad[oa]|escrit[oa])\s+pel[oa]\s+(assistente|modelo|agente|sistema|llm|ia|bot)\b/i,
 ];
