@@ -42,6 +42,20 @@ export function extractFinalText(response: LLMResult, _atomicData: unknown): str
         return normalized.content;
     }
 
+    // A successfully-parsed tool call with no accompanying content is not an extraction
+    // failure — it's an internal control message ({thought, action, evaluation}) meant to
+    // drive the next tool step, not to be shown to the user. Falling through to
+    // sanitizeContent() below would return that raw JSON as "final text" (sanitizeContent
+    // only strips <think> tags), which then satisfies length-based "good content" checks
+    // upstream and can get committed as the user-facing response verbatim.
+    // Evidence: 2026-07-05 audit log — SAFETY-GUARD aborted a tool_loop and committed this
+    // exact JSON blob as the reply because lastBestContent looked "long enough" to skip
+    // post-loop synthesis. Mirrors the same tool-vs-text check already in extractText()
+    // (ResponseBuilder.ts).
+    if (normalized.type === 'tool') {
+        return '';
+    }
+
     const sanitized = sanitizeContent(response.content || '');
     if (sanitized) return sanitized;
 
