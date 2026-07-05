@@ -39,4 +39,15 @@ export const CONTENT_STUB_PATTERNS: RegExp[] = [
     // frase gerada dizia "obtidos no step 1" (com espaço) — foi direto pro TTS e o usuário
     // recebeu um áudio incompreensível em vez do conteúdo real da previsão do tempo.
     /\bstep[_\s-]?\d+\b/i,
+    // Todos os padrões de meta-placeholder acima (linhas 22-29, 33) pressupõem que o LLM
+    // envolve a descrição em colchetes ("[conteúdo será gerado...]") — mas nada garante isso.
+    // Reproduzido ao vivo (04/07/2026, mesma sessão): send_audio.text = "conteúdo será gerado
+    // em um time com base nos dados de memória recuperados", em prosa solta, SEM colchete
+    // nenhum — escapou de toda a lista acima e foi direto pro TTS. Este padrão cobre a mesma
+    // classe semântica (substantivo do que deveria existir + futuro passivo "será/vai ser
+    // gerado/criado/produzido") independente de colchetes.
+    // Sem "\b" antes do grupo: "\b" no JS (sem flag "u") só reconhece [A-Za-z0-9_] como
+    // caractere de palavra — "á" de "áudio" não conta, então "\báudio\b" nunca casa o início
+    // de "áudio" (não há transição \w↔\W entre o espaço e o "á", ambos tratados como \W).
+    /(conteúdo|texto|resposta|áudio|resultado)\s+(será|vai\s+ser)\s+(gerado|gerada|criado|criada|produzido|produzida)\b/i,
 ];
