@@ -526,7 +526,16 @@ export class MemoryWriteTool implements ToolExecutor {
      */
     private isFamilyOrSocialContent(name: string, content: string): boolean {
         const text = (name + ' ' + content).toLowerCase();
-        return /\b(filho|filha|filhos|filhas|esposa|marido|familia|familiar|irmao|irma|irmão|irmã|mae|mãe|pai|conjuge|cônjuge|parente|casado|solteiro|crianca|criança|nasceu|aniversario|aniversário|namorad)\b/.test(text);
+        // "\b" final não fecha depois de "irmã": "ã" não é \w em JS, então a transição \w->\W
+        // exigida pelo \b nunca ocorre quando "irmã" é seguida de espaço/pontuação/fim de
+        // string (o caso comum) — só "irma" (sem acento) casava. Pior: o mesmo defeito fazia
+        // "irmã" casar (incorretamente) como prefixo de "irmãs"/"irmãozinho", porque a letra
+        // seguinte (\w) criava uma falsa transição \W->\w. "(?!\w)" no lugar do "\b" final
+        // assevera apenas "não seguido de caractere de palavra", sem depender de "ã" ser \w —
+        // corrige os dois problemas ao mesmo tempo. Mesma classe de bug de PromptComposer.ts
+        // (commit f281c9c), mas na borda oposta: lá "á" era o primeiro caractere após o "\b"
+        // de abertura; aqui "ã" é o último caractere antes do "\b" de fechamento.
+        return /\b(filho|filha|filhos|filhas|esposa|marido|familia|familiar|irmao|irma|irmão|irmã|mae|mãe|pai|conjuge|cônjuge|parente|casado|solteiro|crianca|criança|nasceu|aniversario|aniversário|namorad)(?!\w)/.test(text);
     }
 
     /**
@@ -536,7 +545,9 @@ export class MemoryWriteTool implements ToolExecutor {
         const text = content.toLowerCase();
         if (/\b(filho|filha|filhos|filhas|crianca|criança)\b/.test(text)) return 'has_child';
         if (/\b(esposa|marido|conjuge|cônjuge|namorad|casad)\b/.test(text)) return 'has_spouse';
-        if (/\b(pai|mae|mãe|irmao|irma|irmão|irmã|familiar|familia|família)\b/.test(text)) return 'has_family';
+        // Mesmo defeito de "\b" final + "irmã" do isFamilyOrSocialContent acima (regex
+        // independente, mesmo termo, mesma causa raiz) — corrigido da mesma forma.
+        if (/\b(pai|mae|mãe|irmao|irma|irmão|irmã|familiar|familia|família)(?!\w)/.test(text)) return 'has_family';
         return 'has_relation';
     }
 
