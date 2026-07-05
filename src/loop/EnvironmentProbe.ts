@@ -10,7 +10,7 @@
 
 import { createLogger } from '../shared/AppLogger';
 import { ToolRegistry } from '../core/ToolRegistry';
-import { probeToolCmd, probePyPkgCmd } from '../utils/crossPlatform';
+import { probeToolCmd, resolvePython3Runtime, defaultPython3Candidates, runPython3Import } from '../utils/crossPlatform';
 
 const log = createLogger('EnvironmentProbe');
 
@@ -63,29 +63,38 @@ export class EnvironmentProbe {
             const cmdSep  = process.platform === 'win32' ? ' & ' : '; ';
             const whichCmds = TOOLS_TO_PROBE.map(t => probeToolCmd(t)).join(cmdSep);
 
-            // ── 2. Python package probe (cross-platform) ─────────────────────
-            const pyPkgCmds = PYTHON_PKGS_TO_PROBE.map(p => probePyPkgCmd(p)).join(cmdSep);
-
-            const result = await execTool.execute({
-                command: `${whichCmds}; ${pyPkgCmds}`,
-            });
+            const result = await execTool.execute({ command: whichCmds });
 
             const tools: Record<string, boolean> = {};
-            const pythonPkgs: Record<string, boolean> = {};
 
             if (result.success && result.output) {
                 for (const line of result.output.split('\n')) {
                     const trimmed = line.trim();
                     if (trimmed.startsWith('OK:'))           tools[trimmed.slice(3)] = true;
                     else if (trimmed.startsWith('MISSING:')) tools[trimmed.slice(8)] = false;
-                    else if (trimmed.startsWith('PYPKG_OK:'))      pythonPkgs[trimmed.slice(9)]  = true;
-                    else if (trimmed.startsWith('PYPKG_MISSING:')) pythonPkgs[trimmed.slice(14)] = false;
                 }
             }
 
             // Preenche faltantes como false (probe pode ter sido parcial)
-            for (const t of TOOLS_TO_PROBE)       if (!(t in tools))      tools[t]      = false;
-            for (const p of PYTHON_PKGS_TO_PROBE) if (!(p in pythonPkgs)) pythonPkgs[p] = false;
+            for (const t of TOOLS_TO_PROBE) if (!(t in tools)) tools[t] = false;
+
+            // ── 2. Python package probe — resolve o runtime Python 3 UMA VEZ e reutiliza
+            // para os 4 pacotes (nunca via exec_command/shell: um path absoluto com espaços
+            // no `command` do runtime não teria como ser citado com segurança num one-liner
+            // sem um helper de shell escaping, que não existe no projeto — execFile com
+            // array de args evita esse problema por construção).
+            const pythonPkgs: Record<string, boolean> = {};
+            const pythonRuntime = await resolvePython3Runtime(defaultPython3Candidates());
+            if (pythonRuntime) {
+                const pkgResults = await Promise.all(
+                    PYTHON_PKGS_TO_PROBE.map(async (p): Promise<[string, boolean]> => [p, await runPython3Import(pythonRuntime, p)])
+                );
+                for (const [p, available] of pkgResults) pythonPkgs[p] = available;
+            } else {
+                // Nenhum candidato de Python 3 validado — pacotes Python ficam indisponíveis,
+                // mas isso NÃO aborta os probes de ferramentas não-Python acima (já concluídos).
+                for (const p of PYTHON_PKGS_TO_PROBE) pythonPkgs[p] = false;
+            }
 
             const available   = Object.entries(tools).filter(([, v]) =>  v).map(([k]) => k);
             const unavailable = Object.entries(tools).filter(([, v]) => !v).map(([k]) => k);

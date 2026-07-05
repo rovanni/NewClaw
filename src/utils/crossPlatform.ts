@@ -32,7 +32,7 @@
  * ──────────────────────────────────────────────────────────────────────────
  */
 
-import { execSync, execFileSync } from 'child_process';
+import { execSync, execFileSync, execFile } from 'child_process';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -73,16 +73,96 @@ export function probeToolCmd(tool: string): string {
     return `command -v "${tool}" >/dev/null 2>&1 && echo "OK:${tool}" || echo "MISSING:${tool}"`;
 }
 
+// ─── Resolução de runtime Python 3 ───────────────────────────────────────────
+//
+// Substituiu probePyPkgCmd() (que hardcodava `isWindows ? 'python' : 'python3'`
+// e escolhia esse binário sem nunca validar se é realmente Python 3 — se um
+// sistema tivesse `python` apontando pra Python 2, o probe antigo nunca teria
+// como saber). Contrato mínimo que representa corretamente `python3`, `python`,
+// `py -3` (comando + prefixo de argumentos, NÃO uma string única — `py -3` não
+// é um executável, é `py` chamado com o argumento `-3`) e um path absoluto com
+// espaços, sem exigir shell parsing nenhum.
+
+export interface Python3Runtime {
+    command: string;
+    argsPrefix: string[];
+}
+
+const PYTHON3_PROBE_TIMEOUT_MS = 3000;
+
 /**
- * Build a Python package probe one-liner.
- * Prints "PYPKG_OK:<pkg>" or "PYPKG_MISSING:<pkg>".
+ * Roda `<command> <argsPrefix> -c <payload>` via execFile (sem shell — array de
+ * args, não string; preserva paths com espaços e `py -3` sem split algum) e
+ * decide validade só pelo exit code, nunca por texto de stdout/stderr (evita
+ * dependência de localização/encoding). Assíncrona: EnvironmentProbe.probe()
+ * já é async, e um candidato inválido pode travar (alias, launcher) — usar
+ * execFileSync aqui bloquearia o event loop do processo inteiro por até
+ * PYTHON3_PROBE_TIMEOUT_MS a cada candidato testado.
  */
-export function probePyPkgCmd(pkg: string): string {
-    const py = isWindows ? 'python' : 'python3';
+function runPython3Check(runtime: Python3Runtime, payload: string): Promise<boolean> {
+    return new Promise((resolve) => {
+        execFile(
+            runtime.command,
+            [...runtime.argsPrefix, '-c', payload],
+            { timeout: PYTHON3_PROBE_TIMEOUT_MS, windowsHide: true },
+            (error) => resolve(!error),
+        );
+    });
+}
+
+/**
+ * Valida que o candidato é um runtime Python 3 real e executável — não apenas
+ * presente no PATH (which/where só provam presença de um arquivo, nunca que
+ * ele interpreta Python, ver Python3Runtime acima). O payload só termina com
+ * exit code 0 se o processo realmente interpretar Python e for a major
+ * version 3 — decide por exit code, sem parsear "Python 3.x" de --version.
+ */
+export function probePython3Runtime(runtime: Python3Runtime): Promise<boolean> {
+    return runPython3Check(runtime, 'import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)');
+}
+
+/** Testa se um pacote é importável no runtime Python 3 já resolvido (reutilizável — não resolve runtime de novo). */
+export function runPython3Import(runtime: Python3Runtime, pkg: string): Promise<boolean> {
+    return runPython3Check(runtime, `import ${pkg}`);
+}
+
+/**
+ * Candidatos de runtime Python 3 por plataforma, em ordem de preferência.
+ * DECISÃO DE POLÍTICA (não é comportamento histórico do NewClaw): no Windows,
+ * `py -3` vem primeiro — é o launcher mantido pelo próprio CPython para
+ * desambiguar múltiplas instalações, mas nunca foi usado neste projeto antes
+ * desta implementação. Em Linux/macOS, `python3` antes de `python` já refletia
+ * a escolha que probePyPkgCmd() fazia (mantido, não é novidade ali).
+ */
+export function defaultPython3Candidates(): Python3Runtime[] {
     if (isWindows) {
-        return `${py} -c "import ${pkg}" 2>nul && echo PYPKG_OK:${pkg} || echo PYPKG_MISSING:${pkg}`;
+        return [
+            { command: 'py', argsPrefix: ['-3'] },
+            { command: 'python', argsPrefix: [] },
+            { command: 'python3', argsPrefix: [] },
+        ];
     }
-    return `${py} -c "import ${pkg}" 2>/dev/null && echo "PYPKG_OK:${pkg}" || echo "PYPKG_MISSING:${pkg}"`;
+    return [
+        { command: 'python3', argsPrefix: [] },
+        { command: 'python', argsPrefix: [] },
+    ];
+}
+
+/**
+ * Testa os candidatos em ordem, parando no primeiro validado por probe() (short-circuit —
+ * candidatos após o primeiro sucesso nunca são testados). Não é uma função pura em execução
+ * real (o parâmetro probe por padrão executa subprocesso via runPython3Check) — é
+ * desacoplada de child_process por injeção de dependência e deterministicamente testável
+ * com um probe fake, sem precisar mockar child_process.
+ */
+export async function resolvePython3Runtime(
+    candidates: Python3Runtime[],
+    probe: (runtime: Python3Runtime) => Promise<boolean> = probePython3Runtime,
+): Promise<Python3Runtime | null> {
+    for (const candidate of candidates) {
+        if (await probe(candidate)) return candidate;
+    }
+    return null;
 }
 
 /** Cross-platform /dev/null path. */
