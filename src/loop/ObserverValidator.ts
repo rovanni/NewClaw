@@ -375,7 +375,12 @@ export class ObserverValidator {
                    'Tente novamente — posso usar uma abordagem diferente para modificá-lo diretamente.';
         }
         if (isFutureAction) {
-            return 'Ocorreu um erro interno de processamento. Por favor, repita o pedido que vou tentar novamente.';
+            // Não é um erro interno: a ferramenta já rodou (ex: write/exec_command), só a
+            // resposta final descreveu a ação como algo ainda por fazer ("vou recriar...") sem
+            // confirmar que o resultado pedido foi de fato alcançado. Dizer "erro interno" some
+            // com o fato de que já houve trabalho real e deixa o usuário sem saber o que checar.
+            return 'Fiz alterações, mas não consegui confirmar que o resultado final atende ao que você pediu. ' +
+                   'Peça para eu revisar e confirmar o que foi aplicado, ou repita o pedido com mais detalhes.';
         }
 
         return 'Não consegui completar a tarefa solicitada. ' +

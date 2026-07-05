@@ -1800,6 +1800,27 @@ export class AgentLoop {
                         loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
                         if (result.success) usedToolOutputs.set(inputKey, result.output.slice(0, 2000));
 
+                        // Evidence-driven budget upgrade: a turn classified as lightweight
+                        // (conversation/direct, maxSteps=4) can still turn into real file-producing
+                        // work once it actually calls `write`/`exec_command` — the upfront text-only
+                        // classification has no way to know a "refinamento" will need edit + convert
+                        // + send. Evidence: 2026-07-05 audit log, goal_1783288862838_1muu1 follow-up
+                        // "máximo 10 linhas por slide" — routed as refinement_of_recent_goal →
+                        // agentloop → conversation/direct (budget 4+2). The turn spent its entire
+                        // budget re-editing excel_class.md and only wrote a conversion script
+                        // (scripts/gen_excel_pptx.py) in the very last allowed step — never executed
+                        // it, never sent anything — then got blocked as a hallucination (final text
+                        // said "vou recriar..." while no new PPTX existed). Same upgrade pattern as
+                        // requiresPlanning above — reacts to observed tool use, not to a new
+                        // classification signal.
+                        if (result.success && (resolvedToolName === 'write' || resolvedToolName === 'exec_command') &&
+                            maxSteps < (STEP_BUDGETS.tool ?? 10)) {
+                            const upgraded = STEP_BUDGETS.tool ?? 10;
+                            log.info(`[${this.ts()}] [STEP-BUDGET] real file work detected (${resolvedToolName}) → upgrading ${maxSteps} → ${upgraded}`);
+                            maxSteps = upgraded;
+                            decisionCtx.extendedStepBudget = upgraded;
+                        }
+
                         totalToolCalls++;
 
                         // Generic loop detector: same tool called too many times in one turn.
