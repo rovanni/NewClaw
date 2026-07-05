@@ -1316,6 +1316,7 @@ export class AgentLoop {
         const blockedKeyCount = new Map<string, number>(); // tracks repeated block attempts per inputKey
         let dedupAbort = false; // set true when TOOL-DEDUP limit reached — exits while and falls to post-loop synthesis
         let dedupAbortTool = ''; // tracks which tool caused the dedup abort
+        let contextGuardWriteExtensionUsed = false; // one-shot: see context_growth guard below
 
         // Pre-loop: inject non-blocking hints derived from DecisionContext.
         // These orient the LLM without restricting its tool access.
@@ -1379,6 +1380,7 @@ export class AgentLoop {
                 // - Análise/review: o read É a ação principal → instruir a apresentar a análise
                 // - Escrita/geração: o read é preâmbulo → instruir a usar exec_command
                 const isAnalysisAbort = ANALYSIS_INTENT_PATTERN.test(userText);
+                const needsWriteNow = lastToolInCycle === 'read' && !writeToolsUsedThisTurn && !isAnalysisAbort;
                 const ratioAbortMsg = (lastToolInCycle === 'read' && !writeToolsUsedThisTurn)
                     ? isAnalysisAbort
                         ? '[CONTEXTO GRANDE] O arquivo foi lido com sucesso e está no contexto. ' +
@@ -1396,9 +1398,29 @@ export class AgentLoop {
                     role: 'system',
                     content: ratioAbortMsg,
                 });
+                guardsTriggered++;
+
+                // needsWriteNow tells the model "use exec_command AGORA", but post-loop
+                // synthesis (below) is text-only and can never execute that instruction —
+                // setting dedupAbort here would make the guard's own message a lie the model
+                // has no way to act on. Evidence: 2026-07-05 audit log, 4 consecutive turns
+                // (goal "máximo 10 linhas por slide") all hit ratio≈2.6-2.7 right after the
+                // single `read` needed before editing, aborted before any write/exec_command
+                // was attempted, and ended in either a hallucination-block or an honest
+                // "vou ler e depois ajustar" that never got a chance to actually happen.
+                // Fix: grant ONE extra real step (bounded, same +2 pattern as DELIVERY-GUARD's
+                // deliveryStepCap) so the model can act on its own instruction. If context still
+                // hasn't produced a write/exec_command after that, abort for real — one-shot via
+                // contextGuardWriteExtensionUsed prevents this from looping indefinitely.
+                if (needsWriteNow && !contextGuardWriteExtensionUsed) {
+                    contextGuardWriteExtensionUsed = true;
+                    if (maxSteps < stepCount + 2) maxSteps = stepCount + 2;
+                    log.info(`[${this.ts()}] [SAFETY-GUARD] context_growth: granting one extra step to act on exec_command instruction (maxSteps→${maxSteps})`);
+                    continue;
+                }
+
                 dedupAbort = true;
                 dedupAbortTool = `context_growth:${triggerReason}`;
-                guardsTriggered++;
                 // Pula a próxima chamada LLM — evita que o modelo crie artefato stub sob pressão
                 // de contexto (que o DELIVERY-GUARD enviaria). Cai diretamente na síntese.
                 continue;
