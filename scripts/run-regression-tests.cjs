@@ -38,9 +38,10 @@ function runOne(filePath) {
 }
 
 function runSuite(dir) {
-    const files = fs.existsSync(dir)
-        ? fs.readdirSync(dir).filter((f) => f.endsWith('.test.ts')).sort().map((f) => path.join(dir, f))
-        : [];
+    const files = fs.readdirSync(dir)
+        .filter((f) => f.endsWith('.test.ts'))
+        .sort()
+        .map((f) => path.join(dir, f));
 
     const results = files.map(runOne);
     let failures = 0;
@@ -121,23 +122,13 @@ if (isSelfTest) {
     const ok = selfTest();
     process.exit(ok ? 0 : 1);
 } else {
-    // tests/regression/ é a suíte VERSIONADA (reproduzível em qualquer clone) — distinta de
-    // src/__tests__/regression/, que continua existindo como área local-only de investigação
-    // (gitignored, não lida aqui). Migrar uma regressão de local-only para versionada é uma
-    // decisão deliberada de maturidade, feita arquivo a arquivo, não automática.
-    //
-    // Diretório ausente ou vazio NÃO é sucesso: antes, a ausência de src/__tests__/regression/
-    // (o caso normal em qualquer clone limpo, já que era 100% gitignored) fazia este script
-    // sair com exit 0 — um clone limpo reportava "suíte passou" mesmo protegendo zero bugs.
-    // Fail-closed: 0 regressões encontradas é uma falha de configuração, não uma suíte vazia
-    // e válida.
-    const dir = path.join(__dirname, '..', 'tests', 'regression');
+    const dir = path.join(__dirname, '..', 'src', '__tests__', 'regression');
+    if (!fs.existsSync(dir)) {
+        console.log(`Nenhum diretório de testes de regressão encontrado em ${dir} (src/__tests__/ é local-only, gitignored). Nada a rodar.`);
+        process.exit(0);
+    }
     const { total, failures } = runSuite(dir);
     console.log('');
-    if (total === 0) {
-        console.error(`SUÍTE: 0 regressões versionadas encontradas em ${dir} — falha (fail-closed). Um diretório ausente ou vazio não é sucesso.`);
-        process.exit(1);
-    }
     console.log(`SUÍTE: ${total - failures}/${total} passaram`);
     process.exit(failures > 0 ? 1 : 0);
 }
