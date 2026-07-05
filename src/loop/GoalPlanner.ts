@@ -529,6 +529,26 @@ export function detectMissingRequiredArgs(tool: string, args: Record<string, unk
         if (action === 'open' && !args['url']) return "action=open exige 'url'";
         if (action === 'follow_link' && (!args['url'] || !args['link_text'])) return "action=follow_link exige 'url' + 'link_text'";
     }
+    // crypto_analysis já era documentado no prompt como exigindo 'type' válido e, para
+    // type="detail", um único 'symbol' — mas nunca teve checagem determinística aqui (ao
+    // contrário de weather/web_navigate/send_document/send_audio acima). Sem isso, um plano
+    // com type ausente/inválido ou com múltiplas moedas amontoadas em 'symbol' passava direto
+    // pra execução: a tool cai num fallback SILENCIOSO (type inválido → "sangrando", uma lista
+    // de moedas em queda sem relação com o pedido) em vez de retornar erro — o usuário recebe
+    // dados de moedas completamente diferentes das que pediu, sem nenhum sinal de que algo
+    // deu errado. Evidência real: 2026-07-05, goal_1783269002590_inaml.
+    if (tool === 'crypto_analysis') {
+        const type = String(args['type'] ?? '').trim().toLowerCase();
+        const VALID_CRYPTO_TYPES = new Set(['sangrando', 'gainers', 'losers', 'top100', 'detail']);
+        if (!type) return "sem 'type' obrigatório (use: sangrando|gainers|losers|top100|detail)";
+        if (!VALID_CRYPTO_TYPES.has(type)) return `type='${type}' inválido — use: sangrando|gainers|losers|top100|detail`;
+        if (type === 'detail') {
+            const symbol = String(args['symbol'] ?? '').trim();
+            if (!symbol) return "type=detail exige 'symbol' (ex: btc, eth, sol)";
+            const symbolParts = symbol.split(/[,;\s]+/).filter(Boolean);
+            if (symbolParts.length > 1) return `symbol='${symbol}' parece conter mais de uma moeda — use uma chamada de crypto_analysis por moeda`;
+        }
+    }
     return null;
 }
 
@@ -918,9 +938,19 @@ export class GoalPlanner {
     // ── Retry minimal — quando o modelo usa thinking-only e o JSON parse falha ──
 
     private buildMinimalPrompt(goal: Goal): string {
-        const tools = ToolRegistry.getEnabled().map(t => t.name).join(', ');
+        const toolNames = ToolRegistry.getEnabled().map(t => t.name);
+        // Reusa buildToolContracts() (mesma função do prompt completo) em vez de listar só os
+        // nomes das ferramentas. Sem isso, o LLM tinha que adivinhar o formato de toolArgs de
+        // qualquer tool com schema restrito — evidência real (2026-07-05, goal_1783269002590_inaml):
+        // o retry minimal (acionado porque o prompt completo estourou o orçamento de thinking)
+        // gerou um step de crypto_analysis tentando cobrir 3 moedas em 1 chamada só, algo que a
+        // tool não suporta (aceita 1 symbol por vez em type="detail") — o schema completo já
+        // avisa disso ("use chamadas separadas por moeda"), mas esse prompt reduzido nunca incluía
+        // essa seção. A tool caiu no fallback silencioso dela (type inválido → "sangrando") e
+        // devolveu dados de moedas completamente diferentes das pedidas.
         return `Objetivo: ${goal.objective}
-Ferramentas disponíveis: ${tools}
+Ferramentas disponíveis: ${toolNames.join(', ')}
+${buildToolContracts(toolNames)}
 
 Decomponha em 2-3 steps executáveis. Responda APENAS com JSON válido (sem markdown):
 {"steps":[{"id":"step_1","description":"descrição","toolName":"nome_da_tool","toolArgs":{"arg":"valor"}}],"strategy":"estratégia em 1 linha"}
