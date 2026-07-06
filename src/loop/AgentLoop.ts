@@ -1457,18 +1457,30 @@ export class AgentLoop {
                 // deliveryStepCap) so the model can act on its own instruction. If context still
                 // hasn't produced a write/exec_command after that, abort for real — one-shot via
                 // contextGuardWriteExtensionUsed prevents this from looping indefinitely.
+                //
+                // IMPORTANT: do NOT `continue` here. This guard runs at the TOP of the while
+                // loop body, before the LLM call below — `continue` jumps back to `while(...)`,
+                // which re-enters the loop and hits this SAME check again immediately (nothing
+                // changed: no LLM call happened, no tool ran), consuming the one-shot flag on
+                // the very next iteration without ever reaching the LLM call. Evidence:
+                // 2026-07-05 21:33 audit log — Step 3 granted the extension, Step 4 logged
+                // right after with zero LLM/tool activity in between, hit ratio_limit again
+                // (one-shot now used) and aborted for real. Falling through (no continue) lets
+                // THIS iteration's LLM call run with the injected instruction, which is the
+                // whole point of the extension.
                 if (needsWriteNow && !contextGuardWriteExtensionUsed) {
                     contextGuardWriteExtensionUsed = true;
                     if (maxSteps < stepCount + 2) maxSteps = stepCount + 2;
                     log.info(`[${this.ts()}] [SAFETY-GUARD] context_growth: granting one extra step to act on exec_command instruction (maxSteps→${maxSteps})`);
+                    // No `continue`/`dedupAbort` here — falls through to the LLM call below,
+                    // in this SAME iteration, so the model can actually act on the instruction.
+                } else {
+                    dedupAbort = true;
+                    dedupAbortTool = `context_growth:${triggerReason}`;
+                    // Pula a próxima chamada LLM — evita que o modelo crie artefato stub sob
+                    // pressão de contexto (que o DELIVERY-GUARD enviaria). Cai na síntese.
                     continue;
                 }
-
-                dedupAbort = true;
-                dedupAbortTool = `context_growth:${triggerReason}`;
-                // Pula a próxima chamada LLM — evita que o modelo crie artefato stub sob pressão
-                // de contexto (que o DELIVERY-GUARD enviaria). Cai diretamente na síntese.
-                continue;
             }
 
             if (toolFailureCount >= 2) {
