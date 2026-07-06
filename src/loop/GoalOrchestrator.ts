@@ -22,6 +22,7 @@ import { GoalPlanner } from './GoalPlanner';
 import { GoalExecutionLoop } from './GoalExecutionLoop';
 import { ProviderFactory } from '../core/ProviderFactory';
 import { MemoryManager } from '../memory/MemoryManager';
+import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { CaseMemory } from '../memory/CaseMemory';
 import { ToolRegistry } from '../core/ToolRegistry';
@@ -68,7 +69,7 @@ export class GoalOrchestrator {
         private readonly agentLoop: AgentLoop,
         providerFactory: ProviderFactory,
         goalStore: GoalStore,
-        memory: MemoryManager,
+        private readonly memory: MemoryManager,
     ) {
         this.goalStore = goalStore;
         this.extractor = new GoalExtractor(providerFactory, agentLoop.getClassifierModel());
@@ -206,6 +207,39 @@ export class GoalOrchestrator {
             };
             classifyMessages = [followUpContext, ...(recentMessages ?? [])];
             log.info(`[GoalOrchestrator] recent goal context injected for classification (${elapsedSec}s ago): "${recentGoal.intent.slice(0, 80)}"`);
+        }
+
+        // Preferências salvas relevantes à mensagem — mesma técnica já usada e validada em
+        // GoalExecutionLoop.contextualize() (MultiLayerRetriever.keywordSearch, reuso da
+        // classe do ContextBuilder). Sem isso, a classificação de ambiguidade (abaixo) nunca
+        // via preferências como "cidade padrão para previsão do tempo" e pedia clarificação
+        // mesmo com o dado já salvo. Evidência: 2026-07-05 audit log — "envie um áudio com
+        // previsão do tempo para amanha" foi marcado is_ambiguous=true e pediu a cidade, apesar
+        // de existir a preferência "Sempre que Luciano perguntar sobre previsão do tempo ou
+        // clima sem informar a cidade, considere Cornélio Procópio" (score 8.01 via KEYWORD
+        // quando consultada depois, dentro do turno de AgentLoop — tarde demais aqui).
+        // Roda ANTES da classificação (não depois, como contextualize()) porque a pergunta de
+        // clarificação retorna e encerra o turno antes de qualquer goal/planner ser criado.
+        try {
+            const retriever = new MultiLayerRetriever(this.memory.getDatabase());
+            const candidateIds = retriever.keywordSearch(message, 5).slice(0, 3).map(c => c.nodeId);
+            if (candidateIds.length > 0) {
+                const placeholders = candidateIds.map(() => '?').join(',');
+                const prefRows = this.memory.getDatabase().prepare(
+                    `SELECT content FROM memory_nodes WHERE id IN (${placeholders}) AND type IN ('preference', 'trait') AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')`
+                ).all(...candidateIds) as Array<{ content: string }>;
+                const relevantPrefs = prefRows.filter(r => r.content && r.content.trim().length > 10);
+                if (relevantPrefs.length > 0) {
+                    const preferenceContext = {
+                        role: 'assistant',
+                        content: `[MEMÓRIA — preferências salvas do usuário relevantes a esta mensagem]:\n${relevantPrefs.map(r => `- ${r.content}`).join('\n')}`,
+                    };
+                    classifyMessages = [preferenceContext, ...(classifyMessages ?? [])];
+                    log.info(`[GoalOrchestrator] preference memory injected for classification: ${relevantPrefs.length} node(s)`);
+                }
+            }
+        } catch (err) {
+            log.warn('[GoalOrchestrator] preference memory search for classification failed:', String(err));
         }
 
         const classifyStart = Date.now();
