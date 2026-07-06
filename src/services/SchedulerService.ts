@@ -118,7 +118,10 @@ export class SchedulerService {
             // Extract city if mentioned
             const cityMatch = lower.match(/(?:tempo|clima|previsão)\s+(?:de|em|para)?\s*([a-zà-ú\s]+?)(?:\s*$|\s*[,.;])/i);
             const city = cityMatch ? cityMatch[1].trim() : '';
-            return { action_type: 'weather', action_params: JSON.stringify({ city: city || 'Cornélio Procópio' }) };
+            // Sem default de cidade hardcoded: city vazio é resolvido depois, na hora do
+            // disparo (AgentController.setTriggerHandler), consultando a memória do usuário —
+            // um valor fixo aqui só funcionaria pra quem configurou este deploy específico.
+            return { action_type: 'weather', action_params: JSON.stringify({ city }) };
         }
 
         if (/(cripto|crypto|bitcoin|btc|eth|ethereum|moeda|cotação|cotaçao)/i.test(lower)) {

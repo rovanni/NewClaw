@@ -384,8 +384,16 @@ export class AgentController {
                 let prompt = '';
                 if (task.action_type === 'weather') {
                     const params = JSON.parse(task.action_params || '{}');
-                    const city = params.city || 'Cornélio Procópio';
-                    prompt = `[AGENDADO] Envie a previsão do tempo para ${city}. Seja conciso.`;
+                    // Sem cidade hardcoded aqui: um default fixo funcionaria só para quem
+                    // configurou este deploy especificamente, quebrando para qualquer outro
+                    // usuário do projeto (open source, qualquer pessoa pode rodar sua própria
+                    // instância). Quando params.city vier vazio, o prompt agendado passa pela
+                    // mesma pipeline de um turno normal — que já consulta a memória do usuário
+                    // (ContextBuilder/MultiLayerRetriever) por uma preferência de cidade padrão
+                    // salva, ou pergunta se não houver nenhuma.
+                    prompt = params.city
+                        ? `[AGENDADO] Envie a previsão do tempo para ${params.city}. Seja conciso.`
+                        : `[AGENDADO] Envie a previsão do tempo. Se houver uma cidade padrão salva na memória do usuário, use-a; caso contrário, pergunte qual cidade. Seja conciso.`;
                 } else if (task.action_type === 'crypto') {
                     prompt = `[AGENDADO] Envie cotações atuais de criptomoedas (BTC e ETH). Preço em USD + variação 24h. Seja conciso.`;
                 } else {

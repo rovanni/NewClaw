@@ -772,9 +772,15 @@ export class ContextBuilder {
                 const userNode = ranked.find(n => n.type === 'identity' && /^(user|USER|perfil)/i.test(n.name));
                 if (userNode) {
                     const fullContent = (userNode.summary || '').replace(/\n/g, ' ');
-                    // Termos que, se presentes no USER node, podem contaminar contextos não relacionados
-                    const LEAK_TERMS = ['river', 'futebol', 'bandeirantes', 'cornélio', 'cornelio',
-                                        'bitcoin', 'cripto', 'coordenador'];
+                    // Termos que, se presentes no USER node, podem contaminar contextos não
+                    // relacionados — feature só de diagnóstico/auditoria (a decisão real de
+                    // truncar já é genérica, via relevância léxica com a query, poucas linhas
+                    // abaixo). Configurável por instalação via env var em vez de hardcoded no
+                    // código-fonte: projeto é open source, cada instalação tem seus próprios
+                    // termos pessoais sensíveis para auditar — não faz sentido publicar os de
+                    // uma instalação específica no repositório público.
+                    const LEAK_TERMS = (process.env.CONTAMINATION_WATCH_TERMS || '')
+                        .toLowerCase().split(',').map(t => t.trim()).filter(Boolean);
                     const found = LEAK_TERMS.filter(t => fullContent.toLowerCase().includes(t));
                     const queryTokensArr = tokenize(query);
                     const hasRelevance = queryTokensArr.some(t => fullContent.toLowerCase().includes(t));

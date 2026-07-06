@@ -143,8 +143,12 @@ export class SessionContext {
         const memBlock = blocks.find(b => b.content.includes('[MEMÓRIA'));
         if (memBlock) {
             const memChars = memBlock.content.length;
-            // Verificar se termos de alto risco aparecem no bloco de memória
-            const RISK_TERMS = ['river', 'futebol', 'bandeirantes', 'cornélio', 'cornelio'];
+            // Verificar se termos de alto risco aparecem no bloco de memória — mesma feature de
+            // diagnóstico/auditoria de ContextBuilder.ts, mesma env var (configurável por
+            // instalação em vez de hardcoded: projeto open source, termos pessoais sensíveis
+            // não pertencem ao repositório público).
+            const RISK_TERMS = (process.env.CONTAMINATION_WATCH_TERMS || '')
+                .toLowerCase().split(',').map(t => t.trim()).filter(Boolean);
             const found = RISK_TERMS.filter(t => memBlock.content.toLowerCase().includes(t));
             log.info(
                 `[FINAL-CONTEXT] memBlock_chars=${memChars} riskTerms=[${found.join(',') || 'none'}] ` +

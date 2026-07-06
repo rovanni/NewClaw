@@ -213,11 +213,11 @@ export class GoalOrchestrator {
         // GoalExecutionLoop.contextualize() (MultiLayerRetriever.keywordSearch, reuso da
         // classe do ContextBuilder). Sem isso, a classificação de ambiguidade (abaixo) nunca
         // via preferências como "cidade padrão para previsão do tempo" e pedia clarificação
-        // mesmo com o dado já salvo. Evidência: 2026-07-05 audit log — "envie um áudio com
-        // previsão do tempo para amanha" foi marcado is_ambiguous=true e pediu a cidade, apesar
-        // de existir a preferência "Sempre que Luciano perguntar sobre previsão do tempo ou
-        // clima sem informar a cidade, considere Cornélio Procópio" (score 8.01 via KEYWORD
-        // quando consultada depois, dentro do turno de AgentLoop — tarde demais aqui).
+        // mesmo com o dado já salvo. Evidência: 2026-07-05 audit log — pedido de previsão do
+        // tempo por áudio sem cidade foi marcado is_ambiguous=true e pediu a cidade, apesar de
+        // existir uma preferência salva de cidade padrão para previsão do tempo (encontrada com
+        // score alto via camada KEYWORD quando consultada depois, dentro do turno de AgentLoop
+        // — tarde demais aqui).
         // Roda ANTES da classificação (não depois, como contextualize()) porque a pergunta de
         // clarificação retorna e encerra o turno antes de qualquer goal/planner ser criado.
         try {

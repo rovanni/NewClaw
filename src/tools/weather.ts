@@ -14,7 +14,7 @@ export class WeatherTool implements ToolExecutor {
     parameters = {
         type: 'object',
         properties: {
-            city: { type: 'string', description: 'Nome da cidade (ex: Cornélio Procópio, São Paulo)' },
+            city: { type: 'string', description: 'Nome da cidade (ex: São Paulo, Curitiba)' },
             format: { type: 'string', enum: ['simple', 'detailed', 'full'], description: 'Nível de detalhe: simple (1 linha), detailed (resumo), full (completo). Padrão: detailed' }
         },
         required: ['city']

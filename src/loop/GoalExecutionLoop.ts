@@ -2285,14 +2285,14 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
 
             // Complementa a busca semântica pura (só embedding, limit=3) com a camada de
             // KEYWORD do MultiLayerRetriever — a mesma que o ContextBuilder já usa dentro dos
-            // turnos do AgentLoop. Evidência real (05/07/2026): a preferência "Sempre que
-            // Luciano perguntar sobre previsão do tempo ou clima sem informar a cidade,
-            // considerar Cornélio Procópio" tinha score alto (8.08) via camada KEYWORD quando o
-            // AgentLoop consultava o contexto do step de send_audio — mas o PLANNER nunca via
-            // essa preferência, porque contextualize() só fazia semanticSearch (puro embedding,
-            // sem boost de keyword, sem tier de preferência). Resultado: o step de "weather" foi
-            // planejado sem cidade, e a previsão saiu para uma cidade errada (São Paulo) em vez
-            // do padrão salvo pelo usuário.
+            // turnos do AgentLoop. Evidência real (05/07/2026): uma preferência de cidade padrão
+            // para previsão do tempo ("sempre que perguntar sem informar a cidade, considere
+            // [cidade padrão]") tinha score alto via camada KEYWORD quando o AgentLoop consultava
+            // o contexto do step de send_audio — mas o PLANNER nunca via essa preferência,
+            // porque contextualize() só fazia semanticSearch (puro embedding, sem boost de
+            // keyword, sem tier de preferência). Resultado: o step de "weather" foi planejado
+            // sem cidade, e a previsão saiu para uma cidade errada em vez do padrão salvo pelo
+            // usuário.
             const alreadyIncluded = new Set(relevant.map(n => n.id));
             let keywordRelevant: Array<{ id: string; type: string; content: string }> = [];
             try {
