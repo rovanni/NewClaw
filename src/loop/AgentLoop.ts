@@ -559,6 +559,24 @@ export class AgentLoop {
             || /\b\d+\s+slides?\s*[,.]?\s*(1|uma)\s+capa/i.test(text);
     }
 
+    /**
+     * Returns true when the response promises an ongoing/imminent action ("estou gerando
+     * agora", "te envio em instantes") with high confidence — used only when NO tool ran
+     * this turn (see commitResponse below), where such phrasing can only be a fabricated
+     * promise, never a legitimate progress update. Kept deliberately narrow (present-
+     * continuous + "agora", or an explicit imminent-delivery promise) to avoid false
+     * positives on responses that legitimately describe a plan without claiming it's already
+     * in motion. If this needs extending again, follow shared/contentStubPatterns.ts's
+     * precedent and consolidate into a shared module instead of growing this list ad hoc.
+     */
+    private static looksLikePendingActionPromise(text: string): boolean {
+        return /\best(ou|á)\s+\w+ndo\b[^.!?]{0,40}\b(agora|neste\s+momento)\b/i.test(text)
+            || /\b(te\s+|lhe\s+)?(envio|mando)\s+em\s+(instantes|breve|seguida)\b/i.test(text)
+            // \b não funciona de forma confiável após vogais acentuadas em regex JS (á não é
+            // \w) — usa negative lookahead por letra em vez de \b no limite direito.
+            || /\bj[aá]\s+j[aá](?![a-zà-ÿ])/i.test(text);
+    }
+
     private async commitResponse(
         response: string,
         userText: string,
@@ -595,6 +613,22 @@ export class AgentLoop {
             }
             // Analysis intent: success claims are legitimate read outcomes, not hallucinated writes
             log.info(`[${this.ts()}] [COMMIT] Read-only success-claim allowed for analysis intent: "${userText.slice(0, 80)}"`);
+        }
+
+        // Zero tools ran this turn, but the response promises an ongoing/imminent action
+        // ("estou gerando agora e te envio em instantes"). The comment below ("no tool ran →
+        // no hallucination risk") assumed silence is always safe when nothing executed — false
+        // here: no tool means no background job either, so the promised delivery will never
+        // arrive and the user is left waiting indefinitely. Evidence: 2026-07-05 audit log,
+        // correlationId 321b0506 — user said "ok" (confirming a plan described in the previous
+        // turn), UnifiedIntentRouter deterministically routed it to category=confirmation with
+        // ALL tools available (not withheld), the model produced a `final_answer` with
+        // toolCalls=0 claiming "Estou gerando o arquivo agora e te envio em instantes!", and
+        // the turn ended there — nothing was ever generated or sent.
+        if (!last && AgentLoop.looksLikePendingActionPromise(response)) {
+            log.warn(`[${this.ts()}] [COMMIT] Pending-action promise with zero tool calls this turn — blocking response`);
+            return 'Falei que ia fazer algo agora, mas nenhuma ferramenta foi executada neste turno — nada foi gerado ou enviado ainda. ' +
+                   'Pode pedir de novo? Desta vez a ação será executada de verdade antes de eu responder.';
         }
 
         if (!last) return response; // sem tool executada → sem risco de alucinação de ação
@@ -1375,7 +1409,18 @@ export class AgentLoop {
                 const lastToolInCycle = cycleHistory.length > 0
                     ? cycleHistory[cycleHistory.length - 1].tool
                     : null;
-                const writeToolsUsedThisTurn = cycleHistory.some(h => h.tool === 'write' || h.tool === 'edit' || h.tool === 'exec_command');
+                // 'exec_command' deliberately excluded here: it's also the tool used for
+                // read-only recon (e.g. `Get-ChildItem` to find the right file before reading
+                // it), which is NOT evidence that the deliverable was edited. Evidence:
+                // 2026-07-05 audit log, goal "máximo 10 linhas por slide" — 3 recon
+                // `Get-ChildItem` calls (listing *.md/*.pptx) ran before the `read`, made
+                // writeToolsUsedThisTurn true, and steered this guard into the generic
+                // "responda com o que já tem" message instead of "OBRIGATÓRIO use
+                // exec_command" — the turn ended describing a plan instead of executing it.
+                // Same definition DELIVERY-GUARD already uses a few hundred lines below
+                // (wroteFile checks only `tool === 'write'`) — 'edit' kept here too since,
+                // unlike exec_command, it can only ever be a mutation, never a listing.
+                const writeToolsUsedThisTurn = cycleHistory.some(h => h.tool === 'write' || h.tool === 'edit');
                 // Adaptar a mensagem de abort ao intent do usuário:
                 // - Análise/review: o read É a ação principal → instruir a apresentar a análise
                 // - Escrita/geração: o read é preâmbulo → instruir a usar exec_command
