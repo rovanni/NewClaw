@@ -38,7 +38,21 @@ const CONTENT_BEARING_ARG: Record<string, string> = {
     send_audio: 'text',
 };
 
-export type StepMutationReason = 'tool_not_found' | 'placeholder' | 'content_stub' | 'missing_args';
+// Tools cujo OUTPUT é dado dinâmico que só existe DEPOIS de rodar — se um step de conteúdo
+// (write/send_audio) mais adiante no MESMO plano já vem com o argumento preenchido pelo LLM
+// autor do plano, esse valor não pode conter dado real (o LLM não tem como já saber o resultado
+// de uma tool que ainda não executou). Isso é verdade INDEPENDENTE do texto/idioma usado — é uma
+// garantia estrutural, não uma adivinhação de vocabulário. Ver `sawDataProducingTool` abaixo:
+// detector estrutural que substitui a necessidade de caçar cada nova frase-molde (5 rodadas de
+// regex nesta família de bug: "step_1" → "step 1" → "etapas anteriores" → "gerado pelo
+// assistente" → "passo 1", ver shared/contentStubPatterns.ts) por uma regra determinística sobre
+// a ORDEM dos steps no plano, não sobre as palavras que o LLM escolheu.
+const DATA_PRODUCING_TOOLS = new Set([
+    'weather', 'crypto_analysis', 'web_search', 'web_navigate',
+    'read', 'read_document', 'memory_search', 'exec_command', 'ssh_exec',
+]);
+
+export type StepMutationReason = 'tool_not_found' | 'placeholder' | 'content_stub' | 'missing_args' | 'premature_content';
 
 export interface StepMutation {
     stepId: string;
@@ -71,6 +85,12 @@ export function sanitizePlanSteps(
     writeContentStubPatterns: RegExp[],
 ): SanitizePlanStepsResult {
     const mutations: StepMutation[] = [];
+
+    // Atualizado ao final de cada iteração (só quando o step SOBREVIVE à sanitização com uma
+    // DATA_PRODUCING_TOOLS válida) — reflete se algum step ANTERIOR no plano vai efetivamente
+    // buscar/produzir dado dinâmico em runtime, ainda não disponível no momento em que este
+    // plano está sendo montado.
+    let sawDataProducingTool = false;
 
     const steps: PlanStep[] = rawSteps.map((s: Record<string, unknown>, i: number) => {
         const rawToolName = s.toolName ? String(s.toolName) : undefined;
@@ -138,22 +158,43 @@ export function sanitizePlanSteps(
         const contentBearingField = CONTENT_BEARING_ARG[resolvedTool ?? ''];
         if (resolvedTool && contentBearingField && toolArgs?.[contentBearingField]) {
             const contentStr = String(toolArgs[contentBearingField]);
-            const stubMatch = writeContentStubPatterns.find(p => p.test(contentStr));
-            if (stubMatch) {
+
+            if (sawDataProducingTool) {
+                // ESTRUTURAL: um step anterior no plano ainda vai buscar dado dinâmico (weather,
+                // web_search, exec_command...) que ainda não rodou — então este conteúdo, não
+                // importa o que diga, não pode ser o dado real. Não precisa (e não tenta) casar
+                // nenhuma palavra: a garantia vem da ORDEM dos steps, não do texto.
                 log.warn(
-                    `${logPrefix} step ${i + 1}: '${resolvedTool}.${contentBearingField}' content stub detectado ` +
-                    `(${contentStr.length} chars, pattern="${stubMatch.source.slice(0, 50)}") ` +
-                    `— convertendo para AgentLoop step`
+                    `${logPrefix} step ${i + 1}: '${resolvedTool}.${contentBearingField}' preenchido ANTES de um step ` +
+                    `produtor de dado dinâmico já ter rodado (${contentStr.length} chars) — convertendo para AgentLoop step`
                 );
                 mutations.push({
                     stepId: String(s.id ?? `step_${i + 1}`),
                     originalTool: resolvedTool,
-                    reason: 'content_stub',
-                    detail: `${contentStr.length} chars, pattern="${stubMatch.source.slice(0, 50)}"`,
+                    reason: 'premature_content',
+                    detail: `${contentStr.length} chars, depende de step produtor de dado ainda não executado`,
                     description: String(s.description ?? 'Execute step'),
                 });
                 resolvedTool = undefined;
                 toolArgs = undefined;
+            } else {
+                const stubMatch = writeContentStubPatterns.find(p => p.test(contentStr));
+                if (stubMatch) {
+                    log.warn(
+                        `${logPrefix} step ${i + 1}: '${resolvedTool}.${contentBearingField}' content stub detectado ` +
+                        `(${contentStr.length} chars, pattern="${stubMatch.source.slice(0, 50)}") ` +
+                        `— convertendo para AgentLoop step`
+                    );
+                    mutations.push({
+                        stepId: String(s.id ?? `step_${i + 1}`),
+                        originalTool: resolvedTool,
+                        reason: 'content_stub',
+                        detail: `${contentStr.length} chars, pattern="${stubMatch.source.slice(0, 50)}"`,
+                        description: String(s.description ?? 'Execute step'),
+                    });
+                    resolvedTool = undefined;
+                    toolArgs = undefined;
+                }
             }
         }
 
@@ -178,6 +219,13 @@ export function sanitizePlanSteps(
                 resolvedTool = undefined;
                 toolArgs = undefined;
             }
+        }
+
+        // Só conta como "produtor de dado" se o step sobreviveu com essa tool (não foi
+        // rebaixado pra AgentLoop por nenhum dos checks acima) — um step inválido nunca vai
+        // realmente rodar, então não produz dado nenhum pros steps seguintes.
+        if (resolvedTool && DATA_PRODUCING_TOOLS.has(resolvedTool)) {
+            sawDataProducingTool = true;
         }
 
         return {

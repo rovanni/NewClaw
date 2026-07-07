@@ -68,4 +68,20 @@ export const CONTENT_STUB_PATTERNS: RegExp[] = [
     // produzido por uma entidade de IA, em vez de SER o conteúdo) independente de tempo verbal,
     // colchetes, ou qual palavra é usada pra a entidade (assistente/modelo/agente/sistema/IA/bot):
     /\b(gerad[oa]|produzid[oa]|criad[oa]|escrit[oa])\s+pel[oa]\s+(assistente|modelo|agente|sistema|llm|ia|bot)\b/i,
+    // Reproduzido ao vivo (06/07/2026): RiskAnalyzer (Q2) reescreveu send_audio.text ANTES do
+    // step de weather rodar (mesma causa-raiz do incidente de 05/07 acima) como "Previsão do
+    // tempo para amanhã em Belo Horizonte, inserir dados reais obtidos no passo 1." —
+    // foi direto pro TTS. Escapou do padrão "step[_\s-]?\d+" (linha acima) porque o LLM usou a
+    // palavra PORTUGUESA "passo" em vez de "step" — natural num sistema com Language: pt-BR, mas
+    // não coberto porque o padrão de referência a step numerado só cobria o termo em inglês.
+    // Não basta acrescentar "passo"/"etapa"/"fase" como alternativa livre de "step[_\s-]?\d+":
+    // diferente de "step N", essas palavras são cabeçalhos legítimos e comuns em receitas/tutoriais
+    // reais que este bot gera ("Passo 1: pré-aqueça o forno a 180°C") — um padrão genérico
+    // "passo\d+"/"etapa\d+" sem mais contexto bloquearia conteúdo real como falso-positivo.
+    // Por isso este padrão exige também o verbo+preposição que caracteriza REFERÊNCIA a uma
+    // etapa do plano como FONTE de dados (não um cabeçalho de conteúdo): particípio de
+    // obter/coletar/retornar/extrair/recuperar/gerar + "no/na/nos/nas/do/da/dos/das" +
+    // step/passo/etapa/fase + número — mesma classe semântica de sempre, agora cobrindo o
+    // português além do inglês, sem repetir o risco de falso-positivo em conteúdo legítimo:
+    /\b(obtid[oa]s?|coletad[oa]s?|retornad[oa]s?|extraíd[oa]s?|recuperad[oa]s?|gerad[oa]s?)\s+(n[ao]s?|d[ao]s?)\s+(step|passo|etapa|fase)[_\s-]?\d+\b/i,
 ];
