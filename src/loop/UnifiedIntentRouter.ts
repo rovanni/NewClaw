@@ -11,6 +11,7 @@
  */
 
 import { createLogger } from '../shared/AppLogger';
+import { keywordBoundaryMatches } from '../shared/keywordBoundary';
 import type { SkillLearner } from './SkillLearner';
 import type { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 
@@ -531,19 +532,17 @@ export class UnifiedIntentRouter {
                 }
 
                 // High-risk rules (destructive) require word-boundary match to avoid false positives.
-                // e.g. 'format' must not match inside 'informatica' or 'informativo'.
+                // e.g. 'format' must not match inside 'informatica' or 'informativo'. Consolidado em
+                // shared/keywordBoundary.ts (allowPluralS:false preserva o comportamento ESTRITO
+                // original — nenhuma exceção de plural, igual ao regex inline que existia aqui).
                 if (rule.riskLevel === 'high') {
-                    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    const wordBound = new RegExp(`(?:^|\\s|[^a-záàãâéêíóõôúç])${escaped}(?:$|\\s|[^a-záàãâéêíóõôúç])`, 'i');
-                    if (!wordBound.test(normalized)) continue;
+                    if (!keywordBoundaryMatches(normalized, kw, { allowPluralS: false })) continue;
                 }
 
                 // Short keywords (≤4 chars) like 'ada', 'sol', 'eth', 'btc' require word-boundary
                 // to avoid matching substrings in common words (e.g. 'ada' in 'cada').
                 if (kw.length <= 4) {
-                    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    const wordBound = new RegExp(`(?:^|[^a-záàãâéêíóõôúç])${escaped}(?:$|[^a-záàãâéêíóõôúç])`, 'i');
-                    if (!wordBound.test(normalized)) continue;
+                    if (!keywordBoundaryMatches(normalized, kw, { allowPluralS: false })) continue;
                 }
 
                 if (rule.confidence >= 0.85 || rule.keywords.length < 10) {

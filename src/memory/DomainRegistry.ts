@@ -8,6 +8,7 @@
  */
 
 import { createLogger } from '../shared/AppLogger';
+import { keywordBoundaryMatches } from '../shared/keywordBoundary';
 import type { MemoryManager } from './MemoryManager';
 
 const log = createLogger('DomainRegistry');
@@ -105,15 +106,22 @@ export function classifyDomain(text: string): DomainClassification | null {
     for (const domain of DOMAIN_DEFINITIONS) {
         let hits = 0;
         for (const keyword of domain.keywords) {
-            // "amo" (keyword de domain_preferencias) casa como substring de "namorado"/"namorada"
-            // via .includes() — não é o verbo "amar", é uma colisão acidental que fazia
-            // classifyDomain preferir domain_preferencias sobre domain_social para qualquer
-            // menção a namoro (confiança 0.6455 vs 0.6064, decidido pela normalização por
-            // sqrt(keywords.length), não pelo conteúdo real). Reproduzido: "meu namorado mora
-            // em Londrina" → domain_preferencias. Só "amo" precisa de boundary — é a única
-            // keyword de todo o registro que colide com uma palavra natural não relacionada;
-            // as demais keywords continuam usando .includes() sem alteração.
-            const matched = keyword === 'amo' ? /\bamo\b/.test(normalized) : normalized.includes(keyword);
+            // Keywords CURTAS (≤6 chars) colidem como substring acidental dentro de palavras
+            // não relacionadas com muita frequência em português — confirmado com evidência real
+            // rodando classifyDomain(): "ram" (RAM) casa dentro de QUALQUER verbo conjugado no
+            // pretérito "eles/elas" (ficaram, moraram, chegaram...) → domain_infra errado; "sol"
+            // casa dentro de resolver/resolução/solução → domain_clima errado; "calor" casa
+            // dentro de "calorias" → domain_clima errado; "amo" casa dentro de "namorado" (já
+            // documentado antes, ver histórico). keywordBoundaryMatches() exige que a keyword
+            // apareça como palavra própria (ou com plural regular "+s", pra não quebrar "aula"
+            // casando "aulas", "projeto" casando "projetos" etc. — a maioria destas keywords é
+            // um stem no singular que depende de .includes() pra pegar o plural). Keywords mais
+            // LONGAS (7+ chars) têm risco de colisão desprezível e continuam com .includes()
+            // simples, pra não perder casamento com plurais irregulares (ex: "servidor" →
+            // "servidores", que adiciona "es", não só "s").
+            const matched = keyword.length <= 6
+                ? keywordBoundaryMatches(normalized, keyword)
+                : normalized.includes(keyword);
             if (matched) hits++;
         }
         if (hits === 0) continue;
