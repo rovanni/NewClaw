@@ -40,7 +40,13 @@ function getRequestToken(req: Request): string | null {
     return token || null;
 }
 
-export function createIntegrationsRouter(_ctx: DashboardContext): Router {
+function getOwnerId(token: string): string {
+    if (token === 'no-auth-required') return 'system';
+    const secret = dashboardAuth.passwordHash || 'newclaw-no-auth';
+    return crypto.createHmac('sha256', secret).update(token).digest('hex');
+}
+
+export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = spawn): Router {
     const router = Router();
 
     router.get('/install/powerpoint/status/:jobId', (req: Request, res: Response) => {
@@ -52,8 +58,9 @@ export function createIntegrationsRouter(_ctx: DashboardContext): Router {
             return res.status(404).json({ error: 'Job inexistente.' });
         }
 
-        if (job.ownerId !== token) {
-            return res.status(403).json({ error: 'Não autorizado para este job.' });
+        const ownerId = getOwnerId(token);
+        if (job.ownerId !== ownerId) {
+            return res.status(404).json({ error: 'Job inexistente.' });
         }
 
         res.json({ status: job.status });
@@ -82,7 +89,7 @@ export function createIntegrationsRouter(_ctx: DashboardContext): Router {
             const jobId = crypto.randomUUID();
             const job: InstallJob = {
                 id: jobId,
-                ownerId: token,
+                ownerId: getOwnerId(token),
                 status: 'running',
                 createdAt: Date.now(),
             };
@@ -103,7 +110,7 @@ export function createIntegrationsRouter(_ctx: DashboardContext): Router {
 
             let child;
             try {
-                child = spawn('powershell.exe', args, {
+                child = spawnFn('powershell.exe', args, {
                     cwd: addinDir,
                     windowsHide: true,
                     env: { ...process.env, NEWCLAW_TOKEN: token }
@@ -122,20 +129,20 @@ export function createIntegrationsRouter(_ctx: DashboardContext): Router {
                 job.finishedAt = Date.now();
             };
 
-            child.on('error', (err) => {
+            child.on('error', (err: Error) => {
                 log.error(`[PPTX Install Error] Falha no processo: ${errorMessage(err)}`);
                 finalizeJob('failed');
             });
 
-            child.stdout.on('data', (data) => {
+            child.stdout.on('data', (data: Buffer) => {
                 log.info(`[PPTX Install] ${data.toString().trim()}`);
             });
 
-            child.stderr.on('data', (data) => {
+            child.stderr.on('data', (data: Buffer) => {
                 log.warn(`[PPTX Install Warn] ${data.toString().trim()}`);
             });
 
-            child.on('close', (code) => {
+            child.on('close', (code: number | null) => {
                 log.info(`Instalação do suplemento PowerPoint concluída com código ${code}`);
                 finalizeJob(code === 0 ? 'succeeded' : 'failed');
             });
