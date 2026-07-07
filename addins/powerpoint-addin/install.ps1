@@ -24,6 +24,10 @@ param(
     [switch]$Help
 )
 
+if ([string]::IsNullOrEmpty($Token) -and -not [string]::IsNullOrEmpty($env:NEWCLAW_TOKEN)) {
+    $Token = $env:NEWCLAW_TOKEN
+}
+
 $ErrorActionPreference = "Stop"
 $AddinDir = $PSScriptRoot
 $Pm2Name  = "newclaw-pptx-addin"

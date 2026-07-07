@@ -169,6 +169,17 @@ skillsStore.on('proposedCount', count => {
   else           { badge.style.display = 'none'; }
 });
 
+// ── Host badge ───────────────────────────────────────────────────
+runtimeStore.on('platform', () => {
+  const s = runtimeStore.snap();
+  const badge = document.getElementById('newclaw-host-badge');
+  if (badge && s.platform) {
+    const osIcon = s.platform === 'win32' ? '🪟' : (s.platform === 'darwin' ? '🍏' : '🐧');
+    const osName = s.platform === 'win32' ? 'Windows' : (s.platform === 'darwin' ? 'macOS' : 'Linux');
+    badge.innerHTML = \`<span title="Servidor NewClaw (\${s.arch || 'unknown'})" style="font-size: 0.85rem; color: var(--text-soft); padding: 4px 8px; background: rgba(255,255,255,0.05); border-radius: 4px; margin-right: 12px; display: inline-flex; align-items: center; gap: 4px;">Servidor: \${osIcon} \${osName} · \${s.hostname || 'Desconhecido'}</span>\`;
+  }
+});
+
 // ── Data loaders ─────────────────────────────────────────────────
 async function loadConfig() {
   try {
@@ -200,10 +211,13 @@ async function loadStatus() {
       status: 'online',
       uptime: s.uptimeHuman || '—',
       ram:    s.memory?.heapUsed || '—',
+      platform: s.platform || null,
+      hostname: s.hostname || null,
+      arch: s.arch || null,
       telegramChannel: s.telegramChannel || null,
     });
   } catch {
-    runtimeStore.patch({ status: 'offline', uptime: '—', ram: '—', telegramChannel: null });
+    runtimeStore.patch({ status: 'offline', uptime: '—', ram: '—', platform: null, hostname: null, arch: null, telegramChannel: null });
   }
 }
 

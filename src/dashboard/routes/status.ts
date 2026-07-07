@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { exec } from 'child_process';
+import os from 'os';
 import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import { getEventLoopMonitor } from '../../shared/EventLoopMonitor';
@@ -104,6 +105,8 @@ export function createStatusRouter(ctx: DashboardContext): Router {
                 },
                 nodeVersion: process.version,
                 platform: process.platform,
+                arch: process.arch,
+                hostname: os.hostname(),
                 pid: process.pid,
                 telegramChannel,
             }

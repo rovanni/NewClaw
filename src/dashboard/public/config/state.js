@@ -48,6 +48,9 @@ export const runtimeStore = new Store({
   status: 'unknown',
   uptime: '—',
   ram: '—',
+  platform: null,
+  hostname: null,
+  arch: null,
 });
 
 export const providersStore = new Store({

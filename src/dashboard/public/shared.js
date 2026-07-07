@@ -1138,6 +1138,7 @@ function newclawHeader(activePage) {
     '</div>' +
     '<nav class="newclaw-tabs">' + navLinks + '</nav>' +
     '<div class="newclaw-header-right">' +
+      '<div id="newclaw-host-badge" class="newclaw-host-badge"></div>' +
       '<div class="newclaw-lang-selector">' +
         '<select onchange="newclawSetLang(this.value)">' +
           langOptions +

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { spawn } from 'child_process';
 import path from 'path';
+import crypto from 'crypto';
 import { errorMessage } from '../../shared/errors';
 import { DashboardContext } from './types';
 import { createLogger } from '../../shared/AppLogger';
@@ -8,66 +9,142 @@ import { dashboardAuth } from './auth';
 
 const log = createLogger('Integrations');
 
+interface InstallJob {
+    id: string;
+    ownerId: string;
+    status: 'running' | 'succeeded' | 'failed';
+    createdAt: number;
+    finishedAt?: number;
+}
+
+const activeJobs = new Map<string, InstallJob>();
+
+// TTL Garbage Collector
+const gcInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [id, job] of activeJobs.entries()) {
+        if (job.status !== 'running' && job.finishedAt && (now - job.finishedAt > 1000 * 60 * 60)) {
+            activeJobs.delete(id);
+        }
+    }
+}, 15 * 60 * 1000);
+if (gcInterval.unref) gcInterval.unref();
+
+function getRequestToken(req: Request): string | null {
+    const headerToken = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+    const queryToken = Array.isArray(req.query.token) ? req.query.token[0] : req.query.token;
+    const headerStr = headerToken?.replace('Bearer ', '') || queryToken;
+    const cookieToken = req.cookies?.newclaw_session;
+    let token = (headerStr || cookieToken) as string;
+    if (!dashboardAuth.enabled) token = 'no-auth-required';
+    return token || null;
+}
+
 export function createIntegrationsRouter(_ctx: DashboardContext): Router {
     const router = Router();
 
+    router.get('/install/powerpoint/status/:jobId', (req: Request, res: Response) => {
+        const token = getRequestToken(req);
+        if (!token) return res.status(401).json({ error: 'Não autorizado.' });
+
+        const job = activeJobs.get(req.params.jobId as string);
+        if (!job) {
+            return res.status(404).json({ error: 'Job inexistente.' });
+        }
+
+        if (job.ownerId !== token) {
+            return res.status(403).json({ error: 'Não autorizado para este job.' });
+        }
+
+        res.json({ status: job.status });
+    });
+
     router.post('/install/powerpoint', (req: Request, res: Response) => {
         try {
-            // Get token from cookie or header
-            const headerToken = req.headers.authorization?.replace('Bearer ', '') || req.query.token;
-            const cookieToken = req.cookies?.newclaw_session;
-            let token = (headerToken || cookieToken) as string;
-
-            if (!dashboardAuth.enabled) {
-                token = 'no-auth-required';
-            }
-
+            const token = getRequestToken(req);
             if (!token) {
                 return res.status(401).json({ error: 'Nenhum token de autenticação disponível.' });
             }
 
+            if (process.platform !== 'win32') {
+                return res.status(400).json({ 
+                    error: `A instalação remota neste servidor não é suportada. O suplemento precisa ser instalado no computador Windows onde o PowerPoint está disponível.` 
+                });
+            }
+
+            // Lock global (apenas 1 instalação simultânea de PPTX permitida neste host)
+            for (const job of activeJobs.values()) {
+                if (job.status === 'running') {
+                    return res.status(409).json({ error: 'Uma instalação já está em andamento neste servidor.' });
+                }
+            }
+
+            const jobId = crypto.randomUUID();
+            const job: InstallJob = {
+                id: jobId,
+                ownerId: token,
+                status: 'running',
+                createdAt: Date.now(),
+            };
+            activeJobs.set(jobId, job);
+
             const addinDir = path.join(process.cwd(), 'addins', 'powerpoint-addin');
             const installScript = path.join(addinDir, 'install.ps1');
 
-            // Pass the token safely
             const args = [
                 '-ExecutionPolicy', 'Bypass',
                 '-NonInteractive',
                 '-File', installScript,
-                '-NonInteractive', // For the script parameter
-                '-Token', token,
+                '-NonInteractive',
                 '-ServerUrl', `http://127.0.0.1:3090`
             ];
 
-            log.info(`Instalando suplemento PowerPoint: powershell ${args.join(' ')}`);
+            log.info(`Instalando suplemento PowerPoint (Job ${jobId}): powershell ${args.join(' ')}`);
 
-            const child = spawn('powershell.exe', args, {
-                cwd: addinDir,
-                windowsHide: true,
+            let child;
+            try {
+                child = spawn('powershell.exe', args, {
+                    cwd: addinDir,
+                    windowsHide: true,
+                    env: { ...process.env, NEWCLAW_TOKEN: token }
+                });
+            } catch (err) {
+                job.status = 'failed';
+                job.finishedAt = Date.now();
+                return res.status(500).json({ error: `Falha síncrona ao iniciar processo: ${errorMessage(err)}` });
+            }
+
+            let isTerminal = false;
+            const finalizeJob = (status: 'succeeded' | 'failed') => {
+                if (isTerminal) return;
+                isTerminal = true;
+                job.status = status;
+                job.finishedAt = Date.now();
+            };
+
+            child.on('error', (err) => {
+                log.error(`[PPTX Install Error] Falha no processo: ${errorMessage(err)}`);
+                finalizeJob('failed');
             });
 
-            let output = '';
-
             child.stdout.on('data', (data) => {
-                const text = data.toString();
-                output += text;
-                log.info(`[PPTX Install] ${text.trim()}`);
+                log.info(`[PPTX Install] ${data.toString().trim()}`);
             });
 
             child.stderr.on('data', (data) => {
-                const text = data.toString();
-                output += text;
-                log.warn(`[PPTX Install Error] ${text.trim()}`);
+                log.warn(`[PPTX Install Warn] ${data.toString().trim()}`);
             });
 
             child.on('close', (code) => {
                 log.info(`Instalação do suplemento PowerPoint concluída com código ${code}`);
+                finalizeJob(code === 0 ? 'succeeded' : 'failed');
             });
 
-            // Return early to avoid timeout and let the client assume it's running in background
-            res.json({ 
+            res.status(202).json({ 
                 success: true, 
-                message: 'Instalação iniciada em segundo plano. Verifique os logs no terminal (ou na view) para acompanhar o progresso.' 
+                jobId,
+                status: 'running',
+                message: 'Instalação iniciada em segundo plano.' 
             });
 
         } catch (err) {
