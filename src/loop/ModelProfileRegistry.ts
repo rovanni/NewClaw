@@ -12,6 +12,7 @@
 
 import { ProviderFactory } from '../core/ProviderFactory';
 import { createLogger } from '../shared/AppLogger';
+import { keywordBoundaryMatches } from '../shared/keywordBoundary';
 const log = createLogger('ModelProfileRegistry');
 
 // Perfil de modelos por categoria
@@ -256,7 +257,16 @@ Category:`;
         for (const rule of this.config.fallbackRules) {
             let score = 0;
             for (const kw of rule.keywords) {
-                if (lower.includes(kw.toLowerCase())) score += 2;
+                // Keywords curtas (≤6 chars, ex: "file", "js", "ok") colidem como substring
+                // acidental dentro de palavras não relacionadas (ex: "file" dentro de "desfile") —
+                // mesma classe de bug corrigida em DomainRegistry.ts/UnifiedIntentRouter.ts nesta
+                // sessão. keywordBoundaryMatches() (allowPluralS default) evita isso sem quebrar
+                // o plural regular ("bug"→"bugs", "script"→"scripts").
+                const kwLower = kw.toLowerCase();
+                const matched = kwLower.length <= 6
+                    ? keywordBoundaryMatches(lower, kwLower)
+                    : lower.includes(kwLower);
+                if (matched) score += 2;
             }
             for (const pattern of rule.patterns) {
                 if (pattern.test(lower)) score += 3;

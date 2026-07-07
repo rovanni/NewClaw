@@ -21,6 +21,7 @@ import type { CognitiveReflectionEngine } from '../memory/CognitiveReflectionEng
 import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 import { CognitiveMemoryIndex, MemoryTier, type MemoryIndexEntry } from '../memory/CognitiveMemoryIndex';
 import { createLogger } from '../shared/AppLogger';
+import { keywordBoundaryMatches } from '../shared/keywordBoundary';
 
 const log = createLogger('ContextBuilder');
 
@@ -283,6 +284,19 @@ function stripAccents(text: string): string {
     return text.normalize('NFD').replace(/[̀-ͯ]/g, '');
 }
 
+// Termos CURTOS (≤6 chars, ex: "pai", "tia", "avo") colidem como substring acidental dentro de
+// palavras não relacionadas — achado real: "pai" casa dentro de "campainha" (campainha), "tia"
+// casa dentro de QUALQUER verbo terminado em "-tia" no pretérito imperfeito (sentia, mentia,
+// repetia, competia...), mesma classe de bug já corrigida em DomainRegistry.ts nesta sessão.
+// allowPluralS:false (estrito) é seguro aqui — diferente de DomainRegistry, esta lista já
+// enumera as formas plurais EXPLICITAMENTE como entradas separadas ('filho'/'filhos',
+// 'irmao'/'irmaos', 'hijo'/'hijos'...), não depende de substring pra pegar o plural.
+function matchesPersonalTerm(text: string, term: string): boolean {
+    return term.length <= 6
+        ? keywordBoundaryMatches(text, term, { allowPluralS: false })
+        : text.includes(term);
+}
+
 function tokenize(text: string): string[] {
     return text.toLowerCase().split(/\W+/).filter(w => w.length >= 3 && !STOP_WORDS.has(w));
 }
@@ -304,7 +318,7 @@ export function extractEntities(query: string, overrideEntities?: string[]): str
     }
 
     for (const term of PERSONAL_ENTITY_TERMS) {
-        if (queryNorm.includes(term)) results.add(term);
+        if (matchesPersonalTerm(queryNorm, term)) results.add(term);
     }
 
     const possessiveMatches = query.matchAll(
@@ -321,7 +335,7 @@ export function extractEntities(query: string, overrideEntities?: string[]): str
 export function isPersonalMemoryQuery(query: string): boolean {
     const qn = stripAccents(query.toLowerCase());
     for (const term of PERSONAL_ENTITY_TERMS) {
-        if (qn.includes(term)) return true;
+        if (matchesPersonalTerm(qn, term)) return true;
     }
     if (/\b(?:meu|minha|meus|minhas|my|mi|mis)\s+\w+/i.test(query)) return true;
     return false;

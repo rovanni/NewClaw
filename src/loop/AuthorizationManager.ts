@@ -6,6 +6,7 @@
 
 import { createLogger } from '../shared/AppLogger';
 import { ResponseOption } from '../channels/ChannelAdapter';
+import { isDestructiveCommand } from '../shared/destructiveCommandPatterns';
 
 
 const log = createLogger('AuthorizationManager');
@@ -93,7 +94,6 @@ export class AuthorizationManager {
                 // Infer intent from first non-comment, non-variable line
                 const meaningful = lines.find(l => !l.startsWith('#') && !l.match(/^[A-Z_]+=/) && l.length > 3) || lines[0] || cmd;
                 const preview = meaningful.length > 70 ? meaningful.slice(0, 70) + '…' : meaningful;
-                const isDestructive = /rm\s+-rf|drop\s+table|mkfs|format/i.test(cmd);
                 return {
                     emoji: '🖥️',
                     action: 'Executar comando no servidor',
@@ -102,7 +102,7 @@ export class AuthorizationManager {
                         lines.length > 1 ? `_(script com ${lines.length} linhas)_` : '',
                         args.workdir ? `Diretório: \`${args.workdir}\`` : '',
                     ].filter(Boolean),
-                    risk: isDestructive ? 'high' : 'medium',
+                    risk: isDestructiveCommand(cmd) ? 'high' : 'medium',
                 };
             }
 

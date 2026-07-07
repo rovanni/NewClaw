@@ -502,11 +502,6 @@ export class UnifiedIntentRouter {
     private deterministicGate(input: string): DeterministicRule | null {
         const normalized = input.toLowerCase().trim();
 
-        // Short input check (likely greeting or unclear)
-        if (normalized.length <= 3 && !DESTRUCTIVE_KEYWORDS.some(kw => normalized.includes(kw))) {
-            // Will be caught by greeting pattern
-        }
-
         for (const rule of DETERMINISTIC_RULES) {
             // Check patterns first (more precise)
             for (const pattern of rule.patterns) {
@@ -933,14 +928,6 @@ Respond with ONLY valid JSON, no other text:
      */
     isGreeting(input: string): boolean {
         return GREETING_PATTERN.test(input.trim()) || input.trim().length <= 3;
-    }
-
-    /**
-     * Check if input is destructive (high risk).
-     */
-    isDestructive(input: string): boolean {
-        const lower = input.toLowerCase();
-        return DESTRUCTIVE_KEYWORDS.some(kw => lower.includes(kw));
     }
 
     /**
