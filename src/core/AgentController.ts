@@ -63,7 +63,7 @@ import type { NewClawConfig } from './agentControllerTypes';
 import { openDatabase, buildLanguageDirective, buildSystemPrompt } from './agentControllerSetup';
 import { OwnerProfileService } from '../services/OwnerProfileService';
 import { OnboardingService } from '../services/OnboardingService';
-import { bootstrapDomains } from '../memory/DomainRegistry';
+import { bootstrapDomains, createDomainClassifierLLM } from '../memory/DomainRegistry';
 import { WorkflowEngine } from '../loop/WorkflowEngine';
 import { GoalOrchestrator } from '../loop/GoalOrchestrator';
 import { GoalStore } from '../loop/GoalStore';
@@ -231,6 +231,18 @@ export class AgentController {
 
         const sessionContext = new SessionContext(this.sessionManager, this.memory);
         this.agentLoop.setSessionContext(sessionContext);
+
+        // Classificação de domínio de memória via LLM (substitui o keyword-scoring de
+        // DomainRegistry.classifyDomain() por julgamento semântico real — ver
+        // project_session_bugs_jul2026_ai.md parte 6). Usa o mesmo modelo leve/rápido já
+        // configurado para classificação (GoalExtractor/ModelProfileRegistry), evitando latência
+        // extra desnecessária. Só é possível aqui porque ContextBuilder.buildContext() já é
+        // async — outros pontos de classifyDomain() (ex: MemoryManager.addNode(), síncrono,
+        // chamado 36x em 12 arquivos) continuam usando o regex diretamente (decisão consciente,
+        // não um esquecimento).
+        sessionContext.getContextBuilder().setDomainClassifierLLM(
+            createDomainClassifierLLM(this.providerFactory, this.agentLoop.getClassifierModel())
+        );
 
         this.sessionLearner = new SessionLearner(this.sessionManager, this.memory);
 
@@ -597,7 +609,13 @@ export class AgentController {
         ToolRegistry.register(new EditTool());
         ToolRegistry.register(new ReadTool());
         ToolRegistry.register(new MemorySearchTool(this.memory));
-        ToolRegistry.register(new MemoryWriteTool(this.memory, this.ownerProfileService));
+        const memoryWriteTool = new MemoryWriteTool(this.memory, this.ownerProfileService);
+        // Mesma classificação de domínio via LLM injetada no ContextBuilder acima — ver
+        // project_session_bugs_jul2026_ai.md parte 6.
+        memoryWriteTool.setDomainClassifierLLM(
+            createDomainClassifierLLM(this.providerFactory, this.agentLoop.getClassifierModel())
+        );
+        ToolRegistry.register(memoryWriteTool);
         ToolRegistry.register(new ReadDocumentTool());
         ToolRegistry.register(new ListWorkspaceTool());
         ToolRegistry.register(new RefreshWorkspaceTool(this.memory));

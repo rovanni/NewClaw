@@ -14,7 +14,7 @@
 
 import { MemoryManager, type MemoryNode } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
-import { classifyDomain } from '../memory/DomainRegistry';
+import { classifyDomain, type DomainClassifierLLM } from '../memory/DomainRegistry';
 import type { DomainSummaryService } from '../memory/DomainSummaryService';
 import type { EpisodicMemoryService } from '../memory/EpisodicMemoryService';
 import type { CognitiveReflectionEngine } from '../memory/CognitiveReflectionEngine';
@@ -670,6 +670,7 @@ export class ContextBuilder {
     private cognitiveIndex: CognitiveMemoryIndex | null = null;
     private contextPlanner: ContextPlanner | null = null;
     private entityFallbackExtractor?: EntityFallbackExtractor;
+    private domainClassifierLLM?: DomainClassifierLLM;
 
     /** Cached metadata from the last buildContext() call; read by callers via getLastBuildMetadata(). */
     private _lastBuildMetadata: ContextBuildMetadata | null = null;
@@ -702,6 +703,21 @@ export class ContextBuilder {
         this.entityFallbackExtractor = fn;
     }
 
+    /**
+     * Injeta um classificador de domínio baseado em LLM (ver DomainRegistry.createDomainClassifierLLM),
+     * substituindo o keyword-scoring de classifyDomain() por julgamento semântico real nos 2 pontos
+     * de uso deste arquivo (buildContext, domainAwareRankAndSelect — ambos já async). Opcional: se
+     * nunca for chamado, o comportamento é IDÊNTICO ao anterior (classifyDomain via regex).
+     */
+    setDomainClassifierLLM(fn: DomainClassifierLLM): void {
+        this.domainClassifierLLM = fn;
+    }
+
+    /** Usa o classificador LLM se injetado; senão cai no regex de classifyDomain() (comportamento original). */
+    private async classifyDomainForQuery(query: string) {
+        return this.domainClassifierLLM ? await this.domainClassifierLLM(query) : classifyDomain(query);
+    }
+
     async buildContext(query: string, conversationId?: string, tier: ContextTier = 'full'): Promise<string> {
         if (isSocialOrGreeting(query)) {
             if (conversationId) this.episodicMemoryService.recordInteraction(conversationId);
@@ -727,7 +743,7 @@ export class ContextBuilder {
         try {
             if (conversationId) this.episodicMemoryService.recordInteraction(conversationId);
 
-            const domainClass = classifyDomain(query);
+            const domainClass = await this.classifyDomainForQuery(query);
 
             const reflectionBlock = useReflection
                 ? truncateToChars(this.reflectionEngine.buildReflectionBlock(), this.BUDGET_REFLECTION)
@@ -985,7 +1001,7 @@ export class ContextBuilder {
     }
 
     private async domainAwareRankAndSelect(query: string, charBudget: number): Promise<RankedNode[]> {
-        const domainClass = classifyDomain(query);
+        const domainClass = await this.classifyDomainForQuery(query);
         if (domainClass && domainClass.confidence >= 0.5) {
             const subgraphNodes = this.memory.getRelatedNodes(domainClass.domainId, 'contains');
             if (subgraphNodes.length >= 2) {

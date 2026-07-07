@@ -5,15 +5,15 @@
  *   entries → filter trivial → extract metadata → summarize → embed → quality score → chunk
  *
  * Reutiliza:
- *   - ProviderFactory (para sumarização via LLM)
- *   - classifyDomain (DomainRegistry, sem regex semântico)
+ *   - ProviderFactory (para sumarização via LLM e classificação de domínio via LLM)
+ *   - createDomainClassifierLLM (DomainRegistry — julgamento semântico, não keyword-scoring)
  *   - Ollama nomic-embed-text (mesmo modelo do EmbeddingService)
  */
 
 import { ProviderFactory } from '../../core/ProviderFactory';
 import { TranscriptEntry } from '../../session/SessionTranscript';
 import { BufferState, ChunkCutTrigger, ChunkMessage, ConversationChunk } from './cmiTypes';
-import { classifyDomain } from '../DomainRegistry';
+import { createDomainClassifierLLM, type DomainClassifierLLM } from '../DomainRegistry';
 import { createLogger } from '../../shared/AppLogger';
 import { extractText } from '../../loop/ResponseAdapter';
 
@@ -29,10 +29,16 @@ const EMBED_TIMEOUT_MS = 10_000;
 export class CMIIngestionPipeline {
     private providerFactory: ProviderFactory;
     private ollamaUrl: string;
+    // Classificação de domínio via LLM (substitui o keyword-scoring de classifyDomain() por
+    // julgamento semântico real — ver DomainRegistry.createDomainClassifierLLM). Já tem
+    // ProviderFactory injetado aqui, então não precisa do padrão de setter opcional usado em
+    // ContextBuilder.ts/memory_write.ts (que não tinham essa dependência disponível).
+    private domainClassifierLLM: DomainClassifierLLM;
 
     constructor(providerFactory: ProviderFactory, ollamaUrl = 'http://localhost:11434') {
         this.providerFactory = providerFactory;
         this.ollamaUrl = ollamaUrl;
+        this.domainClassifierLLM = createDomainClassifierLLM(providerFactory);
     }
 
     /**
@@ -55,7 +61,7 @@ export class CMIIngestionPipeline {
         }
 
         // 2. Extrair metadados
-        const metadata = this.extractMetadata(relevant, state);
+        const metadata = await this.extractMetadata(relevant, state);
 
         // 3. Construir snapshot de mensagens para o chunk
         const messages = this.buildMessages(relevant);
@@ -136,16 +142,19 @@ export class CMIIngestionPipeline {
 
     // ── 2. EXTRAÇÃO DE METADADOS ───────────────────────────────────────────────
 
-    private extractMetadata(
+    private async extractMetadata(
         entries: TranscriptEntry[],
         state: BufferState
-    ): { topics: string[]; entities: string[]; intent: string; toolsUsed: string[] } {
-        // Tópicos: classificar domínios das mensagens de usuário
+    ): Promise<{ topics: string[]; entities: string[]; intent: string; toolsUsed: string[] }> {
+        // Tópicos: classificar domínios das mensagens de usuário via LLM (mais preciso que
+        // keyword-scoring — ver DomainRegistry.createDomainClassifierLLM). Chamado em série
+        // (não Promise.all) deliberadamente: chunk fecha só ocasionalmente (fim de conversa),
+        // não é um caminho de latência crítica por mensagem.
         const topicSet = new Set<string>();
         if (state.currentDomain) topicSet.add(state.currentDomain);
         for (const entry of entries) {
             if (entry.role === 'user') {
-                const d = classifyDomain(entry.content);
+                const d = await this.domainClassifierLLM(entry.content);
                 if (d) topicSet.add(d.domainId);
             }
         }

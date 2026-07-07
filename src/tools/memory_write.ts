@@ -16,7 +16,7 @@ import type { MemoryFacade } from '../memory/MemoryFacade';
 import { isProtectedNode } from '../memory/MemoryFacade';
 import { errorMessage } from '../shared/errors';
 import type { ExecutionOutcome } from '../memory/ProceduralMemoryService';
-import { classifyDomain } from '../memory/DomainRegistry';
+import { classifyDomain, type DomainClassifierLLM } from '../memory/DomainRegistry';
 import { CognitiveMemoryIndex } from '../memory/CognitiveMemoryIndex';
 import type { OwnerProfileService } from '../services/OwnerProfileService';
 
@@ -50,6 +50,7 @@ export class MemoryWriteTool implements ToolExecutor {
     private facade: MemoryFacade;
     private cognitiveIndex: CognitiveMemoryIndex | null = null;
     private ownerService: OwnerProfileService | null = null;
+    private domainClassifierLLM?: DomainClassifierLLM;
 
     // IDs e nomes que representam a identidade do dono — nunca devem ser sobrescritos pelo LLM
     private static readonly OWNER_IDENTITY_IDS = new Set(['user_identity', 'core_user', 'USER', 'user', 'USUARIO', 'usuario']);
@@ -58,6 +59,18 @@ export class MemoryWriteTool implements ToolExecutor {
         this.memoryManager = memoryManager;
         this.facade = memoryManager.getFacade();
         this.ownerService = ownerService ?? null;
+    }
+
+    /**
+     * Injeta um classificador de domínio baseado em LLM (ver DomainRegistry.createDomainClassifierLLM).
+     * Opcional: se nunca for chamado, comportamento idêntico ao anterior (classifyDomain via regex).
+     */
+    setDomainClassifierLLM(fn: DomainClassifierLLM): void {
+        this.domainClassifierLLM = fn;
+    }
+
+    private async classifyDomainForNode(text: string) {
+        return this.domainClassifierLLM ? await this.domainClassifierLLM(text) : classifyDomain(text);
     }
 
     private isOwnerIdentityNode(id: string): boolean {
@@ -209,7 +222,7 @@ export class MemoryWriteTool implements ToolExecutor {
         // Domain-aware auto-routing: connect via domain hub when confidence >= 0.65,
         // otherwise fall back to direct user_identity connection (flat graph)
         if (type !== 'identity' && type !== 'domain' && id !== 'core_user' && id !== 'user_identity') {
-            const domainResult = classifyDomain(`${name} ${content}`);
+            const domainResult = await this.classifyDomainForNode(`${name} ${content}`);
             const domainHub = domainResult ? this.memoryManager.getNode(domainResult.domainId) : null;
 
             if (domainHub && domainResult && domainResult.confidence >= 0.65) {

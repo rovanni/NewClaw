@@ -10,6 +10,7 @@
 import { createLogger } from '../shared/AppLogger';
 import { keywordBoundaryMatches } from '../shared/keywordBoundary';
 import type { MemoryManager } from './MemoryManager';
+import type { ProviderFactory } from '../core/ProviderFactory';
 
 const log = createLogger('DomainRegistry');
 
@@ -142,6 +143,80 @@ export function classifyDomain(text: string): DomainClassification | null {
 
 export function getDomainById(id: string): DomainDefinition | undefined {
     return DOMAIN_DEFINITIONS.find(d => d.id === id);
+}
+
+export type DomainClassifierLLM = (text: string) => Promise<DomainClassification | null>;
+
+/** Classificação de domínio não justifica esperar um LLM lento — timeout curto. */
+const DOMAIN_CLASSIFIER_TIMEOUT_MS = 6_000;
+
+function buildDomainClassificationPrompt(text: string): string {
+    const domainList = DOMAIN_DEFINITIONS.map(d => `- ${d.id}: ${d.description}`).join('\n');
+    return `Classifique o texto abaixo em UM dos domínios listados. Se não se encaixar claramente em nenhum, responda domainId: null.
+
+Domínios disponíveis:
+${domainList}
+
+Texto: "${text.slice(0, 400)}"
+
+Responda APENAS com JSON válido, sem markdown:
+{"domainId": "domain_xxx" ou null, "confidence": 0.0-1.0}`;
+}
+
+/**
+ * Cria um classificador de domínio baseado em LLM — substitui o keyword-scoring de
+ * classifyDomain() por julgamento semântico real nos pontos de chamada ASSÍNCRONOS, evitando a
+ * classe de bug de colisão de substring que uma lista fixa de keywords sempre vai ter (ver
+ * histórico desta sessão: "ram" em "ficaram", "sol" em "resolver", "calor" em "calorias" — todas
+ * corrigidas, mas nenhuma lista de keywords cobre todo jeito de expressar um assunto).
+ *
+ * Não usado nos pontos SÍNCRONOS de classifyDomain() (ex: MemoryManager.addNode(), chamado 36x
+ * em 12 arquivos) — converter esses pra async exigiria atualizar todos os call-sites, fora de
+ * escopo (decisão consciente: ver [[project_session_bugs_jul2026_ai]]). Nesses pontos,
+ * classifyDomain() (regex, já corrigido) continua sendo usado diretamente.
+ *
+ * Em qualquer falha (timeout, erro de rede, JSON inválido, domainId desconhecido), cai de volta
+ * pro classifyDomain() (regex) — a feature nunca quebra completamente por causa de uma falha de
+ * LLM, só perde a precisão extra.
+ */
+export function createDomainClassifierLLM(
+    providerFactory: ProviderFactory,
+    model?: string,
+): DomainClassifierLLM {
+    return async (text: string): Promise<DomainClassification | null> => {
+        if (!text || text.trim().length === 0) return null;
+
+        try {
+            const prompt = buildDomainClassificationPrompt(text);
+            const result = await providerFactory.chatWithFallback(
+                [{ role: 'user', content: prompt }],
+                undefined,
+                undefined,
+                DOMAIN_CLASSIFIER_TIMEOUT_MS,
+                undefined,
+                model,
+            );
+
+            if (result.status !== 'success') {
+                log.warn(`[DomainClassifierLLM] status=${result.status} — fallback pro classifyDomain (regex)`);
+                return classifyDomain(text);
+            }
+
+            const cleaned = result.content.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
+            const parsed = JSON.parse(cleaned) as { domainId?: string | null; confidence?: number };
+
+            if (!parsed.domainId || typeof parsed.confidence !== 'number') return null;
+            if (!DOMAIN_DEFINITIONS.some(d => d.id === parsed.domainId)) {
+                log.warn(`[DomainClassifierLLM] domainId desconhecido: "${parsed.domainId}" — fallback pro classifyDomain (regex)`);
+                return classifyDomain(text);
+            }
+
+            return { domainId: parsed.domainId, confidence: Math.max(0, Math.min(1, parsed.confidence)) };
+        } catch (err) {
+            log.warn(`[DomainClassifierLLM] erro: ${(err as Error).message} — fallback pro classifyDomain (regex)`);
+            return classifyDomain(text);
+        }
+    };
 }
 
 /**
