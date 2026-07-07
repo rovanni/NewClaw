@@ -1,0 +1,165 @@
+/* Estilos do painel de tarefas do suplemento newclaw. */
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 13px;
+    color: #242424;
+}
+
+#sideload-msg {
+    padding: 20px;
+}
+
+#app-body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    box-sizing: border-box;
+}
+
+.newclaw-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: #1a1a1a;
+    color: #fff;
+    flex: 0 0 auto;
+}
+
+.newclaw-title {
+    font-weight: 600;
+    letter-spacing: 0.2px;
+}
+
+.icon-button {
+    background: none;
+    border: none;
+    color: #fff;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.icon-button:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.settings-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 14px;
+    background: #f3f2f1;
+    border-bottom: 1px solid #e1dfdd;
+    flex: 0 0 auto;
+}
+
+.settings-panel label {
+    font-size: 12px;
+    color: #605e5c;
+}
+
+.settings-panel input {
+    padding: 6px 8px;
+    border: 1px solid #c8c6c4;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+.chat-log {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: #fff;
+}
+
+.msg {
+    max-width: 88%;
+    padding: 8px 12px;
+    border-radius: 10px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.msg--user {
+    align-self: flex-end;
+    background: #0078d4;
+    color: #fff;
+    border-bottom-right-radius: 2px;
+}
+
+.msg--assistant {
+    align-self: flex-start;
+    background: #f3f2f1;
+    color: #242424;
+    border-bottom-left-radius: 2px;
+}
+
+.msg--status {
+    align-self: center;
+    background: transparent;
+    color: #605e5c;
+    font-style: italic;
+    font-size: 12px;
+    padding: 2px 8px;
+}
+
+.msg--success {
+    color: #0f7b0f;
+    font-style: normal;
+}
+
+.msg--error {
+    align-self: stretch;
+    background: #fde7e9;
+    color: #a4262c;
+    border: 1px solid #f3c6c9;
+}
+
+.chat-input-row {
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid #e1dfdd;
+    flex: 0 0 auto;
+}
+
+#message-input {
+    flex: 1 1 auto;
+    resize: none;
+    padding: 8px;
+    border: 1px solid #c8c6c4;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 13px;
+}
+
+.primary-button {
+    background: #0078d4;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 0 16px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.primary-button:hover {
+    background: #106ebe;
+}
+
+.primary-button:disabled {
+    background: #c8c6c4;
+    cursor: default;
+}

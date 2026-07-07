@@ -1,0 +1,9 @@
+# Build output
+dist/
+
+# Node modules folder
+node_modules/
+
+# Gerado por install.ps1 — contém o token do dashboard, nunca deve ser commitado
+config.local.json
+

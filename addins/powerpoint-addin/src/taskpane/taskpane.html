@@ -1,0 +1,48 @@
+<!-- Painel de tarefas do suplemento newclaw para PowerPoint. -->
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>newclaw</title>
+
+    <!-- Office JavaScript API -->
+    <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+
+    <link href="taskpane.css" rel="stylesheet" type="text/css" />
+</head>
+
+<body class="newclaw-body">
+    <section id="sideload-msg">
+        <p>Carregue este suplemento dentro do PowerPoint para começar.</p>
+    </section>
+
+    <main id="app-body" style="display: none;">
+        <header class="newclaw-header">
+            <span class="newclaw-title">newclaw</span>
+            <button id="settings-toggle" class="icon-button" title="Configurações" aria-label="Configurações">⚙</button>
+        </header>
+
+        <section id="settings-panel" class="settings-panel" style="display: none;">
+            <label for="server-url">Endereço do servidor</label>
+            <input id="server-url" type="text" placeholder="http://127.0.0.1:3090" />
+
+            <label for="server-token">Token (opcional, se o dashboard tiver senha)</label>
+            <input id="server-token" type="password" placeholder="Bearer token" />
+
+            <button id="save-settings" class="primary-button">Salvar</button>
+        </section>
+
+        <div id="chat-log" class="chat-log"></div>
+
+        <footer class="chat-input-row">
+            <textarea id="message-input" rows="2" placeholder="Peça um slide, uma edição, o que precisar..."></textarea>
+            <button id="send-button" class="primary-button">Enviar</button>
+        </footer>
+    </main>
+</body>
+
+</html>
