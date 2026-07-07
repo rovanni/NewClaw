@@ -25,16 +25,16 @@ export function render(container) {
               <strong>Requisitos:</strong> Windows, Office 365 ou 2019+, Node.js instalado.
             </p>
           </div>
-          <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px;">
+          <div style="display: flex; flex-direction: column; gap: 12px; align-items: stretch;">
             ${!isWindows ? `
-              <div style="font-size: 0.85rem; color: #ffb86c; background: rgba(255,184,108,0.1); padding: 8px; border-radius: 4px; line-height: 1.4; text-align: left; flex: 1;">
-                ⚠️ <strong>A instalação remota neste servidor não é suportada.</strong> O suplemento precisa ser instalado no computador Windows onde o PowerPoint está disponível. (Alternativa temporária: instale localmente via código-fonte).
+              <div style="font-size: 0.85rem; color: #ffb86c; background: rgba(255,184,108,0.1); padding: 12px; border-radius: 4px; line-height: 1.5; text-align: left;">
+                ⚠️ A instalação remota neste servidor não é suportada. O suplemento precisa ser instalado localmente em um computador Windows com o PowerPoint disponível.
               </div>
-              <button class="btn btn-primary" disabled style="opacity: 0.5;">
+              <button class="btn btn-primary" disabled style="opacity: 0.5; align-self: flex-end;">
                 <span class="ni">⚡</span> Instalação Indisponível
               </button>
             ` : `
-              <button class="btn btn-primary" id="btnInstallPptx">
+              <button class="btn btn-primary" id="btnInstallPptx" style="align-self: flex-end;">
                 <span class="ni">⚡</span> Instalar neste Servidor Windows
               </button>
             `}
