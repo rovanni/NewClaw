@@ -19,6 +19,7 @@ const VIEW_MAP = {
   providers:   'ProvidersView',
   ferramentas: 'FerramentasView',
   skills:      'SkillsView',
+  integracoes: 'IntegracoesView',
   seguranca:   'SegurancaView',
   avancado:    'AvancadoView',
   atualizacao: 'AtualizacaoView',

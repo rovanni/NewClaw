@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 #  newclaw — Instalador do Suplemento PowerPoint
 #
 #  Automatiza tudo que normalmente seria feito na mão:
@@ -18,7 +18,9 @@
 [CmdletBinding()]
 param(
     [string]$ServerUrl = "http://127.0.0.1:3090",
+    [string]$Token = "",
     [switch]$NoPm2,
+    [switch]$NonInteractive,
     [switch]$Help
 )
 
@@ -52,7 +54,9 @@ function Test-Command([string]$cmd) {
 
 function Pause-Exit([int]$code = 0) {
     Write-Host ""
-    Read-Host "  Pressione Enter para fechar"
+    if (-not $NonInteractive) {
+        Read-Host "  Pressione Enter para fechar"
+    }
     exit $code
 }
 
@@ -65,7 +69,9 @@ USO:
 
 OPÇÕES:
   -ServerUrl URL   Endereço do dashboard do newclaw (padrão: http://127.0.0.1:3090)
+  -Token TOKEN     Token de autenticação (evita prompt de senha)
   -NoPm2           Não gerenciar o servidor estático via PM2
+  -NonInteractive  Não pausar a execução ao final
   -Help            Mostrar esta ajuda
 "@
     exit 0
@@ -73,8 +79,17 @@ OPÇÕES:
 
 # ── Obter token de login (funciona também se o dashboard não tiver senha) ──
 function Get-DashboardToken([string]$Url) {
+    if ($Token) {
+        Write-Ok "Usando token fornecido via parâmetro."
+        return $Token
+    }
+
     $maxAttempts = 3
     for ($i = 1; $i -le $maxAttempts; $i++) {
+        if ($NonInteractive) {
+            Write-Warn "Modo não interativo e sem token fornecido. Prosseguindo sem token."
+            return ""
+        }
         $securePw = Read-Host "    Senha do dashboard (Enter se o dashboard não tiver senha)" -AsSecureString
         $plainPw = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
             [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePw))

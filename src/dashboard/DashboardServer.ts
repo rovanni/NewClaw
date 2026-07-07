@@ -33,6 +33,7 @@ import { createMemoryRouter } from './routes/memory';
 import { createConversationsRouter } from './routes/conversations';
 import { createSystemRouter } from './routes/system';
 import { createMaintenanceRouter } from './routes/maintenance';
+import { createIntegrationsRouter } from './routes/integrations';
 import { DashboardContext } from './routes/types';
 
 const log = createLogger('Dashboardserver');
@@ -83,6 +84,7 @@ export class DashboardServer {
         this.app.use('/api/conversations', createConversationsRouter(ctx));
         this.app.use('/api/system', createSystemRouter(ctx));
         this.app.use('/api/maintenance', createMaintenanceRouter());
+        this.app.use('/api/integrations', createIntegrationsRouter(ctx));
     }
 
     public setController(controller: AgentController) {
