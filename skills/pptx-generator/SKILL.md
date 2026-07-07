@@ -67,7 +67,15 @@ Sempre criar o script em arquivo separado e depois executar:
 pip install python-pptx -q 2>/dev/null || pip install --break-system-packages python-pptx -q 2>/dev/null
 ```
 
-**Passo 0B.2** — Usar `write` para salvar o script em `tmp/gerar_pptx.py`:
+**Passo 0B.2** — Usar `write` para salvar o script com um nome **ÚNICO derivado do assunto/arquivo
+de origem** — NUNCA use o nome genérico `tmp/gerar_pptx.py` nem a saída genérica
+`apresentacao.pptx`. O workspace é persistente entre conversas: um script ou script
+`tmp/gerar_pptx.py` de uma tarefa anterior (outro assunto, outra aula) continua no disco, e se
+outro step do mesmo plano (ex: um step separado de `exec_command` que segue esta receita ao pé
+da letra) rodar `python3 tmp/gerar_pptx.py` sem saber que o nome mudou, ele executa o script
+ERRADO — silenciosamente gerando/enviando o arquivo da tarefa antiga. Use o mesmo padrão de nome
+em todos os lugares (script E saída), ex. para uma aula sobre DHCP: `tmp/gerar_pptx_dhcp.py` →
+`aula_dhcp.pptx`.
 
 ```python
 from pptx import Presentation
@@ -75,13 +83,13 @@ from pptx.util import Inches, Pt
 
 prs = Presentation()
 # ... gerar slides a partir do conteúdo
-prs.save('apresentacao.pptx')
+prs.save('NOME_UNICO_DO_ASSUNTO.pptx')  # ex: 'aula_dhcp.pptx' — nunca 'apresentacao.pptx'
 ```
 
-**Passo 0B.3** — Executar via `exec_command`:
+**Passo 0B.3** — Executar via `exec_command`, usando o MESMO nome único do Passo 0B.2:
 
 ```bash
-python3 tmp/gerar_pptx.py
+python3 tmp/gerar_pptx_NOME_UNICO_DO_ASSUNTO.py
 ```
 
 **Nunca informar ao usuário que o Marp não estava disponível ou que foi usado um método alternativo** — simplesmente entregar o arquivo gerado.
@@ -158,22 +166,26 @@ size: 16:9
 > Formato correto: `marp entrada.md --no-stdin -o saida.pptx`
 > Formato ERRADO: `marp --no-stdin -o saida.pptx` (sem arquivo) ou `marp --pdf entrada.md` (flag antes)
 
+> Use nomes derivados do assunto (para o `.md` de entrada E o `.pptx` de saída), nunca genéricos
+> como `slides.md`/`apresentacao.pptx` — o workspace persiste entre conversas, e um nome genérico
+> pode coincidir com um arquivo de uma tarefa antiga e diferente.
+
 ```bash
-# Converter Markdown para PowerPoint (arquivo ANTES das flags)
-marp slides.md -o apresentacao.pptx
+# Converter Markdown para PowerPoint (arquivo ANTES das flags) — nomes de exemplo, adapte ao assunto
+marp aula_dhcp.md -o aula_dhcp.pptx
 
 # Com tema específico
-marp slides.md --theme gaia -o apresentacao.pptx
+marp aula_dhcp.md --theme gaia -o aula_dhcp.pptx
 
 # Verificar que o arquivo foi criado
-ls -lh apresentacao.pptx
+ls -lh aula_dhcp.pptx
 ```
 
 ## Passo 4 — Verificar e enviar
 
 ```bash
-# Confirmar tamanho razoável (deve ser > 10KB para ter conteúdo)
-ls -lh apresentacao.pptx
+# Confirmar tamanho razoável (deve ser > 10KB para ter conteúdo) — use o nome real do arquivo gerado
+ls -lh aula_dhcp.pptx
 ```
 
 Se o arquivo existir e tiver tamanho adequado, usar `send_document` para enviar ao usuário.

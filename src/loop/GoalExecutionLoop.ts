@@ -2649,6 +2649,29 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             ? `\nCONTEÚDO REAL DOS ARTEFATOS EM DISCO:\n${artifactLines.join('\n\n')}`
             : '';
 
+        // L-M2 cobriu checkClaimsAgainstEvidence (aceitar a claim), mas não o PROMPT do
+        // validador em si: quando step_fallback→agentloop entrega via write+send_document
+        // internamente, isso vira uma única tentativa opaca toolName='agentloop' em
+        // goal.attempts — invisível para stepsContext/attemptsContext/artifactBlock acima.
+        // Sem este bloco, o validador só enxerga os steps do ciclo/replan atual e escreve um
+        // "summary" que ignora a entrega real (evidência real: goal_1783430280404_xk7ht,
+        // 07/07 — resumo final falou só em "markdown lido e validado", nunca mencionando o
+        // .pptx que já tinha sido enviado pelo agentloop dois ciclos antes).
+        const deliveredArtifactLines: string[] = [];
+        for (const rawPath of goal.sentArtifacts ?? []) {
+            if (rawPath === '__send_audio_delivered__') continue; // sentinela de dedup, não é arquivo
+            const { resolved: filePath } = resolvePath(rawPath);
+            try {
+                const stat = fs.statSync(filePath);
+                deliveredArtifactLines.push(`- ${filePath} (${stat.size} bytes, já entregue ao usuário nesta sessão)`);
+            } catch {
+                // arquivo listado como entregue mas não encontrado em disco — não afirmar entrega
+            }
+        }
+        const deliveredArtifactsBlock = deliveredArtifactLines.length > 0
+            ? `\nARTEFATOS JÁ ENTREGUES AO USUÁRIO NESTA SESSÃO DESTE OBJETIVO (não recrie nem ignore isto no resumo):\n${deliveredArtifactLines.join('\n')}`
+            : '';
+
         // B: injeta GoalProgressModel no prompt de validação — o LLM sabe o que foi e não foi entregue
         const progressBlock = this.progressModel && this.progressModel.components.length > 0
             ? (() => {
@@ -2672,13 +2695,14 @@ STEPS EXECUTADOS RECENTEMENTE:
 ${stepsContext || '(nenhum)'}
 
 RESULTADOS DAS FERRAMENTAS:
-${attemptsContext || '(nenhum)'}${artifactBlock}
+${attemptsContext || '(nenhum)'}${artifactBlock}${deliveredArtifactsBlock}
 
 IMPORTANTE — INTERPRETAÇÃO DE OUTPUTS:
 - Comandos de edição in-place (sed -i, python3 -c com open().write(), etc.) produzem SAÍDA VAZIA quando bem-sucedidos. Output vazio = SUCESSO para esses comandos.
 - Se o resultado de uma ferramenta exec_command está vazio e não há mensagem de erro, assuma que o comando foi bem-sucedido.
 - Se alguma leitura posterior (read, exec_command grep) mostra o conteúdo modificado, isso confirma a edição.
 - Se o conteúdo real do arquivo está disponível acima, use ESSE conteúdo como fonte primária de verdade.
+- Se houver ARTEFATOS JÁ ENTREGUES listados acima, o "summary" deve mencionar explicitamente esse artefato (nome do arquivo) como o resultado entregue — não descreva apenas os steps do ciclo atual (ex: releitura de um markdown de referência) como se fossem o objetivo em si.
 - Se PROGRESSO POR COMPONENTE mostra ≥70% concluído, considere entrega parcial como "achieved: true" com summary indicando o que ficou pendente.
 - QUALIDADE DE ARTEFATOS: se um arquivo criado pela ferramenta "write" tiver menos de 200 caracteres OU contiver placeholders evidentes ("[Inserir aqui", "TODO", "stub", "conteúdo será adicionado", texto genérico de uma linha sem dados reais), o objetivo NÃO foi atingido — marque achieved=false. Um arquivo de resumo de pesquisa com apenas uma frase genérica não constitui entrega real do objetivo.
 
@@ -2753,8 +2777,12 @@ OU
             const cleaned = llmResult.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
             const parsed = JSON.parse(cleaned);
             log.info(`[GoalLoop] LLM validation: achieved=${parsed.achieved}${parsed.reason ? ` reason="${parsed.reason}"` : ''}`);
-            // H2 observabilidade: resultado do validador com métricas de contexto
-            const artifactCount = goal.attempts.filter(a => a.result === 'success' && ['write', 'send_document'].includes(a.toolName)).length;
+            // H2 observabilidade: resultado do validador com métricas de contexto.
+            // Soma sentArtifacts — do contrário este contador fica em 0 sempre que a entrega
+            // aconteceu via agentloop (toolName='agentloop' opaco), mesmo com artefato real
+            // no disco e já enviado (ver deliveredArtifactsBlock acima).
+            const artifactCount = goal.attempts.filter(a => a.result === 'success' && ['write', 'send_document'].includes(a.toolName)).length
+                + (goal.sentArtifacts ?? []).filter(a => a !== '__send_audio_delivered__').length;
             log.info(
                 `[VALIDATION] goal=${goal.id}` +
                 ` achieved=${parsed.achieved}` +
