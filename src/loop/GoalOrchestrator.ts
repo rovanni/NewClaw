@@ -155,11 +155,18 @@ export class GoalOrchestrator {
             log.info(`[GoalOrchestrator] goal=${activeGoal.id} blocked waiting auth txn=${activeGoal.pendingTxnId}`);
 
             const userText = message.trim();
+            // "(?!\w)" no lugar do "\b" final: achado em auditoria (07/07/2026) — "tá" (confirmação
+            // informal muito comum em pt-BR: "tá", "tá!", "tá bom") termina em "á" (acentuado); "\b"
+            // no JS (sem flag "u") nunca fecha depois de acento seguido de espaço/pontuação/fim de
+            // string, então "tá"/"tá!" sozinhos NUNCA eram reconhecidos como aprovação — o goal
+            // ficava travado em 'blocked' esperando uma confirmação mais "clara" que já tinha sido
+            // dada. Mesma classe de bug já corrigida em GoalExtractor.ts/AgentLoop.ts/
+            // memory_write.ts nesta sessão.
             const isShortApproval = userText.length < 80 &&
-                /^(sim|pode|pode\s+fazer|ok|fa[cç]a|faz|confirmo|aprovado|autorizo|pode\s+ir|pode\s+executar|yes|go|proceed|confirm|tá|ta\s+bom|beleza|claro|certo|execute|executar|confirmar)\b/i
+                /^(sim|pode|pode\s+fazer|ok|fa[cç]a|faz|confirmo|aprovado|autorizo|pode\s+ir|pode\s+executar|yes|go|proceed|confirm|tá|ta\s+bom|beleza|claro|certo|execute|executar|confirmar)(?!\w)/i
                     .test(userText);
             const isShortRejection = userText.length < 80 &&
-                /^(não|nao|no\b|cancela|cancelar|para|stop|recusa|aborta|abortar|negativo)\b/i
+                /^(não|nao|no\b|cancela|cancelar|para|stop|recusa|aborta|abortar|negativo)(?!\w)/i
                     .test(userText);
 
             if (isShortApproval || isShortRejection) {

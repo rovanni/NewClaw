@@ -543,7 +543,14 @@ export class MemoryWriteTool implements ToolExecutor {
         // cobertura de plural que "irmão/irmã" sempre deveria ter tido, seguindo o mesmo padrão
         // já estabelecido no léxico — não é expansão de vocabulário nova, é correção de uma
         // assimetria pré-existente exposta pelo fix do "\b".
-        return /\b(filho|filha|filhos|filhas|esposa|marido|familia|familiar|irmao|irma|irmão|irmã|irmaos|irmas|irmãos|irmãs|mae|mãe|pai|conjuge|cônjuge|parente|casado|solteiro|crianca|criança|nasceu|aniversario|aniversário|namorad)(?!\w)/.test(text);
+        // "namorad" (stem incompleto): achado em auditoria (07/07/2026) — QUALQUER assertion de
+        // boundary logo após um stem incompleto ("\b" OU "(?!\w)") nunca fecha, porque a letra
+        // que completa a palavra real ("o"/"a" de "namorado"/"namorada") É um caractere de
+        // palavra — não é um bug de acento, é usar boundary logo depois de um prefixo em vez da
+        // palavra completa. "Ela é minha namorada"/"Ele é meu namorado" nunca casavam. Mesmo
+        // padrão de correção já usado acima para "irmã": enumerar as formas completas em vez de
+        // depender de prefixo + boundary.
+        return /\b(filho|filha|filhos|filhas|esposa|marido|familia|familiar|irmao|irma|irmão|irmã|irmaos|irmas|irmãos|irmãs|mae|mãe|pai|conjuge|cônjuge|parente|casado|solteiro|crianca|criança|nasceu|aniversario|aniversário|namorado|namorada|namorados|namoradas)(?!\w)/.test(text);
     }
 
     /**
@@ -552,7 +559,11 @@ export class MemoryWriteTool implements ToolExecutor {
     private inferFamilyRelation(content: string): string {
         const text = content.toLowerCase();
         if (/\b(filho|filha|filhos|filhas|crianca|criança)\b/.test(text)) return 'has_child';
-        if (/\b(esposa|marido|conjuge|cônjuge|namorad|casad)\b/.test(text)) return 'has_spouse';
+        // "namorad"/"casad": mesmo bug de stem incompleto + boundary corrigido em
+        // isFamilyOrSocialContent acima — "Sou casado"/"Ela é minha namorada" nunca casavam
+        // porque "\b" nunca fecha logo após um prefixo (a letra que completa a palavra real é
+        // \w). Formas completas enumeradas, boundary trocado para "(?!\w)" por consistência.
+        if (/\b(esposa|marido|conjuge|cônjuge|namorado|namorada|namorados|namoradas|casado|casada|casados|casadas)(?!\w)/.test(text)) return 'has_spouse';
         // Mesmo defeito de "\b" final + "irmã" do isFamilyOrSocialContent acima (regex
         // independente, mesmo termo, mesma causa raiz) — corrigido da mesma forma. Mesmo plural
         // ausente ("irmaos|irmas|irmãos|irmãs") adicionado pela mesma razão (ver comentário acima).

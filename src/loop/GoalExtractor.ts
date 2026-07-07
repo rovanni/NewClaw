@@ -35,7 +35,12 @@ const GOAL_SIGNALS: RegExp[] = [
     // Referência a arquivo/documento
     /\b(esse|este|aquele?|o)\s+(pdf|arquivo|documento|c[oó]digo|script|log|relat[oó]rio)\b/i,
     // Estruturas "faça X para mim" / "preciso que você X"
-    /\b(para\s+mim|preciso\s+que\s+voc[eê]|quero\s+que\s+voc[eê]|pode\s+(fazer|criar|executar))\b/i,
+    // "(?!\w)" no lugar do "\b" final: "voc[eê]" pode terminar em "ê" (acentuado), e "\b" no JS
+    // (sem flag "u") não reconhece acentos como \w — a transição \w→\W exigida por "\b" nunca
+    // ocorre quando "você" é seguida de espaço/pontuação/fim de string (o caso comum), então
+    // "preciso que você"/"quero que você" nunca casavam. Mesma classe de bug já documentada em
+    // memory_write.ts/PromptComposer.ts/contentStubPatterns.ts nesta base de código.
+    /\b(para\s+mim|preciso\s+que\s+voc[eê]|quero\s+que\s+voc[eê]|pode\s+(fazer|criar|executar))(?!\w)/i,
     // Tarefas de desenvolvimento
     /\b(implementa[r]?|refatora[r]?|depur[ae]|corrig[ei]|fix[ae]|adiciona[r]?)\b/i,
     // Operações de sistema
@@ -66,10 +71,14 @@ const UNAMBIGUOUS_TOOL_PATTERNS: RegExp[] = [
 const TRAILING_QUESTION_SIGNAL = /\?$/;
 
 /** Padrões que indicam CLARAMENTE conversa simples (não goal) */
+// "(?!\w)" em vez de "\b" final nas linhas abaixo: várias alternativas terminam em vogal
+// acentuada ("olá", "aí", "você", "é") e "\b" no JS (sem flag "u") nunca fecha depois de um
+// acento seguido de espaço/pontuação/fim de string — "\bOlá\b" nunca casava um "Olá" sozinho,
+// por exemplo. Mesma classe de bug já documentada em memory_write.ts/PromptComposer.ts.
 const NOT_GOAL_SIGNALS: RegExp[] = [
-    /^(oi|ol[aá]|hey|e a[ií]|tudo\s+bem|bom\s+dia|boa\s+tarde|boa\s+noite)\b/i,
-    /^(o\s+que\s+[eé]|me\s+explica|como\s+funciona|qual\s+[eé]\s+a\s+diferen[cç]a)\b/i,
-    /^(voc[eê]\s+[eé]|quem\s+[eé]\s+voc[eê]|o\s+que\s+voc[eê]\s+pode)\b/i,
+    /^(oi|ol[aá]|hey|e a[ií]|tudo\s+bem|bom\s+dia|boa\s+tarde|boa\s+noite)(?!\w)/i,
+    /^(o\s+que\s+[eé]|me\s+explica|como\s+funciona|qual\s+[eé]\s+a\s+diferen[cç]a)(?!\w)/i,
+    /^(voc[eê]\s+[eé]|quem\s+[eé]\s+voc[eê]|o\s+que\s+voc[eê]\s+pode)(?!\w)/i,
     /^(obrigad[ao]|valeu|vlw|entendi|ok|perfeito|show|[oó]timo)\b/i,
     TRAILING_QUESTION_SIGNAL, // só bloqueia quando não há verbo de ação (ver quickClassify)
     // Dados suplementares sendo fornecidos pelo usuário — não são comandos
@@ -82,9 +91,9 @@ const NOT_GOAL_SIGNALS: RegExp[] = [
     // Mesmo que contenham substantivos de ação (instalação, configuração), são listas descritivas.
     /^[\w\s]+\s+[eé]\s+um[a]?\s+(curso|disciplina|módulo|treinamento|programa|sistema|projeto|aplicativo)\s+(de|sobre|para)\b/i,
     // Correção/ajuste da mensagem anterior sem novo pedido explícito: "Estava me referindo a..."
-    /^(estava\s+me\s+referindo|me\s+referia|quis\s+dizer|na\s+verdade\s+(é|eu)|só\s+queria|era\s+(sobre|para))\b/i,
+    /^(estava\s+me\s+referindo|me\s+referia|quis\s+dizer|na\s+verdade\s+(é|eu)|só\s+queria|era\s+(sobre|para))(?!\w)/i,
     // Confirmação ou reconhecimento sem novo objetivo
-    /^(isso|exato|exatamente|correto|é\s+isso|isso\s+mesmo|sim\s*,?\s*(é|foi))\b/i,
+    /^(isso|exato|exatamente|correto|é\s+isso|isso\s+mesmo|sim\s*,?\s*(é|foi))(?!\w)/i,
 ];
 
 export class GoalExtractor {

@@ -116,8 +116,17 @@ export interface DecisionContext {
  * Applied generically — not specific to any entity, currency, or domain.
  * Pattern: financial prices, weather, news, legal changes, real-time data.
  */
+// Bug real encontrado em auditoria (07/07/2026): faltavam parênteses ao redor da alternação —
+// "\bprice|X|Y|coin\b" só aplica "\b" na PRIMEIRA ("price") e na ÚLTIMA ("coin") alternativa
+// (precedência de "|" é mais baixa que concatenação). Todas as alternativas do meio (preço,
+// cotação, clima, weather, notícia, news, legisla, law, stock, bolsa, dólar, câmbio, cripto,
+// crypto, token) casavam como SUBSTRING LIVRE, sem boundary nenhum — ex: "clima" casava dentro
+// de "aclimatar" ("Precisamos nos aclimatar ao novo horário" tratado como consulta volátil sem
+// nenhuma relação com clima/tempo). "bolsa" continua ambíguo mesmo depois do fix (bolsa de
+// valores vs. bolsa/mochila) — isso é ambiguidade de sentido da palavra, não bug de boundary;
+// nenhuma correção de regex resolve, ficaria fora de escopo aqui.
 const VOLATILE_QUERY_PATTERN =
-    /\bprice|preço|cotação|cotaçao|clima|weather|notícia|noticia|news|legisla|law|stock|bolsa|dólar|dolar|câmbio|cambio|cripto|crypto|token|coin\b/i;
+    /\b(price|preço|cotação|cotaçao|clima|weather|notícia|noticia|news|legisla|law|stock|bolsa|dólar|dolar|câmbio|cambio|cripto|crypto|token|coin)\b/i;
 
 /**
  * Compute how much the agent should trust its retrieved memory for this query.
