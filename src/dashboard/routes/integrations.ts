@@ -74,8 +74,8 @@ export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = 
             }
 
             if (process.platform !== 'win32') {
-                return res.status(400).json({ 
-                    error: `A instalação remota neste servidor não é suportada. O suplemento precisa ser instalado no computador Windows onde o PowerPoint está disponível.` 
+                return res.status(400).json({
+                    error: `A instalação remota neste servidor não é suportada. O suplemento precisa ser instalado no computador Windows onde o PowerPoint está disponível.`
                 });
             }
 
@@ -147,11 +147,71 @@ export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = 
                 finalizeJob(code === 0 ? 'succeeded' : 'failed');
             });
 
-            res.status(202).json({ 
-                success: true, 
+            res.status(202).json({
+                success: true,
                 jobId,
                 status: 'running',
-                message: 'Instalação iniciada em segundo plano.' 
+                message: 'Instalação iniciada em segundo plano.'
+            });
+
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+    router.delete('/install/powerpoint', (req: Request, res: Response) => {
+        try {
+            const token = getRequestToken(req);
+            if (!token) {
+                return res.status(401).json({ error: 'Nenhum token de autenticação disponível.' });
+            }
+
+            if (process.platform !== 'win32') {
+                return res.status(400).json({ error: 'Desinstalação apenas suportada em Windows.' });
+            }
+
+            const addinDir = path.join(process.cwd(), 'addins', 'powerpoint-addin');
+            const uninstallScript = path.join(addinDir, 'uninstall.ps1');
+
+            const child = spawnFn('powershell.exe', [
+                '-ExecutionPolicy', 'Bypass',
+                '-File', uninstallScript
+            ], {
+                cwd: addinDir,
+                env: { ...process.env, NEWCLAW_TOKEN: token },
+                detached: false
+            });
+
+            let out = '';
+            child.stdout.on('data', (data: Buffer) => out += data.toString());
+            child.stderr.on('data', (data: Buffer) => out += data.toString());
+
+            child.on('close', (code: number) => {
+                if (code === 0) {
+                    res.json({ success: true, message: 'Suplemento desinstalado.' });
+                } else {
+                    res.status(500).json({ error: `Erro na desinstalação: ${out}` });
+                }
+            });
+
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.get('/powerpoint/status', (_req: Request, res: Response) => {
+        try {
+            if (process.platform !== 'win32') {
+                return res.json({ installed: false });
+            }
+
+            // Verifica se o pm2 newclaw-pptx-addin existe
+            const child = spawnFn('pm2', ['show', 'newclaw-pptx-addin']);
+
+            child.on('close', (code: number) => {
+                res.json({ installed: code === 0 });
+            });
+            child.on('error', () => {
+                res.json({ installed: false });
             });
 
         } catch (err) {

@@ -165,6 +165,16 @@ const TRANSLATIONS = {
     pptx_install_windows: "Instalar neste Servidor Windows",
     pptx_install_confirm: "Deseja instalar o suplemento neste Servidor Windows? Isso compilará e registrará o add-in localmente.",
     pptx_installing: "Instalando neste servidor Windows...",
+    pptx_status_unknown: "Status desconhecido/continue verificando",
+    pptx_status_unavailable: "Status da instalação indisponível; o servidor pode ter sido reiniciado.",
+    pptx_install_success_toast: "Instalação concluída no servidor Windows.",
+    pptx_install_success: "Instalação concluída no servidor",
+    pptx_install_failed_toast: "Falha na instalação. Verifique os logs.",
+    pptx_install_failed: "Erro na instalação no servidor",
+    pptx_install_error: "Erro na instalação",
+    pptx_uninstall_btn: "Desinstalar Suplemento",
+    pptx_uninstalling: "Desinstalando...",
+    pptx_uninstall_confirm: "Deseja remover o suplemento do PowerPoint deste servidor?",
 
     // Update view
     update_page_desc: "Verifique e aplique atualizações do NewClaw.",
@@ -531,6 +541,16 @@ const TRANSLATIONS = {
     pptx_install_windows: "Install on this Windows Server",
     pptx_install_confirm: "Do you want to install the add-in on this Windows Server? This will compile and register the add-in locally.",
     pptx_installing: "Installing on this Windows server...",
+    pptx_status_unknown: "Unknown status/keep checking",
+    pptx_status_unavailable: "Installation status unavailable; server may have restarted.",
+    pptx_install_success_toast: "Installation completed on Windows server.",
+    pptx_install_success: "Installation completed on server",
+    pptx_install_failed_toast: "Installation failed. Check logs.",
+    pptx_install_failed: "Error installing on server",
+    pptx_install_error: "Installation error",
+    pptx_uninstall_btn: "Uninstall Add-in",
+    pptx_uninstalling: "Uninstalling...",
+    pptx_uninstall_confirm: "Do you want to remove the PowerPoint add-in from this server?",
 
     // Update view
     update_page_desc: "Check and apply NewClaw updates.",
