@@ -116,9 +116,12 @@ export class SessionContext {
             stateBlock += `\nCanal: ${HOST_APP_HINTS[hostApp]}`;
             
             // Injeta as informacoes detalhadas do slideContext se existirem
-            const slideContext = channelMetadata?.slideContext as { currentSlide?: number, totalSlides?: number, slideTexts?: string[] } | undefined;
+            const slideContext = channelMetadata?.slideContext as { presentationTitle?: string, currentSlide?: number, totalSlides?: number, slideTexts?: string[] } | undefined;
             if (slideContext) {
                 stateBlock += `\n\n[CONTEXTO DO POWERPOINT ABERTO]`;
+                if (slideContext.presentationTitle) {
+                    stateBlock += `\nArquivo: ${slideContext.presentationTitle}`;
+                }
                 if (slideContext.currentSlide && slideContext.totalSlides) {
                     stateBlock += `\nSlide ativo: ${slideContext.currentSlide} de ${slideContext.totalSlides}`;
                 }

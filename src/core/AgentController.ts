@@ -14,6 +14,7 @@ import { SkillLoader } from '../skills/SkillLoader';
 import { SkillLearner } from '../loop/SkillLearner';
 import { ExecCommandTool } from '../tools/exec_command';
 import { WebSearchTool } from '../tools/web_search';
+import { powerpointControlTool } from '../tools/powerpoint_control';
 import { WebNavigateTool } from '../tools/web_navigate';
 import { WriteTool } from '../tools/write_tool';
 import { EditTool } from '../tools/edit_tool';
@@ -602,6 +603,7 @@ export class AgentController {
     }
 
     private registerSkills(): void {
+        ToolRegistry.register(powerpointControlTool);
         ToolRegistry.register(new ExecCommandTool(), { dangerous: true });
         ToolRegistry.register(new WebSearchTool());
         ToolRegistry.register(new WebNavigateTool());

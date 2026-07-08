@@ -6,6 +6,7 @@ import { errorMessage } from '../../shared/errors';
 import { DashboardContext } from './types';
 import { createLogger } from '../../shared/AppLogger';
 import { dashboardAuth } from './auth';
+import { powerpointBroker } from './powerpointBroker';
 
 const log = createLogger('Integrations');
 
@@ -48,6 +49,32 @@ function getOwnerId(token: string): string {
 
 export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = spawn): Router {
     const router = Router();
+
+    router.get('/powerpoint/commands', (req: Request, res: Response) => {
+        const sessionId = req.query.sessionId as string;
+        if (!sessionId) {
+            return res.status(400).json({ error: 'sessionId is required' });
+        }
+        const cmd = powerpointBroker.poll(sessionId);
+        if (cmd) {
+            return res.json({ commands: [cmd] });
+        }
+        return res.json({ commands: [] });
+    });
+
+    router.post('/powerpoint/commands/:commandId/result', (req: Request, res: Response) => {
+        const commandId = req.params.commandId;
+        const { sessionId, status, error } = req.body;
+        if (!sessionId || !status) {
+            return res.status(400).json({ error: 'sessionId and status are required' });
+        }
+
+        const result = powerpointBroker.ack(String(commandId), String(sessionId), status as any, error as string);
+        if (result.error) {
+            return res.status(400).json(result);
+        }
+        return res.json({ success: true });
+    });
 
     router.get('/install/powerpoint/status/:jobId', (req: Request, res: Response) => {
         const token = getRequestToken(req);

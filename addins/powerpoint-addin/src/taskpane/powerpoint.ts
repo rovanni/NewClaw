@@ -90,7 +90,31 @@ async function getSlideContext(): Promise<Record<string, unknown> | null> {
         }
       }
 
+      // Captura o nome do arquivo da apresentacao via Office Common API (se disponivel/salvo)
+      let presentationTitle: string | undefined;
+      try {
+        presentationTitle = await new Promise<string | undefined>((resolve) => {
+          if (Office && Office.context && Office.context.document && Office.context.document.getFilePropertiesAsync) {
+            Office.context.document.getFilePropertiesAsync((asyncResult) => {
+              if (asyncResult.status === Office.AsyncResultStatus.Succeeded && asyncResult.value.url) {
+                const url = asyncResult.value.url;
+                // Extrai apenas o nome do arquivo no final da URL/Caminho
+                const fileName = url.substring(url.lastIndexOf('/') + 1).substring(url.lastIndexOf('\\') + 1);
+                resolve(fileName || undefined);
+              } else {
+                resolve(undefined);
+              }
+            });
+          } else {
+            resolve(undefined);
+          }
+        });
+      } catch {
+        // Ignora erros na captura do nome do arquivo
+      }
+
       return {
+        presentationTitle,
         currentSlide: currentSlideNumber,
         totalSlides,
         slideTexts: slideTexts.length > 0 ? slideTexts : undefined,
@@ -128,6 +152,7 @@ Office.onReady(async (info) => {
   if (info.host !== Office.HostType.PowerPoint) return;
 
   await bootstrapFromInstaller();
+  startCommandPolling();
 
   document.getElementById("sideload-msg")!.style.display = "none";
   document.getElementById("app-body")!.style.display = "flex";
@@ -261,4 +286,67 @@ async function insertSlidesFromAttachment(attachment: ChatAttachment): Promise<v
       `Não foi possível inserir os slides automaticamente (${detail}). O arquivo "${attachment.fileName}" foi gerado pelo newclaw — insira manualmente via Inserir > Reutilizar Slides, se necessário.`
     );
   }
+}
+
+let isPolling = false;
+async function startCommandPolling(): Promise<void> {
+  setInterval(async () => {
+    if (isPolling) return;
+    isPolling = true;
+    try {
+      const serverUrl = getServerUrl();
+      const token = getToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`${serverUrl}/api/integrations/powerpoint/commands?sessionId=${getSessionId()}`, { headers });
+      if (!res.ok) return;
+
+      const data = await res.json();
+      const commands = data.commands || [];
+
+      for (const cmd of commands) {
+        if (cmd.action === 'addTextBox') {
+          let status = 'failed';
+          let errorMsg = '';
+          try {
+            await PowerPoint.run(async (context) => {
+              const slides = context.presentation.slides;
+              const activeSlides = context.presentation.getSelectedSlides();
+              activeSlides.load("items/id");
+              await context.sync();
+
+              const targetSlide = activeSlides.items.length > 0 ? activeSlides.items[0] : slides.getItemAt(0);
+              const shape = targetSlide.shapes.addTextBox(cmd.args.text, {
+                left: cmd.args.x || 100,
+                top: cmd.args.y || 100,
+                width: 400,
+                height: 100
+              });
+              await context.sync();
+              status = 'executed';
+            });
+          } catch (err) {
+            status = 'failed';
+            errorMsg = err instanceof Error ? err.message : String(err);
+          }
+
+          // Send ACK
+          await fetch(`${serverUrl}/api/integrations/powerpoint/commands/${cmd.commandId}/result`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              sessionId: getSessionId(),
+              status,
+              error: errorMsg
+            })
+          }).catch(console.error);
+        }
+      }
+    } catch {
+      // Ignora erros de rede no polling
+    } finally {
+      isPolling = false;
+    }
+  }, 3000);
 }
