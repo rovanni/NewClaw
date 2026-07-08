@@ -1,7 +1,7 @@
-﻿# ============================================================
-#  newclaw — Desinstalador do Suplemento PowerPoint
+# ============================================================
+#  newclaw - Desinstalador do Suplemento PowerPoint
 #
-#  Desfaz o que foi feito na instalação:
+#  Desfaz o que foi feito na instalacao:
 #    1. Remove o registro do suplemento no PowerPoint
 #    2. Para e deleta o processo do PM2
 # ============================================================
@@ -18,7 +18,7 @@ try {
     Write-Host "Removendo registro do PowerPoint..." -ForegroundColor Green
     npx office-addin-dev-settings unregister manifest.xml
 } catch {
-    Write-Host "Aviso: Falha ao remover registro (pode já estar removido)." -ForegroundColor Yellow
+    Write-Host "Aviso: Falha ao remover registro (pode ja estar removido)." -ForegroundColor Yellow
 }
 
 try {
@@ -26,10 +26,11 @@ try {
     pm2 delete $Pm2Name 2>&1 | Out-Null
     pm2 save | Out-Null
 } catch {
-    Write-Host "Aviso: Falha ao remover do PM2 (pode não estar rodando)." -ForegroundColor Yellow
+    Write-Host "Aviso: Falha ao remover do PM2 (pode nao estar rodando)." -ForegroundColor Yellow
 }
 
-Write-Host "Desinstalação concluída." -ForegroundColor Cyan
+Write-Host "Desinstalacao concluida." -ForegroundColor Cyan
 Pop-Location
 exit 0
+
 
