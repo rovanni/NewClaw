@@ -23,7 +23,7 @@ try {
 
 try {
     Write-Host "Parando o processo PM2 ($Pm2Name)..." -ForegroundColor Green
-    pm2 delete $Pm2Name 2>&1 | Out-Null
+    try { pm2 delete $Pm2Name 2>&1 | Out-Null } catch { }
     pm2 save | Out-Null
 } catch {
     Write-Host "Aviso: Falha ao remover do PM2 (pode nao estar rodando)." -ForegroundColor Yellow
@@ -32,5 +32,6 @@ try {
 Write-Host "Desinstalacao concluida." -ForegroundColor Cyan
 Pop-Location
 exit 0
+
 
 

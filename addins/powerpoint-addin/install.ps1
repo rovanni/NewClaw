@@ -1,17 +1,17 @@
 # ============================================================
-#  newclaw a?? Instalador do Suplemento PowerPoint
+#  newclaw - Instalador do Suplemento PowerPoint
 #
-#  Automatiza tudo que normalmente seria feito na ma?o:
-#    1. npm install + build de produa?a?o
-#    2. Confiar no certificado de desenvolvimento (uma vez por ma?quina)
+#  Automatiza tudo que normalmente seria feito na mao:
+#    1. npm install + build de produaao
+#    2. Confiar no certificado de desenvolvimento (uma vez por maquina)
 #    3. Registrar o suplemento no PowerPoint (sem precisar de "Upload My Add-in")
-#    4. Login no dashboard do newclaw e gravaa?a?o do token localmente
-#    5. Subir o servidor esta?tico (dist/) via PM2, para na?o depender de terminal aberto
+#    4. Login no dashboard do newclaw e gravaaao do token localmente
+#    5. Subir o servidor estatico (dist/) via PM2, para nao depender de terminal aberto
 #
 #  Uso:
 #    .\install.ps1
 #    .\install.ps1 -ServerUrl "http://127.0.0.1:3090"
-#    .\install.ps1 -NoPm2      # na?o gerencia o servidor via PM2 (use "npm run serve" manualmente)
+#    .\install.ps1 -NoPm2      # nao gerencia o servidor via PM2 (use "npm run serve" manualmente)
 #    .\install.ps1 -Help
 # ============================================================
 
@@ -35,7 +35,7 @@ $Pm2Name  = "newclaw-pptx-addin"
 function Write-Banner {
     Write-Host ""
     Write-Host "  ============================================" -ForegroundColor Cyan
-    Write-Host "   newclaw a?? Suplemento PowerPoint" -ForegroundColor Cyan
+    Write-Host "   newclaw - Suplemento PowerPoint" -ForegroundColor Cyan
     Write-Host "       Instalador" -ForegroundColor Cyan
     Write-Host "  ============================================" -ForegroundColor Cyan
     Write-Host ""
@@ -66,35 +66,35 @@ function Pause-Exit([int]$code = 0) {
 
 if ($Help) {
     Write-Host @"
-newclaw a?? Instalador do Suplemento PowerPoint
+newclaw - Instalador do Suplemento PowerPoint
 
 USO:
-  .\install.ps1 [OPa?a?ES]
+  .\install.ps1 [OPaaES]
 
-OPa?a?ES:
-  -ServerUrl URL   Enderea?o do dashboard do newclaw (padra?o: http://127.0.0.1:3090)
-  -Token TOKEN     Token de autenticaa?a?o (evita prompt de senha)
-  -NoPm2           Na?o gerenciar o servidor esta?tico via PM2
-  -NonInteractive  Na?o pausar a execua?a?o ao final
+OPaaES:
+  -ServerUrl URL   Endereao do dashboard do newclaw (padrao: http://127.0.0.1:3090)
+  -Token TOKEN     Token de autenticaaao (evita prompt de senha)
+  -NoPm2           Nao gerenciar o servidor estatico via PM2
+  -NonInteractive  Nao pausar a execuaao ao final
   -Help            Mostrar esta ajuda
 "@
     exit 0
 }
 
-# a??a?? Obter token de login (funciona tamba?m se o dashboard na?o tiver senha) a??a??
+# -- Obter token de login (funciona tambam se o dashboard nao tiver senha) --
 function Get-DashboardToken([string]$Url) {
     if ($Token) {
-        Write-Ok "Usando token fornecido via para?metro."
+        Write-Ok "Usando token fornecido via parametro."
         return $Token
     }
 
     $maxAttempts = 3
     for ($i = 1; $i -le $maxAttempts; $i++) {
         if ($NonInteractive) {
-            Write-Warn "Modo na?o interativo e sem token fornecido. Prosseguindo sem token."
+            Write-Warn "Modo nao interativo e sem token fornecido. Prosseguindo sem token."
             return ""
         }
-        $securePw = Read-Host "    Senha do dashboard (Enter se o dashboard na?o tiver senha)" -AsSecureString
+        $securePw = Read-Host "    Senha do dashboard (Enter se o dashboard nao tiver senha)" -AsSecureString
         $plainPw = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
             [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePw))
 
@@ -105,10 +105,10 @@ function Get-DashboardToken([string]$Url) {
 
             if ($resp.success -and $resp.token) {
                 if ($resp.token -eq "no-auth-required") {
-                    Write-Ok "Dashboard sem senha configurada a?? nenhum token necessa?rio."
+                    Write-Ok "Dashboard sem senha configurada - nenhum token necessario."
                     return ""
                 }
-                Write-Ok "Login bem-sucedido a?? token obtido."
+                Write-Ok "Login bem-sucedido - token obtido."
                 return $resp.token
             }
         } catch {
@@ -117,12 +117,12 @@ function Get-DashboardToken([string]$Url) {
             if ($statusCode -eq 401) {
                 Write-Fail "Senha incorreta. Tente novamente ($i/$maxAttempts)."
             } else {
-                Write-Fail "Na?o foi possa?vel conectar em $Url ($($_.Exception.Message))"
-                Write-Info "O newclaw esta? rodando? Confira com 'pm2 list'."
+                Write-Fail "Nao foi possavel conectar em $Url ($($_.Exception.Message))"
+                Write-Info "O newclaw esta rodando? Confira com 'pm2 list'."
             }
         }
     }
-    Write-Warn "Na?o foi possa?vel obter um token. Configure depois manualmente na engrenagem do painel do suplemento."
+    Write-Warn "Nao foi possavel obter um token. Configure depois manualmente na engrenagem do painel do suplemento."
     return ""
 }
 
@@ -131,21 +131,21 @@ function Write-JsonNoBom([string]$Path, [string]$Content) {
     [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
 }
 
-# a??a?? Main a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??
+# -- Main -----------------------------------------------------
 
 try {
     Write-Banner
     Push-Location $AddinDir
 
-    # 1/6 a?? Node.js
-    Write-Step "1/6 a?? Verificando Node.js"
+    # 1/6 - Node.js
+    Write-Step "1/6 - Verificando Node.js"
     if (-not (Test-Command "node")) {
-        Write-Fail "Node.js na?o encontrado no PATH. Instale antes de continuar: https://nodejs.org"
+        Write-Fail "Node.js nao encontrado no PATH. Instale antes de continuar: https://nodejs.org"
         Pause-Exit 1
     }
     Write-Ok "Node.js: $(node --version)"
 
-    # 2/6 a?? Dependaancias + build de produa?a?o
+    # 2/6 - Dependaancias + build de produaao
     Write-Step "2/6 - Instalando dependaancias e compilando"
 
     Write-Info "npm install (pode demorar na 1aa vez)..."
@@ -156,52 +156,52 @@ try {
     Write-Info "npm run build..."
     npm run build
     if ($LASTEXITCODE -ne 0) { throw "npm run build falhou (exit code $LASTEXITCODE)" }
-    Write-Ok "Build de produa?a?o pronto em dist/."
+    Write-Ok "Build de produaao pronto em dist/."
 
-    # 3/6 a?? Certificado de desenvolvimento
-    Write-Step "3/6 a?? Certificado de desenvolvimento (https://localhost:3000)"
-    Write-Info "Se esta for a 1aa vez nesta ma?quina, o Windows pode pedir para confirmar a instalaa?a?o do certificado."
+    # 3/6 - Certificado de desenvolvimento
+    Write-Step "3/6 - Certificado de desenvolvimento (https://localhost:3000)"
+    Write-Info "Se esta for a 1aa vez nesta maquina, o Windows pode pedir para confirmar a instalaaao do certificado."
     npx office-addin-dev-certs install
     if ($LASTEXITCODE -ne 0) { throw "Falha ao confiar no certificado de desenvolvimento (exit code $LASTEXITCODE)" }
     Write-Ok "Certificado confiado."
 
-    # 4/6 a?? Registrar o suplemento no PowerPoint
-    Write-Step "4/6 a?? Registrando o suplemento no PowerPoint"
-    Write-Info "Isso faz o bota?o 'newclaw' aparecer na guia HOME sem precisar de Upload My Add-in."
+    # 4/6 - Registrar o suplemento no PowerPoint
+    Write-Step "4/6 - Registrando o suplemento no PowerPoint"
+    Write-Info "Isso faz o botao 'newclaw' aparecer na guia HOME sem precisar de Upload My Add-in."
     npm run register
     if ($LASTEXITCODE -ne 0) {
-        Write-Warn "Na?o foi possa?vel registrar automaticamente (exit code $LASTEXITCODE)."
+        Write-Warn "Nao foi possavel registrar automaticamente (exit code $LASTEXITCODE)."
         Write-Info "Alternativa manual: PowerPoint > Inserir > Suplementos > Carregar Meu Suplemento > manifest.xml"
     } else {
-        Write-Ok "Suplemento registrado. Feche e reabra o PowerPoint para ver o bota?o 'newclaw'."
+        Write-Ok "Suplemento registrado. Feche e reabra o PowerPoint para ver o botao 'newclaw'."
     }
 
-    # 5/6 a?? Login no dashboard e gravaa?a?o do token
-    Write-Step "5/6 a?? Conectando ao dashboard do newclaw"
+    # 5/6 - Login no dashboard e gravaaao do token
+    Write-Step "5/6 - Conectando ao dashboard do newclaw"
     Write-Info "Servidor: $ServerUrl"
     $token = Get-DashboardToken $ServerUrl
     $configPath = Join-Path $AddinDir "config.local.json"
     $configJson = (@{ serverUrl = $ServerUrl; token = $token } | ConvertTo-Json)
     Write-JsonNoBom $configPath $configJson
-    Write-Ok "Configuraa?a?o salva em config.local.json."
+    Write-Ok "Configuraaao salva em config.local.json."
 
-    # Reempacota o build para incluir o config.local.json reca?m-gerado
-    Write-Info "Recompilando para incluir a configuraa?a?o..."
+    # Reempacota o build para incluir o config.local.json recam-gerado
+    Write-Info "Recompilando para incluir a configuraaao..."
     npm run build
     if ($LASTEXITCODE -ne 0) { throw "npm run build (2aa passada) falhou (exit code $LASTEXITCODE)" }
 
-    # 6/6 a?? Servidor esta?tico via PM2
-    Write-Step "6/6 a?? Subindo o servidor do suplemento"
+    # 6/6 - Servidor estatico via PM2
+    Write-Step "6/6 - Subindo o servidor do suplemento"
     if ($NoPm2) {
         Write-Info "Pulado (-NoPm2). Rode manualmente com: npm run serve"
     } elseif (-not (Test-Command "pm2")) {
-        Write-Warn "PM2 na?o encontrado no PATH. Instale com 'npm install -g pm2' ou rode manualmente: npm run serve"
+        Write-Warn "PM2 nao encontrado no PATH. Instale com 'npm install -g pm2' ou rode manualmente: npm run serve"
     } else {
-        pm2 delete $Pm2Name 2>&1 | Out-Null
+        try { pm2 delete $Pm2Name 2>&1 | Out-Null } catch { }
         pm2 start server.js --name $Pm2Name --cwd $AddinDir
         if ($LASTEXITCODE -ne 0) {
-            Write-Warn "Na?o foi possa?vel subir o servidor via PM2 (exit code $LASTEXITCODE)."
-            Write-Info "Verifique se a porta 3000 ja? esta? em uso por outro processo (ex: 'npm run dev-server' rodando em outro terminal)."
+            Write-Warn "Nao foi possavel subir o servidor via PM2 (exit code $LASTEXITCODE)."
+            Write-Info "Verifique se a porta 3000 ja esta em uso por outro processo (ex: 'npm run dev-server' rodando em outro terminal)."
         } else {
             pm2 save | Out-Null
             Write-Ok "Servidor rodando via PM2 como '$Pm2Name' em https://localhost:3000."
@@ -213,14 +213,15 @@ try {
     Write-Host "   Suplemento newclaw instalado!" -ForegroundColor Green
     Write-Host "  ================================================" -ForegroundColor Green
     Write-Host ""
-    Write-Host "    Abra (ou reabra) o PowerPoint e procure o bota?o 'newclaw' na guia HOME." -ForegroundColor Cyan
+    Write-Host "    Abra (ou reabra) o PowerPoint e procure o botao 'newclaw' na guia HOME." -ForegroundColor Cyan
     Write-Host "    Gerenciar o servidor: pm2 logs $Pm2Name  /  pm2 restart $Pm2Name" -ForegroundColor Cyan
     Write-Host ""
     Pop-Location
 } catch {
     Pop-Location -ErrorAction SilentlyContinue
-    Write-Fail "Instalaa?a?o falhou: $_"
+    Write-Fail "Instalaaao falhou: $_"
     Pause-Exit 1
 }
+
 
 
