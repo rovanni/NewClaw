@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 #  newclaw — Instalador do Suplemento PowerPoint
 #
 #  Automatiza tudo que normalmente seria feito na mão:
@@ -146,7 +146,8 @@ try {
     Write-Ok "Node.js: $(node --version)"
 
     # 2/6 — Dependências + build de produção
-    Write-Step "2/6 — Instalando dependências e compilando"
+    Write-Step "2/6 - Instalando dependências e compilando"
+
     Write-Info "npm install (pode demorar na 1ª vez)..."
     npm install
     if ($LASTEXITCODE -ne 0) { throw "npm install falhou (exit code $LASTEXITCODE)" }

@@ -113,7 +113,7 @@ export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = 
                 child = spawnFn('powershell.exe', args, {
                     cwd: addinDir,
                     windowsHide: true,
-                    env: { ...process.env, NEWCLAW_TOKEN: token }
+                    env: { ...process.env, NODE_ENV: 'development', NEWCLAW_TOKEN: token }
                 });
             } catch (err) {
                 job.status = 'failed';
@@ -177,7 +177,7 @@ export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = 
                 '-File', uninstallScript
             ], {
                 cwd: addinDir,
-                env: { ...process.env, NEWCLAW_TOKEN: token },
+                env: { ...process.env, NODE_ENV: 'development', NEWCLAW_TOKEN: token },
                 detached: false
             });
 
