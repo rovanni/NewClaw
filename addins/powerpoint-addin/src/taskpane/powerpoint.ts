@@ -38,6 +38,71 @@ function getSessionId(): string {
 }
 
 /**
+ * Captura o contexto do slide ativo usando a API Office.js.
+ * Retorna informacoes sobre o slide atual (numero, total, textos) para
+ * que o agente saiba sobre o que o usuario esta trabalhando.
+ * Falhas sao silenciadas — o chat funciona normalmente sem contexto.
+ */
+async function getSlideContext(): Promise<Record<string, unknown> | null> {
+  try {
+    return await PowerPoint.run(async (context) => {
+      const slides = context.presentation.slides;
+      slides.load("items/id");
+      await context.sync();
+
+      const totalSlides = slides.items.length;
+
+      // Identifica o slide ativo
+      const activeSlide = context.presentation.getSelectedSlides();
+      activeSlide.load("items/id");
+      await context.sync();
+
+      let currentSlideNumber = 1;
+      if (activeSlide.items.length > 0) {
+        const activeId = activeSlide.items[0].id;
+        for (let i = 0; i < slides.items.length; i++) {
+          if (slides.items[i].id === activeId) {
+            currentSlideNumber = i + 1;
+            break;
+          }
+        }
+      }
+
+      // Captura textos do slide ativo
+      const slideTexts: string[] = [];
+      if (activeSlide.items.length > 0) {
+        const slide = activeSlide.items[0];
+        const shapes = slide.shapes;
+        shapes.load("items/name,items/textFrame/textRange/text,items/textFrame/hasText");
+        await context.sync();
+
+        for (const shape of shapes.items) {
+          try {
+            if (shape.textFrame && shape.textFrame.hasText) {
+              const text = shape.textFrame.textRange.text.trim();
+              if (text) {
+                slideTexts.push(text);
+              }
+            }
+          } catch {
+            // Shapes sem textFrame (imagens, graficos) — ignora silenciosamente
+          }
+        }
+      }
+
+      return {
+        currentSlide: currentSlideNumber,
+        totalSlides,
+        slideTexts: slideTexts.length > 0 ? slideTexts : undefined,
+      };
+    });
+  } catch {
+    // API indisponivel ou erro de permissao — nao bloqueia o chat
+    return null;
+  }
+}
+
+/**
  * Carrega servidor/token gerados pelo install.ps1 (config.local.json, servido junto do
  * bundle) na primeira execução. localStorage sempre tem prioridade — isso só preenche o
  * que o usuário ainda não configurou manualmente pelo painel de configurações.
@@ -123,10 +188,16 @@ async function sendMessage(): Promise<void> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
+    const slideContext = await getSlideContext();
+
     const res = await fetch(`${serverUrl}/api/chat`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ message, sessionId: getSessionId() }),
+      body: JSON.stringify({
+        message,
+        sessionId: getSessionId(),
+        slideContext: slideContext || undefined,
+      }),
     });
 
     const data = (await res.json()) as ChatApiResponse;

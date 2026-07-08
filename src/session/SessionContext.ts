@@ -61,7 +61,8 @@ export class SessionContext {
         systemPrompt: string,
         currentMessage: string,
         skillsBlock?: string,
-        contextTier?: import('../loop/ContextBuilder').ContextTier
+        contextTier?: import('../loop/ContextBuilder').ContextTier,
+        channelMetadata?: Record<string, unknown>
     ): Promise<SessionContextResult> {
         const stats = {
             fromCheckpoint: false,
@@ -100,7 +101,35 @@ export class SessionContext {
         // 4. Build state block (short, essential info)
         const now = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'full', timeStyle: 'short' });
         let stateBlock = `[ESTADO]\nData: ${now}`;
-        
+
+        // Injeta contexto do aplicativo hospedeiro quando presente.
+        // Atualmente apenas o suplemento PowerPoint define hostApp='powerpoint'.
+        // Canais como Telegram, Discord, dashboard web NAO possuem hostApp.
+        const HOST_APP_HINTS: Record<string, string> = {
+            powerpoint: 'Suplemento Microsoft PowerPoint — o usuario esta interagindo de dentro do PowerPoint. '
+                + 'Quando o usuario mencionar "tema", "slide", "apresentacao", "design" ou termos similares, '
+                + 'presuma que se refere ao contexto do PowerPoint aberto. '
+                + 'Voce pode gerar e inserir slides .pptx diretamente na apresentacao ativa via send_document.',
+        };
+        const hostApp = channelMetadata?.hostApp as string | undefined;
+        if (hostApp && HOST_APP_HINTS[hostApp]) {
+            stateBlock += `\nCanal: ${HOST_APP_HINTS[hostApp]}`;
+            
+            // Injeta as informacoes detalhadas do slideContext se existirem
+            const slideContext = channelMetadata?.slideContext as { currentSlide?: number, totalSlides?: number, slideTexts?: string[] } | undefined;
+            if (slideContext) {
+                stateBlock += `\n\n[CONTEXTO DO POWERPOINT ABERTO]`;
+                if (slideContext.currentSlide && slideContext.totalSlides) {
+                    stateBlock += `\nSlide ativo: ${slideContext.currentSlide} de ${slideContext.totalSlides}`;
+                }
+                if (slideContext.slideTexts && slideContext.slideTexts.length > 0) {
+                    stateBlock += `\nTextos no slide ativo:\n- ${slideContext.slideTexts.join('\n- ')}`;
+                } else {
+                    stateBlock += `\nTextos no slide ativo: (Nenhum texto legivel encontrado)`;
+                }
+            }
+        }
+
         const activeFiles = this.sessionManager.getActiveFilesBlock(key);
         if (activeFiles) {
             stateBlock += `\n\n${activeFiles}`;

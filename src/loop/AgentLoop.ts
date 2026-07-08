@@ -1309,7 +1309,8 @@ export class AgentLoop {
             buildMasterPrompt(chatProfile.category),
             userText,
             skillContext,
-            contextTier
+            contextTier,
+            channelContext?.metadata
         );
         const loopMessages = sessionMessages;
         // Context growth guard helpers — defined here so loopMessages is in scope.

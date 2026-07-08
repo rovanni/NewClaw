@@ -99,6 +99,7 @@ export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = 
             const installScript = path.join(addinDir, 'install.ps1');
 
             const args = [
+                '-WindowStyle', 'Hidden',
                 '-ExecutionPolicy', 'Bypass',
                 '-NonInteractive',
                 '-File', installScript,
@@ -173,10 +174,12 @@ export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = 
             const uninstallScript = path.join(addinDir, 'uninstall.ps1');
 
             const child = spawnFn('powershell.exe', [
+                '-WindowStyle', 'Hidden',
                 '-ExecutionPolicy', 'Bypass',
                 '-File', uninstallScript
             ], {
                 cwd: addinDir,
+                windowsHide: true,
                 env: { ...process.env, NODE_ENV: 'development', NEWCLAW_TOKEN: token },
                 detached: false
             });
@@ -205,7 +208,7 @@ export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = 
             }
 
             // Verifica se o pm2 newclaw-pptx-addin existe
-            const child = spawnFn('pm2', ['show', 'newclaw-pptx-addin']);
+            const child = spawnFn('pm2', ['show', 'newclaw-pptx-addin'], { windowsHide: true });
 
             let responded = false;
             child.on('close', (code: number) => {

@@ -114,6 +114,20 @@ export function createChatRouter(ctx: DashboardContext): Router {
             const webAdapter = ctx.controller.getWebAdapter();
             const requestId = crypto.randomUUID();
 
+            // Detecta o canal de origem pelo prefixo do sessionId.
+            // O suplemento PowerPoint gera sessionIds com prefixo 'powerpoint-addin-'.
+            // Outros canais (dashboard web, Telegram, etc.) nao possuem esse prefixo.
+            const metadata: Record<string, unknown> = {};
+            if (sessionId.startsWith('powerpoint-addin-')) {
+                metadata.hostApp = 'powerpoint';
+                // slideContext e enviado pelo add-in com info do slide ativo (numero, total, textos).
+                // So existe quando a mensagem vem do suplemento PowerPoint.
+                const slideContext = req.body?.slideContext;
+                if (slideContext && typeof slideContext === 'object') {
+                    metadata.slideContext = slideContext;
+                }
+            }
+
             const normalizedMsg: NormalizedMessage = {
                 messageId: requestId,
                 channel: 'web',
@@ -123,6 +137,7 @@ export function createChatRouter(ctx: DashboardContext): Router {
                 attachments: attachments.length > 0 ? attachments : undefined,
                 rawContext: requestId,
                 chatId: sessionId,
+                metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
             };
 
             // Mesmo pipeline usado por Telegram/Discord/WhatsApp/Signal: MessageBus enfileira
