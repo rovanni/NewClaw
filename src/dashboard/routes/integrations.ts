@@ -207,10 +207,15 @@ export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = 
             // Verifica se o pm2 newclaw-pptx-addin existe
             const child = spawnFn('pm2', ['show', 'newclaw-pptx-addin']);
 
+            let responded = false;
             child.on('close', (code: number) => {
+                if (responded) return;
+                responded = true;
                 res.json({ installed: code === 0 });
             });
             child.on('error', () => {
+                if (responded) return;
+                responded = true;
                 res.json({ installed: false });
             });
 
