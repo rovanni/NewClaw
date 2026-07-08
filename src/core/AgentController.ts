@@ -8,6 +8,7 @@
 import Database from 'better-sqlite3';
 import { ProviderFactory } from './ProviderFactory';
 import { AgentLoop } from '../loop/AgentLoop';
+import type { ChannelContext } from '../loop/agentLoopTypes';
 import { MemoryManager } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
 import { SkillLoader } from '../skills/SkillLoader';
@@ -437,7 +438,18 @@ export class AgentController {
                     chatId: string; channel: string; prompt: string; taskId: number; actionType: string; label: string;
                 };
                 log.info(`[EVENTBUS] Processing scheduler.trigger #${taskId} → chat ${chatId} (${channel})`);
-                const result = await this.agentLoop.process(chatId, prompt);
+                // BUG REAL (microauditoria de continuidade conversacional, 2026-07-08): antes
+                // desta correção, process() era chamado SEM ChannelContext — o AgentLoop então
+                // caía no fallback 'telegram' pra montar a sessionKey (ver AgentLoop.ts), então
+                // um agendamento em qualquer canal != telegram (channel é uma coluna real por
+                // tarefa — ver SchedulerService.ts, suporta discord/signal/whatsapp/web) lia e
+                // gravava o histórico da conversa sob a identidade ERRADA (telegram:chatId em
+                // vez de <canal real>:chatId), quebrando a continuidade do próprio agendamento
+                // e arriscando poluir a sessão humana real de outro canal caso o chatId colida.
+                // A entrega final (sendToChat abaixo) já usava o channel real corretamente —
+                // essa era exatamente a assimetria leitura/escrita que a auditoria pediu pra achar.
+                const schedulerContext: ChannelContext = { channel, chatId, userId: chatId, correlationId: event.correlationId };
+                const result = await this.agentLoop.process(chatId, prompt, chatId, schedulerContext);
                 await this.messageBus.sendToChat(channel as import('../channels/ChannelAdapter').ChannelType, chatId, {
                     text: typeof result === 'string' ? result : result.text,
                     format: 'markdown',

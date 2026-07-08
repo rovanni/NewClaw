@@ -11,6 +11,7 @@
  */
 
 import { SessionManager, SessionKey } from './SessionManager';
+import { composeSessionKey } from './SessionKeyFactory';
 import { MemoryManager } from '../memory/MemoryManager';
 import { TranscriptEntry } from './SessionTranscript';
 import { createLogger } from '../shared/AppLogger';
@@ -48,7 +49,7 @@ export class SessionLearner {
      * Call this periodically (e.g., after each assistant response or on checkpoint).
      */
     async learnFromSession(key: SessionKey): Promise<SessionLearningResult> {
-        const sid = `${key.channel}:${key.userId}`;
+        const sid = composeSessionKey(key);
         const result: SessionLearningResult = {
             factsExtracted: 0,
             nodesCreated: 0,
@@ -276,7 +277,7 @@ export class SessionLearner {
      * Get learning stats for a session.
      */
     getLearningStats(key: SessionKey): { lastProcessedSeq: number } {
-        const sid = `${key.channel}:${key.userId}`;
+        const sid = composeSessionKey(key);
         return { lastProcessedSeq: this.processedSeqs.get(sid) || 0 };
     }
 }

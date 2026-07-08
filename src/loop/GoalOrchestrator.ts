@@ -30,6 +30,7 @@ import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
+import { composeSessionKey, parseSessionKey } from '../session/SessionKeyFactory';
 import type { WorkflowEngine } from './WorkflowEngine';
 
 const log = createLogger('GoalOrchestrator');
@@ -130,9 +131,9 @@ export class GoalOrchestrator {
         // TTL cleanup a cada processamento (query lightweight)
         this.goalStore.expireStale();
 
-        const sessionKey = context
-            ? `${context.channel}:${context.userId ?? userId}`
-            : `unknown:${userId}`;
+        const sessionKey = composeSessionKey(
+            context ? { channel: context.channel, userId: context.userId ?? userId } : { channel: 'unknown', userId }
+        );
 
         // ── Resolver clarificação pendente ──────────────────────────────────
         const pending = this.pendingClarifications.get(sessionKey);
@@ -527,9 +528,9 @@ export class GoalOrchestrator {
         log.info(`[GoalOrchestrator] resuming goal=${goal.id} after auth txn=${txnId}`);
 
         // Reconstrói channelContext a partir do sessionKey do goal (ex: "telegram:userId")
-        const [channel, sessionUserId] = goal.sessionKey.split(':');
+        const { channel, userId: sessionUserId } = parseSessionKey(goal.sessionKey);
         const channelContext: ChannelContext = {
-            channel: channel ?? 'unknown',
+            channel: channel || 'unknown',
             chatId: goal.conversationId,
             userId: sessionUserId,
         };

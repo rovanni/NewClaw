@@ -12,6 +12,7 @@
 import crypto from 'crypto';
 import { AgentLoop } from '../loop/AgentLoop';
 import { SessionManager, type SessionKey } from '../session/SessionManager';
+import { composeSessionKey } from '../session/SessionKeyFactory';
 import type { OnboardingService } from '../services/OnboardingService';
 import {
     ChannelAdapter,
@@ -292,7 +293,7 @@ export class MessageBus {
         });
 
         // Chave da fila: por canal + usuário — preserva independência entre usuários
-        const queueId = `${msg.channel}:${msg.userId}`;
+        const queueId = composeSessionKey({ channel: msg.channel, userId: msg.userId });
 
         // Comandos de prioridade máxima (ex: /cancelar) bypassam a fila completamente.
         // Executam imediatamente, cancelam a operação em curso e descartam tarefas pendentes.
@@ -349,7 +350,7 @@ export class MessageBus {
      */
     private async processMessageCore(msg: NormalizedMessage, correlationId: string): Promise<void> {
         const sessionKey: SessionKey = { channel: msg.channel, userId: msg.userId };
-        const typingKey = `${msg.channel}:${msg.userId}`;
+        const typingKey = composeSessionKey(sessionKey);
         const adapter = this.adapters.get(msg.channel);
 
         // Typing indicator só começa quando a tarefa realmente inicia (não durante espera na fila)
@@ -445,7 +446,7 @@ export class MessageBus {
             // 4. Envia resposta antes de gravar no DB — erro de DB nunca bloqueia o usuário
             if (adapter) {
                 // H1 observabilidade: correlaciona mensagem recebida com resposta enviada
-                log.info(`[USER-MESSAGE] message_id=${msg.messageId} session=${msg.channel}:${msg.userId} correlationId=${correlationId} response_len=${responseText?.length ?? 0} duration_ms=${duration}`);
+                log.info(`[USER-MESSAGE] message_id=${msg.messageId} session=${composeSessionKey(sessionKey)} correlationId=${correlationId} response_len=${responseText?.length ?? 0} duration_ms=${duration}`);
                 const normalizedResponse: NormalizedResponse = {
                     text: responseText || 'Desculpe, não consegui gerar uma resposta.',
                     format: 'markdown',
@@ -481,6 +482,16 @@ export class MessageBus {
                     msg.rawContext
                 ).catch(() => {});
             }
+
+            // MICROAUDITORIA (continuidade conversacional, 2026-07-08): o caminho de sucesso
+            // sempre grava a resposta do assistente na transcript (linha ~457 acima); este
+            // catch mandava a mensagem de erro/timeout pro usuário mas NUNCA a persistia. Se o
+            // turno seguinte for uma confirmação curta ("sim"), o modelo lê a transcript e vê
+            // a pergunta do usuário sem NENHUMA resposta do assistente depois dela — não hávia
+            // como saber que o turno anterior tinha falhado (o humano viu o erro; o histórico
+            // que o modelo lê, não). Grava a mesma mensagem de erro mostrada ao usuário para
+            // que o próximo turno tenha o antecedente correto.
+            await this.sessionManager.recordAssistantMessage(sessionKey, userMessage, { model: 'newclaw', status: 'error' }).catch(() => {});
         } finally {
             this.stopTypingIndicator(typingKey);
         }

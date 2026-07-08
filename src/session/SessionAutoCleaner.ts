@@ -15,6 +15,7 @@
  */
 
 import { SessionManager, type SessionKey } from '../session/SessionManager';
+import { fromFileSafeId, parseSessionKey } from '../session/SessionKeyFactory';
 import { eventBus } from '../core/EventBus';
 import { createLogger } from '../shared/AppLogger';
 import fs from 'fs';
@@ -164,11 +165,12 @@ export class SessionAutoCleaner {
 
                 if (stat.size < this.config.compactSizeThreshold) continue;
 
-                const sessionId = file.replace('.jsonl', '');
-                const sessionKey: SessionKey = {
-                    channel: sessionId.split(':')[0],
-                    userId: sessionId.split(':').slice(1).join(':'),
-                };
+                // Arquivo no disco está no formato file-safe (toFileSafeId — ':' virou '~',
+                // ver SessionKeyFactory). fromFileSafeId desfaz isso antes de parsear de volta
+                // em {channel, userId}; parseSessionKey delimita no PRIMEIRO ':' (não trunca
+                // um userId que contenha ':').
+                const sessionId = fromFileSafeId(file.replace('.jsonl', ''));
+                const sessionKey: SessionKey = parseSessionKey(sessionId);
 
                 try {
                     const result = await this.sessionManager.compactSession(sessionKey);

@@ -7,9 +7,10 @@
  * - Rich event metadata (status, duration, tokens)
  * - Checkpoint index for fast replay since last checkpoint
  * 
- * Each session gets:
- *   telegram:8071707790.jsonl  → append-only event log
- *   telegram:8071707790.idx.json → seek index + stats
+ * Each session gets (nome de arquivo sanitizado via SessionKeyFactory.toFileSafeId — ':' vira
+ * '~' porque ':' num nome de arquivo é o separador de Alternate Data Stream no NTFS):
+ *   telegram~8071707790.jsonl  → append-only event log
+ *   telegram~8071707790.idx.json → seek index + stats
  */
 
 import fs from 'fs';
@@ -17,6 +18,7 @@ import path from 'path';
 import { mkdirSync, existsSync } from 'fs';
 import readline from 'readline';
 import { createLogger } from '../shared/AppLogger';
+import { toFileSafeId } from './SessionKeyFactory';
 const log = createLogger('Sessiontranscript');
 
 export type SessionEventType = 'user' | 'assistant' | 'system' | 'tool_call' | 'tool_result' | 'checkpoint';
@@ -71,8 +73,14 @@ export class SessionTranscript {
     constructor(transcriptDir: string, sessionId: string) {
         this.transcriptDir = transcriptDir;
         this.sessionId = sessionId;
-        this.filePath = path.join(transcriptDir, `${sessionId}.jsonl`);
-        this.indexPath = path.join(transcriptDir, `${sessionId}.idx.json`);
+        // toFileSafeId: sessionId é `channel:userId` — ':' num nome de arquivo é o separador de
+        // Alternate Data Stream no NTFS (ver SessionKeyFactory.toFileSafeId). Usar o id bruto
+        // aqui faz o Windows gravar o conteúdo real numa ADS anexada a um arquivo-base vazio
+        // chamado só "telegram"/"web", invisível para qualquer `fs.readdirSync` (confirmado em
+        // produção: SessionAutoCleaner nunca compactou nenhuma sessão numa instalação Windows).
+        const safeId = toFileSafeId(sessionId);
+        this.filePath = path.join(transcriptDir, `${safeId}.jsonl`);
+        this.indexPath = path.join(transcriptDir, `${safeId}.idx.json`);
         this.index = {
             lastOffset: 0,
             lastSeq: 0,
@@ -90,6 +98,7 @@ export class SessionTranscript {
         if (this.initialized) return;
 
         mkdirSync(this.transcriptDir, { recursive: true });
+        this.migrateLegacyColonPath();
 
         // Try loading index first
         if (existsSync(this.indexPath)) {
@@ -111,6 +120,54 @@ export class SessionTranscript {
         this.initialized = true;
 
         log.info(`Initialized: ${this.sessionId} (seq: ${this.seqCounter}, entries: ${this.index.totalEntries}, checkpoints: ${this.index.checkpoints.length})`);
+    }
+
+    /**
+     * Migração de dado existente: sessões criadas antes do fix de toFileSafeId gravaram no path
+     * bruto `${sessionId}.jsonl` (com ':' — no Windows isso é uma NTFS Alternate Data Stream
+     * anexada a um arquivo-base "telegram"/"web", não um arquivo normal). O processo sempre
+     * conseguiu ler essa ADS de volta (mesmo path bruto usado para ler e escrever), então o
+     * histórico de conversas reais do usuário está lá — só nunca apareceu em listagens de
+     * diretório. Antes de abrir o novo path seguro, verifica se ele já existe; se não existir
+     * mas o path legado (bruto) existir, migra o .jsonl e o .idx.json uma única vez.
+     *
+     * VERIFICADO NA PRÁTICA (não apenas assumido): a primeira versão deste fix usava
+     * `fs.renameSync` — falha com EINVAL ao mover de uma ADS pra um arquivo normal no Windows
+     * (confirmado rodando contra uma cópia real dos dados de produção do usuário). `fs.copyFileSync`
+     * falha da MESMA forma (mesma limitação de baixo nível do Windows). A combinação que
+     * funciona, testada e confirmada byte-a-byte: `readFileSync` (lê a ADS inteira pra memória)
+     * + `writeFileSync` (grava normal no path novo) + `unlinkSync` (remove a ADS antiga —
+     * também testado, funciona). Sem essa correção, a "migração" silenciosamente falhava,
+     * engolia o erro como não-fatal e seguia com um arquivo NOVO VAZIO — ou seja, o primeiro
+     * deploy deste fix teria zerado a visão da aplicação sobre o histórico de toda sessão
+     * existente (o dado em si não seria destruído — continuaria na ADS antiga — mas ficaria
+     * inacessível pra aplicação, que é exatamente o mesmo tipo de perda que este fix existe
+     * pra resolver).
+     */
+    private migrateLegacyColonPath(): void {
+        if (!this.sessionId.includes(':')) return; // nada a migrar (id já não tem ':')
+        const legacyFilePath = path.join(this.transcriptDir, `${this.sessionId}.jsonl`);
+        const legacyIndexPath = path.join(this.transcriptDir, `${this.sessionId}.idx.json`);
+
+        if (!existsSync(this.filePath) && existsSync(legacyFilePath)) {
+            try {
+                const content = fs.readFileSync(legacyFilePath);
+                fs.writeFileSync(this.filePath, content);
+                fs.unlinkSync(legacyFilePath);
+                log.info(`Migrated legacy session file (colon path → file-safe path, ${content.length} bytes): ${this.sessionId}`);
+            } catch (err) {
+                log.warn(`Failed to migrate legacy session file for ${this.sessionId} (non-fatal, continuing with fresh file): ${(err as Error).message}`);
+            }
+        }
+        if (!existsSync(this.indexPath) && existsSync(legacyIndexPath)) {
+            try {
+                const content = fs.readFileSync(legacyIndexPath);
+                fs.writeFileSync(this.indexPath, content);
+                fs.unlinkSync(legacyIndexPath);
+            } catch (err) {
+                log.warn(`Failed to migrate legacy session index for ${this.sessionId} (non-fatal): ${(err as Error).message}`);
+            }
+        }
     }
 
     /**

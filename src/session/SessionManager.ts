@@ -12,6 +12,7 @@
 import { MemoryManager } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
 import { SessionTranscript, TranscriptEntry, TranscriptMeta } from './SessionTranscript';
+import { composeSessionKey } from './SessionKeyFactory';
 import { ContextCompressor } from '../loop/ContextCompressor';
 import { ProviderFactory } from '../core/ProviderFactory';
 import type { CMIEngine } from '../memory/conversational/CMIEngine';
@@ -190,7 +191,7 @@ export class SessionManager {
     }
 
     private sessionKey(key: SessionKey): string {
-        return `${key.channel}:${key.userId}`;
+        return composeSessionKey(key);
     }
 
     private conversationId(key: SessionKey): string {

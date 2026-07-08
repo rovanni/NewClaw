@@ -44,6 +44,7 @@ import { resolveInstallCommand } from './planning/resolveInstallCommand';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext, ContextAwareTool } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
+import { parseSessionKey } from '../session/SessionKeyFactory';
 
 const log = createLogger('GoalExecutionLoop');
 
@@ -515,8 +516,8 @@ export class GoalExecutionLoop {
         initialFeedback?: string,
     ): Promise<GoalResult> {
         // Telemetria: registra goal ativo para detectar compressão concorrente
-        const [goalChannel, goalUserId] = goal.sessionKey.split(':');
-        const goalSessionKey = { channel: goalChannel ?? 'unknown', userId: goalUserId ?? 'unknown' };
+        const { channel: goalChannel, userId: goalUserId } = parseSessionKey(goal.sessionKey);
+        const goalSessionKey = { channel: goalChannel || 'unknown', userId: goalUserId || 'unknown' };
         this.sessionManager?.setActiveGoal(goalSessionKey, goal.id);
 
         try {
@@ -1519,8 +1520,8 @@ export class GoalExecutionLoop {
                     evidenceDirective,
                     cognitiveBlock ? `\n${cognitiveBlock}` : '',
                 ].join('');
-                const [goalCh, sessionUserId] = goal.sessionKey.split(':');
-                const stepSessionKey = { channel: goalCh ?? 'unknown', userId: sessionUserId ?? goal.conversationId };
+                const { channel: goalCh, userId: sessionUserId } = parseSessionKey(goal.sessionKey);
+                const stepSessionKey = { channel: goalCh || 'unknown', userId: sessionUserId || goal.conversationId };
                 this.sessionManager?.resetTurnToolCounts(stepSessionKey);
                 // FIX C + P3-DEDUP: captura sends diferidos com deduplicação por file_path.
                 // deferSendDocument só aceita um artefato por caminho único nesta execução.
@@ -2402,9 +2403,9 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
         // e não tente re-gerar ou re-ler de um path incorreto.
         try {
             if (this.sessionManager && goal.sessionKey) {
-                const [ch, uid] = goal.sessionKey.split(':');
+                const { channel: ch, userId: uid } = parseSessionKey(goal.sessionKey);
                 const deliveredBlock = this.sessionManager.getDeliveredArtifactsBlock(
-                    { channel: ch ?? 'unknown', userId: uid ?? 'unknown' }
+                    { channel: ch || 'unknown', userId: uid || 'unknown' }
                 );
                 if (deliveredBlock) {
                     parts.push(deliveredBlock);
