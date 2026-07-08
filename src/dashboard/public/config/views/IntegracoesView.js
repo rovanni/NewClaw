@@ -14,7 +14,7 @@ export function render(container) {
 
       <div class="provider-grid" style="margin-top: 24px;">
         
-        <div class="provider-card" style="display: flex; flex-direction: column; justify-content: space-between;">
+        <div class="provider-card wide" style="display: flex; flex-direction: column; justify-content: space-between;">
           <div>
             <div style="margin-bottom: 8px;">
               <span style="font-size: 1.1rem; font-weight: 600;">${t('pptx_addin_title')}</span>
