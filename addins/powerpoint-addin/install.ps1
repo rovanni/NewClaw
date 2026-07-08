@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #  newclaw — Instalador do Suplemento PowerPoint
 #
 #  Automatiza tudo que normalmente seria feito na mão:
@@ -221,3 +221,4 @@ try {
     Write-Fail "Instalação falhou: $_"
     Pause-Exit 1
 }
+

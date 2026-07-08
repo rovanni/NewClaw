@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #  newclaw — Desinstalador do Suplemento PowerPoint
 #
 #  Desfaz o que foi feito na instalação:
@@ -32,3 +32,4 @@ try {
 Write-Host "Desinstalação concluída." -ForegroundColor Cyan
 Pop-Location
 exit 0
+
