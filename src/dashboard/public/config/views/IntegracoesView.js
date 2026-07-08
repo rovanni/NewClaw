@@ -27,7 +27,7 @@ export function render(container) {
           </div>
           <div style="display: flex; flex-direction: column; gap: 12px; align-items: stretch;">
             ${!isWindows ? `
-              <div style="font-size: 0.85rem; color: #ffb86c; background: rgba(255,184,108,0.1); padding: 12px; border-radius: 4px; line-height: 1.5; text-align: left;">
+              <div style="font-size: 0.85rem; color: var(--danger); background: var(--danger-bg); padding: 12px; border-radius: 4px; line-height: 1.5; text-align: left;">
                 ⚠️ ${t('pptx_remote_not_supported')}
               </div>
               <button class="btn btn-primary" disabled style="opacity: 0.5; align-self: flex-end;">
