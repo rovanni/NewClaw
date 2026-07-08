@@ -1303,7 +1303,22 @@ export class AgentLoop {
             'minimal';
         log.info(`[${this.ts()}] [CONTEXT-TIER] category=${intentDecision.category} → tier=${contextTier}`);
 
-        const sessionKey: SessionKey = { channel: 'telegram', userId: conversationId };
+        // BUG REAL (log 2026-07-08, suplemento PowerPoint, sessão web:powerpoint-addin-...):
+        // channel estava hardcoded como 'telegram' independente do canal real da conversa.
+        // SessionManager chaveia sessões por `${channel}:${userId}` (SessionManager.ts:193) —
+        // MessageBus grava com o channel real (ex.: "web"), mas aqui a leitura ia para uma
+        // chave diferente ("telegram:<mesmoUserId>"), que nunca teve nada escrito. Resultado:
+        // buildLLMMessages sempre via "0 recent msgs" para qualquer canal != telegram (web,
+        // discord, signal, whatsapp) — o modelo perdia toda a transcript da conversa entre
+        // turnos. Sintoma observado: usuário pediu para aplicar fundo branco, assistente
+        // ofereceu rodar um script e perguntou "quer que eu execute agora?", usuário respondeu
+        // "sim", e o modelo — sem ver a pergunta anterior no contexto — respondeu apenas
+        // "Estou pronto. Como posso ajudar...", sem executar nada. Só passava despercebido no
+        // Telegram porque lá o canal real também é 'telegram' (TelegramAdapter.ts), coincidindo
+        // com o valor fixo. Fix: usar o canal real do turno, com 'telegram' como fallback apenas
+        // quando não há ChannelContext (ex.: AgentController.ts scheduler, que já não propaga
+        // contexto hoje).
+        const sessionKey: SessionKey = { channel: channelContext?.channel ?? 'telegram', userId: conversationId };
         const { messages: sessionMessages } = await this.sessionContext.buildLLMMessages(
             sessionKey,
             buildMasterPrompt(chatProfile.category),

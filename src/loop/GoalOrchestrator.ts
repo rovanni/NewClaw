@@ -288,11 +288,20 @@ export class GoalOrchestrator {
             // para que follow-ups recebam o tópico correto como contexto.
             // Sem isso, "Busque os dados do river?" (termina em '?') vai pelo AgentLoop,
             // e "Quero dados atuais!" chega sem saber que o assunto era RIVER.
-            // PRESERVAÇÃO: não sobrescreve se há um GOAL recente (sucesso ou falha) na janela.
-            // Sem isso, a resposta ao texto secundário apaga o contexto do goal falho e
-            // o follow-up ("Conseguiu criar os slides?") perde a referência ao goal anterior.
+            // PRESERVAÇÃO: não sobrescreve se há um GOAL FALHO recente na janela — sem isso, a
+            // resposta ao texto secundário apaga o contexto do goal falho e o follow-up
+            // ("Conseguiu criar os slides?") perde a referência ao goal anterior.
+            // Restrito a success===false (antes cobria "sucesso ou falha" indiscriminadamente):
+            // log real 2026-07-08 mostrou um goal BEM-SUCEDIDO (aula IPv4/IPv6, arquivo já
+            // entregue) travando essa entrada por até 5 min inteiros, mesmo depois de um turno
+            // AgentLoop inteiramente novo (pedido de fundo branco, com pergunta de confirmação
+            // pendente) já ter acontecido. Quando "sim" chegou 21s depois desse turno, o
+            // classificador recebeu como contexto o goal antigo de 177s atrás em vez da
+            // pergunta real que estava sendo confirmada. Um goal já entregue não tem mais nada
+            // pendente a preservar — deixar o AgentLoop mais recente atualizar a entrada é o
+            // comportamento correto nesse caso.
             const existingGoal = this.recentCompletedGoals.get(sessionKey);
-            const existingIsRecentGoal = existingGoal?.isGoal &&
+            const existingIsRecentGoal = existingGoal?.isGoal && existingGoal.success === false &&
                 (Date.now() - existingGoal.completedAt) < RECENT_GOAL_TTL_MS;
             const agentOutputText = typeof agentResult === 'string'
                 ? agentResult
