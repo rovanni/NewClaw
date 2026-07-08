@@ -152,6 +152,19 @@ const TRANSLATIONS = {
     sidebar_advanced: "Avançado",
     sidebar_update: "Atualização",
     sidebar_backup: "Backup",
+    sidebar_integrations: "Integrações",
+
+    // Integrations view
+    integrations_page_desc: "Instale e gerencie extensões e integrações do NewClaw com outros softwares.",
+    pptx_addin_title: "Suplemento PowerPoint",
+    pptx_addin_desc: "Gere slides e apresentações diretamente dentro do Microsoft PowerPoint usando o NewClaw.",
+    req_label: "Requisitos:",
+    req_pptx: "Windows, Office 365 ou 2019+, Node.js instalado.",
+    pptx_remote_not_supported: "A instalação remota neste servidor não é suportada. O suplemento precisa ser instalado localmente em um computador Windows com o PowerPoint disponível.",
+    pptx_install_unavailable: "Instalação Indisponível",
+    pptx_install_windows: "Instalar neste Servidor Windows",
+    pptx_install_confirm: "Deseja instalar o suplemento neste Servidor Windows? Isso compilará e registrará o add-in localmente.",
+    pptx_installing: "Instalando neste servidor Windows...",
 
     // Update view
     update_page_desc: "Verifique e aplique atualizações do NewClaw.",
@@ -505,6 +518,19 @@ const TRANSLATIONS = {
     sidebar_advanced: "Advanced",
     sidebar_update: "Update",
     sidebar_backup: "Backup",
+    sidebar_integrations: "Integrations",
+
+    // Integrations view
+    integrations_page_desc: "Install and manage NewClaw extensions and integrations with other software.",
+    pptx_addin_title: "PowerPoint Add-in",
+    pptx_addin_desc: "Generate slides and presentations directly inside Microsoft PowerPoint using NewClaw.",
+    req_label: "Requirements:",
+    req_pptx: "Windows, Office 365 or 2019+, Node.js installed.",
+    pptx_remote_not_supported: "Remote installation on this server is not supported. The add-in must be installed locally on a Windows computer with PowerPoint available.",
+    pptx_install_unavailable: "Installation Unavailable",
+    pptx_install_windows: "Install on this Windows Server",
+    pptx_install_confirm: "Do you want to install the add-in on this Windows Server? This will compile and register the add-in locally.",
+    pptx_installing: "Installing on this Windows server...",
 
     // Update view
     update_page_desc: "Check and apply NewClaw updates.",

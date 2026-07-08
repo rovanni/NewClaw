@@ -8,34 +8,34 @@ export function render(container) {
   container.innerHTML = `
     <div class="page-view">
       <div class="page-header">
-        <h1>🔌 Integrações</h1>
-        <p>Instale e gerencie extensões e integrações do NewClaw com outros softwares.</p>
+        <h1>🔌 ${t('sidebar_integrations')}</h1>
+        <p>${t('integrations_page_desc')}</p>
       </div>
 
-      <div class="model-cards" style="display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); margin-top: 24px;">
+      <div class="provider-grid" style="margin-top: 24px;">
         
-        <div class="m-card" style="display: flex; flex-direction: column; justify-content: space-between;">
+        <div class="provider-card" style="display: flex; flex-direction: column; justify-content: space-between;">
           <div>
-            <div class="m-card-header" style="margin-bottom: 8px;">
-              <span class="m-card-title" style="font-size: 1.1rem; font-weight: 600;">Suplemento PowerPoint</span>
+            <div style="margin-bottom: 8px;">
+              <span style="font-size: 1.1rem; font-weight: 600;">${t('pptx_addin_title')}</span>
             </div>
             <p style="font-size: 0.9rem; color: var(--text-soft); line-height: 1.4; margin-bottom: 16px;">
-              Gere slides e apresentações diretamente dentro do Microsoft PowerPoint usando o NewClaw.
+              ${t('pptx_addin_desc')}
               <br><br>
-              <strong>Requisitos:</strong> Windows, Office 365 ou 2019+, Node.js instalado.
+              <strong>${t('req_label')}</strong> ${t('req_pptx')}
             </p>
           </div>
           <div style="display: flex; flex-direction: column; gap: 12px; align-items: stretch;">
             ${!isWindows ? `
               <div style="font-size: 0.85rem; color: #ffb86c; background: rgba(255,184,108,0.1); padding: 12px; border-radius: 4px; line-height: 1.5; text-align: left;">
-                ⚠️ A instalação remota neste servidor não é suportada. O suplemento precisa ser instalado localmente em um computador Windows com o PowerPoint disponível.
+                ⚠️ ${t('pptx_remote_not_supported')}
               </div>
               <button class="btn btn-primary" disabled style="opacity: 0.5; align-self: flex-end;">
-                <span class="ni">⚡</span> Instalação Indisponível
+                <span class="ni">⚡</span> ${t('pptx_install_unavailable')}
               </button>
             ` : `
               <button class="btn btn-primary" id="btnInstallPptx" style="align-self: flex-end;">
-                <span class="ni">⚡</span> Instalar neste Servidor Windows
+                <span class="ni">⚡</span> ${t('pptx_install_windows')}
               </button>
             `}
           </div>
@@ -52,12 +52,12 @@ export function render(container) {
     btnInstall.addEventListener('click', async (e) => {
       const btn = e.currentTarget;
       
-      if (!confirm('Deseja instalar o suplemento neste Servidor Windows? Isso compilará e registrará o add-in localmente.')) {
+      if (!confirm(t('pptx_install_confirm'))) {
         return;
       }
 
       btn.disabled = true;
-      btn.innerHTML = '<span class="ni">⏳</span> Instalando neste servidor Windows...';
+      btn.innerHTML = `<span class="ni">⏳</span> ${t('pptx_installing')}`;
       
       try {
         const response = await (window.newclawFetch || fetch)('/api/integrations/install/powerpoint', {
@@ -67,7 +67,7 @@ export function render(container) {
         
         if (response.status === 409) {
           showToast(data.error, 'error');
-          btn.innerHTML = '<span class="ni">⚡</span> Instalar neste Servidor Windows';
+          btn.innerHTML = `<span class="ni">⚡</span> ${t('pptx_install_windows')}`;
           btn.disabled = false;
           return;
         }
