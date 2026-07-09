@@ -360,8 +360,23 @@ export class ExecCommandTool implements ToolExecutor {
         // windowsHide evita que cada comando abra uma janela de console visível no Windows —
         // o processo do bot roda sem console próprio (PM2/Tarefa Agendada), então sem essa
         // flag o Windows aloca uma janela nova a cada chamada, piscando na tela do usuário.
-        const execOptions: { timeout: number; cwd?: string; windowsHide: boolean } = { timeout, windowsHide: true };
+        const execOptions: { timeout: number; cwd?: string; windowsHide: boolean; env: NodeJS.ProcessEnv } =
+            { timeout, windowsHide: true, env: { ...process.env } };
         execOptions.cwd = effectiveWorkdir;
+
+        // Scripts Python gerados pelo LLM usam print() com emojis/box-drawing (✅, 📊, ─...) por
+        // hábito estilístico — o modelo foi treinado majoritariamente em ambientes Linux/macOS,
+        // onde stdout já é UTF-8 por padrão. Quando o stdout é redirecionado (sempre o caso aqui,
+        // via child_process.exec — nunca é um console real), o Python no Windows cai para a code
+        // page legada (cp1252/mbcs) em vez de UTF-8, e QUALQUER caractere fora do cp1252 num
+        // print() derruba o script inteiro com UnicodeEncodeError. Reproduzido ao vivo 5x em
+        // produção ao longo de dias diferentes (30/06, 02/07, 05/07 x2, 09/07) — sempre o mesmo
+        // erro, sempre scripts e emojis diferentes, porque a causa nunca foi o conteúdo do script
+        // e sim o ambiente de execução. PYTHONIOENCODING/PYTHONUTF8 forçam UTF-8
+        // incondicionalmente (não fazem nada em processos não-Python), eliminando a classe
+        // inteira sem depender do LLM lembrar de evitar emoji em cada script novo que gerar.
+        execOptions.env.PYTHONIOENCODING = 'utf-8';
+        execOptions.env.PYTHONUTF8 = '1';
 
         // Comandos de busca retornam exit code 1 quando não há resultados — isso é um
         // resultado válido ("nenhum match"), não um erro. grep, rg, find -quit, etc.
