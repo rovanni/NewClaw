@@ -306,11 +306,19 @@ export class ProviderFactory {
                     const prov = this.providers.get(providerName);
                     const modelUsed = (prov instanceof OllamaProvider) ? prov.getModel() : (prov as { model?: string })?.model || providerName;
                     const isTimeout = errorMessage(error)?.includes('Timeout');
+                    // 'Empty response from stream' (OllamaProvider) é lançado deliberadamente
+                    // "para que ProviderFactory possa retentar" (ver comentário na origem) — mas
+                    // essa string nunca esteve nesta lista, então isRetryable sempre dava false e
+                    // o pedido era descartado após 1 tentativa (attempts=1) em vez de retentar.
+                    // Reproduzido ao vivo (auditoria 09/07): dezenas de "EMPTY after 1 chunks" em
+                    // <3s cada — glitch transitório do provider, não erro permanente — cascateando
+                    // em replans desnecessários (prompt cresce a cada replan) até esgotar o goal.
                     const isRetryable = isTimeout ||
                         errorMessage(error)?.includes('abort') ||
                         errorMessage(error)?.includes('ECONNRESET') ||
                         errorMessage(error)?.includes('fetch failed') ||
-                        errorMessage(error)?.includes('network');
+                        errorMessage(error)?.includes('network') ||
+                        errorMessage(error)?.includes('Empty response from stream');
 
                     log.warn(`[${attemptId}] FAILED ${errorMessage(error)} duration=${duration}ms retryable=${isRetryable && attempt < MAX_RETRIES}`);
                     attemptLog.push({

@@ -339,7 +339,7 @@ export class GoalExecutionLoop {
         // injetadas no prompt e gerar um fingerprint idêntico ao de um plano que já falhou.
         // Nesse caso, substituímos por um step agentloop com instrução explícita de abordagem nova
         // em vez de executar silenciosamente um plano que com certeza vai falhar de novo.
-        if (!StrategyDiversityGuard.isDiverse(rawPlan, goal)) {
+        if (!StrategyDiversityGuard.isDiverse(rawPlan, goal, planResult.strategy)) {
             const violationFp = StrategyDiversityGuard.fingerprint(rawPlan);
             log.warn(
                 `[DIVERSITY-VIOLATION] goal=${goal.id} cycle=${cycleNumber}` +
@@ -348,7 +348,16 @@ export class GoalExecutionLoop {
             );
             this.goalStore.addStrategyTried(goal.id, `diversity_violation:${violationFp}`);
             goal = this.goalStore.getById(goal.id)!;
-            const exhaustedTools = StrategyDiversityGuard.extractExhaustedTools(goal);
+            // Este step não tem toolName → StrategyDiversityGuard.fingerprint() e o executor
+            // tratam sua execução como 'agentloop' (o free-form catch-all). Incluir 'agentloop'
+            // na lista "Não use" abaixo instruiria o step a proibir a própria ferramenta pela
+            // qual ele inevitavelmente roda — uma autocontradição que o validador semântico
+            // (Q4/SEMANTIC-MISMATCH) sempre detecta e derruba para 'blocked', queimando um ciclo
+            // inteiro de replan sem chance de sucesso. Reproduzido ao vivo (auditoria 09/07,
+            // ciclos 3 e 5): "a ferramenta executada foi a 'agentloop', que estava explicitamente
+            // proibida no step".
+            const exhaustedTools = StrategyDiversityGuard.extractExhaustedTools(goal)
+                .filter(tool => tool !== 'agentloop');
             rawPlan = [{
                 id: `step_diversity_fallback_${Date.now()}`,
                 description: `[DIVERSIDADE FORÇADA] Estratégias anteriores com [${violationFp}] falharam. Use abordagem completamente diferente para: ${goal.objective.slice(0, 150)}${exhaustedTools.length > 0 ? `. Não use: ${exhaustedTools.join(', ')}` : ''}.`,

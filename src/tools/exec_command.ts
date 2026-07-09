@@ -55,13 +55,25 @@ function remapForeignWorkspacePaths(command: string, allowRelativePrefix: boolea
 const POWERSHELL_CMDLET_PATTERN = /\b[A-Z][a-zA-Z]*-[A-Z][a-zA-Z]+\b/;
 
 // Binários POSIX comuns que o LLM emite (treinado majoritariamente em ambientes Linux/macOS)
-// e que o cmd.exe também não reconhece — mas que o powershell.exe TEM via alias/cmdlet nativo
-// (ls→Get-ChildItem, cat→Get-Content, rm→Remove-Item...), então encaminhar resolve sem
-// reescrever o texto do comando. Mesma lista que já existia em RiskAnalyzer.ts (usada lá só
-// para AVISAR no plano) — reproduzido ao vivo em produção (log de auditoria, 02/07): 'ls'
+// e que o cmd.exe também não reconhece. Mesma lista que já existia em RiskAnalyzer.ts (usada lá
+// só para AVISAR no plano) — reproduzido ao vivo em produção (log de auditoria, 02/07): 'ls'
 // falhando repetidas vezes com "não é reconhecido como um comando interno" mesmo com o aviso
 // do Q2 presente, porque POWERSHELL_CMDLET_PATTERN (só cmdlets Verbo-Substantivo) nunca cobria
-// esses binários — o aviso nunca virava correção de fato.
+// esses binários — o aviso nunca virava correção de fato. Todo o conjunto ainda serve para
+// DECIDIR que o comando precisa ser encaminhado ao powershell.exe (needsPowerShellWrap) — mas
+// ATENÇÃO: só ls/cat/rm/cp/mv/sort/tee têm alias nativo garantido no PowerShell 5.1. Os demais
+// (head, tail, grep, find, which, test, uniq, wc, touch, sed, awk, tr, cut, printf, xargs, sh,
+// bash, read, env) dependem de existir um .exe correspondente no PATH do processo (ex: tail.exe
+// via Git for Windows) — quando não existe, ou quando o processo (Tarefa Agendada/PM2, PATH
+// pode divergir do shell interativo) não o enxerga, o resultado é CommandNotFoundException
+// serializada como CLIXML bruto pelo host -NonInteractive. Confirmado ao vivo em produção
+// (auditoria, 02/07 e 09/07): comandos com 'ls' e com 'pip ... | tail -5' chegaram ao LLM como
+// "#< CLIXML..." ilegível, e o LLM reagiu retentando o MESMO comando repetidas vezes por não
+// conseguir interpretar o erro (chegou a aprender "evitar exec_command em PowerShell" como
+// estratégia). head/tail (idioma de truncar saída, o caso mais comum) ganham tradução explícita
+// abaixo (translateHeadTailForPowerShell) — elimina a dependência de PATH para esse caso
+// específico. decodeClixmlError() é a rede de segurança para o resto do conjunto e para
+// qualquer CLIXML que ainda vazar por outro motivo (ex: ruído de progress stream).
 const POSIX_ONLY_NO_WIN_EQUIVALENT = new Set([
     'ls', 'cat', 'grep', 'find', 'rm', 'cp', 'mv', 'which', 'test',
     'head', 'tail', 'sort', 'uniq', 'wc', 'touch', 'sed', 'awk', 'tr',
@@ -123,6 +135,41 @@ export function translateLsFlagsForPowerShell(command: string): string {
     return command.replace(/\bls\s+-[lah]+(?=\s|$)/gi, 'Get-ChildItem');
 }
 
+// `head -N`/`tail -N` (e a variante `-n N`) não têm alias no PowerShell — encaminhados
+// verbatim, o powershell.exe lança CommandNotFoundException, serializada como CLIXML bruto
+// pelo host -NonInteractive (ver comentário de POSIX_ONLY_NO_WIN_EQUIVALENT acima).
+// Select-Object -First/-Last é o equivalente universal, funciona tanto lendo um arquivo
+// quanto recebendo objetos de um pipe anterior (o caso mais comum: `cmd 2>&1 | tail -N`).
+export function translateHeadTailForPowerShell(command: string): string {
+    return command
+        .replace(/\bhead\s+-n\s*(\d+)/gi, 'Select-Object -First $1')
+        .replace(/\bhead\s+-(\d+)\b/gi, 'Select-Object -First $1')
+        .replace(/\btail\s+-n\s*(\d+)/gi, 'Select-Object -Last $1')
+        .replace(/\btail\s+-(\d+)\b/gi, 'Select-Object -Last $1');
+}
+
+/**
+ * Decodifica um payload CLIXML (formato que o powershell.exe usa para serializar streams de
+ * erro/warning/verbose quando roda -NonInteractive, sem host para renderizar como texto) em
+ * texto plano legível. Sem isso, o LLM recebe "#< CLIXML\n<Objs ...>" como mensagem de erro
+ * inteira — ilegível, então não consegue entender o que quebrou e repete o mesmo comando até
+ * esgotar o retryBudget. Reproduzido ao vivo (auditoria 02/07 e 09/07): comandos com 'ls' e
+ * 'pip ... | tail' voltaram como "#< CLIXML" bruto, e o GoalPlanner chegou a aprender "evitar
+ * exec_command em PowerShell" como estratégia de replan — o tool inteiro ficou marcado como
+ * não-confiável por causa de um erro que sempre foi só ilegibilidade.
+ */
+export function decodeClixmlError(output: string): string {
+    if (!output.includes('#< CLIXML')) return output;
+    // Cada <S S="Error"> é UMA LINHA do console PowerShell e já termina com _x000D__x000A_
+    // (CRLF escapado) — decodificar sem trim por fragmento preserva as quebras de linha entre
+    // eles; um trim por fragmento aqui colaria a última palavra de uma linha na primeira da
+    // próxima (ex: "Verifique a" + "grafia" → "Verifique agrafia").
+    const decodeEscapes = (s: string) => s.replace(/_x([0-9A-Fa-f]{4})_/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    const messages = [...output.matchAll(/<S S="Error">([\s\S]*?)<\/S>/g)].map(m => decodeEscapes(m[1]));
+    if (messages.length === 0) return output;
+    return messages.join('').trim();
+}
+
 /**
  * Encaminha o comando para powershell.exe via -EncodedCommand (Base64 UTF-16LE).
  * Evita o inferno de escaping de aspas entre cmd.exe (shell externo) e PowerShell
@@ -136,7 +183,7 @@ export function translateLsFlagsForPowerShell(command: string): string {
  * Setar a preferência ANTES do comando real elimina esse stream na origem.
  */
 export function wrapForWindowsPowerShell(command: string): string {
-    const translated = translateLsFlagsForPowerShell(translateDevNullForPowerShell(translateChainOperatorsForPowerShell(command)));
+    const translated = translateHeadTailForPowerShell(translateLsFlagsForPowerShell(translateDevNullForPowerShell(translateChainOperatorsForPowerShell(command))));
     const withoutProgressNoise = `$ProgressPreference = 'SilentlyContinue'; ${translated}`;
     const encoded = Buffer.from(withoutProgressNoise, 'utf16le').toString('base64');
     return `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
@@ -339,7 +386,7 @@ export class ExecCommandTool implements ToolExecutor {
         try {
             const output = await new Promise<string>((resolve, reject) => {
                 exec(command, execOptions, (error, stdout, stderr) => {
-                    const combined = (stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : '');
+                    const combined = decodeClixmlError((stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : ''));
                     if (error) {
                         const exitCode = error.code ?? 'unknown';
                         // Exit code 1 em comandos de busca = "nenhum resultado encontrado" (válido).

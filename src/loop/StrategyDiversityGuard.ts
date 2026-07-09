@@ -85,14 +85,52 @@ export class StrategyDiversityGuard {
     }
 
     /**
+     * Similaridade estrutural (Jaccard sobre palavras) entre dois textos de estratégia.
+     * Não usa listas de vocabulário — só overlap de tokens, então funciona para qualquer
+     * par de estratégias sem precisar antecipar palavras-chave.
+     */
+    private static wordOverlap(a: string, b: string): number {
+        const words = (s: string) => new Set(s.toLowerCase().match(/\w+/g) ?? []);
+        const setA = words(a);
+        const setB = words(b);
+        if (setA.size === 0 || setB.size === 0) return 0;
+        let intersection = 0;
+        for (const w of setA) if (setB.has(w)) intersection++;
+        return intersection / new Set([...setA, ...setB]).size;
+    }
+
+    /**
      * Verifica se um novo plano proposto é diverso dos planos anteriores.
      * Retorna true se o plano é diverso (deve ser usado), false se é repetição.
+     *
+     * `newStrategy` é o texto da estratégia (GoalPlanner.replan().strategy) associado ao
+     * plano — quando presente, uma sequência de tools repetida (mesmo fingerprint) ainda é
+     * considerada diversa se o CONTEÚDO da estratégia mudou substancialmente. Necessário
+     * porque tarefas com pipeline fixo (gerar conteúdo → converter → enviar) têm um número
+     * pequeno de sequências de tools válidas — fingerprint puro por nome de tool derruba
+     * pivots estratégicos legítimos (ex: markdown/Marp → script Python com python-pptx)
+     * mesmo quando a abordagem real mudou. Reproduzido ao vivo (auditoria 09/07): GoalPlanner
+     * replanejou corretamente de Marp para python-pptx (REPLAN_DIFF strategy_changed=true)
+     * especificamente para evitar o timeout anterior, e este guard descartou o plano por
+     * structurally_identical=true, forçando um step genérico em vez do pivot que já resolvia
+     * o problema.
      */
-    static isDiverse(newPlan: PlanStep[], goal: Goal): boolean {
+    static isDiverse(newPlan: PlanStep[], goal: Goal, newStrategy?: string): boolean {
         const newFp = StrategyDiversityGuard.fingerprint(newPlan);
         const usedFps = StrategyDiversityGuard.extractUsedFingerprints(goal);
 
         if (usedFps.includes(newFp)) {
+            const prevStrategy = goal.cycleFocus ?? '';
+            if (newStrategy && prevStrategy) {
+                const overlap = StrategyDiversityGuard.wordOverlap(newStrategy, prevStrategy);
+                if (overlap < 0.5) {
+                    log.info(
+                        `[StrategyDiversityGuard] fingerprint repeated but strategy changed: goal=${goal.id}` +
+                        ` fingerprint="${newFp}" overlap=${overlap.toFixed(2)} — allowing pivot`
+                    );
+                    return true;
+                }
+            }
             log.warn(
                 `[StrategyDiversityGuard] duplicate fingerprint: goal=${goal.id}` +
                 ` fingerprint="${newFp}"`
