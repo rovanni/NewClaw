@@ -62,7 +62,22 @@ export class CircuitBreaker {
     private consecutiveSuccesses: number = 0;
     private lastFailureTime: number = 0;
     private lastStateChangeTime: number = Date.now();
-    private halfOpenAttempted: boolean = false;
+    /**
+     * Contador de tentativas de teste permitidas no estado HALF_OPEN — precisa ir até
+     * successThreshold, NÃO parar em 1. onSuccess() só transiciona HALF_OPEN → CLOSED
+     * quando consecutiveSuccesses >= successThreshold (default 3); se este contador
+     * permitisse só 1 tentativa (era um boolean antes), o circuito nunca conseguia
+     * acumular sucessos suficientes pra fechar de novo — ficava preso em HALF_OPEN
+     * para sempre depois do 1º teste bem-sucedido, rejeitando toda chamada futura
+     * mesmo com o provider 100% saudável (visto em produção: 'ollama' preso em
+     * HALF_OPEN por >2min straight, todo request rejeitado com "failures: 0" porque
+     * onSuccess() já tinha zerado consecutiveFailures no único teste permitido).
+     * Qualquer falha durante HALF_OPEN ainda transiciona de volta pra OPEN
+     * imediatamente (onFailure), então isso não permite avalanche de tentativas
+     * num provider realmente quebrado — só dá chances suficientes pra um provider
+     * saudável realmente fechar o circuito de novo.
+     */
+    private halfOpenAttempts: number = 0;
     private nextAttemptAt: number = 0;
     private avgDurationMs: number = 0;
 
@@ -138,10 +153,11 @@ export class CircuitBreaker {
             return false;
         }
 
-        // HALF_OPEN: allow only one test request
+        // HALF_OPEN: allow up to successThreshold test requests (not just one — see
+        // halfOpenAttempts doc comment above for why one is not enough to ever close again).
         if (this.state === 'HALF_OPEN') {
-            if (!this.halfOpenAttempted) {
-                this.halfOpenAttempted = true;
+            if (this.halfOpenAttempts < this.config.successThreshold) {
+                this.halfOpenAttempts++;
                 return true;
             }
             this.totalRejected++;
