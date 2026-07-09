@@ -55,6 +55,16 @@ export interface ChannelContext {
      *  duplicado ao usuário a cada tentativa (evidência: 2026-07-05, goal_1783269002590_inaml —
      *  4 áudios enviados em sequência pelo mesmo pedido). */
     isAudioAlreadySent?: () => boolean;
+    /**
+     * Janela pequena e recente de turnos REAIS (role user/assistant, sem tool_call/tool_result/
+     * checkpoint) da MESMA sessão, sem incluir a mensagem atual — usada por
+     * UnifiedIntentRouter.route() para classificar mensagens curtas/elípticas ("continue",
+     * "isso", "faça") considerando o que o assistente acabou de perguntar/propor, em vez de
+     * classificar a mensagem isolada. Ver SessionKeyFactory/MessageBus para a origem do dado —
+     * não é uma infraestrutura nova, reusa o mesmo slice já computado pra GoalExtractor
+     * (microauditoria de continuidade conversacional, 08/07/2026).
+     */
+    recentMessages?: Array<{ role: string; content: string }>;
 }
 
 export interface AgentLoopConfig {

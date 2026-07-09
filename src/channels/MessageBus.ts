@@ -397,27 +397,34 @@ export class MessageBus {
             const startTime = Date.now();
             log.info('processing_start', `User: ${msg.text.slice(0, 80)}`, { channel: msg.channel, userId: msg.userId, correlationId });
 
+            // Snapshot das últimas mensagens REAIS da sessão (role user/assistant — nunca
+            // tool_call/tool_result/checkpoint, ver SessionManager.buildContext), excluindo a
+            // mensagem atual (que acabou de ser gravada acima — slice(-5,-1) descarta o último
+            // elemento). Usado por dois consumidores hoje: (1) GoalExtractor, pra avaliar se a
+            // mensagem atual é resposta a um menu/lista do assistente (uso original, inalterado);
+            // (2) UnifiedIntentRouter.llmClassify via ChannelContext.recentMessages, pra
+            // classificar mensagens curtas/elípticas ("continue", "isso", "faça") considerando o
+            // que o assistente acabou de propor, em vez de classificar o texto isolado
+            // (microauditoria de continuidade conversacional, 08/07/2026). Antes só era computado
+            // quando GoalOrchestrator estava ativo — agora incondicional, porque o consumidor (2)
+            // roda mesmo quando GoalOrchestrator está desativado (AgentLoop direto).
+            let recentSessionMessages: Array<{ role: string; content: string }> = [];
+            try {
+                const { messages: transcriptEntries } = await this.sessionManager.buildContext(sessionKey, '');
+                recentSessionMessages = transcriptEntries
+                    .filter(m => m.role === 'user' || m.role === 'assistant')
+                    .slice(-5, -1) // últimas 4 antes da mensagem atual
+                    .map(m => ({ role: m.role as string, content: m.content.slice(0, 400) }));
+            } catch { /* continua sem contexto */ }
+
             const channelCtx = {
                 channel: msg.channel,
                 chatId: msg.chatId || msg.userId,
                 userId: msg.userId,
                 metadata: msg.metadata,
-                correlationId
+                correlationId,
+                recentMessages: recentSessionMessages,
             };
-
-            // Snapshot das últimas mensagens da sessão para o GoalExtractor avaliar
-            // se a mensagem atual é resposta a um menu/lista do assistente.
-            // Feito apenas quando GoalOrchestrator está ativo para evitar overhead desnecessário.
-            let recentSessionMessages: Array<{ role: string; content: string }> = [];
-            if (this.goalOrchestrator) {
-                try {
-                    const { messages: transcriptEntries } = await this.sessionManager.buildContext(sessionKey, '');
-                    recentSessionMessages = transcriptEntries
-                        .filter(m => m.role === 'user' || m.role === 'assistant')
-                        .slice(-5, -1) // últimas 4 antes da mensagem atual
-                        .map(m => ({ role: m.role as string, content: m.content.slice(0, 400) }));
-                } catch { /* continua sem contexto */ }
-            }
 
             // Onboarding: primeira instalação — banco vazio, pede nome e apelido uma única vez.
             // Dashboard web é interface do operador (onboarding já concluído via canal principal) — nunca redireciona.

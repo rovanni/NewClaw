@@ -1146,7 +1146,16 @@ export class AgentLoop {
         try {
         move('START_TURN');
 
-        const intentDecision: IntentDecision = await this.intentRouter.route(userText, { sessionId: conversationId });
+        // recentMessages (quando presente) permite ao UnifiedIntentRouter classificar mensagens
+        // curtas/elípticas ("continue", "isso", "faça") considerando a conversa recente em vez
+        // de classificar o texto isolado — ver RouterContext em UnifiedIntentRouter.ts e a
+        // origem do dado em MessageBus.processMessageCore (microauditoria de continuidade
+        // conversacional, 08/07/2026). Passos sintéticos sem conversa real (goal step, scheduler)
+        // não preenchem este campo — não são elípticos, não precisam de contexto.
+        const intentDecision: IntentDecision = await this.intentRouter.route(userText, {
+            sessionId: conversationId,
+            recentMessages: channelContext?.recentMessages,
+        });
 
         traceManager.addStep(trace, 'intent_classification', {
             intent: intentDecision.intent,

@@ -400,6 +400,133 @@ const SEMANTIC_RULES: SemanticRule[] = [
     },
 ];
 
+// ── Classificação contextual ────────────────────────────────────────────
+//
+// MICROAUDITORIA (continuidade conversacional, 08/07/2026): llmClassify() classificava a
+// mensagem atual ISOLADA — sem nenhum turno anterior da conversa. Para "sim"/"ok"/"pode" isso
+// nunca foi um problema (a palavra já carrega o sentido de confirmação fora de contexto), mas
+// pra "continue"/"agora"/"isso"/"faça" — nenhuma delas cobertas pelo gate determinístico exato
+// (ver DETERMINISTIC_RULES acima: 'confirmation' exige normalized===kw ou o CONFIRMATION_PATTERN
+// ancorado) — o LLM classificava esse texto sozinho, sem saber que existia uma pergunta/proposta
+// pendente do assistente. Fix: passar uma janela pequena e recente de turnos REAIS da mesma
+// sessão (já filtrados por role user/assistant — eventos operacionais como tool_call/tool_result/
+// checkpoint NUNCA entram nessa lista, ver SessionManager.buildContext) + identificar
+// explicitamente a última resposta do assistente como antecedente imediato.
+
+export interface RecentTurn {
+    role: 'user' | 'assistant' | string;
+    content: string;
+}
+
+/** Contexto conversacional opcional passado a route()/routeSync(). */
+export interface RouterContext {
+    sessionId?: string;
+    lastTask?: string;
+    /**
+     * Janela pequena e recente de turnos REAIS da MESMA sessão (role user/assistant apenas —
+     * nunca tool_call/tool_result/checkpoint/system), em ordem cronológica, SEM incluir a
+     * mensagem atual (o chamador já grava a mensagem atual antes de montar essa janela — ver
+     * MessageBus.processMessageCore — e a exclui do slice). Usada só por route() (async, chama
+     * LLM); routeSync() aceita o campo por compatibilidade de contrato mas NUNCA o consome
+     * (não pode chamar LLM de forma síncrona).
+     */
+    recentMessages?: RecentTurn[];
+}
+
+/**
+ * Encontra a última resposta REAL do assistente na janela de turnos recentes.
+ * "Real" aqui significa: gravada via SessionManager.recordAssistantMessage, que só é chamado
+ * nos pontos onde uma resposta foi de fato entregue (ou seu envio foi tentado sem lançar) ao
+ * canal do usuário — ver MessageBus.ts (sucesso e, desde o fix anterior desta auditoria, também
+ * o branch de erro/timeout) e AgentController.ts (callback de workflow/autorização). Nenhum
+ * ponto do código grava role='assistant' para conteúdo puramente interno (raciocínio, tool
+ * output bruto, stack trace) — esses entram como role='tool_call'/'tool_result', já excluídos
+ * da janela antes de chegar aqui. Não há, portanto, ambiguidade a resolver nesta função: o
+ * último item com role==='assistant' na janela JÁ É a última resposta real.
+ */
+export function extractLastAssistantMessage(recentMessages: RecentTurn[] | undefined): string | undefined {
+    if (!recentMessages || recentMessages.length === 0) return undefined;
+    for (let i = recentMessages.length - 1; i >= 0; i--) {
+        if (recentMessages[i].role === 'assistant') return recentMessages[i].content;
+    }
+    return undefined;
+}
+
+/**
+ * Resolve a janela EFETIVA de turnos recentes usada pra classificação: filtra por role
+ * user/assistant e remove um eventual último item duplicado da mensagem atual (defesa contra
+ * duplicação — cobre o caso de um chamador futuro esquecer de excluir a mensagem atual da
+ * janela; o chamador atual, MessageBus, já exclui via slice(-5,-1), mas esta função não
+ * depende disso pra estar correta).
+ *
+ * ÚNICA fonte da janela efetiva — usada tanto por buildClassificationMessages() (o que é
+ * ENVIADO ao LLM) quanto por UnifiedIntentRouter.buildCacheKey() (o que é REPRESENTADO na chave
+ * de cache). Antes de existir esta função compartilhada, as duas calculavam a janela de forma
+ * independente a partir do mesmo `context.recentMessages` bruto — se um chamador futuro viesse
+ * a passar uma janela cujo último item duplicasse a mensagem atual, buildClassificationMessages
+ * removeria esse item (defesa acima) mas buildCacheKey (lendo o array bruto) não, hasheando um
+ * conjunto de mensagens diferente do que foi realmente enviado ao LLM (achado da microauditoria
+ * S71-adversarial, 08/07/2026: "contexto enviado ao LLM diferente do contexto representado no
+ * cache" — Eixo C). Compartilhar esta função elimina a divergência por construção.
+ */
+function resolveClassificationWindow(input: string, context?: RouterContext): RecentTurn[] {
+    const recentMessages = (context?.recentMessages ?? []).filter(m =>
+        m.role === 'user' || m.role === 'assistant'
+    );
+    const trimmedInput = input.trim();
+    while (recentMessages.length > 0 && recentMessages[recentMessages.length - 1].content.trim() === trimmedInput) {
+        recentMessages.pop();
+    }
+    return recentMessages;
+}
+
+/**
+ * Monta as mensagens de chat enviadas ao classificador LLM: system prompt (com a instrução de
+ * classificação contextual quando há janela disponível) + os turnos recentes reais, na ordem
+ * em que aconteceram + a mensagem atual por último.
+ */
+export function buildClassificationMessages(input: string, context?: RouterContext): LLMMessage[] {
+    const baseCategories = `Categories:
+- greeting: greetings, farewells, thanks, casual social phrases
+- confirmation: explicit yes/proceed/confirm/authorize
+- rejection: explicit no/cancel/stop/abort
+- creation: creating or generating any content — files, slides, HTML, documents, code, presentations, PDFs
+- information: factual questions, web searches, explanations, definitions
+- data_analysis: analyzing data, statistics, crypto/market prices, financial data, reports
+- memory_operation: saving to or retrieving from memory/notes
+- system_operation: shell commands, servers, deployment, infrastructure, SSH
+- audio: generating audio, TTS, voice narration
+- vision: analyzing images, screenshots, OCR
+- destructive: deleting files/databases, formatting disks, dangerous system commands
+- conversation: general chat, opinions, follow-ups, ambiguous requests`;
+
+    const recentMessages = resolveClassificationWindow(input, context);
+    const lastAssistantMessage = extractLastAssistantMessage(recentMessages);
+
+    if (recentMessages.length === 0) {
+        // Sem histórico disponível (primeira mensagem da sessão, ou sessão sem turnos recentes) —
+        // comportamento idêntico ao original: classifica a mensagem isolada.
+        return [
+            { role: 'system', content: `You are an intent classifier. Classify the user message into exactly one category.\n\n${baseCategories}\n\nRespond with ONLY valid JSON, no other text:\n{"category": "<category>", "cognitiveLoad": "minimal|normal|deep", "confidence": 0.0}` },
+            { role: 'user', content: input },
+        ];
+    }
+
+    const systemContent = `You are an intent classifier. Classifique a intenção da mensagem atual do usuário considerando a conversa recente. A última resposta do assistente é o antecedente mais imediato, mas use o histórico para detectar mudança de assunto, referência, confirmação, rejeição, dúvida, adiamento ou continuação.
+
+${baseCategories}
+
+${lastAssistantMessage ? `A última resposta real do assistente nesta conversa foi:\n"""${lastAssistantMessage.slice(0, 500)}"""\n` : ''}
+Respond with ONLY valid JSON, no other text:
+{"category": "<category>", "cognitiveLoad": "minimal|normal|deep", "confidence": 0.0}`;
+
+    return [
+        { role: 'system', content: systemContent },
+        ...recentMessages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+        { role: 'user', content: input },
+    ];
+}
+
 // ── UnifiedIntentRouter ──────────────────────────────────────────────
 
 export class UnifiedIntentRouter {
@@ -419,7 +546,7 @@ export class UnifiedIntentRouter {
      * Layer 2: LLM classification for everything else (falls back to keyword scoring if no provider).
      * Layer 3: strategy selection (sync).
      */
-    async route(input: string, context?: { lastTask?: string; sessionId?: string }): Promise<IntentDecision> {
+    async route(input: string, context?: RouterContext): Promise<IntentDecision> {
         const startTime = Date.now();
         const trace: RoutingTrace = {
             inputHash: this.hashInput(input),
@@ -437,13 +564,18 @@ export class UnifiedIntentRouter {
             const decision = this.buildDecisionFromRule(deterministicMatch, input, 'deterministic', trace, startTime);
             trace.deterministicMatch = deterministicMatch.id;
             log.info(`[UNIFIED-ROUTER] Deterministic: ${deterministicMatch.id} → ${deterministicMatch.category} (confidence: ${decision.confidence})`);
+            // Gate determinístico nunca usa contexto (mensagem exata/ancorada, sem ambiguidade
+            // a resolver) — chave de cache sem contexto é segura aqui.
             return this.cacheAndTrace(input, this.enrichWithSkillContext(input, decision));
         }
 
         // ── Layer 2: LLM Classification (with keyword fallback) ──
+        // context é passado pro LLM (classificação contextual — ver buildClassificationMessages)
+        // e também entra na chave de cache abaixo, pra não misturar decisão de uma sessão/
+        // contexto com outra (ver cacheAndTrace).
         const semStart = Date.now();
         const semanticResult = this.providerFactory
-            ? await this.llmClassify(input)
+            ? await this.llmClassify(input, context)
             : this.semanticRoute(input);
         trace.steps.push({ step: 'semantic_routing', durationMs: Date.now() - semStart, result: semanticResult.category });
 
@@ -469,15 +601,27 @@ export class UnifiedIntentRouter {
         );
 
         const enriched = this.enrichWithSkillContext(input, { ...decision, source, trace: { ...decision.trace, ...trace, totalTimeMs: Date.now() - startTime } });
-        return this.cacheAndTrace(input, enriched);
+        return this.cacheAndTrace(input, enriched, context);
     }
 
     /**
      * Synchronous route — uses cache + deterministic gate + keyword fallback only.
-     * Does NOT call LLM. Use for contexts where async is unavailable.
+     * Does NOT call LLM (não pode: chatWithFallback é assíncrono). Use para contextos onde
+     * await não está disponível.
+     *
+     * Contrato quanto a `context.recentMessages`: aceito na assinatura (mesmo RouterContext de
+     * route()) mas NUNCA lido aqui — routeSync nunca chama llmClassify, então não há como usar
+     * a janela de conversa pra classificação contextual de forma síncrona. Isso é intencional,
+     * não um bug: passar recentMessages aqui é um no-op seguro, não um comportamento divergente
+     * silencioso (ver S71 — teste prova explicitamente que routeSync ignora o campo sem lançar
+     * e sem produzir uma decisão diferente de quando o campo está ausente).
+     *
+     * routeSync não tem NENHUM chamador em produção hoje (auditoria de 08/07/2026 — grep em todo
+     * o src/ não encontrou `.routeSync(` fora deste arquivo e de um teste). Mantido pelo contrato
+     * público da classe, não removido por falta de evidência de que seja seguro fazer isso.
      */
-    routeSync(input: string, context?: { lastTask?: string; sessionId?: string }): IntentDecision {
-        const cached = this.classificationCache.get(input.trim().toLowerCase());
+    routeSync(input: string, context?: RouterContext): IntentDecision {
+        const cached = this.classificationCache.get(this.buildCacheKey(input, undefined));
         if (cached && (Date.now() - cached.timestamp) < this.CACHE_TTL) {
             return cached.decision;
         }
@@ -551,31 +695,8 @@ export class UnifiedIntentRouter {
 
     // ── Layer 2a: LLM Classification ─────────────────────────────────────
 
-    private async llmClassify(input: string): Promise<{ category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number }> {
-        const messages: LLMMessage[] = [
-            {
-                role: 'system',
-                content: `You are an intent classifier. Classify the user message into exactly one category.
-
-Categories:
-- greeting: greetings, farewells, thanks, casual social phrases
-- confirmation: explicit yes/proceed/confirm/authorize
-- rejection: explicit no/cancel/stop/abort
-- creation: creating or generating any content — files, slides, HTML, documents, code, presentations, PDFs
-- information: factual questions, web searches, explanations, definitions
-- data_analysis: analyzing data, statistics, crypto/market prices, financial data, reports
-- memory_operation: saving to or retrieving from memory/notes
-- system_operation: shell commands, servers, deployment, infrastructure, SSH
-- audio: generating audio, TTS, voice narration
-- vision: analyzing images, screenshots, OCR
-- destructive: deleting files/databases, formatting disks, dangerous system commands
-- conversation: general chat, opinions, follow-ups, ambiguous requests
-
-Respond with ONLY valid JSON, no other text:
-{"category": "<category>", "cognitiveLoad": "minimal|normal|deep", "confidence": 0.0}`,
-            },
-            { role: 'user', content: input },
-        ];
+    private async llmClassify(input: string, context?: RouterContext): Promise<{ category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number }> {
+        const messages: LLMMessage[] = buildClassificationMessages(input, context);
 
         try {
             const result = await this.providerFactory!.chatWithFallback(messages, undefined, undefined, 30000);
@@ -654,7 +775,7 @@ Respond with ONLY valid JSON, no other text:
     private strategySelection(
         _input: string,
         semantic: { category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number },
-        _context?: { lastTask?: string; sessionId?: string }
+        _context?: RouterContext
     ): IntentDecision {
         const { category, modelCategory, cognitiveLoad, requiresReasoning, confidence } = semantic;
 
@@ -876,11 +997,43 @@ Respond with ONLY valid JSON, no other text:
 
     // ── Cache and Trace ──────────────────────────────────────────────────
 
-    private cacheAndTrace(input: string, decision: IntentDecision): IntentDecision {
-        const key = input.trim().toLowerCase();
+    private cacheAndTrace(input: string, decision: IntentDecision, context?: RouterContext): IntentDecision {
+        const key = this.buildCacheKey(input, context);
         this.classificationCache.set(key, { decision, timestamp: Date.now() });
         this.purgeCache();
         return decision;
+    }
+
+    /**
+     * Chave de cache. Sem contexto conversacional (ou recentMessages vazio) — comportamento
+     * IDÊNTICO ao original: chave é só o texto normalizado.
+     *
+     * COM contexto — a chave inclui sessionId + um hash da JANELA INTEIRA efetivamente enviada
+     * ao LLM (via resolveClassificationWindow(), a mesma função usada por
+     * buildClassificationMessages — não uma segunda leitura independente de context.recentMessages).
+     *
+     * CORREÇÃO (microauditoria adversarial do S71, 08/07/2026, Eixo A): a versão anterior
+     * hasheava só a ÚLTIMA resposta do assistente, não a janela inteira. Contraexemplo mínimo
+     * construído a partir do fluxo real: numa mesma sessão, se o assistente produzir a MESMA
+     * frase de fechamento em dois momentos diferentes (ex.: "Pronto! Quer que eu envie agora?" —
+     * um fechamento genérico de ação, plausível de se repetir literalmente em pedidos distintos:
+     * "renomeia o arquivo A" → "Pronto! Quer que eu envie agora?" vs. "cria um resumo do
+     * relatório" → "Pronto! Quer que eu envie agora?"), a chave antiga colidia (mesma sessionId +
+     * mesmo hash da última resposta + mesmo input "agora") mesmo com `llmClassify()` recebendo
+     * DOIS conjuntos de mensagens diferentes (os turnos anteriores — sobre o quê — divergem).
+     * Hashear a janela inteira fecha essa lacuna: o hash agora representa o MESMO domínio de
+     * dados que realmente influencia a saída de llmClassify().
+     *
+     * routeSync() nunca gera chaves com sufixo de contexto (não tem contexto real disponível de
+     * forma síncrona) — suas leituras de cache continuam batendo só em entradas context-free,
+     * nunca em uma decisão contextual de outra sessão.
+     */
+    private buildCacheKey(input: string, context?: RouterContext): string {
+        const normalized = input.trim().toLowerCase();
+        const window = resolveClassificationWindow(input, context);
+        if (window.length === 0) return normalized;
+        const windowFingerprint = window.map(m => `${m.role}:${m.content}`).join('');
+        return `${normalized}::ctx:${context?.sessionId ?? 'unknown'}:${this.hashInput(windowFingerprint)}`;
     }
 
     private purgeCache(): void {
