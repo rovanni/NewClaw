@@ -202,6 +202,23 @@ export class GoalStore {
         return rows.map(r => this.rowToGoal(r));
     }
 
+    /**
+     * Retorna os goals mais recentes de uma sessão (qualquer status), mais recente primeiro.
+     * Usado para recuperar `sentArtifacts` de goals passados da mesma sessão — esse campo é
+     * persistido em SQLite por goal, então sobrevive tanto à limpeza de sessões inativas em
+     * memória (SessionManager.deliveredArtifacts, apagado após 10-15min sem atividade) quanto
+     * a reinícios do processo.
+     */
+    getRecentBySession(sessionKey: string, limit = 5): Goal[] {
+        const rows = this.db.prepare(`
+            SELECT * FROM goals
+            WHERE session_key = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+        `).all(sessionKey, limit) as GoalRow[];
+        return rows.map(r => this.rowToGoal(r));
+    }
+
     // ── Atualização ───────────────────────────────────────────────────────────
 
     update(id: string, patch: Partial<Goal>): void {

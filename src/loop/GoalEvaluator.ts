@@ -418,8 +418,22 @@ export class GoalEvaluator {
             ? `Último bloqueio: ${lastBlocker.description}.`
             : '';
 
+        // goal.sentArtifacts registra arquivos REALMENTE entregues ao usuário durante a
+        // execução deste goal (trackArtifact, disparado só após send_document/DELIVERY-GUARD
+        // confirmarem o envio) — um goal pode entregar arquivos válidos e só DEPOIS esbarrar
+        // num step adicional (ex: uma tentativa de sobrescrita bloqueada, ou um replan que
+        // expira o reasoning budget) que o derruba para failed. Sem checar isso aqui, o usuário
+        // recebe "Não consegui completar" como se nada tivesse sido feito, mesmo tendo acabado
+        // de receber os arquivos corretos segundos antes. Reproduzido ao vivo (09/07 19:32):
+        // goal entregou 2 .pptx válidos (19:28, 19:29) e ainda assim reportou falha total no
+        // rodapé, sem mencionar os arquivos já enviados.
+        const sentArtifacts = goal.sentArtifacts ?? [];
+        const deliveredMsg = sentArtifacts.length > 0
+            ? `Consegui gerar e enviar: ${sentArtifacts.join(', ')}. Porém não finalizei o restante do pedido.`
+            : '';
+
         return [
-            `Não consegui completar: "${goal.userIntent.slice(0, 150)}"`,
+            deliveredMsg || `Não consegui completar: "${goal.userIntent.slice(0, 150)}"`,
             strategies,
             blockerMsg,
             'Você pode reformular o pedido ou fornecer mais informações para eu tentar de outra forma.',

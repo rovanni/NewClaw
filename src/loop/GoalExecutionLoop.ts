@@ -2432,6 +2432,35 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             log.warn('[GoalLoop] Q1 delivered artifacts error:', String(err));
         }
 
+        // Fallback persistente para o bloco acima: SessionManager.deliveredArtifacts é um Map
+        // em memória, apagado por cleanupInactiveSessions após só 10-15min sem atividade. Um
+        // usuário que pausa a conversa por mais tempo que isso e volta pedindo para editar "o
+        // que você me mandou" perde esse contexto — o planner cai de volta a explorar o
+        // workspace inteiro (compartilhado por TODOS os goals/temas já executados, de qualquer
+        // sessão) sem nenhum sinal de qual arquivo é o certo. Reproduzido ao vivo (09/07,
+        // gap de 22min entre 18:44 e 19:06): usuário pediu para tornar editável "esse que
+        // mandou" (aula_ipv4_vs_ipv6.md) e recebeu de volta um arquivo sobre "DHCP e IP Manual"
+        // — tema de um goal antigo completamente não relacionado, só por ordem alfabética do
+        // workspace. goal.sentArtifacts é persistido em SQLite por goal (sobrevive a esse
+        // cleanup e a reinícios do processo) — consultamos os goals recentes da MESMA sessão
+        // como fonte complementar, sempre presente independente do estado da memória.
+        try {
+            if (goal.sessionKey) {
+                const recentGoals = this.goalStore.getRecentBySession(goal.sessionKey, 5)
+                    .filter(g => g.id !== goal.id && g.sentArtifacts && g.sentArtifacts.length > 0);
+                const paths = new Set<string>();
+                for (const g of recentGoals) for (const p of g.sentArtifacts ?? []) paths.add(p);
+                if (paths.size > 0) {
+                    parts.push(
+                        `ARQUIVOS ENTREGUES EM GOALS ANTERIORES DESTA SESSÃO (persistente — use estes paths exatos ao referenciar "o arquivo que você me mandou"):\n` +
+                        [...paths].map(p => `- ${p}`).join('\n')
+                    );
+                }
+            }
+        } catch (err) {
+            log.warn('[GoalLoop] Q1 recent-session sentArtifacts error:', String(err));
+        }
+
         // Estado atual do workspace — paths criados/modificados neste goal.
         // Injetado em plan() e replan() para garantir consistência de paths entre ciclos.
         // Sem este bloco o replanner não sabe que landing-page/index.html existe e cria
