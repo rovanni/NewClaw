@@ -20,7 +20,8 @@ import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { permissionRegistry } from '../core/PermissionRegistry';
 import { Goal, PlanStep } from './GoalTypes';
-import { detectMissingRequiredArgs, WRITE_CONTENT_STUB_PATTERNS } from './GoalPlanner';
+import { detectMissingRequiredArgs } from './GoalPlanner';
+import { makeContentStubClassifier, ContentStubClassifier } from '../shared/contentStubClassifier';
 import { sanitizePlanSteps } from './planning/sanitizePlanSteps';
 import { resolveToolAlias } from './planning/toolAliasResolver';
 
@@ -101,12 +102,17 @@ export interface RiskReport {
 
 export class RiskAnalyzer {
     private model: string = RISK_REVIEW_MODEL_DEFAULT;
+    private readonly classifyContentStub: ContentStubClassifier;
 
     constructor(
         private readonly providerFactory: ProviderFactory,
         private readonly toolRegistry: typeof ToolRegistry,
         private readonly reflectionMemory: ReflectionMemory,
-    ) {}
+        /** Injeção de teste — quando omitido, usa o classificador LLM real via providerFactory. */
+        classifyContentStub?: ContentStubClassifier,
+    ) {
+        this.classifyContentStub = classifyContentStub ?? makeContentStubClassifier(providerFactory);
+    }
 
     setModel(model: string): void {
         if (model) this.model = model;
@@ -646,12 +652,12 @@ OU
                 );
             });
 
-            const sanitized = sanitizePlanSteps(
+            const sanitized = await sanitizePlanSteps(
                 rawSteps,
                 this.toolRegistry,
                 '[RiskAnalyzer] adjusted step',
                 detectMissingRequiredArgs,
-                WRITE_CONTENT_STUB_PATTERNS,
+                this.classifyContentStub,
             );
             const adjustedPlan: PlanStep[] = sanitized.steps;
 

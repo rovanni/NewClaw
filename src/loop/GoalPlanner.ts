@@ -21,7 +21,7 @@ import { PromptComposer } from '../core/PromptComposer';
 import { Goal, GoalBlocker, PlanStep, SuccessCriterion, CriterionCheck, GoalProgressModel } from './GoalTypes';
 import { StrategyDiversityGuard } from './StrategyDiversityGuard';
 import { PLACEHOLDER_ARG_PATTERN } from '../shared/placeholderPatterns';
-import { CONTENT_STUB_PATTERNS as WRITE_CONTENT_STUB_PATTERNS } from '../shared/contentStubPatterns';
+import { makeContentStubClassifier, ContentStubClassifier } from '../shared/contentStubClassifier';
 import { sanitizePlanSteps } from './planning/sanitizePlanSteps';
 import { isWindows } from '../utils/crossPlatform';
 
@@ -485,12 +485,6 @@ function extractUnixPaths(text: string): string[] {
 // Re-exportado aqui por compatibilidade com quem já importa de GoalPlanner.
 export { PLACEHOLDER_ARG_PATTERN };
 
-// WRITE_CONTENT_STUB_PATTERNS vem de shared/contentStubPatterns.ts (fonte única, também usada
-// por WriteTool em runtime — antes eram 2 listas divergentes: write_tool.ts tinha 8 padrões de
-// "LLM meta-placeholder" que esta lista não tinha). Re-exportado aqui por compatibilidade com
-// RiskAnalyzer/sanitizePlanSteps, que já importam esse nome de GoalPlanner.
-export { WRITE_CONTENT_STUB_PATTERNS };
-
 // ── Validação de args obrigatórios ────────────────────────────────────────────
 
 export function detectMissingRequiredArgs(tool: string, args: Record<string, unknown>): string | null {
@@ -564,11 +558,16 @@ export class GoalPlanner {
     private readonly skillLoader = new SkillLoader();
     private skillsSummaryCache: { summary: string; loadedAt: number } | null = null;
     private static readonly SKILLS_CACHE_TTL_MS = 60_000;
+    private readonly classifyContentStub: ContentStubClassifier;
 
     constructor(
         private readonly providerFactory: ProviderFactory,
         private readonly reflectionMemory: ReflectionMemory,
-    ) {}
+        /** Injeção de teste — quando omitido, usa o classificador LLM real via providerFactory. */
+        classifyContentStub?: ContentStubClassifier,
+    ) {
+        this.classifyContentStub = classifyContentStub ?? makeContentStubClassifier(providerFactory);
+    }
 
     setModel(model: string): void {
         if (model) this.model = model;
@@ -666,7 +665,7 @@ export class GoalPlanner {
                 return this.fallbackPlan(goal);
             }
 
-            let parsed = this.parsePlanResponse(result.content);
+            let parsed = await this.parsePlanResponse(result.content);
             if (parsed.steps.length === 0) {
                 log.warn(`[GoalPlanner] plan empty after parse: model=${this.model} raw="${result.content.slice(0, 200)}"`);
                 const retried = await this.retryWithMinimalPrompt(goal, 'plan');
@@ -742,7 +741,7 @@ export class GoalPlanner {
                 return this.emergencyFallback(goal, blocker);
             }
 
-            let parsed = this.parsePlanResponse(result.content);
+            let parsed = await this.parsePlanResponse(result.content);
             if (parsed.steps.length === 0) {
                 log.warn(`[GoalPlanner] replan empty after parse: model=${this.model} raw="${result.content.slice(0, 200)}"`);
                 const retried = await this.retryWithMinimalPrompt(goal, 'replan');
@@ -818,7 +817,7 @@ export class GoalPlanner {
 
     // ── Parsing ───────────────────────────────────────────────────────────────
 
-    private parsePlanResponse(content: string): PlanResult {
+    private async parsePlanResponse(content: string): Promise<PlanResult> {
         try {
             const cleaned = content
                 .replace(/```json\n?/g, '')
@@ -849,12 +848,12 @@ export class GoalPlanner {
             // Etapa 2 da consolidação do pipeline de planejamento: sanitização de steps
             // extraída para sanitizePlanSteps.ts (compartilhada com RiskAnalyzer na Etapa 3).
             // Comportamento idêntico ao que existia inline aqui antes.
-            const { steps } = sanitizePlanSteps(
+            const { steps } = await sanitizePlanSteps(
                 rawSteps.slice(0, 6),
                 ToolRegistry,
                 '[GoalPlanner]',
                 detectMissingRequiredArgs,
-                WRITE_CONTENT_STUB_PATTERNS,
+                this.classifyContentStub,
             );
 
             // Parseia e valida os successCriteria
@@ -968,7 +967,7 @@ Regras:
         try {
             const result = await this.callPlannerLLM(messages, 30_000);
             if (result.status !== 'success' || !result.content) return null;
-            const parsed = this.parsePlanResponse(result.content);
+            const parsed = await this.parsePlanResponse(result.content);
             if (parsed.steps.length === 0) {
                 log.warn(`[GoalPlanner] retry_minimal also empty: raw="${result.content.slice(0, 120)}"`);
                 return null;

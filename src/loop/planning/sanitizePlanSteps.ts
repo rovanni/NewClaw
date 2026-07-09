@@ -16,17 +16,25 @@
  * perderam args obrigatórios para decidir se rejeita o plano inteiro) sem precisar duplicar
  * a lógica de detecção outra vez.
  *
- * `detectMissingRequiredArgs` e `WRITE_CONTENT_STUB_PATTERNS` são recebidos por parâmetro em
- * vez de importados de GoalPlanner.ts: GoalPlanner.ts importa `sanitizePlanSteps` (Etapa 2),
- * então um import direto no sentido contrário criaria um ciclo — CommonJS resolveria com os
- * exports de GoalPlanner.ts ainda incompletos nesse ponto (as duas constantes são declaradas
- * depois do ponto do arquivo onde o ciclo seria disparado), quebrando em runtime.
+ * `detectMissingRequiredArgs` é recebido por parâmetro em vez de importado de GoalPlanner.ts:
+ * GoalPlanner.ts importa `sanitizePlanSteps` (Etapa 2), então um import direto no sentido
+ * contrário criaria um ciclo — CommonJS resolveria com os exports de GoalPlanner.ts ainda
+ * incompletos nesse ponto (a constante é declarada depois do ponto do arquivo onde o ciclo
+ * seria disparado), quebrando em runtime.
+ *
+ * `classifyContentStub` (09/07/2026): substituiu o parâmetro `writeContentStubPatterns:
+ * RegExp[]` — ver shared/contentStubClassifier.ts para o motivo (regex precisou de 6 rodadas
+ * de patch por incidentes reais; um LLM julgando a CLASSE do problema generaliza sem precisar
+ * de um padrão novo por frase). Função agora é `async` por causa disso — a checagem estrutural
+ * (`sawDataProducingTool`) continua síncrona e continua sendo a primeira linha de defesa,
+ * gratuita e determinística; o LLM só é chamado quando ela não se aplica.
  */
 
 import { createLogger } from '../../shared/AppLogger';
 import { PlanStep } from '../GoalTypes';
 import { PLACEHOLDER_ARG_PATTERN } from '../../shared/placeholderPatterns';
 import { resolveToolAlias } from './toolAliasResolver';
+import { ContentStubClassifier } from '../../shared/contentStubClassifier';
 
 const log = createLogger('SanitizePlanSteps');
 
@@ -75,15 +83,15 @@ export interface SanitizePlanStepsResult {
  *                      qualquer instância/mock com o mesmo formato.
  * @param logPrefix    Prefixo de log, ex: "[GoalPlanner]" ou "[RiskAnalyzer]".
  * @param detectMissingRequiredArgs Validador de args obrigatórios por tool (de GoalPlanner.ts).
- * @param writeContentStubPatterns  Lista de regex de content-stub (de GoalPlanner.ts).
+ * @param classifyContentStub       Classificador LLM de content-stub (shared/contentStubClassifier.ts).
  */
-export function sanitizePlanSteps(
+export async function sanitizePlanSteps(
     rawSteps: Array<Record<string, unknown>>,
     toolRegistry: { get(name: string): unknown },
     logPrefix: string,
     detectMissingRequiredArgs: (tool: string, args: Record<string, unknown>) => string | null,
-    writeContentStubPatterns: RegExp[],
-): SanitizePlanStepsResult {
+    classifyContentStub: ContentStubClassifier,
+): Promise<SanitizePlanStepsResult> {
     const mutations: StepMutation[] = [];
 
     // Atualizado ao final de cada iteração (só quando o step SOBREVIVE à sanitização com uma
@@ -92,7 +100,13 @@ export function sanitizePlanSteps(
     // plano está sendo montado.
     let sawDataProducingTool = false;
 
-    const steps: PlanStep[] = rawSteps.map((s: Record<string, unknown>, i: number) => {
+    // Loop sequencial (não Promise.all): sawDataProducingTool é lido e atualizado na ORDEM dos
+    // steps — um step i precisa saber se algum step ANTERIOR (< i) sobreviveu como produtor de
+    // dado, então cada iteração precisa terminar antes da próxima começar (inclusive esperando
+    // a chamada LLM de classifyContentStub, quando ela roda).
+    const steps: PlanStep[] = [];
+    for (let i = 0; i < rawSteps.length; i++) {
+        const s = rawSteps[i];
         const rawToolName = s.toolName ? String(s.toolName) : undefined;
 
         // Resolve alias antes de validar (ex: provide_file → send_document)
@@ -178,18 +192,18 @@ export function sanitizePlanSteps(
                 resolvedTool = undefined;
                 toolArgs = undefined;
             } else {
-                const stubMatch = writeContentStubPatterns.find(p => p.test(contentStr));
-                if (stubMatch) {
+                const verdict = await classifyContentStub(contentStr, resolvedTool);
+                if (verdict.isStub) {
                     log.warn(
                         `${logPrefix} step ${i + 1}: '${resolvedTool}.${contentBearingField}' content stub detectado ` +
-                        `(${contentStr.length} chars, pattern="${stubMatch.source.slice(0, 50)}") ` +
+                        `(${contentStr.length} chars, LLM reason="${verdict.reason.slice(0, 80)}") ` +
                         `— convertendo para AgentLoop step`
                     );
                     mutations.push({
                         stepId: String(s.id ?? `step_${i + 1}`),
                         originalTool: resolvedTool,
                         reason: 'content_stub',
-                        detail: `${contentStr.length} chars, pattern="${stubMatch.source.slice(0, 50)}"`,
+                        detail: `${contentStr.length} chars, LLM reason="${verdict.reason.slice(0, 80)}"`,
                         description: String(s.description ?? 'Execute step'),
                     });
                     resolvedTool = undefined;
@@ -228,15 +242,15 @@ export function sanitizePlanSteps(
             sawDataProducingTool = true;
         }
 
-        return {
+        steps.push({
             id: String(s.id ?? `step_${i + 1}`),
             description: String(s.description ?? 'Execute step'),
             toolName: resolvedTool,
             toolArgs,
             fallbackSteps: [],
             status: 'pending' as const,
-        };
-    });
+        });
+    }
 
     return { steps, mutations };
 }
