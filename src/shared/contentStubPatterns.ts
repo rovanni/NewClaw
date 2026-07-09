@@ -84,4 +84,16 @@ export const CONTENT_STUB_PATTERNS: RegExp[] = [
     // step/passo/etapa/fase + número — mesma classe semântica de sempre, agora cobrindo o
     // português além do inglês, sem repetir o risco de falso-positivo em conteúdo legítimo:
     /\b(obtid[oa]s?|coletad[oa]s?|retornad[oa]s?|extraíd[oa]s?|recuperad[oa]s?|gerad[oa]s?)\s+(n[ao]s?|d[ao]s?)\s+(step|passo|etapa|fase)[_\s-]?\d+\b/i,
+    // Reproduzido ao vivo (09/07/2026): send_audio.text = "Resumo do mercado de criptomoedas de
+    // hoje: [resultado_do_passo_1]" — foi direto pro TTS (o usuário reportou "áudio falando
+    // errado, repetindo letras": exatamente o efeito de um engine de TTS tentando pronunciar um
+    // identificador em snake_case). Escapou de TODOS os padrões acima, incluindo o de
+    // "step[_\s-]?\d+"/"passo...\d+" (linhas 41 e 86): aqui "passo_1" está GRUDADO em
+    // "resultado_do_" como um único token de identificador (sem verbo/preposição isolando um
+    // "passo N" reconhecível) — é a 6ª variação da mesma classe de bug (colchetes referenciando
+    // resultado de step) escapando por usar uma forma sintática ainda não coberta: identificador
+    // de código, não frase. Prosa real em português NUNCA usa snake_case dentro de colchetes —
+    // isso só existe como nome de variável de template vazando sem substituição. Cobre a classe
+    // inteira (qualquer nome_de_variável, não só "passo"/"step") em vez de mais uma string:
+    /\[[a-zà-öø-ÿ][a-zà-öø-ÿ0-9]*(?:_[a-zà-öø-ÿ0-9]+)+\]/i,
 ];
