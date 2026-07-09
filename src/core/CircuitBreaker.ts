@@ -232,7 +232,7 @@ export class CircuitBreaker {
     reset(): void {
         this.consecutiveFailures = 0;
         this.consecutiveSuccesses = 0;
-        this.halfOpenAttempted = false;
+        this.halfOpenAttempts = 0;
         this.transitionTo('CLOSED');
         log.info(`[CIRCUIT-BREAKER] ${this.config.name}: MANUAL RESET → CLOSED`);
     }
@@ -294,7 +294,7 @@ export class CircuitBreaker {
         this.lastStateChangeTime = Date.now();
 
         if (newState === 'HALF_OPEN') {
-            this.halfOpenAttempted = false;
+            this.halfOpenAttempts = 0;
         }
 
         if (oldState !== newState) {
