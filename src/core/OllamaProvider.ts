@@ -347,7 +347,16 @@ export class OllamaProvider implements ILLMProvider {
                         return;
                     }
                 }
-                if (thinkingBudgetAbort) break;
+                if (thinkingBudgetAbort) {
+                    // Must throw (not just break) so this reaches the catch block below and
+                    // propagates to _consumeStream's REASONING_BUDGET handling, which discards
+                    // the raw thinking instead of leaking it to the user as content. A silent
+                    // break here would make streamChat return normally with no 'done' chunk,
+                    // and _consumeStream's thinking-as-content fallback (for models that route
+                    // their whole response through the thinking field) would promote the
+                    // truncated internal reasoning as the final answer.
+                    throw new Error(`Reasoning budget exceeded — stream aborted (${thinkingYielded} chars)`);
+                }
             }
 
             // Flush remaining buffer
