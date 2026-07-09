@@ -1912,6 +1912,20 @@ export class AgentLoop {
                         cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
                         loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
                         if (result.success) usedToolOutputs.set(inputKey, result.output.slice(0, 2000));
+                        // Persiste args de tool calls bem-sucedidas no transcript (mesmo padrão já
+                        // usado por GoalExecutionLoop.ts, que sempre teve isso — AgentLoop nunca
+                        // teve, então turnos roteados por aqui perdiam permanentemente os argumentos
+                        // de qualquer tool call assim que o turno terminava (cycleHistory é local ao
+                        // método, descartado no return). Caso real: send_audio recebe o texto do
+                        // áudio só via toolArgs — sem isso, "qual foi o texto que você usou?" nunca
+                        // tem como ser respondido, mesmo o áudio tendo sido gerado com sucesso.
+                        if (result.success && channelContext) {
+                            this.sessionContext?.getSessionManager().recordToolCall(
+                                { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
+                                resolvedToolName,
+                                JSON.stringify(resolvedArgs),
+                            ).catch(() => {});
+                        }
 
                         // Evidence-driven budget upgrade: a turn classified as lightweight
                         // (conversation/direct, maxSteps=4) can still turn into real file-producing
@@ -2224,6 +2238,15 @@ export class AgentLoop {
 
                     cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
                     loopMessages.push({ role: 'tool', content: result.output });
+                    // Mesmo fix do caminho de tool-calling nativo acima (ver comentário lá) —
+                    // path json_action é a 2ª cópia do mesmo dispatch, precisa do mesmo registro.
+                    if (result.success && channelContext) {
+                        this.sessionContext?.getSessionManager().recordToolCall(
+                            { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
+                            resolvedToolName,
+                            JSON.stringify(resolvedArgs),
+                        ).catch(() => {});
+                    }
 
                     if (!result.success) {
                         toolFailureCount++;
@@ -2553,6 +2576,17 @@ export class AgentLoop {
                         log.info(`[${this.ts()}] [DELIVERY] ${result.finalToolName} -> ${result.result.success ? '✓' : '✗'}`);
                         loopMessages.push({ role: 'tool', content: result.result.output, tool_call_id: toolCall.id });
                         cycleHistory.push({ step: stepCount, tool: toolCall.name, input: JSON.stringify(toolCall.arguments), status: result.result.success ? 'success' : 'error' });
+                        // Mesmo fix dos caminhos nativo/json_action acima — este é justamente o
+                        // caminho que despacha send_audio/send_document/send_image/send_video
+                        // (terminalTools abaixo), então é o mais relevante dos três para o gap
+                        // real observado (texto do send_audio nunca persistido em lugar nenhum).
+                        if (result.result.success && channelContext) {
+                            this.sessionContext?.getSessionManager().recordToolCall(
+                                { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
+                                result.finalToolName,
+                                JSON.stringify(result.finalArgs ?? toolCall.arguments),
+                            ).catch(() => {});
+                        }
                         const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
                         if (terminalTools.includes(toolCall.name) && result.result.success) {
                             move('TOOL_COMPLETED', { step: stepCount, tool: toolCall.name, success: true });

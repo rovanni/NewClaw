@@ -397,10 +397,21 @@ export class GoalEvaluator {
         return null;
     }
 
-    /** Gera texto de explicação para o usuário quando goal falha */
+    /**
+     * Gera texto de explicação para o usuário quando goal falha.
+     *
+     * Usa goal.toolsTried (nomes de ferramenta limpos), NÃO goal.strategiesTried:
+     * strategiesTried guarda descrições de step já enriquecidas com hints internos
+     * de replanning (ex: "[ATENÇÃO — tentativa anterior com X retornou output
+     * irrelevante: ... Use abordagem diferente...]", ver GoalExecutionLoop.ts
+     * mismatchHint) — texto escrito para o PRÓPRIO LLM replanejador consumir no
+     * próximo ciclo, não para o usuário final. Juntar essas entradas aqui vazava
+     * jargão interno (nomes de step truncados, marcadores [ATENÇÃO —) direto na
+     * resposta do Telegram.
+     */
     buildFailureExplanation(goal: Goal): string {
-        const strategies = goal.strategiesTried.length > 0
-            ? `Tentei: ${goal.strategiesTried.join(', ')}.`
+        const strategies = goal.toolsTried.length > 0
+            ? `Tentei: ${goal.toolsTried.join(', ')}.`
             : '';
         const lastBlocker = goal.blockers[goal.blockers.length - 1];
         const blockerMsg = lastBlocker

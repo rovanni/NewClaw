@@ -47,6 +47,9 @@ export class SessionContext {
         this.budget = new ContextBudget(budgetConfig);
     }
 
+    /** Expose the SessionManager so callers (e.g. AgentLoop) can record tool calls to the transcript. */
+    getSessionManager(): SessionManager { return this.sessionManager; }
+
     /** Expose the ContextBuilder so callers (e.g. AgentLoop) can read post-build metadata. */
     getContextBuilder(): ContextBuilder { return this.contextBuilder; }
 

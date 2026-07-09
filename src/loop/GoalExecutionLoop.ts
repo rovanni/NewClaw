@@ -1027,13 +1027,21 @@ export class GoalExecutionLoop {
                         const dirHint = isDirListing
                             ? ` Listagem do diretório retornada: ${(cycleResult.output ?? '').split('\n').slice(0, 10).join('; ')}`
                             : '';
+                        // Quando alreadyHinted=true, pendingStep.description já carrega o
+                        // mismatchHint embutido de um ciclo anterior (linha ~1010) — cortar em
+                        // 100 chars sem remover o hint primeiro produz um blocker.description
+                        // truncado no meio do marcador interno (ex: "...via send_audio. [AT'"),
+                        // que buildFailureExplanation() (GoalEvaluator.ts) expõe ao usuário como
+                        // texto quebrado. Remove o hint antes de truncar — mesma sub-string
+                        // '[ATENÇÃO —' já usada em alreadyHinted acima, não é um padrão novo.
+                        const cleanStepDesc = pendingStep.description.split(' [ATENÇÃO —')[0];
                         cycleResult = {
                             ...cycleResult,
                             outcome: 'blocked',
                             blocker: {
                                 kind: 'semantic_mismatch' as const,
                                 toolName: pendingStep.toolName,
-                                description: `Step '${pendingStep.description.slice(0, 100)}' retornou output irrelevante ${alreadyHinted ? 'após 2 tentativas' : 'após esgotar retryBudget'}: ${semanticValidation.reason ?? 'mismatch semântico'}${dirHint}`,
+                                description: `Step '${cleanStepDesc.slice(0, 100)}' retornou output irrelevante ${alreadyHinted ? 'após 2 tentativas' : 'após esgotar retryBudget'}: ${semanticValidation.reason ?? 'mismatch semântico'}${dirHint}`,
                                 suggestedActions: isDirListing
                                     ? [
                                         'Usar o path completo de um dos arquivos listados acima em vez do diretório',
