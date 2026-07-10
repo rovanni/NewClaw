@@ -60,6 +60,21 @@ const GENERIC_CRITERIA_SUMMARY = 'Todos os critérios do checklist foram satisfe
 
 export type ProgressCallback = (update: GoalProgressUpdate) => Promise<void>;
 
+/**
+ * Estado cognitivo/de progresso de UMA execução de goal — criado localmente em `runLoop()`
+ * (ponto de entrada compartilhado por `executeGoal`/`resumeGoal`) e propagado explicitamente
+ * pela cadeia de chamadas, nunca guardado em campo de instância. Antes (Sprint 0.6, Front A),
+ * `cognitiveContext`/`progressModel` eram campos `private` da classe — como `GoalExecutionLoop`
+ * é singleton por processo, dois goals de sessões diferentes podiam ler/escrever o mesmo objeto
+ * (concorrência real via `await`, ou vazamento sequencial garantido via `resumeGoal()`, que nunca
+ * resetava os campos). Local a cada chamada elimina o compartilhamento por construção — não é
+ * mais possível vazar entre goals, com ou sem reset disciplinado.
+ */
+interface GoalExecutionState {
+    cognitiveContext: StepCognitiveContext;
+    progressModel: GoalProgressModel | null;
+}
+
 export class GoalExecutionLoop {
     private readonly evaluator = new GoalEvaluator();
     private readonly riskAnalyzer: RiskAnalyzer;
@@ -67,12 +82,6 @@ export class GoalExecutionLoop {
     private readonly gracefulDelivery = new GracefulDeliveryOrchestrator();
     private readonly capRegistry = CapabilityRegistry.getInstance();
     private readonly proactiveRecovery = new ProactiveRecovery();
-
-    /** Contexto cognitivo acumulado durante a execução de um goal (resetado a cada novo goal). */
-    private cognitiveContext: StepCognitiveContext = createEmptyStepCognitiveContext();
-
-    /** Modelo de progresso dimensional do goal atual. */
-    private progressModel: GoalProgressModel | null = null;
 
     /** SessionManager opcional — usado para telemetria de compressão concorrente e artefatos. */
     private sessionManager: SessionManager | null = null;
@@ -131,14 +140,10 @@ export class GoalExecutionLoop {
         // novo, sem bloquear a execução real (também fire-and-forget).
         void this.caseMemory.backfillMissingEmbeddings().catch(() => {});
 
-        // Reinicia o contexto cognitivo e o modelo de progresso para este goal
-        this.cognitiveContext = createEmptyStepCognitiveContext();
-        this.progressModel = {
-            goalId: goal.id,
-            components: [],
-            overallPercent: 0,
-            updatedAt: Date.now(),
-        };
+        // NOTA (Sprint 0.6, Front A): o estado cognitivo/de progresso não é mais inicializado
+        // aqui — `runLoop()` (chamado abaixo, ponto de entrada compartilhado com `resumeGoal()`)
+        // cria um `GoalExecutionState` novo e local a cada chamada. Isso elimina por construção
+        // o vazamento que existia quando `resumeGoal()` reusava o estado de instância sem resetar.
 
         // ── Q1: Contextualização ──────────────────────────────────────────
         // Enriquece o entendimento do objetivo com memória semântica antes de planejar
@@ -311,6 +316,7 @@ export class GoalExecutionLoop {
         blocker: GoalBlocker,
         priorFeedback: string | undefined,
         cycleNumber: number,
+        state: GoalExecutionState,
         forceQ2 = false,
     ): Promise<Goal> {
         // Q1: Contextualização — memória + feedback do ciclo anterior
@@ -324,7 +330,7 @@ export class GoalExecutionLoop {
             : undefined;
 
         // Replan com contexto enriquecido (inclui progresso dimensional acumulado)
-        const planResult = await this.planner.replan(goal, blocker, q1Context ?? '', capSummary, activeMilestone, this.progressModel ?? undefined);
+        const planResult = await this.planner.replan(goal, blocker, q1Context ?? '', capSummary, activeMilestone, state.progressModel ?? undefined);
 
         // Se o roadmap foi ajustado pelo planner durante o replanejamento
         if (goal.isConstruction && planResult.adjustedRoadmap && planResult.adjustedRoadmap.length > 0) {
@@ -499,17 +505,17 @@ export class GoalExecutionLoop {
         // (tentativas fracassadas já descartadas), preserva apenas os 'completed'.
         // Recalcula overallPercent como: completed_anteriores / (completed + steps_pendentes_do_novo_plano)
         // para refletir o progresso real acumulado em relação ao trabalho total que ainda resta.
-        if (this.progressModel) {
-            this.progressModel.components = this.progressModel.components.filter(
+        if (state.progressModel) {
+            state.progressModel.components = state.progressModel.components.filter(
                 c => c.status === 'completed'
             );
-            const completedCount = this.progressModel.components.length;
+            const completedCount = state.progressModel.components.length;
             const pendingCount = finalPlan.filter(s => s.status === 'pending').length;
             const totalWork = completedCount + pendingCount;
-            this.progressModel.overallPercent = totalWork > 0
+            state.progressModel.overallPercent = totalWork > 0
                 ? Math.round((completedCount / totalWork) * 100)
                 : 0;
-            this.progressModel.updatedAt = Date.now();
+            state.progressModel.updatedAt = Date.now();
         }
         return this.goalStore.getById(goal.id)!;
     }
@@ -529,8 +535,23 @@ export class GoalExecutionLoop {
         const goalSessionKey = { channel: goalChannel || 'unknown', userId: goalUserId || 'unknown' };
         this.sessionManager?.setActiveGoal(goalSessionKey, goal.id);
 
+        // Estado cognitivo/de progresso local a ESTA chamada (Sprint 0.6, Front A) — criado aqui
+        // porque `runLoop()` é o ponto de entrada compartilhado por `executeGoal` E `resumeGoal`,
+        // então nenhum dos dois pode esquecer de inicializar (era exatamente o bug de
+        // `resumeGoal()` antes desta correção). Nunca armazenado em `this.*` — não há como um
+        // Goal B ler/escrever o estado de um Goal A.
+        const state: GoalExecutionState = {
+            cognitiveContext: createEmptyStepCognitiveContext(),
+            progressModel: {
+                goalId: goal.id,
+                components: [],
+                overallPercent: 0,
+                updatedAt: Date.now(),
+            },
+        };
+
         try {
-        return await this.runLoopInternal(goal, channelContext, onProgress, initialCycles, initialReplans, initialFeedback);
+        return await this.runLoopInternal(goal, channelContext, onProgress, initialCycles, initialReplans, initialFeedback, state);
         } finally {
             this.sessionManager?.clearActiveGoal(goalSessionKey);
         }
@@ -542,7 +563,8 @@ export class GoalExecutionLoop {
         onProgress: ProgressCallback | undefined,
         initialCycles: number,
         initialReplans: number,
-        initialFeedback?: string,
+        initialFeedback: string | undefined,
+        state: GoalExecutionState,
     ): Promise<GoalResult> {
         let currentGoal = goal;
         let totalCycles = initialCycles;
@@ -636,7 +658,7 @@ export class GoalExecutionLoop {
                     );
                     validation = { achieved: true, summary: 'Arquivo(s) já existente(s) no workspace, pronto(s) para envio.' };
                 } else {
-                    validation = await this.validateGoalCompletion(currentGoal, activeMilestone);
+                    validation = await this.validateGoalCompletion(currentGoal, activeMilestone, state);
                 }
 
                 if (validation.achieved) {
@@ -717,7 +739,7 @@ export class GoalExecutionLoop {
                                 currentGoal = this.goalStore.getById(currentGoal.id)!;
                                 continue;
                             }
-                            const sendResult = await this.executeStep(currentGoal, sendStep, channelContext, totalCycles);
+                            const sendResult = await this.executeStep(currentGoal, sendStep, channelContext, totalCycles, state);
                             currentGoal = this.goalStore.getById(currentGoal.id)!;
                             const sendOk = sendResult.outcome === 'success';
                             log.info(
@@ -734,6 +756,15 @@ export class GoalExecutionLoop {
                                 }
                             } else {
                                 failedSends++;
+                                // Sprint 0.6, Front B: preserva o blocker classificado por
+                                // GoalEvaluator dentro de executeStep() — causa raiz exata do
+                                // `blockers=[]` observado no goal real "ykpko" (Sprint 0.5): a
+                                // falha de um send_document diferido pós-validação nunca
+                                // propagava seu blocker.
+                                if (sendResult.blocker) {
+                                    this.goalStore.recordBlocker(currentGoal.id, sendResult.blocker);
+                                    currentGoal = this.goalStore.getById(currentGoal.id)!;
+                                }
                             }
                         }
                         // FIX #2: não marcar goal como completed se algum send_document falhou
@@ -856,7 +887,7 @@ export class GoalExecutionLoop {
                 if (currentGoal.replanBudget <= 0) {
                     // C: budget adaptativo — se há progresso substancial, concede +1 replan bonus
                     // focalizado nos componentes pendentes em vez de reiniciar do zero
-                    const progressPct = this.progressModel?.overallPercent ?? 0;
+                    const progressPct = state.progressModel?.overallPercent ?? 0;
                     const bonusGranted = progressPct >= 60 && totalReplans <= 1;
                     if (bonusGranted) {
                         log.info(
@@ -870,7 +901,7 @@ export class GoalExecutionLoop {
                         });
                         currentGoal = this.goalStore.getById(currentGoal.id)!;
                         // Blocker focado nos componentes pendentes do progressModel
-                        const pendingComponents = (this.progressModel?.components ?? [])
+                        const pendingComponents = (state.progressModel?.components ?? [])
                             .filter(c => c.status !== 'completed')
                             .map(c => c.label)
                             .join('; ');
@@ -882,7 +913,7 @@ export class GoalExecutionLoop {
                         };
                         this.goalStore.addBlocker(currentGoal.id, bonusBlocker);
                         this.goalStore.addStrategyTried(currentGoal.id, `bonus_replan: progress=${progressPct}% pendentes=[${pendingComponents}]`);
-                        currentGoal = await this.planWithSpiral(currentGoal, bonusBlocker, validation.reason, totalReplans + 1, true);
+                        currentGoal = await this.planWithSpiral(currentGoal, bonusBlocker, validation.reason, totalReplans + 1, state, true);
                         totalReplans++;
                         continue;
                     }
@@ -890,7 +921,7 @@ export class GoalExecutionLoop {
                     this.goalStore.setStatus(currentGoal.id, 'failed');
                     const baseExplanation = validation.reason ?? this.evaluator.buildFailureExplanation(currentGoal);
                     // Entrega parcial: se há conteúdo útil coletado, enriquece a mensagem final
-                    const graceful = this.gracefulDelivery.assess(currentGoal, this.cognitiveContext);
+                    const graceful = this.gracefulDelivery.assess(currentGoal, state.cognitiveContext);
                     const explanation = graceful.hasPartialContent
                         ? graceful.partialSummary
                         : baseExplanation;
@@ -924,7 +955,7 @@ export class GoalExecutionLoop {
                 // Q4 → Q1: feedback da validação alimenta o próximo ciclo espiral
                 // forceQ2=true: se o objetivo não foi entregue, Q2 sempre revisa o plano
                 priorFeedback = validation.reason;
-                currentGoal = await this.planWithSpiral(currentGoal, blocker, priorFeedback, totalReplans + 1, true);
+                currentGoal = await this.planWithSpiral(currentGoal, blocker, priorFeedback, totalReplans + 1, state, true);
                 totalReplans++;
 
                 if (Date.now() > currentGoal.expiresAt) {
@@ -963,7 +994,7 @@ export class GoalExecutionLoop {
             }
 
             let cycleResult = await this.executeStep(
-                currentGoal, pendingStep, channelContext, totalCycles,
+                currentGoal, pendingStep, channelContext, totalCycles, state,
                 // CORREÇÃO 1: passa callback para que DELIVERY-GUARD notifique sentArtifacts
                 // diretamente, sem depender de S10 (que só executa em case 'success').
                 (fp) => { if (fp) trackArtifact(fp); },
@@ -1024,7 +1055,7 @@ export class GoalExecutionLoop {
                         ` reason="${(semanticValidation.reason ?? '').slice(0, 100)}"` +
                         ` action=downgrade_to_partial`
                     );
-                    this.cognitiveContext.failedStrategies.push(
+                    state.cognitiveContext.failedStrategies.push(
                         `${pendingStep.toolName} (step ${pendingStep.id}): output irrelevante para a intenção — ${semanticValidation.reason ?? 'mismatch'}`
                     );
                     // P5: persiste na ReflectionMemory para que futuros goals evitem o mesmo padrão
@@ -1109,7 +1140,7 @@ export class GoalExecutionLoop {
                         ` reason="${(semanticValidation.reason ?? '').slice(0, 100)}"` +
                         ` action=log_only (below downgrade threshold)`
                     );
-                    this.cognitiveContext.failedStrategies.push(
+                    state.cognitiveContext.failedStrategies.push(
                         `${pendingStep.toolName}: possível mismatch semântico — ${semanticValidation.reason ?? 'output pode não ser relevante'}`
                     );
                 }
@@ -1120,8 +1151,8 @@ export class GoalExecutionLoop {
 
                 case 'success': {
                     this.markStepDone(currentGoal, pendingStep, cycleResult.output ?? '');
-                    this.updateCognitiveContext(pendingStep, cycleResult.output ?? '');
-                    this.updateProgressModel(pendingStep, 'completed', cycleResult.output);
+                    this.updateCognitiveContext(pendingStep, cycleResult.output ?? '', state);
+                    this.updateProgressModel(pendingStep, 'completed', cycleResult.output, state);
                     // Fix #2: registra artefatos enviados para evitar reenvio por deliverable_check
                     if (pendingStep.toolName === 'send_document' && pendingStep.toolArgs?.file_path) {
                         trackArtifact(String(pendingStep.toolArgs.file_path));
@@ -1219,8 +1250,15 @@ export class GoalExecutionLoop {
                 }
 
                 case 'partial': {
+                    // Sprint 0.6, Front B: preserva o blocker já classificado por
+                    // GoalEvaluator.evaluate() para auditoria/replan futuro. Usa recordBlocker
+                    // (não addBlocker) de propósito — 'partial' é retryável, o goal continua
+                    // 'executing'; addBlocker forçaria status='blocked' incorretamente.
+                    if (cycleResult.blocker) {
+                        this.goalStore.recordBlocker(currentGoal.id, cycleResult.blocker);
+                    }
                     // Retryável — registra como 'in_progress' e diminui retry budget
-                    this.updateProgressModel(pendingStep, 'in_progress', cycleResult.output);
+                    this.updateProgressModel(pendingStep, 'in_progress', cycleResult.output, state);
                     this.goalStore.update(currentGoal.id, {
                         retryBudget: Math.max(0, currentGoal.retryBudget - 1),
                     });
@@ -1336,8 +1374,8 @@ export class GoalExecutionLoop {
                     if (!cycleResult.blocker) break;
 
                     this.goalStore.addBlocker(currentGoal.id, cycleResult.blocker);
-                    this.recordFailedStrategy(pendingStep, cycleResult.blocker.description, currentGoal.id);
-                    this.updateProgressModel(pendingStep, 'failed', cycleResult.blocker.description);
+                    this.recordFailedStrategy(pendingStep, cycleResult.blocker.description, currentGoal.id, state);
+                    this.updateProgressModel(pendingStep, 'failed', cycleResult.blocker.description, state);
                     currentGoal = this.goalStore.getById(currentGoal.id)!;
 
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'replanning', message: cycleResult.blocker.description });
@@ -1384,15 +1422,21 @@ export class GoalExecutionLoop {
                         pendingStep.description + (pendingStep.toolName ? ` via ${pendingStep.toolName}` : ''));
 
                     priorFeedback = cycleResult.blocker?.description;
-                    currentGoal = await this.planWithSpiral(currentGoal, cycleResult.blocker!, priorFeedback, totalReplans + 1);
+                    currentGoal = await this.planWithSpiral(currentGoal, cycleResult.blocker!, priorFeedback, totalReplans + 1, state);
                     totalReplans++;
                     break;
                 }
 
                 case 'failed': {
+                    // Sprint 0.6, Front B: preserva o blocker classificado por GoalEvaluator
+                    // antes desta falha ser tratada como terminal — sem isso, goal.blockers
+                    // ficava vazio mesmo em falhas definitivas (esgotamento de budget).
+                    if (cycleResult.blocker) {
+                        this.goalStore.recordBlocker(currentGoal.id, cycleResult.blocker);
+                    }
                     this.goalStore.setStatus(currentGoal.id, 'failed');
-                    this.recordFailedStrategy(pendingStep, cycleResult.output ?? 'step falhou', currentGoal.id);
-                    this.updateProgressModel(pendingStep, 'failed', cycleResult.output);
+                    this.recordFailedStrategy(pendingStep, cycleResult.output ?? 'step falhou', currentGoal.id, state);
+                    this.updateProgressModel(pendingStep, 'failed', cycleResult.output, state);
                     // cycleResult.output tem prioridade quando contém mensagem rica (ex: dep install falhou → instrução manual)
                     const explanation = cycleResult.output ?? this.evaluator.buildFailureExplanation(currentGoal);
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'failed', message: explanation });
@@ -1417,7 +1461,7 @@ export class GoalExecutionLoop {
             const activeMilestone = currentGoal.isConstruction && currentGoal.roadmap && currentGoal.roadmap.length > 0
                 ? currentGoal.roadmap[currentGoal.currentMilestoneIndex ?? 0]
                 : undefined;
-            const validation = await this.validateGoalCompletion(currentGoal, activeMilestone);
+            const validation = await this.validateGoalCompletion(currentGoal, activeMilestone, state);
             if (validation.achieved) {
                 const isLastMilestone = !currentGoal.isConstruction || !currentGoal.roadmap || (currentGoal.currentMilestoneIndex ?? 0) === currentGoal.roadmap.length - 1;
                 if (isLastMilestone) {
@@ -1442,7 +1486,8 @@ export class GoalExecutionLoop {
         goal: Goal,
         step: PlanStep,
         channelContext: ChannelContext,
-        cycle = 0,
+        cycle: number,
+        state: GoalExecutionState,
         onArtifactDelivered?: (filePath: string) => void,
         isAudioAlreadySent?: () => boolean,
     ): Promise<CycleResult> {
@@ -1536,7 +1581,7 @@ export class GoalExecutionLoop {
                 }
             } else {
                 // Sem tool específica → chama AgentLoop com prompt focado no step
-                const cognitiveBlock = this.buildIncrementalExecutionContext(goal, step);
+                const cognitiveBlock = this.buildIncrementalExecutionContext(goal, step, state);
                 const focusLine = goal.cycleFocus
                     ? `\nFoco do ciclo: ${goal.cycleFocus}`
                     : '';
@@ -2013,7 +2058,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
      *   goal.strategiesTried      → failedStrategies
      *   attempt.discoveries       → discoveries (ProactiveRecovery + step)
      */
-    private buildIncrementalExecutionContext(goal: Goal, currentStep: PlanStep): string {
+    private buildIncrementalExecutionContext(goal: Goal, currentStep: PlanStep, state: GoalExecutionState): string {
         const attempts = goal.attempts;
 
         // ── Derivar categorias a partir de goal.attempts ─────────────────────
@@ -2105,8 +2150,8 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
 
         // D: GoalProgressModel — visão dimensional do progresso para o AgentLoop
         // Elimina re-discovery e orienta o agente para o que ainda falta
-        if (this.progressModel && this.progressModel.components.length > 0) {
-            const pm = this.progressModel;
+        if (state.progressModel && state.progressModel.components.length > 0) {
+            const pm = state.progressModel;
             const pending = pm.components.filter(c => c.status !== 'completed');
             const done = pm.components.filter(c => c.status === 'completed');
             if (done.length > 0 || pending.length > 0) {
@@ -2218,8 +2263,8 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
      * Atualiza o cognitiveContext com os resultados de um step concluído.
      * Extrai via pattern matching: arquivos lidos, comandos, artefatos.
      */
-    private updateCognitiveContext(step: PlanStep, output: string): void {
-        const ctx = this.cognitiveContext;
+    private updateCognitiveContext(step: PlanStep, output: string, state: GoalExecutionState): void {
+        const ctx = state.cognitiveContext;
         const text = output.slice(0, 800);
 
         // ARTIFACT-DRIFT FIX: incluir 'read' no rastreamento (antes só file_read/read_document)
@@ -2299,19 +2344,20 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
     private updateProgressModel(
         step: PlanStep,
         status: ProgressComponent['status'],
-        evidence?: string,
+        evidence: string | undefined,
+        state: GoalExecutionState,
     ): void {
-        if (!this.progressModel) return;
+        if (!state.progressModel) return;
 
         const componentId = `step_${step.id}`;
-        const existing = this.progressModel.components.find(c => c.id === componentId);
+        const existing = state.progressModel.components.find(c => c.id === componentId);
 
         if (existing) {
             existing.status = status;
             existing.evidence = evidence?.slice(0, 200);
             if (status === 'completed') existing.completedAt = Date.now();
         } else {
-            this.progressModel.components.push({
+            state.progressModel.components.push({
                 id: componentId,
                 label: step.description.slice(0, 100),
                 status,
@@ -2320,10 +2366,10 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             });
         }
 
-        const total = this.progressModel.components.length;
-        const done = this.progressModel.components.filter(c => c.status === 'completed').length;
-        this.progressModel.overallPercent = total > 0 ? Math.round((done / total) * 100) : 0;
-        this.progressModel.updatedAt = Date.now();
+        const total = state.progressModel.components.length;
+        const done = state.progressModel.components.filter(c => c.status === 'completed').length;
+        state.progressModel.overallPercent = total > 0 ? Math.round((done / total) * 100) : 0;
+        state.progressModel.updatedAt = Date.now();
     }
 
     /**
@@ -2538,7 +2584,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
      * Persiste em goalStore.strategiesTried (SQLite) para sobreviver a restarts.
      * O cognitiveContext.failedStrategies é mantido como cache in-memory (compatibilidade).
      */
-    private recordFailedStrategy(step: PlanStep, reason: string, goalId?: string): void {
+    private recordFailedStrategy(step: PlanStep, reason: string, goalId: string | undefined, state: GoalExecutionState): void {
         const strategy = step.toolName
             ? `${step.toolName}: ${step.description.slice(0, 80)}`
             : step.description.slice(0, 100);
@@ -2550,10 +2596,10 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
         }
 
         // Cache in-memory para a sessão atual (compatibilidade com código legado)
-        if (!this.cognitiveContext.failedStrategies.includes(entry)) {
-            this.cognitiveContext.failedStrategies.push(entry);
-            if (this.cognitiveContext.failedStrategies.length > 6) {
-                this.cognitiveContext.failedStrategies.shift();
+        if (!state.cognitiveContext.failedStrategies.includes(entry)) {
+            state.cognitiveContext.failedStrategies.push(entry);
+            if (state.cognitiveContext.failedStrategies.length > 6) {
+                state.cognitiveContext.failedStrategies.shift();
             }
         }
     }
@@ -2674,7 +2720,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
         };
     }
 
-    private async validateGoalCompletion(goal: Goal, activeMilestone?: string): Promise<{
+    private async validateGoalCompletion(goal: Goal, activeMilestone: string | undefined, state: GoalExecutionState): Promise<{
         achieved: boolean;
         summary?: string;
         reason?: string;
@@ -2758,9 +2804,9 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             : '';
 
         // B: injeta GoalProgressModel no prompt de validação — o LLM sabe o que foi e não foi entregue
-        const progressBlock = this.progressModel && this.progressModel.components.length > 0
+        const progressBlock = state.progressModel && state.progressModel.components.length > 0
             ? (() => {
-                const pm = this.progressModel!;
+                const pm = state.progressModel!;
                 const compLines = pm.components.map(c => {
                     const icon = c.status === 'completed' ? '✓' : c.status === 'failed' ? '✗' : '○';
                     return `  ${icon} ${c.label}${c.evidence ? ` — ${c.evidence.slice(0, 80)}` : ''}`;

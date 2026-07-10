@@ -309,6 +309,25 @@ export class GoalStore {
         log.info(`[GoalStore] goal=${goalId} blocker: kind=${blocker.kind} tool=${blocker.toolName ?? 'none'} desc="${blocker.description.slice(0, 100)}"`);
     }
 
+    /**
+     * Registra um blocker SEM forçar `status='blocked'` — ao contrário de `addBlocker()`
+     * (que sempre muda o status, correto no branch 'blocked', onde o goal de fato pausa para
+     * replan). Usada nos branches onde o blocker já foi classificado por
+     * `GoalEvaluator.evaluate()` mas o outcome real é outro: 'partial' (retryável — o goal
+     * continua 'executing', virar 'blocked' seria transformar uma falha recuperável em bloqueio
+     * permanente falso) ou 'failed'/entrega diferida (o goal já está terminando com seu status
+     * final correto — `addBlocker` sobrescreveria para 'blocked' incorretamente, já que
+     * `update()` não valida transição de estado). Sprint 0.6, Front B — causa raiz do
+     * `blockers=[]` observado em goals `failed` reais (ex: goal_...ykpko, Sprint 0.5).
+     */
+    recordBlocker(goalId: string, blocker: GoalBlocker): void {
+        const goal = this.getById(goalId);
+        if (!goal) return;
+        const blockers = [...goal.blockers, blocker];
+        this.update(goalId, { blockers });
+        log.info(`[GoalStore] goal=${goalId} blocker recorded (status inalterado): kind=${blocker.kind} tool=${blocker.toolName ?? 'none'} desc="${blocker.description.slice(0, 100)}"`);
+    }
+
     addToolTried(goalId: string, toolName: string): void {
         const goal = this.getById(goalId);
         if (!goal) return;

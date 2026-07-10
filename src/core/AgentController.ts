@@ -313,7 +313,10 @@ export class AgentController {
             transcriptDir: './data/sessions',
         });
 
-        this.memoryCurator = new MemoryCurator(this.memory);
+        // Sprint 0.6, Front D: reaproveita a ReflectionMemory já construída dentro do
+        // AgentLoop para que enforceStorageQuotas() também agende reflectionMemory.prune()
+        // (antes: reflection_annotations crescia sem limite, prune() nunca era chamado).
+        this.memoryCurator = new MemoryCurator(this.memory, undefined, this.agentLoop.getReflectionMemory());
 
         if (config.telegramBotToken) {
             this.telegramAdapter = new TelegramAdapter({

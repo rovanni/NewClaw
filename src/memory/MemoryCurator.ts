@@ -7,6 +7,7 @@ import { errorMessage } from '../shared/errors';
 const log = createLogger('Memorycurator');
 import type { DomainSummaryService } from './DomainSummaryService';
 import { getDomainById } from './DomainRegistry';
+import type { ReflectionMemory } from './ReflectionMemory';
 
 interface CuratorResult {
     orphansFixed: number;
@@ -53,13 +54,23 @@ export class MemoryCurator {
     private embeddingService?: EmbeddingService;
     private domainSummaryService: DomainSummaryService;
     private intervalId: ReturnType<typeof setInterval> | null = null;
+    private reflectionMemory?: ReflectionMemory;
 
-    constructor(memoryManager: MemoryManager, embeddingService?: EmbeddingService) {
+    /**
+     * `reflectionMemory` opcional (Sprint 0.6, Front D): permite agendar
+     * `reflectionMemory.prune()` no mesmo ciclo de `enforceStorageQuotas()` que já poda
+     * `agent_traces`/`procedural_executions`. Sem isso, `reflection_annotations` crescia sem
+     * limite (o método `prune()` já existia, corretamente implementado, mas nunca era
+     * chamado). Opcional para não quebrar o call site de `DashboardServer.ts` (modo
+     * standalone do dashboard), que não tem uma instância de `ReflectionMemory` à mão.
+     */
+    constructor(memoryManager: MemoryManager, embeddingService?: EmbeddingService, reflectionMemory?: ReflectionMemory) {
         this.mm = memoryManager;
         this.repo = memoryManager.getGraphRepository();
         this.analytics = new GraphAnalytics(memoryManager);
         this.embeddingService = embeddingService;
         this.domainSummaryService = memoryManager.getDomainSummaryService();
+        this.reflectionMemory = reflectionMemory;
     }
 
     private addEdgeSafe(from: string, to: string, relation: string): boolean {
@@ -226,9 +237,13 @@ export class MemoryCurator {
             }
 
             const prunedProcedural = this.mm.getProceduralMemory().pruneOldExecutions(90);
+            // Sprint 0.6, Front D: usa o default já declarado em ReflectionMemory.prune()
+            // (30 dias) — não um número novo. Evidência de suficiência (ver relatório): nenhum
+            // consumidor real de reflection_annotations lê além de 30 dias.
+            const prunedReflections = this.reflectionMemory?.prune() ?? 0;
 
-            if (prunedTraces > 0 || prunedMessages > 0 || prunedProcedural > 0) {
-                log.info(`[StorageQuotas] Pruned ${prunedTraces} traces, ${prunedMessages} messages, ${prunedProcedural} procedural executions.`);
+            if (prunedTraces > 0 || prunedMessages > 0 || prunedProcedural > 0 || prunedReflections > 0) {
+                log.info(`[StorageQuotas] Pruned ${prunedTraces} traces, ${prunedMessages} messages, ${prunedProcedural} procedural executions, ${prunedReflections} reflection annotations.`);
             }
 
             return { prunedTraces, prunedMessages };

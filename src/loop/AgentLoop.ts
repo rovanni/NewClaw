@@ -227,6 +227,15 @@ export class AgentLoop {
 
     // ── Accessors ──────────────────────────────────────────────────────────────
 
+    /**
+     * Expõe a instância de ReflectionMemory já construída internamente — reaproveitada por
+     * `MemoryCurator` (Sprint 0.6, Front D) para agendar `prune()` no mesmo ciclo que já poda
+     * `agent_traces`/`procedural_executions`, sem criar uma segunda instância desnecessária.
+     */
+    getReflectionMemory(): ReflectionMemory {
+        return this.reflectionMemory;
+    }
+
     /** Injeta o WorkflowEngine para habilitar callbacks estruturados (Fase 2). */
     setWorkflowEngine(engine: WorkflowEngine): void {
         this.workflowEngine = engine;
@@ -2794,6 +2803,38 @@ export class AgentLoop {
                 this.persistTrace(trace, 0, 'error', 'Erro interno de estado', channelContext);
             }
             throw fsmError;
+        } finally {
+            // Sprint 0.6, Front C: rede de segurança do lifecycle do trace. O catch acima só
+            // intercepta EXCEÇÕES (fsmError) — mas vários `return` normais dentro do try (ex:
+            // "sessionContext not set", pedido de autorização needs_auth, cancelamentos em
+            // fases de delivery/síntese/fallback) não passam por nenhum dos completeTrace(...)
+            // já existentes acima, deixando o trace ativo no Map para sempre (achado "Unbounded
+            // active trace memory leak" já autodiagnosticado pelo AuditorService). Se o catch já
+            // fechou o trace (exceção real), completeTrace() já removeu do Map ativo — o guard
+            // getActiveTrace() abaixo simplesmente não dispara de novo (sem dupla finalização).
+            // Nunca deixa uma falha de limpeza mascarar a exceção causal original: erro aqui só
+            // é logado, nunca relançado.
+            try {
+                if (traceManager.getActiveTrace(trace.id)) {
+                    const closedByCancel = turnSignal.aborted;
+                    // 'completed' (não 'error'): por construção, só chegamos aqui quando a
+                    // função saiu por um `return` normal sem exceção — o turno produziu uma
+                    // resposta válida (ex: pedido de autorização, mensagem de indisponibilidade),
+                    // não um erro. Rotular como 'error' seria telemetria falsa. 'cancelled'
+                    // quando o turnSignal foi abortado, mesmo critério já usado no único
+                    // cancelamento hoje tratado corretamente (linha ~1569 desta função).
+                    const status = closedByCancel ? 'cancelled' : 'completed';
+                    const note = closedByCancel
+                        ? 'Operação cancelada.'
+                        : 'Turno concluído (fechado pela rede de segurança do lifecycle — ver Sprint 0.6 Front C).';
+                    traceManager.completeTrace(trace, status, note);
+                    if (!closedByCancel) {
+                        this.persistTrace(trace, 0, status, note, channelContext);
+                    }
+                }
+            } catch (cleanupError) {
+                log.warn(`[${this.ts()}] [TRACE-CLEANUP-FAILED] trace=${trace.id} ${errorMessage(cleanupError)}`);
+            }
         }
     }
 }
