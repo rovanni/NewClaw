@@ -599,7 +599,45 @@ export class GoalExecutionLoop {
                     ? currentGoal.roadmap[currentGoal.currentMilestoneIndex ?? 0]
                     : undefined;
 
-                const validation = await this.validateGoalCompletion(currentGoal, activeMilestone);
+                // Bypass estrutural: quando o único trabalho restante é despachar send_document
+                // para arquivo(s) que já existem no disco com tamanho substantivo, o validador por
+                // LLM nunca consegue confirmar "foi enviado" — o envio só acontece DEPOIS de
+                // achieved=true (Fix #1 acima). Isso é um impasse estrutural para goals cujo único
+                // propósito é reenviar um arquivo já existente (sem nenhum 'write' neste goal como
+                // evidência de criação). Reproduzido ao vivo em 09/07 (goal "me envia a aula ..."):
+                // esgotou o replanBudget tentando reenviar um .pptx já pronto, e no desespero o
+                // planner criou um arquivo de "resumo de entrega" fabricado só para ter evidência de
+                // 'write' e passar no validador — ver project_session_bugs_jul2026_ap na memória.
+                // Verificação estrutural (arquivo existe, não é placeholder) é mais confiável aqui
+                // do que o julgamento literal do LLM sobre um evento que ainda não aconteceu.
+                const pendingSendSteps = currentGoal.currentPlan.filter(
+                    s => s.status === 'pending' && s.toolName === 'send_document'
+                );
+                const structuralBypass = pendingSendSteps.length > 0 && pendingSendSteps.every(s => {
+                    const fp = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
+                    if (!fp) return false;
+                    try {
+                        const { resolved } = resolvePath(fp);
+                        return fs.statSync(resolved).size >= 200;
+                    } catch {
+                        return false;
+                    }
+                });
+
+                let validation: Awaited<ReturnType<typeof this.validateGoalCompletion>>;
+                if (structuralBypass) {
+                    const artifactList = pendingSendSteps
+                        .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
+                        .join(',');
+                    log.info(
+                        `[VALIDATION-BYPASS] goal=${currentGoal.id}` +
+                        ` reason=only_pending_is_verified_send_document` +
+                        ` artifacts="${artifactList}"`
+                    );
+                    validation = { achieved: true, summary: 'Arquivo(s) já existente(s) no workspace, pronto(s) para envio.' };
+                } else {
+                    validation = await this.validateGoalCompletion(currentGoal, activeMilestone);
+                }
 
                 if (validation.achieved) {
                     if (currentGoal.isConstruction && currentGoal.roadmap && (currentGoal.currentMilestoneIndex ?? 0) < currentGoal.roadmap.length - 1) {

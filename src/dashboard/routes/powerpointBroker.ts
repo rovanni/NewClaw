@@ -1,17 +1,22 @@
 import crypto from 'crypto';
 
 export type CommandStatus = 'executed' | 'failed' | 'unsupported';
+export type CommandAction = 'addTextBox' | 'insertDocument';
 
 export interface CommandArgs {
-    text: string;
+    text?: string;
     x?: number;
     y?: number;
+    /** insertDocument: conteúdo do arquivo em base64 */
+    data?: string;
+    /** insertDocument: nome do arquivo (usado para decidir como inserir) */
+    fileName?: string;
 }
 
 export interface PendingCommand {
     commandId: string;
     sessionId: string;
-    action: 'addTextBox';
+    action: CommandAction;
     args: CommandArgs;
     resolve: (result: { success: boolean; output: string }) => void;
     timeoutId: NodeJS.Timeout;
@@ -19,7 +24,7 @@ export interface PendingCommand {
 
 export interface ClientCommand {
     commandId: string;
-    action: 'addTextBox';
+    action: CommandAction;
     args: CommandArgs;
 }
 
@@ -56,6 +61,21 @@ export class PowerPointBroker {
             }
             queue.push({ commandId, action, args });
         });
+    }
+
+    /**
+     * Enfileira um documento para entrega assíncrona via polling, sem esperar ack — usado
+     * quando o goal que gerou o anexo termina depois que a requisição HTTP original que o
+     * pediu já foi fechada (ex.: mensagem enfileirada atrás de uma conversa ocupada, cujo
+     * round-trip HTTP foi resolvido de imediato com um ACK). Ver WebChannelAdapter.sendDocument.
+     */
+    public pushDocument(sessionId: string, data: string, fileName: string): void {
+        let queue = this.queues.get(sessionId);
+        if (!queue) {
+            queue = [];
+            this.queues.set(sessionId, queue);
+        }
+        queue.push({ commandId: crypto.randomUUID(), action: 'insertDocument', args: { data, fileName } });
     }
 
     public poll(sessionId: string): ClientCommand | null {

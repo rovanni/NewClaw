@@ -341,6 +341,21 @@ async function startCommandPolling(): Promise<void> {
               error: errorMsg
             })
           }).catch(console.error);
+        } else if (cmd.action === 'insertDocument') {
+          // Entrega assíncrona: goal terminou depois que a requisição HTTP original que o
+          // pediu já tinha sido resolvida (ex.: ACK de "conversa ocupada"). Sem ack pendente
+          // no broker para esse tipo de comando — só inserimos o que chegou.
+          const fileName: string = cmd.args.fileName || 'documento.pptx';
+          if (fileName.toLowerCase().endsWith('.pptx')) {
+            await insertSlidesFromAttachment({
+              type: 'document',
+              fileName,
+              mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+              data: cmd.args.data,
+            });
+          } else {
+            addMessage('status', `Anexo recebido (não inserido automaticamente): ${fileName}`);
+          }
         }
       }
     } catch {

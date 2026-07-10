@@ -21,8 +21,10 @@
  */
 import { ChannelAdapter, ChannelType, NormalizedResponse, ResponseAttachment } from './ChannelAdapter';
 import { createLogger } from '../shared/AppLogger';
+import { powerpointBroker } from '../dashboard/routes/powerpointBroker';
 
 const log = createLogger('WebChannelAdapter');
+const POWERPOINT_SESSION_PREFIX = 'powerpoint-addin-';
 
 interface PendingRequest {
     resolve: (response: NormalizedResponse) => void;
@@ -100,6 +102,16 @@ export class WebChannelAdapter implements ChannelAdapter {
     async sendDocument(chatId: string, buffer: Buffer, filename: string, _caption?: string): Promise<void> {
         const p = this.findPendingByChatId(chatId);
         if (!p) {
+            // Sessão do suplemento PowerPoint: mesmo sem HTTP vivo, o suplemento faz polling de
+            // comandos (startCommandPolling em powerpoint.ts) — usa esse canal como entrega
+            // assíncrona em vez de descartar. Cobre o caso de uma mensagem enfileirada atrás de
+            // uma conversa ocupada: o round-trip HTTP original já foi resolvido com um ACK antes
+            // do goal terminar, então quando o anexo fica pronto não há mais requisição pendente.
+            if (chatId.startsWith(POWERPOINT_SESSION_PREFIX)) {
+                powerpointBroker.pushDocument(chatId, buffer.toString('base64'), filename);
+                log.info('send_document_deferred_to_broker', `chatId=${chatId} filename=${filename} entregue via polling (sem HTTP pendente)`);
+                return;
+            }
             // Lança em vez de descartar silenciosamente: sem isso, send_document.ts acreditava
             // que o anexo tinha sido entregue quando na verdade não havia requisição HTTP viva
             // para acumulá-lo — mesma classe de falso-sucesso corrigida em sendVoice abaixo.
