@@ -3013,31 +3013,68 @@ OU
         const DELIVERY_TOOLS = new Set(['write', 'exec_command', 'send_document', 'send_audio']);
         let claimsChecked = 0;
 
+        // "Algo foi enviado" não é o mesmo que "o que foi pedido foi enviado". Reusa
+        // inferExpectedExtensions — o mesmo sinal estrutural já usado pelo deliverable_check
+        // logo abaixo neste arquivo — para exigir que o artefato de fato enviado via
+        // send_document tenha a extensão esperada pelo pedido original, em vez de aceitar
+        // qualquer arquivo que tenha passado por send_document/sentArtifacts na execução do
+        // goal. Reproduzido ao vivo em 09/07: um script .py (código-fonte, não executado
+        // ainda) foi enviado por engano via callback do DELIVERY-GUARD, e o evidence-checker
+        // aceitava isso como prova de "PPTX editável enviado" só porque sentArtifacts não
+        // estava vazio — mesma classe de bug que a fabricação de um .md de "resumo de
+        // entrega" em vez do arquivo pedido (goal_incomplete → decoy) — ver
+        // project_session_bugs_jul2026_ap. Quando o intent não permite inferir uma extensão
+        // esperada (goal sem tipo de arquivo específico), não restringe — mantém o
+        // comportamento permissivo original.
+        const expectedExts = this.inferExpectedExtensions(goal.userIntent);
+        const matchesExpectedType = (filePath: string): boolean =>
+            expectedExts.length === 0 || expectedExts.some(ext => filePath.toLowerCase().endsWith(ext));
+
         for (const rule of CLAIM_RULES) {
             if (!rule.pattern.test(llmSummary)) continue;
             claimsChecked++;
+            const isDeliveryClaim = rule.requiredTools.includes('send_document') || rule.requiredTools.includes('send_audio');
 
             const evidenceAttempt = successfulAttempts.find(a => {
                 if (!rule.requiredTools.includes(a.toolName)) return false;
                 if (rule.requireNonEmptyOutput) {
                     return (a.output ?? '').trim().length > 10;
                 }
+                if (isDeliveryClaim && a.toolName === 'send_document') {
+                    const fp = String(a.args?.['file_path'] ?? a.args?.['path'] ?? '');
+                    return matchesExpectedType(fp);
+                }
                 return true;
             });
 
             if (!evidenceAttempt) {
                 // L-M2: se agentloop registrou entrega via DELIVERY-GUARD e a claim requer
-                // uma tool de entrega (write, send_document, exec_command), aceitar como evidência.
+                // uma tool de entrega (write, send_document, exec_command), aceitar como evidência —
+                // mas só se algum dos artefatos registrados bater com o tipo esperado, quando
+                // a claim é especificamente de envio (ver comentário acima).
                 // Isso cobre o padrão step_fallback→agentloop que entrega internamente.
                 if (hasRegisteredDelivery && rule.requiredTools.some(t => DELIVERY_TOOLS.has(t))) {
-                    log.info(
+                    const registeredArtifacts = goal.sentArtifacts ?? [];
+                    const registeredTypeOk = !isDeliveryClaim || registeredArtifacts.some(matchesExpectedType);
+                    if (registeredTypeOk) {
+                        log.info(
+                            `[VALIDATION-EVIDENCE]` +
+                            ` claim="${rule.label}"` +
+                            ` evidence_found="agentloop_delivery"` +
+                            ` registered_artifacts="${registeredArtifacts.join(',')}"` +
+                            ` decision=accept`
+                        );
+                        continue;
+                    }
+                    log.warn(
                         `[VALIDATION-EVIDENCE]` +
                         ` claim="${rule.label}"` +
-                        ` evidence_found="agentloop_delivery"` +
-                        ` registered_artifacts="${(goal.sentArtifacts ?? []).join(',')}"` +
-                        ` decision=accept`
+                        ` registered_artifacts="${registeredArtifacts.join(',')}"` +
+                        ` expected_ext="${expectedExts.join('|')}"` +
+                        ` decision=reject_artifact_type_mismatch`
                     );
-                    continue;
+                    // Não aceita — o artefato registrado não é do tipo pedido. Cai para os
+                    // checks abaixo (step pendente que ainda vai satisfazer / falha real).
                 }
 
                 // Step pendente que satisfará esta claim já está no plano — não bloquear.
