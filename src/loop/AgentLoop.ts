@@ -11,6 +11,7 @@
  */
 
 import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary } from '../core/ProviderFactory';
+import { computeDynamicTimeout } from '../shared/dynamicTimeout';
 import { CognitiveWorkspace } from '../cognitive/CognitiveWorkspace';
 import { SessionContext } from '../session/SessionContext';
 import type { SessionKey } from '../session/SessionManager';
@@ -875,18 +876,8 @@ export class AgentLoop {
     // ── LLM call with fallback ─────────────────────────────────────────────────
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: ModelProfile, signal?: AbortSignal): Promise<LLMResult> {
-        const MIN_TIMEOUT = 45000;
-        const MAX_TIMEOUT = 420000;
-        const BASE_TIMEOUT = 180000;
-        const SCALE_PER_TOKEN = 60;
-        const MAX_SCALE = 240000;
-        const TOKEN_THRESHOLD = 1000;
-
-        const totalChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
-        const approxTokens = Math.ceil(totalChars / 4);
-        const scale = Math.min(Math.max(0, approxTokens - TOKEN_THRESHOLD) * SCALE_PER_TOKEN, MAX_SCALE);
-        const timeoutMs = Math.max(MIN_TIMEOUT, Math.min(BASE_TIMEOUT + scale, MAX_TIMEOUT));
-        log.info(`[${this.ts()}] [TIMEOUT] Dynamic: ${Math.round(timeoutMs / 1000)}s (tokens≈${approxTokens}, chars=${totalChars}, scale=${Math.round(scale / 1000)}s, clamp=[${MIN_TIMEOUT / 1000}-${MAX_TIMEOUT / 1000}]s)`);
+        const { timeoutMs, approxTokens, totalChars, scaleMs } = computeDynamicTimeout(messages);
+        log.info(`[${this.ts()}] [TIMEOUT] Dynamic: ${Math.round(timeoutMs / 1000)}s (tokens≈${approxTokens}, chars=${totalChars}, scale=${Math.round(scaleMs / 1000)}s, clamp=[45-420]s)`);
 
         const callStart = Date.now();
         try {

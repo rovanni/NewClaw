@@ -14,6 +14,7 @@
 import path from 'path';
 import { createLogger } from '../shared/AppLogger';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
+import { computeDynamicTimeout } from '../shared/dynamicTimeout';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { SkillLoader } from '../skills/SkillLoader';
@@ -655,10 +656,13 @@ export class GoalPlanner {
         PromptComposer.recordPlan(prompt.length, capBlock.length, 0, enrichedContext.length);
 
         try {
-            // S7: 90s para planos iniciais — goals complexos (slides, relatórios, código extenso)
-            // precisam de mais tempo que os 45s originais. O stream aborta com 458 chars e o sistema
-            // cai no fallbackPlan (AgentLoop sem web_search), gerando slides sem pesquisa.
-            const result = await this.callPlannerLLM(messages, 90_000);
+            // S7 apontou que um timeout fixo curto abortava planos iniciais complexos (goals de
+            // slides/relatórios/código extenso), caindo no fallbackPlan degradado — a correção
+            // na época foi só aumentar o número fixo (45s→90s). O mesmo padrão reapareceu no
+            // replan (ver computeDynamicTimeout) porque um valor fixo nunca escala com o tamanho
+            // real do prompt — agora escala com o contexto em vez de arriscar repetir o bug.
+            const { timeoutMs } = computeDynamicTimeout(messages);
+            const result = await this.callPlannerLLM(messages, timeoutMs);
 
             if (result.status !== 'success') {
                 log.warn(`[GoalPlanner] plan failed: model=${this.model} status=${result.status} raw="${result.content.slice(0, 150)}"`);
@@ -734,7 +738,12 @@ export class GoalPlanner {
         PromptComposer.recordPlan(prompt.length, capBlock.length, compressedRefl.length, runtimeContext?.length ?? 0);
 
         try {
-            const result = await this.callPlannerLLM(messages, 45_000);
+            // Timeout fixo de 45s abortava replans com contexto grande (reproduzido ao vivo em
+            // 10/07: prompt ~73KB após SAFETY-GUARD context_growth, stream abortado aos exatos
+            // 45021ms, "replan empty after parse" consumindo replanBudget à toa) — ver
+            // computeDynamicTimeout e o mesmo problema já documentado em plan() (comentário S7).
+            const { timeoutMs } = computeDynamicTimeout(messages);
+            const result = await this.callPlannerLLM(messages, timeoutMs);
 
             if (result.status !== 'success') {
                 log.warn(`[GoalPlanner] replan failed: model=${this.model} status=${result.status} raw="${result.content.slice(0, 150)}"`);
@@ -782,7 +791,9 @@ export class GoalPlanner {
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
 
         try {
-            const result = await this.callPlannerLLM(messages, 45_000);
+            // Mesmo racional de plan()/replan() — ver computeDynamicTimeout.
+            const { timeoutMs } = computeDynamicTimeout(messages);
+            const result = await this.callPlannerLLM(messages, timeoutMs);
 
             if (result.status !== 'success') {
                 log.warn(`[GoalPlanner] planRoadmap failed status=${result.status}`);
