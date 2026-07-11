@@ -221,12 +221,32 @@ export class GoalStore {
 
     // ── Atualização ───────────────────────────────────────────────────────────
 
+    /**
+     * Sprint 0.10 (achado L04): `update()` grava qualquer campo do patch, incluindo `status`,
+     * sem validar a transição — só `setStatus()` validava, mas a maioria dos call sites reais
+     * (`GoalExecutionLoop`/`GoalOrchestrator`) grava `status` via `update()` diretamente, nunca
+     * passando por `setStatus()`. `update()` agora valida `status` (quando presente no patch)
+     * contra a MESMA `ALLOWED_TRANSITIONS` usada por `setStatus()` — nenhuma segunda tabela,
+     * nenhuma segunda regra. Transição inválida: `status` é descartado do patch (log de aviso),
+     * o resto do patch (currentPlan, blockers, etc.) continua sendo aplicado normalmente — um
+     * `update()` real frequentemente combina `status` com outros campos no mesmo patch, e
+     * rejeitar a chamada inteira por causa só do `status` derrubaria escritas legítimas.
+     */
     update(id: string, patch: Partial<Goal>): void {
         const now = Date.now();
         const sets: string[] = ['updated_at = ?'];
         const values: unknown[] = [now];
 
-        if (patch.status !== undefined)            { sets.push('status = ?');             values.push(patch.status); }
+        let statusToWrite = patch.status;
+        if (statusToWrite !== undefined) {
+            const current = (this.db.prepare('SELECT status FROM goals WHERE id = ?').get(id) as { status: string } | undefined)?.status;
+            if (current !== undefined && !GoalStore.isTransitionAllowed(current, statusToWrite)) {
+                log.warn(`[GoalStore] blocked invalid transition: ${current} → ${statusToWrite} for goal=${id} (update())`);
+                statusToWrite = undefined;
+            }
+        }
+
+        if (statusToWrite !== undefined)           { sets.push('status = ?');             values.push(statusToWrite); }
         if (patch.currentPlan !== undefined)       { sets.push('current_plan = ?');       values.push(JSON.stringify(patch.currentPlan)); }
         if (patch.attempts !== undefined)          { sets.push('attempts = ?');           values.push(JSON.stringify(patch.attempts)); }
         if (patch.blockers !== undefined)          { sets.push('blockers = ?');           values.push(JSON.stringify(patch.blockers)); }
@@ -245,15 +265,21 @@ export class GoalStore {
         if (patch.confidence !== undefined)        { sets.push('confidence = ?');         values.push(patch.confidence); }
         if (patch.requiresAuth !== undefined)      { sets.push('requires_auth = ?');      values.push(patch.requiresAuth ? 1 : 0); }
         if (patch.authorizationScope !== undefined){ sets.push('authorization_scope = ?'); values.push(JSON.stringify(patch.authorizationScope)); }
-        if (patch.pendingTxnId !== undefined)      { sets.push('pending_txn_id = ?');     values.push(patch.pendingTxnId ?? null); }
+        // 'pendingTxnId' in patch (não !== undefined): Sprint 0.10 (achado L04, bug B) —
+        // resumeGoal()/abortGoalFromAuth() passam `{pendingTxnId: undefined}` para LIMPAR a
+        // transação pendente; `!== undefined` nunca é true para um valor literal `undefined`,
+        // então o campo nunca era de fato limpo (pending_txn_id ficava órfão no banco depois de
+        // resume/abort). `in` distingue "chave ausente do patch" (não mexer) de "chave presente
+        // com valor undefined" (limpar para NULL).
+        if ('pendingTxnId' in patch)                { sets.push('pending_txn_id = ?');     values.push(patch.pendingTxnId ?? null); }
         if (patch.completedAt !== undefined)       { sets.push('completed_at = ?');       values.push(patch.completedAt); }
 
         values.push(id);
         this.db.prepare(`UPDATE goals SET ${sets.join(', ')} WHERE id = ?`).run(...values);
 
         // Loga mudança de status inline (update() é usado tanto quanto setStatus)
-        if (patch.status !== undefined) {
-            log.info(`[GoalStore] goal=${id} → ${patch.status}`);
+        if (statusToWrite !== undefined) {
+            log.info(`[GoalStore] goal=${id} → ${statusToWrite}`);
         }
         if (patch.replanBudget !== undefined) {
             log.debug(`[GoalStore] goal=${id} replanBudget=${patch.replanBudget}`);
@@ -266,23 +292,47 @@ export class GoalStore {
     // ── Máquina de estados explícita ─────────────────────────────────────────
     // Cada estado lista exatamente quais transições são permitidas.
     // Estados terminais (completed, failed, abandoned) não permitem saída.
+    //
+    // Sprint 0.10 (achado L04): tabela corrigida contra o comportamento REAL do runtime, não
+    // só a intenção original — auditoria empírica de todo call site que grava `status` em
+    // GoalExecutionLoop.ts/GoalOrchestrator.ts encontrou 2 pares legítimos e recorrentes que
+    // faltavam:
+    //   - active→replanning: todo goal, sem exceção, vai de 'active' (criado por
+    //     GoalOrchestrator) direto para 'replanning' no planejamento inicial
+    //     (GoalExecutionLoop.ts, início de executeGoal/runLoop) — nunca passa por 'executing'
+    //     antes de planejar pela primeira vez.
+    //   - replanning→blocked: quando Q2 (RiskAnalyzer) bloqueia um replan, ou quando um bonus
+    //     replan é concedido, o código grava 'replanning' e, na sequência, addBlocker() força
+    //     'blocked' — um encadeamento real e intencional (registrar o blocker do replan que
+    //     falhou), não um bug de sequenciamento.
     private static readonly ALLOWED_TRANSITIONS: Record<string, GoalStatus[]> = {
-        active:      ['executing', 'abandoned'],
+        active:      ['executing', 'replanning', 'abandoned'],
         executing:   ['blocked', 'replanning', 'completed', 'failed', 'abandoned'],
         blocked:     ['executing', 'replanning', 'failed', 'abandoned'],
-        replanning:  ['executing', 'failed', 'abandoned'],
+        replanning:  ['executing', 'blocked', 'failed', 'abandoned'],
         completed:   [],  // terminal — sem saída
         failed:      [],  // terminal — sem saída
         abandoned:   [],  // terminal — sem saída
     };
 
+    /**
+     * Self-transição (`from === to`) é sempre permitida — vários call sites reescrevem o
+     * `status` atual como parte de um patch maior (ex: `update(id, {currentPlan, status:
+     * 'executing'})` enquanto o goal já está `'executing'`); isso não é uma transição de
+     * estado real, é uma reafirmação redundante do mesmo estado, e recusá-la derrubaria
+     * escritas legítimas sem nenhum ganho de segurança.
+     */
+    private static isTransitionAllowed(from: string, to: GoalStatus): boolean {
+        if (from === to) return true;
+        return (GoalStore.ALLOWED_TRANSITIONS[from] ?? []).includes(to);
+    }
+
     setStatus(id: string, status: GoalStatus): void {
         const now = Date.now();
         const prev = (this.db.prepare('SELECT status FROM goals WHERE id = ?').get(id) as { status: string } | undefined)?.status ?? '?';
 
-        // Validação da máquina de estados
-        const allowed = GoalStore.ALLOWED_TRANSITIONS[prev] ?? [];
-        if (prev !== '?' && !allowed.includes(status)) {
+        // Validação da máquina de estados — mesmo predicate usado por update() (isTransitionAllowed)
+        if (prev !== '?' && !GoalStore.isTransitionAllowed(prev, status)) {
             log.warn(`[GoalStore] blocked invalid transition: ${prev} → ${status} for goal=${id}`);
             return;
         }

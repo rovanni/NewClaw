@@ -134,6 +134,20 @@ export interface GoalAttempt {
     mutations?: ToolMutation[];
     /** Avaliação heurística do resultado */
     evaluation?: { confidence: number; reason?: string };
+    /**
+     * Sprint 0.10 (achado L22): id do `ExecutionTrace` do sub-turno `agentloop` que produziu
+     * este attempt (quando `toolName==='agentloop'`) — correlação com `agent_traces`
+     * (persistido por `AgentLoop.persistTrace`/`memory.saveTrace`), sem duplicar o conteúdo do
+     * trace aqui. Ausente em attempts de tool direta (não passam por `AgentLoop`).
+     */
+    traceId?: string;
+    /**
+     * Sprint 0.10 (achado L22): nomes das tools chamadas dentro do sub-turno `agentloop`
+     * (ordem de execução, só nomes — sem args/output, para não duplicar dado já coberto pelo
+     * trace referenciado em `traceId`). Decompõe minimamente a "caixa-preta" do sub-turno
+     * diretamente no histórico do goal, sem custo de armazenamento relevante.
+     */
+    subToolCalls?: string[];
 }
 
 // ── Goal ──────────────────────────────────────────────────────────────────────

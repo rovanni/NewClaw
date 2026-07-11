@@ -21,6 +21,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { createLogger } from '../shared/AppLogger';
 import { AgentLoop } from './AgentLoop';
+import { traceManager } from '../core/ExecutionTrace';
 import { GoalStore } from './GoalStore';
 import { GoalPlanner } from './GoalPlanner';
 import { GoalEvaluator } from './GoalEvaluator';
@@ -1536,6 +1537,11 @@ export class GoalExecutionLoop {
             let toolResult: { success: boolean; output: string; error?: string };
             let stepMutations: import('./GoalTypes').ToolMutation[] | undefined;
             let stepEvalForAttempt: { confidence: number; reason?: string } | undefined;
+            // Sprint 0.10 (achado L22): correlação com o ExecutionTrace do sub-turno agentloop,
+            // preenchida logo após `agentLoop.process()` resolver (ver mais abaixo). Ausente no
+            // caminho de tool direta (não passa por AgentLoop).
+            let agentloopTraceId: string | undefined;
+            let agentloopSubToolCalls: string[] | undefined;
             // Sprint 0.8 (achados L10/L11/L14/L15): true por padrão — o caminho de tool direta
             // (com toolName) é determinístico, sem heurística envolvida, sempre confiável.
             // Só o caminho 'agentloop' abaixo pode rebaixar para false.
@@ -1708,6 +1714,25 @@ export class GoalExecutionLoop {
                 const text = typeof response === 'string' ? response : response.text;
                 const respOptions = typeof response === 'string' ? undefined : response.options;
 
+                // Sprint 0.10 (achado L22): correlaciona o attempt com o ExecutionTrace real do
+                // sub-turno que acabou de rodar, sem duplicar seu conteúdo — só a referência
+                // (traceId, para pivotar em agent_traces/dashboard) e a sequência de nomes de
+                // tools chamadas (subToolCalls, decomposição mínima da "caixa-preta" agentloop
+                // direto no histórico do goal). traceManager.getRecentTraces() é o mesmo
+                // singleton que AgentLoop já usa para persistir/emitir os traces — reaproveitado
+                // aqui, nenhum mecanismo novo. Busca pelo mais recente com o mesmo
+                // conversationId (traces são unshift'ados, então o primeiro match já é o mais
+                // recente); se nada for encontrado (ex: trace pruned do buffer de 50), os campos
+                // ficam undefined — falha aberta, sem afetar o resultado do step.
+                const relatedTrace = traceManager.getRecentTraces(10).find(t => t.sessionId === goal.conversationId);
+                if (relatedTrace) {
+                    agentloopTraceId = relatedTrace.id;
+                    agentloopSubToolCalls = relatedTrace.steps
+                        .filter(s => s.type === 'tool_call')
+                        .map(s => String(s.data?.tool ?? '').trim())
+                        .filter(Boolean);
+                }
+
                 // Guarda de saída: step-name usado como path de arquivo (CR#5)
                 const invalidPath = this.detectStepNameAsPath(text);
                 if (invalidPath) {
@@ -1783,6 +1808,8 @@ export class GoalExecutionLoop {
                 cycle,
                 mutations: stepMutations,
                 evaluation: stepEvalForAttempt,
+                traceId: agentloopTraceId,
+                subToolCalls: agentloopSubToolCalls,
             };
             this.goalStore.addAttempt(goal.id, attempt);
 

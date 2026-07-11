@@ -77,46 +77,60 @@ export class SshExecTool implements ToolExecutor {
         try {
             const output = await new Promise<string>((resolve, reject) => {
                 exec(sshCommand, { timeout, windowsHide: true }, (error, stdout, stderr) => {
+                    const combined = (stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : '');
                     if (error) {
-                        const partial = (stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : '');
-                        if (partial.trim()) {
-                            resolve(partial + `\n[exit code: ${error.code || 'unknown'}]`);
-                        } else {
-                            reject(error);
-                        }
+                        // Sprint 0.10 (achado L31): exit code ≠ 0 é sempre falha, mesmo com
+                        // output parcial — mesmo contrato de exec_command.ts (exit_code!==0 →
+                        // success:false). ANTES desta correção, qualquer saída não-vazia fazia
+                        // este branch RESOLVER como sucesso, mascarando falhas reais do comando
+                        // remoto (ex: `ls /caminho/inexistente` imprime em stderr e sai com
+                        // exit≠0 — era reportado como sucesso). O output real (stdout+stderr) é
+                        // preservado no erro para GoalEvaluator classificar, não descartado.
+                        const exitCode = error.code ?? 'unknown';
+                        const fullOutput = (combined.trim() || error.message) + `\n[exit code: ${exitCode}]`;
+                        reject(Object.assign(error, { combinedOutput: fullOutput.trim() }));
                     } else {
-                        resolve(stdout + (stderr ? '\n' + stderr : ''));
+                        resolve(combined);
                     }
                 });
             });
 
             return { success: true, output: output.trim().slice(0, 8000) };
         } catch (error) {
+            const e = error as NodeJS.ErrnoException & { combinedOutput?: string };
             const msg = errorMessage(error) || String(error);
-            
-            // Friendly error messages
+
+            // Friendly error messages — falhas de CONEXÃO SSH (chave/rede), distintas de um
+            // comando remoto que rodou e saiu com exit code ≠ 0 (tratado no fallback abaixo).
             if (msg.includes('Permission denied')) {
-                return { 
-                    success: false, 
-                    output: '', 
-                    error: `SSH authentication failed for ${sshTarget}. Check if the SSH key is configured and authorized on the target server. Key tried: ${sshKey}` 
+                return {
+                    success: false,
+                    output: '',
+                    error: `SSH authentication failed for ${sshTarget}. Check if the SSH key is configured and authorized on the target server. Key tried: ${sshKey}`
                 };
             }
             if (msg.includes('Connection timed out') || msg.includes('ConnectTimeout')) {
-                return { 
-                    success: false, 
-                    output: '', 
-                    error: `SSH connection timed out for ${sshTarget}. The server may be unreachable.` 
+                return {
+                    success: false,
+                    output: '',
+                    error: `SSH connection timed out for ${sshTarget}. The server may be unreachable.`
                 };
             }
             if (msg.includes('Connection refused')) {
-                return { 
-                    success: false, 
-                    output: '', 
-                    error: `SSH connection refused for ${sshTarget}. The SSH service may not be running.` 
+                return {
+                    success: false,
+                    output: '',
+                    error: `SSH connection refused for ${sshTarget}. The SSH service may not be running.`
                 };
             }
-            
+
+            // Comando remoto rodou e saiu com exit code ≠ 0 — mesmo contrato de exec_command.ts:
+            // success:false, output real (stdout+stderr+exit code) preservado, não convertido em
+            // sucesso silencioso (Sprint 0.10, achado L31).
+            if (e.combinedOutput) {
+                return { success: false, output: e.combinedOutput.slice(0, 8000), error: e.combinedOutput.slice(0, 8000) };
+            }
+
             return { success: false, output: '', error: `SSH to ${sshTarget} failed: ${msg}` };
         }
     }
