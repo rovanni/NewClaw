@@ -50,6 +50,7 @@ import { buildMasterPrompt } from './agentPrompts';
 import { parseLLMResponse, extractFinalText } from './agentOutputParser';
 import { buildLoopMetric, summarizeMetrics } from './agentMetrics';
 import { extractMissingExecutable } from './planning/extractMissingExecutable';
+import { computeToolInputKey } from './planning/computeToolInputKey';
 
 export type { ToolResult, ToolExecutor, LoopMetrics, ChannelContext, AgentLoopConfig, ProcessedResult };
 
@@ -1684,8 +1685,7 @@ export class AgentLoop {
 
                 for (const toolCall of response.toolCalls) {
                     const toolName = toolCall.name;
-                    const toolInput = JSON.stringify(toolCall.arguments);
-                    const inputKey = `${toolName}:${toolInput}`;
+                    const inputKey = computeToolInputKey(toolName, toolCall.arguments);
 
                     // Block read attempts on filenames already confirmed as non-existent,
                     // regardless of path format (absolute, relative, workspace-prefixed, etc.)
@@ -2128,8 +2128,7 @@ export class AgentLoop {
             // JSON-action tool execution
             if (atomicData?.action?.type === 'tool' && atomicData.action.name) {
                 const toolName = atomicData.action.name;
-                const toolInput = JSON.stringify(atomicData.action.input || {});
-                const inputKey = `${toolName}:${toolInput}`;
+                const inputKey = computeToolInputKey(toolName, atomicData.action.input || {});
 
                 if (usedToolInputs.has(inputKey)) {
                     const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
