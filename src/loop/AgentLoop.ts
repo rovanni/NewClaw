@@ -2790,8 +2790,18 @@ export class AgentLoop {
             // inside the loop and returned normally. Close the trace so it doesn't leak in the Map.
             if (trace.status === 'running') {
                 log.error(`[${this.ts()}] [FSM-ERROR] Invalid FSM state — aborting turn: ${errorMessage(fsmError)}`);
-                traceManager.completeTrace(trace, 'error', 'Erro interno de estado');
-                this.persistTrace(trace, 0, 'error', 'Erro interno de estado', channelContext);
+                // Sprint 0.8 (achado L06, Sprint 0.7 Gate A): esta limpeza precisa da mesma
+                // proteção do finally logo abaixo — sem o try/catch aqui, uma falha em
+                // completeTrace()/persistTrace() (ex: listener SSE do dashboard lançando ao
+                // escrever numa conexão já fechada) substitui fsmError pelo erro de limpeza
+                // antes mesmo de `throw fsmError` ser alcançado, mascarando a causa real do
+                // erro. Comprovado com teste dinâmico real (S83).
+                try {
+                    traceManager.completeTrace(trace, 'error', 'Erro interno de estado');
+                    this.persistTrace(trace, 0, 'error', 'Erro interno de estado', channelContext);
+                } catch (cleanupError) {
+                    log.warn(`[${this.ts()}] [TRACE-CLEANUP-FAILED] trace=${trace.id} ${errorMessage(cleanupError)}`);
+                }
             }
             throw fsmError;
         } finally {

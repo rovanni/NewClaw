@@ -328,6 +328,52 @@ export class GoalStore {
         log.info(`[GoalStore] goal=${goalId} blocker recorded (status inalterado): kind=${blocker.kind} tool=${blocker.toolName ?? 'none'} desc="${blocker.description.slice(0, 100)}"`);
     }
 
+    /**
+     * Corrige em vigor (read-modify-write) o attempt mais recente de um `planStepId` que
+     * satisfaça `predicate`, sem criar um segundo `GoalAttempt` para a mesma execução lógica.
+     * Base comum de `downgradeLastAttemptToPartial()` e `finalizeLastAttemptAsSuccess()` —
+     * ambos precisam do mesmo find-mais-recente-e-substitua, só o predicate/patch mudam.
+     */
+    private updateLastAttempt(
+        goalId: string,
+        planStepId: string,
+        patch: Partial<Pick<GoalAttempt, 'result' | 'output' | 'error'>>,
+        predicate: (a: GoalAttempt) => boolean,
+    ): void {
+        const goal = this.getById(goalId);
+        if (!goal) return;
+        const idxFromEnd = [...goal.attempts].reverse().findIndex(a => a.planStepId === planStepId && predicate(a));
+        if (idxFromEnd === -1) return;
+        const realIdx = goal.attempts.length - 1 - idxFromEnd;
+        const attempts = goal.attempts.map((a, i) => i === realIdx ? { ...a, ...patch } : a);
+        this.update(goalId, { attempts });
+        log.info(`[GoalStore] goal=${goalId} attempt updated: step=${planStepId} attemptId=${attempts[realIdx].id} patch=${JSON.stringify(patch)}`);
+    }
+
+    /**
+     * Corrige o `result` do attempt mais recente de um step, já persistido como 'success',
+     * para 'partial' — usado quando uma validação posterior (ex: mismatch semântico) rebaixa
+     * a confiança na conclusão depois que o attempt original já foi gravado via addAttempt().
+     */
+    downgradeLastAttemptToPartial(goalId: string, planStepId: string): void {
+        this.updateLastAttempt(goalId, planStepId, { result: 'partial' }, a => a.result === 'success');
+    }
+
+    /**
+     * Corrige o `result` do attempt mais recente de um step, gravado como 'failure' (ex: bloqueio
+     * de permissão detectado por `executeStep()`), para 'success' com o output real do desfecho —
+     * usado quando uma decisão posterior no mesmo ciclo (ex: auto-aprovação `needs_auth` em modo
+     * DEVELOPER/GOD) resolve retroativamente o bloqueio, sem que uma segunda execução real e
+     * distinta do step tenha ocorrido. Evita gravar um segundo `GoalAttempt` contraditório
+     * (`'failure'` + `'success'`) para a mesma execução lógica — Sprint 0.8.3, achado residual 2.
+     */
+    finalizeLastAttemptAsSuccess(goalId: string, planStepId: string, output: string): void {
+        // error:undefined limpa o texto de erro do bloqueio original — um attempt 'success'
+        // com `error` de uma falha que deixou de existir seria incoerente para consumidores
+        // que inspecionam `attempt.error` independente de `result`.
+        this.updateLastAttempt(goalId, planStepId, { result: 'success', output: output.slice(0, 300), error: undefined }, a => a.result === 'failure');
+    }
+
     addToolTried(goalId: string, toolName: string): void {
         const goal = this.getById(goalId);
         if (!goal) return;

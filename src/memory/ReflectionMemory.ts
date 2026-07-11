@@ -259,7 +259,7 @@ export class ReflectionMemory {
               AND (
                 SELECT COUNT(*) FROM reflection_annotations r3
                 WHERE r3.pattern = r1.pattern AND r3.tool_used = r1.tool_used
-                  AND r3.approved = 1 AND r3.created_at > datetime('now', '-3 hours')
+                  AND r3.approved = 1 AND r3.outcome IS NOT 'partial' AND r3.created_at > datetime('now', '-3 hours')
               ) = 0
             ORDER BY failure_rate DESC, total DESC
             LIMIT 3
@@ -359,7 +359,7 @@ export class ReflectionMemory {
               AND (
                 SELECT COUNT(*) FROM reflection_annotations r3
                 WHERE r3.pattern = r1.pattern AND r3.tool_used = r1.tool_used
-                  AND r3.approved = 1 AND r3.created_at > datetime('now', '-3 hours')
+                  AND r3.approved = 1 AND r3.outcome IS NOT 'partial' AND r3.created_at > datetime('now', '-3 hours')
               ) = 0
             ORDER BY failure_rate DESC, total DESC
             LIMIT 5
@@ -450,7 +450,7 @@ export class ReflectionMemory {
                   AND (
                     SELECT COUNT(*) FROM reflection_annotations r3
                     WHERE r3.tool_used = r1.tool_used
-                      AND r3.approved = 1 AND r3.created_at > datetime('now', '-3 hours')
+                      AND r3.approved = 1 AND r3.outcome IS NOT 'partial' AND r3.created_at > datetime('now', '-3 hours')
                   ) = 0
             `).get(tool) as { tool_used: string; total: number; failures: number; failure_rate: number; top_fix: string | null } | undefined;
             if (!row) return '';
@@ -490,7 +490,7 @@ export class ReflectionMemory {
                       AND (
                         SELECT COUNT(*) FROM reflection_annotations r3
                         WHERE r3.tool_used = r1.tool_used
-                          AND r3.approved = 1 AND r3.created_at > datetime('now', '-3 hours')
+                          AND r3.approved = 1 AND r3.outcome IS NOT 'partial' AND r3.created_at > datetime('now', '-3 hours')
                       ) = 0
                 `).get(tool) as { tool_used: string; total: number; failure_rate: number; top_fix: string | null; recent_failure_type: string | null; recent_pattern: string | null } | undefined;
                 if (!row) continue;
@@ -560,7 +560,7 @@ export class ReflectionMemory {
                   AND (
                     SELECT COUNT(*) FROM reflection_annotations r3
                     WHERE (r3.category = ? OR (r3.category IS NULL AND r3.pattern = ?))
-                      AND r3.approved = 1 AND r3.created_at > datetime('now', '-3 hours')
+                      AND r3.approved = 1 AND r3.outcome IS NOT 'partial' AND r3.created_at > datetime('now', '-3 hours')
                   ) = 0
             `).get(category, category, category, category, category, category) as { total: number; failures: number; failure_rate: number; top_fix: string | null } | undefined;
             if (!row) return '';

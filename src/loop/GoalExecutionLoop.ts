@@ -34,7 +34,7 @@ import { permissionRegistry } from '../core/PermissionRegistry';
 import { MemoryManager } from '../memory/MemoryManager';
 import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
-import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext, SuccessCriterion, GoalProgressModel, ProgressComponent } from './GoalTypes';
+import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext, SuccessCriterion, GoalProgressModel, ProgressComponent, AttemptOutcome } from './GoalTypes';
 import { StepSemanticValidator } from './StepSemanticValidator';
 import { GracefulDeliveryOrchestrator } from './GracefulDeliveryOrchestrator';
 import { StrategyDiversityGuard } from './StrategyDiversityGuard';
@@ -275,7 +275,12 @@ export class GoalExecutionLoop {
     ): Promise<GoalResult> {
         log.info(`[GoalLoop] resuming goal=${goal.id} after auth`);
 
-        // Marca o step que estava aguardando auth como concluído
+        // Marca o step que estava aguardando auth como concluído. Modo 'add' (default)
+        // corretamente: authStepOutput vem de uma execução real e distinta via WorkflowEngine
+        // (GoalOrchestrator.resumeFromAuth), não de um executeStep() já rodado nesta passagem —
+        // não é a mesma classe de duplicação do achado residual 2 (Sprint 0.8.2/0.8.3): o
+        // attempt 'failure' anterior (bloqueio de permissão) e este 'success' (pós-aprovação)
+        // representam duas execuções genuinamente distintas do step.
         const blockedStep = goal.currentPlan.find(s => s.status === 'pending');
         if (blockedStep) {
             this.markStepDone(goal, blockedStep, authStepOutput);
@@ -748,7 +753,7 @@ export class GoalExecutionLoop {
                                 ` result=${sendResult.outcome}`
                             );
                             if (sendOk) {
-                                this.markStepDone(currentGoal, sendStep, sendResult.output ?? '');
+                                this.markStepDone(currentGoal, sendStep, sendResult.output ?? '', 'skip');
                                 currentGoal = this.goalStore.getById(currentGoal.id)!;
                                 if (filePath) {
                                     trackArtifact(filePath);
@@ -1090,6 +1095,13 @@ export class GoalExecutionLoop {
                     );
                     this.goalStore.update(currentGoal.id, { currentPlan: enrichedPlan });
                     currentGoal = this.goalStore.getById(currentGoal.id)!;
+                    // Sprint 0.8 (achados L10/L11/L14/L15): o GoalAttempt já persistido por
+                    // executeStep() (antes desta validação semântica rodar) continua com
+                    // result='success' — corrige para 'partial', alinhando com o que
+                    // ReflectionMemory.record({outcome:'partial', ...}) já registrava acima
+                    // para o mesmo evento.
+                    this.goalStore.downgradeLastAttemptToPartial(currentGoal.id, pendingStep.id);
+                    currentGoal = this.goalStore.getById(currentGoal.id)!;
                     if (currentGoal.retryBudget > 0 && !alreadyHinted) {
                         // Primeira falha: retry com hint enriquecido
                         cycleResult = { ...cycleResult, outcome: 'partial' };
@@ -1150,7 +1162,10 @@ export class GoalExecutionLoop {
             switch (cycleResult.outcome) {
 
                 case 'success': {
-                    this.markStepDone(currentGoal, pendingStep, cycleResult.output ?? '');
+                    // skipAttemptRecord=true: executeStep() já gravou o attempt real deste
+                    // ciclo (com o result correto, incluindo 'partial' de baixa confiança —
+                    // Sprint 0.8) antes de retornar cycleResult; ver comentário em markStepDone.
+                    this.markStepDone(currentGoal, pendingStep, cycleResult.output ?? '', 'skip');
                     this.updateCognitiveContext(pendingStep, cycleResult.output ?? '', state);
                     this.updateProgressModel(pendingStep, 'completed', cycleResult.output, state);
                     // Fix #2: registra artefatos enviados para evitar reenvio por deliverable_check
@@ -1291,9 +1306,13 @@ export class GoalExecutionLoop {
                     // isDestructive() ainda bloqueia comandos perigosos em qualquer modo.
                     if (permissionRegistry.can('auto_approve_exec')) {
                         log.info(`[GoalLoop] needs_auth auto-approved (mode=${permissionRegistry.getMode()}) goal=${currentGoal.id}`);
-                        // Resume diretamente: o step volta como pending para ser re-executado
-                        // pelo WorkflowEngine com aprovação implícita via resumeGoal.
-                        this.markStepDone(currentGoal, pendingStep, cycleResult.output ?? '');
+                        // 'finalize': executeStep() já gravou um attempt 'failure' para este
+                        // step (o bloqueio de permissão que originou este outcome) — a
+                        // auto-aprovação resolve esse bloqueio no mesmo ciclo, sem uma segunda
+                        // execução real distinta. Corrige o attempt existente para 'success' em
+                        // vez de acrescentar um segundo, contraditório (Sprint 0.8.3, achado
+                        // residual 2).
+                        this.markStepDone(currentGoal, pendingStep, cycleResult.output ?? '', 'finalize');
                         currentGoal = this.goalStore.getById(currentGoal.id)!;
                         break;
                     }
@@ -1303,6 +1322,13 @@ export class GoalExecutionLoop {
                         ?.find(o => o.value?.startsWith('auth:'))
                         ?.value?.split(':').slice(2).join(':');
 
+                    // Sprint 0.8 (achados L02d/L12/L13): preserva o blocker já classificado por
+                    // GoalEvaluator — mesmo padrão dos branches 'partial'/'failed'/deferred send
+                    // corrigidos na Sprint 0.6. Só neste ramo SAFE, nunca no auto-aprovado acima:
+                    // ali a tool não foi de fato bloqueada.
+                    if (cycleResult.blocker) {
+                        this.goalStore.recordBlocker(currentGoal.id, cycleResult.blocker);
+                    }
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'blocked', message: 'Aguardando autorização' });
                     this.goalStore.update(currentGoal.id, {
                         status: 'blocked',
@@ -1314,6 +1340,11 @@ export class GoalExecutionLoop {
                 }
 
                 case 'needs_dependency': {
+                    // Sprint 0.8 (achados L02d/L12/L13): preserva o blocker 'missing_tool' que
+                    // motivou a injeção do step de instalação — mesmo padrão do branch 'blocked'.
+                    if (cycleResult.blocker) {
+                        this.goalStore.recordBlocker(currentGoal.id, cycleResult.blocker);
+                    }
                     const depInfo = cycleResult.depInfo!;
                     const installKey = `install_dep_${depInfo.name}`;
 
@@ -1505,6 +1536,10 @@ export class GoalExecutionLoop {
             let toolResult: { success: boolean; output: string; error?: string };
             let stepMutations: import('./GoalTypes').ToolMutation[] | undefined;
             let stepEvalForAttempt: { confidence: number; reason?: string } | undefined;
+            // Sprint 0.8 (achados L10/L11/L14/L15): true por padrão — o caminho de tool direta
+            // (com toolName) é determinístico, sem heurística envolvida, sempre confiável.
+            // Só o caminho 'agentloop' abaixo pode rebaixar para false.
+            let stepSuccessConfident = true;
             // FIX C: acumulador de sends diferidos capturados do AgentLoop.
             // Usa Map<filePath, args> para deduplicar por artefato desde a captura.
             // Evita que o LLM chame send_document N vezes para o mesmo arquivo.
@@ -1713,9 +1748,16 @@ export class GoalExecutionLoop {
                 // Heurística determinística avalia se o step teve sucesso
                 const stepEval = this.evaluateAgentStepSuccess(step, goal.objective, text);
                 let finalSuccess = stepEval.success;
+                // Sprint 0.8 (achados L10/L11/L14/L15): 'success_signal_detected' é o único
+                // motivo de sucesso de alta confiança da heurística (sinal explícito no texto).
+                // 'substantial_response' (fallback conservador "resposta longa, assume sucesso")
+                // NÃO é confiável — vira 'partial' abaixo, a menos que a escalada ao LLM confirme.
+                stepSuccessConfident = stepEval.reason === 'success_signal_detected';
                 if (stepEval.shouldEscalateToLLM) {
                     log.info(`[GoalStep] heuristic inconclusive (conf=${stepEval.confidence.toFixed(2)}) — escalating to LLM`);
-                    finalSuccess = await this.escalateStepEvalToLLM(step, goal.objective, text);
+                    const escalation = await this.escalateStepEvalToLLM(step, goal.objective, text);
+                    finalSuccess = escalation.success;
+                    stepSuccessConfident = escalation.confident;
                 }
                 stepEvalForAttempt = { confidence: stepEval.confidence, reason: stepEval.reason };
                 toolResult = { success: finalSuccess, output: text };
@@ -1727,7 +1769,13 @@ export class GoalExecutionLoop {
                 planStepId: step.id,
                 toolName: step.toolName ?? 'agentloop',
                 args: step.toolArgs ?? {},
-                result: toolResult.success ? 'success' : 'failure',
+                // Sprint 0.8 (achados L10/L11/L14/L15): 'success' só quando o resultado veio de
+                // um sinal confiável (tool determinística, sinal explícito, ou LLM que de fato
+                // confirmou) — caso contrário 'partial': a tarefa produziu output e não falhou
+                // explicitamente, mas a conclusão não foi confirmada com confiança suficiente
+                // para valer como evidência de sucesso (GoalEvaluator.ts:312 já trata 'partial'
+                // como progresso equivalente a 'success', só não como prova de conclusão).
+                result: !toolResult.success ? 'failure' : (stepSuccessConfident ? 'success' : 'partial'),
                 output: toolResult.output?.slice(0, 300),
                 error: toolResult.error,
                 durationMs: Date.now() - startMs,
@@ -1821,10 +1869,13 @@ export class GoalExecutionLoop {
     ): Record<string, unknown> {
         const STEP_REF = /\{\{(step_\d+)\.output\}\}/g;
 
-        // Build map: planStepId → output do último attempt bem-sucedido
+        // Build map: planStepId → output do último attempt bem-sucedido (ou parcial — Sprint
+        // 0.8: 'partial' significa que a tool rodou e produziu output real, só sem confirmação
+        // confiável de conclusão; o texto produzido continua válido para referência por steps
+        // seguintes independente da confiança na conclusão da tarefa).
         const stepOutputs = new Map<string, string>();
         for (const attempt of goal.attempts) {
-            if (attempt.result === 'success' && attempt.output) {
+            if ((attempt.result === 'success' || attempt.result === 'partial') && attempt.output) {
                 stepOutputs.set(attempt.planStepId, attempt.output);
             }
         }
@@ -1906,13 +1957,18 @@ export class GoalExecutionLoop {
     /**
      * Escalation path: usado apenas quando a heurística retorna confidence < 0.6.
      * Chama LLM com prompt compacto (sem system prompt completo) para decidir sucesso/falha.
-     * Fail-safe: qualquer erro → assume success=true (conservador, evita loops de replan).
+     * Fail-safe: qualquer erro → assume success=true (conservador, evita loops de replan), mas
+     * `confident: false` — Sprint 0.8 (achados L10/L11/L14/L15): distingue explicitamente uma
+     * confirmação genuína do LLM (`confident: true`) do fail-safe conservador, permitindo ao
+     * caller gravar `GoalAttempt.result: 'partial'` em vez de `'success'` quando o "sucesso" não
+     * foi de fato confirmado — a mesma lógica de decisão de sempre, só expondo uma distinção
+     * que já existia implicitamente.
      */
     private async escalateStepEvalToLLM(
         step: PlanStep,
         objective: string,
         agentResponse: string,
-    ): Promise<boolean> {
+    ): Promise<{ success: boolean; confident: boolean }> {
         const prompt = `Avalie se o seguinte output indica SUCESSO ou FALHA na execução desta tarefa.
 
 TAREFA: ${step.description.slice(0, 200)}
@@ -1928,14 +1984,14 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
                 undefined,
                 15_000,
             );
-            if (result.status !== 'success') return true;
+            if (result.status !== 'success') return { success: true, confident: false };
             const cleaned = result.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
             const parsed = JSON.parse(cleaned);
             log.info(`[GoalStep] LLM escalation result: success=${parsed.success} step=${step.id}`);
-            return Boolean(parsed.success);
+            return { success: Boolean(parsed.success), confident: true };
         } catch {
             log.warn(`[GoalStep] LLM escalation failed — defaulting to success=true step=${step.id}`);
-            return true;
+            return { success: true, confident: false };
         }
     }
 
@@ -1994,7 +2050,31 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private markStepDone(goal: Goal, step: PlanStep, output: string): void {
+    /**
+     * `attemptRecording` decide como o(s) `GoalAttempt`(s) deste step são conciliados —
+     * Sprint 0.8.3, achado residual 2 (dupla gravação de `GoalAttempt` para uma única
+     * execução lógica). Os 3 modos cobrem os 3 fluxos estruturalmente distintos que chegam
+     * aqui:
+     *   - 'add' (default): nenhum attempt real foi gravado para este step nesta passagem
+     *     (dedup de envio diferido — o step foi pulado; `resumeGoal()` — a autorização foi
+     *     processada por uma execução real e distinta via WorkflowEngine, fora deste loop).
+     *     Grava um attempt novo, 'success'.
+     *   - 'skip': `executeStep()` já gravou o attempt real deste step nesta mesma passagem
+     *     (`case 'success':` do switch principal; envio diferido bem-sucedido). Não grava
+     *     nada nesse `GoalAttempt` — só lê o que já existe para alimentar a ReflectionMemory
+     *     de forma coerente (ver abaixo).
+     *   - 'finalize': `executeStep()` já gravou um attempt 'failure' para este step nesta
+     *     mesma passagem (sinal de bloqueio de permissão), e uma decisão imediata no mesmo
+     *     ciclo (auto-aprovação `needs_auth` em modo DEVELOPER/GOD) resolve esse bloqueio sem
+     *     que uma segunda execução real e distinta tenha ocorrido. Corrige o attempt existente
+     *     para 'success' em vez de acrescentar um segundo, contraditório.
+     */
+    private markStepDone(
+        goal: Goal,
+        step: PlanStep,
+        output: string,
+        attemptRecording: 'add' | 'skip' | 'finalize' = 'add',
+    ): void {
         const updatedPlan = goal.currentPlan.map(s =>
             s.id === step.id ? { ...s, status: 'completed' as const, result: output.slice(0, 200), executedAt: Date.now() } : s
         );
@@ -2008,36 +2088,54 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
             log.info(`[GoalLoop] dep install step=${step.id} completed — capability cache invalidated`);
         }
 
-        // Registra attempt de sucesso para que buildResult() encontre o output real
-        // (sem isso, resumeGoal() marca o step como concluído mas goal.attempts fica vazio
-        // e buildResult() cai no fallback genérico "Objetivo concluído.")
-        this.goalStore.addAttempt(goal.id, {
-            id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-            planStepId: step.id,
-            toolName: step.toolName ?? 'agentloop',
-            args: step.toolArgs ?? {},
-            result: 'success',
-            output: output.slice(0, 300),
-            durationMs: 0,
-            executedAt: Date.now(),
-        });
+        // outcome/confidence usados na ReflectionMemory logo abaixo — 'success'/0.9 por
+        // padrão (attempt novo e genuinamente confirmado nos modos 'add'/'finalize'); no modo
+        // 'skip', substituídos pelo resultado REAL já gravado por executeStep() (achado
+        // residual 1, Sprint 0.8.3: ReflectionMemory precisa refletir o attempt real, não um
+        // 'success'/0.9 fixo, senão um 'partial' de baixa confiança fica indistinguível de uma
+        // conclusão confirmada para RiskAnalyzer/findToolFailures/findHardConstraints/
+        // findCategoryHints).
+        let reflectionOutcome: AttemptOutcome = 'success';
+        let reflectionConfidence = 0.9;
 
-        // Registra sucesso na ReflectionMemory.
+        if (attemptRecording === 'add') {
+            // Registra attempt de sucesso para que buildResult() encontre o output real
+            // (sem isso, resumeGoal() marca o step como concluído mas goal.attempts fica vazio
+            // e buildResult() cai no fallback genérico "Objetivo concluído.")
+            this.goalStore.addAttempt(goal.id, {
+                id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+                planStepId: step.id,
+                toolName: step.toolName ?? 'agentloop',
+                args: step.toolArgs ?? {},
+                result: 'success',
+                output: output.slice(0, 300),
+                durationMs: 0,
+                executedAt: Date.now(),
+            });
+        } else if (attemptRecording === 'finalize') {
+            this.goalStore.finalizeLastAttemptAsSuccess(goal.id, step.id, output);
+        } else {
+            const existing = [...goal.attempts].reverse().find(a => a.planStepId === step.id);
+            if (existing) {
+                reflectionOutcome = existing.result;
+                reflectionConfidence = existing.evaluation?.confidence ?? 0.9;
+            }
+        }
+
+        // Registra na ReflectionMemory.
         // IMPORTANTE: o pattern deve ser `tool_${toolName}` (sem sufixo _success) para que a
         // query de supressão em getFailurePatterns/getHardFailurePatterns encontre o registro
         // aprovado e descarte histórico de falhas obsoleto do mesmo tool.
-        // S2a: outcome='success' — markStepDone só é chamado para conclusão confirmada
-        // (o addAttempt logo acima já registra result:'success' no mesmo evento).
         this.reflectionMemory.record({
             userInput: goal.userIntent,
             intent: goal.objective.slice(0, 100),
             toolUsed: step.toolName ?? 'agentloop',
             toolOutput: output.slice(0, 200),
-            approved: true,
-            reason: 'step completed successfully',
-            confidence: 0.9,
+            approved: reflectionOutcome !== 'failure',
+            reason: reflectionOutcome === 'partial' ? 'step completed with low-confidence signal' : 'step completed successfully',
+            confidence: reflectionConfidence,
             pattern: step.toolName ? `tool_${step.toolName}` : 'goal_step_success',
-            outcome: 'success',
+            outcome: reflectionOutcome,
         });
     }
 
