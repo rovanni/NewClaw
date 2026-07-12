@@ -111,6 +111,15 @@ export interface ChannelAdapter {
     readonly displayName: string;
     /** Se o canal está conectado */
     readonly isConnected: boolean;
+    /**
+     * true quando o próprio adapter já gerencia reconexão/backoff/circuit-breaker
+     * internamente (ex.: TelegramAdapter + TelegramPollingSupervisor). Quando true, o
+     * MessageBus NÃO agenda seu próprio `scheduleAdapterReconnect` para este adapter —
+     * evita dois mecanismos de reconexão concorrentes e descoordenados sobre a mesma
+     * conexão (auditoria adversarial 2026-07-12, achado B1). Adapters sem supervisor
+     * próprio deixam este campo undefined/false e continuam usando o reconnect do bus.
+     */
+    readonly selfHealing?: boolean;
 
     /** Iniciar o adapter */
     start(): Promise<void>;

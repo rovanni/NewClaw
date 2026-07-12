@@ -11,6 +11,7 @@ dotenv.config();
 
 import { AgentController } from './core/AgentController';
 import { autoRecoverDatabase, replaceDatabaseFile } from './core/dbRecovery';
+import { applyUncaughtExceptionDecision } from './core/UncaughtExceptionPolicy';
 import { DashboardServer } from './dashboard/DashboardServer';
 import { Logger } from './shared/Logger';
 import { createLogger } from './shared/AppLogger';
@@ -76,26 +77,16 @@ const config = {
 };
 
 async function main() {
-    // Global error handlers to prevent silent crashes
-    // These catch unhandled rejections/exceptions but DO NOT exit the process.
-    // The service must stay alive even if a single request fails.
-    process.on('unhandledRejection', (reason, _promise) => {
-        log.error('unhandled_rejection', reason instanceof Error ? reason : undefined, String(reason));
-        // DO NOT exit — log and continue. One failed request should not kill the service.
+    // Global error handlers — capturam exceções que escapam de todo try/catch.
+    // A decisão de continuar vs. reiniciar (e toda a classificação de erro) é centralizada em
+    // UncaughtExceptionPolicy, controlada por UNCAUGHT_EXCEPTION_POLICY=continue|restart (ver
+    // core/UncaughtExceptionPolicy.ts). Nenhuma condicional de classificação deve ser adicionada
+    // aqui — isso reintroduziria a lógica espalhada que a auditoria 2026-07-12 (achado B2) apontou.
+    process.on('unhandledRejection', (reason) => {
+        applyUncaughtExceptionDecision(reason instanceof Error ? reason : new Error(String(reason)), 'unhandledRejection');
     });
     process.on('uncaughtException', (error) => {
-        log.error('uncaught_exception', error);
-        // DO NOT exit on transient errors (timeout, network, provider failures)
-        // Only exit on truly fatal errors (OOM, corrupt state)
-        const isFatal = error.message?.includes('ENOMEM') || 
-                        error.message?.includes('heap out of memory') ||
-                        error.message?.includes('FATAL');
-        if (isFatal) {
-            log.error('fatal_error', error, 'Unrecoverable error — exiting');
-            process.exit(1);
-        }
-        // Non-fatal: log and continue
-        log.error('non_fatal_exception', error, 'Continuing after non-fatal error');
+        applyUncaughtExceptionDecision(error, 'uncaughtException');
     });
 
     log.info('🚀 NewClaw v0.2.0 starting...');

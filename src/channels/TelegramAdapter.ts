@@ -56,6 +56,8 @@ interface TelegramMsg {
 export class TelegramAdapter implements ChannelAdapter {
     readonly channelType: ChannelType = 'telegram';
     readonly displayName: string = 'Telegram';
+    /** TelegramPollingSupervisor já gerencia reconexão/backoff/circuit-breaker — ver B1 em ChannelAdapter.ts */
+    readonly selfHealing = true;
 
     /**
      * Callback injetado pelo AgentController para tratar callbacks estruturados

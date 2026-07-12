@@ -2,7 +2,14 @@
  * ConversationQueueManager — Serialização de mensagens por conversa
  *
  * Garante que mensagens do mesmo usuário/conversa sejam processadas
- * exatamente em ordem, sem descarte, com ACK amigável ao usuário.
+ * exatamente em ordem, com ACK amigável ao usuário durante bursts.
+ *
+ * Sem descarte ATÉ o limite MAX_PENDING por conversa: acima disso, a mensagem
+ * excedente É rejeitada (backpressure) e o usuário é avisado para reenviar —
+ * ver `enqueue()` (auditoria adversarial 2026-07-12, achado B3). Isso é
+ * deliberado (proteção contra fila ilimitada/DoS por flood de uma única
+ * conversa), não um bug; o comentário anterior prometia "sem descarte" sem
+ * qualificação, o que não reflete esse limite.
  *
  * Cada conversa tem sua própria PQueue com concurrency=1.
  * Filas ociosas são removidas automaticamente após IDLE_CLEANUP_MS.

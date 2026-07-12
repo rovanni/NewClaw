@@ -153,10 +153,18 @@ export class MessageBus {
                 await adapter.start();
                 log.info('adapter_started', `${adapter.displayName} started`);
             } catch (error) {
-                // Don't crash — schedule background reconnect
-                // Each adapter handles its own reconnect via scheduleReconnect
+                // Don't crash — schedule background reconnect, EXCETO para adapters que já
+                // gerenciam sua própria reconexão internamente (ex.: TelegramAdapter +
+                // TelegramPollingSupervisor, que tem seu próprio backoff/cooldown/circuit-breaker).
+                // Rodar os dois mecanismos ao mesmo tempo é redundante e descoordenado — o bus
+                // acabaria chamando adapter.start() de novo enquanto o supervisor interno já está
+                // no meio do próprio ciclo de retry (auditoria adversarial 2026-07-12, achado B1).
                 log.error('adapter_start_failed', error, `${type} failed to start — will retry in background`);
-                this.scheduleAdapterReconnect(type, adapter, error);
+                if (adapter.selfHealing) {
+                    log.info('adapter_self_healing_skip', `${adapter.displayName} gerencia sua própria reconexão — bus não agendará reconnect redundante`);
+                } else {
+                    this.scheduleAdapterReconnect(type, adapter, error);
+                }
             }
         }
 
