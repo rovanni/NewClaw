@@ -44,9 +44,6 @@ tmp_*.txt
 tmp_*.png
 tmp_*.json
 
-# Testes de regressão (executados localmente, não parte do build)
-src/__tests__/
-
 # IDE / OS
 .vscode/
 .idea/
