@@ -597,6 +597,22 @@ export class AgentLoop {
             || /\bj[aá]\s+j[aá](?![a-zà-ÿ])/i.test(text);
     }
 
+    /**
+     * Mesma classe semântica de looksLikePendingActionPromise (promessa de ação futura em vez
+     * de entrega), mas construção gramatical diferente: futuro perifrástico "vou X" em vez de
+     * gerúndio "estou X-ndo". Evidência real (11/07/2026): "Vou buscar informações atualizadas
+     * agora." — web_search já tinha rodado com sucesso, mas a resposta não usou o resultado.
+     * Deliberadamente SEPARADO de looksLikePendingActionPromise em vez de fundido nela: "vou
+     * verbo... agora" é mais propenso a falso positivo em respostas legítimas que mencionam
+     * "agora" mais adiante sem prometer ação nenhuma (ex: "vou explicar como isso funciona:
+     * primeiro, agora observe que..."). Por isso só é usado no guard de commitResponse() que já
+     * exige commit.valid===false (rejeição independente do ObserverValidator) como segundo
+     * sinal — nunca sozinho, ao contrário de looksLikePendingActionPromise no caminho `!last`.
+     */
+    private static looksLikeUnfulfilledFuturePromise(text: string): boolean {
+        return /\bvou\s+\w+[^.!?]{0,40}\b(agora|neste\s+momento)\b/i.test(text);
+    }
+
     private async commitResponse(
         response: string,
         userText: string,
@@ -715,6 +731,24 @@ export class AgentLoop {
             if (commit.blocked && commit.correctedResponse) {
                 log.warn(`[${this.ts()}] [COMMIT] Hallucination bloqueada (risk=${commit.hallucinationRisk.toFixed(2)}): ${commit.blockReason}`);
                 return commit.correctedResponse;
+            }
+
+            // Mesma classe de bug do guard `!last` acima (pending-action promise), mas para o
+            // caso em que a tool JÁ RODOU E TEVE SUCESSO — a resposta final ainda assim só
+            // repete a promessa em vez de usar o resultado que já está em last.toolOutput.
+            // ObserverValidator.validateResponseCommit() deliberadamente nunca bloqueia
+            // rejeições vindas do caminho de qualidade via LLM (ver comentário lá: evita
+            // esconder a interação do usuário e loops de erro) — então commit.valid=false
+            // sozinho não basta pra corrigir aqui. Combinamos com o mesmo padrão regex já
+            // testado (looksLikePendingActionPromise) como segundo sinal independente, pra não
+            // bloquear por causa só de uma rejeição de qualidade genérica do LLM.
+            // Evidência real (11/07/2026, Telegram): web_search rodou 2x com sucesso, resposta
+            // final foi só "Vou buscar informações atualizadas agora." — ObserverValidator
+            // aprovou=false confidence=0.95, mas nada impediu o envio; o usuário respondeu
+            // "Conseguiu fazer isso?" sem nunca receber os dados já coletados.
+            if (!commit.valid && (AgentLoop.looksLikePendingActionPromise(response) || AgentLoop.looksLikeUnfulfilledFuturePromise(response))) {
+                log.warn(`[${this.ts()}] [COMMIT] Pending-action promise apesar de "${last.toolName}" já ter sucesso — bloqueando resposta`);
+                return `Já executei "${last.toolName}" e tenho os resultados, mas minha resposta anterior não os apresentou — só repetiu que ia buscar. Pode perguntar de novo? Desta vez uso os dados já coletados.`;
             }
 
             return response;

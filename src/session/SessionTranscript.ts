@@ -9,8 +9,8 @@
  * 
  * Each session gets (nome de arquivo sanitizado via SessionKeyFactory.toFileSafeId — ':' vira
  * '~' porque ':' num nome de arquivo é o separador de Alternate Data Stream no NTFS):
- *   telegram~8071707790.jsonl  → append-only event log
- *   telegram~8071707790.idx.json → seek index + stats
+ *   telegram~123456789.jsonl  → append-only event log
+ *   telegram~123456789.idx.json → seek index + stats
  */
 
 import fs from 'fs';
@@ -53,8 +53,16 @@ export interface SessionIndex {
     totalEntries: number;     // total entries written
     checkpoints: Array<{
         offset: number;        // byte offset in JSONL
-        seq: number;           // sequence number
+        seq: number;           // sequence number DA PRÓPRIA entrada de checkpoint (sempre a
+                                // mais recente do arquivo no momento em que foi gravada — NÃO
+                                // usar como limite de replay, ver compressedUpTo abaixo)
         ts: string;            // timestamp
+        // Seq da ÚLTIMA mensagem que realmente entrou no resumo (meta.compressed_up_to de
+        // quem chamou append). getSinceCheckpoint() precisa reproduzir a partir daqui, não
+        // de `seq` acima — a entrada de checkpoint é sempre anexada DEPOIS da janela de
+        // mensagens recentes que devem continuar visíveis (maxContextMessages), então usar
+        // `seq` como limite descartava essa janela inteira (nem resumida, nem visível).
+        compressedUpTo?: number;
     }>;
     updatedAt: string;
 }
@@ -219,7 +227,8 @@ export class SessionTranscript {
             this.index.checkpoints.push({
                 offset,
                 seq: this.seqCounter,
-                ts: entry.ts
+                ts: entry.ts,
+                compressedUpTo: meta.compressed_up_to,
             });
         }
 
@@ -258,7 +267,7 @@ export class SessionTranscript {
                         if (entry.seq > lastSeq) lastSeq = entry.seq;
                         totalEntries++;
                         if (entry.meta?.checkpoint) {
-                            checkpoints.push({ offset, seq: entry.seq, ts: entry.ts });
+                            checkpoints.push({ offset, seq: entry.seq, ts: entry.ts, compressedUpTo: entry.meta.compressed_up_to });
                         }
                     } catch { /* skip malformed */ }
                 }
@@ -380,8 +389,14 @@ export class SessionTranscript {
             return { entries: await this.replay(), lastCheckpointSeq: null };
         }
 
+        // compressedUpTo (seq da última mensagem efetivamente resumida) é o limite correto de
+        // replay — a própria entrada de checkpoint (lastCheckpoint.seq) é sempre anexada DEPOIS
+        // da janela de mensagens recentes (maxContextMessages) que deve continuar visível aqui.
+        // Fallback pra lastCheckpoint.seq só para índices antigos gravados antes deste campo
+        // existir (compatibilidade retroativa, não path normal).
+        const replayFrom = lastCheckpoint.compressedUpTo ?? lastCheckpoint.seq;
         return {
-            entries: await this.replay(lastCheckpoint.seq + 1),
+            entries: await this.replay(replayFrom + 1),
             lastCheckpointSeq: lastCheckpoint.seq
         };
     }

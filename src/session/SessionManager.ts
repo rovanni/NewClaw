@@ -451,7 +451,14 @@ export class SessionManager {
 
         log.info(`Compressing ${userAssistantMessages.length} messages (${tokenEstimate} tokens) for ${sid}`);
 
-        const messagesToCompress = entries.slice(0, compressCount);
+        // BUG REAL (auditoria 11/07/2026, sessão Telegram real): fatiar `entries` (que
+        // inclui tool_call/tool_result/system intercalados) usando um `compressCount` calculado
+        // sobre `userAssistantMessages` não seleciona as N mensagens de conversa mais antigas —
+        // pode incluir menos mensagens reais que o pretendido, ou deixar de fora exatamente as
+        // que deveriam ser resumidas. Fatiar `userAssistantMessages` diretamente garante que
+        // `messagesToCompress` sejam exatamente as `compressCount` trocas de conversa mais
+        // antigas, consistente com o que `maxContextMessages`/`maxUncompressedMessages` querem dizer.
+        const messagesToCompress = userAssistantMessages.slice(0, compressCount);
 
         let summary: string;
         if (this.contextCompressor) {
@@ -470,8 +477,24 @@ export class SessionManager {
             summary = this.fallbackSummary(messagesToCompress, sid);
         }
 
+        // BUG REAL (auditoria 11/07/2026): `transcript.getSeq()` retorna o seq mais recente de
+        // TODO o transcript (a última mensagem do assistente que acabou de responder), não o
+        // seq da última mensagem efetivamente incluída no resumo. Como a entrada de checkpoint
+        // só pode ser anexada no fim do arquivo (log append-only), usar `getSeq()` aqui fazia
+        // `getSinceCheckpoint()` tratar a janela inteira de `maxContextMessages` (as mensagens
+        // recentes que deveriam continuar visíveis SEM compressão) como se já estivesse
+        // resumida — ela não estava no resumo (só as `compressCount` mais antigas estavam) nem
+        // ficava mais visível no replay (porque o limite de replay passava a ser o seq da
+        // própria entrada de checkpoint, sempre o mais alto do arquivo). Resultado: essa janela
+        // simplesmente desaparecia do contexto do LLM. Reproduzido ao vivo: usuário perguntou
+        // "Conseguiu fazer isso?" referindo-se à resposta do assistente 7 min antes ("Vou
+        // buscar informações atualizadas agora") — a compressão disparada exatamente nesse
+        // turno apagou essa troca do contexto (SessionContext logou "1 recent msgs" em vez das
+        // ~6 esperadas), e o modelo, sem esse anchor, executou uma tarefa antiga não
+        // relacionada em vez de responder à pergunta.
+        const lastCompressedSeq = messagesToCompress[messagesToCompress.length - 1]?.seq ?? transcript.getSeq();
         const checkpoint: CompressionCheckpoint = {
-            seq: transcript.getSeq(),
+            seq: lastCompressedSeq,
             summary,
             originalCount: messagesToCompress.length,
             compressedAt: new Date().toISOString(),

@@ -136,6 +136,25 @@ export class SessionContext {
             }
         }
 
+        // BUG REAL (auditoria 11/07/2026): TelegramAdapter captura ctx.message.reply_to_message
+        // (o usuário respondeu citando uma mensagem específica do bot) em metadata.quotedText,
+        // mas deliberadamente NÃO embute no texto da mensagem — comentário original em
+        // TelegramAdapter.ts explica que isso evitaria interferir na detecção de intenção (ex:
+        // texto citado contendo "Executar comando" sendo lido como novo goal), assumindo que "o
+        // histórico de sessão já contém a mensagem anterior do bot, então o LLM tem contexto".
+        // Só que quotedText nunca era lido em NENHUM outro lugar do código — o sinal mais
+        // confiável de a que o usuário está se referindo (a própria API do Telegram, não
+        // inferência) era descartado, e a suposição de que o histórico bastava falha quando
+        // compressão de sessão (ver maybeCompress) apaga justamente a mensagem citada do
+        // contexto. Injetado aqui — DEPOIS da classificação de intenção (UnifiedIntentRouter/
+        // GoalExtractor já rodaram antes de buildLLMMessages ser chamado, ver AgentLoop.run) —
+        // preserva a preocupação original (não interfere na classificação) e ainda assim entrega
+        // o sinal ao LLM na geração da resposta final.
+        const quotedText = channelMetadata?.quotedText as string | undefined;
+        if (quotedText) {
+            stateBlock += `\n\n[MENSAGEM RESPONDIDA]\nO usuário respondeu diretamente a esta mensagem sua (recurso de reply do Telegram):\n"${quotedText.slice(0, 500)}"\nUse isso para entender a que "isso"/"aquilo"/referências vagas na mensagem atual se referem.`;
+        }
+
         const activeFiles = this.sessionManager.getActiveFilesBlock(key);
         if (activeFiles) {
             stateBlock += `\n\n${activeFiles}`;
