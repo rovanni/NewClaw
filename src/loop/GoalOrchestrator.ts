@@ -559,7 +559,8 @@ export class GoalOrchestrator {
             return '❌ Ação cancelada.';
         }
         log.info(`[GoalOrchestrator] [AUTH-REJECTED] goal=${goal.id} txn=${txnId} — aborting goal`);
-        this.goalStore.update(goal.id, { status: 'failed', pendingTxnId: undefined });
+        // requiresAuth: false — Sprint 0.11, ver nota em GoalExecutionLoop.ts (branch 'needs_auth').
+        this.goalStore.update(goal.id, { status: 'failed', pendingTxnId: undefined, requiresAuth: false });
         return '❌ Ação cancelada. O objetivo foi encerrado sem executar o comando.';
     }
 

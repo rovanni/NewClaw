@@ -287,7 +287,8 @@ export class GoalExecutionLoop {
             this.markStepDone(goal, blockedStep, authStepOutput);
         }
 
-        this.goalStore.update(goal.id, { status: 'executing', pendingTxnId: undefined });
+        // requiresAuth: false — Sprint 0.11, ver nota no branch 'needs_auth' acima.
+        this.goalStore.update(goal.id, { status: 'executing', pendingTxnId: undefined, requiresAuth: false });
         const currentGoal = this.goalStore.getById(goal.id)!;
 
         return this.runLoop(currentGoal, channelContext, onProgress, 0, 0);
@@ -1331,9 +1332,18 @@ export class GoalExecutionLoop {
                         this.goalStore.recordBlocker(currentGoal.id, cycleResult.blocker);
                     }
                     await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'blocked', message: 'Aguardando autorização' });
+                    // Sprint 0.11 (achado do Laboratório Cognitivo, newclaw-cortex/C1.5): `requiresAuth`
+                    // era setado 'false' em create() (GoalOrchestrator.ts) e NUNCA setado 'true' em
+                    // nenhum outro ponto do runtime — mesmo aqui, onde um `pendingTxnId` real é gravado
+                    // porque o goal está de fato aguardando autorização. `requires_auth` ficava sempre 0
+                    // no banco, dissociado de `pending_txn_id` (achado com dado real: 40/442 goals com
+                    // pendingTxnId e requires_auth=0). `requiresAuth` volta a `false` em resumeGoal()
+                    // (linha ~290) e em abortGoalFromAuth() (GoalOrchestrator.ts), os dois pontos que já
+                    // limpam `pendingTxnId`.
                     this.goalStore.update(currentGoal.id, {
                         status: 'blocked',
                         pendingTxnId: txnId,
+                        requiresAuth: true,
                     });
                     const goalResult = this.buildResult(currentGoal, false, totalCycles, totalReplans,
                         cycleResult.output || 'Aguardando sua autorização para prosseguir.');

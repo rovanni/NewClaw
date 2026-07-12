@@ -347,7 +347,20 @@ export class GoalStore {
         const goal = this.getById(goalId);
         if (!goal) return;
         const attempts = [...goal.attempts, attempt];
-        this.update(goalId, { attempts, retryBudget: Math.max(0, goal.retryBudget - 1) });
+        // Sprint 0.11 (achado do Laboratório Cognitivo, newclaw-cortex/C1.5): `goals.confidence`
+        // era gravado só em create() (GOAL_LIMITS.INITIAL_CONFIDENCE, sempre 0.85) e nunca mais
+        // atualizado — nenhum dos ~35 call sites de update()/setStatus() em GoalExecutionLoop
+        // tocava este campo, apesar de update() já validá-lo (linha 265). Em produção real,
+        // isso tornava `confidence` uma constante sem informação (desvio padrão = 0 em 442/442
+        // goals observados), o que por sua vez anulava as regras de decisão do Cortex baseadas
+        // em `uncertainty = 1 - confidence`. `attempt.evaluation.confidence` já é o único sinal
+        // de confiança real, calculado por tentativa, disponível neste ponto — propagá-lo para
+        // o goal é o menor fechamento possível do sinal já existente, sem inventar uma fórmula
+        // nova de agregação (ex: EMA) que ninguém pediu.
+        const confidence = attempt.evaluation?.confidence !== undefined
+            ? attempt.evaluation.confidence
+            : goal.confidence;
+        this.update(goalId, { attempts, retryBudget: Math.max(0, goal.retryBudget - 1), confidence });
         log.debug(`[GoalStore] goal=${goalId} attempt: tool=${attempt.toolName} result=${attempt.result} durationMs=${attempt.durationMs}${attempt.error ? ` error="${attempt.error.slice(0, 80)}"` : ''}`);
     }
 
