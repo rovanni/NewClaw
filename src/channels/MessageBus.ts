@@ -44,8 +44,24 @@ export class MessageBus {
     private priorityCommandHandlers: Map<string, (msg: NormalizedMessage) => Promise<string | null>> = new Map();
     /** Custom media handlers */
     private mediaHandlers: Map<string, (msg: NormalizedMessage, attachment: ChannelAttachment) => Promise<string | null>> = new Map();
-    /** Recently processed message IDs to prevent Telegram duplicate delivery */
-    private recentMessageIds: Map<string, number> = new Map();
+    /**
+     * Dedup de mensagens por (canal:messageId) com ESTADO — evita reentregas duplicadas do
+     * Telegram sem descartar mensagens cujo processamento falhou.
+     *
+     * Auditoria adversarial 2026-07-12 (achado A3): a versão anterior marcava o messageId como
+     * "visto" no momento da ADMISSÃO (antes de processar). Se o turno falhasse sem produzir
+     * resposta e o Telegram reentregasse a mesma update dentro da janela de TTL, a reentrega era
+     * descartada como duplicata — perda silenciosa de mensagem do usuário, violando a garantia
+     * "sem descarte" da ConversationQueueManager.
+     *
+     * Agora o estado distingue:
+     *   - 'in_flight': admitida, ainda processando (ou concluída sem erro fatal). Uma segunda
+     *     entrega enquanto in_flight é duplicata real → descartada.
+     *   - 'done': processamento concluído. Reentregas continuam sendo duplicatas → descartadas.
+     * Em FALHA (exceção não capturada pelo processamento), a entrada é REMOVIDA, permitindo que
+     * uma reentrega legítima seja reprocessada em vez de perdida.
+     */
+    private recentMessageIds: Map<string, { status: 'in_flight' | 'done'; ts: number }> = new Map();
     private readonly MESSAGE_ID_TTL_MS = 5 * 60 * 1000; // 5 minutes
     private cleanupTimer: NodeJS.Timeout | null = null;
     /** Fila serial por conversa — garante processamento em ordem */
@@ -60,8 +76,8 @@ export class MessageBus {
         if (this.cleanupTimer) return;
         this.cleanupTimer = setInterval(() => {
             const now = Date.now();
-            for (const [key, ts] of this.recentMessageIds) {
-                if (now - ts > this.MESSAGE_ID_TTL_MS) this.recentMessageIds.delete(key);
+            for (const [key, entry] of this.recentMessageIds) {
+                if (now - entry.ts > this.MESSAGE_ID_TTL_MS) this.recentMessageIds.delete(key);
             }
         }, this.MESSAGE_ID_TTL_MS);
         this.cleanupTimer.unref(); // don't keep the process alive just for cleanup
@@ -272,15 +288,20 @@ export class MessageBus {
      * Retorna imediatamente — o processamento real ocorre em background via ConversationQueueManager.
      */
     async processMessage(msg: NormalizedMessage): Promise<void> {
-        // Deduplicate by messageId — Telegram pode re-entregar a mesma atualização
-        if (msg.messageId) {
-            const dedupeKey = `${msg.channel}:${msg.messageId}`;
-            if (this.recentMessageIds.has(dedupeKey)) {
-                log.warn('duplicate_message_dropped', `messageId=${msg.messageId} already processed`, { channel: msg.channel, userId: msg.userId });
+        // Deduplicate by messageId — Telegram pode re-entregar a mesma atualização.
+        // Marca como 'in_flight' na admissão; o estado só vira 'done' ao concluir, e é REMOVIDO
+        // em falha para permitir reprocessamento de uma reentrega legítima (achado A3).
+        const dedupeKey = msg.messageId ? `${msg.channel}:${msg.messageId}` : null;
+        if (dedupeKey) {
+            const existing = this.recentMessageIds.get(dedupeKey);
+            if (existing) {
+                log.warn('duplicate_message_dropped', `messageId=${msg.messageId} status=${existing.status}`, { channel: msg.channel, userId: msg.userId });
                 return;
             }
-            this.recentMessageIds.set(dedupeKey, Date.now());
+            this.recentMessageIds.set(dedupeKey, { status: 'in_flight', ts: Date.now() });
         }
+        const markDone = () => { if (dedupeKey) this.recentMessageIds.set(dedupeKey, { status: 'done', ts: Date.now() }); };
+        const markFailed = () => { if (dedupeKey) this.recentMessageIds.delete(dedupeKey); };
 
         const correlationId = crypto.randomUUID();
         const adapter = this.adapters.get(msg.channel);
@@ -307,16 +328,32 @@ export class MessageBus {
                     await adapter.send({ text: response, format: 'plain' }, msg.rawContext).catch(() => {});
                 }
                 log.info('priority_command_executed', `cmd=${commandName} clearedPending=${cleared}`, { queueId, correlationId });
+                markDone(); // comando prioritário concluído — reentrega deve ser tratada como duplicata
                 return;
             }
         }
 
         const result = this.conversationQueues.enqueue(
             queueId,
-            () => this.processMessageCore(msg, correlationId)
+            async () => {
+                try {
+                    await this.processMessageCore(msg, correlationId);
+                    markDone();
+                } catch (err) {
+                    // processMessageCore captura seus próprios erros e responde ao usuário no caminho
+                    // normal; só chega aqui uma exceção realmente inesperada (sem resposta enviada).
+                    // Remover a marca de dedup permite que a reentrega da mesma update seja
+                    // reprocessada em vez de descartada silenciosamente (achado A3). NÃO relança: a
+                    // task da fila não é aguardada, então um throw viraria unhandledRejection sem
+                    // nenhum handler a jusante — o log abaixo é o registro adequado.
+                    markFailed();
+                    log.error('message_processing_unexpected_error', err instanceof Error ? err : undefined, msg.text.slice(0, 50), { channel: msg.channel, userId: msg.userId, correlationId });
+                }
+            }
         );
 
         if ('rejected' in result) {
+            markFailed(); // não foi processada — permite reprocessar quando houver capacidade
             log.warn('queue_backpressure', `Rejected message for ${queueId}`, { queueId });
             if (adapter) {
                 await adapter.send(

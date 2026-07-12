@@ -35,6 +35,7 @@ import { SshExecTool } from '../tools/ssh_exec';
 import { WeatherTool } from '../tools/weather';
 import { ToolRegistry } from './ToolRegistry';
 import { SessionManager } from '../session/SessionManager';
+import { composeSessionKey } from '../session/SessionKeyFactory';
 import { SessionContext } from '../session/SessionContext';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
@@ -112,6 +113,7 @@ export class AgentController {
     private discordAdapter: DiscordAdapter | null = null;
     private whatsAppAdapter: WhatsAppAdapter | null = null;
     private signalAdapter: SignalAdapter | null = null;
+    private eventBusUnsubscribe: (() => void) | null = null;
 
     public getMemory(): MemoryManager { return this.memory; }
     public getSkillLearner(): SkillLearner { return this.skillLearner; }
@@ -434,7 +436,7 @@ export class AgentController {
             }
         });
 
-        this._eventBus.onAny(async (event: AppEvent) => {
+        this.eventBusUnsubscribe = this._eventBus.onAny(async (event: AppEvent) => {
             if (event.type !== EventTypes.SCHEDULER_TRIGGER) return;
             try {
                 const { chatId, channel, prompt, taskId } = event.payload as {
@@ -562,6 +564,10 @@ export class AgentController {
     }
 
     async stop(reason: string = 'shutdown'): Promise<void> {
+        if (this.eventBusUnsubscribe) {
+            this.eventBusUnsubscribe();
+            this.eventBusUnsubscribe = null;
+        }
         // ITEM6: loga goals ativos antes de desligar para detectar perda de estado
         try {
             const activeGoals = this.goalStore.getAllActive();
@@ -589,31 +595,34 @@ export class AgentController {
         return async (userId, txnId, decision, rawCtx) => {
             log.info(`[WF] ${channel} callback userId=${userId} txn=${txnId} decision=${decision}`);
             const sessionKey = { channel, userId };
+            const sid = composeSessionKey(sessionKey);
 
-            const result = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
-            if (!result) {
-                await adapter.send({ text: '⚠️ Sessão de autorização expirada. Repita o comando.', format: 'plain' }, rawCtx);
-                return;
-            }
+            await this.sessionManager.withMutex(sid, async () => {
+                const result = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
+                if (!result) {
+                    await adapter.send({ text: '⚠️ Sessão de autorização expirada. Repita o comando.', format: 'plain' }, rawCtx);
+                    return;
+                }
 
-            // Se há um goal aguardando esta transação, retoma ou aborta conforme a decisão
-            const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
-            if (pendingGoal) {
-                const responseText = decision === 'rejected'
-                    ? await this.goalOrchestrator.abortGoalFromAuth(txnId)
-                    : await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
+                // Se há um goal aguardando esta transação, retoma ou aborta conforme a decisão
+                const pendingGoal = this.goalOrchestrator.getGoalStore().getByTxnId(txnId);
+                if (pendingGoal) {
+                    const responseText = decision === 'rejected'
+                        ? await this.goalOrchestrator.abortGoalFromAuth(txnId)
+                        : await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '');
+                    await adapter.send({ text: responseText, format }, rawCtx);
+                    await this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(err =>
+                        log.error('[WF] record_auth_response_failed', err)
+                    );
+                    return;
+                }
+
+                const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
                 await adapter.send({ text: responseText, format }, rawCtx);
-                this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(err =>
-                    log.error('[WF] record_auth_response_failed', err)
+                await this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(err =>
+                    log.error('[WF] record_workflow_response_failed', err)
                 );
-                return;
-            }
-
-            const responseText = await this.agentLoop.resumeFromWorkflow(userId, result);
-            await adapter.send({ text: responseText, format }, rawCtx);
-            this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }).catch(err =>
-                log.error('[WF] record_workflow_response_failed', err)
-            );
+            });
         };
     }
 

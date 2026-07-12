@@ -5,6 +5,25 @@ import { createLogger } from '../shared/AppLogger';
 
 const log = createLogger('DBRecovery');
 
+/**
+ * Substitui o arquivo de banco `dest` pelo conteúdo de `src`, removendo ANTES o WAL/SHM stale
+ * do destino.
+ *
+ * Por que a limpeza do WAL/SHM é obrigatória (auditoria adversarial 2026-07-12, achado A2):
+ * o NewClaw abre o SQLite em modo WAL (agentControllerSetup.openDatabase). Se copiarmos um `.db`
+ * por cima de `dest` sem apagar o `dest-wal`/`dest-shm` remanescentes do banco antigo, na próxima
+ * abertura o SQLite encontra um WAL que pertence a OUTRO banco e tenta aplicar seus frames sobre o
+ * arquivo recém-copiado — resultado: "disk image is malformed". Este é exatamente o modo de falha
+ * que o restore manual (index.ts) já tratava inline; a auto-recuperação NÃO tratava, então podia
+ * reverter/loopar justamente no cenário que deveria salvar. Ponto único, usado pelos dois caminhos.
+ */
+export function replaceDatabaseFile(src: string, dest: string): void {
+    for (const suffix of ['-wal', '-shm']) {
+        try { fs.unlinkSync(dest + suffix); } catch { /* ok se não existir */ }
+    }
+    fs.copyFileSync(src, dest);
+}
+
 // Retorna o caminho do melhor backup válido disponível em backupDir,
 // priorizando pre-restore (criados automaticamente antes de um restore) sobre regulares.
 // Retorna null se nenhum backup válido existir.
@@ -57,7 +76,9 @@ export function autoRecoverDatabase(dataDir: string): boolean {
     }
 
     try {
-        fs.copyFileSync(best, dbMain);
+        // replaceDatabaseFile remove o WAL/SHM stale antes de copiar — sem isso o SQLite
+        // reaplicaria o WAL do banco corrompido sobre o backup restaurado (ver A2 acima).
+        replaceDatabaseFile(best, dbMain);
         log.info('auto_recovery_applied',
             `✅ Auto-recuperação aplicada: ${path.basename(best)}`
         );

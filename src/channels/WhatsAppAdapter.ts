@@ -27,6 +27,7 @@ import {
     ResponseAttachment
 } from './ChannelAdapter';
 import { MessageBus } from './MessageBus';
+import { isSenderAllowed } from './accessControl';
 import { createLogger } from '../shared/AppLogger';
 import PQueue from 'p-queue';
 import { existsSync, mkdirSync, readFileSync } from 'fs';
@@ -40,7 +41,7 @@ export interface WhatsAppConfig extends ChannelConfig {
     authDir?: string;
     /** Phone number for pairing (e.g., '5511999999999') */
     phoneNumber?: string;
-    /** Allowed JIDs (e.g., ['5511999999999@s.whatsapp.net']) — empty = all contacts */
+    /** Allowed JIDs (e.g., ['5511999999999@s.whatsapp.net']) — empty = DENY ALL (fail-closed) */
     allowedJids?: string[];
     /** Browser to emulate */
     browser?: string;
@@ -268,11 +269,11 @@ export class WhatsAppAdapter implements ChannelAdapter {
         const jid = msg.key?.remoteJid || '';
         const userId = jid.split('@')[0] || jid;
 
-        // JID whitelist
-        if (this.config.allowedJids && this.config.allowedJids.length > 0) {
-            if (!this.config.allowedJids.includes(jid) && !this.config.allowedJids.includes(userId)) {
-                return;
-            }
+        // JID whitelist — FAIL-CLOSED: allowlist vazia nega tudo (ver channels/accessControl.ts).
+        // O remetente pode ser identificado pelo jid completo ou só pelo número (userId).
+        if (!isSenderAllowed(this.config.allowedJids, jid, userId)) {
+            log.info('unauthorized', `Remetente não autorizado: jid=${jid}`);
+            return;
         }
 
         const message = msg.message;

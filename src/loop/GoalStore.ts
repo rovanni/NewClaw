@@ -20,6 +20,7 @@ type SqliteDb = {
         all(...params: unknown[]): unknown[];
     };
     exec(sql: string): void;
+    transaction(fn: any): any;
 };
 
 interface GoalRow {
@@ -344,32 +345,36 @@ export class GoalStore {
     }
 
     addAttempt(goalId: string, attempt: GoalAttempt): void {
-        const goal = this.getById(goalId);
-        if (!goal) return;
-        const attempts = [...goal.attempts, attempt];
-        // Sprint 0.11 (achado do Laboratório Cognitivo, newclaw-cortex/C1.5): `goals.confidence`
-        // era gravado só em create() (GOAL_LIMITS.INITIAL_CONFIDENCE, sempre 0.85) e nunca mais
-        // atualizado — nenhum dos ~35 call sites de update()/setStatus() em GoalExecutionLoop
-        // tocava este campo, apesar de update() já validá-lo (linha 265). Em produção real,
-        // isso tornava `confidence` uma constante sem informação (desvio padrão = 0 em 442/442
-        // goals observados), o que por sua vez anulava as regras de decisão do Cortex baseadas
-        // em `uncertainty = 1 - confidence`. `attempt.evaluation.confidence` já é o único sinal
-        // de confiança real, calculado por tentativa, disponível neste ponto — propagá-lo para
-        // o goal é o menor fechamento possível do sinal já existente, sem inventar uma fórmula
-        // nova de agregação (ex: EMA) que ninguém pediu.
-        const confidence = attempt.evaluation?.confidence !== undefined
-            ? attempt.evaluation.confidence
-            : goal.confidence;
-        this.update(goalId, { attempts, retryBudget: Math.max(0, goal.retryBudget - 1), confidence });
-        log.debug(`[GoalStore] goal=${goalId} attempt: tool=${attempt.toolName} result=${attempt.result} durationMs=${attempt.durationMs}${attempt.error ? ` error="${attempt.error.slice(0, 80)}"` : ''}`);
+        this.db.transaction(() => {
+            const goal = this.getById(goalId);
+            if (!goal) return;
+            const attempts = [...goal.attempts, attempt];
+            // Sprint 0.11 (achado do Laboratório Cognitivo, newclaw-cortex/C1.5): `goals.confidence`
+            // era gravado só em create() (GOAL_LIMITS.INITIAL_CONFIDENCE, sempre 0.85) e nunca mais
+            // atualizado — nenhum dos ~35 call sites de update()/setStatus() em GoalExecutionLoop
+            // tocava este campo, apesar de update() já validá-lo (linha 265). Em produção real,
+            // isso tornava `confidence` uma constante sem informação (desvio padrão = 0 em 442/442
+            // goals observados), o que por sua vez anulava as regras de decisão do Cortex baseadas
+            // em `uncertainty = 1 - confidence`. `attempt.evaluation.confidence` já é o único sinal
+            // de confiança real, calculado por tentativa, disponível neste ponto — propagá-lo para
+            // o goal é o menor fechamento possível do sinal já existente, sem inventar uma fórmula
+            // nova de agregação (ex: EMA) que ninguém pediu.
+            const confidence = attempt.evaluation?.confidence !== undefined
+                ? attempt.evaluation.confidence
+                : goal.confidence;
+            this.update(goalId, { attempts, retryBudget: Math.max(0, goal.retryBudget - 1), confidence });
+            log.debug(`[GoalStore] goal=${goalId} attempt: tool=${attempt.toolName} result=${attempt.result} durationMs=${attempt.durationMs}${attempt.error ? ` error="${attempt.error.slice(0, 80)}"` : ''}`);
+        })();
     }
 
     addBlocker(goalId: string, blocker: GoalBlocker): void {
-        const goal = this.getById(goalId);
-        if (!goal) return;
-        const blockers = [...goal.blockers, blocker];
-        this.update(goalId, { blockers, status: 'blocked' });
-        log.info(`[GoalStore] goal=${goalId} blocker: kind=${blocker.kind} tool=${blocker.toolName ?? 'none'} desc="${blocker.description.slice(0, 100)}"`);
+        this.db.transaction(() => {
+            const goal = this.getById(goalId);
+            if (!goal) return;
+            const blockers = [...goal.blockers, blocker];
+            this.update(goalId, { blockers, status: 'blocked' });
+            log.info(`[GoalStore] goal=${goalId} blocker: kind=${blocker.kind} tool=${blocker.toolName ?? 'none'} desc="${blocker.description.slice(0, 100)}"`);
+        })();
     }
 
     /**
@@ -384,11 +389,13 @@ export class GoalStore {
      * `blockers=[]` observado em goals `failed` reais (ex: goal_...ykpko, Sprint 0.5).
      */
     recordBlocker(goalId: string, blocker: GoalBlocker): void {
-        const goal = this.getById(goalId);
-        if (!goal) return;
-        const blockers = [...goal.blockers, blocker];
-        this.update(goalId, { blockers });
-        log.info(`[GoalStore] goal=${goalId} blocker recorded (status inalterado): kind=${blocker.kind} tool=${blocker.toolName ?? 'none'} desc="${blocker.description.slice(0, 100)}"`);
+        this.db.transaction(() => {
+            const goal = this.getById(goalId);
+            if (!goal) return;
+            const blockers = [...goal.blockers, blocker];
+            this.update(goalId, { blockers });
+            log.info(`[GoalStore] goal=${goalId} blocker recorded (status inalterado): kind=${blocker.kind} tool=${blocker.toolName ?? 'none'} desc="${blocker.description.slice(0, 100)}"`);
+        })();
     }
 
     /**
@@ -403,14 +410,16 @@ export class GoalStore {
         patch: Partial<Pick<GoalAttempt, 'result' | 'output' | 'error'>>,
         predicate: (a: GoalAttempt) => boolean,
     ): void {
-        const goal = this.getById(goalId);
-        if (!goal) return;
-        const idxFromEnd = [...goal.attempts].reverse().findIndex(a => a.planStepId === planStepId && predicate(a));
-        if (idxFromEnd === -1) return;
-        const realIdx = goal.attempts.length - 1 - idxFromEnd;
-        const attempts = goal.attempts.map((a, i) => i === realIdx ? { ...a, ...patch } : a);
-        this.update(goalId, { attempts });
-        log.info(`[GoalStore] goal=${goalId} attempt updated: step=${planStepId} attemptId=${attempts[realIdx].id} patch=${JSON.stringify(patch)}`);
+        this.db.transaction(() => {
+            const goal = this.getById(goalId);
+            if (!goal) return;
+            const idxFromEnd = [...goal.attempts].reverse().findIndex(a => a.planStepId === planStepId && predicate(a));
+            if (idxFromEnd === -1) return;
+            const realIdx = goal.attempts.length - 1 - idxFromEnd;
+            const attempts = goal.attempts.map((a, i) => i === realIdx ? { ...a, ...patch } : a);
+            this.update(goalId, { attempts });
+            log.info(`[GoalStore] goal=${goalId} attempt updated: step=${planStepId} attemptId=${attempts[realIdx].id} patch=${JSON.stringify(patch)}`);
+        })();
     }
 
     /**
@@ -438,17 +447,21 @@ export class GoalStore {
     }
 
     addToolTried(goalId: string, toolName: string): void {
-        const goal = this.getById(goalId);
-        if (!goal) return;
-        if (!goal.toolsTried.includes(toolName)) {
-            this.update(goalId, { toolsTried: [...goal.toolsTried, toolName] });
-        }
+        this.db.transaction(() => {
+            const goal = this.getById(goalId);
+            if (!goal) return;
+            if (!goal.toolsTried.includes(toolName)) {
+                this.update(goalId, { toolsTried: [...goal.toolsTried, toolName] });
+            }
+        })();
     }
 
     addStrategyTried(goalId: string, strategy: string): void {
-        const goal = this.getById(goalId);
-        if (!goal) return;
-        this.update(goalId, { strategiesTried: [...goal.strategiesTried, strategy.slice(0, 200)] });
+        this.db.transaction(() => {
+            const goal = this.getById(goalId);
+            if (!goal) return;
+            this.update(goalId, { strategiesTried: [...goal.strategiesTried, strategy.slice(0, 200)] });
+        })();
     }
 
     // ── TTL cleanup ───────────────────────────────────────────────────────────

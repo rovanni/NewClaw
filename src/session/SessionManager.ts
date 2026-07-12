@@ -18,6 +18,7 @@ import { ProviderFactory } from '../core/ProviderFactory';
 import type { CMIEngine } from '../memory/conversational/CMIEngine';
 import fs from 'fs';
 import { createLogger } from '../shared/AppLogger';
+import { AsyncLocalStorage } from 'async_hooks';
 const log = createLogger('Sessionmanager');
 
 /**
@@ -70,6 +71,7 @@ const DEFAULT_CONFIG: SessionConfig = {
 };
 
 export class SessionManager {
+    private static readonly lockStorage = new AsyncLocalStorage<Set<string>>();
     private config: SessionConfig;
     private memory: MemoryManager;
     private memoryFacade: MemoryFacade;
@@ -110,21 +112,25 @@ export class SessionManager {
     /**
      * Mutex-protected operation per session key.
      * Prevents concurrent writes to the same JSONL.
-     * Includes timeout protection against deadlocks (30s).
+     * Includes timeout protection against deadlocks (45s).
+     * Fully re-entrant via AsyncLocalStorage.
      */
-    private async withMutex<T>(sid: string, fn: () => Promise<T>): Promise<T> {
+    public async withMutex<T>(sid: string, fn: () => Promise<T>): Promise<T> {
+        const activeLocks = SessionManager.lockStorage.getStore();
+        if (activeLocks?.has(sid)) {
+            return fn();
+        }
+
         const current = this.sessionMutexes.get(sid) || Promise.resolve();
         let resolve: () => void;
         const next = new Promise<void>(r => { resolve = r; });
         this.sessionMutexes.set(sid, next);
 
-        // Update last activity for TTL cleanup
         this.lastActivity.set(sid, Date.now());
-
         const waitStart = Date.now();
 
         const mutexTimeout = new Promise<void>((_, reject) => {
-            setTimeout(() => reject(new Error(`Mutex timeout for ${sid} after 10s`)), 10_000);
+            setTimeout(() => reject(new Error(`Mutex timeout for ${sid} after 45s`)), 45_000);
         });
 
         try {
@@ -132,18 +138,21 @@ export class SessionManager {
             const waitMs = Date.now() - waitStart;
             if (waitMs > 200) log.warn('mutex_contention', `[MUTEX] sid=${sid} waited=${waitMs}ms for previous operation`);
         } catch (err) {
-            const waitMs = Date.now() - waitStart;
-            log.warn('mutex_timeout', `[MUTEX] sid=${sid} waited=${waitMs}ms — previous operation took >10s, proceeding anyway`);
+            resolve!();
+            setTimeout(() => {
+                if (this.sessionMutexes.get(sid) === next) {
+                    this.sessionMutexes.delete(sid);
+                }
+            }, 60_000);
+            throw err;
         }
 
         const opStart = Date.now();
         try {
-            return await fn();
-        } catch (err) {
-            const opMs = Date.now() - opStart;
-            const msg = err instanceof Error ? err.message : String(err);
-            log.error('mutex_op_failed', `[MUTEX] sid=${sid} op failed after ${opMs}ms: ${msg}`);
-            throw err;
+            return await SessionManager.lockStorage.run(
+                new Set([...(activeLocks || []), sid]),
+                () => fn()
+            );
         } finally {
             const opMs = Date.now() - opStart;
             if (opMs > 2000) log.warn('mutex_held_long', `[MUTEX] sid=${sid} held=${opMs}ms`);
@@ -210,15 +219,16 @@ export class SessionManager {
         return transcript;
     }
 
-    async recordUserMessage(key: SessionKey, content: string, meta?: TranscriptMeta): Promise<number> {
+        async recordUserMessage(key: SessionKey, content: string, meta?: TranscriptMeta): Promise<number> {
         const sid = this.sessionKey(key);
+        const checkpointData = await this.prepareCompression(key);
+
         return this.withMutex(sid, async () => {
             const transcript = await this.getOrCreateSession(key);
-            // Compress BEFORE appending the user message so the checkpoint entry lands at a seq
-            // lower than the user message. getSinceCheckpoint() returns entries after the checkpoint
-            // entry seq, which correctly includes the user message appended below.
-            await this.maybeCompress(key);
-            const seq = transcript.append('user', content, meta);
+            if (checkpointData) {
+                await this.applyCheckpoint(sid, transcript, checkpointData);
+            }
+            const seq = await transcript.appendAsync('user', content, meta);
             this.memory.addMessage(this.conversationId(key), 'user', content);
             log.info(`${sid} user seq=${seq} len=${content.length}`);
             // CMI: fire-and-forget, nunca bloqueia o response
@@ -232,7 +242,7 @@ export class SessionManager {
         const sid = this.sessionKey(key);
         return this.withMutex(sid, async () => {
             const transcript = await this.getOrCreateSession(key);
-            const seq = transcript.append('assistant', content, meta);
+            const seq = await transcript.appendAsync('assistant', content, meta);
             this.memory.addMessage(this.conversationId(key), 'assistant', content);
             log.info(`${sid} assistant seq=${seq} len=${content.length} tokens≈${Math.round(estimateTokens(content))}`);
             // CMI: fire-and-forget
@@ -243,80 +253,88 @@ export class SessionManager {
     }
 
     async recordSystemMessage(key: SessionKey, content: string, meta?: TranscriptMeta): Promise<number> {
-        const transcript = await this.getOrCreateSession(key);
-        return transcript.append('system', content, meta);
+        const sid = this.sessionKey(key);
+        return this.withMutex(sid, async () => {
+            const transcript = await this.getOrCreateSession(key);
+            return transcript.appendAsync('system', content, meta);
+        });
     }
 
     async recordToolMessage(key: SessionKey, content: string, meta?: TranscriptMeta): Promise<number> {
-        const transcript = await this.getOrCreateSession(key);
-        return transcript.append('tool_result', content, meta);
+        const sid = this.sessionKey(key);
+        return this.withMutex(sid, async () => {
+            const transcript = await this.getOrCreateSession(key);
+            return transcript.appendAsync('tool_result', content, meta);
+        });
     }
 
     async recordToolCall(key: SessionKey, toolName: string, input: string, meta?: TranscriptMeta): Promise<number> {
-        const transcript = await this.getOrCreateSession(key);
         const sid = this.sessionKey(key);
+        return this.withMutex(sid, async () => {
+            const transcript = await this.getOrCreateSession(key);
 
-        // Contadores por turno de AgentLoop (para validação estrutural de steps de modificação)
-        if (toolName === 'read' || toolName === 'write' || toolName === 'edit') {
-            if (!this.turnToolCounts.has(sid)) {
-                this.turnToolCounts.set(sid, { reads: 0, writes: 0, edits: 0 });
-            }
-            const counts = this.turnToolCounts.get(sid)!;
-            if (toolName === 'read')  counts.reads++;
-            if (toolName === 'write') counts.writes++;
-            if (toolName === 'edit')  counts.edits++;
-        }
-
-        // Track active files
-        if (toolName === 'read' || toolName === 'write' || toolName === 'edit') {
-            try {
-                const parsedArgs = JSON.parse(input);
-                if (parsedArgs.path) {
-                    if (!this.activeFiles.has(sid)) {
-                        this.activeFiles.set(sid, new Set());
-                    }
-                    this.activeFiles.get(sid)!.add(parsedArgs.path);
-
-                    // Keep maximum of 10 recent files to avoid context bloat
-                    if (this.activeFiles.get(sid)!.size > 10) {
-                        const arr = Array.from(this.activeFiles.get(sid)!);
-                        arr.shift(); // Remove oldest
-                        this.activeFiles.set(sid, new Set(arr));
-                    }
+            // Contadores por turno de AgentLoop (para validação estrutural de steps de modificação)
+            if (toolName === 'read' || toolName === 'write' || toolName === 'edit') {
+                if (!this.turnToolCounts.has(sid)) {
+                    this.turnToolCounts.set(sid, { reads: 0, writes: 0, edits: 0 });
                 }
-            } catch (e) {
-                // Ignore parse errors
+                const counts = this.turnToolCounts.get(sid)!;
+                if (toolName === 'read')  counts.reads++;
+                if (toolName === 'write') counts.writes++;
+                if (toolName === 'edit')  counts.edits++;
             }
-        }
 
-        // Track delivered artifacts — sobrevivem à compressão de sessão
-        if (toolName === 'send_document') {
-            try {
-                const parsedArgs = JSON.parse(input);
-                const filePath = parsedArgs.file_path ?? parsedArgs.path;
-                if (filePath) {
-                    if (!this.deliveredArtifacts.has(sid)) {
-                        this.deliveredArtifacts.set(sid, []);
+            // Track active files
+            if (toolName === 'read' || toolName === 'write' || toolName === 'edit') {
+                try {
+                    const parsedArgs = JSON.parse(input);
+                    if (parsedArgs.path) {
+                        if (!this.activeFiles.has(sid)) {
+                            this.activeFiles.set(sid, new Set());
+                        }
+                        this.activeFiles.get(sid)!.add(parsedArgs.path);
+
+                        // Keep maximum of 10 recent files to avoid context bloat
+                        if (this.activeFiles.get(sid)!.size > 10) {
+                            const arr = Array.from(this.activeFiles.get(sid)!);
+                            arr.shift(); // Remove oldest
+                            this.activeFiles.set(sid, new Set(arr));
+                        }
                     }
-                    this.deliveredArtifacts.get(sid)!.push({
-                        path: String(filePath),
-                        name: String(filePath).split('/').pop() ?? String(filePath),
-                        deliveredAt: new Date().toISOString(),
-                    });
+                } catch (e) {
+                    // Ignore parse errors
                 }
-            } catch {
-                // Ignore parse errors
             }
-        }
-        
-        const seq = transcript.append('tool_call', `Tool: ${toolName}`, { ...meta, tool_name: toolName, tool_input: input });
-        // CMI: registrar tool call (extrai tools_used e entity paths)
-        const toolEntry: TranscriptEntry = {
-            ts: new Date().toISOString(), seq, role: 'tool_call',
-            content: `Tool: ${toolName}`, meta: { ...meta, tool_name: toolName, tool_input: input }
-        };
-        this.cmiEngine?.feedEntry(sid, toolEntry).catch(() => {});
-        return seq;
+
+            // Track delivered artifacts — sobrevivem à compressão de sessão
+            if (toolName === 'send_document') {
+                try {
+                    const parsedArgs = JSON.parse(input);
+                    const filePath = parsedArgs.file_path ?? parsedArgs.path;
+                    if (filePath) {
+                        if (!this.deliveredArtifacts.has(sid)) {
+                            this.deliveredArtifacts.set(sid, []);
+                        }
+                        this.deliveredArtifacts.get(sid)!.push({
+                            path: String(filePath),
+                            name: String(filePath).split('/').pop() ?? String(filePath),
+                            deliveredAt: new Date().toISOString(),
+                        });
+                    }
+                } catch {
+                    // Ignore parse errors
+                }
+            }
+            
+            const seq = await transcript.appendAsync('tool_call', `Tool: ${toolName}`, { ...meta, tool_name: toolName, tool_input: input });
+            // CMI: registrar tool call (extrai tools_used e entity paths)
+            const toolEntry: TranscriptEntry = {
+                ts: new Date().toISOString(), seq, role: 'tool_call',
+                content: `Tool: ${toolName}`, meta: { ...meta, tool_name: toolName, tool_input: input }
+            };
+            this.cmiEngine?.feedEntry(sid, toolEntry).catch(() => {});
+            return seq;
+        });
     }
 
     /**
@@ -382,17 +400,19 @@ export class SessionManager {
     }
 
     async recordToolResult(key: SessionKey, toolName: string, result: string, success: boolean, durationMs?: number, meta?: TranscriptMeta): Promise<number> {
-        const transcript = await this.getOrCreateSession(key);
         const sid = this.sessionKey(key);
-        const resultMeta = { ...meta, tool_name: toolName, tool_success: success, tool_duration_ms: durationMs, status: success ? 'success' as const : 'error' as const };
-        const seq = transcript.append('tool_result', result, resultMeta);
-        // CMI: sinaliza conclusão de workflow para terminal tools
-        const resultEntry: TranscriptEntry = {
-            ts: new Date().toISOString(), seq, role: 'tool_result',
-            content: result.slice(0, 200), meta: resultMeta
-        };
-        this.cmiEngine?.feedEntry(sid, resultEntry).catch(() => {});
-        return seq;
+        return this.withMutex(sid, async () => {
+            const transcript = await this.getOrCreateSession(key);
+            const resultMeta = { ...meta, tool_name: toolName, tool_success: success, tool_duration_ms: durationMs, status: success ? 'success' as const : 'error' as const };
+            const seq = await transcript.appendAsync('tool_result', result, resultMeta);
+            // CMI: sinaliza conclusão de workflow para terminal tools
+            const resultEntry: TranscriptEntry = {
+                ts: new Date().toISOString(), seq, role: 'tool_result',
+                content: result.slice(0, 200), meta: resultMeta
+            };
+            this.cmiEngine?.feedEntry(sid, resultEntry).catch(() => {});
+            return seq;
+        });
     }
 
     /**
@@ -424,40 +444,32 @@ export class SessionManager {
     }
 
     /**
-     * Hybrid compression: triggers on message count OR token estimate.
+     * Preparação da compressão de contexto — Executado fora do lock do mutex
+     * para evitar que chamadas de LLM bloqueiem a sessão por longos períodos.
      */
-    private async maybeCompress(key: SessionKey): Promise<void> {
+    private async prepareCompression(key: SessionKey): Promise<CompressionCheckpoint | null> {
         const transcript = await this.getOrCreateSession(key);
         const sid = this.sessionKey(key);
 
         const { entries } = await transcript.getSinceCheckpoint();
         const userAssistantMessages = entries.filter(e => e.role === 'user' || e.role === 'assistant');
 
-        // Hybrid trigger: message count OR token estimate
         const messageThreshold = userAssistantMessages.length >= this.config.maxUncompressedMessages;
         const tokenEstimate = userAssistantMessages.reduce((sum, e) => sum + estimateTokens(e.content), 0);
         const tokenThreshold = tokenEstimate >= this.config.maxUncompressedTokens;
 
-        if (!messageThreshold && !tokenThreshold) return;
+        if (!messageThreshold && !tokenThreshold) return null;
 
         const compressCount = userAssistantMessages.length - this.config.maxContextMessages;
-        if (compressCount <= 0) return;
+        if (compressCount <= 0) return null;
 
-        // Telemetria: compressão durante execução de goal pode causar perda de contexto
         const activeGoalId = this.activeGoals.get(sid);
         if (activeGoalId) {
             log.warn(`[SESSION] compressDuringGoal=true sid=${sid} goalId=${activeGoalId} msgs=${userAssistantMessages.length} tokens≈${tokenEstimate}`);
         }
 
-        log.info(`Compressing ${userAssistantMessages.length} messages (${tokenEstimate} tokens) for ${sid}`);
+        log.info(`[COMPRESSION-START] sid=${sid} msgs=${userAssistantMessages.length} tokens≈${tokenEstimate} (LLM running outside lock)`);
 
-        // BUG REAL (auditoria 11/07/2026, sessão Telegram real): fatiar `entries` (que
-        // inclui tool_call/tool_result/system intercalados) usando um `compressCount` calculado
-        // sobre `userAssistantMessages` não seleciona as N mensagens de conversa mais antigas —
-        // pode incluir menos mensagens reais que o pretendido, ou deixar de fora exatamente as
-        // que deveriam ser resumidas. Fatiar `userAssistantMessages` diretamente garante que
-        // `messagesToCompress` sejam exatamente as `compressCount` trocas de conversa mais
-        // antigas, consistente com o que `maxContextMessages`/`maxUncompressedMessages` querem dizer.
         const messagesToCompress = userAssistantMessages.slice(0, compressCount);
 
         let summary: string;
@@ -477,23 +489,9 @@ export class SessionManager {
             summary = this.fallbackSummary(messagesToCompress, sid);
         }
 
-        // BUG REAL (auditoria 11/07/2026): `transcript.getSeq()` retorna o seq mais recente de
-        // TODO o transcript (a última mensagem do assistente que acabou de responder), não o
-        // seq da última mensagem efetivamente incluída no resumo. Como a entrada de checkpoint
-        // só pode ser anexada no fim do arquivo (log append-only), usar `getSeq()` aqui fazia
-        // `getSinceCheckpoint()` tratar a janela inteira de `maxContextMessages` (as mensagens
-        // recentes que deveriam continuar visíveis SEM compressão) como se já estivesse
-        // resumida — ela não estava no resumo (só as `compressCount` mais antigas estavam) nem
-        // ficava mais visível no replay (porque o limite de replay passava a ser o seq da
-        // própria entrada de checkpoint, sempre o mais alto do arquivo). Resultado: essa janela
-        // simplesmente desaparecia do contexto do LLM. Reproduzido ao vivo: usuário perguntou
-        // "Conseguiu fazer isso?" referindo-se à resposta do assistente 7 min antes ("Vou
-        // buscar informações atualizadas agora") — a compressão disparada exatamente nesse
-        // turno apagou essa troca do contexto (SessionContext logou "1 recent msgs" em vez das
-        // ~6 esperadas), e o modelo, sem esse anchor, executou uma tarefa antiga não
-        // relacionada em vez de responder à pergunta.
         const lastCompressedSeq = messagesToCompress[messagesToCompress.length - 1]?.seq ?? transcript.getSeq();
-        const checkpoint: CompressionCheckpoint = {
+        
+        return {
             seq: lastCompressedSeq,
             summary,
             originalCount: messagesToCompress.length,
@@ -501,20 +499,30 @@ export class SessionManager {
             model: this.config.compressionModel,
             tokenEstimate
         };
+    }
+
+    /**
+     * Aplicação do Checkpoint — Executado dentro do lock do mutex.
+     * Apenas persiste e anexa o checkpoint se ele for mais recente do que o já existente.
+     */
+    private async applyCheckpoint(sid: string, transcript: SessionTranscript, checkpoint: CompressionCheckpoint): Promise<void> {
+        const currentCP = this.compressionCheckpoints.get(sid);
+        if (currentCP && currentCP.seq >= checkpoint.seq) {
+            log.info(`[COMPRESSION-SKIP] sid=${sid} checkpoint at seq=${checkpoint.seq} is outdated (current=${currentCP.seq})`);
+            return;
+        }
 
         this.compressionCheckpoints.set(sid, checkpoint);
         this.saveCheckpoint(sid, checkpoint);
 
-        // Mark checkpoint in transcript as STRUCTURED system event
-        transcript.append('checkpoint', summary, {
+        await transcript.appendAsync('checkpoint', checkpoint.summary, {
             checkpoint: true,
             compressed_up_to: checkpoint.seq
         });
 
-        // CMI: fronteira semântica natural — flush imediato do buffer
         this.cmiEngine?.onCheckpointCreated(sid).catch(() => {});
 
-        log.info(`Checkpoint: seq=${checkpoint.seq} compressed=${messagesToCompress.length} tokens≈${tokenEstimate}`);
+        log.info(`[COMPRESSION-APPLIED] sid=${sid} seq=${checkpoint.seq} compressed=${checkpoint.originalCount}`);
     }
 
     private fallbackSummary(messages: TranscriptEntry[], sid: string): string {

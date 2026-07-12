@@ -28,6 +28,7 @@ import {
     ResponseAttachment
 } from './ChannelAdapter';
 import { MessageBus } from './MessageBus';
+import { isSenderAllowed } from './accessControl';
 import { createLogger } from '../shared/AppLogger';
 import type { WorkflowCallbackFn, AuthDecision } from '../loop/WorkflowTypes';
 
@@ -38,7 +39,7 @@ export interface SignalConfig extends ChannelConfig {
     phoneNumber: string;
     /** signal-cli command path */
     signalCliPath?: string;
-    /** Allowed phone numbers (e.g., ['+5511999999999']) — empty = all */
+    /** Allowed phone numbers (e.g., ['+5511999999999']) — empty = DENY ALL (fail-closed) */
     allowedNumbers?: string[];
     /** JSON-RPC port for signal-cli daemon */
     rpcPort?: number;
@@ -297,8 +298,11 @@ export class SignalAdapter implements ChannelAdapter {
         const sourceName = envelope.sourceName || '';
         const dataMessage = envelope.dataMessage;
 
-        // Phone number whitelist
-            if (envelope?.sourceNumber && this.config.allowedNumbers && this.config.allowedNumbers.length > 0 && !this.config.allowedNumbers.includes(envelope.sourceNumber)) {
+        // Phone number whitelist — FAIL-CLOSED: allowlist vazia nega tudo (ver channels/accessControl.ts).
+        // Usa `sourceNumber` (envelope.sourceNumber || envelope.source), a mesma identidade canônica
+        // que o `userId` abaixo deriva — não só envelope.sourceNumber.
+        if (!isSenderAllowed(this.config.allowedNumbers, sourceNumber)) {
+            log.info('unauthorized', `Remetente não autorizado: ${sourceNumber || '(sem número)'}`);
             return;
         }
 

@@ -32,6 +32,7 @@ import {
     ResponseAttachment
 } from './ChannelAdapter';
 import { MessageBus } from './MessageBus';
+import { isSenderAllowed, isWithinScope } from './accessControl';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 
@@ -286,11 +287,10 @@ export class DiscordAdapter implements ChannelAdapter {
             const btn = interaction as ButtonInteraction;
             const userId = btn.user.id;
 
-            if (this.config.allowedUserIds && this.config.allowedUserIds.length > 0) {
-                if (!this.config.allowedUserIds.includes(userId)) {
-                    await btn.deferUpdate().catch(() => {});
-                    return;
-                }
+            // FAIL-CLOSED: allowlist de usuários vazia nega tudo (ver channels/accessControl.ts).
+            if (!isSenderAllowed(this.config.allowedUserIds, userId)) {
+                await btn.deferUpdate().catch(() => {});
+                return;
             }
 
             const parts = btn.customId.split(':');
@@ -310,18 +310,16 @@ export class DiscordAdapter implements ChannelAdapter {
             // Ignore bot messages
             if (message.author.bot) return;
 
-            // Guild whitelist
-            if (this.config.allowedGuildIds && this.config.allowedGuildIds.length > 0) {
-                if (message.guild && !this.config.allowedGuildIds.includes(message.guild.id)) {
-                    return;
-                }
+            // Guild whitelist — filtro de ESCOPO (fail-open): lista vazia não restringe, e DMs
+            // (message.guild ausente) não são filtradas por guild. A autorização real é a de
+            // usuário logo abaixo. Ver channels/accessControl.ts (isWithinScope).
+            if (!isWithinScope(this.config.allowedGuildIds, message.guild?.id)) {
+                return;
             }
 
-            // User whitelist
-            if (this.config.allowedUserIds && this.config.allowedUserIds.length > 0) {
-                if (!this.config.allowedUserIds.includes(message.author.id)) {
-                    return;
-                }
+            // User whitelist — FAIL-CLOSED: allowlist de usuários vazia nega tudo.
+            if (!isSenderAllowed(this.config.allowedUserIds, message.author.id)) {
+                return;
             }
 
             // Determine message type

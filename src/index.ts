@@ -10,7 +10,7 @@ import path from 'path';
 dotenv.config();
 
 import { AgentController } from './core/AgentController';
-import { autoRecoverDatabase } from './core/dbRecovery';
+import { autoRecoverDatabase, replaceDatabaseFile } from './core/dbRecovery';
 import { DashboardServer } from './dashboard/DashboardServer';
 import { Logger } from './shared/Logger';
 import { createLogger } from './shared/AppLogger';
@@ -112,8 +112,21 @@ async function main() {
         log.warn('   → Configure um canal em: Dashboard → Config, ou via TELEGRAM_BOT_TOKEN/DISCORD_BOT_TOKEN/etc. no .env');
     }
 
+    // Allowlist FAIL-CLOSED (ver channels/accessControl.ts): um canal habilitado sem allowlist
+    // de remetente configurada NÃO aceita ninguém. Avisa o operador em cada canal — sem isso,
+    // um canal ligado sem allowlist ficaria silenciosamente mudo (comportamento seguro, mas
+    // confuso se não for anunciado). Uniforme entre Telegram/Discord/WhatsApp/Signal.
     if (config.telegramBotToken && config.telegramAllowedUserIds.length === 0) {
-        log.warn('⚠️ TELEGRAM_ALLOWED_USER_IDS vazio — nenhum usuário autorizado no Telegram');
+        log.warn('⚠️ TELEGRAM_ALLOWED_USER_IDS vazio — nenhum usuário autorizado no Telegram (canal ficará mudo até configurar)');
+    }
+    if (config.discordBotToken && config.discordAllowedUserIds.length === 0) {
+        log.warn('⚠️ DISCORD_ALLOWED_USER_IDS vazio — nenhum usuário autorizado no Discord (canal ficará mudo até configurar)');
+    }
+    if (config.whatsappPhoneNumber && config.whatsappAllowedJids.length === 0) {
+        log.warn('⚠️ WHATSAPP_ALLOWED_JIDS vazio — nenhum remetente autorizado no WhatsApp (canal ficará mudo até configurar)');
+    }
+    if (config.signalPhoneNumber && config.signalAllowedNumbers.length === 0) {
+        log.warn('⚠️ SIGNAL_ALLOWED_NUMBERS vazio — nenhum remetente autorizado no Signal (canal ficará mudo até configurar)');
     }
 
     const missingInternalModels: string[] = [];
@@ -133,13 +146,11 @@ async function main() {
     if (fs.existsSync(restorePendingFlag) && fs.existsSync(restoreSource)) {
         log.info('🔄 Restauração de banco de dados pendente — aplicando antes de iniciar...');
         try {
-            // Remove o WAL/SHM do banco ATUAL antes de substituí-lo.
-            // Se não limparmos, o SQLite ao abrir o banco restaurado encontra um WAL
-            // de outro banco e tenta aplicar os frames — resultado: "disk image is malformed"
-            // e o autoRecoverDatabase reverte o restore silenciosamente.
-            try { fs.unlinkSync(dbMain + '-wal'); } catch { /* ok se não existe */ }
-            try { fs.unlinkSync(dbMain + '-shm'); } catch { /* ok se não existe */ }
-            fs.copyFileSync(restoreSource, dbMain);
+            // replaceDatabaseFile remove o WAL/SHM do banco ATUAL antes de substituí-lo — sem
+            // isso o SQLite, ao abrir o banco restaurado, encontra um WAL de outro banco e aplica
+            // seus frames → "disk image is malformed", e o autoRecoverDatabase reverteria o restore
+            // silenciosamente. Mesmo helper usado pela auto-recuperação (dbRecovery.ts) — ponto único.
+            replaceDatabaseFile(restoreSource, dbMain);
             fs.unlinkSync(restoreSource);
             fs.unlinkSync(restorePendingFlag);
             log.info('✅ Banco de dados restaurado com sucesso.');

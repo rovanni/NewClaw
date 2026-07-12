@@ -186,8 +186,7 @@ export class SqliteMemoryFacade implements MemoryFacade {
         if (isProtectedNode(nodeId)) {
             throw new Error(`Nó protegido: "${nodeId}" não pode ser deletado. Use MemoryManager.addNode() para atualizar.`);
         }
-        this.db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(nodeId, nodeId);
-        this.db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(nodeId);
+        this.deleteNodeCascade(nodeId);
     }
 
     applyNodeDecay(): void {
@@ -250,14 +249,18 @@ export class SqliteMemoryFacade implements MemoryFacade {
         this.db.prepare('UPDATE memory_nodes SET domain = ? WHERE id = ?').run(domain, id);
     }
 
-    deleteNodeFull(id: string): void {
-        if (isProtectedNode(id)) {
-            throw new Error(`Nó protegido: "${id}" não pode ser deletado. Use MemoryManager.addNode() para atualizar.`);
-        }
+    private deleteNodeCascade(id: string): void {
         this.db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(id, id);
         this.db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(id);
         this.db.prepare('DELETE FROM node_metrics WHERE node_id = ?').run(id);
         this.db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(id);
+    }
+
+    deleteNodeFull(id: string): void {
+        if (isProtectedNode(id)) {
+            throw new Error(`Nó protegido: "${id}" não pode ser deletado. Use MemoryManager.addNode() para atualizar.`);
+        }
+        this.deleteNodeCascade(id);
     }
 
     countNodeEdges(id: string): number {

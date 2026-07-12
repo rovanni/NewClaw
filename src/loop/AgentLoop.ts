@@ -164,14 +164,16 @@ export function computeMemoryConfidence(
     return 'low';
 }
 
+export interface TurnState {
+    cognitiveWorkspace: CognitiveWorkspace;
+    lastToolExecution: { toolName: string; toolOutput: string; intent: string; category: string } | null;
+    pendingObserverFeedback: string[];
+}
+
 export class AgentLoop {
     private providerFactory: ProviderFactory;
     private memory: MemoryManager;
     private tools: Map<string, ToolExecutor> = new Map();
-    /** Cognitive Workspace: governed working memory for internal reasoning.
-     *  NEVER shown to user. Auto-pruned, distilled, budget-controlled.
-     *  Reset each conversation turn. */
-    private cognitiveWorkspace = new CognitiveWorkspace();
     private authManager = new AuthorizationManager();
     private skillLearner: SkillLearner;
     private skillLoader: SkillLoader;
@@ -184,6 +186,22 @@ export class AgentLoop {
     private activeTurns: Map<string, AbortController> = new Map();
     private turnStartTimes: Map<string, number> = new Map();
     private readonly TURN_STALE_MS = 7 * 60 * 1000; // 7 min — matches MAX_TIMEOUT (420s) + small buffer
+    private activeTurnStates: Map<string, TurnState> = new Map();
+
+    private getTurnState(conversationId?: string): TurnState {
+        const key = conversationId || 'legacy-fallback-id';
+        let state = this.activeTurnStates.get(key);
+        if (!state) {
+            state = {
+                cognitiveWorkspace: new CognitiveWorkspace(),
+                lastToolExecution: null,
+                pendingObserverFeedback: [],
+            };
+            this.activeTurnStates.set(key, state);
+        }
+        return state;
+    }
+
     private classificationMemory: ClassificationMemory;
     private decisionMemory: DecisionMemory;
     private protocolParser: ProtocolParser;
@@ -191,14 +209,7 @@ export class AgentLoop {
     private goalOrchestrator: import('./GoalOrchestrator').GoalOrchestrator | null = null;
     private reflectionMemory: ReflectionMemory;
     private fsmHistoryStore: FSMHistoryStore;
-    private lastToolExecution: { toolName: string; toolOutput: string; intent: string; category: string } | null = null;
     private readonly proactiveRecovery = new ProactiveRecovery();
-    /**
-     * Per-turn observer feedback accumulated asynchronously by tryValidateTool.
-     * Flushed at the top of each while iteration as system hints.
-     * Must be reset at turn start (see runWithTools).
-     */
-    private pendingObserverFeedback: string[] = [];
     private workflowEngine?: WorkflowEngine;
     /** Callback pós-turno: disparado fire-and-forget após cada resposta entregue. */
     private postTurnCallback: (() => void) | null = null;
@@ -550,7 +561,7 @@ export class AgentLoop {
                 }
                 // Also store structured feedback in the per-turn queue so the next while
                 // iteration can flush it even if this async call completes later than expected.
-                this.pendingObserverFeedback.push(
+                this.getTurnState(conversationId).pendingObserverFeedback.push(
                     `[OBSERVER] "${toolName}" — ${validation.reason} (confidence=${validation.confidence.toFixed(2)})`
                 );
             }
@@ -621,7 +632,7 @@ export class AgentLoop {
         signal?: AbortSignal,
         toolFailureCount = 0,
     ): Promise<string> {
-        const last = this.lastToolExecution;
+        const last = this.getTurnState(conversationId).lastToolExecution;
 
         // When no tool succeeded but tools did run and fail, the LLM may fabricate a success
         // message. The normal validator is skipped when last===null, so we guard here first.
@@ -812,11 +823,16 @@ export class AgentLoop {
     }
 
     public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string | ProcessedResult> {
-        this.cognitiveWorkspace.reset();
+        this.activeTurnStates.set(conversationId, {
+            cognitiveWorkspace: new CognitiveWorkspace(),
+            lastToolExecution: null,
+            pendingObserverFeedback: [],
+        });
         try {
             return await this.runWithTools(conversationId, userText, 0, userId, context);
         } finally {
             // Cleanup: sempre executado mesmo em erros
+            this.activeTurnStates.delete(conversationId);
             this.activeTurns.delete(conversationId);
             this.turnStartTimes.delete(conversationId);
             // Dispara cognição pós-turno (fire-and-forget — nunca bloqueia resposta)
@@ -1080,7 +1096,7 @@ export class AgentLoop {
         this.decisionMemory.recordFromLoop(toolName, true, 0, userText);
         this.skillLearner.recordPattern(userText, toolName, true, 0);
 
-        this.lastToolExecution = {
+        this.getTurnState(conversationId).lastToolExecution = {
             toolName,
             toolOutput: toolResult.output,
             intent: intentDecision.intent,
@@ -1278,7 +1294,7 @@ export class AgentLoop {
         }
 
         this.classificationMemory.store(userText, intentDecision.modelCategory, intentDecision.confidence);
-        this.lastToolExecution = null;
+        this.getTurnState(conversationId).lastToolExecution = null;
 
         let skillContext = intentDecision.skillContext ?? '';
 
@@ -1379,7 +1395,7 @@ export class AgentLoop {
         // ── DecisionContext ─────────────────────────────────────────────────
         // Build from all cognitive signals available after session context is ready.
         // Influences loop behaviour via hints and budget adjustment — never via tool removal.
-        this.pendingObserverFeedback = [];   // reset per-turn
+        this.getTurnState(conversationId).pendingObserverFeedback = [];   // reset per-turn
         const ctxMetadata = this.sessionContext.getContextBuilder().getLastBuildMetadata();
         const memConf = computeMemoryConfidence(ctxMetadata, userText);
 
@@ -1439,15 +1455,16 @@ export class AgentLoop {
             log.info(`[${this.ts()}] [COGNITION] Step ${stepCount}...`);
 
             // Flush observer feedback from previous step (accumulated asynchronously).
-            if (this.pendingObserverFeedback.length > 0) {
-                for (const fb of this.pendingObserverFeedback) {
+            const turnState = this.getTurnState(conversationId);
+            if (turnState.pendingObserverFeedback.length > 0) {
+                for (const fb of turnState.pendingObserverFeedback) {
                     loopMessages.push({ role: 'system', content: fb });
                 }
                 if (!observerFeedbackInjected) {
                     observerFeedbackInjected = true;
                     observerFeedbackFirstStep = stepCount;
                 }
-                this.pendingObserverFeedback = [];
+                turnState.pendingObserverFeedback = [];
             }
 
             // Context Growth Guard — two independent limits:
@@ -1588,7 +1605,7 @@ export class AgentLoop {
             move('LLM_RESPONSE', { step: stepCount, status: response.status });
 
             if (response.thinking && response.thinking.trim().length > 0) {
-                this.cognitiveWorkspace.add(stepCount, response.thinking.trim(), 'reasoning');
+                this.getTurnState(conversationId).cognitiveWorkspace.add(stepCount, response.thinking.trim(), 'reasoning');
                 totalThinkingChars += response.thinking.trim().length;
             }
 
@@ -1954,7 +1971,7 @@ export class AgentLoop {
                         // áudio só via toolArgs — sem isso, "qual foi o texto que você usou?" nunca
                         // tem como ser respondido, mesmo o áudio tendo sido gerado com sucesso.
                         if (result.success && channelContext) {
-                            this.sessionContext?.getSessionManager().recordToolCall(
+                            await this.sessionContext?.getSessionManager().recordToolCall(
                                 { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
                                 resolvedToolName,
                                 JSON.stringify(resolvedArgs),
@@ -2117,7 +2134,7 @@ export class AgentLoop {
 
                         const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
                         if (result.success && !terminalTools.includes(toolName) && !this.isSafeExecCommand(toolName, toolCall.arguments)) {
-                            this.lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
+                            this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
                             void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
                         }
                         if (toolName === 'send_audio' && result.success) {
@@ -2274,7 +2291,7 @@ export class AgentLoop {
                     // Mesmo fix do caminho de tool-calling nativo acima (ver comentário lá) —
                     // path json_action é a 2ª cópia do mesmo dispatch, precisa do mesmo registro.
                     if (result.success && channelContext) {
-                        this.sessionContext?.getSessionManager().recordToolCall(
+                        await this.sessionContext?.getSessionManager().recordToolCall(
                             { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
                             resolvedToolName,
                             JSON.stringify(resolvedArgs),
@@ -2363,7 +2380,7 @@ export class AgentLoop {
                     }
 
                     if (result.success && !this.isSafeExecCommand(toolName, atomicData.action?.input as Record<string, unknown> || {})) {
-                        this.lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
+                        this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
                         void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
                     }
 
@@ -2614,7 +2631,7 @@ export class AgentLoop {
                         // (terminalTools abaixo), então é o mais relevante dos três para o gap
                         // real observado (texto do send_audio nunca persistido em lugar nenhum).
                         if (result.result.success && channelContext) {
-                            this.sessionContext?.getSessionManager().recordToolCall(
+                            await this.sessionContext?.getSessionManager().recordToolCall(
                                 { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
                                 result.finalToolName,
                                 JSON.stringify(result.finalArgs ?? toolCall.arguments),

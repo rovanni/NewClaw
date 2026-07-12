@@ -204,14 +204,17 @@ export class EventBusClass {
     /**
      * Subscribe to generic AppEvent type.
      */
-    onAny(handler: EventHandler): number {
-        // Wildcard via EventEmitter's special wildcard handling
-        const id = Date.now();
+    onAny(handler: EventHandler): () => void {
         for (const eventType of Object.values(EventTypes)) {
             this.emitter.on(eventType, handler as any); // eslint-disable-line @typescript-eslint/no-explicit-any -- interop com EventEmitter
         }
-        log.info(`[EventBus] Subscribed to all event types (sub #${id})`);
-        return id;
+        log.info('[EventBus] Subscribed to all event types');
+        return () => {
+            for (const eventType of Object.values(EventTypes)) {
+                this.emitter.off(eventType, handler as any); // eslint-disable-line @typescript-eslint/no-explicit-any -- interop com EventEmitter
+            }
+            log.info('[EventBus] Unsubscribed from all event types');
+        };
     }
 
     /**

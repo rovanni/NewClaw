@@ -101,6 +101,9 @@ export class EmbeddingService {
      * projeto (já existia uma cópia divergente em MemoryManager.cosineSimilarity).
      */
     cosineSimilarity(a: number[], b: number[]): number {
+        if (a.length !== b.length) {
+            throw new Error(`Dimension mismatch: vector A has length ${a.length}, vector B has length ${b.length}`);
+        }
         let dot = 0, normA = 0, normB = 0;
         for (let i = 0; i < a.length; i++) {
             dot += a[i] * b[i];
@@ -128,6 +131,9 @@ export class EmbeddingService {
         const results: Array<{ id: string; score: number }> = [];
         for (const row of rows) {
             const emb = Array.from(new Float64Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 8));
+            if (queryEmbedding.length !== emb.length) {
+                continue; // fail-closed: skip embedding of mismatched dimension
+            }
             const score = this.cosineSimilarity(queryEmbedding, emb);
             results.push({ id: row.node_id, score });
         }

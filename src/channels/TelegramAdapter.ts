@@ -24,6 +24,7 @@ import { mdToTelegramHTML } from '../shared/TelegramFormatter';
 import { createLogger } from '../shared/AppLogger';
 import { TelegramPollingSupervisor, SupervisorStatus } from './TelegramPollingSupervisor';
 import type { WorkflowCallbackFn, AuthDecision } from '../loop/WorkflowTypes';
+import { isSenderAllowed } from './accessControl';
 
 const log = createLogger('TelegramAdapter');
 
@@ -322,7 +323,7 @@ export class TelegramAdapter implements ChannelAdapter {
         this.bot.on('message:text', (ctx) => {
             const userId = ctx.from!.id.toString();
             log.info('text_message_received', `userId=${userId} text="${ctx.message?.text?.slice(0, 50)}"`);
-            if (!this.config.allowedUserIds.includes(userId)) {
+            if (!isSenderAllowed(this.config.allowedUserIds, userId)) {
                 log.info('unauthorized', `Usuário não autorizado: ${userId}`);
                 return;
             }
@@ -371,7 +372,7 @@ export class TelegramAdapter implements ChannelAdapter {
         // Photos
         this.bot.on('message:photo', async (ctx) => {
             const userId = ctx.from!.id.toString();
-            if (!this.config.allowedUserIds.includes(userId)) return;
+            if (!isSenderAllowed(this.config.allowedUserIds, userId)) return;
 
             const photos = (ctx.message as unknown as TelegramMsg)?.photo;
             if (!photos || photos.length === 0) return;
@@ -412,7 +413,7 @@ export class TelegramAdapter implements ChannelAdapter {
         this.bot.on('message:voice', async (ctx) => {
             const userId = ctx.from!.id.toString();
             log.info('voice_received', `userId=${userId} duration=${ctx.message!.voice?.duration}s`);
-            if (!this.config.allowedUserIds.includes(userId)) return;
+            if (!isSenderAllowed(this.config.allowedUserIds, userId)) return;
 
             const voiceAgeMs = Date.now() - ctx.message!.date * 1000;
             if (voiceAgeMs > TelegramAdapter.PENDING_MAX_AGE_MS) {
@@ -450,7 +451,7 @@ export class TelegramAdapter implements ChannelAdapter {
         this.bot.on('message:audio', async (ctx) => {
             const userId = ctx.from!.id.toString();
             log.info('audio_received', `userId=${userId} file=${(ctx.message as unknown as TelegramMsg)?.audio?.file_name}`);
-            if (!this.config.allowedUserIds.includes(userId)) return;
+            if (!isSenderAllowed(this.config.allowedUserIds, userId)) return;
 
             const audioAgeMs = Date.now() - ctx.message!.date * 1000;
             if (audioAgeMs > TelegramAdapter.PENDING_MAX_AGE_MS) {
@@ -490,7 +491,7 @@ export class TelegramAdapter implements ChannelAdapter {
         // Documents
         this.bot.on('message:document', async (ctx) => {
             const userId = ctx.from!.id.toString();
-            if (!this.config.allowedUserIds.includes(userId)) return;
+            if (!isSenderAllowed(this.config.allowedUserIds, userId)) return;
 
             const docAgeMs = Date.now() - ctx.message!.date * 1000;
             if (docAgeMs > TelegramAdapter.PENDING_MAX_AGE_MS) {
@@ -529,7 +530,7 @@ export class TelegramAdapter implements ChannelAdapter {
         // Callback queries (Button clicks)
         this.bot.on('callback_query:data', async (ctx) => {
             const userId = ctx.from.id.toString();
-            if (!this.config.allowedUserIds.includes(userId)) return;
+            if (!isSenderAllowed(this.config.allowedUserIds, userId)) return;
 
             const data = ctx.callbackQuery.data ?? '';
             log.info('callback_received', `userId=${userId} data="${data}"`);
