@@ -50,6 +50,8 @@ O hard gate da R3 lista explicitamente `sentArtifacts` entre os componentes que 
 
 Recomendação: Opção B — o argumento central de toda essa cadeia de sprints foi sempre "usar evidência real que já existe" (R5/R6); `sentArtifacts` é exatamente esse tipo de evidência já existente, e negá-la por uma leitura literal do hard gate reproduziria, de forma menor, o mesmo tipo de lacuna silenciosa que a Sprint R1 inteira foi feita para expor. Mas a decisão de esticar um hard gate que o próprio usuário definiu na R3 não é minha para tomar sozinho.
 
+**Decisão (2026-07-13):** Opção B — emenda mínima aprovada. O hard gate da R3 fica ajustado: `sentArtifacts` pode ser **lido** (nunca escrito) pela resolução de `file_path` no replan, como sinal adicional quando `goal.attempts` não tem um `write`/`exec_command` direto (caso `agentloop`). Continua proibido: escrever em `sentArtifacts`, tocar `AgentLoop` internamente, construir `getEffectiveDeliveredArtifacts()` como abstração nova (fica para sprint futura, se um 4º sintoma da mesma classe aparecer), tocar `SessionManager`/memória/conversas.
+
 ---
 
 ## Síntese
@@ -60,6 +62,15 @@ Nenhuma alternativa "claramente superior" ao desenho da R6 apareceu — o desenh
 2. Decisão pendente (§7) sobre ler `goal.sentArtifacts` para não herdar o blind spot de `agentloop`, já visto 2x no histórico do projeto.
 3. Nomear `checkDeliverables` (§1) como candidato de simplificação futura, sem tocar agora.
 
-Com a decisão de §7 tomada, a fase arquitetural pode ser considerada encerrada — não há mais pergunta em aberto que uma sétima rodada de análise resolveria sem informação nova (código real rodando).
+Com a decisão de §7 tomada, a fase arquitetural está encerrada — não há mais pergunta em aberto que uma oitava rodada de análise resolveria sem informação nova (código real rodando).
+
+### Especificação final do piloto (R1 → R7)
+
+- `exec_command` declara artefatos produzidos via convenção de linha `ARTIFACT: <path>` no stdout, uma linha por artefato (§ R6.2).
+- Cada `ARTIFACT:` declarado é verificado contra o disco (existência + `MIN_DELIVERABLE_SIZE` ≥200 bytes, constante já existente em `GoalExecutionLoop.ts:877`) antes de ser gravado em `GoalAttempt.producedArtifactPaths: string[]` (§ R7.2).
+- `RiskAnalyzer`, no replan, resolve `file_path` de `send_document` consultando: (a) `goal.attempts` por `producedArtifactPaths` compatível com `inferExpectedExtensions(step.description ?? goal.userIntent)`, mais recente primeiro; (b) se nada compatível, **leitura** de `goal.sentArtifacts` como sinal adicional (cobre o caso `agentloop`, decisão de §7); (c) se nada em nenhum dos dois, fallback para a heurística sintática atual (comportamento inalterado).
+- Nenhum UUID, hash, Event Log, Projection ou `ArtifactTrace`.
+- Não tocar: escrita em `sentArtifacts`, `AgentLoop` internamente, `SessionManager`, memória, conversas, `checkDeliverables` (candidato de sprint futura, § R7.1).
+- Teste de regressão obrigatório junto com o piloto: caso-limite de dois artefatos de mesma extensão esperada no mesmo goal (§ R6.4, aceito como limite não resolvido, precisa estar coberto por teste, não silenciosamente ignorado).
 
 Nenhum código foi alterado nesta sprint.
