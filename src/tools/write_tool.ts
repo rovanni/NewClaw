@@ -162,6 +162,7 @@ export class WriteTool implements ToolExecutor {
                     '[ARTEFATO REGISTRADO] O arquivo existe e contém conteúdo.',
                     'Se o objetivo desta etapa foi gerar este arquivo, prossiga para a próxima ferramenta sem reescrever.',
                 ].join('\n'),
+                artifactPaths: [finalPath],
             };
         } catch (error) {
             return { success: false, output: '', error: errorMessage(error) };
