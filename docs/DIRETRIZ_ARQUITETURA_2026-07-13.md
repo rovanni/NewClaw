@@ -59,6 +59,25 @@ Só implementar se todas as respostas forem satisfatórias.
 
 Só começar quando: nenhuma alternativa significativamente melhor tiver sido encontrada; a arquitetura estiver suficientemente amadurecida; os riscos estiverem documentados; existir plano incremental de migração; existirem critérios objetivos de sucesso. Havendo dúvida arquitetural relevante, interromper a implementação e continuar a investigação.
 
+## Validação Progressiva
+
+Para toda mudança arquitetural relevante (mesmo critério de escopo da Fase 1), a validação segue quatro etapas obrigatórias, nesta ordem, antes de considerar a mudança pronta para merge:
+
+1. **Testes unitários** — funções isoladas, sem I/O real.
+2. **Testes de regressão** — suíte completa do projeto (`npm run test:regression`), incluindo os casos novos que cobrem a mudança.
+3. **Testes end-to-end sintéticos** — fluxo completo do componente, com dependências externas (LLM, HTTP, filesystem) mockadas.
+4. **Execução em ambiente real** — app real rodando, LLM real, HTTP real, planner real, filesystem real. Numa instância isolada (porta/DB/workspace separados de qualquer processo em uso), nunca contra dado de produção.
+
+Só considerar uma mudança validada depois da etapa 4. Etapas 1-3 continuam necessárias — não são substituídas pela 4, são complementares (guarda contra regressão futura; a etapa 4 sozinha não é repetível/barata o suficiente para rodar a cada mudança pequena no futuro).
+
+**Por que a etapa 4 é obrigatória, não opcional:** duas evidências concretas, não hipotéticas, do próprio histórico deste projeto:
+- `SessionTranscript.migrateLegacyColonPath` (`project_session_bugs_jul2026_am`, memória): passou em teste de regressão e `tsc --noEmit`, mas falhava de verdade em runtime (`fs.renameSync` retorna `EINVAL` ao mover de uma NTFS Alternate Data Stream no Windows) — só descoberto rodando contra uma cópia de dado real.
+- `resolveArtifactPathFromEvidence` (Sprint R1-R7, piloto de resolução de `file_path`, 13/07/2026): passou 100% num teste de regressão com LLM mockado à mão — mas o mock foi escrito pela mesma pessoa que escreveu o fix, com a extensão de arquivo já certa. Rodando a app real contra um LLM real (Ollama), um replan real e espontâneo expôs que o código escolhia um script-fonte (`.py`) em vez do arquivo pedido (`.txt`).
+
+Em ambos os casos, a causa nunca foi falta de rigor no teste — foi que o teste testava a implementação do jeito que o autor a entendia, não o comportamento real do sistema (SO, filesystem, LLM) sob o qual ela roda. Mock e código compartilham o mesmo ponto cego.
+
+**Como aplicar:** ao terminar a implementação de uma mudança arquitetural relevante, antes de declarar concluído ou abrir PR — subir a app de verdade (`ts-node src/index.ts` ou equivalente) numa instância isolada, dirigir via HTTP/CLI real o fluxo que a mudança afeta, com o LLM real configurado (não mockado), e observar o resultado real. A skill `verify` do Claude Code é o mecanismo indicado para isso quando disponível.
+
 ## Filosofia do projeto
 
 Prioriza: simplicidade arquitetural, baixo acoplamento, conceitos universais, evolução incremental, decisões fundamentadas em evidências, documentação antes da implementação. Elegância arquitetural é mais importante que velocidade de implementação. Sempre preferir eliminar a causa estrutural em vez de corrigir sintomas isolados.
