@@ -59,6 +59,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
                 deepseek:    { available: !!ctx.config.deepseekApiKey,    name: 'DeepSeek' },
                 groq:        { available: !!ctx.config.groqApiKey,        name: 'Groq' },
                 openrouter:  { available: !!ctx.config.openrouterApiKey,  name: 'OpenRouter' },
+                anthropic:   { available: !!ctx.config.anthropicApiKey,   name: 'Anthropic (Claude)' },
                 ollama:      { available: true, name: 'Ollama (Local/Cloud)', url: ctx.config.ollamaUrl, models: allModels },
             },
             currentProvider: ctx.config.defaultProvider,
@@ -97,6 +98,10 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
             case 'openrouter':
                 ctx.config.openrouterApiKey = undefined;
                 ctx.providerFactory?.removeCredential('openrouterKey');
+                break;
+            case 'anthropic':
+                ctx.config.anthropicApiKey = undefined;
+                ctx.providerFactory?.removeCredential('anthropicKey');
                 break;
             default:
                 return res.status(400).json({ error: `Unknown provider: ${provider}` });

@@ -11,6 +11,7 @@ const ROUTE_MAP = {
 const PROV_LABELS = {
   ollama: 'Ollama (Local + Cloud)', gemini: 'Google Gemini',
   openrouter: 'OpenRouter', deepseek: 'DeepSeek', groq: 'Groq',
+  anthropic: 'Anthropic (Claude)',
 };
 
 export function render(container) {
@@ -112,6 +113,7 @@ export function render(container) {
               <option value="openrouter">🔀 OpenRouter</option>
               <option value="deepseek">DeepSeek</option>
               <option value="groq">Groq</option>
+              <option value="anthropic">🧠 Anthropic (Claude)</option>
             </select>
           </div>
           <div id="ml-ollamaSection">
@@ -400,6 +402,7 @@ function providerCard(cat, icon, label) {
         <option value="gemini">Gemini</option>
         <option value="deepseek">DeepSeek</option>
         <option value="groq">Groq</option>
+        <option value="anthropic">Anthropic (Claude)</option>
       </select>
       <div class="prov-hint" id="ml-prov-hint-${cat}"></div>
     </div>`;

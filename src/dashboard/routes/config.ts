@@ -50,6 +50,7 @@ export function persistConfigToEnv(ctx: DashboardContext): void {
         updates['DEEPSEEK_API_KEY']   = ctx.config.deepseekApiKey   || '';
         updates['GROQ_API_KEY']       = ctx.config.groqApiKey       || '';
         updates['OPENROUTER_API_KEY'] = ctx.config.openrouterApiKey || '';
+        updates['ANTHROPIC_API_KEY'] = ctx.config.anthropicApiKey || '';
         updates['SYSTEM_PROMPT']      = ctx.config.systemPrompt     || '';
 
         try {
@@ -99,6 +100,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
                 hasDeepseekKey: !!ctx.config.deepseekApiKey,
                 hasGroqKey: !!ctx.config.groqApiKey,
                 hasOpenrouterKey: !!ctx.config.openrouterApiKey,
+                hasAnthropicKey: !!ctx.config.anthropicApiKey,
                 hasOllamaApiKey: !!ctx.config.ollamaApiKey,
                 modelRouter: ctx.config.modelRouter || {}
             }
@@ -107,7 +109,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
 
     router.post('/', (req: Request, res: Response) => {
         const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl, telegramAllowedUserIds, modelRouter,
-                geminiKey, deepseekKey, groqKey, openrouterKey } = req.body;
+                geminiKey, deepseekKey, groqKey, openrouterKey, anthropicKey } = req.body;
 
         log.info(`POST /api/config — ollamaModel="${ollamaModel}" provider="${defaultProvider}"`);
 
@@ -165,6 +167,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
         if (deepseekKey)   { ctx.config.deepseekApiKey   = deepseekKey;   ctx.providerFactory?.updateCredential('deepseekKey', deepseekKey); }
         if (groqKey)       { ctx.config.groqApiKey       = groqKey;       ctx.providerFactory?.updateCredential('groqKey', groqKey); }
         if (openrouterKey) { ctx.config.openrouterApiKey = openrouterKey; ctx.providerFactory?.updateCredential('openrouterKey', openrouterKey); }
+        if (anthropicKey)  { ctx.config.anthropicApiKey  = anthropicKey;  ctx.providerFactory?.updateCredential('anthropicKey', anthropicKey); }
 
         if (ctx.controller) {
             const loop = (ctx.controller as unknown as { agentLoop: { updateConfig?: (cfg: Record<string, unknown>) => void } }).agentLoop;
@@ -193,6 +196,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
             hasDeepseekKey: !!ctx.config.deepseekApiKey,
             hasGroqKey: !!ctx.config.groqApiKey,
             hasOpenrouterKey: !!ctx.config.openrouterApiKey,
+            hasAnthropicKey: !!ctx.config.anthropicApiKey,
             hasOllamaApiKey: !!ctx.config.ollamaApiKey,
             modelRouter: ctx.config.modelRouter || {}
         };

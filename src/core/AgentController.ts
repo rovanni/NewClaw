@@ -176,6 +176,7 @@ export class AgentController {
             deepseekKey: config.deepseekApiKey,
             groqKey: config.groqApiKey,
             openrouterKey: config.openrouterApiKey,
+            anthropicKey: config.anthropicApiKey,
             ollamaUrl: config.ollamaUrl,
             ollamaModel: config.ollamaModel,
             ollamaApiKey: config.ollamaApiKey,

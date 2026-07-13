@@ -39,6 +39,7 @@ const config = {
     deepseekApiKey: process.env.DEEPSEEK_API_KEY,
     groqApiKey: process.env.GROQ_API_KEY,
     openrouterApiKey: process.env.OPENROUTER_API_KEY,
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     ollamaUrl: process.env.OLLAMA_URL || 'http://localhost:11434',
     ollamaModel: process.env.OLLAMA_MODEL || 'glm-5.2:cloud',
     ollamaApiKey: process.env.OLLAMA_API_KEY || '',

@@ -15,6 +15,28 @@ export interface GeminiChatResponse {
     [key: string]: unknown;
 }
 
+/** Anthropic Messages API content block (text, tool_use, thinking) */
+export interface AnthropicContentBlock {
+    type?: string;
+    text?: string;
+    thinking?: string;
+    id?: string;
+    name?: string;
+    input?: Record<string, unknown>;
+    tool_use_id?: string;
+    content?: string;
+    [key: string]: unknown;
+}
+
+/** Anthropic /v1/messages response shape */
+export interface AnthropicChatResponse {
+    content?: AnthropicContentBlock[];
+    stop_reason?: string;
+    usage?: { input_tokens?: number; output_tokens?: number };
+    error?: { type?: string; message?: string };
+    [key: string]: unknown;
+}
+
 /** OpenAI-compatible chat completion response */
 export interface OpenAIChatResponse {
     choices?: Array<{

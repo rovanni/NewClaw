@@ -16,6 +16,7 @@ export interface NewClawConfig {
     deepseekApiKey?: string;
     groqApiKey?: string;
     openrouterApiKey?: string;
+    anthropicApiKey?: string;
     ollamaUrl?: string;
     ollamaModel?: string;
     ollamaApiKey?: string;

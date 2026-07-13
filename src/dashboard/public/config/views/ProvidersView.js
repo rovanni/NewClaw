@@ -97,6 +97,21 @@ export function render(container) {
             </div>
           </div>
         </div>
+
+        <div class="provider-card">
+          <div class="provider-head">
+            <div class="provider-name">🧠 Anthropic (Claude)</div>
+            <div class="provider-health"><span class="dot" id="pv-anthropicDot"></span></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">API Key</label>
+            <div class="api-key-group">
+              <input type="password" class="form-input" id="pv-anthropicKey" placeholder="sk-ant-...">
+              <span class="api-key-status" id="pv-anthropicStatus">—</span>
+              <button class="btn btn-ghost btn-sm btn-remove-key" id="pv-anthropicRemove" style="display:none" title="Remover chave">✕</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>`;
 
@@ -112,12 +127,14 @@ export function render(container) {
   setKeyStatus('pv-deepseekStatus',     'pv-deepseekDot',    s.hasDeepseekKey);
   setKeyStatus('pv-groqStatus',         'pv-groqDot',        s.hasGroqKey);
   setKeyStatus('pv-openrouterStatus',   'pv-openrouterDot',  s.hasOpenrouterKey);
+  setKeyStatus('pv-anthropicStatus',    'pv-anthropicDot',   s.hasAnthropicKey);
 
   // Show remove buttons only when a key is already configured
   el('pv-geminiRemove').style.display     = s.hasGeminiKey     ? '' : 'none';
   el('pv-deepseekRemove').style.display   = s.hasDeepseekKey   ? '' : 'none';
   el('pv-groqRemove').style.display       = s.hasGroqKey       ? '' : 'none';
   el('pv-openrouterRemove').style.display = s.hasOpenrouterKey ? '' : 'none';
+  el('pv-anthropicRemove').style.display  = s.hasAnthropicKey  ? '' : 'none';
 
   // Populate Ollama health from providersStore
   const ps = providersStore.snap();
@@ -133,9 +150,10 @@ export function render(container) {
   el('pv-deepseekKey').addEventListener('input',    e => cs.set('deepseekKey', e.target.value));
   el('pv-groqKey').addEventListener('input',        e => cs.set('groqKey', e.target.value));
   el('pv-openrouterKey').addEventListener('input',  e => cs.set('openrouterKey', e.target.value));
+  el('pv-anthropicKey').addEventListener('input',   e => cs.set('anthropicKey', e.target.value));
 
   // Remove key buttons
-  ['gemini', 'deepseek', 'groq', 'openrouter'].forEach(p => {
+  ['gemini', 'deepseek', 'groq', 'openrouter', 'anthropic'].forEach(p => {
     el(`pv-${p}Remove`).addEventListener('click', async () => {
       if (!confirm(`Remover a API key do ${p}?`)) return;
       try {

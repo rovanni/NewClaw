@@ -1,6 +1,6 @@
 /**
  * ProviderFactory — Troca dinâmica de LLMs
- * Suporta: Gemini, DeepSeek, Groq, OpenAI, OpenRouter, Ollama
+ * Suporta: Gemini, DeepSeek, Groq, OpenAI, OpenRouter, Anthropic, Ollama
  */
 
 import { createLogger } from '../shared/AppLogger';
@@ -12,6 +12,7 @@ import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
 import { OpenRouterProvider } from './OpenAIProvider';
 import { OllamaProvider } from './OllamaProvider';
+import { AnthropicProvider } from './AnthropicProvider';
 
 // Re-export everything so all existing imports continue to work unchanged
 export type { LLMMessage, LLMResponse, ToolCall, ToolDefinition, FallbackReason, AttemptInfo, LLMResult, MetricsSummary, ILLMProvider, ChatOptions, StreamChunk } from './providerTypes';
@@ -21,6 +22,7 @@ export { DeepSeekProvider } from './DeepSeekProvider';
 export { GroqProvider } from './GroqProvider';
 export { OpenAIProvider, OpenRouterProvider } from './OpenAIProvider';
 export { OllamaProvider } from './OllamaProvider';
+export { AnthropicProvider } from './AnthropicProvider';
 
 const log = createLogger('Providerfactory');
 
@@ -34,6 +36,7 @@ export class ProviderFactory {
         deepseekKey?: string;
         groqKey?: string;
         openrouterKey?: string;
+        anthropicKey?: string;
         ollamaUrl: string;
         ollamaApiKey: string;
     };
@@ -43,6 +46,7 @@ export class ProviderFactory {
         deepseekKey?: string;
         groqKey?: string;
         openrouterKey?: string;
+        anthropicKey?: string;
         ollamaUrl?: string;
         ollamaModel?: string;
         ollamaApiKey?: string;
@@ -55,6 +59,7 @@ export class ProviderFactory {
             deepseekKey:    config.deepseekKey,
             groqKey:        config.groqKey,
             openrouterKey:  config.openrouterKey,
+            anthropicKey:   config.anthropicKey,
             ollamaUrl:      config.ollamaUrl      || 'http://localhost:11434',
             ollamaApiKey:   config.ollamaApiKey   || '',
         };
@@ -63,6 +68,7 @@ export class ProviderFactory {
         if (config.deepseekKey)    this.providers.set('deepseek',    new DeepSeekProvider(config.deepseekKey));
         if (config.groqKey)        this.providers.set('groq',        new GroqProvider(config.groqKey));
         if (config.openrouterKey)  this.providers.set('openrouter',  new OpenRouterProvider(config.openrouterKey));
+        if (config.anthropicKey)   this.providers.set('anthropic',   new AnthropicProvider(config.anthropicKey));
 
         this.providers.set('ollama', new OllamaProvider(
             config.ollamaUrl || 'http://localhost:11434',
@@ -106,6 +112,10 @@ export class ProviderFactory {
             case 'deepseek':
                 if (this.creds.deepseekKey)
                     return new DeepSeekProvider(this.creds.deepseekKey, model);
+                break;
+            case 'anthropic':
+                if (this.creds.anthropicKey)
+                    return new AnthropicProvider(this.creds.anthropicKey, model);
                 break;
         }
         // Ollama (padrão) ou fallback quando a key do provider alvo não está configurada
@@ -458,7 +468,7 @@ export class ProviderFactory {
         if (preferred) {
             log.warn(`Provider "${preferred}" requested but not available (missing credential?). Using default fallback order.`);
         }
-        const order = ['ollama', 'openrouter', 'gemini', 'deepseek', 'groq'];
+        const order = ['ollama', 'openrouter', 'anthropic', 'gemini', 'deepseek', 'groq'];
         const sorted = order.filter(p => this.providers.has(p));
         const remaining = all.filter(p => !sorted.includes(p));
         return [...sorted, ...remaining];
@@ -468,24 +478,26 @@ export class ProviderFactory {
      * Atualiza uma API key em runtime (chamado pelo dashboard após o usuário salvar).
      * Substitui a credential em creds e recria a instância do provider no mapa.
      */
-    updateCredential(key: 'geminiKey' | 'deepseekKey' | 'groqKey' | 'openrouterKey', value: string): void {
+    updateCredential(key: 'geminiKey' | 'deepseekKey' | 'groqKey' | 'openrouterKey' | 'anthropicKey', value: string): void {
         this.creds[key] = value;
         switch (key) {
             case 'geminiKey':     this.providers.set('gemini',     new GeminiProvider(value));        break;
             case 'deepseekKey':   this.providers.set('deepseek',   new DeepSeekProvider(value));      break;
             case 'groqKey':       this.providers.set('groq',       new GroqProvider(value));          break;
             case 'openrouterKey': this.providers.set('openrouter', new OpenRouterProvider(value));    break;
+            case 'anthropicKey':  this.providers.set('anthropic',  new AnthropicProvider(value));     break;
         }
         log.info(`Credential updated and provider recreated: ${key.replace('Key', '')}`);
     }
 
-    removeCredential(key: 'geminiKey' | 'deepseekKey' | 'groqKey' | 'openrouterKey'): void {
+    removeCredential(key: 'geminiKey' | 'deepseekKey' | 'groqKey' | 'openrouterKey' | 'anthropicKey'): void {
         this.creds[key] = undefined;
         switch (key) {
             case 'geminiKey':     this.providers.delete('gemini');     break;
             case 'deepseekKey':   this.providers.delete('deepseek');   break;
             case 'groqKey':       this.providers.delete('groq');       break;
             case 'openrouterKey': this.providers.delete('openrouter'); break;
+            case 'anthropicKey':  this.providers.delete('anthropic');  break;
         }
         log.info(`Credential removed: ${key.replace('Key', '')}`);
     }

@@ -39,9 +39,9 @@ export const configStore = new Store({
     provider_light: '', provider_analysis: '', provider_execution: '',
     plannerModel: '', riskModel: '', observerModel: '',
   },
-  hasGeminiKey: false, hasDeepseekKey: false, hasGroqKey: false, hasOpenrouterKey: false, hasOllamaApiKey: false,
+  hasGeminiKey: false, hasDeepseekKey: false, hasGroqKey: false, hasOpenrouterKey: false, hasAnthropicKey: false, hasOllamaApiKey: false,
   currentModel: '—',
-  geminiKey: '', deepseekKey: '', groqKey: '', openrouterKey: '',
+  geminiKey: '', deepseekKey: '', groqKey: '', openrouterKey: '', anthropicKey: '',
 });
 
 export const runtimeStore = new Store({

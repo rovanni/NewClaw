@@ -83,6 +83,7 @@ async function doSave() {
   if (c.deepseekKey)     config.deepseekKey     = c.deepseekKey;
   if (c.groqKey)         config.groqKey         = c.groqKey;
   if (c.openrouterKey)   config.openrouterKey   = c.openrouterKey;
+  if (c.anthropicKey)    config.anthropicKey    = c.anthropicKey;
 
   // Auto-pull/register missing models
   const toCheck = new Set();
@@ -197,6 +198,7 @@ async function loadConfig() {
       hasDeepseekKey:         c.hasDeepseekKey    || false,
       hasGroqKey:             c.hasGroqKey        || false,
       hasOpenrouterKey:       c.hasOpenrouterKey  || false,
+      hasAnthropicKey:        c.hasAnthropicKey   || false,
       hasOllamaApiKey:        c.hasOllamaApiKey   || false,
       currentModel:           c.currentModel  || c.ollamaModel || '—',
       modelRouter:            c.modelRouter   || {},
