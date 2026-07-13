@@ -18,8 +18,11 @@
  *
  * Cobre: 1 stable (compat — nunca toca em git), 2 preview existente, 3 preview inexistente
  * (fallback com aviso, não falha), 4 dev com --branch explícita, 5 dev sem branch (fallback),
- * 6 default sem override nem .env (byte-idêntico ao comportamento pré-canais), 7-8
- * listRemoteBranches (filtro + resiliência a git falhando).
+ * 6 default sem override nem .env (byte-idêntico ao comportamento pré-canais), 7-10
+ * listRemoteBranches (filtro, refspec explícito de fetch — achado real num VPS Linux onde a
+ * config default do remoto estava restrita e a lista vinha vazia —, ordenação por data mais
+ * recente primeiro — achado real testando o Dashboard, ordem alfabética não deixa claro qual
+ * branch é a mais atualizada —, e resiliência a git falhando).
  *
  * Execução: npx ts-node src/__tests__/regression/S111_UpdateChannelResolution.test.ts
  */
@@ -57,7 +60,7 @@ const binNewclawPath = path.join(process.cwd(), 'bin', 'newclaw');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { resolveUpdateChannel, listRemoteBranches } = require(binNewclawPath) as {
     resolveUpdateChannel: (channel?: string, branch?: string) => { channel: string; branchName: string; warning: string | null };
-    listRemoteBranches: () => string[];
+    listRemoteBranches: () => Array<{ name: string; lastCommitAt: string }>;
 };
 
 console.log('\n=== S111-1 — stable → origin/main, nunca chama git ===');
@@ -114,12 +117,33 @@ console.log('\n=== S111-6 — sem override e sem .env → default Stable/main (c
     );
 }
 
-console.log('\n=== S111-7 — listRemoteBranches: exclui origin/HEAD e origin/main, remove prefixo origin/ ===');
+console.log('\n=== S111-7 — listRemoteBranches: exclui origin/HEAD e origin/main, remove prefixo origin/, expõe lastCommitAt ===');
 {
-    mockExecSyncImpl = () => 'origin/HEAD\norigin/main\norigin/feature/x\norigin/experimental/y\n';
+    mockExecSyncImpl = (cmd) => /^git fetch/.test(cmd)
+        ? ''
+        : 'origin/HEAD|||0 seconds ago\norigin/main|||1 hour ago\norigin/feature/x|||2 hours ago\norigin/experimental/y|||1 day ago\n';
     const branches = listRemoteBranches();
-    assert(!branches.includes('HEAD') && !branches.includes('main'), 'origin/HEAD e origin/main excluídos da lista', branches);
-    assert(branches.includes('feature/x') && branches.includes('experimental/y'), 'demais branches remotas listadas sem o prefixo origin/', branches);
+    const names = branches.map(b => b.name);
+    assert(!names.includes('HEAD') && !names.includes('main'), 'origin/HEAD e origin/main excluídos da lista', branches);
+    assert(names.includes('feature/x') && names.includes('experimental/y'), 'demais branches remotas listadas sem o prefixo origin/', branches);
+    const featureX = branches.find(b => b.name === 'feature/x');
+    assert(featureX?.lastCommitAt === '2 hours ago', 'lastCommitAt exposto por branch (base pra UI mostrar recência, não só ordem)', featureX);
+}
+
+console.log('\n=== S111-8 — listRemoteBranches: preserva a ordem já vinda do git (mais recente primeiro), sem reordenar por nome ===');
+{
+    // git branch -r --sort=-committerdate já entrega mais recente primeiro — achado real
+    // testando o Dashboard: ordem alfabética ("claude/...", "dependabot/...",
+    // "experimental/...") não deixa claro qual branch tem o commit mais recente. Um `.sort()`
+    // por nome em JS depois do git (como o código tinha antes) desfaria essa ordenação.
+    mockExecSyncImpl = (cmd) => /^git fetch/.test(cmd)
+        ? ''
+        : 'origin/zeta|||1 hour ago\norigin/alpha|||3 days ago\norigin/main|||5 minutes ago\n';
+    const branches = listRemoteBranches();
+    assert(
+        branches.length === 2 && branches[0].name === 'zeta' && branches[1].name === 'alpha',
+        '"zeta" (mais recente) vem antes de "alpha" (mais antiga) — ordem do git preservada, não alfabética', branches
+    );
 }
 
 console.log('\n=== S111-9 — listRemoteBranches: descarta ref remota espúria sem sub-branch ("origin" puro) ===');
@@ -129,13 +153,35 @@ console.log('\n=== S111-9 — listRemoteBranches: descarta ref remota espúria s
     // nenhuma branch selecionável. Sem exigir o prefixo "origin/" antes do strip, esse valor
     // sobrevivia ao filtro (não era 'origin/HEAD' nem 'origin/main') e aparecia intacto na
     // lista exposta ao Dashboard/CLI.
-    mockExecSyncImpl = () => 'origin\norigin/main\norigin/feature/x\n';
+    mockExecSyncImpl = (cmd) => /^git fetch/.test(cmd)
+        ? ''
+        : 'origin|||1 hour ago\norigin/main|||1 hour ago\norigin/feature/x|||2 hours ago\n';
     const branches = listRemoteBranches();
-    assert(!branches.includes('origin'), 'ref remota espúria "origin" (sem sub-branch) não aparece na lista', branches);
-    assert(branches.includes('feature/x'), 'branch real ainda é listada normalmente', branches);
+    const names = branches.map(b => b.name);
+    assert(!names.includes('origin') && !names.includes(''), 'ref remota espúria "origin" (sem sub-branch) não aparece na lista', branches);
+    assert(names.includes('feature/x'), 'branch real ainda é listada normalmente', branches);
 }
 
-console.log('\n=== S111-8 — listRemoteBranches: git indisponível não derruba o processo (retorna []) ===');
+console.log('\n=== S111-10 — listRemoteBranches: fetch usa refspec explícito de wildcard (achado real, VPS Linux) ===');
+{
+    // Um clone cuja config `remote.origin.fetch` esteja restrita a uma única branch (comum em
+    // deploys mais antigos/enxutos) nunca traz os remote-tracking refs das outras branches com
+    // um "git fetch origin --prune" bare — a listagem ficava vazia mesmo havendo branches reais
+    // no GitHub (reportado ao vivo por um usuário rodando o Dashboard num VPS Linux).
+    let fetchCmdSeen: string | null = null;
+    mockExecSyncImpl = (cmd) => {
+        if (/^git fetch/.test(cmd)) { fetchCmdSeen = cmd; return ''; }
+        return 'origin/main|||1 hour ago\n';
+    };
+    listRemoteBranches();
+    assert(fetchCmdSeen !== null, 'listRemoteBranches faz fetch antes de listar');
+    assert(
+        /\+refs\/heads\/\*:refs\/remotes\/origin\/\*/.test(fetchCmdSeen || ''),
+        'fetch usa o refspec explícito de wildcard, não um "git fetch origin --prune" bare — funciona mesmo com config de fetch restrita', fetchCmdSeen
+    );
+}
+
+console.log('\n=== S111-11 — listRemoteBranches: git indisponível não derruba o processo (retorna []) ===');
 {
     mockExecSyncImpl = () => { throw new Error('git indisponível (simulado)'); };
     const branches = listRemoteBranches();

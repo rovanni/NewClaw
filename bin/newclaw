@@ -303,16 +303,35 @@ function resolveUpdateChannel(channelOverride, branchOverride) {
 }
 
 function listRemoteBranches() {
+  // Refspec explícito (não "git fetch origin --prune" bare) — achado real validando num VPS
+  // Linux: um clone cuja config `remote.origin.fetch` esteja restrita (comum em deploys mais
+  // antigos/enxutos, ex: `git remote set-branches origin main`) nunca traz os remote-tracking
+  // refs das outras branches para o fetch bare, e a listagem ficava vazia mesmo havendo
+  // branches reais no GitHub. `+refs/heads/*:refs/remotes/origin/*` força esta chamada
+  // específica a buscar TODAS as branches, independente da config default do remoto.
   try {
-    const out = execSync('git branch -r --format=%(refname:short)', { cwd: DIR, encoding: 'utf-8' });
-    // Exigir o prefixo "origin/" (em vez de só excluir alguns valores conhecidos) —
-    // achado real ao validar contra o repositório de verdade: `git branch -r` pode listar
-    // uma ref remota espúria chamada literalmente "origin" (sem sub-branch), que não é uma
-    // branch selecionável e precisa ser descartada, não sobrar na lista após o strip do prefixo.
+    execSync('git fetch origin "+refs/heads/*:refs/remotes/origin/*" --prune', { cwd: DIR, stdio: 'ignore' });
+  } catch { /* segue com o que já existir localmente — melhor uma lista desatualizada que travar */ }
+
+  try {
+    // --sort=-committerdate: mais recente primeiro. Ordem alfabética (ex: "claude/...",
+    // "dependabot/...", "experimental/...") não deixa claro qual branch tem o commit mais
+    // recente — achado real reportado testando o Dashboard.
+    const out = execSync(
+      'git branch -r --sort=-committerdate --format="%(refname:short)|||%(committerdate:relative)"',
+      { cwd: DIR, encoding: 'utf-8' }
+    );
     return out.split('\n').map(s => s.trim()).filter(Boolean)
-      .filter(b => b.startsWith('origin/') && b !== 'origin/HEAD' && b !== 'origin/main')
-      .map(b => b.slice('origin/'.length))
-      .sort();
+      .map(line => {
+        const [ref, when] = line.split('|||');
+        return { ref: ref || '', lastCommitAt: (when || '').trim() };
+      })
+      // Exigir o prefixo "origin/" (em vez de só excluir alguns valores conhecidos) — achado
+      // real ao validar contra o repositório de verdade: `git branch -r` pode listar uma ref
+      // remota espúria chamada literalmente "origin" (sem sub-branch), que não é uma branch
+      // selecionável e precisa ser descartada, não sobrar na lista após o strip do prefixo.
+      .filter(({ ref }) => ref.startsWith('origin/') && ref !== 'origin/HEAD' && ref !== 'origin/main')
+      .map(({ ref, lastCommitAt }) => ({ name: ref.slice('origin/'.length), lastCommitAt }));
   } catch { return []; }
 }
 
@@ -363,19 +382,18 @@ function updateChannelFlow(args) {
       return;
     }
     console.log('\n⏳ Buscando branches disponíveis...');
-    try { execSync('git fetch origin --prune', { cwd: DIR, stdio: 'ignore' }); } catch {}
     const branches = listRemoteBranches();
     if (branches.length === 0) {
       console.log('❌ Nenhuma branch de desenvolvimento encontrada no remoto.');
       readline.close();
       return;
     }
-    console.log('\nBranches disponíveis:\n');
-    branches.forEach((b, i) => console.log(`  ${i + 1}. ${b}`));
+    console.log('\nBranches disponíveis (mais recente primeiro):\n');
+    branches.forEach((b, i) => console.log(`  ${i + 1}. ${b.name} — ${b.lastCommitAt}`));
     readline.question(`\nOpção (1-${branches.length}): `, (bChoice) => {
       const idx = parseInt(bChoice.trim(), 10) - 1;
       if (idx < 0 || idx >= branches.length) { console.log('❌ Opção inválida.'); readline.close(); return; }
-      persist('dev', branches[idx]);
+      persist('dev', branches[idx].name);
       readline.close();
     });
   });
@@ -820,7 +838,6 @@ const commands = {
     const branchOverride = args?.find(a => a.startsWith('--branch='))?.split('=')[1];
 
     if (listBranchesOnly) {
-      try { execSync('git fetch origin --prune', { cwd: DIR, stdio: 'ignore' }); } catch {}
       console.log(JSON.stringify({ success: true, branches: listRemoteBranches() }));
       return;
     }

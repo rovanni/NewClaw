@@ -123,7 +123,13 @@ export function render(container) {
   // sozinhos — só bin/newclaw grava UPDATE_CHANNEL/UPDATE_BRANCH no .env, e só
   // depois de um "Aplicar atualização" bem-sucedido (ver resolveUpdateChannel em
   // bin/newclaw e /update/apply em maintenance.ts).
-  let selectedChannel = 'stable';
+  //
+  // selectedChannel começa null (não 'stable'): null significa "ainda não escolhido
+  // nesta sessão da UI", e faz a 1ª chamada de checkUpdate() omitir o parâmetro
+  // channel — só assim o backend usa resolveUpdateChannel() para ler o canal
+  // REALMENTE persistido no .env. Enviar 'stable' explícito desde o início (bug
+  // anterior) forçava toda 1ª carga a ignorar o canal salvo e sempre mostrar Stable.
+  let selectedChannel = null;
   let selectedBranch = null;
   let branchesLoaded = false;
   let initialLoad = true;
@@ -138,20 +144,29 @@ export function render(container) {
     if (branchesLoaded) return;
     branchSelect.innerHTML = `<option>${t('update_channel_branch_loading')}</option>`;
     try {
+      // getUpdateBranches() retorna [{name, lastCommitAt}], já ordenado do mais recente
+      // pro mais antigo (bin/newclaw: git branch -r --sort=-committerdate) — não reordenar
+      // aqui, senão perde a ordenação por data que resolve "por nome não dá pra saber
+      // qual é a mais recente".
       const branches = await getUpdateBranches();
       branchesLoaded = true;
       if (!branches.length) {
         branchSelect.innerHTML = `<option value="">${t('update_channel_branch_empty')}</option>`;
+        selectedBranch = null;
         return;
       }
-      branchSelect.innerHTML = branches.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
-      if (selectedBranch && branches.includes(selectedBranch)) {
-        branchSelect.value = selectedBranch;
+      branchSelect.innerHTML = branches
+        .map(b => `<option value="${esc(b.name)}">${esc(b.name)} — ${esc(b.lastCommitAt)}</option>`)
+        .join('');
+      const match = branches.find(b => b.name === selectedBranch);
+      if (match) {
+        branchSelect.value = match.name;
       } else {
-        selectedBranch = branchSelect.value;
+        selectedBranch = branchSelect.value || null;
       }
     } catch (e) {
       branchSelect.innerHTML = `<option value="">${t('update_channel_branch_empty')}</option>`;
+      selectedBranch = null;
       showToast('❌ ' + e.message, 'error');
     }
   }
@@ -177,17 +192,34 @@ export function render(container) {
 
   // ── Verificar atualização ─────────────────────────────────────────────────
   async function runCheck() {
+    // Canal "dev" escolhido mas ainda sem branch (lista vazia, ainda carregando, ou
+    // usuário não escolheu nenhuma ainda): não chama a API — ela rejeitaria com 400
+    // ("branch é obrigatório..."), que não é um erro de verdade, é só um estado
+    // intermediário da UI. Mostra uma dica em vez de um erro.
+    if (selectedChannel === 'dev' && !selectedBranch) {
+      applyBtn.style.display = 'none';
+      changelogEl.style.display = 'none';
+      statusEl.innerHTML = `<span style="color:var(--text-soft)">${t('update_channel_select_branch_hint')}</span>`;
+      return;
+    }
+
     checkBtn.disabled = true;
     statusEl.style.color = 'var(--text-soft)';
     statusEl.textContent = t('update_checking_progress');
     changelogEl.style.display = 'none';
     try {
-      const params = { channel: selectedChannel };
-      if (selectedChannel === 'dev') params.branch = selectedBranch;
+      // selectedChannel null (1ª carga, antes de qualquer escolha nesta sessão) omite
+      // o parâmetro — o backend usa resolveUpdateChannel() e lê o canal REALMENTE
+      // persistido no .env, em vez de assumir "stable" antes de sequer perguntar.
+      const params = {};
+      if (selectedChannel) {
+        params.channel = selectedChannel;
+        if (selectedChannel === 'dev') params.branch = selectedBranch;
+      }
       const r = await checkUpdate(params);
 
-      // Primeira carga: reflete o canal já persistido no .env (bin/newclaw resolve
-      // isso mesmo sem query params) para pré-selecionar o rádio certo.
+      // Primeira carga: reflete o canal já persistido no .env (agora sim — a chamada
+      // acima não forçou nenhum canal) para pré-selecionar o rádio certo.
       if (initialLoad) {
         initialLoad = false;
         selectedChannel = r.channel || 'stable';
