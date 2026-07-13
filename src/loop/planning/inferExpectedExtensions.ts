@@ -1,3 +1,12 @@
+// Extensões de código-fonte/script — nunca contam como deliverable esperado, mesmo se
+// mencionadas literalmente no texto (um script é meio, não fim). Achado ao vivo em 13/07/2026
+// (docs/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md, validação end-to-end do piloto):
+// RiskAnalyzer.resolveArtifactPathFromEvidence() escolheu um .py em vez do .txt que o usuário
+// pediu, porque .txt não tinha nenhuma keyword aqui — sem extensão esperada, o filtro virava
+// permissivo e o candidato mais recente (o script-fonte) venceu. Mesma classe de bug que o
+// teste S27 já cobria em outro call site (script enviado em vez do artefato gerado).
+export const SOURCE_SCRIPT_EXTENSIONS = new Set(['.py', '.sh', '.js', '.ts', '.ps1', '.bat', '.cmd']);
+
 /**
  * Infere extensões de arquivo esperadas a partir de texto livre (userIntent/descrição de step).
  * Retorna lista vazia se não há tipo de arquivo identificável.
@@ -26,5 +35,16 @@ export function inferExpectedExtensions(userIntent: string): string[] {
         !lower.includes('[imagem recebida:') &&
         !/slides?|pptx|apresenta|powerpoint/i.test(lower);
     if (isImageDeliveryIntent) exts.push('.png', '.jpg', '.jpeg');
+
+    // Extensão literal mencionada no texto (ex: "planetas.txt", "resumo.csv") — cobre formatos
+    // sem keyword dedicada acima (txt, csv, json, md...) sem precisar enumerar cada um. Só
+    // letras (não dígitos) para não confundir com versão/decimal ("v2.0", "gpt-4.1"); scripts
+    // ficam de fora mesmo quando citados de propósito.
+    const literalExtMatches = lower.match(/\b[\w-]+\.([a-z]{2,4})\b/g) ?? [];
+    for (const token of literalExtMatches) {
+        const ext = '.' + token.slice(token.lastIndexOf('.') + 1);
+        if (!SOURCE_SCRIPT_EXTENSIONS.has(ext) && !exts.includes(ext)) exts.push(ext);
+    }
+
     return exts;
 }

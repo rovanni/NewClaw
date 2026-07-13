@@ -1,6 +1,6 @@
 import fs from 'fs';
 import { Goal } from '../GoalTypes';
-import { inferExpectedExtensions } from './inferExpectedExtensions';
+import { inferExpectedExtensions, SOURCE_SCRIPT_EXTENSIONS } from './inferExpectedExtensions';
 
 /**
  * Tamanho mínimo (bytes) para um arquivo contar como deliverable real, não stub/placeholder.
@@ -61,6 +61,16 @@ export function extractVerifiedArtifacts(
  *      (mesma classe de bug documentada em project_session_bugs_jul2026_ak, decisão
  *      explícita de emendar o hard gate da Sprint R3 — ver R7 §7).
  *   3. undefined — chamador cai para o comportamento heurístico anterior.
+ *
+ * Achado ao vivo em 13/07/2026 (validação end-to-end do piloto, docs/REVISAO_ARQUITETURAL_
+ * SPRINT_R7_2026-07-13.md): sem extensão esperada inferível, o filtro (passo 1) é permissivo
+ * por design (R6 §4) — mas isso não pode incluir um script-fonte (.py/.sh/...) como candidato
+ * válido, porque um script é meio, não fim (mesma classe de bug que o teste S27 já cobria em
+ * outro call site). Bloqueio é incondicional, não condicionado a `expectedExts`: uma descrição
+ * de step tipicamente menciona o NOME do script (ex.: "executar gerar_planetas.py e enviar
+ * planetas.txt") — se scripts pudessem "se qualificar" por menção literal, o próprio texto que
+ * descreve a etapa de execução reabriria a mesma brecha. Pedido explícito pelo script em si cai
+ * para o fallback normal (AgentLoop resolve via tool-calling com contexto real), não por aqui.
  */
 export function resolveArtifactPathFromEvidence(
     goal: Pick<Goal, 'attempts' | 'sentArtifacts' | 'userIntent'>,
@@ -69,16 +79,20 @@ export function resolveArtifactPathFromEvidence(
     const expectedExts = inferExpectedExtensions(stepDescription || goal.userIntent || '');
     const matchesExpected = (p: string): boolean =>
         expectedExts.length === 0 || expectedExts.some(ext => p.toLowerCase().endsWith(ext));
+    const isScript = (p: string): boolean => {
+        const lower = p.toLowerCase();
+        return [...SOURCE_SCRIPT_EXTENSIONS].some(ext => lower.endsWith(ext));
+    };
 
     const candidates = (goal.attempts ?? [])
         .filter(a => a.result !== 'failure' && a.producedArtifactPaths && a.producedArtifactPaths.length > 0)
         .flatMap(a => (a.producedArtifactPaths ?? []).map(p => ({ path: p, executedAt: a.executedAt })))
-        .filter(c => matchesExpected(c.path))
+        .filter(c => matchesExpected(c.path) && !isScript(c.path))
         .sort((a, b) => b.executedAt - a.executedAt);
 
     if (candidates.length > 0) return candidates[0].path;
 
-    const sent = (goal.sentArtifacts ?? []).filter(matchesExpected);
+    const sent = (goal.sentArtifacts ?? []).filter(p => matchesExpected(p) && !isScript(p));
     if (sent.length > 0) return sent[sent.length - 1];
 
     return undefined;

@@ -121,9 +121,62 @@ console.log('\n=== S111.5 — caso-limite aceito (R6 §4): dois candidatos de ME
     );
 }
 
+console.log('\n=== S111.6 — achado ao vivo (13/07): extensão literal no texto (.txt sem keyword dedicada) vence script-fonte mais recente ===');
+{
+    // Réplica exata do bug encontrado na validação end-to-end: descrição menciona "planetas.txt"
+    // literalmente (sem nenhuma keyword de inferExpectedExtensions cobrir .txt), e existe um
+    // .py mais recente no goal.attempts (o script que gerou o .txt). Antes do fix, .txt não
+    // entrava em expectedExts, o filtro virava permissivo, e o .py (mais recente) vencia —
+    // exatamente a classe de bug que o teste S27 cobria em outro call site.
+    const goal = {
+        userIntent: 'Crie um script Python que gere um arquivo texto tmp/planetas.txt e me envie',
+        sentArtifacts: [],
+        attempts: [
+            attempt({ id: 'a1', toolName: 'write', executedAt: 1000, producedArtifactPaths: ['gerar_planetas.py'] }),
+            attempt({ id: 'a2', toolName: 'exec_command', executedAt: 2000, producedArtifactPaths: ['tmp/planetas.txt'] }),
+        ],
+    };
+    const resolved = resolveArtifactPathFromEvidence(goal, 'Envia o arquivo planetas.txt gerado para o usuário');
+    assert(resolved === 'tmp/planetas.txt', 'resolveu para o .txt (extensão literal do texto), não o .py mais recente', resolved);
+}
+
+console.log('\n=== S111.7 — sem NENHUM candidato exceto um script-fonte → undefined, nunca envia o script por padrão ===');
+{
+    // Caso mais estrito que o S111.6: nem sequer existe um .txt no goal.attempts ainda (só o
+    // script foi escrito, exec_command ainda não rodou). Mesmo com filtro permissivo (nenhuma
+    // extensão esperada inferível do texto), um .py NUNCA deve ser o fallback silencioso.
+    const goal = {
+        userIntent: 'gerar um arquivo com a lista de planetas',
+        sentArtifacts: [],
+        attempts: [
+            attempt({ id: 'a1', toolName: 'write', executedAt: 1000, producedArtifactPaths: ['gerar_planetas.py'] }),
+        ],
+    };
+    const resolved = resolveArtifactPathFromEvidence(goal, 'enviar o arquivo gerado para o usuário');
+    assert(resolved === undefined, 'não escolheu o script-fonte como fallback — retornou undefined (cai para agentloop)', resolved);
+}
+
+console.log('\n=== S111.8 — bloqueio de script é INCONDICIONAL, mesmo quando o nome do script é citado literalmente na description ===');
+{
+    // A description de um step de exec_command tipicamente cita o nome do script que está
+    // rodando (ex.: "executar gerar_planetas.py") — se isso "qualificasse" .py em expectedExts,
+    // a mesma brecha do bug ao vivo reabriria por outro caminho. Bloqueio precisa ser
+    // incondicional: pedido explícito pelo script cai para o fallback normal (AgentLoop), não
+    // por resolveArtifactPathFromEvidence.
+    const goal = {
+        userIntent: 'gerar lista de planetas',
+        sentArtifacts: [],
+        attempts: [
+            attempt({ id: 'a1', toolName: 'write', executedAt: 1000, producedArtifactPaths: ['gerar_planetas.py'] }),
+        ],
+    };
+    const resolved = resolveArtifactPathFromEvidence(goal, 'executar o script gerar_planetas.py');
+    assert(resolved === undefined, 'script nunca é retornado por aqui, mesmo citado literalmente na description do step', resolved);
+}
+
 // ── Parte 2: integração — RiskAnalyzer.analyze() com plano real via LLM mockado ────────────
 
-console.log('\n=== S111.6 — RiskAnalyzer.analyze() end-to-end: send_document sem file_path + write em CICLO ANTERIOR (replan real) ===');
+console.log('\n=== S111.9 — RiskAnalyzer.analyze() end-to-end: send_document sem file_path + write em CICLO ANTERIOR (replan real) ===');
 {
     ToolRegistry.register({
         name: 'send_document',
