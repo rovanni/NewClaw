@@ -41,6 +41,33 @@ export const isWindows = process.platform === 'win32';
 export const isMac     = process.platform === 'darwin';
 export const isLinux   = process.platform === 'linux';
 
+const BASH_PROBE_TIMEOUT_MS = 3000;
+
+/**
+ * Verifica se `bash` é REALMENTE executável — não apenas presente no PATH.
+ *
+ * Por quê: no Windows, `where bash` frequentemente encontra o launcher stub do WSL
+ * (`C:\Windows\System32\bash.exe` ou o da Microsoft Store) mesmo quando nenhuma distro
+ * Linux está instalada/registrada. `commandExists('bash')`/`which('bash')` reportam esse
+ * stub como "presente", mas invocá-lo falha com
+ * "WSL (10 - Relay) ERROR: CreateProcessCommon:818: execvpe(/bin/bash) failed: No such
+ * file or directory" — um falso positivo. Evidência real (2026-07-12, instalação Windows):
+ * o agente tentou `bash scripts/html2pdf.sh` 4 vezes, sempre com esse erro, queimando um
+ * ciclo de replan inteiro antes de trocar de estratégia — porque EnvironmentProbe nunca
+ * checava `bash` (nem via `where`, que teria dado o mesmo falso positivo). Este probe
+ * executa `bash -c "exit 0"` de verdade e decide só pelo exit code, igual a
+ * `probePython3Runtime` — sem isso, qualquer skill que dependa de bash no Windows sem WSL
+ * configurado só descobre o problema empiricamente, em runtime, depois de já ter tentado.
+ * Em Linux/macOS, bash é o shell nativo — `commandExists` já é confiável e não precisa do
+ * probe de execução real.
+ */
+export function isBashFunctional(): Promise<boolean> {
+    if (!isWindows) return Promise.resolve(commandExists('bash'));
+    return new Promise((resolve) => {
+        execFile('bash', ['-c', 'exit 0'], { timeout: BASH_PROBE_TIMEOUT_MS, windowsHide: true }, (error) => resolve(!error));
+    });
+}
+
 /** Cross-platform equivalent of `which` / `where`. Returns full path or null. */
 export function which(cmd: string): string | null {
     try {

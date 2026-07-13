@@ -732,7 +732,37 @@ export class GoalExecutionLoop {
                         );
                         let failedSends = 0;
                         for (const sendStep of deferredSends) {
-                            const filePath = String(sendStep.toolArgs?.file_path ?? sendStep.toolArgs?.path ?? '');
+                            let filePath = String(sendStep.toolArgs?.file_path ?? sendStep.toolArgs?.path ?? '');
+                            // Correção estrutural (achado replan/pivot 2026-07-12, goals reais no
+                            // Windows: 09/07, 10/07 x2, 12/07 — mesma assinatura repetida): o plano
+                            // pode chegar aqui com um file_path desatualizado se a estratégia pivotou
+                            // no meio da execução (ex.: falha de "bash script.sh" sem WSL funcional
+                            // levou o agente a trocar de HTML/Reveal.js para geração de .pptx via
+                            // python-pptx) sem que o step de send_document já agendado fosse
+                            // atualizado. Resultado sem esta correção: "Objetivo validado" (o
+                            // artefato real existe e foi confirmado) mas a entrega falha com
+                            // "arquivo não encontrado" porque aponta para um nome que nunca existiu.
+                            // Corrige SOMENTE quando há exatamente 1 artefato real (confirmado pela
+                            // própria validação do goal, não um palpite por extensão) ainda não
+                            // enviado — evidência concreta, sem ambiguidade; caso contrário mantém o
+                            // comportamento antigo (falha com mensagem clara) em vez de adivinhar.
+                            if (filePath) {
+                                const { resolved: requestedResolved } = resolvePath(filePath);
+                                if (!fs.existsSync(requestedResolved)) {
+                                    const candidates = (validation.artifactPaths ?? [])
+                                        .filter(p => p !== filePath && !sentArtifacts.has(p) && fs.existsSync(resolvePath(p).resolved));
+                                    if (candidates.length === 1) {
+                                        log.warn(
+                                            `[SEND-PATH-CORRECTED] goal=${currentGoal.id}` +
+                                            ` requested="${filePath}"` +
+                                            ` corrected="${candidates[0]}"` +
+                                            ` reason=requested_file_missing_single_validated_artifact_found`
+                                        );
+                                        sendStep.toolArgs = { ...sendStep.toolArgs, file_path: candidates[0] };
+                                        filePath = candidates[0];
+                                    }
+                                }
+                            }
                             // Defesa em profundidade: skip se já enviado nesta sessão de goal
                             if (filePath && sentArtifacts.has(filePath)) {
                                 log.info(
@@ -2860,6 +2890,14 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
         summary?: string;
         reason?: string;
         suggestions?: string[];
+        /**
+         * Caminhos (formato bruto, igual a toolArgs.file_path/sentArtifacts) de artefatos que
+         * esta validação confirmou existir em disco AGORA — evidência real, não o que o plano
+         * pretendia. Usado pelo caller para corrigir um send_document diferido cujo file_path
+         * ficou desatualizado após um pivô de estratégia (ex.: plano previa .html, execução
+         * pivotou para .pptx no meio do caminho) — ver achado replan/pivot 2026-07-12.
+         */
+        artifactPaths?: string[];
     }> {
         // ── 1. Verificação determinística via checklist (sem LLM) ─────────────────
         const criteriaEval = this.evaluateCriteria(goal);
@@ -2896,6 +2934,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
                 .filter(Boolean)
         )];
         const artifactLines: string[] = [];
+        const existingArtifactPaths: string[] = [];
         for (const rawPath of writtenPaths) {
             const { resolved: filePath } = resolvePath(rawPath);
             try {
@@ -2907,6 +2946,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
                     ` path="${filePath}" chars=${content.length} hash=${hash} included=true`
                 );
                 artifactLines.push(`--- ARQUIVO: ${filePath} (${content.length} chars, hash=${hash}) ---\n${truncated}`);
+                existingArtifactPaths.push(rawPath); // formato bruto — mesma convenção de toolArgs.file_path/sentArtifacts
             } catch {
                 log.warn(`[VALIDATION-ARTIFACT] goal=${goal.id} path="${filePath}" included=false readable=false`);
             }
@@ -3111,6 +3151,7 @@ OU
                 summary: parsed.summary,
                 reason: parsed.reason,
                 suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : undefined,
+                artifactPaths: existingArtifactPaths,
             };
         } catch (err) {
             // LLM respondeu em texto livre (ex: thinking recovered de timeout) → não confirma sucesso

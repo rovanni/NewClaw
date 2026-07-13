@@ -10,7 +10,7 @@
 
 import { createLogger } from '../shared/AppLogger';
 import { ToolRegistry } from '../core/ToolRegistry';
-import { probeToolCmd, resolvePython3Runtime, defaultPython3Candidates, runPython3Import } from '../utils/crossPlatform';
+import { probeToolCmd, resolvePython3Runtime, defaultPython3Candidates, runPython3Import, isBashFunctional } from '../utils/crossPlatform';
 
 const log = createLogger('EnvironmentProbe');
 
@@ -77,6 +77,13 @@ export class EnvironmentProbe {
 
             // Preenche faltantes como false (probe pode ter sido parcial)
             for (const t of TOOLS_TO_PROBE) if (!(t in tools)) tools[t] = false;
+
+            // 'bash' fica FORA de TOOLS_TO_PROBE deliberadamente: o probe genérico acima
+            // usa `where`/`command -v`, que no Windows encontra o launcher stub do WSL
+            // (bash.exe presente) mesmo sem nenhuma distro instalada — falso positivo que já
+            // causou replans desperdiçados em produção (ver isBashFunctional() em
+            // crossPlatform.ts). Só um probe de execução real detecta isso.
+            tools['bash'] = await isBashFunctional();
 
             // ── 2. Python package probe — resolve o runtime Python 3 UMA VEZ e reutiliza
             // para os 4 pacotes (nunca via exec_command/shell: um path absoluto com espaços
