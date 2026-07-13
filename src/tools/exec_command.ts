@@ -425,7 +425,7 @@ export class ExecCommandTool implements ToolExecutor {
             // podem declarar o(s) arquivo(s) que produziram via linha "ARTIFACT: <path>" no
             // stdout — declarativo (opt-in do script), nunca varredura do workspace. Cada
             // declaração é verificada contra o disco antes de virar evidência confiável.
-            const artifactPaths = extractVerifiedArtifacts(output, (raw) => resolvePath(raw).resolved);
+            const artifactPaths = extractVerifiedArtifacts(output, (raw) => resolvePath(raw));
 
             return {
                 success: true,

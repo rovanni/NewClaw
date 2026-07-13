@@ -174,6 +174,53 @@ console.log('\n=== S111.8 — bloqueio de script é INCONDICIONAL, mesmo quando 
     assert(resolved === undefined, 'script nunca é retornado por aqui, mesmo citado literalmente na description do step', resolved);
 }
 
+console.log('\n=== S111.9a — .js/.ts NÃO são bloqueados como script-fonte — fonte única com AgentLoop.DELIVERABLE_EXTENSIONS ===');
+{
+    // Achado da revisão de código (Sprint F2): a lista anterior de SOURCE_SCRIPT_EXTENSIONS
+    // incluía '.js'/'.ts', contradizendo AgentLoop.ts, que já trata esses dois como deliverable
+    // legítimo (DELIVERABLE_EXTENSIONS), não como script-fonte. Um .js gerado (ex: widget web)
+    // precisa continuar elegível aqui.
+    const goal = {
+        userIntent: 'gerar um widget em javascript',
+        sentArtifacts: [],
+        attempts: [attempt({ id: 'a1', toolName: 'write', executedAt: 1000, producedArtifactPaths: ['widget.js'] })],
+    };
+    const resolved = resolveArtifactPathFromEvidence(goal, 'enviar o widget gerado');
+    assert(resolved === 'widget.js', '.js não é tratado como script-fonte — permanece candidato válido', resolved);
+}
+
+console.log('\n=== S111.9b — attempts com result=\'partial\' NÃO contam como evidência confiável ===');
+{
+    // GoalStore.downgradeLastAttemptToPartial rebaixa um attempt pra 'partial' quando o
+    // SemanticValidator julga o output irrelevante ao objetivo — producedArtifactPaths fica
+    // intacto, mas não deve ser tratado como evidência plenamente válida.
+    const goal = {
+        userIntent: 'gerar um relatório em pdf',
+        sentArtifacts: [],
+        attempts: [attempt({ id: 'a1', result: 'partial', executedAt: 1000, producedArtifactPaths: ['tmp/relatorio_duvidoso.pdf'] })],
+    };
+    const resolved = resolveArtifactPathFromEvidence(goal, 'enviar o relatório');
+    assert(resolved === undefined, 'attempt \'partial\' não foi aceito como evidência — retornou undefined', resolved);
+}
+
+console.log('\n=== S111.9c — stepDescription genérica combina com goal.userIntent, não ignora suas keywords ===');
+{
+    // Antes: inferExpectedExtensions(stepDescription || goal.userIntent) só consultava userIntent
+    // quando stepDescription era vazia. Uma description genérica ("Enviar o arquivo gerado",
+    // sem keyword) fazia o filtro virar permissivo mesmo com userIntent dizendo "apresentação
+    // de slides" (que inferiria .pptx).
+    const goal = {
+        userIntent: 'gerar uma apresentação de slides sobre o tema',
+        sentArtifacts: [],
+        attempts: [
+            attempt({ id: 'a1', executedAt: 1000, producedArtifactPaths: ['tmp/aula.pptx'] }),
+            attempt({ id: 'a2', executedAt: 2000, producedArtifactPaths: ['tmp/rascunho.png'] }), // mais recente, mas não é o tipo pedido
+        ],
+    };
+    const resolved = resolveArtifactPathFromEvidence(goal, 'Enviar o arquivo gerado ao usuário'); // description genérica, sem keyword
+    assert(resolved === 'tmp/aula.pptx', 'combinou description+userIntent — extensão .pptx do userIntent não foi ignorada', resolved);
+}
+
 // ── Parte 2: integração — RiskAnalyzer.analyze() com plano real via LLM mockado ────────────
 
 console.log('\n=== S111.9 — RiskAnalyzer.analyze() end-to-end: send_document sem file_path + write em CICLO ANTERIOR (replan real) ===');

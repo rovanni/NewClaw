@@ -5,7 +5,17 @@
 // pediu, porque .txt não tinha nenhuma keyword aqui — sem extensão esperada, o filtro virava
 // permissivo e o candidato mais recente (o script-fonte) venceu. Mesma classe de bug que o
 // teste S27 já cobria em outro call site (script enviado em vez do artefato gerado).
-export const SOURCE_SCRIPT_EXTENSIONS = new Set(['.py', '.sh', '.js', '.ts', '.ps1', '.bat', '.cmd']);
+//
+// Fonte única com AgentLoop.ts's DELIVERY-GUARD (Sprint F2, revisão de código pós-piloto):
+// AgentLoop já tinha EXECUTABLE_SCRIPT_EXTENSIONS=['.py','.sh'] (scripts que precisam ser
+// EXECUTADOS antes de contar como entregável) e DELIVERABLE_EXTENSIONS incluindo '.js'/'.ts'
+// (tratados como entregável direto, não script). A lista anterior aqui incluía '.js'/'.ts' como
+// "nunca deliverable", contradizendo essa decisão já existente — um .js/.ts gerado (ex: widget
+// web) era aceito como deliverable pelo AgentLoop mas bloqueado incondicionalmente por
+// resolveArtifactPathFromEvidence. Lista agora reflete a mesma fronteira que AgentLoop já
+// desenha, só estendida com os tipos de script Windows (.ps1/.bat/.cmd) que AgentLoop nunca
+// chegou a listar mas que exec_command também executa via wrapForWindowsPowerShell.
+export const SOURCE_SCRIPT_EXTENSIONS = new Set(['.py', '.sh', '.ps1', '.bat', '.cmd']);
 
 /**
  * Infere extensões de arquivo esperadas a partir de texto livre (userIntent/descrição de step).

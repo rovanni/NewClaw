@@ -21,17 +21,24 @@ const ARTIFACT_LINE = /^ARTIFACT:\s*(.+)$/gm;
  *
  * `resolvePathFn` resolve o path declarado (relativo ao workspace ou absoluto) para um path
  * de disco real — injetado pelo chamador para reusar a mesma resolvePath() de crossPlatform.ts
- * usada por write/read/exec_command, sem duplicar a lógica de resolução aqui.
+ * usada por write/read/exec_command, sem duplicar a lógica de resolução aqui. Retorna `error`
+ * quando o path está fora do sandbox permitido (Sprint F2, revisão de código pós-piloto): sem
+ * checar esse campo, um `ARTIFACT: <path fora do sandbox>` no stdout de um script (bug do
+ * próprio script, ou path traversal) podia ser aceito como evidência verificada só porque o
+ * arquivo apontado por `.resolved` acontecia de existir em disco — send_document validaria de
+ * novo no envio, mas resolveArtifactPathFromEvidence podia escolher esse candidato espúrio
+ * antes disso, no lugar do artefato real.
  */
 export function extractVerifiedArtifacts(
     stdout: string,
-    resolvePathFn: (raw: string) => string,
+    resolvePathFn: (raw: string) => { resolved: string; error?: string },
 ): string[] {
     const verified: string[] = [];
     for (const match of stdout.matchAll(ARTIFACT_LINE)) {
         const raw = match[1].trim();
         if (!raw) continue;
-        const resolved = resolvePathFn(raw);
+        const { resolved, error } = resolvePathFn(raw);
+        if (error) continue;
         try {
             const stat = fs.statSync(resolved);
             if (stat.isFile() && stat.size >= MIN_DELIVERABLE_SIZE) {
@@ -71,21 +78,30 @@ export function extractVerifiedArtifacts(
  * planetas.txt") — se scripts pudessem "se qualificar" por menção literal, o próprio texto que
  * descreve a etapa de execução reabriria a mesma brecha. Pedido explícito pelo script em si cai
  * para o fallback normal (AgentLoop resolve via tool-calling com contexto real), não por aqui.
+ *
+ * Sprint F2 (revisão de código pós-piloto): só `GoalAttempt.result === 'success'` conta como
+ * evidência — `'partial'` fica de fora. `GoalStore.downgradeLastAttemptToPartial` rebaixa um
+ * attempt pra 'partial' quando o SemanticValidator julga o output irrelevante ao objetivo,
+ * preservando `producedArtifactPaths` intacto; sem essa exclusão, um artefato que o próprio
+ * sistema já sinalizou como duvidoso seria tratado como evidência plenamente confiável.
  */
 export function resolveArtifactPathFromEvidence(
     goal: Pick<Goal, 'attempts' | 'sentArtifacts' | 'userIntent'>,
     stepDescription: string,
 ): string | undefined {
-    const expectedExts = inferExpectedExtensions(stepDescription || goal.userIntent || '');
+    // Combina os dois textos em vez de só usar userIntent como fallback do || — uma description
+    // de step genérica ("Enviar o arquivo gerado") não deve fazer o sistema ignorar keywords de
+    // tipo de arquivo já presentes no userIntent do goal ("gerar apresentação de slides").
+    const expectedExts = inferExpectedExtensions(`${stepDescription} ${goal.userIntent ?? ''}`.trim());
     const matchesExpected = (p: string): boolean =>
         expectedExts.length === 0 || expectedExts.some(ext => p.toLowerCase().endsWith(ext));
     const isScript = (p: string): boolean => {
-        const lower = p.toLowerCase();
-        return [...SOURCE_SCRIPT_EXTENSIONS].some(ext => lower.endsWith(ext));
+        const dot = p.lastIndexOf('.');
+        return dot !== -1 && SOURCE_SCRIPT_EXTENSIONS.has(p.slice(dot).toLowerCase());
     };
 
     const candidates = (goal.attempts ?? [])
-        .filter(a => a.result !== 'failure' && a.producedArtifactPaths && a.producedArtifactPaths.length > 0)
+        .filter(a => a.result === 'success' && a.producedArtifactPaths && a.producedArtifactPaths.length > 0)
         .flatMap(a => (a.producedArtifactPaths ?? []).map(p => ({ path: p, executedAt: a.executedAt })))
         .filter(c => matchesExpected(c.path) && !isScript(c.path))
         .sort((a, b) => b.executedAt - a.executedAt);
