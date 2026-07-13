@@ -167,3 +167,21 @@ O "estado atual" de um artefato (`project(traceId)`) é uma função pura que do
 2. `RiskAnalyzer`/`GoalExecutionLoop` passam a resolver `file_path` de `send_document` via `traceId` quando disponível, com fallback para a heurística atual.
 
 Critério de sucesso do piloto: um teste de regressão equivalente ao `S109` (que hoje cobre a correção reativa de `7d086d4`) passando via herança de `traceId` no replan, sem depender de inferência por path. Se esse teste não simplificar em relação ao fix atual, o conceito não pagou seu custo e não deveria se expandir.
+
+---
+
+## 12. Melhorias ao desenho do §11 (revisão contra bugs reais já documentados)
+
+Seis pontos que o desenho inicial deixava em aberto — os dois primeiros resolvem uma classe de bug já vivida em produção, não hipotética:
+
+1. **Resolução de `traceId` por path para arquivo pré-existente.** Bug documentado em 09/07 (goal "reenviar `aula_seguranca_redes_completa.pptx`"): quando o único propósito do goal é reenviar um arquivo que já existia **antes** do goal (sem `write` como evidência dentro dele), o validador não tinha nada que provasse "foi enviado", e o planner acabou fabricando um arquivo substituto que o validador aceitou por engano. O fix aplicado foi um bypass heurístico (≥200 bytes no disco). Com `ArtifactTrace`, isso vira estrutural: no início do goal, se `send_document` referencia um path sem `traceId` no plano, o sistema resolve via índice reverso `path → traceId` (projeção do log de eventos de goals anteriores) antes de cair no bypass por tamanho de arquivo. Se o path já tem um evento `delivered`/`created` de outro goal, o novo `send_document` herda esse `traceId` — a validação deixa de depender de limiar arbitrário.
+
+2. **`checkClaimsAgainstEvidence` deveria checar o `traceId` certo, não "algo em `sentArtifacts`".** Outro bug do mesmo dia: o `DELIVERY-GUARD` enviou um `.py` (script não executado) em vez do `.pptx` final; o validador aceitou porque só checava "existe alguma entrega registrada", sem checar se era a entrega **pedida**. O fix atual usa `inferExpectedExtensions()` (heurística de regex sobre o texto do pedido). Com `traceId`, a claim de entrega poderia apontar para o id específico do artefato-alvo do goal, e a checagem vira `project(traceIdAlvo).status === 'delivered'` — elimina a classe inteira sem depender de inferir extensão por texto.
+
+3. **Idempotência de `emit()`.** Retries de step (comuns no `GoalExecutionLoop`) não podem gerar um segundo evento `created` fantasma para o mesmo artefato físico. `emit()` precisa de uma chave de dedup (ex.: `traceId + type + cycle`) para ser seguro sob reexecução — o desenho do §11 não deixava isso explícito.
+
+4. **`traceId` nunca deve ser exposto ao LLM.** É uma chave de correlação interna, não um dado de conversa. O histórico do projeto já teve mais de um vazamento de bookkeeping interno para o texto final do usuário (`CONTENT_STUB_PATTERNS`, labels de `send_audio`) — o mesmo risco existe aqui se `traceId` vazar para o prompt e o LLM começar a "citá-lo" ou alucinar em torno dele.
+
+5. **Política de retenção do log de eventos.** Hoje `sentArtifacts` sobrevive a restart mas nada garante que o novo log de eventos por artefato tenha uma vida útil definida — sem isso, cresce sem limite por goal/sessão. Precisa amarrar a retenção ao ciclo de vida do goal (purgar/arquivar junto quando o goal é arquivado), ou vira um novo ponto cego parecido com os já vistos em "amnésia de sessão".
+
+6. **Observabilidade de graça.** Dado quantos bugs do histórico do projeto exigiram arqueologia manual de log (`newclaw-audit.log`, grep manual) para reconstruir "o que aconteceu com este arquivo", um `project(traceId)` que já existe para uso interno praticamente paga sozinho um comando de diagnóstico (`newclaw trace <path|traceId>`) que imprime a linhagem completa. Baixo custo adicional, alto valor para depuração futura.
