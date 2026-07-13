@@ -274,7 +274,8 @@ export class GoalExecutionLoop {
         goal: Goal,
         channelContext: ChannelContext,
         authStepOutput: string,
-        onProgress?: ProgressCallback
+        onProgress?: ProgressCallback,
+        authStepArtifactPaths?: string[],
     ): Promise<GoalResult> {
         log.info(`[GoalLoop] resuming goal=${goal.id} after auth`);
 
@@ -286,7 +287,7 @@ export class GoalExecutionLoop {
         // representam duas execuções genuinamente distintas do step.
         const blockedStep = goal.currentPlan.find(s => s.status === 'pending');
         if (blockedStep) {
-            this.markStepDone(goal, blockedStep, authStepOutput);
+            this.markStepDone(goal, blockedStep, authStepOutput, 'add', authStepArtifactPaths);
         }
 
         // requiresAuth: false — Sprint 0.11, ver nota no branch 'needs_auth' acima.
@@ -649,7 +650,7 @@ export class GoalExecutionLoop {
                     if (!fp) return false;
                     try {
                         const { resolved } = resolvePath(fp);
-                        return fs.statSync(resolved).size >= 200;
+                        return fs.statSync(resolved).size >= MIN_DELIVERABLE_SIZE;
                     } catch {
                         return false;
                     }
@@ -2144,6 +2145,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
         step: PlanStep,
         output: string,
         attemptRecording: 'add' | 'skip' | 'finalize' = 'add',
+        producedArtifactPaths?: string[],
     ): void {
         const updatedPlan = goal.currentPlan.map(s =>
             s.id === step.id ? { ...s, status: 'completed' as const, result: output.slice(0, 200), executedAt: Date.now() } : s
@@ -2181,6 +2183,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
                 output: output.slice(0, 300),
                 durationMs: 0,
                 executedAt: Date.now(),
+                producedArtifactPaths,
             });
         } else if (attemptRecording === 'finalize') {
             this.goalStore.finalizeLastAttemptAsSuccess(goal.id, step.id, output);
