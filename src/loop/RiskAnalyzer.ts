@@ -101,6 +101,20 @@ export interface RiskReport {
     skillHints?: Array<{ skillName: string; skillContext: string }>;
 }
 
+/**
+ * JSON.stringify com chaves ordenadas — usado para comparar dois objetos por VALOR, não por
+ * ordem de inserção de chaves. `plan[i].toolArgs` (do GoalPlanner original) e o `toolArgs`
+ * reconstruído a partir da resposta JSON independente do LLM de risco podem ter os mesmos
+ * valores em ordem diferente; JSON.stringify puro os trataria como diferentes, forçando
+ * planAdjusted=true (e a substituição do plano inteiro) sem mudança real.
+ */
+function stableStringify(value: unknown): string {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+    const keys = Object.keys(value as Record<string, unknown>).sort();
+    return `{${keys.map(k => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`).join(',')}}`;
+}
+
 export class RiskAnalyzer {
     private model: string = RISK_REVIEW_MODEL_DEFAULT;
     private readonly classifyContentStub: ContentStubClassifier;
@@ -593,6 +607,12 @@ OU
             // este step). resolveToolAlias() aqui é uma melhoria pequena e deliberada: antes
             // desta consolidação, RiskAnalyzer não resolvia alias em NENHUM lugar, então um
             // 'provide_file' sem file_path nem chegava a tentar essa inferência.
+            // Sprint F1 (revisão de código pós-piloto): steps que este bloco CONSERTA (preenche
+            // file_path que faltava) precisam sair do denominador/numerador de CR#3 abaixo, não
+            // só ganhar crédito de "válido" — senão consertar UM step dilui a proteção de CR#3
+            // para OUTROS steps quebrados no mesmo batch (ex: um 'read' sem 'path' que nada aqui
+            // conserta escaparia da rejeição só porque o send_document ao lado foi corrigido).
+            const repairedStepIndices = new Set<number>();
             rawSteps.forEach((s, i) => {
                 const rawTool = s.toolName ? String(s.toolName) : undefined;
                 if (!rawTool || resolveToolAlias(rawTool) !== 'send_document') return;
@@ -622,6 +642,7 @@ OU
                 if (lastWrite) {
                     const inferredPath = String((lastWrite['toolArgs'] as Record<string, unknown>)['path']);
                     s.toolArgs = { ...(toolArgs ?? {}), file_path: inferredPath };
+                    repairedStepIndices.add(i);
                     log.info(
                         `[STEP-MUTATION]` +
                         ` step=${String(s.id ?? `step_${i + 1}`)}` +
@@ -644,6 +665,7 @@ OU
                 if (!evidencePath) return; // sem evidência: sanitizePlanSteps converte pra AgentLoop normalmente
 
                 s.toolArgs = { ...(toolArgs ?? {}), file_path: evidencePath };
+                repairedStepIndices.add(i);
                 log.info(
                     `[STEP-MUTATION]` +
                     ` step=${String(s.id ?? `step_${i + 1}`)}` +
@@ -657,13 +679,20 @@ OU
 
             // ── CR#3: Rejeitar plano quando maioria dos tool-steps tem args inválidos ──
             // Roda DEPOIS do pré-processamento acima, para contar args já com file_path
-            // resolvido por evidência quando aplicável (ver comentário acima).
-            const toolStepsCount = rawSteps.filter(s => {
-                const t = s.toolName ? String(s.toolName) : undefined;
+            // resolvido por evidência quando aplicável (ver comentário acima). Steps em
+            // `repairedStepIndices` ficam de fora da contagem inteira (nem válido nem inválido)
+            // — foram consertados por este bloco, não devem "emprestar" crédito de validade
+            // para diluir a proteção de OUTROS steps quebrados no mesmo batch. Alias resolvido
+            // via resolveToolAlias() (mesma correção do bloco de inferência acima) — antes,
+            // um step com toolName aliased (ex: 'provide_file') não era encontrado no
+            // toolRegistry por nome cru e ficava isento da contagem, mascarando args inválidos.
+            const cr3Candidates = rawSteps.filter((_, i) => !repairedStepIndices.has(i));
+            const toolStepsCount = cr3Candidates.filter(s => {
+                const t = s.toolName ? resolveToolAlias(String(s.toolName)) : undefined;
                 return t && this.toolRegistry.get(t);
             }).length;
-            const invalidArgsCount = rawSteps.filter(s => {
-                const t = s.toolName ? String(s.toolName) : undefined;
+            const invalidArgsCount = cr3Candidates.filter(s => {
+                const t = s.toolName ? resolveToolAlias(String(s.toolName)) : undefined;
                 if (!t || !this.toolRegistry.get(t)) return false;
                 const args = (s.toolArgs && typeof s.toolArgs === 'object')
                     ? s.toolArgs as Record<string, unknown>
@@ -754,7 +783,7 @@ OU
                 adjustedPlan.some((s, i) =>
                     s.toolName !== plan[i]?.toolName ||
                     s.description !== plan[i]?.description ||
-                    JSON.stringify(s.toolArgs ?? {}) !== JSON.stringify(plan[i]?.toolArgs ?? {})
+                    stableStringify(s.toolArgs ?? {}) !== stableStringify(plan[i]?.toolArgs ?? {})
                 );
 
             log.info(`[RiskAnalyzer] LLM review: risks=${detectedRisks.length} planAdjusted=${planAdjusted} steps=${adjustedPlan.length}`);

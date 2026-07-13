@@ -241,6 +241,95 @@ console.log('\n=== S111.9 — RiskAnalyzer.analyze() end-to-end: send_document s
     );
 }
 
+console.log('\n=== S111.10 — CR#3 não fica diluída: send_document consertado NÃO isenta outro step genuinamente quebrado ===');
+{
+    // Achado da revisão de código pós-piloto (Sprint F1): mover CR#3 pra depois da correção de
+    // file_path (S111.9) não pode fazer com que consertar send_document "empreste" crédito de
+    // validade pro plano inteiro — um 'read' sem 'path' no mesmo batch, que nada aqui conserta,
+    // precisa continuar contando como inválido e derrubar o plano (2 steps, 1 genuinamente
+    // quebrado = 100% dos NÃO-consertados = ainda rejeita).
+    ToolRegistry.register({ name: 'read', description: 'test', parameters: {}, execute: async () => ({ success: true, output: '' }) });
+
+    const db = new (Database as any)(':memory:');
+    const goalStore = new GoalStore(db);
+    const goal: Goal = goalStore.create({
+        sessionKey: 'test:s111-cr3',
+        conversationId: 'test-conv-s111-cr3',
+        userIntent: 'gerar uma apresentação de slides e enviar',
+        objective: 'Gerar e enviar apresentação de slides',
+        status: 'executing',
+        currentPlan: [],
+        attempts: [attempt({ id: 'prev1', toolName: 'exec_command', executedAt: Date.now() - 60_000, producedArtifactPaths: ['tmp/aula.pptx'] })],
+        blockers: [], toolsTried: [], strategiesTried: [], successCriteria: [], sentArtifacts: [],
+        retryBudget: 3, replanBudget: 5, confidence: 0.9, requiresAuth: false, authorizationScope: [],
+        expiresAt: Date.now() + 3_600_000,
+    } as Omit<Goal, 'id' | 'createdAt' | 'updatedAt'>);
+
+    const newPlanFromLLM = [
+        { id: 'step_send', description: 'Enviar a apresentação pronta', toolName: 'send_document', toolArgs: {} },
+        { id: 'step_read', description: 'Ler configuração', toolName: 'read', toolArgs: {} }, // sem 'path' — genuinamente inválido, nada conserta isso
+    ];
+    const fakeProviderFactory = {
+        getProviderWithModel: () => ({ chat: async () => ({ content: JSON.stringify({ risks: [], plan: newPlanFromLLM }) }) }),
+    } as unknown as ProviderFactory;
+    const fakeReflectionMemory = { findHardConstraints: () => [], findToolFailures: () => undefined } as unknown as ReflectionMemory;
+    const analyzer = new RiskAnalyzer(fakeProviderFactory, ToolRegistry, fakeReflectionMemory);
+    const currentPlan: PlanStep[] = [
+        { id: 'step_send', description: 'Enviar a apresentação pronta', toolName: 'send_document', toolArgs: {}, status: 'pending', fallbackSteps: [] },
+        { id: 'step_read', description: 'Ler configuração', toolName: 'read', toolArgs: {}, status: 'pending', fallbackSteps: [] },
+    ];
+    const report = await analyzer.analyze(goal, currentPlan);
+
+    assert(
+        report.planRejected === true,
+        'plano rejeitado: o read genuinamente quebrado não foi mascarado pelo send_document consertado',
+        report
+    );
+}
+
+console.log('\n=== S111.11 — planAdjusted não dispara por ordem de chaves diferente em toolArgs com mesmo valor ===');
+{
+    ToolRegistry.register({ name: 'write', description: 'test', parameters: {}, execute: async () => ({ success: true, output: '' }) });
+
+    const db = new (Database as any)(':memory:');
+    const goalStore = new GoalStore(db);
+    const goal: Goal = goalStore.create({
+        sessionKey: 'test:s111-order', conversationId: 'test-conv-s111-order',
+        userIntent: 'escrever um arquivo', objective: 'Escrever um arquivo',
+        status: 'executing', currentPlan: [], attempts: [], blockers: [], toolsTried: [], strategiesTried: [],
+        successCriteria: [], sentArtifacts: [], retryBudget: 3, replanBudget: 5, confidence: 0.9,
+        requiresAuth: false, authorizationScope: [], expiresAt: Date.now() + 3_600_000,
+    } as Omit<Goal, 'id' | 'createdAt' | 'updatedAt'>);
+
+    // Mesmos valores, ordem de chaves INVERTIDA em relação ao currentPlan — semanticamente idêntico.
+    const newPlanFromLLM = [
+        { id: 'step_1', description: 'Escrever nota', toolName: 'write', toolArgs: { content: 'ola mundo', path: 'nota.txt' } },
+    ];
+    const fakeProviderFactory = {
+        getProviderWithModel: () => ({ chat: async () => ({ content: JSON.stringify({ risks: [], plan: newPlanFromLLM }) }) }),
+    } as unknown as ProviderFactory;
+    const fakeReflectionMemory = { findHardConstraints: () => [], findToolFailures: () => undefined } as unknown as ReflectionMemory;
+    // Isola o teste do classificador de content-stub (que faria uma 2ª chamada LLM real via
+    // fakeProviderFactory, não relacionada ao que este teste verifica) — sempre "não é stub".
+    const fakeClassifyContentStub = async () => ({ isStub: false, reason: 'test' });
+    const analyzer = new RiskAnalyzer(fakeProviderFactory, ToolRegistry, fakeReflectionMemory, fakeClassifyContentStub);
+    const currentPlan: PlanStep[] = [
+        { id: 'step_1', description: 'Escrever nota', toolName: 'write', toolArgs: { path: 'nota.txt', content: 'ola mundo' }, status: 'pending', fallbackSteps: [] },
+    ];
+    const report = await analyzer.analyze(goal, currentPlan);
+
+    assert(
+        report.planAdjusted === false,
+        'planAdjusted permaneceu false — mesmos valores em ordem de chaves diferente não contam como mudança',
+        report
+    );
+    assert(
+        report.adjustedPlan[0]?.toolArgs === currentPlan[0].toolArgs,
+        'adjustedPlan devolveu o plano ORIGINAL (mesma referência de objeto), não uma reconstrução desnecessária do LLM de risco',
+        report.adjustedPlan[0]?.toolArgs
+    );
+}
+
 console.log(`\n${'─'.repeat(60)}`);
 console.log(`S111 RESULTADO: ${passed} passou | ${failed} falhou`);
 if (failed > 0) process.exit(1);
