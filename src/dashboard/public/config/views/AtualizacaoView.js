@@ -1,4 +1,4 @@
-import { checkUpdate, applyUpdate, getStatus } from '../api.js';
+import { checkUpdate, applyUpdate, getStatus, getUpdateBranches } from '../api.js';
 import { showToast } from '../components/Toast.js';
 
 const TELEGRAM_WAIT = 30; // segundos — limite para Telegram liberar polling
@@ -11,6 +11,37 @@ export function render(container) {
         <h1>⬆️ ${t('sidebar_update')}</h1>
         <p>${t('update_page_desc')}</p>
       </div>
+
+      <details class="cfg-details" open>
+        <summary>${t('update_channel_title')}</summary>
+        <div class="cfg-details-body">
+          <p style="font-size:.85rem;color:var(--text-soft);margin-top:0">${t('update_channel_desc')}</p>
+
+          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
+            <label style="display:flex;align-items:baseline;gap:8px;cursor:pointer">
+              <input type="radio" name="upd-channel" id="upd-channel-stable" value="stable" checked>
+              <span>${t('update_channel_stable')}</span>
+            </label>
+            <label style="display:flex;align-items:baseline;gap:8px;cursor:pointer">
+              <input type="radio" name="upd-channel" id="upd-channel-preview" value="preview">
+              <span>${t('update_channel_preview')}</span>
+            </label>
+            <label style="display:flex;align-items:baseline;gap:8px;cursor:pointer">
+              <input type="radio" name="upd-channel" id="upd-channel-dev" value="dev">
+              <span>${t('update_channel_dev')}</span>
+            </label>
+          </div>
+
+          <div id="upd-branch-wrap" style="display:none;margin-bottom:12px">
+            <label style="font-size:.82rem;color:var(--text-soft);display:block;margin-bottom:4px">
+              ${t('update_channel_branch_label')}
+            </label>
+            <select id="upd-branch-select" class="cfg-input" style="max-width:420px"></select>
+          </div>
+
+          <div id="upd-channel-current" style="font-size:.82rem;color:var(--text-soft)"></div>
+        </div>
+      </details>
 
       <details class="cfg-details" open>
         <summary>${t('update_version_title')}</summary>
@@ -74,15 +105,75 @@ export function render(container) {
       }
     </style>`;
 
-  const statusEl      = document.getElementById('upd-status');
-  const changelogEl   = document.getElementById('upd-changelog');
-  const checkBtn      = document.getElementById('upd-checkBtn');
-  const applyBtn      = document.getElementById('upd-applyBtn');
-  const progressWrap  = document.getElementById('upd-progress-wrap');
-  const phase1El      = document.getElementById('upd-phase1');
-  const phase2El      = document.getElementById('upd-phase2');
-  const countdownNum  = document.getElementById('upd-countdown-num');
-  const countdownBar  = document.getElementById('upd-countdown-bar');
+  const statusEl        = document.getElementById('upd-status');
+  const changelogEl      = document.getElementById('upd-changelog');
+  const checkBtn         = document.getElementById('upd-checkBtn');
+  const applyBtn         = document.getElementById('upd-applyBtn');
+  const progressWrap     = document.getElementById('upd-progress-wrap');
+  const phase1El         = document.getElementById('upd-phase1');
+  const phase2El         = document.getElementById('upd-phase2');
+  const countdownNum     = document.getElementById('upd-countdown-num');
+  const countdownBar     = document.getElementById('upd-countdown-bar');
+  const channelRadios    = Array.from(document.querySelectorAll('input[name="upd-channel"]'));
+  const branchWrap       = document.getElementById('upd-branch-wrap');
+  const branchSelect     = document.getElementById('upd-branch-select');
+  const channelCurrentEl = document.getElementById('upd-channel-current');
+
+  // Canal/branch efetivamente selecionados nesta sessão da UI. Não persistem
+  // sozinhos — só bin/newclaw grava UPDATE_CHANNEL/UPDATE_BRANCH no .env, e só
+  // depois de um "Aplicar atualização" bem-sucedido (ver resolveUpdateChannel em
+  // bin/newclaw e /update/apply em maintenance.ts).
+  let selectedChannel = 'stable';
+  let selectedBranch = null;
+  let branchesLoaded = false;
+  let initialLoad = true;
+
+  function channelLabel(channel) {
+    if (channel === 'preview') return t('update_channel_preview_short');
+    if (channel === 'dev') return t('update_channel_dev_short');
+    return t('update_channel_stable_short');
+  }
+
+  async function ensureBranchesLoaded() {
+    if (branchesLoaded) return;
+    branchSelect.innerHTML = `<option>${t('update_channel_branch_loading')}</option>`;
+    try {
+      const branches = await getUpdateBranches();
+      branchesLoaded = true;
+      if (!branches.length) {
+        branchSelect.innerHTML = `<option value="">${t('update_channel_branch_empty')}</option>`;
+        return;
+      }
+      branchSelect.innerHTML = branches.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
+      if (selectedBranch && branches.includes(selectedBranch)) {
+        branchSelect.value = selectedBranch;
+      } else {
+        selectedBranch = branchSelect.value;
+      }
+    } catch (e) {
+      branchSelect.innerHTML = `<option value="">${t('update_channel_branch_empty')}</option>`;
+      showToast('❌ ' + e.message, 'error');
+    }
+  }
+
+  channelRadios.forEach(radio => {
+    radio.addEventListener('change', async () => {
+      if (!radio.checked) return;
+      selectedChannel = radio.value;
+      if (selectedChannel === 'dev') {
+        branchWrap.style.display = 'block';
+        await ensureBranchesLoaded();
+      } else {
+        branchWrap.style.display = 'none';
+      }
+      runCheck();
+    });
+  });
+
+  branchSelect.addEventListener('change', () => {
+    selectedBranch = branchSelect.value;
+    runCheck();
+  });
 
   // ── Verificar atualização ─────────────────────────────────────────────────
   async function runCheck() {
@@ -91,7 +182,33 @@ export function render(container) {
     statusEl.textContent = t('update_checking_progress');
     changelogEl.style.display = 'none';
     try {
-      const r = await checkUpdate();
+      const params = { channel: selectedChannel };
+      if (selectedChannel === 'dev') params.branch = selectedBranch;
+      const r = await checkUpdate(params);
+
+      // Primeira carga: reflete o canal já persistido no .env (bin/newclaw resolve
+      // isso mesmo sem query params) para pré-selecionar o rádio certo.
+      if (initialLoad) {
+        initialLoad = false;
+        selectedChannel = r.channel || 'stable';
+        selectedBranch = r.channel === 'dev' ? (r.branch || null) : null;
+        const radio = channelRadios.find(rd => rd.value === selectedChannel);
+        if (radio) radio.checked = true;
+        if (selectedChannel === 'dev') {
+          branchWrap.style.display = 'block';
+          await ensureBranchesLoaded();
+        }
+      }
+
+      const branchInfo = selectedChannel === 'dev' && r.branch ? ` (${esc(r.branch)})` : '';
+      channelCurrentEl.innerHTML =
+        `${t('update_channel_current_prefix')} <b>${channelLabel(selectedChannel)}</b>${branchInfo} — ` +
+        `${t('update_channel_installed_version')} <code>${esc(r.localSha)}</code>`;
+
+      if (r.warning) {
+        showToast('⚠️ ' + r.warning, 'warning');
+      }
+
       if (r.hasUpdate) {
         const countLabel = r.commitCount !== 1 ? t('update_commits_label') : t('update_commit_label');
         statusEl.innerHTML =
@@ -142,7 +259,9 @@ export function render(container) {
     statusEl.innerHTML = `<span style="color:var(--warning)">${t('update_in_progress')}</span>`;
 
     try {
-      await applyUpdate();
+      const params = { channel: selectedChannel };
+      if (selectedChannel === 'dev') params.branch = selectedBranch;
+      await applyUpdate(params);
       showToast(t('update_started_toast'), 'success');
       progressWrap.style.display = 'block';
 

@@ -1,0 +1,152 @@
+/// <reference types="node" />
+/**
+ * TESTE DE REGRESSÃO — S111
+ * Canais de atualização (Stable/Preview/Development) — resolveUpdateChannel() e
+ * listRemoteBranches() em bin/newclaw, fonte única de verdade sobre qual branch
+ * "newclaw update" e o Dashboard (via `update --check`/`--list-branches`) devem usar.
+ *
+ * bin/newclaw roda como script CJS puro (sem depender de dist/, para conseguir corrigir
+ * um build quebrado), então esse teste faz `require()` direto do arquivo. Só isso não
+ * dispara o CLI: o dispatch de comandos agora fica atrás de `if (require.main === module)`,
+ * então requerer o arquivo só expõe { resolveUpdateChannel, listRemoteBranches, commands }
+ * sem executar nada.
+ *
+ * Mocks: child_process.execSync (nunca bater na rede real via `git ls-remote`/`git branch -r`)
+ * e fs.existsSync para o ENV_FILE (nunca ler o .env real da máquina rodando o teste — sem
+ * isso, resolveUpdateChannel('dev', undefined) dependeria de UPDATE_BRANCH já persistido
+ * localmente por acaso, tornando o teste 8 não-determinístico).
+ *
+ * Cobre: 1 stable (compat — nunca toca em git), 2 preview existente, 3 preview inexistente
+ * (fallback com aviso, não falha), 4 dev com --branch explícita, 5 dev sem branch (fallback),
+ * 6 default sem override nem .env (byte-idêntico ao comportamento pré-canais), 7-8
+ * listRemoteBranches (filtro + resiliência a git falhando).
+ *
+ * Execução: npx ts-node src/__tests__/regression/S111_UpdateChannelResolution.test.ts
+ */
+
+import * as path from 'path';
+// `import cp = require(...)` (não `import * as cp from`) é necessário aqui: o namespace
+// gerado por `import *` é uma view somente-leitura (getters não-configuráveis) mesmo para
+// módulos core do Node, o que impede sobrescrever execSync/existsSync para o mock abaixo.
+// A forma require() retorna o objeto module.exports real e mutável.
+import cp = require('child_process');
+import fs = require('fs');
+
+let passed = 0;
+let failed = 0;
+
+function assert(condition: boolean, message: string, detail?: unknown): void {
+    if (condition) { console.log(`  ✅ ${message}`); passed++; }
+    else { console.error(`  ❌ FALHOU: ${message}`, detail ?? ''); failed++; }
+}
+
+const originalExecSync = cp.execSync;
+const originalExistsSync = fs.existsSync;
+
+let mockExecSyncImpl: (cmd: string) => string = () => '';
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(cp as any).execSync = (cmd: string) => mockExecSyncImpl(cmd);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(fs as any).existsSync = (p: unknown) => {
+    if (typeof p === 'string' && (p.endsWith('.env') || p.endsWith('newclaw.env'))) return false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return originalExistsSync(p as any);
+};
+
+const binNewclawPath = path.join(process.cwd(), 'bin', 'newclaw');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { resolveUpdateChannel, listRemoteBranches } = require(binNewclawPath) as {
+    resolveUpdateChannel: (channel?: string, branch?: string) => { channel: string; branchName: string; warning: string | null };
+    listRemoteBranches: () => string[];
+};
+
+console.log('\n=== S111-1 — stable → origin/main, nunca chama git ===');
+{
+    mockExecSyncImpl = () => { throw new Error('stable não deveria tocar em git'); };
+    const r = resolveUpdateChannel('stable', undefined);
+    assert(r.channel === 'stable' && r.branchName === 'main' && r.warning === null, 'stable resolve para main sem I/O de git', r);
+}
+
+console.log('\n=== S111-2 — preview existente no remoto → origin/preview, sem aviso ===');
+{
+    let sawLsRemote = false;
+    mockExecSyncImpl = (cmd) => {
+        if (/git ls-remote --exit-code origin preview/.test(cmd)) sawLsRemote = true;
+        return '';
+    };
+    const r = resolveUpdateChannel('preview', undefined);
+    assert(sawLsRemote, 'checou a existência da branch preview via ls-remote antes de decidir');
+    assert(r.channel === 'preview' && r.branchName === 'preview' && r.warning === null, 'preview existente resolve para origin/preview', r);
+}
+
+console.log('\n=== S111-3 — preview inexistente no remoto → fallback pra Stable com aviso (não falha) ===');
+{
+    mockExecSyncImpl = () => { throw new Error('branch not found (simulado — ls-remote sai com erro)'); };
+    const r = resolveUpdateChannel('preview', undefined);
+    assert(r.channel === 'preview' && r.branchName === 'main', 'preview ausente cai para origin/main sem quebrar', r);
+    assert(typeof r.warning === 'string' && r.warning.length > 0, 'aviso explícito é retornado quando preview não existe ainda', r);
+}
+
+console.log('\n=== S111-4 — dev com --branch explícita → origin/<branch>, sem tocar em git ===');
+{
+    mockExecSyncImpl = () => { throw new Error('dev com branch explícita não deveria tocar em git'); };
+    const r = resolveUpdateChannel('dev', 'experimental/artifact-pipeline-refactor');
+    assert(
+        r.channel === 'dev' && r.branchName === 'experimental/artifact-pipeline-refactor' && r.warning === null,
+        'dev com --branch usa a branch pedida diretamente', r
+    );
+}
+
+console.log('\n=== S111-5 — dev sem branch (nem override, nem .env) → fallback pra Stable com aviso ===');
+{
+    const r = resolveUpdateChannel('dev', undefined);
+    assert(r.channel === 'stable' && r.branchName === 'main', 'dev configurado sem branch nunca quebra o update — cai pra Stable', r);
+    assert(typeof r.warning === 'string' && r.warning.length > 0, 'aviso explícito é retornado quando dev está sem branch', r);
+}
+
+console.log('\n=== S111-6 — sem override e sem .env → default Stable/main (compatibilidade com instalações existentes) ===');
+{
+    mockExecSyncImpl = () => { throw new Error('default stable não deveria tocar em git'); };
+    const r = resolveUpdateChannel(undefined, undefined);
+    assert(
+        r.channel === 'stable' && r.branchName === 'main' && r.warning === null,
+        'quem nunca configurou canal continua em origin/main — comportamento idêntico ao pré-canais', r
+    );
+}
+
+console.log('\n=== S111-7 — listRemoteBranches: exclui origin/HEAD e origin/main, remove prefixo origin/ ===');
+{
+    mockExecSyncImpl = () => 'origin/HEAD\norigin/main\norigin/feature/x\norigin/experimental/y\n';
+    const branches = listRemoteBranches();
+    assert(!branches.includes('HEAD') && !branches.includes('main'), 'origin/HEAD e origin/main excluídos da lista', branches);
+    assert(branches.includes('feature/x') && branches.includes('experimental/y'), 'demais branches remotas listadas sem o prefixo origin/', branches);
+}
+
+console.log('\n=== S111-9 — listRemoteBranches: descarta ref remota espúria sem sub-branch ("origin" puro) ===');
+{
+    // Achado real ao validar contra o repositório de verdade (não hipotético): `git branch -r`
+    // pode listar uma ref chamada literalmente "origin" (sem "/algo"), que não corresponde a
+    // nenhuma branch selecionável. Sem exigir o prefixo "origin/" antes do strip, esse valor
+    // sobrevivia ao filtro (não era 'origin/HEAD' nem 'origin/main') e aparecia intacto na
+    // lista exposta ao Dashboard/CLI.
+    mockExecSyncImpl = () => 'origin\norigin/main\norigin/feature/x\n';
+    const branches = listRemoteBranches();
+    assert(!branches.includes('origin'), 'ref remota espúria "origin" (sem sub-branch) não aparece na lista', branches);
+    assert(branches.includes('feature/x'), 'branch real ainda é listada normalmente', branches);
+}
+
+console.log('\n=== S111-8 — listRemoteBranches: git indisponível não derruba o processo (retorna []) ===');
+{
+    mockExecSyncImpl = () => { throw new Error('git indisponível (simulado)'); };
+    const branches = listRemoteBranches();
+    assert(Array.isArray(branches) && branches.length === 0, 'falha de git vira lista vazia, nunca exceção não tratada', branches);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(cp as any).execSync = originalExecSync;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(fs as any).existsSync = originalExistsSync;
+
+console.log(`\n${'─'.repeat(60)}`);
+console.log(`S111 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
+if (failed > 0) process.exit(1);

@@ -112,13 +112,26 @@ export async function deleteAutoSkill(id) {
 
 // ── Maintenance ───────────────────────────────────────────────────────────────
 
-export async function checkUpdate() {
-  const d = await json(f('/api/maintenance/update/check'));
+export async function checkUpdate({ channel, branch } = {}) {
+  const qs = new URLSearchParams();
+  if (channel) qs.set('channel', channel);
+  if (branch) qs.set('branch', branch);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  const d = await json(f(`/api/maintenance/update/check${suffix}`));
   return d;
 }
 
-export async function applyUpdate() {
-  return json(f('/api/maintenance/update/apply', { method: 'POST' }));
+export async function applyUpdate({ channel, branch } = {}) {
+  return json(f('/api/maintenance/update/apply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channel, branch }),
+  }));
+}
+
+export async function getUpdateBranches() {
+  const d = await json(f('/api/maintenance/update/branches'));
+  return d.branches || [];
 }
 
 export async function getBackupSchedule() {

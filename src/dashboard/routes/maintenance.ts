@@ -1,5 +1,5 @@
 import express, { Router, Request, Response } from 'express';
-import { exec, execSync, spawn } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import fs from 'fs';
@@ -72,10 +72,6 @@ function parseCronHuman(expr: string): string {
         return 'todo dia 1 do mês';
     }
     return expr; // fallback: mostra a expressão raw
-}
-
-function gitExec(cmd: string): string {
-    return execSync(cmd, { cwd: DIR, encoding: 'utf8', timeout: 10000, windowsHide: true }).trim();
 }
 
 function loadBackupConfig(): BackupConfig {
@@ -167,45 +163,101 @@ class BuildLogBuffer {
 
 const buildLog = new BuildLogBuffer();
 
+// ── Canais de atualização ────────────────────────────────────────────────
+// bin/newclaw (resolveUpdateChannel) é a fonte única de verdade sobre qual branch
+// usar. Este router nunca reimplementa git — ele só invoca `bin/newclaw update`
+// com os modos --check / --list-branches (somente leitura, imprimem um JSON em
+// stdout) e repassa channel/branch para o `update restart` real via spawn, do
+// mesmo jeito que /update/apply já fazia antes desta mudança.
+const VALID_UPDATE_CHANNELS = ['stable', 'preview', 'dev'] as const;
+type UpdateChannel = typeof VALID_UPDATE_CHANNELS[number];
+
+// Nomes de branch git válidos (cobre o padrão real do projeto, ex.:
+// experimental/artifact-pipeline-refactor). Validado aqui porque channel/branch
+// chegam do body/query HTTP — fronteira de confiança antes de virar argv do
+// processo filho.
+const BRANCH_NAME_RE = /^[A-Za-z0-9._/-]+$/;
+
+function parseChannelParams(input: Record<string, unknown>): { args: string[]; error?: string } {
+    const { channel, branch } = input;
+    if (channel === undefined || channel === null || channel === '') return { args: [] };
+    if (typeof channel !== 'string' || !VALID_UPDATE_CHANNELS.includes(channel as UpdateChannel)) {
+        return { args: [], error: `channel inválido: ${String(channel)}` };
+    }
+    const args = [`--channel=${channel}`];
+    if (channel === 'dev') {
+        if (typeof branch !== 'string' || !branch || !BRANCH_NAME_RE.test(branch)) {
+            return { args: [], error: 'branch é obrigatório e deve ser um nome de branch git válido quando channel=dev' };
+        }
+        args.push(`--branch=${branch}`);
+    }
+    return { args };
+}
+
+function runNewclawCli(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+    return new Promise((resolve) => {
+        const node = process.execPath;
+        const cli = path.join(DIR, 'bin', 'newclaw');
+        const child = spawn(node, [cli, ...args], { cwd: DIR, windowsHide: true });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+        child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+        child.on('close', (code) => resolve({ code, stdout, stderr }));
+        child.on('error', (err) => resolve({ code: -1, stdout, stderr: errorMessage(err) }));
+    });
+}
+
+function parseLastJsonLine(stdout: string): unknown {
+    const lastLine = stdout.trim().split('\n').filter(Boolean).pop() || '';
+    return JSON.parse(lastLine);
+}
+
 export function createMaintenanceRouter(): Router {
     const router = Router();
 
-    // GET /api/maintenance/update/check
-    router.get('/update/check', (_req: Request, res: Response) => {
-        exec('git fetch origin main', { cwd: DIR, timeout: 20000, windowsHide: true }, (fetchErr) => {
-            try {
-                if (fetchErr) throw new Error(`git fetch falhou: ${errorMessage(fetchErr)}`);
-                const local = gitExec('git rev-parse HEAD');
-                const remote = gitExec('git rev-parse origin/main');
-                const hasUpdate = local !== remote;
-                let commits: { sha: string; msg: string; when: string }[] = [];
-                let commitCount = 0;
-                if (hasUpdate) {
-                    commitCount = parseInt(gitExec('git rev-list HEAD..origin/main --count'), 10) || 0;
-                    const raw = gitExec('git log HEAD..origin/main --pretty=format:"%h|||%s|||%ar" -30');
-                    commits = raw.split('\n').filter(Boolean).map(line => {
-                        const [sha, msg, when] = line.split('|||');
-                        return { sha: sha ?? '', msg: msg ?? '', when: when ?? '' };
-                    });
-                }
-                res.json({ success: true, hasUpdate, localSha: local.slice(0, 7), remoteSha: remote.slice(0, 7), commitCount, commits });
-            } catch (err) {
-                res.status(500).json({ success: false, error: errorMessage(err) });
+    // GET /api/maintenance/update/check?channel=&branch=
+    router.get('/update/check', async (req: Request, res: Response) => {
+        const { args, error } = parseChannelParams(req.query as Record<string, unknown>);
+        if (error) return res.status(400).json({ success: false, error });
+
+        const { stdout, stderr } = await runNewclawCli(['update', '--check', ...args]);
+        try {
+            const parsed = parseLastJsonLine(stdout) as { success: boolean; error?: string };
+            if (!parsed.success) {
+                return res.status(500).json({ success: false, error: parsed.error || 'Falha ao verificar atualização.' });
             }
-        });
+            res.json(parsed);
+        } catch {
+            res.status(500).json({ success: false, error: stderr || 'Resposta inesperada do CLI ao verificar atualização.' });
+        }
     });
 
-    // POST /api/maintenance/update/apply
-    router.post('/update/apply', (_req: Request, res: Response) => {
+    // GET /api/maintenance/update/branches
+    router.get('/update/branches', async (_req: Request, res: Response) => {
+        const { stdout, stderr } = await runNewclawCli(['update', '--list-branches']);
+        try {
+            const parsed = parseLastJsonLine(stdout) as { success: boolean; branches?: string[] };
+            res.json(parsed);
+        } catch {
+            res.status(500).json({ success: false, error: stderr || 'Resposta inesperada do CLI ao listar branches.' });
+        }
+    });
+
+    // POST /api/maintenance/update/apply  { channel?, branch? }
+    router.post('/update/apply', (req: Request, res: Response) => {
         if (buildLog.running) {
             return res.status(409).json({ success: false, error: 'Atualização já em andamento.' });
         }
+        const { args, error } = parseChannelParams(req.body || {});
+        if (error) return res.status(400).json({ success: false, error });
+
         res.json({ success: true, message: 'Atualização iniciada.' });
 
         buildLog.start();
         const node = process.execPath;
         const cli = path.join(DIR, 'bin', 'newclaw');
-        const child = spawn(node, [cli, 'update', 'restart'], { cwd: DIR, windowsHide: true });
+        const child = spawn(node, [cli, 'update', 'restart', ...args], { cwd: DIR, windowsHide: true });
 
         child.stdout.on('data', (d: Buffer) => buildLog.push(d.toString()));
         child.stderr.on('data', (d: Buffer) => buildLog.push(d.toString()));

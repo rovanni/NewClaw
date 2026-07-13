@@ -274,6 +274,113 @@ function installBuildRestart(restart) {
   }
 }
 
+// ─── Update Channels (Stable / Preview / Development) ──────────────────────
+// Fonte única de verdade para "qual branch usar": bin/newclaw roda como script
+// CJS puro, sem depender de dist/ (precisa continuar assim para conseguir
+// corrigir um build quebrado). O Dashboard consome essa resolução via spawn +
+// JSON (--check / --list-branches), nunca reimplementando git em TS — ver
+// src/dashboard/routes/maintenance.ts.
+function resolveUpdateChannel(channelOverride, branchOverride) {
+  const env = readEnv();
+  const channel = channelOverride || env.UPDATE_CHANNEL || 'stable';
+  const branch = branchOverride || env.UPDATE_BRANCH;
+
+  if (channel === 'dev') {
+    if (!branch) {
+      return { channel: 'stable', branchName: 'main', warning: 'Canal "dev" configurado sem branch — usando Stable (origin/main).' };
+    }
+    return { channel: 'dev', branchName: branch, warning: null };
+  }
+  if (channel === 'preview') {
+    try {
+      execSync('git ls-remote --exit-code origin preview', { cwd: DIR, stdio: 'ignore' });
+      return { channel: 'preview', branchName: 'preview', warning: null };
+    } catch {
+      return { channel: 'preview', branchName: 'main', warning: 'Canal Preview ainda não disponível neste repositório — usando Stable (origin/main).' };
+    }
+  }
+  return { channel: 'stable', branchName: 'main', warning: null };
+}
+
+function listRemoteBranches() {
+  try {
+    const out = execSync('git branch -r --format=%(refname:short)', { cwd: DIR, encoding: 'utf-8' });
+    // Exigir o prefixo "origin/" (em vez de só excluir alguns valores conhecidos) —
+    // achado real ao validar contra o repositório de verdade: `git branch -r` pode listar
+    // uma ref remota espúria chamada literalmente "origin" (sem sub-branch), que não é uma
+    // branch selecionável e precisa ser descartada, não sobrar na lista após o strip do prefixo.
+    return out.split('\n').map(s => s.trim()).filter(Boolean)
+      .filter(b => b.startsWith('origin/') && b !== 'origin/HEAD' && b !== 'origin/main')
+      .map(b => b.slice('origin/'.length))
+      .sort();
+  } catch { return []; }
+}
+
+function updateChannelFlow(args) {
+  const env = readEnv();
+  const channelArg = args.find(a => a.startsWith('--channel='))?.split('=')[1];
+  const branchArg = args.find(a => a.startsWith('--branch='))?.split('=')[1];
+
+  const persist = (channel, branch) => {
+    env.UPDATE_CHANNEL = channel;
+    if (channel === 'dev') env.UPDATE_BRANCH = branch;
+    else delete env.UPDATE_BRANCH;
+    writeEnv(env);
+    console.log(`\n✅ Canal de atualização definido para: ${channel}${channel === 'dev' ? ' (' + branch + ')' : ''}`);
+    console.log('💡 Rode "newclaw update" para aplicar.');
+  };
+
+  if (channelArg) {
+    if (!['stable', 'preview', 'dev'].includes(channelArg)) {
+      console.log('❌ Canal inválido. Use: stable, preview ou dev');
+      return;
+    }
+    if (channelArg === 'dev' && !branchArg) {
+      console.log('❌ --channel=dev requer --branch=<nome>');
+      return;
+    }
+    persist(channelArg, branchArg);
+    return;
+  }
+
+  if (!process.stdin.isTTY) {
+    console.log('❌ Sessão não-interativa. Use: newclaw update channel --channel=<stable|preview|dev> [--branch=<nome>]');
+    return;
+  }
+
+  const readline = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+  console.log('\n📡 Escolha o canal de atualização:\n');
+  console.log('  1. Stable (recomendado)');
+  console.log('  2. Preview');
+  console.log('  3. Development\n');
+  readline.question('Opção (1-3): ', (choice) => {
+    const map = { '1': 'stable', '2': 'preview', '3': 'dev' };
+    const channel = map[choice.trim()];
+    if (!channel) { console.log('❌ Opção inválida.'); readline.close(); return; }
+    if (channel !== 'dev') {
+      persist(channel, null);
+      readline.close();
+      return;
+    }
+    console.log('\n⏳ Buscando branches disponíveis...');
+    try { execSync('git fetch origin --prune', { cwd: DIR, stdio: 'ignore' }); } catch {}
+    const branches = listRemoteBranches();
+    if (branches.length === 0) {
+      console.log('❌ Nenhuma branch de desenvolvimento encontrada no remoto.');
+      readline.close();
+      return;
+    }
+    console.log('\nBranches disponíveis:\n');
+    branches.forEach((b, i) => console.log(`  ${i + 1}. ${b}`));
+    readline.question(`\nOpção (1-${branches.length}): `, (bChoice) => {
+      const idx = parseInt(bChoice.trim(), 10) - 1;
+      if (idx < 0 || idx >= branches.length) { console.log('❌ Opção inválida.'); readline.close(); return; }
+      persist('dev', branches[idx]);
+      readline.close();
+    });
+  });
+}
+
 const commands = {
   start(args) {
     const debug = args.includes('--debug');
@@ -701,15 +808,66 @@ const commands = {
   },
 
   update(args) {
+    if (args && args[0] === 'channel') {
+      return updateChannelFlow(args.slice(1));
+    }
+
     const restart = args?.includes('restart') || args?.includes('-r');
     const force = args?.includes('--force') || args?.includes('-f');
+    const checkOnly = args?.includes('--check');
+    const listBranchesOnly = args?.includes('--list-branches');
+    const channelOverride = args?.find(a => a.startsWith('--channel='))?.split('=')[1];
+    const branchOverride = args?.find(a => a.startsWith('--branch='))?.split('=')[1];
+
+    if (listBranchesOnly) {
+      try { execSync('git fetch origin --prune', { cwd: DIR, stdio: 'ignore' }); } catch {}
+      console.log(JSON.stringify({ success: true, branches: listRemoteBranches() }));
+      return;
+    }
+
+    const resolved = resolveUpdateChannel(channelOverride, branchOverride);
+    const remoteBranch = resolved.branchName;
+    const remoteRef = `origin/${remoteBranch}`;
+
+    // --check: dry-run somente-leitura (fetch + comparação de SHAs), consumido pelo
+    // Dashboard via spawn — nunca reimplementar esta lógica em TS (ver maintenance.ts).
+    if (checkOnly) {
+      try {
+        execSync(`git fetch origin ${remoteBranch}:refs/remotes/origin/${remoteBranch}`, { cwd: DIR, stdio: 'ignore' });
+        const local = execSync('git rev-parse HEAD', { cwd: DIR, encoding: 'utf-8' }).trim();
+        const remote = execSync(`git rev-parse ${remoteRef}`, { cwd: DIR, encoding: 'utf-8' }).trim();
+        const hasUpdate = local !== remote;
+        let commits = [];
+        let commitCount = 0;
+        if (hasUpdate) {
+          commitCount = parseInt(execSync(`git rev-list HEAD..${remoteRef} --count`, { cwd: DIR, encoding: 'utf-8' }).trim(), 10) || 0;
+          const raw = execSync(`git log HEAD..${remoteRef} --pretty=format:"%h|||%s|||%ar" -30`, { cwd: DIR, encoding: 'utf-8' });
+          commits = raw.split('\n').filter(Boolean).map(line => {
+            const [sha, msg, when] = line.split('|||');
+            return { sha: sha || '', msg: msg || '', when: when || '' };
+          });
+        }
+        console.log(JSON.stringify({
+          success: true, hasUpdate,
+          localSha: local.slice(0, 7), remoteSha: remote.slice(0, 7),
+          commitCount, commits,
+          channel: resolved.channel, branch: remoteBranch, warning: resolved.warning,
+        }));
+      } catch (e) {
+        console.log(JSON.stringify({ success: false, error: e.message }));
+      }
+      return;
+    }
+
     console.log('🔄 Atualizando NewClaw...');
+    console.log(`   Canal: ${resolved.channel}${resolved.channel === 'dev' ? ' (' + remoteBranch + ')' : ''}`);
+    if (resolved.warning) console.log(`⚠️  ${resolved.warning}`);
     try {
       // 1. Fetch remote
-      execSync('git fetch origin main', { cwd: DIR, stdio: 'inherit' });
+      execSync(`git fetch origin ${remoteBranch}:refs/remotes/origin/${remoteBranch}`, { cwd: DIR, stdio: 'inherit' });
       const local = execSync('git rev-parse HEAD', { cwd: DIR }).toString().trim();
-      const remote = execSync('git rev-parse origin/main', { cwd: DIR }).toString().trim();
-      
+      const remote = execSync(`git rev-parse ${remoteRef}`, { cwd: DIR }).toString().trim();
+
       if (local === remote) {
         console.log('✅ Sistema já está na versão mais recente.');
         return;
@@ -736,7 +894,7 @@ const commands = {
       // 4. Pull with rebase (cleanest merge)
       let pullOk = false;
       try {
-        execSync('git pull --rebase origin main', { cwd: DIR, stdio: 'inherit' });
+        execSync(`git pull --rebase origin ${remoteBranch}`, { cwd: DIR, stdio: 'inherit' });
         pullOk = true;
       } catch {
         // 5. Fallback: hard reset (guaranteed to work)
@@ -744,7 +902,7 @@ const commands = {
         try {
           execSync('git rebase --abort', { cwd: DIR, stdio: 'ignore' });
         } catch { /* no rebase in progress */ }
-        execSync('git reset --hard origin/main', { cwd: DIR, stdio: 'inherit' });
+        execSync(`git reset --hard ${remoteRef}`, { cwd: DIR, stdio: 'inherit' });
         pullOk = true;
       }
 
@@ -786,6 +944,15 @@ const commands = {
         fs.unlinkSync(envBackup);
         console.log('🔒 .env restaurado com sucesso');
       }
+
+      // 7.1 — Persiste o canal só depois do fetch/pull ter dado certo (não grava um
+      // canal cujo pull acabou de falhar). Lido pela próxima chamada de `newclaw update`
+      // e pelo Dashboard (via --check) através de resolveUpdateChannel().
+      const envAfterSync = readEnv();
+      envAfterSync.UPDATE_CHANNEL = resolved.channel;
+      if (resolved.channel === 'dev') envAfterSync.UPDATE_BRANCH = remoteBranch;
+      else delete envAfterSync.UPDATE_BRANCH;
+      writeEnv(envAfterSync);
 
       // 7.5 — Self-update re-exec guard (achado real: 4 updates seguidos, cada um trazendo
       // uma correção diferente para este PRÓPRIO comando, mas nenhuma correção entrava em
@@ -1265,15 +1432,25 @@ newclaw status          Mostra o status, PID, uptime e configurações
 newclaw logs -f         Visualiza os logs em tempo real
 newclaw update          Atualiza o código do GitHub e recompila o projeto
 newclaw update restart  Atualiza e reinicia automaticamente
+newclaw update channel  Escolhe o canal de atualização (Stable/Preview/Development)
 newclaw restore         Abre o assistente de restauração de backups
 newclaw uninstall       Remove o NewClaw e limpa o sistema
 newclaw help            Mostra esta tela de ajuda
+
+Canais de atualização:
+  newclaw update channel                          Menu interativo (Stable/Preview/Development)
+  newclaw update channel --channel=stable          Define o canal Stable (origin/main)
+  newclaw update channel --channel=preview         Define o canal Preview
+  newclaw update channel --channel=dev --branch=<nome>  Define uma branch de desenvolvimento
+  newclaw update --check                          Só verifica se há atualização (JSON, não muda nada)
+  newclaw update --list-branches                  Lista branches remotas disponíveis (JSON)
 
 Exemplos:
   newclaw onboard
   newclaw start --daemon --tail
   newclaw status --lang=pt-BR
   newclaw update restart
+  newclaw update channel --channel=dev --branch=experimental/artifact-pipeline-refactor
   newclaw logs -f
 
 Dicas:
@@ -1402,14 +1579,22 @@ Dicas:
   },
 };
 
-// Parse args
-const args = process.argv.slice(2);
-const command = args[0] || 'help';
-const rest = args.slice(1);
+// Exportado apenas para teste unitário isolado (resolveUpdateChannel/listRemoteBranches
+// com child_process/fs mockados) — ver src/__tests__/regression/. Não afeta a execução
+// via CLI: o dispatch abaixo só roda quando este arquivo é o entrypoint (require.main),
+// nunca quando é `require()`-ado por um test runner.
+module.exports = { resolveUpdateChannel, listRemoteBranches, commands };
 
-if (commands[command]) {
-  commands[command](rest);
-} else {
-  console.log(`❌ Unknown command: ${command}`);
-  commands.help();
+if (require.main === module) {
+  // Parse args
+  const args = process.argv.slice(2);
+  const command = args[0] || 'help';
+  const rest = args.slice(1);
+
+  if (commands[command]) {
+    commands[command](rest);
+  } else {
+    console.log(`❌ Unknown command: ${command}`);
+    commands.help();
+  }
 }
