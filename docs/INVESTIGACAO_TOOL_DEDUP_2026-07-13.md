@@ -91,4 +91,11 @@ O `DELIVERY-GUARD` (linha ~2539-2616, mecanismo irmão que roda **uma vez, incon
 
 **Veredito:** análise suficiente para considerar E pronta para implementação (baixo risco, escopo isolado, evidência direta). C precisa de uma investigação adicional focada especificamente em "como distinguir turno-com-mais-trabalho-pendente de turno-satisfeito" antes de ser implementada — não é uma mudança de uma linha, é uma mudança de comportamento da FSM que merece seu próprio ciclo de crítica.
 
-Nenhum código foi alterado nesta investigação.
+---
+
+## Status
+
+- **Fix E — implementado.** O branch de defer de `send_document` (`AgentLoop.ts`, ~linha 1802-1828) agora empurra uma entrada em `cycleHistory` com `status: 'deferred'`, e o `sentFile` do DELIVERY-GUARD (~linha 2551) passa a reconhecer `'deferred'` como já tratado, ao lado de `'success'`. Coberto por `src/__tests__/regression/S112_DeliveryGuard_DeferredSendBlindSpot.test.ts` (reproduz o comportamento pré-fix como prova de regressão, valida o fix, e preserva os 3 casos legítimos: arquivo nunca enviado, envio confirmado, envio que falhou de verdade). Suíte completa de regressão validada (113/113) após a mudança.
+- **Fix C — não implementado.** Continua exigindo seu próprio ciclo de 5 fases, focado em distinguir "turno com mais trabalho pendente" de "turno satisfeito" antes de alterar a transição `TOOL_COMPLETED` da FSM.
+
+Nenhum código foi alterado nesta investigação (fases 1-5). O Fix E foi implementado depois, como item separado já validado pela análise acima.

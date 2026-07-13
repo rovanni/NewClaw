@@ -1136,6 +1136,9 @@ export class AgentLoop {
 
         turnLog.info('turn_start', `Cycle ${iteration + 1}`, { conversationId });
 
+        // status: 'success' | 'error' (execução normal de tool, ver ~linha 1973/2299/2641) |
+        // 'deferred' (send_document adiado para pós-validação — FIX E, ~linha 1835; conta como
+        // já tratado para o DELIVERY-GUARD, ~linha 2564, mas nunca como um envio confirmado).
         const cycleHistory: Array<{ step: number; tool: string; input: string; status: string }> = [];
         let lastBestContent = '';
         let toolFailureCount = 0;
@@ -1823,6 +1826,16 @@ export class AgentLoop {
                             content: deferMsg,
                             tool_call_id: toolCall.id,
                         });
+                        // FIX E (docs/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md): este branch nunca
+                        // escrevia em cycleHistory, deixando o DELIVERY-GUARD (abaixo, no fim do
+                        // loop) cego a um defer bem-sucedido — ele recalcula `sentFile` só a
+                        // partir de cycleHistory, então via achar `wroteFile && !sentFile` e
+                        // reinjetar "[ENTREGA PENDENTE] ... USE send_document AGORA" por cima de
+                        // um arquivo que já tinha sido corretamente registrado para entrega.
+                        // status:'deferred' (não 'success') propositalmente — alinha com o que
+                        // channelContext.isDeferredArtifact já sabe, sem se passar por um envio
+                        // confirmado de verdade.
+                        cycleHistory.push({ step: stepCount, tool: 'send_document', input: JSON.stringify(toolCall.arguments ?? {}), status: 'deferred' });
                         usedToolInputs.add(inputKey);
                         continue;
                     }
@@ -2548,7 +2561,10 @@ export class AgentLoop {
         const DELIVERABLE_EXTENSIONS = ['.html', '.pdf', '.md', '.txt', '.js', '.ts', '.csv', '.json', '.docx', '.xlsx'];
         const EXECUTABLE_SCRIPT_EXTENSIONS = ['.py', '.sh'];
         const wroteFile = cycleHistory.some(h => h.tool === 'write' && h.status === 'success');
-        const sentFile = cycleHistory.some(h => (h.tool === 'send_document' || h.tool === 'send_audio' || h.tool === 'send_image') && h.status === 'success');
+        // 'deferred' conta como já tratado: um send_document adiado para pós-validação (FIX E
+        // acima) já está registrado para entrega via channelContext — sem isso, este guard
+        // reinjetaria "[ENTREGA PENDENTE]" por cima de um arquivo que já ia ser entregue.
+        const sentFile = cycleHistory.some(h => (h.tool === 'send_document' || h.tool === 'send_audio' || h.tool === 'send_image') && (h.status === 'success' || h.status === 'deferred'));
         const writtenFilePaths = cycleHistory
             .filter(h => h.tool === 'write' && h.status === 'success')
             .map(h => { try { return (JSON.parse(h.input) as Record<string, string>).path || ''; } catch { return ''; } });
