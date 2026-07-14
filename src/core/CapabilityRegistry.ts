@@ -417,6 +417,7 @@ interface CachedData {
     runtime:   { data: RuntimeCapabilities;   ts: number } | null;
     workspace: { data: WorkspaceCapabilities; ts: number } | null;
     tools:     { data: ToolCapabilities;      ts: number } | null;
+    pythonPkgs:{ data: Record<string, CapabilityStatus>; ts: number } | null;
     network:   { data: NetworkCapabilities;   ts: number } | null;
     execution: { data: ExecutionCapabilities; ts: number } | null;
 }
@@ -433,6 +434,7 @@ export class CapabilityRegistry {
         runtime:   null,
         workspace: null,
         tools:     null,
+        pythonPkgs:null,
         network:   null,
         execution: null,
     };
@@ -480,7 +482,14 @@ export class CapabilityRegistry {
                 toolCaps[name] = { available, confidence: 0.99, source: 'probe', checkedAt: caps.probeTimestamp };
             }
             this.cache.tools = { data: toolCaps, ts: Date.now() };
-            log.debug('[Registry] tools refreshed');
+
+            const pythonCaps: Record<string, CapabilityStatus> = {};
+            for (const [name, available] of Object.entries(caps.pythonPkgs || {})) {
+                pythonCaps[name] = { available, confidence: 0.99, source: 'probe', checkedAt: caps.probeTimestamp };
+            }
+            this.cache.pythonPkgs = { data: pythonCaps, ts: Date.now() };
+
+            log.debug('[Registry] tools and pythonPkgs refreshed');
         } catch (err) {
             log.warn('[Registry] tools probe failed:', String(err));
         }
@@ -583,7 +592,10 @@ export class CapabilityRegistry {
 
     invalidate(category: Category): void {
         this.cache[category] = null;
-        if (category === 'tools') EnvironmentProbe.invalidateCache();
+        if (category === 'tools') {
+            this.cache.pythonPkgs = null;
+            EnvironmentProbe.invalidateCache();
+        }
         log.debug(`[Registry] invalidated category=${category}`);
     }
 
@@ -661,6 +673,12 @@ export class CapabilityRegistry {
             if (unavailable.length > 0) lines.push(`• Indisponíveis (não usar): ${unavailable.join(', ')}`);
         }
 
+        const pyPkgs = this.cache.pythonPkgs?.data;
+        if (pyPkgs) {
+            const availablePy = Object.entries(pyPkgs).filter(([, s]) => s.available).map(([k]) => k);
+            if (availablePy.length > 0) lines.push(`• Python packages disponíveis: ${availablePy.join(', ')}`);
+        }
+
         const net = this.cache.network?.data;
         if (net) {
             lines.push(`• Rede: internet ${net.outboundHttp.available ? '✓' : '✗'} | localhost ${net.localhostHttp.available ? '✓' : '✗'}`);
@@ -684,6 +702,7 @@ export class CapabilityRegistry {
             case 'network':   await this.ensureFresh('network');   return this.resolveNetworkStatus(subkey);
             case 'execution': await this.ensureFresh('execution'); return this.resolveExecutionStatus(subkey);
             case 'tool':      await this.ensureFresh('tools');     return this.cache.tools?.data[subkey] ?? null;
+            case 'pythonPkg': await this.ensureFresh('tools');     return this.cache.pythonPkgs?.data[subkey] ?? null;
             default: log.warn(`[Registry] unknown capability key: ${key}`); return null;
         }
     }
@@ -696,6 +715,7 @@ export class CapabilityRegistry {
             case 'network':   if (!this.cache.network)   return undefined; return this.resolveNetworkStatus(subkey);
             case 'execution': if (!this.cache.execution) return undefined; return this.resolveExecutionStatus(subkey);
             case 'tool':      if (!this.cache.tools)     return undefined; return this.cache.tools.data[subkey] ?? null;
+            case 'pythonPkg': if (!this.cache.pythonPkgs) return undefined; return this.cache.pythonPkgs.data[subkey] ?? null;
             default: return null;
         }
     }

@@ -2947,19 +2947,64 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
                 .map(a => String(a.args['path'] ?? a.args['file_path'] ?? ''))
                 .filter(Boolean)
         )];
+
+        // Coleciona caminhos do workspace modificados durante a execução do goal (cobertura para exec_command/scripts)
+        const workspaceDir = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
+        const cutoff = goal.createdAt - 60_000;
+        const recentFiles: string[] = [];
+
+        const scanRecent = (dir: string, depth: number) => {
+            if (depth > 4) return;
+            try {
+                for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                    const fullPath = path.join(dir, entry.name);
+                    if (entry.isDirectory()) {
+                        scanRecent(fullPath, depth + 1);
+                    } else {
+                        try {
+                            const stat = fs.statSync(fullPath);
+                            if (stat.mtimeMs >= cutoff && stat.size > 0) {
+                                const relPath = path.relative(workspaceDir, fullPath).replace(/\\/g, '/');
+                                if (!relPath.startsWith('..') && !entry.name.startsWith('~$') && !entry.name.endsWith('.log')) {
+                                    recentFiles.push(relPath);
+                                }
+                            }
+                        } catch { /* ignorar */ }
+                    }
+                }
+            } catch { /* ignorar */ }
+        };
+        scanRecent(workspaceDir, 0);
+
+        const allWritten = [...new Set([...writtenPaths, ...recentFiles].map(p => p.replace(/\\/g, '/')))];
+        const binaryExtensions = new Set(['.pptx', '.pdf', '.zip', '.png', '.jpg', '.jpeg', '.gif', '.mp3', '.wav', '.mp4', '.avi', '.mov']);
+
         const artifactLines: string[] = [];
         const existingArtifactPaths: string[] = [];
-        for (const rawPath of writtenPaths) {
+        for (const rawPath of allWritten) {
             const { resolved: filePath } = resolvePath(rawPath);
             try {
-                const content = fs.readFileSync(filePath, 'utf-8');
-                const truncated = content.length > 2000 ? content.slice(0, 2000) + '\n...(truncado)' : content;
-                const hash = crypto.createHash('sha1').update(content).digest('hex').slice(0, 12);
-                log.info(
-                    `[VALIDATION-ARTIFACT] goal=${goal.id}` +
-                    ` path="${filePath}" chars=${content.length} hash=${hash} included=true`
-                );
-                artifactLines.push(`--- ARQUIVO: ${filePath} (${content.length} chars, hash=${hash}) ---\n${truncated}`);
+                const ext = path.extname(filePath).toLowerCase();
+                const isBinary = binaryExtensions.has(ext);
+
+                if (!isBinary) {
+                    const content = fs.readFileSync(filePath, 'utf-8');
+                    const truncated = content.length > 2000 ? content.slice(0, 2000) + '\n...(truncado)' : content;
+                    const hash = crypto.createHash('sha1').update(content).digest('hex').slice(0, 12);
+                    log.info(
+                        `[VALIDATION-ARTIFACT] goal=${goal.id}` +
+                        ` path="${filePath}" chars=${content.length} hash=${hash} included=true`
+                    );
+                    artifactLines.push(`--- ARQUIVO: ${filePath} (${content.length} chars, hash=${hash}) ---\n${truncated}`);
+                } else {
+                    const stat = fs.statSync(filePath);
+                    const hash = crypto.createHash('sha1').update(filePath + stat.mtimeMs).digest('hex').slice(0, 12);
+                    log.info(
+                        `[VALIDATION-ARTIFACT] goal=${goal.id}` +
+                        ` path="${filePath}" size=${stat.size}B (binário) hash=${hash} included=true`
+                    );
+                    artifactLines.push(`--- ARQUIVO BINÁRIO: ${filePath} (${stat.size} bytes, hash=${hash}) ---`);
+                }
                 existingArtifactPaths.push(rawPath); // formato bruto — mesma convenção de toolArgs.file_path/sentArtifacts
             } catch {
                 log.warn(`[VALIDATION-ARTIFACT] goal=${goal.id} path="${filePath}" included=false readable=false`);
