@@ -17,6 +17,11 @@ import { CONTENT_STUB_PATTERNS } from '../shared/contentStubPatterns';
 
 const log = createLogger('WriteTool');
 
+const CODE_EXTENSIONS = new Set([
+    '.py', '.ts', '.js', '.jsx', '.tsx', '.sh', '.ps1',
+    '.go', '.rs', '.java', '.cs', '.c', '.cpp', '.h'
+]);
+
 export class WriteTool implements ToolExecutor {
     name = 'write';
     description = 'Criar ou sobrescrever um arquivo. Cria diretórios pais automaticamente. Caminhos relativos são resolvidos a partir do workspace.';
@@ -85,7 +90,12 @@ export class WriteTool implements ToolExecutor {
         // Sem este gate, o GoalExecutionLoop aceita o write como "sucesso" e gasta
         // todo o replanBudget tentando converter um arquivo inexistente (exec_command,
         // ssh_exec, Marp, etc.) antes de perceber que o artefato é inválido.
-        const stubMatch = CONTENT_STUB_PATTERNS.find(p => p.test(content));
+        // Código-fonte (scripts .py, .js, .ts, etc.) é isento da validação de stubs via regex
+        // para evitar falso-positivos em variáveis, docstrings ou comentários legítimos
+        // (ex: coleções "placeholders" do PPTX).
+        const ext = path.extname(rawPath).toLowerCase();
+        const isCodeFile = CODE_EXTENSIONS.has(ext);
+        const stubMatch = isCodeFile ? null : CONTENT_STUB_PATTERNS.find(p => p.test(content));
         if (stubMatch) {
             log.warn(`[CONTENT-STUB-GATE] path="${rawPath}" chars=${content.length} pattern="${stubMatch.source.slice(0, 60)}"`);
             return {

@@ -1478,7 +1478,7 @@ export class AgentLoop {
             // MIN_RATIO_BASELINE prevents ratio guard from firing on short initial contexts.
             const MIN_RATIO_BASELINE = 4_000;   // chars; below this, only absolute limit applies
             const CONTEXT_RATIO_LIMIT = 2.5;    // 150 % growth cap (when baseline is substantial)
-            const CONTEXT_ABSOLUTE_DELTA = 16_000; // ~4 000 tokens of added content
+            const CONTEXT_ABSOLUTE_DELTA = 32_000; // ~8 000 tokens of added content
             const currentContextChars = getContextChars();
             const contextGrowthRatio = initialContextChars > 0 ? currentContextChars / initialContextChars : 1;
             const useRatioGuard = initialContextChars >= MIN_RATIO_BASELINE;

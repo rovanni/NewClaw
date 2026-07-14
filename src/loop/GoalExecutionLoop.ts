@@ -663,7 +663,17 @@ export class GoalExecutionLoop {
                         ` reason=only_pending_is_verified_send_document` +
                         ` artifacts="${artifactList}"`
                     );
-                    validation = { achieved: true, summary: 'Arquivo(s) já existente(s) no workspace, pronto(s) para envio.' };
+                    const allAlreadySent = pendingSendSteps.every(s => {
+                        const fp = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
+                        return fp ? sentArtifacts.has(fp) : false;
+                    });
+                    const userMessage = allAlreadySent
+                        ? 'O arquivo solicitado já foi gerado e enviado anteriormente.'
+                        : 'Consegui gerar o arquivo solicitado com sucesso! Ele está pronto e será enviado em seguida.';
+                    validation = {
+                        achieved: true,
+                        summary: userMessage
+                    };
                 } else {
                     validation = await this.validateGoalCompletion(currentGoal, activeMilestone, state);
                 }
