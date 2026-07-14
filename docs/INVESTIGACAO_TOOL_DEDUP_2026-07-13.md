@@ -499,10 +499,31 @@ decidir).
   confirma que `FINAL_READY` continua uma transição válida da FSM a partir de `THINKING`/
   `EXECUTING_TOOL`.
 - Suíte completa de regressão: **114/114 passaram**. `tsc --noEmit` limpo.
-- **Não validado em ambiente real** (limitação explícita): exercitar isso de ponta a ponta exige
-  um LLM real configurado numa instância NewClaw ativa (Ollama/provider + canal), que não estava
-  disponível de forma segura nesta sessão. Recomendado testar na instância real, após deploy, com
-  os dois prompts que a própria investigação usou como critério: "gere um PDF e envie" (confirmar
-  que não há mais bloqueio repetido de `send_document` pelo TOOL-DEDUP nos logs) e "gere um PDF,
-  envie e depois faça um resumo" (confirmar que o resumo ainda é feito — a tarefa composta não é
-  cortada cedo).
+- **Ambiente real — CONFIRMADO (13-14/07/2026, Telegram, PC_Newclaw_bot).** Duas rodadas de
+  teste na instância real do usuário, rastreadas por horário em
+  `C:\Users\lucia\NewClaw\logs\newclaw-audit.log`:
+  - **1ª rodada (23:10-23:29)**: os dois prompts-critério não chegaram a exercitar o branch de
+    defer. `"Gere um PDF e envie"` travou na conversão HTML→PDF (causa não relacionada).
+    `"Gere um PDF, envie e depois faça um resumo"` teve sucesso, mas por dois caminhos que não
+    passam pelo defer: DELIVERY-GUARD chamando `send_document` direto via
+    `proactiveRecovery.execute()`, e um step final com `toolName: 'send_document'` explícito
+    despachado direto pelo `GoalExecutionLoop`. Nenhuma ocorrência de `[AGENTLOOP-SEND]` no log
+    inteiro do dia.
+  - **2ª rodada (23:39-23:58, prompt de aula + pedido de PPTX)**: o branch de defer disparou
+    **duas vezes de verdade**, nos dois ramos do mecanismo:
+    - `23:45:37` — `send_document` (`seguranca_redes.pptx`) interceptado e diferido
+      (`[AGENTLOOP-SEND] deferred=true`). Log imediatamente seguinte:
+      `[TASK-FSM] Terminal batch done → task DONE, returning result` e
+      `[AGENT-FSM] THINKING --FINAL_READY--> DONE` — **sem nenhuma nova inferência ao LLM**.
+      `hasPendingWork=false` acionou o short-circuit (reaproveitando `terminalBatchResult`)
+      exatamente como projetado.
+    - `23:46:18` — mesmo arquivo, um sub-turno diferente (após o `GoalExecutionLoop` reinjetar o
+      step de entrega validada): `send_document` deferido de novo, mas desta vez o log mostra
+      `[COGNITION] Step 4...` e `[AGENT-FSM] THINKING --LLM_REQUEST--> THINKING` **depois** do
+      defer — `hasPendingWork=true`, o mecanismo corretamente NÃO cortou, e o modelo seguiu
+      raciocinando até produzir uma resposta final de texto.
+    - Em nenhum dos dois casos houve bloqueio do TOOL-DEDUP em `send_document` (o único bloqueio
+      de dedup nesta janela foi para `exec_command`, sem relação com esta correção).
+  - **Conclusão**: os dois ramos do mecanismo (short-circuit determinístico e reforço de
+    autoridade) foram observados disparando corretamente com LLM real, sem mock, em produção.
+    Critérios de aceitação da investigação confirmados na prática, não só em teste unitário.
