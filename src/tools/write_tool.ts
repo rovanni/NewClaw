@@ -58,6 +58,29 @@ export class WriteTool implements ToolExecutor {
             return { success: false, output: '', error: selfErr };
         }
 
+        // EMPTY-CONTENT-GATE: detecta tool calls corrompidas onde o provider truncou o
+        // argumento `content` (confirmado ao vivo em 14/07/2026: glm-5.2:cloud gerou 6950
+        // eval tokens em ~98s mas o content da tool call chegou como "" — 0 chars — o modelo
+        // sofreu truncamento silencioso no streaming). Sem este gate, o código cai no
+        // DESTRUCTIVE-WRITE-BLOCK com mensagem sobre "arquivo de referência" que confunde o
+        // LLM (ele sabe que não leu como referência) e gera loop de retentativas inúteis.
+        if ((!content || content.trim().length === 0) && fs.existsSync(filePath)) {
+            log.warn(
+                `[EMPTY-CONTENT-GATE] path="${rawPath}" resolved="${filePath}"` +
+                ` existing_size=${fs.statSync(filePath).size}` +
+                ` reason=content_empty_or_whitespace`
+            );
+            return {
+                success: false,
+                output: '',
+                error:
+                    `[EMPTY-CONTENT] O conteúdo chegou vazio (0 chars) — provavelmente truncado pelo provider durante o streaming. ` +
+                    `O arquivo "${path.basename(filePath)}" já existe (${fs.statSync(filePath).size} bytes) e NÃO foi alterado. ` +
+                    `SOLUÇÕES: (1) Tente novamente gerando conteúdo MAIS CURTO, ou (2) divida em múltiplas chamadas write, ` +
+                    `ou (3) use exec_command com um script que gere o conteúdo diretamente.`,
+            };
+        }
+
         // CONTENT-STUB-GATE: falha rápido quando o conteúdo é um placeholder.
         // Sem este gate, o GoalExecutionLoop aceita o write como "sucesso" e gasta
         // todo o replanBudget tentando converter um arquivo inexistente (exec_command,

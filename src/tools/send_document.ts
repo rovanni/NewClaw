@@ -58,6 +58,36 @@ export class SendDocumentTool implements ToolExecutor {
         if (pathError) return { success: false, output: '', error: pathError };
 
         if (!fs.existsSync(resolvedPath)) {
+            // FUZZY-MATCH: quando o LLM alucina o nome do arquivo (confirmado ao vivo em
+            // 14/07/2026: modelo pediu "seguranca_redes_senac_final.pptx" mas o arquivo real
+            // era "seguranca_redes_senac.pptx" — 2 falhas consecutivas antes do GoalLoop
+            // resolver via list_workspace+exec_command), tenta encontrar candidatos similares
+            // no workspace. Busca arquivos com mesma extensão que compartilhem substrings
+            // significativas do nome pedido. Auto-resolve se houver exatamente 1 candidato;
+            // lista todos se houver múltiplos — o LLM escolhe na próxima tentativa.
+            const candidates = this.findSimilarFiles(resolvedPath, workspaceDir);
+            if (candidates.length === 1) {
+                const match = candidates[0];
+                log.info(`[FUZZY-MATCH] requested="${file_path}" auto_resolved="${match}" reason=single_candidate`);
+                // Auto-resolve: usa o candidato único
+                if (this.channel === 'discord') {
+                    return this.sendToDiscord(match, this.chatId, caption, filename);
+                } else if (this.channel === 'web') {
+                    return this.sendToWeb(match, this.chatId, caption, filename);
+                } else {
+                    return this.sendToTelegram(match, this.chatId, caption, filename);
+                }
+            } else if (candidates.length > 1) {
+                const list = candidates.map(c => path.basename(c)).join(', ');
+                log.info(`[FUZZY-MATCH] requested="${file_path}" candidates=${candidates.length} files="${list}"`);
+                return {
+                    success: false,
+                    output: '',
+                    error: `Arquivo não encontrado: ${path.basename(resolvedPath)}. ` +
+                        `Encontrei ${candidates.length} arquivos similares no workspace: ${list}. ` +
+                        `Especifique o nome exato.`
+                };
+            }
             return { success: false, output: '', error: `Arquivo não encontrado: ${resolvedPath}` };
         }
 
@@ -137,5 +167,46 @@ export class SendDocumentTool implements ToolExecutor {
         } catch (error) {
             return { success: false, output: '', error: `Erro Telegram: ${errorMessage(error)}` };
         }
+    }
+
+    /**
+     * Busca arquivos com nome similar no workspace quando o nome exato não existe.
+     * Algoritmo: mesma extensão + pelo menos um token significativo (≥5 chars) em comum.
+     * Busca no workspace root e no subdiretório tmp/.
+     */
+    private findSimilarFiles(requestedPath: string, workspaceDir: string): string[] {
+        const ext = path.extname(requestedPath).toLowerCase();
+        if (!ext) return [];
+
+        const basename = path.basename(requestedPath, ext).toLowerCase();
+        // Divide o nome em tokens significativos (separados por _, - ou espaço)
+        const tokens = basename.split(/[_\-\s]+/).filter(t => t.length >= 5);
+        if (tokens.length === 0) return [];
+
+        const candidates: string[] = [];
+        const searchDirs = [workspaceDir];
+        const tmpDir = path.join(workspaceDir, 'tmp');
+        if (fs.existsSync(tmpDir)) searchDirs.push(tmpDir);
+
+        for (const dir of searchDirs) {
+            try {
+                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                    if (!entry.isFile()) continue;
+                    if (path.extname(entry.name).toLowerCase() !== ext) continue;
+
+                    const candidateBase = path.basename(entry.name, ext).toLowerCase();
+                    // O candidato compartilha pelo menos 1 token significativo?
+                    const hasSharedToken = tokens.some(token => candidateBase.includes(token));
+                    if (hasSharedToken) {
+                        candidates.push(path.join(dir, entry.name));
+                    }
+                }
+            } catch {
+                // Diretório inacessível — ignora silenciosamente
+            }
+        }
+
+        return candidates;
     }
 }

@@ -27,7 +27,18 @@ export const CONTENT_STUB_PATTERNS: RegExp[] = [
     /será\s+preenchido\s+(depois|posteriormente|pelo\s+(modelo|agente))/i,
     /\[escrever\s+aqui\]|\[preencher\s+aqui\]|\[adicionar\s+aqui\]/i,
     /\[conteúdo\s+da\s+(aula|disciplina|curso|matéria)\]/i,
-    /placeholder|PLACEHOLDER/,                          // literal "placeholder"
+    // Padrão original era /placeholder|PLACEHOLDER/ — bloqueava qualquer conteúdo contendo a
+    // palavra em qualquer contexto, incluindo código-fonte legítimo (variáveis Python, template
+    // strings, docstrings). Reproduzido ao vivo (14/07/2026): um script Python de 2478 chars para
+    // gerar PPTX foi bloqueado porque continha "placeholder" como texto de slide em template
+    // (ex: slide.placeholders[1].text = "..."). Agora exige contexto de meta-descrição:
+    // - Entre colchetes: [placeholder para conteúdo]
+    // - Tag XML-style: <placeholder> ou <PLACEHOLDER/>
+    // - Linha inteira é só "placeholder" (com espaço/pontuação ao redor)
+    // - ALL_CAPS snake_case com PLACEHOLDER (ex: PLACEHOLDER_GERADO_EM_RUNTIME) — convenção
+    //   de constante/template que nunca aparece em prosa portuguesa legítima
+    // Código-fonte lowercase (variáveis Python, strings, imports) nunca dispara.
+    /\[.*placeholder.*\]|<\/?placeholder\s*\/?>|^\s*placeholder\s*[.!?]?\s*$|\bPLACEHOLDER(?:_[A-Z0-9]+)+\b/im,
     // Reproduzido ao vivo (VPS, 01/07): "[Conteúdo do resumo gerado a partir do texto lido no
     // step_1]" escapava de todos os padrões acima (nenhum casava "gerado a partir de/do").
     /\[.*?gerado\s+a\s+partir/i,                        // "[X gerado a partir de/do Y]"
