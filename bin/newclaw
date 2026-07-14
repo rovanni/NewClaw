@@ -371,7 +371,7 @@ function updateChannelFlow(args) {
   console.log('\n📡 Escolha o canal de atualização:\n');
   console.log('  1. Stable (recomendado)');
   console.log('  2. Preview');
-  console.log('  3. Development\n');
+  console.log('  3. Development (avançado)\n');
   readline.question('Opção (1-3): ', (choice) => {
     const map = { '1': 'stable', '2': 'preview', '3': 'dev' };
     const channel = map[choice.trim()];

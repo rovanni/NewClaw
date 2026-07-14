@@ -17,7 +17,7 @@ export function render(container) {
         <div class="cfg-details-body">
           <p style="font-size:.85rem;color:var(--text-soft);margin-top:0">${t('update_channel_desc')}</p>
 
-          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
+          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:4px">
             <label style="display:flex;align-items:baseline;gap:8px;cursor:pointer">
               <input type="radio" name="upd-channel" id="upd-channel-stable" value="stable" checked>
               <span>${t('update_channel_stable')}</span>
@@ -26,18 +26,29 @@ export function render(container) {
               <input type="radio" name="upd-channel" id="upd-channel-preview" value="preview">
               <span>${t('update_channel_preview')}</span>
             </label>
-            <label style="display:flex;align-items:baseline;gap:8px;cursor:pointer">
-              <input type="radio" name="upd-channel" id="upd-channel-dev" value="dev">
-              <span>${t('update_channel_dev')}</span>
-            </label>
           </div>
 
-          <div id="upd-branch-wrap" style="display:none;margin-bottom:12px">
-            <label style="font-size:.82rem;color:var(--text-soft);display:block;margin-bottom:4px">
-              ${t('update_channel_branch_label')}
-            </label>
-            <select id="upd-branch-select" class="cfg-input" style="max-width:420px"></select>
-          </div>
+          <!-- Development fica escondido atrás de "Opções avançadas": é a única opção que
+               exige saber o nome de uma branch do Git — não faz sentido pra usuário comum,
+               que pensa em "estável / novidades antecipadas / desenvolvimento", não em
+               branches. Preview nunca pede branch (resolve sozinho pra origin/preview). -->
+          <details id="upd-advanced" style="margin:4px 0 12px">
+            <summary style="cursor:pointer;font-size:.85rem;color:var(--text-soft);user-select:none;list-style:none">
+              ${t('update_channel_advanced_summary')}
+            </summary>
+            <div style="padding:10px 0 0 4px">
+              <label style="display:flex;align-items:baseline;gap:8px;cursor:pointer;margin-bottom:8px">
+                <input type="radio" name="upd-channel" id="upd-channel-dev" value="dev">
+                <span>${t('update_channel_dev')}</span>
+              </label>
+              <div id="upd-branch-wrap" style="display:none;margin-bottom:4px">
+                <label style="font-size:.82rem;color:var(--text-soft);display:block;margin-bottom:4px">
+                  ${t('update_channel_branch_label')}
+                </label>
+                <select id="upd-branch-select" class="cfg-input" style="max-width:420px"></select>
+              </div>
+            </div>
+          </details>
 
           <div id="upd-channel-current" style="font-size:.82rem;color:var(--text-soft)"></div>
         </div>
@@ -103,6 +114,11 @@ export function render(container) {
         0%,100% { opacity:1; transform:scale(1); }
         50%      { opacity:.3; transform:scale(.7); }
       }
+      /* Suprime o marcador nativo de <summary> (varia por navegador — list-style sozinho só
+         funciona no Firefox) para não duplicar com o "▸" já presente no texto traduzido. */
+      #upd-advanced summary { list-style:none; }
+      #upd-advanced summary::-webkit-details-marker { display:none; }
+      #upd-advanced summary::marker { content:''; }
     </style>`;
 
   const statusEl        = document.getElementById('upd-status');
@@ -115,6 +131,7 @@ export function render(container) {
   const countdownNum     = document.getElementById('upd-countdown-num');
   const countdownBar     = document.getElementById('upd-countdown-bar');
   const channelRadios    = Array.from(document.querySelectorAll('input[name="upd-channel"]'));
+  const advancedDetails  = document.getElementById('upd-advanced');
   const branchWrap       = document.getElementById('upd-branch-wrap');
   const branchSelect     = document.getElementById('upd-branch-select');
   const channelCurrentEl = document.getElementById('upd-channel-current');
@@ -227,6 +244,9 @@ export function render(container) {
         const radio = channelRadios.find(rd => rd.value === selectedChannel);
         if (radio) radio.checked = true;
         if (selectedChannel === 'dev') {
+          // Sem isso, quem já usa Development veria o rádio marcado escondido dentro de um
+          // <details> fechado — a UI pareceria "esquecer" a própria seleção atual do usuário.
+          advancedDetails.open = true;
           branchWrap.style.display = 'block';
           await ensureBranchesLoaded();
         }
