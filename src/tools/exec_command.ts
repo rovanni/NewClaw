@@ -8,6 +8,7 @@
 
 import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
 import { exec } from 'child_process';
+import fs from 'fs';
 import { resolveHost, isDestructive } from './server_config';
 import path from 'path';
 import { errorMessage } from '../shared/errors';
@@ -363,6 +364,49 @@ export class ExecCommandTool implements ToolExecutor {
         const execOptions: { timeout: number; cwd?: string; windowsHide: boolean; env: NodeJS.ProcessEnv } =
             { timeout, windowsHide: true, env: { ...process.env } };
         execOptions.cwd = effectiveWorkdir;
+
+        // Windows Environment and CWD Normalization:
+        // PM2/daemon environments on Windows often strip or mismatch the casing of critical system env variables
+        // (like SystemRoot, Path, ComSpec). If SystemRoot or PATH is missing or case-mismatched, Node's child_process
+        // fails to spawn the shell, throwing "spawn C:\WINDOWS\system32\cmd.exe ENOENT" even though cmd.exe exists.
+        if (process.platform === 'win32') {
+            const envKeys = Object.keys(execOptions.env);
+            
+            // 1. Force PATH to be all-caps 'PATH' (plain objects are case-sensitive, unlike process.env)
+            const pathKey = envKeys.find(k => k.toLowerCase() === 'path');
+            if (pathKey && pathKey !== 'PATH') {
+                execOptions.env.PATH = execOptions.env[pathKey];
+                delete execOptions.env[pathKey];
+            }
+            
+            // 2. Ensure SystemRoot is present (needed for Windows process initialization)
+            if (!execOptions.env.SystemRoot) {
+                const sysRootKey = envKeys.find(k => k.toLowerCase() === 'systemroot');
+                execOptions.env.SystemRoot = sysRootKey ? execOptions.env[sysRootKey] : (process.env.SystemRoot || 'C:\\Windows');
+            }
+            
+            // 3. Ensure SystemDrive is present
+            if (!execOptions.env.SystemDrive) {
+                const sysDriveKey = envKeys.find(k => k.toLowerCase() === 'systemdrive');
+                execOptions.env.SystemDrive = sysDriveKey ? execOptions.env[sysDriveKey] : (process.env.SystemDrive || 'C:');
+            }
+
+            // 4. Ensure ComSpec is present
+            if (!execOptions.env.ComSpec) {
+                const comSpecKey = envKeys.find(k => k.toLowerCase() === 'comspec');
+                execOptions.env.ComSpec = comSpecKey ? execOptions.env[comSpecKey] : (process.env.ComSpec || 'C:\\Windows\\system32\\cmd.exe');
+            }
+        }
+
+        // Ensure the working directory exists before spawning to prevent ENOENT
+        if (execOptions.cwd && !fs.existsSync(execOptions.cwd)) {
+            try {
+                fs.mkdirSync(execOptions.cwd, { recursive: true });
+            } catch {
+                log.warn(`Failed to create workdir ${execOptions.cwd}, falling back to process.cwd()`);
+                execOptions.cwd = process.cwd();
+            }
+        }
 
         // Scripts Python gerados pelo LLM usam print() com emojis/box-drawing (✅, 📊, ─...) por
         // hábito estilístico — o modelo foi treinado majoritariamente em ambientes Linux/macOS,
