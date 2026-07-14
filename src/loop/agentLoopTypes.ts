@@ -55,6 +55,24 @@ export interface ChannelContext {
      *  duplicado ao usuário a cada tentativa (evidência: 2026-07-05, goal_1783269002590_inaml —
      *  4 áudios enviados em sequência pelo mesmo pedido). */
     isAudioAlreadySent?: () => boolean;
+    /** Investigação TOOL-DEDUP (docs/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md, Fase 5): quando
+     *  presente e retorna `false`, o branch de defer de `send_document` no AgentLoop encerra o
+     *  sub-turno imediatamente (`FINAL_READY`) em vez de aguardar uma nova inferência do LLM —
+     *  o loop de repetição deixa de ser estruturalmente possível para o caso comum ("gere e
+     *  envie", sem mais nada pendente), em vez de só ficar menos provável. GoalExecutionLoop é
+     *  quem decide isso (é o dono de `currentPlan`), lendo se existe algum outro `PlanStep` com
+     *  `status: 'pending'` além do atual.
+     *
+     *  ATENÇÃO: só retorna `false` com segurança quando `currentPlan.length > 1` (decomposição
+     *  real em múltiplos steps — o padrão que o próprio GoalPlanner recomenda: gerar → entregar
+     *  como steps separados). Um plano monolítico de 1 step (ex.: `fallbackPlan()` em
+     *  GoalPlanner.ts, usado quando o planejamento via LLM falha) pode embutir "gere, envie e
+     *  depois resuma" inteiro na descrição de um único step "agentloop" — nesse caso não há
+     *  como saber estruturalmente que ainda falta o resumo, então este getter deve retornar
+     *  `true` (conservador: não corta a tarefa, deixa o LLM decidir) em vez de arriscar um falso
+     *  negativo. Ausente (undefined) tem o mesmo efeito de `true` — comportamento atual
+     *  preservado por quem não implementar este getter. */
+    hasPendingPlanWorkBeyondDelivery?: () => boolean;
     /**
      * Janela pequena e recente de turnos REAIS (role user/assistant, sem tool_call/tool_result/
      * checkpoint) da MESMA sessão, sem incluir a mensagem atual — usada por

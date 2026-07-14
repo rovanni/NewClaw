@@ -1744,6 +1744,20 @@ export class GoalExecutionLoop {
                         }
                     },
                     isAudioAlreadySent: () => isAudioAlreadySent?.() ?? false,
+                    // Investigação TOOL-DEDUP (docs/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md,
+                    // Fase 5): GoalExecutionLoop é o dono de currentPlan, então é quem decide se
+                    // ainda há trabalho planejado além da entrega que está sendo diferida.
+                    // Conservador por design: só autoriza o short-circuit (retorna false) quando
+                    // há decomposição real em múltiplos steps (currentPlan.length > 1 — o padrão
+                    // que o próprio GoalPlanner recomenda: gerar → entregar em steps separados) E
+                    // nenhum outro step está com status 'pending'. Um plano monolítico de 1 step
+                    // (ex.: fallbackPlan() em GoalPlanner.ts) pode embutir "gere, envie e depois
+                    // resuma" inteiro na descrição de um único step — nesse caso não há sinal
+                    // estrutural confiável, então retorna true (não corta, deixa o LLM decidir).
+                    hasPendingPlanWorkBeyondDelivery: () => {
+                        if (goal.currentPlan.length <= 1) return true;
+                        return goal.currentPlan.some(s => s.id !== step.id && s.status === 'pending');
+                    },
                 };
                 const response = await this.agentLoop.process(
                     goal.conversationId,

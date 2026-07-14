@@ -1837,6 +1837,32 @@ export class AgentLoop {
                         // confirmado de verdade.
                         cycleHistory.push({ step: stepCount, tool: 'send_document', input: JSON.stringify(toolCall.arguments ?? {}), status: 'deferred' });
                         usedToolInputs.add(inputKey);
+
+                        // Investigação TOOL-DEDUP, Fases 3-5 (docs/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md):
+                        // causa raiz verificada é uma assimetria de autoridade — "não reenvie" chega
+                        // como mensagem tool (baixa autoridade, dados passivos por design anti-injeção),
+                        // enquanto o prompt de sistema manda "write + send_document" de forma obrigatória
+                        // (alta autoridade). O DELIVERY-GUARD já usa role:'system' pro caso simétrico
+                        // ("ainda falta entregar") — replicado aqui pro caso oposto.
+                        const hasPendingWork = channelContext.hasPendingPlanWorkBeyondDelivery?.() ?? true;
+                        if (!hasPendingWork) {
+                            // Sem mais nada pendente no plano (GoalExecutionLoop verificou): reusa o
+                            // mesmo mecanismo terminalBatchResult que o caminho real de terminalTools
+                            // (abaixo) já usa — processa o resto da batch normalmente (ex: mais um
+                            // toolCall no mesmo response), mas o turno encerra em FINAL_READY sem uma
+                            // nova inferência ao LLM. O loop de repetição deixa de ser estruturalmente
+                            // possível para este caso, não apenas menos provável.
+                            terminalBatchResult = deferMsg;
+                        } else {
+                            // Ainda há trabalho pendente (ou contexto sem GoalExecutionLoop, onde o
+                            // getter não existe — default conservador ao comportamento atual): reforça
+                            // a autoridade da instrução, já que o modelo ainda vai raciocinar mais uma
+                            // vez sobre o que fazer a seguir.
+                            loopMessages.push({
+                                role: 'system',
+                                content: `[ESTADO] A entrega de "${filePath}" já foi registrada e será concluída após validação — NÃO chame send_document novamente para este arquivo. Continue apenas com o trabalho ainda pendente.`,
+                            });
+                        }
                         continue;
                     }
 
