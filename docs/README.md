@@ -9,6 +9,7 @@
 - [ROADMAP.md](./ROADMAP.md) — Roadmap estratégico de evolução do projeto
 - [walkthrough.md](./walkthrough.md) — Walkthrough da evolução da memória cognitiva
 - [plano-correcao-bugs.md](./plano-correcao-bugs.md) — Plano de correção de bugs
+- [DIRETRIZ_ARQUITETURA_2026-07-13.md](./DIRETRIZ_ARQUITETURA_2026-07-13.md) — Diretriz permanente de arquitetura
 
 ## Skills
 
@@ -30,5 +31,6 @@
 
 ## Investigações & Melhorias
 
+- [AI_ARTIFACTS.md](./AI_ARTIFACTS.md) — Padronização de organização de artefatos de IA e relatórios
 - [issues/](./issues/) — Issues técnicos documentados
 - [melhorias/](./melhorias/) — Análises de performance e melhorias
