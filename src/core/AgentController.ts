@@ -79,6 +79,8 @@ import {
     refreshWorkspaceIndex,
 } from './agentMediaHandlers';
 
+import { CapabilityRegistry } from './CapabilityRegistry';
+
 export type { NewClawConfig };
 
 const log = createLogger('AgentController');
@@ -482,6 +484,11 @@ export class AgentController {
         this.lifecycle.registerService('eventLoopMonitor', () => getEventLoopMonitor().stop());
 
         this.registerSkills();
+
+        // Aquece o CapabilityRegistry em background — agora com ferramentas registradas!
+        CapabilityRegistry.getInstance().bootstrap().catch(err => {
+            log.warn('[AgentController] CapabilityRegistry bootstrap failed:', String(err));
+        });
     }
 
     async start(): Promise<void> {

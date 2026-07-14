@@ -10,6 +10,14 @@
 - [walkthrough.md](./walkthrough.md) — Walkthrough da evolução da memória cognitiva
 - [plano-correcao-bugs.md](./plano-correcao-bugs.md) — Plano de correção de bugs
 - [DIRETRIZ_ARQUITETURA_2026-07-13.md](./DIRETRIZ_ARQUITETURA_2026-07-13.md) — Diretriz permanente de arquitetura
+- [architecture/provider_pipeline_transport.md](./architecture/provider_pipeline_transport.md) — Arquitetura de transporte entre Tool Layer e Providers
+
+## Architecture Decisions (ADR)
+
+Os ADRs registram decisões arquiteturais permanentes e suas motivações (o *porquê*), enquanto os documentos de arquitetura descrevem a implementação (o *como*) e os testes garantem sua conformidade contínua (a *validação*).
+
+*   [Decisões Arquiteturais (ADRs)](./architecture/decisions/) — Histórico de registros de decisões arquiteturais do projeto.
+    - [ADR 0001 — Sanitização do Histórico e Integridade do Transporte](./architecture/decisions/0001-provider-pipeline-transport-integrity.md) — Motivação para a sanitização estrutural e conformidade de hashes.
 
 ## Skills
 

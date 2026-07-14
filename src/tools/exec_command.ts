@@ -369,41 +369,59 @@ export class ExecCommandTool implements ToolExecutor {
         // PM2/daemon environments on Windows often strip or mismatch the casing of critical system env variables
         // (like SystemRoot, Path, ComSpec). If SystemRoot or PATH is missing or case-mismatched, Node's child_process
         // fails to spawn the shell, throwing "spawn C:\WINDOWS\system32\cmd.exe ENOENT" even though cmd.exe exists.
+        // We normalize case-sensitive duplicates on Windows to avoid CreateProcess issues.
         if (process.platform === 'win32') {
-            const envKeys = Object.keys(execOptions.env);
+            const cleanEnv: Record<string, string | undefined> = {};
+            const keysToNormalize = {
+                path: 'PATH',
+                systemroot: 'SystemRoot',
+                systemdrive: 'SystemDrive',
+                comspec: 'ComSpec'
+            };
             
-            // 1. Force PATH to be all-caps 'PATH' (plain objects are case-sensitive, unlike process.env)
-            const pathKey = envKeys.find(k => k.toLowerCase() === 'path');
-            if (pathKey && pathKey !== 'PATH') {
-                execOptions.env.PATH = execOptions.env[pathKey];
-                delete execOptions.env[pathKey];
+            for (const key of Object.keys(execOptions.env)) {
+                const lowerKey = key.toLowerCase();
+                const normalizedKey = keysToNormalize[lowerKey as keyof typeof keysToNormalize];
+                const value = execOptions.env[key];
+                
+                if (normalizedKey) {
+                    if (!cleanEnv[normalizedKey] || key === normalizedKey) {
+                        cleanEnv[normalizedKey] = value;
+                    }
+                } else {
+                    const existingKey = Object.keys(cleanEnv).find(k => k.toLowerCase() === lowerKey);
+                    if (!existingKey || key === existingKey) {
+                        if (existingKey) delete cleanEnv[existingKey];
+                        cleanEnv[key] = value;
+                    }
+                }
             }
             
-            // 2. Ensure SystemRoot is present (needed for Windows process initialization)
-            if (!execOptions.env.SystemRoot) {
-                const sysRootKey = envKeys.find(k => k.toLowerCase() === 'systemroot');
-                execOptions.env.SystemRoot = sysRootKey ? execOptions.env[sysRootKey] : (process.env.SystemRoot || 'C:\\Windows');
-            }
+            if (!cleanEnv.PATH) cleanEnv.PATH = process.env.PATH || '';
+            if (!cleanEnv.SystemRoot) cleanEnv.SystemRoot = process.env.SystemRoot || 'C:\\Windows';
+            if (!cleanEnv.SystemDrive) cleanEnv.SystemDrive = process.env.SystemDrive || 'C:';
+            if (!cleanEnv.ComSpec) cleanEnv.ComSpec = process.env.ComSpec || 'C:\\Windows\\system32\\cmd.exe';
             
-            // 3. Ensure SystemDrive is present
-            if (!execOptions.env.SystemDrive) {
-                const sysDriveKey = envKeys.find(k => k.toLowerCase() === 'systemdrive');
-                execOptions.env.SystemDrive = sysDriveKey ? execOptions.env[sysDriveKey] : (process.env.SystemDrive || 'C:');
-            }
-
-            // 4. Ensure ComSpec is present
-            if (!execOptions.env.ComSpec) {
-                const comSpecKey = envKeys.find(k => k.toLowerCase() === 'comspec');
-                execOptions.env.ComSpec = comSpecKey ? execOptions.env[comSpecKey] : (process.env.ComSpec || 'C:\\Windows\\system32\\cmd.exe');
-            }
+            execOptions.env = cleanEnv as NodeJS.ProcessEnv;
         }
 
-        // Ensure the working directory exists before spawning to prevent ENOENT
-        if (execOptions.cwd && !fs.existsSync(execOptions.cwd)) {
+        // Ensure the working directory exists and is a directory before spawning to prevent ENOENT
+        let cwdIsValid = false;
+        if (execOptions.cwd) {
+            try {
+                const stat = fs.statSync(execOptions.cwd);
+                if (stat.isDirectory()) {
+                    cwdIsValid = true;
+                }
+            } catch {
+                // directory does not exist
+            }
+        }
+        if (execOptions.cwd && !cwdIsValid) {
             try {
                 fs.mkdirSync(execOptions.cwd, { recursive: true });
             } catch {
-                log.warn(`Failed to create workdir ${execOptions.cwd}, falling back to process.cwd()`);
+                log.warn(`Failed to create/validate workdir ${execOptions.cwd}, falling back to process.cwd()`);
                 execOptions.cwd = process.cwd();
             }
         }

@@ -26,7 +26,6 @@ import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { CaseMemory } from '../memory/CaseMemory';
 import { ToolRegistry } from '../core/ToolRegistry';
-import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
@@ -90,10 +89,6 @@ export class GoalOrchestrator {
             caseMemory,
         );
 
-        // Aquece o CapabilityRegistry em background — não bloqueia a inicialização.
-        CapabilityRegistry.getInstance().bootstrap().catch(err => {
-            log.warn('[GoalOrchestrator] CapabilityRegistry bootstrap failed:', String(err));
-        });
     }
 
     /** Conecta SessionManager ao executionLoop para telemetria e artefatos. */
