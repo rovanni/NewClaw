@@ -292,7 +292,8 @@ export class SessionManager {
                         if (!this.activeFiles.has(sid)) {
                             this.activeFiles.set(sid, new Set());
                         }
-                        this.activeFiles.get(sid)!.add(parsedArgs.path);
+                        const normalizedPath = String(parsedArgs.path).replace(/\\/g, '/');
+                        this.activeFiles.get(sid)!.add(normalizedPath);
 
                         // Keep maximum of 10 recent files to avoid context bloat
                         if (this.activeFiles.get(sid)!.size > 10) {
@@ -338,6 +339,27 @@ export class SessionManager {
     }
 
     /**
+     * Registra diretamente um arquivo como ativo na sessão (ex: proveniente de uploads).
+     * Normaliza caminhos com barra '/' para consistência.
+     */
+    registerActiveFile(key: SessionKey, filePath: string): void {
+        const sid = this.sessionKey(key);
+        if (!this.activeFiles.has(sid)) {
+            this.activeFiles.set(sid, new Set());
+        }
+        const normalizedPath = filePath.replace(/\\/g, '/');
+        this.activeFiles.get(sid)!.add(normalizedPath);
+
+        // Keep maximum of 10 recent files to avoid context bloat
+        if (this.activeFiles.get(sid)!.size > 10) {
+            const arr = Array.from(this.activeFiles.get(sid)!);
+            arr.shift(); // Remove oldest
+            this.activeFiles.set(sid, new Set(arr));
+        }
+        log.info(`[SessionManager] Registered active file: session=${sid} path=${normalizedPath}`);
+    }
+
+    /**
      * Helper para injetar a lista de arquivos trabalhados recentemente no prompt.
      * Sobrevive à compressão do contexto.
      */
@@ -347,7 +369,7 @@ export class SessionManager {
         if (!files || files.size === 0) return null;
 
         const fileList = Array.from(files).map(f => `- ${f}`).join('\n');
-        return `ARQUIVOS ATIVOS NESTA SESSÃO (que você manipulou recentemente):\n${fileList}`;
+        return `ARQUIVOS DISPONÍVEIS NESTA SESSÃO (recebidos ou manipulados recentemente):\n${fileList}`;
     }
 
     /**

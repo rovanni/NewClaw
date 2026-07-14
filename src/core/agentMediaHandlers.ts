@@ -4,6 +4,7 @@ import type { NormalizedMessage, ChannelAttachment } from '../channels/ChannelAd
 import type { MessageBus } from '../channels/MessageBus';
 import type { MemoryManager } from '../memory/MemoryManager';
 import type { ProviderFactory } from './ProviderFactory';
+import type { SessionManager } from '../session/SessionManager';
 import fsStatic from 'fs';
 import pathStatic from 'path';
 
@@ -228,7 +229,8 @@ export async function handleDocumentAttachment(
     messageBus: MessageBus,
     memory?: MemoryManager,
     visionProfile?: VisionProfile | null,
-    providerFactory?: ProviderFactory
+    providerFactory?: ProviderFactory,
+    sessionManager?: SessionManager
 ): Promise<string | null> {
     try {
         const channel = msg.channel;
@@ -287,6 +289,11 @@ export async function handleDocumentAttachment(
             // Refresh the workspace index so the model sees all files after this upload.
             if (memory) refreshWorkspaceIndex(memory);
 
+            if (sessionManager) {
+                const sessionKey = { channel: msg.channel, userId: msg.userId };
+                sessionManager.registerActiveFile(sessionKey, `workspace/${safeFileName}`);
+            }
+
             return null;
         }
 
@@ -334,7 +341,8 @@ export async function handlePhotoAttachment(
     attachment: ChannelAttachment,
     messageBus: MessageBus,
     visionProfile: VisionProfile | null,
-    providerFactory?: ProviderFactory
+    providerFactory?: ProviderFactory,
+    sessionManager?: SessionManager
 ): Promise<string | null> {
     try {
         const channel = msg.channel;
@@ -374,6 +382,12 @@ export async function handlePhotoAttachment(
 
             const visionDescription = await processVision(fileBuffer, safeFileName, visionProfile, providerFactory);
             msg.text = (msg.text || '') + `\n[IMAGEM RECEBIDA: ${safeFileName}]\n[DESCRIÇÃO DA VISÃO]: ${visionDescription}\n`;
+
+            if (sessionManager) {
+                const sessionKey = { channel: msg.channel, userId: msg.userId };
+                sessionManager.registerActiveFile(sessionKey, `workspace/${safeFileName}`);
+            }
+
             return null;
         }
 

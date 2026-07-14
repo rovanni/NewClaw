@@ -353,11 +353,11 @@ export class AgentController {
             transcribeAttachment(msg, attachment, this.messageBus, tmpDir));
         this.messageBus.registerMediaHandler('document', async (msg, attachment) => {
             const profile = this.agentLoop.getProfileRegistry().getProfileByCategory('vision');
-            return handleDocumentAttachment(msg, attachment, this.messageBus, this.memory, profile ?? null, this.providerFactory);
+            return handleDocumentAttachment(msg, attachment, this.messageBus, this.memory, profile ?? null, this.providerFactory, this.sessionManager);
         });
         this.messageBus.registerMediaHandler('photo', async (msg, attachment) => {
             const profile = this.agentLoop.getProfileRegistry().getProfileByCategory('vision');
-            return handlePhotoAttachment(msg, attachment, this.messageBus, profile ?? null, this.providerFactory);
+            return handlePhotoAttachment(msg, attachment, this.messageBus, profile ?? null, this.providerFactory, this.sessionManager);
         });
 
         if (config.discordBotToken) {
