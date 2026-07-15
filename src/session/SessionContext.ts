@@ -119,19 +119,25 @@ export class SessionContext {
             stateBlock += `\nCanal: ${HOST_APP_HINTS[hostApp]}`;
             
             // Injeta as informacoes detalhadas do slideContext se existirem
-            const slideContext = channelMetadata?.slideContext as { presentationTitle?: string, currentSlide?: number, totalSlides?: number, slideTexts?: string[] } | undefined;
+            const slideContext = channelMetadata?.slideContext as {
+                presentationTitle?: string;
+                activeSlideIndex?: number;
+                totalSlides?: number;
+                slideTitles?: string[];
+            } | undefined;
+
             if (slideContext) {
                 stateBlock += `\n\n[CONTEXTO DO POWERPOINT ABERTO]`;
                 if (slideContext.presentationTitle) {
                     stateBlock += `\nArquivo: ${slideContext.presentationTitle}`;
                 }
-                if (slideContext.currentSlide && slideContext.totalSlides) {
-                    stateBlock += `\nSlide ativo: ${slideContext.currentSlide} de ${slideContext.totalSlides}`;
+                if (slideContext.activeSlideIndex && slideContext.totalSlides) {
+                    stateBlock += `\nSlide ativo: ${slideContext.activeSlideIndex} de ${slideContext.totalSlides}`;
                 }
-                if (slideContext.slideTexts && slideContext.slideTexts.length > 0) {
-                    stateBlock += `\nTextos no slide ativo:\n- ${slideContext.slideTexts.join('\n- ')}`;
+                if (slideContext.slideTitles && slideContext.slideTitles.length > 0) {
+                    stateBlock += `\nTítulos dos slides:\n` + slideContext.slideTitles.map((title, idx) => `  ${idx + 1}. ${title}`).join('\n');
                 } else {
-                    stateBlock += `\nTextos no slide ativo: (Nenhum texto legivel encontrado)`;
+                    stateBlock += `\nEstrutura de slides: (Nenhum slide ou título encontrado)`;
                 }
             }
         }

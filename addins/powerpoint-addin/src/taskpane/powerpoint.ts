@@ -68,28 +68,6 @@ async function getSlideContext(): Promise<Record<string, unknown> | null> {
         }
       }
 
-      // Captura textos do slide ativo
-      const slideTexts: string[] = [];
-      if (activeSlide.items.length > 0) {
-        const slide = activeSlide.items[0];
-        const shapes = slide.shapes;
-        shapes.load("items/name,items/textFrame/textRange/text,items/textFrame/hasText");
-        await context.sync();
-
-        for (const shape of shapes.items) {
-          try {
-            if (shape.textFrame && shape.textFrame.hasText) {
-              const text = shape.textFrame.textRange.text.trim();
-              if (text) {
-                slideTexts.push(text);
-              }
-            }
-          } catch {
-            // Shapes sem textFrame (imagens, graficos) — ignora silenciosamente
-          }
-        }
-      }
-
       // Captura o nome do arquivo da apresentacao via Office Common API (se disponivel/salvo)
       let presentationTitle: string | undefined;
       try {
@@ -113,11 +91,29 @@ async function getSlideContext(): Promise<Record<string, unknown> | null> {
         // Ignora erros na captura do nome do arquivo
       }
 
+      // Carrega os títulos dos slides em lote (batch load)
+      for (const slide of slides.items) {
+        slide.shapes.load("items/name,items/textFrame/textRange/text,items/textFrame/hasText");
+      }
+      await context.sync();
+
+      const slideTitles = slides.items.map((slide, idx) => {
+        for (const shape of slide.shapes.items) {
+          if (shape.textFrame && shape.textFrame.hasText) {
+            const text = shape.textFrame.textRange.text.trim();
+            if (text) {
+              return text.length > 30 ? text.slice(0, 30) + "..." : text;
+            }
+          }
+        }
+        return `Slide ${idx + 1}`;
+      });
+
       return {
         presentationTitle,
-        currentSlide: currentSlideNumber,
         totalSlides,
-        slideTexts: slideTexts.length > 0 ? slideTexts : undefined,
+        activeSlideIndex: currentSlideNumber,
+        slideTitles: slideTitles.slice(0, 50),
       };
     });
   } catch {
@@ -339,6 +335,219 @@ async function startCommandPolling(): Promise<void> {
               sessionId: getSessionId(),
               status,
               error: errorMsg
+            })
+          }).catch(console.error);
+        } else if (cmd.action === 'getPresentation') {
+          let status = 'failed';
+          let errorMsg = '';
+          let responseData: any = null;
+
+          try {
+            if (!Office.context.requirements.isSetSupported('PowerPointApi', '1.1')) {
+              status = 'unsupported';
+              errorMsg = 'PowerPointApi 1.1 não é suportada neste ambiente.';
+            } else {
+              await PowerPoint.run(async (context) => {
+                const slides = context.presentation.slides;
+                slides.load("items/id");
+                await context.sync();
+
+                for (const slide of slides.items) {
+                  slide.shapes.load("items/name,items/textFrame/textRange/text,items/textFrame/hasText");
+                }
+                await context.sync();
+
+                const mappedSlides = slides.items.map((slide, idx) => {
+                  let title = `Slide ${idx + 1}`;
+                  for (const shape of slide.shapes.items) {
+                    if (shape.textFrame && shape.textFrame.hasText) {
+                      const text = shape.textFrame.textRange.text.trim();
+                      if (text) {
+                        title = text.length > 50 ? text.slice(0, 50) + "..." : text;
+                        break;
+                      }
+                    }
+                  }
+                  return {
+                    slideId: slide.id,
+                    index: idx + 1,
+                    title
+                  };
+                });
+
+                responseData = { slides: mappedSlides };
+                status = 'executed';
+              });
+            }
+          } catch (err) {
+            status = 'failed';
+            errorMsg = err instanceof Error ? err.message : String(err);
+          }
+
+          await fetch(`${serverUrl}/api/integrations/powerpoint/commands/${cmd.commandId}/result`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              sessionId: getSessionId(),
+              status,
+              error: errorMsg,
+              data: responseData
+            })
+          }).catch(console.error);
+        } else if (cmd.action === 'getSlide') {
+          let status = 'failed';
+          let errorMsg = '';
+          let responseData: any = null;
+
+          try {
+            if (!Office.context.requirements.isSetSupported('PowerPointApi', '1.1')) {
+              status = 'unsupported';
+              errorMsg = 'PowerPointApi 1.1 não é suportada neste ambiente.';
+            } else {
+              await PowerPoint.run(async (context) => {
+                const slides = context.presentation.slides;
+                let targetSlide: PowerPoint.Slide;
+
+                if (cmd.args.id) {
+                  targetSlide = slides.getItem(cmd.args.id);
+                } else if (typeof cmd.args.index === 'number') {
+                  targetSlide = slides.getItemAt(cmd.args.index - 1);
+                } else {
+                  const activeSlides = context.presentation.getSelectedSlides();
+                  activeSlides.load("items/id");
+                  await context.sync();
+                  targetSlide = activeSlides.items.length > 0 ? activeSlides.items[0] : slides.getItemAt(0);
+                }
+
+                targetSlide.load("id");
+                const shapes = targetSlide.shapes;
+                shapes.load("items/id,items/name,items/type");
+                await context.sync();
+
+                const slideId = targetSlide.id;
+                slides.load("items/id");
+                await context.sync();
+                let slideIndex = 1;
+                for (let i = 0; i < slides.items.length; i++) {
+                  if (slides.items[i].id === slideId) {
+                    slideIndex = i + 1;
+                    break;
+                  }
+                }
+
+                const tables: { shape: PowerPoint.Shape; table: PowerPoint.Table }[] = [];
+                const textShapes: PowerPoint.Shape[] = [];
+
+                for (const shape of shapes.items) {
+                  if (shape.type === 'Table') {
+                    const tbl = shape.getTable();
+                    tbl.load("rowCount,columnCount");
+                    tables.push({ shape, table: tbl });
+                  } else {
+                    try {
+                      shape.textFrame.load("hasText");
+                      textShapes.push(shape);
+                    } catch {
+                      // Ignora shapes que não suportam textFrame
+                    }
+                  }
+                }
+                await context.sync();
+
+                const cellQueries: { cell: PowerPoint.TableCell; row: number; col: number; shapeId: string }[] = [];
+                for (const item of tables) {
+                  const tbl = item.table;
+                  const rowCount = tbl.rowCount;
+                  const colCount = tbl.columnCount;
+                  for (let r = 0; r < rowCount; r++) {
+                    for (let c = 0; c < colCount; c++) {
+                      const cell = tbl.getCell(r, c);
+                      cell.load("text");
+                      cellQueries.push({ cell, row: r, col: c, shapeId: item.shape.id });
+                    }
+                  }
+                }
+
+                for (const shape of textShapes) {
+                  if (shape.textFrame.hasText) {
+                    shape.textFrame.textRange.load("text");
+                  }
+                }
+                await context.sync();
+
+                const mappedShapes = shapes.items.map((shape) => {
+                  const typeLower = (shape.type || '').toLowerCase();
+                  const isPlaceholder = typeLower === 'placeholder';
+
+                  if (shape.type === 'Table') {
+                    const tblItem = tables.find(t => t.shape.id === shape.id);
+                    const rowCount = tblItem ? tblItem.table.rowCount : 0;
+                    const colCount = tblItem ? tblItem.table.columnCount : 0;
+                    
+                    const cells: string[][] = [];
+                    for (let r = 0; r < rowCount; r++) {
+                      cells[r] = [];
+                      for (let c = 0; c < colCount; c++) {
+                        const cellQuery = cellQueries.find(q => q.shapeId === shape.id && q.row === r && q.col === c);
+                        const cellText = cellQuery ? cellQuery.cell.text : '';
+                        cells[r][c] = cellText.length > 1000 ? cellText.slice(0, 1000) + "..." : cellText;
+                      }
+                    }
+
+                    return {
+                      shapeId: shape.id,
+                      name: shape.name,
+                      type: 'table',
+                      placeholder: false,
+                      cells
+                    };
+                  } else if (shape.type === 'Image') {
+                    return {
+                      shapeId: shape.id,
+                      name: shape.name,
+                      type: 'picture',
+                      placeholder: isPlaceholder
+                    };
+                  } else {
+                    const hasText = textShapes.find(s => s.id === shape.id)?.textFrame.hasText;
+                    let text = '';
+                    if (hasText) {
+                      const shapeText = textShapes.find(s => s.id === shape.id)?.textFrame.textRange.text || '';
+                      text = shapeText.length > 1000 ? shapeText.slice(0, 1000) + "..." : shapeText;
+                    }
+
+                    return {
+                      shapeId: shape.id,
+                      name: shape.name,
+                      type: text ? 'text' : 'other',
+                      placeholder: isPlaceholder,
+                      text: text || undefined
+                    };
+                  }
+                });
+
+                responseData = {
+                  slideId,
+                  slideIndex,
+                  layoutName: 'Normal',
+                  shapes: mappedShapes
+                };
+                status = 'executed';
+              });
+            }
+          } catch (err) {
+            status = 'failed';
+            errorMsg = err instanceof Error ? err.message : String(err);
+          }
+
+          await fetch(`${serverUrl}/api/integrations/powerpoint/commands/${cmd.commandId}/result`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              sessionId: getSessionId(),
+              status,
+              error: errorMsg,
+              data: responseData
             })
           }).catch(console.error);
         } else if (cmd.action === 'insertDocument') {
