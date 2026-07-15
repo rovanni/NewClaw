@@ -87,14 +87,17 @@ async function main(): Promise<void> {
     assert(!!activeFilesBlock?.includes('workspace/windows_path.pptx'), 'O path deve ser normalizado com barras ordinárias');
     assert(!activeFilesBlock?.includes('workspace\\windows_path.pptx'), 'O path com barra invertida não deve aparecer');
 
-    // Finalizar sessões e limpar diretório
+    // Finalizar sessões, parar timers em background e limpar diretório
     const transcript = await sessionManager.getOrCreateSession(key);
     await transcript.close();
+    memoryManager.getAttentionFeedback()?.stopBackgroundJobs();
     fs.rmSync(dir, { recursive: true, force: true });
 
     console.log(`\n=== Resultado de S120: ${passed} passaram, ${failed} falharam ===`);
     if (failed > 0) {
         process.exit(1);
+    } else {
+        process.exit(0);
     }
 }
 

@@ -19,6 +19,7 @@ import { ContextBuilder } from '../loop/ContextBuilder';
 import { MemoryManager } from '../memory/MemoryManager';
 import { ContextBudget, ContextBlock, DEFAULT_BUDGET } from '../loop/ContextBudget';
 import { LLMMessage } from '../core/ProviderFactory';
+import { buildHostAppContextBlock } from '../shared/hostAppContext';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('SessionContext');
 
@@ -108,38 +109,11 @@ export class SessionContext {
         // Injeta contexto do aplicativo hospedeiro quando presente.
         // Atualmente apenas o suplemento PowerPoint define hostApp='powerpoint'.
         // Canais como Telegram, Discord, dashboard web NAO possuem hostApp.
-        const HOST_APP_HINTS: Record<string, string> = {
-            powerpoint: 'Suplemento Microsoft PowerPoint — o usuario esta interagindo de dentro do PowerPoint. '
-                + 'Quando o usuario mencionar "tema", "slide", "apresentacao", "design" ou termos similares, '
-                + 'presuma que se refere ao contexto do PowerPoint aberto. '
-                + 'Voce pode gerar e inserir slides .pptx diretamente na apresentacao ativa via send_document.',
-        };
-        const hostApp = channelMetadata?.hostApp as string | undefined;
-        if (hostApp && HOST_APP_HINTS[hostApp]) {
-            stateBlock += `\nCanal: ${HOST_APP_HINTS[hostApp]}`;
-            
-            // Injeta as informacoes detalhadas do slideContext se existirem
-            const slideContext = channelMetadata?.slideContext as {
-                presentationTitle?: string;
-                activeSlideIndex?: number;
-                totalSlides?: number;
-                slideTitles?: string[];
-            } | undefined;
-
-            if (slideContext) {
-                stateBlock += `\n\n[CONTEXTO DO POWERPOINT ABERTO]`;
-                if (slideContext.presentationTitle) {
-                    stateBlock += `\nArquivo: ${slideContext.presentationTitle}`;
-                }
-                if (slideContext.activeSlideIndex && slideContext.totalSlides) {
-                    stateBlock += `\nSlide ativo: ${slideContext.activeSlideIndex} de ${slideContext.totalSlides}`;
-                }
-                if (slideContext.slideTitles && slideContext.slideTitles.length > 0) {
-                    stateBlock += `\nTítulos dos slides:\n` + slideContext.slideTitles.map((title, idx) => `  ${idx + 1}. ${title}`).join('\n');
-                } else {
-                    stateBlock += `\nEstrutura de slides: (Nenhum slide ou título encontrado)`;
-                }
-            }
+        // Formatação compartilhada com o GoalExecutionLoop (caminho do planner) —
+        // fonte única em shared/hostAppContext.ts, ver nota lá.
+        const hostAppBlock = buildHostAppContextBlock(channelMetadata);
+        if (hostAppBlock) {
+            stateBlock += `\n${hostAppBlock}`;
         }
 
         // BUG REAL (auditoria 11/07/2026): TelegramAdapter captura ctx.message.reply_to_message

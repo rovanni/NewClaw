@@ -175,6 +175,25 @@ Os canais apenas passam a utilizá-la — nenhuma linha nova em nenhum adapter.
 Se uma funcionalidade exige alterar mais de um `*Adapter.ts` para "funcionar em todo canal", isso
 é sinal de que ela foi colocada no lugar errado — deveria estar em uma única linha do Core.
 
+## Contexto de aplicativo hospedeiro (`metadata.hostApp`)
+
+Alguns canais rodam DENTRO de outro aplicativo (hoje: o suplemento do PowerPoint; possíveis
+futuros: Word, Excel). O canal declara isso populando `NormalizedMessage.metadata.hostApp`
+(+ dados extras, ex.: `slideContext` com arquivo aberto/slide ativo/títulos). Esse metadata
+viaja pelo `MessageBus` até o `ChannelContext` e é formatado por UMA função —
+`shared/hostAppContext.ts: buildHostAppContextBlock()` — consumida pelos DOIS caminhos de
+raciocínio:
+
+* `SessionContext.buildLLMMessages()` — turnos do AgentLoop;
+* `GoalExecutionLoop` → `GoalPlanner.plan/replan/planRoadmap` — planejamento de goals, como
+  seção própria do prompt (`AMBIENTE DA CONVERSA`), fora do orçamento de memória semântica.
+
+Regra: nenhum consumidor duplica a formatação, e nenhum código decide comportamento por
+vocabulário do usuário — o sinal é sempre o `hostApp` declarado pelo canal (determinístico,
+independente de idioma). Origem: investigação 2026-07-14
+(`docs/INVESTIGACAO_POWERPOINT_ADDIN_2026-07-14.md`), na qual o GoalPlanner planejava cego ao
+PowerPoint aberto porque só o caminho AgentLoop injetava esse contexto.
+
 ## Exceções arquiteturais documentadas
 
 Nem todo desvio da regra "tudo passa pelo `MessageBus`" é um bug. Quando uma exceção legítima

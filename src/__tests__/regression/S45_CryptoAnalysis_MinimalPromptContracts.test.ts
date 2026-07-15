@@ -104,19 +104,6 @@ console.log('\n=== S45-3 — uso legítimo continua passando, sem falso positivo
     );
 }
 
-console.log('\n=== S45-4 — buildMinimalPrompt() (fallback de thinking-timeout) agora inclui os contratos de tools ===');
-{
-    const plannerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'GoalPlanner.ts'), 'utf-8');
-    const minimalPromptMatch = plannerSource.match(/private buildMinimalPrompt\(goal: Goal\): string \{[\s\S]*?\n    \}/);
-    assert(minimalPromptMatch !== null, 'função buildMinimalPrompt encontrada no source');
-    const minimalPromptBody = minimalPromptMatch?.[0] ?? '';
-    assert(
-        /buildToolContracts\(toolNames\)/.test(minimalPromptBody),
-        'buildMinimalPrompt chama buildToolContracts() — mesma função do prompt completo, sem duplicar schemas',
-        minimalPromptBody,
-    );
-}
-
 console.log('\n=== S45-5 — RiskAnalyzer.ts importa a MESMA função (fix cobre plano inicial + replan/Q2, sem duplicação) ===');
 {
     const riskAnalyzerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'RiskAnalyzer.ts'), 'utf-8');

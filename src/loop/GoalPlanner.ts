@@ -46,7 +46,7 @@ export interface PlanResult {
 // Gera a seção de contratos de tools dinamicamente a partir da lista real de tools
 // registradas no ToolRegistry — evita hardcode e garante que tools de terceiros
 // (instaladas via plugin/skill) sejam automaticamente reconhecidas pelo planner.
-function buildToolContracts(callableTools: string[]): string {
+export function buildToolContracts(callableTools: string[]): string {
     return `
 CATEGORIAS DE FERRAMENTAS — leia antes de planejar:
 
@@ -63,7 +63,7 @@ CATEGORIAS DE FERRAMENTAS — leia antes de planejar:
   pptx-generator, content-validator, html-pdf-converter, system-provisioner
   → São guias de comportamento. Não aparecem no campo toolName.
 
-SCHEMAS OBRIGATÓRIOS (use caminhos RELATIVOS ao workspace — sem prefixo de servidor):
+SCHEMAS OBRIGATÓRIOS (use caminhos RELATIVOS ao workspace — sem prefixo de servidor):${buildDynamicSchemaLines(callableTools)}
   send_document:   {"file_path": "arquivo.pptx"}
   read:            {"path": "arquivo.html"}
   write:           {"path": "arquivo.md", "content": "..."}
@@ -95,6 +95,57 @@ SCHEMAS OBRIGATÓRIOS (use caminhos RELATIVOS ao workspace — sem prefixo de se
 `.trim();
 }
 
+// ── Schemas dinâmicos a partir do JSON schema declarado pela própria tool ────
+//
+// As tools do bloco hardcoded acima têm semântica especial documentada à mão. Todas as
+// DEMAIS tools registradas que declaram `parameters` (JSON schema — campo obrigatório de
+// ToolExecutor) ganham a linha de schema automaticamente: required + enums extraídos do
+// próprio schema. Fecha a classe de bug em que uma tool nova ficava invisível para o
+// planner até alguém lembrar de editar este arquivo — evidência real (2026-07-14,
+// goal_1784081308500_d65qd): o planner escolheu powerpoint_control mas, sem conhecer o
+// schema, gerou o step sem 'action' → "Ação 'undefined' não é suportada" → o replan
+// abandonou a única estratégia correta. Ver docs/INVESTIGACAO_POWERPOINT_ADDIN_2026-07-14.md.
+const SCHEMA_DOCUMENTED_TOOLS = new Set([
+    'send_document', 'read', 'write', 'edit', 'exec_command', 'memory_write',
+    'crypto_analysis', 'web_navigate', 'weather', 'send_audio',
+]);
+
+interface ToolJsonSchema {
+    properties?: Record<string, { type?: string; enum?: unknown[]; description?: string }>;
+    required?: string[];
+}
+
+function buildDynamicSchemaLines(callableTools: string[]): string {
+    const lines: string[] = [];
+    for (const name of callableTools) {
+        if (SCHEMA_DOCUMENTED_TOOLS.has(name)) continue;
+        const params = ToolRegistry.get(name)?.parameters as ToolJsonSchema | undefined;
+        if (!params?.properties || Object.keys(params.properties).length === 0) continue;
+        const required = new Set(params.required ?? []);
+        const props = Object.entries(params.properties).map(([key, def]) => {
+            const valueHint = Array.isArray(def?.enum) && def.enum.length > 0
+                ? def.enum.join(' | ')
+                : (def?.type ?? '...');
+            return `"${key}": "${valueHint}"${required.has(key) ? ' (obrigatório)' : ''}`;
+        });
+        lines.push(`  ${name}: {${props.join(', ')}}`);
+    }
+    return lines.length > 0 ? `\n${lines.join('\n')}` : '';
+}
+
+// ── Contexto do aplicativo hospedeiro ─────────────────────────────────────────
+//
+// Seção própria do prompt (plan, replan e roadmap), com orçamento independente:
+// deliberadamente NÃO viaja dentro de runtimeContext, que passa por
+// enforceMemoryBudget (1600 chars) — o ambiente real da conversa (ex.: apresentação
+// aberta no PowerPoint) não pode ser truncado junto com memória semântica.
+// Conteúdo vem de shared/hostAppContext.ts (mesma fonte usada pelo SessionContext).
+function buildHostContextSection(hostContext?: string): string {
+    if (!hostContext) return '';
+    const bounded = PromptComposer.enforceBudget(hostContext, 2000);
+    return `\nAMBIENTE DA CONVERSA (real, não hipotético — planeje com base nisto):\n${bounded}\n`;
+}
+
 // ── Tool descriptions (injeta apenas ferramentas não-óbvias pelo nome) ───────
 
 const STANDARD_TOOLS = new Set([
@@ -118,7 +169,7 @@ function buildToolDescriptions(toolNames: string[]): string {
 
 // ── Prompt templates ─────────────────────────────────────────────────────────
 
-function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string, toolDescriptions?: string): string {
+function buildPlanPrompt(goal: Goal, availableTools: string[], skillContext?: string, runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string, toolDescriptions?: string, hostContext?: string): string {
     const goalText  = `${goal.objective} ${goal.userIntent}`;
     const capBlock  = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary);
     const skillBlock = skillContext
@@ -155,11 +206,13 @@ ESTRATÉGIA OBRIGATÓRIA — siga exatamente esta ordem:
         ? `\n- AJUSTE DO ROADMAP: Se você descobrir novas dependências, blockers ou a necessidade de reordenar os marcos, você pode retornar o roadmap inteiro redefinido e atualizado na propriedade JSON "adjustedRoadmap" (máximo de 3 a 5 marcos). Caso contrário, omita essa propriedade.\n`
         : '';
 
+    const hostBlock = buildHostContextSection(hostContext);
+
     return `Você é um planejador de tarefas. Decomponha o objetivo abaixo em steps executáveis com ferramentas.
 
 OBJETIVO GLOBAL: ${goal.objective}
 INTENÇÃO ORIGINAL: ${goal.userIntent}
-${milestoneInstruction}
+${milestoneInstruction}${hostBlock}
 ${pathsBlock}${contentRefBlock}${capBlock ? `\n${capBlock}\n` : ''}${skillBlock}${contextBlock}
 Ferramentas disponíveis (use EXATAMENTE esses nomes): ${availableTools.join(', ')}
 ${toolDescriptions ?? ''}
@@ -265,7 +318,7 @@ function buildProgressBlock(progressModel: GoalProgressModel): string {
     return lines.join('\n');
 }
 
-function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, availableTools: string[], runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string, skillContext?: string, diversityBlock?: string, progressModel?: GoalProgressModel): string {
+function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, availableTools: string[], runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string, skillContext?: string, diversityBlock?: string, progressModel?: GoalProgressModel, hostContext?: string): string {
     const goalText            = `${goal.objective} ${goal.userIntent}`;
     const compressedRefl      = PromptComposer.compressReflection(reflectionHint);
     const capBlock            = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary, compressedRefl);
@@ -381,11 +434,12 @@ MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
 
     const diversitySection = diversityBlock ? `\n${diversityBlock}\n` : '';
     const progressSection = progressModel ? `\n${buildProgressBlock(progressModel)}\n` : '';
+    const hostBlock = buildHostContextSection(hostContext);
 
     return `Você é um planejador de tarefas. Um blocker foi detectado. Proponha uma NOVA estratégia.
 
 OBJETIVO GLOBAL: ${goal.objective}
-${milestoneInstruction}
+${milestoneInstruction}${hostBlock}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}${retryHint}${ratioLimitHint}
 ${pipVenvLoopDirective}${execCommandBanDirective}${contentStubDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}${progressSection}${diversitySection}
@@ -436,15 +490,16 @@ REGRAS CRÍTICAS para blocker 'environment_limit':
   → Verifique capabilities do ambiente antes de planejar qualquer comando de conversão.`.trim();
 }
 
-function buildRoadmapPrompt(goal: Goal, availableTools: string[], skillContext?: string, _runtimeContext?: string, capabilityContext?: string, skillsSummary?: string): string {
+function buildRoadmapPrompt(goal: Goal, availableTools: string[], skillContext?: string, _runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, hostContext?: string): string {
     const capBlock = PromptComposer.buildCompactEnv(capabilityContext ?? '', goal.objective, skillsSummary);
     const skillBlock = skillContext ? `\nINSTRUÇÕES DE SKILL:\n${skillContext}\n` : '';
-    
+    const hostBlock = buildHostContextSection(hostContext);
+
     return `Você é um arquiteto de software especialista em desenvolvimento ágil e seguro. Crie um roadmap de desenvolvimento incremental para o objetivo abaixo.
-    
+
 OBJETIVO GLOBAL DO USUÁRIO: ${goal.objective}
 INTENÇÃO ORIGINAL: ${goal.userIntent}
-${capBlock ? `\n${capBlock}\n` : ''}${skillBlock}
+${hostBlock}${capBlock ? `\n${capBlock}\n` : ''}${skillBlock}
 Ferramentas disponíveis: ${availableTools.join(', ')}
 
 Divida o desenvolvimento em um roadmap de 3 a 5 marcos (milestones) sequenciais e incrementais.
@@ -544,8 +599,40 @@ export function detectMissingRequiredArgs(tool: string, args: Record<string, unk
             if (symbolParts.length > 1) return `symbol='${symbol}' parece conter mais de uma moeda — use uma chamada de crypto_analysis por moeda`;
         }
     }
+
+    // Fallback genérico dirigido pelo JSON schema da própria tool (tool.parameters).
+    // Toda tool registrada declara `parameters` (ToolExecutor) — required + enum são
+    // validados aqui para qualquer tool SEM caso explícito acima. Fecha a classe de bug
+    // em que uma tool nova ficava sem validação determinística até alguém lembrar de
+    // adicionar um caso hardcoded — evidência real (2026-07-14): step de
+    // powerpoint_control sem 'action' passou pela sanitização e explodiu na tool com
+    // "Ação 'undefined' não é suportada", empurrando o replan para longe da única
+    // estratégia correta. Os casos explícitos acima continuam valendo (semântica
+    // especial, ex.: alternativas do edit).
+    if (!EXPLICITLY_VALIDATED_TOOLS.has(tool)) {
+        const params = ToolRegistry.get(tool)?.parameters as {
+            properties?: Record<string, { enum?: unknown[] }>;
+            required?: string[];
+        } | undefined;
+        for (const field of params?.required ?? []) {
+            const value = args[field];
+            if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
+                return `sem '${field}' obrigatório`;
+            }
+            const enumValues = params?.properties?.[field]?.enum;
+            if (Array.isArray(enumValues) && enumValues.length > 0 && !enumValues.includes(value)) {
+                return `${field}='${String(value)}' inválido — use: ${enumValues.join('|')}`;
+            }
+        }
+    }
     return null;
 }
+
+// Tools com validação explícita nos ifs acima — o fallback genérico não roda para elas.
+const EXPLICITLY_VALIDATED_TOOLS = new Set([
+    'read', 'write', 'edit', 'send_document', 'send_audio', 'weather',
+    'read_document', 'web_navigate', 'crypto_analysis',
+]);
 
 // ── GoalPlanner ───────────────────────────────────────────────────────────────
 
@@ -621,7 +708,7 @@ export class GoalPlanner {
         return this.skillLoader.loadAll();
     }
 
-    async plan(goal: Goal, runtimeContext?: string, capabilityContext?: string, activeMilestone?: string): Promise<PlanResult> {
+    async plan(goal: Goal, runtimeContext?: string, capabilityContext?: string, activeMilestone?: string, hostContext?: string): Promise<PlanResult> {
         log.info(`[GoalPlanner] plan start goal=${goal.id} model=${this.model} contextLen=${runtimeContext?.length ?? 0}`);
 
         const availableTools = ToolRegistry.getEnabled().map(t => t.name);
@@ -649,7 +736,7 @@ export class GoalPlanner {
 
         const skillsSummary  = this.loadSkillsSummary();
         const toolDescriptions = buildToolDescriptions(availableTools);
-        const prompt         = buildPlanPrompt(goal, availableTools, this.skillContext, enrichedContext, capabilityContext, skillsSummary, activeMilestone, toolDescriptions);
+        const prompt         = buildPlanPrompt(goal, availableTools, this.skillContext, enrichedContext, capabilityContext, skillsSummary, activeMilestone, toolDescriptions, hostContext);
         const capBlock       = PromptComposer.buildCompactEnv(capabilityContext ?? '', `${goal.objective} ${goal.userIntent}`, skillsSummary);
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
 
@@ -672,7 +759,7 @@ export class GoalPlanner {
             let parsed = await this.parsePlanResponse(result.content);
             if (parsed.steps.length === 0) {
                 log.warn(`[GoalPlanner] plan empty after parse: model=${this.model} raw="${result.content.slice(0, 200)}"`);
-                const retried = await this.retryWithMinimalPrompt(goal, 'plan');
+                const retried = await this.retryWithMinimalPrompt(goal, 'plan', hostContext);
                 if (retried) parsed = retried;
                 else return this.fallbackPlan(goal);
             }
@@ -687,7 +774,7 @@ export class GoalPlanner {
         }
     }
 
-    async replan(goal: Goal, blocker: GoalBlocker, runtimeContext?: string, capabilityContext?: string, activeMilestone?: string, progressModel?: GoalProgressModel): Promise<PlanResult> {
+    async replan(goal: Goal, blocker: GoalBlocker, runtimeContext?: string, capabilityContext?: string, activeMilestone?: string, progressModel?: GoalProgressModel, hostContext?: string): Promise<PlanResult> {
         log.info(`[GoalPlanner] replan start goal=${goal.id} model=${this.model} blocker=${blocker.kind} contextLen=${runtimeContext?.length ?? 0}`);
 
         // P4 observabilidade: registra a decisão de replanejamento com causa raiz detectável
@@ -731,7 +818,7 @@ export class GoalPlanner {
             ` forbidden=${diversityConstraints.forbiddenFingerprints.length}` +
             ` exhausted=${diversityConstraints.exhaustedTools.length}`
         );
-        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, availableTools, runtimeContext, capabilityContext, skillsSummary, activeMilestone, this.skillContext, diversityConstraints.promptBlock, progressModel);
+        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, availableTools, runtimeContext, capabilityContext, skillsSummary, activeMilestone, this.skillContext, diversityConstraints.promptBlock, progressModel, hostContext);
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
 
         PromptComposer.recordReplan();
@@ -753,7 +840,7 @@ export class GoalPlanner {
             let parsed = await this.parsePlanResponse(result.content);
             if (parsed.steps.length === 0) {
                 log.warn(`[GoalPlanner] replan empty after parse: model=${this.model} raw="${result.content.slice(0, 200)}"`);
-                const retried = await this.retryWithMinimalPrompt(goal, 'replan');
+                const retried = await this.retryWithMinimalPrompt(goal, 'replan', hostContext);
                 if (retried) parsed = retried;
                 else return this.emergencyFallback(goal, blocker);
             }
@@ -782,12 +869,12 @@ export class GoalPlanner {
         }
     }
 
-    async planRoadmap(goal: Goal, runtimeContext?: string, capabilityContext?: string): Promise<string[]> {
+    async planRoadmap(goal: Goal, runtimeContext?: string, capabilityContext?: string, hostContext?: string): Promise<string[]> {
         log.info(`[GoalPlanner] planRoadmap start goal=${goal.id} model=${this.model}`);
 
         const availableTools = ToolRegistry.getEnabled().map(t => t.name);
         const skillsSummary  = this.loadSkillsSummary();
-        const prompt         = buildRoadmapPrompt(goal, availableTools, this.skillContext, runtimeContext, capabilityContext, skillsSummary);
+        const prompt         = buildRoadmapPrompt(goal, availableTools, this.skillContext, runtimeContext, capabilityContext, skillsSummary, hostContext);
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
 
         try {
@@ -947,7 +1034,7 @@ export class GoalPlanner {
 
     // ── Retry minimal — quando o modelo usa thinking-only e o JSON parse falha ──
 
-    private buildMinimalPrompt(goal: Goal): string {
+    private buildMinimalPrompt(goal: Goal, hostContext?: string): string {
         const toolNames = ToolRegistry.getEnabled().map(t => t.name);
         // Reusa buildToolContracts() (mesma função do prompt completo) em vez de listar só os
         // nomes das ferramentas. Sem isso, o LLM tinha que adivinhar o formato de toolArgs de
@@ -958,8 +1045,11 @@ export class GoalPlanner {
         // avisa disso ("use chamadas separadas por moeda"), mas esse prompt reduzido nunca incluía
         // essa seção. A tool caiu no fallback silencioso dela (type inválido → "sangrando") e
         // devolveu dados de moedas completamente diferentes das pedidas.
+        // hostContext preservado no retry minimal pelo mesmo motivo (mesma classe de bug):
+        // sem ele, o retry perdia o ambiente da conversa (ex.: apresentação aberta no
+        // PowerPoint) e voltava a planejar como se fosse um canal comum.
         return `Objetivo: ${goal.objective}
-Ferramentas disponíveis: ${toolNames.join(', ')}
+${buildHostContextSection(hostContext)}Ferramentas disponíveis: ${toolNames.join(', ')}
 ${buildToolContracts(toolNames)}
 
 Decomponha em 2-3 steps executáveis. Responda APENAS com JSON válido (sem markdown):
@@ -971,8 +1061,8 @@ Regras:
 - O step final deve ser send_document quando o resultado for um arquivo`.trim();
     }
 
-    private async retryWithMinimalPrompt(goal: Goal, context: 'plan' | 'replan'): Promise<PlanResult | null> {
-        const prompt = this.buildMinimalPrompt(goal);
+    private async retryWithMinimalPrompt(goal: Goal, context: 'plan' | 'replan', hostContext?: string): Promise<PlanResult | null> {
+        const prompt = this.buildMinimalPrompt(goal, hostContext);
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
         log.info(`[GoalPlanner] retry_minimal context=${context} goal=${goal.id} promptLen=${prompt.length}`);
         try {

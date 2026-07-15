@@ -40,6 +40,7 @@ import { StepSemanticValidator } from './StepSemanticValidator';
 import { GracefulDeliveryOrchestrator } from './GracefulDeliveryOrchestrator';
 import { StrategyDiversityGuard } from './StrategyDiversityGuard';
 import { resolvePath } from '../utils/crossPlatform';
+import { buildHostAppContextBlock } from '../shared/hostAppContext';
 import { ensureDeliverySuccessCriteria, AUTO_DELIVERY_CRITERION_IDS } from './planning/ensureDeliverySuccessCriteria';
 import { resolveInstallCommand } from './planning/resolveInstallCommand';
 import { GOAL_LIMITS } from './GoalLimits';
@@ -150,6 +151,16 @@ export class GoalExecutionLoop {
         // Enriquece o entendimento do objetivo com memória semântica antes de planejar
         const q1Context = await this.contextualize(goal, 1, undefined);
 
+        // ── Contexto do aplicativo hospedeiro (ex.: suplemento PowerPoint) ──
+        // Mesmo bloco que o caminho AgentLoop injeta via SessionContext (fonte única em
+        // shared/hostAppContext.ts). Vai como seção PRÓPRIA do prompt do planner — não dentro
+        // de q1Context — porque runtimeContext passa por enforceMemoryBudget (1600 chars) e o
+        // ambiente da conversa não pode competir/ser truncado junto com memória semântica.
+        // Sem isso o planner planejava CEGO ao host: caçava a apresentação aberta como arquivo
+        // no workspace e nunca considerava powerpoint_control (investigação 2026-07-14, ver
+        // docs/INVESTIGACAO_POWERPOINT_ADDIN_2026-07-14.md).
+        const hostContext = buildHostAppContextBlock(channelContext.metadata) || undefined;
+
         // ── Capabilities summary — injetar no contexto do planner ──────────
         // Registry usa TTL por categoria; chamadas consecutivas são servidas do cache.
         const capSummary = await this.capRegistry.getCapabilitySummary();
@@ -163,7 +174,7 @@ export class GoalExecutionLoop {
                 event: 'replanning',
                 message: 'Analisando o objetivo global e definindo o roadmap de desenvolvimento incremental...'
             });
-            const roadmap = await this.planner.planRoadmap(goal, q1Context, capSummary);
+            const roadmap = await this.planner.planRoadmap(goal, q1Context, capSummary, hostContext);
             this.goalStore.update(goal.id, {
                 roadmap,
                 currentMilestoneIndex: 0
@@ -185,7 +196,7 @@ export class GoalExecutionLoop {
 
         // ── Planejamento inicial ───────────────────────────────────────────
         this.goalStore.update(goal.id, { status: 'replanning' });
-        const planResult = await this.planner.plan(goal, q1Context ?? '', capSummary, activeMilestone);
+        const planResult = await this.planner.plan(goal, q1Context ?? '', capSummary, activeMilestone, hostContext);
 
         // S5 (modo sombra): consulta DIAGNÓSTICA — mede quantos Casos anteriores têm a mesma
         // assinatura de estratégia. Puramente observacional: o resultado NUNCA é usado para
@@ -325,6 +336,7 @@ export class GoalExecutionLoop {
         cycleNumber: number,
         state: GoalExecutionState,
         forceQ2 = false,
+        channelContext?: ChannelContext,
     ): Promise<Goal> {
         // Q1: Contextualização — memória + feedback do ciclo anterior
         const q1Context = await this.contextualize(goal, cycleNumber, priorFeedback);
@@ -336,8 +348,12 @@ export class GoalExecutionLoop {
             ? goal.roadmap[goal.currentMilestoneIndex ?? 0]
             : undefined;
 
+        // Contexto do host como seção própria — mesma justificativa do plan inicial
+        // (executeGoal): não pode ser truncado junto com a memória semântica.
+        const hostContext = buildHostAppContextBlock(channelContext?.metadata) || undefined;
+
         // Replan com contexto enriquecido (inclui progresso dimensional acumulado)
-        const planResult = await this.planner.replan(goal, blocker, q1Context ?? '', capSummary, activeMilestone, state.progressModel ?? undefined);
+        const planResult = await this.planner.replan(goal, blocker, q1Context ?? '', capSummary, activeMilestone, state.progressModel ?? undefined, hostContext);
 
         // Se o roadmap foi ajustado pelo planner durante o replanejamento
         if (goal.isConstruction && planResult.adjustedRoadmap && planResult.adjustedRoadmap.length > 0) {
@@ -703,7 +719,8 @@ export class GoalExecutionLoop {
                         const q1Context = await this.contextualize(currentGoal, totalCycles, undefined);
                         const capSummary = await this.capRegistry.getCapabilitySummary();
 
-                        const planResult = await this.planner.plan(currentGoal, q1Context ?? '', capSummary, nextMilestone);
+                        const milestoneHostContext = buildHostAppContextBlock(channelContext.metadata) || undefined;
+                        const planResult = await this.planner.plan(currentGoal, q1Context ?? '', capSummary, nextMilestone, milestoneHostContext);
                         
                         // Permite atualizar o roadmap se o planner retornou um ajustado
                         if (currentGoal.isConstruction && planResult.adjustedRoadmap && planResult.adjustedRoadmap.length > 0) {
@@ -960,7 +977,7 @@ export class GoalExecutionLoop {
                         };
                         this.goalStore.addBlocker(currentGoal.id, bonusBlocker);
                         this.goalStore.addStrategyTried(currentGoal.id, `bonus_replan: progress=${progressPct}% pendentes=[${pendingComponents}]`);
-                        currentGoal = await this.planWithSpiral(currentGoal, bonusBlocker, validation.reason, totalReplans + 1, state, true);
+                        currentGoal = await this.planWithSpiral(currentGoal, bonusBlocker, validation.reason, totalReplans + 1, state, true, channelContext);
                         totalReplans++;
                         continue;
                     }
@@ -1002,7 +1019,7 @@ export class GoalExecutionLoop {
                 // Q4 → Q1: feedback da validação alimenta o próximo ciclo espiral
                 // forceQ2=true: se o objetivo não foi entregue, Q2 sempre revisa o plano
                 priorFeedback = validation.reason;
-                currentGoal = await this.planWithSpiral(currentGoal, blocker, priorFeedback, totalReplans + 1, state, true);
+                currentGoal = await this.planWithSpiral(currentGoal, blocker, priorFeedback, totalReplans + 1, state, true, channelContext);
                 totalReplans++;
 
                 if (Date.now() > currentGoal.expiresAt) {
@@ -1504,7 +1521,7 @@ export class GoalExecutionLoop {
                         pendingStep.description + (pendingStep.toolName ? ` via ${pendingStep.toolName}` : ''));
 
                     priorFeedback = cycleResult.blocker?.description;
-                    currentGoal = await this.planWithSpiral(currentGoal, cycleResult.blocker!, priorFeedback, totalReplans + 1, state);
+                    currentGoal = await this.planWithSpiral(currentGoal, cycleResult.blocker!, priorFeedback, totalReplans + 1, state, false, channelContext);
                     totalReplans++;
                     break;
                 }

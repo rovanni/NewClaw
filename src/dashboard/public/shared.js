@@ -152,7 +152,7 @@ const TRANSLATIONS = {
     sidebar_advanced: "Avançado",
     sidebar_update: "Atualização",
     sidebar_backup: "Backup",
-    sidebar_integrations: "Integrações",
+    sidebar_integrations: "Extensões",
 
     // Integrations view
     integrations_page_desc: "Instale e gerencie extensões e integrações do NewClaw com outros softwares.",
@@ -543,7 +543,7 @@ const TRANSLATIONS = {
     sidebar_advanced: "Advanced",
     sidebar_update: "Update",
     sidebar_backup: "Backup",
-    sidebar_integrations: "Integrations",
+    sidebar_integrations: "Extensions",
 
     // Integrations view
     integrations_page_desc: "Install and manage NewClaw extensions and integrations with other software.",
@@ -921,6 +921,7 @@ const TRANSLATIONS = {
     sidebar_advanced: "Avanzado",
     sidebar_update: "Actualización",
     sidebar_backup: "Copia de seguridad",
+    sidebar_integrations: "Extensiones",
 
     // Update view
     update_page_desc: "Verifique y aplique actualizaciones de NewClaw.",

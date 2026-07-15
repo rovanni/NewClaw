@@ -8,6 +8,7 @@
 
 import { powerpointBroker } from '../../dashboard/routes/powerpointBroker';
 import { powerpointControlTool } from '../../tools/powerpoint_control';
+import { buildHostAppContextBlock } from '../../shared/hostAppContext';
 
 let passed = 0;
 let failed = 0;
@@ -34,30 +35,10 @@ async function main(): Promise<void> {
         slideTitles: ['Capa', 'Introdução', 'Ameaças', 'Conclusão']
     };
 
-    // Simulando a lógica exata de SessionContext.ts (linhas 117-142)
-    let stateBlock = '';
-    const hostApp = 'powerpoint';
-    const HOST_APP_HINTS: Record<string, string> = {
-        powerpoint: 'Suplemento Microsoft PowerPoint — o usuario esta interagindo de dentro do PowerPoint.'
-    };
-
-    if (hostApp && HOST_APP_HINTS[hostApp]) {
-        stateBlock += `\nCanal: ${HOST_APP_HINTS[hostApp]}`;
-        if (slideContext) {
-            stateBlock += `\n\n[CONTEXTO DO POWERPOINT ABERTO]`;
-            if (slideContext.presentationTitle) {
-                stateBlock += `\nArquivo: ${slideContext.presentationTitle}`;
-            }
-            if (slideContext.activeSlideIndex && slideContext.totalSlides) {
-                stateBlock += `\nSlide ativo: ${slideContext.activeSlideIndex} de ${slideContext.totalSlides}`;
-            }
-            if (slideContext.slideTitles && slideContext.slideTitles.length > 0) {
-                stateBlock += `\nTítulos dos slides:\n` + slideContext.slideTitles.map((title, idx) => `  ${idx + 1}. ${title}`).join('\n');
-            } else {
-                stateBlock += `\nEstrutura de slides: (Nenhum slide ou título encontrado)`;
-            }
-        }
-    }
+    // Usa a função REAL compartilhada (shared/hostAppContext.ts) — a mesma consumida por
+    // SessionContext (caminho AgentLoop) e GoalExecutionLoop (caminho do planner). Antes
+    // este teste duplicava a lógica copiada de SessionContext e validava a cópia, não o código.
+    const stateBlock = buildHostAppContextBlock({ hostApp: 'powerpoint', slideContext });
 
     assert(stateBlock.includes('Canal: Suplemento Microsoft PowerPoint'), 'Deve conter hostApp do PowerPoint');
     assert(stateBlock.includes('Arquivo: aula_seguranca.pptx'), 'Deve injetar o presentationTitle leve');
