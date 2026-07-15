@@ -52,9 +52,16 @@ npm install -g @marp-team/marp-cli 2>/dev/null && marp --version
 
 Para gerar um `.pptx` com texto nativo editável — ou quando o Marp não está disponível — usar um script Python com `python-pptx`.
 
+### 🎨 DIRETRIZES ESTRIAS DE DESIGN: Fundo Branco e Alto Contraste
+Para evitar slides ilegíveis (fundo escuro e texto escuro, ou preto sobre preto), siga obrigatoriamente esta paleta:
+1.  **Fundo**: Branco sólido (`RGBColor(255, 255, 255)`).
+2.  **Títulos**: Azul marinho escuro (`RGBColor(26, 60, 110)`).
+3.  **Corpo de Texto**: Cinza escuro de alta leitura (`RGBColor(40, 40, 40)`).
+4.  **Destaques**: Vermelho escuro (`RGBColor(192, 57, 43)`) para alertas; Verde escuro (`RGBColor(30, 126, 52)`) para pontos positivos; Roxo escuro (`RGBColor(108, 59, 131)`) para siglas ou conceitos importantes.
+
 **REGRA CRÍTICA:** escrever o script com `write` **não é o fim da tarefa**. O arquivo `.pptx`
 só existe depois que o script for **executado** com `exec_command`. Uma resposta que diz "gerei
-os slides" sem antes ter rodado o script é uma alucinação — o usuário não recebeu nada. Sempre
+os slides" sem antes ter rodado o script é uma alucinação. Sempre
 faça: `write` do script → `exec_command` para rodá-lo → confirmar que o `.pptx` foi criado →
 `send_document`.
 
@@ -68,25 +75,58 @@ pip install python-pptx -q 2>/dev/null || pip install --break-system-packages py
 ```
 
 **Passo 0B.2** — Usar `write` para salvar o script com um nome **ÚNICO derivado do assunto/arquivo
-de origem** — NUNCA use o nome genérico `tmp/gerar_pptx.py` nem a saída genérica
-`apresentacao.pptx`. O workspace é persistente entre conversas: um script ou script
-`tmp/gerar_pptx.py` de uma tarefa anterior (outro assunto, outra aula) continua no disco, e se
-outro step do mesmo plano (ex: um step separado de `exec_command` que segue esta receita ao pé
-da letra) rodar `python3 tmp/gerar_pptx.py` sem saber que o nome mudou, ele executa o script
-ERRADO — silenciosamente gerando/enviando o arquivo da tarefa antiga. Use o mesmo padrão de nome
-em todos os lugares (script E saída), ex. para uma aula sobre DHCP: `tmp/gerar_pptx_dhcp.py` →
-`aula_dhcp.pptx`.
+de origem** (ex: `tmp/gerar_pptx_dhcp.py`).
+
+**Passo 0B.3** — Consistência de Caminhos e Template de Cores:
+Escreva o script Python resolvendo caminhos absolutos e aplicando o design estrito de cores e contraste conforme o exemplo:
 
 ```python
+import os
 from pptx import Presentation
+from pptx.dml.color import RGBColor
 from pptx.util import Inches, Pt
 
+# Identifica o diretório do script corrente para gravar a saída de forma consistente no workspace
+script_dir = os.path.dirname(os.path.abspath(__file__))
+saida_path = os.path.join(script_dir, '..', 'aula_dhcp_editavel.pptx')
+
 prs = Presentation()
-# ... gerar slides a partir do conteúdo
-prs.save('NOME_UNICO_DO_ASSUNTO.pptx')  # ex: 'aula_dhcp.pptx' — nunca 'apresentacao.pptx'
+
+# Usar layout de slide (ex: 6 = em branco, ou 5 = título apenas)
+slide = prs.slides.add_slide(prs.slide_layouts[6])
+
+# 1. FORÇAR FUNDO BRANCO SÓLIDO (nativamente no PowerPoint)
+background = slide.background
+fill = background.fill
+fill.solid()
+fill.fore_color.rgb = RGBColor(255, 255, 255)
+
+# 2. DEFINIR CORES DE ALTO CONTRASTE
+AZUL_MARINHO = RGBColor(26, 60, 110) # Títulos
+CINZA_ESCURO = RGBColor(40, 40, 40)  # Corpo de texto
+VERMELHO_ESCURO = RGBColor(192, 57, 43)
+
+# Adicionar Título
+title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(9), Inches(1))
+tf = title_box.text_frame
+p = tf.paragraphs[0]
+p.text = "Título do Slide"
+p.font.size = Pt(32)
+p.font.bold = True
+p.font.color.rgb = AZUL_MARINHO
+
+# Adicionar Corpo
+body_box = slide.shapes.add_textbox(Inches(0.5), Inches(1.8), Inches(9), Inches(5))
+tf_body = body_box.text_frame
+p_body = tf_body.add_paragraph()
+p_body.text = "Este é um texto com alto contraste e legibilidade."
+p_body.font.size = Pt(18)
+p_body.font.color.rgb = CINZA_ESCURO
+
+prs.save(saida_path)
 ```
 
-**Passo 0B.3** — Executar via `exec_command`, usando o MESMO nome único do Passo 0B.2:
+**Passo 0B.4** — Executar via `exec_command`, usando o MESMO nome único:
 
 ```bash
 python3 tmp/gerar_pptx_NOME_UNICO_DO_ASSUNTO.py
@@ -122,7 +162,7 @@ Estruturar diretamente como Markdown Marp (ver Passo 2).
 
 ## Passo 2 — Criar arquivo Markdown Marp
 
-Salvar um arquivo `.md` no workspace com frontmatter Marp:
+Salvar um arquivo `.md` no workspace com frontmatter Marp forçando fundo branco e cabeçalhos em azul escuro para legibilidade superior:
 
 ```markdown
 ---
@@ -130,6 +170,17 @@ marp: true
 theme: gaia
 paginate: true
 size: 16:9
+style: |
+  section {
+    background-color: #ffffff;
+    color: #282828;
+  }
+  h1, h2 {
+    color: #1a3c6e;
+  }
+  footer {
+    color: #666666;
+  }
 ---
 
 <!-- _class: lead -->
