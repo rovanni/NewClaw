@@ -13,6 +13,7 @@ import path from 'path';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
 import { resolvePath } from '../utils/crossPlatform';
+import { extractVerifiedArtifacts } from '../loop/planning/artifactContract';
 
 const log = createLogger('ExecCommandTool');
 
@@ -420,7 +421,17 @@ export class ExecCommandTool implements ToolExecutor {
                 });
             });
 
-            return { success: true, output: output.trim().slice(0, 16000) };
+            // Contrato de artefato (docs/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md): scripts
+            // podem declarar o(s) arquivo(s) que produziram via linha "ARTIFACT: <path>" no
+            // stdout — declarativo (opt-in do script), nunca varredura do workspace. Cada
+            // declaração é verificada contra o disco antes de virar evidência confiável.
+            const artifactPaths = extractVerifiedArtifacts(output, (raw) => resolvePath(raw));
+
+            return {
+                success: true,
+                output: output.trim().slice(0, 16000),
+                ...(artifactPaths.length > 0 ? { artifactPaths } : {}),
+            };
         } catch (err) {
             const e = err as NodeJS.ErrnoException & { combinedOutput?: string };
             const msg = (e.combinedOutput || errorMessage(err)).slice(0, 16000);

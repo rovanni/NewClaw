@@ -24,6 +24,7 @@ import { detectMissingRequiredArgs } from './GoalPlanner';
 import { makeContentStubClassifier, ContentStubClassifier } from '../shared/contentStubClassifier';
 import { sanitizePlanSteps } from './planning/sanitizePlanSteps';
 import { resolveToolAlias } from './planning/toolAliasResolver';
+import { resolveArtifactPathFromEvidence } from './planning/artifactContract';
 
 const log = createLogger('RiskAnalyzer');
 
@@ -98,6 +99,20 @@ export interface RiskReport {
      * Cada entrada: { skillName, skillContext } para injetar no próximo replan.
      */
     skillHints?: Array<{ skillName: string; skillContext: string }>;
+}
+
+/**
+ * JSON.stringify com chaves ordenadas — usado para comparar dois objetos por VALOR, não por
+ * ordem de inserção de chaves. `plan[i].toolArgs` (do GoalPlanner original) e o `toolArgs`
+ * reconstruído a partir da resposta JSON independente do LLM de risco podem ter os mesmos
+ * valores em ordem diferente; JSON.stringify puro os trataria como diferentes, forçando
+ * planAdjusted=true (e a substituição do plano inteiro) sem mudança real.
+ */
+function stableStringify(value: unknown): string {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+    const keys = Object.keys(value as Record<string, unknown>).sort();
+    return `{${keys.map(k => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`).join(',')}}`;
 }
 
 export class RiskAnalyzer {
@@ -574,36 +589,17 @@ OU
                 return { risks: detectedRisks, adjustedPlan: plan, planAdjusted: false };
             }
 
-            // ── CR#3: Rejeitar plano quando maioria dos tool-steps tem args inválidos ──
             const rawSteps: Array<Record<string, unknown>> = parsed.plan.slice(0, 5);
-            const toolStepsCount = rawSteps.filter(s => {
-                const t = s.toolName ? String(s.toolName) : undefined;
-                return t && this.toolRegistry.get(t);
-            }).length;
-            const invalidArgsCount = rawSteps.filter(s => {
-                const t = s.toolName ? String(s.toolName) : undefined;
-                if (!t || !this.toolRegistry.get(t)) return false;
-                const args = (s.toolArgs && typeof s.toolArgs === 'object')
-                    ? s.toolArgs as Record<string, unknown>
-                    : {};
-                return Boolean(detectMissingRequiredArgs(t, args));
-            }).length;
 
-            if (toolStepsCount > 0 && invalidArgsCount / toolStepsCount > 0.5) {
-                const rejectionReason =
-                    `Plano rejeitado: ${invalidArgsCount}/${toolStepsCount} tool-steps sem argumentos obrigatórios. ` +
-                    `Para 'edit' inclua oldText+newText. Para 'send_document' inclua file_path. Para 'read' inclua path.`;
-                log.warn(`[RiskAnalyzer] plan rejected (${invalidArgsCount}/${toolStepsCount} invalid args) — requesting structured replan`);
-                return {
-                    risks: [...detectedRisks, rejectionReason],
-                    adjustedPlan: plan,   // devolve plano original sem degradação silenciosa
-                    planAdjusted: false,
-                    planRejected: true,
-                    rejectionReason,
-                };
-            }
-
-            // Pré-processamento específico do RiskAnalyzer, ANTES da sanitização comum:
+            // Pré-processamento específico do RiskAnalyzer, ANTES de CR#3 (rejeição por args
+            // inválidos) e ANTES da sanitização comum: resolve file_path de send_document antes
+            // de contar quantos tool-steps têm args obrigatórios faltando. Ordem importa —
+            // rodar isto DEPOIS de CR#3 (como era originalmente) rejeitava de cara qualquer
+            // replan de UM step só (só send_document, sem write no mesmo batch — o caso mais
+            // comum de replan "só reenviar o que já existe"): 1 tool-step, 1 inválido, 100% >
+            // 50%, plano rejeitado antes mesmo de tentar resolver o file_path. Corrigido junto
+            // com a Sprint R5-R7 (docs/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md) — achado
+            // durante a implementação do piloto, não coberto pela análise arquitetural em si.
             // send_document sem file_path tenta inferir do último 'write' anterior no mesmo
             // batch de steps — evita criar um AgentLoop aninhado só pra descobrir qual arquivo
             // enviar. Muta rawSteps diretamente para que sanitizePlanSteps() já veja o
@@ -611,6 +607,12 @@ OU
             // este step). resolveToolAlias() aqui é uma melhoria pequena e deliberada: antes
             // desta consolidação, RiskAnalyzer não resolvia alias em NENHUM lugar, então um
             // 'provide_file' sem file_path nem chegava a tentar essa inferência.
+            // Sprint F1 (revisão de código pós-piloto): steps que este bloco CONSERTA (preenche
+            // file_path que faltava) precisam sair do denominador/numerador de CR#3 abaixo, não
+            // só ganhar crédito de "válido" — senão consertar UM step dilui a proteção de CR#3
+            // para OUTROS steps quebrados no mesmo batch (ex: um 'read' sem 'path' que nada aqui
+            // conserta escaparia da rejeição só porque o send_document ao lado foi corrigido).
+            const repairedStepIndices = new Set<number>();
             rawSteps.forEach((s, i) => {
                 const rawTool = s.toolName ? String(s.toolName) : undefined;
                 if (!rawTool || resolveToolAlias(rawTool) !== 'send_document') return;
@@ -637,20 +639,80 @@ OU
                         break;
                     }
                 }
-                if (!lastWrite) return; // sem write anterior confiável: sanitizePlanSteps vai converter pra AgentLoop normalmente
+                if (lastWrite) {
+                    const inferredPath = String((lastWrite['toolArgs'] as Record<string, unknown>)['path']);
+                    s.toolArgs = { ...(toolArgs ?? {}), file_path: inferredPath };
+                    repairedStepIndices.add(i);
+                    log.info(
+                        `[STEP-MUTATION]` +
+                        ` step=${String(s.id ?? `step_${i + 1}`)}` +
+                        ` created_by=risk_analyzer` +
+                        ` original_tool=send_document` +
+                        ` new_tool=send_document` +
+                        ` reason="file_path inferred from prior write: ${inferredPath}"` +
+                        ` description="${String(s.description ?? '').slice(0, 80)}"`
+                    );
+                    return;
+                }
 
-                const inferredPath = String((lastWrite['toolArgs'] as Record<string, unknown>)['path']);
-                s.toolArgs = { ...(toolArgs ?? {}), file_path: inferredPath };
+                // Nenhum 'write' anterior NO MESMO BATCH de steps — típico de replan, quando o
+                // step que produziu o arquivo ficou num ciclo anterior e não foi re-declarado no
+                // novo plano. Antes disso significava desistir (fallback para AgentLoop); agora
+                // consulta evidência real já persistida em goal.attempts/sentArtifacts em vez de
+                // inferência sintática sobre o JSON do plano — docs/REVISAO_ARQUITETURAL_
+                // SPRINT_R5_2026-07-13.md a R7 (fase arquitetural completa antes desta mudança).
+                const evidencePath = resolveArtifactPathFromEvidence(goal, String(s.description ?? ''));
+                if (!evidencePath) return; // sem evidência: sanitizePlanSteps converte pra AgentLoop normalmente
+
+                s.toolArgs = { ...(toolArgs ?? {}), file_path: evidencePath };
+                repairedStepIndices.add(i);
                 log.info(
                     `[STEP-MUTATION]` +
                     ` step=${String(s.id ?? `step_${i + 1}`)}` +
                     ` created_by=risk_analyzer` +
                     ` original_tool=send_document` +
                     ` new_tool=send_document` +
-                    ` reason="file_path inferred from prior write: ${inferredPath}"` +
+                    ` reason="file_path resolved from goal.attempts evidence: ${evidencePath}"` +
                     ` description="${String(s.description ?? '').slice(0, 80)}"`
                 );
             });
+
+            // ── CR#3: Rejeitar plano quando maioria dos tool-steps tem args inválidos ──
+            // Roda DEPOIS do pré-processamento acima, para contar args já com file_path
+            // resolvido por evidência quando aplicável (ver comentário acima). Steps em
+            // `repairedStepIndices` ficam de fora da contagem inteira (nem válido nem inválido)
+            // — foram consertados por este bloco, não devem "emprestar" crédito de validade
+            // para diluir a proteção de OUTROS steps quebrados no mesmo batch. Alias resolvido
+            // via resolveToolAlias() (mesma correção do bloco de inferência acima) — antes,
+            // um step com toolName aliased (ex: 'provide_file') não era encontrado no
+            // toolRegistry por nome cru e ficava isento da contagem, mascarando args inválidos.
+            const cr3Candidates = rawSteps.filter((_, i) => !repairedStepIndices.has(i));
+            const toolStepsCount = cr3Candidates.filter(s => {
+                const t = s.toolName ? resolveToolAlias(String(s.toolName)) : undefined;
+                return t && this.toolRegistry.get(t);
+            }).length;
+            const invalidArgsCount = cr3Candidates.filter(s => {
+                const t = s.toolName ? resolveToolAlias(String(s.toolName)) : undefined;
+                if (!t || !this.toolRegistry.get(t)) return false;
+                const args = (s.toolArgs && typeof s.toolArgs === 'object')
+                    ? s.toolArgs as Record<string, unknown>
+                    : {};
+                return Boolean(detectMissingRequiredArgs(t, args));
+            }).length;
+
+            if (toolStepsCount > 0 && invalidArgsCount / toolStepsCount > 0.5) {
+                const rejectionReason =
+                    `Plano rejeitado: ${invalidArgsCount}/${toolStepsCount} tool-steps sem argumentos obrigatórios. ` +
+                    `Para 'edit' inclua oldText+newText. Para 'send_document' inclua file_path. Para 'read' inclua path.`;
+                log.warn(`[RiskAnalyzer] plan rejected (${invalidArgsCount}/${toolStepsCount} invalid args) — requesting structured replan`);
+                return {
+                    risks: [...detectedRisks, rejectionReason],
+                    adjustedPlan: plan,   // devolve plano original sem degradação silenciosa
+                    planAdjusted: false,
+                    planRejected: true,
+                    rejectionReason,
+                };
+            }
 
             const sanitized = await sanitizePlanSteps(
                 rawSteps,
@@ -708,9 +770,21 @@ OU
                 };
             }
 
+            // Compara também toolArgs, não só toolName/description — sem isso, uma mutação que
+            // só preenche um argumento (ex: file_path inferido de evidência, sem mudar qual tool
+            // roda nem a descrição do step) era descartada silenciosamente: adjustedPlan tinha o
+            // file_path certo, mas planAdjusted=false fazia analyze() devolver `plan` (original,
+            // sem o argumento) em vez de `adjustedPlan`. Achado durante a implementação do piloto
+            // R7 (docs/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md) — pré-existente, não
+            // introduzido por ele: já neutralizava silenciosamente a inferência sintática original
+            // sempre que o plano revisado preservava toolName/description do plano original.
             const planAdjusted =
                 adjustedPlan.length !== plan.length ||
-                adjustedPlan.some((s, i) => s.toolName !== plan[i]?.toolName || s.description !== plan[i]?.description);
+                adjustedPlan.some((s, i) =>
+                    s.toolName !== plan[i]?.toolName ||
+                    s.description !== plan[i]?.description ||
+                    stableStringify(s.toolArgs ?? {}) !== stableStringify(plan[i]?.toolArgs ?? {})
+                );
 
             log.info(`[RiskAnalyzer] LLM review: risks=${detectedRisks.length} planAdjusted=${planAdjusted} steps=${adjustedPlan.length}`);
 

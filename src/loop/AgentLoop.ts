@@ -51,6 +51,7 @@ import { parseLLMResponse, extractFinalText } from './agentOutputParser';
 import { buildLoopMetric, summarizeMetrics } from './agentMetrics';
 import { extractMissingExecutable } from './planning/extractMissingExecutable';
 import { computeToolInputKey } from './planning/computeToolInputKey';
+import { SOURCE_SCRIPT_EXTENSIONS } from './planning/inferExpectedExtensions';
 
 export type { ToolResult, ToolExecutor, LoopMetrics, ChannelContext, AgentLoopConfig, ProcessedResult };
 
@@ -2559,7 +2560,12 @@ export class AgentLoop {
         // turns, never executed either, and both times ran out of step budget before this guard
         // could even fire (see the `stepCount < maxSteps` note below).
         const DELIVERABLE_EXTENSIONS = ['.html', '.pdf', '.md', '.txt', '.js', '.ts', '.csv', '.json', '.docx', '.xlsx'];
-        const EXECUTABLE_SCRIPT_EXTENSIONS = ['.py', '.sh'];
+        // Fonte única com RiskAnalyzer/resolveArtifactPathFromEvidence (Sprint F2, revisão de
+        // código pós-piloto R1-R7) — antes esta lista local (['.py','.sh']) e o blocklist
+        // SOURCE_SCRIPT_EXTENSIONS de inferExpectedExtensions.ts divergiam sobre '.js'/'.ts',
+        // fazendo o mesmo tipo de arquivo ser tratado como deliverable aqui e como script-fonte
+        // (nunca deliverable) lá.
+        const EXECUTABLE_SCRIPT_EXTENSIONS = [...SOURCE_SCRIPT_EXTENSIONS];
         const wroteFile = cycleHistory.some(h => h.tool === 'write' && h.status === 'success');
         // 'deferred' conta como já tratado: um send_document adiado para pós-validação (FIX E
         // acima) já está registrado para entrega via channelContext — sem isso, este guard

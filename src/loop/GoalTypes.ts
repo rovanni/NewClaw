@@ -148,6 +148,14 @@ export interface GoalAttempt {
      * diretamente no histórico do goal, sem custo de armazenamento relevante.
      */
     subToolCalls?: string[];
+    /**
+     * Sprint R1-R7 (docs/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md): artefatos que este
+     * attempt declarou ter produzido — populado por `write` (o próprio `file_path`) e por
+     * `exec_command` (linhas `ARTIFACT: <path>` no stdout, verificadas contra o disco antes
+     * de entrar aqui). Fonte de evidência real para `RiskAnalyzer` resolver `file_path` de
+     * `send_document` no replan, em vez de inferir por proximidade sintática no JSON do plano.
+     */
+    producedArtifactPaths?: string[];
 }
 
 // ── Goal ──────────────────────────────────────────────────────────────────────

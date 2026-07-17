@@ -59,6 +59,15 @@ export interface WorkflowStepResult {
     decision: AuthDecision;
     continuationCtx: ContinuationContext;
     error?: string;
+    /**
+     * Artefatos que a tool executada declarou ter produzido (ToolResult.artifactPaths),
+     * repassado sem alteração. Sprint F3 (revisão de código pós-piloto R1-R7): antes,
+     * WorkflowEngine.resume() descartava esse campo do resultado real de tool.execute() ao
+     * repassar só {success,output,decision,error,continuationCtx} — um step write/exec_command
+     * que precisou de aprovação de auth e produziu um arquivo real perdia essa evidência antes
+     * mesmo de chegar em GoalExecutionLoop, que também não a registrava em GoalAttempt.
+     */
+    artifactPaths?: string[];
 }
 
 /** Callback registrado pelo AgentController nos adapters de canal */

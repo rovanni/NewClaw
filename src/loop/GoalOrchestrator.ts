@@ -182,7 +182,7 @@ export class GoalOrchestrator {
                         if (decision === 'rejected') {
                             return this.abortGoalFromAuth(txnId);
                         }
-                        return this.resumeFromAuth(txnId, wfResult.output ?? '');
+                        return this.resumeFromAuth(txnId, wfResult.output ?? '', wfResult.artifactPaths);
                     }
                     log.warn(`[GoalOrchestrator] [AUTH-DETECTED] workflowEngine.resume=null txn=${txnId} — falling back to AgentLoop`);
                 } else {
@@ -518,7 +518,7 @@ export class GoalOrchestrator {
      * Marca o step pendente como concluído com o output do workflow e continua
      * o loop de execução a partir do próximo step, sem replanejar.
      */
-    async resumeFromAuth(txnId: string, workflowOutput: string): Promise<string> {
+    async resumeFromAuth(txnId: string, workflowOutput: string, workflowArtifactPaths?: string[]): Promise<string> {
         const goal = this.goalStore.getByTxnId(txnId);
         if (!goal) {
             log.warn(`[GoalOrchestrator] resumeFromAuth: no goal for txn=${txnId}`);
@@ -541,7 +541,8 @@ export class GoalOrchestrator {
             workflowOutput,
             async (update) => {
                 log.debug(`[GoalOrchestrator] resume goal=${update.goalId} cycle=${update.cycle} event=${update.event}`);
-            }
+            },
+            workflowArtifactPaths,
         );
 
         log.info(`[GoalOrchestrator] goal=${goal.id} resumed success=${result.success} cycles=${result.totalCycles}`);

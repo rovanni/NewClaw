@@ -9,6 +9,12 @@ export interface ToolResult {
     success: boolean;
     output: string;
     error?: string;
+    /**
+     * Artefatos que a tool declarou/confirmou ter produzido (write: o próprio path escrito;
+     * exec_command: linhas ARTIFACT: verificadas contra o disco — ver planning/artifactContract.ts).
+     * Propagado para GoalAttempt.producedArtifactPaths pelo GoalExecutionLoop.
+     */
+    artifactPaths?: string[];
 }
 
 export interface ToolExecutor {

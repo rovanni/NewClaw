@@ -42,6 +42,8 @@ import { StrategyDiversityGuard } from './StrategyDiversityGuard';
 import { resolvePath } from '../utils/crossPlatform';
 import { ensureDeliverySuccessCriteria, AUTO_DELIVERY_CRITERION_IDS } from './planning/ensureDeliverySuccessCriteria';
 import { resolveInstallCommand } from './planning/resolveInstallCommand';
+import { inferExpectedExtensions } from './planning/inferExpectedExtensions';
+import { MIN_DELIVERABLE_SIZE } from './planning/artifactContract';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext, ContextAwareTool } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
@@ -272,7 +274,8 @@ export class GoalExecutionLoop {
         goal: Goal,
         channelContext: ChannelContext,
         authStepOutput: string,
-        onProgress?: ProgressCallback
+        onProgress?: ProgressCallback,
+        authStepArtifactPaths?: string[],
     ): Promise<GoalResult> {
         log.info(`[GoalLoop] resuming goal=${goal.id} after auth`);
 
@@ -284,7 +287,7 @@ export class GoalExecutionLoop {
         // representam duas execuções genuinamente distintas do step.
         const blockedStep = goal.currentPlan.find(s => s.status === 'pending');
         if (blockedStep) {
-            this.markStepDone(goal, blockedStep, authStepOutput);
+            this.markStepDone(goal, blockedStep, authStepOutput, 'add', authStepArtifactPaths);
         }
 
         // requiresAuth: false — Sprint 0.11, ver nota no branch 'needs_auth' acima.
@@ -647,7 +650,7 @@ export class GoalExecutionLoop {
                     if (!fp) return false;
                     try {
                         const { resolved } = resolvePath(fp);
-                        return fs.statSync(resolved).size >= 200;
+                        return fs.statSync(resolved).size >= MIN_DELIVERABLE_SIZE;
                     } catch {
                         return false;
                     }
@@ -868,13 +871,12 @@ export class GoalExecutionLoop {
                 // Evita o cenário onde 3 arquivos .pptx existem mas o sistema
                 // continua tentando regenerar em vez de enviar o que já tem.
                 if (!currentGoal.strategiesTried.includes('deliverable_check_done')) {
-                    const expectedExts = this.inferExpectedExtensions(currentGoal.userIntent);
+                    const expectedExts = inferExpectedExtensions(currentGoal.userIntent);
                     if (expectedExts.length > 0) {
                         const foundFiles = await this.checkDeliverables(expectedExts, currentGoal.createdAt);
                         // Fix #2: ignora arquivos já enviados nesta sessão de execução do goal
                         // Fix S1: ignora arquivos menores que MIN_DELIVERABLE_SIZE — stubs/placeholders
                         // não devem ser enviados ao usuário nem consumir replanBudget com sends inúteis.
-                        const MIN_DELIVERABLE_SIZE = 200; // bytes
                         const substantiveFiles = foundFiles.filter(f => {
                             try {
                                 return fs.statSync(f).size >= MIN_DELIVERABLE_SIZE;
@@ -1574,7 +1576,7 @@ export class GoalExecutionLoop {
             // A autorização real de ferramentas perigosas (exec_command, etc.) é gerida
             // corretamente pelo WorkflowEngine via AgentLoop — não precisa deste pre-flight.
 
-            let toolResult: { success: boolean; output: string; error?: string };
+            let toolResult: { success: boolean; output: string; error?: string; artifactPaths?: string[] };
             let stepMutations: import('./GoalTypes').ToolMutation[] | undefined;
             let stepEvalForAttempt: { confidence: number; reason?: string } | undefined;
             // Sprint 0.10 (achado L22): correlação com o ExecutionTrace do sub-turno agentloop,
@@ -1850,6 +1852,7 @@ export class GoalExecutionLoop {
                 evaluation: stepEvalForAttempt,
                 traceId: agentloopTraceId,
                 subToolCalls: agentloopSubToolCalls,
+                producedArtifactPaths: toolResult.artifactPaths,
             };
             this.goalStore.addAttempt(goal.id, attempt);
 
@@ -1893,6 +1896,7 @@ export class GoalExecutionLoop {
                         durationMs: 0,
                         executedAt: Date.now(),
                         cycle,
+                        producedArtifactPaths: [fp],
                     });
                 }
             }
@@ -2141,6 +2145,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
         step: PlanStep,
         output: string,
         attemptRecording: 'add' | 'skip' | 'finalize' = 'add',
+        producedArtifactPaths?: string[],
     ): void {
         const updatedPlan = goal.currentPlan.map(s =>
             s.id === step.id ? { ...s, status: 'completed' as const, result: output.slice(0, 200), executedAt: Date.now() } : s
@@ -2178,6 +2183,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
                 output: output.slice(0, 300),
                 durationMs: 0,
                 executedAt: Date.now(),
+                producedArtifactPaths,
             });
         } else if (attemptRecording === 'finalize') {
             this.goalStore.finalizeLastAttemptAsSuccess(goal.id, step.id, output);
@@ -3248,7 +3254,7 @@ OU
         // project_session_bugs_jul2026_ap. Quando o intent não permite inferir uma extensão
         // esperada (goal sem tipo de arquivo específico), não restringe — mantém o
         // comportamento permissivo original.
-        const expectedExts = this.inferExpectedExtensions(goal.userIntent);
+        const expectedExts = inferExpectedExtensions(goal.userIntent);
         const matchesExpectedType = (filePath: string): boolean =>
             expectedExts.length === 0 || expectedExts.some(ext => filePath.toLowerCase().endsWith(ext));
 
@@ -3357,32 +3363,6 @@ OU
     private isModificationGoal(userIntent: string): boolean {
         return /\b(modificar|modific|editar|edi[tç]|reorganizar|reorgani[zs]|corrigir|corrij|atualizar|atuali[zs]|converter|convert|dividir|divid|reformular|reformul|melhorar|melhore?|ajustar|ajust|reescrever|reescrev|revisar|revis)\b/i
             .test(userIntent);
-    }
-
-    /**
-     * Infere extensões esperadas a partir das palavras-chave do userIntent.
-     * Retorna lista vazia se não há tipo de arquivo identificável.
-     */
-    private inferExpectedExtensions(userIntent: string): string[] {
-        const lower = userIntent.toLowerCase();
-        const exts: string[] = [];
-        if (/pptx|apresenta|slides?|powerpoint/i.test(lower))  exts.push('.pptx', '.ppt');
-        if (/pdf/i.test(lower))                                 exts.push('.pdf');
-        if (/docx?|word|documento/i.test(lower))               exts.push('.docx', '.doc');
-        if (/xlsx?|excel|planilha/i.test(lower))               exts.push('.xlsx', '.xls');
-        if (/mp4|vídeo|video/i.test(lower))                    exts.push('.mp4', '.avi', '.mkv');
-        if (/mp3|áudio|audio/i.test(lower))                    exts.push('.mp3', '.ogg', '.wav');
-        if (/html|página|pagina/i.test(lower))                 exts.push('.html');
-        if (/zip|comprim/i.test(lower))                        exts.push('.zip');
-        // Imagens só são entregáveis se o objetivo explícito for produzir imagens.
-        // Excluir quando o intent contém marcadores de VisionHandler ("[IMAGEM RECEBIDA:")
-        // ou quando o intent menciona slides/pptx (foto enviada como feedback, não entregável).
-        const isImageDeliveryIntent =
-            /png|jpg|jpeg|imagem|image/i.test(lower) &&
-            !lower.includes('[imagem recebida:') &&
-            !/slides?|pptx|apresenta|powerpoint/i.test(lower);
-        if (isImageDeliveryIntent) exts.push('.png', '.jpg', '.jpeg');
-        return exts;
     }
 
     /**
