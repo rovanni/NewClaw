@@ -32,8 +32,8 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 | 2026-07-S04 | Jul/2026 | Decision Ownership | ARCH-014 | 🟢 | P00 | ccf97c1 | `shared/transientErrorPatterns.ts` novo, 6 padrões unificados, verificado byte-a-byte, 119/119 |
 | 2026-07-S05 | Jul/2026 | Decision Ownership | ARCH-017 | 🟢 | P00 | dd1a51e | `ToolExecutorService` removido (4 arquivos), build+tsc limpos, 119/119 |
 | 2026-07-S06 | Jul/2026 | Technical Cleanup | ARCH-025 | 🟢 | P00 | 7aa5bc4 | 2 blocos de prompt unificados (6 divergências corrigidas), build+tsc limpos, 119/119 |
-| 2026-07-S07 | Jul/2026 | Technical Cleanup | ARCH-026 | ⚪ | P00 | — | — |
-| 2026-07-CP01 | Jul/2026 | Checkpoint | — | ⚪ | S01-S07 | — | — |
+| 2026-07-S07 | Jul/2026 | Technical Cleanup | ARCH-026 | 🟢 | P00 | (ver métricas) | `DELIVERABLE_EXTENSIONS` movido, 1 teste corrigido (S52), build+tsc limpos, 119/119 |
+| 2026-07-CP01 | Jul/2026 | Checkpoint | — | 🟢 | S01-S07 | — | 7/7 Sprints concluídas, indicadores revisados, 0 riscos residuais |
 | 2026-07-S08 | Jul/2026 | Boundary Enforcement | ARCH-002 | ⚪ | CP01 | — | — |
 | 2026-07-S09 | Jul/2026 | Boundary Enforcement | ARCH-003 | ⚪ | CP01 | — | — |
 | 2026-07-S10 | Jul/2026 | Single Source of Truth | ARCH-011 | ⚪ | S09 | — | — |
@@ -64,19 +64,19 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01-S06 concluídas
-**Progresso:** 6 / 26 ARCH concluídos (~23%)
-**Sprint Atual:** Nenhuma em andamento (S06 concluída — próxima é 2026-07-S07)
-**Próxima Sprint:** 2026-07-S07 (ARCH-026)
-**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído; Epic B iniciado — ARCH-006 feito; Epic C parcialmente concluído — ARCH-014/017 feitos; Epic E iniciado — ARCH-025 feito)
-**Próximo Marco:** 2026-07-CP01
-**Última Atualização:** 2026-07-17 (Sprint S06 concluída)
+**Status Geral:** 🟢 Em execução — Fase 0, S01-S07 e Checkpoint CP01 concluídos
+**Progresso:** 7 / 26 ARCH concluídos (~27%)
+**Sprint Atual:** Nenhuma em andamento (CP01 concluído — próxima é 2026-07-S08)
+**Próxima Sprint:** 2026-07-S08 (ARCH-002)
+**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído — ARCH-002/003 restantes; Epic B iniciado — ARCH-006 feito; Epic C parcialmente concluído — ARCH-014/017 feitos; Epic E concluído — ARCH-025/026 feitos)
+**Próximo Marco:** 2026-08-CP02
+**Última Atualização:** 2026-07-17 (Checkpoint CP01 concluído)
 **Build:** 🟢 `npm run build` limpo
 **Testes:** 🟢 119/119
-**Regressão:** 🟢 119/119 (pós-S06)
+**Regressão:** 🟢 119/119 (pós-CP01)
 **Riscos Abertos:** 0
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
-**Dívida Arquitetural Restante:** 20 ARCH (19 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
+**Dívida Arquitetural Restante:** 19 ARCH (18 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
 
@@ -86,11 +86,11 @@ Snapshot do estado de validação do branch `refactor/architectural-backlog` nes
 
 | Indicador | Status | Última verificação | Evidência |
 |---|---|---|---|
-| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S06) | `tsc` + cópia de assets do dashboard, sem erros |
-| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S06) | 0 erros |
-| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S06) | `npm run test:regression` — 119/119 |
-| Integration Tests | — N/A no momento | 2026-07-17 | Nenhuma Sprint até aqui (S01-S06, todas Quick Win/Refactor Local) exigiu etapa 3/4 da Validação Progressiva — `npm run test:integration` só roda quando o card da Sprint pede ("ambiente real: obrigatório") |
-| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S06) | Boundary (ARCH-001/004): 0 violações residuais além das 2 legítimas. SSOT (ARCH-006): só as 2 exceções conscientes fora do accessor. Decision Ownership (ARCH-014): 6/6 regexes byte-idênticas. Decision Ownership (ARCH-017): 0 ocorrências residuais de `ToolExecutorService`. Technical Cleanup (ARCH-025): bloco `memory_write` de referência de args aparece 1x só no arquivo (era 2x). Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
+| Build (`npm run build`) | ✔ | 2026-07-17 (pós-CP01) | `tsc` + cópia de assets do dashboard, sem erros |
+| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-CP01) | 0 erros |
+| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-CP01) | `npm run test:regression` — 119/119 (achou e corrigiu 1 quebra real durante S07 — ver Registro de Métricas) |
+| Integration Tests | — N/A no momento | 2026-07-17 | Nenhuma Sprint até aqui (S01-S07, todas Quick Win/Refactor Local) exigiu etapa 3/4 da Validação Progressiva — `npm run test:integration` só roda quando o card da Sprint pede ("ambiente real: obrigatório") |
+| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-CP01) | Boundary (ARCH-001/004): 0 violações residuais além das 2 legítimas; ARCH-002/003 permanecem, esperado (S08/S09). SSOT (ARCH-006): só as 2 exceções conscientes fora do accessor. Decision Ownership (ARCH-014/017): 6/6 regexes byte-idênticas, 0 ocorrências residuais de `ToolExecutorService`. Technical Cleanup (ARCH-025/026): blocos de prompt e `DELIVERABLE_EXTENSIONS` com fonte única confirmada. Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
 
 **Como reproduzir esta linha "Architecture Metrics":** os comandos variam por Sprint (cada ARCH tem seu próprio "Critérios de Aceite" verificável por grep/contagem — ver o card correspondente em `ARCHITECTURAL_BACKLOG.md`), não existe um único script universal ainda. Ver a seção "Regressão Funcional vs. Regressão Arquitetural" acima.
 
@@ -255,9 +255,15 @@ Validação
 ## Checkpoint 2026-07-CP01
 
 - **Identificação:** `2026-07-CP01`
-- **Revisar:** indicadores (comparar com T0), backlog (nenhuma mudança de escopo esperada), dependências (confirmar que S08-S15 seguem liberadas), arquitetura (nenhuma violação nova introduzida pelas Sprints S01-S07), riscos (nenhum esperado — lote de baixo risco), planejamento (ajustar datas de S08 em diante conforme velocidade real observada no lote de Quick Wins).
-- **Critério de avanço:** todas as Sprints S01-S07 🟢 Concluídas, indicador "Violações de fronteira" reduzido conforme esperado (parcialmente — ARCH-002/003/004 restantes).
-- **Status:** ⚪ Não iniciado.
+- **Revisar (feito em 2026-07-17):**
+  - **Indicadores vs. T0:** Violações de fronteira — ARCH-001 (26→0) e ARCH-004 (2→0) resolvidas; ARCH-002/003 permanecem (esperado, S08/S09 ainda não rodaram — `EnvironmentProbe` ainda em `loop/`, `StrategyDiversityGuard`/`extractText` ainda importados por `memory/`). Decision Owners — ARCH-014 (6 padrões duplicados→0) e ARCH-017 (`ToolExecutorService` removido) resolvidos. Recomputation/duplicação textual — ARCH-006 (15 call sites→1 accessor) e ARCH-025 (2 blocos de prompt→1 fonte) resolvidos. God Methods/Large Classes — inalterados de propósito (fora do escopo deste lote, ver S22-S25).
+  - **Backlog:** sem mudança de escopo real — só 3 correções de contagem encontradas durante a própria execução (ARCH-001: 28→26 arquivos reais; ARCH-006: 6+→15 call sites reais; ARCH-014: 3→6 padrões reais), todas documentadas nos cards e neste plano, nenhuma virou proposta de ARCH novo por serem correções de medição, não de escopo.
+  - **Dependências:** S08-S15 seguem liberadas — confirmado, nenhuma depende de algo que não esteja `🟢`.
+  - **Arquitetura:** nenhuma violação nova introduzida — reverificado por grep completo (ver Dashboard Executivo) imediatamente antes de fechar este checkpoint.
+  - **Riscos:** 1 quase-incidente controlado — S07 (ARCH-026) quebrou `S52_DeliveryGuard_Html2pdfPending.test.ts` (teste fazia asserção sobre a localização exata do código-fonte de `DELIVERABLE_EXTENSIONS`; movê-lo quebrou a asserção, não o comportamento real). Detectado imediatamente pela suíte de regressão (é exatamente para isso que ela existe) e corrigido antes do commit — nenhum resíduo.
+  - **Planejamento:** as 7 Sprints do lote (todas Quick Win/Refactor Local) foram concluídas numa única sessão de trabalho, muito mais rápido que a estimativa de calendário original (Jul/2026 inteiro) — esperado, já que aquelas datas eram só estimativas de planejamento, não compromissos (aviso no topo do documento). Não há sinal ainda para recalibrar a estimativa dos itens de "Refactor Estrutural" (S16 em diante) a partir da velocidade deste lote — são categorias de esforço muito diferentes (Quick Win vs. Refactor Estrutural com Validação Progressiva completa).
+- **Critério de avanço:** todas as Sprints S01-S07 🟢 Concluídas, indicador "Violações de fronteira" reduzido conforme esperado (parcialmente — ARCH-002/003 restantes) — **atingido**.
+- **Status:** 🟢 Concluído em 2026-07-17.
 
 ---
 
@@ -687,15 +693,15 @@ Validação
 - **Epic:** Technical Cleanup
 - **Card ARCH:** ARCH-026
 - **Objetivo:** Unificar `DELIVERABLE_EXTENSIONS` (`AgentLoop.ts`) em `planning/inferExpectedExtensions.ts`.
-- **Arquivos afetados:** `src/loop/AgentLoop.ts` (L2562), `src/loop/planning/inferExpectedExtensions.ts`.
+- **Arquivos afetados:** `src/loop/AgentLoop.ts` (import + remoção da const local), `src/loop/planning/inferExpectedExtensions.ts` (novo export), `src/__tests__/regression/S52_DeliveryGuard_Html2pdfPending.test.ts` (não estava no card — ver nota).
 - **Dependências:** P00.
-- **Checklist de execução:** padrão.
-- **Checklist de validação:** padrão.
+- **Checklist de execução:** padrão — executado. Antes de mover, confirmei que `DELIVERABLE_EXTENSIONS` (allowlist de "extensão conta como entregável quando aparece num path de `write` bem-sucedido") e a lógica de `inferExpectedExtensions()` (infere extensão esperada a partir do TEXTO da intenção do usuário) respondem perguntas diferentes — decidi **não fundir as duas listas em uma só**, só mover `DELIVERABLE_EXTENSIONS` para o mesmo arquivo que já hospeda `SOURCE_SCRIPT_EXTENSIONS` (mesma fronteira conceitual, "que tipo de arquivo é isto"), como export próprio e nomeado.
+- **Checklist de validação:** padrão — `npx tsc --noEmit` limpo, `npm run build` limpo, **regressão pegou uma quebra real na primeira rodada**: `S52_DeliveryGuard_Html2pdfPending.test.ts` inspeciona o texto-fonte de `AgentLoop.ts` diretamente (`fs.readFileSync` + regex) para confirmar que `DELIVERABLE_EXTENSIONS` contém `.html` — como o array literal saiu do arquivo por design deste card, a asserção parou de casar. Corrigido apontando essa asserção para o novo arquivo; as outras 10 asserções do teste (comportamento real do DELIVERY-GUARD, incluindo a reprodução do incidente real de 05/07) já passavam sem mudança, porque usam uma cópia standalone da lógica dentro do próprio teste, não importam de `AgentLoop.ts`. Regressão final: 119/119.
 - **Rollback:** trivial.
-- **Critérios de Aceite:** uma única lista de extensões-deliverable.
-- **Definition of Done:** regressão 100%.
+- **Critérios de Aceite:** uma única lista de extensões-deliverable — **atingido**.
+- **Definition of Done:** regressão 100% — **atingido, com a correção acima**.
 - **Commit esperado:** 1 commit.
-- **Status:** ⚪ Não iniciada.
+- **Status:** 🟢 Concluída em 2026-07-17.
 
 ---
 

@@ -17,6 +17,16 @@
 // chegou a listar mas que exec_command também executa via wrapForWindowsPowerShell.
 export const SOURCE_SCRIPT_EXTENSIONS = new Set(['.py', '.sh', '.ps1', '.bat', '.cmd']);
 
+// Extensões que contam como entregável ao usuário quando aparecem no path de um `write`
+// bem-sucedido — usado pelo DELIVERY-GUARD de AgentLoop.ts para decidir se um arquivo escrito
+// mas nunca enviado precisa de um nudge de entrega antes da síntese final. Movida para cá
+// (ARCH-026) para viver ao lado de SOURCE_SCRIPT_EXTENSIONS — mesma fronteira conceitual
+// ("que tipo de arquivo é isto"), mesmo módulo já designado como fonte única para ela. Não é a
+// mesma lista que `inferExpectedExtensions()` produz (aquela infere o tipo esperado a partir do
+// TEXTO da intenção do usuário; esta classifica um path JÁ ESCRITO em disco) — propositalmente
+// mantida como uma lista separada, não fundida com a lógica de inferência.
+export const DELIVERABLE_EXTENSIONS: readonly string[] = ['.html', '.pdf', '.md', '.txt', '.js', '.ts', '.csv', '.json', '.docx', '.xlsx'];
+
 /**
  * Infere extensões de arquivo esperadas a partir de texto livre (userIntent/descrição de step).
  * Retorna lista vazia se não há tipo de arquivo identificável.

@@ -455,8 +455,8 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Regressão.
 - **Métrica que deverá melhorar:** Code Smells (duplicação textual).
 
-### ARCH-026 — Unificar `DELIVERABLE_EXTENSIONS` em `inferExpectedExtensions.ts`
-- **Descrição:** `AgentLoop.ts` mantém uma lista fixa própria (`DELIVERABLE_EXTENSIONS`) separada da lógica de inferência já centralizada em `planning/inferExpectedExtensions.ts` (que já unificou `SOURCE_SCRIPT_EXTENSIONS` antes).
+### ARCH-026 — Unificar `DELIVERABLE_EXTENSIONS` em `inferExpectedExtensions.ts` ✅ Concluído (2026-07-17, Sprint S07)
+- **Descrição:** `AgentLoop.ts` mantém uma lista fixa própria (`DELIVERABLE_EXTENSIONS`) separada da lógica de inferência já centralizada em `planning/inferExpectedExtensions.ts` (que já unificou `SOURCE_SCRIPT_EXTENSIONS` antes). **Executado como:** `DELIVERABLE_EXTENSIONS` movido para `inferExpectedExtensions.ts` como export próprio, ao lado de (não fundido com) `SOURCE_SCRIPT_EXTENSIONS` — permanece uma lista distinta de `inferExpectedExtensions()`, pois respondem perguntas diferentes (extensão de um path já escrito vs. extensão esperada pelo texto da intenção). Quebrou (e corrigiu) um teste de regressão que inspecionava o texto-fonte de `AgentLoop.ts` diretamente — evidência de que a Regressão Arquitetural precisa incluir também os testes que fazem asserção sobre localização de código, não só sobre comportamento.
 - **Arquivos afetados:** `src/loop/AgentLoop.ts` (L2562), `src/loop/planning/inferExpectedExtensions.ts`.
 - **Origem (auditorias):** Auditoria I (QW5).
 - **Categoria:** Technical Cleanup.

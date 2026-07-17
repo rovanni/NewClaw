@@ -42,6 +42,11 @@ function assert(condition: boolean, message: string): void {
 
 const agentLoopPath = path.join(process.cwd(), 'src', 'loop', 'AgentLoop.ts');
 const agentLoopSource = fs.readFileSync(agentLoopPath, 'utf-8');
+// ARCH-026 (17/07/2026): DELIVERABLE_EXTENSIONS foi movido de AgentLoop.ts para
+// planning/inferExpectedExtensions.ts (fonte única, ao lado de SOURCE_SCRIPT_EXTENSIONS) —
+// a asserção sobre o array literal agora lê este arquivo, não mais AgentLoop.ts.
+const inferExpectedExtensionsPath = path.join(process.cwd(), 'src', 'loop', 'planning', 'inferExpectedExtensions.ts');
+const inferExpectedExtensionsSource = fs.readFileSync(inferExpectedExtensionsPath, 'utf-8');
 
 // ── Reprodução standalone do mecanismo real (mesma lógica de AgentLoop.ts) ──
 type HistEntry = { step: number; tool: string; input: string; status: string };
@@ -81,8 +86,8 @@ console.log('\n=== S52-1 — mecanismo implementado em AgentLoop.ts (via cycleHi
         'writtenPaths filtra .html com conversão pendente — DELIVERABLE_EXTENSIONS em si não foi alterado',
     );
     assert(
-        !/DELIVERABLE_EXTENSIONS = \[.*'\.html'.*\]/.test(agentLoopSource) === false,
-        'DELIVERABLE_EXTENSIONS ainda contém .html (não foi removido da allowlist)',
+        !/DELIVERABLE_EXTENSIONS[^=]*= \[.*'\.html'.*\]/.test(inferExpectedExtensionsSource) === false,
+        'DELIVERABLE_EXTENSIONS (planning/inferExpectedExtensions.ts) ainda contém .html (não foi removido da allowlist)',
     );
 }
 

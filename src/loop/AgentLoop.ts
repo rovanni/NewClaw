@@ -51,7 +51,7 @@ import { parseLLMResponse, extractFinalText } from './agentOutputParser';
 import { buildLoopMetric, summarizeMetrics } from './agentMetrics';
 import { extractMissingExecutable } from './planning/extractMissingExecutable';
 import { computeToolInputKey } from './planning/computeToolInputKey';
-import { SOURCE_SCRIPT_EXTENSIONS } from './planning/inferExpectedExtensions';
+import { SOURCE_SCRIPT_EXTENSIONS, DELIVERABLE_EXTENSIONS } from './planning/inferExpectedExtensions';
 
 export type { ToolResult, ToolExecutor, LoopMetrics, ChannelContext, AgentLoopConfig, ProcessedResult };
 
@@ -2559,7 +2559,8 @@ export class AgentLoop {
         // the agent wrote tmp/gerar_slides_senac.py and workspace/gen_pptx.py in two separate
         // turns, never executed either, and both times ran out of step budget before this guard
         // could even fire (see the `stepCount < maxSteps` note below).
-        const DELIVERABLE_EXTENSIONS = ['.html', '.pdf', '.md', '.txt', '.js', '.ts', '.csv', '.json', '.docx', '.xlsx'];
+        // DELIVERABLE_EXTENSIONS agora vive em planning/inferExpectedExtensions.ts (ARCH-026) —
+        // mesmo módulo que já centraliza SOURCE_SCRIPT_EXTENSIONS logo abaixo.
         // Fonte única com RiskAnalyzer/resolveArtifactPathFromEvidence (Sprint F2, revisão de
         // código pós-piloto R1-R7) — antes esta lista local (['.py','.sh']) e o blocklist
         // SOURCE_SCRIPT_EXTENSIONS de inferExpectedExtensions.ts divergiam sobre '.js'/'.ts',
