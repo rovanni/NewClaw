@@ -48,6 +48,21 @@ export class StrategyDiversityGuard {
 
     /**
      * Extrai todas as fingerprints de planos já tentados pelo goal.
+     *
+     * ARCH-011: `goal.toolsTried` (fonte estruturada, dedupe por `GoalStore.addToolTried`,
+     * ordem de primeira utilização preservada) agora é a fonte PRIMÁRIA — evita recomputar
+     * por regex o que já está gravado de forma limpa. Não é um substituto 1:1 do regex
+     * anterior, porque as duas fontes representam coisas diferentes: `toolsTried` é a lista
+     * (deduplicada, sem repetição) de tools REAIS já despachadas no goal inteiro; o regex
+     * sobre `strategiesTried` tentava reconstruir sequências por-tentativa a partir de texto
+     * livre, incluindo `'agentloop'` — que `toolsTried` NUNCA contém, porque
+     * `GoalExecutionLoop.ts` só grava ali quando `step.toolName` existe (steps despachados
+     * via AgentLoop, sem toolName, não passam por `addToolTried`). Por isso o fallback
+     * abaixo continua existindo — não para reconstruir tool names (agora vem de `toolsTried`,
+     * sem risco de a lista hardcoded de nomes ficar desatualizada em relação ao
+     * `ToolRegistry` real, achado registrado em `docs/issues/005`), só para detectar a
+     * ÚNICA informação que `toolsTried` estruturalmente não pode carregar: que um step sem
+     * toolName (`agentloop`) fez parte da estratégia.
      */
     static extractUsedFingerprints(goal: Goal): string[] {
         const fingerprints = new Set<string>();
@@ -56,13 +71,16 @@ export class StrategyDiversityGuard {
             fingerprints.add(StrategyDiversityGuard.fingerprint(goal.currentPlan));
         }
 
-        // Extrai fingerprints implícitas das strategiesTried (cadeias de tools mencionadas)
+        // Fonte primária estruturada — nenhuma regex, nenhum parsing de texto livre.
+        if (goal.toolsTried.length >= 2) {
+            fingerprints.add(goal.toolsTried.join('→'));
+        }
+
+        // Fallback: só para capturar a participação de 'agentloop' (steps sem toolName),
+        // a única lacuna real de toolsTried — não para reconstruir nomes de tool.
         for (const strategy of goal.strategiesTried) {
-            const toolMatch = strategy.match(
-                /\b(web_search|crypto_analysis|memory_search|agentloop|exec_command|write|read|send_document|web_navigate|api_request|edit|list_workspace)\b/g
-            );
-            if (toolMatch && toolMatch.length >= 2) {
-                fingerprints.add(toolMatch.join('→'));
+            if (/\bagentloop\b/i.test(strategy) && goal.toolsTried.length > 0) {
+                fingerprints.add([...goal.toolsTried, 'agentloop'].join('→'));
             }
         }
 

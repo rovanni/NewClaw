@@ -36,7 +36,7 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 | 2026-07-CP01 | Jul/2026 | Checkpoint | — | 🟢 | S01-S07 | — | 7/7 Sprints concluídas, indicadores revisados, 0 riscos residuais |
 | 2026-07-S08 | Jul/2026 | Boundary Enforcement | ARCH-002 | 🟢 | CP01 | 151fd6a, 36036de | Movido p/ core/, validado real em Windows+Linux (VPS); 3 falhas iniciais na VPS = 2 falso-positivo do setup + 1 bug de teste real (corrigido) — ver docs/issues/002 |
 | 2026-07-S09 | Jul/2026 | Boundary Enforcement | ARCH-003 | 🟢 | CP01 | d9efaff | `memory/` 0 imports de runtime de `loop/`; achado colateral doc. em issues/004 |
-| 2026-07-S10 | Jul/2026 | Single Source of Truth | ARCH-011 | ⚪ | S09 | — | — |
+| 2026-07-S10 | Jul/2026 | Single Source of Truth | ARCH-011 | 🟢 | S09 | (ver métricas) | Fonte primária estruturada aditiva + fallback agentloop; 14 tools "invisíveis" corrigidas de brinde |
 | 2026-08-S11 | Ago/2026 | Decision Ownership | ARCH-016 | ⚪ | S10 | — | — |
 | 2026-08-S12 | Ago/2026 | Structural Simplification | ARCH-023 | ⚪ | CP01 | — | — |
 | 2026-08-S13 | Ago/2026 | Single Source of Truth | ARCH-007 | ⚪ | CP01 | — | — |
@@ -64,20 +64,20 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01-S09 e Checkpoint CP01 concluídos
-**Progresso:** 9 / 26 ARCH concluídos (~35%)
-**Sprint Atual:** Nenhuma em andamento (S09 concluída — próxima é 2026-08-S10)
-**Próxima Sprint:** 2026-08-S10 (ARCH-011)
-**Epic Atual:** Epic A concluído (ARCH-001/002/003/004 todos feitos); Epic B iniciado — ARCH-006 feito; Epic C parcialmente concluído — ARCH-014/017 feitos; Epic E concluído — ARCH-025/026 feitos
+**Status Geral:** 🟢 Em execução — Fase 0, S01-S10 e Checkpoint CP01 concluídos
+**Progresso:** 10 / 26 ARCH concluídos (~38%)
+**Sprint Atual:** Nenhuma em andamento (S10 concluída — próxima é 2026-08-S11)
+**Próxima Sprint:** 2026-08-S11 (ARCH-016)
+**Epic Atual:** Epic A concluído; Epic B em andamento — ARCH-006/011 feitos; Epic C parcialmente concluído — ARCH-014/017 feitos; Epic E concluído — ARCH-025/026 feitos
 **Próximo Marco:** 2026-08-CP02
-**Última Atualização:** 2026-07-17 (Sprint S09 concluída)
+**Última Atualização:** 2026-07-17 (Sprint S10 concluída)
 **Build:** 🟢 `npm run build` limpo
-**Testes:** 🟢 119/119
-**Regressão:** 🟢 119/119 (pós-S09)
+**Testes:** 🟢 120/120
+**Regressão:** 🟢 120/120 (pós-S10, 119 + `S117` novo)
 **Riscos Abertos:** 0 — nota permanente: a VPS `venus@10.0.0.10` usada para validação Linux tem histórico de exigir `.env`/`WORKSPACE_DIR` explícito (skill `verify`) para não gerar falso-positivo — ver `docs/issues/002`
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
-**Dívida Arquitetural Restante:** 17 ARCH (16 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
-**Achados fora de escopo documentados (`docs/issues/`):** 002 (falsos-positivos de validação VPS), 003 (`core/index.ts` barrel possivelmente morto), 004 (2 funções `extractText` com nome colidindo)
+**Dívida Arquitetural Restante:** 16 ARCH (15 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
+**Achados fora de escopo documentados (`docs/issues/`):** 002 (falsos-positivos de validação VPS), 003 (`core/index.ts` barrel possivelmente morto), 004 (2 funções `extractText` com nome colidindo), 005 (regex de tool names desatualizada — corrigido de brinde na própria S10)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
 
@@ -87,11 +87,11 @@ Snapshot do estado de validação do branch `refactor/architectural-backlog` nes
 
 | Indicador | Status | Última verificação | Evidência |
 |---|---|---|---|
-| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S09) | Windows: limpo. Linux real (VPS Ubuntu 24.04, validado em S08): limpo |
-| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S09) | 0 erros |
-| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S09) | `npm run test:regression` — 119/119 (mesma contagem de arquivos; S112 continua sendo o mesmo teste, só com o assert Linux corrigido em S08) |
+| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S10) | Windows: limpo. Linux real (VPS Ubuntu 24.04, validado em S08): limpo |
+| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S10) | 0 erros |
+| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S10) | `npm run test:regression` — 120/120 (119 + `S117` novo, cobrindo o cenário de fallback `agentloop` exigido pelo card ARCH-011) |
 | Integration Tests | ✔ (parcial) | 2026-07-17 | Etapa 4 (ambiente real) executada em S08 numa VPS Linux real (`venus@10.0.0.10`), cópia isolada, produção nunca tocada — ver `docs/issues/002` |
-| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S09) | Boundary (ARCH-001/002/003/004): Epic A **concluído** — `memory/` com 0 imports de runtime/tipo de `loop/`; `core/CapabilityRegistry.ts` não importa mais de `loop/`; só 2 imports legítimos residuais (`AgentLoop` classe). SSOT (ARCH-006): só as 2 exceções conscientes fora do accessor. Decision Ownership (ARCH-014/017): 6/6 regexes byte-idênticas, 0 ocorrências residuais de `ToolExecutorService`. Technical Cleanup (ARCH-025/026): fonte única confirmada. Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
+| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S10) | Boundary (ARCH-001/002/003/004): Epic A **concluído**. SSOT/Recomputation (ARCH-006/011): accessor único + fonte primária estruturada para fingerprint, sem lista hardcoded de tool names (14 de 25 tools estavam "invisíveis" pro mecanismo antigo — corrigido de brinde, `docs/issues/005`). Decision Ownership (ARCH-014/017): 6/6 regexes byte-idênticas, 0 ocorrências residuais de `ToolExecutorService`. Technical Cleanup (ARCH-025/026): fonte única confirmada. Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
 
 **Como reproduzir esta linha "Architecture Metrics":** os comandos variam por Sprint (cada ARCH tem seu próprio "Critérios de Aceite" verificável por grep/contagem — ver o card correspondente em `ARCHITECTURAL_BACKLOG.md`), não existe um único script universal ainda. Ver a seção "Regressão Funcional vs. Regressão Arquitetural" acima.
 
@@ -297,15 +297,16 @@ Validação
 - **Epic:** Single Source of Truth
 - **Card ARCH:** ARCH-011
 - **Objetivo:** `StrategyDiversityGuard.extractUsedFingerprints` passa a ler `goal.toolsTried` (estruturado) em vez de regex sobre `strategiesTried`.
-- **Arquivos afetados:** `src/loop/StrategyDiversityGuard.ts` (L59-67).
+- **Arquivos afetados:** `src/shared/StrategyDiversityGuard.ts` (movido em S09), teste novo `S117`.
 - **Dependências:** S09 (ARCH-003 — mover a classe antes de mudar sua lógica interna).
-- **Checklist de execução:** padrão + confirmar que `toolsTried` cobre os casos que a regex cobria (fallback para steps `agentloop` sem toolName).
-- **Checklist de validação:** padrão + teste do cenário de fallback.
+- **Checklist de execução:** padrão + confirmar que `toolsTried` cobre os casos que a regex cobria (fallback para steps `agentloop` sem toolName) — executado, e a premissa do card não se sustentou inteiramente: `goal.toolsTried` é uma lista DEDUPLICADA (sem fronteira por tentativa/replan) de tools reais, não "a sequência estruturada" completa que o card presumia — trocar 1:1 teria mudado a semântica do fingerprint de "sequência ordenada exata" para algo mais fraco. Design escolhido: `toolsTried` vira fonte primária ADITIVA (soma ao Set de fingerprints, não substitui), regex sobrevive só como fallback para detectar `'agentloop'` (única coisa que `toolsTried` estruturalmente não representa — `GoalExecutionLoop.ts:1928` só grava `addToolTried` quando `step.toolName` existe).
+- **Checklist de validação:** padrão + teste do cenário de fallback — `tsc --noEmit` limpo, `npm run build` limpo, regressão 120/120 (119 + `S117` novo, 6 cenários incluindo o fallback de `agentloop` explicitamente pedido pelo card).
 - **Rollback:** reverter.
-- **Critérios de Aceite:** fingerprint derivado de `toolsTried` como fonte primária.
-- **Definition of Done:** regressão 100% + teste de fallback.
+- **Critérios de Aceite:** fingerprint derivado de `toolsTried` como fonte primária — **atingido** (aditivamente, não substitutivamente — ver nota acima).
+- **Definition of Done:** regressão 100% + teste de fallback — **atingido**.
+- **Achado colateral fora de escopo, resolvido como efeito direto da mudança de fonte:** a lista hardcoded de nomes de tool no regex antigo cobria só 11 de 25 tools reais registradas — 14 tools (incluindo `ssh_exec`, `weather`, `send_audio`) nunca eram reconhecidas em `strategiesTried`. Como o regex agora só busca `'agentloop'` (não mais nomes de tool), essa classe de bug desaparece sem precisar de correção separada. Registro completo: `docs/issues/005-strategydiversityguard-stale-tool-regex.md`.
 - **Commit esperado:** 1 commit.
-- **Status:** ⚪ Não iniciada.
+- **Status:** 🟢 Concluída em 2026-07-17.
 
 ### Sprint 2026-08-S13
 - **Número:** S13

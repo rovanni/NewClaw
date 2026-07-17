@@ -199,8 +199,8 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Unitário + regressão.
 - **Métrica que deverá melhorar:** Recomputation Hotspots.
 
-### ARCH-011 — `StrategyDiversityGuard.extractUsedFingerprints` ler `goal.toolsTried` em vez de regex sobre `strategiesTried`
-- **Descrição:** O achado mais nítido de recomputação da Auditoria II: `goal.toolsTried` já guarda a sequência de tools de forma estruturada, mas `extractUsedFingerprints()` reconstrói a mesma informação via regex sobre o texto livre de `strategiesTried`.
+### ARCH-011 — `StrategyDiversityGuard.extractUsedFingerprints` ler `goal.toolsTried` em vez de regex sobre `strategiesTried` ✅ Concluído (2026-07-17, Sprint S10)
+- **Descrição:** O achado mais nítido de recomputação da Auditoria II: `goal.toolsTried` já guarda a sequência de tools de forma estruturada, mas `extractUsedFingerprints()` reconstrói a mesma informação via regex sobre o texto livre de `strategiesTried`. **Correção na execução:** a premissa "já guarda a sequência" não se sustentou totalmente — `toolsTried` é deduplicado, sem fronteira por tentativa, e nunca contém `'agentloop'`. Implementado como fonte primária ADITIVA (soma ao Set de fingerprints), com o regex sobrevivendo só como fallback para detectar `'agentloop'` — não mais para reconhecer nomes de tool (eliminando, como efeito colateral, uma lista hardcoded que cobria só 11 de 25 tools reais, `docs/issues/005`).
 - **Arquivos afetados:** `src/loop/StrategyDiversityGuard.ts` (L59-67).
 - **Origem (auditorias):** Auditoria II.
 - **Categoria:** Single Source of Truth.
