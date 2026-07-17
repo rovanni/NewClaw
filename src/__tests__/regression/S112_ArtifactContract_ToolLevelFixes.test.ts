@@ -87,7 +87,13 @@ async function main() {
         const tool = new ExecCommandTool();
         const writeCmd = process.platform === 'win32'
             ? `powershell -Command "'conteudo real e substantivo dentro do workspace, '.PadRight(220,'x') | Out-File -Encoding utf8 tmp/dentro.txt" && echo ARTIFACT: tmp/dentro.txt`
-            : `mkdir -p tmp && printf 'conteudo real e substantivo dentro do workspace, %.0sx' {1..220} > tmp/dentro.txt && echo "ARTIFACT: tmp/dentro.txt"`;
+            // `{1..220}` é expansão de chaves do bash — exec_command.ts spawna via Node
+            // child_process.exec(), que no Linux usa /bin/sh (dash no Debian/Ubuntu, SEM
+            // suporte a brace expansion). Achado real validando em VPS Ubuntu 24.04 (17/07/2026,
+            // docs/issues/002): o comando original silenciosamente tratava "{1..220}" como token
+            // literal em vez de expandir, gerando um tmp/dentro.txt curto demais e escondendo o
+            // que este teste deveria provar. `awk` é POSIX/onipresente — não depende de bashismos.
+            : `mkdir -p tmp && printf 'conteudo real e substantivo dentro do workspace, %s' "$(awk 'BEGIN{for(i=0;i<220;i++)printf "x"}')" > tmp/dentro.txt && echo "ARTIFACT: tmp/dentro.txt"`;
         const result = await tool.execute({ command: writeCmd });
 
         assert(result.success === true, 'comando executou com sucesso', result);
