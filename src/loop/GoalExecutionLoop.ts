@@ -1239,14 +1239,41 @@ export class GoalExecutionLoop {
                                 toolArgs: sendArgs,
                                 status: 'pending' as const,
                                 fallbackSteps: [],
+                                originStepId: pendingStep.id,
                             }));
-                            const updatedPlan = [...currentGoal.currentPlan, ...newSendSteps];
+                            // RECONCILIAÇÃO: uma nova tentativa do MESMO pendingStep (retry após
+                            // SEMANTIC-MISMATCH/partial) supera qualquer send_document ainda
+                            // pendente injetado por uma tentativa ANTERIOR do mesmo step — evita
+                            // que retries sucessivos (cada um com um file_path novo) acumulem
+                            // envios concorrentes pro mesmo objetivo lógico. Achado real:
+                            // goal_1784200808912_vw8fu, 16/07/2026 — 3 .pptx enviados pra 1
+                            // pedido de "mudar as cores", cada retry do mesmo step injetando seu
+                            // próprio deferred send sem cancelar o anterior. Só afeta sends AINDA
+                            // NÃO despachados (pending); um DELIVERY-GUARD já enviado de verdade
+                            // (sentArtifacts) é irretratável e fica fora deste escopo.
+                            const supersededPaths: string[] = [];
+                            const planWithoutSuperseded = currentGoal.currentPlan.filter(s => {
+                                const superseded = s.status === 'pending'
+                                    && s.toolName === 'send_document'
+                                    && s.originStepId === pendingStep.id;
+                                if (superseded) supersededPaths.push(String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''));
+                                return !superseded;
+                            });
+                            if (supersededPaths.length > 0) {
+                                log.info(
+                                    `[AGENTLOOP-SEND-SUPERSEDE] goal=${currentGoal.id} step=${pendingStep.id}` +
+                                    ` superseded="${supersededPaths.join(',')}"` +
+                                    ` reason=same_origin_step_retry`
+                                );
+                            }
+                            const updatedPlan = [...planWithoutSuperseded, ...newSendSteps];
                             this.goalStore.update(currentGoal.id, { currentPlan: updatedPlan });
                             currentGoal = this.goalStore.getById(currentGoal.id)!;
                             log.info(
                                 `[AGENTLOOP-SEND] goal=${currentGoal.id} step=${pendingStep.id}` +
                                 ` deferred_injected=${newSendSteps.length}` +
                                 ` deferred_skipped=${cycleResult.deferredSends.length - dedupedSends.length}` +
+                                ` superseded=${supersededPaths.length}` +
                                 ` reason=goal_execution_policy`
                             );
                         } else {
@@ -1886,11 +1913,16 @@ export class GoalExecutionLoop {
                 for (const sendArgs of deferredSendArgs) {
                     const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
                     if (!fp) continue;
+                    // toolName='send_document', não 'write': deferredSendArgs só é populado por
+                    // deferSendDocument() (send_document interceptado dentro do AgentLoop) — o
+                    // pseudo-attempt original gravava 'write', mascarando esta entrega de um
+                    // consumidor que filtre goal.attempts por toolName==='send_document'
+                    // (achado ao validar a hipótese de captura única, 16/07/2026).
                     this.goalStore.addAttempt(goal.id, {
                         id: `att_agentloop_write_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
                         planStepId: step.id,
-                        toolName: 'write',
-                        args: { path: fp },
+                        toolName: 'send_document',
+                        args: { file_path: fp },
                         result: 'success',
                         output: '[AGENTLOOP-WRITE] Arquivo gravado e entregue pelo AgentLoop',
                         durationMs: 0,

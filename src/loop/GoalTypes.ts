@@ -93,6 +93,14 @@ export interface PlanStep {
     status: 'pending' | 'executing' | 'completed' | 'skipped' | 'failed';
     executedAt?: number;
     result?: string;
+    /**
+     * id do `PlanStep` que gerou este step (usado hoje só por sends diferidos do AgentLoop,
+     * injetados em GoalExecutionLoop.ts). Permite reconciliar retries: uma nova tentativa do
+     * MESMO step de origem supera um send_document ainda pendente de uma tentativa anterior
+     * do mesmo step, em vez de acumular os dois (achado real: goal_1784200808912_vw8fu,
+     * 16/07/2026 — 3 arquivos .pptx enviados pra 1 pedido de "mudar as cores", um por retry).
+     */
+    originStepId?: string;
 }
 
 // ── Attempts ─────────────────────────────────────────────────────────────────
