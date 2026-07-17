@@ -94,6 +94,18 @@ export interface PlanStep {
     executedAt?: number;
     result?: string;
     /**
+     * Resultado real do `GoalAttempt` mais recente associado a este step (ARCH-007).
+     * `status: 'completed'` só significa "execução terminou, não está mais pendente de
+     * dispatch" — é o eixo de PROGRESSÃO do plano, não de confiança no resultado. Um step
+     * pode ficar `completed` (não será redespachado) mesmo quando o attempt real foi
+     * `'partial'` (ex: heurística de sucesso de baixa confiança, Sprint 0.8) — isso é
+     * intencional (retry automático nesse caminho não é o design), mas antes ficava
+     * invisível fora de `goal.attempts`. Este campo torna essa divergência explícita e
+     * consultável em vez de acidental — consumidores que precisam da confiança real do
+     * resultado (não só "terminou de rodar") devem ler este campo, não `status`.
+     */
+    lastAttemptOutcome?: AttemptOutcome;
+    /**
      * id do `PlanStep` que gerou este step (usado hoje só por sends diferidos do AgentLoop,
      * injetados em GoalExecutionLoop.ts). Permite reconciliar retries: uma nova tentativa do
      * MESMO step de origem supera um send_document ainda pendente de uma tentativa anterior

@@ -2207,11 +2207,6 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
         attemptRecording: 'add' | 'skip' | 'finalize' = 'add',
         producedArtifactPaths?: string[],
     ): void {
-        const updatedPlan = goal.currentPlan.map(s =>
-            s.id === step.id ? { ...s, status: 'completed' as const, result: output.slice(0, 200), executedAt: Date.now() } : s
-        );
-        this.goalStore.update(goal.id, { currentPlan: updatedPlan });
-
         // Após instalação bem-sucedida de dependência, invalida tools + execution
         // para que o próximo replan detecte a ferramenta recém-instalada.
         if (step.id.startsWith('install_')) {
@@ -2254,6 +2249,18 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
                 reflectionConfidence = existing.evaluation?.confidence ?? 0.9;
             }
         }
+
+        // ARCH-007: status='completed' é só o eixo de progressão do plano (não será
+        // redespachado) — lastAttemptOutcome carrega a confiança REAL (reflectionOutcome já
+        // resolvida acima, incluindo o caso 'skip' que lê o attempt de fato gravado por
+        // executeStep()), tornando explícita a divergência que antes só existia dentro de
+        // goal.attempts, invisível a partir do PlanStep.
+        const updatedPlan = goal.currentPlan.map(s =>
+            s.id === step.id
+                ? { ...s, status: 'completed' as const, result: output.slice(0, 200), executedAt: Date.now(), lastAttemptOutcome: reflectionOutcome }
+                : s
+        );
+        this.goalStore.update(goal.id, { currentPlan: updatedPlan });
 
         // Registra na ReflectionMemory.
         // IMPORTANTE: o pattern deve ser `tool_${toolName}` (sem sufixo _success) para que a
