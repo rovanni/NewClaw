@@ -114,9 +114,9 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Unitário + regressão + e2e sintético (LLM mockado) + execução real (LLM real, goal real que entrega + reenvia artefato).
 - **Métrica que deverá melhorar:** Single Sources (Indicador #4), Decision Owners (Indicador #5).
 
-### ARCH-006 — Accessor único `getPendingSteps(goal, toolName?)`
-- **Descrição:** `.filter(s => s.status === 'pending')` é recalculado inline em 6+ pontos de `GoalExecutionLoop.ts`. Substituir por um accessor único.
-- **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (L614, L619-622, L645-647, L894-898, L1024-1027, L3362-3364).
+### ARCH-006 — Accessor único `getPendingSteps(goal, toolName?)` ✅ Concluído (2026-07-17, Sprint S03)
+- **Descrição:** `.filter(s => s.status === 'pending')` é recalculado inline em 6+ pontos de `GoalExecutionLoop.ts`. Substituir por um accessor único. **Executado como:** `getPendingSteps(plan: PlanStep[], toolName?: string | string[])` — 15 call sites reais migrados (não 6; varredura completa achou mais), 2 ocorrências semelhantes excluídas por serem outra coisa (status de `SuccessCriterion`; filtro de mutação "remover steps supersedidos").
+- **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (15 call sites — ver nota acima).
 - **Origem (auditorias):** Auditoria II.
 - **Categoria:** Single Source of Truth.
 - **Classificação:** Quick Win.

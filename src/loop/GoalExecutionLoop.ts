@@ -285,7 +285,7 @@ export class GoalExecutionLoop {
         // não é a mesma classe de duplicação do achado residual 2 (Sprint 0.8.2/0.8.3): o
         // attempt 'failure' anterior (bloqueio de permissão) e este 'success' (pós-aprovação)
         // representam duas execuções genuinamente distintas do step.
-        const blockedStep = goal.currentPlan.find(s => s.status === 'pending');
+        const blockedStep = this.getPendingSteps(goal.currentPlan)[0];
         if (blockedStep) {
             this.markStepDone(goal, blockedStep, authStepOutput, 'add', authStepArtifactPaths);
         }
@@ -309,6 +309,23 @@ export class GoalExecutionLoop {
         const hasExec = plan.some(s => s.toolName === 'exec_command');
         const hasDelivery = plan.some(s => ['send_document', 'send_audio', 'write', 'edit'].includes(s.toolName ?? ''));
         return hasExec && hasDelivery;
+    }
+
+    // ── Accessor único de steps pendentes (ARCH-006) ───────────────────────────
+
+    /**
+     * Fonte única para "quais steps deste plano estão pendentes", opcionalmente
+     * restrito a uma tool (ou lista de tools). Substitui os `.filter`/`.find`/`.some`
+     * inline com `status === 'pending'` espalhados pelo arquivo — cada um recomputava
+     * o mesmo predicado de forma independente, sem risco funcional individual, mas sem
+     * fonte única do conceito "step pendente".
+     */
+    private getPendingSteps(plan: PlanStep[], toolName?: string | string[]): PlanStep[] {
+        if (toolName === undefined) {
+            return plan.filter(s => s.status === 'pending');
+        }
+        const names = Array.isArray(toolName) ? toolName : [toolName];
+        return plan.filter(s => s.status === 'pending' && names.includes(s.toolName ?? ''));
     }
 
     // ── Helper espiral: Q1+Q2 envolvem cada replan ────────────────────────────
@@ -520,7 +537,7 @@ export class GoalExecutionLoop {
                 c => c.status === 'completed'
             );
             const completedCount = state.progressModel.components.length;
-            const pendingCount = finalPlan.filter(s => s.status === 'pending').length;
+            const pendingCount = this.getPendingSteps(finalPlan).length;
             const totalWork = completedCount + pendingCount;
             state.progressModel.overallPercent = totalWork > 0
                 ? Math.round((completedCount / totalWork) * 100)
@@ -611,14 +628,14 @@ export class GoalExecutionLoop {
                 event: 'cycle_start',
             });
 
-            const pendingStep = currentGoal.currentPlan.find(s => s.status === 'pending');
+            const pendingStep = this.getPendingSteps(currentGoal.currentPlan)[0];
 
             // Fix #1: considera o plano "pronto para validar" quando todos os steps
             // pendentes são send_document. A validação ocorre ANTES da entrega —
             // artefatos só são enviados ao usuário após achieved=true.
             const readyToValidate = !pendingStep || (
                 pendingStep.toolName === 'send_document' &&
-                !currentGoal.currentPlan.some(s => s.status === 'pending' && s.toolName !== 'send_document')
+                this.getPendingSteps(currentGoal.currentPlan).every(s => s.toolName === 'send_document')
             );
 
             if (readyToValidate) {
@@ -642,9 +659,7 @@ export class GoalExecutionLoop {
                 // 'write' e passar no validador — ver project_session_bugs_jul2026_ap na memória.
                 // Verificação estrutural (arquivo existe, não é placeholder) é mais confiável aqui
                 // do que o julgamento literal do LLM sobre um evento que ainda não aconteceu.
-                const pendingSendSteps = currentGoal.currentPlan.filter(
-                    s => s.status === 'pending' && s.toolName === 'send_document'
-                );
+                const pendingSendSteps = this.getPendingSteps(currentGoal.currentPlan, 'send_document');
                 const structuralBypass = pendingSendSteps.length > 0 && pendingSendSteps.every(s => {
                     const fp = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
                     if (!fp) return false;
@@ -730,9 +745,7 @@ export class GoalExecutionLoop {
                         // Fix #1 + P3-DEDUP: executa steps de send_document diferidos,
                         // agora que achieved=true. Verifica sentArtifacts ANTES de executar
                         // para garantir 1 artefato = 1 entrega mesmo após múltiplos replans.
-                        const deferredSends = currentGoal.currentPlan.filter(
-                            s => s.status === 'pending' && s.toolName === 'send_document'
-                        );
+                        const deferredSends = this.getPendingSteps(currentGoal.currentPlan, 'send_document');
                         let failedSends = 0;
                         for (const sendStep of deferredSends) {
                             let filePath = String(sendStep.toolArgs?.file_path ?? sendStep.toolArgs?.path ?? '');
@@ -855,7 +868,7 @@ export class GoalExecutionLoop {
                 log.info(`[GoalLoop] goal=${currentGoal.id} not yet complete: ${validation.reason}`);
                 log.info(`[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey} state=replanning reason="${(validation.reason ?? '').slice(0, 100)}" cycle=${totalCycles} timestamp=${Date.now()}`);
                 // FIX F: [GOAL-SATISFACTION] — registra estado de não-satisfação para diagnóstico
-                const pendingSendCount = currentGoal.currentPlan.filter(s => s.status === 'pending').length;
+                const pendingSendCount = this.getPendingSteps(currentGoal.currentPlan).length;
                 log.info(
                     `[GOAL-SATISFACTION] goal=${currentGoal.id}` +
                     ` achieved=false` +
@@ -892,8 +905,7 @@ export class GoalExecutionLoop {
                         // (agendado mas ainda não executado) — sem isso, deliverable_check injetava um
                         // segundo send step pro mesmo arquivo enquanto o primeiro ainda não tinha rodado.
                         const pendingSendPaths = new Set(
-                            currentGoal.currentPlan
-                                .filter(s => s.status === 'pending' && s.toolName === 'send_document')
+                            this.getPendingSteps(currentGoal.currentPlan, 'send_document')
                                 .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
                         );
                         const unsentFiles = substantiveFiles.filter(f => !sentArtifacts.has(f) && !pendingSendPaths.has(f));
@@ -1022,9 +1034,7 @@ export class GoalExecutionLoop {
             }
             // H7: AgentLoop pode chamar send_document internamente sem proteção de deferred
             if (pendingStep.toolName === 'agentloop' || !pendingStep.toolName) {
-                const hasPendingSends = currentGoal.currentPlan.some(
-                    s => s.status === 'pending' && s.toolName === 'send_document'
-                );
+                const hasPendingSends = this.getPendingSteps(currentGoal.currentPlan, 'send_document').length > 0;
                 log.info(
                     `[SEND-ORDER] goal=${currentGoal.id} step=${pendingStep.id}` +
                     ` tool=${pendingStep.toolName ?? 'agentloop'} validation_done=false` +
@@ -1230,8 +1240,7 @@ export class GoalExecutionLoop {
                     // no plano mesmo que a dedup no callback tenha falhado (defesa em profundidade).
                     if (cycleResult.deferredSends && cycleResult.deferredSends.length > 0) {
                         const existingPendingSendPaths = new Set(
-                            currentGoal.currentPlan
-                                .filter(s => s.status === 'pending' && s.toolName === 'send_document')
+                            this.getPendingSteps(currentGoal.currentPlan, 'send_document')
                                 .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
                         );
                         const dedupedSends: typeof cycleResult.deferredSends = [];
@@ -1474,7 +1483,7 @@ export class GoalExecutionLoop {
                         ...currentGoal.currentPlan.filter(s => s.status === 'completed'),
                         installStep,
                         pendingStep,
-                        ...currentGoal.currentPlan.filter(s => s.status === 'pending' && s.id !== pendingStep.id),
+                        ...this.getPendingSteps(currentGoal.currentPlan).filter(s => s.id !== pendingStep.id),
                     ];
 
                     this.goalStore.update(currentGoal.id, { currentPlan: updatedPlan });
@@ -1575,7 +1584,7 @@ export class GoalExecutionLoop {
         // Max cycles atingido — mas se todos os steps completaram, ainda roda a validação final.
         // Sem esta verificação, o goal falha mesmo quando o último step termina com sucesso
         // no mesmo ciclo em que MAX_CYCLES é atingido (a iteração de validação nunca roda).
-        const allStepsDone = !currentGoal.currentPlan.find(s => s.status === 'pending');
+        const allStepsDone = this.getPendingSteps(currentGoal.currentPlan).length === 0;
         if (allStepsDone) {
             log.info(`[GoalLoop] goal=${currentGoal.id} MAX_CYCLES=${GOAL_LIMITS.MAX_CYCLES} reached but all steps done — running final validation`);
             const activeMilestone = currentGoal.isConstruction && currentGoal.roadmap && currentGoal.roadmap.length > 0
@@ -3359,9 +3368,7 @@ OU
                 // Step pendente que satisfará esta claim já está no plano — não bloquear.
                 // Evita deadlock onde readyToValidate=true (só send_document pendente) mas
                 // a evidência ainda não existe porque o step ainda não foi despachado.
-                const hasPendingEvidence = goal.currentPlan.some(
-                    s => s.status === 'pending' && rule.requiredTools.includes(s.toolName ?? '')
-                );
+                const hasPendingEvidence = this.getPendingSteps(goal.currentPlan, rule.requiredTools).length > 0;
                 if (hasPendingEvidence) {
                     log.info(
                         `[VALIDATION-EVIDENCE]` +

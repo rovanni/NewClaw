@@ -15,7 +15,7 @@ Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejame
 | 2026-07-P00 | Jul/2026 | Preparação | Baseline | 🟢 | — | d088864 (TAG `baseline-b1.0-pre-refactor`) | 118/118, tsc limpo, T0 registrado |
 | 2026-07-S01 | Jul/2026 | Boundary Enforcement | ARCH-001 | 🟢 | P00 | 6c14a9b | 26 imports corrigidos (`tools/`→25, `core/ToolRegistry.ts`→1), tsc limpo, 118/118 |
 | 2026-07-S02 | Jul/2026 | Boundary Enforcement | ARCH-004 | 🟢 | P00 | 18ba2a2 | `shared/domainTypes.ts` criado, `memory/` sem imports de tipo de `loop/`, tsc limpo, 118/118 |
-| 2026-07-S03 | Jul/2026 | Single Source of Truth | ARCH-006 | ⚪ | P00 | — | — |
+| 2026-07-S03 | Jul/2026 | Single Source of Truth | ARCH-006 | 🟢 | P00 | (ver métricas) | `getPendingSteps` único, 15 call sites migrados, tsc limpo, 119/119 |
 | 2026-07-S04 | Jul/2026 | Decision Ownership | ARCH-014 | ⚪ | P00 | — | — |
 | 2026-07-S05 | Jul/2026 | Decision Ownership | ARCH-017 | ⚪ | P00 | — | — |
 | 2026-07-S06 | Jul/2026 | Technical Cleanup | ARCH-025 | ⚪ | P00 | — | — |
@@ -51,19 +51,19 @@ Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejame
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01 e S02 concluídas
-**Progresso:** 2 / 26 ARCH concluídos (~8%)
-**Sprint Atual:** Nenhuma em andamento (S02 concluída — próxima é 2026-07-S03)
-**Próxima Sprint:** 2026-07-S03 (ARCH-006)
-**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído — ARCH-001/004 feitos, ARCH-002 restante em S08)
+**Status Geral:** 🟢 Em execução — Fase 0, S01, S02 e S03 concluídas
+**Progresso:** 3 / 26 ARCH concluídos (~12%)
+**Sprint Atual:** Nenhuma em andamento (S03 concluída — próxima é 2026-07-S04)
+**Próxima Sprint:** 2026-07-S04 (ARCH-014)
+**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído — ARCH-001/004 feitos, ARCH-002 restante em S08; Epic B iniciado — ARCH-006 feito)
 **Próximo Marco:** 2026-07-CP01
-**Última Atualização:** 2026-07-17 (Sprint S02 concluída)
+**Última Atualização:** 2026-07-17 (Sprint S03 concluída)
 **Build:** 🟢 `tsc --noEmit` limpo
-**Testes:** 🟢 118/118
-**Regressão:** 🟢 118/118 (pós-S02)
+**Testes:** 🟢 119/119 (118 + S116, novo)
+**Regressão:** 🟢 119/119 (pós-S03)
 **Riscos Abertos:** 0
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
-**Dívida Arquitetural Restante:** 24 ARCH (23 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
+**Dívida Arquitetural Restante:** 23 ARCH (22 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
 
@@ -236,15 +236,15 @@ Estrutura de cada Sprint abaixo, na ordem cronológica real de execução (a mes
 - **Epic:** Single Source of Truth
 - **Card ARCH:** ARCH-006
 - **Objetivo:** Criar accessor único `getPendingSteps(goal, toolName?)`, substituindo os 6+ `.filter(status==='pending')` inline.
-- **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (L614, L619-622, L645-647, L894-898, L1024-1027, L3362-3364).
+- **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (escopo real: **15 call sites**, não 6 — a contagem do card citava só as ocorrências mais óbvias; a varredura completa na execução achou mais 9 com o mesmo predicado, todas dentro do espírito do card. 2 ocorrências parecidas foram **excluídas conscientemente**: uma é `SuccessCriterion.status==='pending'`, campo homônimo mas de outro tipo; outra é um filtro de "remover steps supersedidos" — operação de mutação de plano, não leitura de pendentes).
 - **Dependências:** P00.
-- **Checklist de execução:** padrão.
-- **Checklist de validação:** padrão.
+- **Checklist de execução:** padrão — executado.
+- **Checklist de validação:** padrão — `tsc --noEmit` limpo, regressão 119/119 (118 + novo teste S116 cobrindo o accessor isoladamente).
 - **Rollback:** trivial.
-- **Critérios de Aceite:** os 6+ call sites usam o mesmo accessor.
-- **Definition of Done:** regressão 100%, comportamento observável idêntico.
+- **Critérios de Aceite:** os 6+ call sites usam o mesmo accessor — **atingido, 15/15**.
+- **Definition of Done:** regressão 100%, comportamento observável idêntico — **atingido**. Assinatura final: `getPendingSteps(plan: PlanStep[], toolName?: string | string[]): PlanStep[]` — recebe `PlanStep[]` em vez de `Goal` porque um dos call sites reais (linha ~523, adoção de plano após replan) só tem o array de steps em mãos, ainda não um `Goal` completo; aceitar `toolName` como string OU array cobre tanto o caso de igualdade simples (`'send_document'`) quanto o de pertencimento em lista (`rule.requiredTools`).
 - **Commit esperado:** 1 commit.
-- **Status:** ⚪ Não iniciada.
+- **Status:** 🟢 Concluída em 2026-07-17.
 
 ### Sprint 2026-07-S10
 - **Número:** S10
