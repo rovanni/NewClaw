@@ -255,8 +255,8 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Unitário + regressão + e2e sintético + ambiente real (LLM real).
 - **Métrica que deverá melhorar:** Decision Owners.
 
-### ARCH-014 — Unificar regex de erro transiente entre `GoalEvaluator` e `ProactiveRecovery`
-- **Descrição:** `GoalEvaluator.ERROR_PATTERNS[].isRetryable` (nível goal) e `ProactiveRecovery.RECOVERY[tool].retryablePatterns` (nível tool) têm regex parcialmente sobrepostas (`ECONNRESET`/`ETIMEDOUT`/`timeout`) mantidas independentemente.
+### ARCH-014 — Unificar regex de erro transiente entre `GoalEvaluator` e `ProactiveRecovery` ✅ Concluído (2026-07-17, Sprint S04)
+- **Descrição:** `GoalEvaluator.ERROR_PATTERNS[].isRetryable` (nível goal) e `ProactiveRecovery.RECOVERY[tool].retryablePatterns` (nível tool) têm regex parcialmente sobrepostas (`ECONNRESET`/`ETIMEDOUT`/`timeout`) mantidas independentemente. **Executado como:** `src/shared/transientErrorPatterns.ts` novo com 6 padrões nomeados (a sobreposição real, maior que os 3 citados — inclui também `network` e `rate.?limit`/`429`), cada consumidor compondo sua própria lista/regex a partir deles; nenhuma lista universal (rejeitada deliberadamente — mudaria comportamento de retry por tool). Verificado byte-a-byte que a composição preserva 100% o comportamento anterior.
 - **Arquivos afetados:** `src/loop/GoalEvaluator.ts` (L72-212), `src/loop/ProactiveRecovery.ts` (L49-174).
 - **Origem (auditorias):** Auditoria I.
 - **Categoria:** Decision Ownership.

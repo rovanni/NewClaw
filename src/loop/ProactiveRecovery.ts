@@ -13,6 +13,7 @@
 import { createHash } from 'crypto';
 import { ToolResult } from './AgentLoop';
 import { createLogger } from '../shared/AppLogger';
+import { CORE_TRANSIENT_PATTERNS, NETWORK_PATTERN, RATE_LIMIT_PATTERN, HTTP_429_PATTERN } from '../shared/transientErrorPatterns';
 
 const log = createLogger('ProactiveRecovery');
 
@@ -49,7 +50,7 @@ interface ToolRecoveryConfig {
 const RECOVERY: Record<string, ToolRecoveryConfig> = {
 
     weather: {
-        retryablePatterns: [/ECONNRESET/i, /ETIMEDOUT/i, /timeout/i, /fetch/i, /network/i],
+        retryablePatterns: [...CORE_TRANSIENT_PATTERNS, /fetch/i, NETWORK_PATTERN],
         maxRetries: 1,
         argMutators: [
             // "Bandeirantes, PR" or "Bandeirantes, Paraná" → "Bandeirantes"
@@ -75,7 +76,7 @@ const RECOVERY: Record<string, ToolRecoveryConfig> = {
     },
 
     web_search: {
-        retryablePatterns: [/ECONNRESET/i, /ETIMEDOUT/i, /timeout/i, /rate.?limit/i, /429/],
+        retryablePatterns: [...CORE_TRANSIENT_PATTERNS, RATE_LIMIT_PATTERN, HTTP_429_PATTERN],
         maxRetries: 1,
         argMutators: [
             // Remove year and location qualifiers to broaden query
@@ -98,7 +99,7 @@ const RECOVERY: Record<string, ToolRecoveryConfig> = {
     },
 
     web_navigate: {
-        retryablePatterns: [/ECONNRESET/i, /ETIMEDOUT/i, /timeout/i],
+        retryablePatterns: [...CORE_TRANSIENT_PATTERNS],
         maxRetries: 1,
         argMutators: [],
         fallbackTools: ['web_search'],

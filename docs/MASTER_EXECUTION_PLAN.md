@@ -16,7 +16,7 @@ Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejame
 | 2026-07-S01 | Jul/2026 | Boundary Enforcement | ARCH-001 | 🟢 | P00 | 6c14a9b | 26 imports corrigidos (`tools/`→25, `core/ToolRegistry.ts`→1), tsc limpo, 118/118 |
 | 2026-07-S02 | Jul/2026 | Boundary Enforcement | ARCH-004 | 🟢 | P00 | 18ba2a2 | `shared/domainTypes.ts` criado, `memory/` sem imports de tipo de `loop/`, tsc limpo, 118/118 |
 | 2026-07-S03 | Jul/2026 | Single Source of Truth | ARCH-006 | 🟢 | P00 | 0225075 | `getPendingSteps` único, 15 call sites migrados, tsc limpo, 119/119 |
-| 2026-07-S04 | Jul/2026 | Decision Ownership | ARCH-014 | ⚪ | P00 | — | — |
+| 2026-07-S04 | Jul/2026 | Decision Ownership | ARCH-014 | 🟢 | P00 | (ver métricas) | `shared/transientErrorPatterns.ts` novo, 6 padrões unificados, verificado byte-a-byte, 119/119 |
 | 2026-07-S05 | Jul/2026 | Decision Ownership | ARCH-017 | ⚪ | P00 | — | — |
 | 2026-07-S06 | Jul/2026 | Technical Cleanup | ARCH-025 | ⚪ | P00 | — | — |
 | 2026-07-S07 | Jul/2026 | Technical Cleanup | ARCH-026 | ⚪ | P00 | — | — |
@@ -51,19 +51,19 @@ Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejame
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01, S02 e S03 concluídas
-**Progresso:** 3 / 26 ARCH concluídos (~12%)
-**Sprint Atual:** Nenhuma em andamento (S03 concluída — próxima é 2026-07-S04)
-**Próxima Sprint:** 2026-07-S04 (ARCH-014)
-**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído — ARCH-001/004 feitos, ARCH-002 restante em S08; Epic B iniciado — ARCH-006 feito)
+**Status Geral:** 🟢 Em execução — Fase 0, S01, S02, S03 e S04 concluídas
+**Progresso:** 4 / 26 ARCH concluídos (~15%)
+**Sprint Atual:** Nenhuma em andamento (S04 concluída — próxima é 2026-07-S05)
+**Próxima Sprint:** 2026-07-S05 (ARCH-017)
+**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído; Epic B iniciado — ARCH-006 feito; Epic C iniciado — ARCH-014 feito)
 **Próximo Marco:** 2026-07-CP01
-**Última Atualização:** 2026-07-17 (Sprint S03 concluída)
+**Última Atualização:** 2026-07-17 (Sprint S04 concluída)
 **Build:** 🟢 `tsc --noEmit` limpo
-**Testes:** 🟢 119/119 (118 + S116, novo)
-**Regressão:** 🟢 119/119 (pós-S03)
+**Testes:** 🟢 119/119
+**Regressão:** 🟢 119/119 (pós-S04)
 **Riscos Abertos:** 0
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
-**Dívida Arquitetural Restante:** 23 ARCH (22 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
+**Dívida Arquitetural Restante:** 22 ARCH (21 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
 
@@ -388,15 +388,15 @@ Estrutura de cada Sprint abaixo, na ordem cronológica real de execução (a mes
 - **Epic:** Decision Ownership
 - **Card ARCH:** ARCH-014
 - **Objetivo:** Unificar a lista de padrões de erro transiente entre `GoalEvaluator.ERROR_PATTERNS` e `ProactiveRecovery.RECOVERY[tool].retryablePatterns`.
-- **Arquivos afetados:** `src/loop/GoalEvaluator.ts` (L72-212), `src/loop/ProactiveRecovery.ts` (L49-174).
+- **Arquivos afetados:** `src/shared/transientErrorPatterns.ts` (novo), `src/loop/GoalEvaluator.ts` (L72-212), `src/loop/ProactiveRecovery.ts` (L49-174).
 - **Dependências:** P00.
-- **Checklist de execução:** padrão.
-- **Checklist de validação:** padrão.
+- **Checklist de execução:** padrão — executado. Mapeamento exato da sobreposição real (não só os 3 citados no card): `ECONNRESET`/`ETIMEDOUT`/`timeout` (nas 3 tools de rede de `ProactiveRecovery` + 2 entradas de `GoalEvaluator`), mais `network` (weather + entrada "rede" do `GoalEvaluator`) e `rate.?limit`/`429` (web_search + entrada "rate limit" do `GoalEvaluator`) — 6 padrões literalmente duplicados ao todo, não 3.
+- **Checklist de validação:** padrão — `tsc --noEmit` limpo, regressão 119/119, **mais uma verificação adicional**: script isolado comparando `.source`/`.flags` de cada regex composta contra a regex original byte-a-byte, para provar que a composição não mudou nenhum comportamento de matching (os 6 casos bateram 100%).
 - **Rollback:** trivial.
-- **Critérios de Aceite:** uma única lista de padrões, referenciada pelos dois módulos.
-- **Definition of Done:** regressão 100%.
+- **Critérios de Aceite:** uma única lista de padrões, referenciada pelos dois módulos. **Decisão de design (Fase 2/3 da diretriz):** rejeitada a opção de "uma lista universal usada identicamente nos dois módulos" — mudaria comportamento observável (ex.: `web_navigate` passaria a retriar em rate-limit, que nunca teve; `memory_recall`/`edit`, que não retriam em NADA de propósito, ganhariam retries indesejados) e causaria misclassificação em `GoalEvaluator` (erro de timeout seria capturado pela entrada "rede", que vem antes na lista, se os dois conjuntos fossem fundidos num só). Design escolhido: cada padrão realmente duplicado (6, não os 3 citados) ganha uma única definição nomeada em `shared/transientErrorPatterns.ts`, referenciada por identidade — cada consumidor continua compondo sua própria lista/regex a partir desses nomes, preservando exatamente o comportamento de cada tool/entrada.
+- **Definition of Done:** regressão 100% — **atingido, 119/119, comportamento observável idêntico (verificado byte-a-byte, não só pela suíte)**.
 - **Commit esperado:** 1 commit.
-- **Status:** ⚪ Não iniciada.
+- **Status:** 🟢 Concluída em 2026-07-17.
 
 ### Sprint 2026-07-S05
 - **Número:** S05

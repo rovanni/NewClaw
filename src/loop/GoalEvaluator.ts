@@ -16,6 +16,7 @@ import { createLogger } from '../shared/AppLogger';
 import { ToolResult } from './agentLoopTypes';
 import { Goal, PlanStep, CycleResult, GoalBlocker, BlockerKind, DependencyInfo } from './GoalTypes';
 import { extractMissingExecutable } from './planning/extractMissingExecutable';
+import { ECONNRESET_PATTERN, ETIMEDOUT_PATTERN, TIMEOUT_PATTERN, NETWORK_PATTERN, RATE_LIMIT_PATTERN, HTTP_429_PATTERN, combineRegExp } from '../shared/transientErrorPatterns';
 
 const log = createLogger('GoalEvaluator');
 
@@ -114,7 +115,7 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     },
     // Sem conexão / rede
     {
-        pattern: /ECONNREFUSED|ECONNRESET|ETIMEDOUT|network|no route|getaddrinfo|fetch failed/i,
+        pattern: combineRegExp([/ECONNREFUSED/i, ECONNRESET_PATTERN, ETIMEDOUT_PATTERN, NETWORK_PATTERN, /no route/i, /getaddrinfo/i, /fetch failed/i]),
         kind: 'environment_limit',
         description: () => 'Falha de conectividade de rede',
         suggestedActions: [
@@ -126,7 +127,7 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     },
     // Rate limit / quota
     {
-        pattern: /rate.?limit|too many requests|429|quota exceeded/i,
+        pattern: combineRegExp([RATE_LIMIT_PATTERN, /too many requests/i, HTTP_429_PATTERN, /quota exceeded/i]),
         kind: 'environment_limit',
         description: () => 'Limite de requisições atingido',
         suggestedActions: [
@@ -185,7 +186,7 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     },
     // Timeout
     {
-        pattern: /timeout|timed out|exceeded.*time/i,
+        pattern: combineRegExp([TIMEOUT_PATTERN, /timed out/i, /exceeded.*time/i]),
         kind: 'tool_error',
         description: (_, tool) => `Timeout na execução de '${tool}'`,
         suggestedActions: [
