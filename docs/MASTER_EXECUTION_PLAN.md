@@ -8,6 +8,19 @@ Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejame
 
 ---
 
+## Regressão Funcional vs. Regressão Arquitetural
+
+Este programa existe para mudar a arquitetura sem mudar o comportamento — então "não regrediu" precisa ser verificado em dois eixos independentes, não um só. Um refactor pode manter 100% do comportamento externo (regressão funcional limpa) e ainda assim reintroduzir exatamente a violação que o ARCH correspondente eliminou (regressão arquitetural), ou vice-versa. As duas são obrigatórias, nenhuma substitui a outra.
+
+| Tipo | Objetivo | Como se verifica neste programa |
+|---|---|---|
+| **Regressão Funcional** | Garantir que o comportamento externo do sistema permaneça inalterado. | `npm run test:regression` (suíte de regressão — dobra de "unitário" para a maioria dos cards deste programa, já que cada teste `SNNN_*.test.ts` cobre uma unidade de comportamento específica) + `npm run test:integration` quando a Sprint exigir etapa 3/4 da Validação Progressiva (`DIRETRIZ_ARQUITETURA_2026-07-13.md`). |
+| **Regressão Arquitetural** | Garantir que a refatoração não reintroduza violações arquiteturais (Boundary Enforcement, SSOT, Ownership, acoplamentos indevidos, etc.). | Repetir a mesma medição usada para os indicadores T0 (Fase 0, Anexo) e para o "Critérios de Aceite" do ARCH da própria Sprint — tipicamente `grep` estrutural (imports cross-layer, padrões duplicados, recomputação inline) + contagem de linhas dos hotspots. Comparar contra o valor esperado da Sprint, não contra "zero absoluto" (uma Sprint só corrige o que seu ARCH cobre — o restante da dívida arquitetural permanece, de propósito, até sua própria Sprint). |
+
+Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os itens "Regression Tests" e "Architecture Metrics" do checklist de Validação (abaixo) formalizam — nenhum dos dois é opcional, e "a suíte passou" sozinho não é suficiente para fechar uma Sprint deste programa.
+
+---
+
 ## PAINEL EXECUTIVO
 
 | Sprint | Período | Epic | ARCH | Status | Dependências | Commit | Resultado |
@@ -66,6 +79,20 @@ Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejame
 **Dívida Arquitetural Restante:** 22 ARCH (21 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
+
+## Dashboard Executivo — Estado Global de Validação
+
+Snapshot do estado de validação do branch `refactor/architectural-backlog` neste momento — não de uma Sprint isolada. Se qualquer linha virar ✘, nenhuma Sprint nova deve começar até ela voltar a ✔ (a causa pode ser uma Sprint anterior que saiu do ar sem que alguém tenha notado).
+
+| Indicador | Status | Última verificação | Evidência |
+|---|---|---|---|
+| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S04) | `tsc` + cópia de assets do dashboard, sem erros |
+| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S04) | 0 erros |
+| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S04) | `npm run test:regression` — 119/119 |
+| Integration Tests | — N/A no momento | 2026-07-17 | Nenhuma Sprint até aqui (S01-S04, todas Quick Win/Refactor Local) exigiu etapa 3/4 da Validação Progressiva — `npm run test:integration` só roda quando o card da Sprint pede ("ambiente real: obrigatório") |
+| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S04) | Boundary (ARCH-001/004): 0 violações residuais além das 2 legítimas (`AgentController`/`agentControllerCommands` importando a classe `AgentLoop`, fora de escopo). SSOT (ARCH-006): só as 2 exceções conscientes fora do accessor. Decision Ownership (ARCH-014): 6/6 regexes compostas byte-idênticas às originais. Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515, +7 do novo `getPendingSteps`), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
+
+**Como reproduzir esta linha "Architecture Metrics":** os comandos variam por Sprint (cada ARCH tem seu próprio "Critérios de Aceite" verificável por grep/contagem — ver o card correspondente em `ARCHITECTURAL_BACKLOG.md`), não existe um único script universal ainda. Ver a seção "Regressão Funcional vs. Regressão Arquitetural" acima.
 
 ---
 
@@ -134,13 +161,20 @@ Estrutura de cada Sprint abaixo, na ordem cronológica real de execução (a mes
 ```
 
 ### Checklist de Validação — padrão (repetido em toda Sprint)
+
+Os 6 itens abaixo cobrem os dois eixos da seção "Regressão Funcional vs. Regressão Arquitetural" (acima) — nenhuma Sprint fecha `🟢 Concluída` com algum item pulado sem justificativa explícita registrada no card.
+
 ```
-□ tsc
-□ testes unitários
-□ regressão
-□ integração
-□ ambiente real (quando aplicável — ver campo "Validação Progressiva" de cada Sprint)
-□ indicadores arquiteturais
+Validação
+□ Build            (npm run build)
+□ tsc              (npm run build já inclui, mas tsc --noEmit isolado é o ciclo rápido de iteração)
+□ Unit Tests        [Regressão Funcional] — cobertos pela suíte de regressão neste projeto (não há
+                     runner de unit test separado; cada SNNN_*.test.ts é a unidade)
+□ Integration Tests [Regressão Funcional] — npm run test:integration, só quando o card exigir
+                     etapa 3/4 da Validação Progressiva (ambiente real — DIRETRIZ_ARQUITETURA)
+□ Regression Tests  [Regressão Funcional] — npm run test:regression, sempre obrigatório
+□ Architecture Metrics [Regressão Arquitetural] — repetir a medição usada nos indicadores T0 para
+                     o(s) indicador(es) que o ARCH desta Sprint afeta; comparar contra o esperado
 ```
 
 ---
@@ -695,3 +729,4 @@ Cada Sprint concluída deve adicionar uma linha aqui, no formato:
 4. Respeitar rigorosamente as dependências registradas no Painel Executivo — nunca alterar a ordem por conveniência.
 5. Toda Sprint que envolva `Refactor Estrutural` ou `Exige RFC` precisa da etapa 4 (ambiente real) da Validação Progressiva antes de ser considerada `🟢 Concluída` — etapas 1-3 sozinhas não bastam.
 6. Este documento (`MASTER_EXECUTION_PLAN.md`) é atualizado a cada Sprint encerrada — o Painel Executivo e o Resumo Executivo nunca ficam desatualizados por mais de uma Sprint.
+7. Nenhuma Sprint fecha `🟢 Concluída` sem passar nos dois eixos de regressão (ver "Regressão Funcional vs. Regressão Arquitetural", no topo do documento) — comportamento externo inalterado E nenhuma violação arquitetural reintroduzida. Passar só na suíte de testes não é suficiente; passar só no grep de indicadores arquiteturais também não é. O Dashboard Executivo (logo após o Resumo Executivo) é reescrito a cada Sprint encerrada, junto com o Resumo — se alguma linha do Dashboard virar ✘, nenhuma Sprint nova começa até a causa ser encontrada e corrigida.
