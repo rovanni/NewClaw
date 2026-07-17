@@ -31,7 +31,7 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 | 2026-07-S03 | Jul/2026 | Single Source of Truth | ARCH-006 | 🟢 | P00 | 0225075 | `getPendingSteps` único, 15 call sites migrados, tsc limpo, 119/119 |
 | 2026-07-S04 | Jul/2026 | Decision Ownership | ARCH-014 | 🟢 | P00 | ccf97c1 | `shared/transientErrorPatterns.ts` novo, 6 padrões unificados, verificado byte-a-byte, 119/119 |
 | 2026-07-S05 | Jul/2026 | Decision Ownership | ARCH-017 | 🟢 | P00 | dd1a51e | `ToolExecutorService` removido (4 arquivos), build+tsc limpos, 119/119 |
-| 2026-07-S06 | Jul/2026 | Technical Cleanup | ARCH-025 | ⚪ | P00 | — | — |
+| 2026-07-S06 | Jul/2026 | Technical Cleanup | ARCH-025 | 🟢 | P00 | (ver métricas) | 2 blocos de prompt unificados (6 divergências corrigidas), build+tsc limpos, 119/119 |
 | 2026-07-S07 | Jul/2026 | Technical Cleanup | ARCH-026 | ⚪ | P00 | — | — |
 | 2026-07-CP01 | Jul/2026 | Checkpoint | — | ⚪ | S01-S07 | — | — |
 | 2026-07-S08 | Jul/2026 | Boundary Enforcement | ARCH-002 | ⚪ | CP01 | — | — |
@@ -64,19 +64,19 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01-S05 concluídas
-**Progresso:** 5 / 26 ARCH concluídos (~19%)
-**Sprint Atual:** Nenhuma em andamento (S05 concluída — próxima é 2026-07-S06)
-**Próxima Sprint:** 2026-07-S06 (ARCH-025)
-**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído; Epic B iniciado — ARCH-006 feito; Epic C parcialmente concluído — ARCH-014/017 feitos)
+**Status Geral:** 🟢 Em execução — Fase 0, S01-S06 concluídas
+**Progresso:** 6 / 26 ARCH concluídos (~23%)
+**Sprint Atual:** Nenhuma em andamento (S06 concluída — próxima é 2026-07-S07)
+**Próxima Sprint:** 2026-07-S07 (ARCH-026)
+**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído; Epic B iniciado — ARCH-006 feito; Epic C parcialmente concluído — ARCH-014/017 feitos; Epic E iniciado — ARCH-025 feito)
 **Próximo Marco:** 2026-07-CP01
-**Última Atualização:** 2026-07-17 (Sprint S05 concluída)
+**Última Atualização:** 2026-07-17 (Sprint S06 concluída)
 **Build:** 🟢 `npm run build` limpo
 **Testes:** 🟢 119/119
-**Regressão:** 🟢 119/119 (pós-S05)
+**Regressão:** 🟢 119/119 (pós-S06)
 **Riscos Abertos:** 0
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
-**Dívida Arquitetural Restante:** 21 ARCH (20 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
+**Dívida Arquitetural Restante:** 20 ARCH (19 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
 
@@ -86,11 +86,11 @@ Snapshot do estado de validação do branch `refactor/architectural-backlog` nes
 
 | Indicador | Status | Última verificação | Evidência |
 |---|---|---|---|
-| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S05) | `tsc` + cópia de assets do dashboard, sem erros |
-| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S05) | 0 erros |
-| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S05) | `npm run test:regression` — 119/119 |
-| Integration Tests | — N/A no momento | 2026-07-17 | Nenhuma Sprint até aqui (S01-S05, todas Quick Win/Refactor Local) exigiu etapa 3/4 da Validação Progressiva — `npm run test:integration` só roda quando o card da Sprint pede ("ambiente real: obrigatório") |
-| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S05) | Boundary (ARCH-001/004): 0 violações residuais além das 2 legítimas. SSOT (ARCH-006): só as 2 exceções conscientes fora do accessor. Decision Ownership (ARCH-014): 6/6 regexes byte-idênticas. Decision Ownership (ARCH-017): 0 ocorrências residuais de `ToolExecutorService`/`getToolExecutor` em `src/`; `core/CircuitBreaker.ts` intacto (uso real confirmado via `ProviderFactory.ts`). Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
+| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S06) | `tsc` + cópia de assets do dashboard, sem erros |
+| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S06) | 0 erros |
+| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S06) | `npm run test:regression` — 119/119 |
+| Integration Tests | — N/A no momento | 2026-07-17 | Nenhuma Sprint até aqui (S01-S06, todas Quick Win/Refactor Local) exigiu etapa 3/4 da Validação Progressiva — `npm run test:integration` só roda quando o card da Sprint pede ("ambiente real: obrigatório") |
+| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S06) | Boundary (ARCH-001/004): 0 violações residuais além das 2 legítimas. SSOT (ARCH-006): só as 2 exceções conscientes fora do accessor. Decision Ownership (ARCH-014): 6/6 regexes byte-idênticas. Decision Ownership (ARCH-017): 0 ocorrências residuais de `ToolExecutorService`. Technical Cleanup (ARCH-025): bloco `memory_write` de referência de args aparece 1x só no arquivo (era 2x). Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
 
 **Como reproduzir esta linha "Architecture Metrics":** os comandos variam por Sprint (cada ARCH tem seu próprio "Critérios de Aceite" verificável por grep/contagem — ver o card correspondente em `ARCHITECTURAL_BACKLOG.md`), não existe um único script universal ainda. Ver a seção "Regressão Funcional vs. Regressão Arquitetural" acima.
 
@@ -670,15 +670,15 @@ Validação
 - **Epic:** Technical Cleanup
 - **Card ARCH:** ARCH-025
 - **Objetivo:** Extrair os blocos de prompt duplicados entre `buildPlanPrompt`/`buildReplanPrompt` ("ARGS OBRIGATÓRIOS", "COLETA EM LOTE").
-- **Arquivos afetados:** `src/loop/GoalPlanner.ts` (L225-245, L412-427).
+- **Arquivos afetados:** `src/loop/GoalPlanner.ts` (2 funções novas: `buildRequiredArgsReference()`, `buildBatchCollectionBlock()`; call sites em `buildPlanPrompt` e `buildReplanPrompt`).
 - **Dependências:** P00. Sequenciar antes de S20 (ARCH-015-RFC).
-- **Checklist de execução:** padrão.
-- **Checklist de validação:** padrão.
+- **Checklist de execução:** padrão — executado. Os dois blocos NÃO eram byte-idênticos entre si (o card já avisava "~95%") — comparação linha-a-linha achou 6 divergências de texto, a mais relevante sendo `memory_write`: o bloco do plano inicial listava os 5 tipos de nó (`fact`/`preference`/`project`/`knowledge`/`context`), o do replan só 3 (faltavam `project` e `knowledge`) numa versão condensada em 1 linha. Isso não lê como diferença proposital de orçamento de tokens — lê como deriva de edição manual independente ao longo do tempo, exatamente a causa que este ARCH existe para eliminar.
+- **Checklist de validação:** padrão — `npm run build` limpo, `tsc --noEmit` limpo, regressão 119/119, grep confirmando que o texto do bloco `memory_write` aparece uma única vez no arquivo agora.
 - **Rollback:** trivial.
-- **Critérios de Aceite:** um único texto-fonte para cada bloco, usado nos dois prompts.
-- **Definition of Done:** regressão 100%.
+- **Critérios de Aceite:** um único texto-fonte para cada bloco, usado nos dois prompts — **atingido**.
+- **Definition of Done:** regressão 100% — **atingido**. **Nota importante:** ao contrário de S01-S05, este card *pretende* mudar o texto observável de um dos dois prompts (é o próprio objetivo — convergir para um único texto elimina por definição a diferença que existia antes). Escolhi a versão mais completa em cada um dos 6 pontos divergentes (geralmente a do plano inicial) como fonte canônica — na prática isso corrige uma lacuna real do prompt de replan (perdia 2 dos 5 tipos de nó de memória), não é uma regressão funcional; é uma melhoria colateral honesta, registrada aqui explicitamente em vez de escondida dentro de um commit "só de dedup".
 - **Commit esperado:** 1 commit.
-- **Status:** ⚪ Não iniciada.
+- **Status:** 🟢 Concluída em 2026-07-17.
 
 ### Sprint 2026-07-S07
 - **Número:** S07

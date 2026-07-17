@@ -438,8 +438,8 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 ## Epic E — Technical Cleanup
 *Origem: Auditoria I e III — itens pequenos, isolados, baixo risco.*
 
-### ARCH-025 — Extrair blocos de prompt duplicados entre `buildPlanPrompt`/`buildReplanPrompt`
-- **Descrição:** "ARGS OBRIGATÓRIOS POR FERRAMENTA"/"REFERÊNCIA DE ARGS OBRIGATÓRIOS" e "COLETA EM LOTE" são ~95% texto idêntico, copiado à mão duas vezes em `GoalPlanner.ts`.
+### ARCH-025 — Extrair blocos de prompt duplicados entre `buildPlanPrompt`/`buildReplanPrompt` ✅ Concluído (2026-07-17, Sprint S06)
+- **Descrição:** "ARGS OBRIGATÓRIOS POR FERRAMENTA"/"REFERÊNCIA DE ARGS OBRIGATÓRIOS" e "COLETA EM LOTE" são ~95% texto idêntico, copiado à mão duas vezes em `GoalPlanner.ts`. **Executado como:** `buildRequiredArgsReference()`/`buildBatchCollectionBlock()` novas, únicas fontes para os dois prompts. A comparação real achou 6 divergências textuais entre as duas cópias (não só formatação) — a mais relevante: o replan tinha só 3 dos 5 tipos de nó de `memory_write`. Convergido para a versão mais completa, o que corrige essa lacuna do prompt de replan como efeito colateral direto da deduplicação.
 - **Arquivos afetados:** `src/loop/GoalPlanner.ts` (L225-245, L412-427).
 - **Origem (auditorias):** Auditoria I (QW1).
 - **Categoria:** Technical Cleanup.

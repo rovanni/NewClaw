@@ -223,10 +223,22 @@ Regras:
 - CRÍTICO: se o objetivo menciona caminhos de arquivo, use-os EXATAMENTE como listados em "PATHS MENCIONADOS" — não encurte, não reconstrua
 ${roadmapAdjustmentInstruction}
 ARGS OBRIGATÓRIOS POR FERRAMENTA:
-- edit: SEMPRE forneça oldText+newText (substituição) OU startLine+endLine+content (patch) OU append=true+content. Nunca chame edit sem esses parâmetros.
+${buildRequiredArgsReference()}
+
+${buildBatchCollectionBlock()}`.trim();
+}
+
+// ARCH-025: os dois blocos abaixo eram copiados à mão em buildPlanPrompt() e buildReplanPrompt()
+// — ~95% texto idêntico, com divergências acumuladas por edição independente ao longo do tempo
+// (a versão do replan tinha só 3 dos 5 tipos de nó de memory_write, por exemplo). Fonte única
+// agora; só o cabeçalho que introduz o bloco muda por prompt ("ARGS OBRIGATÓRIOS POR FERRAMENTA"
+// no plano inicial vs. "REFERÊNCIA DE ARGS OBRIGATÓRIOS" no replan — diferença de tom proposital,
+// não faz parte do texto duplicado).
+function buildRequiredArgsReference(): string {
+    return `- edit: SEMPRE forneça oldText+newText (substituição) OU startLine+endLine+content (patch) OU append=true+content. Nunca chame edit sem esses parâmetros.
 - send_document: SEMPRE forneça file_path com o caminho completo do arquivo. Nunca chame send_document sem file_path.
-- list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") ou absoluto.
-- read: aceita caminho relativo ao workspace ou absoluto.
+- list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") ou absoluto. Passe apenas a subpasta desejada.
+- read: aceita caminho relativo ao workspace ou absoluto. Para diretórios, lista automaticamente o conteúdo.
 - memory_write: SEMPRE forneça action (create|update|connect|delete|merge|reinforce). Para create: forneça type + name + content. Para update: forneça id + content. Para connect: forneça from + to + relation. Nunca chame memory_write sem action.
   TIPOS DE NÓ — escolha o correto para garantir persistência:
     "fact"       → dados pessoais do usuário (portfolio, posições, watchlists, histórico). Decay muito lento. USE ESTE para dados que o usuário forneceu explicitamente.
@@ -235,14 +247,16 @@ ARGS OBRIGATÓRIOS POR FERRAMENTA:
     "knowledge"  → informações técnicas aprendidas.
     "context"    → dados efêmeros de sessão (desaparecem em dias). NÃO use para dados que o usuário precisa recuperar depois.
 - crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc", "sol"). Para múltiplas moedas específicas: use steps separados, um por moeda.
-- web_navigate: SEMPRE forneça action (search|open|follow_link). Para search: forneça query. Para open: forneça url (https://...). Para follow_link: forneça url + link_text.
+- web_navigate: SEMPRE forneça action (search|open|follow_link). Para search: forneça query. Para open: forneça url (https://...). Para follow_link: forneça url + link_text.`;
+}
 
-COLETA EM LOTE (quando o objetivo exige buscar dados para N itens do mesmo tipo, N > 6):
+function buildBatchCollectionBlock(): string {
+    return `COLETA EM LOTE (quando o objetivo exige buscar dados para N itens do mesmo tipo, N > 6):
 - NÃO enumere um step por item — o limite de 6 steps deixaria itens sem cobertura.
 - Use no máximo 2 steps:
   1. memory_search — verifique o que já está salvo sobre esses itens.
   2. Sem toolName (AgentLoop): inclua na description a lista COMPLETA de itens e instrua explicitamente a iterar sobre todos. Ex: "busque crypto_analysis para BTC, ETH, SOL, River, ZEC e Pi individualmente e consolide os resultados".
-- O AgentLoop executará a iteração completa automaticamente — não limite a lista.`.trim();
+- O AgentLoop executará a iteração completa automaticamente — não limite a lista.`;
 }
 
 function buildProgressBlock(progressModel: GoalProgressModel): string {
@@ -410,21 +424,9 @@ Responda APENAS com JSON válido (sem markdown):
 Máximo 3 steps. Se o blocker for 'missing_tool', inclua step de instalação como primeiro step.
 ${roadmapAdjustmentInstruction}
 REFERÊNCIA DE ARGS OBRIGATÓRIOS:
-- edit: SEMPRE forneça oldText+newText (para substituição) OU startLine+endLine+content (para patch) OU append=true+content. Nunca chame edit sem esses parâmetros.
-- send_document: SEMPRE forneça file_path com o caminho completo do arquivo. Nunca chame send_document sem file_path.
-- list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") OU absoluto. Passe apenas a subpasta desejada.
-- read: aceita caminho relativo ao workspace ou absoluto. Para diretórios, lista automaticamente o conteúdo.
-- memory_write: SEMPRE forneça action (create|update|connect|delete|merge|reinforce). Para create: forneça type + name + content. Para update: forneça id + content. Para connect: forneça from + to + relation.
-  TIPOS — use "fact" para dados pessoais do usuário (portfolio, watchlist, posições); "preference" para preferências; "context" APENAS para dados efêmeros de sessão (some em dias).
-- crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc"). Para múltiplas moedas: use steps separados.
-- web_navigate: SEMPRE forneça action (search|open|follow_link). Para search: forneça query. Para open: forneça url (https://...). Para follow_link: forneça url + link_text.
+${buildRequiredArgsReference()}
 
-COLETA EM LOTE (quando o objetivo exige buscar dados para N itens do mesmo tipo, N > 6):
-- NÃO enumere um step por item — o limite de 6 steps deixaria itens sem cobertura.
-- Use no máximo 2 steps:
-  1. memory_search — verifique o que já está salvo sobre esses itens.
-  2. Sem toolName (AgentLoop): inclua na description a lista COMPLETA de itens e instrua a iterar sobre todos. Ex: "busque crypto_analysis para BTC, ETH, SOL, River, ZEC e Pi individualmente e consolide".
-- O AgentLoop executará a iteração completa — não limite a lista.
+${buildBatchCollectionBlock()}
 
 REGRAS CRÍTICAS para blocker 'environment_limit':
 - Se o blocker mencionar PEP 668 ou 'externally-managed':
