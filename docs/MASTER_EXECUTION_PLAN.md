@@ -2,6 +2,8 @@
 
 **Este documento NÃO substitui `docs/ARCHITECTURAL_BACKLOG.md`.** O backlog é a fonte de verdade sobre O QUÊ e POR QUÊ (descrição de cada problema, evidências, arquivos, critérios). Este documento é a fonte de verdade sobre QUANDO e COMO EXECUTAR — a ordem operacional, o rastreamento de status e o histórico de execução.
 
+**Antes de implementar qualquer Sprint, ler `docs/RETROSPECTIVA_PREMISSAS_AUDITORIA_2026-07-17.md`** — catálogo cumulativo de premissas do backlog que não se sustentaram na execução (7 de 11 Sprints até agora) e os 3 modos de falha recorrentes da auditoria original. Não é opcional, é o histórico do que já deu errado quando essa reverificação foi pulada.
+
 **Baseline:** B1.0 (imutável). **Política permanente:** *No Opportunistic Refactoring* — nenhuma Sprint corrige nada além do seu único ARCH designado; dívida nova encontrada durante a execução é documentada em `docs/issues/NNN-*.md` (não só numa nota inline dentro do card da Sprint — ver Regra #3) e vira proposta de ARCH novo, nunca é resolvida "de brinde" na sprint corrente. **WIP máximo = 1** — nunca dois refactors de grande porte em andamento ao mesmo tempo.
 
 Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejamento (não compromissos), a serem corrigidas com dados reais de velocidade a partir da primeira Sprint executada.
@@ -147,8 +149,20 @@ Estrutura de cada Sprint abaixo, na ordem cronológica real de execução (a mes
 **Convenção usada abaixo:** o Checklist de Execução e o Checklist de Validação seguem sempre o mesmo padrão (definido logo a seguir); cada card do Sprint só relista uma etapa quando ela tem uma observação específica para aquele ARCH.
 
 ### Checklist de Execução — padrão (repetido em toda Sprint)
+
+**Antes de implementar, reverificar a premissa do card contra o código atual** —
+`docs/RETROSPECTIVA_PREMISSAS_AUDITORIA_2026-07-17.md` mostra que 7 de 11 Sprints já executadas
+(S01-S11) tiveram alguma alegação do card corrigida na prática: contagens (S01/S03/S04), grafo
+de dependência incompleto (S02/S05), ou equivalência semântica assumida sem verificação
+(S10/S11). Isso não é exceção, é a norma até agora — tratar como etapa obrigatória, não
+opcional, e não assumir que "o card descreve um padrão plausível" é o mesmo que "o card está
+correto". Especificamente: toda contagem numérica no card merece um grep/contagem real; todo
+"mover X" merece checar o que X referencia por dentro; toda "unificar fonte A com fonte B"
+merece ler como A e B são de fato populadas/decididas antes de assumir que são a mesma coisa.
+
 ```
 □ Ler completamente o ARCH correspondente em ARCHITECTURAL_BACKLOG.md
+□ Reverificar cada alegação numérica/estrutural do card contra o código atual (ver nota acima)
 □ Ler os arquivos envolvidos
 □ Mapear consumidores
 □ Mapear produtores
