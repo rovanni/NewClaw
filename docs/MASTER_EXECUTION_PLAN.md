@@ -13,7 +13,7 @@ Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejame
 | Sprint | Período | Epic | ARCH | Status | Dependências | Commit | Resultado |
 |---|---|---|---|---|---|---|---|
 | 2026-07-P00 | Jul/2026 | Preparação | Baseline | 🟢 | — | d088864 (TAG `baseline-b1.0-pre-refactor`) | 118/118, tsc limpo, T0 registrado |
-| 2026-07-S01 | Jul/2026 | Boundary Enforcement | ARCH-001 | 🟢 | P00 | (pendente commit) | 26 imports corrigidos (`tools/`→25, `core/ToolRegistry.ts`→1), tsc limpo, 118/118 |
+| 2026-07-S01 | Jul/2026 | Boundary Enforcement | ARCH-001 | 🟢 | P00 | 6c14a9b | 26 imports corrigidos (`tools/`→25, `core/ToolRegistry.ts`→1), tsc limpo, 118/118 |
 | 2026-07-S02 | Jul/2026 | Boundary Enforcement | ARCH-004 | ⚪ | P00 | — | — |
 | 2026-07-S03 | Jul/2026 | Single Source of Truth | ARCH-006 | ⚪ | P00 | — | — |
 | 2026-07-S04 | Jul/2026 | Decision Ownership | ARCH-014 | ⚪ | P00 | — | — |
@@ -680,7 +680,7 @@ Cada Sprint concluída deve adicionar uma linha aqui, no formato:
 
 | Sprint | Data | Tempo gasto | Commit | Arquivos alterados | Testes executados | Indicadores antes | Indicadores depois | Riscos encontrados | Lições aprendidas |
 |---|---|---|---|---|---|---|---|---|---|
-| S01 | 2026-07-17 | ~1 sessão | (pendente) | 26 (`src/tools/*.ts` ×25, `src/core/ToolRegistry.ts` ×1) | `tsc --noEmit` (limpo) + `node scripts/run-regression-tests.cjs` (118/118) | Violações de fronteira: 26 imports `ToolExecutor`/`ToolResult` de `loop/AgentLoop` | 0 | Nenhum — mudança mecânica de path, sem lógica tocada | O card original tinha 2 falsos positivos na contagem T0 (`AgentController.ts`/`agentControllerCommands.ts` importam a classe `AgentLoop`, não `ToolExecutor`/`ToolResult` — legítimo). Grep bruto por path sem checar o que é importado super-conta violações; a verificação correta é sempre linha-a-linha nos símbolos, não só no path do módulo. |
+| S01 | 2026-07-17 | ~1 sessão | 6c14a9b | 26 (`src/tools/*.ts` ×25, `src/core/ToolRegistry.ts` ×1) | `tsc --noEmit` (limpo) + `node scripts/run-regression-tests.cjs` (118/118) | Violações de fronteira: 26 imports `ToolExecutor`/`ToolResult` de `loop/AgentLoop` | 0 | Nenhum — mudança mecânica de path, sem lógica tocada | O card original tinha 2 falsos positivos na contagem T0 (`AgentController.ts`/`agentControllerCommands.ts` importam a classe `AgentLoop`, não `ToolExecutor`/`ToolResult` — legítimo). Grep bruto por path sem checar o que é importado super-conta violações; a verificação correta é sempre linha-a-linha nos símbolos, não só no path do módulo. |
 
 ---
 
