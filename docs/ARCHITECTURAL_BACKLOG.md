@@ -58,8 +58,8 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Unitário + regressão + validação em ambiente real (o probe já teve bugs reais de plataforma antes).
 - **Métrica que deverá melhorar:** Violações de fronteira, Dependências invertidas.
 
-### ARCH-003 — Extrair `StrategyDiversityGuard.fingerprint()`/`ResponseAdapter.extractText()` para local neutro
-- **Descrição:** `memory/CaseMemory.ts` importa a classe `StrategyDiversityGuard` (runtime, não só tipo) de `loop/`; `memory/conversational/CMIIngestionPipeline.ts` importa a função `extractText` de `loop/ResponseAdapter.ts`. Ambas são utilitários pequenos e sem estado que não dependem de `AgentLoop`/`GoalExecutionLoop` — podem migrar para `src/shared/` sem quebrar quem já as usa em `loop/`.
+### ARCH-003 — Extrair `StrategyDiversityGuard.fingerprint()`/`ResponseAdapter.extractText()` para local neutro ✅ Concluído (2026-07-17, Sprint S09)
+- **Descrição:** `memory/CaseMemory.ts` importa a classe `StrategyDiversityGuard` (runtime, não só tipo) de `loop/`; `memory/conversational/CMIIngestionPipeline.ts` importa a função `extractText` de `loop/ResponseAdapter.ts`. Ambas são utilitários pequenos e sem estado que não dependem de `AgentLoop`/`GoalExecutionLoop` — podem migrar para `src/shared/` sem quebrar quem já as usa em `loop/`. **Executado como:** `StrategyDiversityGuard.ts` movido inteiro (já era autocontido); `extractText` extraído de `loop/ResponseBuilder.ts` (não de `ResponseAdapter.ts`, que é só um shim depreciado reexportando de lá) para `shared/extractText.ts`, mantendo o resto de `ResponseBuilder.ts` (com dependências reais de `loop/`) intacto. Achado colateral fora de escopo: existem 2 funções `extractText` com o mesmo nome e assinaturas diferentes no código — `docs/issues/004-duplicate-extracttext-functions.md`.
 - **Arquivos afetados:** `src/loop/StrategyDiversityGuard.ts`, `src/loop/ResponseAdapter.ts`, `src/memory/CaseMemory.ts`, `src/memory/conversational/CMIIngestionPipeline.ts`.
 - **Origem (auditorias):** Auditoria IV.
 - **Categoria:** Boundary Enforcement.
