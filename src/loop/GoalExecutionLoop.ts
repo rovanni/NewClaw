@@ -1136,7 +1136,22 @@ export class GoalExecutionLoop {
                     // para o mesmo evento.
                     this.goalStore.downgradeLastAttemptToPartial(currentGoal.id, pendingStep.id);
                     currentGoal = this.goalStore.getById(currentGoal.id)!;
-                    if (currentGoal.retryBudget > 0 && !alreadyHinted) {
+                    // Retry só é útil quando o step NÃO tem toolName fixo (caminho 'agentloop'):
+                    // nesse caso o próximo ciclo chama o LLM de novo com a description enriquecida
+                    // acima, então o hint pode de fato mudar o resultado. Para steps com toolName
+                    // (exec_command, memory_search, ssh_exec, ...), executeStep() despacha
+                    // `resolveStepRefs(step.toolArgs, goal)` — resolve só {{step_N.output}}, nunca
+                    // regenera os args a partir da description — então o retry chamaria a MESMA
+                    // tool com os MESMOS args e reproduziria o MESMO mismatch, garantido.
+                    // Reproduzido ao vivo (auditoria, 17/07): um goal de inventário de host rodou
+                    // exec_command 2x idênticas ("hostname/OS/CPU" pedido, saída só com
+                    // vulnerabilidades de CPU as duas vezes) e memory_search 2x idênticas (mesma
+                    // query, mesmo resultado irrelevante as duas vezes) — cada retry queimou um
+                    // ciclo inteiro (dispatch + validação semântica via LLM) sem nenhuma chance de
+                    // resultado diferente, atrasando a escalada para replan (a única coisa que de
+                    // fato muda a abordagem, porque gera um plano novo do zero).
+                    const retryCanHelp = !pendingStep.toolName;
+                    if (currentGoal.retryBudget > 0 && !alreadyHinted && retryCanHelp) {
                         // Primeira falha: retry com hint enriquecido
                         cycleResult = { ...cycleResult, outcome: 'partial' };
                     } else {
@@ -1145,6 +1160,7 @@ export class GoalExecutionLoop {
                         log.warn(
                             `[SEMANTIC-MISMATCH] goal=${currentGoal.id} step=${pendingStep.id}` +
                             ` retryBudget=${currentGoal.retryBudget} alreadyHinted=${alreadyHinted}` +
+                            ` retryCanHelp=${retryCanHelp}` +
                             ` — escalating to blocked for replan`
                         );
                         const isDirListing = pendingStep.toolName === 'read' && /📁|📄/.test(cycleResult.output ?? '');
@@ -1159,13 +1175,16 @@ export class GoalExecutionLoop {
                         // texto quebrado. Remove o hint antes de truncar — mesma sub-string
                         // '[ATENÇÃO —' já usada em alreadyHinted acima, não é um padrão novo.
                         const cleanStepDesc = pendingStep.description.split(' [ATENÇÃO —')[0];
+                        const retryOutcomeLabel = alreadyHinted
+                            ? 'após 2 tentativas'
+                            : (retryCanHelp ? 'após esgotar retryBudget' : 'sem chance de retry ajudar (ferramenta fixa, mesmos argumentos)');
                         cycleResult = {
                             ...cycleResult,
                             outcome: 'blocked',
                             blocker: {
                                 kind: 'semantic_mismatch' as const,
                                 toolName: pendingStep.toolName,
-                                description: `Step '${cleanStepDesc.slice(0, 100)}' retornou output irrelevante ${alreadyHinted ? 'após 2 tentativas' : 'após esgotar retryBudget'}: ${semanticValidation.reason ?? 'mismatch semântico'}${dirHint}`,
+                                description: `Step '${cleanStepDesc.slice(0, 100)}' retornou output irrelevante ${retryOutcomeLabel}: ${semanticValidation.reason ?? 'mismatch semântico'}${dirHint}`,
                                 suggestedActions: isDirListing
                                     ? [
                                         'Usar o path completo de um dos arquivos listados acima em vez do diretório',
