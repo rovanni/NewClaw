@@ -1,4 +1,4 @@
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import fs from 'fs';
 import path from 'path';
 import * as os from 'os';

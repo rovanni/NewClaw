@@ -12,7 +12,7 @@
  * Uso: "cmi_inspect recent", "cmi_inspect search query=pdf", "cmi_inspect stats"
  */
 
-import type { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import type { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import type { CMIEngine } from '../memory/conversational/CMIEngine';
 import type { ConversationChunk } from '../memory/conversational/cmiTypes';
 import { errorMessage } from '../shared/errors';

@@ -10,7 +10,7 @@
  * - merge: Mesclar nós duplicados (análise inteligente)
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
 import { isProtectedNode } from '../memory/MemoryFacade';

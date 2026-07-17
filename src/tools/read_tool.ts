@@ -9,7 +9,7 @@
  * Segurança: block self-editing + sandbox boundary.
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import fs from 'fs';
 import path from 'path';
 import * as crypto from 'crypto';

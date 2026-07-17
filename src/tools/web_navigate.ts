@@ -8,7 +8,7 @@
 
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { errorMessage } from '../shared/errors';
 
 const execFileAsync = promisify(execFile);

@@ -16,7 +16,7 @@
  * - inspect: Inspecionar um nó específico com suas conexões
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { MemoryManager } from '../memory/MemoryManager';
 import type { MemoryGraphRepository } from '../memory/MemoryGraphRepository';
 import { errorMessage } from '../shared/errors';

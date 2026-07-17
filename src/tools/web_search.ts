@@ -3,7 +3,7 @@
  * leitura de páginas e síntese pronta para o LLM.
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 
 
 interface SearchCandidate {

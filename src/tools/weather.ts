@@ -3,7 +3,7 @@
  * Rápido, sem API key, dados em tempo real, ideal para código aberto.
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 const log = createLogger('WeatherTool');

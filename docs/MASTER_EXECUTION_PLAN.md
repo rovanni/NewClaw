@@ -13,7 +13,7 @@ Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejame
 | Sprint | Período | Epic | ARCH | Status | Dependências | Commit | Resultado |
 |---|---|---|---|---|---|---|---|
 | 2026-07-P00 | Jul/2026 | Preparação | Baseline | 🟢 | — | d088864 (TAG `baseline-b1.0-pre-refactor`) | 118/118, tsc limpo, T0 registrado |
-| 2026-07-S01 | Jul/2026 | Boundary Enforcement | ARCH-001 | ⚪ | P00 | — | — |
+| 2026-07-S01 | Jul/2026 | Boundary Enforcement | ARCH-001 | 🟢 | P00 | (pendente commit) | 26 imports corrigidos (`tools/`→25, `core/ToolRegistry.ts`→1), tsc limpo, 118/118 |
 | 2026-07-S02 | Jul/2026 | Boundary Enforcement | ARCH-004 | ⚪ | P00 | — | — |
 | 2026-07-S03 | Jul/2026 | Single Source of Truth | ARCH-006 | ⚪ | P00 | — | — |
 | 2026-07-S04 | Jul/2026 | Decision Ownership | ARCH-014 | ⚪ | P00 | — | — |
@@ -51,19 +51,19 @@ Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejame
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟡 Em preparação — Fase 0 concluída, nenhuma Sprint de execução iniciada
-**Progresso:** 0 / 26 ARCH concluídos (0%)
-**Sprint Atual:** Nenhuma (Fase 0 concluída — próxima é 2026-07-S01)
-**Próxima Sprint:** 2026-07-S01 (ARCH-001)
-**Epic Atual:** Nenhum
+**Status Geral:** 🟢 Em execução — Fase 0 e Sprint S01 concluídas
+**Progresso:** 1 / 26 ARCH concluídos (~4%)
+**Sprint Atual:** Nenhuma em andamento (S01 concluída — próxima é 2026-07-S02)
+**Próxima Sprint:** 2026-07-S02 (ARCH-004)
+**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído — ARCH-001 feito, ARCH-002/004 restantes)
 **Próximo Marco:** 2026-07-CP01
-**Última Atualização:** 2026-07-17 (Fase 0 — Preparação concluída)
+**Última Atualização:** 2026-07-17 (Sprint S01 concluída)
 **Build:** 🟢 `tsc --noEmit` limpo
 **Testes:** 🟢 118/118
-**Regressão:** 🟢 118/118 (baseline, commit `d088864`)
-**Riscos Abertos:** 1 — divergência de escopo em ARCH-001 (28 arquivos reais vs. 25 estimados no backlog; ver Anexo T0 da Fase 0), a corrigir na abertura de S01, não crítico
+**Regressão:** 🟢 118/118 (pós-S01)
+**Riscos Abertos:** 0 (divergência de escopo em ARCH-001 já corrigida durante a própria execução de S01 — ver nota no card)
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
-**Dívida Arquitetural Restante:** 26 ARCH (25 cards executáveis + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
+**Dívida Arquitetural Restante:** 25 ARCH (24 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
 
@@ -99,7 +99,7 @@ Todos os itens do checklist marcados, TAG criada, branch criada, build e testes 
 
 | Indicador | Valor em T0 (medido em 2026-07-17) |
 |---|---|
-| Violações de fronteira | 28 imports de `ToolExecutor`/`ToolResult` de `loop/AgentLoop` (não 25 — ver nota abaixo) + 1 round-trip `core/CapabilityRegistry` ↔ `loop/EnvironmentProbe` ↔ `core/ToolRegistry` (confirmado) + 2 imports de runtime de `memory/` em `loop/` (`StrategyDiversityGuard` em `CaseMemory.ts`, `extractText` em `CMIIngestionPipeline.ts`, confirmados) + 3 imports `import type` de `memory/` em `loop/` (`GoalTypes` ×2, `UnifiedIntentRouter` ×1, confirmados) |
+| Violações de fronteira | 26 imports de `ToolExecutor`/`ToolResult` de `loop/AgentLoop` (não 25 — ver nota abaixo; **correção da correção**: a medição inicial da Fase 0 contou 28 por grep bruto no path, incluindo `core/AgentController.ts`/`agentControllerCommands.ts`, que na verdade importam a classe `AgentLoop` em si, um import legítimo — o número real de violação é 26, confirmado linha-a-linha na execução de S01) + 1 round-trip `core/CapabilityRegistry` ↔ `loop/EnvironmentProbe` ↔ `core/ToolRegistry` (confirmado) + 2 imports de runtime de `memory/` em `loop/` (`StrategyDiversityGuard` em `CaseMemory.ts`, `extractText` em `CMIIngestionPipeline.ts`, confirmados) + 3 imports `import type` de `memory/` em `loop/` (`GoalTypes` ×2, `UnifiedIntentRouter` ×1, confirmados) |
 | God Methods (>300 linhas) | 3 — `AgentLoop.runWithTools` L1118-2911 (~1793 linhas, confirmado), `GoalExecutionLoop.runLoopInternal` L570-1605 (~1035 linhas), `GoalExecutionLoop.executeStep` L1605-1988 (~383 linhas) |
 | Large Classes (>1500 linhas) | 2 — `GoalExecutionLoop.ts` 3515 linhas (confirmado), `AgentLoop.ts` 2913 linhas (confirmado) |
 | Single Sources fragmentadas | ~8 (per Fase 7 do backlog — não re-auditado nesta Fase 0, escopo de leitura manual; ver ARCH-005/006/007/008/009/010/011/012) |
@@ -108,7 +108,7 @@ Todos os itens do checklist marcados, TAG criada, branch criada, build e testes 
 | Suíte de regressão (passou/total) | **118/118** |
 | `tsc --noEmit` | Limpo, 0 erros |
 
-**Nota sobre a divergência em "Violações de fronteira" (ARCH-001):** o backlog estimava 24 arquivos em `src/tools/*.ts` + `src/core/ToolRegistry.ts` (25 total). A contagem real em 2026-07-17 é **28**: os 24 esperados, mais `src/tools/ToolRegistry.ts` (arquivo distinto de `src/core/ToolRegistry.ts`, não citado no card original), `src/core/AgentController.ts` e `src/core/agentControllerCommands.ts`. Isso não invalida o card — é uma correção de escopo a aplicar quando `2026-07-S01` for executada (os 3 arquivos adicionais devem entrar nos "Arquivos afetados" do ARCH-001 e no critério de aceite do grep). Registrado aqui em vez de corrigido agora, per a política "nenhuma Sprint corrige nada além do seu único ARCH designado" — a Fase 0 apenas mede e documenta, não executa Sprint.
+**Nota sobre a divergência em "Violações de fronteira" (ARCH-001) — resolvida em S01:** o backlog estimava 24 arquivos em `src/tools/*.ts` + `src/core/ToolRegistry.ts` (25 total). A medição da Fase 0 (grep bruto pelo path `'../loop/AgentLoop'`) contou 28, mas isso incluía 2 falsos positivos (`core/AgentController.ts`, `core/agentControllerCommands.ts` — importam a classe `AgentLoop`, dependência legítima). Na execução de S01 (2026-07-17), a verificação linha-a-linha confirmou o número real: **26** (25 em `tools/`, incluindo `src/tools/ToolRegistry.ts` que faltava na contagem original do card, + `src/core/ToolRegistry.ts`). Corrigido no card ARCH-001 (ver Sprint S01 acima) e já implementado — não é mais pendência.
 
 ---
 
@@ -153,16 +153,16 @@ Estrutura de cada Sprint abaixo, na ordem cronológica real de execução (a mes
 - **Fase:** Execução Arquitetural
 - **Epic:** Boundary Enforcement
 - **Card ARCH:** ARCH-001
-- **Objetivo:** Corrigir o import de `ToolExecutor`/`ToolResult` em 24 arquivos de `tools/` + `core/ToolRegistry.ts`, apontando para `loop/agentLoopTypes.ts` em vez de `loop/AgentLoop.ts`.
-- **Arquivos afetados:** `src/tools/*.ts` (24 arquivos), `src/core/ToolRegistry.ts`.
+- **Objetivo:** Corrigir o import de `ToolExecutor`/`ToolResult` em `tools/` + `core/ToolRegistry.ts`, apontando para `loop/agentLoopTypes.ts` em vez de `loop/AgentLoop.ts`.
+- **Arquivos afetados:** `src/tools/*.ts` (25 arquivos, **corrigido de 24 para 25** na execução — `src/tools/ToolRegistry.ts`, distinto de `src/core/ToolRegistry.ts`, não estava na contagem original do card), `src/core/ToolRegistry.ts`. **Nota:** `src/core/AgentController.ts` e `src/core/agentControllerCommands.ts` também importam de `'../loop/AgentLoop'`, mas importam a classe `AgentLoop` em si (dependência legítima, ela vive lá) — não são violação de fronteira, ficaram de fora corretamente, per verificação linha-a-linha na execução.
 - **Dependências:** P00.
-- **Checklist de execução:** padrão.
-- **Checklist de validação:** padrão (ambiente real: não aplicável — mudança de import puro).
-- **Rollback:** reverter os 25 imports (commit único, `git revert` trivial).
-- **Critérios de Aceite:** 0 ocorrências de `from '../loop/AgentLoop'` para `ToolExecutor`/`ToolResult` em `tools/`/`core/`.
-- **Definition of Done:** `tsc --noEmit` limpo + regressão 100%.
+- **Checklist de execução:** padrão — executado.
+- **Checklist de validação:** padrão (ambiente real: não aplicável — mudança de import puro) — `tsc --noEmit` limpo, regressão 118/118.
+- **Rollback:** reverter os 26 imports (commit único, `git revert` trivial).
+- **Critérios de Aceite:** 0 ocorrências de `from '../loop/AgentLoop'` para `ToolExecutor`/`ToolResult` em `tools/`/`core/` — confirmado por `grep`, restam só os 2 imports legítimos de `AgentLoop` (classe).
+- **Definition of Done:** `tsc --noEmit` limpo + regressão 100% — **atingido**.
 - **Commit esperado:** 1 commit único, mensagem referenciando ARCH-001.
-- **Status:** ⚪ Não iniciada.
+- **Status:** 🟢 Concluída em 2026-07-17.
 
 ### Sprint 2026-07-S02
 - **Número:** S02
@@ -680,7 +680,7 @@ Cada Sprint concluída deve adicionar uma linha aqui, no formato:
 
 | Sprint | Data | Tempo gasto | Commit | Arquivos alterados | Testes executados | Indicadores antes | Indicadores depois | Riscos encontrados | Lições aprendidas |
 |---|---|---|---|---|---|---|---|---|---|
-| (preencher ao concluir cada Sprint) | | | | | | | | | |
+| S01 | 2026-07-17 | ~1 sessão | (pendente) | 26 (`src/tools/*.ts` ×25, `src/core/ToolRegistry.ts` ×1) | `tsc --noEmit` (limpo) + `node scripts/run-regression-tests.cjs` (118/118) | Violações de fronteira: 26 imports `ToolExecutor`/`ToolResult` de `loop/AgentLoop` | 0 | Nenhum — mudança mecânica de path, sem lógica tocada | O card original tinha 2 falsos positivos na contagem T0 (`AgentController.ts`/`agentControllerCommands.ts` importam a classe `AgentLoop`, não `ToolExecutor`/`ToolResult` — legítimo). Grep bruto por path sem checar o que é importado super-conta violações; a verificação correta é sempre linha-a-linha nos símbolos, não só no path do módulo. |
 
 ---
 

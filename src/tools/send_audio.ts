@@ -7,7 +7,7 @@
  * curl uploads. Now all subprocess calls are async.
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { execFile } from 'child_process';
 import { mkdirSync, existsSync, unlinkSync, readFileSync } from 'fs';
 import path from 'path';

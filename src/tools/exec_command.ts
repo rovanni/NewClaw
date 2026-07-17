@@ -6,7 +6,7 @@
  * Suporta execução remota via ssh://host/command.
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { exec } from 'child_process';
 import { resolveHost, isDestructive } from './server_config';
 import path from 'path';

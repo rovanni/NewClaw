@@ -1,4 +1,4 @@
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import path from 'path';
 import fs from 'fs';
 import { resolvePath } from '../utils/crossPlatform';

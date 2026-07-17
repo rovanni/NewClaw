@@ -24,9 +24,9 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 ## Epic A — Boundary Enforcement
 *Origem: Auditoria IV.* Corrigir a direção de dependência entre `core/`, `memory/`, `loop/` e `tools/` para que infraestrutura nunca dependa de orquestração.
 
-### ARCH-001 — Corrigir import de `ToolExecutor`/`ToolResult` para a fonte neutra
-- **Descrição:** 24 arquivos em `src/tools/*.ts` + `src/core/ToolRegistry.ts` importam `ToolExecutor`/`ToolResult` de `'../loop/AgentLoop'`. `AgentLoop.ts` (L46-56) apenas reexporta esses tipos — a definição real, neutra e sem dependências de negócio já está em `loop/agentLoopTypes.ts`. Trocar o caminho do import elimina o acoplamento aparente de 25 arquivos ao maior "God Method" do projeto.
-- **Arquivos afetados:** `src/tools/*.ts` (24 arquivos), `src/core/ToolRegistry.ts`.
+### ARCH-001 — Corrigir import de `ToolExecutor`/`ToolResult` para a fonte neutra ✅ Concluído (2026-07-17, Sprint S01)
+- **Descrição:** 25 arquivos em `src/tools/*.ts` (incluindo `src/tools/ToolRegistry.ts`, distinto de `src/core/ToolRegistry.ts` — não contado na estimativa original de 24) + `src/core/ToolRegistry.ts` importam `ToolExecutor`/`ToolResult` de `'../loop/AgentLoop'`. `AgentLoop.ts` (L46-56) apenas reexporta esses tipos — a definição real, neutra e sem dependências de negócio já está em `loop/agentLoopTypes.ts`. Trocar o caminho do import elimina o acoplamento aparente de 26 arquivos ao maior "God Method" do projeto. **Verificado na execução:** `src/core/AgentController.ts` e `src/core/agentControllerCommands.ts` também importam de `'../loop/AgentLoop'`, mas a classe `AgentLoop` em si — dependência legítima, fora do escopo deste card.
+- **Arquivos afetados:** `src/tools/*.ts` (25 arquivos), `src/core/ToolRegistry.ts`.
 - **Origem (auditorias):** Auditoria IV.
 - **Categoria:** Boundary Enforcement.
 - **Classificação:** Quick Win.
