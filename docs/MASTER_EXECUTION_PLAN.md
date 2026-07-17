@@ -40,7 +40,7 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 | 2026-07-S09 | Jul/2026 | Boundary Enforcement | ARCH-003 | 🟢 | CP01 | d9efaff | `memory/` 0 imports de runtime de `loop/`; achado colateral doc. em issues/004 |
 | 2026-07-S10 | Jul/2026 | Single Source of Truth | ARCH-011 | 🟢 | S09 | fbaf1a0 | Fonte primária estruturada aditiva + fallback agentloop; 14 tools "invisíveis" corrigidas de brinde |
 | 2026-08-S11 | Ago/2026 | Decision Ownership | ARCH-016 | 🟢 | S10 | 52e8e3c | Template compartilhado nos 4 blocos; fonte estruturada aditiva só em exec_command (1/4, correto per docs/issues/006) |
-| 2026-08-S12 | Ago/2026 | Structural Simplification | ARCH-023 | ⚪ | CP01 | — | — |
+| 2026-08-S12 | Ago/2026 | Structural Simplification | ARCH-023 | 🟢 | CP01 | 88ede55 | Pipeline nomeado (4 steps), gates de validação preservados como ifs, S11 corrigido |
 | 2026-08-S13 | Ago/2026 | Single Source of Truth | ARCH-007 | ⚪ | CP01 | — | — |
 | 2026-08-S14 | Ago/2026 | Single Source of Truth | ARCH-009 | ⚪ | CP01 | — | — |
 | 2026-08-S15 | Ago/2026 | Single Source of Truth | ARCH-010 | ⚪ | CP01 | — | — |
@@ -66,19 +66,19 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01-S11 e Checkpoint CP01 concluídos
-**Progresso:** 11 / 26 ARCH concluídos (~42%)
-**Sprint Atual:** Nenhuma em andamento (S11 concluída — próxima é 2026-08-S12)
-**Próxima Sprint:** 2026-08-S12 (ARCH-023)
-**Epic Atual:** Epic A concluído; Epic B em andamento — ARCH-006/011 feitos; Epic C em andamento — ARCH-014/016/017 feitos; Epic E concluído — ARCH-025/026 feitos
+**Status Geral:** 🟢 Em execução — Fase 0, S01-S12 e Checkpoint CP01 concluídos
+**Progresso:** 12 / 26 ARCH concluídos (~46%)
+**Sprint Atual:** Nenhuma em andamento (S12 concluída — próxima é 2026-08-S13)
+**Próxima Sprint:** 2026-08-S13 (ARCH-007)
+**Epic Atual:** Epic A concluído; Epic B em andamento — ARCH-006/011 feitos; Epic C em andamento — ARCH-014/016/017 feitos; Epic D iniciado — ARCH-023 feito; Epic E concluído — ARCH-025/026 feitos
 **Próximo Marco:** 2026-08-CP02
-**Última Atualização:** 2026-07-17 (Sprint S11 concluída)
+**Última Atualização:** 2026-07-17 (Sprint S12 concluída)
 **Build:** 🟢 `npm run build` limpo
 **Testes:** 🟢 121/121
-**Regressão:** 🟢 121/121 (pós-S11, 120 + `S118` novo)
+**Regressão:** 🟢 121/121 (pós-S12)
 **Riscos Abertos:** 0 — nota permanente: a VPS `venus@10.0.0.10` usada para validação Linux tem histórico de exigir `.env`/`WORKSPACE_DIR` explícito (skill `verify`) para não gerar falso-positivo — ver `docs/issues/002`
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
-**Dívida Arquitetural Restante:** 15 ARCH (14 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
+**Dívida Arquitetural Restante:** 14 ARCH (13 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
 **Achados fora de escopo documentados (`docs/issues/`):** 002 (falsos-positivos de validação VPS), 003 (`core/index.ts` barrel possivelmente morto), 004 (2 funções `extractText` com nome colidindo), 005 (regex de tool names desatualizada — corrigido de brinde na própria S10), 006 (análise de por que os 4 detectores de loop não convergem pra 1 fonte só — não é pendência, é registro de decisão)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
@@ -89,11 +89,11 @@ Snapshot do estado de validação do branch `refactor/architectural-backlog` nes
 
 | Indicador | Status | Última verificação | Evidência |
 |---|---|---|---|
-| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S11) | Windows: limpo. Linux real (VPS Ubuntu 24.04, validado em S08): limpo |
-| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S11) | 0 erros |
-| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S11) | `npm run test:regression` — 121/121 (120 + `S118` novo, 4 cenários de loop exigidos pelo card ARCH-016 + 1 extra) |
+| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S12) | Windows: limpo. Linux real (VPS Ubuntu 24.04, validado em S08): limpo |
+| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S12) | 0 erros |
+| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S12) | `npm run test:regression` — 121/121 (sem teste novo — card usou a suíte já existente, S11/S12/S13/S15, todas verdes) |
 | Integration Tests | ✔ (parcial) | 2026-07-17 | Etapa 4 (ambiente real) executada em S08 numa VPS Linux real (`venus@10.0.0.10`), cópia isolada, produção nunca tocada — ver `docs/issues/002` |
-| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S11) | Boundary (ARCH-001/002/003/004): Epic A **concluído**. SSOT/Recomputation (ARCH-006/011): accessor único + fonte primária estruturada para fingerprint. Decision Ownership (ARCH-014/016/017): 6/6 regexes byte-idênticas, 0 ocorrências residuais de `ToolExecutorService`, 4 detectores de loop com template compartilhado (fonte de dados unificada só onde correto — 1/4, `docs/issues/006`). Technical Cleanup (ARCH-025/026): fonte única confirmada. Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
+| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S12) | Boundary (ARCH-001/002/003/004): Epic A **concluído**. SSOT/Recomputation (ARCH-006/011): accessor único + fonte primária estruturada para fingerprint. Decision Ownership (ARCH-014/016/017): 6/6 regexes byte-idênticas, 0 ocorrências residuais de `ToolExecutorService`, 4 detectores de loop com template compartilhado. Structural Simplification (ARCH-023): pipeline de fixups de `exec_command.ts` como array nomeado (4 steps), gates de validação preservados como `if`s. Technical Cleanup (ARCH-025/026): fonte única confirmada. Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
 
 **Como reproduzir esta linha "Architecture Metrics":** os comandos variam por Sprint (cada ARCH tem seu próprio "Critérios de Aceite" verificável por grep/contagem — ver o card correspondente em `ARCHITECTURAL_BACKLOG.md`), não existe um único script universal ainda. Ver a seção "Regressão Funcional vs. Regressão Arquitetural" acima.
 
@@ -580,15 +580,16 @@ Validação
 - **Epic:** Structural Simplification
 - **Card ARCH:** ARCH-023
 - **Objetivo:** Explicitar o pipeline de fixups do `exec_command.ts` como lista nomeada de transformações, em vez de `if`s sequenciais com ordem implícita.
-- **Arquivos afetados:** `src/tools/exec_command.ts` (L331-400).
+- **Arquivos afetados:** `src/tools/exec_command.ts` (`COMMAND_FIXUP_PIPELINE` novo + `applyFixup()`), teste `S11` corrigido (asserção estrutural presa a localização de código).
 - **Dependências:** CP01 (nenhuma dependência real — item isolado, poderia rodar a qualquer momento).
-- **Checklist de execução:** padrão.
-- **Checklist de validação:** padrão (suíte já existente: S11, S12, S13, S15 do repositório cobrem bem esta área).
+- **Checklist de execução:** padrão + reverificação de premissa (per `docs/RETROSPECTIVA_PREMISSAS_AUDITORIA`) — a contagem "~12 funções" do card estava plausível (11 funções puras relacionadas a comando/fixup realmente existem no arquivo), mas nem todas fazem parte de uma "cadeia de transformação sequencial": só 4 mutam `command` diretamente numa ordem que importa (`remap_foreign_workspace_paths`, `add_marp_no_stdin`, `remove_pandoc_no_stdin`, `wrap_powershell`) — essas viraram o pipeline. 2 são gates de validação que ABORTAM em vez de transformar (`isMarpWithoutInputFile`, `isPandocWithoutInputFile`) — ficaram como `if`s diretos, intercalados exatamente onde estavam, porque um comentário no código original (`isMarpWithoutNoStdin`, linha ~230) já avisava que a ordem entre gate e fixup importa. As demais (`translateChainOperatorsForPowerShell`, `translateDevNullForPowerShell`, etc.) são helpers específicos de PowerShell chamados de dentro de `wrapForWindowsPowerShell`, não uma cadeia própria.
+- **Checklist de validação:** padrão (suíte já existente: S11, S12, S13, S15 do repositório cobrem bem esta área) — `tsc --noEmit` limpo, `npm run build` limpo, regressão 121/121, os 4 arquivos de teste citados no card rodados individualmente e confirmados verdes.
 - **Rollback:** trivial.
-- **Critérios de Aceite:** ordem de aplicação dos fixups é uma estrutura de dados explícita.
-- **Definition of Done:** regressão 100% (suíte existente).
+- **Critérios de Aceite:** ordem de aplicação dos fixups é uma estrutura de dados explícita — **atingido**, `COMMAND_FIXUP_PIPELINE` (array nomeado, 4 steps) consumido via `applyFixup(nome, command, ctx)` nos 4 pontos de chamada exatos que antes eram `if`s inline.
+- **Definition of Done:** regressão 100% (suíte existente) — **atingido**.
+- **Decisão de design (risco zero, não um loop único):** cogitei rodar os 4 steps num `for` só, mas descartei — `isSearchCommand` (calculado ENTRE os fixups de marp/pandoc e o `wrap_powershell`) precisa ler o comando ANTES de ser embrulhado em PowerShell, senão `grep`/`rg`/`find` nunca mais seriam reconhecidos depois do wrap, quebrando o tratamento de "exit code 1 = sem resultados" no Windows. `applyFixup()` é chamado individualmente, no ponto exato onde o `if` antigo estava — o array é a fonte única de definição (nome/condição/transformação), não necessariamente de execução em lote.
 - **Commit esperado:** 1 commit.
-- **Status:** ⚪ Não iniciada.
+- **Status:** 🟢 Concluída em 2026-07-17.
 
 ### Sprint 2026-09-S19
 - **Número:** S19
@@ -751,6 +752,7 @@ Cada Sprint concluída deve adicionar uma linha aqui, no formato:
 | S09 | 2026-07-17 | ~1 sessão | d9efaff | 8 (`shared/StrategyDiversityGuard.ts` movido, `shared/extractText.ts` novo, `loop/GoalExecutionLoop.ts`, `loop/GoalPlanner.ts`, `loop/ResponseBuilder.ts`, `memory/CaseMemory.ts`, `memory/conversational/CMIIngestionPipeline.ts`, teste `S22` corrigido) | `tsc --noEmit` (limpo) + `npm run build` (limpo) + regressão (119/119) + grep confirmando 0 imports de runtime de `loop/` em `memory/` | `memory/` dependia em runtime de 2 símbolos de `loop/` (`StrategyDiversityGuard`, `extractText`) | `StrategyDiversityGuard.ts` movido inteiro; `extractText` extraído de `ResponseBuilder.ts` (não de `ResponseAdapter.ts`, um shim depreciado) | 0 causados por este ARCH — mas achei 2 funções `extractText` diferentes com o mesmo nome no código (`ContentExtractor.ts` tem outra, assinatura `unknown`→`string`, com docstring desatualizado dizendo que `ContextCompressor` a usaria, quando na verdade usa a outra) | `ResponseAdapter.ts`, citado no card, acabou sendo só um shim `@deprecated` — a implementação real de `extractText` estava em `ResponseBuilder.ts`, junto com 3 outras responsabilidades (normalizeResponse, ContextValidator, DecisionPostProcessor) que TÊM dependência real de `loop/` (`AgentState`, `ToolResult`) e não deveriam mover. Mapear o card contra o código real antes de mover evitou mover o arquivo errado ou arrastar dependências desnecessárias para `shared/`. |
 | S10 | 2026-07-17 | ~1 sessão | fbaf1a0 | 2 (`shared/StrategyDiversityGuard.ts`, teste novo `S117`) | `tsc --noEmit` (limpo) + `npm run build` (limpo) + regressão (120/120, 119 + `S117` novo, 6 cenários) | Regex recomputava por texto livre o que `toolsTried` já guarda estruturado (com lacuna real: só 11 de 25 tools reconhecidas) | `toolsTried.join('→')` como fonte primária aditiva; regex sobrevive só p/ detectar `'agentloop'` | 0 causados por este ARCH — mas confirmou e corrigiu (efeito colateral direto) a lista hardcoded de 11/25 tools no regex antigo, `docs/issues/005` | A premissa do card ("toolsTried já guarda a sequência estruturada") não se sustentou 1:1 na inspeção real — é deduplicado, sem fronteira por tentativa, nunca contém `'agentloop'`. Trocar a fonte por completo teria enfraquecido a semântica do fingerprint (de "sequência exata" pra algo mais vago). Design aditivo (soma ao invés de substitui) preservou a semântica original e ainda assim atingiu o critério de aceite do card ("fonte primária"). Card marcado "Quick Win" pelo backlog, mas a investigação de premissa levou tanto quanto uma Sprint típica desse programa — "Quick Win" descreve o tamanho do diff, não necessariamente o esforço de entender se a premissa é sequer verdadeira. |
 | S11 | 2026-07-17 | ~1 sessão | 52e8e3c | 2 (`loop/GoalPlanner.ts`, teste novo `S118`) | `tsc --noEmit` (limpo) + `npm run build` (limpo) + regressão (121/121, 120 + `S118` novo, 5 cenários) + verificação byte-a-byte adicional (3 de 4 blocos idênticos ao original, 1 normalização cosmética documentada) | 4 blocos de detecção de loop com texto quase idêntico gerado por código duplicado 4x | `buildLoopDirective()` como fonte única de FORMATAÇÃO para os 4; `extractExhaustedTools()` como fonte aditiva só onde o padrão realmente se aplica (1 de 4) | 0 causados por este ARCH | A premissa do card ("os 4 blocos são o mesmo padrão de detecção") não se sustentou — só 1 de 4 é genuinamente "tool falhou N vezes"; os outros 3 detectam categoria de blocker+texto, categoria de ação (não falha), e ocorrência única (não repetição). Forçar os 4 pra `extractExhaustedTools()` como o card sugeria teria quebrado 3 deles silenciosamente. Terceira Sprint seguida (depois de S08 e S10) onde a premissa original do backlog não resistiu à inspeção do código real — o padrão está claro o suficiente pra virar hábito permanente: nunca implementar a "troca de fonte" de um card sem antes confirmar que as duas fontes representam genuinamente a mesma coisa. |
+| S12 | 2026-07-17 | ~1 sessão | 88ede55 | 2 (`tools/exec_command.ts`, teste `S11` corrigido) | `tsc --noEmit` (limpo) + `npm run build` (limpo) + regressão (121/121) + os 4 arquivos citados no card (S11/S12/S13/S15) rodados individualmente e confirmados verdes | 4 transformações de `command` (marp/pandoc/PowerShell) como `if`s soltos em `execute()`, ordem só documentada em comentário | `COMMAND_FIXUP_PIPELINE` (array nomeado, 4 steps) + `applyFixup()`, chamado individualmente nos mesmos 4 pontos exatos | 1 achado e corrigido no ato — `S11` fazia asserção sobre `needsPowerShellWrap(` aparecer no texto literal de `execute()`, quebrou quando a chamada foi pro `condition()` do pipeline (mesma classe de achado do S52/S110/S34/S22) | Primeira Sprint com premissa quase inteiramente correta (a única correção: "~12 funções" incluía helpers de PowerShell não relacionados à cadeia de transformação sequencial, e 2 delas eram gates de validação, não transformações). Decisão consciente de NÃO usar um loop único: `isSearchCommand` precisa ler o comando antes do `wrap_powershell` rodar, ou grep/rg/find nunca mais seriam reconhecidos depois do embrulho em PowerShell — a "estrutura de dados explícita" que o card pede não exige forçar tudo num `for` só quando isso quebraria uma dependência de ordem real e documentada. |
 
 ---
 

@@ -399,8 +399,8 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Unitário (os 4 cenários de falha) + regressão + e2e sintético.
 - **Métrica que deverá melhorar:** God Methods, Code Smells (Duplicated Code).
 
-### ARCH-023 — Explicitar pipeline de fixups do `exec_command.ts`
-- **Descrição:** ~12 funções puras de correção (marp/pandoc/PowerShell/CLIXML) são aplicadas via `if`s sequenciais dentro de `execute()`, com ordem importando implicitamente (comentários dizem "roda por ÚLTIMO"). Expressar como uma lista nomeada de transformações aplicadas em sequência explícita torna a ordem auditável sem mudar o resultado.
+### ARCH-023 — Explicitar pipeline de fixups do `exec_command.ts` ✅ Concluído (2026-07-17, Sprint S12)
+- **Descrição:** ~12 funções puras de correção (marp/pandoc/PowerShell/CLIXML) são aplicadas via `if`s sequenciais dentro de `execute()`, com ordem importando implicitamente (comentários dizem "roda por ÚLTIMO"). Expressar como uma lista nomeada de transformações aplicadas em sequência explícita torna a ordem auditável sem mudar o resultado. **Executado como:** `COMMAND_FIXUP_PIPELINE` (4 steps que de fato mutam `command` numa cadeia onde a ordem importa) + `applyFixup()`, chamado individualmente nos mesmos 4 pontos onde os `if`s inline estavam — não um loop único, porque `isSearchCommand` precisa ler o comando ANTES do fixup `wrap_powershell` (embrulho em PowerShell/Base64 esconderia grep/rg/find da detecção). 2 gates de validação (`isMarpWithoutInputFile`/`isPandocWithoutInputFile`) ficaram como `if`s diretos — abortam em vez de transformar, sem dependência de ordem entre si.
 - **Arquivos afetados:** `src/tools/exec_command.ts` (L331-400).
 - **Origem (auditorias):** Auditoria III (Divergent Change, majoritariamente essencial).
 - **Categoria:** Structural Simplification.
