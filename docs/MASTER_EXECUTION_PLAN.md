@@ -34,7 +34,7 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 | 2026-07-S06 | Jul/2026 | Technical Cleanup | ARCH-025 | 🟢 | P00 | 7aa5bc4 | 2 blocos de prompt unificados (6 divergências corrigidas), build+tsc limpos, 119/119 |
 | 2026-07-S07 | Jul/2026 | Technical Cleanup | ARCH-026 | 🟢 | P00 | e97405d | `DELIVERABLE_EXTENSIONS` movido, 1 teste corrigido (S52), build+tsc limpos, 119/119 |
 | 2026-07-CP01 | Jul/2026 | Checkpoint | — | 🟢 | S01-S07 | — | 7/7 Sprints concluídas, indicadores revisados, 0 riscos residuais |
-| 2026-07-S08 | Jul/2026 | Boundary Enforcement | ARCH-002 | ⚪ | CP01 | — | — |
+| 2026-07-S08 | Jul/2026 | Boundary Enforcement | ARCH-002 | 🟢 | CP01 | 151fd6a | Movido p/ core/, validado real em Windows+Linux (VPS), 3 falhas na VPS confirmadas pré-existentes |
 | 2026-07-S09 | Jul/2026 | Boundary Enforcement | ARCH-003 | ⚪ | CP01 | — | — |
 | 2026-07-S10 | Jul/2026 | Single Source of Truth | ARCH-011 | ⚪ | S09 | — | — |
 | 2026-08-S11 | Ago/2026 | Decision Ownership | ARCH-016 | ⚪ | S10 | — | — |
@@ -64,19 +64,19 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01-S07 e Checkpoint CP01 concluídos
-**Progresso:** 7 / 26 ARCH concluídos (~27%)
-**Sprint Atual:** Nenhuma em andamento (CP01 concluído — próxima é 2026-07-S08)
-**Próxima Sprint:** 2026-07-S08 (ARCH-002)
-**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído — ARCH-002/003 restantes; Epic B iniciado — ARCH-006 feito; Epic C parcialmente concluído — ARCH-014/017 feitos; Epic E concluído — ARCH-025/026 feitos)
+**Status Geral:** 🟢 Em execução — Fase 0, S01-S08 e Checkpoint CP01 concluídos
+**Progresso:** 8 / 26 ARCH concluídos (~31%)
+**Sprint Atual:** Nenhuma em andamento (S08 concluída — próxima é 2026-07-S09)
+**Próxima Sprint:** 2026-07-S09 (ARCH-003)
+**Epic Atual:** Epic A quase concluído (só ARCH-003 restante); Epic B iniciado — ARCH-006 feito; Epic C parcialmente concluído — ARCH-014/017 feitos; Epic E concluído — ARCH-025/026 feitos
 **Próximo Marco:** 2026-08-CP02
-**Última Atualização:** 2026-07-17 (Checkpoint CP01 concluído)
-**Build:** 🟢 `npm run build` limpo
-**Testes:** 🟢 119/119
-**Regressão:** 🟢 119/119 (pós-CP01)
-**Riscos Abertos:** 0
+**Última Atualização:** 2026-07-17 (Sprint S08 concluída — primeira com validação real em Linux, via VPS isolada)
+**Build:** 🟢 `npm run build` limpo (Windows e Linux real)
+**Testes:** 🟢 119/119 (Windows) — 116/119 (VPS Linux específica, 3 falhas confirmadas pré-existentes ao programa, não-regressão)
+**Regressão:** 🟢 119/119 (pós-S08, Windows)
+**Riscos Abertos:** 0 — mas nota permanente: a VPS `venus@10.0.0.10` usada para validação tem 3 falhas de ambiente pré-existentes (workspace de teste com `spawn /bin/sh ENOENT`, `edge-tts` sem acesso de rede) que não são deste programa; útil registrar para não re-investigar do zero na próxima Sprint que exigir ambiente real
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
-**Dívida Arquitetural Restante:** 19 ARCH (18 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
+**Dívida Arquitetural Restante:** 18 ARCH (17 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
 
@@ -86,11 +86,11 @@ Snapshot do estado de validação do branch `refactor/architectural-backlog` nes
 
 | Indicador | Status | Última verificação | Evidência |
 |---|---|---|---|
-| Build (`npm run build`) | ✔ | 2026-07-17 (pós-CP01) | `tsc` + cópia de assets do dashboard, sem erros |
-| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-CP01) | 0 erros |
-| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-CP01) | `npm run test:regression` — 119/119 (achou e corrigiu 1 quebra real durante S07 — ver Registro de Métricas) |
-| Integration Tests | — N/A no momento | 2026-07-17 | Nenhuma Sprint até aqui (S01-S07, todas Quick Win/Refactor Local) exigiu etapa 3/4 da Validação Progressiva — `npm run test:integration` só roda quando o card da Sprint pede ("ambiente real: obrigatório") |
-| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-CP01) | Boundary (ARCH-001/004): 0 violações residuais além das 2 legítimas; ARCH-002/003 permanecem, esperado (S08/S09). SSOT (ARCH-006): só as 2 exceções conscientes fora do accessor. Decision Ownership (ARCH-014/017): 6/6 regexes byte-idênticas, 0 ocorrências residuais de `ToolExecutorService`. Technical Cleanup (ARCH-025/026): blocos de prompt e `DELIVERABLE_EXTENSIONS` com fonte única confirmada. Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
+| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S08) | Windows: limpo. **Linux real (VPS Ubuntu 24.04)**: limpo — primeira Sprint validada nos dois SOs |
+| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S08) | 0 erros (Windows e Linux) |
+| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S08) | Windows: 119/119. **Linux real (VPS)**: 116/119 — 3 falhas (`S112`, `S13`, `S37`) investigadas e confirmadas pré-existentes (reproduzem idênticas no commit anterior ao ARCH-002, na mesma VPS) — ver nota na Sprint S08 |
+| Integration Tests | ✔ (parcial, primeira vez) | 2026-07-17 | S08 (ARCH-002) foi a primeira Sprint a exigir e executar etapa 4 (ambiente real) — validação numa VPS Linux real (`venus@10.0.0.10`), em cópia isolada, sem tocar a instância de produção que já rodava lá (PM2, confirmada intacta antes/depois) |
+| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S08) | Boundary (ARCH-001/002/004): `core/CapabilityRegistry.ts` não importa mais de `loop/`; 0 violações residuais além das 2 legítimas; ARCH-003 permanece, esperado (S09). SSOT (ARCH-006): só as 2 exceções conscientes fora do accessor. Decision Ownership (ARCH-014/017): 6/6 regexes byte-idênticas, 0 ocorrências residuais de `ToolExecutorService`. Technical Cleanup (ARCH-025/026): blocos de prompt e `DELIVERABLE_EXTENSIONS` com fonte única confirmada. Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
 
 **Como reproduzir esta linha "Architecture Metrics":** os comandos variam por Sprint (cada ARCH tem seu próprio "Critérios de Aceite" verificável por grep/contagem — ver o card correspondente em `ARCHITECTURAL_BACKLOG.md`), não existe um único script universal ainda. Ver a seção "Regressão Funcional vs. Regressão Arquitetural" acima.
 
@@ -222,15 +222,17 @@ Validação
 - **Epic:** Boundary Enforcement
 - **Card ARCH:** ARCH-002
 - **Objetivo:** Mover `EnvironmentProbe.ts` para `src/core/`, resolvendo a travessia `core/CapabilityRegistry` ↔ `loop/EnvironmentProbe` ↔ `core/ToolRegistry`.
-- **Arquivos afetados:** `src/loop/EnvironmentProbe.ts` (mover), `src/core/CapabilityRegistry.ts`.
+- **Arquivos afetados:** `src/loop/EnvironmentProbe.ts` → `src/core/EnvironmentProbe.ts` (movido), `src/core/CapabilityRegistry.ts`, `src/__tests__/regression/S110_BashHealthProbe_WSLStubDetection.test.ts` e `S34_Python3RuntimeResolution.test.ts` (não estavam no card — inspecionam o texto-fonte de `EnvironmentProbe.ts` por path hardcoded, mesma classe de achado de S07/ARCH-026).
 - **Dependências:** CP01 (sequenciado após o lote de Quick Wins, mesmo revisor/área temática).
-- **Checklist de execução:** padrão + mapear todos os call sites de `EnvironmentProbe` antes de mover.
-- **Checklist de validação:** padrão + **ambiente real obrigatório** (probe já teve bugs de plataforma — validar em Windows e Linux).
+- **Checklist de execução:** padrão + mapear todos os call sites de `EnvironmentProbe` antes de mover — executado. `GoalEvaluator.ts`/`RiskAnalyzer.ts`/`utils/crossPlatform.ts` mencionam "EnvironmentProbe" só em comentários (confirmado por grep); `core/CapabilityRegistry.ts` é o único consumidor real de código.
+- **Checklist de validação:** padrão + **ambiente real obrigatório — executado nos dois SOs**:
+  - **Windows** (esta máquina): `tsc --noEmit` limpo, `npm run build` limpo, regressão 119/119.
+  - **Linux real** (VPS Ubuntu 24.04, `venus@10.0.0.10` — production já rodava lá via PM2; validação feita numa cópia **isolada** em `~/verify-arch002/`, nunca tocando o processo/DB de produção): branch pusheado pro GitHub, clonado na VPS, `npm install` + `npm run build` limpos, regressão = **116/119** (3 falhas: `S112`, `S13`, `S37`). Investigado antes de aceitar como não-regressão: fiz checkout do commit *anterior* (S07, pré-ARCH-002) na mesma VPS e rodei os mesmos 3 testes isoladamente — **as 3 falhas reproduzem idênticas no baseline**, confirmando que são diferenças de ambiente pré-existentes desta VPS (workspace de teste com `spawn /bin/sh ENOENT`, e `edge-tts` que resolve mas não gera o MP3 de verdade — sem acesso à API por rede nesta VPS), não causadas pelo `EnvironmentProbe.ts` movido. VPS restaurada pro commit do ARCH-002, diretório de verificação removido, produção confirmada intacta (mesmo PID, 0 restarts) antes e depois.
 - **Rollback:** reverter `git mv` + ajuste de import.
-- **Critérios de Aceite:** `core/CapabilityRegistry.ts` nunca importa de `loop/`.
-- **Definition of Done:** build limpo, regressão 100%, `EnvironmentProbe.probe()` funcional em ambiente real.
+- **Critérios de Aceite:** `core/CapabilityRegistry.ts` nunca importa de `loop/` — **atingido** (import agora é `./EnvironmentProbe`, intra-`core/`).
+- **Definition of Done:** build limpo, regressão 100%, `EnvironmentProbe.probe()` funcional em ambiente real — **atingido**. "Regressão 100%" refere-se ao delta causado por este card (0 — as 3 falhas da VPS preexistiam e não fazem parte da mudança), não ao estado absoluto da suíte nesta VPS específica, que já tinha essas 3 lacunas de ambiente antes de qualquer Sprint deste programa.
 - **Commit esperado:** 1 commit.
-- **Status:** ⚪ Não iniciada.
+- **Status:** 🟢 Concluída em 2026-07-17.
 
 ### Sprint 2026-07-S09
 - **Número:** S09
@@ -728,6 +730,7 @@ Cada Sprint concluída deve adicionar uma linha aqui, no formato:
 | S05 | 2026-07-17 | ~1 sessão | dd1a51e | 4 (`core/ToolExecutor.ts` removido, `core/index.ts`, `core/AgentController.ts`, `tools/powerpoint_control.ts`) | `npm run build` (limpo) + `tsc --noEmit` (limpo) + regressão (119/119) + grep confirmando 0 ocorrências residuais | `ToolExecutorService` morto (0 call sites reais) coexistindo com `ProactiveRecovery.execute()` (caminho real) | `ToolExecutorService` removido; `ToolExecutorLike` consolidada no `ToolExecutor` já existente em `agentLoopTypes.ts` | Nenhum — grep de todo `src/` confirma 0 referências residuais; `core/CircuitBreaker.ts` (usado de verdade por `ProviderFactory.ts`) intacto | O card não citava `tools/powerpoint_control.ts` (usava `ToolExecutorLike`, tipo do mesmo arquivo, só para type-check estrutural) nem os listeners `tool:timeout`/`tool:failed` em `AgentController.ts` (só o `ToolExecutorService` deletado os emitia) — mapear TODOS os exports de um arquivo antes de removê-lo, não só a classe citada no card, evita quebrar consumidores que a auditoria original não viu. Achado à parte, documentado sem corrigir: `core/index.ts` parece não ter nenhum importador em todo o projeto. |
 | S06 | 2026-07-17 | ~1 sessão | 7aa5bc4 | 1 (`loop/GoalPlanner.ts`, 2 funções novas) | `npm run build` (limpo) + `tsc --noEmit` (limpo) + regressão (119/119) + grep confirmando o bloco `memory_write` aparece 1x, não 2x | 2 blocos de prompt (~95% idênticos, per o card) copiados à mão em `buildPlanPrompt`/`buildReplanPrompt` | `buildRequiredArgsReference()`/`buildBatchCollectionBlock()` como fonte única | Nenhum, mas **mudança de comportamento intencional**: convergir 2 textos em 1 exige escolher um vencedor nos pontos divergentes — o prompt de replan ganhou os 2 tipos de nó de `memory_write` que faltavam (`project`/`knowledge`), documentado explicitamente, não escondido | A comparação real achou 6 divergências, não só as citadas no card ("~95%" era literal, não estimativa vaga) — a mais séria era uma lacuna de conteúdo (3 de 5 tipos de nó), não só diferença de wording. Ao contrário de S01-S05, este card *pretende* mudar texto observável — "regressão 100%" aqui significa comportamento de execução inalterado (testes passam), não texto de prompt idêntico ao anterior, já que o objetivo do card é justamente eliminar a diferença. |
 | S07 | 2026-07-17 | ~1 sessão | e97405d | 3 (`loop/AgentLoop.ts`, `loop/planning/inferExpectedExtensions.ts`, teste `S52` corrigido) | `tsc --noEmit` (limpo) + `npm run build` (limpo) + regressão — **118/119 na primeira rodada, 119/119 após corrigir S52** | `DELIVERABLE_EXTENSIONS` duplicado (`AgentLoop.ts`) fora do módulo que já centraliza `SOURCE_SCRIPT_EXTENSIONS` | 1 export único em `inferExpectedExtensions.ts` | 1 encontrado e corrigido no ato — `S52` fazia asserção sobre o texto-fonte exato de `AgentLoop.ts`, quebrou quando o array mudou de arquivo (comportamento real intacto, só a localização do código mudou) | Primeira Sprint deste programa em que a suíte de regressão realmente pegou algo — prova de que a distinção Regressão Funcional/Arquitetural (adicionada nesta sessão, a pedido do usuário) não é só formalidade: um refactor "limpo" (comportamento idêntico) ainda pode quebrar um teste que faz asserção sobre onde o código mora, não só o que ele faz. Rodar a suíte de verdade após cada Sprint, não assumir que vai passar, continua sendo o item que mais paga dividendo. |
+| S08 | 2026-07-17 | ~1 sessão | 151fd6a | 4 (`src/core/EnvironmentProbe.ts` movido, `core/CapabilityRegistry.ts`, testes `S110`/`S34` corrigidos) | Windows: `tsc`+`build`+regressão 119/119. **Linux real (VPS `venus@10.0.0.10`, cópia isolada em `~/verify-arch002/`, produção nunca tocada)**: `npm install`+`npm run build` limpos, regressão 116/119 — 3 falhas (`S112`,`S13`,`S37`) comparadas contra o commit anterior (S07) na mesma VPS, reproduzidas idênticas → confirmadas pré-existentes, não-regressão | Round-trip `core/CapabilityRegistry` ↔ `loop/EnvironmentProbe` ↔ `core/ToolRegistry` | `EnvironmentProbe.ts` movido para `core/`; import agora intra-camada nos dois sentidos | 0 causados por este ARCH — mas achou (e isolou corretamente) 3 falhas de ambiente pré-existentes na VPS de validação, não relacionadas ao código movido | Primeira Sprint com etapa 4 (ambiente real) de verdade: subir uma cópia isolada numa VPS que já tinha produção rodando via PM2 exigiu recon antes de qualquer ação (checar processos/diretórios existentes), e a suíte "só" passando 116/119 lá não significa regressão — precisa comparar contra o baseline NA MESMA máquina antes de concluir qualquer coisa, porque ambientes diferentes têm suas próprias lacunas (`edge-tts` sem rede, um `spawn ENOENT` de teste) que não têm nada a ver com o diff sob validação. |
 
 ---
 

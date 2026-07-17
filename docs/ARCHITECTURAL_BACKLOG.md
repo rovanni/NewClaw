@@ -41,7 +41,7 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Unitário (nenhum comportamento muda) + `tsc --noEmit` + suíte de regressão completa.
 - **Métrica que deverá melhorar:** Violações de fronteira (Indicador #1).
 
-### ARCH-002 — Resolver travessia de camada `core/CapabilityRegistry` ↔ `loop/EnvironmentProbe` ↔ `core/ToolRegistry`
+### ARCH-002 — Resolver travessia de camada `core/CapabilityRegistry` ↔ `loop/EnvironmentProbe` ↔ `core/ToolRegistry` ✅ Concluído (2026-07-17, Sprint S08) — validado em Windows e Linux real (VPS)
 - **Descrição:** `core/CapabilityRegistry.ts` importa `EnvironmentProbe` de `loop/`; `EnvironmentProbe.ts` importa `ToolRegistry` de volta de `core/`. Não é um ciclo de import literal, mas é uma ida-e-volta entre camadas para uma responsabilidade (detectar binários via `which`) que é conceitualmente infraestrutura, não orquestração. Mover `EnvironmentProbe.ts` para `src/core/` resolve a direção sem mudar nenhuma lógica interna do arquivo.
 - **Arquivos afetados:** `src/loop/EnvironmentProbe.ts` (mover para `src/core/`), `src/core/CapabilityRegistry.ts` (ajustar import).
 - **Origem (auditorias):** Auditoria IV.
