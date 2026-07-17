@@ -55,7 +55,6 @@ import { SignalAdapter } from '../channels/SignalAdapter';
 import { AuditorService } from '../services/auditor/AuditorService';
 import { eventBus, EventTypes, type AppEvent } from './EventBus';
 import { circuitRegistry } from './CircuitBreaker';
-import { toolExecutor } from './ToolExecutor';
 import { promptRegistry } from './PromptRegistry';
 import { ConfidenceClassifier } from './ConfidenceClassifier';
 import { SessionAutoCleaner } from '../session/SessionAutoCleaner';
@@ -134,7 +133,6 @@ export class AgentController {
     public getOwnerProfileService(): OwnerProfileService { return this.ownerProfileService; }
     public getCircuitBreakerStates() { return circuitRegistry.getAllMetrics(); }
     public getPromptRegistry() { return promptRegistry; }
-    public getToolExecutor() { return toolExecutor; }
 
     constructor(config: NewClawConfig) {
         this.config = config;
@@ -299,12 +297,6 @@ export class AgentController {
         });
         eventBus.on('circuit:closed', (data) => {
             log.info(`[CircuitBreaker] ${data.name} CLOSED — ${data.successes} consecutive successes`);
-        });
-        eventBus.on('tool:timeout', (data) => {
-            log.warn(`[ToolExecutor] ${data.tool} timed out after ${data.timeoutMs}ms`);
-        });
-        eventBus.on('tool:failed', (data) => {
-            log.warn(`[ToolExecutor] ${data.tool} failed: ${data.error}`);
         });
 
         this.confidenceClassifier = new ConfidenceClassifier();
@@ -561,7 +553,7 @@ export class AgentController {
         }, 60_000);
 
         log.info('✅ NewClaw running — multi-channel pipeline active');
-        log.info('   Modules: EventBus ✅ | CircuitBreaker ✅ | ToolExecutor ✅ | ConfidenceClassifier ✅ | PromptRegistry ✅ | SessionAutoCleaner ✅');
+        log.info('   Modules: EventBus ✅ | CircuitBreaker ✅ | ConfidenceClassifier ✅ | PromptRegistry ✅ | SessionAutoCleaner ✅');
     }
 
     async stop(reason: string = 'shutdown'): Promise<void> {

@@ -306,8 +306,8 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Unitário (4 cenários) + regressão.
 - **Métrica que deverá melhorar:** Decision Owners, Code Smells (Data Clump).
 
-### ARCH-017 — Decidir destino do `ToolExecutorService`/`CircuitBreaker` morto
-- **Descrição:** `core/ToolExecutor.ts` (`ToolExecutorService`, com `CircuitBreaker` completo) tem 0 call sites reais — nem `GoalExecutionLoop`, nem `ProactiveRecovery`, nem `AgentLoop` o usam; `AgentController.getToolExecutor()` também não tem caller. Toda execução real passa por `ProactiveRecovery.execute()` direto.
+### ARCH-017 — Decidir destino do `ToolExecutorService`/`CircuitBreaker` morto ✅ Concluído (2026-07-17, Sprint S05 — decisão: remover)
+- **Descrição:** `core/ToolExecutor.ts` (`ToolExecutorService`, com `CircuitBreaker` completo) tem 0 call sites reais — nem `GoalExecutionLoop`, nem `ProactiveRecovery`, nem `AgentLoop` o usam; `AgentController.getToolExecutor()` também não tem caller. Toda execução real passa por `ProactiveRecovery.execute()` direto. **Executado como:** arquivo removido inteiro; `ToolExecutorLike` (interface do mesmo arquivo, com 1 consumidor real não citado no card — `tools/powerpoint_control.ts`) substituída pelo `ToolExecutor` já existente em `loop/agentLoopTypes.ts` (estruturalmente idêntico). `core/CircuitBreaker.ts` (usado de verdade por `ProviderFactory.ts`) **não foi tocado** — só o wrapper morto que o envolvia.
 - **Arquivos afetados:** `src/core/ToolExecutor.ts`, `src/core/AgentController.ts` (`getToolExecutor`), `src/loop/ProactiveRecovery.ts` (se optar por conectar em vez de remover).
 - **Origem (auditorias):** Auditoria I (#9, QW3).
 - **Categoria:** Decision Ownership / Technical Cleanup.

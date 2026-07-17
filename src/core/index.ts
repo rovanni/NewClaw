@@ -13,8 +13,6 @@ export { CircuitBreaker, circuitRegistry, CircuitBreakerOpenError } from './Circ
 export type { CircuitBreakerConfig, CircuitState } from './CircuitBreaker';
 export { ConfidenceClassifier } from './ConfidenceClassifier';
 export type { ClassificationResult, ClassificationInput } from './ConfidenceClassifier';
-export { ToolExecutorService, toolExecutor } from './ToolExecutor';
-export type { ToolExecutionOptions, ToolExecutionResult, ToolExecutorLike } from './ToolExecutor';
 export { PromptRegistry, promptRegistry } from './PromptRegistry';
 export type { PromptCategoryConfig } from './PromptRegistry';
 export { ExecutionTrace, traceManager } from './ExecutionTrace';

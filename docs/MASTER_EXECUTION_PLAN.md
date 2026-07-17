@@ -30,7 +30,7 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 | 2026-07-S02 | Jul/2026 | Boundary Enforcement | ARCH-004 | 🟢 | P00 | 18ba2a2 | `shared/domainTypes.ts` criado, `memory/` sem imports de tipo de `loop/`, tsc limpo, 118/118 |
 | 2026-07-S03 | Jul/2026 | Single Source of Truth | ARCH-006 | 🟢 | P00 | 0225075 | `getPendingSteps` único, 15 call sites migrados, tsc limpo, 119/119 |
 | 2026-07-S04 | Jul/2026 | Decision Ownership | ARCH-014 | 🟢 | P00 | ccf97c1 | `shared/transientErrorPatterns.ts` novo, 6 padrões unificados, verificado byte-a-byte, 119/119 |
-| 2026-07-S05 | Jul/2026 | Decision Ownership | ARCH-017 | ⚪ | P00 | — | — |
+| 2026-07-S05 | Jul/2026 | Decision Ownership | ARCH-017 | 🟢 | P00 | (ver métricas) | `ToolExecutorService` removido (4 arquivos), build+tsc limpos, 119/119 |
 | 2026-07-S06 | Jul/2026 | Technical Cleanup | ARCH-025 | ⚪ | P00 | — | — |
 | 2026-07-S07 | Jul/2026 | Technical Cleanup | ARCH-026 | ⚪ | P00 | — | — |
 | 2026-07-CP01 | Jul/2026 | Checkpoint | — | ⚪ | S01-S07 | — | — |
@@ -64,19 +64,19 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01, S02, S03 e S04 concluídas
-**Progresso:** 4 / 26 ARCH concluídos (~15%)
-**Sprint Atual:** Nenhuma em andamento (S04 concluída — próxima é 2026-07-S05)
-**Próxima Sprint:** 2026-07-S05 (ARCH-017)
-**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído; Epic B iniciado — ARCH-006 feito; Epic C iniciado — ARCH-014 feito)
+**Status Geral:** 🟢 Em execução — Fase 0, S01-S05 concluídas
+**Progresso:** 5 / 26 ARCH concluídos (~19%)
+**Sprint Atual:** Nenhuma em andamento (S05 concluída — próxima é 2026-07-S06)
+**Próxima Sprint:** 2026-07-S06 (ARCH-025)
+**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído; Epic B iniciado — ARCH-006 feito; Epic C parcialmente concluído — ARCH-014/017 feitos)
 **Próximo Marco:** 2026-07-CP01
-**Última Atualização:** 2026-07-17 (Sprint S04 concluída)
-**Build:** 🟢 `tsc --noEmit` limpo
+**Última Atualização:** 2026-07-17 (Sprint S05 concluída)
+**Build:** 🟢 `npm run build` limpo
 **Testes:** 🟢 119/119
-**Regressão:** 🟢 119/119 (pós-S04)
+**Regressão:** 🟢 119/119 (pós-S05)
 **Riscos Abertos:** 0
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
-**Dívida Arquitetural Restante:** 22 ARCH (21 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
+**Dívida Arquitetural Restante:** 21 ARCH (20 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
 
@@ -86,11 +86,11 @@ Snapshot do estado de validação do branch `refactor/architectural-backlog` nes
 
 | Indicador | Status | Última verificação | Evidência |
 |---|---|---|---|
-| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S04) | `tsc` + cópia de assets do dashboard, sem erros |
-| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S04) | 0 erros |
-| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S04) | `npm run test:regression` — 119/119 |
-| Integration Tests | — N/A no momento | 2026-07-17 | Nenhuma Sprint até aqui (S01-S04, todas Quick Win/Refactor Local) exigiu etapa 3/4 da Validação Progressiva — `npm run test:integration` só roda quando o card da Sprint pede ("ambiente real: obrigatório") |
-| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S04) | Boundary (ARCH-001/004): 0 violações residuais além das 2 legítimas (`AgentController`/`agentControllerCommands` importando a classe `AgentLoop`, fora de escopo). SSOT (ARCH-006): só as 2 exceções conscientes fora do accessor. Decision Ownership (ARCH-014): 6/6 regexes compostas byte-idênticas às originais. Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515, +7 do novo `getPendingSteps`), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
+| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S05) | `tsc` + cópia de assets do dashboard, sem erros |
+| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S05) | 0 erros |
+| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S05) | `npm run test:regression` — 119/119 |
+| Integration Tests | — N/A no momento | 2026-07-17 | Nenhuma Sprint até aqui (S01-S05, todas Quick Win/Refactor Local) exigiu etapa 3/4 da Validação Progressiva — `npm run test:integration` só roda quando o card da Sprint pede ("ambiente real: obrigatório") |
+| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S05) | Boundary (ARCH-001/004): 0 violações residuais além das 2 legítimas. SSOT (ARCH-006): só as 2 exceções conscientes fora do accessor. Decision Ownership (ARCH-014): 6/6 regexes byte-idênticas. Decision Ownership (ARCH-017): 0 ocorrências residuais de `ToolExecutorService`/`getToolExecutor` em `src/`; `core/CircuitBreaker.ts` intacto (uso real confirmado via `ProviderFactory.ts`). Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
 
 **Como reproduzir esta linha "Architecture Metrics":** os comandos variam por Sprint (cada ARCH tem seu próprio "Critérios de Aceite" verificável por grep/contagem — ver o card correspondente em `ARCHITECTURAL_BACKLOG.md`), não existe um único script universal ainda. Ver a seção "Regressão Funcional vs. Regressão Arquitetural" acima.
 
@@ -439,15 +439,16 @@ Validação
 - **Epic:** Decision Ownership
 - **Card ARCH:** ARCH-017
 - **Objetivo:** Decidir e executar o destino do `ToolExecutorService`/`CircuitBreaker` morto (0 call sites reais). **Decisão registrada: remover** (ver Resumo executivo do ARCHITECTURAL_BACKLOG.md — recomendação por simplicidade/YAGNI, sem evidência de necessidade de circuit breaker hoje).
-- **Arquivos afetados:** `src/core/ToolExecutor.ts`, `src/core/AgentController.ts` (`getToolExecutor`).
+- **Arquivos afetados:** `src/core/ToolExecutor.ts` (**removido**), `src/core/index.ts` (2 linhas de re-export removidas), `src/core/AgentController.ts` (`getToolExecutor()`, import de `toolExecutor`, os 2 listeners `tool:timeout`/`tool:failed` que só o `ToolExecutorService` emitia, e a menção "ToolExecutor ✅" no banner de startup), `src/tools/powerpoint_control.ts` (não estava no card original — ver nota).
 - **Dependências:** P00.
-- **Checklist de execução:** padrão.
-- **Checklist de validação:** padrão.
-- **Rollback:** reverter (recriar o arquivo removido).
-- **Critérios de Aceite:** `ToolExecutorService` deixa de existir no código.
-- **Definition of Done:** build limpo, regressão 100%.
+- **Checklist de execução:** padrão — executado. Antes de remover, mapeei TODOS os consumidores (não só a classe `ToolExecutorService`): a interface `ToolExecutorLike`, definida no mesmo arquivo, tinha 1 consumidor real fora do escopo citado no card — `src/tools/powerpoint_control.ts` a usava só para type-checking estrutural (`implements ToolExecutorLike`). Como `ToolExecutorLike` é estruturalmente idêntica ao `ToolExecutor` já existente em `loop/agentLoopTypes.ts` (mesmo shape: `name`/`description`/`parameters`/`execute()`), troquei `powerpoint_control.ts` para usar o tipo já canônico em vez de recriar `ToolExecutorLike` em outro lugar — elimina mais uma duplicação de tipo como efeito colateral direto da remoção, não como bônus não pedido. Também confirmei que `circuit:open`/`circuit:closed` (listeners vizinhos em `AgentController.ts`) são emitidos por `core/CircuitBreaker.ts` para QUALQUER consumidor de circuit breaker — `ProviderFactory.ts` também usa `circuitRegistry` — então esses 2 listeners continuam vivos e não foram tocados; só `tool:timeout`/`tool:failed`, exclusivos do `ToolExecutorService` deletado, foram removidos.
+- **Checklist de validação:** padrão — `npm run build` (completo, não só `tsc --noEmit`) limpo, regressão 119/119, grep confirmando 0 ocorrências residuais de `ToolExecutorService`/`getToolExecutor`/import do arquivo removido em todo `src/`.
+- **Rollback:** reverter (recriar o arquivo removido + reverter os 4 arquivos tocados).
+- **Critérios de Aceite:** `ToolExecutorService` deixa de existir no código — **atingido**.
+- **Definition of Done:** build limpo, regressão 100% — **atingido**.
+- **Achado fora de escopo (documentado, não corrigido — per *No Opportunistic Refactoring*):** `src/core/index.ts` (o barrel de `core/`) não tem nenhum importador em todo o projeto — parece inteiramente morto, não só a linha do `ToolExecutor`. Não investigado a fundo nem removido aqui; se confirmado, é candidato a um ARCH novo, não deste card.
 - **Commit esperado:** 1 commit.
-- **Status:** ⚪ Não iniciada.
+- **Status:** 🟢 Concluída em 2026-07-17.
 
 ### Sprint 2026-08-S11
 - **Número:** S11
