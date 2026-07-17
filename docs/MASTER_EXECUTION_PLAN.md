@@ -37,7 +37,7 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 | 2026-07-S08 | Jul/2026 | Boundary Enforcement | ARCH-002 | 🟢 | CP01 | 151fd6a, 36036de | Movido p/ core/, validado real em Windows+Linux (VPS); 3 falhas iniciais na VPS = 2 falso-positivo do setup + 1 bug de teste real (corrigido) — ver docs/issues/002 |
 | 2026-07-S09 | Jul/2026 | Boundary Enforcement | ARCH-003 | 🟢 | CP01 | d9efaff | `memory/` 0 imports de runtime de `loop/`; achado colateral doc. em issues/004 |
 | 2026-07-S10 | Jul/2026 | Single Source of Truth | ARCH-011 | 🟢 | S09 | fbaf1a0 | Fonte primária estruturada aditiva + fallback agentloop; 14 tools "invisíveis" corrigidas de brinde |
-| 2026-08-S11 | Ago/2026 | Decision Ownership | ARCH-016 | ⚪ | S10 | — | — |
+| 2026-08-S11 | Ago/2026 | Decision Ownership | ARCH-016 | 🟢 | S10 | (ver métricas) | Template compartilhado nos 4 blocos; fonte estruturada aditiva só em exec_command (1/4, correto per docs/issues/006) |
 | 2026-08-S12 | Ago/2026 | Structural Simplification | ARCH-023 | ⚪ | CP01 | — | — |
 | 2026-08-S13 | Ago/2026 | Single Source of Truth | ARCH-007 | ⚪ | CP01 | — | — |
 | 2026-08-S14 | Ago/2026 | Single Source of Truth | ARCH-009 | ⚪ | CP01 | — | — |
@@ -64,20 +64,20 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01-S10 e Checkpoint CP01 concluídos
-**Progresso:** 10 / 26 ARCH concluídos (~38%)
-**Sprint Atual:** Nenhuma em andamento (S10 concluída — próxima é 2026-08-S11)
-**Próxima Sprint:** 2026-08-S11 (ARCH-016)
-**Epic Atual:** Epic A concluído; Epic B em andamento — ARCH-006/011 feitos; Epic C parcialmente concluído — ARCH-014/017 feitos; Epic E concluído — ARCH-025/026 feitos
+**Status Geral:** 🟢 Em execução — Fase 0, S01-S11 e Checkpoint CP01 concluídos
+**Progresso:** 11 / 26 ARCH concluídos (~42%)
+**Sprint Atual:** Nenhuma em andamento (S11 concluída — próxima é 2026-08-S12)
+**Próxima Sprint:** 2026-08-S12 (ARCH-023)
+**Epic Atual:** Epic A concluído; Epic B em andamento — ARCH-006/011 feitos; Epic C em andamento — ARCH-014/016/017 feitos; Epic E concluído — ARCH-025/026 feitos
 **Próximo Marco:** 2026-08-CP02
-**Última Atualização:** 2026-07-17 (Sprint S10 concluída)
+**Última Atualização:** 2026-07-17 (Sprint S11 concluída)
 **Build:** 🟢 `npm run build` limpo
-**Testes:** 🟢 120/120
-**Regressão:** 🟢 120/120 (pós-S10, 119 + `S117` novo)
+**Testes:** 🟢 121/121
+**Regressão:** 🟢 121/121 (pós-S11, 120 + `S118` novo)
 **Riscos Abertos:** 0 — nota permanente: a VPS `venus@10.0.0.10` usada para validação Linux tem histórico de exigir `.env`/`WORKSPACE_DIR` explícito (skill `verify`) para não gerar falso-positivo — ver `docs/issues/002`
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
-**Dívida Arquitetural Restante:** 16 ARCH (15 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
-**Achados fora de escopo documentados (`docs/issues/`):** 002 (falsos-positivos de validação VPS), 003 (`core/index.ts` barrel possivelmente morto), 004 (2 funções `extractText` com nome colidindo), 005 (regex de tool names desatualizada — corrigido de brinde na própria S10)
+**Dívida Arquitetural Restante:** 15 ARCH (14 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
+**Achados fora de escopo documentados (`docs/issues/`):** 002 (falsos-positivos de validação VPS), 003 (`core/index.ts` barrel possivelmente morto), 004 (2 funções `extractText` com nome colidindo), 005 (regex de tool names desatualizada — corrigido de brinde na própria S10), 006 (análise de por que os 4 detectores de loop não convergem pra 1 fonte só — não é pendência, é registro de decisão)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
 
@@ -87,11 +87,11 @@ Snapshot do estado de validação do branch `refactor/architectural-backlog` nes
 
 | Indicador | Status | Última verificação | Evidência |
 |---|---|---|---|
-| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S10) | Windows: limpo. Linux real (VPS Ubuntu 24.04, validado em S08): limpo |
-| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S10) | 0 erros |
-| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S10) | `npm run test:regression` — 120/120 (119 + `S117` novo, cobrindo o cenário de fallback `agentloop` exigido pelo card ARCH-011) |
+| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S11) | Windows: limpo. Linux real (VPS Ubuntu 24.04, validado em S08): limpo |
+| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S11) | 0 erros |
+| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S11) | `npm run test:regression` — 121/121 (120 + `S118` novo, 4 cenários de loop exigidos pelo card ARCH-016 + 1 extra) |
 | Integration Tests | ✔ (parcial) | 2026-07-17 | Etapa 4 (ambiente real) executada em S08 numa VPS Linux real (`venus@10.0.0.10`), cópia isolada, produção nunca tocada — ver `docs/issues/002` |
-| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S10) | Boundary (ARCH-001/002/003/004): Epic A **concluído**. SSOT/Recomputation (ARCH-006/011): accessor único + fonte primária estruturada para fingerprint, sem lista hardcoded de tool names (14 de 25 tools estavam "invisíveis" pro mecanismo antigo — corrigido de brinde, `docs/issues/005`). Decision Ownership (ARCH-014/017): 6/6 regexes byte-idênticas, 0 ocorrências residuais de `ToolExecutorService`. Technical Cleanup (ARCH-025/026): fonte única confirmada. Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
+| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S11) | Boundary (ARCH-001/002/003/004): Epic A **concluído**. SSOT/Recomputation (ARCH-006/011): accessor único + fonte primária estruturada para fingerprint. Decision Ownership (ARCH-014/016/017): 6/6 regexes byte-idênticas, 0 ocorrências residuais de `ToolExecutorService`, 4 detectores de loop com template compartilhado (fonte de dados unificada só onde correto — 1/4, `docs/issues/006`). Technical Cleanup (ARCH-025/026): fonte única confirmada. Hotspots: `GoalExecutionLoop.ts` 3522 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
 
 **Como reproduzir esta linha "Architecture Metrics":** os comandos variam por Sprint (cada ARCH tem seu próprio "Critérios de Aceite" verificável por grep/contagem — ver o card correspondente em `ARCHITECTURAL_BACKLOG.md`), não existe um único script universal ainda. Ver a seção "Regressão Funcional vs. Regressão Arquitetural" acima.
 
@@ -468,15 +468,15 @@ Validação
 - **Epic:** Decision Ownership
 - **Card ARCH:** ARCH-016
 - **Objetivo:** Substituir os 4 detectores de loop artesanais em `GoalPlanner.buildReplanPrompt()` por chamadas a `StrategyDiversityGuard.extractExhaustedTools()`, com template de texto compartilhado.
-- **Arquivos afetados:** `src/loop/GoalPlanner.ts` (L295-356), `src/loop/StrategyDiversityGuard.ts`.
+- **Arquivos afetados:** `src/loop/GoalPlanner.ts` (função nova `buildLoopDirective`, 4 blocos reescritos), teste novo `S118`. `StrategyDiversityGuard.ts` **não precisou de mudança** — `extractExhaustedTools()` já existia e já fazia o que era necessário.
 - **Dependências:** S10 (ARCH-011 — fonte de dados corrigida antes de trocar os consumidores).
-- **Checklist de execução:** padrão.
-- **Checklist de validação:** padrão + teste unitário para cada um dos 4 cenários de loop (pip/venv, exec_command, stuck-in-analysis, content_stub).
+- **Checklist de execução:** padrão — executado. A premissa do card ("os 4 blocos são variações do mesmo padrão") não se sustentou: cada um detecta um TIPO de sinal diferente (categoria de blocker+texto; tool específica falhando; categoria de ação, não falha; ocorrência única vs. repetição) — análise completa em `docs/issues/006-loop-directives-different-signal-kinds.md`. Forçar os 4 pra `extractExhaustedTools()` teria quebrado 3 deles (nunca disparariam ou mudariam de threshold silenciosamente).
+- **Checklist de validação:** padrão + teste unitário para cada um dos 4 cenários de loop — `tsc --noEmit` limpo, `npm run build` limpo, regressão 121/121 (120 + `S118` novo, 5 cenários incluindo um extra provando o gatilho aditivo da fonte estruturada). Verificação byte-a-byte adicional: os 3 blocos com lógica inalterada (pip/venv, stuck-in-analysis, content_stub) produzem texto IDÊNTICO ao original (exceto 1 normalização cosmética de indentação documentada no commit); só o texto do bloco `exec_command` pode variar quando disparado pela fonte estruturada nova.
 - **Rollback:** reverter.
-- **Critérios de Aceite:** os 4 blocos usam `StrategyDiversityGuard` como única fonte; texto gerado por função compartilhada.
-- **Definition of Done:** regressão 100% + os 4 testes unitários.
+- **Critérios de Aceite:** os 4 blocos usam `StrategyDiversityGuard` como única fonte; texto gerado por função compartilhada. **Atingido parcialmente por desenho, não por limitação:** texto compartilhado — sim, 4/4; fonte de dados de `StrategyDiversityGuard` — sim para 1/4 (o único caso onde faz sentido), aditivamente, sem perder cobertura.
+- **Definition of Done:** regressão 100% + os 4 testes unitários — **atingido** (`S118`, 5 cenários).
 - **Commit esperado:** 1 commit.
-- **Status:** ⚪ Não iniciada.
+- **Status:** 🟢 Concluída em 2026-07-17.
 
 ### Sprint 2026-08-S18
 - **Número:** S18

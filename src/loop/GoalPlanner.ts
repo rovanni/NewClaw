@@ -279,6 +279,34 @@ function buildProgressBlock(progressModel: GoalProgressModel): string {
     return lines.join('\n');
 }
 
+// ARCH-016: os 4 blocos de detecção de loop em buildReplanPrompt() geravam texto quase idêntico
+// (cabeçalho com ícone + contagem, lista numerada/com marcadores, linha de fechamento) por 4
+// blocos de código independentes. Fonte única de FORMATAÇÃO para os 4 — a fonte de DADOS de
+// cada um continua distinta de propósito: só `execCommandBanDirective` detecta "tool falhou N
+// vezes" (o único caso que `StrategyDiversityGuard.extractExhaustedTools()` de fato resolve);
+// os outros 3 detectam categoria de blocker (`environment_limit`+pip/venv, `content_stub`) ou
+// categoria de ação (só leitura, sem implementar) — sinais que `extractExhaustedTools()` não
+// consegue representar (ele só agrupa `goal.attempts` por `toolName`+`result==='failure'`).
+// Ver docs/issues/006 para a análise completa de por que os 4 não convergem pra uma fonte só.
+function buildLoopDirective(opts: {
+    /** Primeira linha completa, com pontuação/dois-pontos já incluídos. */
+    header: string;
+    /** Linhas entre o header e a lista (0 ou mais). */
+    preamble: string[];
+    /** Itens da lista — sem prefixo de marcador/número, o template adiciona. */
+    items: string[];
+    /** true = "1. 2. 3."; false/omitido = "• " (default). */
+    numbered?: boolean;
+    /** Linha final de aviso, indentada como as demais. */
+    closing: string;
+}): string {
+    const bulletFor = (i: number) => (opts.numbered ? `  ${i + 1}. ` : '  • ');
+    const lines: string[] = [`\n${opts.header}`, ...opts.preamble];
+    opts.items.forEach((item, i) => lines.push(`${bulletFor(i)}${item}`));
+    lines.push(`  ${opts.closing}`);
+    return lines.join('\n') + '\n';
+}
+
 function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, availableTools: string[], runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string, skillContext?: string, diversityBlock?: string, progressModel?: GoalProgressModel): string {
     const goalText            = `${goal.objective} ${goal.userIntent}`;
     const compressedRefl      = PromptComposer.compressReflection(reflectionHint);
@@ -311,30 +339,57 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
         /pep\s*668|pip\s*install|venv|ensurepip|externally.managed/i.test(b.description ?? '')
     ).length;
     const pipVenvLoopDirective = envLimitPipVenvCount >= 2
-        ? `\n⛔ LOOP DETECTADO (${envLimitPipVenvCount} tentativas pip/venv falharam):
-NÃO use pip install NEM python3 -m venv — ambos estão bloqueados neste ambiente.
-ESTRATÉGIAS VÁLIDAS sem instalação:
-  1. python3 -c "import zipfile, shutil, os; ..." — módulo zipfile é built-in, não precisa de pip
-  2. Use ferramentas nativas disponíveis no ambiente (verifique capabilities antes de planejar)
-  3. sed -i 's/NomeAntigo/NovoNome/g' arquivo.xml — para edição de XML dentro de zips
-Escolha UMA dessas abordagens. Qualquer plano com pip ou venv será bloqueado automaticamente.\n`
+        ? buildLoopDirective({
+            header: `⛔ LOOP DETECTADO (${envLimitPipVenvCount} tentativas pip/venv falharam):`,
+            preamble: [
+                'NÃO use pip install NEM python3 -m venv — ambos estão bloqueados neste ambiente.',
+                'ESTRATÉGIAS VÁLIDAS sem instalação:',
+            ],
+            items: [
+                'python3 -c "import zipfile, shutil, os; ..." — módulo zipfile é built-in, não precisa de pip',
+                'Use ferramentas nativas disponíveis no ambiente (verifique capabilities antes de planejar)',
+                "sed -i 's/NomeAntigo/NovoNome/g' arquivo.xml — para edição de XML dentro de zips",
+            ],
+            numbered: true,
+            closing: 'Escolha UMA dessas abordagens. Qualquer plano com pip ou venv será bloqueado automaticamente.',
+        })
         : '';
 
     // Guard S3: exec_command repetitivo — proíbe a tool quando bloqueou 2+ vezes neste goal.
     // O modelo tende a voltar para exec_command em replans mesmo após bloqueios repetidos
     // (missing_tool ou tool_error), porque o StrategyDiversityGuard opera por "estratégia textual"
     // e não por nome de tool. Esta diretiva é um freio explícito por nome.
+    //
+    // ARCH-016: fonte ADITIVA — o count original (blockers com toolName='exec_command' OU
+    // descrição mencionando marp/pandoc/html2pdf) continua, somado ao sinal estruturado de
+    // StrategyDiversityGuard.extractExhaustedTools() (goal.attempts com result='failure',
+    // agrupado por toolName real, sem depender de regex sobre descrição). Aditivo por design:
+    // não pode perder cobertura que o count original já tinha (blockers sem toolName mas cuja
+    // descrição menciona a ferramenta de conversão), só pode ficar mais sensível.
     const execCommandBlockerCount = goal.blockers.filter(
         b => b.toolName === 'exec_command' || (b.kind === 'tool_error' && /exec_command|marp|pandoc|html2pdf/i.test(b.description))
     ).length;
-    const execCommandBanDirective = execCommandBlockerCount >= 2
-        ? `\n⛔ exec_command BLOQUEADO (${execCommandBlockerCount} falhas neste goal):
-exec_command falhou repetidamente — NÃO inclua exec_command em nenhum step deste replan.
-ALTERNATIVAS obrigatórias:
-  • Para gerar HTML/slides: use {sem toolName} — AgentLoop sintetiza diretamente com Reveal.js via CDN (sem conversão)
-  • Para converter arquivos: use a skill correspondente via {sem toolName} descrevendo a conversão desejada
-  • Para enviar resultado: use send_document com o arquivo já criado via write ou AgentLoop
-  Qualquer step com toolName="exec_command" será descartado automaticamente.\n`
+    // Contagem separada da decisão de disparo: a fonte estruturada (extractExhaustedTools) só
+    // devolve um booleano de inclusão, não uma contagem — sem isso, um trigger vindo SÓ da fonte
+    // estruturada (0 blockers com toolName, mas 2+ attempts com result='failure') mostraria "(0
+    // falhas neste goal)" no texto, o que seria enganoso.
+    const execCommandAttemptFailures = goal.attempts.filter(a => a.toolName === 'exec_command' && a.result === 'failure').length;
+    const execCommandExhausted = StrategyDiversityGuard.extractExhaustedTools(goal).includes('exec_command');
+    const execCommandFailureCount = Math.max(execCommandBlockerCount, execCommandAttemptFailures);
+    const execCommandBanDirective = (execCommandBlockerCount >= 2 || execCommandExhausted)
+        ? buildLoopDirective({
+            header: `⛔ exec_command BLOQUEADO (${execCommandFailureCount} falhas neste goal):`,
+            preamble: [
+                'exec_command falhou repetidamente — NÃO inclua exec_command em nenhum step deste replan.',
+                'ALTERNATIVAS obrigatórias:',
+            ],
+            items: [
+                'Para gerar HTML/slides: use {sem toolName} — AgentLoop sintetiza diretamente com Reveal.js via CDN (sem conversão)',
+                'Para converter arquivos: use a skill correspondente via {sem toolName} descrevendo a conversão desejada',
+                'Para enviar resultado: use send_document com o arquivo já criado via write ou AgentLoop',
+            ],
+            closing: 'Qualquer step com toolName="exec_command" será descartado automaticamente.',
+        })
         : '';
 
     const priorIncompletes = goal.blockers.filter(b => b.kind === 'goal_incomplete').length;
@@ -345,12 +400,17 @@ ALTERNATIVAS obrigatórias:
         (priorIncompletes >= 1 || priorAnalysisOnly >= 2);
 
     const implementDirective = stuckInAnalysis
-        ? `\nALERTA: LOOP DE ANÁLISE DETECTADO — ciclos anteriores só fizeram leitura sem implementar.
-OBRIGATÓRIO neste replan:
-  1. NÃO planeje mais steps somente de read/exec_command/list_workspace — contexto já foi coletado.
-  2. IMPLEMENTE usando write ou edit para modificar os arquivos necessários.
-  3. ENTREGUE: inclua step final que confirme o resultado ao usuário (send_document ou write com resumo).
-  Um plano que só lê arquivos sem modificar/entregar será rejeitado novamente.\n`
+        ? buildLoopDirective({
+            header: 'ALERTA: LOOP DE ANÁLISE DETECTADO — ciclos anteriores só fizeram leitura sem implementar.',
+            preamble: ['OBRIGATÓRIO neste replan:'],
+            items: [
+                'NÃO planeje mais steps somente de read/exec_command/list_workspace — contexto já foi coletado.',
+                'IMPLEMENTE usando write ou edit para modificar os arquivos necessários.',
+                'ENTREGUE: inclua step final que confirme o resultado ao usuário (send_document ou write com resumo).',
+            ],
+            numbered: true,
+            closing: 'Um plano que só lê arquivos sem modificar/entregar será rejeitado novamente.',
+        })
         : '';
 
     // Diretiva específica para content_stub: orienta o modelo a usar AgentLoop (sem toolName)
@@ -358,15 +418,21 @@ OBRIGATÓRIO neste replan:
     // bloqueou por CONTENT-STUB-GATE ou quando o GoalEvaluator classificou como content_stub.
     const contentStubCount = goal.blockers.filter(b => b.kind === 'content_stub').length;
     const contentStubDirective = (contentStubCount >= 1 || blocker.kind === 'content_stub')
-        ? `\n⚠️ ERRO DE CONTEÚDO PLACEHOLDER — tentativas anteriores gravaram stubs em vez de conteúdo real.
-CAUSA: o step "write" teve o campo "content" com um placeholder (ex: "[Conteúdo completo da aula]", "... (HTML completo) ...").
-SOLUÇÃO OBRIGATÓRIA neste replan:
-  1. NÃO use toolName="write" com content estático para documentos extensos (slides, HTML, relatórios).
-  2. OMITA toolName no step de síntese — o AgentLoop gerará o conteúdo REAL com contexto dos steps anteriores.
-  3. Padrão CORRETO:
-     {"id":"step_2","description":"Gere o HTML completo dos slides de Scrum com Reveal.js usando os dados pesquisados acima"} (sem toolName, sem toolArgs)
-  4. O AgentLoop tem acesso ao output de web_search/read e produzirá o artefato final — você NÃO precisa pré-gerar content.
-  Qualquer step com toolName="write" e content curto/placeholder será bloqueado novamente.\n`
+        ? buildLoopDirective({
+            header: '⚠️ ERRO DE CONTEÚDO PLACEHOLDER — tentativas anteriores gravaram stubs em vez de conteúdo real.',
+            preamble: [
+                'CAUSA: o step "write" teve o campo "content" com um placeholder (ex: "[Conteúdo completo da aula]", "... (HTML completo) ...").',
+                'SOLUÇÃO OBRIGATÓRIA neste replan:',
+            ],
+            items: [
+                'NÃO use toolName="write" com content estático para documentos extensos (slides, HTML, relatórios).',
+                'OMITA toolName no step de síntese — o AgentLoop gerará o conteúdo REAL com contexto dos steps anteriores.',
+                'Padrão CORRETO:\n     {"id":"step_2","description":"Gere o HTML completo dos slides de Scrum com Reveal.js usando os dados pesquisados acima"} (sem toolName, sem toolArgs)',
+                'O AgentLoop tem acesso ao output de web_search/read e produzirá o artefato final — você NÃO precisa pré-gerar content.',
+            ],
+            numbered: true,
+            closing: 'Qualquer step com toolName="write" e content curto/placeholder será bloqueado novamente.',
+        })
         : '';
 
     const milestoneInstruction = activeMilestone
