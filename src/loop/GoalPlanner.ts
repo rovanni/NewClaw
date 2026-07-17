@@ -20,7 +20,7 @@ import { ToolRegistry } from '../core/ToolRegistry';
 import { SkillLoader } from '../skills/SkillLoader';
 import { PromptComposer } from '../core/PromptComposer';
 import { Goal, GoalBlocker, PlanStep, SuccessCriterion, CriterionCheck, GoalProgressModel } from './GoalTypes';
-import { StrategyDiversityGuard } from './StrategyDiversityGuard';
+import { StrategyDiversityGuard } from '../shared/StrategyDiversityGuard';
 import { PLACEHOLDER_ARG_PATTERN } from '../shared/placeholderPatterns';
 import { makeContentStubClassifier, ContentStubClassifier } from '../shared/contentStubClassifier';
 import { sanitizePlanSteps } from './planning/sanitizePlanSteps';

@@ -69,7 +69,7 @@ import { createLogger } from '../shared/AppLogger';
 import type { MemoryManager } from './MemoryManager';
 import type { EmbeddingService } from './EmbeddingService';
 import type { Goal, PlanStep } from '../shared/domainTypes';
-import { StrategyDiversityGuard } from '../loop/StrategyDiversityGuard';
+import { StrategyDiversityGuard } from '../shared/StrategyDiversityGuard';
 
 const log = createLogger('CaseMemory');
 

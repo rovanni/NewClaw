@@ -38,7 +38,7 @@ import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext, SuccessCriterion, GoalProgressModel, ProgressComponent, AttemptOutcome } from './GoalTypes';
 import { StepSemanticValidator } from './StepSemanticValidator';
 import { GracefulDeliveryOrchestrator } from './GracefulDeliveryOrchestrator';
-import { StrategyDiversityGuard } from './StrategyDiversityGuard';
+import { StrategyDiversityGuard } from '../shared/StrategyDiversityGuard';
 import { resolvePath } from '../utils/crossPlatform';
 import { ensureDeliverySuccessCriteria, AUTO_DELIVERY_CRITERION_IDS } from './planning/ensureDeliverySuccessCriteria';
 import { resolveInstallCommand } from './planning/resolveInstallCommand';

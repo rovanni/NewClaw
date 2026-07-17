@@ -13,8 +13,8 @@
  *   (a) fingerprints já usados, (b) tools esgotadas, (c) sugestão de abordagem nova
  */
 
-import { createLogger } from '../shared/AppLogger';
-import { Goal, PlanStep } from './GoalTypes';
+import { createLogger } from './AppLogger';
+import { Goal, PlanStep } from './domainTypes';
 
 const log = createLogger('StrategyDiversityGuard');
 

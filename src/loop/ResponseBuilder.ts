@@ -16,6 +16,11 @@ import type { ParsedLLMResponse } from './ContentExtractor';
 import { sanitizeContent } from './agentOutputParser';
 import { AgentState } from '../core/AgentStateManager';
 import { ToolResult } from './AgentLoop';
+import { extractText } from '../shared/extractText';
+import type { ExtractedText } from '../shared/extractText';
+
+export { extractText };
+export type { ExtractedText };
 
 // ── Seção 1: Normalização de resposta LLM (ex-ResponseAdapter) ──────────────
 
@@ -35,9 +40,6 @@ export interface NormalizedResponse {
     toolName?: string;
     toolInput?: Record<string, unknown>;
 }
-
-/** Resultado de extração leve — apenas o texto. */
-export type ExtractedText = string;
 
 /**
  * normalizeResponse — normalização full-structure.
@@ -82,47 +84,6 @@ export function normalizeResponse(parsed: ParsedLLMResponse | null, rawContent: 
     }
 
     return { type: 'empty', content: '' };
-}
-
-/**
- * extractText — extração leve de texto.
- * USE IN: ContextCompressor, ContextValidator, OnboardingService.
- * Sem estrutura, sem avaliação, sem roteamento — apenas texto legível.
- */
-export function extractText(content: string): ExtractedText {
-    if (!content || !content.trim()) return '';
-
-    try {
-        const parsed = JSON.parse(content);
-        if (parsed?.action?.content) return parsed.action.content;
-        if (parsed?.content) return parsed.content;
-        if (typeof parsed === 'string') return parsed;
-        // thought + tool-action é JSON de controle interno — nunca deve chegar ao usuário
-        if (parsed?.thought && parsed?.action && (parsed.action.type === 'tool' || parsed.action.name)) return '';
-        if (parsed?.thought && parsed?.action?.type === 'final_answer') return parsed.action.content ?? '';
-    } catch { /* não é JSON */ }
-
-    try {
-        const jsonMatch = content.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-            const parsed = JSON.parse(jsonMatch[0]);
-            if (parsed?.action?.content) return parsed.action.content;
-            if (parsed?.content) return parsed.content;
-            if (parsed?.thought && parsed?.action && (parsed.action.type === 'tool' || parsed.action.name)) return '';
-        }
-    } catch { /* não é JSON */ }
-
-    let text = content;
-    text = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
-    text = text.replace(/<\/?think>/gi, '');
-    text = text.replace(/\[TOOL_CALL\][\s\S]*?\[\/TOOL_CALL\]/gi, '');
-
-    const codeFenceMatch = text.match(/^```[\s\S]*?```\s*$/);
-    if (codeFenceMatch) {
-        text = text.replace(/^```\w*\n?/, '').replace(/\n?```\s*$/, '');
-    }
-
-    return text.trim();
 }
 
 /**
