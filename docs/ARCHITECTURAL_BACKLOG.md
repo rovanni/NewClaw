@@ -75,8 +75,8 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Unitário + regressão.
 - **Métrica que deverá melhorar:** Violações de fronteira, Dependências invertidas.
 
-### ARCH-004 — Migrar imports de tipo (`GoalTypes`, `IntentCategory`) usados por `memory/` para local neutro
-- **Descrição:** `memory/CaseMemory.ts` e `memory/ReflectionMemory.ts` importam `type {Goal, PlanStep, AttemptOutcome, BlockerKind}` de `loop/GoalTypes.ts` e `type {IntentCategory}` de `loop/UnifiedIntentRouter.ts`. Como são `import type`, o custo em runtime é zero — mas a direção continua invertida. Prioridade mais baixa que os demais itens do Epic A.
+### ARCH-004 — Migrar imports de tipo (`GoalTypes`, `IntentCategory`) usados por `memory/` para local neutro ✅ Concluído (2026-07-17, Sprint S02)
+- **Descrição:** `memory/CaseMemory.ts` e `memory/ReflectionMemory.ts` importam `type {Goal, PlanStep, AttemptOutcome, BlockerKind}` de `loop/GoalTypes.ts` e `type {IntentCategory}` de `loop/UnifiedIntentRouter.ts`. Como são `import type`, o custo em runtime é zero — mas a direção continua invertida. Prioridade mais baixa que os demais itens do Epic A. **Executado como:** `src/shared/domainTypes.ts` novo, contendo `Goal`/`PlanStep`/`GoalAttempt`/`GoalBlocker`/`SuccessCriterion`/`ToolMutation`/`GoalStatus`/`BlockerKind`/`CriterionCheck`/`AttemptOutcome`/`IntentCategory` (o fechamento transitivo real de `Goal`, maior que os 2-4 tipos citados originalmente — `Goal` referencia todos os outros). `loop/GoalTypes.ts` e `loop/UnifiedIntentRouter.ts` reexportam de lá, zero ripple nos consumidores existentes em `loop/`.
 - **Arquivos afetados:** `src/loop/GoalTypes.ts`, `src/loop/UnifiedIntentRouter.ts`, `src/memory/CaseMemory.ts`, `src/memory/ReflectionMemory.ts`.
 - **Origem (auditorias):** Auditoria IV.
 - **Categoria:** Boundary Enforcement.

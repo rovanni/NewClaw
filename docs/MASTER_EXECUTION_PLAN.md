@@ -14,7 +14,7 @@ Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejame
 |---|---|---|---|---|---|---|---|
 | 2026-07-P00 | Jul/2026 | Preparação | Baseline | 🟢 | — | d088864 (TAG `baseline-b1.0-pre-refactor`) | 118/118, tsc limpo, T0 registrado |
 | 2026-07-S01 | Jul/2026 | Boundary Enforcement | ARCH-001 | 🟢 | P00 | 6c14a9b | 26 imports corrigidos (`tools/`→25, `core/ToolRegistry.ts`→1), tsc limpo, 118/118 |
-| 2026-07-S02 | Jul/2026 | Boundary Enforcement | ARCH-004 | ⚪ | P00 | — | — |
+| 2026-07-S02 | Jul/2026 | Boundary Enforcement | ARCH-004 | 🟢 | P00 | (ver métricas) | `shared/domainTypes.ts` criado, `memory/` sem imports de tipo de `loop/`, tsc limpo, 118/118 |
 | 2026-07-S03 | Jul/2026 | Single Source of Truth | ARCH-006 | ⚪ | P00 | — | — |
 | 2026-07-S04 | Jul/2026 | Decision Ownership | ARCH-014 | ⚪ | P00 | — | — |
 | 2026-07-S05 | Jul/2026 | Decision Ownership | ARCH-017 | ⚪ | P00 | — | — |
@@ -51,19 +51,19 @@ Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejame
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0 e Sprint S01 concluídas
-**Progresso:** 1 / 26 ARCH concluídos (~4%)
-**Sprint Atual:** Nenhuma em andamento (S01 concluída — próxima é 2026-07-S02)
-**Próxima Sprint:** 2026-07-S02 (ARCH-004)
-**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído — ARCH-001 feito, ARCH-002/004 restantes)
+**Status Geral:** 🟢 Em execução — Fase 0, S01 e S02 concluídas
+**Progresso:** 2 / 26 ARCH concluídos (~8%)
+**Sprint Atual:** Nenhuma em andamento (S02 concluída — próxima é 2026-07-S03)
+**Próxima Sprint:** 2026-07-S03 (ARCH-006)
+**Epic Atual:** Nenhum em andamento (Epic A parcialmente concluído — ARCH-001/004 feitos, ARCH-002 restante em S08)
 **Próximo Marco:** 2026-07-CP01
-**Última Atualização:** 2026-07-17 (Sprint S01 concluída)
+**Última Atualização:** 2026-07-17 (Sprint S02 concluída)
 **Build:** 🟢 `tsc --noEmit` limpo
 **Testes:** 🟢 118/118
-**Regressão:** 🟢 118/118 (pós-S01)
-**Riscos Abertos:** 0 (divergência de escopo em ARCH-001 já corrigida durante a própria execução de S01 — ver nota no card)
+**Regressão:** 🟢 118/118 (pós-S02)
+**Riscos Abertos:** 0
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
-**Dívida Arquitetural Restante:** 25 ARCH (24 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
+**Dívida Arquitetural Restante:** 24 ARCH (23 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
 
@@ -171,15 +171,15 @@ Estrutura de cada Sprint abaixo, na ordem cronológica real de execução (a mes
 - **Epic:** Boundary Enforcement
 - **Card ARCH:** ARCH-004
 - **Objetivo:** Migrar imports de tipo (`GoalTypes`, `IntentCategory`) usados por `memory/` para local neutro.
-- **Arquivos afetados:** `src/loop/GoalTypes.ts`, `src/loop/UnifiedIntentRouter.ts`, `src/memory/CaseMemory.ts`, `src/memory/ReflectionMemory.ts`.
+- **Arquivos afetados:** `src/shared/domainTypes.ts` (novo — definições movidas para cá), `src/loop/GoalTypes.ts` (passa a reexportar `GoalStatus`/`BlockerKind`/`GoalBlocker`/`CriterionCheck`/`SuccessCriterion`/`PlanStep`/`ToolMutation`/`AttemptOutcome`/`GoalAttempt`/`Goal` de `shared/domainTypes.ts`), `src/loop/UnifiedIntentRouter.ts` (idem para `IntentCategory`), `src/memory/CaseMemory.ts`, `src/memory/ReflectionMemory.ts`.
 - **Dependências:** P00.
-- **Checklist de execução:** padrão.
-- **Checklist de validação:** padrão (ambiente real: não aplicável — só tipo).
-- **Rollback:** trivial.
-- **Critérios de Aceite:** tipos compartilhados residem em local neutro (ex.: `shared/domainTypes.ts`).
-- **Definition of Done:** `tsc --noEmit` limpo.
+- **Checklist de execução:** padrão — executado. Escopo real acabou maior que "migrar 2-3 tipos": `Goal`/`PlanStep` referenciam transitivamente `GoalStatus`, `GoalBlocker`, `SuccessCriterion`, `GoalAttempt`, `ToolMutation` (todos usados pela shape completa de `Goal`, que `CaseMemory.ts` consome por inteiro) — mover só os 2-4 tipos citados no card sem os que eles referenciam quebraria a compilação. Nenhum tipo de execução específico de `loop/` (`CycleResult`, `GoalResult`, `StepEvaluation`, `GoalProgressModel` etc.) foi tocado — ficaram em `GoalTypes.ts`, não são consumidos por `memory/`.
+- **Checklist de validação:** padrão (ambiente real: não aplicável — só tipo) — `tsc --noEmit` limpo, regressão 118/118 (por precaução, embora o card só exigisse tsc).
+- **Rollback:** trivial (reverter o commit; `loop/GoalTypes.ts` volta a definir os tipos localmente).
+- **Critérios de Aceite:** tipos compartilhados residem em local neutro (`shared/domainTypes.ts`) — **atingido**. `memory/` não importa mais nenhum tipo de `loop/GoalTypes.ts` nem `loop/UnifiedIntentRouter.ts` (confirmado por grep); os 2 imports de runtime restantes de `memory/` em `loop/` (`StrategyDiversityGuard`, `extractText`) são escopo do ARCH-003 (S09), não deste card.
+- **Definition of Done:** `tsc --noEmit` limpo — **atingido**.
 - **Commit esperado:** 1 commit.
-- **Status:** ⚪ Não iniciada.
+- **Status:** 🟢 Concluída em 2026-07-17.
 
 ### Sprint 2026-07-S08
 - **Número:** S08

@@ -14,6 +14,7 @@ import { createLogger } from '../shared/AppLogger';
 import { keywordBoundaryMatches } from '../shared/keywordBoundary';
 import type { SkillLearner } from './SkillLearner';
 import type { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
+import type { IntentCategory } from '../shared/domainTypes';
 
 const log = createLogger('UnifiedIntentRouter');
 
@@ -22,7 +23,9 @@ const log = createLogger('UnifiedIntentRouter');
 export type ExecutionMode = 'direct' | 'tool' | 'planner' | 'hybrid';
 export type RiskLevel = 'low' | 'medium' | 'high';
 export type CognitiveLoad = 'minimal' | 'normal' | 'deep';
-export type IntentCategory = 'greeting' | 'conversation' | 'information' | 'creation' | 'system_operation' | 'data_analysis' | 'memory_operation' | 'audio' | 'vision' | 'destructive' | 'confirmation' | 'rejection';
+// IntentCategory vive em shared/domainTypes.ts (ARCH-004) — memory/ReflectionMemory.ts
+// consome esse tipo e não deve depender de loop/.
+export type { IntentCategory };
 
 export interface IntentDecision {
     /** Intent classification */
