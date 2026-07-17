@@ -272,6 +272,78 @@ export function removePandocNoStdin(command: string): string {
     return command.replace(/\s*--no-stdin\b/g, '').replace(/\s{2,}/g, ' ').trim();
 }
 
+// ── Pipeline de fixups (ARCH-023) ────────────────────────────────────────────
+// As transformações de `command` que ANTES eram uma sequência de `if`s soltos dentro de
+// execute() — ordem implícita, só documentada em comentário ("Roda por ÚLTIMO, depois de toda
+// normalização de path acima"). Agora é uma lista explícita, ordenada, auditável sem precisar
+// ler o corpo de execute() inteiro. Escopo consciente (não os ~12 "e tanto" citados no card):
+// só as transformações que mutam `command` sequencialmente entram aqui — os 2 gates de
+// validação que ABORTAM a execução com erro (isMarpWithoutInputFile, isPandocWithoutInputFile)
+// continuam como `if`s diretos em execute(), porque não fazem parte de uma cadeia onde a ordem
+// entre eles determina o resultado (cada um só decide "abortar ou não", independente do outro).
+interface FixupContext {
+    isSsh: boolean;
+    /** Corresponde ao antigo `!workdir` — só reescreve prefixo relativo "workspace/" quando o
+     *  cwd do processo É o workspaceDir (sem workdir customizado). */
+    allowRelativeWorkspacePrefix: boolean;
+}
+
+interface CommandFixupStep {
+    name: string;
+    condition: (command: string, ctx: FixupContext) => boolean;
+    transform: (command: string, ctx: FixupContext) => string;
+    /** Default true. `remap_foreign_workspace_paths` nunca teve log `[AUTO-FIX]` no código
+     *  original (sempre roda, silenciosamente) — preservado aqui para não introduzir uma linha
+     *  de log nova que não existia antes. */
+    logOnChange?: boolean;
+}
+
+// Ordem = ordem real de aplicação em execute() (ver os 2 pontos de chamada de applyFixup() mais
+// abaixo — não um `for` batelado, de propósito: os 2 gates de validação (isMarpWithoutInputFile,
+// isPandocWithoutInputFile) precisam continuar INTERCALADOS entre os fixups, exatamente como já
+// eram, e `wrap_powershell` precisa continuar sendo o ÚLTIMO fixup aplicado, depois que
+// `isSearchCommand` já leu o comando original (grep/rg/find) — se rodasse mais cedo,
+// `isSearchCommand` veria o comando já embrulhado em PowerShell/Base64 e nunca mais
+// reconheceria os binários originais). A lista existe para dar UMA fonte nomeada, legível e
+// testável do que cada fixup faz — não para forçar todos a rodar num loop só, o que exigiria
+// quebrar a interleaving com os gates ou arriscar essa regressão de `isSearchCommand`.
+const COMMAND_FIXUP_PIPELINE: CommandFixupStep[] = [
+    {
+        name: 'remap_foreign_workspace_paths',
+        condition: () => true,
+        transform: (command, ctx) => remapForeignWorkspacePaths(command, ctx.allowRelativeWorkspacePrefix),
+        logOnChange: false,
+    },
+    {
+        name: 'add_marp_no_stdin',
+        condition: (command) => isMarpWithoutNoStdin(command),
+        transform: (command) => addMarpNoStdin(command),
+    },
+    {
+        name: 'remove_pandoc_no_stdin',
+        condition: (command) => hasPandocInvalidNoStdin(command),
+        transform: (command) => removePandocNoStdin(command),
+    },
+    {
+        // Roda por último, depois de toda normalização de path acima — o comando final (já com
+        // paths corrigidos) é o que vira Base64, não o texto original ainda com paths errados.
+        // Não se aplica a ssh:// — o shell remoto não é necessariamente Windows.
+        name: 'wrap_powershell',
+        condition: (command, ctx) => !ctx.isSsh && process.platform === 'win32' && needsPowerShellWrap(command),
+        transform: (command) => wrapForWindowsPowerShell(command),
+    },
+];
+
+function applyFixup(stepName: string, command: string, ctx: FixupContext): string {
+    const step = COMMAND_FIXUP_PIPELINE.find(s => s.name === stepName);
+    if (!step || !step.condition(command, ctx)) return command;
+    const next = step.transform(command, ctx);
+    if (step.logOnChange !== false) {
+        log.info(`[AUTO-FIX] fix=${step.name} original="${command.slice(0, 120)}"`);
+    }
+    return next;
+}
+
 export class ExecCommandTool implements ToolExecutor {
     name = 'exec_command';
     description = 'Execute shell commands. Workspace como cwd padrão. Suporta ssh://host/command para remoto. Timeout padrão: 30s.';
@@ -328,7 +400,8 @@ export class ExecCommandTool implements ToolExecutor {
         // "workspace/" relativo só é reescrito quando NÃO há workdir customizado (cwd já é o
         // workspaceDir nesse caso — com workdir custom, "workspace/foo" deve continuar relativo
         // a ele, não virar um path absoluto pra raiz do workspace).
-        command = remapForeignWorkspacePaths(command, !workdir);
+        const fixupCtx: FixupContext = { isSsh, allowRelativeWorkspacePrefix: !workdir };
+        command = applyFixup('remap_foreign_workspace_paths', command, fixupCtx);
 
         // marp/pandoc: falha rápido quando não há arquivo de entrada (evita ficar preso
         // esperando stdin até o timeout), e corrige automaticamente a flag --no-stdin
@@ -340,11 +413,7 @@ export class ExecCommandTool implements ToolExecutor {
                        'Formato correto: marp entrada.md --no-stdin -o saida.html',
             };
         }
-        if (isMarpWithoutNoStdin(command)) {
-            const original = command;
-            command = addMarpNoStdin(command);
-            log.info(`[AUTO-FIX] fix=add_marp_no_stdin original="${original.slice(0, 120)}"`);
-        }
+        command = applyFixup('add_marp_no_stdin', command, fixupCtx);
         if (isPandocWithoutInputFile(command)) {
             return {
                 success: false, output: '',
@@ -352,11 +421,7 @@ export class ExecCommandTool implements ToolExecutor {
                        'Formato correto: pandoc entrada.md -o saida.html',
             };
         }
-        if (hasPandocInvalidNoStdin(command)) {
-            const original = command;
-            command = removePandocNoStdin(command);
-            log.info(`[AUTO-FIX] fix=remove_pandoc_no_stdin original="${original.slice(0, 120)}"`);
-        }
+        command = applyFixup('remove_pandoc_no_stdin', command, fixupCtx);
 
         // windowsHide evita que cada comando abra uma janela de console visível no Windows —
         // o processo do bot roda sem console próprio (PM2/Tarefa Agendada), então sem essa
@@ -393,11 +458,7 @@ export class ExecCommandTool implements ToolExecutor {
         // rodava para planos "complexos" (isComplexPlan(): >=3 steps, ou exec_command+write/send
         // juntos). Um plano de 1 step só com exec_command — o caso mais comum — pulava essa
         // análise inteira e o fix nunca era aplicado.
-        if (!isSsh && process.platform === 'win32' && needsPowerShellWrap(command)) {
-            const original = command;
-            command = wrapForWindowsPowerShell(command);
-            log.info(`[AUTO-FIX] fix=wrap_powershell original="${original.slice(0, 120)}"`);
-        }
+        command = applyFixup('wrap_powershell', command, fixupCtx);
 
         try {
             const output = await new Promise<string>((resolve, reject) => {
