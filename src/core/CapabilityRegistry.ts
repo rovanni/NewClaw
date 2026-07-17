@@ -27,7 +27,7 @@ import dns from 'dns';
 import os from 'os';
 import { promisify } from 'util';
 import { createLogger } from '../shared/AppLogger';
-import { EnvironmentProbe } from '../loop/EnvironmentProbe';
+import { EnvironmentProbe } from './EnvironmentProbe';
 import { which, isWindows, linuxDistro, resolvePython3Runtime, defaultPython3Candidates, Python3Runtime } from '../utils/crossPlatform';
 
 const log = createLogger('CapabilityRegistry');

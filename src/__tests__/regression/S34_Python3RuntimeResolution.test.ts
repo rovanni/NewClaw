@@ -204,7 +204,7 @@ console.log('\n=== S34-extra — probePython3Runtime()/runPython3Import() reais 
 
 console.log('\n=== S34-11 — EnvironmentProbe.probe(): resolvePython3Runtime chamado no máximo 1 vez ===');
 {
-    const envProbePath = path.join(process.cwd(), 'src', 'loop', 'EnvironmentProbe.ts');
+    const envProbePath = path.join(process.cwd(), 'src', 'core', 'EnvironmentProbe.ts');
     const src = fs.readFileSync(envProbePath, 'utf-8');
     const calls = src.match(/resolvePython3Runtime\(/g) ?? [];
     assert(calls.length === 1, `resolvePython3Runtime( aparece exatamente 1 vez no source (obtido: ${calls.length})`, calls.length);
@@ -212,7 +212,7 @@ console.log('\n=== S34-11 — EnvironmentProbe.probe(): resolvePython3Runtime ch
 
 console.log('\n=== S34-12 — 4 pacotes reutilizam a MESMA variável de runtime já resolvida ===');
 {
-    const envProbePath = path.join(process.cwd(), 'src', 'loop', 'EnvironmentProbe.ts');
+    const envProbePath = path.join(process.cwd(), 'src', 'core', 'EnvironmentProbe.ts');
     const src = fs.readFileSync(envProbePath, 'utf-8');
     assert(/const pythonRuntime = await resolvePython3Runtime/.test(src), 'runtime resolvido uma vez em variável própria', null);
     assert(/PYTHON_PKGS_TO_PROBE\.map\(async \(p\).*runPython3Import\(pythonRuntime, p\)/.test(src), 'os 4 pacotes chamam runPython3Import(pythonRuntime, p) — reusando a mesma variável, não resolvendo de novo', null);
@@ -220,7 +220,7 @@ console.log('\n=== S34-12 — 4 pacotes reutilizam a MESMA variável de runtime 
 
 console.log('\n=== S34-13 — ausência de runtime: 4 pacotes false, probes não-Python independentes ===');
 {
-    const envProbePath = path.join(process.cwd(), 'src', 'loop', 'EnvironmentProbe.ts');
+    const envProbePath = path.join(process.cwd(), 'src', 'core', 'EnvironmentProbe.ts');
     const src = fs.readFileSync(envProbePath, 'utf-8');
     assert(/for \(const p of PYTHON_PKGS_TO_PROBE\) pythonPkgs\[p\] = false;/.test(src), 'branch else preenche os 4 pacotes com false quando runtime é null', null);
     // Confirma que o probe de ferramentas (tools) roda ANTES e é independente da resolução Python —
@@ -244,7 +244,7 @@ console.log('\n=== S34-14 — timeout: pequeno e explícito, candidato tratado c
 
 console.log('\n=== S34-15 — regressão: pptx/docx/PIL/markdown preservados em EnvironmentProbe ===');
 {
-    const envProbePath = path.join(process.cwd(), 'src', 'loop', 'EnvironmentProbe.ts');
+    const envProbePath = path.join(process.cwd(), 'src', 'core', 'EnvironmentProbe.ts');
     const src = fs.readFileSync(envProbePath, 'utf-8');
     assert(/PYTHON_PKGS_TO_PROBE = \['pptx', 'docx', 'PIL', 'markdown'\]/.test(src), 'lista de 4 pacotes preservada, sem mudança de shape público (EnvironmentCapabilities.pythonPkgs continua Record<string, boolean>)', null);
     assert(!/probePyPkgCmd/.test(src), 'probePyPkgCmd removida do consumidor (função morta eliminada, não preservada artificialmente)', null);

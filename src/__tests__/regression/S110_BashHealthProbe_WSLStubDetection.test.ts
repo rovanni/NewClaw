@@ -57,7 +57,7 @@ async function main() {
 
     console.log('\n=== S110.3 — EnvironmentProbe.probe() inclui "bash" via isBashFunctional() (não via where/command -v) ===');
     {
-        const probePath = path.join(process.cwd(), 'src', 'loop', 'EnvironmentProbe.ts');
+        const probePath = path.join(process.cwd(), 'src', 'core', 'EnvironmentProbe.ts');
         const source = fs.readFileSync(probePath, 'utf-8');
 
         assert(
