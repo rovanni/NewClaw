@@ -4,6 +4,8 @@
 
 **Antes de implementar qualquer Sprint, ler `docs/RETROSPECTIVA_PREMISSAS_AUDITORIA_2026-07-17.md`** — catálogo cumulativo de premissas do backlog que não se sustentaram na execução (7 de 11 Sprints até agora) e os 3 modos de falha recorrentes da auditoria original. Não é opcional, é o histórico do que já deu errado quando essa reverificação foi pulada.
 
+**Antes de mexer em qualquer arquivo, também checar `docs/DEPENDENCIAS_ORDEM_IMPLICITA_2026-07-17.md`** — catálogo cumulativo de trechos de código cujo comportamento correto depende de uma ORDEM de execução ou de dados só documentada num comentário solto (não reforçada por tipo, estrutura ou teste). Um desses casos (`RiskAnalyzer.ts`) já causou um bug real de produção quando reordenado sem essa consciência. Sempre que uma Sprint encontrar um comentário do tipo "roda antes/depois de", "ordem importa", "precisa ser checado antes/depois" — tratar como invariante a preservar e, se for uma instância nova, registrar no documento.
+
 **Baseline:** B1.0 (imutável). **Política permanente:** *No Opportunistic Refactoring* — nenhuma Sprint corrige nada além do seu único ARCH designado; dívida nova encontrada durante a execução é documentada em `docs/issues/NNN-*.md` (não só numa nota inline dentro do card da Sprint — ver Regra #3) e vira proposta de ARCH novo, nunca é resolvida "de brinde" na sprint corrente. **WIP máximo = 1** — nunca dois refactors de grande porte em andamento ao mesmo tempo.
 
 Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejamento (não compromissos), a serem corrigidas com dados reais de velocidade a partir da primeira Sprint executada.
@@ -160,10 +162,17 @@ correto". Especificamente: toda contagem numérica no card merece um grep/contag
 "mover X" merece checar o que X referencia por dentro; toda "unificar fonte A com fonte B"
 merece ler como A e B são de fato populadas/decididas antes de assumir que são a mesma coisa.
 
+**Ao ler os arquivos envolvidos, também checar dependências de ordem implícita** —
+`docs/DEPENDENCIAS_ORDEM_IMPLICITA_2026-07-17.md` cataloga trechos cujo comportamento correto
+depende de uma sequência de execução/dados só documentada em comentário solto (um deles já
+causou um bug real de produção quando reordenado). Se um comentário do tipo "roda antes/depois
+de", "ordem importa" aparecer num arquivo tocado pela Sprint, preservar a posição relativa
+exata — não assumir que consolidar/reordenar é seguro só porque parece equivalente.
+
 ```
 □ Ler completamente o ARCH correspondente em ARCHITECTURAL_BACKLOG.md
 □ Reverificar cada alegação numérica/estrutural do card contra o código atual (ver nota acima)
-□ Ler os arquivos envolvidos
+□ Ler os arquivos envolvidos — atento a comentários de dependência de ordem (ver nota acima)
 □ Mapear consumidores
 □ Mapear produtores
 □ Identificar impactos
