@@ -2,7 +2,7 @@
 
 **Este documento NÃO substitui `docs/ARCHITECTURAL_BACKLOG.md`.** O backlog é a fonte de verdade sobre O QUÊ e POR QUÊ (descrição de cada problema, evidências, arquivos, critérios). Este documento é a fonte de verdade sobre QUANDO e COMO EXECUTAR — a ordem operacional, o rastreamento de status e o histórico de execução.
 
-**Baseline:** B1.0 (imutável). **Política permanente:** *No Opportunistic Refactoring* — nenhuma Sprint corrige nada além do seu único ARCH designado; dívida nova encontrada durante a execução é documentada e vira proposta de ARCH novo, nunca é resolvida "de brinde" na sprint corrente. **WIP máximo = 1** — nunca dois refactors de grande porte em andamento ao mesmo tempo.
+**Baseline:** B1.0 (imutável). **Política permanente:** *No Opportunistic Refactoring* — nenhuma Sprint corrige nada além do seu único ARCH designado; dívida nova encontrada durante a execução é documentada em `docs/issues/NNN-*.md` (não só numa nota inline dentro do card da Sprint — ver Regra #3) e vira proposta de ARCH novo, nunca é resolvida "de brinde" na sprint corrente. **WIP máximo = 1** — nunca dois refactors de grande porte em andamento ao mesmo tempo.
 
 Nenhuma Sprint foi iniciada. Todas as datas abaixo são estimativas de planejamento (não compromissos), a serem corrigidas com dados reais de velocidade a partir da primeira Sprint executada.
 
@@ -454,7 +454,7 @@ Validação
 - **Rollback:** reverter (recriar o arquivo removido + reverter os 4 arquivos tocados).
 - **Critérios de Aceite:** `ToolExecutorService` deixa de existir no código — **atingido**.
 - **Definition of Done:** build limpo, regressão 100% — **atingido**.
-- **Achado fora de escopo (documentado, não corrigido — per *No Opportunistic Refactoring*):** `src/core/index.ts` (o barrel de `core/`) não tem nenhum importador em todo o projeto — parece inteiramente morto, não só a linha do `ToolExecutor`. Não investigado a fundo nem removido aqui; se confirmado, é candidato a um ARCH novo, não deste card.
+- **Achado fora de escopo (documentado, não corrigido — per *No Opportunistic Refactoring*):** `src/core/index.ts` (o barrel de `core/`) não tem nenhum importador em todo o projeto — parece inteiramente morto, não só a linha do `ToolExecutor`. Não investigado a fundo nem removido aqui; se confirmado, é candidato a um ARCH novo, não deste card. **Registro completo:** `docs/issues/003-core-index-unused-barrel.md`.
 - **Commit esperado:** 1 commit.
 - **Status:** 🟢 Concluída em 2026-07-17.
 
@@ -738,7 +738,7 @@ Cada Sprint concluída deve adicionar uma linha aqui, no formato:
 
 1. Nunca executar dois grandes refactors simultaneamente. WIP máximo = 1.
 2. Nunca adicionar funcionalidades novas durante a execução deste programa.
-3. Nunca aproveitar uma Sprint para corrigir problemas fora do seu ARCH designado — *No Opportunistic Refactoring*. Dívida nova encontrada: documentar, propor novo ARCH, continuar a Sprint atual sem desviar.
+3. Nunca aproveitar uma Sprint para corrigir problemas fora do seu ARCH designado — *No Opportunistic Refactoring*. Dívida nova encontrada: **criar um arquivo em `docs/issues/NNN-titulo-curto.md`** (próximo número livre — ver os já existentes antes de numerar; formato do `001`: Descrição, Comportamento Esperado/Observado, Causa Raiz, Severidade), não só uma frase solta dentro do card da Sprint — a nota inline no card pode (e deve) continuar existindo como referência rápida, mas o registro completo, pesquisável e sobrevivente à reescrita do Resumo Executivo mora no arquivo de issue. Depois: propor novo ARCH se fizer sentido, continuar a Sprint atual sem desviar. **Nota:** `docs/issues/` está no `.gitignore` deste projeto (só `001` ficou versionado, de antes dessa regra) — os arquivos ficam documentados localmente; perguntar ao usuário se algum deve ser forçado (`git add -f`) para o GitHub.
 4. Respeitar rigorosamente as dependências registradas no Painel Executivo — nunca alterar a ordem por conveniência.
 5. Toda Sprint que envolva `Refactor Estrutural` ou `Exige RFC` precisa da etapa 4 (ambiente real) da Validação Progressiva antes de ser considerada `🟢 Concluída` — etapas 1-3 sozinhas não bastam.
 6. Este documento (`MASTER_EXECUTION_PLAN.md`) é atualizado a cada Sprint encerrada — o Painel Executivo e o Resumo Executivo nunca ficam desatualizados por mais de uma Sprint.
