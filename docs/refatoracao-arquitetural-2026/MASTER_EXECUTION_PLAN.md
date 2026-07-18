@@ -50,7 +50,7 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 | 2026-08-S16 | Ago/2026 | Single Source of Truth | ARCH-005 | 🟢 | CP02 | 7abede2 | Escopo redesenhado (Fase 1/2): premissa das "4 estruturas desincronizadas" não se sustentou; fix cirúrgico de normalização de path (`resolvePath`) em `deliverable_check`, achado real confirmado em ambiente real (LLM real, goal real), `S121` novo, 124/124 |
 | 2026-08-S17 | Ago/2026 | Single Source of Truth | ARCH-008 | ⏸ | S16 | 4e01818 | Adiado antes de codificar — premissa citava "recovery no boot" que não existe (6º modo de falha); defeito real via resumeGoal()/auth, fix desenhado em `docs/issues/009` |
 | 2026-08-S18 | Ago/2026 | Decision Ownership | ARCH-018 | ⏸ | S16 | 4171d31 | Adiado antes de codificar — `file_exists` checa attempt, não disco (2ª instância do modo 3); reaproveitá-lo reintroduziria o deadlock histórico; fix desenhado em `docs/issues/010` |
-| 2026-09-S19 | Set/2026 | Structural Simplification | ARCH-024-RFC | ⚪ | CP02 | — | — |
+| 2026-09-S19 | Set/2026 | Structural Simplification | ARCH-024-RFC | 🟢 | CP02 | (pendente — commit ao final desta Sprint) | RFC aprovada, escopo corrigido: 4 campos consolidados (não 5 — `recentMessages` não é delivery-tracking); campo aninhado `deliveryTracking`, não parâmetro separado; ver `RFC_ARCH-024_DeliveryTrackingContext.md` |
 | 2026-09-S20 | Set/2026 | Decision Ownership | ARCH-015-RFC | ⚪ | S06 | — | — |
 | 2026-09-CP03 | Set/2026 | Checkpoint | — | ⚪ | S16-S20 | — | — |
 | 2026-09-S21 | Set/2026 | Decision Ownership | ARCH-013 | ⚪ | CP03, S14 | — | — |
@@ -68,18 +68,18 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01-S13/S15/S16, Checkpoints CP01/CP02 concluídos; S14/S17/S18 adiadas (ver abaixo)
-**Progresso:** 15 / 26 ARCH concluídos (~58%) — ARCH-008 (S17), ARCH-009 (S14) e ARCH-018 (S18) adiados, não contam como concluídos nem como pendências simples
-**Sprint Atual:** Nenhuma em andamento (S18 adiada antes de codificar — próxima é 2026-09-S19)
-**Próxima Sprint:** 2026-09-S19 (ARCH-024-RFC) — produzir a análise de Fase 1-5 para consolidar os 5 callbacks de `ChannelContext` em `DeliveryTrackingContext`; sem código, só análise
-**Epic Atual:** Epic A concluído; Epic B "concluído" no sentido de nenhum item executável restante nesta ordem — ARCH-005/006/007/010/011 feitos, ARCH-008 adiado, ARCH-012 deliberadamente deferido para o fim do programa; Epic C — ARCH-014/016/017 feitos, ARCH-018 adiado (dependência real de ARCH-012); Epic D iniciado — ARCH-023 feito; Epic E concluído — ARCH-025/026 feitos
+**Status Geral:** 🟢 Em execução — Fase 0, S01-S13/S15/S16/S19, Checkpoints CP01/CP02 concluídos; S14/S17/S18 adiadas (ver abaixo)
+**Progresso:** 15 / 26 ARCH concluídos (~58%) — ARCH-008 (S17), ARCH-009 (S14) e ARCH-018 (S18) adiados, não contam como concluídos nem como pendências simples. ARCH-024 tem a RFC (S19) aprovada, mas só conta como concluído quando a Impl (S23) landar — Definition of Done do próprio card exige as duas etapas
+**Sprint Atual:** Nenhuma em andamento (S19 concluída — próxima é 2026-09-S20)
+**Próxima Sprint:** 2026-09-S20 (ARCH-015-RFC) — produzir a análise de Fase 1-5 para geração de validação/prompt de args obrigatórios a partir do schema de cada tool; sem código, só análise
+**Epic Atual:** Epic A concluído; Epic B "concluído" no sentido de nenhum item executável restante nesta ordem — ARCH-005/006/007/010/011 feitos, ARCH-008 adiado, ARCH-012 deliberadamente deferido para o fim do programa; Epic C — ARCH-014/016/017 feitos, ARCH-018 adiado (dependência real de ARCH-012); Epic D iniciado — ARCH-023 feito, ARCH-024 com RFC aprovada (Impl em S23); Epic E concluído — ARCH-025/026 feitos
 **Próximo Marco:** 2026-09-CP03
-**Última Atualização:** 2026-07-18 (Sprint S18 adiada)
-**Build:** 🟢 `npm run build` limpo (inalterado — S17/S18 não tocaram código)
+**Última Atualização:** 2026-07-18 (Sprint S19 concluída)
+**Build:** 🟢 `npm run build` limpo (inalterado — S17/S18/S19 não tocaram código de produção)
 **Testes:** 🟢 124/124 (inalterado)
-**Regressão:** 🟢 124/124 (pós-S16, inalterado — S17/S18 não tocaram código)
+**Regressão:** 🟢 124/124 (pós-S16, inalterado — S17/S18/S19 não tocaram código de produção)
 **Riscos Abertos:** 0 materializados — nota permanente: a VPS `venus@10.0.0.10` usada para validação Linux tem histórico de exigir `.env`/`WORKSPACE_DIR` explícito (skill `verify`) para não gerar falso-positivo — ver `docs/issues/002`. S16 (ARCH-005), o item sinalizado como maior risco do programa até então, teve o escopo redesenhado na Fase 1/2 para um fix cirúrgico — risco real materializado ficou bem menor que o estimado. S18 (ARCH-018), próxima Sprint, é a área do bug de deadlock histórico já documentado — atenção redobrada na Fase 1.
-**RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
+**RFCs Pendentes:** 2 (ARCH-012, ARCH-015) — ARCH-024 concluiu a RFC em S19 (aprovada, escopo corrigido), Impl agendada para S23
 **Temas Adiados para Revisão Consolidada:** 1 (ARCH-009 — ver `docs/refatoracao-arquitetural-2026/REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`, que já lista ARCH-024 e `docs/issues/004` como temas correlatos a tratar junto quando essa revisão abrir)
 **Temas Adiados sem Consolidação (categoria própria):** 2 (ARCH-008 — premissa citava mecanismo de recovery-no-boot inexistente, `docs/issues/009`; ARCH-018 — `file_exists` não faz o que o card presumia, reaproveitá-lo reintroduziria o deadlock histórico, `docs/issues/010`, **dependência real de ARCH-012**, não só sequenciamento)
 **Dívida Arquitetural Restante:** 9 ARCH (7 cards executáveis restantes + ARCH-008/ARCH-009/ARCH-018 adiados + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
@@ -641,22 +641,25 @@ Validação
 - **Commit esperado:** 1 commit.
 - **Status:** 🟢 Concluída em 2026-07-17.
 
-### Sprint 2026-09-S19
+### Sprint 2026-09-S19 ✅ Concluída
 - **Número:** S19
 - **Identificação Temporal:** 2026-09-S19
 - **Fase:** Execução Arquitetural
 - **Epic:** Structural Simplification
 - **Card ARCH:** ARCH-024-RFC
 - **Objetivo:** Produzir a análise de Fase 1-5 para consolidar os 5 callbacks de `ChannelContext` em um `DeliveryTrackingContext` dedicado. **Sem código.**
-- **Arquivos afetados:** nenhum tocado — só leitura/análise de `src/loop/agentLoopTypes.ts`, `src/loop/AgentLoop.ts`, `src/loop/GoalExecutionLoop.ts`.
+- **Arquivos afetados:** nenhum de produção — `docs/refatoracao-arquitetural-2026/RFC_ARCH-024_DeliveryTrackingContext.md` (novo).
 - **Dependências:** CP02.
-- **Checklist de execução:** padrão (adaptado, ver S20).
-- **Checklist de validação:** N/A (fase de análise).
-- **Rollback:** N/A.
-- **Critérios de Aceite:** documento de Fase 1-5 completo.
-- **Definition of Done:** RFC revisada e aprovada (ou formalmente rejeitada).
+- **Premissa reverificada (Fase 1) — corrigida:** a alegação do card ("nenhum [dos 5 campos] é sobre o canal, todos são sobre rastreamento de entrega") vale para 4 dos 5, não para os 5 — `recentMessages` é construído em `MessageBus.ts` (mesmo lugar/razão que `channel`/`chatId`/`userId`) e consumido só por `UnifiedIntentRouter` para classificação de intenção, sem nenhuma relação com entrega de artefato. Confirmado por grep completo de produtores/consumidores dos 5 campos, não por amostra.
+- **Fase 2/3 (crítica + alternativas):** avaliadas 4 opções — rejeitar; `DeliveryTrackingContext` como parâmetro novo separado de `channelContext` (leitura mais literal do card, risco alto — muda assinatura de `AgentLoop.process()`); `DeliveryTrackingContext` como campo único aninhado dentro do próprio `ChannelContext` (`channelContext.deliveryTracking`, risco baixo — assinatura de método inalterada); mover as closures pra fora de `agentLoopTypes.ts` sem tipo nomeado (pior ergonomia, mesmo risco da 2ª opção).
+- **Decisão (Fase 4/5):** aprovado — campo único aninhado (padrão Parameter Object), 4 campos consolidados (`recentMessages` excluído, permanece campo direto de `ChannelContext`). Documento completo com desenho de implementação: `RFC_ARCH-024_DeliveryTrackingContext.md`.
+- **Checklist de execução:** padrão, adaptado para análise (sem "implementar"/"build"/"testes").
+- **Checklist de validação:** N/A (fase de análise, per o próprio card).
+- **Rollback:** N/A — nenhum código tocado.
+- **Critérios de Aceite:** documento de Fase 1-5 completo — **atingido**.
+- **Definition of Done:** RFC revisada e aprovada — **atingido**, com escopo corrigido (4 campos, não 5) e forma de implementação definida (campo aninhado, não parâmetro separado).
 - **Commit esperado:** 1 commit contendo o documento de RFC.
-- **Status:** ⚪ Não iniciada.
+- **Status:** 🟢 Concluída em 2026-07-18.
 
 ### Sprint 2026-09-S22
 - **Número:** S22
@@ -810,6 +813,7 @@ Cada Sprint concluída deve adicionar uma linha aqui, no formato:
 | S16 | 2026-07-18 | ~1 sessão (incl. Fase 1/2 extensa + etapa 4 real) | 7abede2 | 2 código (`loop/GoalExecutionLoop.ts`, teste novo `S121`) + 1 teste corrigido (`S10`) | `tsc --noEmit` (limpo) + `npm run build` (limpo) + regressão (124/124, 123 + `S121` novo, 2 cenários/3 assertions) + **etapa 4 real**: instância isolada Windows, LLM real (glm-5.2:cloud), goal real, dado real do SQLite confirmando a precondição do bug e a correção nos dois sentidos | "4 estruturas desincronizadas" de artefatos entregues (premissa do card) | Fix cirúrgico: `sentArtifacts`/`pendingSendPaths` normalizados via `resolvePath()` antes de comparar contra paths absolutos de `checkDeliverables()` em `deliverable_check` | 0 causados por este ARCH — mas achado 1 bug real não documentado antes (mismatch de path cru vs. resolvido), confirmado com dado real em ambiente real | Maior desvio de premissa do programa até agora: a reverificação de Fase 1/2 mostrou que as "4 estruturas" já convergiam majoritariamente para `sentArtifacts` (via `onArtifactDelivered`, `.has()`, fallback em `checkClaimsAgainstEvidence`), que o escopo do card estava incompleto (faltava `planning/artifactContract.ts`), e que os 2 bugs históricos citados como motivação já tinham sido corrigidos por Sprints anteriores a este programa. Consolidar 4 mecanismos já majoritariamente sincronizados, pra prevenir uma 3ª ocorrência hipotética de bug já resolvido 2x, tinha valor questionável frente ao risco de um Refactor Estrutural. Apresentei 3 alternativas ao usuário (fix cirúrgico / consolidação completa / adiar como ARCH-009); optou pelo fix cirúrgico. Etapa 4 (obrigatória pelo card original) foi cumprida apesar do escopo reduzido, por decisão do usuário, dado que a mudança toca resolução de path — categoria com histórico de bugs só visíveis fora de mocks (`feedback_verificar_fixes_de_verdade`); rodei uma instância isolada real com LLM real, que confirmou com dado genuíno (não hipotético) que `send_document` de fato usa paths relativos na prática, validando a precondição do bug antes mesmo de testar o fix. VPS Linux oferecida e dispensada pelo usuário (código só usa `path.resolve`/`path.join`, sem lógica por SO). |
 | S17 | 2026-07-18 | ~1 sessão (adiada na Fase 1, sem implementação) | 4e01818 | 0 arquivos de código; 1 arquivo de doc novo (`docs/issues/009`) + `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`/`ARCHITECTURAL_BACKLOG.md` + este documento | N/A — nenhum código tocado, nada a rodar | `progressModel` reseta a cada `runLoop()`, perdendo progresso "pós-restart" (premissa do card) | Nenhuma mudança — Sprint adiada antes de codificar | 0 causados (nenhum código tocado), mas achado grave sobre a premissa do card | O mecanismo citado como motivação/cenário de teste ("o sistema já tem recovery de goals ativos no boot") não existe — `AgentController.getAllActive()` só loga no boot/shutdown (`recovered=false` explícito), nunca chama `resumeGoal()`. O defeito é real, mas via outro caminho: o único call site de `resumeGoal()` é `GoalOrchestrator.resumeFromAuth()` (aprovação de ação perigosa), mesmo processo, sem restart — mais frequente que o cenário descrito. 6º modo de falha catalogado (auditoria afirmando que um mecanismo operacional existe, sem verificar contra o runtime) — o mais perigoso dos 6 por ler como fato de arquitetura, não como inferência. Fix desenhado (`buildInitialProgressModel`, deriva de `goal.currentPlan`/`goal.attempts`, mesmo espírito de `buildIncrementalExecutionContext`) mas não implementado — usuário optou por adiar e documentar em vez de corrigir pontualmente, dado que a etapa 4 prescrita pelo card ("matar o processo") nem sequer é testável nesse sistema. |
 | S18 | 2026-07-18 | ~1 sessão (adiada na Fase 1, sem implementação) | 4171d31 | 0 arquivos de código; 1 arquivo de doc novo (`docs/issues/010`) + `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`/`ARCHITECTURAL_BACKLOG.md` + este documento | N/A — nenhum código tocado, nada a rodar | `structuralBypass` é um `if` solto fora de `evaluateCriteria` (premissa do card) | Nenhuma mudança — Sprint adiada antes de codificar | 0 causados (nenhum código tocado), mas achado grave sobre a premissa numa área de bug histórico real | O card presumia que `CriterionCheck: 'file_exists'` já cobria o caso de uso de `structuralBypass` — não cobre: `file_exists` checa `GoalAttempt.output` não-vazio, `structuralBypass` faz `fs.statSync()` direto no disco sem depender de attempt algum (motivo de existir: o Bug 2 original era sobre arquivo pré-existente ao goal, sem attempt como evidência). Reaproveitar `file_exists` literalmente reintroduziria o deadlock. Achado estrutural adicional: alvos de `structuralBypass` são dinâmicos (plano atual, muda a cada replan) vs. `successCriteria` estática — sincronizar as duas seria um risco novo, não uma simplificação. 2ª instância confirmada do modo 3 da retrospectiva (mesmo modo de S10/S11) — reforça que "equivalência semântica assumida sem verificação" é o modo mais recorrente do catálogo, não um acaso isolado. Alternativa desenhada (`CriterionCheck` novo dedicado) mas não implementada — usuário optou por adiar, mesma linha de S14/S17, dado o histórico de bug real nesta área específica. |
+| S19 | 2026-07-18 | ~1 sessão | (pendente — commit ao final desta Sprint) | 1 (`RFC_ARCH-024_DeliveryTrackingContext.md`, novo) | N/A (Sprint de RFC — sem código, sem build/teste) | 5 campos de callback "todos sobre rastreamento de entrega" (premissa do card) | RFC aprovada: 4 campos (não 5) consolidados em `ChannelContext.deliveryTracking` (campo aninhado, não parâmetro separado) | 0 (Sprint de análise, sem código) | Grep completo dos 5 campos mostrou que `recentMessages` é construído em `MessageBus.ts` (mesmo lugar/razão que `channel`/`chatId`/`userId`) e consumido só por `UnifiedIntentRouter`, sem nenhuma relação com entrega de artefato — a premissa do card ("nenhum é sobre o canal, todos sobre entrega") valia pra 4 dos 5, não pros 5. Avaliadas 4 alternativas de forma de consolidação; escolhida a de menor risco (campo aninhado dentro de `ChannelContext`, não parâmetro novo em `AgentLoop.process()`) por preservar a assinatura de método existente — o card não distinguia entre as duas formas, e a diferença de risco entre elas é grande. RFC aprovada com esse escopo corrigido; implementação agendada para S23 (já condicionada a esta RFC). |
 
 ---
 
