@@ -1476,6 +1476,205 @@ export class AgentLoop {
         return { earlyReturn: false, stepCount };
     }
 
+    /**
+     * ARCH-019 (S25, Incremento 3): "Post-loop synthesis" + "Fallback" extraído de
+     * `runWithTools()` sem mudar lógica — é a cauda final do método, sempre termina em
+     * `return`, nunca em `continue`/`break` (por isso não precisa do discriminated union usado
+     * nos outros incrementos: todo caminho aqui já é um "earlyReturn" na prática, incluindo os
+     * de cancelamento). Chamado do orquestrador como a última coisa dentro do `try`, logo
+     * antes do `catch(fsmError)`/`finally` (que continuam em `runWithTools()`, nunca movidos —
+     * precisam envolver TODAS as fases, não só esta).
+     */
+    private async runSynthesisAndFallbackPhase(
+        conversationId: string,
+        userText: string,
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        loopMessages: LLMMessage[],
+        lastBestContent: string,
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        chatProfile: ModelProfile,
+        turnSignal: AbortSignal,
+        trace: ExecutionTrace,
+        channelContext: ChannelContext | undefined,
+        stepCount: number,
+        maxSteps: number,
+        toolFailureCount: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): Promise<string | ProcessedResult> {
+        // Post-loop synthesis
+        const executedToolsInLastStep = cycleHistory.length > 0;
+        const hasGoodContent = lastBestContent && lastBestContent.length > 100;
+
+        if (executedToolsInLastStep && !hasGoodContent) {
+            log.info(`[${this.ts()}] [SYNTHESIS] Tools executed but response is stale/brief (${lastBestContent?.length || 0} chars). Generating post-action synthesis...`);
+            move('SYNTHESIS_REQUIRED', { step: stepCount, tools: cycleHistory.length });
+
+            const toolSummary = cycleHistory.map(h => `• ${h.tool}: ${h.status}`).join('\n');
+            const dedupSynthesisBody = (() => {
+                const successTools = cycleHistory.filter(h => h.status === 'success').map(h => h.tool);
+                const failedTools  = cycleHistory.filter(h => h.status === 'error').map(h => h.tool);
+                const successLine  = successTools.length > 0 ? `Ferramentas que FUNCIONARAM: ${successTools.join(', ')}` : '';
+                const failLine     = failedTools.length  > 0 ? `Ferramentas que FALHARAM: ${failedTools.join(', ')}` : '';
+                return (
+                    `ATENÇÃO: O loop foi interrompido porque a ferramenta "${dedupAbortTool}" foi chamada repetidamente.\n\n` +
+                    `Resultado real das ações executadas:\n${toolSummary}\n\n` +
+                    (successLine ? `${successLine}\n` : '') +
+                    (failLine    ? `${failLine}\n`    : '') +
+                    `\nIMPORTANTE: NÃO invente falhas para ferramentas listadas como "success" acima.\n` +
+                    `Explique ao usuário: (1) o que foi executado com sucesso, (2) qual etapa ficou pendente e por quê, ` +
+                    `(3) como prosseguir. Seja direto e honesto.`
+                );
+            })();
+            // Distinguish info-retrieval tools from file-operation tools so the synthesis
+            // instruction is context-appropriate: "present the data" vs "confirm changes".
+            const INFO_TOOLS = new Set(['web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request']);
+            const executedTools = new Set(cycleHistory.map(h => h.tool));
+            const isInfoRetrieval = cycleHistory.length > 0 && [...executedTools].every(t => INFO_TOOLS.has(t));
+            // For info-retrieval, always present collected data — even when dedup aborted.
+            // dedupSynthesisBody is reserved for file/command loops where "how to proceed" makes sense.
+            const infoRetrievalSynthesisBody = (() => {
+                const failedTools = cycleHistory.filter(h => h.status === 'error');
+                const base = `Você consultou as seguintes fontes:\n${toolSummary}\n\nApresente os dados/resultados das fontes que FUNCIONARAM diretamente ao usuário, como se estivesse respondendo uma pergunta. Não descreva o que você fez — apresente os dados em si.`;
+                if (failedTools.length === 0) return base;
+                return base + ` Para as fontes que falharam, explique brevemente o motivo. NÃO peça ao usuário para repetir ou especificar novamente o que já foi solicitado.`;
+            })();
+            const synthesisBody = isInfoRetrieval
+                ? infoRetrievalSynthesisBody
+                : dedupAbort
+                    ? dedupSynthesisBody
+                    : `Você executou as seguintes ações:\n${toolSummary}\n\nConfirme ao usuário O QUE foi realizado, com detalhes específicos. Não diga "vou fazer" — você JÁ fez.`;
+
+            // Trim context for synthesis: the full step history (15+ tool rounds) causes the model
+            // to produce massive thinking without content and time out at MAX_TIMEOUT (420s).
+            // For info-retrieval, include ALL tool outputs (budget 2400 chars) so the LLM has actual
+            // data to synthesize — not just the last result (which may be an error).
+            // For other cases, include only the last tool output to keep context lean.
+            const _synthLastUser = loopMessages.slice().reverse().find(m => m.role === 'user');
+            const _synthLastTool = loopMessages.slice().reverse().find(m => m.role === 'tool');
+            const synthToolMessages: LLMMessage[] = [];
+            if (isInfoRetrieval) {
+                const toolMsgs = loopMessages.filter(m => m.role === 'tool');
+                let budgetLeft = 2400;
+                for (const tm of toolMsgs) {
+                    const content = (tm.content ?? '').slice(0, budgetLeft);
+                    if (content.trim()) {
+                        synthToolMessages.push({ role: 'tool' as const, content, tool_call_id: tm.tool_call_id });
+                        budgetLeft -= content.length;
+                    }
+                    if (budgetLeft <= 0) break;
+                }
+            } else if (_synthLastTool) {
+                synthToolMessages.push({
+                    role: 'tool' as const,
+                    content: (_synthLastTool.content ?? '').slice(0, 1200) +
+                        ((_synthLastTool.content?.length ?? 0) > 1200 ? '\n...[truncated]' : ''),
+                    tool_call_id: _synthLastTool.tool_call_id,
+                });
+            }
+            const synthMessages: LLMMessage[] = [
+                loopMessages[0],
+                ...(_synthLastUser ? [_synthLastUser] : []),
+                ...synthToolMessages,
+                {
+                    role: 'system' as const,
+                    content: `SÍNTESE FINAL OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON, NÃO use formato action/thought):\n\n${synthesisBody}\n\nResponda DIRETAMENTE em linguagem natural.`,
+                },
+            ];
+
+            move('LLM_REQUEST', { step: stepCount, phase: 'synthesis' });
+            log.info(`[${this.ts()}] [SYNTHESIS] Trimmed context: ${loopMessages.length} → ${synthMessages.length} messages`);
+            // Usa 'execution' profile (kimi-k2.6) em vez de chatProfile (glm-5.1) para síntese:
+            // glm-5.1 com contexto grande produz apenas thinking sem content → chain-of-thought vaza para o usuário.
+            const synthesisProfile = this.profileRegistry.getProfileByCategory('execution') ?? chatProfile;
+            const synthesisResponse = await this.callLLMWithFallback(synthMessages, [], synthesisProfile, turnSignal);
+            move('LLM_RESPONSE', { step: stepCount, phase: 'synthesis', status: synthesisResponse.status });
+            if (synthesisResponse.status === 'cancelled') {
+                move('CANCEL', { step: stepCount, phase: 'synthesis' });
+                this.activeTurns.delete(conversationId);
+                return { text: 'Operação cancelada.' };
+            }
+            const rawSynthesis = synthesisResponse.content || '';
+
+            let synthesisText = extractText(rawSynthesis);
+            if (!synthesisText || synthesisText.length < 20) {
+                synthesisText = extractFinalText(synthesisResponse, parseLLMResponse(rawSynthesis));
+            }
+            if (!synthesisText || synthesisText.length < 20) {
+                synthesisText = rawSynthesis
+                    .replace(/^\s*\{[\s\S]*\}\s*$/, '')
+                    .replace(/```[\s\S]*?```/g, '')
+                    .trim();
+            }
+
+            if (synthesisText && synthesisText.length > 10) {
+                log.info(`[${this.ts()}] [SYNTHESIS] Success: ${synthesisText.length} chars extracted from ${rawSynthesis.length} chars raw`);
+                move('FINAL_READY', { step: stepCount, reason: 'synthesis' });
+                traceManager.completeTrace(trace, 'completed', synthesisText);
+                this.persistTrace(trace, stepCount, 'completed', synthesisText, channelContext);
+                return await this.commitResponse(synthesisText, userText, trace.id, conversationId, turnSignal, toolFailureCount);
+            }
+
+            log.warn(`[${this.ts()}] [SYNTHESIS] Failed to extract useful text (raw=${rawSynthesis.length}, extracted=${synthesisText?.length || 0})`);
+        }
+
+        if (lastBestContent) {
+            move('FINAL_READY', { step: stepCount, reason: 'last_best_content' });
+            traceManager.completeTrace(trace, 'completed', lastBestContent);
+            this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
+            return await this.commitResponse(lastBestContent, userText, trace.id, conversationId, turnSignal, toolFailureCount);
+        }
+
+        log.info(`[${this.ts()}] [FALLBACK] Generating final synthesis...`);
+        move('SYNTHESIS_REQUIRED', { step: stepCount, reason: 'fallback' });
+        // Same trim as post-loop synthesis to prevent thinking timeout on large contexts.
+        // Include last tool output (truncated) so the model has real data to reference.
+        const _fbLastUser = loopMessages.slice().reverse().find(m => m.role === 'user');
+        const _fbLastTool = loopMessages.slice().reverse().find(m => m.role === 'tool');
+        const fallbackSynthMessages: LLMMessage[] = [
+            loopMessages[0],
+            ...(_fbLastUser ? [_fbLastUser] : []),
+            ...(_fbLastTool ? [{
+                role: 'tool' as const,
+                content: (_fbLastTool.content ?? '').slice(0, 1200) +
+                    ((_fbLastTool.content?.length ?? 0) > 1200 ? '\n...[truncated]' : ''),
+                tool_call_id: _fbLastTool.tool_call_id,
+            }] : []),
+            {
+                role: 'system' as const,
+                content: 'FINALIZAÇÃO OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON): Forneça uma resposta honesta agora. Se não obteve dados suficientes, admita a limitação claramente. Responda diretamente em linguagem natural.',
+            },
+        ];
+        move('LLM_REQUEST', { step: stepCount, phase: 'fallback' });
+        log.info(`[${this.ts()}] [FALLBACK] Trimmed context: ${loopMessages.length} → ${fallbackSynthMessages.length} messages`);
+        const finalResponse = await this.callLLMWithFallback(fallbackSynthMessages, [], chatProfile, turnSignal);
+        move('LLM_RESPONSE', { step: stepCount, phase: 'fallback', status: finalResponse.status });
+        if (finalResponse.status === 'cancelled') {
+            move('CANCEL', { step: stepCount, phase: 'fallback' });
+            this.activeTurns.delete(conversationId);
+            return { text: 'Operação cancelada.' };
+        }
+        const rawFinal = finalResponse.content || '';
+
+        let text = extractText(rawFinal);
+        if (!text || text.length < 20) {
+            text = extractFinalText(finalResponse, parseLLMResponse(rawFinal));
+        }
+        // If the final synthesis call also returned nothing useful, fall back to the
+        // best content seen during the turn rather than sending a generic error.
+        if ((!text || text === 'Desculpe, não consegui gerar uma resposta. Pode reformular a pergunta?') && lastBestContent) {
+            log.warn(`[${this.ts()}] [FALLBACK] Final synthesis empty — using lastBestContent (${lastBestContent.length} chars)`);
+            text = lastBestContent;
+        }
+
+        move('FINAL_READY', { step: stepCount, reason: stepCount >= maxSteps ? 'max_iterations' : 'fallback' });
+        traceManager.completeTrace(trace, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
+        this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text, channelContext);
+        this.activeTurns.delete(conversationId);
+
+        return await this.commitResponse(text, userText, trace.id, conversationId, turnSignal, toolFailureCount);
+    }
+
     // ── Core execution loop ────────────────────────────────────────────────────
 
     private async runWithTools(conversationId: string, userText: string, iteration: number, _userId?: string, channelContext?: ChannelContext): Promise<string | ProcessedResult> {
@@ -2789,177 +2988,11 @@ export class AgentLoop {
         if (deliveryGuardResult.earlyReturn) return deliveryGuardResult.result;
         stepCount = deliveryGuardResult.stepCount;
 
-        // Post-loop synthesis
-        const executedToolsInLastStep = cycleHistory.length > 0;
-        const hasGoodContent = lastBestContent && lastBestContent.length > 100;
-
-        if (executedToolsInLastStep && !hasGoodContent) {
-            log.info(`[${this.ts()}] [SYNTHESIS] Tools executed but response is stale/brief (${lastBestContent?.length || 0} chars). Generating post-action synthesis...`);
-            move('SYNTHESIS_REQUIRED', { step: stepCount, tools: cycleHistory.length });
-
-            const toolSummary = cycleHistory.map(h => `• ${h.tool}: ${h.status}`).join('\n');
-            const dedupSynthesisBody = (() => {
-                const successTools = cycleHistory.filter(h => h.status === 'success').map(h => h.tool);
-                const failedTools  = cycleHistory.filter(h => h.status === 'error').map(h => h.tool);
-                const successLine  = successTools.length > 0 ? `Ferramentas que FUNCIONARAM: ${successTools.join(', ')}` : '';
-                const failLine     = failedTools.length  > 0 ? `Ferramentas que FALHARAM: ${failedTools.join(', ')}` : '';
-                return (
-                    `ATENÇÃO: O loop foi interrompido porque a ferramenta "${dedupAbortTool}" foi chamada repetidamente.\n\n` +
-                    `Resultado real das ações executadas:\n${toolSummary}\n\n` +
-                    (successLine ? `${successLine}\n` : '') +
-                    (failLine    ? `${failLine}\n`    : '') +
-                    `\nIMPORTANTE: NÃO invente falhas para ferramentas listadas como "success" acima.\n` +
-                    `Explique ao usuário: (1) o que foi executado com sucesso, (2) qual etapa ficou pendente e por quê, ` +
-                    `(3) como prosseguir. Seja direto e honesto.`
-                );
-            })();
-            // Distinguish info-retrieval tools from file-operation tools so the synthesis
-            // instruction is context-appropriate: "present the data" vs "confirm changes".
-            const INFO_TOOLS = new Set(['web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request']);
-            const executedTools = new Set(cycleHistory.map(h => h.tool));
-            const isInfoRetrieval = cycleHistory.length > 0 && [...executedTools].every(t => INFO_TOOLS.has(t));
-            // For info-retrieval, always present collected data — even when dedup aborted.
-            // dedupSynthesisBody is reserved for file/command loops where "how to proceed" makes sense.
-            const infoRetrievalSynthesisBody = (() => {
-                const failedTools = cycleHistory.filter(h => h.status === 'error');
-                const base = `Você consultou as seguintes fontes:\n${toolSummary}\n\nApresente os dados/resultados das fontes que FUNCIONARAM diretamente ao usuário, como se estivesse respondendo uma pergunta. Não descreva o que você fez — apresente os dados em si.`;
-                if (failedTools.length === 0) return base;
-                return base + ` Para as fontes que falharam, explique brevemente o motivo. NÃO peça ao usuário para repetir ou especificar novamente o que já foi solicitado.`;
-            })();
-            const synthesisBody = isInfoRetrieval
-                ? infoRetrievalSynthesisBody
-                : dedupAbort
-                    ? dedupSynthesisBody
-                    : `Você executou as seguintes ações:\n${toolSummary}\n\nConfirme ao usuário O QUE foi realizado, com detalhes específicos. Não diga "vou fazer" — você JÁ fez.`;
-
-            // Trim context for synthesis: the full step history (15+ tool rounds) causes the model
-            // to produce massive thinking without content and time out at MAX_TIMEOUT (420s).
-            // For info-retrieval, include ALL tool outputs (budget 2400 chars) so the LLM has actual
-            // data to synthesize — not just the last result (which may be an error).
-            // For other cases, include only the last tool output to keep context lean.
-            const _synthLastUser = loopMessages.slice().reverse().find(m => m.role === 'user');
-            const _synthLastTool = loopMessages.slice().reverse().find(m => m.role === 'tool');
-            const synthToolMessages: LLMMessage[] = [];
-            if (isInfoRetrieval) {
-                const toolMsgs = loopMessages.filter(m => m.role === 'tool');
-                let budgetLeft = 2400;
-                for (const tm of toolMsgs) {
-                    const content = (tm.content ?? '').slice(0, budgetLeft);
-                    if (content.trim()) {
-                        synthToolMessages.push({ role: 'tool' as const, content, tool_call_id: tm.tool_call_id });
-                        budgetLeft -= content.length;
-                    }
-                    if (budgetLeft <= 0) break;
-                }
-            } else if (_synthLastTool) {
-                synthToolMessages.push({
-                    role: 'tool' as const,
-                    content: (_synthLastTool.content ?? '').slice(0, 1200) +
-                        ((_synthLastTool.content?.length ?? 0) > 1200 ? '\n...[truncated]' : ''),
-                    tool_call_id: _synthLastTool.tool_call_id,
-                });
-            }
-            const synthMessages: LLMMessage[] = [
-                loopMessages[0],
-                ...(_synthLastUser ? [_synthLastUser] : []),
-                ...synthToolMessages,
-                {
-                    role: 'system' as const,
-                    content: `SÍNTESE FINAL OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON, NÃO use formato action/thought):\n\n${synthesisBody}\n\nResponda DIRETAMENTE em linguagem natural.`,
-                },
-            ];
-
-            move('LLM_REQUEST', { step: stepCount, phase: 'synthesis' });
-            log.info(`[${this.ts()}] [SYNTHESIS] Trimmed context: ${loopMessages.length} → ${synthMessages.length} messages`);
-            // Usa 'execution' profile (kimi-k2.6) em vez de chatProfile (glm-5.1) para síntese:
-            // glm-5.1 com contexto grande produz apenas thinking sem content → chain-of-thought vaza para o usuário.
-            const synthesisProfile = this.profileRegistry.getProfileByCategory('execution') ?? chatProfile;
-            const synthesisResponse = await this.callLLMWithFallback(synthMessages, [], synthesisProfile, turnSignal);
-            move('LLM_RESPONSE', { step: stepCount, phase: 'synthesis', status: synthesisResponse.status });
-            if (synthesisResponse.status === 'cancelled') {
-                move('CANCEL', { step: stepCount, phase: 'synthesis' });
-                this.activeTurns.delete(conversationId);
-                return { text: 'Operação cancelada.' };
-            }
-            const rawSynthesis = synthesisResponse.content || '';
-
-            let synthesisText = extractText(rawSynthesis);
-            if (!synthesisText || synthesisText.length < 20) {
-                synthesisText = extractFinalText(synthesisResponse, parseLLMResponse(rawSynthesis));
-            }
-            if (!synthesisText || synthesisText.length < 20) {
-                synthesisText = rawSynthesis
-                    .replace(/^\s*\{[\s\S]*\}\s*$/, '')
-                    .replace(/```[\s\S]*?```/g, '')
-                    .trim();
-            }
-
-            if (synthesisText && synthesisText.length > 10) {
-                log.info(`[${this.ts()}] [SYNTHESIS] Success: ${synthesisText.length} chars extracted from ${rawSynthesis.length} chars raw`);
-                move('FINAL_READY', { step: stepCount, reason: 'synthesis' });
-                traceManager.completeTrace(trace, 'completed', synthesisText);
-                this.persistTrace(trace, stepCount, 'completed', synthesisText, channelContext);
-                return await this.commitResponse(synthesisText, userText, trace.id, conversationId, turnSignal, toolFailureCount);
-            }
-
-            log.warn(`[${this.ts()}] [SYNTHESIS] Failed to extract useful text (raw=${rawSynthesis.length}, extracted=${synthesisText?.length || 0})`);
-        }
-
-        if (lastBestContent) {
-            move('FINAL_READY', { step: stepCount, reason: 'last_best_content' });
-            traceManager.completeTrace(trace, 'completed', lastBestContent);
-            this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
-            return await this.commitResponse(lastBestContent, userText, trace.id, conversationId, turnSignal, toolFailureCount);
-        }
-
-        log.info(`[${this.ts()}] [FALLBACK] Generating final synthesis...`);
-        move('SYNTHESIS_REQUIRED', { step: stepCount, reason: 'fallback' });
-        // Same trim as post-loop synthesis to prevent thinking timeout on large contexts.
-        // Include last tool output (truncated) so the model has real data to reference.
-        const _fbLastUser = loopMessages.slice().reverse().find(m => m.role === 'user');
-        const _fbLastTool = loopMessages.slice().reverse().find(m => m.role === 'tool');
-        const fallbackSynthMessages: LLMMessage[] = [
-            loopMessages[0],
-            ...(_fbLastUser ? [_fbLastUser] : []),
-            ...(_fbLastTool ? [{
-                role: 'tool' as const,
-                content: (_fbLastTool.content ?? '').slice(0, 1200) +
-                    ((_fbLastTool.content?.length ?? 0) > 1200 ? '\n...[truncated]' : ''),
-                tool_call_id: _fbLastTool.tool_call_id,
-            }] : []),
-            {
-                role: 'system' as const,
-                content: 'FINALIZAÇÃO OBRIGATÓRIA — RESPONDA EM TEXTO PURO (NÃO use JSON): Forneça uma resposta honesta agora. Se não obteve dados suficientes, admita a limitação claramente. Responda diretamente em linguagem natural.',
-            },
-        ];
-        move('LLM_REQUEST', { step: stepCount, phase: 'fallback' });
-        log.info(`[${this.ts()}] [FALLBACK] Trimmed context: ${loopMessages.length} → ${fallbackSynthMessages.length} messages`);
-        const finalResponse = await this.callLLMWithFallback(fallbackSynthMessages, [], chatProfile, turnSignal);
-        move('LLM_RESPONSE', { step: stepCount, phase: 'fallback', status: finalResponse.status });
-        if (finalResponse.status === 'cancelled') {
-            move('CANCEL', { step: stepCount, phase: 'fallback' });
-            this.activeTurns.delete(conversationId);
-            return { text: 'Operação cancelada.' };
-        }
-        const rawFinal = finalResponse.content || '';
-
-        let text = extractText(rawFinal);
-        if (!text || text.length < 20) {
-            text = extractFinalText(finalResponse, parseLLMResponse(rawFinal));
-        }
-        // If the final synthesis call also returned nothing useful, fall back to the
-        // best content seen during the turn rather than sending a generic error.
-        if ((!text || text === 'Desculpe, não consegui gerar uma resposta. Pode reformular a pergunta?') && lastBestContent) {
-            log.warn(`[${this.ts()}] [FALLBACK] Final synthesis empty — using lastBestContent (${lastBestContent.length} chars)`);
-            text = lastBestContent;
-        }
-
-        move('FINAL_READY', { step: stepCount, reason: stepCount >= maxSteps ? 'max_iterations' : 'fallback' });
-        traceManager.completeTrace(trace, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
-        this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text, channelContext);
-        this.activeTurns.delete(conversationId);
-
-        return await this.commitResponse(text, userText, trace.id, conversationId, turnSignal, toolFailureCount);
+        return await this.runSynthesisAndFallbackPhase(
+            conversationId, userText, cycleHistory, loopMessages, lastBestContent, dedupAbort,
+            dedupAbortTool, chatProfile, turnSignal, trace, channelContext, stepCount, maxSteps,
+            toolFailureCount, move,
+        );
 
         } catch (fsmError) {
             // Only FSM violations (invalid transitions) reach here — all other errors are handled
