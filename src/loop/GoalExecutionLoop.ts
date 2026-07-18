@@ -89,6 +89,27 @@ type StepOutcomeHandled =
     | { earlyReturn: true; result: GoalResult }
     | { earlyReturn: false; goal: Goal; totalReplans: number; priorFeedback: string | undefined };
 
+/**
+ * ARCH-020 (S24, Incremento 2): retorno da fase de validação de conclusão de goal, extraída do
+ * bloco `if (readyToValidate) {...}` de `runLoopInternal()`. `continueLoop` replica um
+ * `continue` do bloco original; `earlyReturn` replica um `return`. Nenhum caminho dentro desse
+ * bloco cai no switch de outcome — por isso não existe uma 3ª variante "proceed".
+ */
+type ValidationPhaseResult =
+    | { action: 'earlyReturn'; result: GoalResult }
+    | { action: 'continueLoop'; goal: Goal; totalReplans: number; priorFeedback: string | undefined };
+
+/**
+ * ARCH-020 (S24, Incremento 2): retorno da fase de execução do step pendente, extraída do
+ * bloco `else` de `runLoopInternal()` (dispatch de `executeStep()` + validação semântica).
+ * `proceedToSwitch` entrega o `cycleResult` já ajustado pela validação semântica (que pode
+ * fazer downgrade para 'partial' ou escalar para 'blocked') para o switch de outcome, que
+ * continua inline em `runLoopInternal()` — ver os 6 handlers `handle*Outcome` (Incremento 1).
+ */
+type StepExecutionPhaseResult =
+    | { action: 'earlyReturn'; result: GoalResult }
+    | { action: 'proceedToSwitch'; goal: Goal; cycleResult: CycleResult };
+
 export class GoalExecutionLoop {
     private readonly evaluator = new GoalEvaluator();
     private readonly riskAnalyzer: RiskAnalyzer;
@@ -1007,6 +1028,696 @@ export class GoalExecutionLoop {
         return { earlyReturn: true, result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
     }
 
+    // ── ARCH-020 (Incremento 2): fases do corpo pré-switch de runLoopInternal() ─────────────
+
+    /**
+     * ARCH-020 (S24, Incremento 2): dispara quando `readyToValidate` é true — todos os steps
+     * pendentes já foram executados (ou só resta `send_document`). Roda a validação de
+     * conclusão (LLM ou bypass estrutural) e delega para `runValidationAchievedPhase()` ou
+     * `runValidationNotAchievedPhase()` conforme o resultado. Extraído sem mudar lógica.
+     */
+    private async runValidationPhase(
+        goal: Goal,
+        totalCycles: number,
+        totalReplans: number,
+        priorFeedback: string | undefined,
+        state: GoalExecutionState,
+        channelContext: ChannelContext,
+        onProgress: ProgressCallback | undefined,
+        sentArtifacts: Set<string>,
+        trackArtifact: (fp: string) => void,
+        audioDeliveredKey: string,
+    ): Promise<ValidationPhaseResult> {
+        // Todos os steps concluídos — LLM valida se o objetivo foi realmente atingido
+        log.info(`[GoalLoop] goal=${goal.id} all steps completed — running LLM validation`);
+        log.info(`[GOAL-LIFECYCLE] goal=${goal.id} session=${goal.sessionKey} state=validating cycle=${totalCycles} timestamp=${Date.now()}`);
+        await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'tool_completed', message: 'Validando conclusão...' });
+
+        const activeMilestone = goal.isConstruction && goal.roadmap && goal.roadmap.length > 0
+            ? goal.roadmap[goal.currentMilestoneIndex ?? 0]
+            : undefined;
+
+        // Bypass estrutural: quando o único trabalho restante é despachar send_document
+        // para arquivo(s) que já existem no disco com tamanho substantivo, o validador por
+        // LLM nunca consegue confirmar "foi enviado" — o envio só acontece DEPOIS de
+        // achieved=true (Fix #1 acima). Isso é um impasse estrutural para goals cujo único
+        // propósito é reenviar um arquivo já existente (sem nenhum 'write' neste goal como
+        // evidência de criação). Reproduzido ao vivo em 09/07 (goal "me envia a aula ..."):
+        // esgotou o replanBudget tentando reenviar um .pptx já pronto, e no desespero o
+        // planner criou um arquivo de "resumo de entrega" fabricado só para ter evidência de
+        // 'write' e passar no validador — ver project_session_bugs_jul2026_ap na memória.
+        // Verificação estrutural (arquivo existe, não é placeholder) é mais confiável aqui
+        // do que o julgamento literal do LLM sobre um evento que ainda não aconteceu.
+        const pendingSendSteps = this.getPendingSteps(goal.currentPlan, 'send_document');
+        const structuralBypass = pendingSendSteps.length > 0 && pendingSendSteps.every(s => {
+            const fp = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
+            if (!fp) return false;
+            try {
+                const { resolved } = resolvePath(fp);
+                return fs.statSync(resolved).size >= MIN_DELIVERABLE_SIZE;
+            } catch {
+                return false;
+            }
+        });
+
+        let validation: Awaited<ReturnType<typeof this.validateGoalCompletion>>;
+        if (structuralBypass) {
+            const artifactList = pendingSendSteps
+                .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
+                .join(',');
+            log.info(
+                `[VALIDATION-BYPASS] goal=${goal.id}` +
+                ` reason=only_pending_is_verified_send_document` +
+                ` artifacts="${artifactList}"`
+            );
+            validation = { achieved: true, summary: 'Arquivo(s) já existente(s) no workspace, pronto(s) para envio.' };
+        } else {
+            validation = await this.validateGoalCompletion(goal, activeMilestone, state);
+        }
+
+        if (validation.achieved) {
+            return this.runValidationAchievedPhase(
+                goal, validation, totalCycles, totalReplans, priorFeedback, state, channelContext, onProgress,
+                sentArtifacts, trackArtifact,
+            );
+        }
+        return this.runValidationNotAchievedPhase(
+            goal, validation, totalCycles, totalReplans, priorFeedback, state, onProgress, sentArtifacts, audioDeliveredKey,
+        );
+    }
+
+    /**
+     * ARCH-020 (S24, Incremento 2): `validation.achieved === true` — ou avança para o próximo
+     * marco de um goal de construção (continueLoop), ou despacha os `send_document` diferidos
+     * e encerra o goal (earlyReturn). Extraído sem mudar lógica.
+     */
+    private async runValidationAchievedPhase(
+        goal: Goal,
+        validation: Awaited<ReturnType<typeof this.validateGoalCompletion>>,
+        totalCycles: number,
+        totalReplans: number,
+        priorFeedback: string | undefined,
+        state: GoalExecutionState,
+        channelContext: ChannelContext,
+        onProgress: ProgressCallback | undefined,
+        sentArtifacts: Set<string>,
+        trackArtifact: (fp: string) => void,
+    ): Promise<ValidationPhaseResult> {
+        if (goal.isConstruction && goal.roadmap && (goal.currentMilestoneIndex ?? 0) < goal.roadmap.length - 1) {
+            const prevMilestone = goal.roadmap[goal.currentMilestoneIndex ?? 0];
+            const nextIndex = (goal.currentMilestoneIndex ?? 0) + 1;
+            const nextMilestone = goal.roadmap[nextIndex];
+            log.info(`[GoalLoop] milestone ${goal.currentMilestoneIndex} achieved: "${prevMilestone}". Advancing to milestone ${nextIndex}: "${nextMilestone}"`);
+
+            await onProgress?.({
+                goalId: goal.id,
+                cycle: totalCycles,
+                event: 'replanning',
+                message: `✅ *Marco Concluído:* ${prevMilestone}\n\n👉 *Próximo Marco:* ${nextMilestone}`
+            });
+
+            // Avança o marco e limpa o plano atual para forçar replanejamento para o novo marco
+            this.goalStore.update(goal.id, {
+                currentMilestoneIndex: nextIndex,
+                currentPlan: [],
+            });
+            goal = this.goalStore.getById(goal.id)!;
+
+            // Planeja os steps para o próximo marco
+            const q1Context = await this.contextualize(goal, totalCycles, undefined);
+            const capSummary = await this.capRegistry.getCapabilitySummary();
+
+            const planResult = await this.planner.plan(goal, q1Context ?? '', capSummary, nextMilestone);
+
+            // Permite atualizar o roadmap se o planner retornou um ajustado
+            if (goal.isConstruction && planResult.adjustedRoadmap && planResult.adjustedRoadmap.length > 0) {
+                log.info(`[GoalLoop] roadmap adjusted during milestone planning transition.`);
+                this.goalStore.update(goal.id, { roadmap: planResult.adjustedRoadmap });
+                goal = this.goalStore.getById(goal.id)!;
+            }
+
+            let initialPlan = planResult.steps;
+
+            // Q2: Análise de Riscos para o novo plano
+            if (this.isComplexPlan(initialPlan)) {
+                const riskReport = await this.riskAnalyzer.analyze(goal, initialPlan, this.planner.getAvailableSkills());
+                if (riskReport.blocked) {
+                    log.warn(`[GoalLoop] Q2 BLOCKED milestone goal=${goal.id}: ${riskReport.blockReason}`);
+                    this.goalStore.setStatus(goal.id, 'failed');
+                    return {
+                        action: 'earlyReturn',
+                        result: this.buildResult(goal, false, totalCycles, totalReplans,
+                            riskReport.blockReason ?? 'Plano inviável detectado para o marco.'),
+                    };
+                }
+                initialPlan = riskReport.planAdjusted ? riskReport.adjustedPlan : initialPlan;
+            }
+
+            this.goalStore.update(goal.id, {
+                currentPlan: initialPlan,
+                status: 'executing',
+                cycleFocus: planResult.strategy || undefined,
+            });
+            goal = this.goalStore.getById(goal.id)!;
+            return { action: 'continueLoop', goal, totalReplans, priorFeedback };
+        }
+
+        // Fix #1 + P3-DEDUP: executa steps de send_document diferidos,
+        // agora que achieved=true. Verifica sentArtifacts ANTES de executar
+        // para garantir 1 artefato = 1 entrega mesmo após múltiplos replans.
+        const deferredSends = this.getPendingSteps(goal.currentPlan, 'send_document');
+        let failedSends = 0;
+        for (const sendStep of deferredSends) {
+            let filePath = String(sendStep.toolArgs?.file_path ?? sendStep.toolArgs?.path ?? '');
+            // Correção estrutural (achado replan/pivot 2026-07-12, goals reais no
+            // Windows: 09/07, 10/07 x2, 12/07 — mesma assinatura repetida): o plano
+            // pode chegar aqui com um file_path desatualizado se a estratégia pivotou
+            // no meio da execução (ex.: falha de "bash script.sh" sem WSL funcional
+            // levou o agente a trocar de HTML/Reveal.js para geração de .pptx via
+            // python-pptx) sem que o step de send_document já agendado fosse
+            // atualizado. Resultado sem esta correção: "Objetivo validado" (o
+            // artefato real existe e foi confirmado) mas a entrega falha com
+            // "arquivo não encontrado" porque aponta para um nome que nunca existiu.
+            // Corrige SOMENTE quando há exatamente 1 artefato real (confirmado pela
+            // própria validação do goal, não um palpite por extensão) ainda não
+            // enviado — evidência concreta, sem ambiguidade; caso contrário mantém o
+            // comportamento antigo (falha com mensagem clara) em vez de adivinhar.
+            if (filePath) {
+                const { resolved: requestedResolved } = resolvePath(filePath);
+                if (!fs.existsSync(requestedResolved)) {
+                    const candidates = (validation.artifactPaths ?? [])
+                        .filter(p => p !== filePath && !sentArtifacts.has(p) && fs.existsSync(resolvePath(p).resolved));
+                    if (candidates.length === 1) {
+                        log.warn(
+                            `[SEND-PATH-CORRECTED] goal=${goal.id}` +
+                            ` requested="${filePath}"` +
+                            ` corrected="${candidates[0]}"` +
+                            ` reason=requested_file_missing_single_validated_artifact_found`
+                        );
+                        sendStep.toolArgs = { ...sendStep.toolArgs, file_path: candidates[0] };
+                        filePath = candidates[0];
+                    }
+                }
+            }
+            // Defesa em profundidade: skip se já enviado nesta sessão de goal
+            if (filePath && sentArtifacts.has(filePath)) {
+                log.info(
+                    `[DELIVERY-DEDUP] goal=${goal.id}` +
+                    ` artifact="${filePath}"` +
+                    ` reason=already_sent_in_goal_session` +
+                    ` existing_delivery=sent` +
+                    ` decision=skip`
+                );
+                this.markStepDone(goal, sendStep, '[DEDUP] já entregue nesta sessão');
+                goal = this.goalStore.getById(goal.id)!;
+                continue;
+            }
+            const sendResult = await this.executeStep(goal, sendStep, channelContext, totalCycles, state);
+            goal = this.goalStore.getById(goal.id)!;
+            const sendOk = sendResult.outcome === 'success';
+            log.info(
+                `[DEFERRED-SEND] goal=${goal.id}` +
+                ` artifact="${filePath}"` +
+                ` result=${sendResult.outcome}`
+            );
+            if (sendOk) {
+                this.markStepDone(goal, sendStep, sendResult.output ?? '', 'skip');
+                goal = this.goalStore.getById(goal.id)!;
+                if (filePath) {
+                    trackArtifact(filePath);
+                    log.info(`[DELIVERY-REGISTRY] artifact="${filePath}" goal=${goal.id} status=delivered`);
+                }
+            } else {
+                failedSends++;
+                // Sprint 0.6, Front B: preserva o blocker classificado por
+                // GoalEvaluator dentro de executeStep() — causa raiz exata do
+                // `blockers=[]` observado no goal real "ykpko" (Sprint 0.5): a
+                // falha de um send_document diferido pós-validação nunca
+                // propagava seu blocker.
+                if (sendResult.blocker) {
+                    this.goalStore.recordBlocker(goal.id, sendResult.blocker);
+                    goal = this.goalStore.getById(goal.id)!;
+                }
+            }
+        }
+        // FIX #2: não marcar goal como completed se algum send_document falhou
+        const allSendsOk = deferredSends.length === 0 || failedSends === 0;
+        const deliveredArtifacts = deferredSends
+            .filter((_, i) => i < deferredSends.length - failedSends)
+            .map(s => String(s.toolArgs?.file_path ?? '(unknown)'));
+        log.info(`[GOAL-COMPLETE-CHECK] goal=${goal.id} validation_ok=true all_sends_ok=${allSendsOk} deferred_sends=${deferredSends.length} failed_sends=${failedSends} final_state=${allSendsOk ? 'completed' : 'failed'}`);
+
+        // FIX E: [DELIVERY-DECISION] — documenta a decisão de encerramento
+        log.info(
+            `[DELIVERY-DECISION] goal=${goal.id}` +
+            ` artifact="${deliveredArtifacts.join(',') || '(none)'}"` +
+            ` delivered=${allSendsOk}` +
+            ` validation=true` +
+            ` completed=${allSendsOk}` +
+            ` continue_execution=false` +
+            ` reason=${allSendsOk ? 'goal_satisfied' : 'send_failed'}`
+        );
+        // FIX F: [GOAL-SATISFACTION] — estado final de satisfação do objetivo
+        log.info(
+            `[GOAL-SATISFACTION] goal=${goal.id}` +
+            ` achieved=true` +
+            ` artifacts=${deferredSends.length}` +
+            ` delivered=${deferredSends.length - failedSends}` +
+            ` remaining_steps=0` +
+            ` reason=${allSendsOk ? 'artifact_delivered' : 'delivery_failed'}`
+        );
+
+        if (!allSendsOk) {
+            this.goalStore.setStatus(goal.id, 'failed');
+            const sendErr = failedSends === deferredSends.length
+                ? 'Objetivo validado, mas nenhum arquivo pôde ser entregue ao usuário. Verifique o workspace.'
+                : `Objetivo validado, mas ${failedSends} de ${deferredSends.length} arquivo(s) não foram entregues.`;
+            return { action: 'earlyReturn', result: this.buildResult(goal, false, totalCycles, totalReplans, sendErr) };
+        }
+        // FIX E: encerra imediatamente — sem replan, sem novos ciclos
+        this.goalStore.setStatus(goal.id, 'completed');
+        log.info(`[GoalLoop] goal=${goal.id} validated as complete`);
+        // S5 (modo sombra): captura Caso só se houver evidência de nível de goal
+        // (successCriteria met OU sentArtifacts real) — nunca influencia o resultado.
+        this.caseMemory.captureIfEligible(this.goalStore.getById(goal.id)!);
+        return { action: 'earlyReturn', result: this.buildResult(goal, true, totalCycles, totalReplans, validation.summary) };
+    }
+
+    /**
+     * ARCH-020 (S24, Incremento 2): `validation.achieved === false` — injeta send steps para
+     * arquivos já no workspace (deliverable_check), concede um replan bonus se há progresso
+     * substancial, ou falha/replan normal via espiral. Extraído sem mudar lógica.
+     */
+    private async runValidationNotAchievedPhase(
+        goal: Goal,
+        validation: Awaited<ReturnType<typeof this.validateGoalCompletion>>,
+        totalCycles: number,
+        totalReplans: number,
+        priorFeedback: string | undefined,
+        state: GoalExecutionState,
+        onProgress: ProgressCallback | undefined,
+        sentArtifacts: Set<string>,
+        audioDeliveredKey: string,
+    ): Promise<ValidationPhaseResult> {
+        // LLM diz que o objetivo ainda não foi atingido
+        log.info(`[GoalLoop] goal=${goal.id} not yet complete: ${validation.reason}`);
+        log.info(`[GOAL-LIFECYCLE] goal=${goal.id} session=${goal.sessionKey} state=replanning reason="${(validation.reason ?? '').slice(0, 100)}" cycle=${totalCycles} timestamp=${Date.now()}`);
+        // FIX F: [GOAL-SATISFACTION] — registra estado de não-satisfação para diagnóstico
+        const pendingSendCount = this.getPendingSteps(goal.currentPlan).length;
+        log.info(
+            `[GOAL-SATISFACTION] goal=${goal.id}` +
+            ` achieved=false` +
+            ` artifacts=${goal.attempts.filter(a => a.result === 'success' && a.toolName === 'write').length}` +
+            ` delivered=0` +
+            ` remaining_steps=${pendingSendCount}` +
+            ` reason=${(validation.reason ?? 'unknown').slice(0, 80)}`
+        );
+        await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'replanning', message: validation.reason });
+
+        // ── Item 2: Deliverable Check ──────────────────────────────
+        // Antes de replanejar, verifica se já existe output no workspace.
+        // Evita o cenário onde 3 arquivos .pptx existem mas o sistema
+        // continua tentando regenerar em vez de enviar o que já tem.
+        if (!goal.strategiesTried.includes('deliverable_check_done')) {
+            const expectedExts = inferExpectedExtensions(goal.userIntent);
+            if (expectedExts.length > 0) {
+                const foundFiles = await this.checkDeliverables(expectedExts, goal.createdAt);
+                // Fix #2: ignora arquivos já enviados nesta sessão de execução do goal
+                // Fix S1: ignora arquivos menores que MIN_DELIVERABLE_SIZE — stubs/placeholders
+                // não devem ser enviados ao usuário nem consumir replanBudget com sends inúteis.
+                const substantiveFiles = foundFiles.filter(f => {
+                    try {
+                        return fs.statSync(f).size >= MIN_DELIVERABLE_SIZE;
+                    } catch {
+                        return false; // arquivo desapareceu — ignorar
+                    }
+                });
+                const tinyFiles = foundFiles.length - substantiveFiles.length;
+                if (tinyFiles > 0) {
+                    log.warn(`[GoalLoop] deliverable_check: ${tinyFiles} arquivo(s) ignorado(s) por tamanho < ${MIN_DELIVERABLE_SIZE}B (placeholders)`);
+                }
+                // Exclui também arquivos que já têm um send_document PENDENTE no plano atual
+                // (agendado mas ainda não executado) — sem isso, deliverable_check injetava um
+                // segundo send step pro mesmo arquivo enquanto o primeiro ainda não tinha rodado.
+                //
+                // ARCH-005 (S16): `substantiveFiles` vem de `checkDeliverables()`, que retorna
+                // paths ABSOLUTOS (path.join(workspaceDir, ...) na varredura de disco).
+                // `sentArtifacts`/`toolArgs.file_path` guardam o path CRU como o LLM passou pro
+                // `send_document` — que pode ser relativo (ex.: "aula.pptx"). Comparar os dois
+                // direto por `.has()` sem normalizar fazia um arquivo JÁ ENTREGUE (via path
+                // relativo) parecer "não entregue" aqui, sempre que checkDeliverables o
+                // encontrasse pelo path absoluto — gerando um send_document duplicado do mesmo
+                // arquivo. Resolve ambos os lados para a mesma representação (resolvePath(),
+                // já usada por write/read/exec_command) antes de comparar.
+                const sentArtifactsResolved = new Set(
+                    [...sentArtifacts]
+                        .filter(p => p.length > 0 && p !== audioDeliveredKey)
+                        .map(p => resolvePath(p).resolved)
+                );
+                const pendingSendPaths = new Set(
+                    this.getPendingSteps(goal.currentPlan, 'send_document')
+                        .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
+                        .filter(p => p.length > 0)
+                        .map(p => resolvePath(p).resolved)
+                );
+                const unsentFiles = substantiveFiles.filter(f => !sentArtifactsResolved.has(f) && !pendingSendPaths.has(f));
+                if (unsentFiles.length > 0) {
+                    const skipped = substantiveFiles.length - unsentFiles.length;
+                    log.info(`[GoalLoop] deliverable_check: ${unsentFiles.length} arquivo(s) no workspace${skipped > 0 ? ` (${skipped} já enviado(s) ignorado(s))` : ''} — injetando send steps`);
+                    this.goalStore.addStrategyTried(goal.id, 'deliverable_check_done');
+                    goal = this.goalStore.getById(goal.id)!;
+
+                    const sendSteps: PlanStep[] = unsentFiles.slice(0, 2).map((filePath, i) => ({
+                        id: `send_del_${Date.now()}_${i}`,
+                        description: `Enviar ao usuário arquivo encontrado no workspace: ${filePath}`,
+                        toolName: 'send_document',
+                        toolArgs: { file_path: filePath },
+                        status: 'pending' as const,
+                        fallbackSteps: [],
+                    }));
+
+                    const updatedPlan: PlanStep[] = [
+                        ...goal.currentPlan.filter(s => s.status === 'completed'),
+                        ...sendSteps,
+                    ];
+                    this.goalStore.update(goal.id, { currentPlan: updatedPlan, status: 'executing' });
+                    goal = this.goalStore.getById(goal.id)!;
+                    return { action: 'continueLoop', goal, totalReplans, priorFeedback };
+                }
+            }
+        }
+
+        if (goal.replanBudget <= 0) {
+            // C: budget adaptativo — se há progresso substancial, concede +1 replan bonus
+            // focalizado nos componentes pendentes em vez de reiniciar do zero
+            const progressPct = state.progressModel?.overallPercent ?? 0;
+            const bonusGranted = progressPct >= 60 && totalReplans <= 1;
+            if (bonusGranted) {
+                log.info(
+                    `[ADAPTIVE-BUDGET] goal=${goal.id}` +
+                    ` progress=${progressPct}% >= 60% — granting +1 bonus replan` +
+                    ` cycle=${totalCycles}`
+                );
+                this.goalStore.update(goal.id, {
+                    replanBudget: 1,
+                    status: 'replanning',
+                });
+                goal = this.goalStore.getById(goal.id)!;
+                // Blocker focado nos componentes pendentes do progressModel
+                const pendingComponents = (state.progressModel?.components ?? [])
+                    .filter(c => c.status !== 'completed')
+                    .map(c => c.label)
+                    .join('; ');
+                const bonusBlocker: GoalBlocker = {
+                    kind: 'goal_incomplete',
+                    description: `[BONUS REPLAN — ${progressPct}% concluído] Complete APENAS os componentes pendentes: ${pendingComponents || (validation.reason ?? 'componentes ainda não entregues')}`,
+                    suggestedActions: ['Foque exclusivamente nos componentes pendentes — não replanejar o que já foi entregue'],
+                    detectedAt: Date.now(),
+                };
+                this.goalStore.addBlocker(goal.id, bonusBlocker);
+                this.goalStore.addStrategyTried(goal.id, `bonus_replan: progress=${progressPct}% pendentes=[${pendingComponents}]`);
+                goal = await this.planWithSpiral(goal, bonusBlocker, validation.reason, totalReplans + 1, state, true);
+                totalReplans++;
+                return { action: 'continueLoop', goal, totalReplans, priorFeedback };
+            }
+
+            this.goalStore.setStatus(goal.id, 'failed');
+            const baseExplanation = validation.reason ?? this.evaluator.buildFailureExplanation(goal);
+            // Entrega parcial: se há conteúdo útil coletado, enriquece a mensagem final
+            const graceful = this.gracefulDelivery.assess(goal, state.cognitiveContext);
+            const explanation = graceful.hasPartialContent
+                ? graceful.partialSummary
+                : baseExplanation;
+            log.info(
+                `[GOAL-LIFECYCLE] goal=${goal.id} session=${goal.sessionKey}` +
+                ` state=failed reason="replan_budget_exhausted"` +
+                ` graceful_delivery=${graceful.hasPartialContent}` +
+                ` progress=${progressPct}%` +
+                ` cycle=${totalCycles} timestamp=${Date.now()}`
+            );
+            await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'failed', message: explanation });
+            return { action: 'earlyReturn', result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
+        }
+
+        const blocker: GoalBlocker = {
+            kind: 'goal_incomplete',
+            description: validation.reason ?? 'Objetivo não verificado como concluído pelo validador',
+            suggestedActions: validation.suggestions ?? ['Verificar se o resultado foi entregue ao usuário'],
+            detectedAt: Date.now(),
+        };
+        this.goalStore.addBlocker(goal.id, blocker);
+        goal = this.goalStore.getById(goal.id)!;
+
+        this.goalStore.update(goal.id, {
+            status: 'replanning',
+            replanBudget: goal.replanBudget - 1,
+        });
+        this.goalStore.addStrategyTried(goal.id,
+            `completed all steps but goal_incomplete: ${(validation.reason ?? '').slice(0, 100)}`);
+
+        // Q4 → Q1: feedback da validação alimenta o próximo ciclo espiral
+        // forceQ2=true: se o objetivo não foi entregue, Q2 sempre revisa o plano
+        priorFeedback = validation.reason;
+        goal = await this.planWithSpiral(goal, blocker, priorFeedback, totalReplans + 1, state, true);
+        totalReplans++;
+
+        if (Date.now() > goal.expiresAt) {
+            this.goalStore.setStatus(goal.id, 'abandoned');
+            return { action: 'earlyReturn', result: this.buildResult(goal, false, totalCycles, totalReplans, 'Objetivo expirou por tempo limite.') };
+        }
+        return { action: 'continueLoop', goal, totalReplans, priorFeedback };
+    }
+
+    /**
+     * ARCH-020 (S24, Incremento 2): dispara quando `readyToValidate` é false — despacha
+     * `executeStep()` para o step pendente e roda a validação semântica pós-execução (que pode
+     * fazer downgrade do outcome para 'partial' ou escalar para 'blocked'). Extraído sem mudar
+     * lógica. Os 2 guards de saída antecipada (goal abandonado durante o step, artefato fonte
+     * vazio para goal de modificação) viram `earlyReturn`; o caminho normal vira
+     * `proceedToSwitch`, entregando o `cycleResult` (possivelmente ajustado) para o switch de
+     * outcome que continua em `runLoopInternal()`.
+     */
+    private async runStepExecutionPhase(
+        goal: Goal,
+        pendingStep: PlanStep,
+        totalCycles: number,
+        totalReplans: number,
+        state: GoalExecutionState,
+        channelContext: ChannelContext,
+        trackArtifact: (fp: string) => void,
+        isAudioAlreadySent: () => boolean,
+        onProgress: ProgressCallback | undefined,
+    ): Promise<StepExecutionPhaseResult> {
+        await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'tool_executing', message: pendingStep.description });
+
+        // H7: classificar se send_document está sendo executado antes da validação (step regular)
+        if (pendingStep.toolName === 'send_document') {
+            log.info(`[SEND-CLASSIFICATION] goal=${goal.id} step=${pendingStep.id} tool=send_document deferred=false reason=regular_plan_step`);
+        }
+        // ITEM5: rastrear origem do path em steps de escrita
+        if ((pendingStep.toolName === 'write' || pendingStep.toolName === 'edit') && pendingStep.toolArgs?.path) {
+            const source = totalReplans > 0 ? 'replanner' : 'planner';
+            log.info(
+                `[PATH-ORIGIN] goal=${goal.id} cycle=${totalCycles}` +
+                ` path="${pendingStep.toolArgs.path}"` +
+                ` source=${source} step=${pendingStep.id}`
+            );
+        }
+        // H7: AgentLoop pode chamar send_document internamente sem proteção de deferred
+        if (pendingStep.toolName === 'agentloop' || !pendingStep.toolName) {
+            const hasPendingSends = this.getPendingSteps(goal.currentPlan, 'send_document').length > 0;
+            log.info(
+                `[SEND-ORDER] goal=${goal.id} step=${pendingStep.id}` +
+                ` tool=${pendingStep.toolName ?? 'agentloop'} validation_done=false` +
+                ` send_allowed=uncontrolled deferred_sends_pending=${hasPendingSends}`
+            );
+        }
+
+        let cycleResult = await this.executeStep(
+            goal, pendingStep, channelContext, totalCycles, state,
+            // CORREÇÃO 1: passa callback para que DELIVERY-GUARD notifique sentArtifacts
+            // diretamente, sem depender de S10 (que só executa em case 'success').
+            (fp) => { if (fp) trackArtifact(fp); },
+            isAudioAlreadySent,
+        );
+
+        // Recarrega o goal — pode ter sido abandonado durante o step (nova mensagem do usuário)
+        goal = this.goalStore.getById(goal.id)!;
+        if (goal.status === 'abandoned') {
+            log.info(`[GoalLoop] goal=${goal.id} foi abandonado durante execução do step — saindo do loop`);
+            return {
+                action: 'earlyReturn',
+                result: this.buildResult(goal, false, totalCycles, totalReplans,
+                    'Goal interrompido: nova mensagem do usuário recebida durante execução.'),
+            };
+        }
+
+        // FIX B: detectar arquivo vazio em step de leitura para goals de modificação.
+        // Impede que o sistema replane com "usar memória como substituto" quando o artefato
+        // fonte é um requisito real (o conteúdo precisa existir para ser modificado).
+        if (
+            (pendingStep.toolName === 'read' || pendingStep.toolName === 'read_document') &&
+            cycleResult.outcome !== 'success'
+        ) {
+            const lastAttempt = [...goal.attempts].reverse().find(a => a.planStepId === pendingStep.id);
+            const isEmptyArtifact = lastAttempt?.error?.includes('[ARQUIVO VAZIO]') ?? false;
+            if (isEmptyArtifact && this.isModificationGoal(goal.userIntent)) {
+                const requiredPath = String(pendingStep.toolArgs?.path ?? pendingStep.toolArgs?.filename ?? '(desconhecido)');
+                log.warn(
+                    `[ARTIFACT-DEPENDENCY] goal=${goal.id} required="${requiredPath}"` +
+                    ` exists=true empty=true action=fail` +
+                    ` reason="goal de modificação requer conteúdo real no arquivo fonte"`
+                );
+                const failMsg = `Arquivo fonte obrigatório "${requiredPath}" está vazio. ` +
+                    `O objetivo requer modificar conteúdo existente — não é possível continuar sem o arquivo original.`;
+                this.goalStore.setStatus(goal.id, 'failed');
+                this.goalStore.addBlocker(goal.id, {
+                    kind: 'required_artifact_missing',
+                    description: failMsg,
+                    suggestedActions: ['Verifique se o arquivo correto foi enviado ou criado antes de pedir modificações'],
+                    detectedAt: Date.now(),
+                });
+                log.info(`[GOAL-LIFECYCLE] goal=${goal.id} session=${goal.sessionKey} state=failed reason="required_artifact_missing" cycle=${totalCycles} timestamp=${Date.now()}`);
+                return { action: 'earlyReturn', result: this.buildResult(goal, false, totalCycles, totalReplans, failMsg) };
+            }
+        }
+
+        // ── Validação semântica: mesmo após 'success' heurístico, verifica se o output
+        // endereça a intenção do step (ex: crypto_analysis retornando ENA/BCH em vez de ZEC/Pi)
+        // P6: cobre também steps agentloop (sem toolName) — output do AgentLoop também é validado
+        if (cycleResult.outcome === 'success' && cycleResult.output) {
+            const semanticValidation = await this.semanticValidator.validate(
+                pendingStep,
+                cycleResult.output,
+                goal.userIntent,
+            );
+            if (semanticValidation.shouldDowngradeToPartial) {
+                log.warn(
+                    `[SEMANTIC-MISMATCH] goal=${goal.id} step=${pendingStep.id}` +
+                    ` tool=${pendingStep.toolName} confidence=${semanticValidation.confidence.toFixed(2)}` +
+                    ` reason="${(semanticValidation.reason ?? '').slice(0, 100)}"` +
+                    ` action=downgrade_to_partial`
+                );
+                state.cognitiveContext.failedStrategies.push(
+                    `${pendingStep.toolName} (step ${pendingStep.id}): output irrelevante para a intenção — ${semanticValidation.reason ?? 'mismatch'}`
+                );
+                // P5: persiste na ReflectionMemory para que futuros goals evitem o mesmo padrão
+                // S2a: outcome='partial' (não 'failure') — a ferramenta rodou e produziu
+                // output real, só não endereçou a intenção do step. É exatamente o caso que
+                // shouldDowngradeToPartial já nomeia; evidência objetiva, não interpretação.
+                // failureType='semantic_mismatch' — BlockerKind já tem esse valor exato.
+                this.reflectionMemory.record({
+                    userInput: goal.userIntent.slice(0, 300),
+                    intent: pendingStep.description.slice(0, 200),
+                    toolUsed: pendingStep.toolName ?? 'agentloop',
+                    toolOutput: cycleResult.output?.slice(0, 500),
+                    approved: false,
+                    reason: `Mismatch semântico: ${semanticValidation.reason ?? 'output não endereça a intenção do step'}`,
+                    confidence: semanticValidation.confidence,
+                    pattern: `tool_${pendingStep.toolName ?? 'agentloop'}`,
+                    suggestedFix: `Use query/abordagem que retorne especificamente: ${pendingStep.description.slice(0, 100)}`,
+                    outcome: 'partial',
+                    failureType: 'semantic_mismatch',
+                });
+                // A: enriquece a descrição do step no plano para que a próxima tentativa
+                // seja explicitamente guiada pelo motivo do mismatch.
+                // Se a descrição já contém o marcador [ATENÇÃO —, o step já foi tentado com
+                // o hint e voltou irrelevante — retry adicional é inútil; escala imediatamente
+                // para 'blocked' para forçar replan com ferramenta diferente.
+                const alreadyHinted = (pendingStep.description ?? '').includes('[ATENÇÃO —');
+                const mismatchHint = ` [ATENÇÃO — tentativa anterior com ${pendingStep.toolName ?? 'agentloop'} retornou output irrelevante: ${(semanticValidation.reason ?? 'mismatch').slice(0, 120)}. Use abordagem diferente que retorne especificamente o que o objetivo pede.]`;
+                const enrichedPlan = goal.currentPlan.map(s =>
+                    s.id === pendingStep.id
+                        ? { ...s, description: (s.description + mismatchHint).slice(0, 500) }
+                        : s
+                );
+                this.goalStore.update(goal.id, { currentPlan: enrichedPlan });
+                goal = this.goalStore.getById(goal.id)!;
+                // Sprint 0.8 (achados L10/L11/L14/L15): o GoalAttempt já persistido por
+                // executeStep() (antes desta validação semântica rodar) continua com
+                // result='success' — corrige para 'partial', alinhando com o que
+                // ReflectionMemory.record({outcome:'partial', ...}) já registrava acima
+                // para o mesmo evento.
+                this.goalStore.downgradeLastAttemptToPartial(goal.id, pendingStep.id);
+                goal = this.goalStore.getById(goal.id)!;
+                // Retry só é útil quando o step NÃO tem toolName fixo (caminho 'agentloop'):
+                // nesse caso o próximo ciclo chama o LLM de novo com a description enriquecida
+                // acima, então o hint pode de fato mudar o resultado. Para steps com toolName
+                // (exec_command, memory_search, ssh_exec, ...), executeStep() despacha
+                // `resolveStepRefs(step.toolArgs, goal)` — resolve só {{step_N.output}}, nunca
+                // regenera os args a partir da description — então o retry chamaria a MESMA
+                // tool com os MESMOS args e reproduziria o MESMO mismatch, garantido.
+                // Reproduzido ao vivo (auditoria, 17/07): um goal de inventário de host rodou
+                // exec_command 2x idênticas ("hostname/OS/CPU" pedido, saída só com
+                // vulnerabilidades de CPU as duas vezes) e memory_search 2x idênticas (mesma
+                // query, mesmo resultado irrelevante as duas vezes) — cada retry queimou um
+                // ciclo inteiro (dispatch + validação semântica via LLM) sem nenhuma chance de
+                // resultado diferente, atrasando a escalada para replan (a única coisa que de
+                // fato muda a abordagem, porque gera um plano novo do zero).
+                const retryCanHelp = !pendingStep.toolName;
+                if (goal.retryBudget > 0 && !alreadyHinted && retryCanHelp) {
+                    // Primeira falha: retry com hint enriquecido
+                    cycleResult = { ...cycleResult, outcome: 'partial' };
+                } else {
+                    // Segunda falha para o mesmo step (alreadyHinted) OU retryBudget esgotado:
+                    // retry adicional seria inútil — escala para 'blocked' para replan com nova estratégia
+                    log.warn(
+                        `[SEMANTIC-MISMATCH] goal=${goal.id} step=${pendingStep.id}` +
+                        ` retryBudget=${goal.retryBudget} alreadyHinted=${alreadyHinted}` +
+                        ` retryCanHelp=${retryCanHelp}` +
+                        ` — escalating to blocked for replan`
+                    );
+                    const isDirListing = pendingStep.toolName === 'read' && /📁|📄/.test(cycleResult.output ?? '');
+                    const dirHint = isDirListing
+                        ? ` Listagem do diretório retornada: ${(cycleResult.output ?? '').split('\n').slice(0, 10).join('; ')}`
+                        : '';
+                    // Quando alreadyHinted=true, pendingStep.description já carrega o
+                    // mismatchHint embutido de um ciclo anterior (linha ~1010) — cortar em
+                    // 100 chars sem remover o hint primeiro produz um blocker.description
+                    // truncado no meio do marcador interno (ex: "...via send_audio. [AT'"),
+                    // que buildFailureExplanation() (GoalEvaluator.ts) expõe ao usuário como
+                    // texto quebrado. Remove o hint antes de truncar — mesma sub-string
+                    // '[ATENÇÃO —' já usada em alreadyHinted acima, não é um padrão novo.
+                    const cleanStepDesc = pendingStep.description.split(' [ATENÇÃO —')[0];
+                    const retryOutcomeLabel = alreadyHinted
+                        ? 'após 2 tentativas'
+                        : (retryCanHelp ? 'após esgotar retryBudget' : 'sem chance de retry ajudar (ferramenta fixa, mesmos argumentos)');
+                    cycleResult = {
+                        ...cycleResult,
+                        outcome: 'blocked',
+                        blocker: {
+                            kind: 'semantic_mismatch' as const,
+                            toolName: pendingStep.toolName,
+                            description: `Step '${cleanStepDesc.slice(0, 100)}' retornou output irrelevante ${retryOutcomeLabel}: ${semanticValidation.reason ?? 'mismatch semântico'}${dirHint}`,
+                            suggestedActions: isDirListing
+                                ? [
+                                    'Usar o path completo de um dos arquivos listados acima em vez do diretório',
+                                    'Verificar nos ARQUIVOS ENVIADOS AO USUÁRIO o path exato do arquivo solicitado',
+                                ]
+                                : [
+                                    'Usar tool diferente para este step',
+                                    'Reformular a query com abordagem completamente alternativa',
+                                ],
+                            detectedAt: Date.now(),
+                        },
+                    };
+                }
+            } else if (semanticValidation.result === 'mismatch') {
+                log.info(
+                    `[SEMANTIC-MISMATCH] goal=${goal.id} step=${pendingStep.id}` +
+                    ` tool=${pendingStep.toolName} confidence=${semanticValidation.confidence.toFixed(2)}` +
+                    ` reason="${(semanticValidation.reason ?? '').slice(0, 100)}"` +
+                    ` action=log_only (below downgrade threshold)`
+                );
+                state.cognitiveContext.failedStrategies.push(
+                    `${pendingStep.toolName}: possível mismatch semântico — ${semanticValidation.reason ?? 'output pode não ser relevante'}`
+                );
+            }
+        }
+
+        return { action: 'proceedToSwitch', goal, cycleResult };
+    }
+
     private async runLoopInternal(
         goal: Goal,
         channelContext: ChannelContext,
@@ -1062,604 +1773,24 @@ export class GoalExecutionLoop {
             );
 
             if (readyToValidate) {
-                // Todos os steps concluídos — LLM valida se o objetivo foi realmente atingido
-                log.info(`[GoalLoop] goal=${currentGoal.id} all steps completed — running LLM validation`);
-                log.info(`[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey} state=validating cycle=${totalCycles} timestamp=${Date.now()}`);
-                await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'tool_completed', message: 'Validando conclusão...' });
-
-                const activeMilestone = currentGoal.isConstruction && currentGoal.roadmap && currentGoal.roadmap.length > 0
-                    ? currentGoal.roadmap[currentGoal.currentMilestoneIndex ?? 0]
-                    : undefined;
-
-                // Bypass estrutural: quando o único trabalho restante é despachar send_document
-                // para arquivo(s) que já existem no disco com tamanho substantivo, o validador por
-                // LLM nunca consegue confirmar "foi enviado" — o envio só acontece DEPOIS de
-                // achieved=true (Fix #1 acima). Isso é um impasse estrutural para goals cujo único
-                // propósito é reenviar um arquivo já existente (sem nenhum 'write' neste goal como
-                // evidência de criação). Reproduzido ao vivo em 09/07 (goal "me envia a aula ..."):
-                // esgotou o replanBudget tentando reenviar um .pptx já pronto, e no desespero o
-                // planner criou um arquivo de "resumo de entrega" fabricado só para ter evidência de
-                // 'write' e passar no validador — ver project_session_bugs_jul2026_ap na memória.
-                // Verificação estrutural (arquivo existe, não é placeholder) é mais confiável aqui
-                // do que o julgamento literal do LLM sobre um evento que ainda não aconteceu.
-                const pendingSendSteps = this.getPendingSteps(currentGoal.currentPlan, 'send_document');
-                const structuralBypass = pendingSendSteps.length > 0 && pendingSendSteps.every(s => {
-                    const fp = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
-                    if (!fp) return false;
-                    try {
-                        const { resolved } = resolvePath(fp);
-                        return fs.statSync(resolved).size >= MIN_DELIVERABLE_SIZE;
-                    } catch {
-                        return false;
-                    }
-                });
-
-                let validation: Awaited<ReturnType<typeof this.validateGoalCompletion>>;
-                if (structuralBypass) {
-                    const artifactList = pendingSendSteps
-                        .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
-                        .join(',');
-                    log.info(
-                        `[VALIDATION-BYPASS] goal=${currentGoal.id}` +
-                        ` reason=only_pending_is_verified_send_document` +
-                        ` artifacts="${artifactList}"`
-                    );
-                    validation = { achieved: true, summary: 'Arquivo(s) já existente(s) no workspace, pronto(s) para envio.' };
-                } else {
-                    validation = await this.validateGoalCompletion(currentGoal, activeMilestone, state);
-                }
-
-                if (validation.achieved) {
-                    if (currentGoal.isConstruction && currentGoal.roadmap && (currentGoal.currentMilestoneIndex ?? 0) < currentGoal.roadmap.length - 1) {
-                        const prevMilestone = currentGoal.roadmap[currentGoal.currentMilestoneIndex ?? 0];
-                        const nextIndex = (currentGoal.currentMilestoneIndex ?? 0) + 1;
-                        const nextMilestone = currentGoal.roadmap[nextIndex];
-                        log.info(`[GoalLoop] milestone ${currentGoal.currentMilestoneIndex} achieved: "${prevMilestone}". Advancing to milestone ${nextIndex}: "${nextMilestone}"`);
-
-                        await onProgress?.({
-                            goalId: currentGoal.id,
-                            cycle: totalCycles,
-                            event: 'replanning',
-                            message: `✅ *Marco Concluído:* ${prevMilestone}\n\n👉 *Próximo Marco:* ${nextMilestone}`
-                        });
-
-                        // Avança o marco e limpa o plano atual para forçar replanejamento para o novo marco
-                        this.goalStore.update(currentGoal.id, {
-                            currentMilestoneIndex: nextIndex,
-                            currentPlan: [],
-                        });
-                        currentGoal = this.goalStore.getById(currentGoal.id)!;
-
-                        // Planeja os steps para o próximo marco
-                        const q1Context = await this.contextualize(currentGoal, totalCycles, undefined);
-                        const capSummary = await this.capRegistry.getCapabilitySummary();
-
-                        const planResult = await this.planner.plan(currentGoal, q1Context ?? '', capSummary, nextMilestone);
-                        
-                        // Permite atualizar o roadmap se o planner retornou um ajustado
-                        if (currentGoal.isConstruction && planResult.adjustedRoadmap && planResult.adjustedRoadmap.length > 0) {
-                            log.info(`[GoalLoop] roadmap adjusted during milestone planning transition.`);
-                            this.goalStore.update(currentGoal.id, { roadmap: planResult.adjustedRoadmap });
-                            currentGoal = this.goalStore.getById(currentGoal.id)!;
-                        }
-
-                        let initialPlan = planResult.steps;
-
-                        // Q2: Análise de Riscos para o novo plano
-                        if (this.isComplexPlan(initialPlan)) {
-                            const riskReport = await this.riskAnalyzer.analyze(currentGoal, initialPlan, this.planner.getAvailableSkills());
-                            if (riskReport.blocked) {
-                                log.warn(`[GoalLoop] Q2 BLOCKED milestone goal=${currentGoal.id}: ${riskReport.blockReason}`);
-                                this.goalStore.setStatus(currentGoal.id, 'failed');
-                                return this.buildResult(currentGoal, false, totalCycles, totalReplans,
-                                    riskReport.blockReason ?? 'Plano inviável detectado para o marco.');
-                            }
-                            initialPlan = riskReport.planAdjusted ? riskReport.adjustedPlan : initialPlan;
-                        }
-
-                        this.goalStore.update(currentGoal.id, {
-                            currentPlan: initialPlan,
-                            status: 'executing',
-                            cycleFocus: planResult.strategy || undefined,
-                        });
-                        currentGoal = this.goalStore.getById(currentGoal.id)!;
-                        continue;
-                    } else {
-                        // Fix #1 + P3-DEDUP: executa steps de send_document diferidos,
-                        // agora que achieved=true. Verifica sentArtifacts ANTES de executar
-                        // para garantir 1 artefato = 1 entrega mesmo após múltiplos replans.
-                        const deferredSends = this.getPendingSteps(currentGoal.currentPlan, 'send_document');
-                        let failedSends = 0;
-                        for (const sendStep of deferredSends) {
-                            let filePath = String(sendStep.toolArgs?.file_path ?? sendStep.toolArgs?.path ?? '');
-                            // Correção estrutural (achado replan/pivot 2026-07-12, goals reais no
-                            // Windows: 09/07, 10/07 x2, 12/07 — mesma assinatura repetida): o plano
-                            // pode chegar aqui com um file_path desatualizado se a estratégia pivotou
-                            // no meio da execução (ex.: falha de "bash script.sh" sem WSL funcional
-                            // levou o agente a trocar de HTML/Reveal.js para geração de .pptx via
-                            // python-pptx) sem que o step de send_document já agendado fosse
-                            // atualizado. Resultado sem esta correção: "Objetivo validado" (o
-                            // artefato real existe e foi confirmado) mas a entrega falha com
-                            // "arquivo não encontrado" porque aponta para um nome que nunca existiu.
-                            // Corrige SOMENTE quando há exatamente 1 artefato real (confirmado pela
-                            // própria validação do goal, não um palpite por extensão) ainda não
-                            // enviado — evidência concreta, sem ambiguidade; caso contrário mantém o
-                            // comportamento antigo (falha com mensagem clara) em vez de adivinhar.
-                            if (filePath) {
-                                const { resolved: requestedResolved } = resolvePath(filePath);
-                                if (!fs.existsSync(requestedResolved)) {
-                                    const candidates = (validation.artifactPaths ?? [])
-                                        .filter(p => p !== filePath && !sentArtifacts.has(p) && fs.existsSync(resolvePath(p).resolved));
-                                    if (candidates.length === 1) {
-                                        log.warn(
-                                            `[SEND-PATH-CORRECTED] goal=${currentGoal.id}` +
-                                            ` requested="${filePath}"` +
-                                            ` corrected="${candidates[0]}"` +
-                                            ` reason=requested_file_missing_single_validated_artifact_found`
-                                        );
-                                        sendStep.toolArgs = { ...sendStep.toolArgs, file_path: candidates[0] };
-                                        filePath = candidates[0];
-                                    }
-                                }
-                            }
-                            // Defesa em profundidade: skip se já enviado nesta sessão de goal
-                            if (filePath && sentArtifacts.has(filePath)) {
-                                log.info(
-                                    `[DELIVERY-DEDUP] goal=${currentGoal.id}` +
-                                    ` artifact="${filePath}"` +
-                                    ` reason=already_sent_in_goal_session` +
-                                    ` existing_delivery=sent` +
-                                    ` decision=skip`
-                                );
-                                this.markStepDone(currentGoal, sendStep, '[DEDUP] já entregue nesta sessão');
-                                currentGoal = this.goalStore.getById(currentGoal.id)!;
-                                continue;
-                            }
-                            const sendResult = await this.executeStep(currentGoal, sendStep, channelContext, totalCycles, state);
-                            currentGoal = this.goalStore.getById(currentGoal.id)!;
-                            const sendOk = sendResult.outcome === 'success';
-                            log.info(
-                                `[DEFERRED-SEND] goal=${currentGoal.id}` +
-                                ` artifact="${filePath}"` +
-                                ` result=${sendResult.outcome}`
-                            );
-                            if (sendOk) {
-                                this.markStepDone(currentGoal, sendStep, sendResult.output ?? '', 'skip');
-                                currentGoal = this.goalStore.getById(currentGoal.id)!;
-                                if (filePath) {
-                                    trackArtifact(filePath);
-                                    log.info(`[DELIVERY-REGISTRY] artifact="${filePath}" goal=${currentGoal.id} status=delivered`);
-                                }
-                            } else {
-                                failedSends++;
-                                // Sprint 0.6, Front B: preserva o blocker classificado por
-                                // GoalEvaluator dentro de executeStep() — causa raiz exata do
-                                // `blockers=[]` observado no goal real "ykpko" (Sprint 0.5): a
-                                // falha de um send_document diferido pós-validação nunca
-                                // propagava seu blocker.
-                                if (sendResult.blocker) {
-                                    this.goalStore.recordBlocker(currentGoal.id, sendResult.blocker);
-                                    currentGoal = this.goalStore.getById(currentGoal.id)!;
-                                }
-                            }
-                        }
-                        // FIX #2: não marcar goal como completed se algum send_document falhou
-                        const allSendsOk = deferredSends.length === 0 || failedSends === 0;
-                        const deliveredArtifacts = deferredSends
-                            .filter((_, i) => i < deferredSends.length - failedSends)
-                            .map(s => String(s.toolArgs?.file_path ?? '(unknown)'));
-                        log.info(`[GOAL-COMPLETE-CHECK] goal=${currentGoal.id} validation_ok=true all_sends_ok=${allSendsOk} deferred_sends=${deferredSends.length} failed_sends=${failedSends} final_state=${allSendsOk ? 'completed' : 'failed'}`);
-
-                        // FIX E: [DELIVERY-DECISION] — documenta a decisão de encerramento
-                        log.info(
-                            `[DELIVERY-DECISION] goal=${currentGoal.id}` +
-                            ` artifact="${deliveredArtifacts.join(',') || '(none)'}"` +
-                            ` delivered=${allSendsOk}` +
-                            ` validation=true` +
-                            ` completed=${allSendsOk}` +
-                            ` continue_execution=false` +
-                            ` reason=${allSendsOk ? 'goal_satisfied' : 'send_failed'}`
-                        );
-                        // FIX F: [GOAL-SATISFACTION] — estado final de satisfação do objetivo
-                        log.info(
-                            `[GOAL-SATISFACTION] goal=${currentGoal.id}` +
-                            ` achieved=true` +
-                            ` artifacts=${deferredSends.length}` +
-                            ` delivered=${deferredSends.length - failedSends}` +
-                            ` remaining_steps=0` +
-                            ` reason=${allSendsOk ? 'artifact_delivered' : 'delivery_failed'}`
-                        );
-
-                        if (!allSendsOk) {
-                            this.goalStore.setStatus(currentGoal.id, 'failed');
-                            const sendErr = failedSends === deferredSends.length
-                                ? 'Objetivo validado, mas nenhum arquivo pôde ser entregue ao usuário. Verifique o workspace.'
-                                : `Objetivo validado, mas ${failedSends} de ${deferredSends.length} arquivo(s) não foram entregues.`;
-                            return this.buildResult(currentGoal, false, totalCycles, totalReplans, sendErr);
-                        }
-                        // FIX E: encerra imediatamente — sem replan, sem novos ciclos
-                        this.goalStore.setStatus(currentGoal.id, 'completed');
-                        log.info(`[GoalLoop] goal=${currentGoal.id} validated as complete`);
-                        // S5 (modo sombra): captura Caso só se houver evidência de nível de goal
-                        // (successCriteria met OU sentArtifacts real) — nunca influencia o resultado.
-                        this.caseMemory.captureIfEligible(this.goalStore.getById(currentGoal.id)!);
-                        return this.buildResult(currentGoal, true, totalCycles, totalReplans, validation.summary);
-                    }
-                }
-
-                // LLM diz que o objetivo ainda não foi atingido
-                log.info(`[GoalLoop] goal=${currentGoal.id} not yet complete: ${validation.reason}`);
-                log.info(`[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey} state=replanning reason="${(validation.reason ?? '').slice(0, 100)}" cycle=${totalCycles} timestamp=${Date.now()}`);
-                // FIX F: [GOAL-SATISFACTION] — registra estado de não-satisfação para diagnóstico
-                const pendingSendCount = this.getPendingSteps(currentGoal.currentPlan).length;
-                log.info(
-                    `[GOAL-SATISFACTION] goal=${currentGoal.id}` +
-                    ` achieved=false` +
-                    ` artifacts=${currentGoal.attempts.filter(a => a.result === 'success' && a.toolName === 'write').length}` +
-                    ` delivered=0` +
-                    ` remaining_steps=${pendingSendCount}` +
-                    ` reason=${(validation.reason ?? 'unknown').slice(0, 80)}`
+                const validationResult = await this.runValidationPhase(
+                    currentGoal, totalCycles, totalReplans, priorFeedback, state, channelContext, onProgress,
+                    sentArtifacts, trackArtifact, AUDIO_DELIVERED_KEY,
                 );
-                await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'replanning', message: validation.reason });
-
-                // ── Item 2: Deliverable Check ──────────────────────────────
-                // Antes de replanejar, verifica se já existe output no workspace.
-                // Evita o cenário onde 3 arquivos .pptx existem mas o sistema
-                // continua tentando regenerar em vez de enviar o que já tem.
-                if (!currentGoal.strategiesTried.includes('deliverable_check_done')) {
-                    const expectedExts = inferExpectedExtensions(currentGoal.userIntent);
-                    if (expectedExts.length > 0) {
-                        const foundFiles = await this.checkDeliverables(expectedExts, currentGoal.createdAt);
-                        // Fix #2: ignora arquivos já enviados nesta sessão de execução do goal
-                        // Fix S1: ignora arquivos menores que MIN_DELIVERABLE_SIZE — stubs/placeholders
-                        // não devem ser enviados ao usuário nem consumir replanBudget com sends inúteis.
-                        const substantiveFiles = foundFiles.filter(f => {
-                            try {
-                                return fs.statSync(f).size >= MIN_DELIVERABLE_SIZE;
-                            } catch {
-                                return false; // arquivo desapareceu — ignorar
-                            }
-                        });
-                        const tinyFiles = foundFiles.length - substantiveFiles.length;
-                        if (tinyFiles > 0) {
-                            log.warn(`[GoalLoop] deliverable_check: ${tinyFiles} arquivo(s) ignorado(s) por tamanho < ${MIN_DELIVERABLE_SIZE}B (placeholders)`);
-                        }
-                        // Exclui também arquivos que já têm um send_document PENDENTE no plano atual
-                        // (agendado mas ainda não executado) — sem isso, deliverable_check injetava um
-                        // segundo send step pro mesmo arquivo enquanto o primeiro ainda não tinha rodado.
-                        //
-                        // ARCH-005 (S16): `substantiveFiles` vem de `checkDeliverables()`, que retorna
-                        // paths ABSOLUTOS (path.join(workspaceDir, ...) na varredura de disco).
-                        // `sentArtifacts`/`toolArgs.file_path` guardam o path CRU como o LLM passou pro
-                        // `send_document` — que pode ser relativo (ex.: "aula.pptx"). Comparar os dois
-                        // direto por `.has()` sem normalizar fazia um arquivo JÁ ENTREGUE (via path
-                        // relativo) parecer "não entregue" aqui, sempre que checkDeliverables o
-                        // encontrasse pelo path absoluto — gerando um send_document duplicado do mesmo
-                        // arquivo. Resolve ambos os lados para a mesma representação (resolvePath(),
-                        // já usada por write/read/exec_command) antes de comparar.
-                        const sentArtifactsResolved = new Set(
-                            [...sentArtifacts]
-                                .filter(p => p.length > 0 && p !== AUDIO_DELIVERED_KEY)
-                                .map(p => resolvePath(p).resolved)
-                        );
-                        const pendingSendPaths = new Set(
-                            this.getPendingSteps(currentGoal.currentPlan, 'send_document')
-                                .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
-                                .filter(p => p.length > 0)
-                                .map(p => resolvePath(p).resolved)
-                        );
-                        const unsentFiles = substantiveFiles.filter(f => !sentArtifactsResolved.has(f) && !pendingSendPaths.has(f));
-                        if (unsentFiles.length > 0) {
-                            const skipped = substantiveFiles.length - unsentFiles.length;
-                            log.info(`[GoalLoop] deliverable_check: ${unsentFiles.length} arquivo(s) no workspace${skipped > 0 ? ` (${skipped} já enviado(s) ignorado(s))` : ''} — injetando send steps`);
-                            this.goalStore.addStrategyTried(currentGoal.id, 'deliverable_check_done');
-                            currentGoal = this.goalStore.getById(currentGoal.id)!;
-
-                            const sendSteps: PlanStep[] = unsentFiles.slice(0, 2).map((filePath, i) => ({
-                                id: `send_del_${Date.now()}_${i}`,
-                                description: `Enviar ao usuário arquivo encontrado no workspace: ${filePath}`,
-                                toolName: 'send_document',
-                                toolArgs: { file_path: filePath },
-                                status: 'pending' as const,
-                                fallbackSteps: [],
-                            }));
-
-                            const updatedPlan: PlanStep[] = [
-                                ...currentGoal.currentPlan.filter(s => s.status === 'completed'),
-                                ...sendSteps,
-                            ];
-                            this.goalStore.update(currentGoal.id, { currentPlan: updatedPlan, status: 'executing' });
-                            currentGoal = this.goalStore.getById(currentGoal.id)!;
-                            continue;
-                        }
-                    }
-                }
-
-                if (currentGoal.replanBudget <= 0) {
-                    // C: budget adaptativo — se há progresso substancial, concede +1 replan bonus
-                    // focalizado nos componentes pendentes em vez de reiniciar do zero
-                    const progressPct = state.progressModel?.overallPercent ?? 0;
-                    const bonusGranted = progressPct >= 60 && totalReplans <= 1;
-                    if (bonusGranted) {
-                        log.info(
-                            `[ADAPTIVE-BUDGET] goal=${currentGoal.id}` +
-                            ` progress=${progressPct}% >= 60% — granting +1 bonus replan` +
-                            ` cycle=${totalCycles}`
-                        );
-                        this.goalStore.update(currentGoal.id, {
-                            replanBudget: 1,
-                            status: 'replanning',
-                        });
-                        currentGoal = this.goalStore.getById(currentGoal.id)!;
-                        // Blocker focado nos componentes pendentes do progressModel
-                        const pendingComponents = (state.progressModel?.components ?? [])
-                            .filter(c => c.status !== 'completed')
-                            .map(c => c.label)
-                            .join('; ');
-                        const bonusBlocker: GoalBlocker = {
-                            kind: 'goal_incomplete',
-                            description: `[BONUS REPLAN — ${progressPct}% concluído] Complete APENAS os componentes pendentes: ${pendingComponents || (validation.reason ?? 'componentes ainda não entregues')}`,
-                            suggestedActions: ['Foque exclusivamente nos componentes pendentes — não replanejar o que já foi entregue'],
-                            detectedAt: Date.now(),
-                        };
-                        this.goalStore.addBlocker(currentGoal.id, bonusBlocker);
-                        this.goalStore.addStrategyTried(currentGoal.id, `bonus_replan: progress=${progressPct}% pendentes=[${pendingComponents}]`);
-                        currentGoal = await this.planWithSpiral(currentGoal, bonusBlocker, validation.reason, totalReplans + 1, state, true);
-                        totalReplans++;
-                        continue;
-                    }
-
-                    this.goalStore.setStatus(currentGoal.id, 'failed');
-                    const baseExplanation = validation.reason ?? this.evaluator.buildFailureExplanation(currentGoal);
-                    // Entrega parcial: se há conteúdo útil coletado, enriquece a mensagem final
-                    const graceful = this.gracefulDelivery.assess(currentGoal, state.cognitiveContext);
-                    const explanation = graceful.hasPartialContent
-                        ? graceful.partialSummary
-                        : baseExplanation;
-                    log.info(
-                        `[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey}` +
-                        ` state=failed reason="replan_budget_exhausted"` +
-                        ` graceful_delivery=${graceful.hasPartialContent}` +
-                        ` progress=${progressPct}%` +
-                        ` cycle=${totalCycles} timestamp=${Date.now()}`
-                    );
-                    await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'failed', message: explanation });
-                    return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
-                }
-
-                const blocker: GoalBlocker = {
-                    kind: 'goal_incomplete',
-                    description: validation.reason ?? 'Objetivo não verificado como concluído pelo validador',
-                    suggestedActions: validation.suggestions ?? ['Verificar se o resultado foi entregue ao usuário'],
-                    detectedAt: Date.now(),
-                };
-                this.goalStore.addBlocker(currentGoal.id, blocker);
-                currentGoal = this.goalStore.getById(currentGoal.id)!;
-
-                this.goalStore.update(currentGoal.id, {
-                    status: 'replanning',
-                    replanBudget: currentGoal.replanBudget - 1,
-                });
-                this.goalStore.addStrategyTried(currentGoal.id,
-                    `completed all steps but goal_incomplete: ${(validation.reason ?? '').slice(0, 100)}`);
-
-                // Q4 → Q1: feedback da validação alimenta o próximo ciclo espiral
-                // forceQ2=true: se o objetivo não foi entregue, Q2 sempre revisa o plano
-                priorFeedback = validation.reason;
-                currentGoal = await this.planWithSpiral(currentGoal, blocker, priorFeedback, totalReplans + 1, state, true);
-                totalReplans++;
-
-                if (Date.now() > currentGoal.expiresAt) {
-                    this.goalStore.setStatus(currentGoal.id, 'abandoned');
-                    return this.buildResult(currentGoal, false, totalCycles, totalReplans, 'Objetivo expirou por tempo limite.');
-                }
+                if (validationResult.action === 'earlyReturn') return validationResult.result;
+                currentGoal = validationResult.goal;
+                totalReplans = validationResult.totalReplans;
+                priorFeedback = validationResult.priorFeedback;
                 continue;
             }
 
-            // ── Executar o step atual ──────────────────────────────────
-            await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'tool_executing', message: pendingStep.description });
-
-            // H7: classificar se send_document está sendo executado antes da validação (step regular)
-            if (pendingStep.toolName === 'send_document') {
-                log.info(`[SEND-CLASSIFICATION] goal=${currentGoal.id} step=${pendingStep.id} tool=send_document deferred=false reason=regular_plan_step`);
-            }
-            // ITEM5: rastrear origem do path em steps de escrita
-            if ((pendingStep.toolName === 'write' || pendingStep.toolName === 'edit') && pendingStep.toolArgs?.path) {
-                const source = totalReplans > 0 ? 'replanner' : 'planner';
-                log.info(
-                    `[PATH-ORIGIN] goal=${currentGoal.id} cycle=${totalCycles}` +
-                    ` path="${pendingStep.toolArgs.path}"` +
-                    ` source=${source} step=${pendingStep.id}`
-                );
-            }
-            // H7: AgentLoop pode chamar send_document internamente sem proteção de deferred
-            if (pendingStep.toolName === 'agentloop' || !pendingStep.toolName) {
-                const hasPendingSends = this.getPendingSteps(currentGoal.currentPlan, 'send_document').length > 0;
-                log.info(
-                    `[SEND-ORDER] goal=${currentGoal.id} step=${pendingStep.id}` +
-                    ` tool=${pendingStep.toolName ?? 'agentloop'} validation_done=false` +
-                    ` send_allowed=uncontrolled deferred_sends_pending=${hasPendingSends}`
-                );
-            }
-
-            let cycleResult = await this.executeStep(
-                currentGoal, pendingStep, channelContext, totalCycles, state,
-                // CORREÇÃO 1: passa callback para que DELIVERY-GUARD notifique sentArtifacts
-                // diretamente, sem depender de S10 (que só executa em case 'success').
-                (fp) => { if (fp) trackArtifact(fp); },
-                isAudioAlreadySent,
+            const stepExecResult = await this.runStepExecutionPhase(
+                currentGoal, pendingStep, totalCycles, totalReplans, state, channelContext,
+                trackArtifact, isAudioAlreadySent, onProgress,
             );
-
-            // Recarrega o goal — pode ter sido abandonado durante o step (nova mensagem do usuário)
-            currentGoal = this.goalStore.getById(currentGoal.id)!;
-            if (currentGoal.status === 'abandoned') {
-                log.info(`[GoalLoop] goal=${currentGoal.id} foi abandonado durante execução do step — saindo do loop`);
-                return this.buildResult(currentGoal, false, totalCycles, totalReplans,
-                    'Goal interrompido: nova mensagem do usuário recebida durante execução.');
-            }
-
-            // FIX B: detectar arquivo vazio em step de leitura para goals de modificação.
-            // Impede que o sistema replane com "usar memória como substituto" quando o artefato
-            // fonte é um requisito real (o conteúdo precisa existir para ser modificado).
-            if (
-                (pendingStep.toolName === 'read' || pendingStep.toolName === 'read_document') &&
-                cycleResult.outcome !== 'success'
-            ) {
-                const lastAttempt = [...currentGoal.attempts].reverse().find(a => a.planStepId === pendingStep.id);
-                const isEmptyArtifact = lastAttempt?.error?.includes('[ARQUIVO VAZIO]') ?? false;
-                if (isEmptyArtifact && this.isModificationGoal(currentGoal.userIntent)) {
-                    const requiredPath = String(pendingStep.toolArgs?.path ?? pendingStep.toolArgs?.filename ?? '(desconhecido)');
-                    log.warn(
-                        `[ARTIFACT-DEPENDENCY] goal=${currentGoal.id} required="${requiredPath}"` +
-                        ` exists=true empty=true action=fail` +
-                        ` reason="goal de modificação requer conteúdo real no arquivo fonte"`
-                    );
-                    const failMsg = `Arquivo fonte obrigatório "${requiredPath}" está vazio. ` +
-                        `O objetivo requer modificar conteúdo existente — não é possível continuar sem o arquivo original.`;
-                    this.goalStore.setStatus(currentGoal.id, 'failed');
-                    this.goalStore.addBlocker(currentGoal.id, {
-                        kind: 'required_artifact_missing',
-                        description: failMsg,
-                        suggestedActions: ['Verifique se o arquivo correto foi enviado ou criado antes de pedir modificações'],
-                        detectedAt: Date.now(),
-                    });
-                    log.info(`[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey} state=failed reason="required_artifact_missing" cycle=${totalCycles} timestamp=${Date.now()}`);
-                    return this.buildResult(currentGoal, false, totalCycles, totalReplans, failMsg);
-                }
-            }
-
-            // ── Validação semântica: mesmo após 'success' heurístico, verifica se o output
-            // endereça a intenção do step (ex: crypto_analysis retornando ENA/BCH em vez de ZEC/Pi)
-            // P6: cobre também steps agentloop (sem toolName) — output do AgentLoop também é validado
-            if (cycleResult.outcome === 'success' && cycleResult.output) {
-                const semanticValidation = await this.semanticValidator.validate(
-                    pendingStep,
-                    cycleResult.output,
-                    currentGoal.userIntent,
-                );
-                if (semanticValidation.shouldDowngradeToPartial) {
-                    log.warn(
-                        `[SEMANTIC-MISMATCH] goal=${currentGoal.id} step=${pendingStep.id}` +
-                        ` tool=${pendingStep.toolName} confidence=${semanticValidation.confidence.toFixed(2)}` +
-                        ` reason="${(semanticValidation.reason ?? '').slice(0, 100)}"` +
-                        ` action=downgrade_to_partial`
-                    );
-                    state.cognitiveContext.failedStrategies.push(
-                        `${pendingStep.toolName} (step ${pendingStep.id}): output irrelevante para a intenção — ${semanticValidation.reason ?? 'mismatch'}`
-                    );
-                    // P5: persiste na ReflectionMemory para que futuros goals evitem o mesmo padrão
-                    // S2a: outcome='partial' (não 'failure') — a ferramenta rodou e produziu
-                    // output real, só não endereçou a intenção do step. É exatamente o caso que
-                    // shouldDowngradeToPartial já nomeia; evidência objetiva, não interpretação.
-                    // failureType='semantic_mismatch' — BlockerKind já tem esse valor exato.
-                    this.reflectionMemory.record({
-                        userInput: currentGoal.userIntent.slice(0, 300),
-                        intent: pendingStep.description.slice(0, 200),
-                        toolUsed: pendingStep.toolName ?? 'agentloop',
-                        toolOutput: cycleResult.output?.slice(0, 500),
-                        approved: false,
-                        reason: `Mismatch semântico: ${semanticValidation.reason ?? 'output não endereça a intenção do step'}`,
-                        confidence: semanticValidation.confidence,
-                        pattern: `tool_${pendingStep.toolName ?? 'agentloop'}`,
-                        suggestedFix: `Use query/abordagem que retorne especificamente: ${pendingStep.description.slice(0, 100)}`,
-                        outcome: 'partial',
-                        failureType: 'semantic_mismatch',
-                    });
-                    // A: enriquece a descrição do step no plano para que a próxima tentativa
-                    // seja explicitamente guiada pelo motivo do mismatch.
-                    // Se a descrição já contém o marcador [ATENÇÃO —, o step já foi tentado com
-                    // o hint e voltou irrelevante — retry adicional é inútil; escala imediatamente
-                    // para 'blocked' para forçar replan com ferramenta diferente.
-                    const alreadyHinted = (pendingStep.description ?? '').includes('[ATENÇÃO —');
-                    const mismatchHint = ` [ATENÇÃO — tentativa anterior com ${pendingStep.toolName ?? 'agentloop'} retornou output irrelevante: ${(semanticValidation.reason ?? 'mismatch').slice(0, 120)}. Use abordagem diferente que retorne especificamente o que o objetivo pede.]`;
-                    const enrichedPlan = currentGoal.currentPlan.map(s =>
-                        s.id === pendingStep.id
-                            ? { ...s, description: (s.description + mismatchHint).slice(0, 500) }
-                            : s
-                    );
-                    this.goalStore.update(currentGoal.id, { currentPlan: enrichedPlan });
-                    currentGoal = this.goalStore.getById(currentGoal.id)!;
-                    // Sprint 0.8 (achados L10/L11/L14/L15): o GoalAttempt já persistido por
-                    // executeStep() (antes desta validação semântica rodar) continua com
-                    // result='success' — corrige para 'partial', alinhando com o que
-                    // ReflectionMemory.record({outcome:'partial', ...}) já registrava acima
-                    // para o mesmo evento.
-                    this.goalStore.downgradeLastAttemptToPartial(currentGoal.id, pendingStep.id);
-                    currentGoal = this.goalStore.getById(currentGoal.id)!;
-                    // Retry só é útil quando o step NÃO tem toolName fixo (caminho 'agentloop'):
-                    // nesse caso o próximo ciclo chama o LLM de novo com a description enriquecida
-                    // acima, então o hint pode de fato mudar o resultado. Para steps com toolName
-                    // (exec_command, memory_search, ssh_exec, ...), executeStep() despacha
-                    // `resolveStepRefs(step.toolArgs, goal)` — resolve só {{step_N.output}}, nunca
-                    // regenera os args a partir da description — então o retry chamaria a MESMA
-                    // tool com os MESMOS args e reproduziria o MESMO mismatch, garantido.
-                    // Reproduzido ao vivo (auditoria, 17/07): um goal de inventário de host rodou
-                    // exec_command 2x idênticas ("hostname/OS/CPU" pedido, saída só com
-                    // vulnerabilidades de CPU as duas vezes) e memory_search 2x idênticas (mesma
-                    // query, mesmo resultado irrelevante as duas vezes) — cada retry queimou um
-                    // ciclo inteiro (dispatch + validação semântica via LLM) sem nenhuma chance de
-                    // resultado diferente, atrasando a escalada para replan (a única coisa que de
-                    // fato muda a abordagem, porque gera um plano novo do zero).
-                    const retryCanHelp = !pendingStep.toolName;
-                    if (currentGoal.retryBudget > 0 && !alreadyHinted && retryCanHelp) {
-                        // Primeira falha: retry com hint enriquecido
-                        cycleResult = { ...cycleResult, outcome: 'partial' };
-                    } else {
-                        // Segunda falha para o mesmo step (alreadyHinted) OU retryBudget esgotado:
-                        // retry adicional seria inútil — escala para 'blocked' para replan com nova estratégia
-                        log.warn(
-                            `[SEMANTIC-MISMATCH] goal=${currentGoal.id} step=${pendingStep.id}` +
-                            ` retryBudget=${currentGoal.retryBudget} alreadyHinted=${alreadyHinted}` +
-                            ` retryCanHelp=${retryCanHelp}` +
-                            ` — escalating to blocked for replan`
-                        );
-                        const isDirListing = pendingStep.toolName === 'read' && /📁|📄/.test(cycleResult.output ?? '');
-                        const dirHint = isDirListing
-                            ? ` Listagem do diretório retornada: ${(cycleResult.output ?? '').split('\n').slice(0, 10).join('; ')}`
-                            : '';
-                        // Quando alreadyHinted=true, pendingStep.description já carrega o
-                        // mismatchHint embutido de um ciclo anterior (linha ~1010) — cortar em
-                        // 100 chars sem remover o hint primeiro produz um blocker.description
-                        // truncado no meio do marcador interno (ex: "...via send_audio. [AT'"),
-                        // que buildFailureExplanation() (GoalEvaluator.ts) expõe ao usuário como
-                        // texto quebrado. Remove o hint antes de truncar — mesma sub-string
-                        // '[ATENÇÃO —' já usada em alreadyHinted acima, não é um padrão novo.
-                        const cleanStepDesc = pendingStep.description.split(' [ATENÇÃO —')[0];
-                        const retryOutcomeLabel = alreadyHinted
-                            ? 'após 2 tentativas'
-                            : (retryCanHelp ? 'após esgotar retryBudget' : 'sem chance de retry ajudar (ferramenta fixa, mesmos argumentos)');
-                        cycleResult = {
-                            ...cycleResult,
-                            outcome: 'blocked',
-                            blocker: {
-                                kind: 'semantic_mismatch' as const,
-                                toolName: pendingStep.toolName,
-                                description: `Step '${cleanStepDesc.slice(0, 100)}' retornou output irrelevante ${retryOutcomeLabel}: ${semanticValidation.reason ?? 'mismatch semântico'}${dirHint}`,
-                                suggestedActions: isDirListing
-                                    ? [
-                                        'Usar o path completo de um dos arquivos listados acima em vez do diretório',
-                                        'Verificar nos ARQUIVOS ENVIADOS AO USUÁRIO o path exato do arquivo solicitado',
-                                    ]
-                                    : [
-                                        'Usar tool diferente para este step',
-                                        'Reformular a query com abordagem completamente alternativa',
-                                    ],
-                                detectedAt: Date.now(),
-                            },
-                        };
-                    }
-                } else if (semanticValidation.result === 'mismatch') {
-                    log.info(
-                        `[SEMANTIC-MISMATCH] goal=${currentGoal.id} step=${pendingStep.id}` +
-                        ` tool=${pendingStep.toolName} confidence=${semanticValidation.confidence.toFixed(2)}` +
-                        ` reason="${(semanticValidation.reason ?? '').slice(0, 100)}"` +
-                        ` action=log_only (below downgrade threshold)`
-                    );
-                    state.cognitiveContext.failedStrategies.push(
-                        `${pendingStep.toolName}: possível mismatch semântico — ${semanticValidation.reason ?? 'output pode não ser relevante'}`
-                    );
-                }
-            }
+            if (stepExecResult.action === 'earlyReturn') return stepExecResult.result;
+            currentGoal = stepExecResult.goal;
+            const cycleResult = stepExecResult.cycleResult;
 
             // ── Avaliar resultado ──────────────────────────────────────
             // ARCH-020 (S24): cada case do switch original virou um handler nomeado
