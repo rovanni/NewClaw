@@ -1628,6 +1628,12 @@ export class GoalExecutionLoop {
 
     // ── Execução de um step ───────────────────────────────────────────────────
 
+    /**
+     * ARCH-022: orquestrador enxuto — dispatch (tool direta OU agentloop) + pós-processamento
+     * comum. Extraído de um único método de ~375 linhas sem mudar nenhuma lógica; ver os 4
+     * métodos privados abaixo dele (`recordFailedAttempt`, `dispatchToolStep`,
+     * `dispatchAgentloopStep`, `finalizeStepAttempt`) para onde cada pedaço foi.
+     */
     private async executeStep(
         goal: Goal,
         step: PlanStep,
@@ -1648,359 +1654,451 @@ export class GoalExecutionLoop {
             // A autorização real de ferramentas perigosas (exec_command, etc.) é gerida
             // corretamente pelo WorkflowEngine via AgentLoop — não precisa deste pre-flight.
 
-            let toolResult: { success: boolean; output: string; error?: string; artifactPaths?: string[] };
-            let stepMutations: import('./GoalTypes').ToolMutation[] | undefined;
-            let stepEvalForAttempt: { confidence: number; reason?: string } | undefined;
-            // Sprint 0.10 (achado L22): correlação com o ExecutionTrace do sub-turno agentloop,
-            // preenchida logo após `agentLoop.process()` resolver (ver mais abaixo). Ausente no
-            // caminho de tool direta (não passa por AgentLoop).
-            let agentloopTraceId: string | undefined;
-            let agentloopSubToolCalls: string[] | undefined;
-            // Sprint 0.8 (achados L10/L11/L14/L15): true por padrão — o caminho de tool direta
-            // (com toolName) é determinístico, sem heurística envolvida, sempre confiável.
-            // Só o caminho 'agentloop' abaixo pode rebaixar para false.
-            let stepSuccessConfident = true;
+            if (step.toolName) {
+                const { toolResult, stepMutations } = await this.dispatchToolStep(goal, step, step.toolName, channelContext, isAudioAlreadySent);
+                // Sprint 0.8: caminho de tool direta é determinístico, sem heurística — sempre confiável.
+                return this.finalizeStepAttempt(goal, step, channelContext, cycle, startMs, toolResult, {
+                    stepMutations,
+                    stepSuccessConfident: true,
+                    deferredSendArgs: [],
+                });
+            }
+
             // FIX C: acumulador de sends diferidos capturados do AgentLoop.
             // Usa Map<filePath, args> para deduplicar por artefato desde a captura.
             // Evita que o LLM chame send_document N vezes para o mesmo arquivo.
             const deferredSendArgsMap = new Map<string, Record<string, unknown>>();
             const deferredSendArgs: Array<Record<string, unknown>> = []; // view do Map (populado em sync)
 
-            if (step.toolName) {
-                // Execução via ToolRegistry com ProactiveRecovery (mutação de args + fallback)
-                // toolArgs pode ser undefined quando a tool não tem args obrigatórios — defaulta para {}
-                // Resolve referências {{step_N.output}} antes de executar (ex: write com content de exec anterior)
-                const resolvedArgs = this.resolveStepRefs(step.toolArgs ?? {}, goal);
-                const registered = this.toolRegistry.get(step.toolName);
-                log.info(
-                    `[TOOL-DISPATCH] goal=${goal.id} step=${step.id}` +
-                    ` requested_tool=${step.toolName}` +
-                    ` resolved_tool=${registered ? step.toolName : 'none'}` +
-                    ` reason=${registered ? 'tool_found_in_registry' : 'tool_not_registered'}` +
-                    ` args_provided=${step.toolArgs !== undefined}`
-                );
-                if (step.toolName === 'send_audio' && isAudioAlreadySent?.()) {
-                    // Mesmo guard já usado no caminho agentloop (AgentLoop.ts, checks de
-                    // channelContext.isAudioAlreadySent() antes de chamar send_audio). Esse
-                    // dispatch direto (step.toolName vindo de um replan do GoalPlanner, sem
-                    // passar por agentloop) nunca consultava o mesmo sinal — permitindo que um
-                    // replan por falha em OUTRO step (ex.: extração de PPTX) reenviasse áudio
-                    // já entregue com sucesso em um ciclo anterior do mesmo goal.
-                    log.info(
-                        `[DELIVERY-DEDUP] goal=${goal.id} step=${step.id}` +
-                        ` artifact="__send_audio_delivered__"` +
-                        ` reason=already_sent_in_goal_session` +
-                        ` decision=skip`
-                    );
-                    toolResult = { success: true, output: '🔊 Áudio já enviado nesta execução do objetivo — reenvio evitado.' };
-                } else if (!registered) {
-                    toolResult = { success: false, output: '', error: `command not found: ${step.toolName}` };
-                } else {
-                    const getTool = (name: string): ToolExecutorLike | undefined =>
-                        this.toolRegistry.get(name) as ToolExecutorLike | undefined;
-                    const toolInstance = registered;
-                    if (typeof (toolInstance as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
-                        (toolInstance as unknown as ContextAwareTool).setContext(channelContext.chatId, channelContext.channel);
-                    }
-                    const recoveryResult = await this.proactiveRecovery.execute(
-                        step.toolName, resolvedArgs, getTool, new Set<string>(),
-                        undefined,
-                        { toolsTried: goal.toolsTried, userIntent: goal.userIntent },
-                    );
-                    toolResult = recoveryResult.result;
-                    if (recoveryResult.recovered) {
-                        const kind = recoveryResult.mutationKind ?? 'arg_mutation';
-                        log.info('RECOVERY_OUTCOME',
-                            `goal=${goal.id} step=${step.id}` +
-                            ` tool=${recoveryResult.originalToolName ?? step.toolName}` +
-                            ` final_tool=${recoveryResult.finalToolName}` +
-                            ` mutation_kind=${kind}` +
-                            ` step_passed=${recoveryResult.result.success}`
-                        );
-                    }
-                    if (recoveryResult.recovered && recoveryResult.recoveryNote) {
-                        const kind = recoveryResult.mutationKind ?? 'arg_mutation';
-                        log.info(
-                            `[MUTATION] tool_mutation:\n  tool: ${recoveryResult.originalToolName ?? step.toolName}\n  kind: ${kind}\n` +
-                            `  original: ${JSON.stringify(recoveryResult.originalArgs ?? {})}\n` +
-                            `  modified: ${JSON.stringify(recoveryResult.finalArgs)}`
-                        );
-                        stepMutations = [{
-                            originalTool: recoveryResult.originalToolName ?? step.toolName,
-                            finalTool: recoveryResult.finalToolName,
-                            originalArgs: recoveryResult.originalArgs ?? resolvedArgs,
-                            finalArgs: recoveryResult.finalArgs,
-                            kind,
-                        }];
-                    }
-                }
-            } else {
-                // Sem tool específica → chama AgentLoop com prompt focado no step
-                const cognitiveBlock = this.buildIncrementalExecutionContext(goal, step, state);
-                const focusLine = goal.cycleFocus
-                    ? `\nFoco do ciclo: ${goal.cycleFocus}`
-                    : '';
-                const targetFile = this.extractTargetFileFromStep(step, goal);
-                const reflectionLine = targetFile
-                    ? `\n[REFLEXÃO] Arquivo alvo desta tarefa: ${targetFile}\nAntes de usar qualquer ferramenta, confirme que o arquivo corresponde ao alvo acima.`
-                    : '';
-                // C2: detectar intenções que requerem ação observável com dados reais.
-                // Se o step pede "mostrar", "listar", "apresentar", "enviar", etc.,
-                // o AgentLoop DEVE usar uma ferramenta — não produzir narrativa.
-                const OBSERVABLE_PATTERNS = [
-                    /\b(mostr[ae]r?|list[ae]r?|apresentar?|exibir?|visualizar?)\b/i,
-                    /\b(enviar?|exportar?|gerar? arquivo|mostrar? resultado)\b/i,
-                    /\b(apresente|liste|exiba|mostre|envie)\b/i,
-                ];
-                const requiresObservableExecution = OBSERVABLE_PATTERNS.some(p => p.test(step.description));
-                if (requiresObservableExecution) {
-                    log.info(
-                        `[AGENTLOOP-EVIDENCE-CHECK]` +
-                        ` step=${step.id}` +
-                        ` task="${step.description.slice(0, 80)}"` +
-                        ` requires_tool=true` +
-                        ` reason=observable_action_in_step_description`
-                    );
-                }
-                // Diretiva injetada no prompt: previne resposta narrativa quando há ação real a executar
-                const evidenceDirective = requiresObservableExecution
-                    ? `\n\n[REGRA DE EXECUÇÃO] Esta tarefa exige ação observável com dados reais. Chame obrigatoriamente uma ferramenta (list_workspace, read, exec_command, send_document, etc.) antes de responder. Não descreva o resultado sem executar a ferramenta que o produz.`
-                    : '';
+            const agentloopResult = await this.dispatchAgentloopStep(
+                goal, step, channelContext, cycle, state, startMs,
+                deferredSendArgsMap, deferredSendArgs, onArtifactDelivered, isAudioAlreadySent,
+            );
+            if (agentloopResult.earlyReturn) return agentloopResult.cycleResult;
 
-                const stepPrompt = [
-                    `[GOAL STEP] ${this.sanitizeStepDescription(step.description)}`,
-                    `\nContexto do objetivo: ${goal.objective}`,
-                    focusLine,
-                    reflectionLine,
-                    evidenceDirective,
-                    cognitiveBlock ? `\n${cognitiveBlock}` : '',
-                ].join('');
-                const { channel: goalCh, userId: sessionUserId } = parseSessionKey(goal.sessionKey);
-                const stepSessionKey = { channel: goalCh || 'unknown', userId: sessionUserId || goal.conversationId };
-                this.sessionManager?.resetTurnToolCounts(stepSessionKey);
-                // FIX C + P3-DEDUP: captura sends diferidos com deduplicação por file_path.
-                // deferSendDocument só aceita um artefato por caminho único nesta execução.
-                const goalChannelContext: ChannelContext = {
-                    ...channelContext,
-                    deferSendDocument: (args) => {
-                        const fp = String(args['file_path'] ?? args['path'] ?? '');
-                        const key = fp || JSON.stringify(args);
-                        if (deferredSendArgsMap.has(key)) {
-                            log.info(
-                                `[DELIVERY-DEDUP] artifact="${fp}"` +
-                                ` reason=duplicate_defer_in_agentloop` +
-                                ` existing_delivery=pending` +
-                                ` decision=skip`
-                            );
-                            return;
-                        }
-                        deferredSendArgsMap.set(key, args);
-                        deferredSendArgs.push(args);
-                        log.info(`[DELIVERY-REGISTRY] artifact="${fp}" status=deferred_registered`);
-                    },
-                    isDeferredArtifact: (filePath: string) => {
-                        return deferredSendArgsMap.has(filePath);
-                    },
-                    // CORREÇÃO 1: recebe notificação do DELIVERY-GUARD quando ele entrega
-                    // um artefato diretamente (sem passar pelo deferSendDocument).
-                    // Propaga para o caller (executeGoal) via onArtifactDelivered, que tem
-                    // acesso a sentArtifacts no escopo correto. Isso garante que o path
-                    // seja registrado antes que o SemanticValidator possa fazer downgrade
-                    // para 'partial', bloqueando S10 e causando reentregas redundantes.
-                    onArtifactDelivered: (filePath: string) => {
-                        if (filePath) {
-                            onArtifactDelivered?.(filePath);
-                            log.info(
-                                `[DELIVERY-GUARD-REGISTERED] goal=${goal.id}` +
-                                ` artifact="${filePath}"` +
-                                ` source=delivery_guard_callback`
-                            );
-                        }
-                    },
-                    isAudioAlreadySent: () => isAudioAlreadySent?.() ?? false,
-                };
-                const response = await this.agentLoop.process(
-                    goal.conversationId,
-                    stepPrompt,
-                    sessionUserId ?? goal.conversationId,
-                    goalChannelContext
-                );
-                const text = typeof response === 'string' ? response : response.text;
-                const respOptions = typeof response === 'string' ? undefined : response.options;
-
-                // Sprint 0.10 (achado L22): correlaciona o attempt com o ExecutionTrace real do
-                // sub-turno que acabou de rodar, sem duplicar seu conteúdo — só a referência
-                // (traceId, para pivotar em agent_traces/dashboard) e a sequência de nomes de
-                // tools chamadas (subToolCalls, decomposição mínima da "caixa-preta" agentloop
-                // direto no histórico do goal). traceManager.getRecentTraces() é o mesmo
-                // singleton que AgentLoop já usa para persistir/emitir os traces — reaproveitado
-                // aqui, nenhum mecanismo novo. Busca pelo mais recente com o mesmo
-                // conversationId (traces são unshift'ados, então o primeiro match já é o mais
-                // recente); se nada for encontrado (ex: trace pruned do buffer de 50), os campos
-                // ficam undefined — falha aberta, sem afetar o resultado do step.
-                const relatedTrace = traceManager.getRecentTraces(10).find(t => t.sessionId === goal.conversationId);
-                if (relatedTrace) {
-                    agentloopTraceId = relatedTrace.id;
-                    agentloopSubToolCalls = relatedTrace.steps
-                        .filter(s => s.type === 'tool_call')
-                        .map(s => String(s.data?.tool ?? '').trim())
-                        .filter(Boolean);
-                }
-
-                // Guarda de saída: step-name usado como path de arquivo (CR#5)
-                const invalidPath = this.detectStepNameAsPath(text);
-                if (invalidPath) {
-                    log.warn(`[GoalStep] step-name-as-path detected: "${invalidPath}" step=${step.id} — marking failure`);
-                    const errorMsg = `Path inválido na resposta: "${invalidPath}" é um identificador de step, não um arquivo.`;
-                    this.goalStore.addAttempt(goal.id, {
-                        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-                        planStepId: step.id,
-                        toolName: 'agentloop',
-                        args: {},
-                        result: 'failure',
-                        output: text.slice(0, 300),
-                        error: errorMsg,
-                        durationMs: Date.now() - startMs,
-                        executedAt: Date.now(),
-                        cycle,
-                    });
-                    return this.evaluator.evaluate(goal, step, { success: false, output: text, error: errorMsg });
-                }
-
-                // Se o AgentLoop retornou botões de auth, propaga como needs_auth
-                const authOpts = respOptions?.filter(o => o.value?.startsWith('auth:'));
-                if (authOpts && authOpts.length > 0) {
-                    this.goalStore.addAttempt(goal.id, {
-                        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-                        planStepId: step.id,
-                        toolName: 'agentloop',
-                        args: {},
-                        result: 'failure',
-                        output: text.slice(0, 300),
-                        durationMs: Date.now() - startMs,
-                        executedAt: Date.now(),
-                        cycle,
-                    });
-                    return { outcome: 'needs_auth' as const, confidence: 0.9, output: text, authOptions: authOpts };
-                }
-
-                // Heurística determinística avalia se o step teve sucesso
-                const stepEval = this.evaluateAgentStepSuccess(step, goal.objective, text);
-                let finalSuccess = stepEval.success;
-                // Sprint 0.8 (achados L10/L11/L14/L15): 'success_signal_detected' é o único
-                // motivo de sucesso de alta confiança da heurística (sinal explícito no texto).
-                // 'substantial_response' (fallback conservador "resposta longa, assume sucesso")
-                // NÃO é confiável — vira 'partial' abaixo, a menos que a escalada ao LLM confirme.
-                stepSuccessConfident = stepEval.reason === 'success_signal_detected';
-                if (stepEval.shouldEscalateToLLM) {
-                    log.info(`[GoalStep] heuristic inconclusive (conf=${stepEval.confidence.toFixed(2)}) — escalating to LLM`);
-                    const escalation = await this.escalateStepEvalToLLM(step, goal.objective, text);
-                    finalSuccess = escalation.success;
-                    stepSuccessConfident = escalation.confident;
-                }
-                stepEvalForAttempt = { confidence: stepEval.confidence, reason: stepEval.reason };
-                toolResult = { success: finalSuccess, output: text };
-            }
-
-            // Registrar attempt com auditoria completa (cycle, mutations, evaluation)
-            const attempt: GoalAttempt = {
-                id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-                planStepId: step.id,
-                toolName: step.toolName ?? 'agentloop',
-                args: step.toolArgs ?? {},
-                // Sprint 0.8 (achados L10/L11/L14/L15): 'success' só quando o resultado veio de
-                // um sinal confiável (tool determinística, sinal explícito, ou LLM que de fato
-                // confirmou) — caso contrário 'partial': a tarefa produziu output e não falhou
-                // explicitamente, mas a conclusão não foi confirmada com confiança suficiente
-                // para valer como evidência de sucesso (GoalEvaluator.ts:312 já trata 'partial'
-                // como progresso equivalente a 'success', só não como prova de conclusão).
-                result: !toolResult.success ? 'failure' : (stepSuccessConfident ? 'success' : 'partial'),
-                output: toolResult.output?.slice(0, 300),
-                error: toolResult.error,
-                durationMs: Date.now() - startMs,
-                executedAt: Date.now(),
-                cycle,
-                mutations: stepMutations,
-                evaluation: stepEvalForAttempt,
-                traceId: agentloopTraceId,
-                subToolCalls: agentloopSubToolCalls,
-                producedArtifactPaths: toolResult.artifactPaths,
-            };
-            this.goalStore.addAttempt(goal.id, attempt);
-
-            // FIX #1: Alimenta SessionManager com resultado da tool para popular
-            // activeFiles e deliveredArtifacts — habilita contexto cross-goal de artefatos.
-            if (toolResult.success && step.toolName && this.sessionManager) {
-                const stepSessionKey = {
-                    channel: channelContext.channel,
-                    userId: channelContext.userId ?? goal.conversationId,
-                };
-                this.sessionManager.recordToolCall(
-                    stepSessionKey,
-                    step.toolName,
-                    JSON.stringify(step.toolArgs ?? {}),
-                ).catch(() => {});
-            }
-
-            if (step.toolName) {
-                this.goalStore.addToolTried(goal.id, step.toolName);
-            }
-
-            const cycleResult = this.evaluator.evaluate(goal, step, toolResult);
-            // FIX C: propaga sends diferidos capturados do AgentLoop para o loop principal
-            if (deferredSendArgs.length > 0) {
-                cycleResult.deferredSends = deferredSendArgs;
-                // S8: injeta pseudo-write attempts para artefatos criados pelo AgentLoop.
-                // Writes feitos dentro do AgentLoop são invisíveis para goal.attempts (a camada
-                // exterior só vê o step agentloop como attempt, não os writes internos).
-                // Sem isso, checkClaimsAgainstEvidence derruba achieved=true com [UNVERIFIED-CLAIM]
-                // mesmo quando o arquivo foi criado, DELIVERY-GUARD enviou e o usuário recebeu.
-                for (const sendArgs of deferredSendArgs) {
-                    const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
-                    if (!fp) continue;
-                    // toolName='send_document', não 'write': deferredSendArgs só é populado por
-                    // deferSendDocument() (send_document interceptado dentro do AgentLoop) — o
-                    // pseudo-attempt original gravava 'write', mascarando esta entrega de um
-                    // consumidor que filtre goal.attempts por toolName==='send_document'
-                    // (achado ao validar a hipótese de captura única, 16/07/2026).
-                    this.goalStore.addAttempt(goal.id, {
-                        id: `att_agentloop_write_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-                        planStepId: step.id,
-                        toolName: 'send_document',
-                        args: { file_path: fp },
-                        result: 'success',
-                        output: '[AGENTLOOP-WRITE] Arquivo gravado e entregue pelo AgentLoop',
-                        durationMs: 0,
-                        executedAt: Date.now(),
-                        cycle,
-                        producedArtifactPaths: [fp],
-                    });
-                }
-            }
-            const durationMs = Date.now() - startMs;
-            log.info(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'agentloop'} outcome=${cycleResult.outcome} durationMs=${durationMs}${cycleResult.blocker ? ` blocker=${cycleResult.blocker.kind}` : ''}${deferredSendArgs.length > 0 ? ` deferred_sends=${deferredSendArgs.length}` : ''}`);
-            return cycleResult;
+            return this.finalizeStepAttempt(goal, step, channelContext, cycle, startMs, agentloopResult.toolResult, {
+                stepEvalForAttempt: agentloopResult.stepEvalForAttempt,
+                stepSuccessConfident: agentloopResult.stepSuccessConfident,
+                agentloopTraceId: agentloopResult.agentloopTraceId,
+                agentloopSubToolCalls: agentloopResult.agentloopSubToolCalls,
+                deferredSendArgs,
+            });
 
         } catch (err) {
             const errorMsg = err instanceof Error ? err.message : String(err);
-            const durationMs = Date.now() - startMs;
-            const attempt: GoalAttempt = {
-                id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-                planStepId: step.id,
+            this.recordFailedAttempt(goal, step, cycle, startMs, {
+                error: errorMsg,
                 toolName: step.toolName ?? 'unknown',
                 args: step.toolArgs ?? {},
-                result: 'failure',
-                error: errorMsg,
-                durationMs,
-                executedAt: Date.now(),
-                cycle,
-            };
-            this.goalStore.addAttempt(goal.id, attempt);
-
+            });
             const cycleResult = this.evaluator.evaluate(goal, step, { success: false, output: '', error: errorMsg });
-            log.warn(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'unknown'} EXCEPTION durationMs=${durationMs} error="${errorMsg.slice(0, 100)}"`);
+            log.warn(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'unknown'} EXCEPTION durationMs=${Date.now() - startMs} error="${errorMsg.slice(0, 100)}"`);
             return cycleResult;
         }
+    }
+
+    /**
+     * ARCH-022: constrói e persiste um `GoalAttempt` de falha — usado pelos 3 pontos de
+     * `executeStep()` (guarda de step-name-as-path, catch de exceção) que registram uma
+     * tentativa mal-sucedida ANTES de decidir o outcome. A decisão do outcome em si
+     * (`evaluator.evaluate`, `needs_auth` direto, etc.) fica com o chamador, não aqui — os 4
+     * blocos que o card ARCH-022 descrevia como "quase idênticos" discordam sobre isso: o guard
+     * de auth (`needs_auth`) NUNCA chamava `evaluator.evaluate()` (retorna o outcome direto,
+     * sem classificação de erro/retry), os outros 3 sempre chamavam. Forçar os 4 num único
+     * helper que também decide o outcome teria mudado esse comportamento — por isso o guard de
+     * auth constrói seu attempt inline (ver `dispatchAgentloopStep`), não usa este helper.
+     */
+    private recordFailedAttempt(
+        goal: Goal,
+        step: PlanStep,
+        cycle: number,
+        startMs: number,
+        opts: { output?: string; error?: string; toolName?: string; args?: Record<string, unknown> },
+    ): void {
+        this.goalStore.addAttempt(goal.id, {
+            id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+            planStepId: step.id,
+            toolName: opts.toolName ?? 'agentloop',
+            args: opts.args ?? {},
+            result: 'failure',
+            output: opts.output,
+            error: opts.error,
+            durationMs: Date.now() - startMs,
+            executedAt: Date.now(),
+            cycle,
+        });
+    }
+
+    /**
+     * ARCH-022: dispatch de step com `toolName` definido — via ToolRegistry + ProactiveRecovery.
+     * Extraído do antigo bloco `if (step.toolName) { ... }` de `executeStep()`, sem mudança de
+     * lógica.
+     */
+    private async dispatchToolStep(
+        goal: Goal,
+        step: PlanStep,
+        toolName: string,
+        channelContext: ChannelContext,
+        isAudioAlreadySent?: () => boolean,
+    ): Promise<{
+        toolResult: { success: boolean; output: string; error?: string; artifactPaths?: string[] };
+        stepMutations?: import('./GoalTypes').ToolMutation[];
+    }> {
+        // Execução via ToolRegistry com ProactiveRecovery (mutação de args + fallback)
+        // toolArgs pode ser undefined quando a tool não tem args obrigatórios — defaulta para {}
+        // Resolve referências {{step_N.output}} antes de executar (ex: write com content de exec anterior)
+        const resolvedArgs = this.resolveStepRefs(step.toolArgs ?? {}, goal);
+        const registered = this.toolRegistry.get(toolName);
+        log.info(
+            `[TOOL-DISPATCH] goal=${goal.id} step=${step.id}` +
+            ` requested_tool=${toolName}` +
+            ` resolved_tool=${registered ? toolName : 'none'}` +
+            ` reason=${registered ? 'tool_found_in_registry' : 'tool_not_registered'}` +
+            ` args_provided=${step.toolArgs !== undefined}`
+        );
+        if (toolName === 'send_audio' && isAudioAlreadySent?.()) {
+            // Mesmo guard já usado no caminho agentloop (AgentLoop.ts, checks de
+            // channelContext.isAudioAlreadySent() antes de chamar send_audio). Esse
+            // dispatch direto (step.toolName vindo de um replan do GoalPlanner, sem
+            // passar por agentloop) nunca consultava o mesmo sinal — permitindo que um
+            // replan por falha em OUTRO step (ex.: extração de PPTX) reenviasse áudio
+            // já entregue com sucesso em um ciclo anterior do mesmo goal.
+            log.info(
+                `[DELIVERY-DEDUP] goal=${goal.id} step=${step.id}` +
+                ` artifact="__send_audio_delivered__"` +
+                ` reason=already_sent_in_goal_session` +
+                ` decision=skip`
+            );
+            return { toolResult: { success: true, output: '🔊 Áudio já enviado nesta execução do objetivo — reenvio evitado.' } };
+        }
+        if (!registered) {
+            return { toolResult: { success: false, output: '', error: `command not found: ${toolName}` } };
+        }
+        const getTool = (name: string): ToolExecutorLike | undefined =>
+            this.toolRegistry.get(name) as ToolExecutorLike | undefined;
+        const toolInstance = registered;
+        if (typeof (toolInstance as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
+            (toolInstance as unknown as ContextAwareTool).setContext(channelContext.chatId, channelContext.channel);
+        }
+        const recoveryResult = await this.proactiveRecovery.execute(
+            toolName, resolvedArgs, getTool, new Set<string>(),
+            undefined,
+            { toolsTried: goal.toolsTried, userIntent: goal.userIntent },
+        );
+        const toolResult = recoveryResult.result;
+        let stepMutations: import('./GoalTypes').ToolMutation[] | undefined;
+        if (recoveryResult.recovered) {
+            const kind = recoveryResult.mutationKind ?? 'arg_mutation';
+            log.info('RECOVERY_OUTCOME',
+                `goal=${goal.id} step=${step.id}` +
+                ` tool=${recoveryResult.originalToolName ?? toolName}` +
+                ` final_tool=${recoveryResult.finalToolName}` +
+                ` mutation_kind=${kind}` +
+                ` step_passed=${recoveryResult.result.success}`
+            );
+        }
+        if (recoveryResult.recovered && recoveryResult.recoveryNote) {
+            const kind = recoveryResult.mutationKind ?? 'arg_mutation';
+            log.info(
+                `[MUTATION] tool_mutation:\n  tool: ${recoveryResult.originalToolName ?? toolName}\n  kind: ${kind}\n` +
+                `  original: ${JSON.stringify(recoveryResult.originalArgs ?? {})}\n` +
+                `  modified: ${JSON.stringify(recoveryResult.finalArgs)}`
+            );
+            stepMutations = [{
+                originalTool: recoveryResult.originalToolName ?? toolName,
+                finalTool: recoveryResult.finalToolName,
+                originalArgs: recoveryResult.originalArgs ?? resolvedArgs,
+                finalArgs: recoveryResult.finalArgs,
+                kind,
+            }];
+        }
+        return { toolResult, stepMutations };
+    }
+
+    /**
+     * ARCH-022: dispatch de step sem `toolName` — via AgentLoop (sub-turno livre). Extraído do
+     * antigo bloco `else { ... }` de `executeStep()`, sem mudança de lógica. Retorna
+     * `earlyReturn: true` quando um dos 2 guards de saída dispara (step-name-as-path, botões de
+     * auth) — nesses 2 casos o chamador deve devolver `cycleResult` direto, sem passar por
+     * `finalizeStepAttempt()` (o guard de auth em particular nunca passou por
+     * `evaluator.evaluate()` — ver `recordFailedAttempt` para o porquê).
+     */
+    private async dispatchAgentloopStep(
+        goal: Goal,
+        step: PlanStep,
+        channelContext: ChannelContext,
+        cycle: number,
+        state: GoalExecutionState,
+        startMs: number,
+        deferredSendArgsMap: Map<string, Record<string, unknown>>,
+        deferredSendArgs: Array<Record<string, unknown>>,
+        onArtifactDelivered?: (filePath: string) => void,
+        isAudioAlreadySent?: () => boolean,
+    ): Promise<
+        | { earlyReturn: true; cycleResult: CycleResult }
+        | {
+            earlyReturn: false;
+            toolResult: { success: boolean; output: string; error?: string; artifactPaths?: string[] };
+            stepEvalForAttempt?: { confidence: number; reason?: string };
+            stepSuccessConfident: boolean;
+            agentloopTraceId?: string;
+            agentloopSubToolCalls?: string[];
+        }
+    > {
+        // Sem tool específica → chama AgentLoop com prompt focado no step
+        const cognitiveBlock = this.buildIncrementalExecutionContext(goal, step, state);
+        const focusLine = goal.cycleFocus
+            ? `\nFoco do ciclo: ${goal.cycleFocus}`
+            : '';
+        const targetFile = this.extractTargetFileFromStep(step, goal);
+        const reflectionLine = targetFile
+            ? `\n[REFLEXÃO] Arquivo alvo desta tarefa: ${targetFile}\nAntes de usar qualquer ferramenta, confirme que o arquivo corresponde ao alvo acima.`
+            : '';
+        // C2: detectar intenções que requerem ação observável com dados reais.
+        // Se o step pede "mostrar", "listar", "apresentar", "enviar", etc.,
+        // o AgentLoop DEVE usar uma ferramenta — não produzir narrativa.
+        const OBSERVABLE_PATTERNS = [
+            /\b(mostr[ae]r?|list[ae]r?|apresentar?|exibir?|visualizar?)\b/i,
+            /\b(enviar?|exportar?|gerar? arquivo|mostrar? resultado)\b/i,
+            /\b(apresente|liste|exiba|mostre|envie)\b/i,
+        ];
+        const requiresObservableExecution = OBSERVABLE_PATTERNS.some(p => p.test(step.description));
+        if (requiresObservableExecution) {
+            log.info(
+                `[AGENTLOOP-EVIDENCE-CHECK]` +
+                ` step=${step.id}` +
+                ` task="${step.description.slice(0, 80)}"` +
+                ` requires_tool=true` +
+                ` reason=observable_action_in_step_description`
+            );
+        }
+        // Diretiva injetada no prompt: previne resposta narrativa quando há ação real a executar
+        const evidenceDirective = requiresObservableExecution
+            ? `\n\n[REGRA DE EXECUÇÃO] Esta tarefa exige ação observável com dados reais. Chame obrigatoriamente uma ferramenta (list_workspace, read, exec_command, send_document, etc.) antes de responder. Não descreva o resultado sem executar a ferramenta que o produz.`
+            : '';
+
+        const stepPrompt = [
+            `[GOAL STEP] ${this.sanitizeStepDescription(step.description)}`,
+            `\nContexto do objetivo: ${goal.objective}`,
+            focusLine,
+            reflectionLine,
+            evidenceDirective,
+            cognitiveBlock ? `\n${cognitiveBlock}` : '',
+        ].join('');
+        const { channel: goalCh, userId: sessionUserId } = parseSessionKey(goal.sessionKey);
+        const stepSessionKey = { channel: goalCh || 'unknown', userId: sessionUserId || goal.conversationId };
+        this.sessionManager?.resetTurnToolCounts(stepSessionKey);
+        // FIX C + P3-DEDUP: captura sends diferidos com deduplicação por file_path.
+        // deferSendDocument só aceita um artefato por caminho único nesta execução.
+        const goalChannelContext: ChannelContext = {
+            ...channelContext,
+            deferSendDocument: (args) => {
+                const fp = String(args['file_path'] ?? args['path'] ?? '');
+                const key = fp || JSON.stringify(args);
+                if (deferredSendArgsMap.has(key)) {
+                    log.info(
+                        `[DELIVERY-DEDUP] artifact="${fp}"` +
+                        ` reason=duplicate_defer_in_agentloop` +
+                        ` existing_delivery=pending` +
+                        ` decision=skip`
+                    );
+                    return;
+                }
+                deferredSendArgsMap.set(key, args);
+                deferredSendArgs.push(args);
+                log.info(`[DELIVERY-REGISTRY] artifact="${fp}" status=deferred_registered`);
+            },
+            isDeferredArtifact: (filePath: string) => {
+                return deferredSendArgsMap.has(filePath);
+            },
+            // CORREÇÃO 1: recebe notificação do DELIVERY-GUARD quando ele entrega
+            // um artefato diretamente (sem passar pelo deferSendDocument).
+            // Propaga para o caller (executeGoal) via onArtifactDelivered, que tem
+            // acesso a sentArtifacts no escopo correto. Isso garante que o path
+            // seja registrado antes que o SemanticValidator possa fazer downgrade
+            // para 'partial', bloqueando S10 e causando reentregas redundantes.
+            onArtifactDelivered: (filePath: string) => {
+                if (filePath) {
+                    onArtifactDelivered?.(filePath);
+                    log.info(
+                        `[DELIVERY-GUARD-REGISTERED] goal=${goal.id}` +
+                        ` artifact="${filePath}"` +
+                        ` source=delivery_guard_callback`
+                    );
+                }
+            },
+            isAudioAlreadySent: () => isAudioAlreadySent?.() ?? false,
+        };
+        const response = await this.agentLoop.process(
+            goal.conversationId,
+            stepPrompt,
+            sessionUserId ?? goal.conversationId,
+            goalChannelContext
+        );
+        const text = typeof response === 'string' ? response : response.text;
+        const respOptions = typeof response === 'string' ? undefined : response.options;
+
+        // Sprint 0.10 (achado L22): correlaciona o attempt com o ExecutionTrace real do
+        // sub-turno que acabou de rodar, sem duplicar seu conteúdo — só a referência
+        // (traceId, para pivotar em agent_traces/dashboard) e a sequência de nomes de
+        // tools chamadas (subToolCalls, decomposição mínima da "caixa-preta" agentloop
+        // direto no histórico do goal). traceManager.getRecentTraces() é o mesmo
+        // singleton que AgentLoop já usa para persistir/emitir os traces — reaproveitado
+        // aqui, nenhum mecanismo novo. Busca pelo mais recente com o mesmo
+        // conversationId (traces são unshift'ados, então o primeiro match já é o mais
+        // recente); se nada for encontrado (ex: trace pruned do buffer de 50), os campos
+        // ficam undefined — falha aberta, sem afetar o resultado do step.
+        const relatedTrace = traceManager.getRecentTraces(10).find(t => t.sessionId === goal.conversationId);
+        let agentloopTraceId: string | undefined;
+        let agentloopSubToolCalls: string[] | undefined;
+        if (relatedTrace) {
+            agentloopTraceId = relatedTrace.id;
+            agentloopSubToolCalls = relatedTrace.steps
+                .filter(s => s.type === 'tool_call')
+                .map(s => String(s.data?.tool ?? '').trim())
+                .filter(Boolean);
+        }
+
+        // Guarda de saída: step-name usado como path de arquivo (CR#5)
+        const invalidPath = this.detectStepNameAsPath(text);
+        if (invalidPath) {
+            log.warn(`[GoalStep] step-name-as-path detected: "${invalidPath}" step=${step.id} — marking failure`);
+            const errorMsg = `Path inválido na resposta: "${invalidPath}" é um identificador de step, não um arquivo.`;
+            this.recordFailedAttempt(goal, step, cycle, startMs, { output: text.slice(0, 300), error: errorMsg });
+            return { earlyReturn: true, cycleResult: this.evaluator.evaluate(goal, step, { success: false, output: text, error: errorMsg }) };
+        }
+
+        // Se o AgentLoop retornou botões de auth, propaga como needs_auth
+        const authOpts = respOptions?.filter(o => o.value?.startsWith('auth:'));
+        if (authOpts && authOpts.length > 0) {
+            this.recordFailedAttempt(goal, step, cycle, startMs, { output: text.slice(0, 300) });
+            return { earlyReturn: true, cycleResult: { outcome: 'needs_auth' as const, confidence: 0.9, output: text, authOptions: authOpts } };
+        }
+
+        // Heurística determinística avalia se o step teve sucesso
+        const stepEval = this.evaluateAgentStepSuccess(step, goal.objective, text);
+        let finalSuccess = stepEval.success;
+        // Sprint 0.8 (achados L10/L11/L14/L15): 'success_signal_detected' é o único
+        // motivo de sucesso de alta confiança da heurística (sinal explícito no texto).
+        // 'substantial_response' (fallback conservador "resposta longa, assume sucesso")
+        // NÃO é confiável — vira 'partial' abaixo, a menos que a escalada ao LLM confirme.
+        let stepSuccessConfident = stepEval.reason === 'success_signal_detected';
+        if (stepEval.shouldEscalateToLLM) {
+            log.info(`[GoalStep] heuristic inconclusive (conf=${stepEval.confidence.toFixed(2)}) — escalating to LLM`);
+            const escalation = await this.escalateStepEvalToLLM(step, goal.objective, text);
+            finalSuccess = escalation.success;
+            stepSuccessConfident = escalation.confident;
+        }
+        const stepEvalForAttempt = { confidence: stepEval.confidence, reason: stepEval.reason };
+        const toolResult = { success: finalSuccess, output: text };
+
+        return { earlyReturn: false, toolResult, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls };
+    }
+
+    /**
+     * ARCH-022: pós-processamento comum aos 2 caminhos de dispatch (tool direto e agentloop) —
+     * registra o `GoalAttempt` real do ciclo (com toda a auditoria: mutations, evaluation,
+     * trace, artefatos), alimenta SessionManager/toolsTried, avalia o outcome via GoalEvaluator,
+     * e injeta os sends diferidos capturados durante um sub-turno agentloop (lista vazia no
+     * caminho de tool direto). Extraído do antigo bloco final de `executeStep()`, sem mudança
+     * de lógica.
+     */
+    private finalizeStepAttempt(
+        goal: Goal,
+        step: PlanStep,
+        channelContext: ChannelContext,
+        cycle: number,
+        startMs: number,
+        toolResult: { success: boolean; output: string; error?: string; artifactPaths?: string[] },
+        opts: {
+            stepMutations?: import('./GoalTypes').ToolMutation[];
+            stepEvalForAttempt?: { confidence: number; reason?: string };
+            stepSuccessConfident: boolean;
+            agentloopTraceId?: string;
+            agentloopSubToolCalls?: string[];
+            deferredSendArgs: Array<Record<string, unknown>>;
+        },
+    ): CycleResult {
+        const { stepMutations, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls, deferredSendArgs } = opts;
+
+        // Registrar attempt com auditoria completa (cycle, mutations, evaluation)
+        const attempt: GoalAttempt = {
+            id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+            planStepId: step.id,
+            toolName: step.toolName ?? 'agentloop',
+            args: step.toolArgs ?? {},
+            // Sprint 0.8 (achados L10/L11/L14/L15): 'success' só quando o resultado veio de
+            // um sinal confiável (tool determinística, sinal explícito, ou LLM que de fato
+            // confirmou) — caso contrário 'partial': a tarefa produziu output e não falhou
+            // explicitamente, mas a conclusão não foi confirmada com confiança suficiente
+            // para valer como evidência de sucesso (GoalEvaluator.ts:312 já trata 'partial'
+            // como progresso equivalente a 'success', só não como prova de conclusão).
+            result: !toolResult.success ? 'failure' : (stepSuccessConfident ? 'success' : 'partial'),
+            output: toolResult.output?.slice(0, 300),
+            error: toolResult.error,
+            durationMs: Date.now() - startMs,
+            executedAt: Date.now(),
+            cycle,
+            mutations: stepMutations,
+            evaluation: stepEvalForAttempt,
+            traceId: agentloopTraceId,
+            subToolCalls: agentloopSubToolCalls,
+            producedArtifactPaths: toolResult.artifactPaths,
+        };
+        this.goalStore.addAttempt(goal.id, attempt);
+
+        // FIX #1: Alimenta SessionManager com resultado da tool para popular
+        // activeFiles e deliveredArtifacts — habilita contexto cross-goal de artefatos.
+        if (toolResult.success && step.toolName && this.sessionManager) {
+            const stepSessionKey = {
+                channel: channelContext.channel,
+                userId: channelContext.userId ?? goal.conversationId,
+            };
+            this.sessionManager.recordToolCall(
+                stepSessionKey,
+                step.toolName,
+                JSON.stringify(step.toolArgs ?? {}),
+            ).catch(() => {});
+        }
+
+        if (step.toolName) {
+            this.goalStore.addToolTried(goal.id, step.toolName);
+        }
+
+        const cycleResult = this.evaluator.evaluate(goal, step, toolResult);
+        // FIX C: propaga sends diferidos capturados do AgentLoop para o loop principal
+        if (deferredSendArgs.length > 0) {
+            cycleResult.deferredSends = deferredSendArgs;
+            // S8: injeta pseudo-write attempts para artefatos criados pelo AgentLoop.
+            // Writes feitos dentro do AgentLoop são invisíveis para goal.attempts (a camada
+            // exterior só vê o step agentloop como attempt, não os writes internos).
+            // Sem isso, checkClaimsAgainstEvidence derruba achieved=true com [UNVERIFIED-CLAIM]
+            // mesmo quando o arquivo foi criado, DELIVERY-GUARD enviou e o usuário recebeu.
+            for (const sendArgs of deferredSendArgs) {
+                const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
+                if (!fp) continue;
+                // toolName='send_document', não 'write': deferredSendArgs só é populado por
+                // deferSendDocument() (send_document interceptado dentro do AgentLoop) — o
+                // pseudo-attempt original gravava 'write', mascarando esta entrega de um
+                // consumidor que filtre goal.attempts por toolName==='send_document'
+                // (achado ao validar a hipótese de captura única, 16/07/2026).
+                this.goalStore.addAttempt(goal.id, {
+                    id: `att_agentloop_write_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+                    planStepId: step.id,
+                    toolName: 'send_document',
+                    args: { file_path: fp },
+                    result: 'success',
+                    output: '[AGENTLOOP-WRITE] Arquivo gravado e entregue pelo AgentLoop',
+                    durationMs: 0,
+                    executedAt: Date.now(),
+                    cycle,
+                    producedArtifactPaths: [fp],
+                });
+            }
+        }
+        const durationMs = Date.now() - startMs;
+        log.info(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'agentloop'} outcome=${cycleResult.outcome} durationMs=${durationMs}${cycleResult.blocker ? ` blocker=${cycleResult.blocker.kind}` : ''}${deferredSendArgs.length > 0 ? ` deferred_sends=${deferredSendArgs.length}` : ''}`);
+        return cycleResult;
     }
 
     // ── Step arg template resolution ─────────────────────────────────────────────
