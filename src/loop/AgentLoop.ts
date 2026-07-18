@@ -149,6 +149,19 @@ interface TurnDiagnosticsInput {
 }
 
 /**
+ * ARCH-019 (S25, Incremento 2): retorno de `runDeliveryGuardPhase()`, extraído do bloco
+ * "Delivery guard" de `runWithTools()`. `earlyReturn: true` replica um `return` que existia
+ * dentro do bloco original (cancelamento ou entrega terminal bem-sucedida); `earlyReturn: false`
+ * replica a queda para o código seguinte (síntese pós-loop) — só `stepCount` precisa ser
+ * devolvido explicitamente (mutado pelo laço interno do próprio guard); `cycleHistory` e
+ * `loopMessages` são mutados em placee (mesma referência de array/Map) e não precisam de
+ * threading de retorno, mesmo padrão de `sentArtifacts`/`trackArtifact` em ARCH-020/S24.
+ */
+type DeliveryGuardResult =
+    | { earlyReturn: true; result: string | ProcessedResult }
+    | { earlyReturn: false; stepCount: number };
+
+/**
  * Queries whose answers are likely to be volatile even when in memory.
  * Applied generically — not specific to any entity, currency, or domain.
  * Pattern: financial prices, weather, news, legal changes, real-time data.
@@ -1300,6 +1313,167 @@ export class AgentLoop {
             `    dedup: triggered=${shadowDedup.triggered}${shadowDedup.triggered ? ` tool=${shadowDedup.tool} calls=${shadowDedup.calls}` : ''}\n` +
             `    memoryFirst: wouldHaveChanged=${shadowMemoryFirst}`
         );
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 2): "Delivery guard" extraído de `runWithTools()` sem mudar
+     * lógica — se um arquivo foi escrito mas nunca enviado (ou um script gerado mas nunca
+     * executado), reentra num mini-loop de LLM+tool-calling com uma instrução de entrega antes
+     * de cair na síntese pós-loop. `stepCount` é o único valor mutável que precisa ser
+     * devolvido explicitamente (o guard tem seu próprio laço `while` interno que o incrementa);
+     * `cycleHistory`/`loopMessages` são mutados nas MESMAS referências recebidas, sem threading.
+     */
+    private async runDeliveryGuardPhase(
+        conversationId: string,
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        loopMessages: LLMMessage[],
+        toolDefs: ToolDefinition[],
+        chatProfile: ModelProfile,
+        turnSignal: AbortSignal,
+        trace: ExecutionTrace,
+        channelContext: ChannelContext | undefined,
+        usedToolInputs: Set<string>,
+        maxSteps: number,
+        stepCount: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): Promise<DeliveryGuardResult> {
+        // Delivery guard: if a file was written but never sent, the user received nothing.
+        // Re-enter the loop with a delivery instruction before synthesis.
+        //
+        // Scripts (.py/.sh) are a special case: they aren't the deliverable, they're the
+        // MEANS to produce one (e.g. a python-pptx generator script). Telling the agent to
+        // `send_document` an unexecuted generator script is wrong — the file the user asked
+        // for doesn't exist yet. Evidence: 2026-07-02 audit log, goal "gerar slides editáveis" —
+        // the agent wrote tmp/gerar_slides_senac.py and workspace/gen_pptx.py in two separate
+        // turns, never executed either, and both times ran out of step budget before this guard
+        // could even fire (see the `stepCount < maxSteps` note below).
+        // DELIVERABLE_EXTENSIONS agora vive em planning/inferExpectedExtensions.ts (ARCH-026) —
+        // mesmo módulo que já centraliza SOURCE_SCRIPT_EXTENSIONS logo abaixo.
+        // Fonte única com RiskAnalyzer/resolveArtifactPathFromEvidence (Sprint F2, revisão de
+        // código pós-piloto R1-R7) — antes esta lista local (['.py','.sh']) e o blocklist
+        // SOURCE_SCRIPT_EXTENSIONS de inferExpectedExtensions.ts divergiam sobre '.js'/'.ts',
+        // fazendo o mesmo tipo de arquivo ser tratado como deliverable aqui e como script-fonte
+        // (nunca deliverable) lá.
+        const EXECUTABLE_SCRIPT_EXTENSIONS = [...SOURCE_SCRIPT_EXTENSIONS];
+        const wroteFile = cycleHistory.some(h => h.tool === 'write' && h.status === 'success');
+        // 'deferred' conta como já tratado: um send_document adiado para pós-validação (FIX E
+        // acima) já está registrado para entrega via channelContext — sem isso, este guard
+        // reinjetaria "[ENTREGA PENDENTE]" por cima de um arquivo que já ia ser entregue.
+        const sentFile = cycleHistory.some(h => (h.tool === 'send_document' || h.tool === 'send_audio' || h.tool === 'send_image') && (h.status === 'success' || h.status === 'deferred'));
+        const writtenFilePaths = cycleHistory
+            .filter(h => h.tool === 'write' && h.status === 'success')
+            .map(h => { try { return (JSON.parse(h.input) as Record<string, string>).path || ''; } catch { return ''; } });
+        // A .html write has a PENDING (unresolved) conversion when cycleHistory proves an
+        // explicit `html2pdf.sh` attempt against that exact path failed, with no later success
+        // for the same path. Evidence: 2026-07-05 audit log, goal "capacidades_newclaw.html" —
+        // `bash scripts/html2pdf.sh` failed (WSL/bash unavailable on this Windows machine),
+        // SAFETY-GUARD capped further exec_command retries, and this guard's own message then
+        // told the agent it could send the raw `.html` directly — delivering an unconverted
+        // slide deck the active skill (html-pdf-converter) explicitly forbids sending via
+        // send_document. Scoped ONLY to html2pdf.sh (the one conversion command the skill
+        // mandates), matched against the exact write path (not just basename) since that string
+        // is already available from the same `write` call args — no new tracking added.
+        const htmlConversionPending = (htmlPath: string): boolean => {
+            const isHtml2pdfAttempt = (h: { tool: string; input: string }) =>
+                h.tool === 'exec_command' && h.input.includes(htmlPath) && h.input.toLowerCase().includes('html2pdf');
+            let lastFailureIdx = -1;
+            for (let i = 0; i < cycleHistory.length; i++) {
+                if (isHtml2pdfAttempt(cycleHistory[i]) && cycleHistory[i].status === 'error') lastFailureIdx = i;
+            }
+            if (lastFailureIdx === -1) return false;
+            return !cycleHistory.some((h, idx) => idx > lastFailureIdx && isHtml2pdfAttempt(h) && h.status === 'success');
+        };
+        const writtenPaths = writtenFilePaths
+            .filter(p => DELIVERABLE_EXTENSIONS.some(ext => p.toLowerCase().endsWith(ext)))
+            .filter(p => !(p.toLowerCase().endsWith('.html') && htmlConversionPending(p)));
+        const writtenScriptPaths = writtenFilePaths
+            .filter(p => EXECUTABLE_SCRIPT_EXTENSIONS.some(ext => p.toLowerCase().endsWith(ext)));
+        // A script counts as "already executed" if any successful exec_command in this cycle
+        // referenced its basename — good enough since exec_command commands are shell strings,
+        // not structured paths.
+        const executedScriptPaths = writtenScriptPaths.filter(scriptPath => {
+            const base = scriptPath.split(/[\\/]/).pop() || scriptPath;
+            return cycleHistory.some(h => h.tool === 'exec_command' && h.status === 'success' && h.input.includes(base));
+        });
+        const unexecutedScriptPaths = writtenScriptPaths.filter(p => !executedScriptPaths.includes(p));
+
+        // Extra budget dedicated to this guard: the failure this fixes is precisely "ran out
+        // of steps right after writing the file" (direct/conversation mode caps maxSteps=4),
+        // so gating re-entry on remaining main-loop budget defeats the guard's own purpose.
+        const deliveryStepCap = maxSteps + 2;
+
+        if (wroteFile && !sentFile && (writtenPaths.length > 0 || unexecutedScriptPaths.length > 0) && stepCount < deliveryStepCap) {
+            const guardMessage = unexecutedScriptPaths.length > 0
+                ? `[EXECUÇÃO PENDENTE] Você criou o script ${unexecutedScriptPaths.join(', ')} mas ainda NÃO o executou. O usuário ainda NÃO recebeu nenhum arquivo. USE exec_command para RODAR o script AGORA (ex: python <script> ou bash <script>), depois entregue o arquivo gerado por ele com send_document. A tarefa SÓ está concluída quando o arquivo final for gerado e enviado.`
+                : `[ENTREGA PENDENTE] Você criou o(s) arquivo(s): ${writtenPaths.join(', ')}\nO usuário ainda NÃO recebeu nada. USE send_document para entregar AGORA. Para arquivos .html, você pode enviá-los diretamente com send_document ou converter para PDF com bash scripts/html2pdf.sh antes. A tarefa SÓ está concluída quando o arquivo for enviado.`;
+            log.info(`[${this.ts()}] [DELIVERY-GUARD] ${unexecutedScriptPaths.length > 0 ? 'Script created but not executed' : 'File created but not sent'} — re-entering loop: ${(unexecutedScriptPaths.length > 0 ? unexecutedScriptPaths : writtenPaths).join(', ')}`);
+            loopMessages.push({ role: 'system', content: guardMessage });
+            // Re-enter the main loop for delivery/execution steps
+            while (stepCount < deliveryStepCap) {
+                stepCount++;
+                log.info(`[${this.ts()}] [DELIVERY] Step ${stepCount}...`);
+                move('LLM_REQUEST', { step: stepCount, phase: 'delivery' });
+                const deliveryResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile, turnSignal);
+                move('LLM_RESPONSE', { step: stepCount, phase: 'delivery', status: deliveryResponse.status });
+
+                if (deliveryResponse.status === 'cancelled') { move('CANCEL', { step: stepCount }); this.activeTurns.delete(conversationId); return { earlyReturn: true, result: { text: 'Operação cancelada.' } }; }
+                if (deliveryResponse.status === 'timeout' || deliveryResponse.status === 'error') break;
+
+                loopMessages.push({ role: 'assistant', content: deliveryResponse.content, toolCalls: deliveryResponse.toolCalls });
+
+                if (deliveryResponse.toolCalls && deliveryResponse.toolCalls.length > 0) {
+                    for (const toolCall of deliveryResponse.toolCalls) {
+                        const tool = this.tools.get(toolCall.name);
+                        if (!tool) continue;
+                        if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
+                            (tool as unknown as ContextAwareTool).setContext(channelContext.chatId || '', channelContext.channel);
+                        }
+                        move('TOOL_REQUESTED', { step: stepCount, tool: toolCall.name, mode: 'delivery' });
+                        const result = await this.proactiveRecovery.execute(toolCall.name, toolCall.arguments, (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined, usedToolInputs, turnSignal);
+                        if (result.recovered && result.recoveryNote) {
+                            const kind = result.mutationKind ?? 'arg_mutation';
+                            log.info(`[MUTATION] tool_mutation:\n  tool: ${result.originalToolName ?? toolCall.name}\n  kind: ${kind}\n  original: ${JSON.stringify(result.originalArgs ?? {})}\n  modified: ${JSON.stringify(result.finalArgs)}`);
+                        }
+                        log.info(`[${this.ts()}] [DELIVERY] ${result.finalToolName} -> ${result.result.success ? '✓' : '✗'}`);
+                        loopMessages.push({ role: 'tool', content: result.result.output, tool_call_id: toolCall.id });
+                        cycleHistory.push({ step: stepCount, tool: toolCall.name, input: JSON.stringify(toolCall.arguments), status: result.result.success ? 'success' : 'error' });
+                        // Mesmo fix dos caminhos nativo/json_action acima — este é justamente o
+                        // caminho que despacha send_audio/send_document/send_image/send_video
+                        // (terminalTools abaixo), então é o mais relevante dos três para o gap
+                        // real observado (texto do send_audio nunca persistido em lugar nenhum).
+                        if (result.result.success && channelContext) {
+                            await this.sessionContext?.getSessionManager().recordToolCall(
+                                { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
+                                result.finalToolName,
+                                JSON.stringify(result.finalArgs ?? toolCall.arguments),
+                            ).catch(() => {});
+                        }
+                        const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
+                        if (terminalTools.includes(toolCall.name) && result.result.success) {
+                            move('TOOL_COMPLETED', { step: stepCount, tool: toolCall.name, success: true });
+                            move('FINAL_READY', { step: stepCount, tool: toolCall.name, terminal: true });
+                            // CORREÇÃO 1: notifica GoalExecutionLoop que DELIVERY-GUARD entregou
+                            // um artefato diretamente. Sem este callback, sentArtifacts nunca é
+                            // atualizado e o SemanticValidator pode marcar outcome=partial antes
+                            // que S10 execute, causando reentregas redundantes nos ciclos seguintes.
+                            if (toolCall.name === 'send_document') {
+                                const finalArgs = (result.finalArgs ?? toolCall.arguments) as Record<string, unknown>;
+                                const deliveredPath = String(finalArgs['file_path'] ?? finalArgs['path'] ?? '');
+                                if (deliveredPath) channelContext?.deliveryTracking?.onArtifactDelivered?.(deliveredPath);
+                            }
+                            traceManager.completeTrace(trace, 'completed', result.result.output);
+                            this.persistTrace(trace, stepCount, 'completed', result.result.output, channelContext);
+                            return { earlyReturn: true, result: result.result.output };
+                        }
+                        move('TOOL_COMPLETED', { step: stepCount, tool: toolCall.name, success: result.result.success });
+                    }
+                    continue;
+                }
+                // No tool calls — model gave up, break out
+                break;
+            }
+        }
+        return { earlyReturn: false, stepCount };
     }
 
     // ── Core execution loop ────────────────────────────────────────────────────
@@ -2608,142 +2782,12 @@ export class AgentLoop {
             intentCategory: intentDecision.category,
         });
 
-        // Delivery guard: if a file was written but never sent, the user received nothing.
-        // Re-enter the loop with a delivery instruction before synthesis.
-        //
-        // Scripts (.py/.sh) are a special case: they aren't the deliverable, they're the
-        // MEANS to produce one (e.g. a python-pptx generator script). Telling the agent to
-        // `send_document` an unexecuted generator script is wrong — the file the user asked
-        // for doesn't exist yet. Evidence: 2026-07-02 audit log, goal "gerar slides editáveis" —
-        // the agent wrote tmp/gerar_slides_senac.py and workspace/gen_pptx.py in two separate
-        // turns, never executed either, and both times ran out of step budget before this guard
-        // could even fire (see the `stepCount < maxSteps` note below).
-        // DELIVERABLE_EXTENSIONS agora vive em planning/inferExpectedExtensions.ts (ARCH-026) —
-        // mesmo módulo que já centraliza SOURCE_SCRIPT_EXTENSIONS logo abaixo.
-        // Fonte única com RiskAnalyzer/resolveArtifactPathFromEvidence (Sprint F2, revisão de
-        // código pós-piloto R1-R7) — antes esta lista local (['.py','.sh']) e o blocklist
-        // SOURCE_SCRIPT_EXTENSIONS de inferExpectedExtensions.ts divergiam sobre '.js'/'.ts',
-        // fazendo o mesmo tipo de arquivo ser tratado como deliverable aqui e como script-fonte
-        // (nunca deliverable) lá.
-        const EXECUTABLE_SCRIPT_EXTENSIONS = [...SOURCE_SCRIPT_EXTENSIONS];
-        const wroteFile = cycleHistory.some(h => h.tool === 'write' && h.status === 'success');
-        // 'deferred' conta como já tratado: um send_document adiado para pós-validação (FIX E
-        // acima) já está registrado para entrega via channelContext — sem isso, este guard
-        // reinjetaria "[ENTREGA PENDENTE]" por cima de um arquivo que já ia ser entregue.
-        const sentFile = cycleHistory.some(h => (h.tool === 'send_document' || h.tool === 'send_audio' || h.tool === 'send_image') && (h.status === 'success' || h.status === 'deferred'));
-        const writtenFilePaths = cycleHistory
-            .filter(h => h.tool === 'write' && h.status === 'success')
-            .map(h => { try { return (JSON.parse(h.input) as Record<string, string>).path || ''; } catch { return ''; } });
-        // A .html write has a PENDING (unresolved) conversion when cycleHistory proves an
-        // explicit `html2pdf.sh` attempt against that exact path failed, with no later success
-        // for the same path. Evidence: 2026-07-05 audit log, goal "capacidades_newclaw.html" —
-        // `bash scripts/html2pdf.sh` failed (WSL/bash unavailable on this Windows machine),
-        // SAFETY-GUARD capped further exec_command retries, and this guard's own message then
-        // told the agent it could send the raw `.html` directly — delivering an unconverted
-        // slide deck the active skill (html-pdf-converter) explicitly forbids sending via
-        // send_document. Scoped ONLY to html2pdf.sh (the one conversion command the skill
-        // mandates), matched against the exact write path (not just basename) since that string
-        // is already available from the same `write` call args — no new tracking added.
-        const htmlConversionPending = (htmlPath: string): boolean => {
-            const isHtml2pdfAttempt = (h: { tool: string; input: string }) =>
-                h.tool === 'exec_command' && h.input.includes(htmlPath) && h.input.toLowerCase().includes('html2pdf');
-            let lastFailureIdx = -1;
-            for (let i = 0; i < cycleHistory.length; i++) {
-                if (isHtml2pdfAttempt(cycleHistory[i]) && cycleHistory[i].status === 'error') lastFailureIdx = i;
-            }
-            if (lastFailureIdx === -1) return false;
-            return !cycleHistory.some((h, idx) => idx > lastFailureIdx && isHtml2pdfAttempt(h) && h.status === 'success');
-        };
-        const writtenPaths = writtenFilePaths
-            .filter(p => DELIVERABLE_EXTENSIONS.some(ext => p.toLowerCase().endsWith(ext)))
-            .filter(p => !(p.toLowerCase().endsWith('.html') && htmlConversionPending(p)));
-        const writtenScriptPaths = writtenFilePaths
-            .filter(p => EXECUTABLE_SCRIPT_EXTENSIONS.some(ext => p.toLowerCase().endsWith(ext)));
-        // A script counts as "already executed" if any successful exec_command in this cycle
-        // referenced its basename — good enough since exec_command commands are shell strings,
-        // not structured paths.
-        const executedScriptPaths = writtenScriptPaths.filter(scriptPath => {
-            const base = scriptPath.split(/[\\/]/).pop() || scriptPath;
-            return cycleHistory.some(h => h.tool === 'exec_command' && h.status === 'success' && h.input.includes(base));
-        });
-        const unexecutedScriptPaths = writtenScriptPaths.filter(p => !executedScriptPaths.includes(p));
-
-        // Extra budget dedicated to this guard: the failure this fixes is precisely "ran out
-        // of steps right after writing the file" (direct/conversation mode caps maxSteps=4),
-        // so gating re-entry on remaining main-loop budget defeats the guard's own purpose.
-        const deliveryStepCap = maxSteps + 2;
-
-        if (wroteFile && !sentFile && (writtenPaths.length > 0 || unexecutedScriptPaths.length > 0) && stepCount < deliveryStepCap) {
-            const guardMessage = unexecutedScriptPaths.length > 0
-                ? `[EXECUÇÃO PENDENTE] Você criou o script ${unexecutedScriptPaths.join(', ')} mas ainda NÃO o executou. O usuário ainda NÃO recebeu nenhum arquivo. USE exec_command para RODAR o script AGORA (ex: python <script> ou bash <script>), depois entregue o arquivo gerado por ele com send_document. A tarefa SÓ está concluída quando o arquivo final for gerado e enviado.`
-                : `[ENTREGA PENDENTE] Você criou o(s) arquivo(s): ${writtenPaths.join(', ')}\nO usuário ainda NÃO recebeu nada. USE send_document para entregar AGORA. Para arquivos .html, você pode enviá-los diretamente com send_document ou converter para PDF com bash scripts/html2pdf.sh antes. A tarefa SÓ está concluída quando o arquivo for enviado.`;
-            log.info(`[${this.ts()}] [DELIVERY-GUARD] ${unexecutedScriptPaths.length > 0 ? 'Script created but not executed' : 'File created but not sent'} — re-entering loop: ${(unexecutedScriptPaths.length > 0 ? unexecutedScriptPaths : writtenPaths).join(', ')}`);
-            loopMessages.push({ role: 'system', content: guardMessage });
-            // Re-enter the main loop for delivery/execution steps
-            while (stepCount < deliveryStepCap) {
-                stepCount++;
-                log.info(`[${this.ts()}] [DELIVERY] Step ${stepCount}...`);
-                move('LLM_REQUEST', { step: stepCount, phase: 'delivery' });
-                const deliveryResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile, turnSignal);
-                move('LLM_RESPONSE', { step: stepCount, phase: 'delivery', status: deliveryResponse.status });
-
-                if (deliveryResponse.status === 'cancelled') { move('CANCEL', { step: stepCount }); this.activeTurns.delete(conversationId); return { text: 'Operação cancelada.' }; }
-                if (deliveryResponse.status === 'timeout' || deliveryResponse.status === 'error') break;
-
-                loopMessages.push({ role: 'assistant', content: deliveryResponse.content, toolCalls: deliveryResponse.toolCalls });
-
-                if (deliveryResponse.toolCalls && deliveryResponse.toolCalls.length > 0) {
-                    for (const toolCall of deliveryResponse.toolCalls) {
-                        const tool = this.tools.get(toolCall.name);
-                        if (!tool) continue;
-                        if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
-                            (tool as unknown as ContextAwareTool).setContext(channelContext.chatId || '', channelContext.channel);
-                        }
-                        move('TOOL_REQUESTED', { step: stepCount, tool: toolCall.name, mode: 'delivery' });
-                        const result = await this.proactiveRecovery.execute(toolCall.name, toolCall.arguments, (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined, usedToolInputs, turnSignal);
-                        if (result.recovered && result.recoveryNote) {
-                            const kind = result.mutationKind ?? 'arg_mutation';
-                            log.info(`[MUTATION] tool_mutation:\n  tool: ${result.originalToolName ?? toolCall.name}\n  kind: ${kind}\n  original: ${JSON.stringify(result.originalArgs ?? {})}\n  modified: ${JSON.stringify(result.finalArgs)}`);
-                        }
-                        log.info(`[${this.ts()}] [DELIVERY] ${result.finalToolName} -> ${result.result.success ? '✓' : '✗'}`);
-                        loopMessages.push({ role: 'tool', content: result.result.output, tool_call_id: toolCall.id });
-                        cycleHistory.push({ step: stepCount, tool: toolCall.name, input: JSON.stringify(toolCall.arguments), status: result.result.success ? 'success' : 'error' });
-                        // Mesmo fix dos caminhos nativo/json_action acima — este é justamente o
-                        // caminho que despacha send_audio/send_document/send_image/send_video
-                        // (terminalTools abaixo), então é o mais relevante dos três para o gap
-                        // real observado (texto do send_audio nunca persistido em lugar nenhum).
-                        if (result.result.success && channelContext) {
-                            await this.sessionContext?.getSessionManager().recordToolCall(
-                                { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
-                                result.finalToolName,
-                                JSON.stringify(result.finalArgs ?? toolCall.arguments),
-                            ).catch(() => {});
-                        }
-                        const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
-                        if (terminalTools.includes(toolCall.name) && result.result.success) {
-                            move('TOOL_COMPLETED', { step: stepCount, tool: toolCall.name, success: true });
-                            move('FINAL_READY', { step: stepCount, tool: toolCall.name, terminal: true });
-                            // CORREÇÃO 1: notifica GoalExecutionLoop que DELIVERY-GUARD entregou
-                            // um artefato diretamente. Sem este callback, sentArtifacts nunca é
-                            // atualizado e o SemanticValidator pode marcar outcome=partial antes
-                            // que S10 execute, causando reentregas redundantes nos ciclos seguintes.
-                            if (toolCall.name === 'send_document') {
-                                const finalArgs = (result.finalArgs ?? toolCall.arguments) as Record<string, unknown>;
-                                const deliveredPath = String(finalArgs['file_path'] ?? finalArgs['path'] ?? '');
-                                if (deliveredPath) channelContext?.deliveryTracking?.onArtifactDelivered?.(deliveredPath);
-                            }
-                            traceManager.completeTrace(trace, 'completed', result.result.output);
-                            this.persistTrace(trace, stepCount, 'completed', result.result.output, channelContext);
-                            return result.result.output;
-                        }
-                        move('TOOL_COMPLETED', { step: stepCount, tool: toolCall.name, success: result.result.success });
-                    }
-                    continue;
-                }
-                // No tool calls — model gave up, break out
-                break;
-            }
-        }
+        const deliveryGuardResult = await this.runDeliveryGuardPhase(
+            conversationId, cycleHistory, loopMessages, toolDefs, chatProfile, turnSignal,
+            trace, channelContext, usedToolInputs, maxSteps, stepCount, move,
+        );
+        if (deliveryGuardResult.earlyReturn) return deliveryGuardResult.result;
+        stepCount = deliveryGuardResult.stepCount;
 
         // Post-loop synthesis
         const executedToolsInLastStep = cycleHistory.length > 0;
