@@ -1,8 +1,7 @@
-import { ToolExecutorLike } from '../core/ToolExecutor';
 import { powerpointBroker, CommandArgs } from '../dashboard/routes/powerpointBroker';
-import { ContextAwareTool, ToolResult } from '../loop/agentLoopTypes';
+import { ContextAwareTool, ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 
-class PowerPointControlTool implements ToolExecutorLike, ContextAwareTool {
+class PowerPointControlTool implements ToolExecutor, ContextAwareTool {
     name = 'powerpoint_control';
     description = 'Executa comandos interativos na apresentação ativa do PowerPoint. O comando é bloqueante até o PowerPoint reportar o sucesso ou falha real.';
     

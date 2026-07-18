@@ -9,7 +9,7 @@
  */
 
 import { createLogger } from '../shared/AppLogger';
-import { ToolRegistry } from '../core/ToolRegistry';
+import { ToolRegistry } from './ToolRegistry';
 import { probeToolCmd, resolvePython3Runtime, defaultPython3Candidates, runPython3Import, isBashFunctional } from '../utils/crossPlatform';
 
 const log = createLogger('EnvironmentProbe');

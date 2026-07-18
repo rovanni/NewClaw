@@ -9,7 +9,7 @@
  * Segurança: block self-editing + sandbox boundary.
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import fs from 'fs';
 import path from 'path';
 import * as crypto from 'crypto';
@@ -26,6 +26,8 @@ const NEAR_EMPTY_THRESHOLD_BYTES = 50;
 export class ReadTool implements ToolExecutor {
     name = 'read';
     description = 'Ler conteúdo de um arquivo ou listar entradas de um diretório. Se o caminho for um diretório, lista automaticamente. Caminhos relativos são resolvidos a partir do workspace.';
+    // ARCH-015 (S26): texto co-localizado, agregado por GoalPlanner.buildRequiredArgsReference().
+    requiredArgsHint = '- read: aceita caminho relativo ao workspace ou absoluto. Para diretórios, lista automaticamente o conteúdo.';
     parameters = {
         type: 'object' as const,
         properties: {

@@ -2,7 +2,7 @@
  * ToolRegistry — Registro centralizado de tools com enable/disable
  */
 
-import { ToolExecutor } from '../loop/AgentLoop';
+import { ToolExecutor } from '../loop/agentLoopTypes';
 import { createLogger } from '../shared/AppLogger';
 const log = createLogger('Toolregistry');
 

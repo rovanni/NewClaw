@@ -2,7 +2,7 @@
  * crypto_report — Relatório de criptomoedas via CoinGecko API
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { errorMessage } from '../shared/errors';
 
 interface CacheEntry {

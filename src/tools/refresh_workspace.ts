@@ -1,4 +1,4 @@
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { refreshWorkspaceIndex } from '../core/agentMediaHandlers';
 import type { MemoryManager } from '../memory/MemoryManager';
 

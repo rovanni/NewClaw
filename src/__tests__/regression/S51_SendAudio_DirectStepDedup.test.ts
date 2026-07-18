@@ -54,17 +54,24 @@ async function main(): Promise<void> {
 
 console.log('\n=== S51-1 — dispatch direto de step.toolName checa isAudioAlreadySent antes de executar ===');
 {
-    const directDispatchGuard = /step\.toolName === 'send_audio' && isAudioAlreadySent\?\.\(\)/;
+    // ARCH-022 (S22, 2026-07-18): executeStep() foi decomposto — o branch `if (step.toolName)`
+    // agora só chama `dispatchToolStep(goal, step, step.toolName, ...)`, e o guard em si vive
+    // dentro desse método extraído, recebendo o nome da tool como parâmetro explícito
+    // `toolName` (não mais `step.toolName` inline) — mesmo valor, mesma lógica, só outro nome
+    // de variável local. Regex atualizada para o novo texto-fonte, mesma classe de achado já
+    // catalogada em S52/S110/S34/S22(teste)/S11/S10 (asserção presa a texto-fonte que um
+    // refactor legítimo muda sem alterar comportamento).
+    const directDispatchGuard = /toolName === 'send_audio' && isAudioAlreadySent\?\.\(\)/;
     assert(
         directDispatchGuard.test(goalLoopSource),
-        'branch `if (step.toolName)` bloqueia send_audio já entregue antes de chamar proactiveRecovery.execute',
+        'dispatchToolStep() (extraído do branch `if (step.toolName)`) bloqueia send_audio já entregue antes de chamar proactiveRecovery.execute',
     );
 }
 
 console.log('\n=== S51-2 — guard aparece ANTES do dispatch real via proactiveRecovery.execute ===');
 {
-    const guardIdx = goalLoopSource.search(/step\.toolName === 'send_audio' && isAudioAlreadySent\?\.\(\)/);
-    const dispatchIdx = goalLoopSource.indexOf('this.proactiveRecovery.execute(\n                        step.toolName');
+    const guardIdx = goalLoopSource.search(/toolName === 'send_audio' && isAudioAlreadySent\?\.\(\)/);
+    const dispatchIdx = goalLoopSource.indexOf('this.proactiveRecovery.execute(\n            toolName');
     assert(guardIdx !== -1, 'guard encontrado no arquivo');
     assert(dispatchIdx === -1 || guardIdx < dispatchIdx, 'guard vem antes da chamada real da tool (short-circuit, não pós-checagem)');
 }

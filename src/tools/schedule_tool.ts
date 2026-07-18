@@ -5,7 +5,7 @@
  * e o LLM cria tarefas agendadas automaticamente.
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { SchedulerService } from '../services/SchedulerService';
 import { errorMessage } from '../shared/errors';
 

@@ -66,7 +66,7 @@ console.log('\n=== S44-1 — ChannelContext expõe o hook de dedup de áudio ===
 
 console.log('\n=== S44-2 — AgentLoop.ts bloqueia send_audio já entregue nos DOIS caminhos de execução ===');
 {
-    const nativePathGuard = /toolName === 'send_audio' && channelContext\?\.isAudioAlreadySent\?\.\(\)/;
+    const nativePathGuard = /toolName === 'send_audio' && channelContext\?\.deliveryTracking\?\.isAudioAlreadySent\?\.\(\)/;
     const guardMatches = agentLoopSource.match(new RegExp(nativePathGuard.source, 'g')) ?? [];
     assert(
         guardMatches.length >= 2,

@@ -11,7 +11,17 @@
  *
  * FIX: Após executar um step AgentLoop com deferredSends, injeta pseudo-write attempts
  * em goal.attempts para cada file_path nos deferredSendArgs.
- * toolName='write', result='success', output='[AGENTLOOP-WRITE] ...'
+ * toolName='send_document', result='success', output='[AGENTLOOP-WRITE] ...'
+ *
+ * ATUALIZADO 16/07/2026 (validação da invariante de captura única): o pseudo-attempt
+ * gravava toolName='write', mas deferredSendArgs só é populado por deferSendDocument()
+ * (interceptação de send_document dentro do AgentLoop) — nunca representa uma escrita.
+ * Isso mascarava a entrega de um consumidor que filtre goal.attempts por
+ * toolName==='send_document' (ex.: a regra de claim "foi enviado/entregue" em
+ * checkClaimsAgainstEvidence, que exige exatamente esse toolName). A claim de "criação"
+ * (toolName IN ['write','exec_command']) não perde cobertura com a correção: ela já tem
+ * um fallback independente via goal.sentArtifacts (hasRegisteredDelivery), populado
+ * quando o send diferido é de fato despachado — não depende do toolName deste pseudo-attempt.
  *
  * REGRESSÃO SE: Loop de injeção de pseudo-writes for removido de executeStep().
  *
@@ -42,8 +52,8 @@ assert(
 );
 
 assert(
-    /toolName:\s*'write'/.test(loopSource),
-    "pseudo-attempt usa toolName: 'write'"
+    /toolName:\s*'send_document'/.test(loopSource),
+    "pseudo-attempt usa toolName: 'send_document' (não 'write' — deferredSendArgs vem de deferSendDocument, nunca de uma escrita)"
 );
 
 assert(
@@ -95,14 +105,15 @@ const deferredSendArgs: Array<Record<string, unknown>> = [
     { file_path: '/workspace/scrum_parte3.html'      },
 ];
 
-// Réplica exata da lógica de GoalExecutionLoop.ts linha ~1433
+// Réplica exata da lógica de GoalExecutionLoop.ts (bloco de injeção de pseudo-attempts
+// dentro de executeStep(), logo após this.evaluator.evaluate())
 for (const sendArgs of deferredSendArgs) {
     const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
     if (!fp) continue;
     mockGoalStore.addAttempt('goal_test_123', {
         id: `att_agentloop_write_${Date.now()}_abc`,
-        toolName: 'write',
-        args: { path: fp },
+        toolName: 'send_document',
+        args: { file_path: fp },
         result: 'success',
         output: '[AGENTLOOP-WRITE] Arquivo gravado e entregue pelo AgentLoop',
         durationMs: 0,
@@ -118,8 +129,8 @@ assert(
 );
 
 assert(
-    addedAttempts.every(a => a.toolName === 'write'),
-    "Todos os pseudo-attempts têm toolName='write'"
+    addedAttempts.every(a => a.toolName === 'send_document'),
+    "Todos os pseudo-attempts têm toolName='send_document' (não 'write')"
 );
 
 assert(
@@ -133,40 +144,44 @@ assert(
 );
 
 assert(
-    addedAttempts[0].args.path === '/workspace/aula_scrum_slides.html',
-    'Primeiro pseudo-write: path correto via file_path'
+    addedAttempts[0].args.file_path === '/workspace/aula_scrum_slides.html',
+    'Primeiro pseudo-attempt: file_path correto via file_path'
 );
 
 assert(
-    addedAttempts[1].args.path === '/workspace/scrum_parte2.html',
-    'Segundo pseudo-write: path correto via path alias'
+    addedAttempts[1].args.file_path === '/workspace/scrum_parte2.html',
+    'Segundo pseudo-attempt: file_path correto via path alias'
 );
 
 assert(
-    addedAttempts[2].args.path === '/workspace/scrum_parte3.html',
-    'Terceiro pseudo-write: path correto via file_path'
+    addedAttempts[2].args.file_path === '/workspace/scrum_parte3.html',
+    'Terceiro pseudo-attempt: file_path correto via file_path'
 );
 
-// ── Teste 3: checkClaimsAgainstEvidence encontraria os writes ───────────────
+// ── Teste 3: checkClaimsAgainstEvidence encontraria a evidência de envio ────
 
 console.log('\n=== S8 — Simulação: checkClaimsAgainstEvidence encontra evidência ===');
 
-// Simula o que checkClaimsAgainstEvidence faz: busca attempts toolName='write' com path
+// Simula a regra de claim "foi enviado/entregue" (requiredTools: ['send_document','send_audio']),
+// que é a que este pseudo-attempt corretamente satisfaz agora — a regra de "criação"
+// (requiredTools: ['write','exec_command']) não depende deste pseudo-attempt: tem seu
+// próprio fallback via goal.sentArtifacts (hasRegisteredDelivery), populado quando o
+// send diferido é de fato despachado.
 const mockGoalAttempts = [...addedAttempts];
-const writeAttempts = mockGoalAttempts.filter(a => a.toolName === 'write' && a.args.path);
+const sendAttempts = mockGoalAttempts.filter(a => a.toolName === 'send_document' && a.args.file_path);
 
 assert(
-    writeAttempts.length === 3,
-    `checkClaimsAgainstEvidence encontraria ${writeAttempts.length} write attempts com path`
+    sendAttempts.length === 3,
+    `checkClaimsAgainstEvidence encontraria ${sendAttempts.length} send_document attempts com file_path`
 );
 
-// Simula a verificação de "criação de artefato"
-const hasArtifactEvidence = writeAttempts.some(
-    a => a.args.path?.endsWith('.html')
+// Simula a verificação de "envio de artefato"
+const hasArtifactEvidence = sendAttempts.some(
+    a => a.args.file_path?.endsWith('.html')
 );
 assert(
     hasArtifactEvidence,
-    'Evidência de criação de .html encontrada → [UNVERIFIED-CLAIM] NÃO derrubaria achieved=true'
+    'Evidência de envio de .html encontrada → [UNVERIFIED-CLAIM] NÃO derrubaria achieved=true'
 );
 
 // ── Resultado ────────────────────────────────────────────────────────────────
@@ -176,6 +191,6 @@ console.log(`S8 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
 console.log(`\nCOBERTURA:`);
 console.log(`  [AGENTLOOP-WRITE] marker no source: testado`);
 console.log(`  Lógica de injeção com 4 deferredSendArgs (1 sem path): testado`);
-console.log(`  toolName='write', result='success': testado`);
+console.log(`  toolName='send_document', result='success': testado`);
 console.log(`  checkClaimsAgainstEvidence encontra evidência: simulado`);
 if (failed > 0) process.exit(1);

@@ -10,7 +10,7 @@
  *   agentMetrics.ts      — buildLoopMetric, summarizeMetrics
  */
 
-import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary } from '../core/ProviderFactory';
+import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary, ToolCall } from '../core/ProviderFactory';
 import { computeDynamicTimeout } from '../shared/dynamicTimeout';
 import { CognitiveWorkspace } from '../cognitive/CognitiveWorkspace';
 import { SessionContext } from '../session/SessionContext';
@@ -51,6 +51,7 @@ import { parseLLMResponse, extractFinalText } from './agentOutputParser';
 import { buildLoopMetric, summarizeMetrics } from './agentMetrics';
 import { extractMissingExecutable } from './planning/extractMissingExecutable';
 import { computeToolInputKey } from './planning/computeToolInputKey';
+import { SOURCE_SCRIPT_EXTENSIONS, DELIVERABLE_EXTENSIONS } from './planning/inferExpectedExtensions';
 
 export type { ToolResult, ToolExecutor, LoopMetrics, ChannelContext, AgentLoopConfig, ProcessedResult };
 
@@ -112,6 +113,210 @@ export interface DecisionContext {
     /** Historical success rate per tool (0–1). Used for cost-aware hints. */
     toolSuccessRates:            Record<string, number>;
 }
+
+/**
+ * ARCH-019 (S25, Incremento 1): snapshot somente-leitura do estado do turno, usado por
+ * `logTurnDiagnostics()` — extraído do bloco "Structured turn diagnostics" de
+ * `runWithTools()`. Nenhum campo é mutado pelo método; é só um agrupamento nomeado dos ~20
+ * sinais soltos que o bloco original lia via closure, evitando 25 parâmetros posicionais.
+ */
+interface TurnDiagnosticsInput {
+    stepCount: number;
+    executionMode: string;
+    maxSteps: number;
+    decisionCtx: DecisionContext;
+    getContextChars: () => number;
+    initialContextChars: number;
+    toolTypeCallCount: Map<string, number>;
+    groupCallCount: Map<string, number>;
+    cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>;
+    maxSameToolCalls: number;
+    totalToolCalls: number;
+    consecutiveToolFailures: number;
+    toolFailureCount: number;
+    totalThinkingChars: number;
+    guardsTriggered: number;
+    dedupAbortTool: string;
+    memoryFirstInjected: boolean;
+    toolFailureHintInjected: boolean;
+    toolFailureHintFirstStep: number | null;
+    toolSuccessHintInjected: boolean;
+    toolSuccessHintFirstStep: number | null;
+    observerFeedbackInjected: boolean;
+    observerFeedbackFirstStep: number | null;
+    reflectionHintInjected: boolean;
+    intentCategory: string;
+}
+
+/**
+ * ARCH-019 (S25, Incremento 2): retorno de `runDeliveryGuardPhase()`, extraído do bloco
+ * "Delivery guard" de `runWithTools()`. `earlyReturn: true` replica um `return` que existia
+ * dentro do bloco original (cancelamento ou entrega terminal bem-sucedida); `earlyReturn: false`
+ * replica a queda para o código seguinte (síntese pós-loop) — só `stepCount` precisa ser
+ * devolvido explicitamente (mutado pelo laço interno do próprio guard); `cycleHistory` e
+ * `loopMessages` são mutados em placee (mesma referência de array/Map) e não precisam de
+ * threading de retorno, mesmo padrão de `sentArtifacts`/`trackArtifact` em ARCH-020/S24.
+ */
+type DeliveryGuardResult =
+    | { earlyReturn: true; result: string | ProcessedResult }
+    | { earlyReturn: false; stepCount: number };
+
+/**
+ * ARCH-019 (S25, Incremento 4): retorno de `runJsonActionDispatch()`, extraído do bloco
+ * "JSON-action tool execution" de `runWithTools()` (caminho alternativo ao tool-calling nativo,
+ * usado por modelos sem suporte a function-calling — parseia a ação de um blob JSON na resposta
+ * do LLM). 4 variantes, refletindo os 4 desfechos que o bloco original podia ter dentro do
+ * `while` principal: `earlyReturn` (tool terminal com sucesso), `continueLoop`/`breakLoop`
+ * (replicam os `continue`/`break` que já existiam), `fallThrough` (a condição externa
+ * `atomicData?.action?.type === 'tool'` era falsa — cai direto na checagem de STEP-LIMIT, que
+ * permanece em `runWithTools()` por se aplicar a AMBOS os caminhos de dispatch, não só a este).
+ * Os 6 contadores/flags primitivos mutados pelo bloco (dedupAbort, dedupAbortTool,
+ * consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount) são devolvidos em
+ * TODA variante não-earlyReturn — mesma disciplina que pegou os 3 bugs de priorFeedback em
+ * ARCH-020/S24: nunca hardcode um valor "sem mudança", sempre threade o valor recebido.
+ */
+type JsonActionDispatchResult =
+    | { action: 'earlyReturn'; result: string | ProcessedResult }
+    | {
+        action: 'continueLoop' | 'breakLoop' | 'fallThrough';
+        dedupAbort: boolean;
+        dedupAbortTool: string;
+        consecutiveToolFailures: number;
+        guardsTriggered: number;
+        totalToolCalls: number;
+        toolFailureCount: number;
+    };
+
+/**
+ * ARCH-019 (S25, Incremento 5): retorno de `runNativeToolCallDispatch()`, extraído do bloco
+ * `if (response.toolCalls && response.toolCalls.length > 0) {...}` de `runWithTools()` — o
+ * caminho principal de tool-calling nativo (function-calling real da API do provider), com um
+ * `for` interno que processa TODO o batch de tool calls do step antes de decidir o próximo
+ * passo (permite múltiplos `send_document` no mesmo step, por exemplo). O `for` interno e seus
+ * próprios `continue`/`break` ficam inteiramente DENTRO do método extraído — nunca precisam
+ * cruzar a fronteira do método, porque nenhum deles teria como "escapar" para o `while` externo
+ * no código original (o `for` é o loop mais próximo). Só o desfecho DEPOIS do `for` completar
+ * cruza a fronteira: `earlyReturn` (auth pendente, ou terminalBatchResult != null),
+ * `continueLoop` (replica o `continue` que fechava o bloco original), `fallThrough` (a condição
+ * externa `response.toolCalls?.length > 0` era falsa — cai no dispatch JSON-action, Incremento
+ * 4). 7 primitivos mutados são devolvidos em toda variante não-earlyReturn — incluindo
+ * `maxSteps`, que só este caminho (não o JSON-action) pode fazer upgrade (achado real durante a
+ * extração: assimetria pré-existente entre os 2 caminhos de dispatch, não introduzida aqui).
+ */
+type NativeToolCallDispatchResult =
+    | { action: 'earlyReturn'; result: string | ProcessedResult }
+    | {
+        action: 'continueLoop' | 'fallThrough';
+        dedupAbort: boolean;
+        dedupAbortTool: string;
+        maxSteps: number;
+        totalToolCalls: number;
+        consecutiveToolFailures: number;
+        guardsTriggered: number;
+        toolFailureCount: number;
+    };
+
+/**
+ * ARCH-019 (S25, Incremento 5, sub-decomposição): `runNativeToolCallDispatch()` sozinho ficou
+ * com 487 linhas — acima do limite de 300 do critério de aceite do card. Decisão do usuário
+ * (apresentada via AskUserQuestion): sub-decompor mais 2 níveis em vez de aceitar como exceção
+ * documentada. `dispatchSingleNativeToolCall()` processa UMA toolCall do batch (o corpo do
+ * `for` interno) — extrai os guards de pré-voo (read-blocked/dedup/send_document-defer/
+ * send_audio-already-sent) inline, e delega a execução real para `executeAndRecordNativeToolCall`
+ * + `applyPostToolCallGuardsAndFinalize`. `earlyReturn` (auth pendente) sobe direto;
+ * `continueFor`/`breakFor` replicam os `continue`/`break` do `for` original — nunca cruzam para
+ * o `while` externo, o `for` inteiro vive dentro de `dispatchSingleNativeToolCall`.
+ */
+type SingleToolCallDispatchResult =
+    | { action: 'earlyReturn'; result: string | ProcessedResult }
+    | {
+        action: 'continueFor' | 'breakFor';
+        terminalOutput?: string;
+        dedupAbort: boolean;
+        dedupAbortTool: string;
+        maxSteps: number;
+        totalToolCalls: number;
+        consecutiveToolFailures: number;
+        guardsTriggered: number;
+        toolFailureCount: number;
+    };
+
+/**
+ * ARCH-019 (S25, Incremento 5, sub-decomposição): retorno de `executeAndRecordNativeToolCall()`
+ * — a 1ª metade do antigo bloco `if (tool) {...}` (checagem de perigo, guard de edit-loop,
+ * despacho real via `proactiveRecovery.execute`, e todo o registro/telemetria/upgrade de
+ * budget). `proceed` entrega `result`/`resolvedToolName`/`resolvedArgs` para
+ * `applyPostToolCallGuardsAndFinalize()` continuar (2ª metade: detectores de loop/grupo/falha
+ * + tratamento terminal).
+ */
+type ExecuteAndRecordResult =
+    | { action: 'earlyReturn'; result: string | ProcessedResult }
+    | { action: 'continueFor' | 'breakFor'; dedupAbort: boolean; dedupAbortTool: string }
+    | {
+        action: 'proceed';
+        result: ToolResult;
+        resolvedToolName: string;
+        resolvedArgs: Record<string, unknown>;
+        maxSteps: number;
+        totalToolCalls: number;
+    };
+
+/**
+ * ARCH-019 (S25, Incremento 6): estado que `setupTurn()` inicializa e devolve para
+ * `runWithTools()` entrar no `while` principal. Escopo DELIBERADAMENTE menor do que "toda
+ * variável usada depois do setup" — `trace`/`fsm`/`move`/`turnAbort`/`turnSignal` e todo o
+ * estado acumulador do loop principal (`cycleHistory`, `toolFailureCount`, `usedToolInputs`,
+ * os contadores de guard, etc.) são declarados ANTES do `try{}` de `runWithTools()` e
+ * PERMANECEM lá — só o código que roda DEPOIS de `move('START_TURN')` (roteamento de intenção,
+ * fast-paths, sessão/DecisionContext, orçamento de steps) vira `setupTurn()`, chamado de DENTRO
+ * do `try` do chamador. Mover a criação de `trace` para dentro de `setupTurn()` teria sido um
+ * bug real: se `traceManager.startTrace()` lançasse exceção depois de movido, o
+ * `catch(fsmError)` do chamador tentaria ler `trace.status` de um `trace` nunca atribuído — o
+ * mesmo `trace` no original é criado ANTES do `try`, então uma falha ali propaga sem nunca
+ * passar por este catch. Achado por análise cuidadosa da fronteira try/catch antes de escrever
+ * qualquer código, não por teste.
+ */
+interface RunWithToolsLoopState {
+    intentDecision: IntentDecision;
+    reflectionHintInjected: boolean;
+    toolDefs: ToolDefinition[];
+    chatProfile: ModelProfile;
+    loopMessages: LLMMessage[];
+    getContextChars: () => number;
+    initialContextChars: number;
+    decisionCtx: DecisionContext;
+    executionMode: string;
+    maxSteps: number;
+    stepCount: number;
+    hasUsedNativeTools: boolean;
+    consecutiveNonProgressSteps: number;
+    blockedKeyCount: Map<string, number>;
+    dedupAbort: boolean;
+    dedupAbortTool: string;
+    contextGuardWriteExtensionUsed: boolean;
+    memoryFirstInjected: boolean;
+}
+
+type RunWithToolsSetupResult =
+    | { action: 'earlyReturn'; result: string | ProcessedResult }
+    | { action: 'proceed'; state: RunWithToolsLoopState };
+
+/**
+ * ARCH-019 (S25, Incremento 6, corte final): retorno de `checkContextGrowthGuard()`, extraído
+ * do bloco "Context Growth Guard" no topo do `while` de `runWithTools()`. Nunca retorna
+ * `earlyReturn` (o guard só decide `continue` ou deixar o step prosseguir) — por isso só 2
+ * variantes, sempre com os 5 primitivos devolvidos (mesma disciplina que já pegou 3 bugs de
+ * threading nesta Sprint: nenhum branch pode devolver um valor diferente do recebido sem
+ * reatribuir explicitamente).
+ */
+type ContextGrowthGuardResult = {
+    action: 'continueLoop' | 'proceed';
+    dedupAbort: boolean;
+    dedupAbortTool: string;
+    maxSteps: number;
+    contextGuardWriteExtensionUsed: boolean;
+    guardsTriggered: number;
+};
 
 /**
  * Queries whose answers are likely to be volatile even when in memory.
@@ -1112,1442 +1317,183 @@ export class AgentLoop {
         return { text: await this.commitResponse(finalText, userText, trace.id, conversationId) };
     }
 
-    // ── Core execution loop ────────────────────────────────────────────────────
-
-    private async runWithTools(conversationId: string, userText: string, iteration: number, _userId?: string, channelContext?: ChannelContext): Promise<string | ProcessedResult> {
-        const correlationId = channelContext?.correlationId;
-        const turnLog = correlationId ? log.child({ cid: correlationId.slice(0, 8) }) : log;
-
-        // Guard: reject truly concurrent turns for the same user.
-        // Also clears stale entries left by unexpected throws (try/finally in run() covers new cases,
-        // but this handles any pre-existing stuck state without requiring a server restart).
-        if (iteration === 0 && this.activeTurns.has(conversationId)) {
-            const startedAt = this.turnStartTimes.get(conversationId) || 0;
-            if (Date.now() - startedAt > this.TURN_STALE_MS) {
-                log.warn(`[${this.ts()}] [AGENT] Stale turn cleared for ${conversationId} (started ${Math.round((Date.now() - startedAt) / 1000)}s ago)`);
-                this.activeTurns.get(conversationId)?.abort();
-                this.activeTurns.delete(conversationId);
-                this.turnStartTimes.delete(conversationId);
-            } else {
-                log.warn(`[${this.ts()}] [AGENT] Concurrent turn rejected for ${conversationId}`);
-                return 'Ainda estou processando sua mensagem anterior. Aguarde um momento.';
-            }
-        }
-
-        turnLog.info('turn_start', `Cycle ${iteration + 1}`, { conversationId });
-
-        // status: 'success' | 'error' (execução normal de tool, ver ~linha 1973/2299/2641) |
-        // 'deferred' (send_document adiado para pós-validação — FIX E, ~linha 1835; conta como
-        // já tratado para o DELIVERY-GUARD, ~linha 2564, mas nunca como um envio confirmado).
-        const cycleHistory: Array<{ step: number; tool: string; input: string; status: string }> = [];
-        let lastBestContent = '';
-        let toolFailureCount = 0;
-        const usedToolInputs = new Set<string>();
-        const usedToolOutputs = new Map<string, string>(); // stores output of first successful call per inputKey
-        // Track filenames confirmed absent from workspace so DEDUP can block path-variant retries
-        const failedReadFilenames = new Set<string>();
-        // Track binary filenames that failed with "cannot read as text" so retries are blocked early
-        const binaryReadFilenames = new Set<string>();
-        // Track how many times edit was called per file path to prevent append-loop corruption
-        const editPathCount = new Map<string, number>();
-        // Generic per-tool-type call counter: detects when the agent loops on the same tool
-        // regardless of argument variation (which TOOL-DEDUP alone cannot catch).
-        const toolTypeCallCount = new Map<string, number>();
-        const MAX_SAME_TOOL_CALLS = 4;
-
-        // TOOL_GROUP_REGISTRY is defined at module level — use it directly.
-        const groupCallCount = new Map<string, number>();
-        const MAX_GROUP_CALLS = 6;
-
-        // Consecutive failure tracker: resets on any success so persistent errors
-        // (not isolated failures) trigger the abort.
-        let consecutiveToolFailures = 0;
-        const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
-
-        // getContextChars is defined after loopMessages (below) to avoid TDZ.
-        // Diagnostic counters — accumulated across the turn, emitted in TURN-DIAGNOSTICS.
-        let guardsTriggered    = 0;
-        let totalThinkingChars = 0;  // sum of response.thinking lengths across all steps
-        let totalToolCalls     = 0;
-
-        // Sprint 3.5A — Decision Impact Telemetry (shadow mode, no enforcement)
-        // Tracks whether hints were injected, eligible, and followed by the LLM.
-        // Computed at end-of-turn from cycleHistory + injection flags.
-        let memoryFirstInjected          = false;
-        let observerFeedbackInjected     = false;
-        let toolFailureHintInjected      = false;
-        let toolSuccessHintInjected      = false;
-        let toolFailureHintFirstStep: number | null  = null;
-        let toolSuccessHintFirstStep: number | null  = null;
-        let observerFeedbackFirstStep: number | null = null;
-
-        const turnAbort = new AbortController();
-        this.activeTurns.set(conversationId, turnAbort);
-        this.turnStartTimes.set(conversationId, Date.now());
-        const turnSignal = turnAbort.signal;
-
-        const trace = traceManager.startTrace(conversationId, userText, correlationId);
-        const fsm = new AgentFSM();
-        const move = (event: AgentFSMEvent, meta?: Record<string, unknown>) => {
-            // Throws on invalid transition — callers must be in the correct FSM state.
-            // The try/catch below (wrapping the rest of runWithTools) handles cleanup.
-            const transition = fsm.transition(event, meta);
-            log.info(`[${this.ts()}] [AGENT-FSM] ${transition.from} --${event}--> ${transition.to}`);
-            traceManager.addStep(trace, 'fsm_transition', transition);
-            this.fsmHistoryStore.record(transition, trace.id, conversationId);
-        };
-
-        try {
-        move('START_TURN');
-
-        // recentMessages (quando presente) permite ao UnifiedIntentRouter classificar mensagens
-        // curtas/elípticas ("continue", "isso", "faça") considerando a conversa recente em vez
-        // de classificar o texto isolado — ver RouterContext em UnifiedIntentRouter.ts e a
-        // origem do dado em MessageBus.processMessageCore (microauditoria de continuidade
-        // conversacional, 08/07/2026). Passos sintéticos sem conversa real (goal step, scheduler)
-        // não preenchem este campo — não são elípticos, não precisam de contexto.
-        const intentDecision: IntentDecision = await this.intentRouter.route(userText, {
-            sessionId: conversationId,
-            recentMessages: channelContext?.recentMessages,
-        });
-
-        traceManager.addStep(trace, 'intent_classification', {
-            intent: intentDecision.intent,
-            category: intentDecision.category,
-            executionMode: intentDecision.executionMode,
-            confidence: intentDecision.confidence,
-            source: intentDecision.source,
-            modelCategory: intentDecision.modelCategory,
-            riskLevel: intentDecision.riskLevel,
-            cognitiveLoad: intentDecision.cognitiveLoad,
-            requiresTools: intentDecision.requiresTools,
-            requiresMemory: intentDecision.requiresMemory,
-            requiresReasoning: intentDecision.requiresReasoning,
-        });
-        log.info(`[${this.ts()}] [UNIFIED-ROUTER] intent=${intentDecision.intent} mode=${intentDecision.executionMode} category=${intentDecision.category} confidence=${intentDecision.confidence} source=${intentDecision.source} model=${intentDecision.modelCategory}`);
-
-        // Fast-paths must not fire when there is a pending auth action — the auth check handles those turns.
-        const hasPendingAuth = !!this.authManager.getPending(conversationId);
-
-        // ── Text-based auth approval fallback ───────────────────────────────
-        // When buttons fail to render (e.g. Telegram HTML parse errors), the user may type
-        // "sim" or "cancelar" as plain text. Intercept these before the LLM loop to avoid
-        // the model misinterpreting the response and generating a second auth request.
-        if (hasPendingAuth && this.workflowEngine) {
-            const trimmed = userText.trim();
-            const isApproval = /^(sim|sim[,.]?\s*(pode|ok|autorizado|confirmado|faça|faz)|yes|ok|pode|autoriza)\b/i.test(trimmed) && trimmed.length < 40;
-            const isRejection = /^(não|nao|n\b|cancel[ar]?|cancela|não\s+pode|nope|recusa)\b/i.test(trimmed) && trimmed.length < 40;
-
-            if (isApproval || isRejection) {
-                const pending = this.authManager.getPending(conversationId);
-                if (pending?.txnId) {
-                    const decision: AuthDecision = isApproval ? 'approved' : 'rejected';
-                    log.info(`[${this.ts()}] [AUTH-TEXT] Text-based ${decision} for txn=${pending.txnId}`);
-                    const wfResult = await this.workflowEngine.resume(
-                        pending.txnId,
-                        decision,
-                        (name) => this.tools.get(name)
-                    );
-                    if (wfResult) {
-                        move('FINAL_READY', { decision, txnId: pending.txnId });
-                        return this.resumeFromWorkflow(conversationId, wfResult);
-                    }
-                }
-            }
-        }
-
-        if (!hasPendingAuth && intentDecision.terminalAction && intentDecision.executionMode === 'direct' && intentDecision.category === 'greeting') {
-            log.info(`[${this.ts()}] [FAST-PATH] Greeting detected — skipping LLM`);
-            move('FINAL_READY');
-            traceManager.completeTrace(trace, 'completed', 'Greeting fast path');
-            const greetings = ['Olá! 👋', 'Oi! Como posso ajudar?', 'E aí! 🚀', 'Olá! Tô aqui! 💪', 'Opa! Bora? 😊'];
-            return greetings[Math.floor(Math.random() * greetings.length)];
-        }
-
-        // ── Current-time fast path ──
-        // Deterministic direct facts (date/time) — Node.js has the clock, no LLM needed.
-        // Must check deterministicMatch explicitly — confirmation ('ok', 'sim') also matches direct+minimal+no-tools.
-        if (
-            !hasPendingAuth &&
-            intentDecision.trace.deterministicMatch === 'current_time' &&
-            intentDecision.source === 'deterministic' &&
-            intentDecision.executionMode === 'direct'
-        ) {
-            const now = new Date();
-            const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-            const dateStr = now.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-            const reply = `🕐 ${timeStr} — ${dateStr}`;
-            log.info(`[${this.ts()}] [FAST-PATH] current_time direct answer`);
-            move('FINAL_READY');
-            traceManager.completeTrace(trace, 'completed', reply);
-            this.persistTrace(trace, 1, 'completed', reply, channelContext);
-            return reply;
-        }
-
-        // ── Tool-first fast path ──
-        // Deterministic tool intents (weather, etc.) bypass the cognition LLM loop entirely.
-        // Falls back to the full loop when the tool is missing or returns an error.
-        if (intentDecision.executionMode === 'tool' && intentDecision.toolName && intentDecision.confidence >= 0.85) {
-            const fastResult = await this.toolFirstFastPath(conversationId, userText, intentDecision, channelContext, trace, move);
-            if (fastResult !== null) {
-                this.activeTurns.delete(conversationId);
-                return fastResult;
-            }
-            log.info(`[${this.ts()}] [FAST-PATH] Tool fast path fell back to cognition loop`);
-        }
-
-        this.classificationMemory.store(userText, intentDecision.modelCategory, intentDecision.confidence);
-        this.getTurnState(conversationId).lastToolExecution = null;
-
-        let skillContext = intentDecision.skillContext ?? '';
-
-        // S3c: "Que tipo de problema geral tende a acontecer neste tipo de pedido?"
-        // findCategoryHints() agrega pela categoria inteira (não mais fragmentada por
-        // ferramenta) e inclui fallback para registros legados com a categoria
-        // smuggled em `pattern` — corrige o caso documentado no S16 (20 registros/30%
-        // falha agregada retornando vazio por fragmentação de GROUP BY).
-        const reflectionHint = this.reflectionMemory.findCategoryHints(intentDecision.category);
-        const reflectionHintInjected = reflectionHint.length > 0;
-        if (reflectionHint) {
-            skillContext = skillContext ? `${skillContext}\n\n${reflectionHint}` : reflectionHint;
-        }
-
-        const manualSkills = this.skillLoader.loadAll();
-        const matchedManual = manualSkills.filter(s =>
-            s.triggers?.some(t => userText.toLowerCase().includes(t.toLowerCase()))
-        );
-        if (matchedManual.length > 0) {
-            // Usa conteúdo completo (com seções TASK_ONLY) apenas quando a skill é a
-            // tarefa primária do turno — alta confiança e intent diretamente relacionada.
-            // Em correspondências parciais (trigger presente mas não é o objetivo principal),
-            // injeta globalContent, que omite restrições de escopo de tarefa.
-            const isPrimary = (skillName: string): boolean =>
-                intentDecision.confidence >= 0.75 &&
-                matchedManual.length === 1 &&
-                (intentDecision.intent?.toLowerCase().includes(skillName.toLowerCase()) ||
-                 intentDecision.skillContext?.toLowerCase().includes(skillName.toLowerCase()) ||
-                 false);
-
-            const manualBlock = matchedManual.map(s => {
-                const content = isPrimary(s.name) ? s.content : s.globalContent;
-                const scope = isPrimary(s.name) ? 'primary' : 'context';
-                log.info(`[SKILL] ${s.name} injetado como "${scope}" (confidence=${intentDecision.confidence})`);
-                return `### SKILL MANUAL: ${s.name}\n${content}`;
-            }).join('\n\n');
-
-            skillContext = skillContext ? `${skillContext}\n\n${manualBlock}` : manualBlock;
-            log.info(`[SKILL] Injetando ${matchedManual.length} skill(s) manual(ais): ${matchedManual.map(s => s.name).join(', ')}`);
-        }
-
-        const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision);
-
-        const chatProfile = await this.profileRegistry.resolveProfile(userText);
-        if (chatProfile && intentDecision.modelCategory && intentDecision.confidence >= 0.8) {
-            const intentProfile = this.profileRegistry.getProfileByCategory(intentDecision.modelCategory);
-            if (intentProfile) {
-                chatProfile.model = intentProfile.model;
-                chatProfile.category = intentProfile.category;
-                log.info(`[${this.ts()}] [UNIFIED-ROUTER] Overriding model: ${intentDecision.modelCategory} → ${intentProfile.model}`);
-            }
-        }
-
-        if (!this.sessionContext) {
-            log.error('sessionContext not set — session pipeline is mandatory.');
-            return '⚠️ Sessão indisponível no momento. Tente novamente em alguns instantes.';
-        }
-
-        // Derive context tier from intent: heavier categories need more context.
-        type ContextTierType = import('../loop/ContextBuilder').ContextTier;
-        const FULL_TIER_CATEGORIES = new Set(['creation', 'system_operation', 'data_analysis', 'destructive', 'memory_operation']);
-        const NORMAL_TIER_CATEGORIES = new Set(['information', 'audio', 'vision']);
-        const contextTier: ContextTierType =
-            FULL_TIER_CATEGORIES.has(intentDecision.category) ? 'full' :
-            NORMAL_TIER_CATEGORIES.has(intentDecision.category) ? 'normal' :
-            'minimal';
-        log.info(`[${this.ts()}] [CONTEXT-TIER] category=${intentDecision.category} → tier=${contextTier}`);
-
-        // BUG REAL (log 2026-07-08, suplemento PowerPoint, sessão web:powerpoint-addin-...):
-        // channel estava hardcoded como 'telegram' independente do canal real da conversa.
-        // SessionManager chaveia sessões por `${channel}:${userId}` (SessionManager.ts:193) —
-        // MessageBus grava com o channel real (ex.: "web"), mas aqui a leitura ia para uma
-        // chave diferente ("telegram:<mesmoUserId>"), que nunca teve nada escrito. Resultado:
-        // buildLLMMessages sempre via "0 recent msgs" para qualquer canal != telegram (web,
-        // discord, signal, whatsapp) — o modelo perdia toda a transcript da conversa entre
-        // turnos. Sintoma observado: usuário pediu para aplicar fundo branco, assistente
-        // ofereceu rodar um script e perguntou "quer que eu execute agora?", usuário respondeu
-        // "sim", e o modelo — sem ver a pergunta anterior no contexto — respondeu apenas
-        // "Estou pronto. Como posso ajudar...", sem executar nada. Só passava despercebido no
-        // Telegram porque lá o canal real também é 'telegram' (TelegramAdapter.ts), coincidindo
-        // com o valor fixo. Fix: usar o canal real do turno, com 'telegram' como fallback apenas
-        // quando não há ChannelContext (ex.: AgentController.ts scheduler, que já não propaga
-        // contexto hoje).
-        const sessionKey: SessionKey = { channel: channelContext?.channel ?? 'telegram', userId: conversationId };
-        const { messages: sessionMessages } = await this.sessionContext.buildLLMMessages(
-            sessionKey,
-            buildMasterPrompt(chatProfile.category),
-            userText,
-            skillContext,
-            contextTier,
-            channelContext?.metadata
-        );
-        const loopMessages = sessionMessages;
-        // Context growth guard helpers — defined here so loopMessages is in scope.
-        const getContextChars = () => loopMessages.reduce((s, m) => s + (m.content?.length ?? 0), 0);
-        const initialContextChars = getContextChars();
-
-        // ── DecisionContext ─────────────────────────────────────────────────
-        // Build from all cognitive signals available after session context is ready.
-        // Influences loop behaviour via hints and budget adjustment — never via tool removal.
-        this.getTurnState(conversationId).pendingObserverFeedback = [];   // reset per-turn
-        const ctxMetadata = this.sessionContext.getContextBuilder().getLastBuildMetadata();
-        const memConf = computeMemoryConfidence(ctxMetadata, userText);
-
-        const toolStatsArr = this.decisionMemory.getToolStats();
-        const toolSuccessRates: Record<string, number> = {};
-        for (const s of toolStatsArr) toolSuccessRates[s.toolName] = s.successRate;
-
-        const decisionCtx: DecisionContext = {
-            memoryConfidence:           memConf,
-            hasHighRelevancePreference: ctxMetadata?.hasHighRelevancePreference ?? false,
-            requiresMemoryFirst:        intentDecision.requiresMemory && (memConf === 'high' || memConf === 'medium'),
-            extendedStepBudget:         null, // resolved after maxSteps is computed
-            toolSuccessRates,
-        };
-
-        // Adaptive step budget: ceiling scales with execution complexity.
-        // Falls back to hybrid budget for unknown modes.
-        const executionMode = intentDecision?.executionMode ?? 'hybrid';
-        let maxSteps = STEP_BUDGETS[executionMode] ?? STEP_BUDGETS.hybrid ?? 6;
-
-        // requiresPlanning → upgrade to planner budget when router signals explicit planning need
-        // and the current mode hasn't already allocated enough steps.
-        if (intentDecision.requiresPlanning && maxSteps < (STEP_BUDGETS.planner ?? 15)) {
-            const upgraded = STEP_BUDGETS.planner ?? 15;
-            log.info(`[${this.ts()}] [STEP-BUDGET] requiresPlanning=true → upgrading ${maxSteps} → ${upgraded}`);
-            maxSteps = upgraded;
-            decisionCtx.extendedStepBudget = upgraded;
-        }
-
-        let stepCount = 0;
-        log.info(
-            `[${this.ts()}] [STEP-BUDGET] mode=${executionMode} maxSteps=${maxSteps} ` +
-            `memoryConfidence=${decisionCtx.memoryConfidence} requiresMemoryFirst=${decisionCtx.requiresMemoryFirst}`
-        );
-        let hasUsedNativeTools = false;      // true once any native tool call executes
-        let consecutiveNonProgressSteps = 0; // non-JSON, no-tool responses in a row
-        const blockedKeyCount = new Map<string, number>(); // tracks repeated block attempts per inputKey
-        let dedupAbort = false; // set true when TOOL-DEDUP limit reached — exits while and falls to post-loop synthesis
-        let dedupAbortTool = ''; // tracks which tool caused the dedup abort
-        let contextGuardWriteExtensionUsed = false; // one-shot: see context_growth guard below
-
-        // Pre-loop: inject non-blocking hints derived from DecisionContext.
-        // These orient the LLM without restricting its tool access.
-        if (decisionCtx.requiresMemoryFirst) {
-            const isHighConf = decisionCtx.memoryConfidence === 'high';
-            loopMessages.push({
-                role: 'system',
-                content: isHighConf
-                    ? '[COGNIÇÃO] Memória pessoal com alta confiança disponível. Avalie o bloco de memória ANTES de usar ferramentas externas. Ferramentas externas devem ser usadas apenas se a memória não tiver resposta completa.'
-                    : '[COGNIÇÃO] Memória pessoal disponível, mas pode estar desatualizada para este domínio. Consulte a memória primeiro e valide com fontes externas se necessário.',
-            });
-            memoryFirstInjected = true;
-        }
-
-        while (stepCount < maxSteps && !dedupAbort) {
-            stepCount++;
-            log.info(`[${this.ts()}] [COGNITION] Step ${stepCount}...`);
-
-            // Flush observer feedback from previous step (accumulated asynchronously).
-            const turnState = this.getTurnState(conversationId);
-            if (turnState.pendingObserverFeedback.length > 0) {
-                for (const fb of turnState.pendingObserverFeedback) {
-                    loopMessages.push({ role: 'system', content: fb });
-                }
-                if (!observerFeedbackInjected) {
-                    observerFeedbackInjected = true;
-                    observerFeedbackFirstStep = stepCount;
-                }
-                turnState.pendingObserverFeedback = [];
-            }
-
-            // Context Growth Guard — two independent limits:
-            //   ratio    : relative growth, only meaningful when baseline is large enough.
-            //              A small initial context (fresh session) can triple in size after one
-            //              legitimate file read; ratio alone would produce false positives.
-            //   absolute : hard ceiling on chars added, regardless of baseline size.
-            // MIN_RATIO_BASELINE prevents ratio guard from firing on short initial contexts.
-            const MIN_RATIO_BASELINE = 4_000;   // chars; below this, only absolute limit applies
-            const CONTEXT_RATIO_LIMIT = 2.5;    // 150 % growth cap (when baseline is substantial)
-            const CONTEXT_ABSOLUTE_DELTA = 16_000; // ~4 000 tokens of added content
-            const currentContextChars = getContextChars();
-            const contextGrowthRatio = initialContextChars > 0 ? currentContextChars / initialContextChars : 1;
-            const useRatioGuard = initialContextChars >= MIN_RATIO_BASELINE;
-            const ratioTriggered = useRatioGuard && contextGrowthRatio > CONTEXT_RATIO_LIMIT;
-            const absoluteTriggered = currentContextChars > initialContextChars + CONTEXT_ABSOLUTE_DELTA;
-            if ((ratioTriggered || absoluteTriggered) && stepCount > 1 && !dedupAbort) {
-                const triggerReason = ratioTriggered ? 'ratio_limit' : 'absolute_limit';
-                const triggerValue  = ratioTriggered ? contextGrowthRatio : (currentContextChars - initialContextChars);
-                const threshold     = ratioTriggered ? CONTEXT_RATIO_LIMIT : CONTEXT_ABSOLUTE_DELTA;
-                log.warn(
-                    `[${this.ts()}] [SAFETY-GUARD] type=context_growth reason=${triggerReason} ` +
-                    `value=${triggerValue.toFixed(2)} threshold=${threshold} ` +
-                    `initial=${initialContextChars} current=${currentContextChars}`
-                );
-                // Context-aware abort message: when the last tool was 'read', the agent loaded
-                // a file but performed no write/edit. Prevent the model from claiming write success.
-                const lastToolInCycle = cycleHistory.length > 0
-                    ? cycleHistory[cycleHistory.length - 1].tool
-                    : null;
-                // 'exec_command' deliberately excluded here: it's also the tool used for
-                // read-only recon (e.g. `Get-ChildItem` to find the right file before reading
-                // it), which is NOT evidence that the deliverable was edited. Evidence:
-                // 2026-07-05 audit log, goal "máximo 10 linhas por slide" — 3 recon
-                // `Get-ChildItem` calls (listing *.md/*.pptx) ran before the `read`, made
-                // writeToolsUsedThisTurn true, and steered this guard into the generic
-                // "responda com o que já tem" message instead of "OBRIGATÓRIO use
-                // exec_command" — the turn ended describing a plan instead of executing it.
-                // Same definition DELIVERY-GUARD already uses a few hundred lines below
-                // (wroteFile checks only `tool === 'write'`) — 'edit' kept here too since,
-                // unlike exec_command, it can only ever be a mutation, never a listing.
-                const writeToolsUsedThisTurn = cycleHistory.some(h => h.tool === 'write' || h.tool === 'edit');
-                // Adaptar a mensagem de abort ao intent do usuário:
-                // - Análise/review: o read É a ação principal → instruir a apresentar a análise
-                // - Escrita/geração: o read é preâmbulo → instruir a usar exec_command
-                const isAnalysisAbort = ANALYSIS_INTENT_PATTERN.test(userText);
-                const needsWriteNow = lastToolInCycle === 'read' && !writeToolsUsedThisTurn && !isAnalysisAbort;
-                const ratioAbortMsg = (lastToolInCycle === 'read' && !writeToolsUsedThisTurn)
-                    ? isAnalysisAbort
-                        ? '[CONTEXTO GRANDE] O arquivo foi lido com sucesso e está no contexto. ' +
-                          'Agora forneça a análise/avaliação solicitada com base no conteúdo que você acabou de ler. ' +
-                          'Responda com suas observações, sugestões de melhoria e avaliação da estrutura. ' +
-                          'NÃO tente ler mais arquivos. NÃO use ferramentas. Responda AGORA com a análise.'
-                        : '[CONTEXTO EXCESSIVO] O arquivo fonte foi carregado com sucesso e está disponível. ' +
-                          'OBRIGATÓRIO: Use exec_command com um script Python COMPLETO E FUNCIONAL para gerar os arquivos de saída agora. ' +
-                          'O script deve ler o arquivo de origem via open() e escrever todos os arquivos de saída necessários. ' +
-                          'PROIBIDO: Afirmar que os arquivos foram criados sem ter executado exec_command. ' +
-                          'PROIBIDO: Criar scripts placeholder com "pass" ou "# TODO" — escreva o código real. ' +
-                          'NÃO leia mais arquivos no contexto. Processe TUDO via exec_command + Python.'
-                    : '[CONTEXTO EXCESSIVO] O contexto cresceu demais. Use os dados já obtidos para responder agora sem usar mais ferramentas.';
-                loopMessages.push({
-                    role: 'system',
-                    content: ratioAbortMsg,
-                });
-                guardsTriggered++;
-
-                // needsWriteNow tells the model "use exec_command AGORA", but post-loop
-                // synthesis (below) is text-only and can never execute that instruction —
-                // setting dedupAbort here would make the guard's own message a lie the model
-                // has no way to act on. Evidence: 2026-07-05 audit log, 4 consecutive turns
-                // (goal "máximo 10 linhas por slide") all hit ratio≈2.6-2.7 right after the
-                // single `read` needed before editing, aborted before any write/exec_command
-                // was attempted, and ended in either a hallucination-block or an honest
-                // "vou ler e depois ajustar" that never got a chance to actually happen.
-                // Fix: grant ONE extra real step (bounded, same +2 pattern as DELIVERY-GUARD's
-                // deliveryStepCap) so the model can act on its own instruction. If context still
-                // hasn't produced a write/exec_command after that, abort for real — one-shot via
-                // contextGuardWriteExtensionUsed prevents this from looping indefinitely.
-                //
-                // IMPORTANT: do NOT `continue` here. This guard runs at the TOP of the while
-                // loop body, before the LLM call below — `continue` jumps back to `while(...)`,
-                // which re-enters the loop and hits this SAME check again immediately (nothing
-                // changed: no LLM call happened, no tool ran), consuming the one-shot flag on
-                // the very next iteration without ever reaching the LLM call. Evidence:
-                // 2026-07-05 21:33 audit log — Step 3 granted the extension, Step 4 logged
-                // right after with zero LLM/tool activity in between, hit ratio_limit again
-                // (one-shot now used) and aborted for real. Falling through (no continue) lets
-                // THIS iteration's LLM call run with the injected instruction, which is the
-                // whole point of the extension.
-                if (needsWriteNow && !contextGuardWriteExtensionUsed) {
-                    contextGuardWriteExtensionUsed = true;
-                    if (maxSteps < stepCount + 2) maxSteps = stepCount + 2;
-                    log.info(`[${this.ts()}] [SAFETY-GUARD] context_growth: granting one extra step to act on exec_command instruction (maxSteps→${maxSteps})`);
-                    // No `continue`/`dedupAbort` here — falls through to the LLM call below,
-                    // in this SAME iteration, so the model can actually act on the instruction.
-                } else {
-                    dedupAbort = true;
-                    dedupAbortTool = `context_growth:${triggerReason}`;
-                    // Pula a próxima chamada LLM — evita que o modelo crie artefato stub sob
-                    // pressão de contexto (que o DELIVERY-GUARD enviaria). Cai na síntese.
-                    continue;
-                }
-            }
-
-            if (toolFailureCount >= 2) {
-                loopMessages.push({
-                    role: 'system',
-                    content: '[CRÍTICO] Múltiplas ferramentas falharam. PARE de tentar ferramentas. Responda AGORA declarando claramente a limitação de dados. Seja honesto e transparente: não invente tendências e não use linguagem vaga. Ofereça uma alternativa útil com base no que já sabemos.'
-                });
-                if (!toolFailureHintInjected) {
-                    toolFailureHintInjected = true;
-                    toolFailureHintFirstStep = stepCount;
-                }
-            }
-
-            // DecisionMemory-guided hint: if a tool has a poor historical success rate
-            // AND has already been called multiple times this turn, suggest alternatives.
-            // Generic: works for any tool, not just web_search.
-            if (stepCount > 1) {
-                for (const [toolName, rate] of Object.entries(decisionCtx.toolSuccessRates)) {
-                    const callsThisTurn = cycleHistory.filter(h => h.tool === toolName).length;
-                    if (rate < 0.4 && callsThisTurn >= 2 && decisionCtx.memoryConfidence !== 'none') {
-                        loopMessages.push({
-                            role: 'system',
-                            content: `[COGNIÇÃO] "${toolName}" tem taxa de sucesso histórica de ${(rate * 100).toFixed(0)}% e já foi chamado ${callsThisTurn}x neste turno. Considere usar dados de memória ou uma abordagem diferente.`,
-                        });
-                        if (!toolSuccessHintInjected) {
-                            toolSuccessHintInjected = true;
-                            toolSuccessHintFirstStep = stepCount;
-                        }
-                        break; // one hint at a time to avoid noise
-                    }
-                }
-            }
-
-            move('LLM_REQUEST', { step: stepCount });
-            const response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile, turnSignal);
-            move('LLM_RESPONSE', { step: stepCount, status: response.status });
-
-            if (response.thinking && response.thinking.trim().length > 0) {
-                this.getTurnState(conversationId).cognitiveWorkspace.add(stepCount, response.thinking.trim(), 'reasoning');
-                totalThinkingChars += response.thinking.trim().length;
-            }
-
-            traceManager.addStep(trace, 'decision', {
-                thought: parseLLMResponse(response.content || '')?.thought,
-                step: stepCount,
-                iteration
-            });
-
-            if (response.status === 'cancelled') {
-                log.info(`[${this.ts()}] [AGENT-FSM] Turn cancelled at step ${stepCount}`);
-                move('CANCEL', { step: stepCount });
-                traceManager.completeTrace(trace, 'cancelled', 'Operação cancelada.');
-                this.activeTurns.delete(conversationId);
-                return { text: 'Operação cancelada.' };
-            }
-
-            if (response.status === 'timeout') {
-                log.warn(`[${this.ts()}] [FALLBACK] Provider timeout at step ${stepCount}`);
-                move('TIMEOUT', { step: stepCount });
-                // If tools ran successfully before the timeout, report what was accomplished
-                const successfulWrites = cycleHistory.filter(h => h.tool === 'write' && h.status === 'success');
-                let timeoutMsg = response.fallbackMessage || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
-                if (successfulWrites.length > 0) {
-                    const filePaths = [...new Set(successfulWrites.map(h => {
-                        try { return (JSON.parse(h.input) as Record<string, unknown>).path as string; } catch { return null; }
-                    }).filter(Boolean))];
-                    if (filePaths.length > 0) {
-                        timeoutMsg = `O modelo demorou mais que o esperado ao finalizar. O arquivo foi criado parcialmente em: ${filePaths.join(', ')} — você pode pedir para continuar.`;
-                    }
-                }
-                traceManager.completeTrace(trace, 'timeout', timeoutMsg);
-                this.persistTrace(trace, stepCount, 'timeout', timeoutMsg, channelContext);
-                this.activeTurns.delete(conversationId);
-                return timeoutMsg;
-            }
-
-            if (response.status === 'error') {
-                log.warn(`[${this.ts()}] [FALLBACK] Provider error at step ${stepCount}: ${response.fallbackReason}`);
-                move('FAIL', { step: stepCount, status: response.status });
-                traceManager.completeTrace(trace, 'error', response.fallbackMessage);
-                this.persistTrace(trace, stepCount, 'error', response.fallbackMessage || 'Error', channelContext);
-                this.activeTurns.delete(conversationId);
-                return response.fallbackMessage || 'Erro ao processar sua mensagem.';
-            }
-
-            this.protocolParser.setProviderContext(
-                response.attempts?.[0]?.provider || 'unknown',
-                response.attempts?.[0]?.model || 'unknown'
-            );
-
-            // Detect native tool calls BEFORE strictParse so the parser can skip
-            // content-format validation when the model already communicated via toolCalls[].
-            // (e.g. kimi-k2.6 puts its reasoning in the thinking field, not JSON protocol)
-            const hasNativeToolCalls = (response.toolCalls?.length ?? 0) > 0;
-
-            const structured = this.protocolParser.strictParse(response.content || '', hasNativeToolCalls);
-            const atomicData = parseLLMResponse(response.content || '');
-            const finalText = extractFinalText(response, atomicData);
-
-            // Only store deliverable responses as lastBestContent.
-            // Protocol violations (planning/protocolViolation) contain raw protocol
-            // artifacts that must not be delivered to the user if the loop exits early.
-            const isProtocolViolation = structured?.metadata?.protocolViolation === true;
-            if (finalText.length > 0 && !isProtocolViolation) {
-                lastBestContent = finalText;
-            }
-
-            loopMessages.push({ role: 'assistant', content: response.content, toolCalls: response.toolCalls });
-
-            const wantsTool = structured?.type === 'tool_call' || (atomicData?.action?.type === 'tool' && atomicData?.action?.name);
-
-            // Track when the model demonstrates native tool capability.
-            if (hasNativeToolCalls) {
-                hasUsedNativeTools = true;
-                consecutiveNonProgressSteps = 0;
-            }
-
-            // Protocol violation recovery — only when there are NO native tool calls to execute.
-            // Native tool calls must always execute regardless of content format.
-            if (structured?.metadata?.protocolViolation && structured?.type === 'planning' && !hasNativeToolCalls) {
-                consecutiveNonProgressSteps++;
-
-                // Generic signal 1: model already used native tools and now has a plain-text answer.
-                // Applies to any model that uses toolCalls[] natively instead of JSON protocol.
-                // Skip when recoveryNeeded=true: content is a timeout fragment, not a real final answer.
-                if (hasUsedNativeTools && finalText.length > 30 && !structured?.metadata?.recoveryNeeded) {
-                    log.info(`[${this.ts()}] [PROTOCOL-EXIT] Native-tool model → plain-text final answer (step ${stepCount}, len=${finalText.length})`);
-                    move('FINAL_READY', { step: stepCount, reason: 'native_tool_final' });
-                    traceManager.completeTrace(trace, 'completed', finalText);
-                    this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                    return { text: finalText };
-                }
-
-                // Generic signal 2: model received 2 recovery prompts and still didn't produce JSON.
-                // Accept best available content rather than spinning indefinitely.
-                if (consecutiveNonProgressSteps >= 2 && lastBestContent.length > 0) {
-                    log.info(`[${this.ts()}] [PROTOCOL-EXIT] ${consecutiveNonProgressSteps} non-progress steps → using best content (len=${lastBestContent.length})`);
-                    move('FINAL_READY', { step: stepCount, reason: 'non_progress_limit' });
-                    traceManager.completeTrace(trace, 'completed', lastBestContent);
-                    this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
-                    return { text: lastBestContent };
-                }
-
-                loopMessages.push({ role: 'system', content: this.protocolParser.getRecoveryPrompt() });
-                continue;
-            }
-
-            consecutiveNonProgressSteps = 0;
-
-            const isExplicitlyComplete = structured?.isComplete === true;
-            const isExplicitlyIncomplete = structured?.isComplete === false;
-            const isFinalAnswer = structured?.type === 'final_answer';
-
-            if ((isFinalAnswer || isExplicitlyComplete) && !isExplicitlyIncomplete && !wantsTool && !hasNativeToolCalls) {
-                move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : 'is_complete' });
-                traceManager.completeTrace(trace, 'completed', finalText);
-                this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                return { text: await this.commitResponse(finalText, userText, trace.id, conversationId, turnSignal, toolFailureCount) };
-            }
-
-            if (response.toolCalls && response.toolCalls.length > 0) {
-                // Tracks the last successful terminal tool in this batch.
-                // We intentionally do NOT return inside the for loop so that all
-                // send_document / send_audio calls in a single batch are executed
-                // before the turn ends (fixes the "only index.html sent" bug).
-                let terminalBatchResult: string | null = null;
-
-                for (const toolCall of response.toolCalls) {
-                    const toolName = toolCall.name;
-                    const inputKey = computeToolInputKey(toolName, toolCall.arguments);
-
-                    // Block read attempts on filenames already confirmed as non-existent,
-                    // regardless of path format (absolute, relative, workspace-prefixed, etc.)
-                    if (toolName === 'read') {
-                        const pathArg = String(toolCall.arguments?.path || '');
-                        const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
-                        if (filename && failedReadFilenames.has(filename)) {
-                            log.warn(`[${this.ts()}] [READ-NOTFOUND-BLOCK] Blocked read of absent file: ${filename}`);
-                            loopMessages.push({
-                                role: 'tool',
-                                content: `[BLOQUEADO] O arquivo "${filename}" já foi confirmado como INEXISTENTE no workspace. Use a ferramenta "write" para criar o arquivo com o conteúdo completo antes de tentar lê-lo.`,
-                                tool_call_id: toolCall.id,
-                            });
-                            loopMessages.push({
-                                role: 'system',
-                                content: `⚠️ "${filename}" NÃO EXISTE no workspace. Ação obrigatória: use "write" com o conteúdo completo para criá-lo. NÃO tente "read" antes de criar o arquivo.`,
-                            });
-                            continue;
-                        }
-                        if (filename && binaryReadFilenames.has(filename)) {
-                            log.warn(`[${this.ts()}] [BINARY-READ-BLOCK] Blocked repeated read of binary file: ${filename}`);
-                            loopMessages.push({
-                                role: 'tool',
-                                content: `[BLOQUEADO] "${filename}" é um arquivo binário — "read" não consegue processá-lo. Use exec_command com python-pptx, pandoc, pdftotext ou similar para extrair o conteúdo.`,
-                                tool_call_id: toolCall.id,
-                            });
-                            loopMessages.push({
-                                role: 'system',
-                                content: `⚠️ NÃO chame "read" em "${filename}" novamente. Abordagem obrigatória: use exec_command com a ferramenta adequada para o formato ${filename.split('.').pop()?.toUpperCase()}.`,
-                            });
-                            continue;
-                        }
-                    }
-
-                    if (usedToolInputs.has(inputKey)) {
-                        const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
-                        blockedKeyCount.set(inputKey, blockCount);
-                        log.warn(`[${this.ts()}] [TOOL-DEDUP] Blocked repeated native call: ${toolName} (block #${blockCount})`);
-                        const cachedOutput = usedToolOutputs.get(inputKey);
-                        const contentHint = toolName === 'read' && cachedOutput
-                            ? `\n\n— Início do conteúdo já lido —\n${cachedOutput.slice(0, 600)}\n— (conteúdo completo disponível no histórico) —`
-                            : '';
-                        const dedupBlockedMsg = toolName === 'read'
-                            ? `[BLOQUEADO] "read" já foi executado para este arquivo. Use este conteúdo diretamente — NÃO releia.${contentHint}\n\nPróximo passo obrigatório: use exec_command para processar o arquivo, write para salvar resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`
-                            : `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos. Esta chamada foi bloqueada. NÃO repita esta ferramenta com os mesmos argumentos — use uma estratégia diferente ou responda com o que já sabe.`;
-                        loopMessages.push({
-                            role: 'tool',
-                            content: dedupBlockedMsg,
-                            tool_call_id: toolCall.id,
-                        });
-                        if (blockCount >= 3) {
-                            loopMessages.push({
-                                role: 'system',
-                                content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. O loop foi interrompido. Forneça a melhor resposta possível com as informações que você já tem.`,
-                            });
-                            dedupAbort = true;
-                            dedupAbortTool = toolName;
-                            break;
-                        }
-                        continue;
-                    }
-
-                    // FIX C: quando em contexto de goal-execution, adiar send_document para pós-validação
-                    if (toolName === 'send_document' && channelContext?.deferSendDocument) {
-                        const filePath = String(toolCall.arguments?.file_path ?? toolCall.arguments?.path ?? '(unknown)');
-                        const alreadyRegistered = channelContext.isDeferredArtifact?.(filePath) ?? false;
-                        log.info(
-                            `[${this.ts()}] [AGENTLOOP-SEND]` +
-                            ` deferred=true` +
-                            ` reason=goal_execution_policy` +
-                            ` file_path="${filePath}"` +
-                            ` already_registered=${alreadyRegistered}`
-                        );
-                        if (!alreadyRegistered) {
-                            channelContext.deferSendDocument(toolCall.arguments ?? {});
-                        }
-                        // Mensagem semanticamente neutra: não instrui o LLM a "continuar trabalhando"
-                        // pois isso causava loop de re-chamadas ao send_document.
-                        const deferMsg = alreadyRegistered
-                            ? `[DIFERIDO-DEDUP] O documento "${filePath}" já foi registrado para entrega. Não reenvie este artefato. Se não há outras tarefas pendentes, conclua com uma resposta final ao usuário.`
-                            : `[DIFERIDO] Documento "${filePath}" registrado para entrega após validação. Não reenvie este artefato. Continue apenas se ainda existirem tarefas pendentes não relacionadas à entrega deste arquivo.`;
-                        loopMessages.push({
-                            role: 'tool',
-                            content: deferMsg,
-                            tool_call_id: toolCall.id,
-                        });
-                        // FIX E (docs/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md): este branch nunca
-                        // escrevia em cycleHistory, deixando o DELIVERY-GUARD (abaixo, no fim do
-                        // loop) cego a um defer bem-sucedido — ele recalcula `sentFile` só a
-                        // partir de cycleHistory, então via achar `wroteFile && !sentFile` e
-                        // reinjetar "[ENTREGA PENDENTE] ... USE send_document AGORA" por cima de
-                        // um arquivo que já tinha sido corretamente registrado para entrega.
-                        // status:'deferred' (não 'success') propositalmente — alinha com o que
-                        // channelContext.isDeferredArtifact já sabe, sem se passar por um envio
-                        // confirmado de verdade.
-                        cycleHistory.push({ step: stepCount, tool: 'send_document', input: JSON.stringify(toolCall.arguments ?? {}), status: 'deferred' });
-                        usedToolInputs.add(inputKey);
-                        continue;
-                    }
-
-                    // send_audio não tem file_path estável (cada chamada gera um mp3/ogg com
-                    // timestamp único), então não pode usar o dedup por path de send_document
-                    // acima. Sem este guard, um step "agentloop" que já entregou áudio com
-                    // sucesso e é re-executado do zero por um replan (ex: SemanticValidator
-                    // rejeitando o texto final por mismatch) gera e envia um NOVO áudio a cada
-                    // tentativa — o TTS/upload já aconteceu de verdade, não há como "desfazer".
-                    // Evidência: 2026-07-05, goal_1783269002590_inaml — 4 áudios enviados em
-                    // sequência pelo mesmo pedido do usuário.
-                    if (toolName === 'send_audio' && channelContext?.isAudioAlreadySent?.()) {
-                        log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal`);
-                        loopMessages.push({
-                            role: 'tool',
-                            content: `[JÁ ENVIADO] O áudio para este objetivo já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
-                            tool_call_id: toolCall.id,
-                        });
-                        usedToolInputs.add(inputKey);
-                        continue;
-                    }
-
-                    const tool = this.tools.get(toolName);
-                    if (tool) {
-                        move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'native' });
-                        if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
-                            (tool as unknown as ContextAwareTool).setContext(
-                                channelContext.chatId || '',
-                                channelContext.channel
-                            );
-                        }
-
-                        const isDangerous = ToolRegistry.isDangerous(toolName) 
-                            && !this.isSafeExecCommand(toolName, toolCall.arguments)
-                            && !permissionRegistry.can('auto_approve_exec');
-                        if (isDangerous) {
-                            log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
-
-                            let txnId: string | undefined;
-                            if (this.workflowEngine) {
-                                // Novo fluxo: cria transaction com ID estruturado.
-                                // Canais com workflowCallback (Telegram, WhatsApp, Discord, Signal) rotearão o callback
-                                // diretamente ao WorkflowEngine — sem passar pelo LLM pipeline.
-                                const ctx: ContinuationContext = {
-                                    workflow: this.inferWorkflowName(intentDecision.intent, toolName),
-                                    step: toolName,
-                                    userGoal: userText.slice(0, 200),
-                                    activeResources: this.extractResourceNames(toolCall.arguments),
-                                    alternativeTools: this.findSafeAlternatives(toolName),
-                                };
-                                const txn = this.workflowEngine.createTransaction(
-                                    conversationId, toolName,
-                                    toolCall.arguments as Record<string, unknown>,
-                                    ctx
-                                );
-                                txnId = txn.id;
-                            }
-                            // Registra no authManager para: (1) guardar hasPendingAuth nos fast-paths,
-                            // (2) permitir removePending() no resumeFromWorkflow() após resolução.
-                            // txnId é armazenado para habilitar aprovação por texto ("sim") como fallback.
-                            this.authManager.addPending(conversationId, toolName, toolCall.arguments, txnId);
-
-                            move('AUTH_REQUIRED', { step: stepCount, tool: toolName, txnId });
-                            const authReq = this.authManager.formatRequest(toolName, toolCall.arguments, txnId);
-                            return { text: authReq.text, options: authReq.options };
-                        }
-
-                        // Guard: bloqueia edit repetido no mesmo arquivo (previne append-loop)
-                        if (toolName === 'edit') {
-                            const ep = typeof toolCall.arguments?.path === 'string' ? toolCall.arguments.path : undefined;
-                            if (ep) {
-                                const ec = (editPathCount.get(ep) ?? 0) + 1;
-                                editPathCount.set(ep, ec);
-                                if (ec > 4) {
-                                    log.warn(`[${this.ts()}] [EDIT-LOOP] Blocked edit #${ec} to "${ep}" — use write to rewrite`);
-                                    loopMessages.push({
-                                        role: 'tool',
-                                        content: `[BLOQUEADO] "edit" foi chamado ${ec} vezes no mesmo arquivo "${ep}" neste turno. Esta chamada foi bloqueada para evitar corrupção de arquivo por append-loop. Use "write" com o conteúdo completo se precisar reescrever o arquivo inteiro.`,
-                                        tool_call_id: toolCall.id,
-                                    });
-                                    if (ec >= 7) {
-                                        loopMessages.push({ role: 'system', content: `[CRÍTICO] "edit" foi chamado ${ec} vezes no arquivo "${ep}". O loop foi interrompido. Responda ao usuário com o que foi feito até aqui.` });
-                                        dedupAbort = true;
-                                        dedupAbortTool = toolName;
-                                        break;
-                                    }
-                                    continue;
-                                }
-                            }
-                        }
-
-                        const toolStartTime = Date.now();
-                        const recovery = await this.proactiveRecovery.execute(
-                            toolName, toolCall.arguments,
-                            (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined,
-                            usedToolInputs,
-                            turnSignal,
-                        );
-                        const result = recovery.result;
-                        const resolvedToolName = recovery.finalToolName;
-                        const resolvedArgs = recovery.finalArgs;
-                        const toolDuration = Date.now() - toolStartTime;
-
-                        if (recovery.recovered && recovery.recoveryNote) {
-                            const origTool = recovery.originalToolName ?? toolName;
-                            const kind = recovery.mutationKind ?? 'arg_mutation';
-                            log.info(
-                                `[MUTATION] tool_mutation:\n  tool: ${origTool}\n  kind: ${kind}\n` +
-                                `  original: ${JSON.stringify(recovery.originalArgs ?? {})}\n` +
-                                `  modified: ${JSON.stringify(resolvedArgs)}`
-                            );
-                            loopMessages.push({
-                                role: 'system',
-                                content: kind === 'fallback_tool'
-                                    ? `[RECUPERAÇÃO AUTOMÁTICA] A ferramenta "${origTool}" falhou e foi substituída por "${resolvedToolName}" com argumentos adaptados. ${recovery.recoveryNote}`
-                                    : `[RECUPERAÇÃO AUTOMÁTICA] Os argumentos da ferramenta "${resolvedToolName}" foram ajustados automaticamente para funcionar. ${recovery.recoveryNote}`,
-                            });
-                        } else if (recovery.recoveryNote) {
-                            log.info(`[${this.ts()}] ${recovery.recoveryNote}`);
-                        }
-                        // Utility score: generic keyword-overlap heuristic — observability only.
-                        // Collect data here; do not use for control flow until patterns emerge.
-                        const utilityScore = result.success
-                            ? computeToolUtilityScore(userText, result.output)
-                            : 0;
-                        log.info(
-                            `[${this.ts()}] [TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'} ` +
-                            `utility=${utilityScore.toFixed(2)}`,
-                            result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200)
-                        );
-
-                        traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
-                        traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output });
-                        this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
-                        this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
-
-                        cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
-                        loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
-                        if (result.success) usedToolOutputs.set(inputKey, result.output.slice(0, 2000));
-                        // Persiste args de tool calls bem-sucedidas no transcript (mesmo padrão já
-                        // usado por GoalExecutionLoop.ts, que sempre teve isso — AgentLoop nunca
-                        // teve, então turnos roteados por aqui perdiam permanentemente os argumentos
-                        // de qualquer tool call assim que o turno terminava (cycleHistory é local ao
-                        // método, descartado no return). Caso real: send_audio recebe o texto do
-                        // áudio só via toolArgs — sem isso, "qual foi o texto que você usou?" nunca
-                        // tem como ser respondido, mesmo o áudio tendo sido gerado com sucesso.
-                        if (result.success && channelContext) {
-                            await this.sessionContext?.getSessionManager().recordToolCall(
-                                { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
-                                resolvedToolName,
-                                JSON.stringify(resolvedArgs),
-                            ).catch(() => {});
-                        }
-
-                        // Evidence-driven budget upgrade: a turn classified as lightweight
-                        // (conversation/direct, maxSteps=4) can still turn into real file-producing
-                        // work once it actually calls `write`/`exec_command` — the upfront text-only
-                        // classification has no way to know a "refinamento" will need edit + convert
-                        // + send. Evidence: 2026-07-05 audit log, goal_1783288862838_1muu1 follow-up
-                        // "máximo 10 linhas por slide" — routed as refinement_of_recent_goal →
-                        // agentloop → conversation/direct (budget 4+2). The turn spent its entire
-                        // budget re-editing excel_class.md and only wrote a conversion script
-                        // (scripts/gen_excel_pptx.py) in the very last allowed step — never executed
-                        // it, never sent anything — then got blocked as a hallucination (final text
-                        // said "vou recriar..." while no new PPTX existed). Same upgrade pattern as
-                        // requiresPlanning above — reacts to observed tool use, not to a new
-                        // classification signal.
-                        if (result.success && (resolvedToolName === 'write' || resolvedToolName === 'exec_command') &&
-                            maxSteps < (STEP_BUDGETS.tool ?? 10)) {
-                            const upgraded = STEP_BUDGETS.tool ?? 10;
-                            log.info(`[${this.ts()}] [STEP-BUDGET] real file work detected (${resolvedToolName}) → upgrading ${maxSteps} → ${upgraded}`);
-                            maxSteps = upgraded;
-                            decisionCtx.extendedStepBudget = upgraded;
-                        }
-
-                        totalToolCalls++;
-
-                        // Generic loop detector: same tool called too many times in one turn.
-                        // Exception: info-retrieval tools called in batch mode (one LLM response,
-                        // each call with a unique argument) are NOT loops — they're valid parallel
-                        // fetches. Use argument diversity to distinguish batch from loop.
-                        const toolTypeCount = (toolTypeCallCount.get(resolvedToolName) ?? 0) + 1;
-                        toolTypeCallCount.set(resolvedToolName, toolTypeCount);
-                        if (toolTypeCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
-                            const INFO_BATCH_TOOLS = new Set(['web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request']);
-                            const uniqueArgsForTool = new Set(
-                                cycleHistory.filter(h => h.tool === resolvedToolName).map(h => h.input)
-                            ).size;
-                            const uniqueRatio = toolTypeCount > 0 ? uniqueArgsForTool / toolTypeCount : 0;
-                            const isBatch = INFO_BATCH_TOOLS.has(resolvedToolName) && uniqueRatio >= 0.75 && toolTypeCount < 10;
-                            if (isBatch) {
-                                log.warn(
-                                    `[${this.ts()}] [SAFETY-GUARD] type=info_batch tool=${resolvedToolName} ` +
-                                    `calls=${toolTypeCount} unique=${uniqueArgsForTool} ratio=${uniqueRatio.toFixed(2)} — batch mode, continuing`
-                                );
-                            } else {
-                                log.warn(
-                                    `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
-                                    `value=${toolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
-                                );
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${toolTypeCount} vezes neste turno. ` +
-                                        `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
-                                });
-                                dedupAbort = true;
-                                dedupAbortTool = `${resolvedToolName}:loop`;
-                                guardsTriggered++;
-                            }
-                        }
-
-                        // Related-tool group detector: catches alternation (e.g. web_search ↔ web_navigate).
-                        const toolGroup = TOOL_GROUP_REGISTRY[resolvedToolName];
-                        if (toolGroup) {
-                            const gCount = (groupCallCount.get(toolGroup) ?? 0) + 1;
-                            groupCallCount.set(toolGroup, gCount);
-                            if (gCount >= MAX_GROUP_CALLS && !dedupAbort) {
-                                log.warn(
-                                    `[${this.ts()}] [SAFETY-GUARD] type=tool_group_loop reason=group_limit ` +
-                                    `value=${gCount} threshold=${MAX_GROUP_CALLS} group=${toolGroup}`
-                                );
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[LOOP DE GRUPO] O grupo de ferramentas "${toolGroup}" foi usado ${gCount} vezes neste turno. ` +
-                                        `Interrompendo. Responda com os dados disponíveis em memória.`,
-                                });
-                                dedupAbort = true;
-                                dedupAbortTool = `group:${toolGroup}:loop`;
-                                guardsTriggered++;
-                            }
-                        }
-
-                        // Consecutive failure detector: resets on any success.
-                        if (result.success) {
-                            consecutiveToolFailures = 0;
-                        } else {
-                            consecutiveToolFailures++;
-                            if (consecutiveToolFailures >= MAX_CONSECUTIVE_TOOL_FAILURES && !dedupAbort) {
-                                log.warn(
-                                    `[${this.ts()}] [SAFETY-GUARD] type=consecutive_failures reason=failure_limit ` +
-                                    `value=${consecutiveToolFailures} threshold=${MAX_CONSECUTIVE_TOOL_FAILURES}`
-                                );
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[FALHAS CONSECUTIVAS] ${consecutiveToolFailures} ferramentas falharam seguidas. ` +
-                                        `Não foi possível obter dados confiáveis após múltiplas tentativas. Responda ao usuário com honestidade sobre essa limitação.`,
-                                });
-                                dedupAbort = true;
-                                dedupAbortTool = 'consecutive_failures';
-                                guardsTriggered++;
-                            }
-                        }
-
-                        // After a successful read, inject a directive to prevent re-reading in this turn.
-                        // ARTIFACT-DRIFT FIX: mensagem escrita para NÃO proibir releitura em turnos futuros
-                        // (arquivo pode ser modificado por steps subsequentes do GoalExecutionLoop).
-                        if (result.success && resolvedToolName === 'read') {
-                            loopMessages.push({
-                                role: 'system',
-                                content:
-                                    `[LEITURA CONCLUÍDA] O arquivo foi lido com sucesso (${result.output.length} chars). ` +
-                                    `O conteúdo está disponível neste turno.\n` +
-                                    `Se o arquivo for modificado (write/edit) em um passo futuro, releia-o antes de usá-lo novamente.\n` +
-                                    `PRÓXIMO PASSO: use "exec_command" para processar, "write" para salvar, ou responda ao usuário.`,
-                            });
-                        }
-
-                        if (!result.success) {
-                            toolFailureCount++;
-                            const errorText = result.error ?? result.output ?? '';
-                            const isReadNotFound = resolvedToolName === 'read' && /não encontrado|not found/i.test(errorText);
-                            const isBinaryRead = resolvedToolName === 'read' && /arquivos binários|binary.*não podem|cannot.*binary/i.test(errorText);
-                            if (isReadNotFound) {
-                                const pathArg = String(resolvedArgs.path || '');
-                                const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
-                                if (filename) failedReadFilenames.add(filename);
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[ARQUIVO INEXISTENTE] "${filename || pathArg}" não existe no workspace. Para criá-lo, use a ferramenta "write" com o conteúdo completo. NÃO tente "read" novamente antes de criar o arquivo com "write".`,
-                                });
-                            } else if (isBinaryRead) {
-                                const pathArg = String(resolvedArgs.path || '');
-                                const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
-                                if (filename) binaryReadFilenames.add(filename);
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[ARQUIVO BINÁRIO] "${filename || pathArg}" não pode ser lido com "read". Use exec_command com a ferramenta adequada (python-pptx, pandoc, pdftotext, etc.). NÃO tente "read" neste arquivo novamente.`,
-                                });
-                            } else if (resolvedToolName === 'exec_command' && /no such file or directory/i.test(errorText)) {
-                                // Path não existe — sugere explorar o workspace antes de adivinhar caminhos
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[PATH INEXISTENTE] O caminho informado não existe. NÃO repita o mesmo comando. Use "list_workspace" para descobrir a estrutura real do workspace antes de prosseguir.`,
-                                });
-                            } else {
-                                // errorText é computado acima (result.error ?? result.output ?? '') mas até aqui
-                                // nunca chegava ao LLM nos casos fora dos 3 padrões especiais acima — a mensagem
-                                // genérica ("tente uma abordagem diferente") não informa POR QUE a tool falhou,
-                                // fazendo o LLM adivinhar variações de frase às cegas em vez de corrigir a causa
-                                // real (ex: argumento obrigatório ausente, dependência não instalada).
-                                const reason = errorText.trim().slice(0, 300) || 'sem detalhes do erro retornados pela ferramenta';
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${reason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`
-                                });
-                            }
-                        }
-
-                        const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
-                        if (result.success && !terminalTools.includes(toolName) && !this.isSafeExecCommand(toolName, toolCall.arguments)) {
-                            this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
-                            void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
-                        }
-                        if (toolName === 'send_audio' && result.success) {
-                            channelContext?.onArtifactDelivered?.('__send_audio_delivered__');
-                        }
-                        if (terminalTools.includes(toolName) && result.success) {
-                            log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded — continuing batch before closing turn`);
-                            terminalBatchResult = result.output;
-                            move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: true });
-                            continue; // process remaining toolCalls in this batch (e.g. multiple send_document)
-                        }
-                        move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
-                    }
-                }
-
-                // After all toolCalls in the batch are processed, check for a terminal result.
-                if (terminalBatchResult !== null) {
-                    log.info(`[${this.ts()}] [TASK-FSM] Terminal batch done → task DONE, returning result`);
-                    move('FINAL_READY', { step: stepCount, terminal: true });
-                    traceManager.completeTrace(trace, 'completed', terminalBatchResult);
-                    this.persistTrace(trace, stepCount, 'completed', terminalBatchResult, channelContext);
-                    return terminalBatchResult;
-                }
-
-                continue;
-            }
-
-            // Protocol-Based Early Exit
-            const hasNoToolsRequested = !response.toolCalls?.length && !wantsTool;
-            const isStructuredPlanning = structured?.type === 'planning';
-
-            if (hasNoToolsRequested && !isExplicitlyIncomplete && !isStructuredPlanning) {
-                if (finalText.length > 0) {
-                    log.info(`[${this.ts()}] [PROTOCOL-EXIT] No tools, structured complete — returning content (step ${stepCount}, type=${structured?.type})`);
-                    move('FINAL_READY', { step: stepCount, reason: 'no_tools_requested' });
-                    traceManager.completeTrace(trace, 'completed', finalText);
-                    this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                    return await this.commitResponse(finalText, userText, trace.id, conversationId, turnSignal, toolFailureCount);
-                }
-            }
-
-            // JSON-action tool execution
-            if (atomicData?.action?.type === 'tool' && atomicData.action.name) {
-                const toolName = atomicData.action.name;
-                const inputKey = computeToolInputKey(toolName, atomicData.action.input || {});
-
-                if (usedToolInputs.has(inputKey)) {
-                    const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
-                    blockedKeyCount.set(inputKey, blockCount);
-                    log.warn(`[${this.ts()}] [ATOMIC-TOOL] Blocked repeated call: ${toolName} (block #${blockCount})`);
-                    const atomicBlockedMsg = toolName === 'read'
-                        ? `[BLOQUEADO] "read" já foi executado para este arquivo. O conteúdo JÁ ESTÁ disponível no histórico desta conversa — NÃO releia. Próximo passo obrigatório: use exec_command para processar o arquivo, write para salvar resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`
-                        : `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos (bloqueio #${blockCount}). NÃO repita — use uma estratégia diferente ou responda com o que já sabe.`;
-                    loopMessages.push({
-                        role: 'system',
-                        content: atomicBlockedMsg,
-                    });
-                    if (blockCount >= 3) {
-                        loopMessages.push({
-                            role: 'system',
-                            content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. Forneça a melhor resposta possível com as informações que você já tem.`,
-                        });
-                        dedupAbort = true;
-                        dedupAbortTool = toolName;
-                        break;
-                    }
-                    continue;
-                }
-
-                const tool = this.tools.get(toolName);
-                if (tool) {
-                    move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'json_action' });
-                    if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
-                        (tool as unknown as ContextAwareTool).setContext(
-                            channelContext.chatId || '',
-                            channelContext.channel
-                        );
-                    }
-
-                    // Guard: bloqueia edit repetido no mesmo arquivo (previne append-loop)
-                    if (toolName === 'edit') {
-                        const ep = typeof atomicData.action.input?.path === 'string' ? atomicData.action.input.path : undefined;
-                        if (ep) {
-                            const ec = (editPathCount.get(ep) ?? 0) + 1;
-                            editPathCount.set(ep, ec);
-                            if (ec > 4) {
-                                log.warn(`[${this.ts()}] [EDIT-LOOP] Blocked atomic edit #${ec} to "${ep}" — use write to rewrite`);
-                                loopMessages.push({ role: 'system', content: `[BLOQUEADO] "edit" foi chamado ${ec} vezes no arquivo "${ep}" neste turno. Use "write" com o conteúdo completo.` });
-                                if (ec >= 7) {
-                                    dedupAbort = true;
-                                    dedupAbortTool = toolName;
-                                    break;
-                                }
-                                continue;
-                            }
-                        }
-                    }
-
-                    // Mesmo guard do caminho de tool-calling nativo (linha ~1645): send_audio
-                    // não tem file_path estável, então não pode reusar o dedup de send_document.
-                    // Sem isso, um step "agentloop" que já entregou áudio e é re-executado do
-                    // zero por um replan reenviaria áudio de novo também quando o modelo usa o
-                    // protocolo JSON de ação em vez de tool-calling nativo.
-                    if (toolName === 'send_audio' && channelContext?.isAudioAlreadySent?.()) {
-                        log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal path=json_action`);
-                        loopMessages.push({
-                            role: 'tool',
-                            content: `[JÁ ENVIADO] O áudio para este objetivo já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
-                        });
-                        continue;
-                    }
-
-                    const toolStartTime = Date.now();
-                    const atomicRecovery = await this.proactiveRecovery.execute(
-                        toolName, atomicData.action.input || {},
-                        (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined,
-                        usedToolInputs,
-                        turnSignal,
-                    );
-                    const result = atomicRecovery.result;
-                    const resolvedToolName = atomicRecovery.finalToolName;
-                    const resolvedArgs = atomicRecovery.finalArgs;
-                    const toolDuration = Date.now() - toolStartTime;
-                    if (toolName === 'send_audio' && result.success) {
-                        channelContext?.onArtifactDelivered?.('__send_audio_delivered__');
-                    }
-
-                    if (atomicRecovery.recovered && atomicRecovery.recoveryNote) {
-                        const origTool = atomicRecovery.originalToolName ?? toolName;
-                        const kind = atomicRecovery.mutationKind ?? 'arg_mutation';
-                        log.info(
-                            `[MUTATION] tool_mutation:\n  tool: ${origTool}\n  kind: ${kind}\n` +
-                            `  original: ${JSON.stringify(atomicRecovery.originalArgs ?? {})}\n` +
-                            `  modified: ${JSON.stringify(resolvedArgs)}`
-                        );
-                        loopMessages.push({
-                            role: 'system',
-                            content: kind === 'fallback_tool'
-                                ? `[RECUPERAÇÃO AUTOMÁTICA] A ferramenta "${origTool}" falhou e foi substituída por "${resolvedToolName}". ${atomicRecovery.recoveryNote}`
-                                : `[RECUPERAÇÃO AUTOMÁTICA] Os argumentos da ferramenta "${resolvedToolName}" foram ajustados automaticamente. ${atomicRecovery.recoveryNote}`,
-                        });
-                    } else if (atomicRecovery.recoveryNote) {
-                        log.info(`[${this.ts()}] ${atomicRecovery.recoveryNote}`);
-                    }
-                    log.info(`[${this.ts()}] [ATOMIC-TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
-
-                    traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
-                    traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output });
-                    this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
-                    this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
-
-                    cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
-                    loopMessages.push({ role: 'tool', content: result.output });
-                    // Mesmo fix do caminho de tool-calling nativo acima (ver comentário lá) —
-                    // path json_action é a 2ª cópia do mesmo dispatch, precisa do mesmo registro.
-                    if (result.success && channelContext) {
-                        await this.sessionContext?.getSessionManager().recordToolCall(
-                            { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
-                            resolvedToolName,
-                            JSON.stringify(resolvedArgs),
-                        ).catch(() => {});
-                    }
-
-                    if (!result.success) {
-                        toolFailureCount++;
-                        // Mesma correção do caminho de tool-calling nativo acima: sem o texto real do
-                        // erro (result.error), o LLM só via "tente uma abordagem diferente" e adivinhava
-                        // variações de frase às cegas em vez de corrigir a causa real da falha.
-                        const atomicReason = (result.error ?? result.output ?? '').trim().slice(0, 300)
-                            || 'sem detalhes do erro retornados pela ferramenta';
-                        loopMessages.push({
-                            role: 'system',
-                            content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${atomicReason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`
-                        });
-                    }
-
-                    totalToolCalls++;
-
-                    // Generic loop detector (JSON-action path): mirrors the native tool check.
-                    const atomicToolTypeCount = (toolTypeCallCount.get(resolvedToolName) ?? 0) + 1;
-                    toolTypeCallCount.set(resolvedToolName, atomicToolTypeCount);
-                    if (atomicToolTypeCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
-                        log.warn(
-                            `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
-                            `value=${atomicToolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
-                        );
-                        loopMessages.push({
-                            role: 'system',
-                            content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${atomicToolTypeCount} vezes neste turno. ` +
-                                `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
-                        });
-                        dedupAbort = true;
-                        dedupAbortTool = `${resolvedToolName}:loop`;
-                        guardsTriggered++;
-                    }
-
-                    // Group loop + consecutive failures (JSON-action path).
-                    const atomicGroup = TOOL_GROUP_REGISTRY[resolvedToolName];
-                    if (atomicGroup) {
-                        const agCount = (groupCallCount.get(atomicGroup) ?? 0) + 1;
-                        groupCallCount.set(atomicGroup, agCount);
-                        if (agCount >= MAX_GROUP_CALLS && !dedupAbort) {
-                            log.warn(
-                                `[${this.ts()}] [SAFETY-GUARD] type=tool_group_loop reason=group_limit ` +
-                                `value=${agCount} threshold=${MAX_GROUP_CALLS} group=${atomicGroup}`
-                            );
-                            loopMessages.push({
-                                role: 'system',
-                                content: `[LOOP DE GRUPO] O grupo "${atomicGroup}" foi usado ${agCount} vezes. Responda com os dados disponíveis.`,
-                            });
-                            dedupAbort = true;
-                            dedupAbortTool = `group:${atomicGroup}:loop`;
-                            guardsTriggered++;
-                        }
-                    }
-                    if (result.success) {
-                        consecutiveToolFailures = 0;
-                    } else {
-                        consecutiveToolFailures++;
-                        if (consecutiveToolFailures >= MAX_CONSECUTIVE_TOOL_FAILURES && !dedupAbort) {
-                            log.warn(
-                                `[${this.ts()}] [SAFETY-GUARD] type=consecutive_failures reason=failure_limit ` +
-                                `value=${consecutiveToolFailures} threshold=${MAX_CONSECUTIVE_TOOL_FAILURES}`
-                            );
-                            loopMessages.push({
-                                role: 'system',
-                                content: `[FALHAS CONSECUTIVAS] ${consecutiveToolFailures} ferramentas falharam seguidas. Responda ao usuário com honestidade sobre essa limitação.`,
-                            });
-                            dedupAbort = true;
-                            dedupAbortTool = 'consecutive_failures';
-                            guardsTriggered++;
-                        }
-                    }
-
-                    const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
-                    if (terminalTools.includes(toolName) && result.success) {
-                        // JSON-action path is always a single tool call per step, so return immediately.
-                        log.info(`[${this.ts()}] [TASK-FSM] Terminal atomic tool "${toolName}" succeeded → task DONE, returning result`);
-                        move('FINAL_READY', { step: stepCount, tool: toolName, terminal: true });
-                        traceManager.completeTrace(trace, 'completed', result.output);
-                        this.persistTrace(trace, stepCount, 'completed', result.output, channelContext);
-                        return result.output;
-                    }
-
-                    if (result.success && !this.isSafeExecCommand(toolName, atomicData.action?.input as Record<string, unknown> || {})) {
-                        this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
-                        void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
-                    }
-
-                    move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
-                    continue;
-                }
-            }
-
-            if (stepCount >= maxSteps) {
-                log.warn(`[${this.ts()}] [STEP-LIMIT] step=${stepCount + 1} action=force_response`);
-                break;
-            }
-        }
-
-        // Structured turn diagnostics — single block per turn, all signals in one place.
-        // Enables post-mortem reconstruction without replaying the full execution log.
+    /**
+     * ARCH-019 (S25, Incremento 1): "Structured turn diagnostics" extraído de `runWithTools()`
+     * sem mudar lógica. Bloco puramente de LEITURA — computa métricas derivadas do turno
+     * inteiro e emite um único log `[TURN-DIAGNOSTICS]`; não muta nenhum estado do chamador,
+     * por isso não precisa de nenhum valor de retorno (diferente dos handlers extraídos em
+     * ARCH-020/S24, que sempre precisavam devolver estado atualizado).
+     */
+    private logTurnDiagnostics(input: TurnDiagnosticsInput): void {
+        const {
+            stepCount, executionMode, maxSteps, decisionCtx, getContextChars, initialContextChars,
+            toolTypeCallCount, groupCallCount, cycleHistory, maxSameToolCalls: MAX_SAME_TOOL_CALLS,
+            totalToolCalls, consecutiveToolFailures, toolFailureCount, totalThinkingChars,
+            guardsTriggered, dedupAbortTool, memoryFirstInjected, toolFailureHintInjected,
+            toolFailureHintFirstStep, toolSuccessHintInjected, toolSuccessHintFirstStep,
+            observerFeedbackInjected, observerFeedbackFirstStep, reflectionHintInjected,
+            intentCategory,
+        } = input;
+
+        const finalContextChars = getContextChars();
+        const finalGrowthRatio  = initialContextChars > 0 ? finalContextChars / initialContextChars : 1;
+        const maxSameToolCalls  = toolTypeCallCount.size > 0 ? Math.max(...toolTypeCallCount.values()) : 0;
+        const maxGroupCalls     = groupCallCount.size   > 0 ? Math.max(...groupCallCount.values())    : 0;
+
+        // ── Sprint 3.5A: Decision Impact Telemetry ──────────────────────────
+        const externalSearchTools = new Set(['web_search', 'web_navigate', 'weather']);
+
+        // eligible = condition was met; injected = hint was actually pushed to loopMessages
+        // eligible=true + injected=false → regression/bug
+        const memoryFirstEligible = decisionCtx.requiresMemoryFirst;
+
+        // compliance: was the hint followed? (derived from cycleHistory with step info)
+        const step1Entries       = cycleHistory.filter(h => h.step === 1);
+        const step1HasMemory     = step1Entries.some(h => h.tool === 'memory_search');
+        const step1HasExternal   = step1Entries.some(h => externalSearchTools.has(h.tool));
+        const memoryFirstFollowed =
+            memoryFirstInjected && step1HasMemory && !step1HasExternal;
+
+        // toolFailureHint: followed if the failing tool wasn't called again after hint step
+        const toolFailureHintFollowed = toolFailureHintInjected && toolFailureHintFirstStep !== null
+            ? !cycleHistory.some(h => h.step > toolFailureHintFirstStep! && h.status === 'error')
+            : false;
+
+        // toolSuccessHint: followed if the flagged tool wasn't called again after hint step
+        const toolSuccessHintFollowed = toolSuccessHintInjected && toolSuccessHintFirstStep !== null
+            ? (() => {
+                const hintedTool = Object.entries(decisionCtx.toolSuccessRates)
+                    .find(([, rate]) => rate < 0.4)?.[0];
+                return hintedTool
+                    ? !cycleHistory.some(h => h.step > toolSuccessHintFirstStep! && h.tool === hintedTool)
+                    : false;
+            })()
+            : false;
+
+        // observerFeedback: followed if no new tool failures in steps after hint
+        const observerFeedbackFollowed = observerFeedbackInjected && observerFeedbackFirstStep !== null
+            ? !cycleHistory.some(h => h.step > observerFeedbackFirstStep! && h.status === 'error')
+            : false;
+
+        // reflectionHint (ReflectionMemory.buildContextHint): injetado uma única vez, antes
+        // do step 1 — não tem "primeiro passo" dinâmico como os outros hints. "Seguido" aqui
+        // significa: o turno não terminou em erro de ferramenta nem em bloqueio de commit
+        // (mesma semântica de observerFeedbackFollowed, adaptada por não ter step de início).
+        // S0.5 (roadmap de aprendizado): esta é a peça que faltava no mecanismo de
+        // hint-compliance já existente — sem isso não há como medir se o conhecimento
+        // recuperado da ReflectionMemory está de fato influenciando o turno.
+        const reflectionHintFollowed = reflectionHintInjected
+            ? !cycleHistory.some(h => h.status === 'error')
+            : false;
+
+        // hint compliance rate across all injected hints this turn
+        let totalHintsInjected = 0;
+        let totalHintsFollowed = 0;
+        if (memoryFirstEligible)        { totalHintsInjected++; if (memoryFirstFollowed)    totalHintsFollowed++; }
+        if (toolFailureHintInjected)    { totalHintsInjected++; if (toolFailureHintFollowed) totalHintsFollowed++; }
+        if (toolSuccessHintInjected)    { totalHintsInjected++; if (toolSuccessHintFollowed) totalHintsFollowed++; }
+        if (observerFeedbackInjected)   { totalHintsInjected++; if (observerFeedbackFollowed) totalHintsFollowed++; }
+        if (reflectionHintInjected)     { totalHintsInjected++; if (reflectionHintFollowed)   totalHintsFollowed++; }
+        const hintComplianceRate = totalHintsInjected > 0
+            ? (totalHintsFollowed / totalHintsInjected).toFixed(2)
+            : 'n/a';
+
+        // knowledge-decision gap: memory available but LLM used only external tools
+        const externalCallCount = cycleHistory.filter(h => externalSearchTools.has(h.tool)).length;
+        const memoryCallCount   = cycleHistory.filter(h => h.tool === 'memory_search').length;
+        const knowledgeDecisionGap =
+            decisionCtx.memoryConfidence !== 'none' &&
+            externalCallCount > 2 &&
+            memoryCallCount === 0;
+
+        // shadow enforcement candidates (would-have-triggered, no behavior change)
+        // tool cooldown shadow: first tool with 2 consecutive failures in cycleHistory
+        let shadowCooldown: { triggered: boolean; tool?: string; failures?: number; step?: number } = { triggered: false };
         {
-            const finalContextChars = getContextChars();
-            const finalGrowthRatio  = initialContextChars > 0 ? finalContextChars / initialContextChars : 1;
-            const maxSameToolCalls  = toolTypeCallCount.size > 0 ? Math.max(...toolTypeCallCount.values()) : 0;
-            const maxGroupCalls     = groupCallCount.size   > 0 ? Math.max(...groupCallCount.values())    : 0;
-
-            // ── Sprint 3.5A: Decision Impact Telemetry ──────────────────────────
-            const externalSearchTools = new Set(['web_search', 'web_navigate', 'weather']);
-
-            // eligible = condition was met; injected = hint was actually pushed to loopMessages
-            // eligible=true + injected=false → regression/bug
-            const memoryFirstEligible = decisionCtx.requiresMemoryFirst;
-
-            // compliance: was the hint followed? (derived from cycleHistory with step info)
-            const step1Entries       = cycleHistory.filter(h => h.step === 1);
-            const step1HasMemory     = step1Entries.some(h => h.tool === 'memory_search');
-            const step1HasExternal   = step1Entries.some(h => externalSearchTools.has(h.tool));
-            const memoryFirstFollowed =
-                memoryFirstInjected && step1HasMemory && !step1HasExternal;
-
-            // toolFailureHint: followed if the failing tool wasn't called again after hint step
-            const toolFailureHintFollowed = toolFailureHintInjected && toolFailureHintFirstStep !== null
-                ? !cycleHistory.some(h => h.step > toolFailureHintFirstStep! && h.status === 'error')
-                : false;
-
-            // toolSuccessHint: followed if the flagged tool wasn't called again after hint step
-            const toolSuccessHintFollowed = toolSuccessHintInjected && toolSuccessHintFirstStep !== null
-                ? (() => {
-                    const hintedTool = Object.entries(decisionCtx.toolSuccessRates)
-                        .find(([, rate]) => rate < 0.4)?.[0];
-                    return hintedTool
-                        ? !cycleHistory.some(h => h.step > toolSuccessHintFirstStep! && h.tool === hintedTool)
-                        : false;
-                })()
-                : false;
-
-            // observerFeedback: followed if no new tool failures in steps after hint
-            const observerFeedbackFollowed = observerFeedbackInjected && observerFeedbackFirstStep !== null
-                ? !cycleHistory.some(h => h.step > observerFeedbackFirstStep! && h.status === 'error')
-                : false;
-
-            // reflectionHint (ReflectionMemory.buildContextHint): injetado uma única vez, antes
-            // do step 1 — não tem "primeiro passo" dinâmico como os outros hints. "Seguido" aqui
-            // significa: o turno não terminou em erro de ferramenta nem em bloqueio de commit
-            // (mesma semântica de observerFeedbackFollowed, adaptada por não ter step de início).
-            // S0.5 (roadmap de aprendizado): esta é a peça que faltava no mecanismo de
-            // hint-compliance já existente — sem isso não há como medir se o conhecimento
-            // recuperado da ReflectionMemory está de fato influenciando o turno.
-            const reflectionHintFollowed = reflectionHintInjected
-                ? !cycleHistory.some(h => h.status === 'error')
-                : false;
-
-            // hint compliance rate across all injected hints this turn
-            let totalHintsInjected = 0;
-            let totalHintsFollowed = 0;
-            if (memoryFirstEligible)        { totalHintsInjected++; if (memoryFirstFollowed)    totalHintsFollowed++; }
-            if (toolFailureHintInjected)    { totalHintsInjected++; if (toolFailureHintFollowed) totalHintsFollowed++; }
-            if (toolSuccessHintInjected)    { totalHintsInjected++; if (toolSuccessHintFollowed) totalHintsFollowed++; }
-            if (observerFeedbackInjected)   { totalHintsInjected++; if (observerFeedbackFollowed) totalHintsFollowed++; }
-            if (reflectionHintInjected)     { totalHintsInjected++; if (reflectionHintFollowed)   totalHintsFollowed++; }
-            const hintComplianceRate = totalHintsInjected > 0
-                ? (totalHintsFollowed / totalHintsInjected).toFixed(2)
-                : 'n/a';
-
-            // knowledge-decision gap: memory available but LLM used only external tools
-            const externalCallCount = cycleHistory.filter(h => externalSearchTools.has(h.tool)).length;
-            const memoryCallCount   = cycleHistory.filter(h => h.tool === 'memory_search').length;
-            const knowledgeDecisionGap =
-                decisionCtx.memoryConfidence !== 'none' &&
-                externalCallCount > 2 &&
-                memoryCallCount === 0;
-
-            // shadow enforcement candidates (would-have-triggered, no behavior change)
-            // tool cooldown shadow: first tool with 2 consecutive failures in cycleHistory
-            let shadowCooldown: { triggered: boolean; tool?: string; failures?: number; step?: number } = { triggered: false };
-            {
-                let consecutive = 0;
-                let lastTool    = '';
-                for (const entry of cycleHistory) {
-                    if (entry.status === 'error' && entry.tool === lastTool) {
-                        consecutive++;
-                        if (consecutive >= 2 && !shadowCooldown.triggered) {
-                            shadowCooldown = { triggered: true, tool: entry.tool, failures: consecutive + 1, step: entry.step };
-                        }
-                    } else {
-                        consecutive = entry.status === 'error' ? 1 : 0;
-                        lastTool    = entry.tool;
+            let consecutive = 0;
+            let lastTool    = '';
+            for (const entry of cycleHistory) {
+                if (entry.status === 'error' && entry.tool === lastTool) {
+                    consecutive++;
+                    if (consecutive >= 2 && !shadowCooldown.triggered) {
+                        shadowCooldown = { triggered: true, tool: entry.tool, failures: consecutive + 1, step: entry.step };
                     }
+                } else {
+                    consecutive = entry.status === 'error' ? 1 : 0;
+                    lastTool    = entry.tool;
                 }
             }
-
-            // dedup abort shadow: first tool that would reach MAX_SAME_TOOL_CALLS
-            const shadowDedupTool = [...toolTypeCallCount.entries()]
-                .find(([, count]) => count >= MAX_SAME_TOOL_CALLS);
-            const shadowDedup = shadowDedupTool
-                ? { triggered: true, tool: shadowDedupTool[0], calls: shadowDedupTool[1] }
-                : { triggered: false };
-
-            // memory-first shadow: enforcement would have changed step-1 behavior
-            const shadowMemoryFirst = memoryFirstEligible && !memoryFirstFollowed;
-
-            log.info(
-                `[${this.ts()}] [TURN-DIAGNOSTICS]\n` +
-                `  steps=${stepCount} mode=${executionMode} budget=${maxSteps}\n` +
-                `  memory:\n` +
-                `    confidence=${decisionCtx.memoryConfidence}\n` +
-                `    requiresMemoryFirst=${decisionCtx.requiresMemoryFirst}\n` +
-                `    hasHighRelevancePref=${decisionCtx.hasHighRelevancePreference}\n` +
-                `  context:\n` +
-                `    initialChars=${initialContextChars}\n` +
-                `    currentChars=${finalContextChars}\n` +
-                `    growthRatio=${finalGrowthRatio.toFixed(2)}\n` +
-                `  tools:\n` +
-                `    totalCalls=${totalToolCalls}\n` +
-                `    sameToolCalls=${maxSameToolCalls}\n` +
-                `    sameGroupCalls=${maxGroupCalls}\n` +
-                `    consecutiveFailures=${consecutiveToolFailures}\n` +
-                `    totalFailures=${toolFailureCount}\n` +
-                `  reasoning:\n` +
-                `    chars=${totalThinkingChars}\n` +
-                `  safety:\n` +
-                `    guardsTriggered=${guardsTriggered}\n` +
-                `    abortReason=${dedupAbortTool || 'none'}\n` +
-                `  decisionImpact:\n` +
-                `    memoryFirst: eligible=${memoryFirstEligible} injected=${memoryFirstInjected} followed=${memoryFirstFollowed}\n` +
-                `    toolFailureHint: injected=${toolFailureHintInjected} step=${toolFailureHintFirstStep ?? '-'} followed=${toolFailureHintFollowed}\n` +
-                `    toolSuccessHint: injected=${toolSuccessHintInjected} step=${toolSuccessHintFirstStep ?? '-'} followed=${toolSuccessHintFollowed}\n` +
-                `    observerFeedback: injected=${observerFeedbackInjected} step=${observerFeedbackFirstStep ?? '-'} followed=${observerFeedbackFollowed}\n` +
-                `    reflectionHint: injected=${reflectionHintInjected} category=${intentDecision.category} followed=${reflectionHintFollowed}\n` +
-                `    hintComplianceRate=${hintComplianceRate} (${totalHintsFollowed}/${totalHintsInjected})\n` +
-                `    knowledgeDecisionGap=${knowledgeDecisionGap} (ext=${externalCallCount} mem=${memoryCallCount})\n` +
-                `  shadowEnforcement:\n` +
-                `    cooldown: triggered=${shadowCooldown.triggered}${shadowCooldown.triggered ? ` tool=${shadowCooldown.tool} failures=${shadowCooldown.failures} atStep=${shadowCooldown.step}` : ''}\n` +
-                `    dedup: triggered=${shadowDedup.triggered}${shadowDedup.triggered ? ` tool=${shadowDedup.tool} calls=${shadowDedup.calls}` : ''}\n` +
-                `    memoryFirst: wouldHaveChanged=${shadowMemoryFirst}`
-            );
         }
 
+        // dedup abort shadow: first tool that would reach MAX_SAME_TOOL_CALLS
+        const shadowDedupTool = [...toolTypeCallCount.entries()]
+            .find(([, count]) => count >= MAX_SAME_TOOL_CALLS);
+        const shadowDedup = shadowDedupTool
+            ? { triggered: true, tool: shadowDedupTool[0], calls: shadowDedupTool[1] }
+            : { triggered: false };
+
+        // memory-first shadow: enforcement would have changed step-1 behavior
+        const shadowMemoryFirst = memoryFirstEligible && !memoryFirstFollowed;
+
+        log.info(
+            `[${this.ts()}] [TURN-DIAGNOSTICS]\n` +
+            `  steps=${stepCount} mode=${executionMode} budget=${maxSteps}\n` +
+            `  memory:\n` +
+            `    confidence=${decisionCtx.memoryConfidence}\n` +
+            `    requiresMemoryFirst=${decisionCtx.requiresMemoryFirst}\n` +
+            `    hasHighRelevancePref=${decisionCtx.hasHighRelevancePreference}\n` +
+            `  context:\n` +
+            `    initialChars=${initialContextChars}\n` +
+            `    currentChars=${finalContextChars}\n` +
+            `    growthRatio=${finalGrowthRatio.toFixed(2)}\n` +
+            `  tools:\n` +
+            `    totalCalls=${totalToolCalls}\n` +
+            `    sameToolCalls=${maxSameToolCalls}\n` +
+            `    sameGroupCalls=${maxGroupCalls}\n` +
+            `    consecutiveFailures=${consecutiveToolFailures}\n` +
+            `    totalFailures=${toolFailureCount}\n` +
+            `  reasoning:\n` +
+            `    chars=${totalThinkingChars}\n` +
+            `  safety:\n` +
+            `    guardsTriggered=${guardsTriggered}\n` +
+            `    abortReason=${dedupAbortTool || 'none'}\n` +
+            `  decisionImpact:\n` +
+            `    memoryFirst: eligible=${memoryFirstEligible} injected=${memoryFirstInjected} followed=${memoryFirstFollowed}\n` +
+            `    toolFailureHint: injected=${toolFailureHintInjected} step=${toolFailureHintFirstStep ?? '-'} followed=${toolFailureHintFollowed}\n` +
+            `    toolSuccessHint: injected=${toolSuccessHintInjected} step=${toolSuccessHintFirstStep ?? '-'} followed=${toolSuccessHintFollowed}\n` +
+            `    observerFeedback: injected=${observerFeedbackInjected} step=${observerFeedbackFirstStep ?? '-'} followed=${observerFeedbackFollowed}\n` +
+            `    reflectionHint: injected=${reflectionHintInjected} category=${intentCategory} followed=${reflectionHintFollowed}\n` +
+            `    hintComplianceRate=${hintComplianceRate} (${totalHintsFollowed}/${totalHintsInjected})\n` +
+            `    knowledgeDecisionGap=${knowledgeDecisionGap} (ext=${externalCallCount} mem=${memoryCallCount})\n` +
+            `  shadowEnforcement:\n` +
+            `    cooldown: triggered=${shadowCooldown.triggered}${shadowCooldown.triggered ? ` tool=${shadowCooldown.tool} failures=${shadowCooldown.failures} atStep=${shadowCooldown.step}` : ''}\n` +
+            `    dedup: triggered=${shadowDedup.triggered}${shadowDedup.triggered ? ` tool=${shadowDedup.tool} calls=${shadowDedup.calls}` : ''}\n` +
+            `    memoryFirst: wouldHaveChanged=${shadowMemoryFirst}`
+        );
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 2): "Delivery guard" extraído de `runWithTools()` sem mudar
+     * lógica — se um arquivo foi escrito mas nunca enviado (ou um script gerado mas nunca
+     * executado), reentra num mini-loop de LLM+tool-calling com uma instrução de entrega antes
+     * de cair na síntese pós-loop. `stepCount` é o único valor mutável que precisa ser
+     * devolvido explicitamente (o guard tem seu próprio laço `while` interno que o incrementa);
+     * `cycleHistory`/`loopMessages` são mutados nas MESMAS referências recebidas, sem threading.
+     */
+    private async runDeliveryGuardPhase(
+        conversationId: string,
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        loopMessages: LLMMessage[],
+        toolDefs: ToolDefinition[],
+        chatProfile: ModelProfile,
+        turnSignal: AbortSignal,
+        trace: ExecutionTrace,
+        channelContext: ChannelContext | undefined,
+        usedToolInputs: Set<string>,
+        maxSteps: number,
+        stepCount: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): Promise<DeliveryGuardResult> {
         // Delivery guard: if a file was written but never sent, the user received nothing.
         // Re-enter the loop with a delivery instruction before synthesis.
         //
@@ -2558,8 +1504,14 @@ export class AgentLoop {
         // the agent wrote tmp/gerar_slides_senac.py and workspace/gen_pptx.py in two separate
         // turns, never executed either, and both times ran out of step budget before this guard
         // could even fire (see the `stepCount < maxSteps` note below).
-        const DELIVERABLE_EXTENSIONS = ['.html', '.pdf', '.md', '.txt', '.js', '.ts', '.csv', '.json', '.docx', '.xlsx'];
-        const EXECUTABLE_SCRIPT_EXTENSIONS = ['.py', '.sh'];
+        // DELIVERABLE_EXTENSIONS agora vive em planning/inferExpectedExtensions.ts (ARCH-026) —
+        // mesmo módulo que já centraliza SOURCE_SCRIPT_EXTENSIONS logo abaixo.
+        // Fonte única com RiskAnalyzer/resolveArtifactPathFromEvidence (Sprint F2, revisão de
+        // código pós-piloto R1-R7) — antes esta lista local (['.py','.sh']) e o blocklist
+        // SOURCE_SCRIPT_EXTENSIONS de inferExpectedExtensions.ts divergiam sobre '.js'/'.ts',
+        // fazendo o mesmo tipo de arquivo ser tratado como deliverable aqui e como script-fonte
+        // (nunca deliverable) lá.
+        const EXECUTABLE_SCRIPT_EXTENSIONS = [...SOURCE_SCRIPT_EXTENSIONS];
         const wroteFile = cycleHistory.some(h => h.tool === 'write' && h.status === 'success');
         // 'deferred' conta como já tratado: um send_document adiado para pós-validação (FIX E
         // acima) já está registrado para entrega via channelContext — sem isso, este guard
@@ -2621,7 +1573,7 @@ export class AgentLoop {
                 const deliveryResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile, turnSignal);
                 move('LLM_RESPONSE', { step: stepCount, phase: 'delivery', status: deliveryResponse.status });
 
-                if (deliveryResponse.status === 'cancelled') { move('CANCEL', { step: stepCount }); this.activeTurns.delete(conversationId); return { text: 'Operação cancelada.' }; }
+                if (deliveryResponse.status === 'cancelled') { move('CANCEL', { step: stepCount }); this.activeTurns.delete(conversationId); return { earlyReturn: true, result: { text: 'Operação cancelada.' } }; }
                 if (deliveryResponse.status === 'timeout' || deliveryResponse.status === 'error') break;
 
                 loopMessages.push({ role: 'assistant', content: deliveryResponse.content, toolCalls: deliveryResponse.toolCalls });
@@ -2664,11 +1616,11 @@ export class AgentLoop {
                             if (toolCall.name === 'send_document') {
                                 const finalArgs = (result.finalArgs ?? toolCall.arguments) as Record<string, unknown>;
                                 const deliveredPath = String(finalArgs['file_path'] ?? finalArgs['path'] ?? '');
-                                if (deliveredPath) channelContext?.onArtifactDelivered?.(deliveredPath);
+                                if (deliveredPath) channelContext?.deliveryTracking?.onArtifactDelivered?.(deliveredPath);
                             }
                             traceManager.completeTrace(trace, 'completed', result.result.output);
                             this.persistTrace(trace, stepCount, 'completed', result.result.output, channelContext);
-                            return result.result.output;
+                            return { earlyReturn: true, result: result.result.output };
                         }
                         move('TOOL_COMPLETED', { step: stepCount, tool: toolCall.name, success: result.result.success });
                     }
@@ -2678,7 +1630,35 @@ export class AgentLoop {
                 break;
             }
         }
+        return { earlyReturn: false, stepCount };
+    }
 
+    /**
+     * ARCH-019 (S25, Incremento 3): "Post-loop synthesis" + "Fallback" extraído de
+     * `runWithTools()` sem mudar lógica — é a cauda final do método, sempre termina em
+     * `return`, nunca em `continue`/`break` (por isso não precisa do discriminated union usado
+     * nos outros incrementos: todo caminho aqui já é um "earlyReturn" na prática, incluindo os
+     * de cancelamento). Chamado do orquestrador como a última coisa dentro do `try`, logo
+     * antes do `catch(fsmError)`/`finally` (que continuam em `runWithTools()`, nunca movidos —
+     * precisam envolver TODAS as fases, não só esta).
+     */
+    private async runSynthesisAndFallbackPhase(
+        conversationId: string,
+        userText: string,
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        loopMessages: LLMMessage[],
+        lastBestContent: string,
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        chatProfile: ModelProfile,
+        turnSignal: AbortSignal,
+        trace: ExecutionTrace,
+        channelContext: ChannelContext | undefined,
+        stepCount: number,
+        maxSteps: number,
+        toolFailureCount: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): Promise<string | ProcessedResult> {
         // Post-loop synthesis
         const executedToolsInLastStep = cycleHistory.length > 0;
         const hasGoodContent = lastBestContent && lastBestContent.length > 100;
@@ -2850,6 +1830,1692 @@ export class AgentLoop {
         this.activeTurns.delete(conversationId);
 
         return await this.commitResponse(text, userText, trace.id, conversationId, turnSignal, toolFailureCount);
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 4): "JSON-action tool execution" extraído de `runWithTools()`
+     * sem mudar lógica — caminho alternativo ao tool-calling nativo (modelos sem suporte a
+     * function-calling expressam a ação pretendida como um blob JSON no texto da resposta,
+     * parseado em `atomicData` antes desta chamada). Réplica funcional do caminho nativo
+     * (mesmos guards de dedup/loop/falhas consecutivas), mas despachando só 1 tool call por
+     * step (não um batch). Ver `JsonActionDispatchResult` para o desenho do retorno.
+     */
+    private async runJsonActionDispatch(
+        atomicData: ReturnType<typeof parseLLMResponse>,
+        stepCount: number,
+        channelContext: ChannelContext | undefined,
+        conversationId: string,
+        userText: string,
+        intentDecision: IntentDecision,
+        trace: ExecutionTrace,
+        turnSignal: AbortSignal,
+        usedToolInputs: Set<string>,
+        blockedKeyCount: Map<string, number>,
+        editPathCount: Map<string, number>,
+        toolTypeCallCount: Map<string, number>,
+        groupCallCount: Map<string, number>,
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        loopMessages: LLMMessage[],
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        consecutiveToolFailures: number,
+        guardsTriggered: number,
+        totalToolCalls: number,
+        toolFailureCount: number,
+        MAX_SAME_TOOL_CALLS: number,
+        MAX_GROUP_CALLS: number,
+        MAX_CONSECUTIVE_TOOL_FAILURES: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): Promise<JsonActionDispatchResult> {
+        const fallThrough = (): JsonActionDispatchResult => ({
+            action: 'fallThrough', dedupAbort, dedupAbortTool, consecutiveToolFailures,
+            guardsTriggered, totalToolCalls, toolFailureCount,
+        });
+
+        // JSON-action tool execution
+        if (atomicData?.action?.type === 'tool' && atomicData.action.name) {
+            const toolName = atomicData.action.name;
+            const inputKey = computeToolInputKey(toolName, atomicData.action.input || {});
+
+            if (usedToolInputs.has(inputKey)) {
+                const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
+                blockedKeyCount.set(inputKey, blockCount);
+                log.warn(`[${this.ts()}] [ATOMIC-TOOL] Blocked repeated call: ${toolName} (block #${blockCount})`);
+                const atomicBlockedMsg = toolName === 'read'
+                    ? `[BLOQUEADO] "read" já foi executado para este arquivo. O conteúdo JÁ ESTÁ disponível no histórico desta conversa — NÃO releia. Próximo passo obrigatório: use exec_command para processar o arquivo, write para salvar resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`
+                    : `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos (bloqueio #${blockCount}). NÃO repita — use uma estratégia diferente ou responda com o que já sabe.`;
+                loopMessages.push({
+                    role: 'system',
+                    content: atomicBlockedMsg,
+                });
+                if (blockCount >= 3) {
+                    loopMessages.push({
+                        role: 'system',
+                        content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. Forneça a melhor resposta possível com as informações que você já tem.`,
+                    });
+                    dedupAbort = true;
+                    dedupAbortTool = toolName;
+                    return { action: 'breakLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
+                }
+                return { action: 'continueLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
+            }
+
+            const tool = this.tools.get(toolName);
+            if (tool) {
+                move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'json_action' });
+                if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
+                    (tool as unknown as ContextAwareTool).setContext(
+                        channelContext.chatId || '',
+                        channelContext.channel
+                    );
+                }
+
+                // Guard: bloqueia edit repetido no mesmo arquivo (previne append-loop)
+                if (toolName === 'edit') {
+                    const ep = typeof atomicData.action.input?.path === 'string' ? atomicData.action.input.path : undefined;
+                    if (ep) {
+                        const ec = (editPathCount.get(ep) ?? 0) + 1;
+                        editPathCount.set(ep, ec);
+                        if (ec > 4) {
+                            log.warn(`[${this.ts()}] [EDIT-LOOP] Blocked atomic edit #${ec} to "${ep}" — use write to rewrite`);
+                            loopMessages.push({ role: 'system', content: `[BLOQUEADO] "edit" foi chamado ${ec} vezes no arquivo "${ep}" neste turno. Use "write" com o conteúdo completo.` });
+                            if (ec >= 7) {
+                                dedupAbort = true;
+                                dedupAbortTool = toolName;
+                                return { action: 'breakLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
+                            }
+                            return { action: 'continueLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
+                        }
+                    }
+                }
+
+                // Mesmo guard do caminho de tool-calling nativo (linha ~1645): send_audio
+                // não tem file_path estável, então não pode reusar o dedup de send_document.
+                // Sem isso, um step "agentloop" que já entregou áudio e é re-executado do
+                // zero por um replan reenviaria áudio de novo também quando o modelo usa o
+                // protocolo JSON de ação em vez de tool-calling nativo.
+                if (toolName === 'send_audio' && channelContext?.deliveryTracking?.isAudioAlreadySent?.()) {
+                    log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal path=json_action`);
+                    loopMessages.push({
+                        role: 'tool',
+                        content: `[JÁ ENVIADO] O áudio para este objetivo já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
+                    });
+                    return { action: 'continueLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
+                }
+
+                const toolStartTime = Date.now();
+                const atomicRecovery = await this.proactiveRecovery.execute(
+                    toolName, atomicData.action.input || {},
+                    (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined,
+                    usedToolInputs,
+                    turnSignal,
+                );
+                const result = atomicRecovery.result;
+                const resolvedToolName = atomicRecovery.finalToolName;
+                const resolvedArgs = atomicRecovery.finalArgs;
+                const toolDuration = Date.now() - toolStartTime;
+                if (toolName === 'send_audio' && result.success) {
+                    channelContext?.deliveryTracking?.onArtifactDelivered?.('__send_audio_delivered__');
+                }
+
+                if (atomicRecovery.recovered && atomicRecovery.recoveryNote) {
+                    const origTool = atomicRecovery.originalToolName ?? toolName;
+                    const kind = atomicRecovery.mutationKind ?? 'arg_mutation';
+                    log.info(
+                        `[MUTATION] tool_mutation:\n  tool: ${origTool}\n  kind: ${kind}\n` +
+                        `  original: ${JSON.stringify(atomicRecovery.originalArgs ?? {})}\n` +
+                        `  modified: ${JSON.stringify(resolvedArgs)}`
+                    );
+                    loopMessages.push({
+                        role: 'system',
+                        content: kind === 'fallback_tool'
+                            ? `[RECUPERAÇÃO AUTOMÁTICA] A ferramenta "${origTool}" falhou e foi substituída por "${resolvedToolName}". ${atomicRecovery.recoveryNote}`
+                            : `[RECUPERAÇÃO AUTOMÁTICA] Os argumentos da ferramenta "${resolvedToolName}" foram ajustados automaticamente. ${atomicRecovery.recoveryNote}`,
+                    });
+                } else if (atomicRecovery.recoveryNote) {
+                    log.info(`[${this.ts()}] ${atomicRecovery.recoveryNote}`);
+                }
+                log.info(`[${this.ts()}] [ATOMIC-TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
+
+                traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
+                traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output });
+                this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
+                this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
+
+                cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
+                loopMessages.push({ role: 'tool', content: result.output });
+                // Mesmo fix do caminho de tool-calling nativo acima (ver comentário lá) —
+                // path json_action é a 2ª cópia do mesmo dispatch, precisa do mesmo registro.
+                if (result.success && channelContext) {
+                    await this.sessionContext?.getSessionManager().recordToolCall(
+                        { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
+                        resolvedToolName,
+                        JSON.stringify(resolvedArgs),
+                    ).catch(() => {});
+                }
+
+                if (!result.success) {
+                    toolFailureCount++;
+                    // Mesma correção do caminho de tool-calling nativo acima: sem o texto real do
+                    // erro (result.error), o LLM só via "tente uma abordagem diferente" e adivinhava
+                    // variações de frase às cegas em vez de corrigir a causa real da falha.
+                    const atomicReason = (result.error ?? result.output ?? '').trim().slice(0, 300)
+                        || 'sem detalhes do erro retornados pela ferramenta';
+                    loopMessages.push({
+                        role: 'system',
+                        content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${atomicReason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`
+                    });
+                }
+
+                totalToolCalls++;
+
+                // Generic loop detector (JSON-action path): mirrors the native tool check.
+                const atomicToolTypeCount = (toolTypeCallCount.get(resolvedToolName) ?? 0) + 1;
+                toolTypeCallCount.set(resolvedToolName, atomicToolTypeCount);
+                if (atomicToolTypeCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
+                    log.warn(
+                        `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
+                        `value=${atomicToolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
+                    );
+                    loopMessages.push({
+                        role: 'system',
+                        content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${atomicToolTypeCount} vezes neste turno. ` +
+                            `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
+                    });
+                    dedupAbort = true;
+                    dedupAbortTool = `${resolvedToolName}:loop`;
+                    guardsTriggered++;
+                }
+
+                // Group loop + consecutive failures (JSON-action path).
+                const atomicGroup = TOOL_GROUP_REGISTRY[resolvedToolName];
+                if (atomicGroup) {
+                    const agCount = (groupCallCount.get(atomicGroup) ?? 0) + 1;
+                    groupCallCount.set(atomicGroup, agCount);
+                    if (agCount >= MAX_GROUP_CALLS && !dedupAbort) {
+                        log.warn(
+                            `[${this.ts()}] [SAFETY-GUARD] type=tool_group_loop reason=group_limit ` +
+                            `value=${agCount} threshold=${MAX_GROUP_CALLS} group=${atomicGroup}`
+                        );
+                        loopMessages.push({
+                            role: 'system',
+                            content: `[LOOP DE GRUPO] O grupo "${atomicGroup}" foi usado ${agCount} vezes. Responda com os dados disponíveis.`,
+                        });
+                        dedupAbort = true;
+                        dedupAbortTool = `group:${atomicGroup}:loop`;
+                        guardsTriggered++;
+                    }
+                }
+                if (result.success) {
+                    consecutiveToolFailures = 0;
+                } else {
+                    consecutiveToolFailures++;
+                    if (consecutiveToolFailures >= MAX_CONSECUTIVE_TOOL_FAILURES && !dedupAbort) {
+                        log.warn(
+                            `[${this.ts()}] [SAFETY-GUARD] type=consecutive_failures reason=failure_limit ` +
+                            `value=${consecutiveToolFailures} threshold=${MAX_CONSECUTIVE_TOOL_FAILURES}`
+                        );
+                        loopMessages.push({
+                            role: 'system',
+                            content: `[FALHAS CONSECUTIVAS] ${consecutiveToolFailures} ferramentas falharam seguidas. Responda ao usuário com honestidade sobre essa limitação.`,
+                        });
+                        dedupAbort = true;
+                        dedupAbortTool = 'consecutive_failures';
+                        guardsTriggered++;
+                    }
+                }
+
+                const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
+                if (terminalTools.includes(toolName) && result.success) {
+                    // JSON-action path is always a single tool call per step, so return immediately.
+                    log.info(`[${this.ts()}] [TASK-FSM] Terminal atomic tool "${toolName}" succeeded → task DONE, returning result`);
+                    move('FINAL_READY', { step: stepCount, tool: toolName, terminal: true });
+                    traceManager.completeTrace(trace, 'completed', result.output);
+                    this.persistTrace(trace, stepCount, 'completed', result.output, channelContext);
+                    return { action: 'earlyReturn', result: result.output };
+                }
+
+                if (result.success && !this.isSafeExecCommand(toolName, atomicData.action?.input as Record<string, unknown> || {})) {
+                    this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
+                    void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
+                }
+
+                move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
+                return { action: 'continueLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
+            }
+        }
+        return fallThrough();
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 5): dispatch de tool-calling nativo, extraído de
+     * `runWithTools()` sem mudar lógica. Ver `NativeToolCallDispatchResult` para o desenho do
+     * retorno — o `for` interno sobre `toolCalls` nunca cruza a fronteira do método.
+     */
+    private async runNativeToolCallDispatch(
+        toolCalls: ToolCall[] | undefined,
+        stepCount: number,
+        channelContext: ChannelContext | undefined,
+        conversationId: string,
+        userText: string,
+        intentDecision: IntentDecision,
+        trace: ExecutionTrace,
+        turnSignal: AbortSignal,
+        usedToolInputs: Set<string>,
+        usedToolOutputs: Map<string, string>,
+        blockedKeyCount: Map<string, number>,
+        failedReadFilenames: Set<string>,
+        binaryReadFilenames: Set<string>,
+        editPathCount: Map<string, number>,
+        toolTypeCallCount: Map<string, number>,
+        groupCallCount: Map<string, number>,
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        loopMessages: LLMMessage[],
+        decisionCtx: DecisionContext,
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        maxSteps: number,
+        totalToolCalls: number,
+        consecutiveToolFailures: number,
+        guardsTriggered: number,
+        toolFailureCount: number,
+        MAX_SAME_TOOL_CALLS: number,
+        MAX_GROUP_CALLS: number,
+        MAX_CONSECUTIVE_TOOL_FAILURES: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): Promise<NativeToolCallDispatchResult> {
+        const fallThrough = (): NativeToolCallDispatchResult => ({
+            action: 'fallThrough', dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+            consecutiveToolFailures, guardsTriggered, toolFailureCount,
+        });
+
+        if (toolCalls && toolCalls.length > 0) {
+            // Tracks the last successful terminal tool in this batch.
+            // We intentionally do NOT return inside the for loop so that all
+            // send_document / send_audio calls in a single batch are executed
+            // before the turn ends (fixes the "only index.html sent" bug).
+            let terminalBatchResult: string | null = null;
+
+            for (const toolCall of toolCalls) {
+                const singleResult = await this.dispatchSingleNativeToolCall(
+                    toolCall, stepCount, channelContext, conversationId, userText, intentDecision, trace,
+                    turnSignal, usedToolInputs, usedToolOutputs, blockedKeyCount, failedReadFilenames,
+                    binaryReadFilenames, editPathCount, toolTypeCallCount, groupCallCount, cycleHistory,
+                    loopMessages, decisionCtx, dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+                    consecutiveToolFailures, guardsTriggered, toolFailureCount,
+                    MAX_SAME_TOOL_CALLS, MAX_GROUP_CALLS, MAX_CONSECUTIVE_TOOL_FAILURES, move,
+                );
+                if (singleResult.action === "earlyReturn") return singleResult;
+                dedupAbort = singleResult.dedupAbort;
+                dedupAbortTool = singleResult.dedupAbortTool;
+                maxSteps = singleResult.maxSteps;
+                totalToolCalls = singleResult.totalToolCalls;
+                consecutiveToolFailures = singleResult.consecutiveToolFailures;
+                guardsTriggered = singleResult.guardsTriggered;
+                toolFailureCount = singleResult.toolFailureCount;
+                if (singleResult.terminalOutput !== undefined) terminalBatchResult = singleResult.terminalOutput;
+                if (singleResult.action === "breakFor") break;
+            }
+
+            // After all toolCalls in the batch are processed, check for a terminal result.
+            if (terminalBatchResult !== null) {
+                log.info(`[${this.ts()}] [TASK-FSM] Terminal batch done → task DONE, returning result`);
+                move('FINAL_READY', { step: stepCount, terminal: true });
+                traceManager.completeTrace(trace, 'completed', terminalBatchResult);
+                this.persistTrace(trace, stepCount, 'completed', terminalBatchResult, channelContext);
+                return { action: 'earlyReturn', result: terminalBatchResult };
+            }
+
+            return {
+                action: 'continueLoop', dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+                consecutiveToolFailures, guardsTriggered, toolFailureCount,
+            };
+        }
+        return fallThrough();
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 5, sub-decomposição): 1ª metade do antigo `if (tool) {...}` —
+     * checagem de perigo (auth pendente), guard de edit-loop, despacho real via
+     * `proactiveRecovery.execute`, e todo o registro/telemetria/upgrade de step budget.
+     * Extraído sem mudar lógica.
+     */
+    private async executeAndRecordNativeToolCall(
+        toolCall: ToolCall,
+        toolName: string,
+        stepCount: number,
+        channelContext: ChannelContext | undefined,
+        conversationId: string,
+        userText: string,
+        intentDecision: IntentDecision,
+        trace: ExecutionTrace,
+        turnSignal: AbortSignal,
+        usedToolInputs: Set<string>,
+        usedToolOutputs: Map<string, string>,
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        loopMessages: LLMMessage[],
+        decisionCtx: DecisionContext,
+        editPathCount: Map<string, number>,
+        maxSteps: number,
+        totalToolCalls: number,
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): Promise<ExecuteAndRecordResult> {
+        const isDangerous = ToolRegistry.isDangerous(toolName)
+            && !this.isSafeExecCommand(toolName, toolCall.arguments)
+            && !permissionRegistry.can('auto_approve_exec');
+        if (isDangerous) {
+            log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
+
+            let txnId: string | undefined;
+            if (this.workflowEngine) {
+                // Novo fluxo: cria transaction com ID estruturado.
+                // Canais com workflowCallback (Telegram, WhatsApp, Discord, Signal) rotearão o callback
+                // diretamente ao WorkflowEngine — sem passar pelo LLM pipeline.
+                const ctx: ContinuationContext = {
+                    workflow: this.inferWorkflowName(intentDecision.intent, toolName),
+                    step: toolName,
+                    userGoal: userText.slice(0, 200),
+                    activeResources: this.extractResourceNames(toolCall.arguments),
+                    alternativeTools: this.findSafeAlternatives(toolName),
+                };
+                const txn = this.workflowEngine.createTransaction(
+                    conversationId, toolName,
+                    toolCall.arguments as Record<string, unknown>,
+                    ctx
+                );
+                txnId = txn.id;
+            }
+            // Registra no authManager para: (1) guardar hasPendingAuth nos fast-paths,
+            // (2) permitir removePending() no resumeFromWorkflow() após resolução.
+            // txnId é armazenado para habilitar aprovação por texto ("sim") como fallback.
+            this.authManager.addPending(conversationId, toolName, toolCall.arguments, txnId);
+
+            move('AUTH_REQUIRED', { step: stepCount, tool: toolName, txnId });
+            const authReq = this.authManager.formatRequest(toolName, toolCall.arguments, txnId);
+            return { action: 'earlyReturn', result: { text: authReq.text, options: authReq.options } };
+        }
+
+        // Guard: bloqueia edit repetido no mesmo arquivo (previne append-loop)
+        if (toolName === 'edit') {
+            const ep = typeof toolCall.arguments?.path === 'string' ? toolCall.arguments.path : undefined;
+            if (ep) {
+                const ec = (editPathCount.get(ep) ?? 0) + 1;
+                editPathCount.set(ep, ec);
+                if (ec > 4) {
+                    log.warn(`[${this.ts()}] [EDIT-LOOP] Blocked edit #${ec} to "${ep}" — use write to rewrite`);
+                    loopMessages.push({
+                        role: 'tool',
+                        content: `[BLOQUEADO] "edit" foi chamado ${ec} vezes no mesmo arquivo "${ep}" neste turno. Esta chamada foi bloqueada para evitar corrupção de arquivo por append-loop. Use "write" com o conteúdo completo se precisar reescrever o arquivo inteiro.`,
+                        tool_call_id: toolCall.id,
+                    });
+                    if (ec >= 7) {
+                        loopMessages.push({ role: 'system', content: `[CRÍTICO] "edit" foi chamado ${ec} vezes no arquivo "${ep}". O loop foi interrompido. Responda ao usuário com o que foi feito até aqui.` });
+                        dedupAbort = true;
+                        dedupAbortTool = toolName;
+                        return { action: 'breakFor', dedupAbort, dedupAbortTool };
+                    }
+                    return { action: 'continueFor', dedupAbort, dedupAbortTool };
+                }
+            }
+        }
+
+        const toolStartTime = Date.now();
+        const recovery = await this.proactiveRecovery.execute(
+            toolName, toolCall.arguments,
+            (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined,
+            usedToolInputs,
+            turnSignal,
+        );
+        const result = recovery.result;
+        const resolvedToolName = recovery.finalToolName;
+        const resolvedArgs = recovery.finalArgs;
+        const toolDuration = Date.now() - toolStartTime;
+
+        if (recovery.recovered && recovery.recoveryNote) {
+            const origTool = recovery.originalToolName ?? toolName;
+            const kind = recovery.mutationKind ?? 'arg_mutation';
+            log.info(
+                `[MUTATION] tool_mutation:\n  tool: ${origTool}\n  kind: ${kind}\n` +
+                `  original: ${JSON.stringify(recovery.originalArgs ?? {})}\n` +
+                `  modified: ${JSON.stringify(resolvedArgs)}`
+            );
+            loopMessages.push({
+                role: 'system',
+                content: kind === 'fallback_tool'
+                    ? `[RECUPERAÇÃO AUTOMÁTICA] A ferramenta "${origTool}" falhou e foi substituída por "${resolvedToolName}" com argumentos adaptados. ${recovery.recoveryNote}`
+                    : `[RECUPERAÇÃO AUTOMÁTICA] Os argumentos da ferramenta "${resolvedToolName}" foram ajustados automaticamente para funcionar. ${recovery.recoveryNote}`,
+            });
+        } else if (recovery.recoveryNote) {
+            log.info(`[${this.ts()}] ${recovery.recoveryNote}`);
+        }
+        // Utility score: generic keyword-overlap heuristic — observability only.
+        // Collect data here; do not use for control flow until patterns emerge.
+        const utilityScore = result.success
+            ? computeToolUtilityScore(userText, result.output)
+            : 0;
+        log.info(
+            `[${this.ts()}] [TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'} ` +
+            `utility=${utilityScore.toFixed(2)}`,
+            result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200)
+        );
+
+        traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
+        traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output });
+        this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
+        this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
+
+        cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
+        loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
+        if (result.success) usedToolOutputs.set(computeToolInputKey(toolName, toolCall.arguments), result.output.slice(0, 2000));
+        // Persiste args de tool calls bem-sucedidas no transcript (mesmo padrão já
+        // usado por GoalExecutionLoop.ts, que sempre teve isso — AgentLoop nunca
+        // teve, então turnos roteados por aqui perdiam permanentemente os argumentos
+        // de qualquer tool call assim que o turno terminava (cycleHistory é local ao
+        // método, descartado no return). Caso real: send_audio recebe o texto do
+        // áudio só via toolArgs — sem isso, "qual foi o texto que você usou?" nunca
+        // tem como ser respondido, mesmo o áudio tendo sido gerado com sucesso.
+        if (result.success && channelContext) {
+            await this.sessionContext?.getSessionManager().recordToolCall(
+                { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
+                resolvedToolName,
+                JSON.stringify(resolvedArgs),
+            ).catch(() => {});
+        }
+
+        // Evidence-driven budget upgrade: a turn classified as lightweight
+        // (conversation/direct, maxSteps=4) can still turn into real file-producing
+        // work once it actually calls `write`/`exec_command` — the upfront text-only
+        // classification has no way to know a "refinamento" will need edit + convert
+        // + send. Evidence: 2026-07-05 audit log, goal_1783288862838_1muu1 follow-up
+        // "máximo 10 linhas por slide" — routed as refinement_of_recent_goal →
+        // agentloop → conversation/direct (budget 4+2). The turn spent its entire
+        // budget re-editing excel_class.md and only wrote a conversion script
+        // (scripts/gen_excel_pptx.py) in the very last allowed step — never executed
+        // it, never sent anything — then got blocked as a hallucination (final text
+        // said "vou recriar..." while no new PPTX existed). Same upgrade pattern as
+        // requiresPlanning above — reacts to observed tool use, not to a new
+        // classification signal.
+        if (result.success && (resolvedToolName === 'write' || resolvedToolName === 'exec_command') &&
+            maxSteps < (STEP_BUDGETS.tool ?? 10)) {
+            const upgraded = STEP_BUDGETS.tool ?? 10;
+            log.info(`[${this.ts()}] [STEP-BUDGET] real file work detected (${resolvedToolName}) → upgrading ${maxSteps} → ${upgraded}`);
+            maxSteps = upgraded;
+            decisionCtx.extendedStepBudget = upgraded;
+        }
+
+        totalToolCalls++;
+
+        return { action: 'proceed', result, resolvedToolName, resolvedArgs, maxSteps, totalToolCalls };
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 5, sub-decomposição): 2ª metade do antigo `if (tool) {...}` —
+     * detectores de loop/grupo/falhas-consecutivas, diretiva pós-leitura, mensagens de falha
+     * por categoria, e o tratamento de tool terminal (send_audio/send_document/send_image/
+     * send_video). Recebe `result`/`resolvedToolName`/`resolvedArgs` já resolvidos por
+     * `executeAndRecordNativeToolCall()`. Extraído sem mudar lógica.
+     */
+    private applyPostToolCallGuardsAndFinalize(
+        toolCall: ToolCall,
+        toolName: string,
+        result: ToolResult,
+        resolvedToolName: string,
+        resolvedArgs: Record<string, unknown>,
+        stepCount: number,
+        channelContext: ChannelContext | undefined,
+        conversationId: string,
+        userText: string,
+        intentDecision: IntentDecision,
+        trace: ExecutionTrace,
+        loopMessages: LLMMessage[],
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        toolTypeCallCount: Map<string, number>,
+        groupCallCount: Map<string, number>,
+        failedReadFilenames: Set<string>,
+        binaryReadFilenames: Set<string>,
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        maxSteps: number,
+        totalToolCalls: number,
+        consecutiveToolFailures: number,
+        guardsTriggered: number,
+        toolFailureCount: number,
+        MAX_SAME_TOOL_CALLS: number,
+        MAX_GROUP_CALLS: number,
+        MAX_CONSECUTIVE_TOOL_FAILURES: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): SingleToolCallDispatchResult {
+        // Generic loop detector: same tool called too many times in one turn.
+        // Exception: info-retrieval tools called in batch mode (one LLM response,
+        // each call with a unique argument) are NOT loops — they're valid parallel
+        // fetches. Use argument diversity to distinguish batch from loop.
+        const toolTypeCount = (toolTypeCallCount.get(resolvedToolName) ?? 0) + 1;
+        toolTypeCallCount.set(resolvedToolName, toolTypeCount);
+        if (toolTypeCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
+            const INFO_BATCH_TOOLS = new Set(['web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request']);
+            const uniqueArgsForTool = new Set(
+                cycleHistory.filter(h => h.tool === resolvedToolName).map(h => h.input)
+            ).size;
+            const uniqueRatio = toolTypeCount > 0 ? uniqueArgsForTool / toolTypeCount : 0;
+            const isBatch = INFO_BATCH_TOOLS.has(resolvedToolName) && uniqueRatio >= 0.75 && toolTypeCount < 10;
+            if (isBatch) {
+                log.warn(
+                    `[${this.ts()}] [SAFETY-GUARD] type=info_batch tool=${resolvedToolName} ` +
+                    `calls=${toolTypeCount} unique=${uniqueArgsForTool} ratio=${uniqueRatio.toFixed(2)} — batch mode, continuing`
+                );
+            } else {
+                log.warn(
+                    `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
+                    `value=${toolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
+                );
+                loopMessages.push({
+                    role: 'system',
+                    content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${toolTypeCount} vezes neste turno. ` +
+                        `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
+                });
+                dedupAbort = true;
+                dedupAbortTool = `${resolvedToolName}:loop`;
+                guardsTriggered++;
+            }
+        }
+
+        // Related-tool group detector: catches alternation (e.g. web_search ↔ web_navigate).
+        const toolGroup = TOOL_GROUP_REGISTRY[resolvedToolName];
+        if (toolGroup) {
+            const gCount = (groupCallCount.get(toolGroup) ?? 0) + 1;
+            groupCallCount.set(toolGroup, gCount);
+            if (gCount >= MAX_GROUP_CALLS && !dedupAbort) {
+                log.warn(
+                    `[${this.ts()}] [SAFETY-GUARD] type=tool_group_loop reason=group_limit ` +
+                    `value=${gCount} threshold=${MAX_GROUP_CALLS} group=${toolGroup}`
+                );
+                loopMessages.push({
+                    role: 'system',
+                    content: `[LOOP DE GRUPO] O grupo de ferramentas "${toolGroup}" foi usado ${gCount} vezes neste turno. ` +
+                        `Interrompendo. Responda com os dados disponíveis em memória.`,
+                });
+                dedupAbort = true;
+                dedupAbortTool = `group:${toolGroup}:loop`;
+                guardsTriggered++;
+            }
+        }
+
+        // Consecutive failure detector: resets on any success.
+        if (result.success) {
+            consecutiveToolFailures = 0;
+        } else {
+            consecutiveToolFailures++;
+            if (consecutiveToolFailures >= MAX_CONSECUTIVE_TOOL_FAILURES && !dedupAbort) {
+                log.warn(
+                    `[${this.ts()}] [SAFETY-GUARD] type=consecutive_failures reason=failure_limit ` +
+                    `value=${consecutiveToolFailures} threshold=${MAX_CONSECUTIVE_TOOL_FAILURES}`
+                );
+                loopMessages.push({
+                    role: 'system',
+                    content: `[FALHAS CONSECUTIVAS] ${consecutiveToolFailures} ferramentas falharam seguidas. ` +
+                        `Não foi possível obter dados confiáveis após múltiplas tentativas. Responda ao usuário com honestidade sobre essa limitação.`,
+                });
+                dedupAbort = true;
+                dedupAbortTool = 'consecutive_failures';
+                guardsTriggered++;
+            }
+        }
+
+        // After a successful read, inject a directive to prevent re-reading in this turn.
+        // ARTIFACT-DRIFT FIX: mensagem escrita para NÃO proibir releitura em turnos futuros
+        // (arquivo pode ser modificado por steps subsequentes do GoalExecutionLoop).
+        if (result.success && resolvedToolName === 'read') {
+            loopMessages.push({
+                role: 'system',
+                content:
+                    `[LEITURA CONCLUÍDA] O arquivo foi lido com sucesso (${result.output.length} chars). ` +
+                    `O conteúdo está disponível neste turno.\n` +
+                    `Se o arquivo for modificado (write/edit) em um passo futuro, releia-o antes de usá-lo novamente.\n` +
+                    `PRÓXIMO PASSO: use "exec_command" para processar, "write" para salvar, ou responda ao usuário.`,
+            });
+        }
+
+        if (!result.success) {
+            toolFailureCount++;
+            const errorText = result.error ?? result.output ?? '';
+            const isReadNotFound = resolvedToolName === 'read' && /não encontrado|not found/i.test(errorText);
+            const isBinaryRead = resolvedToolName === 'read' && /arquivos binários|binary.*não podem|cannot.*binary/i.test(errorText);
+            if (isReadNotFound) {
+                const pathArg = String(resolvedArgs.path || '');
+                const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
+                if (filename) failedReadFilenames.add(filename);
+                loopMessages.push({
+                    role: 'system',
+                    content: `[ARQUIVO INEXISTENTE] "${filename || pathArg}" não existe no workspace. Para criá-lo, use a ferramenta "write" com o conteúdo completo. NÃO tente "read" novamente antes de criar o arquivo com "write".`,
+                });
+            } else if (isBinaryRead) {
+                const pathArg = String(resolvedArgs.path || '');
+                const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
+                if (filename) binaryReadFilenames.add(filename);
+                loopMessages.push({
+                    role: 'system',
+                    content: `[ARQUIVO BINÁRIO] "${filename || pathArg}" não pode ser lido com "read". Use exec_command com a ferramenta adequada (python-pptx, pandoc, pdftotext, etc.). NÃO tente "read" neste arquivo novamente.`,
+                });
+            } else if (resolvedToolName === 'exec_command' && /no such file or directory/i.test(errorText)) {
+                // Path não existe — sugere explorar o workspace antes de adivinhar caminhos
+                loopMessages.push({
+                    role: 'system',
+                    content: `[PATH INEXISTENTE] O caminho informado não existe. NÃO repita o mesmo comando. Use "list_workspace" para descobrir a estrutura real do workspace antes de prosseguir.`,
+                });
+            } else {
+                // errorText é computado acima (result.error ?? result.output ?? '') mas até aqui
+                // nunca chegava ao LLM nos casos fora dos 3 padrões especiais acima — a mensagem
+                // genérica ("tente uma abordagem diferente") não informa POR QUE a tool falhou,
+                // fazendo o LLM adivinhar variações de frase às cegas em vez de corrigir a causa
+                // real (ex: argumento obrigatório ausente, dependência não instalada).
+                const reason = errorText.trim().slice(0, 300) || 'sem detalhes do erro retornados pela ferramenta';
+                loopMessages.push({
+                    role: 'system',
+                    content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${reason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`
+                });
+            }
+        }
+
+        const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
+        if (result.success && !terminalTools.includes(toolName) && !this.isSafeExecCommand(toolName, toolCall.arguments)) {
+            this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
+            void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
+        }
+        if (toolName === 'send_audio' && result.success) {
+            channelContext?.deliveryTracking?.onArtifactDelivered?.('__send_audio_delivered__');
+        }
+        if (terminalTools.includes(toolName) && result.success) {
+            log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded — continuing batch before closing turn`);
+            move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: true });
+            // process remaining toolCalls in this batch (e.g. multiple send_document)
+            return {
+                action: 'continueFor', terminalOutput: result.output, dedupAbort, dedupAbortTool, maxSteps,
+                totalToolCalls, consecutiveToolFailures, guardsTriggered, toolFailureCount,
+            };
+        }
+        move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
+        return {
+            action: 'continueFor', dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+            consecutiveToolFailures, guardsTriggered, toolFailureCount,
+        };
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 5, sub-decomposição): processa UMA `toolCall` do batch — o
+     * corpo do `for` interno de `runNativeToolCallDispatch()`. Guards de pré-voo (read-blocked/
+     * dedup/send_document-defer/send_audio-already-sent) ficam inline aqui; a execução real é
+     * delegada a `executeAndRecordNativeToolCall()` + `applyPostToolCallGuardsAndFinalize()`.
+     */
+    private async dispatchSingleNativeToolCall(
+        toolCall: ToolCall,
+        stepCount: number,
+        channelContext: ChannelContext | undefined,
+        conversationId: string,
+        userText: string,
+        intentDecision: IntentDecision,
+        trace: ExecutionTrace,
+        turnSignal: AbortSignal,
+        usedToolInputs: Set<string>,
+        usedToolOutputs: Map<string, string>,
+        blockedKeyCount: Map<string, number>,
+        failedReadFilenames: Set<string>,
+        binaryReadFilenames: Set<string>,
+        editPathCount: Map<string, number>,
+        toolTypeCallCount: Map<string, number>,
+        groupCallCount: Map<string, number>,
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        loopMessages: LLMMessage[],
+        decisionCtx: DecisionContext,
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        maxSteps: number,
+        totalToolCalls: number,
+        consecutiveToolFailures: number,
+        guardsTriggered: number,
+        toolFailureCount: number,
+        MAX_SAME_TOOL_CALLS: number,
+        MAX_GROUP_CALLS: number,
+        MAX_CONSECUTIVE_TOOL_FAILURES: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): Promise<SingleToolCallDispatchResult> {
+        const passthrough = (): SingleToolCallDispatchResult => ({
+            action: 'continueFor', dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+            consecutiveToolFailures, guardsTriggered, toolFailureCount,
+        });
+
+        const toolName = toolCall.name;
+        const inputKey = computeToolInputKey(toolName, toolCall.arguments);
+
+        // Block read attempts on filenames already confirmed as non-existent,
+        // regardless of path format (absolute, relative, workspace-prefixed, etc.)
+        if (toolName === 'read') {
+            const pathArg = String(toolCall.arguments?.path || '');
+            const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
+            if (filename && failedReadFilenames.has(filename)) {
+                log.warn(`[${this.ts()}] [READ-NOTFOUND-BLOCK] Blocked read of absent file: ${filename}`);
+                loopMessages.push({
+                    role: 'tool',
+                    content: `[BLOQUEADO] O arquivo "${filename}" já foi confirmado como INEXISTENTE no workspace. Use a ferramenta "write" para criar o arquivo com o conteúdo completo antes de tentar lê-lo.`,
+                    tool_call_id: toolCall.id,
+                });
+                loopMessages.push({
+                    role: 'system',
+                    content: `⚠️ "${filename}" NÃO EXISTE no workspace. Ação obrigatória: use "write" com o conteúdo completo para criá-lo. NÃO tente "read" antes de criar o arquivo.`,
+                });
+                return passthrough();
+            }
+            if (filename && binaryReadFilenames.has(filename)) {
+                log.warn(`[${this.ts()}] [BINARY-READ-BLOCK] Blocked repeated read of binary file: ${filename}`);
+                loopMessages.push({
+                    role: 'tool',
+                    content: `[BLOQUEADO] "${filename}" é um arquivo binário — "read" não consegue processá-lo. Use exec_command com python-pptx, pandoc, pdftotext ou similar para extrair o conteúdo.`,
+                    tool_call_id: toolCall.id,
+                });
+                loopMessages.push({
+                    role: 'system',
+                    content: `⚠️ NÃO chame "read" em "${filename}" novamente. Abordagem obrigatória: use exec_command com a ferramenta adequada para o formato ${filename.split('.').pop()?.toUpperCase()}.`,
+                });
+                return passthrough();
+            }
+        }
+
+        if (usedToolInputs.has(inputKey)) {
+            const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
+            blockedKeyCount.set(inputKey, blockCount);
+            log.warn(`[${this.ts()}] [TOOL-DEDUP] Blocked repeated native call: ${toolName} (block #${blockCount})`);
+            const cachedOutput = usedToolOutputs.get(inputKey);
+            const contentHint = toolName === 'read' && cachedOutput
+                ? `\n\n— Início do conteúdo já lido —\n${cachedOutput.slice(0, 600)}\n— (conteúdo completo disponível no histórico) —`
+                : '';
+            const dedupBlockedMsg = toolName === 'read'
+                ? `[BLOQUEADO] "read" já foi executado para este arquivo. Use este conteúdo diretamente — NÃO releia.${contentHint}\n\nPróximo passo obrigatório: use exec_command para processar o arquivo, write para salvar resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`
+                : `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos. Esta chamada foi bloqueada. NÃO repita esta ferramenta com os mesmos argumentos — use uma estratégia diferente ou responda com o que já sabe.`;
+            loopMessages.push({
+                role: 'tool',
+                content: dedupBlockedMsg,
+                tool_call_id: toolCall.id,
+            });
+            if (blockCount >= 3) {
+                loopMessages.push({
+                    role: 'system',
+                    content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. O loop foi interrompido. Forneça a melhor resposta possível com as informações que você já tem.`,
+                });
+                dedupAbort = true;
+                dedupAbortTool = toolName;
+                return {
+                    action: 'breakFor', dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+                    consecutiveToolFailures, guardsTriggered, toolFailureCount,
+                };
+            }
+            return passthrough();
+        }
+
+        // FIX C: quando em contexto de goal-execution, adiar send_document para pós-validação
+        if (toolName === 'send_document' && channelContext?.deliveryTracking?.deferSendDocument) {
+            const filePath = String(toolCall.arguments?.file_path ?? toolCall.arguments?.path ?? '(unknown)');
+            const alreadyRegistered = channelContext.deliveryTracking.isDeferredArtifact?.(filePath) ?? false;
+            log.info(
+                `[${this.ts()}] [AGENTLOOP-SEND]` +
+                ` deferred=true` +
+                ` reason=goal_execution_policy` +
+                ` file_path="${filePath}"` +
+                ` already_registered=${alreadyRegistered}`
+            );
+            if (!alreadyRegistered) {
+                channelContext.deliveryTracking.deferSendDocument(toolCall.arguments ?? {});
+            }
+            // Mensagem semanticamente neutra: não instrui o LLM a "continuar trabalhando"
+            // pois isso causava loop de re-chamadas ao send_document.
+            const deferMsg = alreadyRegistered
+                ? `[DIFERIDO-DEDUP] O documento "${filePath}" já foi registrado para entrega. Não reenvie este artefato. Se não há outras tarefas pendentes, conclua com uma resposta final ao usuário.`
+                : `[DIFERIDO] Documento "${filePath}" registrado para entrega após validação. Não reenvie este artefato. Continue apenas se ainda existirem tarefas pendentes não relacionadas à entrega deste arquivo.`;
+            loopMessages.push({
+                role: 'tool',
+                content: deferMsg,
+                tool_call_id: toolCall.id,
+            });
+            // FIX E (docs/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md): este branch nunca
+            // escrevia em cycleHistory, deixando o DELIVERY-GUARD (abaixo, no fim do
+            // loop) cego a um defer bem-sucedido — ele recalcula `sentFile` só a
+            // partir de cycleHistory, então via achar `wroteFile && !sentFile` e
+            // reinjetar "[ENTREGA PENDENTE] ... USE send_document AGORA" por cima de
+            // um arquivo que já tinha sido corretamente registrado para entrega.
+            // status:'deferred' (não 'success') propositalmente — alinha com o que
+            // channelContext.deliveryTracking.isDeferredArtifact já sabe, sem se passar por um envio
+            // confirmado de verdade.
+            cycleHistory.push({ step: stepCount, tool: 'send_document', input: JSON.stringify(toolCall.arguments ?? {}), status: 'deferred' });
+            usedToolInputs.add(inputKey);
+            return passthrough();
+        }
+
+        // send_audio não tem file_path estável (cada chamada gera um mp3/ogg com
+        // timestamp único), então não pode usar o dedup por path de send_document
+        // acima. Sem este guard, um step "agentloop" que já entregou áudio com
+        // sucesso e é re-executado do zero por um replan (ex: SemanticValidator
+        // rejeitando o texto final por mismatch) gera e envia um NOVO áudio a cada
+        // tentativa — o TTS/upload já aconteceu de verdade, não há como "desfazer".
+        // Evidência: 2026-07-05, goal_1783269002590_inaml — 4 áudios enviados em
+        // sequência pelo mesmo pedido do usuário.
+        if (toolName === 'send_audio' && channelContext?.deliveryTracking?.isAudioAlreadySent?.()) {
+            log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal`);
+            loopMessages.push({
+                role: 'tool',
+                content: `[JÁ ENVIADO] O áudio para este objetivo já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
+                tool_call_id: toolCall.id,
+            });
+            usedToolInputs.add(inputKey);
+            return passthrough();
+        }
+
+        const tool = this.tools.get(toolName);
+        if (!tool) {
+            return passthrough();
+        }
+        move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'native' });
+        if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
+            (tool as unknown as ContextAwareTool).setContext(
+                channelContext.chatId || '',
+                channelContext.channel
+            );
+        }
+
+        const execResult = await this.executeAndRecordNativeToolCall(
+            toolCall, toolName, stepCount, channelContext, conversationId, userText, intentDecision,
+            trace, turnSignal, usedToolInputs, usedToolOutputs, cycleHistory, loopMessages, decisionCtx,
+            editPathCount, maxSteps, totalToolCalls, dedupAbort, dedupAbortTool, move,
+        );
+        if (execResult.action === 'earlyReturn') return execResult;
+        if (execResult.action !== 'proceed') {
+            return {
+                action: execResult.action, dedupAbort: execResult.dedupAbort, dedupAbortTool: execResult.dedupAbortTool,
+                maxSteps, totalToolCalls, consecutiveToolFailures, guardsTriggered, toolFailureCount,
+            };
+        }
+
+        return this.applyPostToolCallGuardsAndFinalize(
+            toolCall, toolName, execResult.result, execResult.resolvedToolName, execResult.resolvedArgs,
+            stepCount, channelContext, conversationId, userText, intentDecision, trace, loopMessages,
+            cycleHistory, toolTypeCallCount, groupCallCount, failedReadFilenames, binaryReadFilenames,
+            dedupAbort, dedupAbortTool, execResult.maxSteps, execResult.totalToolCalls,
+            consecutiveToolFailures, guardsTriggered, toolFailureCount,
+            MAX_SAME_TOOL_CALLS, MAX_GROUP_CALLS, MAX_CONSECUTIVE_TOOL_FAILURES, move,
+        );
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 6): fase de setup do turno, extraída de `runWithTools()` sem
+     * mudar lógica — roteamento de intenção, fast-paths (auth por texto, greeting, current-time,
+     * tool-first), sessão/DecisionContext e orçamento de steps. Chamado de DENTRO do `try` do
+     * chamador (ver nota em `RunWithToolsLoopState` sobre por que `trace`/`move`/`turnSignal`
+     * são recebidos já criados, não inicializados aqui).
+     */
+    private async setupTurn(
+        conversationId: string,
+        userText: string,
+        channelContext: ChannelContext | undefined,
+        trace: ExecutionTrace,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+        memoryFirstInjected: boolean,
+    ): Promise<RunWithToolsSetupResult> {
+        move('START_TURN');
+
+        // recentMessages (quando presente) permite ao UnifiedIntentRouter classificar mensagens
+        // curtas/elípticas ("continue", "isso", "faça") considerando a conversa recente em vez
+        // de classificar o texto isolado — ver RouterContext em UnifiedIntentRouter.ts e a
+        // origem do dado em MessageBus.processMessageCore (microauditoria de continuidade
+        // conversacional, 08/07/2026). Passos sintéticos sem conversa real (goal step, scheduler)
+        // não preenchem este campo — não são elípticos, não precisam de contexto.
+        const intentDecision: IntentDecision = await this.intentRouter.route(userText, {
+            sessionId: conversationId,
+            recentMessages: channelContext?.recentMessages,
+        });
+
+        traceManager.addStep(trace, 'intent_classification', {
+            intent: intentDecision.intent,
+            category: intentDecision.category,
+            executionMode: intentDecision.executionMode,
+            confidence: intentDecision.confidence,
+            source: intentDecision.source,
+            modelCategory: intentDecision.modelCategory,
+            riskLevel: intentDecision.riskLevel,
+            cognitiveLoad: intentDecision.cognitiveLoad,
+            requiresTools: intentDecision.requiresTools,
+            requiresMemory: intentDecision.requiresMemory,
+            requiresReasoning: intentDecision.requiresReasoning,
+        });
+        log.info(`[${this.ts()}] [UNIFIED-ROUTER] intent=${intentDecision.intent} mode=${intentDecision.executionMode} category=${intentDecision.category} confidence=${intentDecision.confidence} source=${intentDecision.source} model=${intentDecision.modelCategory}`);
+
+        // Fast-paths must not fire when there is a pending auth action — the auth check handles those turns.
+        const hasPendingAuth = !!this.authManager.getPending(conversationId);
+
+        // ── Text-based auth approval fallback ───────────────────────────────
+        // When buttons fail to render (e.g. Telegram HTML parse errors), the user may type
+        // "sim" or "cancelar" as plain text. Intercept these before the LLM loop to avoid
+        // the model misinterpreting the response and generating a second auth request.
+        if (hasPendingAuth && this.workflowEngine) {
+            const trimmed = userText.trim();
+            const isApproval = /^(sim|sim[,.]?\s*(pode|ok|autorizado|confirmado|faça|faz)|yes|ok|pode|autoriza)\b/i.test(trimmed) && trimmed.length < 40;
+            const isRejection = /^(não|nao|n\b|cancel[ar]?|cancela|não\s+pode|nope|recusa)\b/i.test(trimmed) && trimmed.length < 40;
+
+            if (isApproval || isRejection) {
+                const pending = this.authManager.getPending(conversationId);
+                if (pending?.txnId) {
+                    const decision: AuthDecision = isApproval ? 'approved' : 'rejected';
+                    log.info(`[${this.ts()}] [AUTH-TEXT] Text-based ${decision} for txn=${pending.txnId}`);
+                    const wfResult = await this.workflowEngine.resume(
+                        pending.txnId,
+                        decision,
+                        (name) => this.tools.get(name)
+                    );
+                    if (wfResult) {
+                        move('FINAL_READY', { decision, txnId: pending.txnId });
+                        return { action: 'earlyReturn', result: await this.resumeFromWorkflow(conversationId, wfResult) };
+                    }
+                }
+            }
+        }
+
+        if (!hasPendingAuth && intentDecision.terminalAction && intentDecision.executionMode === 'direct' && intentDecision.category === 'greeting') {
+            log.info(`[${this.ts()}] [FAST-PATH] Greeting detected — skipping LLM`);
+            move('FINAL_READY');
+            traceManager.completeTrace(trace, 'completed', 'Greeting fast path');
+            const greetings = ['Olá! 👋', 'Oi! Como posso ajudar?', 'E aí! 🚀', 'Olá! Tô aqui! 💪', 'Opa! Bora? 😊'];
+            return { action: 'earlyReturn', result: greetings[Math.floor(Math.random() * greetings.length)] };
+        }
+
+        // ── Current-time fast path ──
+        // Deterministic direct facts (date/time) — Node.js has the clock, no LLM needed.
+        // Must check deterministicMatch explicitly — confirmation ('ok', 'sim') also matches direct+minimal+no-tools.
+        if (
+            !hasPendingAuth &&
+            intentDecision.trace.deterministicMatch === 'current_time' &&
+            intentDecision.source === 'deterministic' &&
+            intentDecision.executionMode === 'direct'
+        ) {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+            const dateStr = now.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+            const reply = `🕐 ${timeStr} — ${dateStr}`;
+            log.info(`[${this.ts()}] [FAST-PATH] current_time direct answer`);
+            move('FINAL_READY');
+            traceManager.completeTrace(trace, 'completed', reply);
+            this.persistTrace(trace, 1, 'completed', reply, channelContext);
+            return { action: 'earlyReturn', result: reply };
+        }
+
+        // ── Tool-first fast path ──
+        // Deterministic tool intents (weather, etc.) bypass the cognition LLM loop entirely.
+        // Falls back to the full loop when the tool is missing or returns an error.
+        if (intentDecision.executionMode === 'tool' && intentDecision.toolName && intentDecision.confidence >= 0.85) {
+            const fastResult = await this.toolFirstFastPath(conversationId, userText, intentDecision, channelContext, trace, move);
+            if (fastResult !== null) {
+                this.activeTurns.delete(conversationId);
+                return { action: 'earlyReturn', result: fastResult };
+            }
+            log.info(`[${this.ts()}] [FAST-PATH] Tool fast path fell back to cognition loop`);
+        }
+
+        this.classificationMemory.store(userText, intentDecision.modelCategory, intentDecision.confidence);
+        this.getTurnState(conversationId).lastToolExecution = null;
+
+        let skillContext = intentDecision.skillContext ?? '';
+
+        // S3c: "Que tipo de problema geral tende a acontecer neste tipo de pedido?"
+        // findCategoryHints() agrega pela categoria inteira (não mais fragmentada por
+        // ferramenta) e inclui fallback para registros legados com a categoria
+        // smuggled em `pattern` — corrige o caso documentado no S16 (20 registros/30%
+        // falha agregada retornando vazio por fragmentação de GROUP BY).
+        const reflectionHint = this.reflectionMemory.findCategoryHints(intentDecision.category);
+        const reflectionHintInjected = reflectionHint.length > 0;
+        if (reflectionHint) {
+            skillContext = skillContext ? `${skillContext}\n\n${reflectionHint}` : reflectionHint;
+        }
+
+        const manualSkills = this.skillLoader.loadAll();
+        const matchedManual = manualSkills.filter(s =>
+            s.triggers?.some(t => userText.toLowerCase().includes(t.toLowerCase()))
+        );
+        if (matchedManual.length > 0) {
+            // Usa conteúdo completo (com seções TASK_ONLY) apenas quando a skill é a
+            // tarefa primária do turno — alta confiança e intent diretamente relacionada.
+            // Em correspondências parciais (trigger presente mas não é o objetivo principal),
+            // injeta globalContent, que omite restrições de escopo de tarefa.
+            const isPrimary = (skillName: string): boolean =>
+                intentDecision.confidence >= 0.75 &&
+                matchedManual.length === 1 &&
+                (intentDecision.intent?.toLowerCase().includes(skillName.toLowerCase()) ||
+                 intentDecision.skillContext?.toLowerCase().includes(skillName.toLowerCase()) ||
+                 false);
+
+            const manualBlock = matchedManual.map(s => {
+                const content = isPrimary(s.name) ? s.content : s.globalContent;
+                const scope = isPrimary(s.name) ? 'primary' : 'context';
+                log.info(`[SKILL] ${s.name} injetado como "${scope}" (confidence=${intentDecision.confidence})`);
+                return `### SKILL MANUAL: ${s.name}\n${content}`;
+            }).join('\n\n');
+
+            skillContext = skillContext ? `${skillContext}\n\n${manualBlock}` : manualBlock;
+            log.info(`[SKILL] Injetando ${matchedManual.length} skill(s) manual(ais): ${matchedManual.map(s => s.name).join(', ')}`);
+        }
+
+        const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision);
+
+        const chatProfile = await this.profileRegistry.resolveProfile(userText);
+        if (chatProfile && intentDecision.modelCategory && intentDecision.confidence >= 0.8) {
+            const intentProfile = this.profileRegistry.getProfileByCategory(intentDecision.modelCategory);
+            if (intentProfile) {
+                chatProfile.model = intentProfile.model;
+                chatProfile.category = intentProfile.category;
+                log.info(`[${this.ts()}] [UNIFIED-ROUTER] Overriding model: ${intentDecision.modelCategory} → ${intentProfile.model}`);
+            }
+        }
+
+        if (!this.sessionContext) {
+            log.error('sessionContext not set — session pipeline is mandatory.');
+            return { action: 'earlyReturn', result: '⚠️ Sessão indisponível no momento. Tente novamente em alguns instantes.' };
+        }
+
+        // Derive context tier from intent: heavier categories need more context.
+        type ContextTierType = import('../loop/ContextBuilder').ContextTier;
+        const FULL_TIER_CATEGORIES = new Set(['creation', 'system_operation', 'data_analysis', 'destructive', 'memory_operation']);
+        const NORMAL_TIER_CATEGORIES = new Set(['information', 'audio', 'vision']);
+        const contextTier: ContextTierType =
+            FULL_TIER_CATEGORIES.has(intentDecision.category) ? 'full' :
+            NORMAL_TIER_CATEGORIES.has(intentDecision.category) ? 'normal' :
+            'minimal';
+        log.info(`[${this.ts()}] [CONTEXT-TIER] category=${intentDecision.category} → tier=${contextTier}`);
+
+        // BUG REAL (log 2026-07-08, suplemento PowerPoint, sessão web:powerpoint-addin-...):
+        // channel estava hardcoded como 'telegram' independente do canal real da conversa.
+        // SessionManager chaveia sessões por `${channel}:${userId}` (SessionManager.ts:193) —
+        // MessageBus grava com o channel real (ex.: "web"), mas aqui a leitura ia para uma
+        // chave diferente ("telegram:<mesmoUserId>"), que nunca teve nada escrito. Resultado:
+        // buildLLMMessages sempre via "0 recent msgs" para qualquer canal != telegram (web,
+        // discord, signal, whatsapp) — o modelo perdia toda a transcript da conversa entre
+        // turnos. Sintoma observado: usuário pediu para aplicar fundo branco, assistente
+        // ofereceu rodar um script e perguntou "quer que eu execute agora?", usuário respondeu
+        // "sim", e o modelo — sem ver a pergunta anterior no contexto — respondeu apenas
+        // "Estou pronto. Como posso ajudar...", sem executar nada. Só passava despercebido no
+        // Telegram porque lá o canal real também é 'telegram' (TelegramAdapter.ts), coincidindo
+        // com o valor fixo. Fix: usar o canal real do turno, com 'telegram' como fallback apenas
+        // quando não há ChannelContext (ex.: AgentController.ts scheduler, que já não propaga
+        // contexto hoje).
+        const sessionKey: SessionKey = { channel: channelContext?.channel ?? 'telegram', userId: conversationId };
+        const { messages: sessionMessages } = await this.sessionContext.buildLLMMessages(
+            sessionKey,
+            buildMasterPrompt(chatProfile.category),
+            userText,
+            skillContext,
+            contextTier,
+            channelContext?.metadata
+        );
+        const loopMessages = sessionMessages;
+        // Context growth guard helpers — defined here so loopMessages is in scope.
+        const getContextChars = () => loopMessages.reduce((s, m) => s + (m.content?.length ?? 0), 0);
+        const initialContextChars = getContextChars();
+
+        // ── DecisionContext ─────────────────────────────────────────────────
+        // Build from all cognitive signals available after session context is ready.
+        // Influences loop behaviour via hints and budget adjustment — never via tool removal.
+        this.getTurnState(conversationId).pendingObserverFeedback = [];   // reset per-turn
+        const ctxMetadata = this.sessionContext.getContextBuilder().getLastBuildMetadata();
+        const memConf = computeMemoryConfidence(ctxMetadata, userText);
+
+        const toolStatsArr = this.decisionMemory.getToolStats();
+        const toolSuccessRates: Record<string, number> = {};
+        for (const s of toolStatsArr) toolSuccessRates[s.toolName] = s.successRate;
+
+        const decisionCtx: DecisionContext = {
+            memoryConfidence:           memConf,
+            hasHighRelevancePreference: ctxMetadata?.hasHighRelevancePreference ?? false,
+            requiresMemoryFirst:        intentDecision.requiresMemory && (memConf === 'high' || memConf === 'medium'),
+            extendedStepBudget:         null, // resolved after maxSteps is computed
+            toolSuccessRates,
+        };
+
+        // Adaptive step budget: ceiling scales with execution complexity.
+        // Falls back to hybrid budget for unknown modes.
+        const executionMode = intentDecision?.executionMode ?? 'hybrid';
+        let maxSteps = STEP_BUDGETS[executionMode] ?? STEP_BUDGETS.hybrid ?? 6;
+
+        // requiresPlanning → upgrade to planner budget when router signals explicit planning need
+        // and the current mode hasn't already allocated enough steps.
+        if (intentDecision.requiresPlanning && maxSteps < (STEP_BUDGETS.planner ?? 15)) {
+            const upgraded = STEP_BUDGETS.planner ?? 15;
+            log.info(`[${this.ts()}] [STEP-BUDGET] requiresPlanning=true → upgrading ${maxSteps} → ${upgraded}`);
+            maxSteps = upgraded;
+            decisionCtx.extendedStepBudget = upgraded;
+        }
+
+        const stepCount = 0;
+        log.info(
+            `[${this.ts()}] [STEP-BUDGET] mode=${executionMode} maxSteps=${maxSteps} ` +
+            `memoryConfidence=${decisionCtx.memoryConfidence} requiresMemoryFirst=${decisionCtx.requiresMemoryFirst}`
+        );
+        const hasUsedNativeTools = false;      // true once any native tool call executes
+        const consecutiveNonProgressSteps = 0; // non-JSON, no-tool responses in a row
+        const blockedKeyCount = new Map<string, number>(); // tracks repeated block attempts per inputKey
+        const dedupAbort = false; // set true when TOOL-DEDUP limit reached — exits while and falls to post-loop synthesis
+        const dedupAbortTool = ''; // tracks which tool caused the dedup abort
+        const contextGuardWriteExtensionUsed = false; // one-shot: see context_growth guard below
+
+        // Pre-loop: inject non-blocking hints derived from DecisionContext.
+        // These orient the LLM without restricting its tool access.
+        if (decisionCtx.requiresMemoryFirst) {
+            const isHighConf = decisionCtx.memoryConfidence === 'high';
+            loopMessages.push({
+                role: 'system',
+                content: isHighConf
+                    ? '[COGNIÇÃO] Memória pessoal com alta confiança disponível. Avalie o bloco de memória ANTES de usar ferramentas externas. Ferramentas externas devem ser usadas apenas se a memória não tiver resposta completa.'
+                    : '[COGNIÇÃO] Memória pessoal disponível, mas pode estar desatualizada para este domínio. Consulte a memória primeiro e valide com fontes externas se necessário.',
+            });
+            memoryFirstInjected = true;
+        }
+
+        return {
+            action: 'proceed',
+            state: {
+                intentDecision, reflectionHintInjected, toolDefs, chatProfile, loopMessages,
+                getContextChars, initialContextChars, decisionCtx, executionMode, maxSteps, stepCount,
+                hasUsedNativeTools, consecutiveNonProgressSteps, blockedKeyCount, dedupAbort,
+                dedupAbortTool, contextGuardWriteExtensionUsed, memoryFirstInjected,
+            },
+        };
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 6, corte final): "Context Growth Guard" extraído do topo do
+     * `while` de `runWithTools()` sem mudar lógica — dois limites independentes (crescimento
+     * relativo e absoluto de tamanho de contexto). `continueLoop` replica o `continue` que
+     * existia no bloco original (aborta o turno, cai na síntese); `proceed` replica a queda
+     * (com ou sem a extensão de +2 steps) para a chamada de LLM logo abaixo no `while`.
+     */
+    private checkContextGrowthGuard(
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        userText: string,
+        stepCount: number,
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        maxSteps: number,
+        contextGuardWriteExtensionUsed: boolean,
+        guardsTriggered: number,
+        getContextChars: () => number,
+        initialContextChars: number,
+        loopMessages: LLMMessage[],
+    ): ContextGrowthGuardResult {
+        // Context Growth Guard — two independent limits:
+        //   ratio    : relative growth, only meaningful when baseline is large enough.
+        //              A small initial context (fresh session) can triple in size after one
+        //              legitimate file read; ratio alone would produce false positives.
+        //   absolute : hard ceiling on chars added, regardless of baseline size.
+        // MIN_RATIO_BASELINE prevents ratio guard from firing on short initial contexts.
+        const MIN_RATIO_BASELINE = 4_000;   // chars; below this, only absolute limit applies
+        const CONTEXT_RATIO_LIMIT = 2.5;    // 150 % growth cap (when baseline is substantial)
+        const CONTEXT_ABSOLUTE_DELTA = 16_000; // ~4 000 tokens of added content
+        const currentContextChars = getContextChars();
+        const contextGrowthRatio = initialContextChars > 0 ? currentContextChars / initialContextChars : 1;
+        const useRatioGuard = initialContextChars >= MIN_RATIO_BASELINE;
+        const ratioTriggered = useRatioGuard && contextGrowthRatio > CONTEXT_RATIO_LIMIT;
+        const absoluteTriggered = currentContextChars > initialContextChars + CONTEXT_ABSOLUTE_DELTA;
+        if ((ratioTriggered || absoluteTriggered) && stepCount > 1 && !dedupAbort) {
+            const triggerReason = ratioTriggered ? 'ratio_limit' : 'absolute_limit';
+            const triggerValue  = ratioTriggered ? contextGrowthRatio : (currentContextChars - initialContextChars);
+            const threshold     = ratioTriggered ? CONTEXT_RATIO_LIMIT : CONTEXT_ABSOLUTE_DELTA;
+            log.warn(
+                `[${this.ts()}] [SAFETY-GUARD] type=context_growth reason=${triggerReason} ` +
+                `value=${triggerValue.toFixed(2)} threshold=${threshold} ` +
+                `initial=${initialContextChars} current=${currentContextChars}`
+            );
+            // Context-aware abort message: when the last tool was 'read', the agent loaded
+            // a file but performed no write/edit. Prevent the model from claiming write success.
+            const lastToolInCycle = cycleHistory.length > 0
+                ? cycleHistory[cycleHistory.length - 1].tool
+                : null;
+            // 'exec_command' deliberately excluded here: it's also the tool used for
+            // read-only recon (e.g. `Get-ChildItem` to find the right file before reading
+            // it), which is NOT evidence that the deliverable was edited. Evidence:
+            // 2026-07-05 audit log, goal "máximo 10 linhas por slide" — 3 recon
+            // `Get-ChildItem` calls (listing *.md/*.pptx) ran before the `read`, made
+            // writeToolsUsedThisTurn true, and steered this guard into the generic
+            // "responda com o que já tem" message instead of "OBRIGATÓRIO use
+            // exec_command" — the turn ended describing a plan instead of executing it.
+            // Same definition DELIVERY-GUARD already uses a few hundred lines below
+            // (wroteFile checks only `tool === 'write'`) — 'edit' kept here too since,
+            // unlike exec_command, it can only ever be a mutation, never a listing.
+            const writeToolsUsedThisTurn = cycleHistory.some(h => h.tool === 'write' || h.tool === 'edit');
+            // Adaptar a mensagem de abort ao intent do usuário:
+            // - Análise/review: o read É a ação principal → instruir a apresentar a análise
+            // - Escrita/geração: o read é preâmbulo → instruir a usar exec_command
+            const isAnalysisAbort = ANALYSIS_INTENT_PATTERN.test(userText);
+            const needsWriteNow = lastToolInCycle === 'read' && !writeToolsUsedThisTurn && !isAnalysisAbort;
+            const ratioAbortMsg = (lastToolInCycle === 'read' && !writeToolsUsedThisTurn)
+                ? isAnalysisAbort
+                    ? '[CONTEXTO GRANDE] O arquivo foi lido com sucesso e está no contexto. ' +
+                      'Agora forneça a análise/avaliação solicitada com base no conteúdo que você acabou de ler. ' +
+                      'Responda com suas observações, sugestões de melhoria e avaliação da estrutura. ' +
+                      'NÃO tente ler mais arquivos. NÃO use ferramentas. Responda AGORA com a análise.'
+                    : '[CONTEXTO EXCESSIVO] O arquivo fonte foi carregado com sucesso e está disponível. ' +
+                      'OBRIGATÓRIO: Use exec_command com um script Python COMPLETO E FUNCIONAL para gerar os arquivos de saída agora. ' +
+                      'O script deve ler o arquivo de origem via open() e escrever todos os arquivos de saída necessários. ' +
+                      'PROIBIDO: Afirmar que os arquivos foram criados sem ter executado exec_command. ' +
+                      'PROIBIDO: Criar scripts placeholder com "pass" ou "# TODO" — escreva o código real. ' +
+                      'NÃO leia mais arquivos no contexto. Processe TUDO via exec_command + Python.'
+                : '[CONTEXTO EXCESSIVO] O contexto cresceu demais. Use os dados já obtidos para responder agora sem usar mais ferramentas.';
+            loopMessages.push({
+                role: 'system',
+                content: ratioAbortMsg,
+            });
+            guardsTriggered++;
+
+            // needsWriteNow tells the model "use exec_command AGORA", but post-loop
+            // synthesis (below) is text-only and can never execute that instruction —
+            // setting dedupAbort here would make the guard's own message a lie the model
+            // has no way to act on. Evidence: 2026-07-05 audit log, 4 consecutive turns
+            // (goal "máximo 10 linhas por slide") all hit ratio≈2.6-2.7 right after the
+            // single `read` needed before editing, aborted before any write/exec_command
+            // was attempted, and ended in either a hallucination-block or an honest
+            // "vou ler e depois ajustar" that never got a chance to actually happen.
+            // Fix: grant ONE extra real step (bounded, same +2 pattern as DELIVERY-GUARD's
+            // deliveryStepCap) so the model can act on its own instruction. If context still
+            // hasn't produced a write/exec_command after that, abort for real — one-shot via
+            // contextGuardWriteExtensionUsed prevents this from looping indefinitely.
+            //
+            // IMPORTANT: do NOT `continue` here. This guard runs at the TOP of the while
+            // loop body, before the LLM call below — `continue` jumps back to `while(...)`,
+            // which re-enters the loop and hits this SAME check again immediately (nothing
+            // changed: no LLM call happened, no tool ran), consuming the one-shot flag on
+            // the very next iteration without ever reaching the LLM call. Evidence:
+            // 2026-07-05 21:33 audit log — Step 3 granted the extension, Step 4 logged
+            // right after with zero LLM/tool activity in between, hit ratio_limit again
+            // (one-shot now used) and aborted for real. Falling through (no continue) lets
+            // THIS iteration's LLM call run with the injected instruction, which is the
+            // whole point of the extension.
+            if (needsWriteNow && !contextGuardWriteExtensionUsed) {
+                contextGuardWriteExtensionUsed = true;
+                if (maxSteps < stepCount + 2) maxSteps = stepCount + 2;
+                log.info(`[${this.ts()}] [SAFETY-GUARD] context_growth: granting one extra step to act on exec_command instruction (maxSteps→${maxSteps})`);
+                // No `continue`/`dedupAbort` here — falls through to the LLM call below,
+                // in this SAME iteration, so the model can actually act on the instruction.
+            } else {
+                dedupAbort = true;
+                dedupAbortTool = `context_growth:${triggerReason}`;
+                // Pula a próxima chamada LLM — evita que o modelo crie artefato stub sob
+                // pressão de contexto (que o DELIVERY-GUARD enviaria). Cai na síntese.
+                return { action: 'continueLoop', dedupAbort, dedupAbortTool, maxSteps, contextGuardWriteExtensionUsed, guardsTriggered };
+            }
+        }
+        return { action: 'proceed', dedupAbort, dedupAbortTool, maxSteps, contextGuardWriteExtensionUsed, guardsTriggered };
+    }
+
+    // ── Core execution loop ────────────────────────────────────────────────────
+
+    private async runWithTools(conversationId: string, userText: string, iteration: number, _userId?: string, channelContext?: ChannelContext): Promise<string | ProcessedResult> {
+        const correlationId = channelContext?.correlationId;
+        const turnLog = correlationId ? log.child({ cid: correlationId.slice(0, 8) }) : log;
+
+        // Guard: reject truly concurrent turns for the same user.
+        // Also clears stale entries left by unexpected throws (try/finally in run() covers new cases,
+        // but this handles any pre-existing stuck state without requiring a server restart).
+        if (iteration === 0 && this.activeTurns.has(conversationId)) {
+            const startedAt = this.turnStartTimes.get(conversationId) || 0;
+            if (Date.now() - startedAt > this.TURN_STALE_MS) {
+                log.warn(`[${this.ts()}] [AGENT] Stale turn cleared for ${conversationId} (started ${Math.round((Date.now() - startedAt) / 1000)}s ago)`);
+                this.activeTurns.get(conversationId)?.abort();
+                this.activeTurns.delete(conversationId);
+                this.turnStartTimes.delete(conversationId);
+            } else {
+                log.warn(`[${this.ts()}] [AGENT] Concurrent turn rejected for ${conversationId}`);
+                return 'Ainda estou processando sua mensagem anterior. Aguarde um momento.';
+            }
+        }
+
+        turnLog.info('turn_start', `Cycle ${iteration + 1}`, { conversationId });
+
+        // status: 'success' | 'error' (execução normal de tool, ver ~linha 1973/2299/2641) |
+        // 'deferred' (send_document adiado para pós-validação — FIX E, ~linha 1835; conta como
+        // já tratado para o DELIVERY-GUARD, ~linha 2564, mas nunca como um envio confirmado).
+        const cycleHistory: Array<{ step: number; tool: string; input: string; status: string }> = [];
+        let lastBestContent = '';
+        let toolFailureCount = 0;
+        const usedToolInputs = new Set<string>();
+        const usedToolOutputs = new Map<string, string>(); // stores output of first successful call per inputKey
+        // Track filenames confirmed absent from workspace so DEDUP can block path-variant retries
+        const failedReadFilenames = new Set<string>();
+        // Track binary filenames that failed with "cannot read as text" so retries are blocked early
+        const binaryReadFilenames = new Set<string>();
+        // Track how many times edit was called per file path to prevent append-loop corruption
+        const editPathCount = new Map<string, number>();
+        // Generic per-tool-type call counter: detects when the agent loops on the same tool
+        // regardless of argument variation (which TOOL-DEDUP alone cannot catch).
+        const toolTypeCallCount = new Map<string, number>();
+        const MAX_SAME_TOOL_CALLS = 4;
+
+        // TOOL_GROUP_REGISTRY is defined at module level — use it directly.
+        const groupCallCount = new Map<string, number>();
+        const MAX_GROUP_CALLS = 6;
+
+        // Consecutive failure tracker: resets on any success so persistent errors
+        // (not isolated failures) trigger the abort.
+        let consecutiveToolFailures = 0;
+        const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
+
+        // getContextChars is defined after loopMessages (below) to avoid TDZ.
+        // Diagnostic counters — accumulated across the turn, emitted in TURN-DIAGNOSTICS.
+        let guardsTriggered    = 0;
+        let totalThinkingChars = 0;  // sum of response.thinking lengths across all steps
+        let totalToolCalls     = 0;
+
+        // Sprint 3.5A — Decision Impact Telemetry (shadow mode, no enforcement)
+        // Tracks whether hints were injected, eligible, and followed by the LLM.
+        // Computed at end-of-turn from cycleHistory + injection flags.
+        let memoryFirstInjected          = false;
+        let observerFeedbackInjected     = false;
+        let toolFailureHintInjected      = false;
+        let toolSuccessHintInjected      = false;
+        let toolFailureHintFirstStep: number | null  = null;
+        let toolSuccessHintFirstStep: number | null  = null;
+        let observerFeedbackFirstStep: number | null = null;
+
+        const turnAbort = new AbortController();
+        this.activeTurns.set(conversationId, turnAbort);
+        this.turnStartTimes.set(conversationId, Date.now());
+        const turnSignal = turnAbort.signal;
+
+        const trace = traceManager.startTrace(conversationId, userText, correlationId);
+        const fsm = new AgentFSM();
+        const move = (event: AgentFSMEvent, meta?: Record<string, unknown>) => {
+            // Throws on invalid transition — callers must be in the correct FSM state.
+            // The try/catch below (wrapping the rest of runWithTools) handles cleanup.
+            const transition = fsm.transition(event, meta);
+            log.info(`[${this.ts()}] [AGENT-FSM] ${transition.from} --${event}--> ${transition.to}`);
+            traceManager.addStep(trace, 'fsm_transition', transition);
+            this.fsmHistoryStore.record(transition, trace.id, conversationId);
+        };
+
+        try {
+        const setupResult = await this.setupTurn(
+            conversationId, userText, channelContext, trace, move, memoryFirstInjected,
+        );
+        if (setupResult.action === "earlyReturn") return setupResult.result;
+        const {
+            intentDecision, reflectionHintInjected, toolDefs, chatProfile, loopMessages,
+            getContextChars, initialContextChars, decisionCtx, executionMode, blockedKeyCount,
+        } = setupResult.state;
+        let maxSteps = setupResult.state.maxSteps;
+        let stepCount = setupResult.state.stepCount;
+        let hasUsedNativeTools = setupResult.state.hasUsedNativeTools;
+        let consecutiveNonProgressSteps = setupResult.state.consecutiveNonProgressSteps;
+        let dedupAbort = setupResult.state.dedupAbort;
+        let dedupAbortTool = setupResult.state.dedupAbortTool;
+        let contextGuardWriteExtensionUsed = setupResult.state.contextGuardWriteExtensionUsed;
+        memoryFirstInjected = setupResult.state.memoryFirstInjected;
+
+        while (stepCount < maxSteps && !dedupAbort) {
+            stepCount++;
+            log.info(`[${this.ts()}] [COGNITION] Step ${stepCount}...`);
+
+            // Flush observer feedback from previous step (accumulated asynchronously).
+            const turnState = this.getTurnState(conversationId);
+            if (turnState.pendingObserverFeedback.length > 0) {
+                for (const fb of turnState.pendingObserverFeedback) {
+                    loopMessages.push({ role: 'system', content: fb });
+                }
+                if (!observerFeedbackInjected) {
+                    observerFeedbackInjected = true;
+                    observerFeedbackFirstStep = stepCount;
+                }
+                turnState.pendingObserverFeedback = [];
+            }
+
+            const contextGuardResult = this.checkContextGrowthGuard(
+                cycleHistory, userText, stepCount, dedupAbort, dedupAbortTool, maxSteps,
+                contextGuardWriteExtensionUsed, guardsTriggered, getContextChars, initialContextChars,
+                loopMessages,
+            );
+            dedupAbort = contextGuardResult.dedupAbort;
+            dedupAbortTool = contextGuardResult.dedupAbortTool;
+            maxSteps = contextGuardResult.maxSteps;
+            contextGuardWriteExtensionUsed = contextGuardResult.contextGuardWriteExtensionUsed;
+            guardsTriggered = contextGuardResult.guardsTriggered;
+            if (contextGuardResult.action === "continueLoop") continue;
+
+            if (toolFailureCount >= 2) {
+                loopMessages.push({
+                    role: 'system',
+                    content: '[CRÍTICO] Múltiplas ferramentas falharam. PARE de tentar ferramentas. Responda AGORA declarando claramente a limitação de dados. Seja honesto e transparente: não invente tendências e não use linguagem vaga. Ofereça uma alternativa útil com base no que já sabemos.'
+                });
+                if (!toolFailureHintInjected) {
+                    toolFailureHintInjected = true;
+                    toolFailureHintFirstStep = stepCount;
+                }
+            }
+
+            // DecisionMemory-guided hint: if a tool has a poor historical success rate
+            // AND has already been called multiple times this turn, suggest alternatives.
+            // Generic: works for any tool, not just web_search.
+            if (stepCount > 1) {
+                for (const [toolName, rate] of Object.entries(decisionCtx.toolSuccessRates)) {
+                    const callsThisTurn = cycleHistory.filter(h => h.tool === toolName).length;
+                    if (rate < 0.4 && callsThisTurn >= 2 && decisionCtx.memoryConfidence !== 'none') {
+                        loopMessages.push({
+                            role: 'system',
+                            content: `[COGNIÇÃO] "${toolName}" tem taxa de sucesso histórica de ${(rate * 100).toFixed(0)}% e já foi chamado ${callsThisTurn}x neste turno. Considere usar dados de memória ou uma abordagem diferente.`,
+                        });
+                        if (!toolSuccessHintInjected) {
+                            toolSuccessHintInjected = true;
+                            toolSuccessHintFirstStep = stepCount;
+                        }
+                        break; // one hint at a time to avoid noise
+                    }
+                }
+            }
+
+            move('LLM_REQUEST', { step: stepCount });
+            const response = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile, turnSignal);
+            move('LLM_RESPONSE', { step: stepCount, status: response.status });
+
+            if (response.thinking && response.thinking.trim().length > 0) {
+                this.getTurnState(conversationId).cognitiveWorkspace.add(stepCount, response.thinking.trim(), 'reasoning');
+                totalThinkingChars += response.thinking.trim().length;
+            }
+
+            traceManager.addStep(trace, 'decision', {
+                thought: parseLLMResponse(response.content || '')?.thought,
+                step: stepCount,
+                iteration
+            });
+
+            if (response.status === 'cancelled') {
+                log.info(`[${this.ts()}] [AGENT-FSM] Turn cancelled at step ${stepCount}`);
+                move('CANCEL', { step: stepCount });
+                traceManager.completeTrace(trace, 'cancelled', 'Operação cancelada.');
+                this.activeTurns.delete(conversationId);
+                return { text: 'Operação cancelada.' };
+            }
+
+            if (response.status === 'timeout') {
+                log.warn(`[${this.ts()}] [FALLBACK] Provider timeout at step ${stepCount}`);
+                move('TIMEOUT', { step: stepCount });
+                // If tools ran successfully before the timeout, report what was accomplished
+                const successfulWrites = cycleHistory.filter(h => h.tool === 'write' && h.status === 'success');
+                let timeoutMsg = response.fallbackMessage || 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.';
+                if (successfulWrites.length > 0) {
+                    const filePaths = [...new Set(successfulWrites.map(h => {
+                        try { return (JSON.parse(h.input) as Record<string, unknown>).path as string; } catch { return null; }
+                    }).filter(Boolean))];
+                    if (filePaths.length > 0) {
+                        timeoutMsg = `O modelo demorou mais que o esperado ao finalizar. O arquivo foi criado parcialmente em: ${filePaths.join(', ')} — você pode pedir para continuar.`;
+                    }
+                }
+                traceManager.completeTrace(trace, 'timeout', timeoutMsg);
+                this.persistTrace(trace, stepCount, 'timeout', timeoutMsg, channelContext);
+                this.activeTurns.delete(conversationId);
+                return timeoutMsg;
+            }
+
+            if (response.status === 'error') {
+                log.warn(`[${this.ts()}] [FALLBACK] Provider error at step ${stepCount}: ${response.fallbackReason}`);
+                move('FAIL', { step: stepCount, status: response.status });
+                traceManager.completeTrace(trace, 'error', response.fallbackMessage);
+                this.persistTrace(trace, stepCount, 'error', response.fallbackMessage || 'Error', channelContext);
+                this.activeTurns.delete(conversationId);
+                return response.fallbackMessage || 'Erro ao processar sua mensagem.';
+            }
+
+            this.protocolParser.setProviderContext(
+                response.attempts?.[0]?.provider || 'unknown',
+                response.attempts?.[0]?.model || 'unknown'
+            );
+
+            // Detect native tool calls BEFORE strictParse so the parser can skip
+            // content-format validation when the model already communicated via toolCalls[].
+            // (e.g. kimi-k2.6 puts its reasoning in the thinking field, not JSON protocol)
+            const hasNativeToolCalls = (response.toolCalls?.length ?? 0) > 0;
+
+            const structured = this.protocolParser.strictParse(response.content || '', hasNativeToolCalls);
+            const atomicData = parseLLMResponse(response.content || '');
+            const finalText = extractFinalText(response, atomicData);
+
+            // Only store deliverable responses as lastBestContent.
+            // Protocol violations (planning/protocolViolation) contain raw protocol
+            // artifacts that must not be delivered to the user if the loop exits early.
+            const isProtocolViolation = structured?.metadata?.protocolViolation === true;
+            if (finalText.length > 0 && !isProtocolViolation) {
+                lastBestContent = finalText;
+            }
+
+            loopMessages.push({ role: 'assistant', content: response.content, toolCalls: response.toolCalls });
+
+            const wantsTool = structured?.type === 'tool_call' || (atomicData?.action?.type === 'tool' && atomicData?.action?.name);
+
+            // Track when the model demonstrates native tool capability.
+            if (hasNativeToolCalls) {
+                hasUsedNativeTools = true;
+                consecutiveNonProgressSteps = 0;
+            }
+
+            // Protocol violation recovery — only when there are NO native tool calls to execute.
+            // Native tool calls must always execute regardless of content format.
+            if (structured?.metadata?.protocolViolation && structured?.type === 'planning' && !hasNativeToolCalls) {
+                consecutiveNonProgressSteps++;
+
+                // Generic signal 1: model already used native tools and now has a plain-text answer.
+                // Applies to any model that uses toolCalls[] natively instead of JSON protocol.
+                // Skip when recoveryNeeded=true: content is a timeout fragment, not a real final answer.
+                if (hasUsedNativeTools && finalText.length > 30 && !structured?.metadata?.recoveryNeeded) {
+                    log.info(`[${this.ts()}] [PROTOCOL-EXIT] Native-tool model → plain-text final answer (step ${stepCount}, len=${finalText.length})`);
+                    move('FINAL_READY', { step: stepCount, reason: 'native_tool_final' });
+                    traceManager.completeTrace(trace, 'completed', finalText);
+                    this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
+                    return { text: finalText };
+                }
+
+                // Generic signal 2: model received 2 recovery prompts and still didn't produce JSON.
+                // Accept best available content rather than spinning indefinitely.
+                if (consecutiveNonProgressSteps >= 2 && lastBestContent.length > 0) {
+                    log.info(`[${this.ts()}] [PROTOCOL-EXIT] ${consecutiveNonProgressSteps} non-progress steps → using best content (len=${lastBestContent.length})`);
+                    move('FINAL_READY', { step: stepCount, reason: 'non_progress_limit' });
+                    traceManager.completeTrace(trace, 'completed', lastBestContent);
+                    this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
+                    return { text: lastBestContent };
+                }
+
+                loopMessages.push({ role: 'system', content: this.protocolParser.getRecoveryPrompt() });
+                continue;
+            }
+
+            consecutiveNonProgressSteps = 0;
+
+            const isExplicitlyComplete = structured?.isComplete === true;
+            const isExplicitlyIncomplete = structured?.isComplete === false;
+            const isFinalAnswer = structured?.type === 'final_answer';
+
+            if ((isFinalAnswer || isExplicitlyComplete) && !isExplicitlyIncomplete && !wantsTool && !hasNativeToolCalls) {
+                move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : 'is_complete' });
+                traceManager.completeTrace(trace, 'completed', finalText);
+                this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
+                return { text: await this.commitResponse(finalText, userText, trace.id, conversationId, turnSignal, toolFailureCount) };
+            }
+
+            const nativeDispatchResult = await this.runNativeToolCallDispatch(
+                response.toolCalls, stepCount, channelContext, conversationId, userText, intentDecision,
+                trace, turnSignal, usedToolInputs, usedToolOutputs, blockedKeyCount, failedReadFilenames,
+                binaryReadFilenames, editPathCount, toolTypeCallCount, groupCallCount, cycleHistory,
+                loopMessages, decisionCtx, dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+                consecutiveToolFailures, guardsTriggered, toolFailureCount,
+                MAX_SAME_TOOL_CALLS, MAX_GROUP_CALLS, MAX_CONSECUTIVE_TOOL_FAILURES, move,
+            );
+            if (nativeDispatchResult.action === "earlyReturn") return nativeDispatchResult.result;
+            dedupAbort = nativeDispatchResult.dedupAbort;
+            dedupAbortTool = nativeDispatchResult.dedupAbortTool;
+            maxSteps = nativeDispatchResult.maxSteps;
+            totalToolCalls = nativeDispatchResult.totalToolCalls;
+            consecutiveToolFailures = nativeDispatchResult.consecutiveToolFailures;
+            guardsTriggered = nativeDispatchResult.guardsTriggered;
+            toolFailureCount = nativeDispatchResult.toolFailureCount;
+            if (nativeDispatchResult.action === "continueLoop") continue;
+
+            // Protocol-Based Early Exit
+            const hasNoToolsRequested = !response.toolCalls?.length && !wantsTool;
+            const isStructuredPlanning = structured?.type === 'planning';
+
+            if (hasNoToolsRequested && !isExplicitlyIncomplete && !isStructuredPlanning) {
+                if (finalText.length > 0) {
+                    log.info(`[${this.ts()}] [PROTOCOL-EXIT] No tools, structured complete — returning content (step ${stepCount}, type=${structured?.type})`);
+                    move('FINAL_READY', { step: stepCount, reason: 'no_tools_requested' });
+                    traceManager.completeTrace(trace, 'completed', finalText);
+                    this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
+                    return await this.commitResponse(finalText, userText, trace.id, conversationId, turnSignal, toolFailureCount);
+                }
+            }
+
+            const jsonActionResult = await this.runJsonActionDispatch(
+                atomicData, stepCount, channelContext, conversationId, userText, intentDecision,
+                trace, turnSignal, usedToolInputs, blockedKeyCount, editPathCount, toolTypeCallCount,
+                groupCallCount, cycleHistory, loopMessages, dedupAbort, dedupAbortTool,
+                consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount,
+                MAX_SAME_TOOL_CALLS, MAX_GROUP_CALLS, MAX_CONSECUTIVE_TOOL_FAILURES, move,
+            );
+            if (jsonActionResult.action === "earlyReturn") return jsonActionResult.result;
+            dedupAbort = jsonActionResult.dedupAbort;
+            dedupAbortTool = jsonActionResult.dedupAbortTool;
+            consecutiveToolFailures = jsonActionResult.consecutiveToolFailures;
+            guardsTriggered = jsonActionResult.guardsTriggered;
+            totalToolCalls = jsonActionResult.totalToolCalls;
+            toolFailureCount = jsonActionResult.toolFailureCount;
+            if (jsonActionResult.action === "continueLoop") continue;
+            if (jsonActionResult.action === "breakLoop") break;
+
+            if (stepCount >= maxSteps) {
+                log.warn(`[${this.ts()}] [STEP-LIMIT] step=${stepCount + 1} action=force_response`);
+                break;
+            }
+        }
+
+        this.logTurnDiagnostics({
+            stepCount, executionMode, maxSteps, decisionCtx, getContextChars, initialContextChars,
+            toolTypeCallCount, groupCallCount, cycleHistory, maxSameToolCalls: MAX_SAME_TOOL_CALLS,
+            totalToolCalls, consecutiveToolFailures, toolFailureCount, totalThinkingChars,
+            guardsTriggered, dedupAbortTool, memoryFirstInjected, toolFailureHintInjected,
+            toolFailureHintFirstStep, toolSuccessHintInjected, toolSuccessHintFirstStep,
+            observerFeedbackInjected, observerFeedbackFirstStep, reflectionHintInjected,
+            intentCategory: intentDecision.category,
+        });
+
+        const deliveryGuardResult = await this.runDeliveryGuardPhase(
+            conversationId, cycleHistory, loopMessages, toolDefs, chatProfile, turnSignal,
+            trace, channelContext, usedToolInputs, maxSteps, stepCount, move,
+        );
+        if (deliveryGuardResult.earlyReturn) return deliveryGuardResult.result;
+        stepCount = deliveryGuardResult.stepCount;
+
+        return await this.runSynthesisAndFallbackPhase(
+            conversationId, userText, cycleHistory, loopMessages, lastBestContent, dedupAbort,
+            dedupAbortTool, chatProfile, turnSignal, trace, channelContext, stepCount, maxSteps,
+            toolFailureCount, move,
+        );
 
         } catch (fsmError) {
             // Only FSM violations (invalid transitions) reach here — all other errors are handled

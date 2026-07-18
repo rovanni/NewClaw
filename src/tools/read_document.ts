@@ -8,7 +8,7 @@
  *   4. strings + grep            — último recurso para extrair texto bruto
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { exec, execFile } from 'child_process';
 import path from 'path';
 import fs from 'fs';

@@ -38,10 +38,12 @@ import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext, SuccessCriterion, GoalProgressModel, ProgressComponent, AttemptOutcome } from './GoalTypes';
 import { StepSemanticValidator } from './StepSemanticValidator';
 import { GracefulDeliveryOrchestrator } from './GracefulDeliveryOrchestrator';
-import { StrategyDiversityGuard } from './StrategyDiversityGuard';
+import { StrategyDiversityGuard } from '../shared/StrategyDiversityGuard';
 import { resolvePath } from '../utils/crossPlatform';
 import { ensureDeliverySuccessCriteria, AUTO_DELIVERY_CRITERION_IDS } from './planning/ensureDeliverySuccessCriteria';
 import { resolveInstallCommand } from './planning/resolveInstallCommand';
+import { inferExpectedExtensions, isExpectedDeliverableFile } from './planning/inferExpectedExtensions';
+import { MIN_DELIVERABLE_SIZE } from './planning/artifactContract';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext, ContextAwareTool } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
@@ -75,6 +77,38 @@ interface GoalExecutionState {
     cognitiveContext: StepCognitiveContext;
     progressModel: GoalProgressModel | null;
 }
+
+/**
+ * ARCH-020 (S24): retorno compartilhado pelos 6 handlers de `cycleResult.outcome` extraídos do
+ * switch de `runLoopInternal()`. `earlyReturn: true` replica um `return` que existia dentro do
+ * case original; `earlyReturn: false` replica um `break` — `runLoopInternal()` retoma o loop com
+ * os 3 valores devolvidos (todo handler devolve os 3, mesmo quando não muda `totalReplans`/
+ * `priorFeedback`, para manter o unwrap no chamador uniforme entre os 6 handlers).
+ */
+type StepOutcomeHandled =
+    | { earlyReturn: true; result: GoalResult }
+    | { earlyReturn: false; goal: Goal; totalReplans: number; priorFeedback: string | undefined };
+
+/**
+ * ARCH-020 (S24, Incremento 2): retorno da fase de validação de conclusão de goal, extraída do
+ * bloco `if (readyToValidate) {...}` de `runLoopInternal()`. `continueLoop` replica um
+ * `continue` do bloco original; `earlyReturn` replica um `return`. Nenhum caminho dentro desse
+ * bloco cai no switch de outcome — por isso não existe uma 3ª variante "proceed".
+ */
+type ValidationPhaseResult =
+    | { action: 'earlyReturn'; result: GoalResult }
+    | { action: 'continueLoop'; goal: Goal; totalReplans: number; priorFeedback: string | undefined };
+
+/**
+ * ARCH-020 (S24, Incremento 2): retorno da fase de execução do step pendente, extraída do
+ * bloco `else` de `runLoopInternal()` (dispatch de `executeStep()` + validação semântica).
+ * `proceedToSwitch` entrega o `cycleResult` já ajustado pela validação semântica (que pode
+ * fazer downgrade para 'partial' ou escalar para 'blocked') para o switch de outcome, que
+ * continua inline em `runLoopInternal()` — ver os 6 handlers `handle*Outcome` (Incremento 1).
+ */
+type StepExecutionPhaseResult =
+    | { action: 'earlyReturn'; result: GoalResult }
+    | { action: 'proceedToSwitch'; goal: Goal; cycleResult: CycleResult };
 
 export class GoalExecutionLoop {
     private readonly evaluator = new GoalEvaluator();
@@ -272,7 +306,8 @@ export class GoalExecutionLoop {
         goal: Goal,
         channelContext: ChannelContext,
         authStepOutput: string,
-        onProgress?: ProgressCallback
+        onProgress?: ProgressCallback,
+        authStepArtifactPaths?: string[],
     ): Promise<GoalResult> {
         log.info(`[GoalLoop] resuming goal=${goal.id} after auth`);
 
@@ -282,9 +317,9 @@ export class GoalExecutionLoop {
         // não é a mesma classe de duplicação do achado residual 2 (Sprint 0.8.2/0.8.3): o
         // attempt 'failure' anterior (bloqueio de permissão) e este 'success' (pós-aprovação)
         // representam duas execuções genuinamente distintas do step.
-        const blockedStep = goal.currentPlan.find(s => s.status === 'pending');
+        const blockedStep = this.getPendingSteps(goal.currentPlan)[0];
         if (blockedStep) {
-            this.markStepDone(goal, blockedStep, authStepOutput);
+            this.markStepDone(goal, blockedStep, authStepOutput, 'add', authStepArtifactPaths);
         }
 
         // requiresAuth: false — Sprint 0.11, ver nota no branch 'needs_auth' acima.
@@ -306,6 +341,23 @@ export class GoalExecutionLoop {
         const hasExec = plan.some(s => s.toolName === 'exec_command');
         const hasDelivery = plan.some(s => ['send_document', 'send_audio', 'write', 'edit'].includes(s.toolName ?? ''));
         return hasExec && hasDelivery;
+    }
+
+    // ── Accessor único de steps pendentes (ARCH-006) ───────────────────────────
+
+    /**
+     * Fonte única para "quais steps deste plano estão pendentes", opcionalmente
+     * restrito a uma tool (ou lista de tools). Substitui os `.filter`/`.find`/`.some`
+     * inline com `status === 'pending'` espalhados pelo arquivo — cada um recomputava
+     * o mesmo predicado de forma independente, sem risco funcional individual, mas sem
+     * fonte única do conceito "step pendente".
+     */
+    private getPendingSteps(plan: PlanStep[], toolName?: string | string[]): PlanStep[] {
+        if (toolName === undefined) {
+            return plan.filter(s => s.status === 'pending');
+        }
+        const names = Array.isArray(toolName) ? toolName : [toolName];
+        return plan.filter(s => s.status === 'pending' && names.includes(s.toolName ?? ''));
     }
 
     // ── Helper espiral: Q1+Q2 envolvem cada replan ────────────────────────────
@@ -517,7 +569,7 @@ export class GoalExecutionLoop {
                 c => c.status === 'completed'
             );
             const completedCount = state.progressModel.components.length;
-            const pendingCount = finalPlan.filter(s => s.status === 'pending').length;
+            const pendingCount = this.getPendingSteps(finalPlan).length;
             const totalWork = completedCount + pendingCount;
             state.progressModel.overallPercent = totalWork > 0
                 ? Math.round((completedCount / totalWork) * 100)
@@ -564,6 +616,1111 @@ export class GoalExecutionLoop {
         }
     }
 
+    // ── ARCH-020: handlers do switch(cycleResult.outcome) de runLoopInternal() ─────────────
+
+    /**
+     * ARCH-020: cada handler abaixo é um `case` do switch original de `runLoopInternal()`,
+     * extraído sem mudar nenhuma lógica — mesmo espírito do discriminated union já usado em
+     * `dispatchAgentloopStep()`/`finalizeStepAttempt()` (ARCH-022, S22). `earlyReturn: true`
+     * replica um `return this.buildResult(...)` (ou `return {...goalResult, authOptions}`)
+     * que existia dentro do case; `earlyReturn: false` replica um `break` — o loop de
+     * `runLoopInternal()` segue para a checagem de TTL pós-switch com os 3 valores devolvidos.
+     */
+    private async handleSuccessOutcome(
+        goal: Goal,
+        step: PlanStep,
+        cycleResult: CycleResult,
+        totalCycles: number,
+        totalReplans: number,
+        priorFeedback: string | undefined,
+        state: GoalExecutionState,
+        sentArtifacts: Set<string>,
+        trackArtifact: (fp: string) => void,
+        writeTraceByPath: Map<string, { cycle: number; step: string; source: string }>,
+        onProgress: ProgressCallback | undefined,
+    ): Promise<StepOutcomeHandled> {
+        // skipAttemptRecord=true: executeStep() já gravou o attempt real deste
+        // ciclo (com o result correto, incluindo 'partial' de baixa confiança —
+        // Sprint 0.8) antes de retornar cycleResult; ver comentário em markStepDone.
+        this.markStepDone(goal, step, cycleResult.output ?? '', 'skip');
+        this.updateCognitiveContext(step, cycleResult.output ?? '', state);
+        this.updateProgressModel(step, 'completed', cycleResult.output, state);
+        // Fix #2: registra artefatos enviados para evitar reenvio por deliverable_check
+        if (step.toolName === 'send_document' && step.toolArgs?.file_path) {
+            trackArtifact(String(step.toolArgs.file_path));
+        }
+        // FIX C + P3-DEDUP: injeta sends diferidos do AgentLoop como steps pendentes.
+        // Deduplicação adicional: garante que o mesmo file_path não entre duas vezes
+        // no plano mesmo que a dedup no callback tenha falhado (defesa em profundidade).
+        if (cycleResult.deferredSends && cycleResult.deferredSends.length > 0) {
+            const existingPendingSendPaths = new Set(
+                this.getPendingSteps(goal.currentPlan, 'send_document')
+                    .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
+            );
+            const dedupedSends: typeof cycleResult.deferredSends = [];
+            for (const sendArgs of cycleResult.deferredSends) {
+                const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
+                const key = fp || JSON.stringify(sendArgs);
+                if (existingPendingSendPaths.has(key) || sentArtifacts.has(fp)) {
+                    log.info(
+                        `[DELIVERY-DEDUP] artifact="${fp}"` +
+                        ` reason=duplicate_in_plan_injection` +
+                        ` existing_delivery=${sentArtifacts.has(fp) ? 'already_sent' : 'pending_step'}` +
+                        ` decision=skip`
+                    );
+                } else {
+                    dedupedSends.push(sendArgs);
+                    existingPendingSendPaths.add(key);
+                }
+            }
+            if (dedupedSends.length > 0) {
+                const newSendSteps: PlanStep[] = dedupedSends.map((sendArgs, i) => ({
+                    id: `step_deferred_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 5)}`,
+                    description: `Enviar documento "${String(sendArgs['file_path'] ?? sendArgs['path'] ?? '(desconhecido)')}" ao usuário`,
+                    toolName: 'send_document',
+                    toolArgs: sendArgs,
+                    status: 'pending' as const,
+                    fallbackSteps: [],
+                    originStepId: step.id,
+                }));
+                // RECONCILIAÇÃO: uma nova tentativa do MESMO pendingStep (retry após
+                // SEMANTIC-MISMATCH/partial) supera qualquer send_document ainda
+                // pendente injetado por uma tentativa ANTERIOR do mesmo step — evita
+                // que retries sucessivos (cada um com um file_path novo) acumulem
+                // envios concorrentes pro mesmo objetivo lógico. Achado real:
+                // goal_1784200808912_vw8fu, 16/07/2026 — 3 .pptx enviados pra 1
+                // pedido de "mudar as cores", cada retry do mesmo step injetando seu
+                // próprio deferred send sem cancelar o anterior. Só afeta sends AINDA
+                // NÃO despachados (pending); um DELIVERY-GUARD já enviado de verdade
+                // (sentArtifacts) é irretratável e fica fora deste escopo.
+                const supersededPaths: string[] = [];
+                const planWithoutSuperseded = goal.currentPlan.filter(s => {
+                    const superseded = s.status === 'pending'
+                        && s.toolName === 'send_document'
+                        && s.originStepId === step.id;
+                    if (superseded) supersededPaths.push(String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''));
+                    return !superseded;
+                });
+                if (supersededPaths.length > 0) {
+                    log.info(
+                        `[AGENTLOOP-SEND-SUPERSEDE] goal=${goal.id} step=${step.id}` +
+                        ` superseded="${supersededPaths.join(',')}"` +
+                        ` reason=same_origin_step_retry`
+                    );
+                }
+                const updatedPlan = [...planWithoutSuperseded, ...newSendSteps];
+                this.goalStore.update(goal.id, { currentPlan: updatedPlan });
+                goal = this.goalStore.getById(goal.id)!;
+                log.info(
+                    `[AGENTLOOP-SEND] goal=${goal.id} step=${step.id}` +
+                    ` deferred_injected=${newSendSteps.length}` +
+                    ` deferred_skipped=${cycleResult.deferredSends.length - dedupedSends.length}` +
+                    ` superseded=${supersededPaths.length}` +
+                    ` reason=goal_execution_policy`
+                );
+            } else {
+                log.info(
+                    `[AGENTLOOP-SEND] goal=${goal.id} step=${step.id}` +
+                    ` deferred_injected=0` +
+                    ` deferred_skipped=${cycleResult.deferredSends.length}` +
+                    ` reason=all_duplicates`
+                );
+            }
+            // REMOVIDO (02/07/2026): este loop chamava trackArtifact() pra TODO
+            // deferredSend, marcando em sentArtifacts arquivos que só foram AGENDADOS
+            // (ainda não enviados de verdade). Isso conflava "agendado" com "enviado" no
+            // mesmo Set — o loop de execução dos sends diferidos (mais abaixo, "agora que
+            // achieved=true") checa `sentArtifacts.has(filePath)` pra decidir se pula o
+            // send como duplicata; como o arquivo já constava ali (marcado aqui, cedo
+            // demais), o send real nunca rodava — goal reportava success=true e
+            // "delivered=1" sem o arquivo ter saído de fato. Reproduzido ao vivo em
+            // 02/07 (usuário: "faltou me enviar o arquivo!"). A proteção que este loop
+            // pretendia dar (evitar deliverable_check reagendar um arquivo já agendado)
+            // agora é feita corretamente no próprio deliverable_check, checando
+            // send_document pendente no currentPlan — não mais poluindo sentArtifacts.
+            // DELIVERY-GUARD (entrega direta do AgentLoop, fora do plano) continua
+            // marcando sentArtifacts corretamente via callback onArtifactDelivered.
+        }
+        // ITEM4: rastreia writes por path para detectar duplicatas entre ciclos
+        if ((step.toolName === 'write' || step.toolName === 'edit') && step.toolArgs?.path) {
+            const writePath = String(step.toolArgs.path);
+            const source = step.toolName === 'write' ? 'planner' : 'planner';
+            const prior = writeTraceByPath.get(writePath);
+            if (prior) {
+                log.warn(
+                    `[DUPLICATE-WRITE-TRACE] goal=${goal.id}` +
+                    ` cycle=${totalCycles} path="${writePath}"` +
+                    ` step=${step.id} source=${source}` +
+                    ` prev_cycle=${prior.cycle} prev_step=${prior.step}`
+                );
+            } else {
+                log.info(
+                    `[DUPLICATE-WRITE-TRACE] goal=${goal.id}` +
+                    ` cycle=${totalCycles} path="${writePath}"` +
+                    ` step=${step.id} source=${source} prev_cycle=none`
+                );
+            }
+            writeTraceByPath.set(writePath, { cycle: totalCycles, step: step.id, source });
+        }
+        goal = this.goalStore.getById(goal.id)!;
+        await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'tool_completed' });
+        return { earlyReturn: false, goal, totalReplans, priorFeedback };
+    }
+
+    private async handlePartialOutcome(
+        goal: Goal,
+        step: PlanStep,
+        cycleResult: CycleResult,
+        totalReplans: number,
+        priorFeedback: string | undefined,
+        state: GoalExecutionState,
+        sentArtifacts: Set<string>,
+        trackArtifact: (fp: string) => void,
+    ): Promise<StepOutcomeHandled> {
+        // Sprint 0.6, Front B: preserva o blocker já classificado por
+        // GoalEvaluator.evaluate() para auditoria/replan futuro. Usa recordBlocker
+        // (não addBlocker) de propósito — 'partial' é retryável, o goal continua
+        // 'executing'; addBlocker forçaria status='blocked' incorretamente.
+        if (cycleResult.blocker) {
+            this.goalStore.recordBlocker(goal.id, cycleResult.blocker);
+        }
+        // Retryável — registra como 'in_progress' e diminui retry budget
+        this.updateProgressModel(step, 'in_progress', cycleResult.output, state);
+        this.goalStore.update(goal.id, {
+            retryBudget: Math.max(0, goal.retryBudget - 1),
+        });
+        goal = this.goalStore.getById(goal.id)!;
+        // CORREÇÃO 2 (S10-PARTIAL): defense-in-depth para o gap DELIVERY-GUARD.
+        // Se deferredSends contém paths (capturados pelo intercept do main loop)
+        // e o DELIVERY-GUARD os entregou antes do downgrade para 'partial',
+        // a Correção 1 já registrou via callback. Este bloco cobre o caso
+        // onde o callback falhou silenciosamente ou não foi acionado.
+        // NÃO injeta steps de send (diferente do S10 em case 'success') —
+        // apenas garante que sentArtifacts reflita o que foi entregue.
+        if (cycleResult.deferredSends?.length) {
+            for (const sendArgs of cycleResult.deferredSends) {
+                const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
+                if (fp && !sentArtifacts.has(fp)) {
+                    trackArtifact(fp);
+                    log.info(
+                        `[S10-PARTIAL] goal=${goal.id}` +
+                        ` artifact="${fp}"` +
+                        ` source=deferred_sends_partial_fallback`
+                    );
+                }
+            }
+        }
+        return { earlyReturn: false, goal, totalReplans, priorFeedback };
+    }
+
+    private async handleNeedsAuthOutcome(
+        goal: Goal,
+        step: PlanStep,
+        cycleResult: CycleResult,
+        totalCycles: number,
+        totalReplans: number,
+        priorFeedback: string | undefined,
+        onProgress: ProgressCallback | undefined,
+    ): Promise<StepOutcomeHandled> {
+        // DEVELOPER/GOD mode: auto-aprovar exec_command sem confirmação por chamada.
+        // isDestructive() ainda bloqueia comandos perigosos em qualquer modo.
+        if (permissionRegistry.can('auto_approve_exec')) {
+            log.info(`[GoalLoop] needs_auth auto-approved (mode=${permissionRegistry.getMode()}) goal=${goal.id}`);
+            // 'finalize': executeStep() já gravou um attempt 'failure' para este
+            // step (o bloqueio de permissão que originou este outcome) — a
+            // auto-aprovação resolve esse bloqueio no mesmo ciclo, sem uma segunda
+            // execução real distinta. Corrige o attempt existente para 'success' em
+            // vez de acrescentar um segundo, contraditório (Sprint 0.8.3, achado
+            // residual 2).
+            this.markStepDone(goal, step, cycleResult.output ?? '', 'finalize');
+            goal = this.goalStore.getById(goal.id)!;
+            return { earlyReturn: false, goal, totalReplans, priorFeedback };
+        }
+
+        // SAFE mode: pausa e aguarda confirmação do usuário
+        const txnId = cycleResult.authOptions
+            ?.find(o => o.value?.startsWith('auth:'))
+            ?.value?.split(':').slice(2).join(':');
+
+        // Sprint 0.8 (achados L02d/L12/L13): preserva o blocker já classificado por
+        // GoalEvaluator — mesmo padrão dos branches 'partial'/'failed'/deferred send
+        // corrigidos na Sprint 0.6. Só neste ramo SAFE, nunca no auto-aprovado acima:
+        // ali a tool não foi de fato bloqueada.
+        if (cycleResult.blocker) {
+            this.goalStore.recordBlocker(goal.id, cycleResult.blocker);
+        }
+        await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'blocked', message: 'Aguardando autorização' });
+        // Sprint 0.11 (achado do Laboratório Cognitivo, newclaw-cortex/C1.5): `requiresAuth`
+        // era setado 'false' em create() (GoalOrchestrator.ts) e NUNCA setado 'true' em
+        // nenhum outro ponto do runtime — mesmo aqui, onde um `pendingTxnId` real é gravado
+        // porque o goal está de fato aguardando autorização. `requires_auth` ficava sempre 0
+        // no banco, dissociado de `pending_txn_id` (achado com dado real: 40/442 goals com
+        // pendingTxnId e requires_auth=0). `requiresAuth` volta a `false` em resumeGoal()
+        // (linha ~290) e em abortGoalFromAuth() (GoalOrchestrator.ts), os dois pontos que já
+        // limpam `pendingTxnId`.
+        this.goalStore.update(goal.id, {
+            status: 'blocked',
+            pendingTxnId: txnId,
+            requiresAuth: true,
+        });
+        const goalResult = this.buildResult(goal, false, totalCycles, totalReplans,
+            cycleResult.output || 'Aguardando sua autorização para prosseguir.');
+        return { earlyReturn: true, result: { ...goalResult, authOptions: cycleResult.authOptions } };
+    }
+
+    private async handleNeedsDependencyOutcome(
+        goal: Goal,
+        step: PlanStep,
+        cycleResult: CycleResult,
+        totalCycles: number,
+        totalReplans: number,
+        priorFeedback: string | undefined,
+        onProgress: ProgressCallback | undefined,
+    ): Promise<StepOutcomeHandled> {
+        // Sprint 0.8 (achados L02d/L12/L13): preserva o blocker 'missing_tool' que
+        // motivou a injeção do step de instalação — mesmo padrão do branch 'blocked'.
+        if (cycleResult.blocker) {
+            this.goalStore.recordBlocker(goal.id, cycleResult.blocker);
+        }
+        const depInfo = cycleResult.depInfo!;
+        const installKey = `install_dep_${depInfo.name}`;
+
+        this.goalStore.addStrategyTried(goal.id, installKey);
+        goal = this.goalStore.getById(goal.id)!;
+
+        const installStepId = `install_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
+        // Resolve o comando just-in-time, pela plataforma REAL detectada — nunca usa
+        // depInfo.installCmd diretamente (histórico: sempre apt/Linux, executaria
+        // "sudo apt install..." também num Windows). Sem comando seguro para este SO,
+        // resolvedCommand fica undefined e o step cai no caminho manual/permission-gated
+        // (toolName undefined) mesmo em modo DEVELOPER/GOD — nunca cria exec_command
+        // vazio nem assume que a instalação ocorreu.
+        const resolvedCommand = resolveInstallCommand(depInfo, this.capRegistry.getOSSync());
+        const autoInstall = permissionRegistry.can('install_dependencies') && resolvedCommand !== undefined;
+        const installStep: PlanStep = {
+            id: installStepId,
+            description: autoInstall
+                ? `Instalar '${depInfo.name}' necessário para continuar: ${resolvedCommand}`
+                : `Instalar '${depInfo.name}' necessário para continuar (sem comando automático seguro para este sistema operacional — ${depInfo.manualInstructions})`,
+            // DEVELOPER/GOD com comando resolvido: toolName explícito → exec_command direto
+            // (sem auth gate do WorkflowEngine). Sem comando resolvido (SO sem entrada
+            // segura) OU modo SAFE: sem toolName → AgentLoop processa → WorkflowEngine
+            // pede confirmação / orienta instalação manual.
+            toolName: autoInstall ? 'exec_command' : undefined,
+            toolArgs: autoInstall ? { command: resolvedCommand } : undefined,
+            status: 'pending',
+            fallbackSteps: [],
+        };
+        if (autoInstall) {
+            log.info(`[GoalLoop] needs_dependency auto-install approved (mode=${permissionRegistry.getMode()}): ${depInfo.name}`);
+        } else if (resolvedCommand === undefined) {
+            log.info(`[GoalLoop] needs_dependency: sem comando de instalação seguro para este SO (dep=${depInfo.name}) — caminho manual/AgentLoop`);
+        }
+
+        // Reconstrói o plano: steps já concluídos + installStep + step que falhou + resto
+        const updatedPlan: PlanStep[] = [
+            ...goal.currentPlan.filter(s => s.status === 'completed'),
+            installStep,
+            step,
+            ...this.getPendingSteps(goal.currentPlan).filter(s => s.id !== step.id),
+        ];
+
+        this.goalStore.update(goal.id, { currentPlan: updatedPlan });
+        goal = this.goalStore.getById(goal.id)!;
+
+        log.info(`[GoalLoop] dep='${depInfo.name}' missing — injected install step=${installStepId}`);
+        await onProgress?.({
+            goalId: goal.id,
+            cycle: totalCycles,
+            event: 'replanning',
+            message: `Dependência '${depInfo.name}' não encontrada — vou instalar antes de continuar`,
+        });
+        return { earlyReturn: false, goal, totalReplans, priorFeedback };
+    }
+
+    private async handleBlockedOutcome(
+        goal: Goal,
+        step: PlanStep,
+        cycleResult: CycleResult,
+        totalCycles: number,
+        totalReplans: number,
+        priorFeedback: string | undefined,
+        state: GoalExecutionState,
+        onProgress: ProgressCallback | undefined,
+    ): Promise<StepOutcomeHandled> {
+        if (!cycleResult.blocker) return { earlyReturn: false, goal, totalReplans, priorFeedback };
+
+        this.goalStore.addBlocker(goal.id, cycleResult.blocker);
+        this.recordFailedStrategy(step, cycleResult.blocker.description, goal.id, state);
+        this.updateProgressModel(step, 'failed', cycleResult.blocker.description, state);
+        goal = this.goalStore.getById(goal.id)!;
+
+        await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'replanning', message: cycleResult.blocker.description });
+
+        // Registra falha na ReflectionMemory para aprendizado futuro
+        // S2a: failureType=cycleResult.blocker.kind — já é um BlockerKind tipado,
+        // vindo direto do objeto blocker. Zero inferência: é o dado real do call site.
+        this.reflectionMemory.record({
+            userInput: goal.userIntent,
+            intent: goal.objective.slice(0, 100),
+            toolUsed: step.toolName ?? 'unknown',
+            approved: false,
+            reason: cycleResult.blocker.description,
+            confidence: cycleResult.confidence,
+            pattern: `tool_${step.toolName ?? cycleResult.blocker.kind}`,
+            suggestedFix: cycleResult.blocker.suggestedActions[0],
+            outcome: 'failure',
+            failureType: cycleResult.blocker.kind,
+        });
+
+        // Verificar se ainda tem replan budget
+        if (goal.replanBudget <= 0) {
+            this.goalStore.setStatus(goal.id, 'failed');
+            const explanation = this.evaluator.buildFailureExplanation(goal);
+            await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'failed', message: explanation });
+            return { earlyReturn: true, result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
+        }
+
+        // Stall detection — sem progresso real?
+        const progress = this.evaluator.evaluateProgress(goal);
+        if (progress === 'regressing') {
+            log.warn(`[GoalLoop] goal=${goal.id} regressing — aborting`);
+            this.goalStore.setStatus(goal.id, 'failed');
+            const explanation = this.evaluator.buildFailureExplanation(goal);
+            return { earlyReturn: true, result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
+        }
+
+        // Replan com Espiral (Q1 + Q2 envolvem cada replanejamento)
+        this.goalStore.update(goal.id, {
+            status: 'replanning',
+            replanBudget: goal.replanBudget - 1,
+        });
+        this.goalStore.addStrategyTried(goal.id,
+            step.description + (step.toolName ? ` via ${step.toolName}` : ''));
+
+        priorFeedback = cycleResult.blocker?.description;
+        goal = await this.planWithSpiral(goal, cycleResult.blocker!, priorFeedback, totalReplans + 1, state);
+        totalReplans++;
+        return { earlyReturn: false, goal, totalReplans, priorFeedback };
+    }
+
+    private async handleFailedOutcome(
+        goal: Goal,
+        step: PlanStep,
+        cycleResult: CycleResult,
+        totalCycles: number,
+        totalReplans: number,
+        state: GoalExecutionState,
+        onProgress: ProgressCallback | undefined,
+    ): Promise<StepOutcomeHandled> {
+        // Sprint 0.6, Front B: preserva o blocker classificado por GoalEvaluator
+        // antes desta falha ser tratada como terminal — sem isso, goal.blockers
+        // ficava vazio mesmo em falhas definitivas (esgotamento de budget).
+        if (cycleResult.blocker) {
+            this.goalStore.recordBlocker(goal.id, cycleResult.blocker);
+        }
+        this.goalStore.setStatus(goal.id, 'failed');
+        this.recordFailedStrategy(step, cycleResult.output ?? 'step falhou', goal.id, state);
+        this.updateProgressModel(step, 'failed', cycleResult.output, state);
+        // cycleResult.output tem prioridade quando contém mensagem rica (ex: dep install falhou → instrução manual)
+        const explanation = cycleResult.output ?? this.evaluator.buildFailureExplanation(goal);
+        await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'failed', message: explanation });
+        return { earlyReturn: true, result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
+    }
+
+    // ── ARCH-020 (Incremento 2): fases do corpo pré-switch de runLoopInternal() ─────────────
+
+    /**
+     * ARCH-020 (S24, Incremento 2): dispara quando `readyToValidate` é true — todos os steps
+     * pendentes já foram executados (ou só resta `send_document`). Roda a validação de
+     * conclusão (LLM ou bypass estrutural) e delega para `runValidationAchievedPhase()` ou
+     * `runValidationNotAchievedPhase()` conforme o resultado. Extraído sem mudar lógica.
+     */
+    private async runValidationPhase(
+        goal: Goal,
+        totalCycles: number,
+        totalReplans: number,
+        priorFeedback: string | undefined,
+        state: GoalExecutionState,
+        channelContext: ChannelContext,
+        onProgress: ProgressCallback | undefined,
+        sentArtifacts: Set<string>,
+        trackArtifact: (fp: string) => void,
+        audioDeliveredKey: string,
+    ): Promise<ValidationPhaseResult> {
+        // Todos os steps concluídos — LLM valida se o objetivo foi realmente atingido
+        log.info(`[GoalLoop] goal=${goal.id} all steps completed — running LLM validation`);
+        log.info(`[GOAL-LIFECYCLE] goal=${goal.id} session=${goal.sessionKey} state=validating cycle=${totalCycles} timestamp=${Date.now()}`);
+        await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'tool_completed', message: 'Validando conclusão...' });
+
+        const activeMilestone = goal.isConstruction && goal.roadmap && goal.roadmap.length > 0
+            ? goal.roadmap[goal.currentMilestoneIndex ?? 0]
+            : undefined;
+
+        // Bypass estrutural: quando o único trabalho restante é despachar send_document
+        // para arquivo(s) que já existem no disco com tamanho substantivo, o validador por
+        // LLM nunca consegue confirmar "foi enviado" — o envio só acontece DEPOIS de
+        // achieved=true (Fix #1 acima). Isso é um impasse estrutural para goals cujo único
+        // propósito é reenviar um arquivo já existente (sem nenhum 'write' neste goal como
+        // evidência de criação). Reproduzido ao vivo em 09/07 (goal "me envia a aula ..."):
+        // esgotou o replanBudget tentando reenviar um .pptx já pronto, e no desespero o
+        // planner criou um arquivo de "resumo de entrega" fabricado só para ter evidência de
+        // 'write' e passar no validador — ver project_session_bugs_jul2026_ap na memória.
+        // Verificação estrutural (arquivo existe, não é placeholder) é mais confiável aqui
+        // do que o julgamento literal do LLM sobre um evento que ainda não aconteceu.
+        const pendingSendSteps = this.getPendingSteps(goal.currentPlan, 'send_document');
+        const structuralBypass = pendingSendSteps.length > 0 && pendingSendSteps.every(s => {
+            const fp = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
+            if (!fp) return false;
+            // ARCH-012: mesma checagem de tipo de checkClaimsAgainstEvidence/evaluateCriteria —
+            // um arquivo do tamanho certo mas do tipo errado não prova entrega correta.
+            if (!isExpectedDeliverableFile(goal.userIntent, fp)) return false;
+            try {
+                const { resolved } = resolvePath(fp);
+                return fs.statSync(resolved).size >= MIN_DELIVERABLE_SIZE;
+            } catch {
+                return false;
+            }
+        });
+
+        let validation: Awaited<ReturnType<typeof this.validateGoalCompletion>>;
+        if (structuralBypass) {
+            const artifactList = pendingSendSteps
+                .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
+                .join(',');
+            log.info(
+                `[VALIDATION-BYPASS] goal=${goal.id}` +
+                ` reason=only_pending_is_verified_send_document` +
+                ` artifacts="${artifactList}"`
+            );
+            validation = { achieved: true, summary: 'Arquivo(s) já existente(s) no workspace, pronto(s) para envio.' };
+        } else {
+            validation = await this.validateGoalCompletion(goal, activeMilestone, state);
+        }
+
+        if (validation.achieved) {
+            return this.runValidationAchievedPhase(
+                goal, validation, totalCycles, totalReplans, priorFeedback, state, channelContext, onProgress,
+                sentArtifacts, trackArtifact,
+            );
+        }
+        return this.runValidationNotAchievedPhase(
+            goal, validation, totalCycles, totalReplans, priorFeedback, state, onProgress, sentArtifacts, audioDeliveredKey,
+        );
+    }
+
+    /**
+     * ARCH-020 (S24, Incremento 2): `validation.achieved === true` — ou avança para o próximo
+     * marco de um goal de construção (continueLoop), ou despacha os `send_document` diferidos
+     * e encerra o goal (earlyReturn). Extraído sem mudar lógica.
+     */
+    private async runValidationAchievedPhase(
+        goal: Goal,
+        validation: Awaited<ReturnType<typeof this.validateGoalCompletion>>,
+        totalCycles: number,
+        totalReplans: number,
+        priorFeedback: string | undefined,
+        state: GoalExecutionState,
+        channelContext: ChannelContext,
+        onProgress: ProgressCallback | undefined,
+        sentArtifacts: Set<string>,
+        trackArtifact: (fp: string) => void,
+    ): Promise<ValidationPhaseResult> {
+        if (goal.isConstruction && goal.roadmap && (goal.currentMilestoneIndex ?? 0) < goal.roadmap.length - 1) {
+            const prevMilestone = goal.roadmap[goal.currentMilestoneIndex ?? 0];
+            const nextIndex = (goal.currentMilestoneIndex ?? 0) + 1;
+            const nextMilestone = goal.roadmap[nextIndex];
+            log.info(`[GoalLoop] milestone ${goal.currentMilestoneIndex} achieved: "${prevMilestone}". Advancing to milestone ${nextIndex}: "${nextMilestone}"`);
+
+            await onProgress?.({
+                goalId: goal.id,
+                cycle: totalCycles,
+                event: 'replanning',
+                message: `✅ *Marco Concluído:* ${prevMilestone}\n\n👉 *Próximo Marco:* ${nextMilestone}`
+            });
+
+            // Avança o marco e limpa o plano atual para forçar replanejamento para o novo marco
+            this.goalStore.update(goal.id, {
+                currentMilestoneIndex: nextIndex,
+                currentPlan: [],
+            });
+            goal = this.goalStore.getById(goal.id)!;
+
+            // Planeja os steps para o próximo marco
+            const q1Context = await this.contextualize(goal, totalCycles, undefined);
+            const capSummary = await this.capRegistry.getCapabilitySummary();
+
+            const planResult = await this.planner.plan(goal, q1Context ?? '', capSummary, nextMilestone);
+
+            // Permite atualizar o roadmap se o planner retornou um ajustado
+            if (goal.isConstruction && planResult.adjustedRoadmap && planResult.adjustedRoadmap.length > 0) {
+                log.info(`[GoalLoop] roadmap adjusted during milestone planning transition.`);
+                this.goalStore.update(goal.id, { roadmap: planResult.adjustedRoadmap });
+                goal = this.goalStore.getById(goal.id)!;
+            }
+
+            let initialPlan = planResult.steps;
+
+            // Q2: Análise de Riscos para o novo plano
+            if (this.isComplexPlan(initialPlan)) {
+                const riskReport = await this.riskAnalyzer.analyze(goal, initialPlan, this.planner.getAvailableSkills());
+                if (riskReport.blocked) {
+                    log.warn(`[GoalLoop] Q2 BLOCKED milestone goal=${goal.id}: ${riskReport.blockReason}`);
+                    this.goalStore.setStatus(goal.id, 'failed');
+                    return {
+                        action: 'earlyReturn',
+                        result: this.buildResult(goal, false, totalCycles, totalReplans,
+                            riskReport.blockReason ?? 'Plano inviável detectado para o marco.'),
+                    };
+                }
+                initialPlan = riskReport.planAdjusted ? riskReport.adjustedPlan : initialPlan;
+            }
+
+            this.goalStore.update(goal.id, {
+                currentPlan: initialPlan,
+                status: 'executing',
+                cycleFocus: planResult.strategy || undefined,
+            });
+            goal = this.goalStore.getById(goal.id)!;
+            return { action: 'continueLoop', goal, totalReplans, priorFeedback };
+        }
+
+        // Fix #1 + P3-DEDUP: executa steps de send_document diferidos,
+        // agora que achieved=true. Verifica sentArtifacts ANTES de executar
+        // para garantir 1 artefato = 1 entrega mesmo após múltiplos replans.
+        const deferredSends = this.getPendingSteps(goal.currentPlan, 'send_document');
+        let failedSends = 0;
+        for (const sendStep of deferredSends) {
+            let filePath = String(sendStep.toolArgs?.file_path ?? sendStep.toolArgs?.path ?? '');
+            // Correção estrutural (achado replan/pivot 2026-07-12, goals reais no
+            // Windows: 09/07, 10/07 x2, 12/07 — mesma assinatura repetida): o plano
+            // pode chegar aqui com um file_path desatualizado se a estratégia pivotou
+            // no meio da execução (ex.: falha de "bash script.sh" sem WSL funcional
+            // levou o agente a trocar de HTML/Reveal.js para geração de .pptx via
+            // python-pptx) sem que o step de send_document já agendado fosse
+            // atualizado. Resultado sem esta correção: "Objetivo validado" (o
+            // artefato real existe e foi confirmado) mas a entrega falha com
+            // "arquivo não encontrado" porque aponta para um nome que nunca existiu.
+            // Corrige SOMENTE quando há exatamente 1 artefato real (confirmado pela
+            // própria validação do goal, não um palpite por extensão) ainda não
+            // enviado — evidência concreta, sem ambiguidade; caso contrário mantém o
+            // comportamento antigo (falha com mensagem clara) em vez de adivinhar.
+            if (filePath) {
+                const { resolved: requestedResolved } = resolvePath(filePath);
+                if (!fs.existsSync(requestedResolved)) {
+                    const candidates = (validation.artifactPaths ?? [])
+                        .filter(p => p !== filePath && !sentArtifacts.has(p) && fs.existsSync(resolvePath(p).resolved));
+                    if (candidates.length === 1) {
+                        log.warn(
+                            `[SEND-PATH-CORRECTED] goal=${goal.id}` +
+                            ` requested="${filePath}"` +
+                            ` corrected="${candidates[0]}"` +
+                            ` reason=requested_file_missing_single_validated_artifact_found`
+                        );
+                        sendStep.toolArgs = { ...sendStep.toolArgs, file_path: candidates[0] };
+                        filePath = candidates[0];
+                    }
+                }
+            }
+            // Defesa em profundidade: skip se já enviado nesta sessão de goal
+            if (filePath && sentArtifacts.has(filePath)) {
+                log.info(
+                    `[DELIVERY-DEDUP] goal=${goal.id}` +
+                    ` artifact="${filePath}"` +
+                    ` reason=already_sent_in_goal_session` +
+                    ` existing_delivery=sent` +
+                    ` decision=skip`
+                );
+                this.markStepDone(goal, sendStep, '[DEDUP] já entregue nesta sessão');
+                goal = this.goalStore.getById(goal.id)!;
+                continue;
+            }
+            const sendResult = await this.executeStep(goal, sendStep, channelContext, totalCycles, state);
+            goal = this.goalStore.getById(goal.id)!;
+            const sendOk = sendResult.outcome === 'success';
+            log.info(
+                `[DEFERRED-SEND] goal=${goal.id}` +
+                ` artifact="${filePath}"` +
+                ` result=${sendResult.outcome}`
+            );
+            if (sendOk) {
+                this.markStepDone(goal, sendStep, sendResult.output ?? '', 'skip');
+                goal = this.goalStore.getById(goal.id)!;
+                if (filePath) {
+                    trackArtifact(filePath);
+                    log.info(`[DELIVERY-REGISTRY] artifact="${filePath}" goal=${goal.id} status=delivered`);
+                }
+            } else {
+                failedSends++;
+                // Sprint 0.6, Front B: preserva o blocker classificado por
+                // GoalEvaluator dentro de executeStep() — causa raiz exata do
+                // `blockers=[]` observado no goal real "ykpko" (Sprint 0.5): a
+                // falha de um send_document diferido pós-validação nunca
+                // propagava seu blocker.
+                if (sendResult.blocker) {
+                    this.goalStore.recordBlocker(goal.id, sendResult.blocker);
+                    goal = this.goalStore.getById(goal.id)!;
+                }
+            }
+        }
+        // FIX #2: não marcar goal como completed se algum send_document falhou
+        const allSendsOk = deferredSends.length === 0 || failedSends === 0;
+        const deliveredArtifacts = deferredSends
+            .filter((_, i) => i < deferredSends.length - failedSends)
+            .map(s => String(s.toolArgs?.file_path ?? '(unknown)'));
+        log.info(`[GOAL-COMPLETE-CHECK] goal=${goal.id} validation_ok=true all_sends_ok=${allSendsOk} deferred_sends=${deferredSends.length} failed_sends=${failedSends} final_state=${allSendsOk ? 'completed' : 'failed'}`);
+
+        // FIX E: [DELIVERY-DECISION] — documenta a decisão de encerramento
+        log.info(
+            `[DELIVERY-DECISION] goal=${goal.id}` +
+            ` artifact="${deliveredArtifacts.join(',') || '(none)'}"` +
+            ` delivered=${allSendsOk}` +
+            ` validation=true` +
+            ` completed=${allSendsOk}` +
+            ` continue_execution=false` +
+            ` reason=${allSendsOk ? 'goal_satisfied' : 'send_failed'}`
+        );
+        // FIX F: [GOAL-SATISFACTION] — estado final de satisfação do objetivo
+        log.info(
+            `[GOAL-SATISFACTION] goal=${goal.id}` +
+            ` achieved=true` +
+            ` artifacts=${deferredSends.length}` +
+            ` delivered=${deferredSends.length - failedSends}` +
+            ` remaining_steps=0` +
+            ` reason=${allSendsOk ? 'artifact_delivered' : 'delivery_failed'}`
+        );
+
+        if (!allSendsOk) {
+            this.goalStore.setStatus(goal.id, 'failed');
+            const sendErr = failedSends === deferredSends.length
+                ? 'Objetivo validado, mas nenhum arquivo pôde ser entregue ao usuário. Verifique o workspace.'
+                : `Objetivo validado, mas ${failedSends} de ${deferredSends.length} arquivo(s) não foram entregues.`;
+            return { action: 'earlyReturn', result: this.buildResult(goal, false, totalCycles, totalReplans, sendErr) };
+        }
+        // FIX E: encerra imediatamente — sem replan, sem novos ciclos
+        this.goalStore.setStatus(goal.id, 'completed');
+        log.info(`[GoalLoop] goal=${goal.id} validated as complete`);
+        // S5 (modo sombra): captura Caso só se houver evidência de nível de goal
+        // (successCriteria met OU sentArtifacts real) — nunca influencia o resultado.
+        this.caseMemory.captureIfEligible(this.goalStore.getById(goal.id)!);
+        return { action: 'earlyReturn', result: this.buildResult(goal, true, totalCycles, totalReplans, validation.summary) };
+    }
+
+    /**
+     * ARCH-020 (S24, Incremento 2): `validation.achieved === false` — injeta send steps para
+     * arquivos já no workspace (deliverable_check), concede um replan bonus se há progresso
+     * substancial, ou falha/replan normal via espiral. Extraído sem mudar lógica.
+     */
+    private async runValidationNotAchievedPhase(
+        goal: Goal,
+        validation: Awaited<ReturnType<typeof this.validateGoalCompletion>>,
+        totalCycles: number,
+        totalReplans: number,
+        priorFeedback: string | undefined,
+        state: GoalExecutionState,
+        onProgress: ProgressCallback | undefined,
+        sentArtifacts: Set<string>,
+        audioDeliveredKey: string,
+    ): Promise<ValidationPhaseResult> {
+        // LLM diz que o objetivo ainda não foi atingido
+        log.info(`[GoalLoop] goal=${goal.id} not yet complete: ${validation.reason}`);
+        log.info(`[GOAL-LIFECYCLE] goal=${goal.id} session=${goal.sessionKey} state=replanning reason="${(validation.reason ?? '').slice(0, 100)}" cycle=${totalCycles} timestamp=${Date.now()}`);
+        // FIX F: [GOAL-SATISFACTION] — registra estado de não-satisfação para diagnóstico
+        const pendingSendCount = this.getPendingSteps(goal.currentPlan).length;
+        log.info(
+            `[GOAL-SATISFACTION] goal=${goal.id}` +
+            ` achieved=false` +
+            ` artifacts=${goal.attempts.filter(a => a.result === 'success' && a.toolName === 'write').length}` +
+            ` delivered=0` +
+            ` remaining_steps=${pendingSendCount}` +
+            ` reason=${(validation.reason ?? 'unknown').slice(0, 80)}`
+        );
+        await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'replanning', message: validation.reason });
+
+        // ── Item 2: Deliverable Check ──────────────────────────────
+        // Antes de replanejar, verifica se já existe output no workspace.
+        // Evita o cenário onde 3 arquivos .pptx existem mas o sistema
+        // continua tentando regenerar em vez de enviar o que já tem.
+        if (!goal.strategiesTried.includes('deliverable_check_done')) {
+            const expectedExts = inferExpectedExtensions(goal.userIntent);
+            if (expectedExts.length > 0) {
+                const foundFiles = await this.checkDeliverables(expectedExts, goal.createdAt);
+                // Fix #2: ignora arquivos já enviados nesta sessão de execução do goal
+                // Fix S1: ignora arquivos menores que MIN_DELIVERABLE_SIZE — stubs/placeholders
+                // não devem ser enviados ao usuário nem consumir replanBudget com sends inúteis.
+                const substantiveFiles = foundFiles.filter(f => {
+                    try {
+                        return fs.statSync(f).size >= MIN_DELIVERABLE_SIZE;
+                    } catch {
+                        return false; // arquivo desapareceu — ignorar
+                    }
+                });
+                const tinyFiles = foundFiles.length - substantiveFiles.length;
+                if (tinyFiles > 0) {
+                    log.warn(`[GoalLoop] deliverable_check: ${tinyFiles} arquivo(s) ignorado(s) por tamanho < ${MIN_DELIVERABLE_SIZE}B (placeholders)`);
+                }
+                // Exclui também arquivos que já têm um send_document PENDENTE no plano atual
+                // (agendado mas ainda não executado) — sem isso, deliverable_check injetava um
+                // segundo send step pro mesmo arquivo enquanto o primeiro ainda não tinha rodado.
+                //
+                // ARCH-005 (S16): `substantiveFiles` vem de `checkDeliverables()`, que retorna
+                // paths ABSOLUTOS (path.join(workspaceDir, ...) na varredura de disco).
+                // `sentArtifacts`/`toolArgs.file_path` guardam o path CRU como o LLM passou pro
+                // `send_document` — que pode ser relativo (ex.: "aula.pptx"). Comparar os dois
+                // direto por `.has()` sem normalizar fazia um arquivo JÁ ENTREGUE (via path
+                // relativo) parecer "não entregue" aqui, sempre que checkDeliverables o
+                // encontrasse pelo path absoluto — gerando um send_document duplicado do mesmo
+                // arquivo. Resolve ambos os lados para a mesma representação (resolvePath(),
+                // já usada por write/read/exec_command) antes de comparar.
+                const sentArtifactsResolved = new Set(
+                    [...sentArtifacts]
+                        .filter(p => p.length > 0 && p !== audioDeliveredKey)
+                        .map(p => resolvePath(p).resolved)
+                );
+                const pendingSendPaths = new Set(
+                    this.getPendingSteps(goal.currentPlan, 'send_document')
+                        .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
+                        .filter(p => p.length > 0)
+                        .map(p => resolvePath(p).resolved)
+                );
+                const unsentFiles = substantiveFiles.filter(f => !sentArtifactsResolved.has(f) && !pendingSendPaths.has(f));
+                if (unsentFiles.length > 0) {
+                    const skipped = substantiveFiles.length - unsentFiles.length;
+                    log.info(`[GoalLoop] deliverable_check: ${unsentFiles.length} arquivo(s) no workspace${skipped > 0 ? ` (${skipped} já enviado(s) ignorado(s))` : ''} — injetando send steps`);
+                    this.goalStore.addStrategyTried(goal.id, 'deliverable_check_done');
+                    goal = this.goalStore.getById(goal.id)!;
+
+                    const sendSteps: PlanStep[] = unsentFiles.slice(0, 2).map((filePath, i) => ({
+                        id: `send_del_${Date.now()}_${i}`,
+                        description: `Enviar ao usuário arquivo encontrado no workspace: ${filePath}`,
+                        toolName: 'send_document',
+                        toolArgs: { file_path: filePath },
+                        status: 'pending' as const,
+                        fallbackSteps: [],
+                    }));
+
+                    const updatedPlan: PlanStep[] = [
+                        ...goal.currentPlan.filter(s => s.status === 'completed'),
+                        ...sendSteps,
+                    ];
+                    this.goalStore.update(goal.id, { currentPlan: updatedPlan, status: 'executing' });
+                    goal = this.goalStore.getById(goal.id)!;
+                    return { action: 'continueLoop', goal, totalReplans, priorFeedback };
+                }
+            }
+        }
+
+        if (goal.replanBudget <= 0) {
+            // C: budget adaptativo — se há progresso substancial, concede +1 replan bonus
+            // focalizado nos componentes pendentes em vez de reiniciar do zero
+            const progressPct = state.progressModel?.overallPercent ?? 0;
+            const bonusGranted = progressPct >= 60 && totalReplans <= 1;
+            if (bonusGranted) {
+                log.info(
+                    `[ADAPTIVE-BUDGET] goal=${goal.id}` +
+                    ` progress=${progressPct}% >= 60% — granting +1 bonus replan` +
+                    ` cycle=${totalCycles}`
+                );
+                this.goalStore.update(goal.id, {
+                    replanBudget: 1,
+                    status: 'replanning',
+                });
+                goal = this.goalStore.getById(goal.id)!;
+                // Blocker focado nos componentes pendentes do progressModel
+                const pendingComponents = (state.progressModel?.components ?? [])
+                    .filter(c => c.status !== 'completed')
+                    .map(c => c.label)
+                    .join('; ');
+                const bonusBlocker: GoalBlocker = {
+                    kind: 'goal_incomplete',
+                    description: `[BONUS REPLAN — ${progressPct}% concluído] Complete APENAS os componentes pendentes: ${pendingComponents || (validation.reason ?? 'componentes ainda não entregues')}`,
+                    suggestedActions: ['Foque exclusivamente nos componentes pendentes — não replanejar o que já foi entregue'],
+                    detectedAt: Date.now(),
+                };
+                this.goalStore.addBlocker(goal.id, bonusBlocker);
+                this.goalStore.addStrategyTried(goal.id, `bonus_replan: progress=${progressPct}% pendentes=[${pendingComponents}]`);
+                goal = await this.planWithSpiral(goal, bonusBlocker, validation.reason, totalReplans + 1, state, true);
+                totalReplans++;
+                return { action: 'continueLoop', goal, totalReplans, priorFeedback };
+            }
+
+            this.goalStore.setStatus(goal.id, 'failed');
+            const baseExplanation = validation.reason ?? this.evaluator.buildFailureExplanation(goal);
+            // Entrega parcial: se há conteúdo útil coletado, enriquece a mensagem final
+            const graceful = this.gracefulDelivery.assess(goal, state.cognitiveContext);
+            const explanation = graceful.hasPartialContent
+                ? graceful.partialSummary
+                : baseExplanation;
+            log.info(
+                `[GOAL-LIFECYCLE] goal=${goal.id} session=${goal.sessionKey}` +
+                ` state=failed reason="replan_budget_exhausted"` +
+                ` graceful_delivery=${graceful.hasPartialContent}` +
+                ` progress=${progressPct}%` +
+                ` cycle=${totalCycles} timestamp=${Date.now()}`
+            );
+            await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'failed', message: explanation });
+            return { action: 'earlyReturn', result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
+        }
+
+        const blocker: GoalBlocker = {
+            kind: 'goal_incomplete',
+            description: validation.reason ?? 'Objetivo não verificado como concluído pelo validador',
+            suggestedActions: validation.suggestions ?? ['Verificar se o resultado foi entregue ao usuário'],
+            detectedAt: Date.now(),
+        };
+        this.goalStore.addBlocker(goal.id, blocker);
+        goal = this.goalStore.getById(goal.id)!;
+
+        this.goalStore.update(goal.id, {
+            status: 'replanning',
+            replanBudget: goal.replanBudget - 1,
+        });
+        this.goalStore.addStrategyTried(goal.id,
+            `completed all steps but goal_incomplete: ${(validation.reason ?? '').slice(0, 100)}`);
+
+        // Q4 → Q1: feedback da validação alimenta o próximo ciclo espiral
+        // forceQ2=true: se o objetivo não foi entregue, Q2 sempre revisa o plano
+        priorFeedback = validation.reason;
+        goal = await this.planWithSpiral(goal, blocker, priorFeedback, totalReplans + 1, state, true);
+        totalReplans++;
+
+        if (Date.now() > goal.expiresAt) {
+            this.goalStore.setStatus(goal.id, 'abandoned');
+            return { action: 'earlyReturn', result: this.buildResult(goal, false, totalCycles, totalReplans, 'Objetivo expirou por tempo limite.') };
+        }
+        return { action: 'continueLoop', goal, totalReplans, priorFeedback };
+    }
+
+    /**
+     * ARCH-020 (S24, Incremento 2): dispara quando `readyToValidate` é false — despacha
+     * `executeStep()` para o step pendente e roda a validação semântica pós-execução (que pode
+     * fazer downgrade do outcome para 'partial' ou escalar para 'blocked'). Extraído sem mudar
+     * lógica. Os 2 guards de saída antecipada (goal abandonado durante o step, artefato fonte
+     * vazio para goal de modificação) viram `earlyReturn`; o caminho normal vira
+     * `proceedToSwitch`, entregando o `cycleResult` (possivelmente ajustado) para o switch de
+     * outcome que continua em `runLoopInternal()`.
+     */
+    private async runStepExecutionPhase(
+        goal: Goal,
+        pendingStep: PlanStep,
+        totalCycles: number,
+        totalReplans: number,
+        state: GoalExecutionState,
+        channelContext: ChannelContext,
+        trackArtifact: (fp: string) => void,
+        isAudioAlreadySent: () => boolean,
+        onProgress: ProgressCallback | undefined,
+    ): Promise<StepExecutionPhaseResult> {
+        await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'tool_executing', message: pendingStep.description });
+
+        // H7: classificar se send_document está sendo executado antes da validação (step regular)
+        if (pendingStep.toolName === 'send_document') {
+            log.info(`[SEND-CLASSIFICATION] goal=${goal.id} step=${pendingStep.id} tool=send_document deferred=false reason=regular_plan_step`);
+        }
+        // ITEM5: rastrear origem do path em steps de escrita
+        if ((pendingStep.toolName === 'write' || pendingStep.toolName === 'edit') && pendingStep.toolArgs?.path) {
+            const source = totalReplans > 0 ? 'replanner' : 'planner';
+            log.info(
+                `[PATH-ORIGIN] goal=${goal.id} cycle=${totalCycles}` +
+                ` path="${pendingStep.toolArgs.path}"` +
+                ` source=${source} step=${pendingStep.id}`
+            );
+        }
+        // H7: AgentLoop pode chamar send_document internamente sem proteção de deferred
+        if (pendingStep.toolName === 'agentloop' || !pendingStep.toolName) {
+            const hasPendingSends = this.getPendingSteps(goal.currentPlan, 'send_document').length > 0;
+            log.info(
+                `[SEND-ORDER] goal=${goal.id} step=${pendingStep.id}` +
+                ` tool=${pendingStep.toolName ?? 'agentloop'} validation_done=false` +
+                ` send_allowed=uncontrolled deferred_sends_pending=${hasPendingSends}`
+            );
+        }
+
+        let cycleResult = await this.executeStep(
+            goal, pendingStep, channelContext, totalCycles, state,
+            // CORREÇÃO 1: passa callback para que DELIVERY-GUARD notifique sentArtifacts
+            // diretamente, sem depender de S10 (que só executa em case 'success').
+            (fp) => { if (fp) trackArtifact(fp); },
+            isAudioAlreadySent,
+        );
+
+        // Recarrega o goal — pode ter sido abandonado durante o step (nova mensagem do usuário)
+        goal = this.goalStore.getById(goal.id)!;
+        if (goal.status === 'abandoned') {
+            log.info(`[GoalLoop] goal=${goal.id} foi abandonado durante execução do step — saindo do loop`);
+            return {
+                action: 'earlyReturn',
+                result: this.buildResult(goal, false, totalCycles, totalReplans,
+                    'Goal interrompido: nova mensagem do usuário recebida durante execução.'),
+            };
+        }
+
+        // FIX B: detectar arquivo vazio em step de leitura para goals de modificação.
+        // Impede que o sistema replane com "usar memória como substituto" quando o artefato
+        // fonte é um requisito real (o conteúdo precisa existir para ser modificado).
+        if (
+            (pendingStep.toolName === 'read' || pendingStep.toolName === 'read_document') &&
+            cycleResult.outcome !== 'success'
+        ) {
+            const lastAttempt = [...goal.attempts].reverse().find(a => a.planStepId === pendingStep.id);
+            const isEmptyArtifact = lastAttempt?.error?.includes('[ARQUIVO VAZIO]') ?? false;
+            if (isEmptyArtifact && this.isModificationGoal(goal.userIntent)) {
+                const requiredPath = String(pendingStep.toolArgs?.path ?? pendingStep.toolArgs?.filename ?? '(desconhecido)');
+                log.warn(
+                    `[ARTIFACT-DEPENDENCY] goal=${goal.id} required="${requiredPath}"` +
+                    ` exists=true empty=true action=fail` +
+                    ` reason="goal de modificação requer conteúdo real no arquivo fonte"`
+                );
+                const failMsg = `Arquivo fonte obrigatório "${requiredPath}" está vazio. ` +
+                    `O objetivo requer modificar conteúdo existente — não é possível continuar sem o arquivo original.`;
+                this.goalStore.setStatus(goal.id, 'failed');
+                this.goalStore.addBlocker(goal.id, {
+                    kind: 'required_artifact_missing',
+                    description: failMsg,
+                    suggestedActions: ['Verifique se o arquivo correto foi enviado ou criado antes de pedir modificações'],
+                    detectedAt: Date.now(),
+                });
+                log.info(`[GOAL-LIFECYCLE] goal=${goal.id} session=${goal.sessionKey} state=failed reason="required_artifact_missing" cycle=${totalCycles} timestamp=${Date.now()}`);
+                return { action: 'earlyReturn', result: this.buildResult(goal, false, totalCycles, totalReplans, failMsg) };
+            }
+        }
+
+        // ── Validação semântica: mesmo após 'success' heurístico, verifica se o output
+        // endereça a intenção do step (ex: crypto_analysis retornando ENA/BCH em vez de ZEC/Pi)
+        // P6: cobre também steps agentloop (sem toolName) — output do AgentLoop também é validado
+        if (cycleResult.outcome === 'success' && cycleResult.output) {
+            const semanticValidation = await this.semanticValidator.validate(
+                pendingStep,
+                cycleResult.output,
+                goal.userIntent,
+            );
+            if (semanticValidation.shouldDowngradeToPartial) {
+                log.warn(
+                    `[SEMANTIC-MISMATCH] goal=${goal.id} step=${pendingStep.id}` +
+                    ` tool=${pendingStep.toolName} confidence=${semanticValidation.confidence.toFixed(2)}` +
+                    ` reason="${(semanticValidation.reason ?? '').slice(0, 100)}"` +
+                    ` action=downgrade_to_partial`
+                );
+                state.cognitiveContext.failedStrategies.push(
+                    `${pendingStep.toolName} (step ${pendingStep.id}): output irrelevante para a intenção — ${semanticValidation.reason ?? 'mismatch'}`
+                );
+                // P5: persiste na ReflectionMemory para que futuros goals evitem o mesmo padrão
+                // S2a: outcome='partial' (não 'failure') — a ferramenta rodou e produziu
+                // output real, só não endereçou a intenção do step. É exatamente o caso que
+                // shouldDowngradeToPartial já nomeia; evidência objetiva, não interpretação.
+                // failureType='semantic_mismatch' — BlockerKind já tem esse valor exato.
+                this.reflectionMemory.record({
+                    userInput: goal.userIntent.slice(0, 300),
+                    intent: pendingStep.description.slice(0, 200),
+                    toolUsed: pendingStep.toolName ?? 'agentloop',
+                    toolOutput: cycleResult.output?.slice(0, 500),
+                    approved: false,
+                    reason: `Mismatch semântico: ${semanticValidation.reason ?? 'output não endereça a intenção do step'}`,
+                    confidence: semanticValidation.confidence,
+                    pattern: `tool_${pendingStep.toolName ?? 'agentloop'}`,
+                    suggestedFix: `Use query/abordagem que retorne especificamente: ${pendingStep.description.slice(0, 100)}`,
+                    outcome: 'partial',
+                    failureType: 'semantic_mismatch',
+                });
+                // A: enriquece a descrição do step no plano para que a próxima tentativa
+                // seja explicitamente guiada pelo motivo do mismatch.
+                // Se a descrição já contém o marcador [ATENÇÃO —, o step já foi tentado com
+                // o hint e voltou irrelevante — retry adicional é inútil; escala imediatamente
+                // para 'blocked' para forçar replan com ferramenta diferente.
+                const alreadyHinted = (pendingStep.description ?? '').includes('[ATENÇÃO —');
+                const mismatchHint = ` [ATENÇÃO — tentativa anterior com ${pendingStep.toolName ?? 'agentloop'} retornou output irrelevante: ${(semanticValidation.reason ?? 'mismatch').slice(0, 120)}. Use abordagem diferente que retorne especificamente o que o objetivo pede.]`;
+                const enrichedPlan = goal.currentPlan.map(s =>
+                    s.id === pendingStep.id
+                        ? { ...s, description: (s.description + mismatchHint).slice(0, 500) }
+                        : s
+                );
+                this.goalStore.update(goal.id, { currentPlan: enrichedPlan });
+                goal = this.goalStore.getById(goal.id)!;
+                // Sprint 0.8 (achados L10/L11/L14/L15): o GoalAttempt já persistido por
+                // executeStep() (antes desta validação semântica rodar) continua com
+                // result='success' — corrige para 'partial', alinhando com o que
+                // ReflectionMemory.record({outcome:'partial', ...}) já registrava acima
+                // para o mesmo evento.
+                this.goalStore.downgradeLastAttemptToPartial(goal.id, pendingStep.id);
+                goal = this.goalStore.getById(goal.id)!;
+                // Retry só é útil quando o step NÃO tem toolName fixo (caminho 'agentloop'):
+                // nesse caso o próximo ciclo chama o LLM de novo com a description enriquecida
+                // acima, então o hint pode de fato mudar o resultado. Para steps com toolName
+                // (exec_command, memory_search, ssh_exec, ...), executeStep() despacha
+                // `resolveStepRefs(step.toolArgs, goal)` — resolve só {{step_N.output}}, nunca
+                // regenera os args a partir da description — então o retry chamaria a MESMA
+                // tool com os MESMOS args e reproduziria o MESMO mismatch, garantido.
+                // Reproduzido ao vivo (auditoria, 17/07): um goal de inventário de host rodou
+                // exec_command 2x idênticas ("hostname/OS/CPU" pedido, saída só com
+                // vulnerabilidades de CPU as duas vezes) e memory_search 2x idênticas (mesma
+                // query, mesmo resultado irrelevante as duas vezes) — cada retry queimou um
+                // ciclo inteiro (dispatch + validação semântica via LLM) sem nenhuma chance de
+                // resultado diferente, atrasando a escalada para replan (a única coisa que de
+                // fato muda a abordagem, porque gera um plano novo do zero).
+                const retryCanHelp = !pendingStep.toolName;
+                if (goal.retryBudget > 0 && !alreadyHinted && retryCanHelp) {
+                    // Primeira falha: retry com hint enriquecido
+                    cycleResult = { ...cycleResult, outcome: 'partial' };
+                } else {
+                    // Segunda falha para o mesmo step (alreadyHinted) OU retryBudget esgotado:
+                    // retry adicional seria inútil — escala para 'blocked' para replan com nova estratégia
+                    log.warn(
+                        `[SEMANTIC-MISMATCH] goal=${goal.id} step=${pendingStep.id}` +
+                        ` retryBudget=${goal.retryBudget} alreadyHinted=${alreadyHinted}` +
+                        ` retryCanHelp=${retryCanHelp}` +
+                        ` — escalating to blocked for replan`
+                    );
+                    const isDirListing = pendingStep.toolName === 'read' && /📁|📄/.test(cycleResult.output ?? '');
+                    const dirHint = isDirListing
+                        ? ` Listagem do diretório retornada: ${(cycleResult.output ?? '').split('\n').slice(0, 10).join('; ')}`
+                        : '';
+                    // Quando alreadyHinted=true, pendingStep.description já carrega o
+                    // mismatchHint embutido de um ciclo anterior (linha ~1010) — cortar em
+                    // 100 chars sem remover o hint primeiro produz um blocker.description
+                    // truncado no meio do marcador interno (ex: "...via send_audio. [AT'"),
+                    // que buildFailureExplanation() (GoalEvaluator.ts) expõe ao usuário como
+                    // texto quebrado. Remove o hint antes de truncar — mesma sub-string
+                    // '[ATENÇÃO —' já usada em alreadyHinted acima, não é um padrão novo.
+                    const cleanStepDesc = pendingStep.description.split(' [ATENÇÃO —')[0];
+                    const retryOutcomeLabel = alreadyHinted
+                        ? 'após 2 tentativas'
+                        : (retryCanHelp ? 'após esgotar retryBudget' : 'sem chance de retry ajudar (ferramenta fixa, mesmos argumentos)');
+                    cycleResult = {
+                        ...cycleResult,
+                        outcome: 'blocked',
+                        blocker: {
+                            kind: 'semantic_mismatch' as const,
+                            toolName: pendingStep.toolName,
+                            description: `Step '${cleanStepDesc.slice(0, 100)}' retornou output irrelevante ${retryOutcomeLabel}: ${semanticValidation.reason ?? 'mismatch semântico'}${dirHint}`,
+                            suggestedActions: isDirListing
+                                ? [
+                                    'Usar o path completo de um dos arquivos listados acima em vez do diretório',
+                                    'Verificar nos ARQUIVOS ENVIADOS AO USUÁRIO o path exato do arquivo solicitado',
+                                ]
+                                : [
+                                    'Usar tool diferente para este step',
+                                    'Reformular a query com abordagem completamente alternativa',
+                                ],
+                            detectedAt: Date.now(),
+                        },
+                    };
+                }
+            } else if (semanticValidation.result === 'mismatch') {
+                log.info(
+                    `[SEMANTIC-MISMATCH] goal=${goal.id} step=${pendingStep.id}` +
+                    ` tool=${pendingStep.toolName} confidence=${semanticValidation.confidence.toFixed(2)}` +
+                    ` reason="${(semanticValidation.reason ?? '').slice(0, 100)}"` +
+                    ` action=log_only (below downgrade threshold)`
+                );
+                state.cognitiveContext.failedStrategies.push(
+                    `${pendingStep.toolName}: possível mismatch semântico — ${semanticValidation.reason ?? 'output pode não ser relevante'}`
+                );
+            }
+        }
+
+        return { action: 'proceedToSwitch', goal, cycleResult };
+    }
+
     private async runLoopInternal(
         goal: Goal,
         channelContext: ChannelContext,
@@ -608,913 +1765,79 @@ export class GoalExecutionLoop {
                 event: 'cycle_start',
             });
 
-            const pendingStep = currentGoal.currentPlan.find(s => s.status === 'pending');
+            const pendingStep = this.getPendingSteps(currentGoal.currentPlan)[0];
 
             // Fix #1: considera o plano "pronto para validar" quando todos os steps
             // pendentes são send_document. A validação ocorre ANTES da entrega —
             // artefatos só são enviados ao usuário após achieved=true.
             const readyToValidate = !pendingStep || (
                 pendingStep.toolName === 'send_document' &&
-                !currentGoal.currentPlan.some(s => s.status === 'pending' && s.toolName !== 'send_document')
+                this.getPendingSteps(currentGoal.currentPlan).every(s => s.toolName === 'send_document')
             );
 
             if (readyToValidate) {
-                // Todos os steps concluídos — LLM valida se o objetivo foi realmente atingido
-                log.info(`[GoalLoop] goal=${currentGoal.id} all steps completed — running LLM validation`);
-                log.info(`[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey} state=validating cycle=${totalCycles} timestamp=${Date.now()}`);
-                await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'tool_completed', message: 'Validando conclusão...' });
-
-                const activeMilestone = currentGoal.isConstruction && currentGoal.roadmap && currentGoal.roadmap.length > 0
-                    ? currentGoal.roadmap[currentGoal.currentMilestoneIndex ?? 0]
-                    : undefined;
-
-                // Bypass estrutural: quando o único trabalho restante é despachar send_document
-                // para arquivo(s) que já existem no disco com tamanho substantivo, o validador por
-                // LLM nunca consegue confirmar "foi enviado" — o envio só acontece DEPOIS de
-                // achieved=true (Fix #1 acima). Isso é um impasse estrutural para goals cujo único
-                // propósito é reenviar um arquivo já existente (sem nenhum 'write' neste goal como
-                // evidência de criação). Reproduzido ao vivo em 09/07 (goal "me envia a aula ..."):
-                // esgotou o replanBudget tentando reenviar um .pptx já pronto, e no desespero o
-                // planner criou um arquivo de "resumo de entrega" fabricado só para ter evidência de
-                // 'write' e passar no validador — ver project_session_bugs_jul2026_ap na memória.
-                // Verificação estrutural (arquivo existe, não é placeholder) é mais confiável aqui
-                // do que o julgamento literal do LLM sobre um evento que ainda não aconteceu.
-                const pendingSendSteps = currentGoal.currentPlan.filter(
-                    s => s.status === 'pending' && s.toolName === 'send_document'
+                const validationResult = await this.runValidationPhase(
+                    currentGoal, totalCycles, totalReplans, priorFeedback, state, channelContext, onProgress,
+                    sentArtifacts, trackArtifact, AUDIO_DELIVERED_KEY,
                 );
-                const structuralBypass = pendingSendSteps.length > 0 && pendingSendSteps.every(s => {
-                    const fp = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
-                    if (!fp) return false;
-                    try {
-                        const { resolved } = resolvePath(fp);
-                        return fs.statSync(resolved).size >= 200;
-                    } catch {
-                        return false;
-                    }
-                });
-
-                let validation: Awaited<ReturnType<typeof this.validateGoalCompletion>>;
-                if (structuralBypass) {
-                    const artifactList = pendingSendSteps
-                        .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
-                        .join(',');
-                    log.info(
-                        `[VALIDATION-BYPASS] goal=${currentGoal.id}` +
-                        ` reason=only_pending_is_verified_send_document` +
-                        ` artifacts="${artifactList}"`
-                    );
-                    validation = { achieved: true, summary: 'Arquivo(s) já existente(s) no workspace, pronto(s) para envio.' };
-                } else {
-                    validation = await this.validateGoalCompletion(currentGoal, activeMilestone, state);
-                }
-
-                if (validation.achieved) {
-                    if (currentGoal.isConstruction && currentGoal.roadmap && (currentGoal.currentMilestoneIndex ?? 0) < currentGoal.roadmap.length - 1) {
-                        const prevMilestone = currentGoal.roadmap[currentGoal.currentMilestoneIndex ?? 0];
-                        const nextIndex = (currentGoal.currentMilestoneIndex ?? 0) + 1;
-                        const nextMilestone = currentGoal.roadmap[nextIndex];
-                        log.info(`[GoalLoop] milestone ${currentGoal.currentMilestoneIndex} achieved: "${prevMilestone}". Advancing to milestone ${nextIndex}: "${nextMilestone}"`);
-
-                        await onProgress?.({
-                            goalId: currentGoal.id,
-                            cycle: totalCycles,
-                            event: 'replanning',
-                            message: `✅ *Marco Concluído:* ${prevMilestone}\n\n👉 *Próximo Marco:* ${nextMilestone}`
-                        });
-
-                        // Avança o marco e limpa o plano atual para forçar replanejamento para o novo marco
-                        this.goalStore.update(currentGoal.id, {
-                            currentMilestoneIndex: nextIndex,
-                            currentPlan: [],
-                        });
-                        currentGoal = this.goalStore.getById(currentGoal.id)!;
-
-                        // Planeja os steps para o próximo marco
-                        const q1Context = await this.contextualize(currentGoal, totalCycles, undefined);
-                        const capSummary = await this.capRegistry.getCapabilitySummary();
-
-                        const planResult = await this.planner.plan(currentGoal, q1Context ?? '', capSummary, nextMilestone);
-                        
-                        // Permite atualizar o roadmap se o planner retornou um ajustado
-                        if (currentGoal.isConstruction && planResult.adjustedRoadmap && planResult.adjustedRoadmap.length > 0) {
-                            log.info(`[GoalLoop] roadmap adjusted during milestone planning transition.`);
-                            this.goalStore.update(currentGoal.id, { roadmap: planResult.adjustedRoadmap });
-                            currentGoal = this.goalStore.getById(currentGoal.id)!;
-                        }
-
-                        let initialPlan = planResult.steps;
-
-                        // Q2: Análise de Riscos para o novo plano
-                        if (this.isComplexPlan(initialPlan)) {
-                            const riskReport = await this.riskAnalyzer.analyze(currentGoal, initialPlan, this.planner.getAvailableSkills());
-                            if (riskReport.blocked) {
-                                log.warn(`[GoalLoop] Q2 BLOCKED milestone goal=${currentGoal.id}: ${riskReport.blockReason}`);
-                                this.goalStore.setStatus(currentGoal.id, 'failed');
-                                return this.buildResult(currentGoal, false, totalCycles, totalReplans,
-                                    riskReport.blockReason ?? 'Plano inviável detectado para o marco.');
-                            }
-                            initialPlan = riskReport.planAdjusted ? riskReport.adjustedPlan : initialPlan;
-                        }
-
-                        this.goalStore.update(currentGoal.id, {
-                            currentPlan: initialPlan,
-                            status: 'executing',
-                            cycleFocus: planResult.strategy || undefined,
-                        });
-                        currentGoal = this.goalStore.getById(currentGoal.id)!;
-                        continue;
-                    } else {
-                        // Fix #1 + P3-DEDUP: executa steps de send_document diferidos,
-                        // agora que achieved=true. Verifica sentArtifacts ANTES de executar
-                        // para garantir 1 artefato = 1 entrega mesmo após múltiplos replans.
-                        const deferredSends = currentGoal.currentPlan.filter(
-                            s => s.status === 'pending' && s.toolName === 'send_document'
-                        );
-                        let failedSends = 0;
-                        for (const sendStep of deferredSends) {
-                            let filePath = String(sendStep.toolArgs?.file_path ?? sendStep.toolArgs?.path ?? '');
-                            // Correção estrutural (achado replan/pivot 2026-07-12, goals reais no
-                            // Windows: 09/07, 10/07 x2, 12/07 — mesma assinatura repetida): o plano
-                            // pode chegar aqui com um file_path desatualizado se a estratégia pivotou
-                            // no meio da execução (ex.: falha de "bash script.sh" sem WSL funcional
-                            // levou o agente a trocar de HTML/Reveal.js para geração de .pptx via
-                            // python-pptx) sem que o step de send_document já agendado fosse
-                            // atualizado. Resultado sem esta correção: "Objetivo validado" (o
-                            // artefato real existe e foi confirmado) mas a entrega falha com
-                            // "arquivo não encontrado" porque aponta para um nome que nunca existiu.
-                            // Corrige SOMENTE quando há exatamente 1 artefato real (confirmado pela
-                            // própria validação do goal, não um palpite por extensão) ainda não
-                            // enviado — evidência concreta, sem ambiguidade; caso contrário mantém o
-                            // comportamento antigo (falha com mensagem clara) em vez de adivinhar.
-                            if (filePath) {
-                                const { resolved: requestedResolved } = resolvePath(filePath);
-                                if (!fs.existsSync(requestedResolved)) {
-                                    const candidates = (validation.artifactPaths ?? [])
-                                        .filter(p => p !== filePath && !sentArtifacts.has(p) && fs.existsSync(resolvePath(p).resolved));
-                                    if (candidates.length === 1) {
-                                        log.warn(
-                                            `[SEND-PATH-CORRECTED] goal=${currentGoal.id}` +
-                                            ` requested="${filePath}"` +
-                                            ` corrected="${candidates[0]}"` +
-                                            ` reason=requested_file_missing_single_validated_artifact_found`
-                                        );
-                                        sendStep.toolArgs = { ...sendStep.toolArgs, file_path: candidates[0] };
-                                        filePath = candidates[0];
-                                    }
-                                }
-                            }
-                            // Defesa em profundidade: skip se já enviado nesta sessão de goal
-                            if (filePath && sentArtifacts.has(filePath)) {
-                                log.info(
-                                    `[DELIVERY-DEDUP] goal=${currentGoal.id}` +
-                                    ` artifact="${filePath}"` +
-                                    ` reason=already_sent_in_goal_session` +
-                                    ` existing_delivery=sent` +
-                                    ` decision=skip`
-                                );
-                                this.markStepDone(currentGoal, sendStep, '[DEDUP] já entregue nesta sessão');
-                                currentGoal = this.goalStore.getById(currentGoal.id)!;
-                                continue;
-                            }
-                            const sendResult = await this.executeStep(currentGoal, sendStep, channelContext, totalCycles, state);
-                            currentGoal = this.goalStore.getById(currentGoal.id)!;
-                            const sendOk = sendResult.outcome === 'success';
-                            log.info(
-                                `[DEFERRED-SEND] goal=${currentGoal.id}` +
-                                ` artifact="${filePath}"` +
-                                ` result=${sendResult.outcome}`
-                            );
-                            if (sendOk) {
-                                this.markStepDone(currentGoal, sendStep, sendResult.output ?? '', 'skip');
-                                currentGoal = this.goalStore.getById(currentGoal.id)!;
-                                if (filePath) {
-                                    trackArtifact(filePath);
-                                    log.info(`[DELIVERY-REGISTRY] artifact="${filePath}" goal=${currentGoal.id} status=delivered`);
-                                }
-                            } else {
-                                failedSends++;
-                                // Sprint 0.6, Front B: preserva o blocker classificado por
-                                // GoalEvaluator dentro de executeStep() — causa raiz exata do
-                                // `blockers=[]` observado no goal real "ykpko" (Sprint 0.5): a
-                                // falha de um send_document diferido pós-validação nunca
-                                // propagava seu blocker.
-                                if (sendResult.blocker) {
-                                    this.goalStore.recordBlocker(currentGoal.id, sendResult.blocker);
-                                    currentGoal = this.goalStore.getById(currentGoal.id)!;
-                                }
-                            }
-                        }
-                        // FIX #2: não marcar goal como completed se algum send_document falhou
-                        const allSendsOk = deferredSends.length === 0 || failedSends === 0;
-                        const deliveredArtifacts = deferredSends
-                            .filter((_, i) => i < deferredSends.length - failedSends)
-                            .map(s => String(s.toolArgs?.file_path ?? '(unknown)'));
-                        log.info(`[GOAL-COMPLETE-CHECK] goal=${currentGoal.id} validation_ok=true all_sends_ok=${allSendsOk} deferred_sends=${deferredSends.length} failed_sends=${failedSends} final_state=${allSendsOk ? 'completed' : 'failed'}`);
-
-                        // FIX E: [DELIVERY-DECISION] — documenta a decisão de encerramento
-                        log.info(
-                            `[DELIVERY-DECISION] goal=${currentGoal.id}` +
-                            ` artifact="${deliveredArtifacts.join(',') || '(none)'}"` +
-                            ` delivered=${allSendsOk}` +
-                            ` validation=true` +
-                            ` completed=${allSendsOk}` +
-                            ` continue_execution=false` +
-                            ` reason=${allSendsOk ? 'goal_satisfied' : 'send_failed'}`
-                        );
-                        // FIX F: [GOAL-SATISFACTION] — estado final de satisfação do objetivo
-                        log.info(
-                            `[GOAL-SATISFACTION] goal=${currentGoal.id}` +
-                            ` achieved=true` +
-                            ` artifacts=${deferredSends.length}` +
-                            ` delivered=${deferredSends.length - failedSends}` +
-                            ` remaining_steps=0` +
-                            ` reason=${allSendsOk ? 'artifact_delivered' : 'delivery_failed'}`
-                        );
-
-                        if (!allSendsOk) {
-                            this.goalStore.setStatus(currentGoal.id, 'failed');
-                            const sendErr = failedSends === deferredSends.length
-                                ? 'Objetivo validado, mas nenhum arquivo pôde ser entregue ao usuário. Verifique o workspace.'
-                                : `Objetivo validado, mas ${failedSends} de ${deferredSends.length} arquivo(s) não foram entregues.`;
-                            return this.buildResult(currentGoal, false, totalCycles, totalReplans, sendErr);
-                        }
-                        // FIX E: encerra imediatamente — sem replan, sem novos ciclos
-                        this.goalStore.setStatus(currentGoal.id, 'completed');
-                        log.info(`[GoalLoop] goal=${currentGoal.id} validated as complete`);
-                        // S5 (modo sombra): captura Caso só se houver evidência de nível de goal
-                        // (successCriteria met OU sentArtifacts real) — nunca influencia o resultado.
-                        this.caseMemory.captureIfEligible(this.goalStore.getById(currentGoal.id)!);
-                        return this.buildResult(currentGoal, true, totalCycles, totalReplans, validation.summary);
-                    }
-                }
-
-                // LLM diz que o objetivo ainda não foi atingido
-                log.info(`[GoalLoop] goal=${currentGoal.id} not yet complete: ${validation.reason}`);
-                log.info(`[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey} state=replanning reason="${(validation.reason ?? '').slice(0, 100)}" cycle=${totalCycles} timestamp=${Date.now()}`);
-                // FIX F: [GOAL-SATISFACTION] — registra estado de não-satisfação para diagnóstico
-                const pendingSendCount = currentGoal.currentPlan.filter(s => s.status === 'pending').length;
-                log.info(
-                    `[GOAL-SATISFACTION] goal=${currentGoal.id}` +
-                    ` achieved=false` +
-                    ` artifacts=${currentGoal.attempts.filter(a => a.result === 'success' && a.toolName === 'write').length}` +
-                    ` delivered=0` +
-                    ` remaining_steps=${pendingSendCount}` +
-                    ` reason=${(validation.reason ?? 'unknown').slice(0, 80)}`
-                );
-                await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'replanning', message: validation.reason });
-
-                // ── Item 2: Deliverable Check ──────────────────────────────
-                // Antes de replanejar, verifica se já existe output no workspace.
-                // Evita o cenário onde 3 arquivos .pptx existem mas o sistema
-                // continua tentando regenerar em vez de enviar o que já tem.
-                if (!currentGoal.strategiesTried.includes('deliverable_check_done')) {
-                    const expectedExts = this.inferExpectedExtensions(currentGoal.userIntent);
-                    if (expectedExts.length > 0) {
-                        const foundFiles = await this.checkDeliverables(expectedExts, currentGoal.createdAt);
-                        // Fix #2: ignora arquivos já enviados nesta sessão de execução do goal
-                        // Fix S1: ignora arquivos menores que MIN_DELIVERABLE_SIZE — stubs/placeholders
-                        // não devem ser enviados ao usuário nem consumir replanBudget com sends inúteis.
-                        const MIN_DELIVERABLE_SIZE = 200; // bytes
-                        const substantiveFiles = foundFiles.filter(f => {
-                            try {
-                                return fs.statSync(f).size >= MIN_DELIVERABLE_SIZE;
-                            } catch {
-                                return false; // arquivo desapareceu — ignorar
-                            }
-                        });
-                        const tinyFiles = foundFiles.length - substantiveFiles.length;
-                        if (tinyFiles > 0) {
-                            log.warn(`[GoalLoop] deliverable_check: ${tinyFiles} arquivo(s) ignorado(s) por tamanho < ${MIN_DELIVERABLE_SIZE}B (placeholders)`);
-                        }
-                        // Exclui também arquivos que já têm um send_document PENDENTE no plano atual
-                        // (agendado mas ainda não executado) — sem isso, deliverable_check injetava um
-                        // segundo send step pro mesmo arquivo enquanto o primeiro ainda não tinha rodado.
-                        const pendingSendPaths = new Set(
-                            currentGoal.currentPlan
-                                .filter(s => s.status === 'pending' && s.toolName === 'send_document')
-                                .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
-                        );
-                        const unsentFiles = substantiveFiles.filter(f => !sentArtifacts.has(f) && !pendingSendPaths.has(f));
-                        if (unsentFiles.length > 0) {
-                            const skipped = substantiveFiles.length - unsentFiles.length;
-                            log.info(`[GoalLoop] deliverable_check: ${unsentFiles.length} arquivo(s) no workspace${skipped > 0 ? ` (${skipped} já enviado(s) ignorado(s))` : ''} — injetando send steps`);
-                            this.goalStore.addStrategyTried(currentGoal.id, 'deliverable_check_done');
-                            currentGoal = this.goalStore.getById(currentGoal.id)!;
-
-                            const sendSteps: PlanStep[] = unsentFiles.slice(0, 2).map((filePath, i) => ({
-                                id: `send_del_${Date.now()}_${i}`,
-                                description: `Enviar ao usuário arquivo encontrado no workspace: ${filePath}`,
-                                toolName: 'send_document',
-                                toolArgs: { file_path: filePath },
-                                status: 'pending' as const,
-                                fallbackSteps: [],
-                            }));
-
-                            const updatedPlan: PlanStep[] = [
-                                ...currentGoal.currentPlan.filter(s => s.status === 'completed'),
-                                ...sendSteps,
-                            ];
-                            this.goalStore.update(currentGoal.id, { currentPlan: updatedPlan, status: 'executing' });
-                            currentGoal = this.goalStore.getById(currentGoal.id)!;
-                            continue;
-                        }
-                    }
-                }
-
-                if (currentGoal.replanBudget <= 0) {
-                    // C: budget adaptativo — se há progresso substancial, concede +1 replan bonus
-                    // focalizado nos componentes pendentes em vez de reiniciar do zero
-                    const progressPct = state.progressModel?.overallPercent ?? 0;
-                    const bonusGranted = progressPct >= 60 && totalReplans <= 1;
-                    if (bonusGranted) {
-                        log.info(
-                            `[ADAPTIVE-BUDGET] goal=${currentGoal.id}` +
-                            ` progress=${progressPct}% >= 60% — granting +1 bonus replan` +
-                            ` cycle=${totalCycles}`
-                        );
-                        this.goalStore.update(currentGoal.id, {
-                            replanBudget: 1,
-                            status: 'replanning',
-                        });
-                        currentGoal = this.goalStore.getById(currentGoal.id)!;
-                        // Blocker focado nos componentes pendentes do progressModel
-                        const pendingComponents = (state.progressModel?.components ?? [])
-                            .filter(c => c.status !== 'completed')
-                            .map(c => c.label)
-                            .join('; ');
-                        const bonusBlocker: GoalBlocker = {
-                            kind: 'goal_incomplete',
-                            description: `[BONUS REPLAN — ${progressPct}% concluído] Complete APENAS os componentes pendentes: ${pendingComponents || (validation.reason ?? 'componentes ainda não entregues')}`,
-                            suggestedActions: ['Foque exclusivamente nos componentes pendentes — não replanejar o que já foi entregue'],
-                            detectedAt: Date.now(),
-                        };
-                        this.goalStore.addBlocker(currentGoal.id, bonusBlocker);
-                        this.goalStore.addStrategyTried(currentGoal.id, `bonus_replan: progress=${progressPct}% pendentes=[${pendingComponents}]`);
-                        currentGoal = await this.planWithSpiral(currentGoal, bonusBlocker, validation.reason, totalReplans + 1, state, true);
-                        totalReplans++;
-                        continue;
-                    }
-
-                    this.goalStore.setStatus(currentGoal.id, 'failed');
-                    const baseExplanation = validation.reason ?? this.evaluator.buildFailureExplanation(currentGoal);
-                    // Entrega parcial: se há conteúdo útil coletado, enriquece a mensagem final
-                    const graceful = this.gracefulDelivery.assess(currentGoal, state.cognitiveContext);
-                    const explanation = graceful.hasPartialContent
-                        ? graceful.partialSummary
-                        : baseExplanation;
-                    log.info(
-                        `[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey}` +
-                        ` state=failed reason="replan_budget_exhausted"` +
-                        ` graceful_delivery=${graceful.hasPartialContent}` +
-                        ` progress=${progressPct}%` +
-                        ` cycle=${totalCycles} timestamp=${Date.now()}`
-                    );
-                    await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'failed', message: explanation });
-                    return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
-                }
-
-                const blocker: GoalBlocker = {
-                    kind: 'goal_incomplete',
-                    description: validation.reason ?? 'Objetivo não verificado como concluído pelo validador',
-                    suggestedActions: validation.suggestions ?? ['Verificar se o resultado foi entregue ao usuário'],
-                    detectedAt: Date.now(),
-                };
-                this.goalStore.addBlocker(currentGoal.id, blocker);
-                currentGoal = this.goalStore.getById(currentGoal.id)!;
-
-                this.goalStore.update(currentGoal.id, {
-                    status: 'replanning',
-                    replanBudget: currentGoal.replanBudget - 1,
-                });
-                this.goalStore.addStrategyTried(currentGoal.id,
-                    `completed all steps but goal_incomplete: ${(validation.reason ?? '').slice(0, 100)}`);
-
-                // Q4 → Q1: feedback da validação alimenta o próximo ciclo espiral
-                // forceQ2=true: se o objetivo não foi entregue, Q2 sempre revisa o plano
-                priorFeedback = validation.reason;
-                currentGoal = await this.planWithSpiral(currentGoal, blocker, priorFeedback, totalReplans + 1, state, true);
-                totalReplans++;
-
-                if (Date.now() > currentGoal.expiresAt) {
-                    this.goalStore.setStatus(currentGoal.id, 'abandoned');
-                    return this.buildResult(currentGoal, false, totalCycles, totalReplans, 'Objetivo expirou por tempo limite.');
-                }
+                if (validationResult.action === 'earlyReturn') return validationResult.result;
+                currentGoal = validationResult.goal;
+                totalReplans = validationResult.totalReplans;
+                priorFeedback = validationResult.priorFeedback;
                 continue;
             }
 
-            // ── Executar o step atual ──────────────────────────────────
-            await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'tool_executing', message: pendingStep.description });
-
-            // H7: classificar se send_document está sendo executado antes da validação (step regular)
-            if (pendingStep.toolName === 'send_document') {
-                log.info(`[SEND-CLASSIFICATION] goal=${currentGoal.id} step=${pendingStep.id} tool=send_document deferred=false reason=regular_plan_step`);
-            }
-            // ITEM5: rastrear origem do path em steps de escrita
-            if ((pendingStep.toolName === 'write' || pendingStep.toolName === 'edit') && pendingStep.toolArgs?.path) {
-                const source = totalReplans > 0 ? 'replanner' : 'planner';
-                log.info(
-                    `[PATH-ORIGIN] goal=${currentGoal.id} cycle=${totalCycles}` +
-                    ` path="${pendingStep.toolArgs.path}"` +
-                    ` source=${source} step=${pendingStep.id}`
-                );
-            }
-            // H7: AgentLoop pode chamar send_document internamente sem proteção de deferred
-            if (pendingStep.toolName === 'agentloop' || !pendingStep.toolName) {
-                const hasPendingSends = currentGoal.currentPlan.some(
-                    s => s.status === 'pending' && s.toolName === 'send_document'
-                );
-                log.info(
-                    `[SEND-ORDER] goal=${currentGoal.id} step=${pendingStep.id}` +
-                    ` tool=${pendingStep.toolName ?? 'agentloop'} validation_done=false` +
-                    ` send_allowed=uncontrolled deferred_sends_pending=${hasPendingSends}`
-                );
-            }
-
-            let cycleResult = await this.executeStep(
-                currentGoal, pendingStep, channelContext, totalCycles, state,
-                // CORREÇÃO 1: passa callback para que DELIVERY-GUARD notifique sentArtifacts
-                // diretamente, sem depender de S10 (que só executa em case 'success').
-                (fp) => { if (fp) trackArtifact(fp); },
-                isAudioAlreadySent,
+            const stepExecResult = await this.runStepExecutionPhase(
+                currentGoal, pendingStep, totalCycles, totalReplans, state, channelContext,
+                trackArtifact, isAudioAlreadySent, onProgress,
             );
-
-            // Recarrega o goal — pode ter sido abandonado durante o step (nova mensagem do usuário)
-            currentGoal = this.goalStore.getById(currentGoal.id)!;
-            if (currentGoal.status === 'abandoned') {
-                log.info(`[GoalLoop] goal=${currentGoal.id} foi abandonado durante execução do step — saindo do loop`);
-                return this.buildResult(currentGoal, false, totalCycles, totalReplans,
-                    'Goal interrompido: nova mensagem do usuário recebida durante execução.');
-            }
-
-            // FIX B: detectar arquivo vazio em step de leitura para goals de modificação.
-            // Impede que o sistema replane com "usar memória como substituto" quando o artefato
-            // fonte é um requisito real (o conteúdo precisa existir para ser modificado).
-            if (
-                (pendingStep.toolName === 'read' || pendingStep.toolName === 'read_document') &&
-                cycleResult.outcome !== 'success'
-            ) {
-                const lastAttempt = [...currentGoal.attempts].reverse().find(a => a.planStepId === pendingStep.id);
-                const isEmptyArtifact = lastAttempt?.error?.includes('[ARQUIVO VAZIO]') ?? false;
-                if (isEmptyArtifact && this.isModificationGoal(currentGoal.userIntent)) {
-                    const requiredPath = String(pendingStep.toolArgs?.path ?? pendingStep.toolArgs?.filename ?? '(desconhecido)');
-                    log.warn(
-                        `[ARTIFACT-DEPENDENCY] goal=${currentGoal.id} required="${requiredPath}"` +
-                        ` exists=true empty=true action=fail` +
-                        ` reason="goal de modificação requer conteúdo real no arquivo fonte"`
-                    );
-                    const failMsg = `Arquivo fonte obrigatório "${requiredPath}" está vazio. ` +
-                        `O objetivo requer modificar conteúdo existente — não é possível continuar sem o arquivo original.`;
-                    this.goalStore.setStatus(currentGoal.id, 'failed');
-                    this.goalStore.addBlocker(currentGoal.id, {
-                        kind: 'required_artifact_missing',
-                        description: failMsg,
-                        suggestedActions: ['Verifique se o arquivo correto foi enviado ou criado antes de pedir modificações'],
-                        detectedAt: Date.now(),
-                    });
-                    log.info(`[GOAL-LIFECYCLE] goal=${currentGoal.id} session=${currentGoal.sessionKey} state=failed reason="required_artifact_missing" cycle=${totalCycles} timestamp=${Date.now()}`);
-                    return this.buildResult(currentGoal, false, totalCycles, totalReplans, failMsg);
-                }
-            }
-
-            // ── Validação semântica: mesmo após 'success' heurístico, verifica se o output
-            // endereça a intenção do step (ex: crypto_analysis retornando ENA/BCH em vez de ZEC/Pi)
-            // P6: cobre também steps agentloop (sem toolName) — output do AgentLoop também é validado
-            if (cycleResult.outcome === 'success' && cycleResult.output) {
-                const semanticValidation = await this.semanticValidator.validate(
-                    pendingStep,
-                    cycleResult.output,
-                    currentGoal.userIntent,
-                );
-                if (semanticValidation.shouldDowngradeToPartial) {
-                    log.warn(
-                        `[SEMANTIC-MISMATCH] goal=${currentGoal.id} step=${pendingStep.id}` +
-                        ` tool=${pendingStep.toolName} confidence=${semanticValidation.confidence.toFixed(2)}` +
-                        ` reason="${(semanticValidation.reason ?? '').slice(0, 100)}"` +
-                        ` action=downgrade_to_partial`
-                    );
-                    state.cognitiveContext.failedStrategies.push(
-                        `${pendingStep.toolName} (step ${pendingStep.id}): output irrelevante para a intenção — ${semanticValidation.reason ?? 'mismatch'}`
-                    );
-                    // P5: persiste na ReflectionMemory para que futuros goals evitem o mesmo padrão
-                    // S2a: outcome='partial' (não 'failure') — a ferramenta rodou e produziu
-                    // output real, só não endereçou a intenção do step. É exatamente o caso que
-                    // shouldDowngradeToPartial já nomeia; evidência objetiva, não interpretação.
-                    // failureType='semantic_mismatch' — BlockerKind já tem esse valor exato.
-                    this.reflectionMemory.record({
-                        userInput: currentGoal.userIntent.slice(0, 300),
-                        intent: pendingStep.description.slice(0, 200),
-                        toolUsed: pendingStep.toolName ?? 'agentloop',
-                        toolOutput: cycleResult.output?.slice(0, 500),
-                        approved: false,
-                        reason: `Mismatch semântico: ${semanticValidation.reason ?? 'output não endereça a intenção do step'}`,
-                        confidence: semanticValidation.confidence,
-                        pattern: `tool_${pendingStep.toolName ?? 'agentloop'}`,
-                        suggestedFix: `Use query/abordagem que retorne especificamente: ${pendingStep.description.slice(0, 100)}`,
-                        outcome: 'partial',
-                        failureType: 'semantic_mismatch',
-                    });
-                    // A: enriquece a descrição do step no plano para que a próxima tentativa
-                    // seja explicitamente guiada pelo motivo do mismatch.
-                    // Se a descrição já contém o marcador [ATENÇÃO —, o step já foi tentado com
-                    // o hint e voltou irrelevante — retry adicional é inútil; escala imediatamente
-                    // para 'blocked' para forçar replan com ferramenta diferente.
-                    const alreadyHinted = (pendingStep.description ?? '').includes('[ATENÇÃO —');
-                    const mismatchHint = ` [ATENÇÃO — tentativa anterior com ${pendingStep.toolName ?? 'agentloop'} retornou output irrelevante: ${(semanticValidation.reason ?? 'mismatch').slice(0, 120)}. Use abordagem diferente que retorne especificamente o que o objetivo pede.]`;
-                    const enrichedPlan = currentGoal.currentPlan.map(s =>
-                        s.id === pendingStep.id
-                            ? { ...s, description: (s.description + mismatchHint).slice(0, 500) }
-                            : s
-                    );
-                    this.goalStore.update(currentGoal.id, { currentPlan: enrichedPlan });
-                    currentGoal = this.goalStore.getById(currentGoal.id)!;
-                    // Sprint 0.8 (achados L10/L11/L14/L15): o GoalAttempt já persistido por
-                    // executeStep() (antes desta validação semântica rodar) continua com
-                    // result='success' — corrige para 'partial', alinhando com o que
-                    // ReflectionMemory.record({outcome:'partial', ...}) já registrava acima
-                    // para o mesmo evento.
-                    this.goalStore.downgradeLastAttemptToPartial(currentGoal.id, pendingStep.id);
-                    currentGoal = this.goalStore.getById(currentGoal.id)!;
-                    if (currentGoal.retryBudget > 0 && !alreadyHinted) {
-                        // Primeira falha: retry com hint enriquecido
-                        cycleResult = { ...cycleResult, outcome: 'partial' };
-                    } else {
-                        // Segunda falha para o mesmo step (alreadyHinted) OU retryBudget esgotado:
-                        // retry adicional seria inútil — escala para 'blocked' para replan com nova estratégia
-                        log.warn(
-                            `[SEMANTIC-MISMATCH] goal=${currentGoal.id} step=${pendingStep.id}` +
-                            ` retryBudget=${currentGoal.retryBudget} alreadyHinted=${alreadyHinted}` +
-                            ` — escalating to blocked for replan`
-                        );
-                        const isDirListing = pendingStep.toolName === 'read' && /📁|📄/.test(cycleResult.output ?? '');
-                        const dirHint = isDirListing
-                            ? ` Listagem do diretório retornada: ${(cycleResult.output ?? '').split('\n').slice(0, 10).join('; ')}`
-                            : '';
-                        // Quando alreadyHinted=true, pendingStep.description já carrega o
-                        // mismatchHint embutido de um ciclo anterior (linha ~1010) — cortar em
-                        // 100 chars sem remover o hint primeiro produz um blocker.description
-                        // truncado no meio do marcador interno (ex: "...via send_audio. [AT'"),
-                        // que buildFailureExplanation() (GoalEvaluator.ts) expõe ao usuário como
-                        // texto quebrado. Remove o hint antes de truncar — mesma sub-string
-                        // '[ATENÇÃO —' já usada em alreadyHinted acima, não é um padrão novo.
-                        const cleanStepDesc = pendingStep.description.split(' [ATENÇÃO —')[0];
-                        cycleResult = {
-                            ...cycleResult,
-                            outcome: 'blocked',
-                            blocker: {
-                                kind: 'semantic_mismatch' as const,
-                                toolName: pendingStep.toolName,
-                                description: `Step '${cleanStepDesc.slice(0, 100)}' retornou output irrelevante ${alreadyHinted ? 'após 2 tentativas' : 'após esgotar retryBudget'}: ${semanticValidation.reason ?? 'mismatch semântico'}${dirHint}`,
-                                suggestedActions: isDirListing
-                                    ? [
-                                        'Usar o path completo de um dos arquivos listados acima em vez do diretório',
-                                        'Verificar nos ARQUIVOS ENVIADOS AO USUÁRIO o path exato do arquivo solicitado',
-                                    ]
-                                    : [
-                                        'Usar tool diferente para este step',
-                                        'Reformular a query com abordagem completamente alternativa',
-                                    ],
-                                detectedAt: Date.now(),
-                            },
-                        };
-                    }
-                } else if (semanticValidation.result === 'mismatch') {
-                    log.info(
-                        `[SEMANTIC-MISMATCH] goal=${currentGoal.id} step=${pendingStep.id}` +
-                        ` tool=${pendingStep.toolName} confidence=${semanticValidation.confidence.toFixed(2)}` +
-                        ` reason="${(semanticValidation.reason ?? '').slice(0, 100)}"` +
-                        ` action=log_only (below downgrade threshold)`
-                    );
-                    state.cognitiveContext.failedStrategies.push(
-                        `${pendingStep.toolName}: possível mismatch semântico — ${semanticValidation.reason ?? 'output pode não ser relevante'}`
-                    );
-                }
-            }
+            if (stepExecResult.action === 'earlyReturn') return stepExecResult.result;
+            currentGoal = stepExecResult.goal;
+            const cycleResult = stepExecResult.cycleResult;
 
             // ── Avaliar resultado ──────────────────────────────────────
+            // ARCH-020 (S24): cada case do switch original virou um handler nomeado
+            // (StepOutcomeHandled) — ver os 6 métodos `handle*Outcome` logo antes de
+            // runLoopInternal(). Lógica idêntica, só movida.
+            let outcomeHandled: StepOutcomeHandled;
             switch (cycleResult.outcome) {
-
-                case 'success': {
-                    // skipAttemptRecord=true: executeStep() já gravou o attempt real deste
-                    // ciclo (com o result correto, incluindo 'partial' de baixa confiança —
-                    // Sprint 0.8) antes de retornar cycleResult; ver comentário em markStepDone.
-                    this.markStepDone(currentGoal, pendingStep, cycleResult.output ?? '', 'skip');
-                    this.updateCognitiveContext(pendingStep, cycleResult.output ?? '', state);
-                    this.updateProgressModel(pendingStep, 'completed', cycleResult.output, state);
-                    // Fix #2: registra artefatos enviados para evitar reenvio por deliverable_check
-                    if (pendingStep.toolName === 'send_document' && pendingStep.toolArgs?.file_path) {
-                        trackArtifact(String(pendingStep.toolArgs.file_path));
-                    }
-                    // FIX C + P3-DEDUP: injeta sends diferidos do AgentLoop como steps pendentes.
-                    // Deduplicação adicional: garante que o mesmo file_path não entre duas vezes
-                    // no plano mesmo que a dedup no callback tenha falhado (defesa em profundidade).
-                    if (cycleResult.deferredSends && cycleResult.deferredSends.length > 0) {
-                        const existingPendingSendPaths = new Set(
-                            currentGoal.currentPlan
-                                .filter(s => s.status === 'pending' && s.toolName === 'send_document')
-                                .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
-                        );
-                        const dedupedSends: typeof cycleResult.deferredSends = [];
-                        for (const sendArgs of cycleResult.deferredSends) {
-                            const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
-                            const key = fp || JSON.stringify(sendArgs);
-                            if (existingPendingSendPaths.has(key) || sentArtifacts.has(fp)) {
-                                log.info(
-                                    `[DELIVERY-DEDUP] artifact="${fp}"` +
-                                    ` reason=duplicate_in_plan_injection` +
-                                    ` existing_delivery=${sentArtifacts.has(fp) ? 'already_sent' : 'pending_step'}` +
-                                    ` decision=skip`
-                                );
-                            } else {
-                                dedupedSends.push(sendArgs);
-                                existingPendingSendPaths.add(key);
-                            }
-                        }
-                        if (dedupedSends.length > 0) {
-                            const newSendSteps: PlanStep[] = dedupedSends.map((sendArgs, i) => ({
-                                id: `step_deferred_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 5)}`,
-                                description: `Enviar documento "${String(sendArgs['file_path'] ?? sendArgs['path'] ?? '(desconhecido)')}" ao usuário`,
-                                toolName: 'send_document',
-                                toolArgs: sendArgs,
-                                status: 'pending' as const,
-                                fallbackSteps: [],
-                            }));
-                            const updatedPlan = [...currentGoal.currentPlan, ...newSendSteps];
-                            this.goalStore.update(currentGoal.id, { currentPlan: updatedPlan });
-                            currentGoal = this.goalStore.getById(currentGoal.id)!;
-                            log.info(
-                                `[AGENTLOOP-SEND] goal=${currentGoal.id} step=${pendingStep.id}` +
-                                ` deferred_injected=${newSendSteps.length}` +
-                                ` deferred_skipped=${cycleResult.deferredSends.length - dedupedSends.length}` +
-                                ` reason=goal_execution_policy`
-                            );
-                        } else {
-                            log.info(
-                                `[AGENTLOOP-SEND] goal=${currentGoal.id} step=${pendingStep.id}` +
-                                ` deferred_injected=0` +
-                                ` deferred_skipped=${cycleResult.deferredSends.length}` +
-                                ` reason=all_duplicates`
-                            );
-                        }
-                        // REMOVIDO (02/07/2026): este loop chamava trackArtifact() pra TODO
-                        // deferredSend, marcando em sentArtifacts arquivos que só foram AGENDADOS
-                        // (ainda não enviados de verdade). Isso conflava "agendado" com "enviado" no
-                        // mesmo Set — o loop de execução dos sends diferidos (mais abaixo, "agora que
-                        // achieved=true") checa `sentArtifacts.has(filePath)` pra decidir se pula o
-                        // send como duplicata; como o arquivo já constava ali (marcado aqui, cedo
-                        // demais), o send real nunca rodava — goal reportava success=true e
-                        // "delivered=1" sem o arquivo ter saído de fato. Reproduzido ao vivo em
-                        // 02/07 (usuário: "faltou me enviar o arquivo!"). A proteção que este loop
-                        // pretendia dar (evitar deliverable_check reagendar um arquivo já agendado)
-                        // agora é feita corretamente no próprio deliverable_check, checando
-                        // send_document pendente no currentPlan — não mais poluindo sentArtifacts.
-                        // DELIVERY-GUARD (entrega direta do AgentLoop, fora do plano) continua
-                        // marcando sentArtifacts corretamente via callback onArtifactDelivered.
-                    }
-                    // ITEM4: rastreia writes por path para detectar duplicatas entre ciclos
-                    if ((pendingStep.toolName === 'write' || pendingStep.toolName === 'edit') && pendingStep.toolArgs?.path) {
-                        const writePath = String(pendingStep.toolArgs.path);
-                        const source = pendingStep.toolName === 'write' ? 'planner' : 'planner';
-                        const prior = writeTraceByPath.get(writePath);
-                        if (prior) {
-                            log.warn(
-                                `[DUPLICATE-WRITE-TRACE] goal=${currentGoal.id}` +
-                                ` cycle=${totalCycles} path="${writePath}"` +
-                                ` step=${pendingStep.id} source=${source}` +
-                                ` prev_cycle=${prior.cycle} prev_step=${prior.step}`
-                            );
-                        } else {
-                            log.info(
-                                `[DUPLICATE-WRITE-TRACE] goal=${currentGoal.id}` +
-                                ` cycle=${totalCycles} path="${writePath}"` +
-                                ` step=${pendingStep.id} source=${source} prev_cycle=none`
-                            );
-                        }
-                        writeTraceByPath.set(writePath, { cycle: totalCycles, step: pendingStep.id, source });
-                    }
-                    currentGoal = this.goalStore.getById(currentGoal.id)!;
-                    await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'tool_completed' });
+                case 'success':
+                    outcomeHandled = await this.handleSuccessOutcome(
+                        currentGoal, pendingStep, cycleResult, totalCycles, totalReplans, priorFeedback,
+                        state, sentArtifacts, trackArtifact, writeTraceByPath, onProgress,
+                    );
                     break;
-                }
-
-                case 'partial': {
-                    // Sprint 0.6, Front B: preserva o blocker já classificado por
-                    // GoalEvaluator.evaluate() para auditoria/replan futuro. Usa recordBlocker
-                    // (não addBlocker) de propósito — 'partial' é retryável, o goal continua
-                    // 'executing'; addBlocker forçaria status='blocked' incorretamente.
-                    if (cycleResult.blocker) {
-                        this.goalStore.recordBlocker(currentGoal.id, cycleResult.blocker);
-                    }
-                    // Retryável — registra como 'in_progress' e diminui retry budget
-                    this.updateProgressModel(pendingStep, 'in_progress', cycleResult.output, state);
-                    this.goalStore.update(currentGoal.id, {
-                        retryBudget: Math.max(0, currentGoal.retryBudget - 1),
-                    });
-                    currentGoal = this.goalStore.getById(currentGoal.id)!;
-                    // CORREÇÃO 2 (S10-PARTIAL): defense-in-depth para o gap DELIVERY-GUARD.
-                    // Se deferredSends contém paths (capturados pelo intercept do main loop)
-                    // e o DELIVERY-GUARD os entregou antes do downgrade para 'partial',
-                    // a Correção 1 já registrou via callback. Este bloco cobre o caso
-                    // onde o callback falhou silenciosamente ou não foi acionado.
-                    // NÃO injeta steps de send (diferente do S10 em case 'success') —
-                    // apenas garante que sentArtifacts reflita o que foi entregue.
-                    if (cycleResult.deferredSends?.length) {
-                        for (const sendArgs of cycleResult.deferredSends) {
-                            const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
-                            if (fp && !sentArtifacts.has(fp)) {
-                                trackArtifact(fp);
-                                log.info(
-                                    `[S10-PARTIAL] goal=${currentGoal.id}` +
-                                    ` artifact="${fp}"` +
-                                    ` source=deferred_sends_partial_fallback`
-                                );
-                            }
-                        }
-                    }
+                case 'partial':
+                    outcomeHandled = await this.handlePartialOutcome(
+                        currentGoal, pendingStep, cycleResult, totalReplans, priorFeedback,
+                        state, sentArtifacts, trackArtifact,
+                    );
                     break;
-                }
-
-                case 'needs_auth': {
-                    // DEVELOPER/GOD mode: auto-aprovar exec_command sem confirmação por chamada.
-                    // isDestructive() ainda bloqueia comandos perigosos em qualquer modo.
-                    if (permissionRegistry.can('auto_approve_exec')) {
-                        log.info(`[GoalLoop] needs_auth auto-approved (mode=${permissionRegistry.getMode()}) goal=${currentGoal.id}`);
-                        // 'finalize': executeStep() já gravou um attempt 'failure' para este
-                        // step (o bloqueio de permissão que originou este outcome) — a
-                        // auto-aprovação resolve esse bloqueio no mesmo ciclo, sem uma segunda
-                        // execução real distinta. Corrige o attempt existente para 'success' em
-                        // vez de acrescentar um segundo, contraditório (Sprint 0.8.3, achado
-                        // residual 2).
-                        this.markStepDone(currentGoal, pendingStep, cycleResult.output ?? '', 'finalize');
-                        currentGoal = this.goalStore.getById(currentGoal.id)!;
-                        break;
-                    }
-
-                    // SAFE mode: pausa e aguarda confirmação do usuário
-                    const txnId = cycleResult.authOptions
-                        ?.find(o => o.value?.startsWith('auth:'))
-                        ?.value?.split(':').slice(2).join(':');
-
-                    // Sprint 0.8 (achados L02d/L12/L13): preserva o blocker já classificado por
-                    // GoalEvaluator — mesmo padrão dos branches 'partial'/'failed'/deferred send
-                    // corrigidos na Sprint 0.6. Só neste ramo SAFE, nunca no auto-aprovado acima:
-                    // ali a tool não foi de fato bloqueada.
-                    if (cycleResult.blocker) {
-                        this.goalStore.recordBlocker(currentGoal.id, cycleResult.blocker);
-                    }
-                    await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'blocked', message: 'Aguardando autorização' });
-                    // Sprint 0.11 (achado do Laboratório Cognitivo, newclaw-cortex/C1.5): `requiresAuth`
-                    // era setado 'false' em create() (GoalOrchestrator.ts) e NUNCA setado 'true' em
-                    // nenhum outro ponto do runtime — mesmo aqui, onde um `pendingTxnId` real é gravado
-                    // porque o goal está de fato aguardando autorização. `requires_auth` ficava sempre 0
-                    // no banco, dissociado de `pending_txn_id` (achado com dado real: 40/442 goals com
-                    // pendingTxnId e requires_auth=0). `requiresAuth` volta a `false` em resumeGoal()
-                    // (linha ~290) e em abortGoalFromAuth() (GoalOrchestrator.ts), os dois pontos que já
-                    // limpam `pendingTxnId`.
-                    this.goalStore.update(currentGoal.id, {
-                        status: 'blocked',
-                        pendingTxnId: txnId,
-                        requiresAuth: true,
-                    });
-                    const goalResult = this.buildResult(currentGoal, false, totalCycles, totalReplans,
-                        cycleResult.output || 'Aguardando sua autorização para prosseguir.');
-                    return { ...goalResult, authOptions: cycleResult.authOptions };
-                }
-
-                case 'needs_dependency': {
-                    // Sprint 0.8 (achados L02d/L12/L13): preserva o blocker 'missing_tool' que
-                    // motivou a injeção do step de instalação — mesmo padrão do branch 'blocked'.
-                    if (cycleResult.blocker) {
-                        this.goalStore.recordBlocker(currentGoal.id, cycleResult.blocker);
-                    }
-                    const depInfo = cycleResult.depInfo!;
-                    const installKey = `install_dep_${depInfo.name}`;
-
-                    this.goalStore.addStrategyTried(currentGoal.id, installKey);
-                    currentGoal = this.goalStore.getById(currentGoal.id)!;
-
-                    const installStepId = `install_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
-                    // Resolve o comando just-in-time, pela plataforma REAL detectada — nunca usa
-                    // depInfo.installCmd diretamente (histórico: sempre apt/Linux, executaria
-                    // "sudo apt install..." também num Windows). Sem comando seguro para este SO,
-                    // resolvedCommand fica undefined e o step cai no caminho manual/permission-gated
-                    // (toolName undefined) mesmo em modo DEVELOPER/GOD — nunca cria exec_command
-                    // vazio nem assume que a instalação ocorreu.
-                    const resolvedCommand = resolveInstallCommand(depInfo, this.capRegistry.getOSSync());
-                    const autoInstall = permissionRegistry.can('install_dependencies') && resolvedCommand !== undefined;
-                    const installStep: PlanStep = {
-                        id: installStepId,
-                        description: autoInstall
-                            ? `Instalar '${depInfo.name}' necessário para continuar: ${resolvedCommand}`
-                            : `Instalar '${depInfo.name}' necessário para continuar (sem comando automático seguro para este sistema operacional — ${depInfo.manualInstructions})`,
-                        // DEVELOPER/GOD com comando resolvido: toolName explícito → exec_command direto
-                        // (sem auth gate do WorkflowEngine). Sem comando resolvido (SO sem entrada
-                        // segura) OU modo SAFE: sem toolName → AgentLoop processa → WorkflowEngine
-                        // pede confirmação / orienta instalação manual.
-                        toolName: autoInstall ? 'exec_command' : undefined,
-                        toolArgs: autoInstall ? { command: resolvedCommand } : undefined,
-                        status: 'pending',
-                        fallbackSteps: [],
-                    };
-                    if (autoInstall) {
-                        log.info(`[GoalLoop] needs_dependency auto-install approved (mode=${permissionRegistry.getMode()}): ${depInfo.name}`);
-                    } else if (resolvedCommand === undefined) {
-                        log.info(`[GoalLoop] needs_dependency: sem comando de instalação seguro para este SO (dep=${depInfo.name}) — caminho manual/AgentLoop`);
-                    }
-
-                    // Reconstrói o plano: steps já concluídos + installStep + step que falhou + resto
-                    const updatedPlan: PlanStep[] = [
-                        ...currentGoal.currentPlan.filter(s => s.status === 'completed'),
-                        installStep,
-                        pendingStep,
-                        ...currentGoal.currentPlan.filter(s => s.status === 'pending' && s.id !== pendingStep.id),
-                    ];
-
-                    this.goalStore.update(currentGoal.id, { currentPlan: updatedPlan });
-                    currentGoal = this.goalStore.getById(currentGoal.id)!;
-
-                    log.info(`[GoalLoop] dep='${depInfo.name}' missing — injected install step=${installStepId}`);
-                    await onProgress?.({
-                        goalId: currentGoal.id,
-                        cycle: totalCycles,
-                        event: 'replanning',
-                        message: `Dependência '${depInfo.name}' não encontrada — vou instalar antes de continuar`,
-                    });
+                case 'needs_auth':
+                    outcomeHandled = await this.handleNeedsAuthOutcome(
+                        currentGoal, pendingStep, cycleResult, totalCycles, totalReplans, priorFeedback, onProgress,
+                    );
                     break;
-                }
-
-                case 'blocked': {
-                    if (!cycleResult.blocker) break;
-
-                    this.goalStore.addBlocker(currentGoal.id, cycleResult.blocker);
-                    this.recordFailedStrategy(pendingStep, cycleResult.blocker.description, currentGoal.id, state);
-                    this.updateProgressModel(pendingStep, 'failed', cycleResult.blocker.description, state);
-                    currentGoal = this.goalStore.getById(currentGoal.id)!;
-
-                    await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'replanning', message: cycleResult.blocker.description });
-
-                    // Registra falha na ReflectionMemory para aprendizado futuro
-                    // S2a: failureType=cycleResult.blocker.kind — já é um BlockerKind tipado,
-                    // vindo direto do objeto blocker. Zero inferência: é o dado real do call site.
-                    this.reflectionMemory.record({
-                        userInput: currentGoal.userIntent,
-                        intent: currentGoal.objective.slice(0, 100),
-                        toolUsed: pendingStep.toolName ?? 'unknown',
-                        approved: false,
-                        reason: cycleResult.blocker.description,
-                        confidence: cycleResult.confidence,
-                        pattern: `tool_${pendingStep.toolName ?? cycleResult.blocker.kind}`,
-                        suggestedFix: cycleResult.blocker.suggestedActions[0],
-                        outcome: 'failure',
-                        failureType: cycleResult.blocker.kind,
-                    });
-
-                    // Verificar se ainda tem replan budget
-                    if (currentGoal.replanBudget <= 0) {
-                        this.goalStore.setStatus(currentGoal.id, 'failed');
-                        const explanation = this.evaluator.buildFailureExplanation(currentGoal);
-                        await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'failed', message: explanation });
-                        return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
-                    }
-
-                    // Stall detection — sem progresso real?
-                    const progress = this.evaluator.evaluateProgress(currentGoal);
-                    if (progress === 'regressing') {
-                        log.warn(`[GoalLoop] goal=${currentGoal.id} regressing — aborting`);
-                        this.goalStore.setStatus(currentGoal.id, 'failed');
-                        const explanation = this.evaluator.buildFailureExplanation(currentGoal);
-                        return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
-                    }
-
-                    // Replan com Espiral (Q1 + Q2 envolvem cada replanejamento)
-                    this.goalStore.update(currentGoal.id, {
-                        status: 'replanning',
-                        replanBudget: currentGoal.replanBudget - 1,
-                    });
-                    this.goalStore.addStrategyTried(currentGoal.id,
-                        pendingStep.description + (pendingStep.toolName ? ` via ${pendingStep.toolName}` : ''));
-
-                    priorFeedback = cycleResult.blocker?.description;
-                    currentGoal = await this.planWithSpiral(currentGoal, cycleResult.blocker!, priorFeedback, totalReplans + 1, state);
-                    totalReplans++;
+                case 'needs_dependency':
+                    outcomeHandled = await this.handleNeedsDependencyOutcome(
+                        currentGoal, pendingStep, cycleResult, totalCycles, totalReplans, priorFeedback, onProgress,
+                    );
                     break;
-                }
-
-                case 'failed': {
-                    // Sprint 0.6, Front B: preserva o blocker classificado por GoalEvaluator
-                    // antes desta falha ser tratada como terminal — sem isso, goal.blockers
-                    // ficava vazio mesmo em falhas definitivas (esgotamento de budget).
-                    if (cycleResult.blocker) {
-                        this.goalStore.recordBlocker(currentGoal.id, cycleResult.blocker);
-                    }
-                    this.goalStore.setStatus(currentGoal.id, 'failed');
-                    this.recordFailedStrategy(pendingStep, cycleResult.output ?? 'step falhou', currentGoal.id, state);
-                    this.updateProgressModel(pendingStep, 'failed', cycleResult.output, state);
-                    // cycleResult.output tem prioridade quando contém mensagem rica (ex: dep install falhou → instrução manual)
-                    const explanation = cycleResult.output ?? this.evaluator.buildFailureExplanation(currentGoal);
-                    await onProgress?.({ goalId: currentGoal.id, cycle: totalCycles, event: 'failed', message: explanation });
-                    return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
-                }
+                case 'blocked':
+                    outcomeHandled = await this.handleBlockedOutcome(
+                        currentGoal, pendingStep, cycleResult, totalCycles, totalReplans, priorFeedback, state, onProgress,
+                    );
+                    break;
+                case 'failed':
+                    outcomeHandled = await this.handleFailedOutcome(
+                        currentGoal, pendingStep, cycleResult, totalCycles, totalReplans, state, onProgress,
+                    );
+                    break;
             }
+            if (outcomeHandled.earlyReturn) return outcomeHandled.result;
+            currentGoal = outcomeHandled.goal;
+            totalReplans = outcomeHandled.totalReplans;
+            priorFeedback = outcomeHandled.priorFeedback;
 
             // Verificar TTL após cada ciclo
             if (Date.now() > currentGoal.expiresAt) {
@@ -1527,7 +1850,7 @@ export class GoalExecutionLoop {
         // Max cycles atingido — mas se todos os steps completaram, ainda roda a validação final.
         // Sem esta verificação, o goal falha mesmo quando o último step termina com sucesso
         // no mesmo ciclo em que MAX_CYCLES é atingido (a iteração de validação nunca roda).
-        const allStepsDone = !currentGoal.currentPlan.find(s => s.status === 'pending');
+        const allStepsDone = this.getPendingSteps(currentGoal.currentPlan).length === 0;
         if (allStepsDone) {
             log.info(`[GoalLoop] goal=${currentGoal.id} MAX_CYCLES=${GOAL_LIMITS.MAX_CYCLES} reached but all steps done — running final validation`);
             const activeMilestone = currentGoal.isConstruction && currentGoal.roadmap && currentGoal.roadmap.length > 0
@@ -1554,6 +1877,12 @@ export class GoalExecutionLoop {
 
     // ── Execução de um step ───────────────────────────────────────────────────
 
+    /**
+     * ARCH-022: orquestrador enxuto — dispatch (tool direta OU agentloop) + pós-processamento
+     * comum. Extraído de um único método de ~375 linhas sem mudar nenhuma lógica; ver os 4
+     * métodos privados abaixo dele (`recordFailedAttempt`, `dispatchToolStep`,
+     * `dispatchAgentloopStep`, `finalizeStepAttempt`) para onde cada pedaço foi.
+     */
     private async executeStep(
         goal: Goal,
         step: PlanStep,
@@ -1574,352 +1903,453 @@ export class GoalExecutionLoop {
             // A autorização real de ferramentas perigosas (exec_command, etc.) é gerida
             // corretamente pelo WorkflowEngine via AgentLoop — não precisa deste pre-flight.
 
-            let toolResult: { success: boolean; output: string; error?: string };
-            let stepMutations: import('./GoalTypes').ToolMutation[] | undefined;
-            let stepEvalForAttempt: { confidence: number; reason?: string } | undefined;
-            // Sprint 0.10 (achado L22): correlação com o ExecutionTrace do sub-turno agentloop,
-            // preenchida logo após `agentLoop.process()` resolver (ver mais abaixo). Ausente no
-            // caminho de tool direta (não passa por AgentLoop).
-            let agentloopTraceId: string | undefined;
-            let agentloopSubToolCalls: string[] | undefined;
-            // Sprint 0.8 (achados L10/L11/L14/L15): true por padrão — o caminho de tool direta
-            // (com toolName) é determinístico, sem heurística envolvida, sempre confiável.
-            // Só o caminho 'agentloop' abaixo pode rebaixar para false.
-            let stepSuccessConfident = true;
+            if (step.toolName) {
+                const { toolResult, stepMutations } = await this.dispatchToolStep(goal, step, step.toolName, channelContext, isAudioAlreadySent);
+                // Sprint 0.8: caminho de tool direta é determinístico, sem heurística — sempre confiável.
+                return this.finalizeStepAttempt(goal, step, channelContext, cycle, startMs, toolResult, {
+                    stepMutations,
+                    stepSuccessConfident: true,
+                    deferredSendArgs: [],
+                });
+            }
+
             // FIX C: acumulador de sends diferidos capturados do AgentLoop.
             // Usa Map<filePath, args> para deduplicar por artefato desde a captura.
             // Evita que o LLM chame send_document N vezes para o mesmo arquivo.
             const deferredSendArgsMap = new Map<string, Record<string, unknown>>();
             const deferredSendArgs: Array<Record<string, unknown>> = []; // view do Map (populado em sync)
 
-            if (step.toolName) {
-                // Execução via ToolRegistry com ProactiveRecovery (mutação de args + fallback)
-                // toolArgs pode ser undefined quando a tool não tem args obrigatórios — defaulta para {}
-                // Resolve referências {{step_N.output}} antes de executar (ex: write com content de exec anterior)
-                const resolvedArgs = this.resolveStepRefs(step.toolArgs ?? {}, goal);
-                const registered = this.toolRegistry.get(step.toolName);
-                log.info(
-                    `[TOOL-DISPATCH] goal=${goal.id} step=${step.id}` +
-                    ` requested_tool=${step.toolName}` +
-                    ` resolved_tool=${registered ? step.toolName : 'none'}` +
-                    ` reason=${registered ? 'tool_found_in_registry' : 'tool_not_registered'}` +
-                    ` args_provided=${step.toolArgs !== undefined}`
-                );
-                if (step.toolName === 'send_audio' && isAudioAlreadySent?.()) {
-                    // Mesmo guard já usado no caminho agentloop (AgentLoop.ts, checks de
-                    // channelContext.isAudioAlreadySent() antes de chamar send_audio). Esse
-                    // dispatch direto (step.toolName vindo de um replan do GoalPlanner, sem
-                    // passar por agentloop) nunca consultava o mesmo sinal — permitindo que um
-                    // replan por falha em OUTRO step (ex.: extração de PPTX) reenviasse áudio
-                    // já entregue com sucesso em um ciclo anterior do mesmo goal.
-                    log.info(
-                        `[DELIVERY-DEDUP] goal=${goal.id} step=${step.id}` +
-                        ` artifact="__send_audio_delivered__"` +
-                        ` reason=already_sent_in_goal_session` +
-                        ` decision=skip`
-                    );
-                    toolResult = { success: true, output: '🔊 Áudio já enviado nesta execução do objetivo — reenvio evitado.' };
-                } else if (!registered) {
-                    toolResult = { success: false, output: '', error: `command not found: ${step.toolName}` };
-                } else {
-                    const getTool = (name: string): ToolExecutorLike | undefined =>
-                        this.toolRegistry.get(name) as ToolExecutorLike | undefined;
-                    const toolInstance = registered;
-                    if (typeof (toolInstance as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
-                        (toolInstance as unknown as ContextAwareTool).setContext(channelContext.chatId, channelContext.channel);
-                    }
-                    const recoveryResult = await this.proactiveRecovery.execute(
-                        step.toolName, resolvedArgs, getTool, new Set<string>(),
-                        undefined,
-                        { toolsTried: goal.toolsTried, userIntent: goal.userIntent },
-                    );
-                    toolResult = recoveryResult.result;
-                    if (recoveryResult.recovered) {
-                        const kind = recoveryResult.mutationKind ?? 'arg_mutation';
-                        log.info('RECOVERY_OUTCOME',
-                            `goal=${goal.id} step=${step.id}` +
-                            ` tool=${recoveryResult.originalToolName ?? step.toolName}` +
-                            ` final_tool=${recoveryResult.finalToolName}` +
-                            ` mutation_kind=${kind}` +
-                            ` step_passed=${recoveryResult.result.success}`
-                        );
-                    }
-                    if (recoveryResult.recovered && recoveryResult.recoveryNote) {
-                        const kind = recoveryResult.mutationKind ?? 'arg_mutation';
-                        log.info(
-                            `[MUTATION] tool_mutation:\n  tool: ${recoveryResult.originalToolName ?? step.toolName}\n  kind: ${kind}\n` +
-                            `  original: ${JSON.stringify(recoveryResult.originalArgs ?? {})}\n` +
-                            `  modified: ${JSON.stringify(recoveryResult.finalArgs)}`
-                        );
-                        stepMutations = [{
-                            originalTool: recoveryResult.originalToolName ?? step.toolName,
-                            finalTool: recoveryResult.finalToolName,
-                            originalArgs: recoveryResult.originalArgs ?? resolvedArgs,
-                            finalArgs: recoveryResult.finalArgs,
-                            kind,
-                        }];
-                    }
-                }
-            } else {
-                // Sem tool específica → chama AgentLoop com prompt focado no step
-                const cognitiveBlock = this.buildIncrementalExecutionContext(goal, step, state);
-                const focusLine = goal.cycleFocus
-                    ? `\nFoco do ciclo: ${goal.cycleFocus}`
-                    : '';
-                const targetFile = this.extractTargetFileFromStep(step, goal);
-                const reflectionLine = targetFile
-                    ? `\n[REFLEXÃO] Arquivo alvo desta tarefa: ${targetFile}\nAntes de usar qualquer ferramenta, confirme que o arquivo corresponde ao alvo acima.`
-                    : '';
-                // C2: detectar intenções que requerem ação observável com dados reais.
-                // Se o step pede "mostrar", "listar", "apresentar", "enviar", etc.,
-                // o AgentLoop DEVE usar uma ferramenta — não produzir narrativa.
-                const OBSERVABLE_PATTERNS = [
-                    /\b(mostr[ae]r?|list[ae]r?|apresentar?|exibir?|visualizar?)\b/i,
-                    /\b(enviar?|exportar?|gerar? arquivo|mostrar? resultado)\b/i,
-                    /\b(apresente|liste|exiba|mostre|envie)\b/i,
-                ];
-                const requiresObservableExecution = OBSERVABLE_PATTERNS.some(p => p.test(step.description));
-                if (requiresObservableExecution) {
-                    log.info(
-                        `[AGENTLOOP-EVIDENCE-CHECK]` +
-                        ` step=${step.id}` +
-                        ` task="${step.description.slice(0, 80)}"` +
-                        ` requires_tool=true` +
-                        ` reason=observable_action_in_step_description`
-                    );
-                }
-                // Diretiva injetada no prompt: previne resposta narrativa quando há ação real a executar
-                const evidenceDirective = requiresObservableExecution
-                    ? `\n\n[REGRA DE EXECUÇÃO] Esta tarefa exige ação observável com dados reais. Chame obrigatoriamente uma ferramenta (list_workspace, read, exec_command, send_document, etc.) antes de responder. Não descreva o resultado sem executar a ferramenta que o produz.`
-                    : '';
+            const agentloopResult = await this.dispatchAgentloopStep(
+                goal, step, channelContext, cycle, state, startMs,
+                deferredSendArgsMap, deferredSendArgs, onArtifactDelivered, isAudioAlreadySent,
+            );
+            if (agentloopResult.earlyReturn) return agentloopResult.cycleResult;
 
-                const stepPrompt = [
-                    `[GOAL STEP] ${this.sanitizeStepDescription(step.description)}`,
-                    `\nContexto do objetivo: ${goal.objective}`,
-                    focusLine,
-                    reflectionLine,
-                    evidenceDirective,
-                    cognitiveBlock ? `\n${cognitiveBlock}` : '',
-                ].join('');
-                const { channel: goalCh, userId: sessionUserId } = parseSessionKey(goal.sessionKey);
-                const stepSessionKey = { channel: goalCh || 'unknown', userId: sessionUserId || goal.conversationId };
-                this.sessionManager?.resetTurnToolCounts(stepSessionKey);
-                // FIX C + P3-DEDUP: captura sends diferidos com deduplicação por file_path.
-                // deferSendDocument só aceita um artefato por caminho único nesta execução.
-                const goalChannelContext: ChannelContext = {
-                    ...channelContext,
-                    deferSendDocument: (args) => {
-                        const fp = String(args['file_path'] ?? args['path'] ?? '');
-                        const key = fp || JSON.stringify(args);
-                        if (deferredSendArgsMap.has(key)) {
-                            log.info(
-                                `[DELIVERY-DEDUP] artifact="${fp}"` +
-                                ` reason=duplicate_defer_in_agentloop` +
-                                ` existing_delivery=pending` +
-                                ` decision=skip`
-                            );
-                            return;
-                        }
-                        deferredSendArgsMap.set(key, args);
-                        deferredSendArgs.push(args);
-                        log.info(`[DELIVERY-REGISTRY] artifact="${fp}" status=deferred_registered`);
-                    },
-                    isDeferredArtifact: (filePath: string) => {
-                        return deferredSendArgsMap.has(filePath);
-                    },
-                    // CORREÇÃO 1: recebe notificação do DELIVERY-GUARD quando ele entrega
-                    // um artefato diretamente (sem passar pelo deferSendDocument).
-                    // Propaga para o caller (executeGoal) via onArtifactDelivered, que tem
-                    // acesso a sentArtifacts no escopo correto. Isso garante que o path
-                    // seja registrado antes que o SemanticValidator possa fazer downgrade
-                    // para 'partial', bloqueando S10 e causando reentregas redundantes.
-                    onArtifactDelivered: (filePath: string) => {
-                        if (filePath) {
-                            onArtifactDelivered?.(filePath);
-                            log.info(
-                                `[DELIVERY-GUARD-REGISTERED] goal=${goal.id}` +
-                                ` artifact="${filePath}"` +
-                                ` source=delivery_guard_callback`
-                            );
-                        }
-                    },
-                    isAudioAlreadySent: () => isAudioAlreadySent?.() ?? false,
-                };
-                const response = await this.agentLoop.process(
-                    goal.conversationId,
-                    stepPrompt,
-                    sessionUserId ?? goal.conversationId,
-                    goalChannelContext
-                );
-                const text = typeof response === 'string' ? response : response.text;
-                const respOptions = typeof response === 'string' ? undefined : response.options;
-
-                // Sprint 0.10 (achado L22): correlaciona o attempt com o ExecutionTrace real do
-                // sub-turno que acabou de rodar, sem duplicar seu conteúdo — só a referência
-                // (traceId, para pivotar em agent_traces/dashboard) e a sequência de nomes de
-                // tools chamadas (subToolCalls, decomposição mínima da "caixa-preta" agentloop
-                // direto no histórico do goal). traceManager.getRecentTraces() é o mesmo
-                // singleton que AgentLoop já usa para persistir/emitir os traces — reaproveitado
-                // aqui, nenhum mecanismo novo. Busca pelo mais recente com o mesmo
-                // conversationId (traces são unshift'ados, então o primeiro match já é o mais
-                // recente); se nada for encontrado (ex: trace pruned do buffer de 50), os campos
-                // ficam undefined — falha aberta, sem afetar o resultado do step.
-                const relatedTrace = traceManager.getRecentTraces(10).find(t => t.sessionId === goal.conversationId);
-                if (relatedTrace) {
-                    agentloopTraceId = relatedTrace.id;
-                    agentloopSubToolCalls = relatedTrace.steps
-                        .filter(s => s.type === 'tool_call')
-                        .map(s => String(s.data?.tool ?? '').trim())
-                        .filter(Boolean);
-                }
-
-                // Guarda de saída: step-name usado como path de arquivo (CR#5)
-                const invalidPath = this.detectStepNameAsPath(text);
-                if (invalidPath) {
-                    log.warn(`[GoalStep] step-name-as-path detected: "${invalidPath}" step=${step.id} — marking failure`);
-                    const errorMsg = `Path inválido na resposta: "${invalidPath}" é um identificador de step, não um arquivo.`;
-                    this.goalStore.addAttempt(goal.id, {
-                        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-                        planStepId: step.id,
-                        toolName: 'agentloop',
-                        args: {},
-                        result: 'failure',
-                        output: text.slice(0, 300),
-                        error: errorMsg,
-                        durationMs: Date.now() - startMs,
-                        executedAt: Date.now(),
-                        cycle,
-                    });
-                    return this.evaluator.evaluate(goal, step, { success: false, output: text, error: errorMsg });
-                }
-
-                // Se o AgentLoop retornou botões de auth, propaga como needs_auth
-                const authOpts = respOptions?.filter(o => o.value?.startsWith('auth:'));
-                if (authOpts && authOpts.length > 0) {
-                    this.goalStore.addAttempt(goal.id, {
-                        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-                        planStepId: step.id,
-                        toolName: 'agentloop',
-                        args: {},
-                        result: 'failure',
-                        output: text.slice(0, 300),
-                        durationMs: Date.now() - startMs,
-                        executedAt: Date.now(),
-                        cycle,
-                    });
-                    return { outcome: 'needs_auth' as const, confidence: 0.9, output: text, authOptions: authOpts };
-                }
-
-                // Heurística determinística avalia se o step teve sucesso
-                const stepEval = this.evaluateAgentStepSuccess(step, goal.objective, text);
-                let finalSuccess = stepEval.success;
-                // Sprint 0.8 (achados L10/L11/L14/L15): 'success_signal_detected' é o único
-                // motivo de sucesso de alta confiança da heurística (sinal explícito no texto).
-                // 'substantial_response' (fallback conservador "resposta longa, assume sucesso")
-                // NÃO é confiável — vira 'partial' abaixo, a menos que a escalada ao LLM confirme.
-                stepSuccessConfident = stepEval.reason === 'success_signal_detected';
-                if (stepEval.shouldEscalateToLLM) {
-                    log.info(`[GoalStep] heuristic inconclusive (conf=${stepEval.confidence.toFixed(2)}) — escalating to LLM`);
-                    const escalation = await this.escalateStepEvalToLLM(step, goal.objective, text);
-                    finalSuccess = escalation.success;
-                    stepSuccessConfident = escalation.confident;
-                }
-                stepEvalForAttempt = { confidence: stepEval.confidence, reason: stepEval.reason };
-                toolResult = { success: finalSuccess, output: text };
-            }
-
-            // Registrar attempt com auditoria completa (cycle, mutations, evaluation)
-            const attempt: GoalAttempt = {
-                id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-                planStepId: step.id,
-                toolName: step.toolName ?? 'agentloop',
-                args: step.toolArgs ?? {},
-                // Sprint 0.8 (achados L10/L11/L14/L15): 'success' só quando o resultado veio de
-                // um sinal confiável (tool determinística, sinal explícito, ou LLM que de fato
-                // confirmou) — caso contrário 'partial': a tarefa produziu output e não falhou
-                // explicitamente, mas a conclusão não foi confirmada com confiança suficiente
-                // para valer como evidência de sucesso (GoalEvaluator.ts:312 já trata 'partial'
-                // como progresso equivalente a 'success', só não como prova de conclusão).
-                result: !toolResult.success ? 'failure' : (stepSuccessConfident ? 'success' : 'partial'),
-                output: toolResult.output?.slice(0, 300),
-                error: toolResult.error,
-                durationMs: Date.now() - startMs,
-                executedAt: Date.now(),
-                cycle,
-                mutations: stepMutations,
-                evaluation: stepEvalForAttempt,
-                traceId: agentloopTraceId,
-                subToolCalls: agentloopSubToolCalls,
-            };
-            this.goalStore.addAttempt(goal.id, attempt);
-
-            // FIX #1: Alimenta SessionManager com resultado da tool para popular
-            // activeFiles e deliveredArtifacts — habilita contexto cross-goal de artefatos.
-            if (toolResult.success && step.toolName && this.sessionManager) {
-                const stepSessionKey = {
-                    channel: channelContext.channel,
-                    userId: channelContext.userId ?? goal.conversationId,
-                };
-                this.sessionManager.recordToolCall(
-                    stepSessionKey,
-                    step.toolName,
-                    JSON.stringify(step.toolArgs ?? {}),
-                ).catch(() => {});
-            }
-
-            if (step.toolName) {
-                this.goalStore.addToolTried(goal.id, step.toolName);
-            }
-
-            const cycleResult = this.evaluator.evaluate(goal, step, toolResult);
-            // FIX C: propaga sends diferidos capturados do AgentLoop para o loop principal
-            if (deferredSendArgs.length > 0) {
-                cycleResult.deferredSends = deferredSendArgs;
-                // S8: injeta pseudo-write attempts para artefatos criados pelo AgentLoop.
-                // Writes feitos dentro do AgentLoop são invisíveis para goal.attempts (a camada
-                // exterior só vê o step agentloop como attempt, não os writes internos).
-                // Sem isso, checkClaimsAgainstEvidence derruba achieved=true com [UNVERIFIED-CLAIM]
-                // mesmo quando o arquivo foi criado, DELIVERY-GUARD enviou e o usuário recebeu.
-                for (const sendArgs of deferredSendArgs) {
-                    const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
-                    if (!fp) continue;
-                    this.goalStore.addAttempt(goal.id, {
-                        id: `att_agentloop_write_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-                        planStepId: step.id,
-                        toolName: 'write',
-                        args: { path: fp },
-                        result: 'success',
-                        output: '[AGENTLOOP-WRITE] Arquivo gravado e entregue pelo AgentLoop',
-                        durationMs: 0,
-                        executedAt: Date.now(),
-                        cycle,
-                    });
-                }
-            }
-            const durationMs = Date.now() - startMs;
-            log.info(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'agentloop'} outcome=${cycleResult.outcome} durationMs=${durationMs}${cycleResult.blocker ? ` blocker=${cycleResult.blocker.kind}` : ''}${deferredSendArgs.length > 0 ? ` deferred_sends=${deferredSendArgs.length}` : ''}`);
-            return cycleResult;
+            return this.finalizeStepAttempt(goal, step, channelContext, cycle, startMs, agentloopResult.toolResult, {
+                stepEvalForAttempt: agentloopResult.stepEvalForAttempt,
+                stepSuccessConfident: agentloopResult.stepSuccessConfident,
+                agentloopTraceId: agentloopResult.agentloopTraceId,
+                agentloopSubToolCalls: agentloopResult.agentloopSubToolCalls,
+                deferredSendArgs,
+            });
 
         } catch (err) {
             const errorMsg = err instanceof Error ? err.message : String(err);
-            const durationMs = Date.now() - startMs;
-            const attempt: GoalAttempt = {
-                id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-                planStepId: step.id,
+            this.recordFailedAttempt(goal, step, cycle, startMs, {
+                error: errorMsg,
                 toolName: step.toolName ?? 'unknown',
                 args: step.toolArgs ?? {},
-                result: 'failure',
-                error: errorMsg,
-                durationMs,
-                executedAt: Date.now(),
-                cycle,
-            };
-            this.goalStore.addAttempt(goal.id, attempt);
-
+            });
             const cycleResult = this.evaluator.evaluate(goal, step, { success: false, output: '', error: errorMsg });
-            log.warn(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'unknown'} EXCEPTION durationMs=${durationMs} error="${errorMsg.slice(0, 100)}"`);
+            log.warn(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'unknown'} EXCEPTION durationMs=${Date.now() - startMs} error="${errorMsg.slice(0, 100)}"`);
             return cycleResult;
         }
+    }
+
+    /**
+     * ARCH-022: constrói e persiste um `GoalAttempt` de falha — usado pelos 3 pontos de
+     * `executeStep()` (guarda de step-name-as-path, catch de exceção) que registram uma
+     * tentativa mal-sucedida ANTES de decidir o outcome. A decisão do outcome em si
+     * (`evaluator.evaluate`, `needs_auth` direto, etc.) fica com o chamador, não aqui — os 4
+     * blocos que o card ARCH-022 descrevia como "quase idênticos" discordam sobre isso: o guard
+     * de auth (`needs_auth`) NUNCA chamava `evaluator.evaluate()` (retorna o outcome direto,
+     * sem classificação de erro/retry), os outros 3 sempre chamavam. Forçar os 4 num único
+     * helper que também decide o outcome teria mudado esse comportamento — por isso o guard de
+     * auth constrói seu attempt inline (ver `dispatchAgentloopStep`), não usa este helper.
+     */
+    private recordFailedAttempt(
+        goal: Goal,
+        step: PlanStep,
+        cycle: number,
+        startMs: number,
+        opts: { output?: string; error?: string; toolName?: string; args?: Record<string, unknown> },
+    ): void {
+        this.goalStore.addAttempt(goal.id, {
+            id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+            planStepId: step.id,
+            toolName: opts.toolName ?? 'agentloop',
+            args: opts.args ?? {},
+            result: 'failure',
+            output: opts.output,
+            error: opts.error,
+            durationMs: Date.now() - startMs,
+            executedAt: Date.now(),
+            cycle,
+        });
+    }
+
+    /**
+     * ARCH-022: dispatch de step com `toolName` definido — via ToolRegistry + ProactiveRecovery.
+     * Extraído do antigo bloco `if (step.toolName) { ... }` de `executeStep()`, sem mudança de
+     * lógica.
+     */
+    private async dispatchToolStep(
+        goal: Goal,
+        step: PlanStep,
+        toolName: string,
+        channelContext: ChannelContext,
+        isAudioAlreadySent?: () => boolean,
+    ): Promise<{
+        toolResult: { success: boolean; output: string; error?: string; artifactPaths?: string[] };
+        stepMutations?: import('./GoalTypes').ToolMutation[];
+    }> {
+        // Execução via ToolRegistry com ProactiveRecovery (mutação de args + fallback)
+        // toolArgs pode ser undefined quando a tool não tem args obrigatórios — defaulta para {}
+        // Resolve referências {{step_N.output}} antes de executar (ex: write com content de exec anterior)
+        const resolvedArgs = this.resolveStepRefs(step.toolArgs ?? {}, goal);
+        const registered = this.toolRegistry.get(toolName);
+        log.info(
+            `[TOOL-DISPATCH] goal=${goal.id} step=${step.id}` +
+            ` requested_tool=${toolName}` +
+            ` resolved_tool=${registered ? toolName : 'none'}` +
+            ` reason=${registered ? 'tool_found_in_registry' : 'tool_not_registered'}` +
+            ` args_provided=${step.toolArgs !== undefined}`
+        );
+        if (toolName === 'send_audio' && isAudioAlreadySent?.()) {
+            // Mesmo guard já usado no caminho agentloop (AgentLoop.ts, checks de
+            // channelContext.isAudioAlreadySent() antes de chamar send_audio). Esse
+            // dispatch direto (step.toolName vindo de um replan do GoalPlanner, sem
+            // passar por agentloop) nunca consultava o mesmo sinal — permitindo que um
+            // replan por falha em OUTRO step (ex.: extração de PPTX) reenviasse áudio
+            // já entregue com sucesso em um ciclo anterior do mesmo goal.
+            log.info(
+                `[DELIVERY-DEDUP] goal=${goal.id} step=${step.id}` +
+                ` artifact="__send_audio_delivered__"` +
+                ` reason=already_sent_in_goal_session` +
+                ` decision=skip`
+            );
+            return { toolResult: { success: true, output: '🔊 Áudio já enviado nesta execução do objetivo — reenvio evitado.' } };
+        }
+        if (!registered) {
+            return { toolResult: { success: false, output: '', error: `command not found: ${toolName}` } };
+        }
+        const getTool = (name: string): ToolExecutorLike | undefined =>
+            this.toolRegistry.get(name) as ToolExecutorLike | undefined;
+        const toolInstance = registered;
+        if (typeof (toolInstance as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
+            (toolInstance as unknown as ContextAwareTool).setContext(channelContext.chatId, channelContext.channel);
+        }
+        const recoveryResult = await this.proactiveRecovery.execute(
+            toolName, resolvedArgs, getTool, new Set<string>(),
+            undefined,
+            { toolsTried: goal.toolsTried, userIntent: goal.userIntent },
+        );
+        const toolResult = recoveryResult.result;
+        let stepMutations: import('./GoalTypes').ToolMutation[] | undefined;
+        if (recoveryResult.recovered) {
+            const kind = recoveryResult.mutationKind ?? 'arg_mutation';
+            log.info('RECOVERY_OUTCOME',
+                `goal=${goal.id} step=${step.id}` +
+                ` tool=${recoveryResult.originalToolName ?? toolName}` +
+                ` final_tool=${recoveryResult.finalToolName}` +
+                ` mutation_kind=${kind}` +
+                ` step_passed=${recoveryResult.result.success}`
+            );
+        }
+        if (recoveryResult.recovered && recoveryResult.recoveryNote) {
+            const kind = recoveryResult.mutationKind ?? 'arg_mutation';
+            log.info(
+                `[MUTATION] tool_mutation:\n  tool: ${recoveryResult.originalToolName ?? toolName}\n  kind: ${kind}\n` +
+                `  original: ${JSON.stringify(recoveryResult.originalArgs ?? {})}\n` +
+                `  modified: ${JSON.stringify(recoveryResult.finalArgs)}`
+            );
+            stepMutations = [{
+                originalTool: recoveryResult.originalToolName ?? toolName,
+                finalTool: recoveryResult.finalToolName,
+                originalArgs: recoveryResult.originalArgs ?? resolvedArgs,
+                finalArgs: recoveryResult.finalArgs,
+                kind,
+            }];
+        }
+        return { toolResult, stepMutations };
+    }
+
+    /**
+     * ARCH-022: dispatch de step sem `toolName` — via AgentLoop (sub-turno livre). Extraído do
+     * antigo bloco `else { ... }` de `executeStep()`, sem mudança de lógica. Retorna
+     * `earlyReturn: true` quando um dos 2 guards de saída dispara (step-name-as-path, botões de
+     * auth) — nesses 2 casos o chamador deve devolver `cycleResult` direto, sem passar por
+     * `finalizeStepAttempt()` (o guard de auth em particular nunca passou por
+     * `evaluator.evaluate()` — ver `recordFailedAttempt` para o porquê).
+     */
+    private async dispatchAgentloopStep(
+        goal: Goal,
+        step: PlanStep,
+        channelContext: ChannelContext,
+        cycle: number,
+        state: GoalExecutionState,
+        startMs: number,
+        deferredSendArgsMap: Map<string, Record<string, unknown>>,
+        deferredSendArgs: Array<Record<string, unknown>>,
+        onArtifactDelivered?: (filePath: string) => void,
+        isAudioAlreadySent?: () => boolean,
+    ): Promise<
+        | { earlyReturn: true; cycleResult: CycleResult }
+        | {
+            earlyReturn: false;
+            toolResult: { success: boolean; output: string; error?: string; artifactPaths?: string[] };
+            stepEvalForAttempt?: { confidence: number; reason?: string };
+            stepSuccessConfident: boolean;
+            agentloopTraceId?: string;
+            agentloopSubToolCalls?: string[];
+        }
+    > {
+        // Sem tool específica → chama AgentLoop com prompt focado no step
+        const cognitiveBlock = this.buildIncrementalExecutionContext(goal, step, state);
+        const focusLine = goal.cycleFocus
+            ? `\nFoco do ciclo: ${goal.cycleFocus}`
+            : '';
+        const targetFile = this.extractTargetFileFromStep(step, goal);
+        const reflectionLine = targetFile
+            ? `\n[REFLEXÃO] Arquivo alvo desta tarefa: ${targetFile}\nAntes de usar qualquer ferramenta, confirme que o arquivo corresponde ao alvo acima.`
+            : '';
+        // C2: detectar intenções que requerem ação observável com dados reais.
+        // Se o step pede "mostrar", "listar", "apresentar", "enviar", etc.,
+        // o AgentLoop DEVE usar uma ferramenta — não produzir narrativa.
+        const OBSERVABLE_PATTERNS = [
+            /\b(mostr[ae]r?|list[ae]r?|apresentar?|exibir?|visualizar?)\b/i,
+            /\b(enviar?|exportar?|gerar? arquivo|mostrar? resultado)\b/i,
+            /\b(apresente|liste|exiba|mostre|envie)\b/i,
+        ];
+        const requiresObservableExecution = OBSERVABLE_PATTERNS.some(p => p.test(step.description));
+        if (requiresObservableExecution) {
+            log.info(
+                `[AGENTLOOP-EVIDENCE-CHECK]` +
+                ` step=${step.id}` +
+                ` task="${step.description.slice(0, 80)}"` +
+                ` requires_tool=true` +
+                ` reason=observable_action_in_step_description`
+            );
+        }
+        // Diretiva injetada no prompt: previne resposta narrativa quando há ação real a executar
+        const evidenceDirective = requiresObservableExecution
+            ? `\n\n[REGRA DE EXECUÇÃO] Esta tarefa exige ação observável com dados reais. Chame obrigatoriamente uma ferramenta (list_workspace, read, exec_command, send_document, etc.) antes de responder. Não descreva o resultado sem executar a ferramenta que o produz.`
+            : '';
+
+        const stepPrompt = [
+            `[GOAL STEP] ${this.sanitizeStepDescription(step.description)}`,
+            `\nContexto do objetivo: ${goal.objective}`,
+            focusLine,
+            reflectionLine,
+            evidenceDirective,
+            cognitiveBlock ? `\n${cognitiveBlock}` : '',
+        ].join('');
+        const { channel: goalCh, userId: sessionUserId } = parseSessionKey(goal.sessionKey);
+        const stepSessionKey = { channel: goalCh || 'unknown', userId: sessionUserId || goal.conversationId };
+        this.sessionManager?.resetTurnToolCounts(stepSessionKey);
+        // FIX C + P3-DEDUP: captura sends diferidos com deduplicação por file_path.
+        // deferSendDocument só aceita um artefato por caminho único nesta execução.
+        const goalChannelContext: ChannelContext = {
+            ...channelContext,
+            deliveryTracking: {
+                deferSendDocument: (args) => {
+                    const fp = String(args['file_path'] ?? args['path'] ?? '');
+                    const key = fp || JSON.stringify(args);
+                    if (deferredSendArgsMap.has(key)) {
+                        log.info(
+                            `[DELIVERY-DEDUP] artifact="${fp}"` +
+                            ` reason=duplicate_defer_in_agentloop` +
+                            ` existing_delivery=pending` +
+                            ` decision=skip`
+                        );
+                        return;
+                    }
+                    deferredSendArgsMap.set(key, args);
+                    deferredSendArgs.push(args);
+                    log.info(`[DELIVERY-REGISTRY] artifact="${fp}" status=deferred_registered`);
+                },
+                isDeferredArtifact: (filePath: string) => {
+                    return deferredSendArgsMap.has(filePath);
+                },
+                // CORREÇÃO 1: recebe notificação do DELIVERY-GUARD quando ele entrega
+                // um artefato diretamente (sem passar pelo deferSendDocument).
+                // Propaga para o caller (executeGoal) via onArtifactDelivered, que tem
+                // acesso a sentArtifacts no escopo correto. Isso garante que o path
+                // seja registrado antes que o SemanticValidator possa fazer downgrade
+                // para 'partial', bloqueando S10 e causando reentregas redundantes.
+                onArtifactDelivered: (filePath: string) => {
+                    if (filePath) {
+                        onArtifactDelivered?.(filePath);
+                        log.info(
+                            `[DELIVERY-GUARD-REGISTERED] goal=${goal.id}` +
+                            ` artifact="${filePath}"` +
+                            ` source=delivery_guard_callback`
+                        );
+                    }
+                },
+                isAudioAlreadySent: () => isAudioAlreadySent?.() ?? false,
+            },
+        };
+        const response = await this.agentLoop.process(
+            goal.conversationId,
+            stepPrompt,
+            sessionUserId ?? goal.conversationId,
+            goalChannelContext
+        );
+        const text = typeof response === 'string' ? response : response.text;
+        const respOptions = typeof response === 'string' ? undefined : response.options;
+
+        // Sprint 0.10 (achado L22): correlaciona o attempt com o ExecutionTrace real do
+        // sub-turno que acabou de rodar, sem duplicar seu conteúdo — só a referência
+        // (traceId, para pivotar em agent_traces/dashboard) e a sequência de nomes de
+        // tools chamadas (subToolCalls, decomposição mínima da "caixa-preta" agentloop
+        // direto no histórico do goal). traceManager.getRecentTraces() é o mesmo
+        // singleton que AgentLoop já usa para persistir/emitir os traces — reaproveitado
+        // aqui, nenhum mecanismo novo. Busca pelo mais recente com o mesmo
+        // conversationId (traces são unshift'ados, então o primeiro match já é o mais
+        // recente); se nada for encontrado (ex: trace pruned do buffer de 50), os campos
+        // ficam undefined — falha aberta, sem afetar o resultado do step.
+        const relatedTrace = traceManager.getRecentTraces(10).find(t => t.sessionId === goal.conversationId);
+        let agentloopTraceId: string | undefined;
+        let agentloopSubToolCalls: string[] | undefined;
+        if (relatedTrace) {
+            agentloopTraceId = relatedTrace.id;
+            agentloopSubToolCalls = relatedTrace.steps
+                .filter(s => s.type === 'tool_call')
+                .map(s => String(s.data?.tool ?? '').trim())
+                .filter(Boolean);
+        }
+
+        // Guarda de saída: step-name usado como path de arquivo (CR#5)
+        const invalidPath = this.detectStepNameAsPath(text);
+        if (invalidPath) {
+            log.warn(`[GoalStep] step-name-as-path detected: "${invalidPath}" step=${step.id} — marking failure`);
+            const errorMsg = `Path inválido na resposta: "${invalidPath}" é um identificador de step, não um arquivo.`;
+            this.recordFailedAttempt(goal, step, cycle, startMs, { output: text.slice(0, 300), error: errorMsg });
+            return { earlyReturn: true, cycleResult: this.evaluator.evaluate(goal, step, { success: false, output: text, error: errorMsg }) };
+        }
+
+        // Se o AgentLoop retornou botões de auth, propaga como needs_auth
+        const authOpts = respOptions?.filter(o => o.value?.startsWith('auth:'));
+        if (authOpts && authOpts.length > 0) {
+            this.recordFailedAttempt(goal, step, cycle, startMs, { output: text.slice(0, 300) });
+            return { earlyReturn: true, cycleResult: { outcome: 'needs_auth' as const, confidence: 0.9, output: text, authOptions: authOpts } };
+        }
+
+        // Heurística determinística avalia se o step teve sucesso
+        const stepEval = this.evaluateAgentStepSuccess(step, goal.objective, text);
+        let finalSuccess = stepEval.success;
+        // Sprint 0.8 (achados L10/L11/L14/L15): 'success_signal_detected' é o único
+        // motivo de sucesso de alta confiança da heurística (sinal explícito no texto).
+        // 'substantial_response' (fallback conservador "resposta longa, assume sucesso")
+        // NÃO é confiável — vira 'partial' abaixo, a menos que a escalada ao LLM confirme.
+        let stepSuccessConfident = stepEval.reason === 'success_signal_detected';
+        if (stepEval.shouldEscalateToLLM) {
+            log.info(`[GoalStep] heuristic inconclusive (conf=${stepEval.confidence.toFixed(2)}) — escalating to LLM`);
+            const escalation = await this.escalateStepEvalToLLM(step, goal.objective, text);
+            finalSuccess = escalation.success;
+            stepSuccessConfident = escalation.confident;
+        }
+        const stepEvalForAttempt = { confidence: stepEval.confidence, reason: stepEval.reason };
+        const toolResult = { success: finalSuccess, output: text };
+
+        return { earlyReturn: false, toolResult, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls };
+    }
+
+    /**
+     * ARCH-022: pós-processamento comum aos 2 caminhos de dispatch (tool direto e agentloop) —
+     * registra o `GoalAttempt` real do ciclo (com toda a auditoria: mutations, evaluation,
+     * trace, artefatos), alimenta SessionManager/toolsTried, avalia o outcome via GoalEvaluator,
+     * e injeta os sends diferidos capturados durante um sub-turno agentloop (lista vazia no
+     * caminho de tool direto). Extraído do antigo bloco final de `executeStep()`, sem mudança
+     * de lógica.
+     */
+    private finalizeStepAttempt(
+        goal: Goal,
+        step: PlanStep,
+        channelContext: ChannelContext,
+        cycle: number,
+        startMs: number,
+        toolResult: { success: boolean; output: string; error?: string; artifactPaths?: string[] },
+        opts: {
+            stepMutations?: import('./GoalTypes').ToolMutation[];
+            stepEvalForAttempt?: { confidence: number; reason?: string };
+            stepSuccessConfident: boolean;
+            agentloopTraceId?: string;
+            agentloopSubToolCalls?: string[];
+            deferredSendArgs: Array<Record<string, unknown>>;
+        },
+    ): CycleResult {
+        const { stepMutations, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls, deferredSendArgs } = opts;
+
+        // Registrar attempt com auditoria completa (cycle, mutations, evaluation)
+        const attempt: GoalAttempt = {
+            id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+            planStepId: step.id,
+            toolName: step.toolName ?? 'agentloop',
+            args: step.toolArgs ?? {},
+            // Sprint 0.8 (achados L10/L11/L14/L15): 'success' só quando o resultado veio de
+            // um sinal confiável (tool determinística, sinal explícito, ou LLM que de fato
+            // confirmou) — caso contrário 'partial': a tarefa produziu output e não falhou
+            // explicitamente, mas a conclusão não foi confirmada com confiança suficiente
+            // para valer como evidência de sucesso (GoalEvaluator.ts:312 já trata 'partial'
+            // como progresso equivalente a 'success', só não como prova de conclusão).
+            result: !toolResult.success ? 'failure' : (stepSuccessConfident ? 'success' : 'partial'),
+            output: toolResult.output?.slice(0, 300),
+            error: toolResult.error,
+            durationMs: Date.now() - startMs,
+            executedAt: Date.now(),
+            cycle,
+            mutations: stepMutations,
+            evaluation: stepEvalForAttempt,
+            traceId: agentloopTraceId,
+            subToolCalls: agentloopSubToolCalls,
+            producedArtifactPaths: toolResult.artifactPaths,
+        };
+        this.goalStore.addAttempt(goal.id, attempt);
+
+        // FIX #1: Alimenta SessionManager com resultado da tool para popular
+        // activeFiles e deliveredArtifacts — habilita contexto cross-goal de artefatos.
+        if (toolResult.success && step.toolName && this.sessionManager) {
+            const stepSessionKey = {
+                channel: channelContext.channel,
+                userId: channelContext.userId ?? goal.conversationId,
+            };
+            this.sessionManager.recordToolCall(
+                stepSessionKey,
+                step.toolName,
+                JSON.stringify(step.toolArgs ?? {}),
+            ).catch(() => {});
+        }
+
+        if (step.toolName) {
+            this.goalStore.addToolTried(goal.id, step.toolName);
+        }
+
+        const cycleResult = this.evaluator.evaluate(goal, step, toolResult);
+        // FIX C: propaga sends diferidos capturados do AgentLoop para o loop principal
+        if (deferredSendArgs.length > 0) {
+            cycleResult.deferredSends = deferredSendArgs;
+            // S8: injeta pseudo-write attempts para artefatos criados pelo AgentLoop.
+            // Writes feitos dentro do AgentLoop são invisíveis para goal.attempts (a camada
+            // exterior só vê o step agentloop como attempt, não os writes internos).
+            // Sem isso, checkClaimsAgainstEvidence derruba achieved=true com [UNVERIFIED-CLAIM]
+            // mesmo quando o arquivo foi criado, DELIVERY-GUARD enviou e o usuário recebeu.
+            for (const sendArgs of deferredSendArgs) {
+                const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
+                if (!fp) continue;
+                // toolName='send_document', não 'write': deferredSendArgs só é populado por
+                // deferSendDocument() (send_document interceptado dentro do AgentLoop) — o
+                // pseudo-attempt original gravava 'write', mascarando esta entrega de um
+                // consumidor que filtre goal.attempts por toolName==='send_document'
+                // (achado ao validar a hipótese de captura única, 16/07/2026).
+                this.goalStore.addAttempt(goal.id, {
+                    id: `att_agentloop_write_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+                    planStepId: step.id,
+                    toolName: 'send_document',
+                    args: { file_path: fp },
+                    result: 'success',
+                    output: '[AGENTLOOP-WRITE] Arquivo gravado e entregue pelo AgentLoop',
+                    durationMs: 0,
+                    executedAt: Date.now(),
+                    cycle,
+                    producedArtifactPaths: [fp],
+                });
+            }
+        }
+        const durationMs = Date.now() - startMs;
+        log.info(`[GoalStep] goal=${goal.id} step=${step.id} tool=${step.toolName ?? 'agentloop'} outcome=${cycleResult.outcome} durationMs=${durationMs}${cycleResult.blocker ? ` blocker=${cycleResult.blocker.kind}` : ''}${deferredSendArgs.length > 0 ? ` deferred_sends=${deferredSendArgs.length}` : ''}`);
+        return cycleResult;
     }
 
     // ── Step arg template resolution ─────────────────────────────────────────────
@@ -2141,12 +2571,8 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
         step: PlanStep,
         output: string,
         attemptRecording: 'add' | 'skip' | 'finalize' = 'add',
+        producedArtifactPaths?: string[],
     ): void {
-        const updatedPlan = goal.currentPlan.map(s =>
-            s.id === step.id ? { ...s, status: 'completed' as const, result: output.slice(0, 200), executedAt: Date.now() } : s
-        );
-        this.goalStore.update(goal.id, { currentPlan: updatedPlan });
-
         // Após instalação bem-sucedida de dependência, invalida tools + execution
         // para que o próximo replan detecte a ferramenta recém-instalada.
         if (step.id.startsWith('install_')) {
@@ -2178,6 +2604,7 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
                 output: output.slice(0, 300),
                 durationMs: 0,
                 executedAt: Date.now(),
+                producedArtifactPaths,
             });
         } else if (attemptRecording === 'finalize') {
             this.goalStore.finalizeLastAttemptAsSuccess(goal.id, step.id, output);
@@ -2188,6 +2615,18 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
                 reflectionConfidence = existing.evaluation?.confidence ?? 0.9;
             }
         }
+
+        // ARCH-007: status='completed' é só o eixo de progressão do plano (não será
+        // redespachado) — lastAttemptOutcome carrega a confiança REAL (reflectionOutcome já
+        // resolvida acima, incluindo o caso 'skip' que lê o attempt de fato gravado por
+        // executeStep()), tornando explícita a divergência que antes só existia dentro de
+        // goal.attempts, invisível a partir do PlanStep.
+        const updatedPlan = goal.currentPlan.map(s =>
+            s.id === step.id
+                ? { ...s, status: 'completed' as const, result: output.slice(0, 200), executedAt: Date.now(), lastAttemptOutcome: reflectionOutcome }
+                : s
+        );
+        this.goalStore.update(goal.id, { currentPlan: updatedPlan });
 
         // Registra na ReflectionMemory.
         // IMPORTANTE: o pattern deve ser `tool_${toolName}` (sem sufixo _success) para que a
@@ -2802,10 +3241,21 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
 
             switch (criterion.check) {
                 case 'tool_succeeded': {
-                    if (relevant.length > 0) {
+                    // ARCH-012: um send_document bem-sucedido de QUALQUER arquivo não prova que o
+                    // arquivo CERTO foi entregue — mesma checagem de tipo que já existe em
+                    // checkClaimsAgainstEvidence (fechando o bug de 09/07, .py aceito no lugar de
+                    // .pptx) precisa valer aqui também, senão este caminho mais rápido (roda ANTES
+                    // do LLM validador) esconde o mesmo problema que a checagem lenta pega.
+                    const typeMatched = criterion.tool === 'send_document'
+                        ? relevant.filter(a => isExpectedDeliverableFile(
+                            goal.userIntent,
+                            String(a.args?.['file_path'] ?? a.args?.['path'] ?? ''),
+                        ))
+                        : relevant;
+                    if (typeMatched.length > 0) {
                         criterion.status = 'met';
                         criterion.metAt = Date.now();
-                        criterion.evidence = relevant[relevant.length - 1].output?.slice(0, 120);
+                        criterion.evidence = typeMatched[typeMatched.length - 1].output?.slice(0, 120);
                     } else {
                         criterion.status = 'unverifiable';
                     }
@@ -3235,22 +3685,20 @@ OU
         const DELIVERY_TOOLS = new Set(['write', 'exec_command', 'send_document', 'send_audio']);
         let claimsChecked = 0;
 
-        // "Algo foi enviado" não é o mesmo que "o que foi pedido foi enviado". Reusa
-        // inferExpectedExtensions — o mesmo sinal estrutural já usado pelo deliverable_check
-        // logo abaixo neste arquivo — para exigir que o artefato de fato enviado via
-        // send_document tenha a extensão esperada pelo pedido original, em vez de aceitar
-        // qualquer arquivo que tenha passado por send_document/sentArtifacts na execução do
-        // goal. Reproduzido ao vivo em 09/07: um script .py (código-fonte, não executado
-        // ainda) foi enviado por engano via callback do DELIVERY-GUARD, e o evidence-checker
-        // aceitava isso como prova de "PPTX editável enviado" só porque sentArtifacts não
-        // estava vazio — mesma classe de bug que a fabricação de um .md de "resumo de
-        // entrega" em vez do arquivo pedido (goal_incomplete → decoy) — ver
-        // project_session_bugs_jul2026_ap. Quando o intent não permite inferir uma extensão
-        // esperada (goal sem tipo de arquivo específico), não restringe — mantém o
-        // comportamento permissivo original.
-        const expectedExts = this.inferExpectedExtensions(goal.userIntent);
+        // "Algo foi enviado" não é o mesmo que "o que foi pedido foi enviado". Exige que o
+        // artefato de fato enviado via send_document tenha a extensão esperada pelo pedido
+        // original, em vez de aceitar qualquer arquivo que tenha passado por
+        // send_document/sentArtifacts na execução do goal. Reproduzido ao vivo em 09/07: um
+        // script .py (código-fonte, não executado ainda) foi enviado por engano via callback do
+        // DELIVERY-GUARD, e o evidence-checker aceitava isso como prova de "PPTX editável
+        // enviado" só porque sentArtifacts não estava vazio — mesma classe de bug que a
+        // fabricação de um .md de "resumo de entrega" em vez do arquivo pedido (goal_incomplete
+        // → decoy) — ver project_session_bugs_jul2026_ap. ARCH-012: extraído para
+        // isExpectedDeliverableFile() (planning/inferExpectedExtensions.ts) — a mesma checagem
+        // agora também vale em evaluateCriteria()/structuralBypass, que antes não a tinham.
+        const expectedExts = inferExpectedExtensions(goal.userIntent); // só para o log abaixo
         const matchesExpectedType = (filePath: string): boolean =>
-            expectedExts.length === 0 || expectedExts.some(ext => filePath.toLowerCase().endsWith(ext));
+            isExpectedDeliverableFile(goal.userIntent, filePath);
 
         for (const rule of CLAIM_RULES) {
             if (!rule.pattern.test(llmSummary)) continue;
@@ -3302,9 +3750,7 @@ OU
                 // Step pendente que satisfará esta claim já está no plano — não bloquear.
                 // Evita deadlock onde readyToValidate=true (só send_document pendente) mas
                 // a evidência ainda não existe porque o step ainda não foi despachado.
-                const hasPendingEvidence = goal.currentPlan.some(
-                    s => s.status === 'pending' && rule.requiredTools.includes(s.toolName ?? '')
-                );
+                const hasPendingEvidence = this.getPendingSteps(goal.currentPlan, rule.requiredTools).length > 0;
                 if (hasPendingEvidence) {
                     log.info(
                         `[VALIDATION-EVIDENCE]` +
@@ -3357,32 +3803,6 @@ OU
     private isModificationGoal(userIntent: string): boolean {
         return /\b(modificar|modific|editar|edi[tç]|reorganizar|reorgani[zs]|corrigir|corrij|atualizar|atuali[zs]|converter|convert|dividir|divid|reformular|reformul|melhorar|melhore?|ajustar|ajust|reescrever|reescrev|revisar|revis)\b/i
             .test(userIntent);
-    }
-
-    /**
-     * Infere extensões esperadas a partir das palavras-chave do userIntent.
-     * Retorna lista vazia se não há tipo de arquivo identificável.
-     */
-    private inferExpectedExtensions(userIntent: string): string[] {
-        const lower = userIntent.toLowerCase();
-        const exts: string[] = [];
-        if (/pptx|apresenta|slides?|powerpoint/i.test(lower))  exts.push('.pptx', '.ppt');
-        if (/pdf/i.test(lower))                                 exts.push('.pdf');
-        if (/docx?|word|documento/i.test(lower))               exts.push('.docx', '.doc');
-        if (/xlsx?|excel|planilha/i.test(lower))               exts.push('.xlsx', '.xls');
-        if (/mp4|vídeo|video/i.test(lower))                    exts.push('.mp4', '.avi', '.mkv');
-        if (/mp3|áudio|audio/i.test(lower))                    exts.push('.mp3', '.ogg', '.wav');
-        if (/html|página|pagina/i.test(lower))                 exts.push('.html');
-        if (/zip|comprim/i.test(lower))                        exts.push('.zip');
-        // Imagens só são entregáveis se o objetivo explícito for produzir imagens.
-        // Excluir quando o intent contém marcadores de VisionHandler ("[IMAGEM RECEBIDA:")
-        // ou quando o intent menciona slides/pptx (foto enviada como feedback, não entregável).
-        const isImageDeliveryIntent =
-            /png|jpg|jpeg|imagem|image/i.test(lower) &&
-            !lower.includes('[imagem recebida:') &&
-            !/slides?|pptx|apresenta|powerpoint/i.test(lower);
-        if (isImageDeliveryIntent) exts.push('.png', '.jpg', '.jpeg');
-        return exts;
     }
 
     /**

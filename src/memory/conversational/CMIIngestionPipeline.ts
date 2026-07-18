@@ -15,7 +15,7 @@ import { TranscriptEntry } from '../../session/SessionTranscript';
 import { BufferState, ChunkCutTrigger, ChunkMessage, ConversationChunk } from './cmiTypes';
 import { createDomainClassifierLLM, type DomainClassifierLLM } from '../DomainRegistry';
 import { createLogger } from '../../shared/AppLogger';
-import { extractText } from '../../loop/ResponseAdapter';
+import { extractText } from '../../shared/extractText';
 
 const log = createLogger('CMIIngestionPipeline');
 

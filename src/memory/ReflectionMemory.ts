@@ -14,8 +14,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { permissionRegistry } from '../core/PermissionRegistry';
 import type { MemoryManager } from './MemoryManager';
-import type { AttemptOutcome, BlockerKind } from '../loop/GoalTypes';
-import type { IntentCategory } from '../loop/UnifiedIntentRouter';
+import type { AttemptOutcome, BlockerKind, IntentCategory } from '../shared/domainTypes';
 
 const log = createLogger('ReflectionMemory');
 

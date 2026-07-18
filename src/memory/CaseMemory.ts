@@ -68,8 +68,8 @@ import type { Database } from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
 import type { MemoryManager } from './MemoryManager';
 import type { EmbeddingService } from './EmbeddingService';
-import type { Goal, PlanStep } from '../loop/GoalTypes';
-import { StrategyDiversityGuard } from '../loop/StrategyDiversityGuard';
+import type { Goal, PlanStep } from '../shared/domainTypes';
+import { StrategyDiversityGuard } from '../shared/StrategyDiversityGuard';
 
 const log = createLogger('CaseMemory');
 

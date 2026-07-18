@@ -1,4 +1,4 @@
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import path from 'path';
 import fs from 'fs';
 import { resolvePath } from '../utils/crossPlatform';
@@ -13,6 +13,8 @@ const log = createLogger('SendDocumentTool');
 export class SendDocumentTool implements ToolExecutor {
     name = 'send_document';
     description = 'Enviar um arquivo como documento ao usuário. Suporta Telegram, Discord e o chat do Dashboard web. Caminhos relativos são resolvidos a partir do workspace.';
+    // ARCH-015 (S26): texto co-localizado, agregado por GoalPlanner.buildRequiredArgsReference().
+    requiredArgsHint = '- send_document: SEMPRE forneça file_path com o caminho completo do arquivo. Nunca chame send_document sem file_path.';
     parameters = {
         type: 'object',
         properties: {

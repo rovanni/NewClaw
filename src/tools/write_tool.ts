@@ -6,7 +6,7 @@
  * Segurança: block self-editing + sandbox boundary.
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import fs from 'fs';
 import path from 'path';
 import { resolvePath, selfEditError } from '../utils/crossPlatform';
@@ -14,6 +14,7 @@ import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
 import { PLACEHOLDER_ARG_PATTERN as PATH_PLACEHOLDER_PATTERN } from '../shared/placeholderPatterns';
 import { CONTENT_STUB_PATTERNS } from '../shared/contentStubPatterns';
+import { MIN_DELIVERABLE_SIZE } from '../loop/planning/artifactContract';
 
 const log = createLogger('WriteTool');
 
@@ -153,6 +154,12 @@ export class WriteTool implements ToolExecutor {
                 ` overwrite=${existed} append=false` +
                 (existed && chars < charsBefore ? ` ⚠️ DESTRUTIVO chars_delta=${chars - charsBefore}` : '')
             );
+            // Mesma régua de confiança que exec_command aplica às declarações ARTIFACT: (Sprint
+            // F2, revisão de código pós-piloto) — sem isso, um write de conteúdo curto (não
+            // capturado por CONTENT_STUB_PATTERNS, que é só regex, sem limiar de tamanho)
+            // populava artifactPaths incondicionalmente, tratado como evidência igualmente
+            // confiável à de exec_command mesmo sem passar pela mesma verificação.
+            const isSubstantive = fs.statSync(finalPath).size >= MIN_DELIVERABLE_SIZE;
             return {
                 success: true,
                 output: [
@@ -162,6 +169,7 @@ export class WriteTool implements ToolExecutor {
                     '[ARTEFATO REGISTRADO] O arquivo existe e contém conteúdo.',
                     'Se o objetivo desta etapa foi gerar este arquivo, prossiga para a próxima ferramenta sem reescrever.',
                 ].join('\n'),
+                ...(isSubstantive ? { artifactPaths: [finalPath] } : {}),
             };
         } catch (error) {
             return { success: false, output: '', error: errorMessage(error) };

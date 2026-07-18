@@ -9,7 +9,7 @@
  * - Ocultação de IDs internos do usuário final
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
 import { errorMessage } from '../shared/errors';
 

@@ -178,6 +178,7 @@ export class WorkflowEngine {
                 output: result.output ?? '',
                 decision: 'approved',
                 error: result.error,
+                artifactPaths: result.artifactPaths,
                 continuationCtx: {
                     ...txn.continuationCtx,
                     metadata: {

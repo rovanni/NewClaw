@@ -1,4 +1,4 @@
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { errorMessage } from '../shared/errors';
 
 export class ApiRequestTool implements ToolExecutor {

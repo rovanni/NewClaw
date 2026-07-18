@@ -71,9 +71,18 @@ async function main() {
     const execCommandSource = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'exec_command.ts'), 'utf-8');
     const executeBody = execCommandSource.slice(execCommandSource.indexOf('async execute('));
 
-    for (const fn of ['isMarpWithoutInputFile', 'isPandocWithoutInputFile', 'needsPowerShellWrap']) {
+    for (const fn of ['isMarpWithoutInputFile', 'isPandocWithoutInputFile']) {
         assert(executeBody.includes(fn + '('), `execute() chama ${fn}() incondicionalmente`);
     }
+    // ARCH-023 (17/07/2026): needsPowerShellWrap() não é mais chamado diretamente dentro do
+    // corpo textual de execute() — vive na condition() de COMMAND_FIXUP_PIPELINE (mesmo
+    // arquivo, definida logo acima da classe), que execute() consome via applyFixup(). A prova
+    // de "não gateado por isComplexPlan/RiskAnalyzer" agora é: (a) a função e o pipeline vivem
+    // neste arquivo, não em RiskAnalyzer.ts/GoalExecutionLoop.ts; (b) execute() chama
+    // applyFixup('wrap_powershell', ...) incondicionalmente (sem nenhum `if isComplexPlan`
+    // ao redor).
+    assert(execCommandSource.includes('needsPowerShellWrap('), 'needsPowerShellWrap() é referenciado neste arquivo (não em RiskAnalyzer.ts/GoalExecutionLoop.ts)');
+    assert(executeBody.includes("applyFixup('wrap_powershell'"), "execute() chama applyFixup('wrap_powershell', ...) incondicionalmente");
 
     const goalExecutionLoopSource = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'GoalExecutionLoop.ts'), 'utf-8');
     assert(

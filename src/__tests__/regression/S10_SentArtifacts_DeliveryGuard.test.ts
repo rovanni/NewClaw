@@ -69,9 +69,15 @@ assert(
 
 console.log('\n=== S10 — deliverable_check não reagenda arquivo que já tem send pendente ===');
 
+// ARCH-005 (S16, 2026-07-18): a comparação passou a usar sentArtifactsResolved (paths
+// normalizados via resolvePath()) em vez de sentArtifacts bruto — corrige um mismatch onde
+// um arquivo já enviado por path relativo não era reconhecido contra o path absoluto que
+// checkDeliverables() retorna (ver S121). A asserção agora prende o NOME da variável
+// resolvida, não mais o Set bruto, para não prender de novo num detalhe de implementação
+// que este próprio card já mudou uma vez.
 assert(
-    /pendingSendPaths/.test(loopSource) && /!sentArtifacts\.has\(f\) && !pendingSendPaths\.has\(f\)/.test(loopSource),
-    'deliverable_check exclui arquivos com send_document pendente no currentPlan (não só sentArtifacts)',
+    /pendingSendPaths/.test(loopSource) && /!sentArtifactsResolved\.has\(f\) && !pendingSendPaths\.has\(f\)/.test(loopSource),
+    'deliverable_check exclui arquivos com send_document pendente no currentPlan e arquivos já enviados (via path normalizado, não só sentArtifacts bruto)',
 );
 
 // ── Teste 4: simulação — sentArtifacts só recebe o que foi REALMENTE entregue ──

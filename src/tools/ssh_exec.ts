@@ -6,7 +6,7 @@
  *           Uses -i to specify the SSH key explicitly.
  */
 
-import { ToolExecutor, ToolResult } from '../loop/AgentLoop';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { exec } from 'child_process';
 import { resolveHost, isDestructive } from './server_config';
 import { createLogger } from '../shared/AppLogger';

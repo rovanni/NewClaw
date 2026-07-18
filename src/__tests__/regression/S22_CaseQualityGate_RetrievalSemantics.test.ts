@@ -28,7 +28,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
 import { CaseMemory } from '../../memory/CaseMemory';
-import { StrategyDiversityGuard } from '../../loop/StrategyDiversityGuard';
+import { StrategyDiversityGuard } from '../../shared/StrategyDiversityGuard';
 import { Goal, PlanStep, GoalBlocker } from '../../loop/GoalTypes';
 
 let passed = 0;
@@ -85,7 +85,7 @@ function blocker(kind: GoalBlocker['kind']): GoalBlocker {
 }
 
 async function main() {
-    const guardSrc = readSource('loop/StrategyDiversityGuard.ts');
+    const guardSrc = readSource('shared/StrategyDiversityGuard.ts');
 
     // ══════════ Pergunta 1 — semântica real do fingerprint (auditoria, sem alterar) ══════════
     console.log('\n=== S22.P1 — Auditoria da implementação real de StrategyDiversityGuard.fingerprint() ===');
