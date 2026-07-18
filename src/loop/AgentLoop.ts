@@ -115,6 +115,40 @@ export interface DecisionContext {
 }
 
 /**
+ * ARCH-019 (S25, Incremento 1): snapshot somente-leitura do estado do turno, usado por
+ * `logTurnDiagnostics()` — extraído do bloco "Structured turn diagnostics" de
+ * `runWithTools()`. Nenhum campo é mutado pelo método; é só um agrupamento nomeado dos ~20
+ * sinais soltos que o bloco original lia via closure, evitando 25 parâmetros posicionais.
+ */
+interface TurnDiagnosticsInput {
+    stepCount: number;
+    executionMode: string;
+    maxSteps: number;
+    decisionCtx: DecisionContext;
+    getContextChars: () => number;
+    initialContextChars: number;
+    toolTypeCallCount: Map<string, number>;
+    groupCallCount: Map<string, number>;
+    cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>;
+    maxSameToolCalls: number;
+    totalToolCalls: number;
+    consecutiveToolFailures: number;
+    toolFailureCount: number;
+    totalThinkingChars: number;
+    guardsTriggered: number;
+    dedupAbortTool: string;
+    memoryFirstInjected: boolean;
+    toolFailureHintInjected: boolean;
+    toolFailureHintFirstStep: number | null;
+    toolSuccessHintInjected: boolean;
+    toolSuccessHintFirstStep: number | null;
+    observerFeedbackInjected: boolean;
+    observerFeedbackFirstStep: number | null;
+    reflectionHintInjected: boolean;
+    intentCategory: string;
+}
+
+/**
  * Queries whose answers are likely to be volatile even when in memory.
  * Applied generically — not specific to any entity, currency, or domain.
  * Pattern: financial prices, weather, news, legal changes, real-time data.
@@ -1111,6 +1145,161 @@ export class AgentLoop {
         this.persistTrace(trace, 1, 'completed', finalText, channelContext);
 
         return { text: await this.commitResponse(finalText, userText, trace.id, conversationId) };
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 1): "Structured turn diagnostics" extraído de `runWithTools()`
+     * sem mudar lógica. Bloco puramente de LEITURA — computa métricas derivadas do turno
+     * inteiro e emite um único log `[TURN-DIAGNOSTICS]`; não muta nenhum estado do chamador,
+     * por isso não precisa de nenhum valor de retorno (diferente dos handlers extraídos em
+     * ARCH-020/S24, que sempre precisavam devolver estado atualizado).
+     */
+    private logTurnDiagnostics(input: TurnDiagnosticsInput): void {
+        const {
+            stepCount, executionMode, maxSteps, decisionCtx, getContextChars, initialContextChars,
+            toolTypeCallCount, groupCallCount, cycleHistory, maxSameToolCalls: MAX_SAME_TOOL_CALLS,
+            totalToolCalls, consecutiveToolFailures, toolFailureCount, totalThinkingChars,
+            guardsTriggered, dedupAbortTool, memoryFirstInjected, toolFailureHintInjected,
+            toolFailureHintFirstStep, toolSuccessHintInjected, toolSuccessHintFirstStep,
+            observerFeedbackInjected, observerFeedbackFirstStep, reflectionHintInjected,
+            intentCategory,
+        } = input;
+
+        const finalContextChars = getContextChars();
+        const finalGrowthRatio  = initialContextChars > 0 ? finalContextChars / initialContextChars : 1;
+        const maxSameToolCalls  = toolTypeCallCount.size > 0 ? Math.max(...toolTypeCallCount.values()) : 0;
+        const maxGroupCalls     = groupCallCount.size   > 0 ? Math.max(...groupCallCount.values())    : 0;
+
+        // ── Sprint 3.5A: Decision Impact Telemetry ──────────────────────────
+        const externalSearchTools = new Set(['web_search', 'web_navigate', 'weather']);
+
+        // eligible = condition was met; injected = hint was actually pushed to loopMessages
+        // eligible=true + injected=false → regression/bug
+        const memoryFirstEligible = decisionCtx.requiresMemoryFirst;
+
+        // compliance: was the hint followed? (derived from cycleHistory with step info)
+        const step1Entries       = cycleHistory.filter(h => h.step === 1);
+        const step1HasMemory     = step1Entries.some(h => h.tool === 'memory_search');
+        const step1HasExternal   = step1Entries.some(h => externalSearchTools.has(h.tool));
+        const memoryFirstFollowed =
+            memoryFirstInjected && step1HasMemory && !step1HasExternal;
+
+        // toolFailureHint: followed if the failing tool wasn't called again after hint step
+        const toolFailureHintFollowed = toolFailureHintInjected && toolFailureHintFirstStep !== null
+            ? !cycleHistory.some(h => h.step > toolFailureHintFirstStep! && h.status === 'error')
+            : false;
+
+        // toolSuccessHint: followed if the flagged tool wasn't called again after hint step
+        const toolSuccessHintFollowed = toolSuccessHintInjected && toolSuccessHintFirstStep !== null
+            ? (() => {
+                const hintedTool = Object.entries(decisionCtx.toolSuccessRates)
+                    .find(([, rate]) => rate < 0.4)?.[0];
+                return hintedTool
+                    ? !cycleHistory.some(h => h.step > toolSuccessHintFirstStep! && h.tool === hintedTool)
+                    : false;
+            })()
+            : false;
+
+        // observerFeedback: followed if no new tool failures in steps after hint
+        const observerFeedbackFollowed = observerFeedbackInjected && observerFeedbackFirstStep !== null
+            ? !cycleHistory.some(h => h.step > observerFeedbackFirstStep! && h.status === 'error')
+            : false;
+
+        // reflectionHint (ReflectionMemory.buildContextHint): injetado uma única vez, antes
+        // do step 1 — não tem "primeiro passo" dinâmico como os outros hints. "Seguido" aqui
+        // significa: o turno não terminou em erro de ferramenta nem em bloqueio de commit
+        // (mesma semântica de observerFeedbackFollowed, adaptada por não ter step de início).
+        // S0.5 (roadmap de aprendizado): esta é a peça que faltava no mecanismo de
+        // hint-compliance já existente — sem isso não há como medir se o conhecimento
+        // recuperado da ReflectionMemory está de fato influenciando o turno.
+        const reflectionHintFollowed = reflectionHintInjected
+            ? !cycleHistory.some(h => h.status === 'error')
+            : false;
+
+        // hint compliance rate across all injected hints this turn
+        let totalHintsInjected = 0;
+        let totalHintsFollowed = 0;
+        if (memoryFirstEligible)        { totalHintsInjected++; if (memoryFirstFollowed)    totalHintsFollowed++; }
+        if (toolFailureHintInjected)    { totalHintsInjected++; if (toolFailureHintFollowed) totalHintsFollowed++; }
+        if (toolSuccessHintInjected)    { totalHintsInjected++; if (toolSuccessHintFollowed) totalHintsFollowed++; }
+        if (observerFeedbackInjected)   { totalHintsInjected++; if (observerFeedbackFollowed) totalHintsFollowed++; }
+        if (reflectionHintInjected)     { totalHintsInjected++; if (reflectionHintFollowed)   totalHintsFollowed++; }
+        const hintComplianceRate = totalHintsInjected > 0
+            ? (totalHintsFollowed / totalHintsInjected).toFixed(2)
+            : 'n/a';
+
+        // knowledge-decision gap: memory available but LLM used only external tools
+        const externalCallCount = cycleHistory.filter(h => externalSearchTools.has(h.tool)).length;
+        const memoryCallCount   = cycleHistory.filter(h => h.tool === 'memory_search').length;
+        const knowledgeDecisionGap =
+            decisionCtx.memoryConfidence !== 'none' &&
+            externalCallCount > 2 &&
+            memoryCallCount === 0;
+
+        // shadow enforcement candidates (would-have-triggered, no behavior change)
+        // tool cooldown shadow: first tool with 2 consecutive failures in cycleHistory
+        let shadowCooldown: { triggered: boolean; tool?: string; failures?: number; step?: number } = { triggered: false };
+        {
+            let consecutive = 0;
+            let lastTool    = '';
+            for (const entry of cycleHistory) {
+                if (entry.status === 'error' && entry.tool === lastTool) {
+                    consecutive++;
+                    if (consecutive >= 2 && !shadowCooldown.triggered) {
+                        shadowCooldown = { triggered: true, tool: entry.tool, failures: consecutive + 1, step: entry.step };
+                    }
+                } else {
+                    consecutive = entry.status === 'error' ? 1 : 0;
+                    lastTool    = entry.tool;
+                }
+            }
+        }
+
+        // dedup abort shadow: first tool that would reach MAX_SAME_TOOL_CALLS
+        const shadowDedupTool = [...toolTypeCallCount.entries()]
+            .find(([, count]) => count >= MAX_SAME_TOOL_CALLS);
+        const shadowDedup = shadowDedupTool
+            ? { triggered: true, tool: shadowDedupTool[0], calls: shadowDedupTool[1] }
+            : { triggered: false };
+
+        // memory-first shadow: enforcement would have changed step-1 behavior
+        const shadowMemoryFirst = memoryFirstEligible && !memoryFirstFollowed;
+
+        log.info(
+            `[${this.ts()}] [TURN-DIAGNOSTICS]\n` +
+            `  steps=${stepCount} mode=${executionMode} budget=${maxSteps}\n` +
+            `  memory:\n` +
+            `    confidence=${decisionCtx.memoryConfidence}\n` +
+            `    requiresMemoryFirst=${decisionCtx.requiresMemoryFirst}\n` +
+            `    hasHighRelevancePref=${decisionCtx.hasHighRelevancePreference}\n` +
+            `  context:\n` +
+            `    initialChars=${initialContextChars}\n` +
+            `    currentChars=${finalContextChars}\n` +
+            `    growthRatio=${finalGrowthRatio.toFixed(2)}\n` +
+            `  tools:\n` +
+            `    totalCalls=${totalToolCalls}\n` +
+            `    sameToolCalls=${maxSameToolCalls}\n` +
+            `    sameGroupCalls=${maxGroupCalls}\n` +
+            `    consecutiveFailures=${consecutiveToolFailures}\n` +
+            `    totalFailures=${toolFailureCount}\n` +
+            `  reasoning:\n` +
+            `    chars=${totalThinkingChars}\n` +
+            `  safety:\n` +
+            `    guardsTriggered=${guardsTriggered}\n` +
+            `    abortReason=${dedupAbortTool || 'none'}\n` +
+            `  decisionImpact:\n` +
+            `    memoryFirst: eligible=${memoryFirstEligible} injected=${memoryFirstInjected} followed=${memoryFirstFollowed}\n` +
+            `    toolFailureHint: injected=${toolFailureHintInjected} step=${toolFailureHintFirstStep ?? '-'} followed=${toolFailureHintFollowed}\n` +
+            `    toolSuccessHint: injected=${toolSuccessHintInjected} step=${toolSuccessHintFirstStep ?? '-'} followed=${toolSuccessHintFollowed}\n` +
+            `    observerFeedback: injected=${observerFeedbackInjected} step=${observerFeedbackFirstStep ?? '-'} followed=${observerFeedbackFollowed}\n` +
+            `    reflectionHint: injected=${reflectionHintInjected} category=${intentCategory} followed=${reflectionHintFollowed}\n` +
+            `    hintComplianceRate=${hintComplianceRate} (${totalHintsFollowed}/${totalHintsInjected})\n` +
+            `    knowledgeDecisionGap=${knowledgeDecisionGap} (ext=${externalCallCount} mem=${memoryCallCount})\n` +
+            `  shadowEnforcement:\n` +
+            `    cooldown: triggered=${shadowCooldown.triggered}${shadowCooldown.triggered ? ` tool=${shadowCooldown.tool} failures=${shadowCooldown.failures} atStep=${shadowCooldown.step}` : ''}\n` +
+            `    dedup: triggered=${shadowDedup.triggered}${shadowDedup.triggered ? ` tool=${shadowDedup.tool} calls=${shadowDedup.calls}` : ''}\n` +
+            `    memoryFirst: wouldHaveChanged=${shadowMemoryFirst}`
+        );
     }
 
     // ── Core execution loop ────────────────────────────────────────────────────
@@ -2409,145 +2598,15 @@ export class AgentLoop {
             }
         }
 
-        // Structured turn diagnostics — single block per turn, all signals in one place.
-        // Enables post-mortem reconstruction without replaying the full execution log.
-        {
-            const finalContextChars = getContextChars();
-            const finalGrowthRatio  = initialContextChars > 0 ? finalContextChars / initialContextChars : 1;
-            const maxSameToolCalls  = toolTypeCallCount.size > 0 ? Math.max(...toolTypeCallCount.values()) : 0;
-            const maxGroupCalls     = groupCallCount.size   > 0 ? Math.max(...groupCallCount.values())    : 0;
-
-            // ── Sprint 3.5A: Decision Impact Telemetry ──────────────────────────
-            const externalSearchTools = new Set(['web_search', 'web_navigate', 'weather']);
-
-            // eligible = condition was met; injected = hint was actually pushed to loopMessages
-            // eligible=true + injected=false → regression/bug
-            const memoryFirstEligible = decisionCtx.requiresMemoryFirst;
-
-            // compliance: was the hint followed? (derived from cycleHistory with step info)
-            const step1Entries       = cycleHistory.filter(h => h.step === 1);
-            const step1HasMemory     = step1Entries.some(h => h.tool === 'memory_search');
-            const step1HasExternal   = step1Entries.some(h => externalSearchTools.has(h.tool));
-            const memoryFirstFollowed =
-                memoryFirstInjected && step1HasMemory && !step1HasExternal;
-
-            // toolFailureHint: followed if the failing tool wasn't called again after hint step
-            const toolFailureHintFollowed = toolFailureHintInjected && toolFailureHintFirstStep !== null
-                ? !cycleHistory.some(h => h.step > toolFailureHintFirstStep! && h.status === 'error')
-                : false;
-
-            // toolSuccessHint: followed if the flagged tool wasn't called again after hint step
-            const toolSuccessHintFollowed = toolSuccessHintInjected && toolSuccessHintFirstStep !== null
-                ? (() => {
-                    const hintedTool = Object.entries(decisionCtx.toolSuccessRates)
-                        .find(([, rate]) => rate < 0.4)?.[0];
-                    return hintedTool
-                        ? !cycleHistory.some(h => h.step > toolSuccessHintFirstStep! && h.tool === hintedTool)
-                        : false;
-                })()
-                : false;
-
-            // observerFeedback: followed if no new tool failures in steps after hint
-            const observerFeedbackFollowed = observerFeedbackInjected && observerFeedbackFirstStep !== null
-                ? !cycleHistory.some(h => h.step > observerFeedbackFirstStep! && h.status === 'error')
-                : false;
-
-            // reflectionHint (ReflectionMemory.buildContextHint): injetado uma única vez, antes
-            // do step 1 — não tem "primeiro passo" dinâmico como os outros hints. "Seguido" aqui
-            // significa: o turno não terminou em erro de ferramenta nem em bloqueio de commit
-            // (mesma semântica de observerFeedbackFollowed, adaptada por não ter step de início).
-            // S0.5 (roadmap de aprendizado): esta é a peça que faltava no mecanismo de
-            // hint-compliance já existente — sem isso não há como medir se o conhecimento
-            // recuperado da ReflectionMemory está de fato influenciando o turno.
-            const reflectionHintFollowed = reflectionHintInjected
-                ? !cycleHistory.some(h => h.status === 'error')
-                : false;
-
-            // hint compliance rate across all injected hints this turn
-            let totalHintsInjected = 0;
-            let totalHintsFollowed = 0;
-            if (memoryFirstEligible)        { totalHintsInjected++; if (memoryFirstFollowed)    totalHintsFollowed++; }
-            if (toolFailureHintInjected)    { totalHintsInjected++; if (toolFailureHintFollowed) totalHintsFollowed++; }
-            if (toolSuccessHintInjected)    { totalHintsInjected++; if (toolSuccessHintFollowed) totalHintsFollowed++; }
-            if (observerFeedbackInjected)   { totalHintsInjected++; if (observerFeedbackFollowed) totalHintsFollowed++; }
-            if (reflectionHintInjected)     { totalHintsInjected++; if (reflectionHintFollowed)   totalHintsFollowed++; }
-            const hintComplianceRate = totalHintsInjected > 0
-                ? (totalHintsFollowed / totalHintsInjected).toFixed(2)
-                : 'n/a';
-
-            // knowledge-decision gap: memory available but LLM used only external tools
-            const externalCallCount = cycleHistory.filter(h => externalSearchTools.has(h.tool)).length;
-            const memoryCallCount   = cycleHistory.filter(h => h.tool === 'memory_search').length;
-            const knowledgeDecisionGap =
-                decisionCtx.memoryConfidence !== 'none' &&
-                externalCallCount > 2 &&
-                memoryCallCount === 0;
-
-            // shadow enforcement candidates (would-have-triggered, no behavior change)
-            // tool cooldown shadow: first tool with 2 consecutive failures in cycleHistory
-            let shadowCooldown: { triggered: boolean; tool?: string; failures?: number; step?: number } = { triggered: false };
-            {
-                let consecutive = 0;
-                let lastTool    = '';
-                for (const entry of cycleHistory) {
-                    if (entry.status === 'error' && entry.tool === lastTool) {
-                        consecutive++;
-                        if (consecutive >= 2 && !shadowCooldown.triggered) {
-                            shadowCooldown = { triggered: true, tool: entry.tool, failures: consecutive + 1, step: entry.step };
-                        }
-                    } else {
-                        consecutive = entry.status === 'error' ? 1 : 0;
-                        lastTool    = entry.tool;
-                    }
-                }
-            }
-
-            // dedup abort shadow: first tool that would reach MAX_SAME_TOOL_CALLS
-            const shadowDedupTool = [...toolTypeCallCount.entries()]
-                .find(([, count]) => count >= MAX_SAME_TOOL_CALLS);
-            const shadowDedup = shadowDedupTool
-                ? { triggered: true, tool: shadowDedupTool[0], calls: shadowDedupTool[1] }
-                : { triggered: false };
-
-            // memory-first shadow: enforcement would have changed step-1 behavior
-            const shadowMemoryFirst = memoryFirstEligible && !memoryFirstFollowed;
-
-            log.info(
-                `[${this.ts()}] [TURN-DIAGNOSTICS]\n` +
-                `  steps=${stepCount} mode=${executionMode} budget=${maxSteps}\n` +
-                `  memory:\n` +
-                `    confidence=${decisionCtx.memoryConfidence}\n` +
-                `    requiresMemoryFirst=${decisionCtx.requiresMemoryFirst}\n` +
-                `    hasHighRelevancePref=${decisionCtx.hasHighRelevancePreference}\n` +
-                `  context:\n` +
-                `    initialChars=${initialContextChars}\n` +
-                `    currentChars=${finalContextChars}\n` +
-                `    growthRatio=${finalGrowthRatio.toFixed(2)}\n` +
-                `  tools:\n` +
-                `    totalCalls=${totalToolCalls}\n` +
-                `    sameToolCalls=${maxSameToolCalls}\n` +
-                `    sameGroupCalls=${maxGroupCalls}\n` +
-                `    consecutiveFailures=${consecutiveToolFailures}\n` +
-                `    totalFailures=${toolFailureCount}\n` +
-                `  reasoning:\n` +
-                `    chars=${totalThinkingChars}\n` +
-                `  safety:\n` +
-                `    guardsTriggered=${guardsTriggered}\n` +
-                `    abortReason=${dedupAbortTool || 'none'}\n` +
-                `  decisionImpact:\n` +
-                `    memoryFirst: eligible=${memoryFirstEligible} injected=${memoryFirstInjected} followed=${memoryFirstFollowed}\n` +
-                `    toolFailureHint: injected=${toolFailureHintInjected} step=${toolFailureHintFirstStep ?? '-'} followed=${toolFailureHintFollowed}\n` +
-                `    toolSuccessHint: injected=${toolSuccessHintInjected} step=${toolSuccessHintFirstStep ?? '-'} followed=${toolSuccessHintFollowed}\n` +
-                `    observerFeedback: injected=${observerFeedbackInjected} step=${observerFeedbackFirstStep ?? '-'} followed=${observerFeedbackFollowed}\n` +
-                `    reflectionHint: injected=${reflectionHintInjected} category=${intentDecision.category} followed=${reflectionHintFollowed}\n` +
-                `    hintComplianceRate=${hintComplianceRate} (${totalHintsFollowed}/${totalHintsInjected})\n` +
-                `    knowledgeDecisionGap=${knowledgeDecisionGap} (ext=${externalCallCount} mem=${memoryCallCount})\n` +
-                `  shadowEnforcement:\n` +
-                `    cooldown: triggered=${shadowCooldown.triggered}${shadowCooldown.triggered ? ` tool=${shadowCooldown.tool} failures=${shadowCooldown.failures} atStep=${shadowCooldown.step}` : ''}\n` +
-                `    dedup: triggered=${shadowDedup.triggered}${shadowDedup.triggered ? ` tool=${shadowDedup.tool} calls=${shadowDedup.calls}` : ''}\n` +
-                `    memoryFirst: wouldHaveChanged=${shadowMemoryFirst}`
-            );
-        }
+        this.logTurnDiagnostics({
+            stepCount, executionMode, maxSteps, decisionCtx, getContextChars, initialContextChars,
+            toolTypeCallCount, groupCallCount, cycleHistory, maxSameToolCalls: MAX_SAME_TOOL_CALLS,
+            totalToolCalls, consecutiveToolFailures, toolFailureCount, totalThinkingChars,
+            guardsTriggered, dedupAbortTool, memoryFirstInjected, toolFailureHintInjected,
+            toolFailureHintFirstStep, toolSuccessHintInjected, toolSuccessHintFirstStep,
+            observerFeedbackInjected, observerFeedbackFirstStep, reflectionHintInjected,
+            intentCategory: intentDecision.category,
+        });
 
         // Delivery guard: if a file was written but never sent, the user received nothing.
         // Re-enter the loop with a delivery instruction before synthesis.
