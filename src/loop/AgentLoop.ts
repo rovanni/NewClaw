@@ -162,6 +162,32 @@ type DeliveryGuardResult =
     | { earlyReturn: false; stepCount: number };
 
 /**
+ * ARCH-019 (S25, Incremento 4): retorno de `runJsonActionDispatch()`, extraído do bloco
+ * "JSON-action tool execution" de `runWithTools()` (caminho alternativo ao tool-calling nativo,
+ * usado por modelos sem suporte a function-calling — parseia a ação de um blob JSON na resposta
+ * do LLM). 4 variantes, refletindo os 4 desfechos que o bloco original podia ter dentro do
+ * `while` principal: `earlyReturn` (tool terminal com sucesso), `continueLoop`/`breakLoop`
+ * (replicam os `continue`/`break` que já existiam), `fallThrough` (a condição externa
+ * `atomicData?.action?.type === 'tool'` era falsa — cai direto na checagem de STEP-LIMIT, que
+ * permanece em `runWithTools()` por se aplicar a AMBOS os caminhos de dispatch, não só a este).
+ * Os 6 contadores/flags primitivos mutados pelo bloco (dedupAbort, dedupAbortTool,
+ * consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount) são devolvidos em
+ * TODA variante não-earlyReturn — mesma disciplina que pegou os 3 bugs de priorFeedback em
+ * ARCH-020/S24: nunca hardcode um valor "sem mudança", sempre threade o valor recebido.
+ */
+type JsonActionDispatchResult =
+    | { action: 'earlyReturn'; result: string | ProcessedResult }
+    | {
+        action: 'continueLoop' | 'breakLoop' | 'fallThrough';
+        dedupAbort: boolean;
+        dedupAbortTool: string;
+        consecutiveToolFailures: number;
+        guardsTriggered: number;
+        totalToolCalls: number;
+        toolFailureCount: number;
+    };
+
+/**
  * Queries whose answers are likely to be volatile even when in memory.
  * Applied generically — not specific to any entity, currency, or domain.
  * Pattern: financial prices, weather, news, legal changes, real-time data.
@@ -1675,6 +1701,261 @@ export class AgentLoop {
         return await this.commitResponse(text, userText, trace.id, conversationId, turnSignal, toolFailureCount);
     }
 
+    /**
+     * ARCH-019 (S25, Incremento 4): "JSON-action tool execution" extraído de `runWithTools()`
+     * sem mudar lógica — caminho alternativo ao tool-calling nativo (modelos sem suporte a
+     * function-calling expressam a ação pretendida como um blob JSON no texto da resposta,
+     * parseado em `atomicData` antes desta chamada). Réplica funcional do caminho nativo
+     * (mesmos guards de dedup/loop/falhas consecutivas), mas despachando só 1 tool call por
+     * step (não um batch). Ver `JsonActionDispatchResult` para o desenho do retorno.
+     */
+    private async runJsonActionDispatch(
+        atomicData: ReturnType<typeof parseLLMResponse>,
+        stepCount: number,
+        channelContext: ChannelContext | undefined,
+        conversationId: string,
+        userText: string,
+        intentDecision: IntentDecision,
+        trace: ExecutionTrace,
+        turnSignal: AbortSignal,
+        usedToolInputs: Set<string>,
+        blockedKeyCount: Map<string, number>,
+        editPathCount: Map<string, number>,
+        toolTypeCallCount: Map<string, number>,
+        groupCallCount: Map<string, number>,
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        loopMessages: LLMMessage[],
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        consecutiveToolFailures: number,
+        guardsTriggered: number,
+        totalToolCalls: number,
+        toolFailureCount: number,
+        MAX_SAME_TOOL_CALLS: number,
+        MAX_GROUP_CALLS: number,
+        MAX_CONSECUTIVE_TOOL_FAILURES: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): Promise<JsonActionDispatchResult> {
+        const fallThrough = (): JsonActionDispatchResult => ({
+            action: 'fallThrough', dedupAbort, dedupAbortTool, consecutiveToolFailures,
+            guardsTriggered, totalToolCalls, toolFailureCount,
+        });
+
+        // JSON-action tool execution
+        if (atomicData?.action?.type === 'tool' && atomicData.action.name) {
+            const toolName = atomicData.action.name;
+            const inputKey = computeToolInputKey(toolName, atomicData.action.input || {});
+
+            if (usedToolInputs.has(inputKey)) {
+                const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
+                blockedKeyCount.set(inputKey, blockCount);
+                log.warn(`[${this.ts()}] [ATOMIC-TOOL] Blocked repeated call: ${toolName} (block #${blockCount})`);
+                const atomicBlockedMsg = toolName === 'read'
+                    ? `[BLOQUEADO] "read" já foi executado para este arquivo. O conteúdo JÁ ESTÁ disponível no histórico desta conversa — NÃO releia. Próximo passo obrigatório: use exec_command para processar o arquivo, write para salvar resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`
+                    : `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos (bloqueio #${blockCount}). NÃO repita — use uma estratégia diferente ou responda com o que já sabe.`;
+                loopMessages.push({
+                    role: 'system',
+                    content: atomicBlockedMsg,
+                });
+                if (blockCount >= 3) {
+                    loopMessages.push({
+                        role: 'system',
+                        content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. Forneça a melhor resposta possível com as informações que você já tem.`,
+                    });
+                    dedupAbort = true;
+                    dedupAbortTool = toolName;
+                    return { action: 'breakLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
+                }
+                return { action: 'continueLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
+            }
+
+            const tool = this.tools.get(toolName);
+            if (tool) {
+                move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'json_action' });
+                if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
+                    (tool as unknown as ContextAwareTool).setContext(
+                        channelContext.chatId || '',
+                        channelContext.channel
+                    );
+                }
+
+                // Guard: bloqueia edit repetido no mesmo arquivo (previne append-loop)
+                if (toolName === 'edit') {
+                    const ep = typeof atomicData.action.input?.path === 'string' ? atomicData.action.input.path : undefined;
+                    if (ep) {
+                        const ec = (editPathCount.get(ep) ?? 0) + 1;
+                        editPathCount.set(ep, ec);
+                        if (ec > 4) {
+                            log.warn(`[${this.ts()}] [EDIT-LOOP] Blocked atomic edit #${ec} to "${ep}" — use write to rewrite`);
+                            loopMessages.push({ role: 'system', content: `[BLOQUEADO] "edit" foi chamado ${ec} vezes no arquivo "${ep}" neste turno. Use "write" com o conteúdo completo.` });
+                            if (ec >= 7) {
+                                dedupAbort = true;
+                                dedupAbortTool = toolName;
+                                return { action: 'breakLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
+                            }
+                            return { action: 'continueLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
+                        }
+                    }
+                }
+
+                // Mesmo guard do caminho de tool-calling nativo (linha ~1645): send_audio
+                // não tem file_path estável, então não pode reusar o dedup de send_document.
+                // Sem isso, um step "agentloop" que já entregou áudio e é re-executado do
+                // zero por um replan reenviaria áudio de novo também quando o modelo usa o
+                // protocolo JSON de ação em vez de tool-calling nativo.
+                if (toolName === 'send_audio' && channelContext?.deliveryTracking?.isAudioAlreadySent?.()) {
+                    log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal path=json_action`);
+                    loopMessages.push({
+                        role: 'tool',
+                        content: `[JÁ ENVIADO] O áudio para este objetivo já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
+                    });
+                    return { action: 'continueLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
+                }
+
+                const toolStartTime = Date.now();
+                const atomicRecovery = await this.proactiveRecovery.execute(
+                    toolName, atomicData.action.input || {},
+                    (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined,
+                    usedToolInputs,
+                    turnSignal,
+                );
+                const result = atomicRecovery.result;
+                const resolvedToolName = atomicRecovery.finalToolName;
+                const resolvedArgs = atomicRecovery.finalArgs;
+                const toolDuration = Date.now() - toolStartTime;
+                if (toolName === 'send_audio' && result.success) {
+                    channelContext?.deliveryTracking?.onArtifactDelivered?.('__send_audio_delivered__');
+                }
+
+                if (atomicRecovery.recovered && atomicRecovery.recoveryNote) {
+                    const origTool = atomicRecovery.originalToolName ?? toolName;
+                    const kind = atomicRecovery.mutationKind ?? 'arg_mutation';
+                    log.info(
+                        `[MUTATION] tool_mutation:\n  tool: ${origTool}\n  kind: ${kind}\n` +
+                        `  original: ${JSON.stringify(atomicRecovery.originalArgs ?? {})}\n` +
+                        `  modified: ${JSON.stringify(resolvedArgs)}`
+                    );
+                    loopMessages.push({
+                        role: 'system',
+                        content: kind === 'fallback_tool'
+                            ? `[RECUPERAÇÃO AUTOMÁTICA] A ferramenta "${origTool}" falhou e foi substituída por "${resolvedToolName}". ${atomicRecovery.recoveryNote}`
+                            : `[RECUPERAÇÃO AUTOMÁTICA] Os argumentos da ferramenta "${resolvedToolName}" foram ajustados automaticamente. ${atomicRecovery.recoveryNote}`,
+                    });
+                } else if (atomicRecovery.recoveryNote) {
+                    log.info(`[${this.ts()}] ${atomicRecovery.recoveryNote}`);
+                }
+                log.info(`[${this.ts()}] [ATOMIC-TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
+
+                traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
+                traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output });
+                this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
+                this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
+
+                cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
+                loopMessages.push({ role: 'tool', content: result.output });
+                // Mesmo fix do caminho de tool-calling nativo acima (ver comentário lá) —
+                // path json_action é a 2ª cópia do mesmo dispatch, precisa do mesmo registro.
+                if (result.success && channelContext) {
+                    await this.sessionContext?.getSessionManager().recordToolCall(
+                        { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
+                        resolvedToolName,
+                        JSON.stringify(resolvedArgs),
+                    ).catch(() => {});
+                }
+
+                if (!result.success) {
+                    toolFailureCount++;
+                    // Mesma correção do caminho de tool-calling nativo acima: sem o texto real do
+                    // erro (result.error), o LLM só via "tente uma abordagem diferente" e adivinhava
+                    // variações de frase às cegas em vez de corrigir a causa real da falha.
+                    const atomicReason = (result.error ?? result.output ?? '').trim().slice(0, 300)
+                        || 'sem detalhes do erro retornados pela ferramenta';
+                    loopMessages.push({
+                        role: 'system',
+                        content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${atomicReason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`
+                    });
+                }
+
+                totalToolCalls++;
+
+                // Generic loop detector (JSON-action path): mirrors the native tool check.
+                const atomicToolTypeCount = (toolTypeCallCount.get(resolvedToolName) ?? 0) + 1;
+                toolTypeCallCount.set(resolvedToolName, atomicToolTypeCount);
+                if (atomicToolTypeCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
+                    log.warn(
+                        `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
+                        `value=${atomicToolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
+                    );
+                    loopMessages.push({
+                        role: 'system',
+                        content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${atomicToolTypeCount} vezes neste turno. ` +
+                            `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
+                    });
+                    dedupAbort = true;
+                    dedupAbortTool = `${resolvedToolName}:loop`;
+                    guardsTriggered++;
+                }
+
+                // Group loop + consecutive failures (JSON-action path).
+                const atomicGroup = TOOL_GROUP_REGISTRY[resolvedToolName];
+                if (atomicGroup) {
+                    const agCount = (groupCallCount.get(atomicGroup) ?? 0) + 1;
+                    groupCallCount.set(atomicGroup, agCount);
+                    if (agCount >= MAX_GROUP_CALLS && !dedupAbort) {
+                        log.warn(
+                            `[${this.ts()}] [SAFETY-GUARD] type=tool_group_loop reason=group_limit ` +
+                            `value=${agCount} threshold=${MAX_GROUP_CALLS} group=${atomicGroup}`
+                        );
+                        loopMessages.push({
+                            role: 'system',
+                            content: `[LOOP DE GRUPO] O grupo "${atomicGroup}" foi usado ${agCount} vezes. Responda com os dados disponíveis.`,
+                        });
+                        dedupAbort = true;
+                        dedupAbortTool = `group:${atomicGroup}:loop`;
+                        guardsTriggered++;
+                    }
+                }
+                if (result.success) {
+                    consecutiveToolFailures = 0;
+                } else {
+                    consecutiveToolFailures++;
+                    if (consecutiveToolFailures >= MAX_CONSECUTIVE_TOOL_FAILURES && !dedupAbort) {
+                        log.warn(
+                            `[${this.ts()}] [SAFETY-GUARD] type=consecutive_failures reason=failure_limit ` +
+                            `value=${consecutiveToolFailures} threshold=${MAX_CONSECUTIVE_TOOL_FAILURES}`
+                        );
+                        loopMessages.push({
+                            role: 'system',
+                            content: `[FALHAS CONSECUTIVAS] ${consecutiveToolFailures} ferramentas falharam seguidas. Responda ao usuário com honestidade sobre essa limitação.`,
+                        });
+                        dedupAbort = true;
+                        dedupAbortTool = 'consecutive_failures';
+                        guardsTriggered++;
+                    }
+                }
+
+                const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
+                if (terminalTools.includes(toolName) && result.success) {
+                    // JSON-action path is always a single tool call per step, so return immediately.
+                    log.info(`[${this.ts()}] [TASK-FSM] Terminal atomic tool "${toolName}" succeeded → task DONE, returning result`);
+                    move('FINAL_READY', { step: stepCount, tool: toolName, terminal: true });
+                    traceManager.completeTrace(trace, 'completed', result.output);
+                    this.persistTrace(trace, stepCount, 'completed', result.output, channelContext);
+                    return { action: 'earlyReturn', result: result.output };
+                }
+
+                if (result.success && !this.isSafeExecCommand(toolName, atomicData.action?.input as Record<string, unknown> || {})) {
+                    this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
+                    void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
+                }
+
+                move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
+                return { action: 'continueLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
+            }
+        }
+        return fallThrough();
+    }
+
     // ── Core execution loop ────────────────────────────────────────────────────
 
     private async runWithTools(conversationId: string, userText: string, iteration: number, _userId?: string, channelContext?: ChannelContext): Promise<string | ProcessedResult> {
@@ -2752,218 +3033,22 @@ export class AgentLoop {
                 }
             }
 
-            // JSON-action tool execution
-            if (atomicData?.action?.type === 'tool' && atomicData.action.name) {
-                const toolName = atomicData.action.name;
-                const inputKey = computeToolInputKey(toolName, atomicData.action.input || {});
-
-                if (usedToolInputs.has(inputKey)) {
-                    const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
-                    blockedKeyCount.set(inputKey, blockCount);
-                    log.warn(`[${this.ts()}] [ATOMIC-TOOL] Blocked repeated call: ${toolName} (block #${blockCount})`);
-                    const atomicBlockedMsg = toolName === 'read'
-                        ? `[BLOQUEADO] "read" já foi executado para este arquivo. O conteúdo JÁ ESTÁ disponível no histórico desta conversa — NÃO releia. Próximo passo obrigatório: use exec_command para processar o arquivo, write para salvar resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`
-                        : `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos (bloqueio #${blockCount}). NÃO repita — use uma estratégia diferente ou responda com o que já sabe.`;
-                    loopMessages.push({
-                        role: 'system',
-                        content: atomicBlockedMsg,
-                    });
-                    if (blockCount >= 3) {
-                        loopMessages.push({
-                            role: 'system',
-                            content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. Forneça a melhor resposta possível com as informações que você já tem.`,
-                        });
-                        dedupAbort = true;
-                        dedupAbortTool = toolName;
-                        break;
-                    }
-                    continue;
-                }
-
-                const tool = this.tools.get(toolName);
-                if (tool) {
-                    move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'json_action' });
-                    if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
-                        (tool as unknown as ContextAwareTool).setContext(
-                            channelContext.chatId || '',
-                            channelContext.channel
-                        );
-                    }
-
-                    // Guard: bloqueia edit repetido no mesmo arquivo (previne append-loop)
-                    if (toolName === 'edit') {
-                        const ep = typeof atomicData.action.input?.path === 'string' ? atomicData.action.input.path : undefined;
-                        if (ep) {
-                            const ec = (editPathCount.get(ep) ?? 0) + 1;
-                            editPathCount.set(ep, ec);
-                            if (ec > 4) {
-                                log.warn(`[${this.ts()}] [EDIT-LOOP] Blocked atomic edit #${ec} to "${ep}" — use write to rewrite`);
-                                loopMessages.push({ role: 'system', content: `[BLOQUEADO] "edit" foi chamado ${ec} vezes no arquivo "${ep}" neste turno. Use "write" com o conteúdo completo.` });
-                                if (ec >= 7) {
-                                    dedupAbort = true;
-                                    dedupAbortTool = toolName;
-                                    break;
-                                }
-                                continue;
-                            }
-                        }
-                    }
-
-                    // Mesmo guard do caminho de tool-calling nativo (linha ~1645): send_audio
-                    // não tem file_path estável, então não pode reusar o dedup de send_document.
-                    // Sem isso, um step "agentloop" que já entregou áudio e é re-executado do
-                    // zero por um replan reenviaria áudio de novo também quando o modelo usa o
-                    // protocolo JSON de ação em vez de tool-calling nativo.
-                    if (toolName === 'send_audio' && channelContext?.deliveryTracking?.isAudioAlreadySent?.()) {
-                        log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal path=json_action`);
-                        loopMessages.push({
-                            role: 'tool',
-                            content: `[JÁ ENVIADO] O áudio para este objetivo já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
-                        });
-                        continue;
-                    }
-
-                    const toolStartTime = Date.now();
-                    const atomicRecovery = await this.proactiveRecovery.execute(
-                        toolName, atomicData.action.input || {},
-                        (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined,
-                        usedToolInputs,
-                        turnSignal,
-                    );
-                    const result = atomicRecovery.result;
-                    const resolvedToolName = atomicRecovery.finalToolName;
-                    const resolvedArgs = atomicRecovery.finalArgs;
-                    const toolDuration = Date.now() - toolStartTime;
-                    if (toolName === 'send_audio' && result.success) {
-                        channelContext?.deliveryTracking?.onArtifactDelivered?.('__send_audio_delivered__');
-                    }
-
-                    if (atomicRecovery.recovered && atomicRecovery.recoveryNote) {
-                        const origTool = atomicRecovery.originalToolName ?? toolName;
-                        const kind = atomicRecovery.mutationKind ?? 'arg_mutation';
-                        log.info(
-                            `[MUTATION] tool_mutation:\n  tool: ${origTool}\n  kind: ${kind}\n` +
-                            `  original: ${JSON.stringify(atomicRecovery.originalArgs ?? {})}\n` +
-                            `  modified: ${JSON.stringify(resolvedArgs)}`
-                        );
-                        loopMessages.push({
-                            role: 'system',
-                            content: kind === 'fallback_tool'
-                                ? `[RECUPERAÇÃO AUTOMÁTICA] A ferramenta "${origTool}" falhou e foi substituída por "${resolvedToolName}". ${atomicRecovery.recoveryNote}`
-                                : `[RECUPERAÇÃO AUTOMÁTICA] Os argumentos da ferramenta "${resolvedToolName}" foram ajustados automaticamente. ${atomicRecovery.recoveryNote}`,
-                        });
-                    } else if (atomicRecovery.recoveryNote) {
-                        log.info(`[${this.ts()}] ${atomicRecovery.recoveryNote}`);
-                    }
-                    log.info(`[${this.ts()}] [ATOMIC-TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
-
-                    traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
-                    traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output });
-                    this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
-                    this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
-
-                    cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
-                    loopMessages.push({ role: 'tool', content: result.output });
-                    // Mesmo fix do caminho de tool-calling nativo acima (ver comentário lá) —
-                    // path json_action é a 2ª cópia do mesmo dispatch, precisa do mesmo registro.
-                    if (result.success && channelContext) {
-                        await this.sessionContext?.getSessionManager().recordToolCall(
-                            { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
-                            resolvedToolName,
-                            JSON.stringify(resolvedArgs),
-                        ).catch(() => {});
-                    }
-
-                    if (!result.success) {
-                        toolFailureCount++;
-                        // Mesma correção do caminho de tool-calling nativo acima: sem o texto real do
-                        // erro (result.error), o LLM só via "tente uma abordagem diferente" e adivinhava
-                        // variações de frase às cegas em vez de corrigir a causa real da falha.
-                        const atomicReason = (result.error ?? result.output ?? '').trim().slice(0, 300)
-                            || 'sem detalhes do erro retornados pela ferramenta';
-                        loopMessages.push({
-                            role: 'system',
-                            content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${atomicReason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`
-                        });
-                    }
-
-                    totalToolCalls++;
-
-                    // Generic loop detector (JSON-action path): mirrors the native tool check.
-                    const atomicToolTypeCount = (toolTypeCallCount.get(resolvedToolName) ?? 0) + 1;
-                    toolTypeCallCount.set(resolvedToolName, atomicToolTypeCount);
-                    if (atomicToolTypeCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
-                        log.warn(
-                            `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
-                            `value=${atomicToolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
-                        );
-                        loopMessages.push({
-                            role: 'system',
-                            content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${atomicToolTypeCount} vezes neste turno. ` +
-                                `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
-                        });
-                        dedupAbort = true;
-                        dedupAbortTool = `${resolvedToolName}:loop`;
-                        guardsTriggered++;
-                    }
-
-                    // Group loop + consecutive failures (JSON-action path).
-                    const atomicGroup = TOOL_GROUP_REGISTRY[resolvedToolName];
-                    if (atomicGroup) {
-                        const agCount = (groupCallCount.get(atomicGroup) ?? 0) + 1;
-                        groupCallCount.set(atomicGroup, agCount);
-                        if (agCount >= MAX_GROUP_CALLS && !dedupAbort) {
-                            log.warn(
-                                `[${this.ts()}] [SAFETY-GUARD] type=tool_group_loop reason=group_limit ` +
-                                `value=${agCount} threshold=${MAX_GROUP_CALLS} group=${atomicGroup}`
-                            );
-                            loopMessages.push({
-                                role: 'system',
-                                content: `[LOOP DE GRUPO] O grupo "${atomicGroup}" foi usado ${agCount} vezes. Responda com os dados disponíveis.`,
-                            });
-                            dedupAbort = true;
-                            dedupAbortTool = `group:${atomicGroup}:loop`;
-                            guardsTriggered++;
-                        }
-                    }
-                    if (result.success) {
-                        consecutiveToolFailures = 0;
-                    } else {
-                        consecutiveToolFailures++;
-                        if (consecutiveToolFailures >= MAX_CONSECUTIVE_TOOL_FAILURES && !dedupAbort) {
-                            log.warn(
-                                `[${this.ts()}] [SAFETY-GUARD] type=consecutive_failures reason=failure_limit ` +
-                                `value=${consecutiveToolFailures} threshold=${MAX_CONSECUTIVE_TOOL_FAILURES}`
-                            );
-                            loopMessages.push({
-                                role: 'system',
-                                content: `[FALHAS CONSECUTIVAS] ${consecutiveToolFailures} ferramentas falharam seguidas. Responda ao usuário com honestidade sobre essa limitação.`,
-                            });
-                            dedupAbort = true;
-                            dedupAbortTool = 'consecutive_failures';
-                            guardsTriggered++;
-                        }
-                    }
-
-                    const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
-                    if (terminalTools.includes(toolName) && result.success) {
-                        // JSON-action path is always a single tool call per step, so return immediately.
-                        log.info(`[${this.ts()}] [TASK-FSM] Terminal atomic tool "${toolName}" succeeded → task DONE, returning result`);
-                        move('FINAL_READY', { step: stepCount, tool: toolName, terminal: true });
-                        traceManager.completeTrace(trace, 'completed', result.output);
-                        this.persistTrace(trace, stepCount, 'completed', result.output, channelContext);
-                        return result.output;
-                    }
-
-                    if (result.success && !this.isSafeExecCommand(toolName, atomicData.action?.input as Record<string, unknown> || {})) {
-                        this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
-                        void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
-                    }
-
-                    move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
-                    continue;
-                }
-            }
+            const jsonActionResult = await this.runJsonActionDispatch(
+                atomicData, stepCount, channelContext, conversationId, userText, intentDecision,
+                trace, turnSignal, usedToolInputs, blockedKeyCount, editPathCount, toolTypeCallCount,
+                groupCallCount, cycleHistory, loopMessages, dedupAbort, dedupAbortTool,
+                consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount,
+                MAX_SAME_TOOL_CALLS, MAX_GROUP_CALLS, MAX_CONSECUTIVE_TOOL_FAILURES, move,
+            );
+            if (jsonActionResult.action === "earlyReturn") return jsonActionResult.result;
+            dedupAbort = jsonActionResult.dedupAbort;
+            dedupAbortTool = jsonActionResult.dedupAbortTool;
+            consecutiveToolFailures = jsonActionResult.consecutiveToolFailures;
+            guardsTriggered = jsonActionResult.guardsTriggered;
+            totalToolCalls = jsonActionResult.totalToolCalls;
+            toolFailureCount = jsonActionResult.toolFailureCount;
+            if (jsonActionResult.action === "continueLoop") continue;
+            if (jsonActionResult.action === "breakLoop") break;
 
             if (stepCount >= maxSteps) {
                 log.warn(`[${this.ts()}] [STEP-LIMIT] step=${stepCount + 1} action=force_response`);
