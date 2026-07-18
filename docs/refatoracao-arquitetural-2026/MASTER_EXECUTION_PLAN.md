@@ -46,7 +46,7 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 | 2026-08-S13 | Ago/2026 | Single Source of Truth | ARCH-007 | 🟢 | CP01 | 216f039 | `PlanStep.lastAttemptOutcome` novo campo; gatilho real ≠ premissa literal do card (ver ARCHITECTURAL_BACKLOG "Executado como") — teste novo S119, 122/122 |
 | 2026-08-S14 | Ago/2026 | Single Source of Truth | ARCH-009 | ⏸ | CP01 | 92c46da (docs) | Adiado antes de codificar — prescrição do card (`extends ToolResult`) não compila + reintroduz violação de fronteira do ARCH-004; consolidado em `REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md` |
 | 2026-08-S15 | Ago/2026 | Single Source of Truth | ARCH-010 | 🟢 | CP01 | ebea0f5 | `hasIdenticalFailedAttempt()` nomeado + `computeToolInputKey` (não índice persistido — SSOT/restart-safety), fix colateral direto: dedup de `send_document` por `file_path`, teste `S120`, 123/123 |
-| 2026-08-CP02 | Ago/2026 | Checkpoint | — | ⚪ | S08-S15 | — | — |
+| 2026-08-CP02 | Ago/2026 | Checkpoint | — | 🟢 | S08-S15 | — | S08-S13/S15 🟢 (7/8), S14 ⏸ adiada com justificativa registrada (não é falha); 0 violações de fronteira novas, regressão 123/123, nenhum indicador piorou |
 | 2026-08-S16 | Ago/2026 | Single Source of Truth | ARCH-005 | ⚪ | CP02 | — | — |
 | 2026-08-S17 | Ago/2026 | Single Source of Truth | ARCH-008 | ⚪ | S16 | — | — |
 | 2026-08-S18 | Ago/2026 | Decision Ownership | ARCH-018 | ⚪ | S16 | — | — |
@@ -68,17 +68,17 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01-S13/S15 e Checkpoint CP01 concluídos; S14 adiada (ver abaixo)
+**Status Geral:** 🟢 Em execução — Fase 0, S01-S13/S15, Checkpoints CP01/CP02 concluídos; S14 adiada (ver abaixo)
 **Progresso:** 14 / 26 ARCH concluídos (~54%) — ARCH-009 (S14) adiado, não conta como concluído nem como pendência simples
-**Sprint Atual:** Nenhuma em andamento (S15 concluída — próxima é o Checkpoint 2026-08-CP02)
-**Próxima Sprint:** Checkpoint 2026-08-CP02 (S08-S15 revisadas em conjunto) — S15 é a última Sprint de execução antes do checkpoint
+**Sprint Atual:** Nenhuma em andamento (Checkpoint CP02 concluído — próxima é 2026-08-S16)
+**Próxima Sprint:** 2026-08-S16 (ARCH-005) — ⚠ maior risco do programa até este ponto; primeira Sprint desde S08 a exigir Validação Progressiva completa até etapa 4 (ambiente real); histórico de 2 bugs reais de produção na mesma área (`Goal.sentArtifacts`)
 **Epic Atual:** Epic A concluído; Epic B quase concluído — ARCH-006/007/010/011 feitos, só ARCH-005/008/012 restantes (ARCH-009 adiado); Epic C em andamento — ARCH-014/016/017 feitos; Epic D iniciado — ARCH-023 feito; Epic E concluído — ARCH-025/026 feitos
-**Próximo Marco:** 2026-08-CP02
-**Última Atualização:** 2026-07-17 (Sprint S15 concluída)
+**Próximo Marco:** 2026-09-CP03
+**Última Atualização:** 2026-07-17 (Checkpoint CP02 concluído)
 **Build:** 🟢 `npm run build` limpo
 **Testes:** 🟢 123/123
-**Regressão:** 🟢 123/123 (pós-S15, `S120` novo)
-**Riscos Abertos:** 0 — nota permanente: a VPS `venus@10.0.0.10` usada para validação Linux tem histórico de exigir `.env`/`WORKSPACE_DIR` explícito (skill `verify`) para não gerar falso-positivo — ver `docs/issues/002`
+**Regressão:** 🟢 123/123 (pós-S15/CP02, reconfirmado na revisão do checkpoint)
+**Riscos Abertos:** 0 materializados — nota permanente: a VPS `venus@10.0.0.10` usada para validação Linux tem histórico de exigir `.env`/`WORKSPACE_DIR` explícito (skill `verify`) para não gerar falso-positivo — ver `docs/issues/002`. **Risco iminente (não materializado):** S16 (ARCH-005) é o item de maior risco do programa até agora — 3 arquivos tocados, histórico de 2 bugs reais de produção na mesma área, exige Validação Progressiva completa até etapa 4.
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
 **Temas Adiados para Revisão Consolidada:** 1 (ARCH-009 — ver `docs/refatoracao-arquitetural-2026/REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`, que já lista ARCH-024 e `docs/issues/004` como temas correlatos a tratar junto quando essa revisão abrir)
 **Dívida Arquitetural Restante:** 12 ARCH (10 cards executáveis restantes + ARCH-009 adiado para revisão consolidada + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
@@ -404,9 +404,15 @@ Validação
 ## Checkpoint 2026-08-CP02
 
 - **Identificação:** `2026-08-CP02`
-- **Revisar:** indicadores (Single Sources parcialmente reduzido, Recomputation Hotspots reduzido), backlog (sem mudança), dependências (confirmar que S16 está de fato liberada), arquitetura (nenhuma violação nova), riscos (nenhum crítico esperado até aqui — todos os itens até CP02 são Quick Win/Refactor Local), planejamento (ARCH-005, o item de maior risco do programa, começa logo em seguida — revisar recursos/tempo disponível antes de entrar em S16).
-- **Critério de avanço:** S08-S15 todas 🟢, suíte de regressão 100%, nenhum indicador piorou.
-- **Status:** ⚪ Não iniciado.
+- **Revisado em 2026-07-17:**
+  - **Indicadores:** Single Sources — `getPendingSteps` (S03), `PlanStep.lastAttemptOutcome` (S13), `toolsTried` como fonte primária de fingerprint (S10), dedup de retry nomeado via `computeToolInputKey` (S15) reduzem a fragmentação medida em T0. Recomputation Hotspots — S10/S11/S15 substituíram recomputação inline por consulta nomeada/fonte estruturada nos 3 pontos que tocaram. Boundary (re-grep nesta revisão): 0 ocorrências de `from '../loop/AgentLoop'` para `ToolExecutor`/`ToolResult` em `tools/`; 0 imports de `loop/` em `memory/` — nenhuma violação nova reintroduzida por S08-S15, Epic A continua concluído.
+  - **Backlog:** 1 mudança de escopo real desde CP01 — ARCH-009 (S14) **adiado**, não implementado como o card descrevia (`docs/issues/008`, `REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`, 5º modo de falha catalogado em `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`). Diferente das correções de contagem de CP01, este é o primeiro caso do programa em que uma Sprint inteira não foi implementada — tratado explicitmente abaixo no Critério de Avanço, não escondido.
+  - **Dependências:** S16 (ARCH-005) depende só deste checkpoint — confirmado liberado. S17 depende de S16. Notas de dependência de S21/S22/S24 (que citavam S14) já atualizadas na própria Sprint S14 para refletir que não bloqueiam.
+  - **Arquitetura:** nenhuma violação nova — reconfirmado por grep nesta revisão (ver Indicadores acima), consistente com o Dashboard Executivo (pós-S15).
+  - **Riscos:** nenhum crítico materializado em S08-S15. S08 teve os 3 falsos-positivos/bug de teste da VPS (já investigados e fechados, `docs/issues/002`). S14 não é um risco realizado — é uma Sprint adiada de forma controlada, com documentação completa e sem código tocado (risco de regressão = 0). Risco real do programa continua concentrado à frente: S16 (ARCH-005) é explicitamente marcada `⚠ Maior risco até este ponto do programa`.
+  - **Planejamento:** ritmo do lote S08-S15 seguiu o mesmo padrão de CP01 (sessão única, muito mais rápido que a estimativa de calendário) — mesma ressalva de CP01 continua valendo: não há sinal ainda para recalibrar a estimativa de S16 (Refactor Estrutural, Validação Progressiva completa até etapa 4) a partir da velocidade deste lote de Quick Win/Refactor Local. Antes de abrir S16: revisar tempo/recursos disponíveis dado que é o primeiro item do programa a exigir etapa 4 (ambiente real) desde S08, e o de maior impacto (`Goal.sentArtifacts` como fonte única de artefatos entregues, histórico de 2 bugs reais de produção na mesma área).
+- **Critério de avanço — reinterpretado à luz do adiamento de S14:** o texto original ("S08-S15 todas 🟢") foi escrito antes de o programa ter uma categoria "adiada com justificativa" — que não existia em CP01. Tratando `⏸ Adiada` (não código tocado, achado documentado, decisão explícita do usuário, sem risco de regressão) como satisfazendo o espírito do critério, no mesmo princípio já usado para "RFC rejeitada" (ARCH-012/S27: "resultado válido e esperado, não uma falha do programa") — **atingido**: S08/S09/S10/S11/S12/S13/S15 🟢 (7/8), S14 ⏸ com justificativa completa registrada; suíte de regressão 123/123; nenhum indicador arquitetural piorou (reconfirmado por grep nesta revisão, não só copiado do Dashboard).
+- **Status:** 🟢 Concluído em 2026-07-17.
 
 ---
 
