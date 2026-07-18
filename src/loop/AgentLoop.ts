@@ -1804,9 +1804,9 @@ export class AgentLoop {
                     }
 
                     // FIX C: quando em contexto de goal-execution, adiar send_document para pós-validação
-                    if (toolName === 'send_document' && channelContext?.deferSendDocument) {
+                    if (toolName === 'send_document' && channelContext?.deliveryTracking?.deferSendDocument) {
                         const filePath = String(toolCall.arguments?.file_path ?? toolCall.arguments?.path ?? '(unknown)');
-                        const alreadyRegistered = channelContext.isDeferredArtifact?.(filePath) ?? false;
+                        const alreadyRegistered = channelContext.deliveryTracking.isDeferredArtifact?.(filePath) ?? false;
                         log.info(
                             `[${this.ts()}] [AGENTLOOP-SEND]` +
                             ` deferred=true` +
@@ -1815,7 +1815,7 @@ export class AgentLoop {
                             ` already_registered=${alreadyRegistered}`
                         );
                         if (!alreadyRegistered) {
-                            channelContext.deferSendDocument(toolCall.arguments ?? {});
+                            channelContext.deliveryTracking.deferSendDocument(toolCall.arguments ?? {});
                         }
                         // Mensagem semanticamente neutra: não instrui o LLM a "continuar trabalhando"
                         // pois isso causava loop de re-chamadas ao send_document.
@@ -1834,7 +1834,7 @@ export class AgentLoop {
                         // reinjetar "[ENTREGA PENDENTE] ... USE send_document AGORA" por cima de
                         // um arquivo que já tinha sido corretamente registrado para entrega.
                         // status:'deferred' (não 'success') propositalmente — alinha com o que
-                        // channelContext.isDeferredArtifact já sabe, sem se passar por um envio
+                        // channelContext.deliveryTracking.isDeferredArtifact já sabe, sem se passar por um envio
                         // confirmado de verdade.
                         cycleHistory.push({ step: stepCount, tool: 'send_document', input: JSON.stringify(toolCall.arguments ?? {}), status: 'deferred' });
                         usedToolInputs.add(inputKey);
@@ -1849,7 +1849,7 @@ export class AgentLoop {
                     // tentativa — o TTS/upload já aconteceu de verdade, não há como "desfazer".
                     // Evidência: 2026-07-05, goal_1783269002590_inaml — 4 áudios enviados em
                     // sequência pelo mesmo pedido do usuário.
-                    if (toolName === 'send_audio' && channelContext?.isAudioAlreadySent?.()) {
+                    if (toolName === 'send_audio' && channelContext?.deliveryTracking?.isAudioAlreadySent?.()) {
                         log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal`);
                         loopMessages.push({
                             role: 'tool',
@@ -2152,7 +2152,7 @@ export class AgentLoop {
                             void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
                         }
                         if (toolName === 'send_audio' && result.success) {
-                            channelContext?.onArtifactDelivered?.('__send_audio_delivered__');
+                            channelContext?.deliveryTracking?.onArtifactDelivered?.('__send_audio_delivered__');
                         }
                         if (terminalTools.includes(toolName) && result.success) {
                             log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded — continuing batch before closing turn`);
@@ -2252,7 +2252,7 @@ export class AgentLoop {
                     // Sem isso, um step "agentloop" que já entregou áudio e é re-executado do
                     // zero por um replan reenviaria áudio de novo também quando o modelo usa o
                     // protocolo JSON de ação em vez de tool-calling nativo.
-                    if (toolName === 'send_audio' && channelContext?.isAudioAlreadySent?.()) {
+                    if (toolName === 'send_audio' && channelContext?.deliveryTracking?.isAudioAlreadySent?.()) {
                         log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal path=json_action`);
                         loopMessages.push({
                             role: 'tool',
@@ -2273,7 +2273,7 @@ export class AgentLoop {
                     const resolvedArgs = atomicRecovery.finalArgs;
                     const toolDuration = Date.now() - toolStartTime;
                     if (toolName === 'send_audio' && result.success) {
-                        channelContext?.onArtifactDelivered?.('__send_audio_delivered__');
+                        channelContext?.deliveryTracking?.onArtifactDelivered?.('__send_audio_delivered__');
                     }
 
                     if (atomicRecovery.recovered && atomicRecovery.recoveryNote) {
@@ -2671,7 +2671,7 @@ export class AgentLoop {
                             if (toolCall.name === 'send_document') {
                                 const finalArgs = (result.finalArgs ?? toolCall.arguments) as Record<string, unknown>;
                                 const deliveredPath = String(finalArgs['file_path'] ?? finalArgs['path'] ?? '');
-                                if (deliveredPath) channelContext?.onArtifactDelivered?.(deliveredPath);
+                                if (deliveredPath) channelContext?.deliveryTracking?.onArtifactDelivered?.(deliveredPath);
                             }
                             traceManager.completeTrace(trace, 'completed', result.result.output);
                             this.persistTrace(trace, stepCount, 'completed', result.result.output, channelContext);

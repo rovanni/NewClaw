@@ -1892,42 +1892,44 @@ export class GoalExecutionLoop {
         // deferSendDocument só aceita um artefato por caminho único nesta execução.
         const goalChannelContext: ChannelContext = {
             ...channelContext,
-            deferSendDocument: (args) => {
-                const fp = String(args['file_path'] ?? args['path'] ?? '');
-                const key = fp || JSON.stringify(args);
-                if (deferredSendArgsMap.has(key)) {
-                    log.info(
-                        `[DELIVERY-DEDUP] artifact="${fp}"` +
-                        ` reason=duplicate_defer_in_agentloop` +
-                        ` existing_delivery=pending` +
-                        ` decision=skip`
-                    );
-                    return;
-                }
-                deferredSendArgsMap.set(key, args);
-                deferredSendArgs.push(args);
-                log.info(`[DELIVERY-REGISTRY] artifact="${fp}" status=deferred_registered`);
+            deliveryTracking: {
+                deferSendDocument: (args) => {
+                    const fp = String(args['file_path'] ?? args['path'] ?? '');
+                    const key = fp || JSON.stringify(args);
+                    if (deferredSendArgsMap.has(key)) {
+                        log.info(
+                            `[DELIVERY-DEDUP] artifact="${fp}"` +
+                            ` reason=duplicate_defer_in_agentloop` +
+                            ` existing_delivery=pending` +
+                            ` decision=skip`
+                        );
+                        return;
+                    }
+                    deferredSendArgsMap.set(key, args);
+                    deferredSendArgs.push(args);
+                    log.info(`[DELIVERY-REGISTRY] artifact="${fp}" status=deferred_registered`);
+                },
+                isDeferredArtifact: (filePath: string) => {
+                    return deferredSendArgsMap.has(filePath);
+                },
+                // CORREÇÃO 1: recebe notificação do DELIVERY-GUARD quando ele entrega
+                // um artefato diretamente (sem passar pelo deferSendDocument).
+                // Propaga para o caller (executeGoal) via onArtifactDelivered, que tem
+                // acesso a sentArtifacts no escopo correto. Isso garante que o path
+                // seja registrado antes que o SemanticValidator possa fazer downgrade
+                // para 'partial', bloqueando S10 e causando reentregas redundantes.
+                onArtifactDelivered: (filePath: string) => {
+                    if (filePath) {
+                        onArtifactDelivered?.(filePath);
+                        log.info(
+                            `[DELIVERY-GUARD-REGISTERED] goal=${goal.id}` +
+                            ` artifact="${filePath}"` +
+                            ` source=delivery_guard_callback`
+                        );
+                    }
+                },
+                isAudioAlreadySent: () => isAudioAlreadySent?.() ?? false,
             },
-            isDeferredArtifact: (filePath: string) => {
-                return deferredSendArgsMap.has(filePath);
-            },
-            // CORREÇÃO 1: recebe notificação do DELIVERY-GUARD quando ele entrega
-            // um artefato diretamente (sem passar pelo deferSendDocument).
-            // Propaga para o caller (executeGoal) via onArtifactDelivered, que tem
-            // acesso a sentArtifacts no escopo correto. Isso garante que o path
-            // seja registrado antes que o SemanticValidator possa fazer downgrade
-            // para 'partial', bloqueando S10 e causando reentregas redundantes.
-            onArtifactDelivered: (filePath: string) => {
-                if (filePath) {
-                    onArtifactDelivered?.(filePath);
-                    log.info(
-                        `[DELIVERY-GUARD-REGISTERED] goal=${goal.id}` +
-                        ` artifact="${filePath}"` +
-                        ` source=delivery_guard_callback`
-                    );
-                }
-            },
-            isAudioAlreadySent: () => isAudioAlreadySent?.() ?? false,
         };
         const response = await this.agentLoop.process(
             goal.conversationId,
