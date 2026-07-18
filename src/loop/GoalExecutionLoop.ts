@@ -904,11 +904,28 @@ export class GoalExecutionLoop {
                         // Exclui também arquivos que já têm um send_document PENDENTE no plano atual
                         // (agendado mas ainda não executado) — sem isso, deliverable_check injetava um
                         // segundo send step pro mesmo arquivo enquanto o primeiro ainda não tinha rodado.
+                        //
+                        // ARCH-005 (S16): `substantiveFiles` vem de `checkDeliverables()`, que retorna
+                        // paths ABSOLUTOS (path.join(workspaceDir, ...) na varredura de disco).
+                        // `sentArtifacts`/`toolArgs.file_path` guardam o path CRU como o LLM passou pro
+                        // `send_document` — que pode ser relativo (ex.: "aula.pptx"). Comparar os dois
+                        // direto por `.has()` sem normalizar fazia um arquivo JÁ ENTREGUE (via path
+                        // relativo) parecer "não entregue" aqui, sempre que checkDeliverables o
+                        // encontrasse pelo path absoluto — gerando um send_document duplicado do mesmo
+                        // arquivo. Resolve ambos os lados para a mesma representação (resolvePath(),
+                        // já usada por write/read/exec_command) antes de comparar.
+                        const sentArtifactsResolved = new Set(
+                            [...sentArtifacts]
+                                .filter(p => p.length > 0 && p !== AUDIO_DELIVERED_KEY)
+                                .map(p => resolvePath(p).resolved)
+                        );
                         const pendingSendPaths = new Set(
                             this.getPendingSteps(currentGoal.currentPlan, 'send_document')
                                 .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
+                                .filter(p => p.length > 0)
+                                .map(p => resolvePath(p).resolved)
                         );
-                        const unsentFiles = substantiveFiles.filter(f => !sentArtifacts.has(f) && !pendingSendPaths.has(f));
+                        const unsentFiles = substantiveFiles.filter(f => !sentArtifactsResolved.has(f) && !pendingSendPaths.has(f));
                         if (unsentFiles.length > 0) {
                             const skipped = substantiveFiles.length - unsentFiles.length;
                             log.info(`[GoalLoop] deliverable_check: ${unsentFiles.length} arquivo(s) no workspace${skipped > 0 ? ` (${skipped} já enviado(s) ignorado(s))` : ''} — injetando send steps`);
