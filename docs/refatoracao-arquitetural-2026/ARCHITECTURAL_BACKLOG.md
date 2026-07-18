@@ -150,8 +150,9 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Unitário (cenário de downgrade semântico seguido de `markStepDone`) + regressão.
 - **Métrica que deverá melhorar:** Source of Truth Conflicts (indicador qualitativo).
 
-### ARCH-008 — `progressModel` derivado sob demanda de `goal.attempts`/`successCriteria`
+### ARCH-008 — `progressModel` derivado sob demanda de `goal.attempts`/`successCriteria` ⏸ Adiado (2026-07-18, Sprint S17) — premissa citava mecanismo inexistente
 - **Descrição:** `state.cognitiveContext` já recebeu o tratamento de "derivar de `goal.attempts` a cada chamada" via `buildIncrementalExecutionContext()` — restart-safe. `state.progressModel` não recebeu o mesmo tratamento: reseta para `{components:[], overallPercent:0}` a cada `runLoop()`, incluindo após recovery pós-restart, mesmo quando `goal.attempts`/`successCriteria` já provam progresso real.
+- **Adiado na S17, antes de codificar (Fase 1 da diretriz de arquitetura):** a premissa citava um mecanismo que não existe — não há recovery automático de goals no boot (`AgentController.getAllActive()` só loga, `recovered=false` explícito no próprio log; nunca chama `resumeGoal()`/`runLoop()`). O defeito subjacente (progressModel perdido) é real, mas o gatilho é outro: o único call site de `resumeGoal()` é `GoalOrchestrator.resumeFromAuth()` (fluxo de aprovação de ação perigosa), que reseta `progressModel` no MESMO processo, sem restart, sempre que um goal com histórico bate numa autorização. Registro técnico completo, incluindo o fix desenhado (`buildInitialProgressModel`, não implementado): `docs/issues/009-arch008-no-automatic-boot-recovery-exists.md`. 6º modo de falha catalogado em `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`. Por decisão do usuário, adiado sem consolidação com outro tema (categoria distinta de ARCH-009/ARCH-024) — retomar lendo o achado antes de re-propor o card original.
 - **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (L548-561 criação do `state`, L2566-2601 `updateProgressModel`).
 - **Origem (auditorias):** Auditoria II.
 - **Categoria:** Single Source of Truth.
@@ -375,7 +376,7 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Impacto:** Muito Alto.
 - **Risco:** Alto (mesma natureza do ARCH-019, arquivo central do sistema de goals).
 - **Esforço:** Muito Alto.
-- **Dependências:** ARCH-005, ARCH-006, ARCH-007, ARCH-008, ARCH-009. **Nunca simultâneo com ARCH-019.**
+- **Dependências:** ARCH-005, ARCH-006, ARCH-007, ARCH-008, ARCH-009. **Nunca simultâneo com ARCH-019.** ARCH-008/ARCH-009 adiados (S17/S14) não bloqueiam — dependência era sequenciamento, não funcional; ver notas nos respectivos cards.
 - **Pré-requisitos:** Mesma exigência de mapeamento de efeitos colaterais do ARCH-019.
 - **Critérios de Aceite:** Nenhum método resultante excede 300 linhas.
 - **Definition of Done:** Validação Progressiva completa até etapa 4.

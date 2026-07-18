@@ -48,7 +48,7 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 | 2026-08-S15 | Ago/2026 | Single Source of Truth | ARCH-010 | 🟢 | CP01 | ebea0f5 | `hasIdenticalFailedAttempt()` nomeado + `computeToolInputKey` (não índice persistido — SSOT/restart-safety), fix colateral direto: dedup de `send_document` por `file_path`, teste `S120`, 123/123 |
 | 2026-08-CP02 | Ago/2026 | Checkpoint | — | 🟢 | S08-S15 | — | S08-S13/S15 🟢 (7/8), S14 ⏸ adiada com justificativa registrada (não é falha); 0 violações de fronteira novas, regressão 123/123, nenhum indicador piorou |
 | 2026-08-S16 | Ago/2026 | Single Source of Truth | ARCH-005 | 🟢 | CP02 | 7abede2 | Escopo redesenhado (Fase 1/2): premissa das "4 estruturas desincronizadas" não se sustentou; fix cirúrgico de normalização de path (`resolvePath`) em `deliverable_check`, achado real confirmado em ambiente real (LLM real, goal real), `S121` novo, 124/124 |
-| 2026-08-S17 | Ago/2026 | Single Source of Truth | ARCH-008 | ⚪ | S16 | — | — |
+| 2026-08-S17 | Ago/2026 | Single Source of Truth | ARCH-008 | ⏸ | S16 | (pendente — commit ao final desta Sprint) | Adiado antes de codificar — premissa citava "recovery no boot" que não existe (6º modo de falha); defeito real via resumeGoal()/auth, fix desenhado em `docs/issues/009` |
 | 2026-08-S18 | Ago/2026 | Decision Ownership | ARCH-018 | ⚪ | S16 | — | — |
 | 2026-09-S19 | Set/2026 | Structural Simplification | ARCH-024-RFC | ⚪ | CP02 | — | — |
 | 2026-09-S20 | Set/2026 | Decision Ownership | ARCH-015-RFC | ⚪ | S06 | — | — |
@@ -68,21 +68,22 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01-S13/S15/S16, Checkpoints CP01/CP02 concluídos; S14 adiada (ver abaixo)
-**Progresso:** 15 / 26 ARCH concluídos (~58%) — ARCH-009 (S14) adiado, não conta como concluído nem como pendência simples
-**Sprint Atual:** Nenhuma em andamento (S16 concluída — próxima é 2026-08-S17)
-**Próxima Sprint:** 2026-08-S17 (ARCH-008) — `progressModel` restart-safe, mesmo padrão de `buildIncrementalExecutionContext`; exige ambiente real (cenário de restart)
-**Epic Atual:** Epic A concluído; Epic B quase concluído — ARCH-005/006/007/010/011 feitos, só ARCH-008/012 restantes (ARCH-009 adiado); Epic C em andamento — ARCH-014/016/017 feitos; Epic D iniciado — ARCH-023 feito; Epic E concluído — ARCH-025/026 feitos
+**Status Geral:** 🟢 Em execução — Fase 0, S01-S13/S15/S16, Checkpoints CP01/CP02 concluídos; S14/S17 adiadas (ver abaixo)
+**Progresso:** 15 / 26 ARCH concluídos (~58%) — ARCH-008 (S17) e ARCH-009 (S14) adiados, não contam como concluídos nem como pendências simples
+**Sprint Atual:** Nenhuma em andamento (S17 adiada antes de codificar — próxima é 2026-08-S18)
+**Próxima Sprint:** 2026-08-S18 (ARCH-018) — `evaluateCriteria` absorve `structuralBypass`; área do bug de deadlock histórico ("reenviar arquivo existente", jul/2026), exige ambiente real
+**Epic Atual:** Epic A concluído; Epic B "concluído" no sentido de nenhum item executável restante nesta ordem — ARCH-005/006/007/010/011 feitos, ARCH-008 adiado, ARCH-012 deliberadamente deferido para o fim do programa; Epic C em andamento — ARCH-014/016/017 feitos; Epic D iniciado — ARCH-023 feito; Epic E concluído — ARCH-025/026 feitos
 **Próximo Marco:** 2026-09-CP03
-**Última Atualização:** 2026-07-18 (Sprint S16 concluída)
-**Build:** 🟢 `npm run build` limpo
-**Testes:** 🟢 124/124
-**Regressão:** 🟢 124/124 (pós-S16, `S121` novo + `S10` corrigido)
-**Riscos Abertos:** 0 materializados — nota permanente: a VPS `venus@10.0.0.10` usada para validação Linux tem histórico de exigir `.env`/`WORKSPACE_DIR` explícito (skill `verify`) para não gerar falso-positivo — ver `docs/issues/002`. S16 (ARCH-005), o item sinalizado como maior risco do programa até então, teve o escopo redesenhado na Fase 1/2 para um fix cirúrgico — risco real materializado ficou bem menor que o estimado.
+**Última Atualização:** 2026-07-18 (Sprint S17 adiada)
+**Build:** 🟢 `npm run build` limpo (inalterado — S17 não tocou código)
+**Testes:** 🟢 124/124 (inalterado)
+**Regressão:** 🟢 124/124 (pós-S16, inalterado — S17 não tocou código)
+**Riscos Abertos:** 0 materializados — nota permanente: a VPS `venus@10.0.0.10` usada para validação Linux tem histórico de exigir `.env`/`WORKSPACE_DIR` explícito (skill `verify`) para não gerar falso-positivo — ver `docs/issues/002`. S16 (ARCH-005), o item sinalizado como maior risco do programa até então, teve o escopo redesenhado na Fase 1/2 para um fix cirúrgico — risco real materializado ficou bem menor que o estimado. S18 (ARCH-018), próxima Sprint, é a área do bug de deadlock histórico já documentado — atenção redobrada na Fase 1.
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
 **Temas Adiados para Revisão Consolidada:** 1 (ARCH-009 — ver `docs/refatoracao-arquitetural-2026/REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`, que já lista ARCH-024 e `docs/issues/004` como temas correlatos a tratar junto quando essa revisão abrir)
-**Dívida Arquitetural Restante:** 11 ARCH (9 cards executáveis restantes + ARCH-009 adiado para revisão consolidada + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
-**Achados fora de escopo documentados (`docs/issues/`):** 002 (falsos-positivos de validação VPS), 003 (`core/index.ts` barrel possivelmente morto), 004 (2 funções `extractText` com nome colidindo), 005 (regex de tool names desatualizada — corrigido de brinde na própria S10), 006 (análise de por que os 4 detectores de loop não convergem pra 1 fonte só — não é pendência, é registro de decisão), 008 (ARCH-009: `extends ToolResult` não compila + reintroduz violação de fronteira do ARCH-004 — motivo do adiamento de S14)
+**Temas Adiados sem Consolidação (categoria própria):** 1 (ARCH-008 — premissa citava mecanismo de recovery-no-boot inexistente; fix desenhado, não implementado; `docs/issues/009`)
+**Dívida Arquitetural Restante:** 10 ARCH (8 cards executáveis restantes + ARCH-008/ARCH-009 adiados + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
+**Achados fora de escopo documentados (`docs/issues/`):** 002 (falsos-positivos de validação VPS), 003 (`core/index.ts` barrel possivelmente morto), 004 (2 funções `extractText` com nome colidindo), 005 (regex de tool names desatualizada — corrigido de brinde na própria S10), 006 (análise de por que os 4 detectores de loop não convergem pra 1 fonte só — não é pendência, é registro de decisão), 008 (ARCH-009: `extends ToolResult` não compila + reintroduz violação de fronteira do ARCH-004 — motivo do adiamento de S14), 009 (ARCH-008: "recovery no boot" citado pelo card não existe no runtime — motivo do adiamento de S17)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
 
@@ -440,22 +441,26 @@ Validação
 - **Commit esperado:** 2 commits (implementação + teste; depois docs — registro de hash+métricas).
 - **Status:** 🟢 Concluída em 2026-07-18.
 
-### Sprint 2026-08-S17
+### Sprint 2026-08-S17 ⏸ Adiada — ver decisão abaixo
 - **Número:** S17
 - **Identificação Temporal:** 2026-08-S17
 - **Fase:** Execução Arquitetural
 - **Epic:** Single Source of Truth
 - **Card ARCH:** ARCH-008
 - **Objetivo:** `progressModel` passa a ser derivado sob demanda de `goal.attempts`/`successCriteria`, com o mesmo tratamento que `cognitiveContext` já recebeu via `buildIncrementalExecutionContext`.
-- **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (L548-561, L2566-2601).
-- **Dependências:** S16 (mesmo padrão de "derivar da fonte persistida").
-- **Checklist de execução:** padrão.
-- **Checklist de validação:** padrão + **ambiente real obrigatório** (cenário de restart: matar o processo com goal em `executing`, validar recovery).
-- **Rollback:** reverter.
-- **Critérios de Aceite:** goal recuperado após restart mostra `progressModel` consistente com o histórico real, não 0%.
-- **Definition of Done:** Validação Progressiva completa até etapa 4.
-- **Commit esperado:** 1 commit.
-- **Status:** ⚪ Não iniciada.
+- **Arquivos afetados:** nenhum tocado em código — só documentação (a Sprint foi adiada na Fase 1, antes de qualquer mudança).
+- **Dependências:** S16 (mesmo padrão de "derivar da fonte persistida") — cumprida, não é o motivo do adiamento.
+- **Premissa reverificada (Fase 1) — não se sustentou, categoria nova (6º modo de falha):** o card justificava a mudança citando "o sistema já tem recovery de goals ativos no boot" — **esse mecanismo não existe**. `AgentController.getAllActive()` roda no boot e no shutdown só para LOGAR (`recovered=false` explícito no próprio log de produção) — nunca chama `resumeGoal()`/`runLoop()`. Um goal deixado `executing` quando o processo morre fica permanentemente órfão, sem qualquer recovery, com ou sem este ARCH.
+- **O defeito subjacente é real, só o gatilho é outro:** o único call site de `resumeGoal()` é `GoalOrchestrator.resumeFromAuth()` (aprovação de ação perigosa) — mesmo processo, sem restart algum. `progressModel` reseta ali igualmente, e esse caminho é MAIS frequente/fácil de reproduzir do que o cenário de restart que o card descrevia.
+- **Fix desenhado (não implementado):** `buildInitialProgressModel(goal)` — reconstrói `components` a partir de `goal.currentPlan` (steps `completed`) + `goal.attempts` (steps `pending` com attempt já registrado), no mesmo espírito de `buildIncrementalExecutionContext()`. Usado só na criação do `state` em `runLoop()`. Para `executeGoal()` (goal novo), retorna `[]` — zero mudança nesse caminho. Registro técnico completo: `docs/issues/009-arch008-no-automatic-boot-recovery-exists.md`.
+- **Decisão do usuário:** adiar e documentar, mesma linha de S14 — a premissa errada era estrutural o suficiente (o mecanismo citado como motivação simplesmente não existe) para justificar não implementar sem revisão adicional, mesmo com o fix já desenhado.
+- **Checklist de execução:** interrompido conscientemente após a Fase 1/2 — nenhuma implementação, nenhum build, nenhum teste executado.
+- **Checklist de validação:** N/A — sem código tocado, indicadores do Dashboard Executivo permanecem exatamente como estavam pós-S16.
+- **Rollback:** N/A — nenhuma mudança de código feita.
+- **Critérios de Aceite:** não avaliado — Sprint adiada antes da fase de implementação. **Nota para quando for retomado:** a prescrição original de etapa 4 ("matar o processo, validar recovery") não é testável, porque não existe recovery-por-restart — a validação real precisa ser via fluxo de autorização (`resumeFromAuth`), não restart de processo.
+- **Definition of Done:** N/A nesta forma.
+- **Commit esperado:** 1 commit (só documentação — achado + adiamento, sem código).
+- **Status:** ⏸ Adiada em 2026-07-18, antes de codificar.
 
 ### Sprint 2026-11-S27 (execução deferida ao final do programa)
 - **Número:** S27
@@ -689,7 +694,7 @@ Validação
 - **Card ARCH:** ARCH-020
 - **Objetivo:** Decompor `GoalExecutionLoop.runLoopInternal()` (~1030 linhas) e o `switch(cycleResult.outcome)` (~400 linhas, ARCH-021 absorvido aqui) em métodos/fases nomeadas.
 - **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (L570-1602).
-- **Dependências:** S16 (ARCH-005), S03 (ARCH-006), S13 (ARCH-007), S17 (ARCH-008), S14 (ARCH-009). **Atualização (S14 adiada, 2026-07-17): não bloqueia mais — ver nota em S14; `REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`.**
+- **Dependências:** S16 (ARCH-005), S03 (ARCH-006), S13 (ARCH-007), S17 (ARCH-008), S14 (ARCH-009). **Atualização (S14 adiada, 2026-07-17): não bloqueia mais — ver nota em S14; `REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`. Atualização (S17 adiada, 2026-07-18): idem — ver `docs/issues/009`.**
 - **Checklist de execução:** padrão + mapear TODOS os efeitos colaterais capturados por closure antes de extrair qualquer método (mandatório — sem teste de sistema que cubra a função inteira hoje).
 - **Checklist de validação:** padrão + **Validação Progressiva completa até etapa 4 — obrigatória.**
 - **Rollback:** reverter o commit (grande, atômico).
@@ -797,6 +802,7 @@ Cada Sprint concluída deve adicionar uma linha aqui, no formato:
 | S14 | 2026-07-17 | ~1 sessão (adiada na Fase 1/2, sem implementação) | 92c46da (docs) | 0 arquivos de código; 4 arquivos de doc (`docs/issues/008` novo, `REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md` novo, `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`, `ARCHITECTURAL_BACKLOG.md`) + este documento | N/A — nenhum código tocado, nada a rodar | `output`/`error` redeclarados independentemente em `ToolResult`/`CycleResult`/`GoalAttempt` (premissa do card) | Nenhuma mudança — Sprint adiada antes de codificar | 0 causados (nenhum código tocado), mas achado grave sobre a viabilidade do card em si | A prescrição literal do card (`extends ToolResult`) não compila — `output` obrigatório em `ToolResult` vs. opcional em `CycleResult`/`GoalAttempt`, TS não permite herdar obrigatório→opcional — e, se forçada via mudança de tipo, reintroduziria a violação de fronteira `shared/→loop/` que o ARCH-004 (S02) já corrigiu (`GoalAttempt` mora em `shared/domainTypes.ts` desde então). Primeira Sprint do programa em que a PRESCRIÇÃO do card, não só o diagnóstico/causa citada, se mostrou estruturalmente inviável (5º modo de falha, catalogado em `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`) — a auditoria original comparou nomes de campo entre 3 tipos sem verificar obrigatoriedade nem a camada física de cada um, que mudou desde a auditoria por causa de outra Sprint deste mesmo programa (ARCH-004). Por decisão do usuário, consolidado (não resolvido pontualmente) com achados correlatos de modelagem de tipo compartilhado — `REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`, que já inclui ARCH-024 (mesma classe de problema em `ChannelContext`) e `docs/issues/004`. |
 | S15 | 2026-07-17 | ~1 sessão | ebea0f5 | 2 (`loop/GoalEvaluator.ts`, teste novo `S120`) | `tsc --noEmit` (limpo) + `npm run build` (limpo) + regressão (123/123, 122 + `S120` novo, 4 cenários/5 assertions) | Dedup `alreadyFailed` inline em `evaluate()`, `JSON.stringify` bruto para comparar args, `send_document` nunca dedupava entre legendas cosmeticamente diferentes | `hasIdenticalFailedAttempt()` método nomeado, chave via `computeToolInputKey()` (já existente/testado, S90) — sem índice persistido/cacheado | 0 causados por este ARCH | A premissa do card citava um "método" que na verdade era uma `const` local, e pedia responder "quantas vezes já falhou" quando o código só precisa de um booleano ("já falhou alguma vez com estes args exatos?") — nenhum consumidor real precisa da contagem. Mais importante: um índice incremental de verdade (o que o card literalmente pedia) foi conscientemente REJEITADO na Fase 2 — `Goal` é recarregado do `GoalStore` a cada mudança de estado relevante em `runLoopInternal`, não existe objeto estável em memória entre ciclos pra um cache se anexar com segurança, e um índice persistido criaria uma segunda fonte de verdade para dado já 100% contido em `goal.attempts` (o oposto do que o Epic B pede), com o mesmo risco de restart-safety ainda em aberto do ARCH-008. A solução implementada (método nomeado + reuso de `computeToolInputKey`) entrega a "clareza" que era o ganho real admitido pelo próprio card, sem os riscos do índice literal — e como efeito direto (não oportunista) de calcular a chave de args corretamente, corrigiu o mesmo gap de dedup de `send_document` por legenda que S90 já tinha corrigido numa camada diferente (`AgentLoop`), agora consistente também em `GoalEvaluator`. |
 | S16 | 2026-07-18 | ~1 sessão (incl. Fase 1/2 extensa + etapa 4 real) | 7abede2 | 2 código (`loop/GoalExecutionLoop.ts`, teste novo `S121`) + 1 teste corrigido (`S10`) | `tsc --noEmit` (limpo) + `npm run build` (limpo) + regressão (124/124, 123 + `S121` novo, 2 cenários/3 assertions) + **etapa 4 real**: instância isolada Windows, LLM real (glm-5.2:cloud), goal real, dado real do SQLite confirmando a precondição do bug e a correção nos dois sentidos | "4 estruturas desincronizadas" de artefatos entregues (premissa do card) | Fix cirúrgico: `sentArtifacts`/`pendingSendPaths` normalizados via `resolvePath()` antes de comparar contra paths absolutos de `checkDeliverables()` em `deliverable_check` | 0 causados por este ARCH — mas achado 1 bug real não documentado antes (mismatch de path cru vs. resolvido), confirmado com dado real em ambiente real | Maior desvio de premissa do programa até agora: a reverificação de Fase 1/2 mostrou que as "4 estruturas" já convergiam majoritariamente para `sentArtifacts` (via `onArtifactDelivered`, `.has()`, fallback em `checkClaimsAgainstEvidence`), que o escopo do card estava incompleto (faltava `planning/artifactContract.ts`), e que os 2 bugs históricos citados como motivação já tinham sido corrigidos por Sprints anteriores a este programa. Consolidar 4 mecanismos já majoritariamente sincronizados, pra prevenir uma 3ª ocorrência hipotética de bug já resolvido 2x, tinha valor questionável frente ao risco de um Refactor Estrutural. Apresentei 3 alternativas ao usuário (fix cirúrgico / consolidação completa / adiar como ARCH-009); optou pelo fix cirúrgico. Etapa 4 (obrigatória pelo card original) foi cumprida apesar do escopo reduzido, por decisão do usuário, dado que a mudança toca resolução de path — categoria com histórico de bugs só visíveis fora de mocks (`feedback_verificar_fixes_de_verdade`); rodei uma instância isolada real com LLM real, que confirmou com dado genuíno (não hipotético) que `send_document` de fato usa paths relativos na prática, validando a precondição do bug antes mesmo de testar o fix. VPS Linux oferecida e dispensada pelo usuário (código só usa `path.resolve`/`path.join`, sem lógica por SO). |
+| S17 | 2026-07-18 | ~1 sessão (adiada na Fase 1, sem implementação) | (pendente — commit ao final desta Sprint) | 0 arquivos de código; 1 arquivo de doc novo (`docs/issues/009`) + `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`/`ARCHITECTURAL_BACKLOG.md` + este documento | N/A — nenhum código tocado, nada a rodar | `progressModel` reseta a cada `runLoop()`, perdendo progresso "pós-restart" (premissa do card) | Nenhuma mudança — Sprint adiada antes de codificar | 0 causados (nenhum código tocado), mas achado grave sobre a premissa do card | O mecanismo citado como motivação/cenário de teste ("o sistema já tem recovery de goals ativos no boot") não existe — `AgentController.getAllActive()` só loga no boot/shutdown (`recovered=false` explícito), nunca chama `resumeGoal()`. O defeito é real, mas via outro caminho: o único call site de `resumeGoal()` é `GoalOrchestrator.resumeFromAuth()` (aprovação de ação perigosa), mesmo processo, sem restart — mais frequente que o cenário descrito. 6º modo de falha catalogado (auditoria afirmando que um mecanismo operacional existe, sem verificar contra o runtime) — o mais perigoso dos 6 por ler como fato de arquitetura, não como inferência. Fix desenhado (`buildInitialProgressModel`, deriva de `goal.currentPlan`/`goal.attempts`, mesmo espírito de `buildIncrementalExecutionContext`) mas não implementado — usuário optou por adiar e documentar em vez de corrigir pontualmente, dado que a etapa 4 prescrita pelo card ("matar o processo") nem sequer é testável nesse sistema. |
 
 ---
 

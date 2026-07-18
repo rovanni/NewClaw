@@ -1,24 +1,25 @@
 # Retrospectiva — Premissas da Auditoria que Não Se Sustentaram na Execução
 
-**Data:** 2026-07-17 (atualizado com o caso S14). **Escopo:** Sprints `2026-07-S01` a
-`2026-08-S14` do Programa de Refatoração Arquitetural (`MASTER_EXECUTION_PLAN.md`), cards ARCH-001
-a ARCH-023 (parcial) + ARCH-009. **Motivo deste documento:** ao final da S11, o usuário perguntou
-diretamente por que premissas erradas estavam se repetindo e pediu um catálogo consolidado — não
-bug a bug, mas como retrospectiva de processo, para melhorar a auditoria em si, não só corrigir os
-sintomas encontrados até agora.
+**Data:** 2026-07-18 (atualizado com os casos S16 e S17). **Escopo:** Sprints `2026-07-S01` a
+`2026-08-S17` do Programa de Refatoração Arquitetural (`MASTER_EXECUTION_PLAN.md`), cards ARCH-001
+a ARCH-023 (parcial) + ARCH-005/008/009/010. **Motivo deste documento:** ao final da S11, o usuário
+perguntou diretamente por que premissas erradas estavam se repetindo e pediu um catálogo
+consolidado — não bug a bug, mas como retrospectiva de processo, para melhorar a auditoria em si,
+não só corrigir os sintomas encontrados até agora.
 
 ## Por que isto importa
 
 `ARCHITECTURAL_BACKLOG.md` é descrito como a consolidação de 4 auditorias ("Auditoria I —
 Duplicação de Decisões", "II — Duplicação de Conhecimento", "III — Complexidade Acidental", "IV —
 Violação de Fronteiras Arquiteturais"), todas conduzidas na mesma sessão de engenharia, cobrindo
-26 cards. Das **12 Sprints já executadas** (incluindo `S14`, que foi adiada na Fase 1/2 antes de
-qualquer código ser escrito — ver caso abaixo), **8 tiveram a premissa original do card corrigida
-durante a execução** — não são exceções, são a maioria. Isso não invalida o backlog (o
-diagnóstico de ALTO NÍVEL — "existe duplicação/acoplamento aqui" — se confirmou em todos os
-casos), mas invalida a confiança de que o TEXTO ESPECÍFICO de cada card (contagens, alegações
-sobre estrutura de dados, equivalência entre padrões, e — caso novo do S14 — a viabilidade da
-PRESCRIÇÃO de implementação em si) pode ser implementado sem reverificação.
+26 cards. Das **15 Sprints já executadas** (incluindo `S14` e `S17`, ambas adiadas na Fase 1/2
+antes de qualquer código ser escrito — ver casos abaixo), **11 tiveram a premissa original do card
+corrigida durante a execução** — não são exceções, são a maioria, cada vez mais larga. Isso não
+invalida o backlog (o diagnóstico de ALTO NÍVEL — "existe duplicação/acoplamento aqui" — se
+confirmou em todos os casos), mas invalida a confiança de que o TEXTO ESPECÍFICO de cada card
+(contagens, alegações sobre estrutura de dados, equivalência entre padrões, viabilidade da
+PRESCRIÇÃO em si — S14 —, e agora até a EXISTÊNCIA do mecanismo citado como motivação — S17) pode
+ser implementado sem reverificação.
 
 ## Catálogo — premissa original vs. achado real vs. causa raiz
 
@@ -149,10 +150,48 @@ PRESCRIÇÃO de implementação em si) pode ser implementado sem reverificação
   (junto com ARCH-024, mesma classe de problema). Registro técnico completo:
   `docs/issues/008-arch009-extends-toolresult-breaks-typing-and-boundary.md`.
 
+### S16 / ARCH-005 — Fonte única de artefatos entregues (categoria: enumeração + equivalência, modos 1+3 combinados)
+- **Premissa do card:** "o fato 'o que já foi entregue' existe em 4 estruturas SEM SINCRONIZAÇÃO
+  AUTOMÁTICA" — `Goal.sentArtifacts`, `cycleHistory` (AgentLoop), `structuralBypass`,
+  `deliverable_check` — consolidar numa função única.
+- **Achado real:** as 4 já convergiam majoritariamente para `sentArtifacts` (via
+  `onArtifactDelivered`, `.has()`, fallback em `checkClaimsAgainstEvidence`) — não estavam
+  desincronizadas como o card afirmava. `structuralBypass` responde uma pergunta diferente por
+  natureza (arquivo existe em disco → bypass de validação, não "foi entregue"), erro de categoria
+  se fosse absorvido na função proposta. O escopo do card também estava incompleto —
+  `planning/artifactContract.ts` também lê `sentArtifacts` e não constava. Os 2 bugs históricos
+  citados como motivação já tinham sido corrigidos por Sprints anteriores a este programa.
+- **Causa raiz:** combinação dos modos 1 (enumeração não-exaustiva — a lista de "4 estruturas" não
+  foi obtida por grep completo de consumidores de `sentArtifacts`) e 3 (equivalência assumida sem
+  verificar — os 4 mecanismos foram tratados como "a mesma decisão duplicada" sem checar se cada
+  um já delegava pra fonte única em algum grau).
+- **Achado novo e real, não coberto pela premissa original:** `sentArtifacts` guarda path CRU,
+  `checkDeliverables()` retorna path ABSOLUTO — `deliverable_check` comparava os dois sem
+  normalizar, podendo reinjetar um `send_document` duplicado de um arquivo já entregue por path
+  relativo. Confirmado com dado real (LLM real usou path relativo de fato) em ambiente real. Fix
+  cirúrgico implementado em vez da consolidação completa — ver `docs/issues/008` não se aplica
+  aqui (esse é do S14); ver commit `7abede2`.
+
+### S17 / ARCH-008 — `progressModel` restart-safe (categoria nova — 6º modo de falha, ver Síntese)
+- **Premissa do card:** "`progressModel` reseta... incluindo após recovery pós-restart... o
+  sistema já tem recovery de goals ativos no boot."
+- **Achado real:** NÃO existe recovery automático no boot — `AgentController.getAllActive()` só
+  loga (`recovered=false` explícito no próprio log), nunca chama `resumeGoal()`/`runLoop()`. O
+  mecanismo citado como motivação/cenário de teste da mudança simplesmente não existe no código.
+- **O defeito subjacente é real, só o gatilho é outro:** o único call site de `resumeGoal()` é
+  `GoalOrchestrator.resumeFromAuth()` (fluxo de aprovação de ação perigosa) — MESMO PROCESSO, sem
+  restart. `progressModel` reseta ali igualmente, perdendo progresso real toda vez que um goal com
+  histórico bate numa autorização e é retomado — mais frequente que o cenário de restart descrito.
+- **Causa raiz:** diferente de todos os modos anteriores — aqui não é uma contagem errada, um
+  grafo de dependência incompleto, uma equivalência semântica falsa, ou uma rota causal trocada. É
+  a auditoria original citando um MECANISMO OPERACIONAL (recovery automático) como justificativa
+  de urgência/cenário de teste sem verificar que ele existe no runtime. Documentado em
+  `docs/issues/009`. Adiado por decisão do usuário — fix desenhado, não implementado.
+
 ## Síntese — causas raiz recorrentes
 
-Analisando os 9 casos acima (excluindo S08, categoria diferente), os erros se agrupam em
-**5 modos de falha da auditoria original**, não 9 causas distintas:
+Analisando os 11 casos acima (excluindo S08, categoria diferente), os erros se agrupam em
+**6 modos de falha da auditoria original**, não 11 causas distintas:
 
 1. **Enumeração não-exaustiva** (S01, S03, S04) — contagens/listas citadas no card eram
    amostras ou resultado de busca parcial, não o resultado de uma varredura automatizada
@@ -179,20 +218,32 @@ Analisando os 9 casos acima (excluindo S08, categoria diferente), os erros se ag
    ANTES de ARCH-004 (S02) ter movido `GoalAttempt` para `shared/domainTypes.ts` — a auditoria
    comparou nomes de campo entre tipos sem verificar (a) compatibilidade de obrigatoriedade nem
    (b) que a topologia de camadas dos tipos envolvidos muda ao longo da execução do próprio
-   programa que o card pertence. É o único modo, dos 5, em que a causa raiz é uma auditoria
-   citando um estado do código anterior a mudanças feitas pelo próprio programa que a consome.
+   programa que o card pertence.
+6. **O mecanismo citado como motivação/justificativa simplesmente não existe no runtime** (S17) —
+   diferente de todos os modos anteriores, aqui a auditoria não errou uma contagem, um grafo, uma
+   equivalência, uma rota causal, ou uma prescrição — errou ao AFIRMAR QUE UM MECANISMO
+   OPERACIONAL EXISTE ("o sistema já tem recovery de goals ativos no boot") sem verificar essa
+   alegação contra o código. O sintoma final que motivou o card (perda de progresso) continua
+   real, só que via um caminho completamente diferente (fluxo de autorização, não restart) que a
+   auditoria nunca mencionou. É o modo mais perigoso de detectar por leitura superficial do card,
+   porque a alegação lê como um FATO sobre a arquitetura ("o sistema já faz X"), não como uma
+   inferência do próprio auditor — só aparece grepando o código em busca do mecanismo citado e
+   confirmando que ele não existe, não lendo a lógica ao redor do sintoma.
 
 **Conclusão sobre a natureza da auditoria original:** os modos 1-4 são consistentes com uma
 auditoria conduzida em **varredura ampla** (grep/leitura rápida cobrindo os 26 cards numa única
 sessão) — apropriada para GERAR candidatos de dívida arquitetural, mas insuficiente para
 PRESCREVER a implementação exata sem reverificação. Isso não é uma falha da auditoria em si (o
-diagnóstico de alto nível — "existe uma violação/duplicação aqui" — se confirmou nos 12/12 casos
+diagnóstico de alto nível — "existe uma violação/duplicação aqui" — se confirmou nos 15/15 casos
 até agora) — é uma característica esperada de qualquer varredura ampla que cobre muito código em
 pouco tempo, agravada no modo 5 pelo fato de o próprio backlog descrever um alvo em movimento (o
-código muda a cada Sprint do mesmo programa que consulta o card). O ponto de falha real seria
-implementar a PRESCRIÇÃO do card sem a Fase 1 (compreensão) da `DIRETRIZ_ARQUITETURA_2026-07-13.md`
-— que já existe, já é mandatória, mas cujo resultado prático (achar a premissa errada em 8 de 12
-casos) não estava sendo consolidado em lugar nenhum até este documento.
+código muda a cada Sprint do mesmo programa que consulta o card), e no modo 6 pelo fato de a
+auditoria ter inferido a EXISTÊNCIA de um mecanismo a partir do comportamento observado
+(perda de progresso), sem confirmar a causa citada por leitura direta do código responsável. O
+ponto de falha real seria implementar a PRESCRIÇÃO do card sem a Fase 1 (compreensão) da
+`DIRETRIZ_ARQUITETURA_2026-07-13.md` — que já existe, já é mandatória, mas cujo resultado prático
+(achar a premissa errada em 11 de 15 casos) não estava sendo consolidado em lugar nenhum até este
+documento.
 
 ## Ação — o que muda no processo a partir de agora
 
@@ -205,12 +256,13 @@ casos) não estava sendo consolidado em lugar nenhum até este documento.
    a norma (7 de 11), não a exceção.
 3. **Achados classificados por modo de falha** (enumeração incompleta / grafo de dependência
    incompleto / equivalência semântica não verificada / rota causal errada / prescrição
-   estruturalmente inviável) ajudam a saber ONDE olhar com mais cuidado em cada card restante:
-   cards que citam contagens específicas → checar modo 1; cards que pedem mover/remover um símbolo
-   → checar modo 2; cards que propõem unificar duas fontes de dados ou dois mecanismos → checar
-   modo 3; cards que citam um mecanismo causal específico → checar modo 4; cards que prescrevem
-   `extends`/herança/fusão de tipos entre camadas → checar modo 5 (compilar mentalmente a
-   prescrição E confirmar em qual camada cada tipo envolvido mora HOJE, não na data da auditoria
-   original).
+   estruturalmente inviável / mecanismo citado inexistente) ajudam a saber ONDE olhar com mais
+   cuidado em cada card restante: cards que citam contagens específicas → checar modo 1; cards que
+   pedem mover/remover um símbolo → checar modo 2; cards que propõem unificar duas fontes de dados
+   ou dois mecanismos → checar modo 3; cards que citam um mecanismo causal específico → checar modo
+   4; cards que prescrevem `extends`/herança/fusão de tipos entre camadas → checar modo 5; cards
+   que justificam a mudança citando "o sistema já faz X"/"já existe Y" como fato de arquitetura →
+   checar modo 6 (grep pelo mecanismo citado ANTES de aceitar que ele existe — não basta o
+   sintoma final bater, o CAMINHO precisa existir de verdade no runtime).
 4. Este documento deve ser **atualizado** (não substituído) conforme novas Sprints revelem novos
    casos — é um registro cumulativo do programa inteiro, não um relatório de um momento único.
