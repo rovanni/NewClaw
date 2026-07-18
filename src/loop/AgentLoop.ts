@@ -262,6 +262,63 @@ type ExecuteAndRecordResult =
     };
 
 /**
+ * ARCH-019 (S25, Incremento 6): estado que `setupTurn()` inicializa e devolve para
+ * `runWithTools()` entrar no `while` principal. Escopo DELIBERADAMENTE menor do que "toda
+ * variável usada depois do setup" — `trace`/`fsm`/`move`/`turnAbort`/`turnSignal` e todo o
+ * estado acumulador do loop principal (`cycleHistory`, `toolFailureCount`, `usedToolInputs`,
+ * os contadores de guard, etc.) são declarados ANTES do `try{}` de `runWithTools()` e
+ * PERMANECEM lá — só o código que roda DEPOIS de `move('START_TURN')` (roteamento de intenção,
+ * fast-paths, sessão/DecisionContext, orçamento de steps) vira `setupTurn()`, chamado de DENTRO
+ * do `try` do chamador. Mover a criação de `trace` para dentro de `setupTurn()` teria sido um
+ * bug real: se `traceManager.startTrace()` lançasse exceção depois de movido, o
+ * `catch(fsmError)` do chamador tentaria ler `trace.status` de um `trace` nunca atribuído — o
+ * mesmo `trace` no original é criado ANTES do `try`, então uma falha ali propaga sem nunca
+ * passar por este catch. Achado por análise cuidadosa da fronteira try/catch antes de escrever
+ * qualquer código, não por teste.
+ */
+interface RunWithToolsLoopState {
+    intentDecision: IntentDecision;
+    reflectionHintInjected: boolean;
+    toolDefs: ToolDefinition[];
+    chatProfile: ModelProfile;
+    loopMessages: LLMMessage[];
+    getContextChars: () => number;
+    initialContextChars: number;
+    decisionCtx: DecisionContext;
+    executionMode: string;
+    maxSteps: number;
+    stepCount: number;
+    hasUsedNativeTools: boolean;
+    consecutiveNonProgressSteps: number;
+    blockedKeyCount: Map<string, number>;
+    dedupAbort: boolean;
+    dedupAbortTool: string;
+    contextGuardWriteExtensionUsed: boolean;
+    memoryFirstInjected: boolean;
+}
+
+type RunWithToolsSetupResult =
+    | { action: 'earlyReturn'; result: string | ProcessedResult }
+    | { action: 'proceed'; state: RunWithToolsLoopState };
+
+/**
+ * ARCH-019 (S25, Incremento 6, corte final): retorno de `checkContextGrowthGuard()`, extraído
+ * do bloco "Context Growth Guard" no topo do `while` de `runWithTools()`. Nunca retorna
+ * `earlyReturn` (o guard só decide `continue` ou deixar o step prosseguir) — por isso só 2
+ * variantes, sempre com os 5 primitivos devolvidos (mesma disciplina que já pegou 3 bugs de
+ * threading nesta Sprint: nenhum branch pode devolver um valor diferente do recebido sem
+ * reatribuir explicitamente).
+ */
+type ContextGrowthGuardResult = {
+    action: 'continueLoop' | 'proceed';
+    dedupAbort: boolean;
+    dedupAbortTool: string;
+    maxSteps: number;
+    contextGuardWriteExtensionUsed: boolean;
+    guardsTriggered: number;
+};
+
+/**
  * Queries whose answers are likely to be volatile even when in memory.
  * Applied generically — not specific to any entity, currency, or domain.
  * Pattern: financial prices, weather, news, legal changes, real-time data.
@@ -2687,6 +2744,411 @@ export class AgentLoop {
         );
     }
 
+    /**
+     * ARCH-019 (S25, Incremento 6): fase de setup do turno, extraída de `runWithTools()` sem
+     * mudar lógica — roteamento de intenção, fast-paths (auth por texto, greeting, current-time,
+     * tool-first), sessão/DecisionContext e orçamento de steps. Chamado de DENTRO do `try` do
+     * chamador (ver nota em `RunWithToolsLoopState` sobre por que `trace`/`move`/`turnSignal`
+     * são recebidos já criados, não inicializados aqui).
+     */
+    private async setupTurn(
+        conversationId: string,
+        userText: string,
+        channelContext: ChannelContext | undefined,
+        trace: ExecutionTrace,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+        memoryFirstInjected: boolean,
+    ): Promise<RunWithToolsSetupResult> {
+        move('START_TURN');
+
+        // recentMessages (quando presente) permite ao UnifiedIntentRouter classificar mensagens
+        // curtas/elípticas ("continue", "isso", "faça") considerando a conversa recente em vez
+        // de classificar o texto isolado — ver RouterContext em UnifiedIntentRouter.ts e a
+        // origem do dado em MessageBus.processMessageCore (microauditoria de continuidade
+        // conversacional, 08/07/2026). Passos sintéticos sem conversa real (goal step, scheduler)
+        // não preenchem este campo — não são elípticos, não precisam de contexto.
+        const intentDecision: IntentDecision = await this.intentRouter.route(userText, {
+            sessionId: conversationId,
+            recentMessages: channelContext?.recentMessages,
+        });
+
+        traceManager.addStep(trace, 'intent_classification', {
+            intent: intentDecision.intent,
+            category: intentDecision.category,
+            executionMode: intentDecision.executionMode,
+            confidence: intentDecision.confidence,
+            source: intentDecision.source,
+            modelCategory: intentDecision.modelCategory,
+            riskLevel: intentDecision.riskLevel,
+            cognitiveLoad: intentDecision.cognitiveLoad,
+            requiresTools: intentDecision.requiresTools,
+            requiresMemory: intentDecision.requiresMemory,
+            requiresReasoning: intentDecision.requiresReasoning,
+        });
+        log.info(`[${this.ts()}] [UNIFIED-ROUTER] intent=${intentDecision.intent} mode=${intentDecision.executionMode} category=${intentDecision.category} confidence=${intentDecision.confidence} source=${intentDecision.source} model=${intentDecision.modelCategory}`);
+
+        // Fast-paths must not fire when there is a pending auth action — the auth check handles those turns.
+        const hasPendingAuth = !!this.authManager.getPending(conversationId);
+
+        // ── Text-based auth approval fallback ───────────────────────────────
+        // When buttons fail to render (e.g. Telegram HTML parse errors), the user may type
+        // "sim" or "cancelar" as plain text. Intercept these before the LLM loop to avoid
+        // the model misinterpreting the response and generating a second auth request.
+        if (hasPendingAuth && this.workflowEngine) {
+            const trimmed = userText.trim();
+            const isApproval = /^(sim|sim[,.]?\s*(pode|ok|autorizado|confirmado|faça|faz)|yes|ok|pode|autoriza)\b/i.test(trimmed) && trimmed.length < 40;
+            const isRejection = /^(não|nao|n\b|cancel[ar]?|cancela|não\s+pode|nope|recusa)\b/i.test(trimmed) && trimmed.length < 40;
+
+            if (isApproval || isRejection) {
+                const pending = this.authManager.getPending(conversationId);
+                if (pending?.txnId) {
+                    const decision: AuthDecision = isApproval ? 'approved' : 'rejected';
+                    log.info(`[${this.ts()}] [AUTH-TEXT] Text-based ${decision} for txn=${pending.txnId}`);
+                    const wfResult = await this.workflowEngine.resume(
+                        pending.txnId,
+                        decision,
+                        (name) => this.tools.get(name)
+                    );
+                    if (wfResult) {
+                        move('FINAL_READY', { decision, txnId: pending.txnId });
+                        return { action: 'earlyReturn', result: await this.resumeFromWorkflow(conversationId, wfResult) };
+                    }
+                }
+            }
+        }
+
+        if (!hasPendingAuth && intentDecision.terminalAction && intentDecision.executionMode === 'direct' && intentDecision.category === 'greeting') {
+            log.info(`[${this.ts()}] [FAST-PATH] Greeting detected — skipping LLM`);
+            move('FINAL_READY');
+            traceManager.completeTrace(trace, 'completed', 'Greeting fast path');
+            const greetings = ['Olá! 👋', 'Oi! Como posso ajudar?', 'E aí! 🚀', 'Olá! Tô aqui! 💪', 'Opa! Bora? 😊'];
+            return { action: 'earlyReturn', result: greetings[Math.floor(Math.random() * greetings.length)] };
+        }
+
+        // ── Current-time fast path ──
+        // Deterministic direct facts (date/time) — Node.js has the clock, no LLM needed.
+        // Must check deterministicMatch explicitly — confirmation ('ok', 'sim') also matches direct+minimal+no-tools.
+        if (
+            !hasPendingAuth &&
+            intentDecision.trace.deterministicMatch === 'current_time' &&
+            intentDecision.source === 'deterministic' &&
+            intentDecision.executionMode === 'direct'
+        ) {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+            const dateStr = now.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+            const reply = `🕐 ${timeStr} — ${dateStr}`;
+            log.info(`[${this.ts()}] [FAST-PATH] current_time direct answer`);
+            move('FINAL_READY');
+            traceManager.completeTrace(trace, 'completed', reply);
+            this.persistTrace(trace, 1, 'completed', reply, channelContext);
+            return { action: 'earlyReturn', result: reply };
+        }
+
+        // ── Tool-first fast path ──
+        // Deterministic tool intents (weather, etc.) bypass the cognition LLM loop entirely.
+        // Falls back to the full loop when the tool is missing or returns an error.
+        if (intentDecision.executionMode === 'tool' && intentDecision.toolName && intentDecision.confidence >= 0.85) {
+            const fastResult = await this.toolFirstFastPath(conversationId, userText, intentDecision, channelContext, trace, move);
+            if (fastResult !== null) {
+                this.activeTurns.delete(conversationId);
+                return { action: 'earlyReturn', result: fastResult };
+            }
+            log.info(`[${this.ts()}] [FAST-PATH] Tool fast path fell back to cognition loop`);
+        }
+
+        this.classificationMemory.store(userText, intentDecision.modelCategory, intentDecision.confidence);
+        this.getTurnState(conversationId).lastToolExecution = null;
+
+        let skillContext = intentDecision.skillContext ?? '';
+
+        // S3c: "Que tipo de problema geral tende a acontecer neste tipo de pedido?"
+        // findCategoryHints() agrega pela categoria inteira (não mais fragmentada por
+        // ferramenta) e inclui fallback para registros legados com a categoria
+        // smuggled em `pattern` — corrige o caso documentado no S16 (20 registros/30%
+        // falha agregada retornando vazio por fragmentação de GROUP BY).
+        const reflectionHint = this.reflectionMemory.findCategoryHints(intentDecision.category);
+        const reflectionHintInjected = reflectionHint.length > 0;
+        if (reflectionHint) {
+            skillContext = skillContext ? `${skillContext}\n\n${reflectionHint}` : reflectionHint;
+        }
+
+        const manualSkills = this.skillLoader.loadAll();
+        const matchedManual = manualSkills.filter(s =>
+            s.triggers?.some(t => userText.toLowerCase().includes(t.toLowerCase()))
+        );
+        if (matchedManual.length > 0) {
+            // Usa conteúdo completo (com seções TASK_ONLY) apenas quando a skill é a
+            // tarefa primária do turno — alta confiança e intent diretamente relacionada.
+            // Em correspondências parciais (trigger presente mas não é o objetivo principal),
+            // injeta globalContent, que omite restrições de escopo de tarefa.
+            const isPrimary = (skillName: string): boolean =>
+                intentDecision.confidence >= 0.75 &&
+                matchedManual.length === 1 &&
+                (intentDecision.intent?.toLowerCase().includes(skillName.toLowerCase()) ||
+                 intentDecision.skillContext?.toLowerCase().includes(skillName.toLowerCase()) ||
+                 false);
+
+            const manualBlock = matchedManual.map(s => {
+                const content = isPrimary(s.name) ? s.content : s.globalContent;
+                const scope = isPrimary(s.name) ? 'primary' : 'context';
+                log.info(`[SKILL] ${s.name} injetado como "${scope}" (confidence=${intentDecision.confidence})`);
+                return `### SKILL MANUAL: ${s.name}\n${content}`;
+            }).join('\n\n');
+
+            skillContext = skillContext ? `${skillContext}\n\n${manualBlock}` : manualBlock;
+            log.info(`[SKILL] Injetando ${matchedManual.length} skill(s) manual(ais): ${matchedManual.map(s => s.name).join(', ')}`);
+        }
+
+        const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision);
+
+        const chatProfile = await this.profileRegistry.resolveProfile(userText);
+        if (chatProfile && intentDecision.modelCategory && intentDecision.confidence >= 0.8) {
+            const intentProfile = this.profileRegistry.getProfileByCategory(intentDecision.modelCategory);
+            if (intentProfile) {
+                chatProfile.model = intentProfile.model;
+                chatProfile.category = intentProfile.category;
+                log.info(`[${this.ts()}] [UNIFIED-ROUTER] Overriding model: ${intentDecision.modelCategory} → ${intentProfile.model}`);
+            }
+        }
+
+        if (!this.sessionContext) {
+            log.error('sessionContext not set — session pipeline is mandatory.');
+            return { action: 'earlyReturn', result: '⚠️ Sessão indisponível no momento. Tente novamente em alguns instantes.' };
+        }
+
+        // Derive context tier from intent: heavier categories need more context.
+        type ContextTierType = import('../loop/ContextBuilder').ContextTier;
+        const FULL_TIER_CATEGORIES = new Set(['creation', 'system_operation', 'data_analysis', 'destructive', 'memory_operation']);
+        const NORMAL_TIER_CATEGORIES = new Set(['information', 'audio', 'vision']);
+        const contextTier: ContextTierType =
+            FULL_TIER_CATEGORIES.has(intentDecision.category) ? 'full' :
+            NORMAL_TIER_CATEGORIES.has(intentDecision.category) ? 'normal' :
+            'minimal';
+        log.info(`[${this.ts()}] [CONTEXT-TIER] category=${intentDecision.category} → tier=${contextTier}`);
+
+        // BUG REAL (log 2026-07-08, suplemento PowerPoint, sessão web:powerpoint-addin-...):
+        // channel estava hardcoded como 'telegram' independente do canal real da conversa.
+        // SessionManager chaveia sessões por `${channel}:${userId}` (SessionManager.ts:193) —
+        // MessageBus grava com o channel real (ex.: "web"), mas aqui a leitura ia para uma
+        // chave diferente ("telegram:<mesmoUserId>"), que nunca teve nada escrito. Resultado:
+        // buildLLMMessages sempre via "0 recent msgs" para qualquer canal != telegram (web,
+        // discord, signal, whatsapp) — o modelo perdia toda a transcript da conversa entre
+        // turnos. Sintoma observado: usuário pediu para aplicar fundo branco, assistente
+        // ofereceu rodar um script e perguntou "quer que eu execute agora?", usuário respondeu
+        // "sim", e o modelo — sem ver a pergunta anterior no contexto — respondeu apenas
+        // "Estou pronto. Como posso ajudar...", sem executar nada. Só passava despercebido no
+        // Telegram porque lá o canal real também é 'telegram' (TelegramAdapter.ts), coincidindo
+        // com o valor fixo. Fix: usar o canal real do turno, com 'telegram' como fallback apenas
+        // quando não há ChannelContext (ex.: AgentController.ts scheduler, que já não propaga
+        // contexto hoje).
+        const sessionKey: SessionKey = { channel: channelContext?.channel ?? 'telegram', userId: conversationId };
+        const { messages: sessionMessages } = await this.sessionContext.buildLLMMessages(
+            sessionKey,
+            buildMasterPrompt(chatProfile.category),
+            userText,
+            skillContext,
+            contextTier,
+            channelContext?.metadata
+        );
+        const loopMessages = sessionMessages;
+        // Context growth guard helpers — defined here so loopMessages is in scope.
+        const getContextChars = () => loopMessages.reduce((s, m) => s + (m.content?.length ?? 0), 0);
+        const initialContextChars = getContextChars();
+
+        // ── DecisionContext ─────────────────────────────────────────────────
+        // Build from all cognitive signals available after session context is ready.
+        // Influences loop behaviour via hints and budget adjustment — never via tool removal.
+        this.getTurnState(conversationId).pendingObserverFeedback = [];   // reset per-turn
+        const ctxMetadata = this.sessionContext.getContextBuilder().getLastBuildMetadata();
+        const memConf = computeMemoryConfidence(ctxMetadata, userText);
+
+        const toolStatsArr = this.decisionMemory.getToolStats();
+        const toolSuccessRates: Record<string, number> = {};
+        for (const s of toolStatsArr) toolSuccessRates[s.toolName] = s.successRate;
+
+        const decisionCtx: DecisionContext = {
+            memoryConfidence:           memConf,
+            hasHighRelevancePreference: ctxMetadata?.hasHighRelevancePreference ?? false,
+            requiresMemoryFirst:        intentDecision.requiresMemory && (memConf === 'high' || memConf === 'medium'),
+            extendedStepBudget:         null, // resolved after maxSteps is computed
+            toolSuccessRates,
+        };
+
+        // Adaptive step budget: ceiling scales with execution complexity.
+        // Falls back to hybrid budget for unknown modes.
+        const executionMode = intentDecision?.executionMode ?? 'hybrid';
+        let maxSteps = STEP_BUDGETS[executionMode] ?? STEP_BUDGETS.hybrid ?? 6;
+
+        // requiresPlanning → upgrade to planner budget when router signals explicit planning need
+        // and the current mode hasn't already allocated enough steps.
+        if (intentDecision.requiresPlanning && maxSteps < (STEP_BUDGETS.planner ?? 15)) {
+            const upgraded = STEP_BUDGETS.planner ?? 15;
+            log.info(`[${this.ts()}] [STEP-BUDGET] requiresPlanning=true → upgrading ${maxSteps} → ${upgraded}`);
+            maxSteps = upgraded;
+            decisionCtx.extendedStepBudget = upgraded;
+        }
+
+        const stepCount = 0;
+        log.info(
+            `[${this.ts()}] [STEP-BUDGET] mode=${executionMode} maxSteps=${maxSteps} ` +
+            `memoryConfidence=${decisionCtx.memoryConfidence} requiresMemoryFirst=${decisionCtx.requiresMemoryFirst}`
+        );
+        const hasUsedNativeTools = false;      // true once any native tool call executes
+        const consecutiveNonProgressSteps = 0; // non-JSON, no-tool responses in a row
+        const blockedKeyCount = new Map<string, number>(); // tracks repeated block attempts per inputKey
+        const dedupAbort = false; // set true when TOOL-DEDUP limit reached — exits while and falls to post-loop synthesis
+        const dedupAbortTool = ''; // tracks which tool caused the dedup abort
+        const contextGuardWriteExtensionUsed = false; // one-shot: see context_growth guard below
+
+        // Pre-loop: inject non-blocking hints derived from DecisionContext.
+        // These orient the LLM without restricting its tool access.
+        if (decisionCtx.requiresMemoryFirst) {
+            const isHighConf = decisionCtx.memoryConfidence === 'high';
+            loopMessages.push({
+                role: 'system',
+                content: isHighConf
+                    ? '[COGNIÇÃO] Memória pessoal com alta confiança disponível. Avalie o bloco de memória ANTES de usar ferramentas externas. Ferramentas externas devem ser usadas apenas se a memória não tiver resposta completa.'
+                    : '[COGNIÇÃO] Memória pessoal disponível, mas pode estar desatualizada para este domínio. Consulte a memória primeiro e valide com fontes externas se necessário.',
+            });
+            memoryFirstInjected = true;
+        }
+
+        return {
+            action: 'proceed',
+            state: {
+                intentDecision, reflectionHintInjected, toolDefs, chatProfile, loopMessages,
+                getContextChars, initialContextChars, decisionCtx, executionMode, maxSteps, stepCount,
+                hasUsedNativeTools, consecutiveNonProgressSteps, blockedKeyCount, dedupAbort,
+                dedupAbortTool, contextGuardWriteExtensionUsed, memoryFirstInjected,
+            },
+        };
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 6, corte final): "Context Growth Guard" extraído do topo do
+     * `while` de `runWithTools()` sem mudar lógica — dois limites independentes (crescimento
+     * relativo e absoluto de tamanho de contexto). `continueLoop` replica o `continue` que
+     * existia no bloco original (aborta o turno, cai na síntese); `proceed` replica a queda
+     * (com ou sem a extensão de +2 steps) para a chamada de LLM logo abaixo no `while`.
+     */
+    private checkContextGrowthGuard(
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        userText: string,
+        stepCount: number,
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        maxSteps: number,
+        contextGuardWriteExtensionUsed: boolean,
+        guardsTriggered: number,
+        getContextChars: () => number,
+        initialContextChars: number,
+        loopMessages: LLMMessage[],
+    ): ContextGrowthGuardResult {
+        // Context Growth Guard — two independent limits:
+        //   ratio    : relative growth, only meaningful when baseline is large enough.
+        //              A small initial context (fresh session) can triple in size after one
+        //              legitimate file read; ratio alone would produce false positives.
+        //   absolute : hard ceiling on chars added, regardless of baseline size.
+        // MIN_RATIO_BASELINE prevents ratio guard from firing on short initial contexts.
+        const MIN_RATIO_BASELINE = 4_000;   // chars; below this, only absolute limit applies
+        const CONTEXT_RATIO_LIMIT = 2.5;    // 150 % growth cap (when baseline is substantial)
+        const CONTEXT_ABSOLUTE_DELTA = 16_000; // ~4 000 tokens of added content
+        const currentContextChars = getContextChars();
+        const contextGrowthRatio = initialContextChars > 0 ? currentContextChars / initialContextChars : 1;
+        const useRatioGuard = initialContextChars >= MIN_RATIO_BASELINE;
+        const ratioTriggered = useRatioGuard && contextGrowthRatio > CONTEXT_RATIO_LIMIT;
+        const absoluteTriggered = currentContextChars > initialContextChars + CONTEXT_ABSOLUTE_DELTA;
+        if ((ratioTriggered || absoluteTriggered) && stepCount > 1 && !dedupAbort) {
+            const triggerReason = ratioTriggered ? 'ratio_limit' : 'absolute_limit';
+            const triggerValue  = ratioTriggered ? contextGrowthRatio : (currentContextChars - initialContextChars);
+            const threshold     = ratioTriggered ? CONTEXT_RATIO_LIMIT : CONTEXT_ABSOLUTE_DELTA;
+            log.warn(
+                `[${this.ts()}] [SAFETY-GUARD] type=context_growth reason=${triggerReason} ` +
+                `value=${triggerValue.toFixed(2)} threshold=${threshold} ` +
+                `initial=${initialContextChars} current=${currentContextChars}`
+            );
+            // Context-aware abort message: when the last tool was 'read', the agent loaded
+            // a file but performed no write/edit. Prevent the model from claiming write success.
+            const lastToolInCycle = cycleHistory.length > 0
+                ? cycleHistory[cycleHistory.length - 1].tool
+                : null;
+            // 'exec_command' deliberately excluded here: it's also the tool used for
+            // read-only recon (e.g. `Get-ChildItem` to find the right file before reading
+            // it), which is NOT evidence that the deliverable was edited. Evidence:
+            // 2026-07-05 audit log, goal "máximo 10 linhas por slide" — 3 recon
+            // `Get-ChildItem` calls (listing *.md/*.pptx) ran before the `read`, made
+            // writeToolsUsedThisTurn true, and steered this guard into the generic
+            // "responda com o que já tem" message instead of "OBRIGATÓRIO use
+            // exec_command" — the turn ended describing a plan instead of executing it.
+            // Same definition DELIVERY-GUARD already uses a few hundred lines below
+            // (wroteFile checks only `tool === 'write'`) — 'edit' kept here too since,
+            // unlike exec_command, it can only ever be a mutation, never a listing.
+            const writeToolsUsedThisTurn = cycleHistory.some(h => h.tool === 'write' || h.tool === 'edit');
+            // Adaptar a mensagem de abort ao intent do usuário:
+            // - Análise/review: o read É a ação principal → instruir a apresentar a análise
+            // - Escrita/geração: o read é preâmbulo → instruir a usar exec_command
+            const isAnalysisAbort = ANALYSIS_INTENT_PATTERN.test(userText);
+            const needsWriteNow = lastToolInCycle === 'read' && !writeToolsUsedThisTurn && !isAnalysisAbort;
+            const ratioAbortMsg = (lastToolInCycle === 'read' && !writeToolsUsedThisTurn)
+                ? isAnalysisAbort
+                    ? '[CONTEXTO GRANDE] O arquivo foi lido com sucesso e está no contexto. ' +
+                      'Agora forneça a análise/avaliação solicitada com base no conteúdo que você acabou de ler. ' +
+                      'Responda com suas observações, sugestões de melhoria e avaliação da estrutura. ' +
+                      'NÃO tente ler mais arquivos. NÃO use ferramentas. Responda AGORA com a análise.'
+                    : '[CONTEXTO EXCESSIVO] O arquivo fonte foi carregado com sucesso e está disponível. ' +
+                      'OBRIGATÓRIO: Use exec_command com um script Python COMPLETO E FUNCIONAL para gerar os arquivos de saída agora. ' +
+                      'O script deve ler o arquivo de origem via open() e escrever todos os arquivos de saída necessários. ' +
+                      'PROIBIDO: Afirmar que os arquivos foram criados sem ter executado exec_command. ' +
+                      'PROIBIDO: Criar scripts placeholder com "pass" ou "# TODO" — escreva o código real. ' +
+                      'NÃO leia mais arquivos no contexto. Processe TUDO via exec_command + Python.'
+                : '[CONTEXTO EXCESSIVO] O contexto cresceu demais. Use os dados já obtidos para responder agora sem usar mais ferramentas.';
+            loopMessages.push({
+                role: 'system',
+                content: ratioAbortMsg,
+            });
+            guardsTriggered++;
+
+            // needsWriteNow tells the model "use exec_command AGORA", but post-loop
+            // synthesis (below) is text-only and can never execute that instruction —
+            // setting dedupAbort here would make the guard's own message a lie the model
+            // has no way to act on. Evidence: 2026-07-05 audit log, 4 consecutive turns
+            // (goal "máximo 10 linhas por slide") all hit ratio≈2.6-2.7 right after the
+            // single `read` needed before editing, aborted before any write/exec_command
+            // was attempted, and ended in either a hallucination-block or an honest
+            // "vou ler e depois ajustar" that never got a chance to actually happen.
+            // Fix: grant ONE extra real step (bounded, same +2 pattern as DELIVERY-GUARD's
+            // deliveryStepCap) so the model can act on its own instruction. If context still
+            // hasn't produced a write/exec_command after that, abort for real — one-shot via
+            // contextGuardWriteExtensionUsed prevents this from looping indefinitely.
+            //
+            // IMPORTANT: do NOT `continue` here. This guard runs at the TOP of the while
+            // loop body, before the LLM call below — `continue` jumps back to `while(...)`,
+            // which re-enters the loop and hits this SAME check again immediately (nothing
+            // changed: no LLM call happened, no tool ran), consuming the one-shot flag on
+            // the very next iteration without ever reaching the LLM call. Evidence:
+            // 2026-07-05 21:33 audit log — Step 3 granted the extension, Step 4 logged
+            // right after with zero LLM/tool activity in between, hit ratio_limit again
+            // (one-shot now used) and aborted for real. Falling through (no continue) lets
+            // THIS iteration's LLM call run with the injected instruction, which is the
+            // whole point of the extension.
+            if (needsWriteNow && !contextGuardWriteExtensionUsed) {
+                contextGuardWriteExtensionUsed = true;
+                if (maxSteps < stepCount + 2) maxSteps = stepCount + 2;
+                log.info(`[${this.ts()}] [SAFETY-GUARD] context_growth: granting one extra step to act on exec_command instruction (maxSteps→${maxSteps})`);
+                // No `continue`/`dedupAbort` here — falls through to the LLM call below,
+                // in this SAME iteration, so the model can actually act on the instruction.
+            } else {
+                dedupAbort = true;
+                dedupAbortTool = `context_growth:${triggerReason}`;
+                // Pula a próxima chamada LLM — evita que o modelo crie artefato stub sob
+                // pressão de contexto (que o DELIVERY-GUARD enviaria). Cai na síntese.
+                return { action: 'continueLoop', dedupAbort, dedupAbortTool, maxSteps, contextGuardWriteExtensionUsed, guardsTriggered };
+            }
+        }
+        return { action: 'proceed', dedupAbort, dedupAbortTool, maxSteps, contextGuardWriteExtensionUsed, guardsTriggered };
+    }
+
     // ── Core execution loop ────────────────────────────────────────────────────
 
     private async runWithTools(conversationId: string, userText: string, iteration: number, _userId?: string, channelContext?: ChannelContext): Promise<string | ProcessedResult> {
@@ -2773,260 +3235,22 @@ export class AgentLoop {
         };
 
         try {
-        move('START_TURN');
-
-        // recentMessages (quando presente) permite ao UnifiedIntentRouter classificar mensagens
-        // curtas/elípticas ("continue", "isso", "faça") considerando a conversa recente em vez
-        // de classificar o texto isolado — ver RouterContext em UnifiedIntentRouter.ts e a
-        // origem do dado em MessageBus.processMessageCore (microauditoria de continuidade
-        // conversacional, 08/07/2026). Passos sintéticos sem conversa real (goal step, scheduler)
-        // não preenchem este campo — não são elípticos, não precisam de contexto.
-        const intentDecision: IntentDecision = await this.intentRouter.route(userText, {
-            sessionId: conversationId,
-            recentMessages: channelContext?.recentMessages,
-        });
-
-        traceManager.addStep(trace, 'intent_classification', {
-            intent: intentDecision.intent,
-            category: intentDecision.category,
-            executionMode: intentDecision.executionMode,
-            confidence: intentDecision.confidence,
-            source: intentDecision.source,
-            modelCategory: intentDecision.modelCategory,
-            riskLevel: intentDecision.riskLevel,
-            cognitiveLoad: intentDecision.cognitiveLoad,
-            requiresTools: intentDecision.requiresTools,
-            requiresMemory: intentDecision.requiresMemory,
-            requiresReasoning: intentDecision.requiresReasoning,
-        });
-        log.info(`[${this.ts()}] [UNIFIED-ROUTER] intent=${intentDecision.intent} mode=${intentDecision.executionMode} category=${intentDecision.category} confidence=${intentDecision.confidence} source=${intentDecision.source} model=${intentDecision.modelCategory}`);
-
-        // Fast-paths must not fire when there is a pending auth action — the auth check handles those turns.
-        const hasPendingAuth = !!this.authManager.getPending(conversationId);
-
-        // ── Text-based auth approval fallback ───────────────────────────────
-        // When buttons fail to render (e.g. Telegram HTML parse errors), the user may type
-        // "sim" or "cancelar" as plain text. Intercept these before the LLM loop to avoid
-        // the model misinterpreting the response and generating a second auth request.
-        if (hasPendingAuth && this.workflowEngine) {
-            const trimmed = userText.trim();
-            const isApproval = /^(sim|sim[,.]?\s*(pode|ok|autorizado|confirmado|faça|faz)|yes|ok|pode|autoriza)\b/i.test(trimmed) && trimmed.length < 40;
-            const isRejection = /^(não|nao|n\b|cancel[ar]?|cancela|não\s+pode|nope|recusa)\b/i.test(trimmed) && trimmed.length < 40;
-
-            if (isApproval || isRejection) {
-                const pending = this.authManager.getPending(conversationId);
-                if (pending?.txnId) {
-                    const decision: AuthDecision = isApproval ? 'approved' : 'rejected';
-                    log.info(`[${this.ts()}] [AUTH-TEXT] Text-based ${decision} for txn=${pending.txnId}`);
-                    const wfResult = await this.workflowEngine.resume(
-                        pending.txnId,
-                        decision,
-                        (name) => this.tools.get(name)
-                    );
-                    if (wfResult) {
-                        move('FINAL_READY', { decision, txnId: pending.txnId });
-                        return this.resumeFromWorkflow(conversationId, wfResult);
-                    }
-                }
-            }
-        }
-
-        if (!hasPendingAuth && intentDecision.terminalAction && intentDecision.executionMode === 'direct' && intentDecision.category === 'greeting') {
-            log.info(`[${this.ts()}] [FAST-PATH] Greeting detected — skipping LLM`);
-            move('FINAL_READY');
-            traceManager.completeTrace(trace, 'completed', 'Greeting fast path');
-            const greetings = ['Olá! 👋', 'Oi! Como posso ajudar?', 'E aí! 🚀', 'Olá! Tô aqui! 💪', 'Opa! Bora? 😊'];
-            return greetings[Math.floor(Math.random() * greetings.length)];
-        }
-
-        // ── Current-time fast path ──
-        // Deterministic direct facts (date/time) — Node.js has the clock, no LLM needed.
-        // Must check deterministicMatch explicitly — confirmation ('ok', 'sim') also matches direct+minimal+no-tools.
-        if (
-            !hasPendingAuth &&
-            intentDecision.trace.deterministicMatch === 'current_time' &&
-            intentDecision.source === 'deterministic' &&
-            intentDecision.executionMode === 'direct'
-        ) {
-            const now = new Date();
-            const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-            const dateStr = now.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-            const reply = `🕐 ${timeStr} — ${dateStr}`;
-            log.info(`[${this.ts()}] [FAST-PATH] current_time direct answer`);
-            move('FINAL_READY');
-            traceManager.completeTrace(trace, 'completed', reply);
-            this.persistTrace(trace, 1, 'completed', reply, channelContext);
-            return reply;
-        }
-
-        // ── Tool-first fast path ──
-        // Deterministic tool intents (weather, etc.) bypass the cognition LLM loop entirely.
-        // Falls back to the full loop when the tool is missing or returns an error.
-        if (intentDecision.executionMode === 'tool' && intentDecision.toolName && intentDecision.confidence >= 0.85) {
-            const fastResult = await this.toolFirstFastPath(conversationId, userText, intentDecision, channelContext, trace, move);
-            if (fastResult !== null) {
-                this.activeTurns.delete(conversationId);
-                return fastResult;
-            }
-            log.info(`[${this.ts()}] [FAST-PATH] Tool fast path fell back to cognition loop`);
-        }
-
-        this.classificationMemory.store(userText, intentDecision.modelCategory, intentDecision.confidence);
-        this.getTurnState(conversationId).lastToolExecution = null;
-
-        let skillContext = intentDecision.skillContext ?? '';
-
-        // S3c: "Que tipo de problema geral tende a acontecer neste tipo de pedido?"
-        // findCategoryHints() agrega pela categoria inteira (não mais fragmentada por
-        // ferramenta) e inclui fallback para registros legados com a categoria
-        // smuggled em `pattern` — corrige o caso documentado no S16 (20 registros/30%
-        // falha agregada retornando vazio por fragmentação de GROUP BY).
-        const reflectionHint = this.reflectionMemory.findCategoryHints(intentDecision.category);
-        const reflectionHintInjected = reflectionHint.length > 0;
-        if (reflectionHint) {
-            skillContext = skillContext ? `${skillContext}\n\n${reflectionHint}` : reflectionHint;
-        }
-
-        const manualSkills = this.skillLoader.loadAll();
-        const matchedManual = manualSkills.filter(s =>
-            s.triggers?.some(t => userText.toLowerCase().includes(t.toLowerCase()))
+        const setupResult = await this.setupTurn(
+            conversationId, userText, channelContext, trace, move, memoryFirstInjected,
         );
-        if (matchedManual.length > 0) {
-            // Usa conteúdo completo (com seções TASK_ONLY) apenas quando a skill é a
-            // tarefa primária do turno — alta confiança e intent diretamente relacionada.
-            // Em correspondências parciais (trigger presente mas não é o objetivo principal),
-            // injeta globalContent, que omite restrições de escopo de tarefa.
-            const isPrimary = (skillName: string): boolean =>
-                intentDecision.confidence >= 0.75 &&
-                matchedManual.length === 1 &&
-                (intentDecision.intent?.toLowerCase().includes(skillName.toLowerCase()) ||
-                 intentDecision.skillContext?.toLowerCase().includes(skillName.toLowerCase()) ||
-                 false);
-
-            const manualBlock = matchedManual.map(s => {
-                const content = isPrimary(s.name) ? s.content : s.globalContent;
-                const scope = isPrimary(s.name) ? 'primary' : 'context';
-                log.info(`[SKILL] ${s.name} injetado como "${scope}" (confidence=${intentDecision.confidence})`);
-                return `### SKILL MANUAL: ${s.name}\n${content}`;
-            }).join('\n\n');
-
-            skillContext = skillContext ? `${skillContext}\n\n${manualBlock}` : manualBlock;
-            log.info(`[SKILL] Injetando ${matchedManual.length} skill(s) manual(ais): ${matchedManual.map(s => s.name).join(', ')}`);
-        }
-
-        const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision);
-
-        const chatProfile = await this.profileRegistry.resolveProfile(userText);
-        if (chatProfile && intentDecision.modelCategory && intentDecision.confidence >= 0.8) {
-            const intentProfile = this.profileRegistry.getProfileByCategory(intentDecision.modelCategory);
-            if (intentProfile) {
-                chatProfile.model = intentProfile.model;
-                chatProfile.category = intentProfile.category;
-                log.info(`[${this.ts()}] [UNIFIED-ROUTER] Overriding model: ${intentDecision.modelCategory} → ${intentProfile.model}`);
-            }
-        }
-
-        if (!this.sessionContext) {
-            log.error('sessionContext not set — session pipeline is mandatory.');
-            return '⚠️ Sessão indisponível no momento. Tente novamente em alguns instantes.';
-        }
-
-        // Derive context tier from intent: heavier categories need more context.
-        type ContextTierType = import('../loop/ContextBuilder').ContextTier;
-        const FULL_TIER_CATEGORIES = new Set(['creation', 'system_operation', 'data_analysis', 'destructive', 'memory_operation']);
-        const NORMAL_TIER_CATEGORIES = new Set(['information', 'audio', 'vision']);
-        const contextTier: ContextTierType =
-            FULL_TIER_CATEGORIES.has(intentDecision.category) ? 'full' :
-            NORMAL_TIER_CATEGORIES.has(intentDecision.category) ? 'normal' :
-            'minimal';
-        log.info(`[${this.ts()}] [CONTEXT-TIER] category=${intentDecision.category} → tier=${contextTier}`);
-
-        // BUG REAL (log 2026-07-08, suplemento PowerPoint, sessão web:powerpoint-addin-...):
-        // channel estava hardcoded como 'telegram' independente do canal real da conversa.
-        // SessionManager chaveia sessões por `${channel}:${userId}` (SessionManager.ts:193) —
-        // MessageBus grava com o channel real (ex.: "web"), mas aqui a leitura ia para uma
-        // chave diferente ("telegram:<mesmoUserId>"), que nunca teve nada escrito. Resultado:
-        // buildLLMMessages sempre via "0 recent msgs" para qualquer canal != telegram (web,
-        // discord, signal, whatsapp) — o modelo perdia toda a transcript da conversa entre
-        // turnos. Sintoma observado: usuário pediu para aplicar fundo branco, assistente
-        // ofereceu rodar um script e perguntou "quer que eu execute agora?", usuário respondeu
-        // "sim", e o modelo — sem ver a pergunta anterior no contexto — respondeu apenas
-        // "Estou pronto. Como posso ajudar...", sem executar nada. Só passava despercebido no
-        // Telegram porque lá o canal real também é 'telegram' (TelegramAdapter.ts), coincidindo
-        // com o valor fixo. Fix: usar o canal real do turno, com 'telegram' como fallback apenas
-        // quando não há ChannelContext (ex.: AgentController.ts scheduler, que já não propaga
-        // contexto hoje).
-        const sessionKey: SessionKey = { channel: channelContext?.channel ?? 'telegram', userId: conversationId };
-        const { messages: sessionMessages } = await this.sessionContext.buildLLMMessages(
-            sessionKey,
-            buildMasterPrompt(chatProfile.category),
-            userText,
-            skillContext,
-            contextTier,
-            channelContext?.metadata
-        );
-        const loopMessages = sessionMessages;
-        // Context growth guard helpers — defined here so loopMessages is in scope.
-        const getContextChars = () => loopMessages.reduce((s, m) => s + (m.content?.length ?? 0), 0);
-        const initialContextChars = getContextChars();
-
-        // ── DecisionContext ─────────────────────────────────────────────────
-        // Build from all cognitive signals available after session context is ready.
-        // Influences loop behaviour via hints and budget adjustment — never via tool removal.
-        this.getTurnState(conversationId).pendingObserverFeedback = [];   // reset per-turn
-        const ctxMetadata = this.sessionContext.getContextBuilder().getLastBuildMetadata();
-        const memConf = computeMemoryConfidence(ctxMetadata, userText);
-
-        const toolStatsArr = this.decisionMemory.getToolStats();
-        const toolSuccessRates: Record<string, number> = {};
-        for (const s of toolStatsArr) toolSuccessRates[s.toolName] = s.successRate;
-
-        const decisionCtx: DecisionContext = {
-            memoryConfidence:           memConf,
-            hasHighRelevancePreference: ctxMetadata?.hasHighRelevancePreference ?? false,
-            requiresMemoryFirst:        intentDecision.requiresMemory && (memConf === 'high' || memConf === 'medium'),
-            extendedStepBudget:         null, // resolved after maxSteps is computed
-            toolSuccessRates,
-        };
-
-        // Adaptive step budget: ceiling scales with execution complexity.
-        // Falls back to hybrid budget for unknown modes.
-        const executionMode = intentDecision?.executionMode ?? 'hybrid';
-        let maxSteps = STEP_BUDGETS[executionMode] ?? STEP_BUDGETS.hybrid ?? 6;
-
-        // requiresPlanning → upgrade to planner budget when router signals explicit planning need
-        // and the current mode hasn't already allocated enough steps.
-        if (intentDecision.requiresPlanning && maxSteps < (STEP_BUDGETS.planner ?? 15)) {
-            const upgraded = STEP_BUDGETS.planner ?? 15;
-            log.info(`[${this.ts()}] [STEP-BUDGET] requiresPlanning=true → upgrading ${maxSteps} → ${upgraded}`);
-            maxSteps = upgraded;
-            decisionCtx.extendedStepBudget = upgraded;
-        }
-
-        let stepCount = 0;
-        log.info(
-            `[${this.ts()}] [STEP-BUDGET] mode=${executionMode} maxSteps=${maxSteps} ` +
-            `memoryConfidence=${decisionCtx.memoryConfidence} requiresMemoryFirst=${decisionCtx.requiresMemoryFirst}`
-        );
-        let hasUsedNativeTools = false;      // true once any native tool call executes
-        let consecutiveNonProgressSteps = 0; // non-JSON, no-tool responses in a row
-        const blockedKeyCount = new Map<string, number>(); // tracks repeated block attempts per inputKey
-        let dedupAbort = false; // set true when TOOL-DEDUP limit reached — exits while and falls to post-loop synthesis
-        let dedupAbortTool = ''; // tracks which tool caused the dedup abort
-        let contextGuardWriteExtensionUsed = false; // one-shot: see context_growth guard below
-
-        // Pre-loop: inject non-blocking hints derived from DecisionContext.
-        // These orient the LLM without restricting its tool access.
-        if (decisionCtx.requiresMemoryFirst) {
-            const isHighConf = decisionCtx.memoryConfidence === 'high';
-            loopMessages.push({
-                role: 'system',
-                content: isHighConf
-                    ? '[COGNIÇÃO] Memória pessoal com alta confiança disponível. Avalie o bloco de memória ANTES de usar ferramentas externas. Ferramentas externas devem ser usadas apenas se a memória não tiver resposta completa.'
-                    : '[COGNIÇÃO] Memória pessoal disponível, mas pode estar desatualizada para este domínio. Consulte a memória primeiro e valide com fontes externas se necessário.',
-            });
-            memoryFirstInjected = true;
-        }
+        if (setupResult.action === "earlyReturn") return setupResult.result;
+        const {
+            intentDecision, reflectionHintInjected, toolDefs, chatProfile, loopMessages,
+            getContextChars, initialContextChars, decisionCtx, executionMode, blockedKeyCount,
+        } = setupResult.state;
+        let maxSteps = setupResult.state.maxSteps;
+        let stepCount = setupResult.state.stepCount;
+        let hasUsedNativeTools = setupResult.state.hasUsedNativeTools;
+        let consecutiveNonProgressSteps = setupResult.state.consecutiveNonProgressSteps;
+        let dedupAbort = setupResult.state.dedupAbort;
+        let dedupAbortTool = setupResult.state.dedupAbortTool;
+        let contextGuardWriteExtensionUsed = setupResult.state.contextGuardWriteExtensionUsed;
+        memoryFirstInjected = setupResult.state.memoryFirstInjected;
 
         while (stepCount < maxSteps && !dedupAbort) {
             stepCount++;
@@ -3045,107 +3269,17 @@ export class AgentLoop {
                 turnState.pendingObserverFeedback = [];
             }
 
-            // Context Growth Guard — two independent limits:
-            //   ratio    : relative growth, only meaningful when baseline is large enough.
-            //              A small initial context (fresh session) can triple in size after one
-            //              legitimate file read; ratio alone would produce false positives.
-            //   absolute : hard ceiling on chars added, regardless of baseline size.
-            // MIN_RATIO_BASELINE prevents ratio guard from firing on short initial contexts.
-            const MIN_RATIO_BASELINE = 4_000;   // chars; below this, only absolute limit applies
-            const CONTEXT_RATIO_LIMIT = 2.5;    // 150 % growth cap (when baseline is substantial)
-            const CONTEXT_ABSOLUTE_DELTA = 16_000; // ~4 000 tokens of added content
-            const currentContextChars = getContextChars();
-            const contextGrowthRatio = initialContextChars > 0 ? currentContextChars / initialContextChars : 1;
-            const useRatioGuard = initialContextChars >= MIN_RATIO_BASELINE;
-            const ratioTriggered = useRatioGuard && contextGrowthRatio > CONTEXT_RATIO_LIMIT;
-            const absoluteTriggered = currentContextChars > initialContextChars + CONTEXT_ABSOLUTE_DELTA;
-            if ((ratioTriggered || absoluteTriggered) && stepCount > 1 && !dedupAbort) {
-                const triggerReason = ratioTriggered ? 'ratio_limit' : 'absolute_limit';
-                const triggerValue  = ratioTriggered ? contextGrowthRatio : (currentContextChars - initialContextChars);
-                const threshold     = ratioTriggered ? CONTEXT_RATIO_LIMIT : CONTEXT_ABSOLUTE_DELTA;
-                log.warn(
-                    `[${this.ts()}] [SAFETY-GUARD] type=context_growth reason=${triggerReason} ` +
-                    `value=${triggerValue.toFixed(2)} threshold=${threshold} ` +
-                    `initial=${initialContextChars} current=${currentContextChars}`
-                );
-                // Context-aware abort message: when the last tool was 'read', the agent loaded
-                // a file but performed no write/edit. Prevent the model from claiming write success.
-                const lastToolInCycle = cycleHistory.length > 0
-                    ? cycleHistory[cycleHistory.length - 1].tool
-                    : null;
-                // 'exec_command' deliberately excluded here: it's also the tool used for
-                // read-only recon (e.g. `Get-ChildItem` to find the right file before reading
-                // it), which is NOT evidence that the deliverable was edited. Evidence:
-                // 2026-07-05 audit log, goal "máximo 10 linhas por slide" — 3 recon
-                // `Get-ChildItem` calls (listing *.md/*.pptx) ran before the `read`, made
-                // writeToolsUsedThisTurn true, and steered this guard into the generic
-                // "responda com o que já tem" message instead of "OBRIGATÓRIO use
-                // exec_command" — the turn ended describing a plan instead of executing it.
-                // Same definition DELIVERY-GUARD already uses a few hundred lines below
-                // (wroteFile checks only `tool === 'write'`) — 'edit' kept here too since,
-                // unlike exec_command, it can only ever be a mutation, never a listing.
-                const writeToolsUsedThisTurn = cycleHistory.some(h => h.tool === 'write' || h.tool === 'edit');
-                // Adaptar a mensagem de abort ao intent do usuário:
-                // - Análise/review: o read É a ação principal → instruir a apresentar a análise
-                // - Escrita/geração: o read é preâmbulo → instruir a usar exec_command
-                const isAnalysisAbort = ANALYSIS_INTENT_PATTERN.test(userText);
-                const needsWriteNow = lastToolInCycle === 'read' && !writeToolsUsedThisTurn && !isAnalysisAbort;
-                const ratioAbortMsg = (lastToolInCycle === 'read' && !writeToolsUsedThisTurn)
-                    ? isAnalysisAbort
-                        ? '[CONTEXTO GRANDE] O arquivo foi lido com sucesso e está no contexto. ' +
-                          'Agora forneça a análise/avaliação solicitada com base no conteúdo que você acabou de ler. ' +
-                          'Responda com suas observações, sugestões de melhoria e avaliação da estrutura. ' +
-                          'NÃO tente ler mais arquivos. NÃO use ferramentas. Responda AGORA com a análise.'
-                        : '[CONTEXTO EXCESSIVO] O arquivo fonte foi carregado com sucesso e está disponível. ' +
-                          'OBRIGATÓRIO: Use exec_command com um script Python COMPLETO E FUNCIONAL para gerar os arquivos de saída agora. ' +
-                          'O script deve ler o arquivo de origem via open() e escrever todos os arquivos de saída necessários. ' +
-                          'PROIBIDO: Afirmar que os arquivos foram criados sem ter executado exec_command. ' +
-                          'PROIBIDO: Criar scripts placeholder com "pass" ou "# TODO" — escreva o código real. ' +
-                          'NÃO leia mais arquivos no contexto. Processe TUDO via exec_command + Python.'
-                    : '[CONTEXTO EXCESSIVO] O contexto cresceu demais. Use os dados já obtidos para responder agora sem usar mais ferramentas.';
-                loopMessages.push({
-                    role: 'system',
-                    content: ratioAbortMsg,
-                });
-                guardsTriggered++;
-
-                // needsWriteNow tells the model "use exec_command AGORA", but post-loop
-                // synthesis (below) is text-only and can never execute that instruction —
-                // setting dedupAbort here would make the guard's own message a lie the model
-                // has no way to act on. Evidence: 2026-07-05 audit log, 4 consecutive turns
-                // (goal "máximo 10 linhas por slide") all hit ratio≈2.6-2.7 right after the
-                // single `read` needed before editing, aborted before any write/exec_command
-                // was attempted, and ended in either a hallucination-block or an honest
-                // "vou ler e depois ajustar" that never got a chance to actually happen.
-                // Fix: grant ONE extra real step (bounded, same +2 pattern as DELIVERY-GUARD's
-                // deliveryStepCap) so the model can act on its own instruction. If context still
-                // hasn't produced a write/exec_command after that, abort for real — one-shot via
-                // contextGuardWriteExtensionUsed prevents this from looping indefinitely.
-                //
-                // IMPORTANT: do NOT `continue` here. This guard runs at the TOP of the while
-                // loop body, before the LLM call below — `continue` jumps back to `while(...)`,
-                // which re-enters the loop and hits this SAME check again immediately (nothing
-                // changed: no LLM call happened, no tool ran), consuming the one-shot flag on
-                // the very next iteration without ever reaching the LLM call. Evidence:
-                // 2026-07-05 21:33 audit log — Step 3 granted the extension, Step 4 logged
-                // right after with zero LLM/tool activity in between, hit ratio_limit again
-                // (one-shot now used) and aborted for real. Falling through (no continue) lets
-                // THIS iteration's LLM call run with the injected instruction, which is the
-                // whole point of the extension.
-                if (needsWriteNow && !contextGuardWriteExtensionUsed) {
-                    contextGuardWriteExtensionUsed = true;
-                    if (maxSteps < stepCount + 2) maxSteps = stepCount + 2;
-                    log.info(`[${this.ts()}] [SAFETY-GUARD] context_growth: granting one extra step to act on exec_command instruction (maxSteps→${maxSteps})`);
-                    // No `continue`/`dedupAbort` here — falls through to the LLM call below,
-                    // in this SAME iteration, so the model can actually act on the instruction.
-                } else {
-                    dedupAbort = true;
-                    dedupAbortTool = `context_growth:${triggerReason}`;
-                    // Pula a próxima chamada LLM — evita que o modelo crie artefato stub sob
-                    // pressão de contexto (que o DELIVERY-GUARD enviaria). Cai na síntese.
-                    continue;
-                }
-            }
+            const contextGuardResult = this.checkContextGrowthGuard(
+                cycleHistory, userText, stepCount, dedupAbort, dedupAbortTool, maxSteps,
+                contextGuardWriteExtensionUsed, guardsTriggered, getContextChars, initialContextChars,
+                loopMessages,
+            );
+            dedupAbort = contextGuardResult.dedupAbort;
+            dedupAbortTool = contextGuardResult.dedupAbortTool;
+            maxSteps = contextGuardResult.maxSteps;
+            contextGuardWriteExtensionUsed = contextGuardResult.contextGuardWriteExtensionUsed;
+            guardsTriggered = contextGuardResult.guardsTriggered;
+            if (contextGuardResult.action === "continueLoop") continue;
 
             if (toolFailureCount >= 2) {
                 loopMessages.push({
