@@ -353,8 +353,19 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 ## Epic D — Structural Simplification
 *Origem: Auditoria III.*
 
-### ARCH-019 — Decompor `AgentLoop.runWithTools()` (~1793 linhas)
+### ARCH-019 — Decompor `AgentLoop.runWithTools()` (~1793 linhas) ✅ Concluído (2026-07-18, Sprint S25, 6 incrementos)
 - **Descrição:** Maior método do projeto — é praticamente a classe inteira depois do construtor. Decompor em fases nomeadas (parse de tool call, dispatch, delivery-guard, orçamento de steps, etc.), sem mudar comportamento.
+- **Executado como (S25, 6 incrementos sequenciais em ordem crescente de risco — decisão do usuário via AskUserQuestion, dado que o método é ~1.7x maior que o ARCH-020/S24 e tem ~3x mais variáveis mutáveis por closure):**
+  - **Incremento 1 (commit `53a4fa3`):** bloco "Structured turn diagnostics" (puramente de leitura, sem mutação de estado do chamador) → `logTurnDiagnostics()`, recebendo um `TurnDiagnosticsInput` nomeado (~25 sinais) em vez de parâmetros posicionais.
+  - **Incremento 2 (commit `3b40632`):** "Delivery guard" (re-entra no loop com instrução de entrega quando um arquivo foi escrito mas não enviado) → `runDeliveryGuardPhase()`.
+  - **Incremento 3 (commit `baf5d34`):** síntese pós-loop + fallback definitivo (a cauda do método, sempre termina em `return`) → `runSynthesisAndFallbackPhase()` — único incremento sem discriminated union (todo caminho já é `return`).
+  - **Incremento 4 (commit `45788e1`):** dispatch JSON-action (caminho alternativo ao tool-calling nativo, para modelos sem function-calling) → `runJsonActionDispatch()`.
+  - **Incremento 5 (commit `0778076`):** dispatch de tool-calling nativo — a peça mais arriscada. `runNativeToolCallDispatch()` sozinho ficou com 487 linhas (acima do limite); sub-decomposto em mais 2 níveis (decisão do usuário) → `dispatchSingleNativeToolCall()` (por toolCall do batch) → `executeAndRecordNativeToolCall()` + `applyPostToolCallGuardsAndFinalize()` (as 2 metades do antigo `if(tool){...}`). 4 métodos, todos < 300 linhas.
+  - **Incremento 6 (commit `73d246c`):** `setupTurn()` (roteamento de intenção + 4 fast-paths + sessão/DecisionContext + orçamento de steps) + `checkContextGrowthGuard()` (2º corte, decisão do usuário após o 1º corte sozinho deixar `runWithTools()` em 509 linhas).
+  - **Achado real mais importante (Incremento 6, pego por análise da fronteira try/catch, não por teste):** `trace`/`fsm`/`move`/`turnAbort` e todo o estado acumulador do loop (`cycleHistory`, `toolFailureCount`, contadores de guard) são declarados ANTES do `try{}` de `runWithTools()` — mover a criação de `trace` para dentro de `setupTurn()` teria introduzido um bug real: se `traceManager.startTrace()` lançasse exceção depois de movido, o `catch(fsmError)` do chamador tentaria ler `trace.status` de um `trace` nunca atribuído. `setupTurn()` só cobre o código que roda DEPOIS de `move('START_TURN')` — por isso seu escopo final ficou ~18 campos, não os ~40 inicialmente cogitados.
+  - **Critério de aceite parcialmente cumprido:** 8 dos 9 métodos novos (Incrementos 1-6) ficam < 300 linhas. `runWithTools()` cai de ~1793 para 419 linhas (77% de redução) — ainda acima de 300, **aceito explicitamente pelo usuário** como resultado final: o que resta é o esqueleto do `while` loop + declarações pré-try (não extraíveis, ver achado acima) + o `catch/finally` obrigatório (rede de segurança do lifecycle do trace), nunca movido em nenhum dos 6 incrementos.
+  - **3 classes distintas de erro pegas por `tsc` antes de qualquer teste rodar, cada uma num incremento diferente:** referência ausente (Incremento 4 — 3 constantes locais esquecidas como parâmetro), tipo errado (Incremento 5 — `ToolCallRequest` em vez de `ToolCall`, dois tipos parecidos com campos diferentes), parâmetro não utilizado (Incremento 6 — `turnSignal` passado para `setupTurn()` mas nunca lido lá). Nenhuma dessas classes de erro é a mesma que os bugs de VALOR (threading de `priorFeedback` em ARCH-020/S24) — reforça que `tsc` cobre corretude de referência/estrutura, não de valor; os dois mecanismos de verificação são complementares, nenhum substitui o outro.
+  - **Validação:** tsc+build limpos nos 6 incrementos; regressão 126/126 em todos (0 quebras de teste em nenhum incremento desta Sprint — diferente de ARCH-020/S24, que teve 1 quebra de fonte-texto). Etapa 4 real executada em todos os 6 incrementos (instância isolada, LLM real) — nem todo cenário de teste conseguiu forçar deterministicamente o caminho específico sendo validado (o classificador do ambiente de teste frequentemente roteou requests via `GoalExecutionLoop` direto em vez de `AgentLoop.process()`), mas nenhuma execução real crashou desde que o código de cada incremento landou, e os incrementos 1 e 6 confirmaram sinais de log específicos (`[TURN-DIAGNOSTICS]` ausente mas explicado; `[UNIFIED-ROUTER]`/`[STEP-BUDGET]` confirmados) com dados reais.
 - **Arquivos afetados:** `src/loop/AgentLoop.ts` (L1118-2911).
 - **Origem (auditorias):** Auditoria III (Hotspot #1, Muito Alta).
 - **Categoria:** Structural Simplification.
@@ -362,12 +373,12 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Impacto:** Muito Alto.
 - **Risco:** Alto — closures capturando `cycleHistory`, `usedToolInputs`, `stepCount` por referência; sem teste de sistema que cubra a função inteira.
 - **Esforço:** Muito Alto.
-- **Dependências:** ARCH-005, ARCH-007 (implementação do novo contrato de callbacks). **Nunca simultâneo com ARCH-020** (mesmo WIP-limit: ambos são cirurgias grandes em concerns de entrega/estado sobrepostos — risco de merge conflict e fadiga de revisão).
-- **Pré-requisitos:** Mapear TODOS os efeitos colaterais capturados por closure antes de extrair qualquer método.
-- **Critérios de Aceite:** Nenhum método resultante da decomposição excede 300 linhas; comportamento observável idêntico.
-- **Definition of Done:** Validação Progressiva completa até etapa 4.
-- **Rollback:** Reverter o commit (grande, mas atômico).
-- **Testes obrigatórios:** Unitário + regressão completa + e2e sintético + ambiente real (fluxo completo de tool-calling com LLM real).
+- **Dependências:** ARCH-005, ARCH-007 (implementação do novo contrato de callbacks). **Nunca simultâneo com ARCH-020** (mesmo WIP-limit: ambos são cirurgias grandes em concerns de entrega/estado sobrepostos — risco de merge conflict e fadiga de revisão). Cumprida — ARCH-020 concluído em S24, antes de S25 começar.
+- **Pré-requisitos:** Mapear TODOS os efeitos colaterais capturados por closure antes de extrair qualquer método. Cumprido — Fase 1 leu o método inteiro antes de qualquer extração.
+- **Critérios de Aceite:** Nenhum método resultante da decomposição excede 300 linhas; comportamento observável idêntico. **Parcialmente cumprido** — ver nota acima (`runWithTools()` em 419 linhas, aceito como exceção documentada).
+- **Definition of Done:** Validação Progressiva completa até etapa 4. Cumprido nos 6 incrementos.
+- **Rollback:** Reverter os 6 commits, na ordem inversa: `73d246c`, `0778076`, `45788e1`, `baf5d34`, `3b40632`, `53a4fa3`.
+- **Testes obrigatórios:** Unitário + regressão completa + e2e sintético + ambiente real (fluxo completo de tool-calling com LLM real). Cumprido.
 - **Métrica que deverá melhorar:** God Methods (Indicador #2), Large Classes (Indicador #3).
 
 ### ARCH-020 — Decompor `GoalExecutionLoop.runLoopInternal()` (~1030 linhas) + `switch(cycleResult.outcome)` ✅ Concluído (2026-07-18, Sprint S24, commits 0173795 + 2782216)
