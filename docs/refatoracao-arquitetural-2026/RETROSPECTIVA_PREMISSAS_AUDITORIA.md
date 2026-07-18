@@ -1,20 +1,21 @@
 # Retrospectiva — Premissas da Auditoria que Não Se Sustentaram na Execução
 
-**Data:** 2026-07-18 (atualizado com os casos S16, S17 e S18). **Escopo:** Sprints `2026-07-S01` a
-`2026-08-S18` do Programa de Refatoração Arquitetural (`MASTER_EXECUTION_PLAN.md`), cards ARCH-001
-a ARCH-023 (parcial) + ARCH-005/008/009/010/018. **Motivo deste documento:** ao final da S11, o
-usuário perguntou diretamente por que premissas erradas estavam se repetindo e pediu um catálogo
-consolidado — não bug a bug, mas como retrospectiva de processo, para melhorar a auditoria em si,
-não só corrigir os sintomas encontrados até agora.
+**Data:** 2026-07-18 (atualizado com os casos S16, S17, S18 e S21). **Escopo:** Sprints
+`2026-07-S01` a `2026-09-S21` do Programa de Refatoração Arquitetural (`MASTER_EXECUTION_PLAN.md`),
+cards ARCH-001 a ARCH-023 (parcial) + ARCH-005/008/009/010/013/018. **Motivo deste documento:** ao
+final da S11, o usuário perguntou diretamente por que premissas erradas estavam se repetindo e
+pediu um catálogo consolidado — não bug a bug, mas como retrospectiva de processo, para melhorar a
+auditoria em si, não só corrigir os sintomas encontrados até agora.
 
 ## Por que isto importa
 
 `ARCHITECTURAL_BACKLOG.md` é descrito como a consolidação de 4 auditorias ("Auditoria I —
 Duplicação de Decisões", "II — Duplicação de Conhecimento", "III — Complexidade Acidental", "IV —
 Violação de Fronteiras Arquiteturais"), todas conduzidas na mesma sessão de engenharia, cobrindo
-26 cards. Das **16 Sprints já executadas** (incluindo `S14`, `S17` e `S18`, todas adiadas na Fase
-1/2 antes de qualquer código ser escrito — ver casos abaixo), **12 tiveram a premissa original do
-card corrigida durante a execução** — não são exceções, são a maioria, cada vez mais larga. Isso não
+26 cards. Das **19 Sprints já executadas** (incluindo `S14`, `S17`, `S18` e `S21`, todas adiadas na
+Fase 1/2 antes de qualquer código ser escrito — ver casos abaixo), **15 tiveram a premissa/desenho
+original do card corrigido durante a execução** — não são exceções, são a maioria, cada vez mais
+larga. Isso não
 invalida o backlog (o diagnóstico de ALTO NÍVEL — "existe duplicação/acoplamento aqui" — se
 confirmou em todos os casos), mas invalida a confiança de que o TEXTO ESPECÍFICO de cada card
 (contagens, alegações sobre estrutura de dados, equivalência entre padrões, viabilidade da
@@ -212,12 +213,60 @@ ser implementado sem reverificação.
   incluindo a alternativa de design levantada (novo `CriterionCheck` dedicado, não reaproveitar
   `file_exists`): `docs/issues/010-arch018-file-exists-checks-attempts-not-disk.md`.
 
+### S19 / ARCH-024-RFC — `DeliveryTrackingContext` (categoria: modo 3, instância nova)
+- **Premissa do card:** os 5 campos de callback de `ChannelContext` (`deferSendDocument`,
+  `isDeferredArtifact`, `onArtifactDelivered`, `isAudioAlreadySent`, `recentMessages`) são "todos
+  sobre rastreamento de entrega de goal".
+- **Achado real:** `recentMessages` não é — construído em `MessageBus.ts` (mesmo lugar/razão que
+  `channel`/`chatId`/`userId`), consumido só por `UnifiedIntentRouter` pra classificação de
+  intenção, zero relação com entrega. Só 4 dos 5 campos são genuinamente delivery-tracking.
+  Análise completa (Sprint de RFC, sem código): `RFC_ARCH-024_DeliveryTrackingContext.md`.
+- **Causa raiz:** modo 3 (equivalência assumida sem verificação) — 4ª instância confirmada (depois de S10, S11, S18).
+
+### S20 / ARCH-015-RFC — Args obrigatórios gerados do schema (categoria: modo 3, instância nova)
+- **Premissa do card:** gerar validação + texto de prompt a partir do schema elimina a
+  sincronização manual dos "5 lugares" que hoje declaram args obrigatórios independentemente.
+- **Achado real:** os "5 lugares" nem cobrem o mesmo conjunto de tools (`memory_write` nunca
+  aparece em `detectMissingRequiredArgs()`); mais grave, a lógica de "obrigatório" não é um
+  `required: string[]` plano pra pelo menos 3 tools (`web_navigate`/`crypto_analysis`: condicional
+  a outro campo; `edit`: "uma de 3 combinações válidas") — gerar a VALIDAÇÃO a partir do schema
+  atual perderia essa lógica condicional silenciosamente. Só a metade de texto de prompt tem
+  incidente real confirmado (S06/ARCH-025). RFC aprovou só essa metade. Análise completa:
+  `RFC_ARCH-015_SchemaGeneratedRequiredArgs.md`.
+- **Causa raiz:** modo 3 (equivalência assumida sem verificação — um `required: string[]` tratado
+  como equivalente a uma lógica condicional que ele não consegue expressar) — 5ª instância.
+
+### S21 / ARCH-013 — Unificar juiz de sucesso de step (categoria nova — 7º modo de falha, ver Síntese)
+- **Premissa do card:** fundir a escalação de `evaluateAgentStepSuccess`/`escalateStepEvalToLLM`
+  dentro de `StepSemanticValidator`, mantendo só a extração determinística (regex) fora dele —
+  reduz de 2 chamadas de LLM por step pra 1.
+- **Achado — diferente de todos os casos anteriores:** o DIAGNÓSTICO do card está correto (os dois
+  mecanismos respondem perguntas diferentes — "sucesso/falha" vs. "relevância semântica" — mas a
+  MESMA condição de ambiguidade tende a disparar escalação nos dois estágios pro mesmo step,
+  confirmado por leitura da sequência real de chamadas). A PRESCRIÇÃO é tecnicamente viável —
+  compila, roda, não reintroduz nenhuma violação. O que falta: rastrear a CONSEQUÊNCIA completa da
+  remoção proposta. Hoje, quando a LLM da zona ambígua confirma sucesso, marca
+  `stepSuccessConfident=true`, que decide se `GoalAttempt.result` vira `'success'` ou `'partial'`.
+  `StepSemanticValidator` só tem um sinal NEGATIVO (`shouldDowngradeToPartial`) — nunca um
+  positivo equivalente. Remover a chamada da zona ambígua sem dar ao `StepSemanticValidator` um
+  sinal de promoção faria TODO step ambíguo virar `'partial'` sempre, mesmo quando genuinamente
+  bem-sucedido — mudança de comportamento observável (critérios de conclusão de goal, contagem de
+  retry) que o card não menciona.
+- **Causa raiz:** nenhum dos 6 modos anteriores encaixa exatamente — não é enumeração incompleta,
+  grafo de dependência incompleto, equivalência semântica falsa, rota causal errada, prescrição
+  inviável, ou mecanismo inexistente. É a auditoria original não ter rastreado a cadeia COMPLETA
+  de efeitos colaterais de "remover uma chamada" até um campo (`stepSuccessConfident`) usado bem
+  longe do ponto de remoção proposto (~15 linhas depois, num cálculo de `GoalAttempt.result`).
+- **Decisão:** adiado por decisão do usuário, mesma linha de S14/S17/S18. Alternativa desenhada
+  (StepSemanticValidator ganha sinal de promoção, não só de rebaixamento) mas não implementada.
+  Registro técnico completo: `docs/issues/011-arch013-merge-loses-confident-success-signal.md`.
+
 ## Síntese — causas raiz recorrentes
 
-Analisando os 12 casos acima (excluindo S08, categoria diferente), os erros se agrupam em
-**6 modos de falha da auditoria original**, não 12 causas distintas — S18 é a segunda instância
-confirmada do modo 3 (a primeira dupla foi S10/S11), reforçando que "equivalência semântica
-assumida sem verificação" não é um acaso isolado, é o modo mais recorrente do catálogo:
+Analisando os 15 casos acima (excluindo S08, categoria diferente), os erros se agrupam em
+**7 modos de falha da auditoria original**, não 15 causas distintas — o modo 3 (equivalência
+semântica assumida sem verificação) sozinho já responde por 5 dos 15 casos (S10, S11, S18, S19,
+S20), confirmando que não é um acaso isolado, é o modo mais recorrente do catálogo, disparado:
 
 1. **Enumeração não-exaustiva** (S01, S03, S04) — contagens/listas citadas no card eram
    amostras ou resultado de busca parcial, não o resultado de uma varredura automatizada
@@ -225,10 +274,10 @@ assumida sem verificação" não é um acaso isolado, é o modo mais recorrente 
 2. **Grafo de dependência incompleto** (S02, S05) — o escopo de "o que precisa mover/remover
    junto" foi decidido olhando só o símbolo citado no card, sem seguir suas próprias
    dependências transitivas (S02) nem enumerar os demais exports do mesmo arquivo (S05).
-3. **Equivalência assumida sem verificar a semântica real** (S10, S11, S18) — mecanismos foram
-   tratados como intercambiáveis por terem nome/formato parecido, sem confirmar que representam
-   o mesmo CONCEITO (como o dado é populado, o que cada condição realmente checa). O modo mais
-   recorrente do catálogo — 3 instâncias confirmadas.
+3. **Equivalência assumida sem verificar a semântica real** (S10, S11, S18, S19, S20) — mecanismos
+   foram tratados como intercambiáveis por terem nome/formato parecido, sem confirmar que
+   representam o mesmo CONCEITO (como o dado é populado, o que cada condição realmente checa). O
+   modo mais recorrente do catálogo — 5 instâncias confirmadas.
 4. **Rota causal citada não é a rota real, apesar do sintoma final estar correto** (S13) —
    diferente dos modos 1-3 (onde a CONCLUSÃO do card também precisou de correção), aqui a
    conclusão de alto nível ("existe essa divergência") se confirmou exatamente como descrita; só
@@ -256,21 +305,31 @@ assumida sem verificação" não é um acaso isolado, é o modo mais recorrente 
    porque a alegação lê como um FATO sobre a arquitetura ("o sistema já faz X"), não como uma
    inferência do próprio auditor — só aparece grepando o código em busca do mecanismo citado e
    confirmando que ele não existe, não lendo a lógica ao redor do sintoma.
+7. **A prescrição é tecnicamente viável, mas a consequência completa de implementá-la não foi
+   rastreada** (S21) — diferente de todos os modos anteriores, aqui o DIAGNÓSTICO do card está
+   certo (os dois mecanismos citados de fato rodam em sequência desnecessária) e a PRESCRIÇÃO
+   compila e roda sem erro — o que falta é seguir a cadeia de efeitos colaterais da mudança
+   proposta até o fim. Remover uma chamada de LLM sem notar que um campo populado só por ela
+   (`stepSuccessConfident`) é lido ~15 linhas depois, num cálculo de resultado final, causaria uma
+   mudança silenciosa de comportamento observável — nenhum erro de compilação, nenhuma violação
+   reintroduzida, só um comportamento diferente do atual sem o card ter avisado.
 
 **Conclusão sobre a natureza da auditoria original:** os modos 1-4 são consistentes com uma
 auditoria conduzida em **varredura ampla** (grep/leitura rápida cobrindo os 26 cards numa única
 sessão) — apropriada para GERAR candidatos de dívida arquitetural, mas insuficiente para
 PRESCREVER a implementação exata sem reverificação. Isso não é uma falha da auditoria em si (o
-diagnóstico de alto nível — "existe uma violação/duplicação aqui" — se confirmou nos 16/16 casos
+diagnóstico de alto nível — "existe uma violação/duplicação aqui" — se confirmou nos 19/19 casos
 até agora) — é uma característica esperada de qualquer varredura ampla que cobre muito código em
 pouco tempo, agravada no modo 5 pelo fato de o próprio backlog descrever um alvo em movimento (o
-código muda a cada Sprint do mesmo programa que consulta o card), e no modo 6 pelo fato de a
-auditoria ter inferido a EXISTÊNCIA de um mecanismo a partir do comportamento observado
-(perda de progresso), sem confirmar a causa citada por leitura direta do código responsável. O
-ponto de falha real seria implementar a PRESCRIÇÃO do card sem a Fase 1 (compreensão) da
+código muda a cada Sprint do mesmo programa que consulta o card), no modo 6 pelo fato de a
+auditoria ter inferido a EXISTÊNCIA de um mecanismo a partir do comportamento observado (perda de
+progresso), sem confirmar a causa citada por leitura direta do código responsável, e no modo 7
+pelo fato de a auditoria original ter avaliado a mudança proposta só no ponto de remoção, sem
+seguir os campos/sinais que dependiam do que foi removido até o consumidor final. O ponto de
+falha real seria implementar a PRESCRIÇÃO do card sem a Fase 1 (compreensão) da
 `DIRETRIZ_ARQUITETURA_2026-07-13.md` — que já existe, já é mandatória, mas cujo resultado prático
-(achar a premissa errada em 11 de 15 casos) não estava sendo consolidado em lugar nenhum até este
-documento.
+(achar a premissa/desenho errado em 15 de 19 casos) não estava sendo consolidado em lugar nenhum
+até este documento.
 
 ## Ação — o que muda no processo a partir de agora
 
@@ -283,13 +342,15 @@ documento.
    a norma (7 de 11), não a exceção.
 3. **Achados classificados por modo de falha** (enumeração incompleta / grafo de dependência
    incompleto / equivalência semântica não verificada / rota causal errada / prescrição
-   estruturalmente inviável / mecanismo citado inexistente) ajudam a saber ONDE olhar com mais
-   cuidado em cada card restante: cards que citam contagens específicas → checar modo 1; cards que
-   pedem mover/remover um símbolo → checar modo 2; cards que propõem unificar duas fontes de dados
-   ou dois mecanismos → checar modo 3; cards que citam um mecanismo causal específico → checar modo
-   4; cards que prescrevem `extends`/herança/fusão de tipos entre camadas → checar modo 5; cards
-   que justificam a mudança citando "o sistema já faz X"/"já existe Y" como fato de arquitetura →
-   checar modo 6 (grep pelo mecanismo citado ANTES de aceitar que ele existe — não basta o
-   sintoma final bater, o CAMINHO precisa existir de verdade no runtime).
+   estruturalmente inviável / mecanismo citado inexistente / consequência não rastreada) ajudam a
+   saber ONDE olhar com mais cuidado em cada card restante: cards que citam contagens específicas
+   → checar modo 1; cards que pedem mover/remover um símbolo → checar modo 2; cards que propõem
+   unificar duas fontes de dados ou dois mecanismos → checar modo 3; cards que citam um mecanismo
+   causal específico → checar modo 4; cards que prescrevem `extends`/herança/fusão de tipos entre
+   camadas → checar modo 5; cards que justificam a mudança citando "o sistema já faz X"/"já existe
+   Y" como fato de arquitetura → checar modo 6 (grep pelo mecanismo citado ANTES de aceitar que ele
+   existe); cards que prescrevem "remover"/"fundir"/"simplificar" uma chamada ou campo → checar
+   modo 7 (seguir CADA consumidor do que será removido até o fim da cadeia, não só o ponto de
+   remoção — um campo populado por uma chamada pode ser lido bem longe dali).
 4. Este documento deve ser **atualizado** (não substituído) conforme novas Sprints revelem novos
    casos — é um registro cumulativo do programa inteiro, não um relatório de um momento único.

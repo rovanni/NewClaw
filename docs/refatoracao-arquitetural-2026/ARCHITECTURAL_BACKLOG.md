@@ -243,8 +243,9 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 ## Epic C — Decision Ownership
 *Origem: Auditoria I.*
 
-### ARCH-013 — Unificar juiz de sucesso de step
+### ARCH-013 — Unificar juiz de sucesso de step ⏸ Adiado (2026-07-18, Sprint S21) — desenho viável, consequência não anunciada pelo card
 - **Descrição:** `evaluateAgentStepSuccess`+`escalateStepEvalToLLM` (heurística própria + LLM própria, "SUCESSO ou FALHA", 15s) e `StepSemanticValidator` (keyword+LLM, "ENDEREÇA a intenção", 8s) rodam em sequência para o mesmo step `agentloop`. Fundir a escalação de `evaluateAgentStepSuccess` dentro de `StepSemanticValidator`, mantendo só a extração determinística (sem LLM) fora dele.
+- **Adiado na S21, antes de codificar (Fase 1/2 da diretriz de arquitetura):** diferente dos achados anteriores deste programa, aqui o DIAGNÓSTICO do card está correto (os dois mecanismos de fato rodam em sequência desnecessária pro mesmo step em casos reais, confirmado lendo a sequência de chamadas) e a PRESCRIÇÃO é tecnicamente viável — compila e roda sem erro. O que falta: quando `escalateStepEvalToLLM` confirma sucesso com confiança, marca `stepSuccessConfident=true`, que decide se `GoalAttempt.result` vira `'success'` ou `'partial'`. `StepSemanticValidator` só tem hoje um sinal NEGATIVO (`shouldDowngradeToPartial`) — remover a chamada da zona ambígua sem dar a ele um sinal de PROMOÇÃo equivalente faria todo step ambíguo virar `'partial'` sempre, mudando comportamento observável de conclusão de goal de forma silenciosa (não anunciada pelo card). Registro técnico completo, incluindo o fix desenhado (StepSemanticValidator ganha sinal de promoção, não só rebaixamento): `docs/issues/011-arch013-merge-loses-confident-success-signal.md`. 7º modo de falha catalogado em `RETROSPECTIVA_PREMISSAS_AUDITORIA.md` — categoria nova, distinta dos 6 anteriores (aqui a premissa está certa, falta rastrear a consequência completa). Por decisão do usuário, adiado sem consolidação com outro tema.
 - **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (L2039-2118), `src/loop/StepSemanticValidator.ts`.
 - **Origem (auditorias):** Auditoria I (Complexity Hotspot #2.2), Auditoria III (ambos vivem dentro de `executeStep()`, um dos métodos mais longos do projeto).
 - **Categoria:** Decision Ownership.
@@ -398,7 +399,7 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Impacto:** Alto.
 - **Risco:** Médio (menor que ARCH-019/020 — método menor e mais localizado).
 - **Esforço:** Médio-Alto.
-- **Dependências:** ARCH-005, ARCH-009, ARCH-013 (simplificar o juiz de sucesso antes reduz a lógica a decompor).
+- **Dependências:** ARCH-005, ARCH-009, ARCH-013 (simplificar o juiz de sucesso antes reduz a lógica a decompor). **ARCH-009/ARCH-013 adiados (S14/S21) não bloqueiam — dependência era sequenciamento (reduzir lógica a decompor), não funcional; S22 pode prosseguir com os 2 juízes ainda separados, só com mais lógica a carvear.**
 - **Pré-requisitos:** Nenhum além das dependências.
 - **Critérios de Aceite:** Nenhum bloco de "registrar falha" duplicado; método principal com sub-métodos claros.
 - **Definition of Done:** Regressão 100% + e2e sintético.
