@@ -1,7 +1,7 @@
 # Retrospectiva — Premissas da Auditoria que Não Se Sustentaram na Execução
 
-**Data:** 2026-07-17. **Escopo:** Sprints `2026-07-S01` a `2026-08-S11` do Programa de Refatoração
-Arquitetural (`docs/MASTER_EXECUTION_PLAN.md`), cards ARCH-001 a ARCH-017 (parcial). **Motivo
+**Data:** 2026-07-17. **Escopo:** Sprints `2026-07-S01` a `2026-08-S13` do Programa de Refatoração
+Arquitetural (`docs/MASTER_EXECUTION_PLAN.md`), cards ARCH-001 a ARCH-023 (parcial). **Motivo
 deste documento:** ao final da S11, o usuário perguntou diretamente por que premissas erradas
 estavam se repetindo e pediu um catálogo consolidado — não bug a bug, mas como retrospectiva de
 processo, para melhorar a auditoria em si, não só corrigir os sintomas encontrados até agora.
@@ -100,10 +100,32 @@ sobre estrutura de dados, equivalência entre padrões) pode ser implementado se
   **semântica** de disparo — a auditoria não leu a condição de disparo (`if`) de cada um
   individualmente antes de propor a fonte de dados unificada.
 
+### S13 / ARCH-007 — Sincronizar `PlanStep.status`/`.result` com `GoalAttempt.result` (categoria nova — ver Síntese, modo 4)
+- **Premissa do card:** "a ordem real de execução em `GoalExecutionLoop.ts` (downgrade semântico
+  roda antes do `markStepDone('skip')`) confirma o caso" — citava um mecanismo causal específico:
+  o caminho de `shouldDowngradeToPartial` (mismatch semântico detectado após o attempt já
+  persistido) levaria, no mesmo ciclo, a uma chamada de `markStepDone(..., 'skip')` que
+  hardcoda `status: 'completed'`.
+- **Achado real:** o SINTOMA final do card estava certo — um `PlanStep` pode mesmo ficar
+  `completed` com o `GoalAttempt` mais recente `'partial'`. Mas o MECANISMO citado nunca ocorre:
+  o caminho de `shouldDowngradeToPartial` muda `cycleResult.outcome` para `'partial'`/`'blocked'`
+  ANTES do `switch(cycleResult.outcome)`, e nenhum desses dois `case`s chama `markStepDone`. O
+  gatilho real (confirmado e coberto por teste, `S119`) é outro caminho, já documentado no
+  próprio código-fonte (comentário "Sprint 0.8"): uma heurística de sucesso de BAIXA confiança
+  grava `GoalAttempt.result: 'partial'`, mas como `toolResult.success` continua `true`,
+  `cycleResult.outcome` ainda vira `'success'` — cai em `case 'success'` → `markStepDone(...,
+  'skip')`, o mesmo destino final, só que por uma porta diferente da citada no card.
+- **Causa raiz:** a auditoria original encontrou dois locais de código (`markStepDone` e o bloco
+  de downgrade semântico) fisicamente próximos e temporariamente plausíveis de estarem
+  conectados, e inferiu uma relação causal direta entre eles sem simular o `cycleResult.outcome`
+  passo a passo entre os dois pontos. O fluxo de controle real (outcome muda de valor entre o
+  bloco citado e o `switch`) só fica visível lendo o código com atenção ao STATE MUTATION
+  intermediário, não à proximidade textual dos dois trechos.
+
 ## Síntese — causas raiz recorrentes
 
-Analisando os 7 casos acima (excluindo S08, categoria diferente), os erros se agrupam em
-**3 modos de falha da auditoria original**, não 7 causas distintas:
+Analisando os 8 casos acima (excluindo S08, categoria diferente), os erros se agrupam em
+**4 modos de falha da auditoria original**, não 8 causas distintas:
 
 1. **Enumeração não-exaustiva** (S01, S03, S04) — contagens/listas citadas no card eram
    amostras ou resultado de busca parcial, não o resultado de uma varredura automatizada
@@ -114,6 +136,14 @@ Analisando os 7 casos acima (excluindo S08, categoria diferente), os erros se ag
 3. **Equivalência assumida sem verificar a semântica real** (S10, S11) — dois mecanismos foram
    tratados como intercambiáveis por terem nome/formato parecido, sem confirmar que representam
    o mesmo CONCEITO (como o dado é populado, o que cada condição realmente checa).
+4. **Rota causal citada não é a rota real, apesar do sintoma final estar correto** (S13) —
+   diferente dos modos 1-3 (onde a CONCLUSÃO do card também precisou de correção), aqui a
+   conclusão de alto nível ("existe essa divergência") se confirmou exatamente como descrita; só
+   o CAMINHO DE CÓDIGO citado como prova/mecanismo estava errado. É o modo de falha mais
+   perigoso de detectar, porque o sintoma correto tende a validar precocemente a explicação
+   errada — só aparece simulando a mutação de estado (aqui, `cycleResult.outcome`) entre os dois
+   pontos citados, não checando se os dois trechos citados existem (ambos existiam) ou se estão
+   perto um do outro no arquivo (estavam).
 
 **Conclusão sobre a natureza da auditoria original:** os modos 1-3 são consistentes com uma
 auditoria conduzida em **varredura ampla** (grep/leitura rápida cobrindo os 26 cards numa única
