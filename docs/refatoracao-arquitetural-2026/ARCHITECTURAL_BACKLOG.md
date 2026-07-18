@@ -230,7 +230,7 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Impacto:** Alto.
 - **Risco:** Alto — dois momentos/LLMs diferentes hoje; fundir exige repensar QUANDO a evidência é coletada, não é uma refatoração mecânica.
 - **Esforço:** Alto.
-- **Dependências:** ARCH-005 (fonte única de entrega), ARCH-018 (evaluateCriteria absorvendo structuralBypass) devem estar concluídos antes — este item deve ser o último do Epic B.
+- **Dependências:** ARCH-005 (fonte única de entrega, concluído — S16), ARCH-018 (evaluateCriteria absorvendo structuralBypass) devem estar concluídos antes — este item deve ser o último do Epic B. **ARCH-018 foi adiado na S18 (2026-07-18) — diferente de ARCH-008/ARCH-009, esta é uma dependência funcional real (ARCH-012 precisa da avaliação de conclusão já consolidada), não só sequenciamento — como ARCH-012 já está no fim do programa (S27), há tempo de retomar ARCH-018 antes de chegar lá, mas não tratar como "não bloqueia" sem revisão.**
 - **Pré-requisitos:** Documento de Fase 1-5 completo (`DIRETRIZ_ARQUITETURA_2026-07-13.md`) antes de qualquer código.
 - **Critérios de Aceite:** Definidos na própria RFC (Fase 4/5 da diretriz).
 - **Definition of Done:** RFC aprovada com riscos documentados E, se aprovada para implementação, Validação Progressiva completa até etapa 4.
@@ -328,8 +328,9 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Regressão completa; se conectar, teste de circuit breaker abrindo sob falhas reais.
 - **Métrica que deverá melhorar:** Decision Owners, God Methods indiretamente (remove uma opção de caminho a considerar).
 
-### ARCH-018 — `evaluateCriteria` absorve `structuralBypass` como `CriterionCheck`
+### ARCH-018 — `evaluateCriteria` absorve `structuralBypass` como `CriterionCheck` ⏸ Adiado (2026-07-18, Sprint S18) — premissa presumia equivalência semântica que não existe
 - **Descrição:** `structuralBypass` (`GoalExecutionLoop.ts` L634-669) é um desvio de código solto dentro de `runLoopInternal` que faz `fs.statSync` direto para decidir "já pode considerar entregue". `file_exists` já existe como `CriterionCheck` — expressar o bypass como mais um critério elimina o `if` ad-hoc.
+- **Adiado na S18, antes de codificar (Fase 1 da diretriz de arquitetura):** a implementação real de `file_exists` (`evaluateCriteria()`) checa se existe um `GoalAttempt` bem-sucedido com `output` não-vazio — NÃO consulta o disco. `structuralBypass` faz `fs.statSync()` direto no disco, sem depender de nenhum attempt, exatamente porque o Bug 2 original (`project_session_bugs_jul2026_ap`) era sobre arquivos que já existiam ANTES do goal começar, sem attempt nenhum como evidência. Reaproveitar `file_exists` literalmente reintroduziria o deadlock que `structuralBypass` foi criado para fechar. Achado estrutural adicional: `structuralBypass` deriva alvos dinamicamente do plano atual (muda a cada replan); `successCriteria` é uma lista estática — encaixar um no outro exigiria sincronizar as duas fontes a cada replan, um risco novo, não uma simplificação. Registro técnico completo, incluindo a alternativa de design (novo `CriterionCheck` dedicado, sem reaproveitar `file_exists`): `docs/issues/010-arch018-file-exists-checks-attempts-not-disk.md`. 2ª instância confirmada do modo 3 da retrospectiva (equivalência semântica assumida sem verificação — mesmo modo de S10/S11). Por decisão do usuário, adiado sem consolidação com outro tema.
 - **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (L634-669, L2840-2943 `evaluateCriteria`).
 - **Origem (auditorias):** Auditoria I (RE4).
 - **Categoria:** Decision Ownership.

@@ -1,9 +1,9 @@
 # Retrospectiva — Premissas da Auditoria que Não Se Sustentaram na Execução
 
-**Data:** 2026-07-18 (atualizado com os casos S16 e S17). **Escopo:** Sprints `2026-07-S01` a
-`2026-08-S17` do Programa de Refatoração Arquitetural (`MASTER_EXECUTION_PLAN.md`), cards ARCH-001
-a ARCH-023 (parcial) + ARCH-005/008/009/010. **Motivo deste documento:** ao final da S11, o usuário
-perguntou diretamente por que premissas erradas estavam se repetindo e pediu um catálogo
+**Data:** 2026-07-18 (atualizado com os casos S16, S17 e S18). **Escopo:** Sprints `2026-07-S01` a
+`2026-08-S18` do Programa de Refatoração Arquitetural (`MASTER_EXECUTION_PLAN.md`), cards ARCH-001
+a ARCH-023 (parcial) + ARCH-005/008/009/010/018. **Motivo deste documento:** ao final da S11, o
+usuário perguntou diretamente por que premissas erradas estavam se repetindo e pediu um catálogo
 consolidado — não bug a bug, mas como retrospectiva de processo, para melhorar a auditoria em si,
 não só corrigir os sintomas encontrados até agora.
 
@@ -12,9 +12,9 @@ não só corrigir os sintomas encontrados até agora.
 `ARCHITECTURAL_BACKLOG.md` é descrito como a consolidação de 4 auditorias ("Auditoria I —
 Duplicação de Decisões", "II — Duplicação de Conhecimento", "III — Complexidade Acidental", "IV —
 Violação de Fronteiras Arquiteturais"), todas conduzidas na mesma sessão de engenharia, cobrindo
-26 cards. Das **15 Sprints já executadas** (incluindo `S14` e `S17`, ambas adiadas na Fase 1/2
-antes de qualquer código ser escrito — ver casos abaixo), **11 tiveram a premissa original do card
-corrigida durante a execução** — não são exceções, são a maioria, cada vez mais larga. Isso não
+26 cards. Das **16 Sprints já executadas** (incluindo `S14`, `S17` e `S18`, todas adiadas na Fase
+1/2 antes de qualquer código ser escrito — ver casos abaixo), **12 tiveram a premissa original do
+card corrigida durante a execução** — não são exceções, são a maioria, cada vez mais larga. Isso não
 invalida o backlog (o diagnóstico de ALTO NÍVEL — "existe duplicação/acoplamento aqui" — se
 confirmou em todos os casos), mas invalida a confiança de que o TEXTO ESPECÍFICO de cada card
 (contagens, alegações sobre estrutura de dados, equivalência entre padrões, viabilidade da
@@ -188,10 +188,36 @@ ser implementado sem reverificação.
   de urgência/cenário de teste sem verificar que ele existe no runtime. Documentado em
   `docs/issues/009`. Adiado por decisão do usuário — fix desenhado, não implementado.
 
+### S18 / ARCH-018 — `evaluateCriteria` absorve `structuralBypass` (categoria: modo 3, instância nova)
+- **Premissa do card:** "`file_exists` já existe como `CriterionCheck` — expressar o
+  [`structuralBypass`] como mais um critério elimina o `if` ad-hoc".
+- **Achado real:** `file_exists` (implementação atual) checa se existe um `GoalAttempt`
+  bem-sucedido com `output` não-vazio — prova indireta via texto de tool, NÃO uma consulta ao
+  disco. `structuralBypass` faz `fs.statSync()` direto no disco, sem depender de nenhum attempt —
+  exatamente para cobrir o caso (o Bug 2 original) de um arquivo que já existia ANTES do goal
+  começar, sem nenhuma evidência de attempt. Reaproveitar `file_exists` literalmente teria feito
+  `structuralBypass` retornar `'unverifiable'` na maioria dos casos, reintroduzindo o deadlock que
+  ele foi criado para fechar.
+- **Achado estrutural adicional:** `structuralBypass` deriva alvos dinamicamente do plano atual
+  (`pendingSendSteps`, que muda a cada replan); `SuccessCriterion` é uma lista estática, decidida
+  na criação do plano. Encaixar um no outro de verdade exigiria sincronizar as duas fontes a cada
+  replan — risco de nova divergência, não simplificação.
+- **Causa raiz:** instância nova do modo 3 (equivalência semântica assumida sem verificação) — dois
+  mecanismos com nomes/conceitos parecidos ("existe o arquivo?") tratados como intercambiáveis sem
+  checar COMO cada um decide isso de fato (attempt-output vs. disco direto), o mesmo padrão de
+  S10/S11. Auto-detectado nesta Sprint só porque o card operava numa área com histórico de bug
+  real de produção (Bug 2, `project_session_bugs_jul2026_ap`), o que motivou reverificação extra
+  antes de tocar código.
+- **Decisão:** adiado por decisão do usuário, mesma linha de S14/S17. Registro técnico completo,
+  incluindo a alternativa de design levantada (novo `CriterionCheck` dedicado, não reaproveitar
+  `file_exists`): `docs/issues/010-arch018-file-exists-checks-attempts-not-disk.md`.
+
 ## Síntese — causas raiz recorrentes
 
-Analisando os 11 casos acima (excluindo S08, categoria diferente), os erros se agrupam em
-**6 modos de falha da auditoria original**, não 11 causas distintas:
+Analisando os 12 casos acima (excluindo S08, categoria diferente), os erros se agrupam em
+**6 modos de falha da auditoria original**, não 12 causas distintas — S18 é a segunda instância
+confirmada do modo 3 (a primeira dupla foi S10/S11), reforçando que "equivalência semântica
+assumida sem verificação" não é um acaso isolado, é o modo mais recorrente do catálogo:
 
 1. **Enumeração não-exaustiva** (S01, S03, S04) — contagens/listas citadas no card eram
    amostras ou resultado de busca parcial, não o resultado de uma varredura automatizada
@@ -199,9 +225,10 @@ Analisando os 11 casos acima (excluindo S08, categoria diferente), os erros se a
 2. **Grafo de dependência incompleto** (S02, S05) — o escopo de "o que precisa mover/remover
    junto" foi decidido olhando só o símbolo citado no card, sem seguir suas próprias
    dependências transitivas (S02) nem enumerar os demais exports do mesmo arquivo (S05).
-3. **Equivalência assumida sem verificar a semântica real** (S10, S11) — dois mecanismos foram
+3. **Equivalência assumida sem verificar a semântica real** (S10, S11, S18) — mecanismos foram
    tratados como intercambiáveis por terem nome/formato parecido, sem confirmar que representam
-   o mesmo CONCEITO (como o dado é populado, o que cada condição realmente checa).
+   o mesmo CONCEITO (como o dado é populado, o que cada condição realmente checa). O modo mais
+   recorrente do catálogo — 3 instâncias confirmadas.
 4. **Rota causal citada não é a rota real, apesar do sintoma final estar correto** (S13) —
    diferente dos modos 1-3 (onde a CONCLUSÃO do card também precisou de correção), aqui a
    conclusão de alto nível ("existe essa divergência") se confirmou exatamente como descrita; só
@@ -234,7 +261,7 @@ Analisando os 11 casos acima (excluindo S08, categoria diferente), os erros se a
 auditoria conduzida em **varredura ampla** (grep/leitura rápida cobrindo os 26 cards numa única
 sessão) — apropriada para GERAR candidatos de dívida arquitetural, mas insuficiente para
 PRESCREVER a implementação exata sem reverificação. Isso não é uma falha da auditoria em si (o
-diagnóstico de alto nível — "existe uma violação/duplicação aqui" — se confirmou nos 15/15 casos
+diagnóstico de alto nível — "existe uma violação/duplicação aqui" — se confirmou nos 16/16 casos
 até agora) — é uma característica esperada de qualquer varredura ampla que cobre muito código em
 pouco tempo, agravada no modo 5 pelo fato de o próprio backlog descrever um alvo em movimento (o
 código muda a cada Sprint do mesmo programa que consulta o card), e no modo 6 pelo fato de a
