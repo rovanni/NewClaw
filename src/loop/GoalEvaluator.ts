@@ -16,6 +16,7 @@ import { createLogger } from '../shared/AppLogger';
 import { ToolResult } from './agentLoopTypes';
 import { Goal, PlanStep, CycleResult, GoalBlocker, BlockerKind, DependencyInfo } from './GoalTypes';
 import { extractMissingExecutable } from './planning/extractMissingExecutable';
+import { computeToolInputKey } from './planning/computeToolInputKey';
 import { ECONNRESET_PATTERN, ETIMEDOUT_PATTERN, TIMEOUT_PATTERN, NETWORK_PATTERN, RATE_LIMIT_PATTERN, HTTP_429_PATTERN, combineRegExp } from '../shared/transientErrorPatterns';
 
 const log = createLogger('GoalEvaluator');
@@ -227,16 +228,7 @@ export class GoalEvaluator {
 
         // Item 9: Immediate replan on dedup — se este step+tool+args já falhou antes,
         // bloquear imediatamente sem retry para evitar loop de tentativas idênticas.
-        // Compara (planStepId, toolName, args) para não bloquear replanos com
-        // comandos diferentes ao mesmo step_id (ex: exec_command com caminhos distintos).
-        const currentArgsStr = JSON.stringify(planStep.toolArgs ?? {});
-        const alreadyFailed = goal.attempts.some(a =>
-            a.planStepId === planStep.id &&
-            a.toolName === toolName &&
-            a.result === 'failure' &&
-            JSON.stringify(a.args ?? {}) === currentArgsStr
-        );
-        if (alreadyFailed) {
+        if (this.hasIdenticalFailedAttempt(goal, planStep, toolName)) {
             log.warn(`[GoalEvaluator] dedup step=${planStep.id} tool=${toolName} — replan imediato`);
             return {
                 outcome: 'blocked',
@@ -302,6 +294,25 @@ export class GoalEvaluator {
 
         // Sem budget de nenhum tipo → falha definitiva
         return { outcome: 'failed', confidence: 0.1, blocker };
+    }
+
+    /**
+     * ARCH-010: responde "esta chamada exata (step, tool, args) já falhou antes neste goal?"
+     * por consulta nomeada, em vez de lógica de dedup recomputada inline em `evaluate()`.
+     * Chave de args via `computeToolInputKey` (mesma função usada pelo dedup de
+     * `AgentLoop.usedToolInputs`) em vez de `JSON.stringify` bruto — evita que duas variações
+     * cosméticas do mesmo `send_document` (legenda diferente, mesmo `file_path`) escapem do
+     * dedup por terem JSON diferente, o mesmo padrão de bug que `computeToolInputKey` já
+     * corrigiu na camada de `AgentLoop` (ver S90).
+     */
+    private hasIdenticalFailedAttempt(goal: Goal, planStep: PlanStep, toolName: string): boolean {
+        const currentKey = computeToolInputKey(toolName, planStep.toolArgs ?? {});
+        return goal.attempts.some(a =>
+            a.planStepId === planStep.id &&
+            a.toolName === toolName &&
+            a.result === 'failure' &&
+            computeToolInputKey(a.toolName, a.args ?? {}) === currentKey
+        );
     }
 
     /** Avalia se o goal ainda tem progresso real entre ciclos */
