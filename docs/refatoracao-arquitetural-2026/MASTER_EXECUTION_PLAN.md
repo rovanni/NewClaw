@@ -52,7 +52,7 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 | 2026-08-S18 | Ago/2026 | Decision Ownership | ARCH-018 | ⏸ | S16 | 4171d31 | Adiado antes de codificar — `file_exists` checa attempt, não disco (2ª instância do modo 3); reaproveitá-lo reintroduziria o deadlock histórico; fix desenhado em `docs/issues/010` |
 | 2026-09-S19 | Set/2026 | Structural Simplification | ARCH-024-RFC | 🟢 | CP02 | 9b6fc80 | RFC aprovada, escopo corrigido: 4 campos consolidados (não 5 — `recentMessages` não é delivery-tracking); campo aninhado `deliveryTracking`, não parâmetro separado; ver `RFC_ARCH-024_DeliveryTrackingContext.md` |
 | 2026-09-S20 | Set/2026 | Decision Ownership | ARCH-015-RFC | 🟢 | S06 | b883cac | RFC aprovada com escopo REDUZIDO: só texto de prompt (`requiredArgsHint`); validação não aprovada (lógica condicional em 3+ tools, sem incidente real motivando); ver `RFC_ARCH-015_SchemaGeneratedRequiredArgs.md` |
-| 2026-09-CP03 | Set/2026 | Checkpoint | — | ⚪ | S16-S20 | — | — |
+| 2026-09-CP03 | Set/2026 | Checkpoint | — | 🟢 | S16-S20 | — | S16/S19/S20 🟢 (3/5), S17/S18 ⏸ adiadas com justificativa (não bloqueiam); 0 violações de fronteira novas, regressão 124/124; risco de S16 não extrapolado pra baixo em S24/S25 |
 | 2026-09-S21 | Set/2026 | Decision Ownership | ARCH-013 | ⚪ | CP03, S14 | — | — |
 | 2026-09-S22 | Set/2026 | Structural Simplification | ARCH-022 | ⚪ | S16, S14, S21 | — | — |
 | 2026-10-S23 | Out/2026 | Structural Simplification | ARCH-024-Impl | ⚪ | S19 (aprovação) | — | — |
@@ -68,17 +68,17 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01-S13/S15/S16/S19/S20, Checkpoints CP01/CP02 concluídos; S14/S17/S18 adiadas (ver abaixo)
+**Status Geral:** 🟢 Em execução — Fase 0, S01-S13/S15/S16/S19/S20, Checkpoints CP01/CP02/CP03 concluídos; S14/S17/S18 adiadas (ver abaixo)
 **Progresso:** 15 / 26 ARCH concluídos (~58%) — ARCH-008 (S17), ARCH-009 (S14) e ARCH-018 (S18) adiados, não contam como concluídos nem como pendências simples. ARCH-024 e ARCH-015 têm RFC aprovada (S19/S20), mas só contam como concluídos quando a Impl (S23/S26) landar — Definition of Done de ambos os cards exige as duas etapas
-**Sprint Atual:** Nenhuma em andamento (S20 concluída — próxima é o Checkpoint 2026-09-CP03)
-**Próxima Sprint:** Checkpoint 2026-09-CP03 (revisão de S16-S20 em conjunto)
-**Epic Atual:** Epic A concluído; Epic B "concluído" no sentido de nenhum item executável restante nesta ordem — ARCH-005/006/007/010/011 feitos, ARCH-008 adiado, ARCH-012 deliberadamente deferido para o fim do programa; Epic C — ARCH-014/015(RFC)/016/017 feitos/aprovados, ARCH-018 adiado (dependência real de ARCH-012); Epic D iniciado — ARCH-023 feito, ARCH-024 com RFC aprovada (Impl em S23); Epic E concluído — ARCH-025/026 feitos
-**Próximo Marco:** 2026-09-CP03 (agora a próxima Sprint em si)
-**Última Atualização:** 2026-07-18 (Sprint S20 concluída)
-**Build:** 🟢 `npm run build` limpo (inalterado — S17/S18/S19/S20 não tocaram código de produção)
+**Sprint Atual:** Nenhuma em andamento (Checkpoint CP03 concluído — próxima é 2026-09-S21)
+**Próxima Sprint:** 2026-09-S21 (ARCH-013) — unificar o juiz de sucesso de step (`evaluateAgentStepSuccess`+`escalateStepEvalToLLM` fundidos em `StepSemanticValidator`); exige ambiente real (latência/custo de LLM). Bloqueia S22.
+**Epic Atual:** Epic A concluído; Epic B "concluído" no sentido de nenhum item executável restante nesta ordem — ARCH-005/006/007/010/011 feitos, ARCH-008 adiado, ARCH-012 deliberadamente deferido para o fim do programa; Epic C em andamento — ARCH-014/015(RFC)/016/017 feitos/aprovados, ARCH-018 adiado (dependência real de ARCH-012), ARCH-013 é a próxima Sprint; Epic D iniciado — ARCH-023 feito, ARCH-024 com RFC aprovada (Impl em S23); Epic E concluído — ARCH-025/026 feitos
+**Próximo Marco:** 2026-11-CP04
+**Última Atualização:** 2026-07-18 (Checkpoint CP03 concluído)
+**Build:** 🟢 `npm run build` limpo (inalterado — S17/S18/S19/S20/CP03 não tocaram código de produção)
 **Testes:** 🟢 124/124 (inalterado)
-**Regressão:** 🟢 124/124 (pós-S16, inalterado — S17/S18/S19/S20 não tocaram código de produção)
-**Riscos Abertos:** 0 materializados — nota permanente: a VPS `venus@10.0.0.10` usada para validação Linux tem histórico de exigir `.env`/`WORKSPACE_DIR` explícito (skill `verify`) para não gerar falso-positivo — ver `docs/issues/002`. S16 (ARCH-005), o item sinalizado como maior risco do programa até então, teve o escopo redesenhado na Fase 1/2 para um fix cirúrgico — risco real materializado ficou bem menor que o estimado. S18 (ARCH-018), próxima Sprint, é a área do bug de deadlock histórico já documentado — atenção redobrada na Fase 1.
+**Regressão:** 🟢 124/124 (pós-S16, reconfirmado na revisão do checkpoint)
+**Riscos Abertos:** 0 materializados — nota permanente: a VPS `venus@10.0.0.10` usada para validação Linux tem histórico de exigir `.env`/`WORKSPACE_DIR` explícito (skill `verify`) para não gerar falso-positivo — ver `docs/issues/002`. S16 (ARCH-005) teve o escopo redesenhado na Fase 1/2 para um fix cirúrgico — risco real ficou bem menor que o estimado, mas isso NÃO deve ser extrapolado para S24/S25 (ver revisão de riscos do CP03) — a redução veio de a premissa do card estar errada, não de a área ser inerentemente mais fácil. S21, próxima Sprint, muda latência/custo real de LLM por step — exige ambiente real.
 **RFCs Pendentes:** 1 (ARCH-012, deliberadamente por último) — ARCH-024 (S19) e ARCH-015 (S20) concluíram a RFC, ambas aprovadas com escopo corrigido/reduzido em relação ao card original; Impls agendadas para S23/S26
 **Temas Adiados para Revisão Consolidada:** 1 (ARCH-009 — ver `docs/refatoracao-arquitetural-2026/REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`, que já lista ARCH-024 e `docs/issues/004` como temas correlatos a tratar junto quando essa revisão abrir)
 **Temas Adiados sem Consolidação (categoria própria):** 2 (ARCH-008 — premissa citava mecanismo de recovery-no-boot inexistente, `docs/issues/009`; ARCH-018 — `file_exists` não faz o que o card presumia, reaproveitá-lo reintroduziria o deadlock histórico, `docs/issues/010`, **dependência real de ARCH-012**, não só sequenciamento)
@@ -618,9 +618,15 @@ Validação
 ## Checkpoint 2026-09-CP03
 
 - **Identificação:** `2026-09-CP03`
-- **Revisar:** indicadores (Single Sources — maior redução do programa até aqui, com ARCH-005 concluído), backlog (confirmar que nenhum item novo de dívida técnica foi descoberto durante S16-S20 sem virar proposta de ARCH), dependências (S21 e S22 liberadas), arquitetura (fundação de estado único estabelecida — condição necessária para decompor os God Methods com segurança), riscos (revisar se o risco real observado em S16 bateu com o estimado; ajustar estimativa de S24/S25 se divergiu), planejamento (esta é a virada do programa — da consolidação de estado para a decomposição estrutural).
-- **Critério de avanço:** S16-S20 todas 🟢, nenhuma regressão pendente, `getEffectiveDeliveredArtifacts` (ARCH-005) validado em ambiente real.
-- **Status:** ⚪ Não iniciado.
+- **Revisado em 2026-07-18:**
+  - **Indicadores:** Single Sources — S16 (ARCH-005) normalizou a comparação de path em `deliverable_check`; S19/S20 (RFCs) não tocaram código, mas já corrigiram o DESENHO de duas futuras consolidações (`DeliveryTrackingContext`, `requiredArgsHint`) antes de qualquer implementação errada. Boundary (re-grep nesta revisão): 0 ocorrências de `from '../loop/AgentLoop'` para `ToolExecutor`/`ToolResult` em `tools/`; 0 imports de `loop/` em `memory/` — nenhuma violação nova, consistente com CP01/CP02.
+  - **Backlog:** nenhuma dívida nova encontrada durante S16-S20 escapou do processo — todo achado de premissa (S16, S17, S18, S19, S20) virou `docs/issues/NNN` e/ou nota "Executado como"/"RFC" no card correspondente, nenhum corrigido "de brinde" fora do escopo do card da própria Sprint.
+  - **Dependências:** S21 (ARCH-013) confirmado liberado (dependia de CP02 + S14, ambas resolvidas/não-bloqueantes). S22 (ARCH-022) depende de S16 (✅), S14 (adiada, não-bloqueante), S21 (ainda não rodou) — segue corretamente bloqueada por S21, não por nada desta leva.
+  - **Arquitetura:** nenhuma violação nova — reconfirmado por grep completo nesta revisão (ver Indicadores acima).
+  - **Riscos:** o risco real observado em S16 (redesenhado para um fix cirúrgico após a Fase 1/2) ficou BEM menor que o estimado pelo card original — mas a causa foi a premissa do card estar errada (as "4 estruturas" já convergiam), não que mudanças nesta área do sistema sejam inerentemente mais fáceis do que o esperado. **Não extrapolar esse resultado para calibrar S24/S25 pra baixo** — a Fase 1/2 de S24/S25 (decomposição de `runLoopInternal`/`runWithTools`) não tem o mesmo tipo de "escape hatch" (não há premissa a corrigir que reduza o escopo; a complexidade dos dois métodos é real e confirmada, não uma alegação de auditoria a verificar). Mantida a estimativa original de Alto risco/esforço para S24/S25.
+  - **Planejamento:** confirmado — este é o ponto de virada do programa. Consolidação de estado (Epic B, praticamente encerrado nesta ordem — só ARCH-008 adiado e ARCH-012 deliberadamente por último restam) dá lugar à decomposição estrutural (Epic D, S22 em diante) e ao fechamento do Epic C (S21, depois ARCH-018 quando for retomado).
+- **Critério de avanço — reinterpretado, mesmo princípio já usado em CP02:** o texto original ("S16-S20 todas 🟢" + "`getEffectiveDeliveredArtifacts` validado em ambiente real") foi escrito antes de (a) a categoria "adiada com justificativa" existir no programa, e (b) a Fase 1/2 de S16 ter corrigido a premissa e descartado `getEffectiveDeliveredArtifacts` como solução (não construída de propósito — ver card ARCH-005, "Executado como"). Aplicando a mesma reinterpretação de CP02: `⏸ Adiada` conta como não-bloqueante quando documentada (S17, S18); "validado em ambiente real" é satisfeito pelo que S16 REALMENTE validou (o fix de normalização de path, com LLM real e goal real), não pela função específica que o card presumia — **atingido**: S16/S19/S20 🟢 (3/5), S17/S18 ⏸ com justificativa completa registrada; regressão 124/124 (inalterada desde S16, nenhuma Sprint desta leva tocou código depois); nenhum indicador arquitetural piorou.
+- **Status:** 🟢 Concluído em 2026-07-18.
 
 ---
 
