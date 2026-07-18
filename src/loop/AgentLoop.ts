@@ -10,7 +10,7 @@
  *   agentMetrics.ts      — buildLoopMetric, summarizeMetrics
  */
 
-import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary } from '../core/ProviderFactory';
+import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary, ToolCall } from '../core/ProviderFactory';
 import { computeDynamicTimeout } from '../shared/dynamicTimeout';
 import { CognitiveWorkspace } from '../cognitive/CognitiveWorkspace';
 import { SessionContext } from '../session/SessionContext';
@@ -185,6 +185,80 @@ type JsonActionDispatchResult =
         guardsTriggered: number;
         totalToolCalls: number;
         toolFailureCount: number;
+    };
+
+/**
+ * ARCH-019 (S25, Incremento 5): retorno de `runNativeToolCallDispatch()`, extraído do bloco
+ * `if (response.toolCalls && response.toolCalls.length > 0) {...}` de `runWithTools()` — o
+ * caminho principal de tool-calling nativo (function-calling real da API do provider), com um
+ * `for` interno que processa TODO o batch de tool calls do step antes de decidir o próximo
+ * passo (permite múltiplos `send_document` no mesmo step, por exemplo). O `for` interno e seus
+ * próprios `continue`/`break` ficam inteiramente DENTRO do método extraído — nunca precisam
+ * cruzar a fronteira do método, porque nenhum deles teria como "escapar" para o `while` externo
+ * no código original (o `for` é o loop mais próximo). Só o desfecho DEPOIS do `for` completar
+ * cruza a fronteira: `earlyReturn` (auth pendente, ou terminalBatchResult != null),
+ * `continueLoop` (replica o `continue` que fechava o bloco original), `fallThrough` (a condição
+ * externa `response.toolCalls?.length > 0` era falsa — cai no dispatch JSON-action, Incremento
+ * 4). 7 primitivos mutados são devolvidos em toda variante não-earlyReturn — incluindo
+ * `maxSteps`, que só este caminho (não o JSON-action) pode fazer upgrade (achado real durante a
+ * extração: assimetria pré-existente entre os 2 caminhos de dispatch, não introduzida aqui).
+ */
+type NativeToolCallDispatchResult =
+    | { action: 'earlyReturn'; result: string | ProcessedResult }
+    | {
+        action: 'continueLoop' | 'fallThrough';
+        dedupAbort: boolean;
+        dedupAbortTool: string;
+        maxSteps: number;
+        totalToolCalls: number;
+        consecutiveToolFailures: number;
+        guardsTriggered: number;
+        toolFailureCount: number;
+    };
+
+/**
+ * ARCH-019 (S25, Incremento 5, sub-decomposição): `runNativeToolCallDispatch()` sozinho ficou
+ * com 487 linhas — acima do limite de 300 do critério de aceite do card. Decisão do usuário
+ * (apresentada via AskUserQuestion): sub-decompor mais 2 níveis em vez de aceitar como exceção
+ * documentada. `dispatchSingleNativeToolCall()` processa UMA toolCall do batch (o corpo do
+ * `for` interno) — extrai os guards de pré-voo (read-blocked/dedup/send_document-defer/
+ * send_audio-already-sent) inline, e delega a execução real para `executeAndRecordNativeToolCall`
+ * + `applyPostToolCallGuardsAndFinalize`. `earlyReturn` (auth pendente) sobe direto;
+ * `continueFor`/`breakFor` replicam os `continue`/`break` do `for` original — nunca cruzam para
+ * o `while` externo, o `for` inteiro vive dentro de `dispatchSingleNativeToolCall`.
+ */
+type SingleToolCallDispatchResult =
+    | { action: 'earlyReturn'; result: string | ProcessedResult }
+    | {
+        action: 'continueFor' | 'breakFor';
+        terminalOutput?: string;
+        dedupAbort: boolean;
+        dedupAbortTool: string;
+        maxSteps: number;
+        totalToolCalls: number;
+        consecutiveToolFailures: number;
+        guardsTriggered: number;
+        toolFailureCount: number;
+    };
+
+/**
+ * ARCH-019 (S25, Incremento 5, sub-decomposição): retorno de `executeAndRecordNativeToolCall()`
+ * — a 1ª metade do antigo bloco `if (tool) {...}` (checagem de perigo, guard de edit-loop,
+ * despacho real via `proactiveRecovery.execute`, e todo o registro/telemetria/upgrade de
+ * budget). `proceed` entrega `result`/`resolvedToolName`/`resolvedArgs` para
+ * `applyPostToolCallGuardsAndFinalize()` continuar (2ª metade: detectores de loop/grupo/falha
+ * + tratamento terminal).
+ */
+type ExecuteAndRecordResult =
+    | { action: 'earlyReturn'; result: string | ProcessedResult }
+    | { action: 'continueFor' | 'breakFor'; dedupAbort: boolean; dedupAbortTool: string }
+    | {
+        action: 'proceed';
+        result: ToolResult;
+        resolvedToolName: string;
+        resolvedArgs: Record<string, unknown>;
+        maxSteps: number;
+        totalToolCalls: number;
     };
 
 /**
@@ -1956,6 +2030,663 @@ export class AgentLoop {
         return fallThrough();
     }
 
+    /**
+     * ARCH-019 (S25, Incremento 5): dispatch de tool-calling nativo, extraído de
+     * `runWithTools()` sem mudar lógica. Ver `NativeToolCallDispatchResult` para o desenho do
+     * retorno — o `for` interno sobre `toolCalls` nunca cruza a fronteira do método.
+     */
+    private async runNativeToolCallDispatch(
+        toolCalls: ToolCall[] | undefined,
+        stepCount: number,
+        channelContext: ChannelContext | undefined,
+        conversationId: string,
+        userText: string,
+        intentDecision: IntentDecision,
+        trace: ExecutionTrace,
+        turnSignal: AbortSignal,
+        usedToolInputs: Set<string>,
+        usedToolOutputs: Map<string, string>,
+        blockedKeyCount: Map<string, number>,
+        failedReadFilenames: Set<string>,
+        binaryReadFilenames: Set<string>,
+        editPathCount: Map<string, number>,
+        toolTypeCallCount: Map<string, number>,
+        groupCallCount: Map<string, number>,
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        loopMessages: LLMMessage[],
+        decisionCtx: DecisionContext,
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        maxSteps: number,
+        totalToolCalls: number,
+        consecutiveToolFailures: number,
+        guardsTriggered: number,
+        toolFailureCount: number,
+        MAX_SAME_TOOL_CALLS: number,
+        MAX_GROUP_CALLS: number,
+        MAX_CONSECUTIVE_TOOL_FAILURES: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): Promise<NativeToolCallDispatchResult> {
+        const fallThrough = (): NativeToolCallDispatchResult => ({
+            action: 'fallThrough', dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+            consecutiveToolFailures, guardsTriggered, toolFailureCount,
+        });
+
+        if (toolCalls && toolCalls.length > 0) {
+            // Tracks the last successful terminal tool in this batch.
+            // We intentionally do NOT return inside the for loop so that all
+            // send_document / send_audio calls in a single batch are executed
+            // before the turn ends (fixes the "only index.html sent" bug).
+            let terminalBatchResult: string | null = null;
+
+            for (const toolCall of toolCalls) {
+                const singleResult = await this.dispatchSingleNativeToolCall(
+                    toolCall, stepCount, channelContext, conversationId, userText, intentDecision, trace,
+                    turnSignal, usedToolInputs, usedToolOutputs, blockedKeyCount, failedReadFilenames,
+                    binaryReadFilenames, editPathCount, toolTypeCallCount, groupCallCount, cycleHistory,
+                    loopMessages, decisionCtx, dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+                    consecutiveToolFailures, guardsTriggered, toolFailureCount,
+                    MAX_SAME_TOOL_CALLS, MAX_GROUP_CALLS, MAX_CONSECUTIVE_TOOL_FAILURES, move,
+                );
+                if (singleResult.action === "earlyReturn") return singleResult;
+                dedupAbort = singleResult.dedupAbort;
+                dedupAbortTool = singleResult.dedupAbortTool;
+                maxSteps = singleResult.maxSteps;
+                totalToolCalls = singleResult.totalToolCalls;
+                consecutiveToolFailures = singleResult.consecutiveToolFailures;
+                guardsTriggered = singleResult.guardsTriggered;
+                toolFailureCount = singleResult.toolFailureCount;
+                if (singleResult.terminalOutput !== undefined) terminalBatchResult = singleResult.terminalOutput;
+                if (singleResult.action === "breakFor") break;
+            }
+
+            // After all toolCalls in the batch are processed, check for a terminal result.
+            if (terminalBatchResult !== null) {
+                log.info(`[${this.ts()}] [TASK-FSM] Terminal batch done → task DONE, returning result`);
+                move('FINAL_READY', { step: stepCount, terminal: true });
+                traceManager.completeTrace(trace, 'completed', terminalBatchResult);
+                this.persistTrace(trace, stepCount, 'completed', terminalBatchResult, channelContext);
+                return { action: 'earlyReturn', result: terminalBatchResult };
+            }
+
+            return {
+                action: 'continueLoop', dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+                consecutiveToolFailures, guardsTriggered, toolFailureCount,
+            };
+        }
+        return fallThrough();
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 5, sub-decomposição): 1ª metade do antigo `if (tool) {...}` —
+     * checagem de perigo (auth pendente), guard de edit-loop, despacho real via
+     * `proactiveRecovery.execute`, e todo o registro/telemetria/upgrade de step budget.
+     * Extraído sem mudar lógica.
+     */
+    private async executeAndRecordNativeToolCall(
+        toolCall: ToolCall,
+        toolName: string,
+        stepCount: number,
+        channelContext: ChannelContext | undefined,
+        conversationId: string,
+        userText: string,
+        intentDecision: IntentDecision,
+        trace: ExecutionTrace,
+        turnSignal: AbortSignal,
+        usedToolInputs: Set<string>,
+        usedToolOutputs: Map<string, string>,
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        loopMessages: LLMMessage[],
+        decisionCtx: DecisionContext,
+        editPathCount: Map<string, number>,
+        maxSteps: number,
+        totalToolCalls: number,
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): Promise<ExecuteAndRecordResult> {
+        const isDangerous = ToolRegistry.isDangerous(toolName)
+            && !this.isSafeExecCommand(toolName, toolCall.arguments)
+            && !permissionRegistry.can('auto_approve_exec');
+        if (isDangerous) {
+            log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
+
+            let txnId: string | undefined;
+            if (this.workflowEngine) {
+                // Novo fluxo: cria transaction com ID estruturado.
+                // Canais com workflowCallback (Telegram, WhatsApp, Discord, Signal) rotearão o callback
+                // diretamente ao WorkflowEngine — sem passar pelo LLM pipeline.
+                const ctx: ContinuationContext = {
+                    workflow: this.inferWorkflowName(intentDecision.intent, toolName),
+                    step: toolName,
+                    userGoal: userText.slice(0, 200),
+                    activeResources: this.extractResourceNames(toolCall.arguments),
+                    alternativeTools: this.findSafeAlternatives(toolName),
+                };
+                const txn = this.workflowEngine.createTransaction(
+                    conversationId, toolName,
+                    toolCall.arguments as Record<string, unknown>,
+                    ctx
+                );
+                txnId = txn.id;
+            }
+            // Registra no authManager para: (1) guardar hasPendingAuth nos fast-paths,
+            // (2) permitir removePending() no resumeFromWorkflow() após resolução.
+            // txnId é armazenado para habilitar aprovação por texto ("sim") como fallback.
+            this.authManager.addPending(conversationId, toolName, toolCall.arguments, txnId);
+
+            move('AUTH_REQUIRED', { step: stepCount, tool: toolName, txnId });
+            const authReq = this.authManager.formatRequest(toolName, toolCall.arguments, txnId);
+            return { action: 'earlyReturn', result: { text: authReq.text, options: authReq.options } };
+        }
+
+        // Guard: bloqueia edit repetido no mesmo arquivo (previne append-loop)
+        if (toolName === 'edit') {
+            const ep = typeof toolCall.arguments?.path === 'string' ? toolCall.arguments.path : undefined;
+            if (ep) {
+                const ec = (editPathCount.get(ep) ?? 0) + 1;
+                editPathCount.set(ep, ec);
+                if (ec > 4) {
+                    log.warn(`[${this.ts()}] [EDIT-LOOP] Blocked edit #${ec} to "${ep}" — use write to rewrite`);
+                    loopMessages.push({
+                        role: 'tool',
+                        content: `[BLOQUEADO] "edit" foi chamado ${ec} vezes no mesmo arquivo "${ep}" neste turno. Esta chamada foi bloqueada para evitar corrupção de arquivo por append-loop. Use "write" com o conteúdo completo se precisar reescrever o arquivo inteiro.`,
+                        tool_call_id: toolCall.id,
+                    });
+                    if (ec >= 7) {
+                        loopMessages.push({ role: 'system', content: `[CRÍTICO] "edit" foi chamado ${ec} vezes no arquivo "${ep}". O loop foi interrompido. Responda ao usuário com o que foi feito até aqui.` });
+                        dedupAbort = true;
+                        dedupAbortTool = toolName;
+                        return { action: 'breakFor', dedupAbort, dedupAbortTool };
+                    }
+                    return { action: 'continueFor', dedupAbort, dedupAbortTool };
+                }
+            }
+        }
+
+        const toolStartTime = Date.now();
+        const recovery = await this.proactiveRecovery.execute(
+            toolName, toolCall.arguments,
+            (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined,
+            usedToolInputs,
+            turnSignal,
+        );
+        const result = recovery.result;
+        const resolvedToolName = recovery.finalToolName;
+        const resolvedArgs = recovery.finalArgs;
+        const toolDuration = Date.now() - toolStartTime;
+
+        if (recovery.recovered && recovery.recoveryNote) {
+            const origTool = recovery.originalToolName ?? toolName;
+            const kind = recovery.mutationKind ?? 'arg_mutation';
+            log.info(
+                `[MUTATION] tool_mutation:\n  tool: ${origTool}\n  kind: ${kind}\n` +
+                `  original: ${JSON.stringify(recovery.originalArgs ?? {})}\n` +
+                `  modified: ${JSON.stringify(resolvedArgs)}`
+            );
+            loopMessages.push({
+                role: 'system',
+                content: kind === 'fallback_tool'
+                    ? `[RECUPERAÇÃO AUTOMÁTICA] A ferramenta "${origTool}" falhou e foi substituída por "${resolvedToolName}" com argumentos adaptados. ${recovery.recoveryNote}`
+                    : `[RECUPERAÇÃO AUTOMÁTICA] Os argumentos da ferramenta "${resolvedToolName}" foram ajustados automaticamente para funcionar. ${recovery.recoveryNote}`,
+            });
+        } else if (recovery.recoveryNote) {
+            log.info(`[${this.ts()}] ${recovery.recoveryNote}`);
+        }
+        // Utility score: generic keyword-overlap heuristic — observability only.
+        // Collect data here; do not use for control flow until patterns emerge.
+        const utilityScore = result.success
+            ? computeToolUtilityScore(userText, result.output)
+            : 0;
+        log.info(
+            `[${this.ts()}] [TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'} ` +
+            `utility=${utilityScore.toFixed(2)}`,
+            result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200)
+        );
+
+        traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
+        traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output });
+        this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
+        this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
+
+        cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
+        loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
+        if (result.success) usedToolOutputs.set(computeToolInputKey(toolName, toolCall.arguments), result.output.slice(0, 2000));
+        // Persiste args de tool calls bem-sucedidas no transcript (mesmo padrão já
+        // usado por GoalExecutionLoop.ts, que sempre teve isso — AgentLoop nunca
+        // teve, então turnos roteados por aqui perdiam permanentemente os argumentos
+        // de qualquer tool call assim que o turno terminava (cycleHistory é local ao
+        // método, descartado no return). Caso real: send_audio recebe o texto do
+        // áudio só via toolArgs — sem isso, "qual foi o texto que você usou?" nunca
+        // tem como ser respondido, mesmo o áudio tendo sido gerado com sucesso.
+        if (result.success && channelContext) {
+            await this.sessionContext?.getSessionManager().recordToolCall(
+                { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
+                resolvedToolName,
+                JSON.stringify(resolvedArgs),
+            ).catch(() => {});
+        }
+
+        // Evidence-driven budget upgrade: a turn classified as lightweight
+        // (conversation/direct, maxSteps=4) can still turn into real file-producing
+        // work once it actually calls `write`/`exec_command` — the upfront text-only
+        // classification has no way to know a "refinamento" will need edit + convert
+        // + send. Evidence: 2026-07-05 audit log, goal_1783288862838_1muu1 follow-up
+        // "máximo 10 linhas por slide" — routed as refinement_of_recent_goal →
+        // agentloop → conversation/direct (budget 4+2). The turn spent its entire
+        // budget re-editing excel_class.md and only wrote a conversion script
+        // (scripts/gen_excel_pptx.py) in the very last allowed step — never executed
+        // it, never sent anything — then got blocked as a hallucination (final text
+        // said "vou recriar..." while no new PPTX existed). Same upgrade pattern as
+        // requiresPlanning above — reacts to observed tool use, not to a new
+        // classification signal.
+        if (result.success && (resolvedToolName === 'write' || resolvedToolName === 'exec_command') &&
+            maxSteps < (STEP_BUDGETS.tool ?? 10)) {
+            const upgraded = STEP_BUDGETS.tool ?? 10;
+            log.info(`[${this.ts()}] [STEP-BUDGET] real file work detected (${resolvedToolName}) → upgrading ${maxSteps} → ${upgraded}`);
+            maxSteps = upgraded;
+            decisionCtx.extendedStepBudget = upgraded;
+        }
+
+        totalToolCalls++;
+
+        return { action: 'proceed', result, resolvedToolName, resolvedArgs, maxSteps, totalToolCalls };
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 5, sub-decomposição): 2ª metade do antigo `if (tool) {...}` —
+     * detectores de loop/grupo/falhas-consecutivas, diretiva pós-leitura, mensagens de falha
+     * por categoria, e o tratamento de tool terminal (send_audio/send_document/send_image/
+     * send_video). Recebe `result`/`resolvedToolName`/`resolvedArgs` já resolvidos por
+     * `executeAndRecordNativeToolCall()`. Extraído sem mudar lógica.
+     */
+    private applyPostToolCallGuardsAndFinalize(
+        toolCall: ToolCall,
+        toolName: string,
+        result: ToolResult,
+        resolvedToolName: string,
+        resolvedArgs: Record<string, unknown>,
+        stepCount: number,
+        channelContext: ChannelContext | undefined,
+        conversationId: string,
+        userText: string,
+        intentDecision: IntentDecision,
+        trace: ExecutionTrace,
+        loopMessages: LLMMessage[],
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        toolTypeCallCount: Map<string, number>,
+        groupCallCount: Map<string, number>,
+        failedReadFilenames: Set<string>,
+        binaryReadFilenames: Set<string>,
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        maxSteps: number,
+        totalToolCalls: number,
+        consecutiveToolFailures: number,
+        guardsTriggered: number,
+        toolFailureCount: number,
+        MAX_SAME_TOOL_CALLS: number,
+        MAX_GROUP_CALLS: number,
+        MAX_CONSECUTIVE_TOOL_FAILURES: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): SingleToolCallDispatchResult {
+        // Generic loop detector: same tool called too many times in one turn.
+        // Exception: info-retrieval tools called in batch mode (one LLM response,
+        // each call with a unique argument) are NOT loops — they're valid parallel
+        // fetches. Use argument diversity to distinguish batch from loop.
+        const toolTypeCount = (toolTypeCallCount.get(resolvedToolName) ?? 0) + 1;
+        toolTypeCallCount.set(resolvedToolName, toolTypeCount);
+        if (toolTypeCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
+            const INFO_BATCH_TOOLS = new Set(['web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request']);
+            const uniqueArgsForTool = new Set(
+                cycleHistory.filter(h => h.tool === resolvedToolName).map(h => h.input)
+            ).size;
+            const uniqueRatio = toolTypeCount > 0 ? uniqueArgsForTool / toolTypeCount : 0;
+            const isBatch = INFO_BATCH_TOOLS.has(resolvedToolName) && uniqueRatio >= 0.75 && toolTypeCount < 10;
+            if (isBatch) {
+                log.warn(
+                    `[${this.ts()}] [SAFETY-GUARD] type=info_batch tool=${resolvedToolName} ` +
+                    `calls=${toolTypeCount} unique=${uniqueArgsForTool} ratio=${uniqueRatio.toFixed(2)} — batch mode, continuing`
+                );
+            } else {
+                log.warn(
+                    `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
+                    `value=${toolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
+                );
+                loopMessages.push({
+                    role: 'system',
+                    content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${toolTypeCount} vezes neste turno. ` +
+                        `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
+                });
+                dedupAbort = true;
+                dedupAbortTool = `${resolvedToolName}:loop`;
+                guardsTriggered++;
+            }
+        }
+
+        // Related-tool group detector: catches alternation (e.g. web_search ↔ web_navigate).
+        const toolGroup = TOOL_GROUP_REGISTRY[resolvedToolName];
+        if (toolGroup) {
+            const gCount = (groupCallCount.get(toolGroup) ?? 0) + 1;
+            groupCallCount.set(toolGroup, gCount);
+            if (gCount >= MAX_GROUP_CALLS && !dedupAbort) {
+                log.warn(
+                    `[${this.ts()}] [SAFETY-GUARD] type=tool_group_loop reason=group_limit ` +
+                    `value=${gCount} threshold=${MAX_GROUP_CALLS} group=${toolGroup}`
+                );
+                loopMessages.push({
+                    role: 'system',
+                    content: `[LOOP DE GRUPO] O grupo de ferramentas "${toolGroup}" foi usado ${gCount} vezes neste turno. ` +
+                        `Interrompendo. Responda com os dados disponíveis em memória.`,
+                });
+                dedupAbort = true;
+                dedupAbortTool = `group:${toolGroup}:loop`;
+                guardsTriggered++;
+            }
+        }
+
+        // Consecutive failure detector: resets on any success.
+        if (result.success) {
+            consecutiveToolFailures = 0;
+        } else {
+            consecutiveToolFailures++;
+            if (consecutiveToolFailures >= MAX_CONSECUTIVE_TOOL_FAILURES && !dedupAbort) {
+                log.warn(
+                    `[${this.ts()}] [SAFETY-GUARD] type=consecutive_failures reason=failure_limit ` +
+                    `value=${consecutiveToolFailures} threshold=${MAX_CONSECUTIVE_TOOL_FAILURES}`
+                );
+                loopMessages.push({
+                    role: 'system',
+                    content: `[FALHAS CONSECUTIVAS] ${consecutiveToolFailures} ferramentas falharam seguidas. ` +
+                        `Não foi possível obter dados confiáveis após múltiplas tentativas. Responda ao usuário com honestidade sobre essa limitação.`,
+                });
+                dedupAbort = true;
+                dedupAbortTool = 'consecutive_failures';
+                guardsTriggered++;
+            }
+        }
+
+        // After a successful read, inject a directive to prevent re-reading in this turn.
+        // ARTIFACT-DRIFT FIX: mensagem escrita para NÃO proibir releitura em turnos futuros
+        // (arquivo pode ser modificado por steps subsequentes do GoalExecutionLoop).
+        if (result.success && resolvedToolName === 'read') {
+            loopMessages.push({
+                role: 'system',
+                content:
+                    `[LEITURA CONCLUÍDA] O arquivo foi lido com sucesso (${result.output.length} chars). ` +
+                    `O conteúdo está disponível neste turno.\n` +
+                    `Se o arquivo for modificado (write/edit) em um passo futuro, releia-o antes de usá-lo novamente.\n` +
+                    `PRÓXIMO PASSO: use "exec_command" para processar, "write" para salvar, ou responda ao usuário.`,
+            });
+        }
+
+        if (!result.success) {
+            toolFailureCount++;
+            const errorText = result.error ?? result.output ?? '';
+            const isReadNotFound = resolvedToolName === 'read' && /não encontrado|not found/i.test(errorText);
+            const isBinaryRead = resolvedToolName === 'read' && /arquivos binários|binary.*não podem|cannot.*binary/i.test(errorText);
+            if (isReadNotFound) {
+                const pathArg = String(resolvedArgs.path || '');
+                const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
+                if (filename) failedReadFilenames.add(filename);
+                loopMessages.push({
+                    role: 'system',
+                    content: `[ARQUIVO INEXISTENTE] "${filename || pathArg}" não existe no workspace. Para criá-lo, use a ferramenta "write" com o conteúdo completo. NÃO tente "read" novamente antes de criar o arquivo com "write".`,
+                });
+            } else if (isBinaryRead) {
+                const pathArg = String(resolvedArgs.path || '');
+                const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
+                if (filename) binaryReadFilenames.add(filename);
+                loopMessages.push({
+                    role: 'system',
+                    content: `[ARQUIVO BINÁRIO] "${filename || pathArg}" não pode ser lido com "read". Use exec_command com a ferramenta adequada (python-pptx, pandoc, pdftotext, etc.). NÃO tente "read" neste arquivo novamente.`,
+                });
+            } else if (resolvedToolName === 'exec_command' && /no such file or directory/i.test(errorText)) {
+                // Path não existe — sugere explorar o workspace antes de adivinhar caminhos
+                loopMessages.push({
+                    role: 'system',
+                    content: `[PATH INEXISTENTE] O caminho informado não existe. NÃO repita o mesmo comando. Use "list_workspace" para descobrir a estrutura real do workspace antes de prosseguir.`,
+                });
+            } else {
+                // errorText é computado acima (result.error ?? result.output ?? '') mas até aqui
+                // nunca chegava ao LLM nos casos fora dos 3 padrões especiais acima — a mensagem
+                // genérica ("tente uma abordagem diferente") não informa POR QUE a tool falhou,
+                // fazendo o LLM adivinhar variações de frase às cegas em vez de corrigir a causa
+                // real (ex: argumento obrigatório ausente, dependência não instalada).
+                const reason = errorText.trim().slice(0, 300) || 'sem detalhes do erro retornados pela ferramenta';
+                loopMessages.push({
+                    role: 'system',
+                    content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${reason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`
+                });
+            }
+        }
+
+        const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
+        if (result.success && !terminalTools.includes(toolName) && !this.isSafeExecCommand(toolName, toolCall.arguments)) {
+            this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
+            void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
+        }
+        if (toolName === 'send_audio' && result.success) {
+            channelContext?.deliveryTracking?.onArtifactDelivered?.('__send_audio_delivered__');
+        }
+        if (terminalTools.includes(toolName) && result.success) {
+            log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded — continuing batch before closing turn`);
+            move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: true });
+            // process remaining toolCalls in this batch (e.g. multiple send_document)
+            return {
+                action: 'continueFor', terminalOutput: result.output, dedupAbort, dedupAbortTool, maxSteps,
+                totalToolCalls, consecutiveToolFailures, guardsTriggered, toolFailureCount,
+            };
+        }
+        move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
+        return {
+            action: 'continueFor', dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+            consecutiveToolFailures, guardsTriggered, toolFailureCount,
+        };
+    }
+
+    /**
+     * ARCH-019 (S25, Incremento 5, sub-decomposição): processa UMA `toolCall` do batch — o
+     * corpo do `for` interno de `runNativeToolCallDispatch()`. Guards de pré-voo (read-blocked/
+     * dedup/send_document-defer/send_audio-already-sent) ficam inline aqui; a execução real é
+     * delegada a `executeAndRecordNativeToolCall()` + `applyPostToolCallGuardsAndFinalize()`.
+     */
+    private async dispatchSingleNativeToolCall(
+        toolCall: ToolCall,
+        stepCount: number,
+        channelContext: ChannelContext | undefined,
+        conversationId: string,
+        userText: string,
+        intentDecision: IntentDecision,
+        trace: ExecutionTrace,
+        turnSignal: AbortSignal,
+        usedToolInputs: Set<string>,
+        usedToolOutputs: Map<string, string>,
+        blockedKeyCount: Map<string, number>,
+        failedReadFilenames: Set<string>,
+        binaryReadFilenames: Set<string>,
+        editPathCount: Map<string, number>,
+        toolTypeCallCount: Map<string, number>,
+        groupCallCount: Map<string, number>,
+        cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
+        loopMessages: LLMMessage[],
+        decisionCtx: DecisionContext,
+        dedupAbort: boolean,
+        dedupAbortTool: string,
+        maxSteps: number,
+        totalToolCalls: number,
+        consecutiveToolFailures: number,
+        guardsTriggered: number,
+        toolFailureCount: number,
+        MAX_SAME_TOOL_CALLS: number,
+        MAX_GROUP_CALLS: number,
+        MAX_CONSECUTIVE_TOOL_FAILURES: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): Promise<SingleToolCallDispatchResult> {
+        const passthrough = (): SingleToolCallDispatchResult => ({
+            action: 'continueFor', dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+            consecutiveToolFailures, guardsTriggered, toolFailureCount,
+        });
+
+        const toolName = toolCall.name;
+        const inputKey = computeToolInputKey(toolName, toolCall.arguments);
+
+        // Block read attempts on filenames already confirmed as non-existent,
+        // regardless of path format (absolute, relative, workspace-prefixed, etc.)
+        if (toolName === 'read') {
+            const pathArg = String(toolCall.arguments?.path || '');
+            const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
+            if (filename && failedReadFilenames.has(filename)) {
+                log.warn(`[${this.ts()}] [READ-NOTFOUND-BLOCK] Blocked read of absent file: ${filename}`);
+                loopMessages.push({
+                    role: 'tool',
+                    content: `[BLOQUEADO] O arquivo "${filename}" já foi confirmado como INEXISTENTE no workspace. Use a ferramenta "write" para criar o arquivo com o conteúdo completo antes de tentar lê-lo.`,
+                    tool_call_id: toolCall.id,
+                });
+                loopMessages.push({
+                    role: 'system',
+                    content: `⚠️ "${filename}" NÃO EXISTE no workspace. Ação obrigatória: use "write" com o conteúdo completo para criá-lo. NÃO tente "read" antes de criar o arquivo.`,
+                });
+                return passthrough();
+            }
+            if (filename && binaryReadFilenames.has(filename)) {
+                log.warn(`[${this.ts()}] [BINARY-READ-BLOCK] Blocked repeated read of binary file: ${filename}`);
+                loopMessages.push({
+                    role: 'tool',
+                    content: `[BLOQUEADO] "${filename}" é um arquivo binário — "read" não consegue processá-lo. Use exec_command com python-pptx, pandoc, pdftotext ou similar para extrair o conteúdo.`,
+                    tool_call_id: toolCall.id,
+                });
+                loopMessages.push({
+                    role: 'system',
+                    content: `⚠️ NÃO chame "read" em "${filename}" novamente. Abordagem obrigatória: use exec_command com a ferramenta adequada para o formato ${filename.split('.').pop()?.toUpperCase()}.`,
+                });
+                return passthrough();
+            }
+        }
+
+        if (usedToolInputs.has(inputKey)) {
+            const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
+            blockedKeyCount.set(inputKey, blockCount);
+            log.warn(`[${this.ts()}] [TOOL-DEDUP] Blocked repeated native call: ${toolName} (block #${blockCount})`);
+            const cachedOutput = usedToolOutputs.get(inputKey);
+            const contentHint = toolName === 'read' && cachedOutput
+                ? `\n\n— Início do conteúdo já lido —\n${cachedOutput.slice(0, 600)}\n— (conteúdo completo disponível no histórico) —`
+                : '';
+            const dedupBlockedMsg = toolName === 'read'
+                ? `[BLOQUEADO] "read" já foi executado para este arquivo. Use este conteúdo diretamente — NÃO releia.${contentHint}\n\nPróximo passo obrigatório: use exec_command para processar o arquivo, write para salvar resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`
+                : `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos. Esta chamada foi bloqueada. NÃO repita esta ferramenta com os mesmos argumentos — use uma estratégia diferente ou responda com o que já sabe.`;
+            loopMessages.push({
+                role: 'tool',
+                content: dedupBlockedMsg,
+                tool_call_id: toolCall.id,
+            });
+            if (blockCount >= 3) {
+                loopMessages.push({
+                    role: 'system',
+                    content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. O loop foi interrompido. Forneça a melhor resposta possível com as informações que você já tem.`,
+                });
+                dedupAbort = true;
+                dedupAbortTool = toolName;
+                return {
+                    action: 'breakFor', dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+                    consecutiveToolFailures, guardsTriggered, toolFailureCount,
+                };
+            }
+            return passthrough();
+        }
+
+        // FIX C: quando em contexto de goal-execution, adiar send_document para pós-validação
+        if (toolName === 'send_document' && channelContext?.deliveryTracking?.deferSendDocument) {
+            const filePath = String(toolCall.arguments?.file_path ?? toolCall.arguments?.path ?? '(unknown)');
+            const alreadyRegistered = channelContext.deliveryTracking.isDeferredArtifact?.(filePath) ?? false;
+            log.info(
+                `[${this.ts()}] [AGENTLOOP-SEND]` +
+                ` deferred=true` +
+                ` reason=goal_execution_policy` +
+                ` file_path="${filePath}"` +
+                ` already_registered=${alreadyRegistered}`
+            );
+            if (!alreadyRegistered) {
+                channelContext.deliveryTracking.deferSendDocument(toolCall.arguments ?? {});
+            }
+            // Mensagem semanticamente neutra: não instrui o LLM a "continuar trabalhando"
+            // pois isso causava loop de re-chamadas ao send_document.
+            const deferMsg = alreadyRegistered
+                ? `[DIFERIDO-DEDUP] O documento "${filePath}" já foi registrado para entrega. Não reenvie este artefato. Se não há outras tarefas pendentes, conclua com uma resposta final ao usuário.`
+                : `[DIFERIDO] Documento "${filePath}" registrado para entrega após validação. Não reenvie este artefato. Continue apenas se ainda existirem tarefas pendentes não relacionadas à entrega deste arquivo.`;
+            loopMessages.push({
+                role: 'tool',
+                content: deferMsg,
+                tool_call_id: toolCall.id,
+            });
+            // FIX E (docs/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md): este branch nunca
+            // escrevia em cycleHistory, deixando o DELIVERY-GUARD (abaixo, no fim do
+            // loop) cego a um defer bem-sucedido — ele recalcula `sentFile` só a
+            // partir de cycleHistory, então via achar `wroteFile && !sentFile` e
+            // reinjetar "[ENTREGA PENDENTE] ... USE send_document AGORA" por cima de
+            // um arquivo que já tinha sido corretamente registrado para entrega.
+            // status:'deferred' (não 'success') propositalmente — alinha com o que
+            // channelContext.deliveryTracking.isDeferredArtifact já sabe, sem se passar por um envio
+            // confirmado de verdade.
+            cycleHistory.push({ step: stepCount, tool: 'send_document', input: JSON.stringify(toolCall.arguments ?? {}), status: 'deferred' });
+            usedToolInputs.add(inputKey);
+            return passthrough();
+        }
+
+        // send_audio não tem file_path estável (cada chamada gera um mp3/ogg com
+        // timestamp único), então não pode usar o dedup por path de send_document
+        // acima. Sem este guard, um step "agentloop" que já entregou áudio com
+        // sucesso e é re-executado do zero por um replan (ex: SemanticValidator
+        // rejeitando o texto final por mismatch) gera e envia um NOVO áudio a cada
+        // tentativa — o TTS/upload já aconteceu de verdade, não há como "desfazer".
+        // Evidência: 2026-07-05, goal_1783269002590_inaml — 4 áudios enviados em
+        // sequência pelo mesmo pedido do usuário.
+        if (toolName === 'send_audio' && channelContext?.deliveryTracking?.isAudioAlreadySent?.()) {
+            log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal`);
+            loopMessages.push({
+                role: 'tool',
+                content: `[JÁ ENVIADO] O áudio para este objetivo já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
+                tool_call_id: toolCall.id,
+            });
+            usedToolInputs.add(inputKey);
+            return passthrough();
+        }
+
+        const tool = this.tools.get(toolName);
+        if (!tool) {
+            return passthrough();
+        }
+        move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'native' });
+        if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
+            (tool as unknown as ContextAwareTool).setContext(
+                channelContext.chatId || '',
+                channelContext.channel
+            );
+        }
+
+        const execResult = await this.executeAndRecordNativeToolCall(
+            toolCall, toolName, stepCount, channelContext, conversationId, userText, intentDecision,
+            trace, turnSignal, usedToolInputs, usedToolOutputs, cycleHistory, loopMessages, decisionCtx,
+            editPathCount, maxSteps, totalToolCalls, dedupAbort, dedupAbortTool, move,
+        );
+        if (execResult.action === 'earlyReturn') return execResult;
+        if (execResult.action !== 'proceed') {
+            return {
+                action: execResult.action, dedupAbort: execResult.dedupAbort, dedupAbortTool: execResult.dedupAbortTool,
+                maxSteps, totalToolCalls, consecutiveToolFailures, guardsTriggered, toolFailureCount,
+            };
+        }
+
+        return this.applyPostToolCallGuardsAndFinalize(
+            toolCall, toolName, execResult.result, execResult.resolvedToolName, execResult.resolvedArgs,
+            stepCount, channelContext, conversationId, userText, intentDecision, trace, loopMessages,
+            cycleHistory, toolTypeCallCount, groupCallCount, failedReadFilenames, binaryReadFilenames,
+            dedupAbort, dedupAbortTool, execResult.maxSteps, execResult.totalToolCalls,
+            consecutiveToolFailures, guardsTriggered, toolFailureCount,
+            MAX_SAME_TOOL_CALLS, MAX_GROUP_CALLS, MAX_CONSECUTIVE_TOOL_FAILURES, move,
+        );
+    }
+
     // ── Core execution loop ────────────────────────────────────────────────────
 
     private async runWithTools(conversationId: string, userText: string, iteration: number, _userId?: string, channelContext?: ChannelContext): Promise<string | ProcessedResult> {
@@ -2574,450 +3305,23 @@ export class AgentLoop {
                 return { text: await this.commitResponse(finalText, userText, trace.id, conversationId, turnSignal, toolFailureCount) };
             }
 
-            if (response.toolCalls && response.toolCalls.length > 0) {
-                // Tracks the last successful terminal tool in this batch.
-                // We intentionally do NOT return inside the for loop so that all
-                // send_document / send_audio calls in a single batch are executed
-                // before the turn ends (fixes the "only index.html sent" bug).
-                let terminalBatchResult: string | null = null;
-
-                for (const toolCall of response.toolCalls) {
-                    const toolName = toolCall.name;
-                    const inputKey = computeToolInputKey(toolName, toolCall.arguments);
-
-                    // Block read attempts on filenames already confirmed as non-existent,
-                    // regardless of path format (absolute, relative, workspace-prefixed, etc.)
-                    if (toolName === 'read') {
-                        const pathArg = String(toolCall.arguments?.path || '');
-                        const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
-                        if (filename && failedReadFilenames.has(filename)) {
-                            log.warn(`[${this.ts()}] [READ-NOTFOUND-BLOCK] Blocked read of absent file: ${filename}`);
-                            loopMessages.push({
-                                role: 'tool',
-                                content: `[BLOQUEADO] O arquivo "${filename}" já foi confirmado como INEXISTENTE no workspace. Use a ferramenta "write" para criar o arquivo com o conteúdo completo antes de tentar lê-lo.`,
-                                tool_call_id: toolCall.id,
-                            });
-                            loopMessages.push({
-                                role: 'system',
-                                content: `⚠️ "${filename}" NÃO EXISTE no workspace. Ação obrigatória: use "write" com o conteúdo completo para criá-lo. NÃO tente "read" antes de criar o arquivo.`,
-                            });
-                            continue;
-                        }
-                        if (filename && binaryReadFilenames.has(filename)) {
-                            log.warn(`[${this.ts()}] [BINARY-READ-BLOCK] Blocked repeated read of binary file: ${filename}`);
-                            loopMessages.push({
-                                role: 'tool',
-                                content: `[BLOQUEADO] "${filename}" é um arquivo binário — "read" não consegue processá-lo. Use exec_command com python-pptx, pandoc, pdftotext ou similar para extrair o conteúdo.`,
-                                tool_call_id: toolCall.id,
-                            });
-                            loopMessages.push({
-                                role: 'system',
-                                content: `⚠️ NÃO chame "read" em "${filename}" novamente. Abordagem obrigatória: use exec_command com a ferramenta adequada para o formato ${filename.split('.').pop()?.toUpperCase()}.`,
-                            });
-                            continue;
-                        }
-                    }
-
-                    if (usedToolInputs.has(inputKey)) {
-                        const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
-                        blockedKeyCount.set(inputKey, blockCount);
-                        log.warn(`[${this.ts()}] [TOOL-DEDUP] Blocked repeated native call: ${toolName} (block #${blockCount})`);
-                        const cachedOutput = usedToolOutputs.get(inputKey);
-                        const contentHint = toolName === 'read' && cachedOutput
-                            ? `\n\n— Início do conteúdo já lido —\n${cachedOutput.slice(0, 600)}\n— (conteúdo completo disponível no histórico) —`
-                            : '';
-                        const dedupBlockedMsg = toolName === 'read'
-                            ? `[BLOQUEADO] "read" já foi executado para este arquivo. Use este conteúdo diretamente — NÃO releia.${contentHint}\n\nPróximo passo obrigatório: use exec_command para processar o arquivo, write para salvar resultado, ou responda diretamente ao usuário com base no conteúdo já lido.`
-                            : `[BLOQUEADO] "${toolName}" já foi executado com estes argumentos. Esta chamada foi bloqueada. NÃO repita esta ferramenta com os mesmos argumentos — use uma estratégia diferente ou responda com o que já sabe.`;
-                        loopMessages.push({
-                            role: 'tool',
-                            content: dedupBlockedMsg,
-                            tool_call_id: toolCall.id,
-                        });
-                        if (blockCount >= 3) {
-                            loopMessages.push({
-                                role: 'system',
-                                content: `[CRÍTICO] A ferramenta "${toolName}" foi bloqueada ${blockCount} vezes seguidas. O loop foi interrompido. Forneça a melhor resposta possível com as informações que você já tem.`,
-                            });
-                            dedupAbort = true;
-                            dedupAbortTool = toolName;
-                            break;
-                        }
-                        continue;
-                    }
-
-                    // FIX C: quando em contexto de goal-execution, adiar send_document para pós-validação
-                    if (toolName === 'send_document' && channelContext?.deliveryTracking?.deferSendDocument) {
-                        const filePath = String(toolCall.arguments?.file_path ?? toolCall.arguments?.path ?? '(unknown)');
-                        const alreadyRegistered = channelContext.deliveryTracking.isDeferredArtifact?.(filePath) ?? false;
-                        log.info(
-                            `[${this.ts()}] [AGENTLOOP-SEND]` +
-                            ` deferred=true` +
-                            ` reason=goal_execution_policy` +
-                            ` file_path="${filePath}"` +
-                            ` already_registered=${alreadyRegistered}`
-                        );
-                        if (!alreadyRegistered) {
-                            channelContext.deliveryTracking.deferSendDocument(toolCall.arguments ?? {});
-                        }
-                        // Mensagem semanticamente neutra: não instrui o LLM a "continuar trabalhando"
-                        // pois isso causava loop de re-chamadas ao send_document.
-                        const deferMsg = alreadyRegistered
-                            ? `[DIFERIDO-DEDUP] O documento "${filePath}" já foi registrado para entrega. Não reenvie este artefato. Se não há outras tarefas pendentes, conclua com uma resposta final ao usuário.`
-                            : `[DIFERIDO] Documento "${filePath}" registrado para entrega após validação. Não reenvie este artefato. Continue apenas se ainda existirem tarefas pendentes não relacionadas à entrega deste arquivo.`;
-                        loopMessages.push({
-                            role: 'tool',
-                            content: deferMsg,
-                            tool_call_id: toolCall.id,
-                        });
-                        // FIX E (docs/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md): este branch nunca
-                        // escrevia em cycleHistory, deixando o DELIVERY-GUARD (abaixo, no fim do
-                        // loop) cego a um defer bem-sucedido — ele recalcula `sentFile` só a
-                        // partir de cycleHistory, então via achar `wroteFile && !sentFile` e
-                        // reinjetar "[ENTREGA PENDENTE] ... USE send_document AGORA" por cima de
-                        // um arquivo que já tinha sido corretamente registrado para entrega.
-                        // status:'deferred' (não 'success') propositalmente — alinha com o que
-                        // channelContext.deliveryTracking.isDeferredArtifact já sabe, sem se passar por um envio
-                        // confirmado de verdade.
-                        cycleHistory.push({ step: stepCount, tool: 'send_document', input: JSON.stringify(toolCall.arguments ?? {}), status: 'deferred' });
-                        usedToolInputs.add(inputKey);
-                        continue;
-                    }
-
-                    // send_audio não tem file_path estável (cada chamada gera um mp3/ogg com
-                    // timestamp único), então não pode usar o dedup por path de send_document
-                    // acima. Sem este guard, um step "agentloop" que já entregou áudio com
-                    // sucesso e é re-executado do zero por um replan (ex: SemanticValidator
-                    // rejeitando o texto final por mismatch) gera e envia um NOVO áudio a cada
-                    // tentativa — o TTS/upload já aconteceu de verdade, não há como "desfazer".
-                    // Evidência: 2026-07-05, goal_1783269002590_inaml — 4 áudios enviados em
-                    // sequência pelo mesmo pedido do usuário.
-                    if (toolName === 'send_audio' && channelContext?.deliveryTracking?.isAudioAlreadySent?.()) {
-                        log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal`);
-                        loopMessages.push({
-                            role: 'tool',
-                            content: `[JÁ ENVIADO] O áudio para este objetivo já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
-                            tool_call_id: toolCall.id,
-                        });
-                        usedToolInputs.add(inputKey);
-                        continue;
-                    }
-
-                    const tool = this.tools.get(toolName);
-                    if (tool) {
-                        move('TOOL_REQUESTED', { step: stepCount, tool: toolName, mode: 'native' });
-                        if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
-                            (tool as unknown as ContextAwareTool).setContext(
-                                channelContext.chatId || '',
-                                channelContext.channel
-                            );
-                        }
-
-                        const isDangerous = ToolRegistry.isDangerous(toolName) 
-                            && !this.isSafeExecCommand(toolName, toolCall.arguments)
-                            && !permissionRegistry.can('auto_approve_exec');
-                        if (isDangerous) {
-                            log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
-
-                            let txnId: string | undefined;
-                            if (this.workflowEngine) {
-                                // Novo fluxo: cria transaction com ID estruturado.
-                                // Canais com workflowCallback (Telegram, WhatsApp, Discord, Signal) rotearão o callback
-                                // diretamente ao WorkflowEngine — sem passar pelo LLM pipeline.
-                                const ctx: ContinuationContext = {
-                                    workflow: this.inferWorkflowName(intentDecision.intent, toolName),
-                                    step: toolName,
-                                    userGoal: userText.slice(0, 200),
-                                    activeResources: this.extractResourceNames(toolCall.arguments),
-                                    alternativeTools: this.findSafeAlternatives(toolName),
-                                };
-                                const txn = this.workflowEngine.createTransaction(
-                                    conversationId, toolName,
-                                    toolCall.arguments as Record<string, unknown>,
-                                    ctx
-                                );
-                                txnId = txn.id;
-                            }
-                            // Registra no authManager para: (1) guardar hasPendingAuth nos fast-paths,
-                            // (2) permitir removePending() no resumeFromWorkflow() após resolução.
-                            // txnId é armazenado para habilitar aprovação por texto ("sim") como fallback.
-                            this.authManager.addPending(conversationId, toolName, toolCall.arguments, txnId);
-
-                            move('AUTH_REQUIRED', { step: stepCount, tool: toolName, txnId });
-                            const authReq = this.authManager.formatRequest(toolName, toolCall.arguments, txnId);
-                            return { text: authReq.text, options: authReq.options };
-                        }
-
-                        // Guard: bloqueia edit repetido no mesmo arquivo (previne append-loop)
-                        if (toolName === 'edit') {
-                            const ep = typeof toolCall.arguments?.path === 'string' ? toolCall.arguments.path : undefined;
-                            if (ep) {
-                                const ec = (editPathCount.get(ep) ?? 0) + 1;
-                                editPathCount.set(ep, ec);
-                                if (ec > 4) {
-                                    log.warn(`[${this.ts()}] [EDIT-LOOP] Blocked edit #${ec} to "${ep}" — use write to rewrite`);
-                                    loopMessages.push({
-                                        role: 'tool',
-                                        content: `[BLOQUEADO] "edit" foi chamado ${ec} vezes no mesmo arquivo "${ep}" neste turno. Esta chamada foi bloqueada para evitar corrupção de arquivo por append-loop. Use "write" com o conteúdo completo se precisar reescrever o arquivo inteiro.`,
-                                        tool_call_id: toolCall.id,
-                                    });
-                                    if (ec >= 7) {
-                                        loopMessages.push({ role: 'system', content: `[CRÍTICO] "edit" foi chamado ${ec} vezes no arquivo "${ep}". O loop foi interrompido. Responda ao usuário com o que foi feito até aqui.` });
-                                        dedupAbort = true;
-                                        dedupAbortTool = toolName;
-                                        break;
-                                    }
-                                    continue;
-                                }
-                            }
-                        }
-
-                        const toolStartTime = Date.now();
-                        const recovery = await this.proactiveRecovery.execute(
-                            toolName, toolCall.arguments,
-                            (n) => this.tools.get(n) as import('./ProactiveRecovery').ToolExecutorLike | undefined,
-                            usedToolInputs,
-                            turnSignal,
-                        );
-                        const result = recovery.result;
-                        const resolvedToolName = recovery.finalToolName;
-                        const resolvedArgs = recovery.finalArgs;
-                        const toolDuration = Date.now() - toolStartTime;
-
-                        if (recovery.recovered && recovery.recoveryNote) {
-                            const origTool = recovery.originalToolName ?? toolName;
-                            const kind = recovery.mutationKind ?? 'arg_mutation';
-                            log.info(
-                                `[MUTATION] tool_mutation:\n  tool: ${origTool}\n  kind: ${kind}\n` +
-                                `  original: ${JSON.stringify(recovery.originalArgs ?? {})}\n` +
-                                `  modified: ${JSON.stringify(resolvedArgs)}`
-                            );
-                            loopMessages.push({
-                                role: 'system',
-                                content: kind === 'fallback_tool'
-                                    ? `[RECUPERAÇÃO AUTOMÁTICA] A ferramenta "${origTool}" falhou e foi substituída por "${resolvedToolName}" com argumentos adaptados. ${recovery.recoveryNote}`
-                                    : `[RECUPERAÇÃO AUTOMÁTICA] Os argumentos da ferramenta "${resolvedToolName}" foram ajustados automaticamente para funcionar. ${recovery.recoveryNote}`,
-                            });
-                        } else if (recovery.recoveryNote) {
-                            log.info(`[${this.ts()}] ${recovery.recoveryNote}`);
-                        }
-                        // Utility score: generic keyword-overlap heuristic — observability only.
-                        // Collect data here; do not use for control flow until patterns emerge.
-                        const utilityScore = result.success
-                            ? computeToolUtilityScore(userText, result.output)
-                            : 0;
-                        log.info(
-                            `[${this.ts()}] [TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'} ` +
-                            `utility=${utilityScore.toFixed(2)}`,
-                            result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200)
-                        );
-
-                        traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
-                        traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output });
-                        this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
-                        this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
-
-                        cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
-                        loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
-                        if (result.success) usedToolOutputs.set(inputKey, result.output.slice(0, 2000));
-                        // Persiste args de tool calls bem-sucedidas no transcript (mesmo padrão já
-                        // usado por GoalExecutionLoop.ts, que sempre teve isso — AgentLoop nunca
-                        // teve, então turnos roteados por aqui perdiam permanentemente os argumentos
-                        // de qualquer tool call assim que o turno terminava (cycleHistory é local ao
-                        // método, descartado no return). Caso real: send_audio recebe o texto do
-                        // áudio só via toolArgs — sem isso, "qual foi o texto que você usou?" nunca
-                        // tem como ser respondido, mesmo o áudio tendo sido gerado com sucesso.
-                        if (result.success && channelContext) {
-                            await this.sessionContext?.getSessionManager().recordToolCall(
-                                { channel: channelContext.channel, userId: channelContext.userId ?? conversationId },
-                                resolvedToolName,
-                                JSON.stringify(resolvedArgs),
-                            ).catch(() => {});
-                        }
-
-                        // Evidence-driven budget upgrade: a turn classified as lightweight
-                        // (conversation/direct, maxSteps=4) can still turn into real file-producing
-                        // work once it actually calls `write`/`exec_command` — the upfront text-only
-                        // classification has no way to know a "refinamento" will need edit + convert
-                        // + send. Evidence: 2026-07-05 audit log, goal_1783288862838_1muu1 follow-up
-                        // "máximo 10 linhas por slide" — routed as refinement_of_recent_goal →
-                        // agentloop → conversation/direct (budget 4+2). The turn spent its entire
-                        // budget re-editing excel_class.md and only wrote a conversion script
-                        // (scripts/gen_excel_pptx.py) in the very last allowed step — never executed
-                        // it, never sent anything — then got blocked as a hallucination (final text
-                        // said "vou recriar..." while no new PPTX existed). Same upgrade pattern as
-                        // requiresPlanning above — reacts to observed tool use, not to a new
-                        // classification signal.
-                        if (result.success && (resolvedToolName === 'write' || resolvedToolName === 'exec_command') &&
-                            maxSteps < (STEP_BUDGETS.tool ?? 10)) {
-                            const upgraded = STEP_BUDGETS.tool ?? 10;
-                            log.info(`[${this.ts()}] [STEP-BUDGET] real file work detected (${resolvedToolName}) → upgrading ${maxSteps} → ${upgraded}`);
-                            maxSteps = upgraded;
-                            decisionCtx.extendedStepBudget = upgraded;
-                        }
-
-                        totalToolCalls++;
-
-                        // Generic loop detector: same tool called too many times in one turn.
-                        // Exception: info-retrieval tools called in batch mode (one LLM response,
-                        // each call with a unique argument) are NOT loops — they're valid parallel
-                        // fetches. Use argument diversity to distinguish batch from loop.
-                        const toolTypeCount = (toolTypeCallCount.get(resolvedToolName) ?? 0) + 1;
-                        toolTypeCallCount.set(resolvedToolName, toolTypeCount);
-                        if (toolTypeCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
-                            const INFO_BATCH_TOOLS = new Set(['web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request']);
-                            const uniqueArgsForTool = new Set(
-                                cycleHistory.filter(h => h.tool === resolvedToolName).map(h => h.input)
-                            ).size;
-                            const uniqueRatio = toolTypeCount > 0 ? uniqueArgsForTool / toolTypeCount : 0;
-                            const isBatch = INFO_BATCH_TOOLS.has(resolvedToolName) && uniqueRatio >= 0.75 && toolTypeCount < 10;
-                            if (isBatch) {
-                                log.warn(
-                                    `[${this.ts()}] [SAFETY-GUARD] type=info_batch tool=${resolvedToolName} ` +
-                                    `calls=${toolTypeCount} unique=${uniqueArgsForTool} ratio=${uniqueRatio.toFixed(2)} — batch mode, continuing`
-                                );
-                            } else {
-                                log.warn(
-                                    `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
-                                    `value=${toolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
-                                );
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${toolTypeCount} vezes neste turno. ` +
-                                        `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
-                                });
-                                dedupAbort = true;
-                                dedupAbortTool = `${resolvedToolName}:loop`;
-                                guardsTriggered++;
-                            }
-                        }
-
-                        // Related-tool group detector: catches alternation (e.g. web_search ↔ web_navigate).
-                        const toolGroup = TOOL_GROUP_REGISTRY[resolvedToolName];
-                        if (toolGroup) {
-                            const gCount = (groupCallCount.get(toolGroup) ?? 0) + 1;
-                            groupCallCount.set(toolGroup, gCount);
-                            if (gCount >= MAX_GROUP_CALLS && !dedupAbort) {
-                                log.warn(
-                                    `[${this.ts()}] [SAFETY-GUARD] type=tool_group_loop reason=group_limit ` +
-                                    `value=${gCount} threshold=${MAX_GROUP_CALLS} group=${toolGroup}`
-                                );
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[LOOP DE GRUPO] O grupo de ferramentas "${toolGroup}" foi usado ${gCount} vezes neste turno. ` +
-                                        `Interrompendo. Responda com os dados disponíveis em memória.`,
-                                });
-                                dedupAbort = true;
-                                dedupAbortTool = `group:${toolGroup}:loop`;
-                                guardsTriggered++;
-                            }
-                        }
-
-                        // Consecutive failure detector: resets on any success.
-                        if (result.success) {
-                            consecutiveToolFailures = 0;
-                        } else {
-                            consecutiveToolFailures++;
-                            if (consecutiveToolFailures >= MAX_CONSECUTIVE_TOOL_FAILURES && !dedupAbort) {
-                                log.warn(
-                                    `[${this.ts()}] [SAFETY-GUARD] type=consecutive_failures reason=failure_limit ` +
-                                    `value=${consecutiveToolFailures} threshold=${MAX_CONSECUTIVE_TOOL_FAILURES}`
-                                );
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[FALHAS CONSECUTIVAS] ${consecutiveToolFailures} ferramentas falharam seguidas. ` +
-                                        `Não foi possível obter dados confiáveis após múltiplas tentativas. Responda ao usuário com honestidade sobre essa limitação.`,
-                                });
-                                dedupAbort = true;
-                                dedupAbortTool = 'consecutive_failures';
-                                guardsTriggered++;
-                            }
-                        }
-
-                        // After a successful read, inject a directive to prevent re-reading in this turn.
-                        // ARTIFACT-DRIFT FIX: mensagem escrita para NÃO proibir releitura em turnos futuros
-                        // (arquivo pode ser modificado por steps subsequentes do GoalExecutionLoop).
-                        if (result.success && resolvedToolName === 'read') {
-                            loopMessages.push({
-                                role: 'system',
-                                content:
-                                    `[LEITURA CONCLUÍDA] O arquivo foi lido com sucesso (${result.output.length} chars). ` +
-                                    `O conteúdo está disponível neste turno.\n` +
-                                    `Se o arquivo for modificado (write/edit) em um passo futuro, releia-o antes de usá-lo novamente.\n` +
-                                    `PRÓXIMO PASSO: use "exec_command" para processar, "write" para salvar, ou responda ao usuário.`,
-                            });
-                        }
-
-                        if (!result.success) {
-                            toolFailureCount++;
-                            const errorText = result.error ?? result.output ?? '';
-                            const isReadNotFound = resolvedToolName === 'read' && /não encontrado|not found/i.test(errorText);
-                            const isBinaryRead = resolvedToolName === 'read' && /arquivos binários|binary.*não podem|cannot.*binary/i.test(errorText);
-                            if (isReadNotFound) {
-                                const pathArg = String(resolvedArgs.path || '');
-                                const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
-                                if (filename) failedReadFilenames.add(filename);
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[ARQUIVO INEXISTENTE] "${filename || pathArg}" não existe no workspace. Para criá-lo, use a ferramenta "write" com o conteúdo completo. NÃO tente "read" novamente antes de criar o arquivo com "write".`,
-                                });
-                            } else if (isBinaryRead) {
-                                const pathArg = String(resolvedArgs.path || '');
-                                const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
-                                if (filename) binaryReadFilenames.add(filename);
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[ARQUIVO BINÁRIO] "${filename || pathArg}" não pode ser lido com "read". Use exec_command com a ferramenta adequada (python-pptx, pandoc, pdftotext, etc.). NÃO tente "read" neste arquivo novamente.`,
-                                });
-                            } else if (resolvedToolName === 'exec_command' && /no such file or directory/i.test(errorText)) {
-                                // Path não existe — sugere explorar o workspace antes de adivinhar caminhos
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[PATH INEXISTENTE] O caminho informado não existe. NÃO repita o mesmo comando. Use "list_workspace" para descobrir a estrutura real do workspace antes de prosseguir.`,
-                                });
-                            } else {
-                                // errorText é computado acima (result.error ?? result.output ?? '') mas até aqui
-                                // nunca chegava ao LLM nos casos fora dos 3 padrões especiais acima — a mensagem
-                                // genérica ("tente uma abordagem diferente") não informa POR QUE a tool falhou,
-                                // fazendo o LLM adivinhar variações de frase às cegas em vez de corrigir a causa
-                                // real (ex: argumento obrigatório ausente, dependência não instalada).
-                                const reason = errorText.trim().slice(0, 300) || 'sem detalhes do erro retornados pela ferramenta';
-                                loopMessages.push({
-                                    role: 'system',
-                                    content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${reason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`
-                                });
-                            }
-                        }
-
-                        const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
-                        if (result.success && !terminalTools.includes(toolName) && !this.isSafeExecCommand(toolName, toolCall.arguments)) {
-                            this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
-                            void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
-                        }
-                        if (toolName === 'send_audio' && result.success) {
-                            channelContext?.deliveryTracking?.onArtifactDelivered?.('__send_audio_delivered__');
-                        }
-                        if (terminalTools.includes(toolName) && result.success) {
-                            log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded — continuing batch before closing turn`);
-                            terminalBatchResult = result.output;
-                            move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: true });
-                            continue; // process remaining toolCalls in this batch (e.g. multiple send_document)
-                        }
-                        move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
-                    }
-                }
-
-                // After all toolCalls in the batch are processed, check for a terminal result.
-                if (terminalBatchResult !== null) {
-                    log.info(`[${this.ts()}] [TASK-FSM] Terminal batch done → task DONE, returning result`);
-                    move('FINAL_READY', { step: stepCount, terminal: true });
-                    traceManager.completeTrace(trace, 'completed', terminalBatchResult);
-                    this.persistTrace(trace, stepCount, 'completed', terminalBatchResult, channelContext);
-                    return terminalBatchResult;
-                }
-
-                continue;
-            }
+            const nativeDispatchResult = await this.runNativeToolCallDispatch(
+                response.toolCalls, stepCount, channelContext, conversationId, userText, intentDecision,
+                trace, turnSignal, usedToolInputs, usedToolOutputs, blockedKeyCount, failedReadFilenames,
+                binaryReadFilenames, editPathCount, toolTypeCallCount, groupCallCount, cycleHistory,
+                loopMessages, decisionCtx, dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
+                consecutiveToolFailures, guardsTriggered, toolFailureCount,
+                MAX_SAME_TOOL_CALLS, MAX_GROUP_CALLS, MAX_CONSECUTIVE_TOOL_FAILURES, move,
+            );
+            if (nativeDispatchResult.action === "earlyReturn") return nativeDispatchResult.result;
+            dedupAbort = nativeDispatchResult.dedupAbort;
+            dedupAbortTool = nativeDispatchResult.dedupAbortTool;
+            maxSteps = nativeDispatchResult.maxSteps;
+            totalToolCalls = nativeDispatchResult.totalToolCalls;
+            consecutiveToolFailures = nativeDispatchResult.consecutiveToolFailures;
+            guardsTriggered = nativeDispatchResult.guardsTriggered;
+            toolFailureCount = nativeDispatchResult.toolFailureCount;
+            if (nativeDispatchResult.action === "continueLoop") continue;
 
             // Protocol-Based Early Exit
             const hasNoToolsRequested = !response.toolCalls?.length && !wantsTool;
