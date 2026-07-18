@@ -1,8 +1,9 @@
 # Programa de Refatoração Arquitetural NewClaw (2026)
 
-**Status: 🟢 Concluído em 2026-07-18.** Branch `refactor/architectural-backlog`, 91+ commits sobre a
-baseline `baseline-b1.0-pre-refactor`. Ainda não mesclada em `main` — decisão de merge pertence ao
-mantenedor do projeto, não a este programa.
+**Status: 🟢 Concluído em 2026-07-18 e integrado em `main`.** Branch `refactor/architectural-backlog`
+(95 commits sobre a baseline `baseline-b1.0-pre-refactor`) mesclada em `main` via merge commit
+`f230fd9`, tag de marco `v2.0.0`. `tsc --noEmit` e a suíte de regressão completa reconfirmados
+limpos em `main` pós-merge, antes da tag.
 
 ## O que foi este programa
 
