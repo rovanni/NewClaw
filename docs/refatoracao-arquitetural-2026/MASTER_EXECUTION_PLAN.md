@@ -51,14 +51,14 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 | 2026-08-S17 | Ago/2026 | Single Source of Truth | ARCH-008 | ⏸ | S16 | 4e01818 | Adiado antes de codificar — premissa citava "recovery no boot" que não existe (6º modo de falha); defeito real via resumeGoal()/auth, fix desenhado em `docs/issues/009` |
 | 2026-08-S18 | Ago/2026 | Decision Ownership | ARCH-018 | ⏸ | S16 | 4171d31 | Adiado antes de codificar — `file_exists` checa attempt, não disco (2ª instância do modo 3); reaproveitá-lo reintroduziria o deadlock histórico; fix desenhado em `docs/issues/010` |
 | 2026-09-S19 | Set/2026 | Structural Simplification | ARCH-024-RFC | 🟢 | CP02 | 9b6fc80 | RFC aprovada, escopo corrigido: 4 campos consolidados (não 5 — `recentMessages` não é delivery-tracking); campo aninhado `deliveryTracking`, não parâmetro separado; ver `RFC_ARCH-024_DeliveryTrackingContext.md` |
-| 2026-09-S20 | Set/2026 | Decision Ownership | ARCH-015-RFC | ⚪ | S06 | — | — |
+| 2026-09-S20 | Set/2026 | Decision Ownership | ARCH-015-RFC | 🟢 | S06 | (pendente — commit ao final desta Sprint) | RFC aprovada com escopo REDUZIDO: só texto de prompt (`requiredArgsHint`); validação não aprovada (lógica condicional em 3+ tools, sem incidente real motivando); ver `RFC_ARCH-015_SchemaGeneratedRequiredArgs.md` |
 | 2026-09-CP03 | Set/2026 | Checkpoint | — | ⚪ | S16-S20 | — | — |
 | 2026-09-S21 | Set/2026 | Decision Ownership | ARCH-013 | ⚪ | CP03, S14 | — | — |
 | 2026-09-S22 | Set/2026 | Structural Simplification | ARCH-022 | ⚪ | S16, S14, S21 | — | — |
 | 2026-10-S23 | Out/2026 | Structural Simplification | ARCH-024-Impl | ⚪ | S19 (aprovação) | — | — |
 | 2026-10-S24 | Out/2026 | Structural Simplification | ARCH-020 | ⚪ | S16, S03, S13, S17, S14 | — | — |
 | 2026-10-S25 | Out/2026 | Structural Simplification | ARCH-019 | ⚪ | S16, S22, S23; **nunca simultânea com S24** | — | — |
-| 2026-11-S26 | Nov/2026 | Decision Ownership | ARCH-015-Impl | ⚪ | S20 (aprovação) | — | — |
+| 2026-11-S26 | Nov/2026 | Decision Ownership | ARCH-015-Impl | ⚪ | S20 (aprovação — cumprida, escopo reduzido) | — | — |
 | 2026-11-CP04 | Nov/2026 | Checkpoint | — | ⚪ | S21-S26 | — | — |
 | 2026-11-S27 | Nov/2026 | Single Source of Truth | ARCH-012 | ⚪ | S16, S18 | — | — |
 | 2026-12-CP05 | Dez/2026 | Checkpoint de Encerramento | — | ⚪ | S27 | — | — |
@@ -68,18 +68,18 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01-S13/S15/S16/S19, Checkpoints CP01/CP02 concluídos; S14/S17/S18 adiadas (ver abaixo)
-**Progresso:** 15 / 26 ARCH concluídos (~58%) — ARCH-008 (S17), ARCH-009 (S14) e ARCH-018 (S18) adiados, não contam como concluídos nem como pendências simples. ARCH-024 tem a RFC (S19) aprovada, mas só conta como concluído quando a Impl (S23) landar — Definition of Done do próprio card exige as duas etapas
-**Sprint Atual:** Nenhuma em andamento (S19 concluída — próxima é 2026-09-S20)
-**Próxima Sprint:** 2026-09-S20 (ARCH-015-RFC) — produzir a análise de Fase 1-5 para geração de validação/prompt de args obrigatórios a partir do schema de cada tool; sem código, só análise
-**Epic Atual:** Epic A concluído; Epic B "concluído" no sentido de nenhum item executável restante nesta ordem — ARCH-005/006/007/010/011 feitos, ARCH-008 adiado, ARCH-012 deliberadamente deferido para o fim do programa; Epic C — ARCH-014/016/017 feitos, ARCH-018 adiado (dependência real de ARCH-012); Epic D iniciado — ARCH-023 feito, ARCH-024 com RFC aprovada (Impl em S23); Epic E concluído — ARCH-025/026 feitos
-**Próximo Marco:** 2026-09-CP03
-**Última Atualização:** 2026-07-18 (Sprint S19 concluída)
-**Build:** 🟢 `npm run build` limpo (inalterado — S17/S18/S19 não tocaram código de produção)
+**Status Geral:** 🟢 Em execução — Fase 0, S01-S13/S15/S16/S19/S20, Checkpoints CP01/CP02 concluídos; S14/S17/S18 adiadas (ver abaixo)
+**Progresso:** 15 / 26 ARCH concluídos (~58%) — ARCH-008 (S17), ARCH-009 (S14) e ARCH-018 (S18) adiados, não contam como concluídos nem como pendências simples. ARCH-024 e ARCH-015 têm RFC aprovada (S19/S20), mas só contam como concluídos quando a Impl (S23/S26) landar — Definition of Done de ambos os cards exige as duas etapas
+**Sprint Atual:** Nenhuma em andamento (S20 concluída — próxima é o Checkpoint 2026-09-CP03)
+**Próxima Sprint:** Checkpoint 2026-09-CP03 (revisão de S16-S20 em conjunto)
+**Epic Atual:** Epic A concluído; Epic B "concluído" no sentido de nenhum item executável restante nesta ordem — ARCH-005/006/007/010/011 feitos, ARCH-008 adiado, ARCH-012 deliberadamente deferido para o fim do programa; Epic C — ARCH-014/015(RFC)/016/017 feitos/aprovados, ARCH-018 adiado (dependência real de ARCH-012); Epic D iniciado — ARCH-023 feito, ARCH-024 com RFC aprovada (Impl em S23); Epic E concluído — ARCH-025/026 feitos
+**Próximo Marco:** 2026-09-CP03 (agora a próxima Sprint em si)
+**Última Atualização:** 2026-07-18 (Sprint S20 concluída)
+**Build:** 🟢 `npm run build` limpo (inalterado — S17/S18/S19/S20 não tocaram código de produção)
 **Testes:** 🟢 124/124 (inalterado)
-**Regressão:** 🟢 124/124 (pós-S16, inalterado — S17/S18/S19 não tocaram código de produção)
+**Regressão:** 🟢 124/124 (pós-S16, inalterado — S17/S18/S19/S20 não tocaram código de produção)
 **Riscos Abertos:** 0 materializados — nota permanente: a VPS `venus@10.0.0.10` usada para validação Linux tem histórico de exigir `.env`/`WORKSPACE_DIR` explícito (skill `verify`) para não gerar falso-positivo — ver `docs/issues/002`. S16 (ARCH-005), o item sinalizado como maior risco do programa até então, teve o escopo redesenhado na Fase 1/2 para um fix cirúrgico — risco real materializado ficou bem menor que o estimado. S18 (ARCH-018), próxima Sprint, é a área do bug de deadlock histórico já documentado — atenção redobrada na Fase 1.
-**RFCs Pendentes:** 2 (ARCH-012, ARCH-015) — ARCH-024 concluiu a RFC em S19 (aprovada, escopo corrigido), Impl agendada para S23
+**RFCs Pendentes:** 1 (ARCH-012, deliberadamente por último) — ARCH-024 (S19) e ARCH-015 (S20) concluíram a RFC, ambas aprovadas com escopo corrigido/reduzido em relação ao card original; Impls agendadas para S23/S26
 **Temas Adiados para Revisão Consolidada:** 1 (ARCH-009 — ver `docs/refatoracao-arquitetural-2026/REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`, que já lista ARCH-024 e `docs/issues/004` como temas correlatos a tratar junto quando essa revisão abrir)
 **Temas Adiados sem Consolidação (categoria própria):** 2 (ARCH-008 — premissa citava mecanismo de recovery-no-boot inexistente, `docs/issues/009`; ARCH-018 — `file_exists` não faz o que o card presumia, reaproveitá-lo reintroduziria o deadlock histórico, `docs/issues/010`, **dependência real de ARCH-012**, não só sequenciamento)
 **Dívida Arquitetural Restante:** 9 ARCH (7 cards executáveis restantes + ARCH-008/ARCH-009/ARCH-018 adiados + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
@@ -559,22 +559,25 @@ Validação
 - **Commit esperado:** 1 commit (só documentação — achado + adiamento, sem código).
 - **Status:** ⏸ Adiada em 2026-07-18, antes de codificar.
 
-### Sprint 2026-09-S20
+### Sprint 2026-09-S20 ✅ Concluída
 - **Número:** S20
 - **Identificação Temporal:** 2026-09-S20
 - **Fase:** Execução Arquitetural
 - **Epic:** Decision Ownership
 - **Card ARCH:** ARCH-015-RFC
 - **Objetivo:** Produzir a análise de Fase 1-5 (`DIRETRIZ_ARQUITETURA_2026-07-13.md`) para gerar validação de args obrigatórios + texto de prompt a partir do schema de cada tool. **Sem código.**
-- **Arquivos afetados:** nenhum tocado — só leitura/análise de `src/loop/GoalPlanner.ts`, `src/tools/*.ts`.
-- **Dependências:** S06 (ARCH-025 — dedupe de texto do Planner primeiro simplifica a análise).
-- **Checklist de execução:** padrão (adaptado — sem "implementar alteração"/"executar build"; substituído por "produzir documento de RFC").
+- **Arquivos afetados:** nenhum de produção — `docs/refatoracao-arquitetural-2026/RFC_ARCH-015_SchemaGeneratedRequiredArgs.md` (novo).
+- **Dependências:** S06 (ARCH-025) — cumprida.
+- **Premissa reverificada (Fase 1) — parcialmente corrigida:** os "5 lugares" citados pelo card nem cobrem o mesmo conjunto de tools (`memory_write` nunca aparece em `detectMissingRequiredArgs()`, confirmado por grep completo). Mais importante: a lógica de "obrigatório" não é um `required: string[]` plano pra pelo menos 3 tools (`web_navigate`/`crypto_analysis`: condicional a outro campo; `edit`: "uma de 3 combinações válidas") — gerar a VALIDAÇÃO a partir do schema atual perderia essa lógica silenciosamente. Só a metade de TEXTO DE PROMPT tem incidente real confirmado (S06/ARCH-025, drift real entre os 2 blocos).
+- **Fase 2/3 (crítica + alternativas):** 4 opções avaliadas — codegen completo (validação+prompt) via schema condicional estendido; híbrido (só tools com `required` plano geradas); rejeitar; só o texto de prompt migra, co-localizado no arquivo de cada tool (`requiredArgsHint` novo em `ToolExecutor`).
+- **Decisão (Fase 4/5):** aprovado com **escopo reduzido** — só a 4ª opção (texto de prompt). A metade de validação não foi aprovada nesta forma; fica candidata a uma RFC futura e distinta, condicionada a desenhar um dialeto de schema condicional primeiro. Documento completo: `RFC_ARCH-015_SchemaGeneratedRequiredArgs.md`.
+- **Checklist de execução:** padrão, adaptado para análise.
 - **Checklist de validação:** N/A (fase de análise).
-- **Rollback:** N/A.
-- **Critérios de Aceite:** documento de Fase 1-5 completo, com decisão explícita de implementar ou não.
-- **Definition of Done:** RFC revisada e aprovada (ou formalmente rejeitada, com justificativa).
-- **Commit esperado:** 1 commit contendo só o documento de RFC (ex.: `docs/RFC_ARCH-015.md`).
-- **Status:** ⚪ Não iniciada.
+- **Rollback:** N/A — nenhum código tocado.
+- **Critérios de Aceite:** documento de Fase 1-5 completo, com decisão explícita — **atingido**.
+- **Definition of Done:** RFC revisada e aprovada — **atingido**, com escopo reduzido em relação ao card original (só texto de prompt, não validação).
+- **Commit esperado:** 1 commit contendo o documento de RFC.
+- **Status:** 🟢 Concluída em 2026-07-18.
 
 ### Sprint 2026-09-S21
 - **Número:** S21
@@ -599,14 +602,14 @@ Validação
 - **Fase:** Execução Arquitetural
 - **Epic:** Decision Ownership
 - **Card ARCH:** ARCH-015-Impl
-- **Objetivo:** Implementar a geração de validação/prompt de args obrigatórios a partir do schema (condicional à aprovação da RFC em S20).
-- **Arquivos afetados:** `src/loop/GoalPlanner.ts`, `src/tools/*.ts`.
-- **Dependências:** S20 (aprovação da RFC).
+- **Objetivo:** ~~Implementar a geração de validação/prompt de args obrigatórios a partir do schema~~ — **escopo reduzido pela RFC (S20):** implementar só a geração do TEXTO DE PROMPT (`requiredArgsHint` co-localizado por tool, agregado via `ToolRegistry`). A metade de VALIDAÇÃO (`detectMissingRequiredArgs`) não foi aprovada — ver `RFC_ARCH-015_SchemaGeneratedRequiredArgs.md`.
+- **Arquivos afetados:** `src/loop/agentLoopTypes.ts` (`ToolExecutor.requiredArgsHint` novo), `src/loop/GoalPlanner.ts` (`buildRequiredArgsReference()` reescrita), `src/tools/*.ts` (campo novo por tool que hoje tem entrada em `buildRequiredArgsReference()`/`buildToolContracts()`).
+- **Dependências:** S20 (aprovação da RFC) — cumprida, com escopo reduzido.
 - **Checklist de execução:** padrão.
-- **Checklist de validação:** padrão + Validação Progressiva completa até etapa 4.
+- **Checklist de validação:** padrão. Etapa 4 (ambiente real) provavelmente dispensável dado o escopo reduzido (geração de string, sem lógica de validação/SO/filesystem/LLM tocada) — reavaliar no início da própria S26, não presumir aqui.
 - **Rollback:** reverter.
-- **Critérios de Aceite:** definidos na RFC (S20).
-- **Definition of Done:** Validação Progressiva completa.
+- **Critérios de Aceite:** definidos na RFC (S20) — escopo reduzido a texto de prompt.
+- **Definition of Done:** Validação Progressiva completa (etapas aplicáveis ao escopo reduzido).
 - **Commit esperado:** 1 commit.
 - **Status:** ⚪ Não iniciada. **Condicional — só ocorre se S20 aprovar a implementação.**
 
@@ -814,6 +817,7 @@ Cada Sprint concluída deve adicionar uma linha aqui, no formato:
 | S17 | 2026-07-18 | ~1 sessão (adiada na Fase 1, sem implementação) | 4e01818 | 0 arquivos de código; 1 arquivo de doc novo (`docs/issues/009`) + `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`/`ARCHITECTURAL_BACKLOG.md` + este documento | N/A — nenhum código tocado, nada a rodar | `progressModel` reseta a cada `runLoop()`, perdendo progresso "pós-restart" (premissa do card) | Nenhuma mudança — Sprint adiada antes de codificar | 0 causados (nenhum código tocado), mas achado grave sobre a premissa do card | O mecanismo citado como motivação/cenário de teste ("o sistema já tem recovery de goals ativos no boot") não existe — `AgentController.getAllActive()` só loga no boot/shutdown (`recovered=false` explícito), nunca chama `resumeGoal()`. O defeito é real, mas via outro caminho: o único call site de `resumeGoal()` é `GoalOrchestrator.resumeFromAuth()` (aprovação de ação perigosa), mesmo processo, sem restart — mais frequente que o cenário descrito. 6º modo de falha catalogado (auditoria afirmando que um mecanismo operacional existe, sem verificar contra o runtime) — o mais perigoso dos 6 por ler como fato de arquitetura, não como inferência. Fix desenhado (`buildInitialProgressModel`, deriva de `goal.currentPlan`/`goal.attempts`, mesmo espírito de `buildIncrementalExecutionContext`) mas não implementado — usuário optou por adiar e documentar em vez de corrigir pontualmente, dado que a etapa 4 prescrita pelo card ("matar o processo") nem sequer é testável nesse sistema. |
 | S18 | 2026-07-18 | ~1 sessão (adiada na Fase 1, sem implementação) | 4171d31 | 0 arquivos de código; 1 arquivo de doc novo (`docs/issues/010`) + `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`/`ARCHITECTURAL_BACKLOG.md` + este documento | N/A — nenhum código tocado, nada a rodar | `structuralBypass` é um `if` solto fora de `evaluateCriteria` (premissa do card) | Nenhuma mudança — Sprint adiada antes de codificar | 0 causados (nenhum código tocado), mas achado grave sobre a premissa numa área de bug histórico real | O card presumia que `CriterionCheck: 'file_exists'` já cobria o caso de uso de `structuralBypass` — não cobre: `file_exists` checa `GoalAttempt.output` não-vazio, `structuralBypass` faz `fs.statSync()` direto no disco sem depender de attempt algum (motivo de existir: o Bug 2 original era sobre arquivo pré-existente ao goal, sem attempt como evidência). Reaproveitar `file_exists` literalmente reintroduziria o deadlock. Achado estrutural adicional: alvos de `structuralBypass` são dinâmicos (plano atual, muda a cada replan) vs. `successCriteria` estática — sincronizar as duas seria um risco novo, não uma simplificação. 2ª instância confirmada do modo 3 da retrospectiva (mesmo modo de S10/S11) — reforça que "equivalência semântica assumida sem verificação" é o modo mais recorrente do catálogo, não um acaso isolado. Alternativa desenhada (`CriterionCheck` novo dedicado) mas não implementada — usuário optou por adiar, mesma linha de S14/S17, dado o histórico de bug real nesta área específica. |
 | S19 | 2026-07-18 | ~1 sessão | 9b6fc80 | 1 (`RFC_ARCH-024_DeliveryTrackingContext.md`, novo) | N/A (Sprint de RFC — sem código, sem build/teste) | 5 campos de callback "todos sobre rastreamento de entrega" (premissa do card) | RFC aprovada: 4 campos (não 5) consolidados em `ChannelContext.deliveryTracking` (campo aninhado, não parâmetro separado) | 0 (Sprint de análise, sem código) | Grep completo dos 5 campos mostrou que `recentMessages` é construído em `MessageBus.ts` (mesmo lugar/razão que `channel`/`chatId`/`userId`) e consumido só por `UnifiedIntentRouter`, sem nenhuma relação com entrega de artefato — a premissa do card ("nenhum é sobre o canal, todos sobre entrega") valia pra 4 dos 5, não pros 5. Avaliadas 4 alternativas de forma de consolidação; escolhida a de menor risco (campo aninhado dentro de `ChannelContext`, não parâmetro novo em `AgentLoop.process()`) por preservar a assinatura de método existente — o card não distinguia entre as duas formas, e a diferença de risco entre elas é grande. RFC aprovada com esse escopo corrigido; implementação agendada para S23 (já condicionada a esta RFC). |
+| S20 | 2026-07-18 | ~1 sessão | (pendente — commit ao final desta Sprint) | 1 (`RFC_ARCH-015_SchemaGeneratedRequiredArgs.md`, novo) | N/A (Sprint de RFC — sem código, sem build/teste) | "gerar validação + texto de prompt a partir do schema" resolve os 5 lugares de args obrigatórios (premissa do card) | RFC aprovada com escopo REDUZIDO: só texto de prompt (`requiredArgsHint` co-localizado por tool); validação não aprovada nesta forma | 0 (Sprint de análise, sem código) | Achado 1: os "5 lugares" nem cobrem o mesmo conjunto de tools — `memory_write` nunca aparece em `detectMissingRequiredArgs()` (grep completo confirma), só no schema e no guard interno. Achado 2, mais grave: a lógica de "obrigatório" não é um `required: string[]` plano pra pelo menos 3 tools (`web_navigate`/`crypto_analysis`: condicional a outro campo do mesmo args; `edit`: "uma de 3 combinações válidas") — gerar a VALIDAÇÃO a partir do schema atual perderia essa lógica condicional silenciosamente, uma regressão de comportamento, não uma simplificação, a menos que o formato do schema seja estendido pra um dialeto condicional (esforço de modelagem maior que o "Risco: Médio" do card sugeria). Achado 3: só a metade de TEXTO DE PROMPT tem incidente real confirmado (S06/ARCH-025 achou drift real entre os 2 blocos de prompt) — a metade de validação não tem nenhum incidente de produção documentado motivando urgência, diferente de S16/S18. RFC aprovou só a metade de menor risco e com evidência real de valor (texto de prompt via campo novo `requiredArgsHint` em `ToolExecutor`, agregado por `ToolRegistry.getEnabled()`); a metade de validação fica candidata a uma RFC futura distinta, condicionada a desenhar um dialeto de schema condicional primeiro. |
 
 ---
 
