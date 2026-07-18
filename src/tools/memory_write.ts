@@ -23,6 +23,14 @@ import type { OwnerProfileService } from '../services/OwnerProfileService';
 export class MemoryWriteTool implements ToolExecutor {
     name = 'memory_write';
     description = 'Criar, atualizar, conectar, deletar ou mesclar nós na memória. REGRAS OBRIGATÓRIAS: (1) SEMPRE busque antes para evitar duplicatas. (2) SEMPRE conecte o novo nó a um nó existente no grafo (use action=connect após create, ou inclua from/relation na mesma chamada). (3) NÓS SEM CONEXÃO = GRAFO QUEBRADO. Tipos de nó: identity, preference, project, context, fact, skill, infrastructure. Relações válidas: belongs_to, owns, prefers, works_on, uses, runs_on, depends_on, contains, created, hosts. Para fatos sobre o usuário, conectar a user_identity com relação "has_trait" ou "created". Para projetos, usar tipo "project" e conectar a user_identity com "works_on" ou "owns". Para infraestrutura, usar tipo "infrastructure" e conectar a user_identity com "uses" ou ao servidor com "runs_on".';
+    // ARCH-015 (S26): texto co-localizado, agregado por GoalPlanner.buildRequiredArgsReference().
+    requiredArgsHint = `- memory_write: SEMPRE forneça action (create|update|connect|delete|merge|reinforce). Para create: forneça type + name + content. Para update: forneça id + content. Para connect: forneça from + to + relation. Nunca chame memory_write sem action.
+  TIPOS DE NÓ — escolha o correto para garantir persistência:
+    "fact"       → dados pessoais do usuário (portfolio, posições, watchlists, histórico). Decay muito lento. USE ESTE para dados que o usuário forneceu explicitamente.
+    "preference" → preferências e configurações do usuário.
+    "project"    → projetos e objetivos em andamento.
+    "knowledge"  → informações técnicas aprendidas.
+    "context"    → dados efêmeros de sessão (desaparecem em dias). NÃO use para dados que o usuário precisa recuperar depois.`;
     parameters = {
         type: 'object',
         properties: {

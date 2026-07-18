@@ -34,6 +34,8 @@ interface BrowserDumpResult {
 export class WebNavigateTool implements ToolExecutor {
     name = 'web_navigate';
     description = 'Navegacao web em modo texto para exploracao passo a passo. Use quando precisar abrir paginas, seguir links e inspecionar sites de forma mais controlada do que web_search.';
+    // ARCH-015 (S26): texto co-localizado, agregado por GoalPlanner.buildRequiredArgsReference().
+    requiredArgsHint = '- web_navigate: SEMPRE forneça action (search|open|follow_link). Para search: forneça query. Para open: forneça url (https://...). Para follow_link: forneça url + link_text.';
     parameters = {
         type: 'object',
         properties: {

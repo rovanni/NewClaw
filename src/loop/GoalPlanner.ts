@@ -234,20 +234,21 @@ ${buildBatchCollectionBlock()}`.trim();
 // agora; só o cabeçalho que introduz o bloco muda por prompt ("ARGS OBRIGATÓRIOS POR FERRAMENTA"
 // no plano inicial vs. "REFERÊNCIA DE ARGS OBRIGATÓRIOS" no replan — diferença de tom proposital,
 // não faz parte do texto duplicado).
+// ARCH-015 (RFC S20, Impl S26): antes um template literal hardcoded aqui, uma 2ª cópia
+// independente de `buildToolContracts()` (mesma classe de problema que ARCH-025/S06 já achou
+// causando drift real entre os blocos de plano inicial e replan). Agora agrega
+// `requiredArgsHint` de cada tool (co-localizado no próprio arquivo — ver ToolExecutor em
+// agentLoopTypes.ts) via `ToolRegistry.getEnabled()`, a mesma fonte que `buildToolContracts()`
+// já usa — um maintainer adicionando um arg obrigatório está com o código da tool na tela, não
+// precisa lembrar de um bloco solto aqui. Escopo deliberadamente reduzido: só texto de prompt,
+// a validação real (`detectMissingRequiredArgs()`, guards internos) não muda — ver
+// RFC_ARCH-015_SchemaGeneratedRequiredArgs.md para por que a metade de validação não foi
+// aprovada (lógica condicional real em ≥3 tools, sem incidente de produção motivando).
 function buildRequiredArgsReference(): string {
-    return `- edit: SEMPRE forneça oldText+newText (substituição) OU startLine+endLine+content (patch) OU append=true+content. Nunca chame edit sem esses parâmetros.
-- send_document: SEMPRE forneça file_path com o caminho completo do arquivo. Nunca chame send_document sem file_path.
-- list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") ou absoluto. Passe apenas a subpasta desejada.
-- read: aceita caminho relativo ao workspace ou absoluto. Para diretórios, lista automaticamente o conteúdo.
-- memory_write: SEMPRE forneça action (create|update|connect|delete|merge|reinforce). Para create: forneça type + name + content. Para update: forneça id + content. Para connect: forneça from + to + relation. Nunca chame memory_write sem action.
-  TIPOS DE NÓ — escolha o correto para garantir persistência:
-    "fact"       → dados pessoais do usuário (portfolio, posições, watchlists, histórico). Decay muito lento. USE ESTE para dados que o usuário forneceu explicitamente.
-    "preference" → preferências e configurações do usuário.
-    "project"    → projetos e objetivos em andamento.
-    "knowledge"  → informações técnicas aprendidas.
-    "context"    → dados efêmeros de sessão (desaparecem em dias). NÃO use para dados que o usuário precisa recuperar depois.
-- crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc", "sol"). Para múltiplas moedas específicas: use steps separados, um por moeda.
-- web_navigate: SEMPRE forneça action (search|open|follow_link). Para search: forneça query. Para open: forneça url (https://...). Para follow_link: forneça url + link_text.`;
+    return ToolRegistry.getEnabled()
+        .map(t => t.requiredArgsHint)
+        .filter((hint): hint is string => Boolean(hint))
+        .join('\n');
 }
 
 function buildBatchCollectionBlock(): string {

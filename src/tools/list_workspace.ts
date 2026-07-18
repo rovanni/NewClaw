@@ -50,6 +50,8 @@ function listDir(dir: string, prefix: string, depth: number, maxDepth: number, p
 export class ListWorkspaceTool implements ToolExecutor {
     name = 'list_workspace';
     description = 'Lista arquivos e pastas do workspace. Use para encontrar arquivos antes de lê-los ou quando o usuário perguntar o que há no workspace. Nunca carrega o conteúdo dos arquivos — apenas nomes, tamanhos e datas.';
+    // ARCH-015 (S26): texto co-localizado, agregado por GoalPlanner.buildRequiredArgsReference().
+    requiredArgsHint = '- list_workspace: aceita caminho relativo (ex: "jogos/tower_defense") ou absoluto. Passe apenas a subpasta desejada.';
     parameters = {
         type: 'object',
         properties: {

@@ -22,6 +22,8 @@ const log = createLogger('EditTool');
 export class EditTool implements ToolExecutor {
     name = 'edit';
     description = 'Editar um arquivo existente: substituir texto exato (oldText→newText), patch por linhas, ou adicionar conteúdo ao final. Caminhos relativos são resolvidos a partir do workspace.';
+    // ARCH-015 (S26): texto co-localizado, agregado por GoalPlanner.buildRequiredArgsReference().
+    requiredArgsHint = '- edit: SEMPRE forneça oldText+newText (substituição) OU startLine+endLine+content (patch) OU append=true+content. Nunca chame edit sem esses parâmetros.';
     parameters = {
         type: 'object' as const,
         properties: {

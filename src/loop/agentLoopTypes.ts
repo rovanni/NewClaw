@@ -21,6 +21,15 @@ export interface ToolExecutor {
     name: string;
     description: string;
     parameters: Record<string, unknown>;
+    /** ARCH-015 (RFC S20, Impl S26): texto curto explicando args obrigatórios/condicionais para
+     *  a seção "REFERÊNCIA DE ARGS OBRIGATÓRIOS" do prompt do Planner (GoalPlanner.ts,
+     *  buildRequiredArgsReference()). Ausente = tool não aparece nessa seção (schema
+     *  autoexplicativo). Co-localizado no arquivo da tool em vez de um bloco solto em
+     *  GoalPlanner.ts — um maintainer adicionando/mudando um arg obrigatório está com o código
+     *  na tela e é mais provável de lembrar de atualizar. Escopo deliberadamente reduzido:
+     *  só texto de prompt, não valida nada — ver RFC_ARCH-015_SchemaGeneratedRequiredArgs.md
+     *  para por que a metade de validação (detectMissingRequiredArgs) não foi aprovada. */
+    requiredArgsHint?: string;
     execute(args: Record<string, unknown>): Promise<ToolResult>;
 }
 

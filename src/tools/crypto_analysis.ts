@@ -49,6 +49,8 @@ interface CoinGeckoDetail {
 export class CryptoAnalysisTool implements ToolExecutor {
     name = 'crypto_analysis';
     description = 'Ferramenta preferida para buscar DADOS REAIS e PREÇOS de criptomoedas via CoinGecko. Traz preço atual, market cap, variações e análise de mercado (sangrando, gainers, losers). Use type="detail" com symbol para um token específico. Quando esta ferramenta falhar ou retornar erro, use web_search como alternativa.';
+    // ARCH-015 (S26): texto co-localizado, agregado por GoalPlanner.buildRequiredArgsReference().
+    requiredArgsHint = '- crypto_analysis: SEMPRE forneça type (sangrando|gainers|losers|top100|detail). Para type="detail": forneça symbol (ex: "zec", "btc", "sol"). Para múltiplas moedas específicas: use steps separados, um por moeda.';
     parameters = {
         type: 'object',
         properties: {
