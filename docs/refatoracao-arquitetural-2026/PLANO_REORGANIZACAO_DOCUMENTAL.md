@@ -1,6 +1,9 @@
 # Plano de Reorganização Documental — Programa de Refatoração Arquitetural
 
-**Status:** **Parcialmente executado, fora de ordem, a pedido explícito do usuário (S13, 2026-07-17).**
+**Status:** **Executado por completo em `2026-12-CP05` (2026-07-18).** Parte 1 (mover os 5
+documentos para a pasta) foi feita fora de ordem em S13 (2026-07-17), a pedido explícito do
+usuário; parte 2 (dividir `MASTER_EXECUTION_PLAN.md`, compilar `EXECUCAO_DECISOES_DE_DESIGN.md`,
+escrever `README.md`) foi feita no encerramento do programa, conforme sempre planejado.
 Este documento é a evolução formal de `docs/issues/007-organizacao-documentacao-programa-
 refatoracao.md` (primeira passada, nível "achado de Sprint") para uma análise arquitetural
 completa — cobre estrutura definitiva, trade-offs, impacto técnico e passo a passo de migração.
@@ -248,12 +251,16 @@ que qualquer rename em qualquer repositório git funciona, não é uma falha des
 1. **Pré-requisito:** todas as 27 Sprints e os 5 Checkpoints com status `🟢`/finalizado — nenhum
    documento do programa deve mudar de conteúdo depois que a migração começar.
 2. Criar `docs/refatoracao-arquitetural-2026/`, `SPRINTS/`, `CHECKPOINTS/`.
-3. Extrair cada seção "### Sprint ..." de `MASTER_EXECUTION_PLAN.md` para
-   `SPRINTS/SNN-ARCH-XXX.md` (mecânico — cada seção já é auto-contida hoje).
-4. Extrair cada seção "## Checkpoint ..." para `CHECKPOINTS/CPNN.md`.
-5. ⬜ **Ainda deferido para CP05** (depende de 3-4, que dependem do documento estar congelado):
-   compilar `EXECUCAO_DECISOES_DE_DESIGN.md` a partir dos campos "Decisão de design"/"Premissa
-   reverificada" já presentes em cada `SPRINTS/*.md` recém-criado.
+3. ✅ **Feito, 2026-12-CP05 (executada 2026-07-18):** as 27 seções "### Sprint ..." de
+   `MASTER_EXECUTION_PLAN.md` extraídas para `SPRINTS/SNN-ARCH-XXX.md` (mecânico, via script —
+   cada seção já era auto-contida).
+4. ✅ **Feito, CP05:** as 5 seções "## Checkpoint ..." extraídas para `CHECKPOINTS/CPNN.md`.
+5. ✅ **Feito, CP05:** `EXECUCAO_DECISOES_DE_DESIGN.md` compilado — a partir do campo "Lições
+   aprendidas"/"Riscos encontrados" de `METRICAS.md` (fonte mais rica que os campos
+   "Objetivo"/"Checklist" dos `SPRINTS/*.md` para esse propósito específico), não literalmente
+   dos campos "Decisão de design"/"Premissa reverificada" citados no rascunho original desta
+   seção (esses campos nomeados não existiam como tal nas Sprints reais — a narrativa de decisão
+   sempre viveu na coluna "Lições aprendidas").
 6. ✅ **Feito fora de ordem, 17/07/2026 (S13), a pedido do usuário:** `git mv` dos 4 documentos
    restantes (`ARCHITECTURAL_BACKLOG.md`, `RETROSPECTIVA_PREMISSAS_AUDITORIA` e
    `DEPENDENCIAS_ORDEM_IMPLICITA` — sem sufixo de data, seção 3.4) para dentro da pasta, na ordem
@@ -266,9 +273,8 @@ que qualquer rename em qualquer repositório git funciona, não é uma falha des
    reescritos para paths relativos (`ARCHITECTURAL_BACKLOG.md` em vez de
    `docs/ARCHITECTURAL_BACKLOG.md`) — confirmado por `grep` com 0 ocorrências residuais do path
    antigo dentro da pasta.
-8. ⬜ **Ainda deferido para CP05:** escrever o `README.md` final (seção 3.1) — um índice "programa
-   encerrado, aqui está o resultado" só faz sentido quando há um resultado final para resumir; hoje
-   (S13/27) seria prematuro.
+8. ✅ **Feito, CP05:** `README.md` final escrito (seção 3.1) — índice do programa encerrado, com
+   resultado final, guia de leitura e as 7 lições mais importantes.
 9. ✅ **Feito, 17/07/2026:** os 5 comentários em código-fonte (seção 5) que citavam o path antigo
    corrigidos para `docs/refatoracao-arquitetural-2026/ARCHITECTURAL_BACKLOG.md`.
 10. ✅ **Feito, 17/07/2026:** memória `project_master_execution_plan_2026-07-17.md` atualizada
@@ -279,10 +285,11 @@ que qualquer rename em qualquer repositório git funciona, não é uma falha des
     tocou código de produção, só `.md`/comentários, então nenhuma alteração de resultado esperada.
 12. ✅ **Feito, 17/07/2026:** commit da migração parcial, apontando para este plano.
 
-**Resumo do que falta para fechar este plano por completo:** só os passos 3-5 e 8 (a decomposição
-de `MASTER_EXECUTION_PLAN.md` em `SPRINTS/`+`CHECKPOINTS/`, o log de decisões, e o `README.md`
-final) — todos dependentes do documento estar congelado, continuam corretamente deferidos para
-`2026-12-CP05`.
+**Plano executado por completo em `2026-12-CP05` (2026-07-18).** Todos os 12 passos concluídos —
+`MASTER_EXECUTION_PLAN.md` reduzido a índice/dashboard (de ~178 KB/866 linhas para ~15 KB/230
+linhas), `SPRINTS/`+`CHECKPOINTS/`+`METRICAS.md`+`EXECUCAO_DECISOES_DE_DESIGN.md`+`README.md`
+criados, regressão pós-reorganização confirmada sem quebras (mudança só em `.md`, nenhum código
+tocado).
 
 ## 7. Recomendações para futuras iniciativas arquiteturais
 
