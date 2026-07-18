@@ -102,7 +102,11 @@ async function main() {
     const goalExecutionLoopSrc = readSource('loop/GoalExecutionLoop.ts');
     const goalPlannerSrc = readSource('loop/GoalPlanner.ts');
 
-    const writeAlwaysPrefixed = /pattern:\s*`tool_\$\{pendingStep\.toolName \?\? cycleResult\.blocker\.kind\}`/.test(goalExecutionLoopSrc);
+    // ARCH-020 (S24): case 'blocked' virou o método handleBlockedOutcome(), onde o parâmetro
+    // se chama `step` (não mais `pendingStep`, que continua sendo o nome usado no corpo de
+    // runLoopInternal() para o mesmo valor antes de ser passado ao handler) — mesmo valor,
+    // outro nome de variável local, sem mudança de comportamento.
+    const writeAlwaysPrefixed = /pattern:\s*`tool_\$\{step\.toolName \?\? cycleResult\.blocker\.kind\}`/.test(goalExecutionLoopSrc);
     assert(writeAlwaysPrefixed, "GoalExecutionLoop.ts continua gravando pattern legado com prefixo tool_ (compatibilidade preservada)");
 
     const noLongerGuessesPrefix = /blocker\.toolName \? `tool_\$\{blocker\.toolName\}` : blocker\.kind/.test(goalPlannerSrc);
