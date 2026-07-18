@@ -2,7 +2,7 @@
  * extractText — extração leve de texto de uma resposta de LLM (raw ou JSON de controle).
  * Sem estrutura, sem avaliação, sem roteamento — apenas texto legível.
  *
- * Extraído de `loop/ResponseBuilder.ts` (ARCH-003, docs/ARCHITECTURAL_BACKLOG.md) — é a única
+ * Extraído de `loop/ResponseBuilder.ts` (ARCH-003, docs/refatoracao-arquitetural-2026/ARCHITECTURAL_BACKLOG.md) — é a única
  * peça de `ResponseBuilder.ts` consumida por `memory/conversational/CMIIngestionPipeline.ts`,
  * que não precisa (nem deveria depender em runtime) do resto do pipeline de resposta do
  * `AgentLoop` (normalizeResponse, ResponseBuilder, ContextValidator, DecisionPostProcessor —

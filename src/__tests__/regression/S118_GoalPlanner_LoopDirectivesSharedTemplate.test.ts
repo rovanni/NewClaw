@@ -2,7 +2,7 @@
 /**
  * TESTE DE REGRESSÃO — S118
  *
- * ARCH-016 (docs/ARCHITECTURAL_BACKLOG.md): os 4 blocos de detecção de loop em
+ * ARCH-016 (docs/refatoracao-arquitetural-2026/ARCHITECTURAL_BACKLOG.md): os 4 blocos de detecção de loop em
  * `GoalPlanner.buildReplanPrompt()` (pip/venv, exec_command, stuck-in-analysis, content_stub)
  * passam a gerar texto via `buildLoopDirective()`, uma função de formatação compartilhada.
  * Só o bloco `exec_command` também ganhou uma fonte de dados estruturada adicional

@@ -1,14 +1,14 @@
 # Retrospectiva — Premissas da Auditoria que Não Se Sustentaram na Execução
 
 **Data:** 2026-07-17. **Escopo:** Sprints `2026-07-S01` a `2026-08-S13` do Programa de Refatoração
-Arquitetural (`docs/MASTER_EXECUTION_PLAN.md`), cards ARCH-001 a ARCH-023 (parcial). **Motivo
+Arquitetural (`MASTER_EXECUTION_PLAN.md`), cards ARCH-001 a ARCH-023 (parcial). **Motivo
 deste documento:** ao final da S11, o usuário perguntou diretamente por que premissas erradas
 estavam se repetindo e pediu um catálogo consolidado — não bug a bug, mas como retrospectiva de
 processo, para melhorar a auditoria em si, não só corrigir os sintomas encontrados até agora.
 
 ## Por que isto importa
 
-`docs/ARCHITECTURAL_BACKLOG.md` é descrito como a consolidação de 4 auditorias ("Auditoria I —
+`ARCHITECTURAL_BACKLOG.md` é descrito como a consolidação de 4 auditorias ("Auditoria I —
 Duplicação de Decisões", "II — Duplicação de Conhecimento", "III — Complexidade Acidental", "IV —
 Violação de Fronteiras Arquiteturais"), todas conduzidas na mesma sessão de engenharia, cobrindo
 26 cards. Das **11 Sprints já executadas**, **7 tiveram a premissa original do card corrigida
@@ -158,7 +158,7 @@ lugar nenhum até este documento.
 
 ## Ação — o que muda no processo a partir de agora
 
-1. **`docs/MASTER_EXECUTION_PLAN.md`, Checklist de Execução — padrão:** o item "Ler completamente
+1. **`MASTER_EXECUTION_PLAN.md`, Checklist de Execução — padrão:** o item "Ler completamente
    o ARCH correspondente" passa a incluir explicitamente "reverificar cada alegação numérica e
    cada afirmação sobre estrutura/semântica de dados contra o código atual — não assumir que o
    card está correto só porque descreve um padrão plausível" (ver commit desta mudança).

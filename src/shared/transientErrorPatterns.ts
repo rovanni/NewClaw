@@ -6,7 +6,7 @@
  *   - `ProactiveRecovery.RECOVERY[tool].retryablePatterns` (retry imediato a nível de
  *     tool, com backoff, antes mesmo do erro chegar ao GoalEvaluator)
  *
- * ARCH-014 (docs/ARCHITECTURAL_BACKLOG.md). Cada padrão realmente compartilhado (mesmo
+ * ARCH-014 (docs/refatoracao-arquitetural-2026/ARCHITECTURAL_BACKLOG.md). Cada padrão realmente compartilhado (mesmo
  * texto de regex usado em 2+ lugares) tem uma única definição aqui, referenciada por
  * identidade nos dois módulos. Padrões usados em um único lugar continuam definidos
  * localmente — não pertencem a este núcleo compartilhado, e forçá-los para cá mudaria

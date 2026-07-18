@@ -2,7 +2,7 @@
 /**
  * TESTE DE REGRESSÃO — S116
  *
- * ARCH-006 (docs/ARCHITECTURAL_BACKLOG.md): `GoalExecutionLoop` recomputava
+ * ARCH-006 (docs/refatoracao-arquitetural-2026/ARCHITECTURAL_BACKLOG.md): `GoalExecutionLoop` recomputava
  * `.filter(s => s.status === 'pending')` (às vezes combinado com `s.toolName === X` ou
  * `rule.requiredTools.includes(s.toolName)`) em 15 pontos independentes do arquivo — nenhum
  * bug funcional isolado, mas 15 fontes do mesmo conceito "step pendente" sem garantia de que

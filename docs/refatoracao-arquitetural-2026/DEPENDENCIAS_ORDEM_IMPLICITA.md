@@ -9,7 +9,7 @@ está documentada num comentário solto (não reforçada por tipo, estrutura ou 
 aqui — porque esse é exatamente o tipo de coisa que um refactor bem-intencionado (humano ou LLM)
 quebra sem perceber.
 
-Este documento é **cumulativo**, como `docs/RETROSPECTIVA_PREMISSAS_AUDITORIA_2026-07-17.md` (que
+Este documento é **cumulativo**, como `RETROSPECTIVA_PREMISSAS_AUDITORIA.md` (que
 cataloga um problema relacionado, mas diferente: premissas de auditoria que descrevem O QUE o
 código faz incorretamente; este cataloga COMO uma sequência específica de execução/dados é
 exigida para o código funcionar direito).
@@ -71,7 +71,7 @@ exigida para o código funcionar direito).
   `isMarpWithoutInputFile` ser `false`) — reordenar não mudaria o resultado observável neste caso
   específico, mas o comentário original claramente expressava intenção de ordem, então o
   refactor da Sprint preservou a posição relativa exata mesmo assim (ver decisão de design no
-  card `ARCH-023`, `docs/MASTER_EXECUTION_PLAN.md`).
+  card `ARCH-023`, `MASTER_EXECUTION_PLAN.md`).
 - **5b. `wrap_powershell` precisa ser o ÚLTIMO fixup, depois de `isSearchCommand` ser calculado:**
   esta SIM tem impacto real comprovado — `isSearchCommand` testa se o comando começa com
   `grep`/`rg`/`find` para tratar exit code 1 como "sem resultados" (não erro). Se
@@ -105,7 +105,7 @@ neste código, não um caso isolado.
 
 ## Ação — o que muda no processo a partir de agora
 
-Adicionado à Checklist de Execução — padrão (`docs/MASTER_EXECUTION_PLAN.md`): ao tocar em
+Adicionado à Checklist de Execução — padrão (`MASTER_EXECUTION_PLAN.md`): ao tocar em
 qualquer trecho de código com um comentário do tipo "roda antes/depois de", "ordem importa",
 "precisa ser checado antes/depois" — tratar isso como um invariante a preservar explicitamente
 (não só evitar quebrar por acidente, mas registrar aqui se for uma instância nova encontrada

@@ -1,15 +1,34 @@
 # Plano de Reorganização Documental — Programa de Refatoração Arquitetural
 
-**Status:** Planejamento aprovado, execução **suspensa até `2026-12-CP05`** (Checkpoint de
-Encerramento do programa). Este documento é a evolução formal de `docs/issues/007-organizacao-
-documentacao-programa-refatoracao.md` (primeira passada, nível "achado de Sprint") para uma
-análise arquitetural completa, a pedido do usuário — cobre estrutura definitiva, trade-offs,
-impacto técnico e passo a passo de migração.
+**Status:** **Parcialmente executado, fora de ordem, a pedido explícito do usuário (S13, 2026-07-17).**
+Este documento é a evolução formal de `docs/issues/007-organizacao-documentacao-programa-
+refatoracao.md` (primeira passada, nível "achado de Sprint") para uma análise arquitetural
+completa — cobre estrutura definitiva, trade-offs, impacto técnico e passo a passo de migração.
 
-**Por que não executar agora:** o programa ainda tem 14 Sprints em andamento (S14-S27). Qualquer
-reorganização de arquivo hoje competiria por atenção com a execução ativa e arriscaria
-retrabalho de link a cada Sprint nova (o hub, `MASTER_EXECUTION_PLAN.md`, muda a cada Sprint
-fechada). A migração só é barata quando os documentos já estão congelados.
+**Divergência registrada entre o plano original e a execução real:** a análise abaixo (seções 1-5)
+recomendava suspender QUALQUER movimentação de arquivo até `2026-12-CP05`, justamente para não
+competir com a execução ativa das Sprints restantes. O usuário, ao revisar essa recomendação,
+priorizou explicitamente encontrabilidade imediata sobre esse custo operacional: aguardar meses
+para ter uma pasta organizada não serve se, nesse meio tempo, a localização dos documentos só é
+recuperável perguntando à IA — o próprio problema que a reorganização deveria resolver. Isso é uma
+correção válida da minha análise original, não uma inconsistência a esconder: eu pesava o custo de
+mexer nos links contra o ganho de organização; o usuário pesou (corretamente) o custo de NÃO se
+lembrar onde as coisas estão contra esse mesmo ganho — um fator que minha análise original não deu
+peso suficiente.
+
+**O que já foi feito (passo 2 e parte do 6 da seção 6, fora de ordem):** os 5 documentos do
+programa (`ARCHITECTURAL_BACKLOG.md`, `MASTER_EXECUTION_PLAN.md`, `RETROSPECTIVA_PREMISSAS_
+AUDITORIA.md`, `DEPENDENCIAS_ORDEM_IMPLICITA.md`, este arquivo) já vivem em
+`docs/refatoracao-arquitetural-2026/`, sem sufixo de data no nome, com todas as referências
+cruzadas internas corrigidas.
+
+**O que continua deferido para `2026-12-CP05`:** exatamente a parte da seção 3 que dependia do
+documento estar CONGELADO — dividir `MASTER_EXECUTION_PLAN.md` em `SPRINTS/`+`CHECKPOINTS/`+
+`METRICAS.md`, compilar `EXECUCAO_DECISOES_DE_DESIGN.md`, e escrever o `README.md` final. Esse
+recorte continua válido: agrupar em pasta é uma mudança de LOCALIZAÇÃO (barata a qualquer momento,
+já provado); decompor o hub em ~35 arquivos é uma mudança de ESTRUTURA que só compensa quando o
+conteúdo já parou de mudar (ver seção 3.2) — os dois têm perfis de custo diferentes, por isso
+foram desacoplados nesta execução parcial.
 
 ---
 
@@ -33,8 +52,8 @@ PROJETO como um todo":
 |---|---|---|
 | `ARCHITECTURAL_BACKLOG.md` | **Sim** | É o próprio objeto do programa — os 26 cards que ele existe para executar. |
 | `MASTER_EXECUTION_PLAN.md` | **Sim** | O plano operacional que executa o backlog acima. |
-| `RETROSPECTIVA_PREMISSAS_AUDITORIA_2026-07-17.md` | **Sim** | Conhecimento gerado *durante* e *sobre* este programa especificamente (a auditoria que ele consolida). |
-| `DEPENDENCIAS_ORDEM_IMPLICITA_2026-07-17.md` | **Sim** | Idem — nasceu de uma Sprint deste programa (S12), mesmo cobrindo trechos de código que sobrevivem além dele. |
+| `RETROSPECTIVA_PREMISSAS_AUDITORIA.md` | **Sim** | Conhecimento gerado *durante* e *sobre* este programa especificamente (a auditoria que ele consolida). |
+| `DEPENDENCIAS_ORDEM_IMPLICITA.md` | **Sim** | Idem — nasceu de uma Sprint deste programa (S12), mesmo cobrindo trechos de código que sobrevivem além dele. |
 | `docs/issues/002` a `006` | **Não** — pertencem ao PROJETO | `docs/issues/` é convenção mais antiga (item `001`, abril/2026) e mais ampla — vai seguir recebendo achados de sessões futuras sem relação alguma com este programa. Só o CONTEÚDO de 5 itens específicos nasceu aqui; a CONVENÇÃO em si não. |
 | `docs/DIRETRIZ_ARQUITETURA_2026-07-13.md` | **Não** — é governança do PROJETO | Rege este programa, mas nasceu de um programa anterior (Sprints R1-R7) e continuará regendo qualquer futuro programa arquitetural. Referenciado por `@docs/...` no `CLAUDE.md` — mover quebraria essa referência sem nenhum ganho (ver seção 5). |
 | Auditoria I, II, III, IV (citadas, nunca persistidas como arquivo) | **N/A** | Não existem como documento — ver `docs/issues/007`, Lacuna 1. Fora do escopo deste plano (é lacuna de conteúdo, não de organização). |
@@ -124,10 +143,12 @@ que a divisão da seção 3.2 já exista, essa extração fica trivial — é ba
 A pasta já carrega o ano (`refatoracao-arquitetural-2026/`). Repetir `_2026-07-17` no nome de cada
 arquivo dentro dela é redundante e só serve para alongar paths sem adicionar informação — a data
 de CRIAÇÃO de cada documento já fica no histórico do git (`git log --follow`), que é a fonte
-correta para "quando isso foi escrito", não o nome do arquivo. Os dois catálogos que hoje têm data
-no nome (`RETROSPECTIVA_PREMISSAS_AUDITORIA_2026-07-17.md`, `DEPENDENCIAS_ORDEM_IMPLICITA_2026-07-
-17.md`) a ganharam de forma ad-hoc, no momento em que foram criados sem um plano de pasta ainda —
-não é uma convenção a preservar, é um acidente de quando cada um nasceu.
+correta para "quando isso foi escrito", não o nome do arquivo. **Já aplicado na migração parcial:**
+os dois catálogos que tinham data no nome (`RETROSPECTIVA_PREMISSAS_AUDITORIA_2026-07-17.md`,
+`DEPENDENCIAS_ORDEM_IMPLICITA_2026-07-17.md`) a ganharam de forma ad-hoc, no momento em que foram
+criados sem um plano de pasta ainda — não era uma convenção a preservar, era um acidente de quando
+cada um nasceu; renomeados para `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`/`DEPENDENCIAS_ORDEM_
+IMPLICITA.md` no `git mv` que moveu tudo para a pasta.
 
 ### 3.5 — `METRICAS.md`: um arquivo, não uma pasta
 
@@ -175,9 +196,10 @@ papel de agrupar/explicar esses 3 documentos por texto, não precisa de mais um 
 2. **Referências cruzadas dentro dos próprios documentos precisam virar links relativos**
    corretos (`SPRINTS/S13-ARCH-007.md` em vez de uma seção `#sprint-2026-08-s13` no mesmo
    arquivo) — trabalho mecânico, mas não zero.
-3. **5 comentários em código-fonte** (`extractText.ts`, `transientErrorPatterns.ts`, 3 testes de
-   regressão — ver seção 5) apontam para `docs/ARCHITECTURAL_BACKLOG.md` pelo path antigo; ficam
-   desatualizados (não quebrados, é comentário, não import) até alguém os corrigir.
+3. ~~5 comentários em código-fonte (`extractText.ts`, `transientErrorPatterns.ts`, 3 testes de
+   regressão) apontam para `docs/ARCHITECTURAL_BACKLOG.md` pelo path antigo.~~ **Corrigido junto
+   com a migração parcial** — os 5 já apontam para `docs/refatoracao-arquitetural-2026/
+   ARCHITECTURAL_BACKLOG.md`.
 4. **Histórico de commits antigos** (mensagens de commit já publicadas, ex. "docs: record S01
    commit hash... in execution plan") continuam citando o path/contexto antigo — imutável por
    natureza de git, não é um problema a resolver, só um custo a aceitar (`git log --follow`
@@ -207,10 +229,13 @@ testes. Nenhuma referência encontrada em `CLAUDE.md` (só cita `ARCHITECTURE.md
 `DIRETRIZ_ARQUITETURA_2026-07-13.md`, nenhum dos dois se move neste plano).
 
 **Memória persistente do Claude Code** (`C:\Users\lucia\.claude\projects\...\memory\`): o arquivo
-`project_master_execution_plan_2026-07-17.md` referencia `docs/MASTER_EXECUTION_PLAN.md` pelo path
-atual. Isso não quebra nada tecnicamente (memória é só contexto, não é resolvida como path de
-arquivo), mas uma sessão futura pode tentar `Read` o path antigo e falhar. **Ação de migração:**
-atualizar essa memória como último passo (seção 6, passo 7).
+`project_master_execution_plan_2026-07-17.md` referenciava `docs/MASTER_EXECUTION_PLAN.md` pelo
+path antigo em dezenas de linhas de narrativa histórica. **Já corrigido na migração parcial**: a
+descrição, o parágrafo de abertura e as instruções finais de "como retomar" (os trechos que uma
+sessão futura efetivamente usa para navegar) foram atualizados para o novo path, com uma nota
+explícita avisando que qualquer path sem o prefixo novo em linhas históricas mais antigas do mesmo
+arquivo está desatualizado — não reescrevi cada menção histórica individual (custo alto,
+benefício baixo: são narrativa de Sprints já fechadas, não instruções de navegação ativas).
 
 **Rastreabilidade histórica no git:** todo `git mv` preserva o histórico via detecção de rename
 (`git log --follow`) — confirmado nesta mesma sessão (o `git mv` de teste feito e revertido mais
@@ -226,28 +251,38 @@ que qualquer rename em qualquer repositório git funciona, não é uma falha des
 3. Extrair cada seção "### Sprint ..." de `MASTER_EXECUTION_PLAN.md` para
    `SPRINTS/SNN-ARCH-XXX.md` (mecânico — cada seção já é auto-contida hoje).
 4. Extrair cada seção "## Checkpoint ..." para `CHECKPOINTS/CPNN.md`.
-5. Compilar `EXECUCAO_DECISOES_DE_DESIGN.md` a partir dos campos "Decisão de design"/"Premissa
+5. ⬜ **Ainda deferido para CP05** (depende de 3-4, que dependem do documento estar congelado):
+   compilar `EXECUCAO_DECISOES_DE_DESIGN.md` a partir dos campos "Decisão de design"/"Premissa
    reverificada" já presentes em cada `SPRINTS/*.md` recém-criado.
-6. `git mv` dos 4 documentos restantes (`ARCHITECTURAL_BACKLOG.md`,
-   `RETROSPECTIVA_PREMISSAS_AUDITORIA` e `DEPENDENCIAS_ORDEM_IMPLICITA` — sem sufixo de data,
-   seção 3.4) para dentro da pasta, **nesta ordem** (menos referenciado → mais referenciado, para
-   nunca deixar um link quebrado por mais de um passo):
-   a. `DEPENDENCIAS_ORDEM_IMPLICITA.md` (0 documentos o citam fora do próprio Plano)
-   b. `RETROSPECTIVA_PREMISSAS_AUDITORIA.md` (citada só pelo Plano)
-   c. `ARCHITECTURAL_BACKLOG.md` (mais citado — 8x no Plano)
-   d. `MASTER_EXECUTION_PLAN.md` por último, já reduzido ao índice/dashboard da seção 3.2.
-7. Reescrever cada link interno afetado (`docs/ARCHITECTURAL_BACKLOG.md` → path relativo dentro da
-   nova pasta) nos documentos movidos — checar com o mesmo `grep` usado na seção 5 antes de
-   considerar o passo concluído (0 ocorrências do path antigo deve sobrar).
-8. Escrever `README.md` (seção 3.1).
-9. Atualizar os 5 comentários em código-fonte (seção 5) que citam o path antigo — trabalho
-   cosmético, mas gratuito nesse ponto (já se está no arquivo).
-10. Atualizar a memória `project_master_execution_plan_2026-07-17.md` (e renomear seu conteúdo
-    para refletir a estrutura final, se aplicável) com o novo path.
-11. Rodar a suíte de regressão completa uma última vez — nenhuma mudança aqui deveria afetá-la
-    (são só arquivos `.md`), mas confirma que a migração não tocou em nada além de documentação.
-12. Commit único, mensagem explicando a migração e apontando para este plano como a análise que a
-    fundamentou.
+6. ✅ **Feito fora de ordem, 17/07/2026 (S13), a pedido do usuário:** `git mv` dos 4 documentos
+   restantes (`ARCHITECTURAL_BACKLOG.md`, `RETROSPECTIVA_PREMISSAS_AUDITORIA` e
+   `DEPENDENCIAS_ORDEM_IMPLICITA` — sem sufixo de data, seção 3.4) para dentro da pasta, na ordem
+   menos referenciado → mais referenciado: `DEPENDENCIAS_ORDEM_IMPLICITA.md` →
+   `RETROSPECTIVA_PREMISSAS_AUDITORIA.md` → `ARCHITECTURAL_BACKLOG.md` → `MASTER_EXECUTION_PLAN.md`
+   por último. **Diferença em relação ao plano original:** `MASTER_EXECUTION_PLAN.md` NÃO foi
+   reduzido ao índice/dashboard da seção 3.2 antes de mover — continua com todas as 27 Sprints
+   inline, porque essa redução só é segura quando o documento já está congelado (passo 5 acima).
+7. ✅ **Feito junto com o passo 6:** todos os links internos entre os 5 documentos movidos
+   reescritos para paths relativos (`ARCHITECTURAL_BACKLOG.md` em vez de
+   `docs/ARCHITECTURAL_BACKLOG.md`) — confirmado por `grep` com 0 ocorrências residuais do path
+   antigo dentro da pasta.
+8. ⬜ **Ainda deferido para CP05:** escrever o `README.md` final (seção 3.1) — um índice "programa
+   encerrado, aqui está o resultado" só faz sentido quando há um resultado final para resumir; hoje
+   (S13/27) seria prematuro.
+9. ✅ **Feito, 17/07/2026:** os 5 comentários em código-fonte (seção 5) que citavam o path antigo
+   corrigidos para `docs/refatoracao-arquitetural-2026/ARCHITECTURAL_BACKLOG.md`.
+10. ✅ **Feito, 17/07/2026:** memória `project_master_execution_plan_2026-07-17.md` atualizada
+    (descrição, parágrafo de abertura, instruções de "como retomar") com o novo path — narrativa
+    histórica de Sprints já fechadas dentro do mesmo arquivo não foi reescrita linha a linha (ver
+    seção 5).
+11. ✅ **Feito, 17/07/2026:** suíte de regressão rodada após a migração parcial — nenhuma mudança
+    tocou código de produção, só `.md`/comentários, então nenhuma alteração de resultado esperada.
+12. ✅ **Feito, 17/07/2026:** commit da migração parcial, apontando para este plano.
+
+**Resumo do que falta para fechar este plano por completo:** só os passos 3-5 e 8 (a decomposição
+de `MASTER_EXECUTION_PLAN.md` em `SPRINTS/`+`CHECKPOINTS/`, o log de decisões, e o `README.md`
+final) — todos dependentes do documento estar congelado, continuam corretamente deferidos para
+`2026-12-CP05`.
 
 ## 7. Recomendações para futuras iniciativas arquiteturais
 

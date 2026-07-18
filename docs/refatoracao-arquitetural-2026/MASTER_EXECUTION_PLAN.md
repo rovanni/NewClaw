@@ -1,10 +1,10 @@
 # MASTER_EXECUTION_PLAN.md — Refatoração Arquitetural NewClaw
 
-**Este documento NÃO substitui `docs/ARCHITECTURAL_BACKLOG.md`.** O backlog é a fonte de verdade sobre O QUÊ e POR QUÊ (descrição de cada problema, evidências, arquivos, critérios). Este documento é a fonte de verdade sobre QUANDO e COMO EXECUTAR — a ordem operacional, o rastreamento de status e o histórico de execução.
+**Este documento NÃO substitui `ARCHITECTURAL_BACKLOG.md`.** O backlog é a fonte de verdade sobre O QUÊ e POR QUÊ (descrição de cada problema, evidências, arquivos, critérios). Este documento é a fonte de verdade sobre QUANDO e COMO EXECUTAR — a ordem operacional, o rastreamento de status e o histórico de execução.
 
-**Antes de implementar qualquer Sprint, ler `docs/RETROSPECTIVA_PREMISSAS_AUDITORIA_2026-07-17.md`** — catálogo cumulativo de premissas do backlog que não se sustentaram na execução (7 de 11 Sprints até agora) e os 3 modos de falha recorrentes da auditoria original. Não é opcional, é o histórico do que já deu errado quando essa reverificação foi pulada.
+**Antes de implementar qualquer Sprint, ler `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`** — catálogo cumulativo de premissas do backlog que não se sustentaram na execução (7 de 11 Sprints até agora) e os 3 modos de falha recorrentes da auditoria original. Não é opcional, é o histórico do que já deu errado quando essa reverificação foi pulada.
 
-**Antes de mexer em qualquer arquivo, também checar `docs/DEPENDENCIAS_ORDEM_IMPLICITA_2026-07-17.md`** — catálogo cumulativo de trechos de código cujo comportamento correto depende de uma ORDEM de execução ou de dados só documentada num comentário solto (não reforçada por tipo, estrutura ou teste). Um desses casos (`RiskAnalyzer.ts`) já causou um bug real de produção quando reordenado sem essa consciência. Sempre que uma Sprint encontrar um comentário do tipo "roda antes/depois de", "ordem importa", "precisa ser checado antes/depois" — tratar como invariante a preservar e, se for uma instância nova, registrar no documento.
+**Antes de mexer em qualquer arquivo, também checar `DEPENDENCIAS_ORDEM_IMPLICITA.md`** — catálogo cumulativo de trechos de código cujo comportamento correto depende de uma ORDEM de execução ou de dados só documentada num comentário solto (não reforçada por tipo, estrutura ou teste). Um desses casos (`RiskAnalyzer.ts`) já causou um bug real de produção quando reordenado sem essa consciência. Sempre que uma Sprint encontrar um comentário do tipo "roda antes/depois de", "ordem importa", "precisa ser checado antes/depois" — tratar como invariante a preservar e, se for uma instância nova, registrar no documento.
 
 **Baseline:** B1.0 (imutável). **Política permanente:** *No Opportunistic Refactoring* — nenhuma Sprint corrige nada além do seu único ARCH designado; dívida nova encontrada durante a execução é documentada em `docs/issues/NNN-*.md` (não só numa nota inline dentro do card da Sprint — ver Regra #3) e vira proposta de ARCH novo, nunca é resolvida "de brinde" na sprint corrente. **WIP máximo = 1** — nunca dois refactors de grande porte em andamento ao mesmo tempo.
 
@@ -117,7 +117,7 @@ Snapshot do estado de validação do branch `refactor/architectural-backlog` nes
 - [x] Registrar métricas atuais (linhas por arquivo/método dos hotspots citados no backlog) — ver Anexo abaixo; valores medidos diretamente no código, não copiados do backlog (2 pequenas divergências encontradas e documentadas — variação de poucas linhas por causa do fix S115, que tocou `runLoopInternal`).
 - [x] Registrar indicadores arquiteturais (a tabela completa da Fase 7 do `ARCHITECTURAL_BACKLOG.md`, como snapshot "T0") — ver Anexo abaixo. **1 divergência material encontrada** (ver nota sobre ARCH-001).
 - [x] Congelar novas funcionalidades no escopo tocado por este programa (nenhuma feature nova em `loop/`, `core/`, `tools/`, `memory/` até o programa concluir ou ser explicitamente pausado) — política em vigor a partir deste commit.
-- [x] Aprovar `docs/ARCHITECTURAL_BACKLOG.md` formalmente (já ocorreu, conforme instrução recebida) — **Responsável:** Luciano Rovanni do Nascimento. **Data:** 2026-07-17.
+- [x] Aprovar `ARCHITECTURAL_BACKLOG.md` formalmente (já ocorreu, conforme instrução recebida) — **Responsável:** Luciano Rovanni do Nascimento. **Data:** 2026-07-17.
 - [x] Registrar baseline arquitetural (cópia do snapshot de indicadores + hash do commit da TAG) — ver Anexo abaixo.
 
 ## Definition of Done da Fase 0
@@ -153,7 +153,7 @@ Estrutura de cada Sprint abaixo, na ordem cronológica real de execução (a mes
 ### Checklist de Execução — padrão (repetido em toda Sprint)
 
 **Antes de implementar, reverificar a premissa do card contra o código atual** —
-`docs/RETROSPECTIVA_PREMISSAS_AUDITORIA_2026-07-17.md` mostra que 7 de 11 Sprints já executadas
+`RETROSPECTIVA_PREMISSAS_AUDITORIA.md` mostra que 7 de 11 Sprints já executadas
 (S01-S11) tiveram alguma alegação do card corrigida na prática: contagens (S01/S03/S04), grafo
 de dependência incompleto (S02/S05), ou equivalência semântica assumida sem verificação
 (S10/S11). Isso não é exceção, é a norma até agora — tratar como etapa obrigatória, não
@@ -163,7 +163,7 @@ correto". Especificamente: toda contagem numérica no card merece um grep/contag
 merece ler como A e B são de fato populadas/decididas antes de assumir que são a mesma coisa.
 
 **Ao ler os arquivos envolvidos, também checar dependências de ordem implícita** —
-`docs/DEPENDENCIAS_ORDEM_IMPLICITA_2026-07-17.md` cataloga trechos cujo comportamento correto
+`DEPENDENCIAS_ORDEM_IMPLICITA.md` cataloga trechos cujo comportamento correto
 depende de uma sequência de execução/dados só documentada em comentário solto (um deles já
 causou um bug real de produção quando reordenado). Se um comentário do tipo "roda antes/depois
 de", "ordem importa" aparecer num arquivo tocado pela Sprint, preservar a posição relativa
@@ -741,7 +741,7 @@ Validação
 - **Identificação:** `2026-12-CP05`
 - **Revisar:** indicadores (comparação final T0 vs. estado atual — todas as 8 linhas da tabela de indicadores do `ARCHITECTURAL_BACKLOG.md` Fase 7), backlog (todos os 26 ARCH com status final registrado, incluindo os que resultaram em "RFC rejeitada" como desfecho válido), dependências (nenhuma pendente), arquitetura (snapshot final documentado), riscos (nenhum risco arquitetural aberto do programa original — novos achados durante a execução, se houver, já devem ter virado propostas de ARCH separadas para um próximo ciclo), planejamento (recomendação explícita: agendar o próximo ciclo de auditoria arquitetural — ver observação abaixo).
 - **Critério de avanço:** N/A — é o encerramento. Produzir um relatório final de encerramento (métricas antes/depois, lições aprendidas consolidadas de todas as Sprints).
-- **Tarefa de housekeeping documental (executar neste checkpoint, não antes):** migrar toda a documentação do programa para `docs/refatoracao-arquitetural-2026/` — plano completo (estrutura, trade-offs, impacto técnico, passo a passo) em `docs/PLANO_REORGANIZACAO_DOCUMENTAL_2026-07-17.md`. Inclui dividir `MASTER_EXECUTION_PLAN.md` em `SPRINTS/`+`CHECKPOINTS/`+`METRICAS.md`, compilar `EXECUCAO_DECISOES_DE_DESIGN.md` (novo), e escrever `README.md` como índice.
+- **Tarefa de housekeeping documental — parte 1 já concluída (S13, fora de ordem, a pedido do usuário):** os 5 documentos do programa já vivem em `docs/refatoracao-arquitetural-2026/` (movidos antes do encerramento, por preferência explícita do usuário de não depender de busca/memória para achá-los). **Parte 2, ainda deferida para este checkpoint:** dividir `MASTER_EXECUTION_PLAN.md` (já congelado neste ponto) em `SPRINTS/`+`CHECKPOINTS/`+`METRICAS.md`, compilar `EXECUCAO_DECISOES_DE_DESIGN.md` (novo) e escrever `README.md` como índice — plano completo em `PLANO_REORGANIZACAO_DOCUMENTAL.md`, seção 3.2-3.5 (a decomposição, diferente do agrupamento em pasta, continua fazendo sentido só depois que o documento parar de crescer).
 - **Status:** ⚪ Não iniciado.
 - **Observação permanente:** conforme discutido durante o planejamento deste programa, a causa raiz da dívida arquitetural encontrada nas 4 auditorias não foi a arquitetura do runtime (modelo espiral Q1-Q4), e sim a ausência de um ciclo de revisão arquitetural recorrente. Este checkpoint de encerramento não deve ser o último — recomenda-se formalizar a cadência (ex.: a cada N sprints de feature/bugfix, ou quando um indicador cruzar um limiar) para o próximo ciclo de auditoria, evitando que a mesma classe de dívida se reconstrua.
 

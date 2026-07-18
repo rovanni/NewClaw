@@ -2,7 +2,7 @@
 /**
  * TESTE DE REGRESSÃO — S117
  *
- * ARCH-011 (docs/ARCHITECTURAL_BACKLOG.md): `StrategyDiversityGuard.extractUsedFingerprints`
+ * ARCH-011 (docs/refatoracao-arquitetural-2026/ARCHITECTURAL_BACKLOG.md): `StrategyDiversityGuard.extractUsedFingerprints`
  * passa a ler `goal.toolsTried` (fonte estruturada, deduplicada por `GoalStore.addToolTried`)
  * como fonte primária, em vez de só reconstruir por regex sobre `strategiesTried` (texto livre).
  *
