@@ -1,21 +1,24 @@
 # Retrospectiva — Premissas da Auditoria que Não Se Sustentaram na Execução
 
-**Data:** 2026-07-17. **Escopo:** Sprints `2026-07-S01` a `2026-08-S13` do Programa de Refatoração
-Arquitetural (`MASTER_EXECUTION_PLAN.md`), cards ARCH-001 a ARCH-023 (parcial). **Motivo
-deste documento:** ao final da S11, o usuário perguntou diretamente por que premissas erradas
-estavam se repetindo e pediu um catálogo consolidado — não bug a bug, mas como retrospectiva de
-processo, para melhorar a auditoria em si, não só corrigir os sintomas encontrados até agora.
+**Data:** 2026-07-17 (atualizado com o caso S14). **Escopo:** Sprints `2026-07-S01` a
+`2026-08-S14` do Programa de Refatoração Arquitetural (`MASTER_EXECUTION_PLAN.md`), cards ARCH-001
+a ARCH-023 (parcial) + ARCH-009. **Motivo deste documento:** ao final da S11, o usuário perguntou
+diretamente por que premissas erradas estavam se repetindo e pediu um catálogo consolidado — não
+bug a bug, mas como retrospectiva de processo, para melhorar a auditoria em si, não só corrigir os
+sintomas encontrados até agora.
 
 ## Por que isto importa
 
 `ARCHITECTURAL_BACKLOG.md` é descrito como a consolidação de 4 auditorias ("Auditoria I —
 Duplicação de Decisões", "II — Duplicação de Conhecimento", "III — Complexidade Acidental", "IV —
 Violação de Fronteiras Arquiteturais"), todas conduzidas na mesma sessão de engenharia, cobrindo
-26 cards. Das **11 Sprints já executadas**, **7 tiveram a premissa original do card corrigida
-durante a implementação** — não são exceções, são a maioria. Isso não invalida o backlog (o
+26 cards. Das **12 Sprints já executadas** (incluindo `S14`, que foi adiada na Fase 1/2 antes de
+qualquer código ser escrito — ver caso abaixo), **8 tiveram a premissa original do card corrigida
+durante a execução** — não são exceções, são a maioria. Isso não invalida o backlog (o
 diagnóstico de ALTO NÍVEL — "existe duplicação/acoplamento aqui" — se confirmou em todos os
 casos), mas invalida a confiança de que o TEXTO ESPECÍFICO de cada card (contagens, alegações
-sobre estrutura de dados, equivalência entre padrões) pode ser implementado sem reverificação.
+sobre estrutura de dados, equivalência entre padrões, e — caso novo do S14 — a viabilidade da
+PRESCRIÇÃO de implementação em si) pode ser implementado sem reverificação.
 
 ## Catálogo — premissa original vs. achado real vs. causa raiz
 
@@ -122,10 +125,34 @@ sobre estrutura de dados, equivalência entre padrões) pode ser implementado se
   bloco citado e o `switch`) só fica visível lendo o código com atenção ao STATE MUTATION
   intermediário, não à proximidade textual dos dois trechos.
 
+### S14 / ARCH-009 — `CycleResult`/`GoalAttempt` estenderem `ToolResult` (categoria nova — ver Síntese, modo 5)
+- **Premissa do card:** "`ToolResult` → `CycleResult` → `GoalAttempt` redeclaram os mesmos 2 campos
+  (`output`, `error`) 3 vezes de forma independente" — prescrição: os dois últimos passam a
+  `extends ToolResult`.
+- **Achado real:** `CycleResult` não tem campo `error` (só `output`, opcional) — já não são "os
+  mesmos 2 campos" nos 3 tipos. Mais grave: a prescrição não compila — `ToolResult.output` é
+  obrigatório, `CycleResult.output`/`GoalAttempt.output` são legitimamente opcionais (ausentes em
+  vários outcomes reais), e TypeScript não permite herdar um campo obrigatório como opcional. Pior
+  ainda: `GoalAttempt` mora em `shared/domainTypes.ts` (camada neutra, ARCH-004/S02) e `ToolResult`
+  em `loop/agentLoopTypes.ts` — fazer `GoalAttempt extends ToolResult` obrigaria `shared/` a
+  importar de `loop/`, a violação de fronteira exata que ARCH-004 corrigiu.
+- **Causa raiz:** diferente dos 4 modos abaixo (onde a CONCLUSÃO ou o CAMINHO CAUSAL citado pelo
+  card precisava de correção, mas a AÇÃO prescrita em si era executável), aqui o problema está na
+  PRESCRIÇÃO — o "como resolver" citado literalmente no card é estruturalmente inviável, não só
+  impreciso. A auditoria original comparou os NOMES dos 2 campos (`output`/`error`) entre os 3
+  tipos e concluiu "duplicação → unificar via herança" sem verificar (a) se a obrigatoriedade era
+  compatível entre os 3 (não é) nem (b) em qual camada cada tipo fisicamente mora hoje (mudou desde
+  a auditoria original — `GoalAttempt` só foi para `shared/` no ARCH-004/S02, uma Sprint DESTE
+  MESMO programa, posterior à auditoria que gerou o card ARCH-009).
+- **Decisão:** adiado por pedido do usuário, consolidado com outros achados de modelagem de tipo
+  compartilhado em `docs/refatoracao-arquitetural-2026/REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`
+  (junto com ARCH-024, mesma classe de problema). Registro técnico completo:
+  `docs/issues/008-arch009-extends-toolresult-breaks-typing-and-boundary.md`.
+
 ## Síntese — causas raiz recorrentes
 
-Analisando os 8 casos acima (excluindo S08, categoria diferente), os erros se agrupam em
-**4 modos de falha da auditoria original**, não 8 causas distintas:
+Analisando os 9 casos acima (excluindo S08, categoria diferente), os erros se agrupam em
+**5 modos de falha da auditoria original**, não 9 causas distintas:
 
 1. **Enumeração não-exaustiva** (S01, S03, S04) — contagens/listas citadas no card eram
    amostras ou resultado de busca parcial, não o resultado de uma varredura automatizada
@@ -144,17 +171,28 @@ Analisando os 8 casos acima (excluindo S08, categoria diferente), os erros se ag
    errada — só aparece simulando a mutação de estado (aqui, `cycleResult.outcome`) entre os dois
    pontos citados, não checando se os dois trechos citados existem (ambos existiam) ou se estão
    perto um do outro no arquivo (estavam).
+5. **A prescrição em si é estruturalmente inviável, não só o diagnóstico** (S14) — diferente dos
+   modos 1-4 (onde o QUE FAZER prescrito continuava executável, só a contagem/grafo/causa citada
+   precisava de ajuste), aqui o "como resolver" literal do card (`extends ToolResult`) não
+   compila, e forçá-lo reintroduziria uma violação de fronteira que outra Sprint DESTE MESMO
+   programa já corrigiu. A causa específica deste modo: o card foi escrito pela auditoria original
+   ANTES de ARCH-004 (S02) ter movido `GoalAttempt` para `shared/domainTypes.ts` — a auditoria
+   comparou nomes de campo entre tipos sem verificar (a) compatibilidade de obrigatoriedade nem
+   (b) que a topologia de camadas dos tipos envolvidos muda ao longo da execução do próprio
+   programa que o card pertence. É o único modo, dos 5, em que a causa raiz é uma auditoria
+   citando um estado do código anterior a mudanças feitas pelo próprio programa que a consome.
 
-**Conclusão sobre a natureza da auditoria original:** os modos 1-3 são consistentes com uma
+**Conclusão sobre a natureza da auditoria original:** os modos 1-4 são consistentes com uma
 auditoria conduzida em **varredura ampla** (grep/leitura rápida cobrindo os 26 cards numa única
 sessão) — apropriada para GERAR candidatos de dívida arquitetural, mas insuficiente para
 PRESCREVER a implementação exata sem reverificação. Isso não é uma falha da auditoria em si (o
-diagnóstico de alto nível — "existe uma violação/duplicação aqui" — se confirmou nos 11/11 casos
+diagnóstico de alto nível — "existe uma violação/duplicação aqui" — se confirmou nos 12/12 casos
 até agora) — é uma característica esperada de qualquer varredura ampla que cobre muito código em
-pouco tempo. O ponto de falha real seria implementar a PRESCRIÇÃO do card sem a Fase 1
-(compreensão) da `DIRETRIZ_ARQUITETURA_2026-07-13.md` — que já existe, já é mandatória, mas cujo
-resultado prático (achar a premissa errada em 7 de 11 casos) não estava sendo consolidado em
-lugar nenhum até este documento.
+pouco tempo, agravada no modo 5 pelo fato de o próprio backlog descrever um alvo em movimento (o
+código muda a cada Sprint do mesmo programa que consulta o card). O ponto de falha real seria
+implementar a PRESCRIÇÃO do card sem a Fase 1 (compreensão) da `DIRETRIZ_ARQUITETURA_2026-07-13.md`
+— que já existe, já é mandatória, mas cujo resultado prático (achar a premissa errada em 8 de 12
+casos) não estava sendo consolidado em lugar nenhum até este documento.
 
 ## Ação — o que muda no processo a partir de agora
 
@@ -166,9 +204,13 @@ lugar nenhum até este documento.
    obrigatória e esperada**, não como trabalho extra — o histórico deste documento mostra que é
    a norma (7 de 11), não a exceção.
 3. **Achados classificados por modo de falha** (enumeração incompleta / grafo de dependência
-   incompleto / equivalência semântica não verificada) ajudam a saber ONDE olhar com mais cuidado
-   em cada card restante: cards que citam contagens específicas → checar modo 1; cards que pedem
-   mover/remover um símbolo → checar modo 2; cards que propõem unificar duas fontes de dados ou
-   dois mecanismos → checar modo 3.
+   incompleto / equivalência semântica não verificada / rota causal errada / prescrição
+   estruturalmente inviável) ajudam a saber ONDE olhar com mais cuidado em cada card restante:
+   cards que citam contagens específicas → checar modo 1; cards que pedem mover/remover um símbolo
+   → checar modo 2; cards que propõem unificar duas fontes de dados ou dois mecanismos → checar
+   modo 3; cards que citam um mecanismo causal específico → checar modo 4; cards que prescrevem
+   `extends`/herança/fusão de tipos entre camadas → checar modo 5 (compilar mentalmente a
+   prescrição E confirmar em qual camada cada tipo envolvido mora HOJE, não na data da auditoria
+   original).
 4. Este documento deve ser **atualizado** (não substituído) conforme novas Sprints revelem novos
    casos — é um registro cumulativo do programa inteiro, não um relatório de um momento único.

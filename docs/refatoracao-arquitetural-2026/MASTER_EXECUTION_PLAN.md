@@ -44,7 +44,7 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 | 2026-08-S11 | Ago/2026 | Decision Ownership | ARCH-016 | 🟢 | S10 | 52e8e3c | Template compartilhado nos 4 blocos; fonte estruturada aditiva só em exec_command (1/4, correto per docs/issues/006) |
 | 2026-08-S12 | Ago/2026 | Structural Simplification | ARCH-023 | 🟢 | CP01 | 88ede55 | Pipeline nomeado (4 steps), gates de validação preservados como ifs, S11 corrigido |
 | 2026-08-S13 | Ago/2026 | Single Source of Truth | ARCH-007 | 🟢 | CP01 | 216f039 | `PlanStep.lastAttemptOutcome` novo campo; gatilho real ≠ premissa literal do card (ver ARCHITECTURAL_BACKLOG "Executado como") — teste novo S119, 122/122 |
-| 2026-08-S14 | Ago/2026 | Single Source of Truth | ARCH-009 | ⚪ | CP01 | — | — |
+| 2026-08-S14 | Ago/2026 | Single Source of Truth | ARCH-009 | ⏸ | CP01 | (pendente — commit de docs ao final desta Sprint) | Adiado antes de codificar — prescrição do card (`extends ToolResult`) não compila + reintroduz violação de fronteira do ARCH-004; consolidado em `REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md` |
 | 2026-08-S15 | Ago/2026 | Single Source of Truth | ARCH-010 | ⚪ | CP01 | — | — |
 | 2026-08-CP02 | Ago/2026 | Checkpoint | — | ⚪ | S08-S15 | — | — |
 | 2026-08-S16 | Ago/2026 | Single Source of Truth | ARCH-005 | ⚪ | CP02 | — | — |
@@ -68,20 +68,21 @@ Uma Sprint só é `🟢 Concluída` quando as duas passam. Isso é o que os iten
 ## RESUMO EXECUTIVO
 
 **Programa:** Refatoração Arquitetural NewClaw
-**Status Geral:** 🟢 Em execução — Fase 0, S01-S13 e Checkpoint CP01 concluídos
-**Progresso:** 13 / 26 ARCH concluídos (~50%)
-**Sprint Atual:** Nenhuma em andamento (S13 concluída — próxima é 2026-08-S14)
-**Próxima Sprint:** 2026-08-S14 (ARCH-009)
-**Epic Atual:** Epic A concluído; Epic B em andamento — ARCH-006/007/011 feitos; Epic C em andamento — ARCH-014/016/017 feitos; Epic D iniciado — ARCH-023 feito; Epic E concluído — ARCH-025/026 feitos
+**Status Geral:** 🟢 Em execução — Fase 0, S01-S13 e Checkpoint CP01 concluídos; S14 adiada (ver abaixo)
+**Progresso:** 13 / 26 ARCH concluídos (~50%) — ARCH-009 (S14) adiado, não conta como concluído nem como pendência simples
+**Sprint Atual:** Nenhuma em andamento (S14 adiada antes de codificar — próxima é 2026-08-S15)
+**Próxima Sprint:** 2026-08-S15 (ARCH-010) — não bloqueada pelo adiamento de S14 (dependência era só CP01)
+**Epic Atual:** Epic A concluído; Epic B em andamento — ARCH-006/007/011 feitos, ARCH-009 adiado; Epic C em andamento — ARCH-014/016/017 feitos; Epic D iniciado — ARCH-023 feito; Epic E concluído — ARCH-025/026 feitos
 **Próximo Marco:** 2026-08-CP02
-**Última Atualização:** 2026-07-17 (Sprint S13 concluída)
-**Build:** 🟢 `npm run build` limpo
-**Testes:** 🟢 122/122
-**Regressão:** 🟢 122/122 (pós-S13)
+**Última Atualização:** 2026-07-17 (Sprint S14 adiada)
+**Build:** 🟢 `npm run build` limpo (inalterado — S14 não tocou código)
+**Testes:** 🟢 122/122 (inalterado)
+**Regressão:** 🟢 122/122 (pós-S13, inalterado — S14 não tocou código)
 **Riscos Abertos:** 0 — nota permanente: a VPS `venus@10.0.0.10` usada para validação Linux tem histórico de exigir `.env`/`WORKSPACE_DIR` explícito (skill `verify`) para não gerar falso-positivo — ver `docs/issues/002`
 **RFCs Pendentes:** 3 (ARCH-012, ARCH-015, ARCH-024)
-**Dívida Arquitetural Restante:** 13 ARCH (12 cards executáveis restantes + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
-**Achados fora de escopo documentados (`docs/issues/`):** 002 (falsos-positivos de validação VPS), 003 (`core/index.ts` barrel possivelmente morto), 004 (2 funções `extractText` com nome colidindo), 005 (regex de tool names desatualizada — corrigido de brinde na própria S10), 006 (análise de por que os 4 detectores de loop não convergem pra 1 fonte só — não é pendência, é registro de decisão)
+**Temas Adiados para Revisão Consolidada:** 1 (ARCH-009 — ver `docs/refatoracao-arquitetural-2026/REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`, que já lista ARCH-024 e `docs/issues/004` como temas correlatos a tratar junto quando essa revisão abrir)
+**Dívida Arquitetural Restante:** 13 ARCH (11 cards executáveis restantes + ARCH-009 adiado para revisão consolidada + ARCH-021 formalmente absorvido em ARCH-020, sem sprint própria)
+**Achados fora de escopo documentados (`docs/issues/`):** 002 (falsos-positivos de validação VPS), 003 (`core/index.ts` barrel possivelmente morto), 004 (2 funções `extractText` com nome colidindo), 005 (regex de tool names desatualizada — corrigido de brinde na própria S10), 006 (análise de por que os 4 detectores de loop não convergem pra 1 fonte só — não é pendência, é registro de decisão), 008 (ARCH-009: `extends ToolResult` não compila + reintroduz violação de fronteira do ARCH-004 — motivo do adiamento de S14)
 
 > Este bloco deve ser reescrito ao final de cada Sprint — não editado por trecho, substituído por inteiro — para refletir o estado real no momento.
 
@@ -91,11 +92,11 @@ Snapshot do estado de validação do branch `refactor/architectural-backlog` nes
 
 | Indicador | Status | Última verificação | Evidência |
 |---|---|---|---|
-| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S13) | Windows: limpo. Linux real (VPS Ubuntu 24.04, validado em S08): limpo |
-| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S13) | 0 erros |
-| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S13) | `npm run test:regression` — 122/122 (S119 novo, cobre o cenário de divergência do ARCH-007) |
+| Build (`npm run build`) | ✔ | 2026-07-17 (pós-S13; S14 não tocou código) | Windows: limpo. Linux real (VPS Ubuntu 24.04, validado em S08): limpo |
+| tsc (`tsc --noEmit`) | ✔ | 2026-07-17 (pós-S13; S14 não tocou código) | 0 erros |
+| Unit + Regression Tests (Regressão Funcional) | ✔ | 2026-07-17 (pós-S13; S14 não tocou código) | `npm run test:regression` — 122/122 (S119 novo, cobre o cenário de divergência do ARCH-007) |
 | Integration Tests | ✔ (parcial) | 2026-07-17 | Etapa 4 (ambiente real) executada em S08 numa VPS Linux real (`venus@10.0.0.10`), cópia isolada, produção nunca tocada — ver `docs/issues/002`. S13 não exigiu etapa 4 (mudança aditiva de tipo/dado, sem dependência de SO/filesystem/LLM — card só listava Unitário+regressão) |
-| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S13) | Boundary (ARCH-001/002/003/004): Epic A **concluído**. SSOT/Recomputation (ARCH-006/007/011): accessor único + fonte primária estruturada para fingerprint + `PlanStep.lastAttemptOutcome` fecha a divergência status/attempt. Decision Ownership (ARCH-014/016/017): 6/6 regexes byte-idênticas, 0 ocorrências residuais de `ToolExecutorService`, 4 detectores de loop com template compartilhado. Structural Simplification (ARCH-023): pipeline de fixups de `exec_command.ts` como array nomeado (4 steps), gates de validação preservados como `if`s. Technical Cleanup (ARCH-025/026): fonte única confirmada. Hotspots: `GoalExecutionLoop.ts` 3529 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
+| Architecture Metrics (Regressão Arquitetural) | ✔ | 2026-07-17 (pós-S13; S14 adiada antes de tocar código, sem impacto em nenhum indicador) | Boundary (ARCH-001/002/003/004): Epic A **concluído**. SSOT/Recomputation (ARCH-006/007/011): accessor único + fonte primária estruturada para fingerprint + `PlanStep.lastAttemptOutcome` fecha a divergência status/attempt. ARCH-009 (S14) **adiado** — `output`/`error` continuam redeclarados independentemente em `ToolResult`/`CycleResult`/`GoalAttempt`, sem piora em relação a T0 (nenhuma mudança foi feita). Decision Ownership (ARCH-014/016/017): 6/6 regexes byte-idênticas, 0 ocorrências residuais de `ToolExecutorService`, 4 detectores de loop com template compartilhado. Structural Simplification (ARCH-023): pipeline de fixups de `exec_command.ts` como array nomeado (4 steps), gates de validação preservados como `if`s. Technical Cleanup (ARCH-025/026): fonte única confirmada. Hotspots: `GoalExecutionLoop.ts` 3529 linhas (T0: 3515), `AgentLoop.ts` 2913 linhas (T0: 2913, inalterado) |
 
 **Como reproduzir esta linha "Architecture Metrics":** os comandos variam por Sprint (cada ARCH tem seu próprio "Critérios de Aceite" verificável por grep/contagem — ver o card correspondente em `ARCHITECTURAL_BACKLOG.md`), não existe um único script universal ainda. Ver a seção "Regressão Funcional vs. Regressão Arquitetural" acima.
 
@@ -350,22 +351,30 @@ Validação
 - **Commit:** `216f039` — `fix(ARCH-007): expose real GoalAttempt outcome on PlanStep via lastAttemptOutcome`.
 - **Status:** 🟢 Concluída em 2026-07-17.
 
-### Sprint 2026-08-S14
+### Sprint 2026-08-S14 ⏸ Adiada — ver decisão abaixo
 - **Número:** S14
 - **Identificação Temporal:** 2026-08-S14
 - **Fase:** Execução Arquitetural
 - **Epic:** Single Source of Truth
 - **Card ARCH:** ARCH-009
 - **Objetivo:** `CycleResult`/`GoalAttempt` passam a estender `ToolResult` em vez de redeclarar `output`/`error`.
-- **Arquivos afetados:** `src/loop/agentLoopTypes.ts`, `src/loop/GoalTypes.ts`.
-- **Dependências:** CP01. Recomendado antes de S21 (ARCH-013) e S22 (ARCH-022) para reduzir churn.
-- **Checklist de execução:** padrão.
-- **Checklist de validação:** padrão (ênfase em `tsc --noEmit` — mudança de tipo com superfície ampla).
-- **Rollback:** reverter.
-- **Critérios de Aceite:** `output`/`error` declarados uma única vez.
-- **Definition of Done:** `tsc --noEmit` limpo, regressão 100%.
-- **Commit esperado:** 1 commit.
-- **Status:** ⚪ Não iniciada.
+- **Arquivos afetados:** nenhum tocado em código — só documentação (a Sprint foi adiada na Fase 1/2, antes de qualquer mudança).
+- **Dependências:** CP01. Recomendado antes de S21 (ARCH-013) e S22 (ARCH-022) para reduzir churn — **essa recomendação continua de pé como sequenciamento preferencial, mas não é bloqueio: ver nota de impacto downstream abaixo.**
+- **Premissa reverificada (Fase 1) — não se sustentou:** `CycleResult` não tem campo `error` próprio (o erro de uma falha vira `blocker.description`, nunca um campo separado) — já não são "os mesmos 2 campos redeclarados 3 vezes" como o card descrevia.
+- **Crítica da hipótese (Fase 2) — a prescrição literal é inviável, não só a contagem:**
+  1. `ToolResult.output` é obrigatório; `CycleResult.output`/`GoalAttempt.output` são opcionais e legitimamente ausentes em vários outcomes reais (`blocked`, `needs_auth`, `partial` sem dep). TypeScript não permite que uma interface herde um campo obrigatório como opcional — `extends ToolResult` não compila sem sintetizar um `output` sempre presente, mudando comportamento observável.
+  2. `GoalAttempt` mora em `src/shared/domainTypes.ts` desde o ARCH-004 (S02) — camada neutra, 0 imports, movida para lá justamente para que `memory/` não dependesse de `loop/`. `ToolResult` mora em `src/loop/agentLoopTypes.ts`. `GoalAttempt extends ToolResult` obrigaria `shared/` a importar de `loop/` — a direção exatamente proibida pelo Epic A (Boundary Enforcement), reintroduzindo numa Sprint deste programa uma violação que outra Sprint deste MESMO programa já fechou.
+  - Registro técnico completo: `docs/issues/008-arch009-extends-toolresult-breaks-typing-and-boundary.md`.
+- **Pesquisa de alternativas (Fase 3):** uma interface-base mínima `{ output?: string; error?: string }` em `shared/domainTypes.ts` (camada neutra), com `ToolResult` (loop/) e `CycleResult` (loop/) estendendo-a na direção correta (`loop/ → shared/`, já estabelecida) e `GoalAttempt` (shared/) estendendo-a diretamente — satisfaz o próprio Critério de Aceite do card ("estendem/**referenciam** `ToolResult`") sem os 2 problemas acima. Não implementada nesta Sprint por decisão do usuário — ver abaixo.
+- **Decisão do usuário (Fase 4/5 — síntese e validação):** em vez de decidir a forma final do tipo compartilhado isoladamente nesta Sprint, consolidar com outros achados de modelagem de tipo entre `loop/`/`shared/` (notadamente ARCH-024, mesma classe de problema em `ChannelContext`) numa revisão dedicada futura. Documento novo criado para essa consolidação: `docs/refatoracao-arquitetural-2026/REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`.
+- **Checklist de execução:** interrompido conscientemente após a Fase 2 (Crítica) — nenhuma implementação, nenhum build, nenhum teste executado, porque não houve mudança de código.
+- **Checklist de validação:** N/A — sem código tocado, os indicadores de build/tsc/regressão do Dashboard Executivo permanecem exatamente como estavam pós-S13.
+- **Rollback:** N/A — nenhuma mudança de código feita.
+- **Critérios de Aceite:** não avaliado — Sprint adiada antes da fase de implementação.
+- **Definition of Done:** N/A nesta forma. Redefinido quando a revisão consolidada (`REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`) for aberta.
+- **Impacto downstream (dependências citando S14/ARCH-009):** `S21` (ARCH-013), `S22` (ARCH-022) e `S24` (ARCH-020) citam "tipos consolidados primeiro" como sequenciamento recomendado. Nenhuma fica bloqueada — a dependência era sobre reduzir churn, não uma dependência funcional; todas podem prosseguir usando a forma atual (não consolidada) de `ToolResult`/`CycleResult`/`GoalAttempt` sem risco, per nota já adicionada em cada uma dessas 3 Sprints abaixo.
+- **Commit esperado:** 1 commit (só documentação — achado + adiamento, sem código).
+- **Status:** ⏸ Adiada em 2026-07-17, antes de codificar. Não é `🟢 Concluída` nem `⚪ Não iniciada` — categoria nova, ver `docs/refatoracao-arquitetural-2026/REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md` para reabertura futura.
 
 ### Sprint 2026-08-S15
 - **Número:** S15
@@ -545,7 +554,7 @@ Validação
 - **Card ARCH:** ARCH-013
 - **Objetivo:** Unificar o juiz de sucesso de step — fundir `evaluateAgentStepSuccess`/`escalateStepEvalToLLM` dentro de `StepSemanticValidator`.
 - **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (L2039-2118), `src/loop/StepSemanticValidator.ts`.
-- **Dependências:** CP02 (via S14/ARCH-009 — tipos consolidados primeiro).
+- **Dependências:** CP02 (via S14/ARCH-009 — tipos consolidados primeiro). **Atualização (S14 adiada, 2026-07-17): não bloqueia mais — a dependência era recomendação de sequenciamento para reduzir churn, não funcional. S21 pode prosseguir usando a forma atual (não consolidada) de `CycleResult`/`GoalAttempt` sem risco — ver `REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`.**
 - **Checklist de execução:** padrão.
 - **Checklist de validação:** padrão + **ambiente real obrigatório** (latência/custo real de LLM precisa ser observado, não só mockado).
 - **Rollback:** reverter.
@@ -627,7 +636,7 @@ Validação
 - **Card ARCH:** ARCH-022
 - **Objetivo:** Decompor `GoalExecutionLoop.executeStep()` (~375 linhas) e eliminar os 4 blocos duplicados de "registrar falha" via helper `recordFailedAttempt()`.
 - **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (L1605-1978).
-- **Dependências:** S16 (ARCH-005), S14 (ARCH-009), S21 (ARCH-013).
+- **Dependências:** S16 (ARCH-005), S14 (ARCH-009), S21 (ARCH-013). **Atualização (S14 adiada, 2026-07-17): não bloqueia mais — ver nota em S14 e S21; `REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`.**
 - **Checklist de execução:** padrão.
 - **Checklist de validação:** padrão + e2e sintético.
 - **Rollback:** reverter.
@@ -661,7 +670,7 @@ Validação
 - **Card ARCH:** ARCH-020
 - **Objetivo:** Decompor `GoalExecutionLoop.runLoopInternal()` (~1030 linhas) e o `switch(cycleResult.outcome)` (~400 linhas, ARCH-021 absorvido aqui) em métodos/fases nomeadas.
 - **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (L570-1602).
-- **Dependências:** S16 (ARCH-005), S03 (ARCH-006), S13 (ARCH-007), S17 (ARCH-008), S14 (ARCH-009).
+- **Dependências:** S16 (ARCH-005), S03 (ARCH-006), S13 (ARCH-007), S17 (ARCH-008), S14 (ARCH-009). **Atualização (S14 adiada, 2026-07-17): não bloqueia mais — ver nota em S14; `REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`.**
 - **Checklist de execução:** padrão + mapear TODOS os efeitos colaterais capturados por closure antes de extrair qualquer método (mandatório — sem teste de sistema que cubra a função inteira hoje).
 - **Checklist de validação:** padrão + **Validação Progressiva completa até etapa 4 — obrigatória.**
 - **Rollback:** reverter o commit (grande, atômico).
@@ -766,6 +775,7 @@ Cada Sprint concluída deve adicionar uma linha aqui, no formato:
 | S11 | 2026-07-17 | ~1 sessão | 52e8e3c | 2 (`loop/GoalPlanner.ts`, teste novo `S118`) | `tsc --noEmit` (limpo) + `npm run build` (limpo) + regressão (121/121, 120 + `S118` novo, 5 cenários) + verificação byte-a-byte adicional (3 de 4 blocos idênticos ao original, 1 normalização cosmética documentada) | 4 blocos de detecção de loop com texto quase idêntico gerado por código duplicado 4x | `buildLoopDirective()` como fonte única de FORMATAÇÃO para os 4; `extractExhaustedTools()` como fonte aditiva só onde o padrão realmente se aplica (1 de 4) | 0 causados por este ARCH | A premissa do card ("os 4 blocos são o mesmo padrão de detecção") não se sustentou — só 1 de 4 é genuinamente "tool falhou N vezes"; os outros 3 detectam categoria de blocker+texto, categoria de ação (não falha), e ocorrência única (não repetição). Forçar os 4 pra `extractExhaustedTools()` como o card sugeria teria quebrado 3 deles silenciosamente. Terceira Sprint seguida (depois de S08 e S10) onde a premissa original do backlog não resistiu à inspeção do código real — o padrão está claro o suficiente pra virar hábito permanente: nunca implementar a "troca de fonte" de um card sem antes confirmar que as duas fontes representam genuinamente a mesma coisa. |
 | S12 | 2026-07-17 | ~1 sessão | 88ede55 | 2 (`tools/exec_command.ts`, teste `S11` corrigido) | `tsc --noEmit` (limpo) + `npm run build` (limpo) + regressão (121/121) + os 4 arquivos citados no card (S11/S12/S13/S15) rodados individualmente e confirmados verdes | 4 transformações de `command` (marp/pandoc/PowerShell) como `if`s soltos em `execute()`, ordem só documentada em comentário | `COMMAND_FIXUP_PIPELINE` (array nomeado, 4 steps) + `applyFixup()`, chamado individualmente nos mesmos 4 pontos exatos | 1 achado e corrigido no ato — `S11` fazia asserção sobre `needsPowerShellWrap(` aparecer no texto literal de `execute()`, quebrou quando a chamada foi pro `condition()` do pipeline (mesma classe de achado do S52/S110/S34/S22) | Primeira Sprint com premissa quase inteiramente correta (a única correção: "~12 funções" incluía helpers de PowerShell não relacionados à cadeia de transformação sequencial, e 2 delas eram gates de validação, não transformações). Decisão consciente de NÃO usar um loop único: `isSearchCommand` precisa ler o comando antes do `wrap_powershell` rodar, ou grep/rg/find nunca mais seriam reconhecidos depois do embrulho em PowerShell — a "estrutura de dados explícita" que o card pede não exige forçar tudo num `for` só quando isso quebraria uma dependência de ordem real e documentada. |
 | S13 | 2026-07-17 | ~1 sessão | 216f039 | 3 (`shared/domainTypes.ts`, `loop/GoalExecutionLoop.ts`, teste novo `S119`) | `tsc --noEmit` (limpo) + `npm run build` (limpo) + regressão (122/122, 121 + `S119` novo, 4 cenários/8 assertions) | `PlanStep.status` hardcoded `'completed'` em `markStepDone()` independente do outcome real do `GoalAttempt` mais recente — divergência invisível fora de `goal.attempts` | `PlanStep.lastAttemptOutcome?: AttemptOutcome` novo, populado com o `reflectionOutcome` já calculado (antes só usado pela ReflectionMemory) | 0 causados por este ARCH | A premissa do card estava certa no resultado (`completed` com attempt `partial` acontece de verdade) mas errada na causa citada — o caminho de "downgrade semântico" que o card apontava (L1137-1202) nunca chega a chamar `markStepDone`, porque `cycleResult.outcome` já deixa de ser `'success'` antes do `switch`. O gatilho real é o caminho da Sprint 0.8 (heurística de baixa confiança), já coberto por outro teste (S85) só no nível do `GoalAttempt` — faltava propagar pro `PlanStep`. Reforça o padrão dos Sprints anteriores: o sintoma correto no card não garante que a causa citada seja a real; vale rastrear o fluxo de execução ponta a ponta antes de implementar, mesmo quando a conclusão final ("é preciso um fix aqui") já parecia óbvia. Decisão de design foi deliberadamente a opção de MENOR blast radius das duas oferecidas pelo card (não mexer no enum de `status`, usado por ~15 call sites) — em vez de mudar retry behavior por um caminho que nunca foi desenhado pra re-tentar. |
+| S14 | 2026-07-17 | ~1 sessão (adiada na Fase 1/2, sem implementação) | (pendente — commit de docs ao final desta Sprint) | 0 arquivos de código; 4 arquivos de doc (`docs/issues/008` novo, `REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md` novo, `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`, `ARCHITECTURAL_BACKLOG.md`) + este documento | N/A — nenhum código tocado, nada a rodar | `output`/`error` redeclarados independentemente em `ToolResult`/`CycleResult`/`GoalAttempt` (premissa do card) | Nenhuma mudança — Sprint adiada antes de codificar | 0 causados (nenhum código tocado), mas achado grave sobre a viabilidade do card em si | A prescrição literal do card (`extends ToolResult`) não compila — `output` obrigatório em `ToolResult` vs. opcional em `CycleResult`/`GoalAttempt`, TS não permite herdar obrigatório→opcional — e, se forçada via mudança de tipo, reintroduziria a violação de fronteira `shared/→loop/` que o ARCH-004 (S02) já corrigiu (`GoalAttempt` mora em `shared/domainTypes.ts` desde então). Primeira Sprint do programa em que a PRESCRIÇÃO do card, não só o diagnóstico/causa citada, se mostrou estruturalmente inviável (5º modo de falha, catalogado em `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`) — a auditoria original comparou nomes de campo entre 3 tipos sem verificar obrigatoriedade nem a camada física de cada um, que mudou desde a auditoria por causa de outra Sprint deste mesmo programa (ARCH-004). Por decisão do usuário, consolidado (não resolvido pontualmente) com achados correlatos de modelagem de tipo compartilhado — `REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`, que já inclui ARCH-024 (mesma classe de problema em `ChannelContext`) e `docs/issues/004`. |
 
 ---
 

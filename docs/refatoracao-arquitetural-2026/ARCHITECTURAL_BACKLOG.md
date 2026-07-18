@@ -166,8 +166,9 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Unitário + regressão + e2e sintético + ambiente real (matar o processo com um goal em `executing` e validar recovery).
 - **Métrica que deverá melhorar:** Single Sources.
 
-### ARCH-009 — `CycleResult`/`GoalAttempt` estenderem `ToolResult` em vez de redeclarar `output`/`error`
+### ARCH-009 — `CycleResult`/`GoalAttempt` estenderem `ToolResult` em vez de redeclarar `output`/`error` ⏸ Adiado (2026-07-17, Sprint S14) — consolidar em revisão de tipos futura
 - **Descrição:** `ToolResult` → `CycleResult` → `GoalAttempt` redeclaram os mesmos 2 campos (`output`, `error`) 3 vezes de forma independente. Qualquer campo novo de proveniência de tool exige decidir, cada vez, em qual das 3 camadas ele deveria viver.
+- **Adiado na S14, antes de qualquer código (Fase 1/2 da diretriz de arquitetura):** a premissa não se sustentou como descrita — `CycleResult` não tem campo `error` próprio (só `blocker.description`), e a prescrição literal (`extends ToolResult`) não compila: `ToolResult.output` é obrigatório, `CycleResult.output`/`GoalAttempt.output` são legitimamente opcionais, e TS não permite herdar um campo obrigatório como opcional. Mais grave: `GoalAttempt` mora em `shared/domainTypes.ts` desde o ARCH-004 (S02) — fazer `GoalAttempt extends ToolResult` (que mora em `loop/agentLoopTypes.ts`) reintroduziria a violação de fronteira `shared/→loop/` que aquele ARCH corrigiu. Registro técnico completo: `docs/issues/008-arch009-extends-toolresult-breaks-typing-and-boundary.md`. Por decisão do usuário, o tema foi consolidado (não resolvido pontualmente) com outros achados de modelagem de tipo compartilhado entre camadas — ver `docs/refatoracao-arquitetural-2026/REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`, que já registra a direção provável (tipo-base mínimo em `shared/domainTypes.ts`, estendido de `loop/` na direção correta) para quando a revisão consolidada for aberta.
 - **Arquivos afetados:** `src/loop/agentLoopTypes.ts` (`ToolResult`), `src/loop/GoalTypes.ts` (`CycleResult`, `GoalAttempt`).
 - **Origem (auditorias):** Auditoria II.
 - **Categoria:** Single Source of Truth.
@@ -175,7 +176,7 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Impacto:** Médio (reduz superfície de manutenção futura, não corrige bug hoje).
 - **Risco:** Médio — mudança de tipos com superfície ampla (todo consumidor de `CycleResult`/`GoalAttempt`).
 - **Esforço:** Médio.
-- **Dependências:** Recomendado antes de ARCH-013, ARCH-019, ARCH-020, ARCH-022 (todos constroem/consomem esses tipos — fazer isso cedo reduz churn nos refactors maiores).
+- **Dependências:** Recomendado antes de ARCH-013, ARCH-019, ARCH-020, ARCH-022 (todos constroem/consomem esses tipos — fazer isso cedo reduz churn nos refactors maiores). **Com o adiamento (S14): a recomendação era de sequenciamento (reduzir churn), não bloqueio funcional — S21/S22/S24 podem prosseguir usando a forma atual, não consolidada, dos 3 tipos.**
 - **Pré-requisitos:** Nenhum.
 - **Critérios de Aceite:** `output`/`error` são declarados uma única vez; `CycleResult`/`GoalAttempt` estendem/referenciam `ToolResult`.
 - **Definition of Done:** `tsc --noEmit` limpo, regressão 100%.
