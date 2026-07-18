@@ -42,7 +42,7 @@ import { StrategyDiversityGuard } from '../shared/StrategyDiversityGuard';
 import { resolvePath } from '../utils/crossPlatform';
 import { ensureDeliverySuccessCriteria, AUTO_DELIVERY_CRITERION_IDS } from './planning/ensureDeliverySuccessCriteria';
 import { resolveInstallCommand } from './planning/resolveInstallCommand';
-import { inferExpectedExtensions } from './planning/inferExpectedExtensions';
+import { inferExpectedExtensions, isExpectedDeliverableFile } from './planning/inferExpectedExtensions';
 import { MIN_DELIVERABLE_SIZE } from './planning/artifactContract';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext, ContextAwareTool } from './agentLoopTypes';
@@ -1072,6 +1072,9 @@ export class GoalExecutionLoop {
         const structuralBypass = pendingSendSteps.length > 0 && pendingSendSteps.every(s => {
             const fp = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
             if (!fp) return false;
+            // ARCH-012: mesma checagem de tipo de checkClaimsAgainstEvidence/evaluateCriteria —
+            // um arquivo do tamanho certo mas do tipo errado não prova entrega correta.
+            if (!isExpectedDeliverableFile(goal.userIntent, fp)) return false;
             try {
                 const { resolved } = resolvePath(fp);
                 return fs.statSync(resolved).size >= MIN_DELIVERABLE_SIZE;
@@ -3238,10 +3241,21 @@ Responda APENAS com JSON: {"success": true} ou {"success": false}`;
 
             switch (criterion.check) {
                 case 'tool_succeeded': {
-                    if (relevant.length > 0) {
+                    // ARCH-012: um send_document bem-sucedido de QUALQUER arquivo não prova que o
+                    // arquivo CERTO foi entregue — mesma checagem de tipo que já existe em
+                    // checkClaimsAgainstEvidence (fechando o bug de 09/07, .py aceito no lugar de
+                    // .pptx) precisa valer aqui também, senão este caminho mais rápido (roda ANTES
+                    // do LLM validador) esconde o mesmo problema que a checagem lenta pega.
+                    const typeMatched = criterion.tool === 'send_document'
+                        ? relevant.filter(a => isExpectedDeliverableFile(
+                            goal.userIntent,
+                            String(a.args?.['file_path'] ?? a.args?.['path'] ?? ''),
+                        ))
+                        : relevant;
+                    if (typeMatched.length > 0) {
                         criterion.status = 'met';
                         criterion.metAt = Date.now();
-                        criterion.evidence = relevant[relevant.length - 1].output?.slice(0, 120);
+                        criterion.evidence = typeMatched[typeMatched.length - 1].output?.slice(0, 120);
                     } else {
                         criterion.status = 'unverifiable';
                     }
@@ -3671,22 +3685,20 @@ OU
         const DELIVERY_TOOLS = new Set(['write', 'exec_command', 'send_document', 'send_audio']);
         let claimsChecked = 0;
 
-        // "Algo foi enviado" não é o mesmo que "o que foi pedido foi enviado". Reusa
-        // inferExpectedExtensions — o mesmo sinal estrutural já usado pelo deliverable_check
-        // logo abaixo neste arquivo — para exigir que o artefato de fato enviado via
-        // send_document tenha a extensão esperada pelo pedido original, em vez de aceitar
-        // qualquer arquivo que tenha passado por send_document/sentArtifacts na execução do
-        // goal. Reproduzido ao vivo em 09/07: um script .py (código-fonte, não executado
-        // ainda) foi enviado por engano via callback do DELIVERY-GUARD, e o evidence-checker
-        // aceitava isso como prova de "PPTX editável enviado" só porque sentArtifacts não
-        // estava vazio — mesma classe de bug que a fabricação de um .md de "resumo de
-        // entrega" em vez do arquivo pedido (goal_incomplete → decoy) — ver
-        // project_session_bugs_jul2026_ap. Quando o intent não permite inferir uma extensão
-        // esperada (goal sem tipo de arquivo específico), não restringe — mantém o
-        // comportamento permissivo original.
-        const expectedExts = inferExpectedExtensions(goal.userIntent);
+        // "Algo foi enviado" não é o mesmo que "o que foi pedido foi enviado". Exige que o
+        // artefato de fato enviado via send_document tenha a extensão esperada pelo pedido
+        // original, em vez de aceitar qualquer arquivo que tenha passado por
+        // send_document/sentArtifacts na execução do goal. Reproduzido ao vivo em 09/07: um
+        // script .py (código-fonte, não executado ainda) foi enviado por engano via callback do
+        // DELIVERY-GUARD, e o evidence-checker aceitava isso como prova de "PPTX editável
+        // enviado" só porque sentArtifacts não estava vazio — mesma classe de bug que a
+        // fabricação de um .md de "resumo de entrega" em vez do arquivo pedido (goal_incomplete
+        // → decoy) — ver project_session_bugs_jul2026_ap. ARCH-012: extraído para
+        // isExpectedDeliverableFile() (planning/inferExpectedExtensions.ts) — a mesma checagem
+        // agora também vale em evaluateCriteria()/structuralBypass, que antes não a tinham.
+        const expectedExts = inferExpectedExtensions(goal.userIntent); // só para o log abaixo
         const matchesExpectedType = (filePath: string): boolean =>
-            expectedExts.length === 0 || expectedExts.some(ext => filePath.toLowerCase().endsWith(ext));
+            isExpectedDeliverableFile(goal.userIntent, filePath);
 
         for (const rule of CLAIM_RULES) {
             if (!rule.pattern.test(llmSummary)) continue;

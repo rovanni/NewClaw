@@ -68,3 +68,21 @@ export function inferExpectedExtensions(userIntent: string): string[] {
 
     return exts;
 }
+
+/**
+ * Verifica se um arquivo já entregue/pronto-para-entrega corresponde ao tipo de arquivo que o
+ * pedido original do usuário esperava. Extraída de `GoalExecutionLoop.checkClaimsAgainstEvidence`
+ * (ARCH-012, RFC `RFC_ARCH-012_UnifiedDeliveryProof.md`) — o mesmo predicado passa a valer também
+ * em `evaluateCriteria()` (checklist determinístico, `tool_succeeded`/`send_document`) e no bypass
+ * estrutural de `runValidationPhase()` (arquivo já existe em disco), que antes checavam apenas
+ * tamanho/existência, nunca tipo — permitindo que o mesmo bug fechado em `checkClaimsAgainstEvidence`
+ * em 09/07/2026 (script .py aceito como prova de entrega de um .pptx pedido) se repetisse pelos
+ * outros 2 caminhos que decidem "entrega comprovada" sem passar por essa checagem.
+ *
+ * Permissivo por design, como `inferExpectedExtensions()`: quando o intent não permite inferir uma
+ * extensão esperada, não restringe.
+ */
+export function isExpectedDeliverableFile(userIntent: string, filePath: string): boolean {
+    const expectedExts = inferExpectedExtensions(userIntent);
+    return expectedExts.length === 0 || expectedExts.some(ext => filePath.toLowerCase().endsWith(ext));
+}
