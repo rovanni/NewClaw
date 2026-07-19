@@ -20,10 +20,11 @@ ser considerada concluída — não só passar na suíte de testes.
 
 ## Resultado final
 
-- **26/26 cards com desfecho registrado** — 24 concluídos (22 do encerramento original +
-  `ARCH-013` e `ARCH-008`, implementadas nas reaberturas de 2026-07-18/19), 1 formalmente adiado
-  (`ARCH-018`) e 1 encerrado como Won't Fix após reabertura (`ARCH-009`, 2026-07-18 — ver
-  `docs/issues/012`) — nenhum esquecido, todos com `docs/issues/NNN` correspondente.
+- **26/26 cards com desfecho registrado — nenhum adiado restante.** 25 concluídos (22 do
+  encerramento original + `ARCH-013`, `ARCH-008` e `ARCH-018`, todas implementadas nas
+  reaberturas de 2026-07-18/19) e 1 encerrado como Won't Fix após reabertura (`ARCH-009`,
+  2026-07-18 — ver `docs/issues/012`) — nenhum esquecido, todos com `docs/issues/NNN`
+  correspondente.
 - **3/3 RFCs concluídas, 0 rejeitadas** — 2 delas (`ARCH-012`, `ARCH-015`) aprovadas com escopo
   reduzido em relação ao card original, por decisão fundamentada em investigação real, não por
   precaução genérica.
@@ -79,14 +80,15 @@ fases de `docs/DIRETRIZ_ARQUITETURA_2026-07-13.md`, que continua em vigor. Ver `
 para a recomendação completa, incluindo o primeiro item de trabalho sugerido (re-auditar o Decision
 Ownership Map e o Code Smells original, não totalmente re-medidos célula a célula neste encerramento).
 
-**Já em andamento (2026-07-18/19):** 3 dos 4 cards adiados já foram reabertos sob esse próximo
-ciclo. `ARCH-009` (S14) foi o primeiro — a auditoria confirmou a premissa de julho, corrigiu o
-escopo da alternativa proposta e reavaliou Impacto/Risco/Esforço para Baixo/Baixo/Pequeno, mas o
-usuário decidiu encerrar o card sem implementar (Won't Fix) por falta de motivação real, não por
-inviabilidade técnica — ver `docs/issues/012-arch009-wontfix-decision.md`. `ARCH-013` (S21) foi o
-segundo — diferente do ARCH-009, aqui havia ganho real (elimina uma 2ª chamada de LLM redundante
-por step ambíguo, latência/custo mensuráveis, não só duplicação cosmética); implementado com um
-design revisado (`GoalStore.promoteLastAttemptToSuccess()`, contraparte do
+**Ciclo concluído (2026-07-18/19):** os 4 cards adiados na primeira rodada foram todos reabertos e
+resolvidos sob esse próximo ciclo — 3 implementados, 1 encerrado como Won't Fix. `ARCH-009` (S14)
+foi o primeiro — a auditoria confirmou a premissa de julho, corrigiu o escopo da alternativa
+proposta e reavaliou Impacto/Risco/Esforço para Baixo/Baixo/Pequeno, mas o usuário decidiu
+encerrar o card sem implementar (Won't Fix) por falta de motivação real, não por inviabilidade
+técnica — ver `docs/issues/012-arch009-wontfix-decision.md`. `ARCH-013` (S21) foi o segundo —
+diferente do ARCH-009, aqui havia ganho real (elimina uma 2ª chamada de LLM redundante por step
+ambíguo, latência/custo mensuráveis, não só duplicação cosmética); implementado com um design
+revisado (`GoalStore.promoteLastAttemptToSuccess()`, contraparte do
 `downgradeLastAttemptToPartial()` já existente), validado até etapa 4 com LLM real — ver
 `SPRINTS/S21-ARCH-013.md`. `ARCH-008` (S17) foi o terceiro — bug real confirmado (progresso
 resetava a cada `resumeGoal()`, quebrando inclusive a lógica de bônus de replan
@@ -94,5 +96,12 @@ resetava a cada `resumeGoal()`, quebrando inclusive a lógica de bônus de repla
 `buildInitialProgressModel()` reaproveitando `PlanStep.lastAttemptOutcome` (ARCH-007), validado
 via `GoalOrchestrator.resumeFromAuth()` real contra um goal real (achado lateral: o canal Web
 Dashboard não tem `workflowCallback` wired para aprovação de ações perigosas, contornado chamando
-o `AgentController` real diretamente) — ver `SPRINTS/S17-ARCH-008.md`. Resta 1 candidato
-formalmente adiado (`ARCH-018`) para a próxima rodada deste ciclo.
+o `AgentController` real diretamente) — ver `SPRINTS/S17-ARCH-008.md`. `ARCH-018` (S18) foi o
+quarto e último — o bypass estrutural (checagem direta de disco, área com histórico real de
+deadlock) virou um `CriterionCheck` novo em vez de um `if` solto, sem reaproveitar `file_exists`
+(mecanismo genuinamente diferente, preservado). **A etapa 4 pegou um achado real que nem o design
+nem os testes mockados previram**: o critério do bypass, sozinho, não bastava para fechar
+`all_met` quando o critério irmão de entrega (`tool_succeeded`) ainda estava pendente — causava 1
+replan desnecessário por goal, confirmado ao vivo e só depois corrigido (reconfirmado com
+`replans=0` numa 2ª rodada) — ver `SPRINTS/S18-ARCH-018.md`. **Com isso, os 26/26 cards do
+backlog original têm desfecho final definitivo — nenhum resta adiado.**

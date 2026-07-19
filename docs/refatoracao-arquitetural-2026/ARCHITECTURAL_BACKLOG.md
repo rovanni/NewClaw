@@ -338,22 +338,23 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Regressão completa; se conectar, teste de circuit breaker abrindo sob falhas reais.
 - **Métrica que deverá melhorar:** Decision Owners, God Methods indiretamente (remove uma opção de caminho a considerar).
 
-### ARCH-018 — `evaluateCriteria` absorve `structuralBypass` como `CriterionCheck` ⏸ Adiado (2026-07-18, Sprint S18) — premissa presumia equivalência semântica que não existe
+### ARCH-018 — `evaluateCriteria` absorve `structuralBypass` como `CriterionCheck` ✅ Concluído (2026-07-19, reaberto e implementado após adiamento original da Sprint S18)
 - **Descrição:** `structuralBypass` (`GoalExecutionLoop.ts` L634-669) é um desvio de código solto dentro de `runLoopInternal` que faz `fs.statSync` direto para decidir "já pode considerar entregue". `file_exists` já existe como `CriterionCheck` — expressar o bypass como mais um critério elimina o `if` ad-hoc.
-- **Adiado na S18, antes de codificar (Fase 1 da diretriz de arquitetura):** a implementação real de `file_exists` (`evaluateCriteria()`) checa se existe um `GoalAttempt` bem-sucedido com `output` não-vazio — NÃO consulta o disco. `structuralBypass` faz `fs.statSync()` direto no disco, sem depender de nenhum attempt, exatamente porque o Bug 2 original (`project_session_bugs_jul2026_ap`) era sobre arquivos que já existiam ANTES do goal começar, sem attempt nenhum como evidência. Reaproveitar `file_exists` literalmente reintroduziria o deadlock que `structuralBypass` foi criado para fechar. Achado estrutural adicional: `structuralBypass` deriva alvos dinamicamente do plano atual (muda a cada replan); `successCriteria` é uma lista estática — encaixar um no outro exigiria sincronizar as duas fontes a cada replan, um risco novo, não uma simplificação. Registro técnico completo, incluindo a alternativa de design (novo `CriterionCheck` dedicado, sem reaproveitar `file_exists`): `docs/issues/010-arch018-file-exists-checks-attempts-not-disk.md`. 2ª instância confirmada do modo 3 da retrospectiva (equivalência semântica assumida sem verificação — mesmo modo de S10/S11). Por decisão do usuário, adiado sem consolidação com outro tema.
-- **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (L634-669, L2840-2943 `evaluateCriteria`).
+- **Adiado originalmente na S18 (2026-07-18), antes de codificar (Fase 1 da diretriz de arquitetura):** a implementação real de `file_exists` (`evaluateCriteria()`) checa se existe um `GoalAttempt` bem-sucedido com `output` não-vazio — NÃO consulta o disco. `structuralBypass` faz `fs.statSync()` direto no disco, sem depender de nenhum attempt, exatamente porque o Bug 2 original (`project_session_bugs_jul2026_ap`) era sobre arquivos que já existiam ANTES do goal começar, sem attempt nenhum como evidência. Reaproveitar `file_exists` literalmente reintroduziria o deadlock que `structuralBypass` foi criado para fechar. 2ª instância confirmada do modo 3 da retrospectiva (equivalência semântica assumida sem verificação — mesmo modo de S10/S11).
+- **Executado como (reabertura 2026-07-19):** NÃO reaproveitou `file_exists` (a checagem continua distinta, disco vs. attempt). Novo `CriterionCheck: 'pending_send_verified_on_disk'`, corpo copiado do `structuralBypass` original; `ensureDeliverySuccessCriteria()` estendida pra injetar esse critério reservado sempre que `send_document` está no plano — resolve a ressalva "dinâmico vs. estático" de julho ao reaproveitar o mesmo padrão já usado por `tool_succeeded` (critério estático, avaliação dinâmica contra estado que cresce). `if` solto removido de `runValidationPhase()`. **Achado real de etapa 4 (não previsto no design, só visível ao vivo):** o critério irmão `tool_succeeded`/`send_document` nunca pode ficar `met` antes do bypass (envio é diferido) — sem tratar isso, `evaluateCriteria()` nunca fechava `all_met`, causando 1 replan desnecessário por goal (confirmado ao vivo, depois corrigido e reconfirmado com `replans=0`). tsc+regressão limpos (131/131, `S128` novo; `S30`/`S125.6` corrigidos por achado colateral). Detalhe completo: `SPRINTS/S18-ARCH-018.md`, `docs/issues/010`.
+- **Arquivos afetados:** `src/shared/domainTypes.ts` (`CriterionCheck`), `src/loop/planning/ensureDeliverySuccessCriteria.ts`, `src/loop/GoalExecutionLoop.ts` (`evaluateCriteria`, `runValidationPhase`).
 - **Origem (auditorias):** Auditoria I (RE4).
 - **Categoria:** Decision Ownership.
 - **Classificação:** Refactor Local.
 - **Impacto:** Médio.
-- **Risco:** Médio — é o caminho que já teve um bug real de deadlock documentado (jul/2026, goals de "reenviar arquivo existente").
+- **Risco:** Médio — é o caminho que já teve um bug real de deadlock documentado (jul/2026, goals de "reenviar arquivo existente"); confirmado que a área continua sensível (achado do replan desnecessário só apareceu em ambiente real).
 - **Esforço:** Médio.
-- **Dependências:** ARCH-005 (fonte única de artefatos entregues) deve vir antes.
-- **Pré-requisitos:** Reler o histórico do bug de deadlock antes de tocar (contexto já documentado em memória do projeto).
-- **Critérios de Aceite:** Nenhum `if` solto de bypass fora de `evaluateCriteria`.
-- **Definition of Done:** Validação Progressiva completa até etapa 4 (é a área do deadlock já documentado).
+- **Dependências:** ARCH-005 (fonte única de artefatos entregues) — cumprida.
+- **Pré-requisitos:** Reler o histórico do bug de deadlock antes de tocar — cumprido.
+- **Critérios de Aceite:** cumprido — nenhum `if` solto de bypass fora de `evaluateCriteria`.
+- **Definition of Done:** cumprido — Validação Progressiva completa até etapa 4 (é a área do deadlock já documentado), incluindo 1 ciclo de descoberta-e-correção de achado real.
 - **Rollback:** Reverter.
-- **Testes obrigatórios:** Unitário (replicar o cenário do bug de deadlock original como regressão) + e2e + ambiente real.
+- **Testes obrigatórios:** cumprido — unitário (`S128`) + regressão (131/131) + ambiente real (2 rodadas).
 - **Métrica que deverá melhorar:** Decision Owners, Single Sources.
 
 ---

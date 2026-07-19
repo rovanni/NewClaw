@@ -1,5 +1,19 @@
 # ARCH-018 — `CriterionCheck: 'file_exists'` checa output de attempt, não o disco; `structuralBypass` não pode ser plugado nele literalmente
 
+## Resolvido em 2026-07-19 (reabertura de S18, pós-encerramento do programa — último item do ciclo)
+
+Este achado foi **resolvido**, não permanece como pendência. A alternativa desenhada abaixo (novo
+`CriterionCheck` dedicado, sem reaproveitar `file_exists`) foi implementada. A ressalva "restaria
+resolver a sincronização dinâmica-vs-estática" foi reavaliada e não se sustentou: o padrão de
+critério estático + avaliação dinâmica já existe e já funciona para `tool_succeeded` (consulta
+`goal.attempts`, que também cresce entre avaliações) — o critério novo (`pending_send_verified_on_disk`,
+consultando `goal.currentPlan` dinamicamente) segue a mesma arquitetura. Achado adicional só visível
+em ambiente real (não no design nem nos testes mockados): o critério irmão `tool_succeeded`/
+`send_document` nunca pode ficar `met` antes do bypass (envio diferido) — sem tratar isso, causava
+1 replan desnecessário por goal; corrigido e reconfirmado ao vivo (`replans=0`). Detalhe completo:
+`docs/refatoracao-arquitetural-2026/SPRINTS/S18-ARCH-018.md`. O texto abaixo é preservado como
+registro histórico do achado original de julho.
+
 ## Contexto
 
 Achado durante a Sprint `2026-08-S18` (ARCH-018, `MASTER_EXECUTION_PLAN.md`), na etapa de
