@@ -225,7 +225,17 @@ console.log('\n=== S125.6 [controle] — structuralBypass: arquivo existente do 
             sessionKey: 'test:s125', conversationId: 'conv-s125-6',
             userIntent: PPTX_INTENT, objective: PPTX_INTENT, status: 'executing',
             attempts: [], blockers: [], toolsTried: [], strategiesTried: [],
-            successCriteria: [], sentArtifacts: [],
+            // ARCH-018: em produção, ensureDeliverySuccessCriteria() já teria injetado este
+            // critério ao adotar o plano (executeGoal()/adoptNewPlan(), sempre chamados antes de
+            // runLoop()) — este teste chama runLoopInternal() direto, pulando a fase de
+            // planejamento, então precisa simular esse critério manualmente.
+            successCriteria: [{
+                id: AUTO_DELIVERY_CRITERION_IDS.structural_bypass_send_document,
+                description: 'Arquivo(s) pendente(s) de envio já existem no disco',
+                check: 'pending_send_verified_on_disk',
+                status: 'pending',
+            }],
+            sentArtifacts: [],
             currentPlan: [{ id: 'step_1', description: 'enviar apresentação', toolName: 'send_document', toolArgs: { file_path: 'aula.pptx' }, status: 'pending' } as PlanStep],
             retryBudget: 3, replanBudget: 0, confidence: 0.9, requiresAuth: false, authorizationScope: [],
             expiresAt: Date.now() + 3_600_000,

@@ -30,6 +30,7 @@ import { PlanStep, SuccessCriterion } from '../GoalTypes';
 export const AUTO_DELIVERY_CRITERION_IDS = {
     send_document: 'auto_delivery_send_document',
     send_audio: 'auto_delivery_send_audio',
+    structural_bypass_send_document: 'auto_structural_bypass_send_document',
 } as const;
 
 const DELIVERY_TOOLS = ['send_document', 'send_audio'] as const;
@@ -44,7 +45,8 @@ export function ensureDeliverySuccessCriteria(
     // steps finais ATUAIS, nunca acumulados/duplicados entre chamadas (plano inicial, cada replan).
     const kept = successCriteria.filter(c =>
         c.id !== AUTO_DELIVERY_CRITERION_IDS.send_document &&
-        c.id !== AUTO_DELIVERY_CRITERION_IDS.send_audio
+        c.id !== AUTO_DELIVERY_CRITERION_IDS.send_audio &&
+        c.id !== AUTO_DELIVERY_CRITERION_IDS.structural_bypass_send_document
     );
 
     const result = [...kept];
@@ -59,6 +61,19 @@ export function ensureDeliverySuccessCriteria(
             description: `Entrega confirmada via ${tool}`,
             check: 'tool_succeeded',
             tool,
+            status: 'pending',
+        });
+    }
+
+    // ARCH-018: mesmo padrão acima, para o critério de bypass estrutural (arquivo já pronto no
+    // disco para um send_document ainda pendente) — só faz sentido quando send_document está no
+    // plano final; a avaliação em si (evaluateCriteria(), case 'pending_send_verified_on_disk')
+    // decide dinamicamente, a cada chamada, se os pendentes ATUAIS já existem no disco.
+    if (stepTools.has('send_document')) {
+        result.push({
+            id: AUTO_DELIVERY_CRITERION_IDS.structural_bypass_send_document,
+            description: 'Arquivo(s) pendente(s) de envio já existem no disco',
+            check: 'pending_send_verified_on_disk',
             status: 'pending',
         });
     }

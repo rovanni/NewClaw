@@ -78,11 +78,16 @@ console.log('\n=== S30-2 — plano com send_document + LLM sem successCriteria �
     assert(r.some(c => c.id === AUTO_DELIVERY_CRITERION_IDS.send_document && c.check === 'tool_succeeded' && c.tool === 'send_document'), 'critério de send_document injetado', r);
 }
 
-console.log('\n=== S30-3 — plano com ambos → injeta exatamente dois critérios ===');
+console.log('\n=== S30-3 — plano com ambos → injeta dois tool_succeeded + 1 bypass estrutural (ARCH-018, send_document) ===');
 {
     const r = ensureDeliverySuccessCriteria([step('s1', 'send_document'), step('s2', 'send_audio')], []);
-    assert(r.length === 2, `exatamente 2 critérios (obtido: ${r.length})`, r);
-    assert(r.some(c => c.tool === 'send_document') && r.some(c => c.tool === 'send_audio'), 'um de cada tool', r);
+    // ARCH-018 (S18/reabertura): send_document agora também ganha o critério
+    // pending_send_verified_on_disk (bypass estrutural) — independente do tool_succeeded, os
+    // dois coexistem (perguntas diferentes: "a tool rodou com sucesso" vs. "o arquivo pendente
+    // já existe pronto no disco"). send_audio não tem bypass equivalente (fora do escopo do card).
+    assert(r.length === 3, `3 critérios: send_document(tool_succeeded) + send_audio(tool_succeeded) + send_document(pending_send_verified_on_disk) (obtido: ${r.length})`, r);
+    assert(r.some(c => c.tool === 'send_document' && c.check === 'tool_succeeded') && r.some(c => c.tool === 'send_audio'), 'um tool_succeeded de cada tool', r);
+    assert(r.some(c => c.check === 'pending_send_verified_on_disk'), 'bypass estrutural de send_document presente', r);
 }
 
 console.log('\n=== S30-4 — LLM já forneceu critério de send_audio equivalente → não duplica ===');
@@ -93,11 +98,17 @@ console.log('\n=== S30-4 — LLM já forneceu critério de send_audio equivalent
     assert(r[0].id === 'llm_c1', 'preserva o id/descrição fornecidos pela LLM, não sobrescreve', r);
 }
 
-console.log('\n=== S30-5 — LLM já forneceu critério de send_document equivalente → não duplica ===');
+console.log('\n=== S30-5 — LLM já forneceu critério de send_document equivalente → não duplica o tool_succeeded, mas o bypass (ARCH-018) é independente ===');
 {
     const llmCriterion: SuccessCriterion = { id: 'llm_c2', description: 'doc enviado', check: 'tool_succeeded', tool: 'send_document', status: 'pending' };
     const r = ensureDeliverySuccessCriteria([step('s1', 'send_document')], [llmCriterion]);
-    assert(r.length === 1 && r[0].id === 'llm_c2', 'preserva o critério da LLM sem duplicar', r);
+    // O dedup de "alreadyCovered" só vale para check==='tool_succeeded' — o bypass estrutural
+    // (pending_send_verified_on_disk) responde uma pergunta diferente (arquivo já pronto no
+    // disco vs. tool rodou com sucesso) e nunca é "equivalente" ao critério da LLM, então
+    // continua sendo injetado ao lado dele.
+    assert(r.length === 2, `2 critérios: o da LLM preservado sem duplicar + o bypass estrutural novo (obtido: ${r.length})`, r);
+    assert(r.some(c => c.id === 'llm_c2'), 'preserva o id/descrição fornecidos pela LLM, não sobrescreve', r);
+    assert(r.some(c => c.check === 'pending_send_verified_on_disk'), 'bypass estrutural presente ao lado do critério da LLM', r);
 }
 
 console.log('\n=== S30-6 — plano só com write → não injeta delivery ===');

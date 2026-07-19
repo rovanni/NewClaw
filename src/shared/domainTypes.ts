@@ -55,16 +55,24 @@ export interface GoalBlocker {
 /**
  * Tipo de verificação determinística que prova que um critério foi cumprido.
  *
- * - tool_succeeded      → algum attempt com toolName teve result='success'
- * - output_not_contains → o output de um attempt bem-sucedido NÃO contém `value`
- * - output_contains     → o output de um attempt bem-sucedido contém `value`
- * - file_exists         → exec_command retornou output não-vazio (arquivo encontrado)
+ * - tool_succeeded            → algum attempt com toolName teve result='success'
+ * - output_not_contains       → o output de um attempt bem-sucedido NÃO contém `value`
+ * - output_contains           → o output de um attempt bem-sucedido contém `value`
+ * - file_exists               → exec_command retornou output não-vazio (arquivo encontrado)
+ * - pending_send_verified_on_disk → ARCH-018: todo step `send_document` ainda pendente do plano
+ *   atual aponta para um arquivo que já existe no disco, com tamanho e tipo esperados — checagem
+ *   DIRETA de disco (`fs.statSync`), sem depender de nenhum `GoalAttempt` como evidência
+ *   indireta (diferente de `file_exists`, que checa attempt — não intercambiáveis, ver
+ *   `docs/issues/010-arch018-file-exists-checks-attempts-not-disk.md`). Alvo dinâmico por
+ *   design (reavalia `goal.currentPlan` a cada chamada, mesmo padrão já usado por
+ *   `tool_succeeded` contra `goal.attempts`, que também cresce entre avaliações).
  */
 export type CriterionCheck =
     | 'tool_succeeded'
     | 'output_not_contains'
     | 'output_contains'
-    | 'file_exists';
+    | 'file_exists'
+    | 'pending_send_verified_on_disk';
 
 export interface SuccessCriterion {
     id: string;

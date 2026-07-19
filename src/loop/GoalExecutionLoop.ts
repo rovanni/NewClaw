@@ -1029,9 +1029,10 @@ export class GoalExecutionLoop {
 
     /**
      * ARCH-020 (S24, Incremento 2): dispara quando `readyToValidate` é true — todos os steps
-     * pendentes já foram executados (ou só resta `send_document`). Roda a validação de
-     * conclusão (LLM ou bypass estrutural) e delega para `runValidationAchievedPhase()` ou
-     * `runValidationNotAchievedPhase()` conforme o resultado. Extraído sem mudar lógica.
+     * pendentes já foram executados (ou só resta `send_document`). Roda `validateGoalCompletion()`
+     * (checklist determinístico — incluindo o bypass estrutural, ARCH-018 — e, se necessário,
+     * LLM) e delega para `runValidationAchievedPhase()` ou `runValidationNotAchievedPhase()`
+     * conforme o resultado.
      */
     private async runValidationPhase(
         goal: Goal,
@@ -1054,46 +1055,17 @@ export class GoalExecutionLoop {
             ? goal.roadmap[goal.currentMilestoneIndex ?? 0]
             : undefined;
 
-        // Bypass estrutural: quando o único trabalho restante é despachar send_document
-        // para arquivo(s) que já existem no disco com tamanho substantivo, o validador por
-        // LLM nunca consegue confirmar "foi enviado" — o envio só acontece DEPOIS de
-        // achieved=true (Fix #1 acima). Isso é um impasse estrutural para goals cujo único
-        // propósito é reenviar um arquivo já existente (sem nenhum 'write' neste goal como
-        // evidência de criação). Reproduzido ao vivo em 09/07 (goal "me envia a aula ..."):
-        // esgotou o replanBudget tentando reenviar um .pptx já pronto, e no desespero o
-        // planner criou um arquivo de "resumo de entrega" fabricado só para ter evidência de
-        // 'write' e passar no validador — ver project_session_bugs_jul2026_ap na memória.
-        // Verificação estrutural (arquivo existe, não é placeholder) é mais confiável aqui
-        // do que o julgamento literal do LLM sobre um evento que ainda não aconteceu.
-        const pendingSendSteps = this.getPendingSteps(goal.currentPlan, 'send_document');
-        const structuralBypass = pendingSendSteps.length > 0 && pendingSendSteps.every(s => {
-            const fp = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
-            if (!fp) return false;
-            // ARCH-012: mesma checagem de tipo de checkClaimsAgainstEvidence/evaluateCriteria —
-            // um arquivo do tamanho certo mas do tipo errado não prova entrega correta.
-            if (!isExpectedDeliverableFile(goal.userIntent, fp)) return false;
-            try {
-                const { resolved } = resolvePath(fp);
-                return fs.statSync(resolved).size >= MIN_DELIVERABLE_SIZE;
-            } catch {
-                return false;
-            }
-        });
-
-        let validation: Awaited<ReturnType<typeof this.validateGoalCompletion>>;
-        if (structuralBypass) {
-            const artifactList = pendingSendSteps
-                .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
-                .join(',');
-            log.info(
-                `[VALIDATION-BYPASS] goal=${goal.id}` +
-                ` reason=only_pending_is_verified_send_document` +
-                ` artifacts="${artifactList}"`
-            );
-            validation = { achieved: true, summary: 'Arquivo(s) já existente(s) no workspace, pronto(s) para envio.' };
-        } else {
-            validation = await this.validateGoalCompletion(goal, activeMilestone, state);
-        }
+        // ARCH-018 (S18/reabertura): o bypass estrutural (goal cujo único trabalho restante é
+        // despachar send_document para arquivo(s) que já existem no disco — o validador por LLM
+        // nunca confirma "foi enviado" porque o envio só acontece DEPOIS de achieved=true, Fix
+        // #1 acima; reproduzido ao vivo em 09/07, ver project_session_bugs_jul2026_ap) deixou de
+        // ser um `if` solto aqui — agora é o critério `pending_send_verified_on_disk`
+        // (auto-injetado por `ensureDeliverySuccessCriteria`, avaliado em `evaluateCriteria()`),
+        // consultado como qualquer outro critério dentro de `validateGoalCompletion()`. Efeito
+        // colateral desejado (não um bug): se o goal tiver OUTROS critérios ainda não
+        // cumpridos, eles agora são considerados — antes, o bypass pulava
+        // `validateGoalCompletion()` inteiro e os ignorava.
+        const validation = await this.validateGoalCompletion(goal, activeMilestone, state);
 
         if (validation.achieved) {
             return this.runValidationAchievedPhase(
@@ -3318,6 +3290,59 @@ export class GoalExecutionLoop {
                         criterion.status = 'met';
                         criterion.metAt = Date.now();
                         criterion.evidence = found.output?.slice(0, 80);
+                    } else {
+                        criterion.status = 'unverifiable';
+                    }
+                    break;
+                }
+                case 'pending_send_verified_on_disk': {
+                    // ARCH-018 (S18/reabertura): mesma lógica que vivia como `structuralBypass`
+                    // solto em `runValidationPhase` — checagem DIRETA de disco (`fs.statSync`),
+                    // não depende de nenhum `GoalAttempt`. Existe pra fechar o deadlock histórico
+                    // (goal cujo único trabalho restante é reenviar um arquivo que já existia
+                    // ANTES do goal começar, sem nenhum `write`/`exec_command` como evidência —
+                    // `file_exists`/`tool_succeeded` nunca teriam attempt pra consultar).
+                    const pendingSendSteps = this.getPendingSteps(goal.currentPlan, 'send_document');
+                    const allVerified = pendingSendSteps.length > 0 && pendingSendSteps.every(s => {
+                        const fp = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
+                        if (!fp) return false;
+                        if (!isExpectedDeliverableFile(goal.userIntent, fp)) return false;
+                        try {
+                            const { resolved } = resolvePath(fp);
+                            return fs.statSync(resolved).size >= MIN_DELIVERABLE_SIZE;
+                        } catch {
+                            return false;
+                        }
+                    });
+                    if (allVerified) {
+                        const artifactList = pendingSendSteps
+                            .map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? ''))
+                            .join(',');
+                        log.info(
+                            `[VALIDATION-BYPASS] goal=${goal.id}` +
+                            ` reason=only_pending_is_verified_send_document` +
+                            ` artifacts="${artifactList}"`
+                        );
+                        criterion.status = 'met';
+                        criterion.metAt = Date.now();
+                        criterion.evidence = artifactList.slice(0, 120);
+                        // Achado real de etapa 4 (2026-07-19): o critério irmão
+                        // `tool_succeeded`/`send_document` (injetado por ensureDeliverySuccessCriteria
+                        // sempre que send_document está no plano) NUNCA pode ficar 'met' antes deste
+                        // bypass — o envio é diferido até achieved=true (Fix #1), então nenhum
+                        // attempt de send_document existe ainda para satisfazê-lo. Sem esta correção,
+                        // `allMet` abaixo nunca fecha (fica travado em "some_pending"), caindo pro
+                        // validador LLM, que corretamente vê que nada foi enviado ainda e replaneja —
+                        // confirmado ao vivo: replan real desnecessário antes deste fix. O bypass
+                        // estrutural também satisfaz esse critério irmão, mesma evidência.
+                        const siblingDelivery = updated.find(c =>
+                            c.check === 'tool_succeeded' && c.tool === 'send_document' && c.status !== 'met'
+                        );
+                        if (siblingDelivery) {
+                            siblingDelivery.status = 'met';
+                            siblingDelivery.metAt = Date.now();
+                            siblingDelivery.evidence = artifactList.slice(0, 120);
+                        }
                     } else {
                         criterion.status = 'unverifiable';
                     }
