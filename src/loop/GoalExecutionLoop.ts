@@ -1705,6 +1705,20 @@ export class GoalExecutionLoop {
                         },
                     };
                 }
+            } else if (semanticValidation.shouldPromoteToConfidentSuccess) {
+                // ARCH-013 (S21/reabertura): contraparte positiva do downgrade acima — corrige
+                // retroativamente um attempt 'partial' (heurística não-confiante) para 'success'
+                // quando a validação semântica confirma relevância com confiança suficiente.
+                // Substitui a antiga 2ª chamada de LLM (`escalateStepEvalToLLM`) sem adicionar
+                // nenhuma chamada nova: `semanticValidator.validate()` já rodava aqui de qualquer
+                // forma para todo step com outcome='success'.
+                log.info(
+                    `[SEMANTIC-PROMOTE] goal=${goal.id} step=${pendingStep.id}` +
+                    ` tool=${pendingStep.toolName} confidence=${semanticValidation.confidence.toFixed(2)}` +
+                    ` reason="${(semanticValidation.reason ?? '').slice(0, 100)}"` +
+                    ` action=promote_to_confident_success`
+                );
+                this.goalStore.promoteLastAttemptToSuccess(goal.id, pendingStep.id);
             } else if (semanticValidation.result === 'mismatch') {
                 log.info(
                     `[SEMANTIC-MISMATCH] goal=${goal.id} step=${pendingStep.id}` +
@@ -2228,20 +2242,16 @@ export class GoalExecutionLoop {
 
         // Heurística determinística avalia se o step teve sucesso
         const stepEval = this.evaluateAgentStepSuccess(step, goal.objective, text);
-        let finalSuccess = stepEval.success;
         // Sprint 0.8 (achados L10/L11/L14/L15): 'success_signal_detected' é o único
         // motivo de sucesso de alta confiança da heurística (sinal explícito no texto).
         // 'substantial_response' (fallback conservador "resposta longa, assume sucesso")
-        // NÃO é confiável — vira 'partial' abaixo, a menos que a escalada ao LLM confirme.
-        let stepSuccessConfident = stepEval.reason === 'success_signal_detected';
-        if (stepEval.shouldEscalateToLLM) {
-            log.info(`[GoalStep] heuristic inconclusive (conf=${stepEval.confidence.toFixed(2)}) — escalating to LLM`);
-            const escalation = await this.escalateStepEvalToLLM(step, goal.objective, text);
-            finalSuccess = escalation.success;
-            stepSuccessConfident = escalation.confident;
-        }
+        // NÃO é confiável — vira 'partial' abaixo. ARCH-013 (S21/reabertura): a confirmação de
+        // confiança para esse caso não-confiável não vem mais de uma 2ª chamada de LLM aqui —
+        // vem de `StepSemanticValidator.shouldPromoteToConfidentSuccess`, em `runValidationPhase`
+        // (roda de qualquer forma para todo step 'success', LLM não é mais duplicado).
+        const stepSuccessConfident = stepEval.reason === 'success_signal_detected';
         const stepEvalForAttempt = { confidence: stepEval.confidence, reason: stepEval.reason };
-        const toolResult = { success: finalSuccess, output: text };
+        const toolResult = { success: stepEval.success, output: text };
 
         return { earlyReturn: false, toolResult, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls };
     }
@@ -2395,21 +2405,30 @@ export class GoalExecutionLoop {
         );
     }
 
-    // ── Step success evaluator (heurística + LLM escalation) ───────────────────
+    // ── Step success evaluator (heurística determinística) ─────────────────────
 
     /**
      * Avalia via heurística determinística se a resposta do AgentLoop indica sucesso.
-     * Retorna StepEvaluation com confidence e flag de escalation.
+     * Retorna StepEvaluation com confidence.
      *
-     * Escalation para LLM ocorre SOMENTE quando:
-     *   - confidence < 0.6 (sinal ambíguo — output misto de erro e sucesso)
-     *   - ferramenta desconhecida sem sinal claro
+     * ARCH-013 (S21/reabertura): a 2ª chamada de LLM que existia aqui (`escalateStepEvalToLLM`,
+     * disparada só na zona ambígua 15-200 chars) foi removida — `StepSemanticValidator`
+     * (chamado depois, em `runValidationPhase`, incondicionalmente para todo step com
+     * `outcome==='success'`) já faz uma pergunta correlata ("o output endereça a intenção do
+     * step?") com seu próprio fast path + LLM. Manter as duas era pagar 2 round-trips de LLM
+     * pro mesmo step ambíguo. A zona ambígua (antes: success=false + shouldEscalateToLLM) foi
+     * fundida com o fallback conservador de "resposta longa sem sinal claro" (sempre existiu,
+     * sempre success=true/confidence=0.70/não-confiante) — `stepSuccessConfident` continua
+     * exigindo um sinal explícito (`success_signal_detected`); a confirmação de confiança para
+     * o caso ambíguo passa a vir de `StepSemanticValidator.shouldPromoteToConfidentSuccess`
+     * (`GoalStore.promoteLastAttemptToSuccess`), não mais daqui.
      *
      * Ordem de precedência:
      *  1. Sinais explícitos de falha → success=false, conf=0.95
      *  2. Sinais explícitos de sucesso → success=true, conf=0.90
-     *  3. Resposta substancial sem sinal claro → success=true, conf=0.50 → escalation
-     *  4. Resposta vazia/curta → success=false, conf=0.85
+     *  3. Resposta vazia/curta → success=false, conf=0.85
+     *  4. Qualquer outra resposta não-trivial sem sinal claro → success=true, conf=0.70,
+     *     não-confiante (promoção fica a cargo do StepSemanticValidator)
      */
     private evaluateAgentStepSuccess(
         step: PlanStep,
@@ -2438,58 +2457,11 @@ export class GoalExecutionLoop {
             return { success: false, confidence: 0.85, reason: 'empty_response' };
         }
 
-        // Zona ambígua — resposta substancial sem sinal claro
-        // Escalation para LLM só quando: output >= 15 chars mas sem sinal direto
-        const isAmbiguous = response.trim().length >= 15 && response.trim().length < 200;
-        if (isAmbiguous) {
-            log.debug(`[GoalLoop] step-heuristic: ambiguous (${response.trim().length} chars) → escalation tool=${step.toolName ?? 'agentloop'}`);
-            return { success: false, confidence: 0.50, reason: 'ambiguous_output', shouldEscalateToLLM: true };
-        }
-
-        // Resposta longa sem sinal de falha → assume progresso (conservador)
-        log.debug(`[GoalLoop] step-heuristic: long response — assuming success tool=${step.toolName ?? 'agentloop'}`);
+        // Qualquer outra resposta não-trivial sem sinal claro (inclui a antiga "zona ambígua"
+        // 15-200 chars, fundida aqui — ARCH-013) → assume progresso (conservador), não-confiante;
+        // StepSemanticValidator decide depois se promove a 'success' confiante.
+        log.debug(`[GoalLoop] step-heuristic: no explicit signal — assuming progress, unconfirmed tool=${step.toolName ?? 'agentloop'}`);
         return { success: true, confidence: 0.70, reason: 'substantial_response' };
-    }
-
-    /**
-     * Escalation path: usado apenas quando a heurística retorna confidence < 0.6.
-     * Chama LLM com prompt compacto (sem system prompt completo) para decidir sucesso/falha.
-     * Fail-safe: qualquer erro → assume success=true (conservador, evita loops de replan), mas
-     * `confident: false` — Sprint 0.8 (achados L10/L11/L14/L15): distingue explicitamente uma
-     * confirmação genuína do LLM (`confident: true`) do fail-safe conservador, permitindo ao
-     * caller gravar `GoalAttempt.result: 'partial'` em vez de `'success'` quando o "sucesso" não
-     * foi de fato confirmado — a mesma lógica de decisão de sempre, só expondo uma distinção
-     * que já existia implicitamente.
-     */
-    private async escalateStepEvalToLLM(
-        step: PlanStep,
-        objective: string,
-        agentResponse: string,
-    ): Promise<{ success: boolean; confident: boolean }> {
-        const prompt = `Avalie se o seguinte output indica SUCESSO ou FALHA na execução desta tarefa.
-
-TAREFA: ${step.description.slice(0, 200)}
-OBJETIVO: ${objective.slice(0, 150)}
-OUTPUT: ${agentResponse.slice(0, 400)}
-
-Responda APENAS com JSON: {"success": true} ou {"success": false}`;
-
-        try {
-            const result = await this.providerFactory.chatWithFallback(
-                [{ role: 'user', content: prompt }] as LLMMessage[],
-                undefined,
-                undefined,
-                15_000,
-            );
-            if (result.status !== 'success') return { success: true, confident: false };
-            const cleaned = result.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            const parsed = JSON.parse(cleaned);
-            log.info(`[GoalStep] LLM escalation result: success=${parsed.success} step=${step.id}`);
-            return { success: Boolean(parsed.success), confident: true };
-        } catch {
-            log.warn(`[GoalStep] LLM escalation failed — defaulting to success=true step=${step.id}`);
-            return { success: true, confident: false };
-        }
     }
 
     // ── CR#5: Proteção contra step-name-as-path ───────────────────────────────

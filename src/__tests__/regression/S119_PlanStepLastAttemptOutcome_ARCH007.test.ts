@@ -46,8 +46,13 @@ const SHARED_TERMS = 'relatório processar';
 const TEXT_EXPLICIT_SUCCESS = `${SHARED_TERMS} — enviado com sucesso, tarefa concluída.`;
 // >=200 chars, sem sinal de falha/sucesso — cai no fallback conservador "resposta longa,
 // assume sucesso" (substantial_response, confidence=0.70) — mesmo cenário do S85.2.
+// ARCH-013 (S21/reabertura): SEM overlap de termos-chave com a description do step
+// (`agentloopStep()`, que usa SHARED_TERMS) — de propósito, para que StepSemanticValidator não
+// encontre relevância e NÃO promova o attempt a 'success' (antes desta correção, o prefixo
+// SHARED_TERMS ficava aqui só para não disparar um downgrade falso-positivo; agora precisa
+// ficar de fora, porque overlap também dispararia promoção).
 const FILLER = 'dados registrados no sistema para análise posterior, aguardando revisão da equipe responsável pelo acompanhamento do cronograma estabelecido pela coordenação técnica envolvida. ';
-const TEXT_LONG_FALLBACK = `${SHARED_TERMS} — ${FILLER}${FILLER}`;
+const TEXT_LONG_FALLBACK = `${FILLER}${FILLER}`;
 if (TEXT_LONG_FALLBACK.length < 200) throw new Error('TEXT_LONG_FALLBACK curto demais — ajuste o filler');
 
 function makeFakeProviderFactory() {

@@ -4,18 +4,26 @@
  *
  * Prova que `GoalExecutionLoop.executeStep()` (caminho 'agentloop', sem toolName) grava
  * `GoalAttempt.result: 'success'` mesmo quando a determinação de sucesso NÃO veio de um sinal
- * confiável — só da heurística conservadora "resposta longa sem sinal de falha, assume
- * sucesso" (`substantial_response`, confidence=0.70) ou do fail-safe de `escalateStepEvalToLLM`
- * (que assume `success=true` quando a chamada ao LLM falha/expira). Em ambos os casos o sinal
- * de baixa confiança já é computado e gravado em `attempt.evaluation.confidence`, mas nunca
- * chega a influenciar `attempt.result` — um consumidor que só olha `result` (ex:
- * `checkClaimsAgainstEvidence`, `validateGoalCompletion`) trata esses casos como prova
- * confirmada de conclusão, igual a um sucesso de alta confiança.
+ * confiável — só da heurística conservadora "resposta longa/ambígua sem sinal claro, assume
+ * progresso" (`substantial_response`, confidence=0.70). O sinal de baixa confiança já é
+ * computado e gravado em `attempt.evaluation.confidence`, mas nunca chega a influenciar
+ * `attempt.result` — um consumidor que só olha `result` (ex: `checkClaimsAgainstEvidence`,
+ * `validateGoalCompletion`) trata esses casos como prova confirmada de conclusão, igual a um
+ * sucesso de alta confiança.
  *
- * Também prova o achado irmão: quando `StepSemanticValidator` já detectou (depois do
- * attempt persistido) que o output não endereça a intenção do step
- * (`shouldDowngradeToPartial`), o `GoalAttempt` já gravado continua com `result: 'success'` —
- * só `ReflectionMemory.record({outcome:'partial', ...})` refletia isso, nunca o attempt real.
+ * Também prova os 2 achados irmãos:
+ * - Downgrade (S85.5): quando `StepSemanticValidator` detecta (depois do attempt persistido)
+ *   que o output não endereça a intenção do step (`shouldDowngradeToPartial`), o `GoalAttempt`
+ *   já gravado é corrigido para 'partial' — não só `ReflectionMemory.record()`.
+ * - Promoção (S85.3/S85.4, ARCH-013 — S21/reabertura, 2026-07-18): a contraparte positiva.
+ *   `escalateStepEvalToLLM` (2ª chamada de LLM, disparada só na zona 15-200 chars) foi removida
+ *   — `StepSemanticValidator` (que já rodava incondicionalmente para todo step 'success', com
+ *   um propósito correlato: "o output endereça a intenção?") passa a ser a ÚNICA fonte de
+ *   confirmação de confiança para o caso não-confiante, via `shouldPromoteToConfidentSuccess`
+ *   → `GoalStore.promoteLastAttemptToSuccess()`. Efeito colateral desejado, não escondido: um
+ *   `substantial_response` de >=200 chars (que antes NUNCA podia ser promovido, só a zona
+ *   ambígua 15-200 tinha esse direito via escalação) agora tem a mesma chance — as duas zonas
+ *   representavam a mesma incerteza e foram fundidas em `evaluateAgentStepSuccess()`.
  *
  * Evidência de suporte já existente no código (não introduzida por este teste):
  * `GoalEvaluator.ts` já trata `'partial'` como valor vivo equivalente a `'success'` para
@@ -49,42 +57,70 @@ function emptyState(goalId: string): { cognitiveContext: unknown; progressModel:
 
 // Palavras-chave deliberadamente compartilhadas entre step.description e o texto de resposta
 // do agentloop, para que StepSemanticValidator (fast path, sem LLM) sempre classifique como
-// 'relevant' (confidence >= 0.72) nos cenários a-d — o que está sob teste ali é o resultado do
-// attempt, não a validação semântica (isolada no cenário S85.5).
+// 'relevant' (confidence >= 0.72) — usado nos cenários que testam PROMOÇÃO. Os cenários que
+// testam "sem relevância" usam texto SEM overlap (`FILLER` puro), de propósito.
 const SHARED_TERMS = 'relatório processar';
 
-// Sinal de sucesso explícito, alta confiança (evaluateAgentStepSuccess: successPattern) — não
-// deve escalar para LLM.
+// Sinal de sucesso explícito, alta confiança (evaluateAgentStepSuccess: successPattern).
 const TEXT_EXPLICIT_SUCCESS = `${SHARED_TERMS} — enviado com sucesso, tarefa concluída.`;
 
-// >=200 chars, sem sinal de falha/sucesso — cai no fallback conservador "resposta longa,
-// assume sucesso" (substantial_response, confidence=0.70), sem escalar para LLM.
+// >=200 chars, sem sinal de falha/sucesso, SEM overlap de termos-chave com a description padrão
+// do step (`agentloopStep()`, que usa SHARED_TERMS) — cai no fallback conservador "resposta
+// longa/ambígua sem sinal claro" (substantial_response, confidence=0.70) e StepSemanticValidator
+// não encontra relevância suficiente para promover.
 const FILLER = 'dados registrados no sistema para análise posterior, aguardando revisão da equipe responsável pelo acompanhamento do cronograma estabelecido pela coordenação técnica envolvida. ';
-const TEXT_LONG_FALLBACK = `${SHARED_TERMS} — ${FILLER}${FILLER}`;
-if (TEXT_LONG_FALLBACK.length < 200) throw new Error('TEXT_LONG_FALLBACK curto demais para o cenário S85.2 — ajuste o filler');
+const TEXT_LONG_NO_OVERLAP = `${FILLER}${FILLER}`;
+if (TEXT_LONG_NO_OVERLAP.length < 200) throw new Error('TEXT_LONG_NO_OVERLAP curto demais para o cenário S85.2/S85.4 — ajuste o filler');
 
-// 15-200 chars, sem sinal de falha/sucesso — zona ambígua, dispara escalation para LLM.
-const TEXT_AMBIGUOUS = `${SHARED_TERMS} — ${FILLER}`.slice(0, 140);
-if (!(TEXT_AMBIGUOUS.trim().length >= 15 && TEXT_AMBIGUOUS.trim().length < 200)) {
-    throw new Error('TEXT_AMBIGUOUS fora da faixa 15-200 esperada pelo cenário S85.3/S85.4 — ajuste o slice');
+// Mesmo texto longo/sem sinal claro, mas COM overlap de termos-chave (prefixo SHARED_TERMS) —
+// StepSemanticValidator confirma 'relevant' com confidence >= FAST_PATH_CONFIDENCE_THRESHOLD
+// (0.72) só pelo fast path, sem nenhuma chamada de LLM.
+const TEXT_LONG_RELEVANT = `${SHARED_TERMS} — ${FILLER}${FILLER}`;
+if (TEXT_LONG_RELEVANT.length < 200) throw new Error('TEXT_LONG_RELEVANT curto demais para o cenário S85.3 — ajuste o filler');
+
+function makeFakeProviderFactory() {
+    return {
+        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }) } as any),
+        getProvider: () => undefined,
+        // ARCH-013: não existe mais uma 2ª chamada de LLM dedicada a "sucesso ou falha" — só o
+        // fast path do StepSemanticValidator entra em jogo nos cenários que usam esta factory
+        // (SHARED_TERMS/TEXT_EXPLICIT_SUCCESS sempre batem o hitRate mínimo), então este mock
+        // nunca deveria ser invocado; resposta genérica aqui é só para não quebrar se for.
+        getProviderWithModel: () => ({ chat: async () => ({ status: 'success', content: '{}' }) }),
+    } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 
-function makeFakeProviderFactory(escalation: 'fail' | { success: boolean }) {
-    const chatWithFallback = async (messages: Array<{ role: string; content: string }>) => {
-        const isEscalationPrompt = messages[0]?.content.includes('SUCESSO ou FALHA');
-        if (isEscalationPrompt) {
-            if (escalation === 'fail') {
-                return { status: 'error', content: '' } as any;
-            }
-            return { status: 'success', content: JSON.stringify({ success: escalation.success }) } as any;
-        }
-        // Validação de conclusão do goal (achieved/summary) — sempre confirma, não é o foco deste teste.
-        return { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }) } as any;
-    };
+/** Simula erro/timeout do LLM de StepSemanticValidator (slow path) — fail-safe conservador. */
+function makeSemanticValidatorErrorProviderFactory() {
     return {
-        chatWithFallback,
+        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }) }),
         getProvider: () => undefined,
-        getProviderWithModel: () => ({ chat: async () => ({ status: 'success', content: '{}' }) }),
+        getProviderWithModel: () => ({ chat: async () => { throw new Error('timeout simulado do validador semântico'); } }),
+    } as unknown as import('../../core/ProviderFactory').ProviderFactory;
+}
+
+/** LLM do StepSemanticValidator (slow path) confirma relevância genuína, alta confiança. */
+function makeSemanticValidatorRelevantProviderFactory() {
+    return {
+        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }) }),
+        getProvider: () => undefined,
+        getProviderWithModel: () => ({
+            chat: async () => ({ status: 'success', content: JSON.stringify({ result: 'relevant', confidence: 0.85, reason: 'teste S85 — LLM confirma relevância genuína' }) }),
+        }),
+    } as unknown as import('../../core/ProviderFactory').ProviderFactory;
+}
+
+/** Conta chamadas ao LLM do StepSemanticValidator — usado para provar 0 chamadas via fast path. */
+function makeCountingProviderFactory(counter: { calls: number }) {
+    return {
+        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }) }),
+        getProvider: () => undefined,
+        getProviderWithModel: () => ({
+            chat: async () => {
+                counter.calls++;
+                return { status: 'success', content: JSON.stringify({ result: 'relevant', confidence: 0.85 }) };
+            },
+        }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 
@@ -138,7 +174,7 @@ function findAttempt(goal: Goal, planStepId: string): GoalAttempt | undefined {
 async function main() {
     console.log('\n=== S85.1 — sinal de sucesso explícito: result="success" ===');
     {
-        const { loop, goalStore } = makeLoop(makeFakeProviderFactory({ success: true }), TEXT_EXPLICIT_SUCCESS);
+        const { loop, goalStore } = makeLoop(makeFakeProviderFactory(), TEXT_EXPLICIT_SUCCESS);
         const goal = makeGoal(goalStore, { currentPlan: [agentloopStep('a1')] });
         const state = emptyState(goal.id) as any;
         await (loop as any).runLoopInternal(goal, channelContext, undefined, 0, 0, undefined, state);
@@ -146,42 +182,52 @@ async function main() {
         assert(attempt?.result === 'success', `attempt.result === 'success' (sinal explícito, alta confiança) — obtido: ${attempt?.result}`, attempt);
     }
 
-    console.log('\n=== S85.2 — fallback "resposta longa": result="partial" (não "success") ===');
+    console.log('\n=== S85.2 — fallback sem relevância semântica + LLM do validador falha: result="partial" (fail-safe conservador) ===');
     {
-        const { loop, goalStore } = makeLoop(makeFakeProviderFactory({ success: true }), TEXT_LONG_FALLBACK);
+        const { loop, goalStore } = makeLoop(makeSemanticValidatorErrorProviderFactory(), TEXT_LONG_NO_OVERLAP);
         const goal = makeGoal(goalStore, { currentPlan: [agentloopStep('b1')] });
         const state = emptyState(goal.id) as any;
         await (loop as any).runLoopInternal(goal, channelContext, undefined, 0, 0, undefined, state);
         const attempt = findAttempt(goalStore.getById(goal.id)!, 'b1');
         assert(
             attempt?.result === 'partial',
-            `attempt.result === 'partial' (ANTES da correção: 'success' — só o fallback conservador 'substantial_response' decidiu, sem confirmação) — obtido: ${attempt?.result}`,
+            `attempt.result === 'partial' (fallback 'substantial_response' + StepSemanticValidator sem relevância/erro de LLM — nenhuma promoção) — obtido: ${attempt?.result}`,
             attempt
         );
     }
 
-    console.log('\n=== S85.3 — escalation LLM fail-safe (erro/timeout): result="partial" ===');
+    console.log('\n=== S85.3 — ARCH-013: fallback COM relevância (fast path): promove pra "success" SEM chamar LLM (0 chamadas) ===');
     {
-        const { loop, goalStore } = makeLoop(makeFakeProviderFactory('fail'), TEXT_AMBIGUOUS);
+        const counter = { calls: 0 };
+        const { loop, goalStore } = makeLoop(makeCountingProviderFactory(counter), TEXT_LONG_RELEVANT);
         const goal = makeGoal(goalStore, { currentPlan: [agentloopStep('c1')] });
         const state = emptyState(goal.id) as any;
         await (loop as any).runLoopInternal(goal, channelContext, undefined, 0, 0, undefined, state);
         const attempt = findAttempt(goalStore.getById(goal.id)!, 'c1');
         assert(
-            attempt?.result === 'partial',
-            `attempt.result === 'partial' (ANTES da correção: 'success' — fail-safe conservador do escalonamento assumiu sucesso sem confirmação real) — obtido: ${attempt?.result}`,
+            attempt?.result === 'success',
+            `attempt.result === 'success' (StepSemanticValidator promoveu via fast path — substitui a antiga escalação de LLM) — obtido: ${attempt?.result}`,
             attempt
+        );
+        assert(
+            counter.calls === 0,
+            `0 chamadas de LLM ao modelo do validador semântico (fast path por keyword-overlap decidiu sozinho — prova a redução de latência/custo do ARCH-013) — obtido: ${counter.calls}`,
+            counter
         );
     }
 
-    console.log('\n=== S85.4 — escalation LLM confirma genuinamente: result="success" ===');
+    console.log('\n=== S85.4 — ARCH-013: fallback sem overlap, mas LLM do validador confirma relevância (slow path): promove pra "success" ===');
     {
-        const { loop, goalStore } = makeLoop(makeFakeProviderFactory({ success: true }), TEXT_AMBIGUOUS);
+        const { loop, goalStore } = makeLoop(makeSemanticValidatorRelevantProviderFactory(), TEXT_LONG_NO_OVERLAP);
         const goal = makeGoal(goalStore, { currentPlan: [agentloopStep('d1')] });
         const state = emptyState(goal.id) as any;
         await (loop as any).runLoopInternal(goal, channelContext, undefined, 0, 0, undefined, state);
         const attempt = findAttempt(goalStore.getById(goal.id)!, 'd1');
-        assert(attempt?.result === 'success', `attempt.result === 'success' (LLM de escalonamento confirmou genuinamente) — obtido: ${attempt?.result}`, attempt);
+        assert(
+            attempt?.result === 'success',
+            `attempt.result === 'success' (StepSemanticValidator promoveu via slow path — LLM confirmou relevância genuína) — obtido: ${attempt?.result}`,
+            attempt
+        );
     }
 
     console.log('\n=== S85.5 — downgrade semântico (shouldDowngradeToPartial): attempt já persistido corrigido para "partial" ===');
@@ -212,7 +258,7 @@ async function main() {
 
     console.log('\n=== S85.6 — resolveStepRefs continua resolvendo {{step_N.output}} de um attempt "partial" ===');
     {
-        const { loop } = makeLoop(makeFakeProviderFactory({ success: true }));
+        const { loop } = makeLoop(makeFakeProviderFactory());
         const goal: Goal = {
             id: 'goal_s85_refs', sessionKey: 'test:s85', conversationId: 'test-conv-s85',
             userIntent: 'teste', objective: 'teste', status: 'executing',

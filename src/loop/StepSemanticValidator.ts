@@ -26,6 +26,17 @@ const FAST_PATH_CONFIDENCE_THRESHOLD = 0.72;
 const LLM_MISMATCH_CONFIDENCE_THRESHOLD = 0.80;
 const TIMEOUT_MS = 8_000;
 
+/**
+ * ARCH-013: bar de confiança para promover um attempt 'partial' a 'success' quando o
+ * veredito é 'relevant'. Deliberadamente MAIS BAIXO que LLM_MISMATCH_CONFIDENCE_THRESHOLD
+ * (0.80, reservado para downgrade) — reusa o próprio bar que fastPathCheck já usa para decidir
+ * "confiável o bastante para não precisar de LLM" (FAST_PATH_CONFIDENCE_THRESHOLD), em vez de
+ * inventar um terceiro número. Downgrade e promoção não são simétricos por acidente: rebaixar
+ * bloqueia progresso (custo alto de falso positivo, merece bar mais alto); promover só
+ * confirma um 'partial' que já contava como progresso — bar mais baixo é aceitável.
+ */
+const PROMOTE_CONFIDENCE_THRESHOLD = FAST_PATH_CONFIDENCE_THRESHOLD;
+
 export type SemanticValidationResult =
     | 'relevant'       // output endereça a intenção do step
     | 'mismatch'       // output não é relevante para a intenção
@@ -42,6 +53,13 @@ export interface StepSemanticValidation {
      * tratar o outcome do step como 'partial' (retry) em vez de 'success'.
      */
     shouldDowngradeToPartial: boolean;
+    /**
+     * ARCH-013: true quando o resultado é 'relevant' com confiança suficiente — o caller pode
+     * promover um `GoalAttempt.result` já persistido como 'partial' (sucesso não-confirmado)
+     * para 'success' confiante, sem precisar de uma 2ª chamada de LLM dedicada
+     * (`escalateStepEvalToLLM`, removida — este veredito passa a ser a única fonte).
+     */
+    shouldPromoteToConfidentSuccess: boolean;
 }
 
 const STOPWORDS = new Set([
@@ -69,6 +87,7 @@ export class StepSemanticValidator {
                 reason: 'output vazio ou muito curto',
                 usedFastPath: true,
                 shouldDowngradeToPartial: false,
+                shouldPromoteToConfidentSuccess: false,
             };
         }
 
@@ -85,6 +104,9 @@ export class StepSemanticValidator {
                 shouldDowngradeToPartial:
                     fastResult.result === 'mismatch' &&
                     fastResult.confidence >= LLM_MISMATCH_CONFIDENCE_THRESHOLD,
+                shouldPromoteToConfidentSuccess:
+                    fastResult.result === 'relevant' &&
+                    fastResult.confidence >= PROMOTE_CONFIDENCE_THRESHOLD,
             };
         }
 
@@ -95,6 +117,9 @@ export class StepSemanticValidator {
             shouldDowngradeToPartial:
                 llmResult.result === 'mismatch' &&
                 llmResult.confidence >= LLM_MISMATCH_CONFIDENCE_THRESHOLD,
+            shouldPromoteToConfidentSuccess:
+                llmResult.result === 'relevant' &&
+                llmResult.confidence >= PROMOTE_CONFIDENCE_THRESHOLD,
         };
     }
 
@@ -147,7 +172,7 @@ export class StepSemanticValidator {
         return output.slice(start, start + maxLen);
     }
 
-    private fastPathCheck(step: PlanStep, output: string): Omit<StepSemanticValidation, 'shouldDowngradeToPartial'> {
+    private fastPathCheck(step: PlanStep, output: string): Omit<StepSemanticValidation, 'shouldDowngradeToPartial' | 'shouldPromoteToConfidentSuccess'> {
         const outputLower = output.toLowerCase();
         const allKeyTerms = this.extractKeyTerms(step);
         if (allKeyTerms.length === 0) {
@@ -183,7 +208,7 @@ export class StepSemanticValidator {
         step: PlanStep,
         toolOutput: string,
         goalIntent?: string,
-    ): Promise<Omit<StepSemanticValidation, 'shouldDowngradeToPartial'>> {
+    ): Promise<Omit<StepSemanticValidation, 'shouldDowngradeToPartial' | 'shouldPromoteToConfidentSuccess'>> {
         const truncatedOutput = this.extractRelevantSnippet(toolOutput, this.extractKeyTerms(step), 600);
         const lines = [
             'Você é um validador de relevância de resultado de ferramentas.',

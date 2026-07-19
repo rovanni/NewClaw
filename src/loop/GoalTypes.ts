@@ -140,15 +140,15 @@ export interface GoalClassification {
 
 /**
  * Resultado da avaliação determinística de um step.
- * confidence < 0.6 dispara escalation para LLM (casos ambíguos).
+ * ARCH-013 (S21/reabertura): não dispara mais escalation de LLM própria — a confirmação de
+ * confiança para casos não-confiantes (confidence=0.70, reason='substantial_response') vem de
+ * `StepSemanticValidator.shouldPromoteToConfidentSuccess`, chamado depois em `runValidationPhase`.
  */
 export interface StepEvaluation {
     success: boolean;
-    /** 0.0 – 1.0 — determinado pela heurística; < 0.6 = ambíguo */
+    /** 0.0 – 1.0 — determinado pela heurística */
     confidence: number;
     reason?: string;
-    /** Quando true, o caller deve chamar o LLM para desempate */
-    shouldEscalateToLLM?: boolean;
 }
 
 // ── Contexto cognitivo persistente entre steps ────────────────────────────────

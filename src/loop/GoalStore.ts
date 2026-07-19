@@ -401,8 +401,9 @@ export class GoalStore {
     /**
      * Corrige em vigor (read-modify-write) o attempt mais recente de um `planStepId` que
      * satisfaça `predicate`, sem criar um segundo `GoalAttempt` para a mesma execução lógica.
-     * Base comum de `downgradeLastAttemptToPartial()` e `finalizeLastAttemptAsSuccess()` —
-     * ambos precisam do mesmo find-mais-recente-e-substitua, só o predicate/patch mudam.
+     * Base comum de `downgradeLastAttemptToPartial()`, `finalizeLastAttemptAsSuccess()` e
+     * `promoteLastAttemptToSuccess()` — todas precisam do mesmo find-mais-recente-e-substitua,
+     * só o predicate/patch mudam.
      */
     private updateLastAttempt(
         goalId: string,
@@ -429,6 +430,19 @@ export class GoalStore {
      */
     downgradeLastAttemptToPartial(goalId: string, planStepId: string): void {
         this.updateLastAttempt(goalId, planStepId, { result: 'partial' }, a => a.result === 'success');
+    }
+
+    /**
+     * ARCH-013: contraparte positiva de `downgradeLastAttemptToPartial()` — corrige o `result`
+     * do attempt mais recente de um step, já persistido como 'partial' (sucesso não-confirmado
+     * pela heurística determinística), para 'success' quando uma validação posterior
+     * (`StepSemanticValidator.shouldPromoteToConfidentSuccess`) confirma relevância com
+     * confiança suficiente. Só o `result` muda — `output`/`error` já estão corretos, essa
+     * correção não é sobre um desfecho novo, é sobre reclassificar a confiança de um desfecho
+     * já conhecido.
+     */
+    promoteLastAttemptToSuccess(goalId: string, planStepId: string): void {
+        this.updateLastAttempt(goalId, planStepId, { result: 'success' }, a => a.result === 'partial');
     }
 
     /**
