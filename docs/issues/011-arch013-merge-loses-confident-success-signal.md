@@ -1,5 +1,17 @@
 # ARCH-013 — Fundir `evaluateAgentStepSuccess`/`escalateStepEvalToLLM` em `StepSemanticValidator` sem ajuste perde o sinal de "sucesso confiante"
 
+## Resolvido em 2026-07-18 (reabertura de S21, pós-encerramento do programa)
+
+Este achado foi **resolvido**, não permanece como pendência. A alternativa desenhada abaixo
+("Alternativa levantada") foi implementada, com 1 ajuste adicional encontrado durante a própria
+implementação (o texto original propunha promover via `stepSuccessConfident` calculado ANTES de
+`cycleResult` existir — inviável após S22/S24 terem separado dispatch de validação semântica em
+fases distintas do loop; a implementação real usa correção retroativa do `GoalAttempt` já
+persistido, via `GoalStore.promoteLastAttemptToSuccess()`, mesmo padrão de
+`downgradeLastAttemptToPartial()`). Detalhe completo, threshold escolhido e validação em ambiente
+real: `docs/refatoracao-arquitetural-2026/SPRINTS/S21-ARCH-013.md`. O texto abaixo é preservado
+como registro histórico do achado original de julho — não reflete mais o estado atual do código.
+
 ## Contexto
 
 Achado durante a Sprint `2026-09-S21` (ARCH-013, `MASTER_EXECUTION_PLAN.md`), na etapa de

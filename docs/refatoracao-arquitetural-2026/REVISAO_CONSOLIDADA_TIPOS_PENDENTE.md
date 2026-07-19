@@ -22,9 +22,22 @@ visibilidade das outras.** Resolver ARCH-009 sem olhar para ARCH-024 (mesma clas
 "campos acumulados sem dono claro", só que em `ChannelContext` em vez de `ToolResult`) arrisca
 duas soluções estruturalmente diferentes para o mesmo tipo de decisão.
 
-## Temas candidatos
+## Status desta revisão (atualizado 2026-07-18)
 
-### 1. ARCH-009 — Campo `output`/`error` redeclarado em `ToolResult`/`CycleResult`/`GoalAttempt`
+**Encerrada como pendência ativa.** Reaberta em 2026-07-18 como 1º item do próximo ciclo de
+auditoria recomendado por `CHECKPOINTS/CP05.md`. O tema 1 (ARCH-009, motivo original desta
+consolidação) foi encerrado como Won't Fix — ver `docs/issues/012-arch009-wontfix-decision.md`. A
+auditoria de reabertura também corrigiu a premissa que motivava agrupar os temas 1 e 2 nesta mesma
+revisão ("mesma classe de problema"): não são — ver detalhe na seção do tema 1. O tema 2 (ARCH-024)
+já estava concluído desde antes desta reabertura (S19/S23), independentemente. O tema 3
+(`docs/issues/004`) permanece uma pendência real, mas passa a ser candidato a quick win isolado, não
+mais dependente de uma "revisão consolidada de tipos" que deixou de fazer sentido como agrupamento
+depois que seu único item ativo (ARCH-009) foi encerrado. Este documento é mantido como registro
+histórico da decisão, não como backlog ativo.
+
+## Temas candidatos (histórico, como estavam quando este documento foi aberto em 2026-07-17)
+
+### 1. ARCH-009 — Campo `output`/`error` redeclarado em `ToolResult`/`CycleResult`/`GoalAttempt` — 🚫 Encerrado Won't Fix (2026-07-18)
 - **Card original:** `ARCHITECTURAL_BACKLOG.md`, Epic B (Single Source of Truth).
 - **Achado que motivou o adiamento:** `docs/issues/008-arch009-extends-toolresult-breaks-typing-and-boundary.md`.
 - **Resumo:** a prescrição literal do card (`extends ToolResult`) não compila (obrigatoriedade de
@@ -35,6 +48,11 @@ duas soluções estruturalmente diferentes para o mesmo tipo de decisão.
   error?: string }`) para `shared/domainTypes.ts` (camada neutra, 0 imports hoje), com `ToolResult`
   estreitando `output` para obrigatório ao estendê-lo de `loop/` — preserva a direção
   `loop/ → shared/` já estabelecida.
+- **Desfecho real (2026-07-18):** a reabertura corrigiu esta direção — `CycleResult` nunca teve
+  `error`, então incluí-lo na base infla sua superfície com um campo morto; o escopo correto seria
+  só `ToolResult`+`GoalAttempt`. Com esse escopo corrigido, Impacto/Risco/Esforço caem para
+  Baixo/Baixo/Pequeno, mas o usuário decidiu **encerrar sem implementar** — ver
+  `docs/issues/012-arch009-wontfix-decision.md`.
 
 ### 2. ARCH-024 — `DeliveryTrackingContext` (RFC já agendada, S19/S23)
 - **Card original:** Epic D (Structural Simplification), já classificado `Exige RFC`.
