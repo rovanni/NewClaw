@@ -214,6 +214,21 @@ Correção real exigiria, por canal:
 Isso não foi implementado agora porque é uma mudança em dois canais de produção que não há como
 testar neste ambiente (sem sessão WhatsApp/Signal ativa) — ver com o operador antes de mexer.
 
+**O Web Dashboard não consegue aprovar ações perigosas.** Diferente de
+Telegram/Discord/WhatsApp/Signal (ver seção "workflowCallback" acima), `WebChannelAdapter` nunca
+recebe um `workflowCallback` — `AgentController` só injeta essa closure nos 4 adapters de
+mensageria. Quando um goal disparado pelo Dashboard atinge `needs_auth` (ex.: `exec_command`
+perigoso em modo SAFE), o `pendingTxnId` é criado normalmente e o goal fica `blocked` — mas não
+existe nenhuma rota HTTP no Dashboard (`src/dashboard/routes/*.ts`) que reconheça o padrão
+`auth:<approve|reject>:<txnId>` ou chame `WorkflowEngine.resume()`/`GoalOrchestrator.resumeFromAuth()`
+— o goal fica preso esperando uma aprovação que o canal não tem como entregar, até expirar.
+Achado durante a validação real do `ARCH-008` (2026-07-19, `docs/refatoracao-arquitetural-2026/SPRINTS/S17-ARCH-008.md`)
+— contornado ali chamando `resumeFromAuth()` diretamente via `AgentController`, fora do canal, só
+para fins de teste. Correção real exigiria um endpoint no Dashboard (ex.: `POST
+/api/goals/:id/auth-decision`) que traduza a decisão do usuário (botão na UI) para a mesma chamada
+que `createWorkflowCallback()` já faz para os outros 4 canais — não implementado porque está fora
+do escopo do ARCH-008 (*No Opportunistic Refactoring*), registrado aqui para não ficar implícito.
+
 ## Como adicionar um canal novo
 
 1. Criar `MeuNovoChannelAdapter implements ChannelAdapter`.

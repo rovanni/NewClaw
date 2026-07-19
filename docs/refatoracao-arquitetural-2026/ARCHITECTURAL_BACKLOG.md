@@ -150,22 +150,23 @@ Registrados aqui por rastreabilidade — as auditorias checaram estas áreas e n
 - **Testes obrigatórios:** Unitário (cenário de downgrade semântico seguido de `markStepDone`) + regressão.
 - **Métrica que deverá melhorar:** Source of Truth Conflicts (indicador qualitativo).
 
-### ARCH-008 — `progressModel` derivado sob demanda de `goal.attempts`/`successCriteria` ⏸ Adiado (2026-07-18, Sprint S17) — premissa citava mecanismo inexistente
+### ARCH-008 — `progressModel` derivado sob demanda de `goal.attempts`/`successCriteria` ✅ Concluído (2026-07-19, reaberto e implementado após adiamento original da Sprint S17)
 - **Descrição:** `state.cognitiveContext` já recebeu o tratamento de "derivar de `goal.attempts` a cada chamada" via `buildIncrementalExecutionContext()` — restart-safe. `state.progressModel` não recebeu o mesmo tratamento: reseta para `{components:[], overallPercent:0}` a cada `runLoop()`, incluindo após recovery pós-restart, mesmo quando `goal.attempts`/`successCriteria` já provam progresso real.
-- **Adiado na S17, antes de codificar (Fase 1 da diretriz de arquitetura):** a premissa citava um mecanismo que não existe — não há recovery automático de goals no boot (`AgentController.getAllActive()` só loga, `recovered=false` explícito no próprio log; nunca chama `resumeGoal()`/`runLoop()`). O defeito subjacente (progressModel perdido) é real, mas o gatilho é outro: o único call site de `resumeGoal()` é `GoalOrchestrator.resumeFromAuth()` (fluxo de aprovação de ação perigosa), que reseta `progressModel` no MESMO processo, sem restart, sempre que um goal com histórico bate numa autorização. Registro técnico completo, incluindo o fix desenhado (`buildInitialProgressModel`, não implementado): `docs/issues/009-arch008-no-automatic-boot-recovery-exists.md`. 6º modo de falha catalogado em `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`. Por decisão do usuário, adiado sem consolidação com outro tema (categoria distinta de ARCH-009/ARCH-024) — retomar lendo o achado antes de re-propor o card original.
-- **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (L548-561 criação do `state`, L2566-2601 `updateProgressModel`).
+- **Adiado na S17 (2026-07-18), antes de codificar (Fase 1 da diretriz de arquitetura):** a premissa citava um mecanismo que não existe — não há recovery automático de goals no boot (`AgentController.getAllActive()` só loga, `recovered=false` explícito no próprio log; nunca chama `resumeGoal()`/`runLoop()`). O defeito subjacente (progressModel perdido) é real, mas o gatilho é outro: o único call site de `resumeGoal()` é `GoalOrchestrator.resumeFromAuth()` (fluxo de aprovação de ação perigosa), que reseta `progressModel` no MESMO processo, sem restart, sempre que um goal com histórico bate numa autorização. 6º modo de falha catalogado em `RETROSPECTIVA_PREMISSAS_AUDITORIA.md`.
+- **Executado como (reabertura 2026-07-19):** `buildInitialProgressModel(goal)` novo em `GoalExecutionLoop.ts`, usado na inicialização de `state` em `runLoop()` — deriva de `PlanStep.status`/`PlanStep.lastAttemptOutcome` (ARCH-007/S13, sinal restart-safe já persistido — mais simples que o design original de julho, que propunha re-escanear `goal.attempts` manualmente). Achado de consequência real: `overallPercent` alimenta a lógica `ADAPTIVE-BUDGET` (bônus de replan quando progresso real >=60%) — o bug não era só uma barra de progresso visual, quebrava esse bônus para todo goal retomado via aprovação. `tsc`+regressão limpos (130/130, `S127` novo). Etapa 4 real: goal real via HTTP atingiu `needs_auth` genuíno; `GoalOrchestrator.resumeFromAuth()` chamado contra o mesmo banco real via `AgentController` real confirmou `progressModel` preservado (não mais `{components:[],overallPercent:0}`). Achado lateral registrado (não é bug desta Sprint): Web Dashboard não tem `workflowCallback` wired para aprovar ações perigosas (mesma categoria dos gaps de anexo WhatsApp/Signal já documentados em `ARCHITECTURE.md`). Detalhe completo: `docs/issues/009-arch008-no-automatic-boot-recovery-exists.md`, `SPRINTS/S17-ARCH-008.md`.
+- **Arquivos afetados:** `src/loop/GoalExecutionLoop.ts` (`buildInitialProgressModel` novo, `runLoop()`).
 - **Origem (auditorias):** Auditoria II.
 - **Categoria:** Single Source of Truth.
 - **Classificação:** Refactor Local.
-- **Impacto:** Alto (corrige perda de progresso pós-restart, um cenário real dado que o sistema já tem recovery de goals ativos no boot).
-- **Risco:** Médio — é o caminho de validação de conclusão, sensível.
-- **Esforço:** Médio.
-- **Dependências:** Recomendado após ARCH-005 (mesmo padrão de "derivar da fonte persistida").
+- **Impacto:** Alto (corrige perda de progresso ao retomar um goal via aprovação de ação perigosa — inclusive a lógica de bônus de replan `ADAPTIVE-BUDGET`, que dependia silenciosamente disso).
+- **Risco:** Baixo na prática — mudança contida à inicialização de `state.progressModel`; caminho de goal novo (`executeGoal()`) comprovadamente idêntico ao anterior.
+- **Esforço:** Pequeno — reaproveitou `PlanStep.lastAttemptOutcome` (ARCH-007) em vez de re-derivar do zero.
+- **Dependências:** Recomendado após ARCH-005 (mesmo padrão de "derivar da fonte persistida") — cumprida.
 - **Pré-requisitos:** Nenhum.
-- **Critérios de Aceite:** Um goal recuperado após restart mostra `progressModel` consistente com `goal.attempts`/`successCriteria`, não 0%.
-- **Definition of Done:** Validação Progressiva completa até etapa 4 (cenário de restart precisa ser testado em ambiente real, não só mockado).
+- **Critérios de Aceite:** cumprido — `progressModel` de um goal recuperado via `resumeGoal()` é consistente com `goal.currentPlan`/`lastAttemptOutcome`, não 0%.
+- **Definition of Done:** cumprido — Validação Progressiva completa até etapa 4 (via fluxo real de aprovação, não restart de processo — a prescrição original de "matar o processo" nunca foi testável, per o próprio achado de julho).
 - **Rollback:** Reverter.
-- **Testes obrigatórios:** Unitário + regressão + e2e sintético + ambiente real (matar o processo com um goal em `executing` e validar recovery).
+- **Testes obrigatórios:** cumprido — unitário (`S127`) + regressão (130/130) + ambiente real.
 - **Métrica que deverá melhorar:** Single Sources.
 
 ### ARCH-009 — `CycleResult`/`GoalAttempt` estenderem `ToolResult` em vez de redeclarar `output`/`error` 🚫 Encerrado sem implementar — Won't Fix (2026-07-18, auditoria de reabertura pós-S14)

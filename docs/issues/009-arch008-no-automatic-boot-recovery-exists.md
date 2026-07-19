@@ -1,5 +1,19 @@
 # ARCH-008 — "Recovery de goals ativos no boot" não existe no código; premissa citava um mecanismo inexistente
 
+## Resolvido em 2026-07-19 (reabertura de S17, pós-encerramento do programa)
+
+Este achado foi **resolvido**, não permanece como pendência. O fix desenhado abaixo foi
+implementado com 1 simplificação encontrada durante a reabertura: em vez de re-escanear
+`goal.attempts` manualmente para derivar o status de steps `pending` já tentados, a implementação
+real usa `PlanStep.lastAttemptOutcome` (adicionado por `ARCH-007`/S13, sinal restart-safe já
+persistido — não existia como tal quando este achado foi escrito). Achado adicional de
+consequência real: `progressModel.overallPercent` alimenta a lógica `ADAPTIVE-BUDGET` (bônus de
+replan), então o bug não era só uma barra de progresso — quebrava esse bônus para todo goal
+retomado via aprovação. Validado em ambiente real (`GoalOrchestrator.resumeFromAuth()` contra um
+goal real, `AgentController` real). Detalhe completo:
+`docs/refatoracao-arquitetural-2026/SPRINTS/S17-ARCH-008.md`. O texto abaixo é preservado como
+registro histórico do achado original de julho.
+
 ## Contexto
 
 Achado durante a Sprint `2026-08-S17` (ARCH-008, `MASTER_EXECUTION_PLAN.md`), na etapa de
