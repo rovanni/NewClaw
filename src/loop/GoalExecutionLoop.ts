@@ -598,15 +598,12 @@ export class GoalExecutionLoop {
         // porque `runLoop()` é o ponto de entrada compartilhado por `executeGoal` E `resumeGoal`,
         // então nenhum dos dois pode esquecer de inicializar (era exatamente o bug de
         // `resumeGoal()` antes desta correção). Nunca armazenado em `this.*` — não há como um
-        // Goal B ler/escrever o estado de um Goal A.
+        // Goal B ler/escrever o estado de um Goal A. `progressModel` reconstruído via
+        // `buildInitialProgressModel` (ARCH-008/S17) — vazio para goal novo, preenchido com
+        // progresso real para goal retomado via `resumeGoal()`.
         const state: GoalExecutionState = {
             cognitiveContext: createEmptyStepCognitiveContext(),
-            progressModel: {
-                goalId: goal.id,
-                components: [],
-                overallPercent: 0,
-                updatedAt: Date.now(),
-            },
+            progressModel: this.buildInitialProgressModel(goal),
         };
 
         try {
@@ -2911,6 +2908,56 @@ export class GoalExecutionLoop {
                 ctx.filesRead.push({ path: catMatch[1] });
             }
         }
+    }
+
+    /**
+     * ARCH-008 (S17/reabertura, 2026-07-19): reconstrói o `GoalProgressModel` de um goal que já
+     * tem histórico real (`goal.currentPlan`/`goal.attempts`) — usado por `runLoop()` na
+     * inicialização de `state`, para que `resumeGoal()` (chamado por
+     * `GoalOrchestrator.resumeFromAuth()` toda vez que uma ação perigosa é aprovada) não zere a
+     * barra de progresso de um goal que já tem steps concluídos. Antes desta correção,
+     * `state.progressModel` sempre nascia `{components: [], overallPercent: 0}` — correto para
+     * `executeGoal()` (goal novo), mas incorreto para `resumeGoal()` (mesmo goal, retomado).
+     *
+     * Deriva de `PlanStep.status`/`PlanStep.lastAttemptOutcome` (ARCH-007, S13 — sinal
+     * restart-safe já persistido por step) em vez de re-escanear `goal.attempts` manualmente
+     * (o desenho original de julho fazia isso; `lastAttemptOutcome` já resolve a mesma pergunta,
+     * reescanear seria uma 2ª fonte da mesma informação). Fórmula de `overallPercent` espelha a
+     * já usada em `adoptNewPlan` (linha ~574): `completed / (completed + pendentes do plano
+     * atual)` — percentual do plano inteiro, não só dos componentes já tocados (diferente de
+     * `updateProgressModel`, que soma incrementalmente só o que já foi processado nesta rodada).
+     *
+     * Para `executeGoal()` (plano todo `pending`, sem `lastAttemptOutcome`): `components=[]`,
+     * `overallPercent=0` — idêntico ao literal fixo que existia antes desta correção, zero
+     * mudança nesse caminho.
+     */
+    private buildInitialProgressModel(goal: Goal): GoalProgressModel {
+        const components: ProgressComponent[] = [];
+        for (const step of goal.currentPlan) {
+            if (step.status === 'completed') {
+                components.push({
+                    id: `step_${step.id}`,
+                    label: step.description.slice(0, 100),
+                    status: 'completed',
+                    completedAt: step.executedAt,
+                });
+            } else if (step.status === 'pending' && step.lastAttemptOutcome) {
+                components.push({
+                    id: `step_${step.id}`,
+                    label: step.description.slice(0, 100),
+                    status: 'in_progress',
+                });
+            }
+        }
+        const completedCount = components.filter(c => c.status === 'completed').length;
+        const pendingCount = this.getPendingSteps(goal.currentPlan).length;
+        const totalWork = completedCount + pendingCount;
+        return {
+            goalId: goal.id,
+            components,
+            overallPercent: totalWork > 0 ? Math.round((completedCount / totalWork) * 100) : 0,
+            updatedAt: Date.now(),
+        };
     }
 
     /**
