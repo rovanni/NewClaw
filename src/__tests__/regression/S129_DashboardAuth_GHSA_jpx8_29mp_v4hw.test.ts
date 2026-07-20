@@ -56,9 +56,12 @@ async function main() {
         // o que prova que o secret nunca degrada para uma constante pública mesmo assim.
         authMod.dashboardAuth.enabled = true;
         authMod.dashboardAuth.passwordHash = '';
+        // Nunca logar `secret` em si (mesmo sendo teste): CodeQL rastreia getEffectiveSecret()
+        // até process.env.DASHBOARD_PASSWORD e sinaliza qualquer log do valor como clear-text-
+        // logging (achado real, GHSA-jpx8-29mp-v4hw #77-81) — usar só metadados (comprimento).
         const secret = authMod.getEffectiveSecret();
-        assert(secret !== '', 'secret efetivo nunca é string vazia', secret);
-        assert(secret !== 'newclaw-no-auth', 'secret efetivo nunca é a constante pública antiga', secret);
+        assert(secret !== '', 'secret efetivo nunca é string vazia');
+        assert(secret !== 'newclaw-no-auth', 'secret efetivo nunca é a constante pública antiga');
         assert(secret.length >= 32, 'secret efetivo é um valor aleatório de tamanho substancial', secret.length);
     }
 
@@ -74,8 +77,8 @@ async function main() {
         assert(dashboardAuth.enabled === true, 'auth fica habilitado após definir senha', dashboardAuth.enabled);
 
         const secret = getEffectiveSecret();
-        assert(secret === dashboardAuth.passwordHash, 'secret efetivo deriva do hash persistido (não do env, que está ausente)', secret);
-        assert(!!secret && secret !== 'newclaw-no-auth', 'secret real não é a constante pública', secret);
+        assert(secret === dashboardAuth.passwordHash, 'secret efetivo deriva do hash persistido (não do env, que está ausente)');
+        assert(!!secret && secret !== 'newclaw-no-auth', 'secret real não é a constante pública');
 
         const login = fakeReqRes('POST', '/login', { password: 'senha-forte-123' });
         await invokeRoute(router, login.req, login.res);

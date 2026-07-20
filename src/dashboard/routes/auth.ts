@@ -54,15 +54,31 @@ const API_TOKENS: Set<string> = new Set();
 
 export let dashboardAuth: { enabled: boolean; passwordHash: string } = { enabled: false, passwordHash: '' };
 
+// scrypt: KDF lenta (custa memória+CPU por tentativa), diferente de sha256 puro — que é rápido
+// demais pra hash de senha (permite brute-force em GPU a bilhões de tentativas/segundo).
+// Formato novo tem prefixo "scrypt:" pra distinguir de hashes antigos já persistidos (formato
+// legado sem prefixo, "salt:sha256hash") sem quebrar quem já tinha senha configurada.
+const SCRYPT_KEYLEN = 64;
+
 function hashPassword(password: string): string {
     const salt = crypto.randomBytes(16).toString('hex');
-    const hash = crypto.createHash('sha256').update(salt + password).digest('hex');
-    return `${salt}:${hash}`;
+    const hash = crypto.scryptSync(password, salt, SCRYPT_KEYLEN).toString('hex');
+    return `scrypt:${salt}:${hash}`;
 }
 
-function verifyPassword(password: string, stored: string): boolean {
-    if (!stored || !stored.includes(':')) return false;
-    const [salt, expectedHash] = stored.split(':');
+function verifyPasswordScrypt(password: string, salt: string, expectedHash: string): boolean {
+    try {
+        const actual = crypto.scryptSync(password, salt, SCRYPT_KEYLEN);
+        const expected = Buffer.from(expectedHash, 'hex');
+        return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+    } catch {
+        return false;
+    }
+}
+
+// Mantido só pra verificar (nunca pra criar) hashes gravados antes desta mudança — ver
+// migrateIfLegacy() no /login, que re-hasheia com scrypt no primeiro login bem-sucedido.
+function verifyPasswordLegacySha256(password: string, salt: string, expectedHash: string): boolean {
     const actualHash = crypto.createHash('sha256').update(salt + password).digest('hex');
     try {
         return crypto.timingSafeEqual(
@@ -72,6 +88,19 @@ function verifyPassword(password: string, stored: string): boolean {
     } catch {
         return false;
     }
+}
+
+function verifyPassword(password: string, stored: string): boolean {
+    if (!stored) return false;
+    if (stored.startsWith('scrypt:')) {
+        const parts = stored.split(':');
+        if (parts.length !== 3) return false;
+        const [, salt, expectedHash] = parts;
+        return verifyPasswordScrypt(password, salt, expectedHash);
+    }
+    if (!stored.includes(':')) return false;
+    const [salt, expectedHash] = stored.split(':');
+    return verifyPasswordLegacySha256(password, salt, expectedHash);
 }
 
 // ── Signed token: survives restarts ──
@@ -147,6 +176,13 @@ export function createAuthRouter(): Router {
             return res.json({ success: true, token: 'no-auth-required' });
         }
         if (password && verifyPassword(password, dashboardAuth.passwordHash)) {
+            // Migração transparente: login legítimo com hash no formato antigo (sha256, sem
+            // KDF) — re-hasheia com scrypt e persiste, sem exigir troca de senha do operador.
+            if (!dashboardAuth.passwordHash.startsWith('scrypt:')) {
+                const migrated = hashPassword(password);
+                dashboardAuth.passwordHash = migrated;
+                savePersistedHash(migrated);
+            }
             const token = createSignedToken();
             // Set httpOnly cookie for session persistence across page loads
             res.cookie('newclaw_session', token, {
