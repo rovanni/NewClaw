@@ -89,11 +89,19 @@ const NOT_GOAL_SIGNALS: RegExp[] = [
     // Padrão: "X [é/e] um [curso/sistema/projeto] de A, B e C" — definição nominal sem verbo imperativo.
     // Ex: "Assistente de TI e um curso de montagem e manutenção de computadores, instalação de SO..."
     // Mesmo que contenham substantivos de ação (instalação, configuração), são listas descritivas.
-    /^[\w\s]+\s+[eé]\s+um[a]?\s+(curso|disciplina|módulo|treinamento|programa|sistema|projeto|aplicativo)\s+(de|sobre|para)\b/i,
+    // [\w\s]+ seguido de \s+ separado tinha dois quantificadores adjacentes disputando os
+    // mesmos espaços em branco (ambiguidade de partição) — polynomial ReDoS em entrada tipo
+    // "muitos espaços/tabs sem 'é' nunca aparecendo" (CodeQL #56). Reescrito como alternância
+    // \w+/\s+ sem sobreposição de alfabeto entre quantificadores adjacentes.
+    /^[\w]+(?:\s+[\w]+)*\s+[eé]\s+um[a]?\s+(curso|disciplina|módulo|treinamento|programa|sistema|projeto|aplicativo)\s+(de|sobre|para)\b/i,
     // Correção/ajuste da mensagem anterior sem novo pedido explícito: "Estava me referindo a..."
     /^(estava\s+me\s+referindo|me\s+referia|quis\s+dizer|na\s+verdade\s+(é|eu)|só\s+queria|era\s+(sobre|para))(?!\w)/i,
     // Confirmação ou reconhecimento sem novo objetivo
-    /^(isso|exato|exatamente|correto|é\s+isso|isso\s+mesmo|sim\s*,?\s*(é|foi))(?!\w)/i,
+    // sim\s*,?\s* tinha dois \s* adjacentes ao redor de uma vírgula opcional — mesma ambiguidade
+    // de partição do padrão acima, entrada tipo "sim" + muitos espaços sem 'é'/'foi' (CodeQL #56).
+    // [\s,]* (um único quantificador sobre espaço-OU-vírgula) é semanticamente equivalente pro
+    // uso real e não tem quantificador adjacente pra ambiguidade nenhuma.
+    /^(isso|exato|exatamente|correto|é\s+isso|isso\s+mesmo|sim[\s,]*(é|foi))(?!\w)/i,
 ];
 
 export class GoalExtractor {
