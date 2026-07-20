@@ -7,6 +7,8 @@
  */
 import { Database } from 'better-sqlite3';
 
+import { boundedHash } from '../shared/boundedHash';
+
 type MemoryContext = 'terminal' | 'coding' | 'chat' | 'analysis' | 'crypto' | 'trading';
 
 export interface ClassificationResult {
@@ -105,11 +107,7 @@ export class ClassificationMemory {
      * Simple hash for input
      */
     private hash(text: string): string {
-        let h = 0;
-        for (let i = 0; i < text.length; i++) {
-            h = ((h << 5) - h + text.charCodeAt(i)) | 0;
-        }
-        return Math.abs(h).toString(36);
+        return boundedHash(text);
     }
 
     /**

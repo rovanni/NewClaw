@@ -12,6 +12,7 @@
 
 import { createLogger } from '../shared/AppLogger';
 import { keywordBoundaryMatches } from '../shared/keywordBoundary';
+import { boundedHash } from '../shared/boundedHash';
 import type { SkillLearner } from './SkillLearner';
 import type { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import type { IntentCategory } from '../shared/domainTypes';
@@ -1052,13 +1053,7 @@ export class UnifiedIntentRouter {
 
     private hashInput(input: string): string {
         // Simple hash for tracing (not cryptographic)
-        let hash = 0;
-        for (let i = 0; i < input.length; i++) {
-            const char = input.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash = hash & hash;
-        }
-        return Math.abs(hash).toString(36);
+        return boundedHash(input);
     }
 
     // ── Public API ──────────────────────────────────────────────────────
