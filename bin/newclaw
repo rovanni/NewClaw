@@ -1358,14 +1358,23 @@ const commands = {
     try {
       let diskMsg = '';
       if (process.platform === 'win32') {
-        const out = execSync(`wmic logicaldisk where DeviceID="${path.parse(DIR).root.replace('\\','')}" get FreeSpace,Size /value`, { encoding: 'utf-8', stdio: 'pipe' }).trim();
+        // .replace('\\','') (sem /g) só troca a 1ª ocorrência, e o resultado ia direto pra
+        // string de shell sem validar formato (CodeQL js/incomplete-sanitization). DIR vem de
+        // __dirname (não é input externo), mas o fix estrutural correto é não confiar nisso:
+        // validar que sobrou só "C:" e usar execFileSync (array de args, sem shell) — mesmo
+        // padrão de diskUsagePercent() em src/utils/crossPlatform.ts.
+        const drive = path.parse(DIR).root.replace(/\\/g, '');
+        if (!/^[A-Za-z]:$/.test(drive)) throw new Error('drive letter inesperado: ' + drive);
+        const out = execFileSync('wmic', ['logicaldisk', 'where', `DeviceID="${drive}"`, 'get', 'FreeSpace,Size', '/value'], { encoding: 'utf-8', stdio: 'pipe' }).trim();
         const free = parseInt((out.match(/FreeSpace=(\d+)/) || [])[1] || '0');
         const total = parseInt((out.match(/Size=(\d+)/) || [])[1] || '1');
         const pct = Math.round((1 - free / total) * 100);
         diskMsg = `${pct}% usado`;
         check('Espaço em disco', pct < 85, diskMsg + (pct >= 85 ? ' ⚠ pouco espaço!' : ''));
       } else {
-        const out = execSync(`df -h "${DIR}" | tail -1`, { encoding: 'utf-8' }).trim();
+        // Mesmo motivo do branch Windows acima: sem shell/pipe, `tail -1` replicado em JS.
+        const dfOut = execFileSync('df', ['-h', DIR], { encoding: 'utf-8' }).trim();
+        const out = dfOut.split('\n').filter(l => l.trim()).pop() || '';
         const cols = out.split(/\s+/);
         diskMsg = `${cols[4] || '?'} usado (${cols[3] || '?'} livre)`;
         const pct = parseInt(cols[4] || '0');

@@ -212,15 +212,22 @@ export function diskUsagePercent(targetPath: string = os.homedir()): number | nu
         if (isWindows) {
             const resolved = path.resolve(targetPath);
             const drive    = path.parse(resolved).root.replace(/\\/g, '').replace(':', '');
-            const out = execSync(
-                `wmic logicaldisk where "DeviceID='${drive}:'" get Size,FreeSpace /value`,
+            // targetPath (default os.homedir(), lido de USERPROFILE/HOME) chega aqui derivado
+            // de env var — nunca interpolar em string de shell (CodeQL
+            // js/shell-command-injection-from-environment). execFileSync com array de args não
+            // usa shell; drive validado como letra única fecha também manipulação da mini
+            // linguagem de query do próprio wmic (where "DeviceID='...'"), não só shell.
+            if (!/^[A-Za-z]$/.test(drive)) return null;
+            const out = execFileSync(
+                'wmic',
+                ['logicaldisk', 'where', `DeviceID='${drive}:'`, 'get', 'Size,FreeSpace', '/value'],
                 { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 4000, windowsHide: true }
             );
             const free  = parseInt((out.match(/FreeSpace=(\d+)/)  ?? [])[1] ?? '0');
             const total = parseInt((out.match(/Size=(\d+)/)        ?? [])[1] ?? '0');
             if (total > 0) return Math.round(((total - free) / total) * 100);
         } else {
-            const out = execSync(`df -k "${targetPath}"`, { encoding: 'utf-8', timeout: 4000 })
+            const out = execFileSync('df', ['-k', targetPath], { encoding: 'utf-8', timeout: 4000 })
                 .split('\n').filter(l => l.trim())[1];
             if (out) {
                 const parts = out.trim().split(/\s+/);
@@ -249,11 +256,16 @@ export function countNodeProcesses(pattern: string): number | null {
             );
             return lines.length;
         } else {
-            const result = execSync(
-                `ps aux | grep -c "${pattern.replace(/"/g, '\\"')}" || echo 0`,
-                { encoding: 'utf-8', timeout: 3000 }
-            );
-            return parseInt(result.trim()) || 0;
+            // Escapar só aspas (\") não bastava: backtick e $() ainda são interpretados dentro
+            // de aspas duplas por sh/bash, então `pattern` com "$(comando)" executava comando
+            // arbitrário (CodeQL js/incomplete-sanitization). Fix estrutural: sem shell/pipe —
+            // roda `ps aux` puro via execFileSync e filtra em JS, igual ao branch do Windows já
+            // fazia (também unifica a semântica: substring simples nos dois SOs, em vez de
+            // regex do grep só no POSIX).
+            const out = execFileSync('ps', ['aux'], { encoding: 'utf-8', timeout: 3000 });
+            const needle = pattern.toLowerCase();
+            const count = out.split('\n').filter(l => l.toLowerCase().includes(needle)).length;
+            return count;
         }
     } catch {
         return null;

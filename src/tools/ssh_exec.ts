@@ -7,7 +7,7 @@
  */
 
 import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { resolveHost, isDestructive } from './server_config';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
@@ -63,20 +63,36 @@ export class SshExecTool implements ToolExecutor {
         const sshTarget = resolveHost(hostAlias);
         const sshKey = getDefaultKey();
 
-        // Build SSH command with:
+        // Build SSH argv with:
         //   - BatchMode=yes: fail fast instead of prompting for password
         //   - StrictHostKeyChecking=accept-new: auto-accept new hosts
         //   - ConnectTimeout=5: fail fast on unreachable hosts
         //   - -i <key>: explicit key file
         //   - ServerAliveInterval=15: detect dead connections
-        const escapedCommand = command.replace(/"/g, '\\"').replace(/'/g, "'\\''");
-        const sshCommand = `ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -i "${sshKey}" ${sshTarget} '${escapedCommand}'`;
+        //
+        // execFile (array de args, sem shell local) em vez de exec+string: a escapagem manual
+        // anterior (replace de " e ') corrompia comandos com backslash — escapar " dentro de
+        // aspas simples é desnecessário E incorreto (não é especial ali), e sem escapar
+        // backslashes pré-existentes do input a combinação virava ambígua (CodeQL
+        // js/incomplete-sanitization). execFile elimina o shell local inteiro: sshKey, sshTarget
+        // e command chegam como argv literais no processo ssh, sem nenhum parsing de shell no
+        // meio — o mesmo texto de `command` chega ao ssh, que o encaminha pro shell REMOTO (esse
+        // é o comportamento pretendido da ferramenta, não uma vulnerabilidade).
+        const sshArgs = [
+            '-o', 'BatchMode=yes',
+            '-o', 'ConnectTimeout=5',
+            '-o', 'StrictHostKeyChecking=accept-new',
+            '-o', 'ServerAliveInterval=15',
+            '-i', sshKey,
+            sshTarget,
+            command,
+        ];
 
         log.info(`[SSH] Executing on ${sshTarget}: ${command.slice(0, 80)}${command.length > 80 ? '...' : ''}`);
 
         try {
             const output = await new Promise<string>((resolve, reject) => {
-                exec(sshCommand, { timeout, windowsHide: true }, (error, stdout, stderr) => {
+                execFile('ssh', sshArgs, { timeout, windowsHide: true }, (error, stdout, stderr) => {
                     const combined = (stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : '');
                     if (error) {
                         // Sprint 0.10 (achado L31): exit code ≠ 0 é sempre falha, mesmo com
