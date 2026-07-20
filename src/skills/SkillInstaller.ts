@@ -4,7 +4,7 @@
  * Adaptado do IalClaw para o NewClaw.
  * Permite instalar skills a partir de repositórios Git ou pacotes npm.
  */
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import { createLogger } from '../shared/AppLogger';
@@ -12,6 +12,7 @@ import { errorMessage } from '../shared/errors';
 const log = createLogger('Skillinstaller');
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const DEFAULT_TIMEOUT = 60000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -71,8 +72,12 @@ export class SkillInstaller {
                 const repoName = sanitizeArg(gitUrl.split('/').pop()?.replace('.git', '') || 'unknown-skill');
                 const dest = path.join(this.skillsDir, 'public', repoName);
 
+                // execFile com array de args (não exec com string interpolada): gitUrl nunca
+                // passa por um shell, então caracteres como ", ;, `, $() no meio da URL (que
+                // isValidGitUrl não bloqueia, só valida o prefixo https://) não têm como escapar
+                // pra fora do argumento do git.
                 await withTimeout(
-                    execAsync(`git clone "${gitUrl}" "${dest}"`, { cwd: this.workspaceDir, windowsHide: true }),
+                    execFileAsync('git', ['clone', gitUrl, dest], { cwd: this.workspaceDir, windowsHide: true }),
                     DEFAULT_TIMEOUT
                 );
 
