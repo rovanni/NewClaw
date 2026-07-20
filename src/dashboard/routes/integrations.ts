@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { errorMessage } from '../../shared/errors';
 import { DashboardContext } from './types';
 import { createLogger } from '../../shared/AppLogger';
-import { dashboardAuth } from './auth';
+import { dashboardAuth, getEffectiveSecret } from './auth';
 import { powerpointBroker } from './powerpointBroker';
 
 const log = createLogger('Integrations');
@@ -43,8 +43,7 @@ function getRequestToken(req: Request): string | null {
 
 function getOwnerId(token: string): string {
     if (token === 'no-auth-required') return 'system';
-    const secret = dashboardAuth.passwordHash || 'newclaw-no-auth';
-    return crypto.createHmac('sha256', secret).update(token).digest('hex');
+    return crypto.createHmac('sha256', getEffectiveSecret()).update(token).digest('hex');
 }
 
 export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = spawn): Router {

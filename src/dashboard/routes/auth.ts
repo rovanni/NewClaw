@@ -77,15 +77,21 @@ function verifyPassword(password: string, stored: string): boolean {
 // ── Signed token: survives restarts ──
 // Secret resolution: DASHBOARD_PASSWORD env var (primary) → stored password hash (fallback).
 // Using the stored hash as fallback means tokens survive restart even without .env.
-function getTokenSecret(): string {
+//
+// GHSA-jpx8-29mp-v4hw: never fall back to a hardcoded/predictable string here. If neither a
+// real secret exists, `enabled` should never have become true in the first place (enforced in
+// the /config route below) — but as defense in depth, fall back to a random per-process secret
+// instead of a public constant, so a stray/forged token can never be pre-computed by an attacker.
+const processRandomSecret = crypto.randomBytes(32).toString('hex');
+
+export function getEffectiveSecret(): string {
     if (process.env.DASHBOARD_PASSWORD) return process.env.DASHBOARD_PASSWORD;
-    // Derive a stable secret from the stored hash so tokens survive restarts without .env
-    return dashboardAuth.passwordHash || 'newclaw-no-auth';
+    return dashboardAuth.passwordHash || processRandomSecret;
 }
 
 function createSignedToken(): string {
     const raw = crypto.randomBytes(32).toString('hex');
-    const signature = crypto.createHmac('sha256', getTokenSecret()).update(raw).digest('hex');
+    const signature = crypto.createHmac('sha256', getEffectiveSecret()).update(raw).digest('hex');
     const token = `${raw}.${signature}`;
     API_TOKENS.add(token);
     return token;
@@ -99,7 +105,7 @@ function verifySignedToken(token: string): boolean {
     const parts = token.split('.');
     if (parts.length !== 2) return false;
     const [raw, signature] = parts;
-    const expected = crypto.createHmac('sha256', getTokenSecret()).update(raw).digest('hex');
+    const expected = crypto.createHmac('sha256', getEffectiveSecret()).update(raw).digest('hex');
     try {
         if (crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex'))) {
             API_TOKENS.add(token);
@@ -169,6 +175,13 @@ export function createAuthRouter(): Router {
 
     router.post('/config', (req: Request, res: Response) => {
         const { enabled, password } = req.body;
+        // GHSA-jpx8-29mp-v4hw: nunca permitir enabled=true sem uma senha real (nesta requisição
+        // ou já persistida) — essa combinação deixa dashboardAuth.passwordHash vazio, forçando
+        // getEffectiveSecret() a cair no fallback e login/verificação ficarem impossíveis.
+        if (enabled === true && !password && !dashboardAuth.passwordHash) {
+            res.status(400).json({ success: false, error: 'Defina uma senha antes de ativar a autenticação' });
+            return;
+        }
         if (typeof enabled === 'boolean') {
             dashboardAuth.enabled = enabled;
             // Desativando auth: remove hash persistido
