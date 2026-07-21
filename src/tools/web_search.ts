@@ -397,17 +397,19 @@ export class WebSearchTool implements ToolExecutor {
         const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/is);
         const title = this.cleanText(titleMatch?.[1] || '');
 
-        // <\/tag\s*> (não <\/tag>): tag de fechamento com espaço antes do ">" (ex: "</script >")
-        // é válida pra parsers HTML reais mas não casava aqui — conteúdo de script/style
-        // "sobrevivia" à remoção (CodeQL js/bad-tag-filter).
+        // <\/tag\b[^>]*> (não <\/tag\s*>): tag de fechamento com qualquer conteúdo entre o nome
+        // da tag e o ">" (ex: "</script foo>", "</script\t\nbar>") é válida pra parsers HTML
+        // reais (atributos/lixo numa end-tag são ignorados, só o nome importa) mas não casava com
+        // \s*> — conteúdo de script/style "sobrevivia" à remoção (CodeQL js/bad-tag-filter,
+        // variante além do espaço simples já coberto antes).
         let text = html
-            .replace(/<script[\s\S]*?<\/script\s*>/gi, ' ')
-            .replace(/<style[\s\S]*?<\/style\s*>/gi, ' ')
-            .replace(/<noscript[\s\S]*?<\/noscript\s*>/gi, ' ')
-            .replace(/<svg[\s\S]*?<\/svg\s*>/gi, ' ')
-            .replace(/<nav[\s\S]*?<\/nav\s*>/gi, ' ')
-            .replace(/<footer[\s\S]*?<\/footer\s*>/gi, ' ')
-            .replace(/<header[\s\S]*?<\/header\s*>/gi, ' ')
+            .replace(/<script[\s\S]*?<\/script\b[^>]*>/gi, ' ')
+            .replace(/<style[\s\S]*?<\/style\b[^>]*>/gi, ' ')
+            .replace(/<noscript[\s\S]*?<\/noscript\b[^>]*>/gi, ' ')
+            .replace(/<svg[\s\S]*?<\/svg\b[^>]*>/gi, ' ')
+            .replace(/<nav[\s\S]*?<\/nav\b[^>]*>/gi, ' ')
+            .replace(/<footer[\s\S]*?<\/footer\b[^>]*>/gi, ' ')
+            .replace(/<header[\s\S]*?<\/header\b[^>]*>/gi, ' ')
             .replace(/<\/?(article|main|section|p|h1|h2|h3|li|br|div)[^>]*>/gi, '\n')
             .replace(/<[^>]+>/g, ' ');
 

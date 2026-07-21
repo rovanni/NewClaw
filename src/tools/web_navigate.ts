@@ -261,13 +261,15 @@ export class WebNavigateTool implements ToolExecutor {
     }
 
     private extractReadableText(html: string, maxChars: number): string {
-        // <\/script\s*> (não <\/script>): tag de fechamento com espaço antes do ">" (ex:
-        // "</script >") é válida pra parsers HTML reais mas não casava aqui — o conteúdo do
-        // script "sobrevivia" à remoção (CodeQL js/bad-tag-filter).
+        // <\/script\b[^>]*> (não <\/script\s*>): tag de fechamento com qualquer conteúdo entre o
+        // nome da tag e o ">" (ex: "</script foo>", "</script\t\nbar>") é válida pra parsers HTML
+        // reais (atributos/lixo numa end-tag são ignorados, só o nome importa) mas não casava com
+        // \s*> — o conteúdo do script "sobrevivia" à remoção (CodeQL js/bad-tag-filter, variante
+        // além do espaço simples já coberto antes).
         let text = html
-            .replace(/<script[\s\S]*?<\/script\s*>/gi, ' ')
-            .replace(/<style[\s\S]*?<\/style\s*>/gi, ' ')
-            .replace(/<noscript[\s\S]*?<\/noscript\s*>/gi, ' ')
+            .replace(/<script[\s\S]*?<\/script\b[^>]*>/gi, ' ')
+            .replace(/<style[\s\S]*?<\/style\b[^>]*>/gi, ' ')
+            .replace(/<noscript[\s\S]*?<\/noscript\b[^>]*>/gi, ' ')
             .replace(/<\/?(article|main|section|p|h1|h2|h3|h4|li|br|div|tr|td)[^>]*>/gi, '\n')
             .replace(/<[^>]+>/g, ' ');
 

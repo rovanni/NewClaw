@@ -17,10 +17,14 @@
 const MAX_HASH_INPUT_LEN = 10_000;
 
 export function boundedHash(text: string, maxLen: number = MAX_HASH_INPUT_LEN): string {
-    const bounded = text.length > maxLen ? text.slice(0, maxLen) : text;
+    // Loop itera direto sobre `len` (Math.min de um valor fixo) em vez de fatiar `text` antes e
+    // iterar sobre `bounded.length` — mesmo resultado, mas o limite explícito no bound do loop é
+    // o padrão que o CodeQL (js/loop-bound-injection) reconhece como corte comprovado; o valor
+    // derivado de uma string já fatiada não era reconhecido, mesmo sendo matematicamente igual.
+    const len = Math.min(text.length, maxLen);
     let h = 0;
-    for (let i = 0; i < bounded.length; i++) {
-        h = ((h << 5) - h + bounded.charCodeAt(i)) | 0;
+    for (let i = 0; i < len; i++) {
+        h = ((h << 5) - h + text.charCodeAt(i)) | 0;
     }
     return Math.abs(h).toString(36);
 }

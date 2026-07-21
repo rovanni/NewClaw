@@ -8,7 +8,10 @@
  *  - shared/htmlEntities.ts decodeHtmlEntities() (js/double-escaping) — web_navigate/web_search
  *    delegam pra cá agora; ordem de decodificação corrigida (&amp; por último).
  *  - web_navigate.ts extractReadableText() / web_search.ts extractReadableContent()
- *    (js/bad-tag-filter) — `</script >` com espaço agora é reconhecido como fechamento válido.
+ *    (js/bad-tag-filter) — `</script >` com espaço agora é reconhecido como fechamento válido;
+ *    S135.5 cobre a variante achada depois (2026-07-21, alertas #85/#86): `</script\t\n bar>`
+ *    (lixo/atributos arbitrários antes do ">", não só espaço) também é uma end-tag válida pra
+ *    parsers HTML reais e não casava com o regex anterior (`\s*>`, só espaço).
  *
  * ModelDropdown.js (#14, js/xss-through-dom) não tem cobertura automatizada aqui — é DOM de
  * navegador (createElement/addEventListener), sem jsdom configurado neste projeto; validado por
@@ -67,6 +70,29 @@ async function main() {
         const result: { title: string; content: string } = (tool as any).extractReadableContent(html);
         assert(!result.content.includes(marker), 'conteúdo do script não aparece no content extraído', result.content);
         assert(result.content.includes('Outro texto legitimo'), 'texto legítimo continua sendo extraído normalmente', result.content);
+    }
+
+    console.log('\n=== S135.5 — "</script\\t\\n bar>" (lixo antes do ">", não só espaço) também remove o script (CodeQL #85/#86) ===');
+    {
+        const marker = 'XSS_MARKER_TRAILING_GARBAGE_END_TAG_KLMNOP';
+        const evasive = '</script\t\n bar>';
+        const htmlNavigate = `<script>${marker}();${evasive}<p>Texto legitimo da pagina que tem mais de trinta caracteres aqui.</p>`;
+        const navResult: string = (new WebNavigateTool() as any).extractReadableText(htmlNavigate, 4000);
+        assert(!navResult.includes(marker), 'web_navigate: conteúdo do script (fechado com lixo antes do ">") não aparece no texto extraído', navResult);
+        assert(navResult.includes('Texto legitimo'), 'web_navigate: texto legítimo continua sendo extraído', navResult);
+
+        const htmlSearch = `<script>${marker}();${evasive}<p>Outro texto legitimo da pagina com mais de quarenta caracteres aqui.</p>`;
+        const searchResult: { title: string; content: string } = (new WebSearchTool() as any).extractReadableContent(htmlSearch);
+        assert(!searchResult.content.includes(marker), 'web_search: conteúdo do script não aparece no content extraído', searchResult.content);
+        assert(searchResult.content.includes('Outro texto legitimo'), 'web_search: texto legítimo continua sendo extraído', searchResult.content);
+
+        // Garante que a tag continua exigindo o NOME exato "script" — "</scriptx>" não deve
+        // fechar o script real (senão \b[^>]*> viraria permissivo demais e apagaria conteúdo
+        // legítimo por engano).
+        const notATag = (new WebNavigateTool() as any).extractReadableText(
+            `<script>${marker}();</scriptx><p>Texto legitimo da pagina que tem mais de trinta caracteres aqui.</p>`, 4000
+        );
+        assert(notATag.includes(marker), '"</scriptx>" (nome de tag diferente) NÃO fecha o script real — \\b continua exigindo o nome exato', notATag);
     }
 
     console.log(`\n=== RESULTADO: ${passed} passou, ${failed} falhou ===`);
