@@ -60,9 +60,22 @@ export function parseSessionKey(composite: string): SessionKeyParts {
  * ou userId real) só na hora de derivar o nome de arquivo — a identidade lógica (`composite`,
  * usada em Maps, DB, logs) continua sendo `channel:userId` sem nenhuma mudança de comportamento
  * fora do disco.
+ *
+ * CodeQL js/path-injection (auditoria 2026-07-20, docs/issues/seguranca-codeql-2026-07-20/SPRINTS/S4):
+ * a versão original só tratava ':' — '/' e '\' passavam intactos. `sessionId` (= `composite`)
+ * vem, para o canal Web, DIRETO do corpo de uma requisição HTTP não validada
+ * (`src/dashboard/routes/chat.ts`: `req.body?.sessionId`) — um `userId` tipo
+ * `../../../../etc/cron.d/evil` chegava aqui sem nenhuma barreira antes. Como `path.join()`
+ * normaliza `..` como segmento de path (não como substring), e essa string virava UM ÚNICO
+ * argumento de `path.join(transcriptDir, safeId + '.jsonl')`, os '/' sobreviventes bastavam pra
+ * escapar de `transcriptDir` de verdade (confirmado por leitura de código, não só suposição —
+ * `path.join('/data/sessions', '../../etc/x.jsonl')` resolve fora de `/data/sessions`). Trocar
+ * também '/' e '\' por '~' fecha isso na fonte — nenhum separador de path sobra pra `path.join`
+ * interpretar. Defesa adicional (cinto e suspensório, não substitui este fix): SessionTranscript
+ * também valida contenção do path resolvido antes de usar.
  */
 export function toFileSafeId(composite: string): string {
-    return composite.replace(/:/g, '~');
+    return composite.replace(/[:/\\]/g, '~');
 }
 
 /**

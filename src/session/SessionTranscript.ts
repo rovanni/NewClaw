@@ -21,6 +21,17 @@ import { createLogger } from '../shared/AppLogger';
 import { toFileSafeId } from './SessionKeyFactory';
 const log = createLogger('Sessiontranscript');
 
+/**
+ * Confirma que `candidate` fica dentro de `baseDir` — defesa em profundidade contra path
+ * traversal (CodeQL js/path-injection, docs/issues/seguranca-codeql-2026-07-20/SPRINTS/S4).
+ * Não substitui toFileSafeId() (que já neutraliza '/','\\',':' na origem) — é o cinto e
+ * suspensório: mesmo idioma de `checkAllowed()` em crossPlatform.ts/resolvePath().
+ */
+function isPathContained(baseDir: string, candidate: string): boolean {
+    const rel = path.relative(path.resolve(baseDir), path.resolve(candidate));
+    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
 export type SessionEventType = 'user' | 'assistant' | 'system' | 'tool_call' | 'tool_result' | 'checkpoint';
 
 export interface TranscriptMeta {
@@ -87,8 +98,16 @@ export class SessionTranscript {
         // chamado só "telegram"/"web", invisível para qualquer `fs.readdirSync` (confirmado em
         // produção: SessionAutoCleaner nunca compactou nenhuma sessão numa instalação Windows).
         const safeId = toFileSafeId(sessionId);
-        this.filePath = path.join(transcriptDir, `${safeId}.jsonl`);
-        this.indexPath = path.join(transcriptDir, `${safeId}.idx.json`);
+        const filePath = path.join(transcriptDir, `${safeId}.jsonl`);
+        const indexPath = path.join(transcriptDir, `${safeId}.idx.json`);
+        // Cinto e suspensório: mesmo com toFileSafeId() já neutralizando '/','\\',':', falhar
+        // ruidosamente aqui (em vez de escrever silenciosamente fora de transcriptDir) se algum
+        // caractere não previsto ainda escapar no futuro.
+        if (!isPathContained(transcriptDir, filePath) || !isPathContained(transcriptDir, indexPath)) {
+            throw new Error(`SessionTranscript: path de sessão fora de transcriptDir (sessionId="${sessionId}")`);
+        }
+        this.filePath = filePath;
+        this.indexPath = indexPath;
         this.index = {
             lastOffset: 0,
             lastSeq: 0,
@@ -156,6 +175,15 @@ export class SessionTranscript {
         if (!this.sessionId.includes(':')) return; // nada a migrar (id já não tem ':')
         const legacyFilePath = path.join(this.transcriptDir, `${this.sessionId}.jsonl`);
         const legacyIndexPath = path.join(this.transcriptDir, `${this.sessionId}.idx.json`);
+        // legacyFilePath/legacyIndexPath usam this.sessionId BRUTO de propósito (achar o arquivo
+        // ADS pré-fix, que nunca passou por toFileSafeId) — mas um sessionId adversarial com
+        // '../' nunca teve um arquivo legado de verdade pra migrar; path traversal aqui não é
+        // uma migração legítima, é o mesmo ataque do construtor. Aborta a migração inteira (não
+        // é fatal — o pior caso é não migrar um arquivo legado que não existe mesmo).
+        if (!isPathContained(this.transcriptDir, legacyFilePath) || !isPathContained(this.transcriptDir, legacyIndexPath)) {
+            log.warn(`Skipping legacy migration: sessionId escapes transcriptDir (sessionId="${this.sessionId}")`);
+            return;
+        }
 
         if (!existsSync(this.filePath) && existsSync(legacyFilePath)) {
             try {
