@@ -939,7 +939,23 @@ function Step-SetupWindowsService {
         $nodePath = if ($nodeCmd) { $nodeCmd.Source } else { "node" }
 
         try {
-            $action    = New-ScheduledTaskAction -Execute $nodePath -Argument "`"$Dir\bin\newclaw`" start" -WorkingDirectory $Dir
+            # Lançador VBScript oculto em vez de chamar node.exe direto na Action: sem isso,
+            # todo boot mostrava alguns segundos de janela de terminal (saída de "newclaw
+            # start": checagem de PID travado, cleanup, etc.) até o PM2 assumir em background.
+            # LogonType S4U ("rodar mesmo sem logon", sessão não-interativa, sem janela) foi
+            # cogitado, mas exige conceder "Log on as a batch job" ao usuário — precisa de
+            # sessão elevada (admin) mesmo a tarefa em si rodando sem privilégios, quebrando a
+            # premissa "não precisa de admin" que já motivou preferir Tarefa Agendada a
+            # sc.exe create (ver comentário acima). wscript.exe com WshShell.Run(cmd, 0, ...)
+            # mantém LogonType Interactive (sem admin) e ainda assim não mostra janela.
+            $vbsPath = Join-Path $Dir "newclaw-hidden.vbs"
+            $vbsContent = @"
+Set objShell = CreateObject("WScript.Shell")
+objShell.Run """$nodePath"" ""$Dir\bin\newclaw"" start", 0, True
+"@
+            Set-Content -Path $vbsPath -Value $vbsContent -Encoding ASCII
+
+            $action    = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`"" -WorkingDirectory $Dir
             $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
             $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
             $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable

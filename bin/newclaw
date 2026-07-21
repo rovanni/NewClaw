@@ -80,6 +80,22 @@ function pm2(args = []) {
   }
 }
 
+// Fonte única pra inspecionar a Tarefa Agendada "NewClaw" do Windows — usada tanto pelo
+// doctor (checagem #11) quanto pelo auto-migrate em installBuildRestart(). Retorna null se
+// a tarefa não existir (usuário nunca configurou auto-início — nada a reportar/migrar).
+function getWindowsAutostartTaskInfo() {
+  const raw = execSync(
+    `powershell -NoProfile -Command "$t = Get-ScheduledTask -TaskName 'NewClaw' -ErrorAction SilentlyContinue; if ($t) { $t.State.ToString() + '|' + $t.Actions[0].Execute }"`,
+    { encoding: 'utf-8', stdio: 'pipe' }
+  ).trim();
+  if (!raw) return null;
+  const [state, execute] = raw.split('|');
+  // Formato antigo: Action chama node.exe direto (mostra janela de console no boot).
+  // Formato novo (21/07/2026): Action chama wscript.exe rodando um lançador oculto.
+  const isOldStyle = /node(\.exe)?$/i.test((execute || '').trim());
+  return { state, execute, isOldStyle };
+}
+
 function isPM2Running() {
   try {
     const out = pm2(['show', 'newclaw']);
@@ -265,6 +281,27 @@ function installBuildRestart(restart) {
     console.log('🧹 Removendo devDependencies pós-build...');
     execSync('npm prune --omit=dev', { cwd: DIR, stdio: 'inherit' });
   } catch { /* não crítico */ }
+
+  // Auto-migra a Tarefa Agendada do Windows se ainda estiver no formato antigo (node.exe
+  // direto, mostra janela de console a cada boot — fix de 21/07/2026). `update()` só troca
+  // os arquivos do repositório; sem este passo, quem já tinha a tarefa registrada ficaria
+  // preso no formato antigo pra sempre, mesmo puxando o código corrigido, até rodar
+  // `newclaw repair` manualmente. Roda o mesmo script que `repair` chama — não reimplementa
+  // a lógica de registro da tarefa aqui.
+  if (process.platform === 'win32') {
+    try {
+      const info = getWindowsAutostartTaskInfo();
+      if (info && info.isOldStyle) {
+        const scriptPath = path.join(DIR, 'scripts', 'fix-windows-autostart.ps1');
+        if (fs.existsSync(scriptPath)) {
+          console.log('🔧 Migrando auto-início do Windows para o lançador oculto (sem mais janela de console no boot)...');
+          execSync(`powershell -ExecutionPolicy Bypass -File "${scriptPath}"`, { cwd: DIR, stdio: 'inherit' });
+        }
+      }
+    } catch {
+      console.log('⚠️  Não foi possível migrar automaticamente o auto-início do Windows — rode manualmente: newclaw repair');
+    }
+  }
 
   if (restart) {
     console.log('🔄 Reiniciando...');
@@ -1415,12 +1452,19 @@ const commands = {
     // mesmo quando o bot não sobreviveria ao próximo reboot.
     if (process.platform === 'win32') {
       try {
-        const taskState = execSync(
-          `powershell -NoProfile -Command "(Get-ScheduledTask -TaskName 'NewClaw' -ErrorAction SilentlyContinue).State"`,
-          { encoding: 'utf-8', stdio: 'pipe' }
-        ).trim();
-        if (taskState) {
-          check('Auto-início (Tarefa Agendada)', true, `estado: ${taskState}`);
+        // installBuildRestart() já auto-migra o formato antigo em todo "newclaw update
+        // restart" — esta checagem é o que resta pra pegar quem nunca rodou update com
+        // restart, ou rodou update sem o restart aplicar (--force, update sem mudanças de
+        // bin/newclaw fora do fluxo normal etc.).
+        const info = getWindowsAutostartTaskInfo();
+        if (info) {
+          check(
+            'Auto-início (Tarefa Agendada)',
+            !info.isOldStyle,
+            info.isOldStyle
+              ? `estado: ${info.state}, mas ainda no formato antigo (janela de console no boot) — rode: newclaw repair`
+              : `estado: ${info.state}`
+          );
         } else {
           let hasOldService = false;
           try { execSync('sc.exe query NewClaw', { stdio: 'pipe' }); hasOldService = true; } catch {}

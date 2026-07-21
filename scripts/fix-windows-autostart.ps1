@@ -73,7 +73,23 @@ if (-not $nodeCmd) {
 $nodePath = $nodeCmd.Source
 
 try {
-    $action    = New-ScheduledTaskAction -Execute $nodePath -Argument "`"$binPath`" start" -WorkingDirectory $Dir
+    # Lançador VBScript oculto em vez de chamar node.exe direto na Action: LogonType
+    # S4U ("rodar mesmo sem logon", que roda em sessão não-interativa e não mostraria
+    # janela) foi tentado primeiro, mas Register-ScheduledTask com S4U exige conceder o
+    # direito "Log on as a batch job" ao usuário — operação que precisa de sessão
+    # elevada (admin) mesmo que a tarefa em si rode sem privilégios. Isso quebraria a
+    # premissa original de não exigir admin (ver install.ps1 Step-SetupWindowsService).
+    # wscript.exe com WshShell.Run(cmd, 0, ...) mantém LogonType Interactive (sem
+    # admin) e ainda assim não mostra janela — SW_HIDE é aplicado à criação do
+    # processo filho, não depende da sessão ser interativa ou não.
+    $vbsPath = Join-Path $Dir "newclaw-hidden.vbs"
+    $vbsContent = @"
+Set objShell = CreateObject("WScript.Shell")
+objShell.Run """$nodePath"" ""$binPath"" start", 0, True
+"@
+    Set-Content -Path $vbsPath -Value $vbsContent -Encoding ASCII
+
+    $action    = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$vbsPath`"" -WorkingDirectory $Dir
     $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable

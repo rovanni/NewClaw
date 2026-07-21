@@ -27,6 +27,10 @@ backups/
 logs/
 *.pid
 
+# Lançador oculto gerado pela Tarefa Agendada do Windows (install.ps1 /
+# fix-windows-autostart.ps1) na pasta de instalação de cada usuário — não é fonte.
+newclaw-hidden.vbs
+
 # Workspace: ambiente de trabalho/scratch do agente (arquivos gerados,
 # conteúdo pessoal do usuário) — nunca versionado, sem exceções.
 workspace/
