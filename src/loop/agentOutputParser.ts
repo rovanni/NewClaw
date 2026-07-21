@@ -1,6 +1,7 @@
 import { normalizeFromRaw } from './ResponseAdapter';
 import type { ParsedLLMResponse } from './ContentExtractor';
 import type { LLMResult } from '../core/ProviderFactory';
+import { stripHtmlTags } from '../shared/stripHtmlTags';
 
 // Strip only real model artifacts: think/reasoning tags that leak into output.
 // Everything else is the LLM's responsibility — don't second-guess its formatting.
@@ -64,7 +65,7 @@ export function extractFinalText(response: LLMResult, _atomicData: unknown): str
     const raw = response.content || '';
     const thinkMatch = raw.match(/<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi);
     if (thinkMatch) {
-        const lastThink = thinkMatch[thinkMatch.length - 1].replace(/<[^>]+>/g, '').trim();
+        const lastThink = stripHtmlTags(thinkMatch[thinkMatch.length - 1]).trim();
         const sentences = lastThink.split(/[.!?]\s+/).filter(s => s.trim().length > 20);
         if (sentences.length > 0) {
             const candidate = sentences[sentences.length - 1].trim();

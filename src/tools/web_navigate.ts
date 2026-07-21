@@ -10,6 +10,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { errorMessage } from '../shared/errors';
+import { decodeHtmlEntities } from '../shared/htmlEntities';
 
 const execFileAsync = promisify(execFile);
 
@@ -248,7 +249,7 @@ export class WebNavigateTool implements ToolExecutor {
         const rows = [...html.matchAll(/<a[^>]*class="result-link"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/gi)];
         return rows
             .map(row => ({
-                url: this.decodeHtmlEntities(row[1] || '').trim(),
+                url: decodeHtmlEntities(row[1] || '').trim(),
                 text: this.cleanInlineText(row[2] || '')
             }))
             .filter(item => item.url && item.text);
@@ -260,14 +261,17 @@ export class WebNavigateTool implements ToolExecutor {
     }
 
     private extractReadableText(html: string, maxChars: number): string {
+        // <\/script\s*> (não <\/script>): tag de fechamento com espaço antes do ">" (ex:
+        // "</script >") é válida pra parsers HTML reais mas não casava aqui — o conteúdo do
+        // script "sobrevivia" à remoção (CodeQL js/bad-tag-filter).
         let text = html
-            .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-            .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-            .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+            .replace(/<script[\s\S]*?<\/script\s*>/gi, ' ')
+            .replace(/<style[\s\S]*?<\/style\s*>/gi, ' ')
+            .replace(/<noscript[\s\S]*?<\/noscript\s*>/gi, ' ')
             .replace(/<\/?(article|main|section|p|h1|h2|h3|h4|li|br|div|tr|td)[^>]*>/gi, '\n')
             .replace(/<[^>]+>/g, ' ');
 
-        text = this.decodeHtmlEntities(text);
+        text = decodeHtmlEntities(text);
         const lines = text
             .split('\n')
             .map(line => this.cleanInlineText(line))
@@ -283,7 +287,7 @@ export class WebNavigateTool implements ToolExecutor {
 
         return links
             .map(link => {
-                const href = this.decodeHtmlEntities(link[1] || '').trim();
+                const href = decodeHtmlEntities(link[1] || '').trim();
                 const text = this.cleanInlineText(link[2] || '');
                 if (!href || !text) return null;
 
@@ -329,7 +333,7 @@ export class WebNavigateTool implements ToolExecutor {
     }
 
     private cleanInlineText(text: string): string {
-        return this.decodeHtmlEntities(text)
+        return decodeHtmlEntities(text)
             .replace(/<[^>]*>/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
@@ -348,18 +352,6 @@ export class WebNavigateTool implements ToolExecutor {
         ].some(fragment => lower.includes(fragment));
     }
 
-    private decodeHtmlEntities(input: string): string {
-        return input
-            .replace(/&amp;/g, '&')
-            .replace(/&quot;/g, '"')
-            .replace(/&#39;/g, "'")
-            .replace(/&apos;/g, "'")
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&nbsp;/g, ' ')
-            .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
-            .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));
-    }
 
     private limitOutput(text: string, maxChars: number): string {
         if (text.length <= maxChars) return text;

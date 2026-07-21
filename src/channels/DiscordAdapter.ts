@@ -35,6 +35,7 @@ import { MessageBus } from './MessageBus';
 import { isSenderAllowed, isWithinScope } from './accessControl';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
+import { stripHtmlTags } from '../shared/stripHtmlTags';
 
 const log = createLogger('DiscordAdapter');
 
@@ -451,12 +452,11 @@ export class DiscordAdapter implements ChannelAdapter {
     }
 
     private stripHtml(text: string): string {
-        return text
+        const withMarkdown = text
             .replace(/<b>(.*?)<\/b>/g, '**$1**')
             .replace(/<i>(.*?)<\/i>/g, '*$1*')
             .replace(/<code>(.*?)<\/code>/g, '`$1`')
-            .replace(/<pre>(.*?)<\/pre>/g, '```\n$1\n```')
-            .replace(/<[^>]+>/g, '')
-            .trim();
+            .replace(/<pre>(.*?)<\/pre>/g, '```\n$1\n```');
+        return stripHtmlTags(withMarkdown).trim();
     }
 }

@@ -4,6 +4,7 @@
  */
 
 import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
+import { decodeHtmlEntities } from '../shared/htmlEntities';
 
 
 interface SearchCandidate {
@@ -190,7 +191,7 @@ export class WebSearchTool implements ToolExecutor {
             const results: SearchCandidate[] = [];
 
             for (const row of rows.slice(0, maxResults)) {
-                const url = this.decodeHtmlEntities(row[1] || '').trim();
+                const url = decodeHtmlEntities(row[1] || '').trim();
                 const title = this.cleanText(row[2] || '');
                 const snippet = this.cleanText(row[3] || '');
                 if (!url || !title) continue;
@@ -396,18 +397,21 @@ export class WebSearchTool implements ToolExecutor {
         const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/is);
         const title = this.cleanText(titleMatch?.[1] || '');
 
+        // <\/tag\s*> (não <\/tag>): tag de fechamento com espaço antes do ">" (ex: "</script >")
+        // é válida pra parsers HTML reais mas não casava aqui — conteúdo de script/style
+        // "sobrevivia" à remoção (CodeQL js/bad-tag-filter).
         let text = html
-            .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-            .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-            .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
-            .replace(/<svg[\s\S]*?<\/svg>/gi, ' ')
-            .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
-            .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
-            .replace(/<header[\s\S]*?<\/header>/gi, ' ')
+            .replace(/<script[\s\S]*?<\/script\s*>/gi, ' ')
+            .replace(/<style[\s\S]*?<\/style\s*>/gi, ' ')
+            .replace(/<noscript[\s\S]*?<\/noscript\s*>/gi, ' ')
+            .replace(/<svg[\s\S]*?<\/svg\s*>/gi, ' ')
+            .replace(/<nav[\s\S]*?<\/nav\s*>/gi, ' ')
+            .replace(/<footer[\s\S]*?<\/footer\s*>/gi, ' ')
+            .replace(/<header[\s\S]*?<\/header\s*>/gi, ' ')
             .replace(/<\/?(article|main|section|p|h1|h2|h3|li|br|div)[^>]*>/gi, '\n')
             .replace(/<[^>]+>/g, ' ');
 
-        text = this.decodeHtmlEntities(text);
+        text = decodeHtmlEntities(text);
         const lines = text
             .split('\n')
             .map(line => this.cleanText(line))
@@ -486,22 +490,10 @@ export class WebSearchTool implements ToolExecutor {
     }
 
     private cleanText(input: string): string {
-        return this.decodeHtmlEntities(input)
+        return decodeHtmlEntities(input)
             .replace(/<[^>]*>/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
     }
 
-    private decodeHtmlEntities(input: string): string {
-        return input
-            .replace(/&amp;/g, '&')
-            .replace(/&quot;/g, '"')
-            .replace(/&#39;/g, "'")
-            .replace(/&apos;/g, "'")
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&nbsp;/g, ' ')
-            .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
-            .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));
-    }
 }

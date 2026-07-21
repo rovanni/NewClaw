@@ -17,6 +17,7 @@ import path from 'path';
 import os from 'os';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
+import { stripHtmlTags } from '../shared/stripHtmlTags';
 
 const log = createLogger('TelegramSupervisor');
 
@@ -121,7 +122,7 @@ export class TelegramPollingSupervisor {
                        + `A API do Telegram permite apenas um consumidor <code>getUpdates</code> por BOT_TOKEN.\n`
                        + `O canal Telegram será mantido apenas na instância principal.\n`
                        + `Recomenda-se usar <code>exec_mode: "fork"</code> no ecosystem.config.`;
-            log.error('cluster_mode_detected', warn.replace(/<[^>]+>/g, ''));
+            log.error('cluster_mode_detected', stripHtmlTags(warn));
             await this.notifyAdmins(warn);
         }
 

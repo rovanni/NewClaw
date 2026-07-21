@@ -46,6 +46,17 @@ export function initDropdowns(ids, onPull) {
   }
 }
 
+/**
+ * Constrói o dropdown via DOM (createElement/textContent), não innerHTML de string.
+ *
+ * CodeQL js/xss-through-dom: a versão anterior interpolava `val` (texto digitado pelo usuário)
+ * e `m` (nome de modelo) direto numa string HTML, inclusive dentro de `onclick="fn('${val}')"` —
+ * uma aspa simples ou dupla em `val` quebrava o atributo/a string JS embutida (self-XSS: usuário
+ * digita `x'); alert(1); //` na busca de modelo). Escapar corretamente exigiria dois níveis
+ * (HTML do atributo + string JS dentro do onclick) — frágil e fácil de errar de novo. Construir
+ * via textContent/addEventListener elimina a classe inteira: nada vira string HTML, então não há
+ * fronteira de atributo/JS-inline pra escapar nem pra quebrar.
+ */
 function _renderDropdown(inputId, input, dropdown, onPull) {
   const val    = input.value.trim();
   const filter = val.toLowerCase();
@@ -55,26 +66,71 @@ function _renderDropdown(inputId, input, dropdown, onPull) {
   const fc     = f(clouds);
   const fl     = f(locals);
 
-  let html = '';
+  dropdown.innerHTML = '';
+
+  const addRow = (className, onClick, build) => {
+    const row = document.createElement('div');
+    row.className = className;
+    row.addEventListener('click', onClick);
+    build(row);
+    dropdown.appendChild(row);
+  };
+  const addSpan = (row, className, text) => {
+    const span = document.createElement('span');
+    span.className = className;
+    span.textContent = text;
+    row.appendChild(span);
+  };
+  const addGroupLabel = (text) => {
+    const label = document.createElement('div');
+    label.className = 'mdg';
+    label.textContent = text;
+    dropdown.appendChild(label);
+  };
+
+  let hasAny = false;
 
   if (val && !_models.includes(val)) {
-    html += `<div class="mia" onclick="window.__ddAddSelect('${inputId}','${val}')">
-               <span class="mn">✨ Usar "${val}"</span>
-               <span class="badge" style="background:#5c6bc0;color:#fff">custom</span>
-             </div>`;
+    hasAny = true;
+    addRow('mia', () => window.__ddAddSelect(inputId, val), (row) => {
+      addSpan(row, 'mn', `✨ Usar "${val}"`);
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.style.background = '#5c6bc0';
+      badge.style.color = '#fff';
+      badge.textContent = 'custom';
+      row.appendChild(badge);
+    });
   }
   if (fc.length) {
-    html += `<div class="mdg">Cloud Models</div>`;
-    fc.forEach(m => { html += `<div class="mi" onclick="window.__ddSelect('${inputId}','${m}')"><span class="mn">${m}</span><span class="badge badge-cloud">cloud</span></div>`; });
+    hasAny = true;
+    addGroupLabel('Cloud Models');
+    fc.forEach(m => addRow('mi', () => window.__ddSelect(inputId, m), (row) => {
+      addSpan(row, 'mn', m);
+      addSpan(row, 'badge badge-cloud', 'cloud');
+    }));
   }
   if (fl.length) {
-    html += `<div class="mdg">Local Models</div>`;
-    fl.forEach(m => { html += `<div class="mi" onclick="window.__ddSelect('${inputId}','${m}')"><span class="mn">${m}</span><span class="badge badge-local">local</span></div>`; });
+    hasAny = true;
+    addGroupLabel('Local Models');
+    fl.forEach(m => addRow('mi', () => window.__ddSelect(inputId, m), (row) => {
+      addSpan(row, 'mn', m);
+      addSpan(row, 'badge badge-local', 'local');
+    }));
   }
   if (filter && !fc.length && !fl.length && !_models.includes(val)) {
-    html += `<div class="mip" onclick="window.__ddPull('${inputId}','${val}')">⬇️ Baixar "${val}"...</div>`;
+    hasAny = true;
+    addRow('mip', () => window.__ddPull(inputId, val), (row) => {
+      row.textContent = `⬇️ Baixar "${val}"...`;
+    });
   }
-  dropdown.innerHTML = html || `<div style="padding:10px;font-size:.79rem;color:var(--text-soft);text-align:center">Nenhum modelo disponível</div>`;
+
+  if (!hasAny) {
+    const empty = document.createElement('div');
+    Object.assign(empty.style, { padding: '10px', fontSize: '.79rem', color: 'var(--text-soft)', textAlign: 'center' });
+    empty.textContent = 'Nenhum modelo disponível';
+    dropdown.appendChild(empty);
+  }
 }
 
 /** Install global helpers used by dropdown onclick handlers. */
