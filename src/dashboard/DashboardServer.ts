@@ -22,6 +22,7 @@ import { SkillInstaller } from '../skills/SkillInstaller';
 import type { SkillLearner } from '../loop/SkillLearner';
 import { createLogger } from '../shared/AppLogger';
 import { authMiddleware, createAuthRouter, dashboardAuth, initAuthPersistence } from './routes/auth';
+import { rateLimitMiddleware, loginRateLimit, csrfOriginCheck } from './security';
 import { createConfigRouter } from './routes/config';
 import { createProvidersRouter } from './routes/providers';
 import { createSkillsRouter } from './routes/skills';
@@ -52,6 +53,14 @@ export class DashboardServer {
         this.app.use(cookieParser());
 
         this.app.use(authMiddleware);
+        // Rate-limit + CSRF (CodeQL js/missing-rate-limiting, js/missing-token-validation — ver
+        // src/dashboard/security.ts para o racional completo). Depois de authMiddleware (não
+        // precisa proteger rotas 401 de qualquer forma) e antes de qualquer router — cobre tudo,
+        // inclusive as páginas estáticas/health. loginRateLimit é mais estrito que o geral e
+        // precisa ser registrado ANTES do router de /api/auth pra rodar primeiro nessa rota.
+        this.app.use(rateLimitMiddleware);
+        this.app.use(csrfOriginCheck);
+        this.app.use('/api/auth/login', loginRateLimit);
         // redirect:false prevents 301 /config → /config/ (Express detects public/config/ directory)
         this.app.use(express.static(path.join(__dirname, 'public'), { redirect: false }));
 
