@@ -9,7 +9,11 @@
  *
  * Esse caso específico (senha configurada via UI) já estava corrigido antes deste teste
  * (getTokenSecret/getEffectiveSecret cai para dashboardAuth.passwordHash, não '' — commit
- * 7d30363). Mapeando o entorno (auth.ts, DashboardServer.ts, integrations.ts) encontrei uma
+ * b509c7c, 2026-06-17, efeito colateral de um refactor maior, não um fix deliberado da
+ * advisory). CORREÇÃO (2026-07-21): a atribuição original deste comentário — "commit 7d30363"
+ * — estava errada; 7d30363 (2026-05-16) é o commit que INTRODUZIU o fallback vazio
+ * (`process.env.DASHBOARD_PASSWORD || ''`), não o que corrigiu. Mapeando o entorno
+ * (auth.ts, DashboardServer.ts, integrations.ts) encontrei uma
  * variante residual da mesma classe de bug: `POST /api/auth/config` aceitava `{enabled: true}`
  * sem nunca ter existido uma senha (passwordHash ainda vazio), deixando getEffectiveSecret() cair
  * num fallback previsível (`'newclaw-no-auth'`, string pública no código-fonte) — reintroduzindo
