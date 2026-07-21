@@ -76,8 +76,15 @@ export class SkillInstaller {
                 // passa por um shell, então caracteres como ", ;, `, $() no meio da URL (que
                 // isValidGitUrl não bloqueia, só valida o prefixo https://) não têm como escapar
                 // pra fora do argumento do git.
+                //
+                // "--" antes dos posicionais (CodeQL js/second-order-command-line-injection,
+                // achado 2026-07-20 — meu próprio fix anterior desta sessão não tinha isso):
+                // isValidGitUrl já impede gitUrl de começar com "-" (exige prefixo https://), mas
+                // "--" é a mitigação padrão pra esse tipo de "argument injection" independente da
+                // validação anterior — sem ele, um valor começando com "-" (ex: "--upload-pack=…")
+                // seria interpretado pelo PRÓPRIO git como uma flag, não como a URL/destino.
                 await withTimeout(
-                    execFileAsync('git', ['clone', gitUrl, dest], { cwd: this.workspaceDir, windowsHide: true }),
+                    execFileAsync('git', ['clone', '--', gitUrl, dest], { cwd: this.workspaceDir, windowsHide: true }),
                     DEFAULT_TIMEOUT
                 );
 

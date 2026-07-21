@@ -18,6 +18,18 @@
  * `success:false` (git falha normalmente, tratando a URL toda como argumento, não como injeção
  * silenciosamente engolida).
  *
+ * Update 2026-07-20 (CodeQL js/second-order-command-line-injection, achado numa varredura
+ * seguinte): faltava `--` antes dos posicionais em `execFile('git', ['clone', gitUrl, dest])` —
+ * defesa em profundidade contra `gitUrl`/`dest` começando com `-` sendo interpretado pelo
+ * próprio git como flag (`isValidGitUrl` já impede isso hoje, exigindo prefixo `https://`, mas
+ * `--` não depende dessa validação continuar correta pra sempre). Tentativa de testar isso via
+ * mock de `child_process.execFile` não funcionou: `SkillInstaller.ts` usa
+ * `promisify(execFile)` UMA VEZ no carregamento do módulo — a referência capturada é imune a
+ * monkey-patch depois (diferente de `ssh_exec.ts`, que chama `execFile` direto a cada
+ * invocação). Cobertura real: S130.3 abaixo já exercita `git clone --` de verdade contra
+ * github.com e passa — prova indireta de que o `--` não quebrou nada, mesmo sem um teste
+ * isolado da posição exata do argv.
+ *
  * Execução: npx ts-node src/__tests__/regression/S130_SkillInstaller_GitCloneCommandInjection.test.ts
  */
 
