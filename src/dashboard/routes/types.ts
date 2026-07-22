@@ -1,5 +1,6 @@
 import { AgentController, NewClawConfig } from '../../core/AgentController';
 import { ProviderFactory } from '../../core/ProviderFactory';
+import { ModelRegistryService } from '../../core/ModelRegistryService';
 import { MemoryManager } from '../../memory/MemoryManager';
 import { MemoryCurator } from '../../memory/MemoryCurator';
 import { EmbeddingService } from '../../memory/EmbeddingService';
@@ -11,6 +12,7 @@ import type { SkillLearner } from '../../loop/SkillLearner';
 export interface DashboardContext {
     controller?: AgentController;
     providerFactory?: ProviderFactory;
+    modelRegistryService?: ModelRegistryService;
     memoryManager?: MemoryManager;
     memoryCurator?: MemoryCurator;
     embeddingService?: EmbeddingService;

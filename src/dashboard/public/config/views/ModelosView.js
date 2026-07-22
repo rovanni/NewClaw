@@ -1,6 +1,8 @@
 import { configStore, providersStore } from '../state.js';
 import { showToast } from '../components/Toast.js';
 import { initDropdowns, updateDropdownModels } from '../components/ModelDropdown.js';
+import { addCustomProvider, removeCustomProvider } from '../api.js';
+import { loadProviders } from '../app.js';
 
 const ROUTE_MAP = {
   modelChat: 'chat', modelCode: 'code', modelVision: 'vision',
@@ -14,6 +16,29 @@ const PROV_LABELS = {
   anthropic: 'Anthropic (Claude)',
 };
 
+const CLOUD_PROVIDERS = [
+  { key: 'gemini',     icon: '✨', name: 'Google Gemini',    placeholder: 'AIza...' },
+  { key: 'deepseek',   icon: '🌊', name: 'DeepSeek',         placeholder: 'sk-...' },
+  { key: 'groq',       icon: '⚡', name: 'Groq',             placeholder: 'gsk_...' },
+  { key: 'openrouter', icon: '🔀', name: 'OpenRouter',       placeholder: 'sk-or-...' },
+  { key: 'anthropic',  icon: '🧠', name: 'Anthropic (Claude)', placeholder: 'sk-ant-...' },
+];
+
+const CUSTOM_PROVIDER_PRESETS = [
+  { label: 'OpenAI',     baseUrl: 'https://api.openai.com/v1' },
+  { label: 'LM Studio',  baseUrl: 'http://localhost:1234/v1' },
+  { label: 'vLLM',       baseUrl: 'http://localhost:8000/v1' },
+];
+
+const CAPABILITY_LABELS = {
+  chat: '💬 Chat', vision: '👁️ Vision', embedding: '🧬 Embedding',
+  reasoning: '🧠 Reasoning', code: '💻 Code', tool_calling: '🔧 Function Calling',
+};
+
+// Estado local do filtro do Model Registry — reiniciado a cada render() (troca de página).
+let registrySearch = '';
+let registryFilters = new Set();
+
 export function render(container) {
   container.innerHTML = `
     <div class="page-view">
@@ -22,8 +47,56 @@ export function render(container) {
         <p>${t('models_page_desc')}</p>
       </div>
 
+      <!-- 1. Provider Overview -->
+      <div class="page-header" style="margin-bottom:8px;padding-top:4px;">
+        <h1 style="font-size:1.05rem;">🔌 Providers</h1>
+        <p>Endpoints configurados e saúde da conexão. "Sincronizar" redescobre os modelos de todos.</p>
+      </div>
+      <div class="provider-toolbar">
+        <button class="btn btn-primary btn-sm" id="ml-syncBtn">🔄 Sincronizar Modelos</button>
+        <span class="form-hint" id="ml-lastSync">Última sincronização: —</span>
+      </div>
+      <div class="provider-grid" id="ml-providerGrid"></div>
+
+      <details class="cfg-details">
+        <summary>➕ Adicionar provider OpenAI-Compatible (LM Studio / vLLM / OpenAI / custom)</summary>
+        <div class="cfg-details-body">
+          <div class="chips" style="margin-bottom:10px;">
+            ${CUSTOM_PROVIDER_PRESETS.map(p => `<div class="chip" data-preset="${p.label}" data-url="${p.baseUrl}">${p.label}</div>`).join('')}
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Nome</label>
+              <input type="text" class="form-input" id="ml-newProvLabel" placeholder="Ex: LM Studio">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Base URL</label>
+              <input type="text" class="form-input" id="ml-newProvUrl" placeholder="http://localhost:1234/v1">
+            </div>
+            <div class="form-group">
+              <label class="form-label">API Key (opcional)</label>
+              <input type="password" class="form-input" id="ml-newProvKey" placeholder="Opcional">
+            </div>
+          </div>
+          <button class="btn btn-primary btn-sm" id="ml-addProvBtn">Adicionar</button>
+        </div>
+      </details>
+
+      <!-- 2. Model Registry -->
+      <div class="page-header" style="margin-bottom:8px;padding-top:14px;">
+        <h1 style="font-size:1.05rem;">📚 Model Registry</h1>
+        <p>Catálogo de modelos descobertos nos providers acima.</p>
+      </div>
+      <div class="model-registry-toolbar">
+        <input type="text" class="form-input" id="mr-search" placeholder="Buscar modelo..." style="max-width:260px;">
+        <div class="model-filter-chips" id="mr-filters">
+          ${Object.keys(CAPABILITY_LABELS).map(cap => `<div class="chip" data-cap="${cap}">${CAPABILITY_LABELS[cap]}</div>`).join('')}
+        </div>
+      </div>
+      <div class="model-registry-grid" id="mr-grid"></div>
+
       <!-- Configuração Efetiva -->
-      <div class="cfg-efetiva">
+      <div class="cfg-efetiva" style="margin-top:18px;">
         <div class="cfg-efetiva-title">📌 ${t('effective_config_title')}</div>
         <div class="cfg-efetiva-body">
           <div class="cfg-efetiva-routes">
@@ -47,7 +120,7 @@ export function render(container) {
         </div>
       </div>
 
-      <!-- Pipeline visual -->
+      <!-- 3. Model Router: pipeline visual -->
       <div class="pipeline-wrap">
         <div class="pipeline-title">${t('pipeline_title')}</div>
         <div class="pipeline">
@@ -178,7 +251,7 @@ export function render(container) {
         </div>
       </details>
 
-      <!-- Modelos dos componentes internos -->
+      <!-- 4. Health: modelos dos componentes internos -->
       <details class="cfg-details" id="ml-internalDetails">
         <summary>
           ${t('internal_models_title')}
@@ -312,11 +385,25 @@ export function render(container) {
   updateDropdownModels(providersStore.get('models') || []);
   initDropdowns(ddIds);
 
+  // ── Provider Overview + Model Registry ──────────────────────────
+  registrySearch = '';
+  registryFilters = new Set();
+
+  renderProviderGrid();
+  renderModelGrid();
+  wireProviderOverview();
+  wireModelRegistry(container);
+
   // Subscribe to providersStore
   const unsubModels = providersStore.on('models', models => {
     updateDropdownModels(models);
     updateModelStatus(models, cs.get('modelRouter') || {});
   });
+  const unsubCatalog = providersStore.on('catalog', () => renderModelGrid());
+  // Atualização leve (só dots/texto de saúde) — NUNCA um renderProviderGrid() completo aqui:
+  // isso recriaria os <input> do card (URL/API key) a cada poll e apagaria o que o usuário
+  // estivesse digitando no meio de uma edição.
+  const unsubHealthSync = providersStore.on('*', () => { updateProviderHealthUI(); updateLastSync(); });
 
   // Subscribe to configStore router
   const unsubRouter = cs.on('modelRouter', mr => {
@@ -324,6 +411,7 @@ export function render(container) {
     updateEffectiveConfig(mr, cs.get('defaultProvider'));
     updateModelStatus(providersStore.get('models') || [], mr);
   });
+  const unsubCustomProviders = cs.on('customProviders', () => renderProviderGrid());
 
   // Routing diagnostics
   if (window._newclawLastRoutingDecision) {
@@ -334,7 +422,10 @@ export function render(container) {
 
   return () => {
     unsubModels();
+    unsubCatalog();
+    unsubHealthSync();
     unsubRouter();
+    unsubCustomProviders();
     window.removeEventListener('newclaw-routing-decision', diagHandler);
   };
 
@@ -351,7 +442,242 @@ export function render(container) {
   }
 }
 
+// ─── Provider Overview ─────────────────────────────────────────
+
+function renderProviderGrid() {
+  const grid = document.getElementById('ml-providerGrid');
+  if (!grid) return;
+  const cs = configStore;
+  const s = cs.snap();
+  const health = providersStore.get('health') || [];
+  const healthByProvider = Object.fromEntries(health.map(h => [h.provider, h]));
+  const ollamaHealth = healthByProvider['ollama'];
+  const ollamaOnline = providersStore.get('ollamaOnline');
+  const ollamaCount  = providersStore.get('ollamaModelCount') || 0;
+
+  const cards = [];
+
+  // Ollama (sempre presente — provider local/cloud padrão)
+  cards.push(`
+    <div class="provider-card wide">
+      <div class="provider-head">
+        <div class="provider-name">🦙 Ollama <span class="badge badge-local">local</span><span class="badge badge-cloud">cloud</span></div>
+        <div class="provider-health" data-health="ollama">
+          <span class="dot ${ollamaOnline ? 'online' : 'offline'}"></span>
+          <span>${ollamaOnline ? `${ollamaCount} modelos` : (ollamaHealth?.error || 'offline')}</span>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">${t('server_url_label') || 'Endpoint'}</label>
+          <input type="text" class="form-input" id="pv-ollamaUrl" placeholder="http://localhost:11434" value="${esc(s.ollamaUrl || '')}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">API Key (cloud)</label>
+          <input type="password" class="form-input" id="pv-ollamaApiKey" placeholder="Opcional">
+        </div>
+      </div>
+    </div>`);
+
+  // Custom providers (OpenAI-Compatible)
+  for (const p of (s.customProviders || [])) {
+    const h = healthByProvider[p.label];
+    cards.push(`
+      <div class="provider-card">
+        <div class="provider-head">
+          <div class="provider-name">🔗 ${esc(p.label)} <span class="badge badge-cloud">OpenAI-Compatible</span></div>
+          <div class="provider-health" data-health="${esc(p.label)}">
+            <span class="dot ${h ? (h.online ? 'online' : 'offline') : ''}"></span>
+            <span>${h ? (h.online ? `${h.modelCount} modelos` : 'offline') : '—'}</span>
+          </div>
+        </div>
+        <div class="form-hint" style="margin-bottom:8px;word-break:break-all;">${esc(p.baseUrl)}</div>
+        <button class="btn btn-ghost btn-sm btn-remove-key" data-remove-provider="${esc(p.label)}">✕ Remover</button>
+      </div>`);
+  }
+
+  // Cloud providers (API key cards)
+  for (const cp of CLOUD_PROVIDERS) {
+    const hasKey = s[`has${cp.key.charAt(0).toUpperCase() + cp.key.slice(1)}Key`];
+    cards.push(`
+      <div class="provider-card">
+        <div class="provider-head">
+          <div class="provider-name">${cp.icon} ${cp.name}</div>
+          <div class="provider-health"><span class="dot ${hasKey ? 'online' : 'offline'}"></span></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">API Key</label>
+          <div class="api-key-group">
+            <input type="password" class="form-input" id="pv-${cp.key}Key" placeholder="${cp.placeholder}">
+            <span class="api-key-status">${hasKey ? '✓ OK' : t('key_missing') || 'não configurada'}</span>
+            <button class="btn btn-ghost btn-sm btn-remove-key" data-remove-key="${cp.key}" style="${hasKey ? '' : 'display:none'}" title="Remover chave">✕</button>
+          </div>
+        </div>
+      </div>`);
+  }
+
+  grid.innerHTML = cards.join('');
+  updateLastSync();
+}
+
+/**
+ * Atualiza só os dots/texto de saúde dos cards já renderizados, sem tocar nos <input> —
+ * usado no polling periódico para não apagar o que o usuário estiver digitando.
+ */
+function updateProviderHealthUI() {
+  const health = providersStore.get('health') || [];
+  const healthByProvider = Object.fromEntries(health.map(h => [h.provider, h]));
+  const ollamaOnline = providersStore.get('ollamaOnline');
+  const ollamaCount  = providersStore.get('ollamaModelCount') || 0;
+
+  const ollamaEl = document.querySelector('[data-health="ollama"]');
+  if (ollamaEl) {
+    const ollamaHealth = healthByProvider['ollama'];
+    ollamaEl.querySelector('.dot').className = `dot ${ollamaOnline ? 'online' : 'offline'}`;
+    ollamaEl.querySelector('span:last-child').textContent = ollamaOnline ? `${ollamaCount} modelos` : (ollamaHealth?.error || 'offline');
+  }
+
+  for (const [label, h] of Object.entries(healthByProvider)) {
+    if (label === 'ollama') continue;
+    const elHealth = document.querySelector(`[data-health="${CSS.escape(label)}"]`);
+    if (!elHealth) continue;
+    elHealth.querySelector('.dot').className = `dot ${h.online ? 'online' : 'offline'}`;
+    elHealth.querySelector('span:last-child').textContent = h.online ? `${h.modelCount} modelos` : 'offline';
+  }
+}
+
+function wireProviderOverview() {
+  const cs = configStore;
+  const el = id => document.getElementById(id);
+
+  el('ml-syncBtn')?.addEventListener('click', async () => {
+    showToast('🔄 Sincronizando...', 'success');
+    await loadProviders(true);
+    showToast('✅ Sincronizado', 'success');
+  });
+
+  document.getElementById('ml-providerGrid')?.addEventListener('input', e => {
+    if (e.target.id === 'pv-ollamaUrl')    cs.set('ollamaUrl', e.target.value);
+    if (e.target.id === 'pv-ollamaApiKey') cs.set('ollamaApiKey', e.target.value);
+    CLOUD_PROVIDERS.forEach(cp => {
+      if (e.target.id === `pv-${cp.key}Key`) cs.set(`${cp.key}Key`, e.target.value);
+    });
+  });
+
+  document.getElementById('ml-providerGrid')?.addEventListener('click', async e => {
+    const removeKey = e.target.closest('[data-remove-key]')?.dataset.removeKey;
+    if (removeKey) {
+      if (!confirm(`Remover a API key do ${removeKey}?`)) return;
+      try {
+        const f = window.newclawFetch || fetch;
+        const res = await f(`/api/providers/key/${removeKey}`, { method: 'DELETE' });
+        if ((await res.json()).success) {
+          const hasKey = `has${removeKey.charAt(0).toUpperCase() + removeKey.slice(1)}Key`;
+          cs.set(hasKey, false);
+          showToast(`Chave ${removeKey} removida`, 'success');
+          renderProviderGrid();
+        }
+      } catch (err) { showToast('Erro ao remover chave: ' + err.message, 'error'); }
+      return;
+    }
+    const removeProvider = e.target.closest('[data-remove-provider]')?.dataset.removeProvider;
+    if (removeProvider) {
+      if (!confirm(`Remover o provider "${removeProvider}"?`)) return;
+      try {
+        await removeCustomProvider(removeProvider);
+        cs.set('customProviders', (cs.get('customProviders') || []).filter(p => p.label !== removeProvider));
+        showToast(`Provider "${removeProvider}" removido`, 'success');
+      } catch (err) { showToast('Erro: ' + err.message, 'error'); }
+    }
+  });
+
+  // Presets do formulário de custom provider
+  document.querySelectorAll('.chip[data-preset]').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const labelInput = document.getElementById('ml-newProvLabel');
+      const urlInput   = document.getElementById('ml-newProvUrl');
+      if (labelInput) labelInput.value = chip.dataset.preset;
+      if (urlInput)   urlInput.value   = chip.dataset.url;
+    });
+  });
+
+  document.getElementById('ml-addProvBtn')?.addEventListener('click', async () => {
+    const label   = document.getElementById('ml-newProvLabel')?.value.trim();
+    const baseUrl = document.getElementById('ml-newProvUrl')?.value.trim();
+    const apiKey  = document.getElementById('ml-newProvKey')?.value.trim();
+    if (!label || !baseUrl) { showToast('Preencha nome e Base URL', 'error'); return; }
+    try {
+      await addCustomProvider({ label, baseUrl, apiKey: apiKey || undefined });
+      cs.set('customProviders', [...(cs.get('customProviders') || []), { label, baseUrl, hasKey: !!apiKey }]);
+      showToast(`Provider "${label}" adicionado`, 'success');
+      document.getElementById('ml-newProvLabel').value = '';
+      document.getElementById('ml-newProvUrl').value   = '';
+      document.getElementById('ml-newProvKey').value   = '';
+    } catch (err) { showToast('Erro: ' + err.message, 'error'); }
+  });
+}
+
+function updateLastSync() {
+  const el = document.getElementById('ml-lastSync');
+  if (!el) return;
+  const ts = providersStore.get('lastSync');
+  el.textContent = 'Última sincronização: ' + (ts ? new Date(ts).toLocaleTimeString() : '—');
+}
+
+// ─── Model Registry ────────────────────────────────────────────
+
+function renderModelGrid() {
+  const grid = document.getElementById('mr-grid');
+  if (!grid) return;
+  const catalog = providersStore.get('catalog') || [];
+  const term = registrySearch.toLowerCase();
+  const filtered = catalog.filter(m => {
+    if (term && !m.id.toLowerCase().includes(term)) return false;
+    if (registryFilters.size > 0 && !m.capabilities?.some(c => registryFilters.has(c))) return false;
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    grid.innerHTML = `<div class="empty" style="padding:20px;color:var(--text-soft);">
+      ${catalog.length === 0 ? 'Nenhum modelo descoberto ainda — clique em "Sincronizar Modelos".' : 'Nenhum modelo bate com a busca/filtro.'}
+    </div>`;
+    return;
+  }
+
+  grid.innerHTML = filtered.map(m => `
+    <div class="model-card">
+      <div class="model-card-header">
+        <span class="model-card-id">${esc(m.id)}</span>
+        <span class="badge badge-${m.provider === 'ollama' ? 'local' : 'cloud'}">${esc(m.provider)}</span>
+      </div>
+      <div class="model-card-caps">
+        ${(m.capabilities || []).map(c => `<span class="model-cap-tag">${CAPABILITY_LABELS[c] || c}</span>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+function wireModelRegistry(container) {
+  const searchInput = document.getElementById('mr-search');
+  searchInput?.addEventListener('input', e => {
+    registrySearch = e.target.value;
+    renderModelGrid();
+  });
+
+  container.querySelectorAll('#mr-filters .chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const cap = chip.dataset.cap;
+      if (registryFilters.has(cap)) { registryFilters.delete(cap); chip.classList.remove('chip-active'); }
+      else { registryFilters.add(cap); chip.classList.add('chip-active'); }
+      renderModelGrid();
+    });
+  });
+}
+
 // ─── HTML helpers ─────────────────────────────────────────────
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 function effRouteRow(cat, icon, label) {
   return `
@@ -479,15 +805,15 @@ function updateProviderHints(defaultProvider) {
 function updateRoutingDiag(decision) {
   const el = document.getElementById('ml-diagContent');
   if (!el || !decision) return;
-  const esc = s => String(s || '—').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const escd = s => String(s || '—').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   el.innerHTML = `
     <div class="routing-diag-grid">
-      <div class="routing-diag-row"><span class="rd-label">${t('rd_message')}</span><span class="rd-value">${esc(decision.message)}</span></div>
-      <div class="routing-diag-row"><span class="rd-label">${t('rd_classifier')}</span><span class="rd-value">${esc(decision.classifier)}</span></div>
-      <div class="routing-diag-row"><span class="rd-label">${t('rd_category')}</span><span class="rd-value rd-cat">${esc(decision.category)}</span></div>
-      <div class="routing-diag-row"><span class="rd-label">${t('rd_model')}</span><span class="rd-value rd-model">${esc(decision.model)}</span></div>
-      <div class="routing-diag-row"><span class="rd-label">${t('rd_provider')}</span><span class="rd-value">${esc(decision.provider)}</span></div>
-      ${decision.elapsed != null ? `<div class="routing-diag-row"><span class="rd-label">${t('rd_elapsed')}</span><span class="rd-value">${esc(decision.elapsed)} ms</span></div>` : ''}
+      <div class="routing-diag-row"><span class="rd-label">${t('rd_message')}</span><span class="rd-value">${escd(decision.message)}</span></div>
+      <div class="routing-diag-row"><span class="rd-label">${t('rd_classifier')}</span><span class="rd-value">${escd(decision.classifier)}</span></div>
+      <div class="routing-diag-row"><span class="rd-label">${t('rd_category')}</span><span class="rd-value rd-cat">${escd(decision.category)}</span></div>
+      <div class="routing-diag-row"><span class="rd-label">${t('rd_model')}</span><span class="rd-value rd-model">${escd(decision.model)}</span></div>
+      <div class="routing-diag-row"><span class="rd-label">${t('rd_provider')}</span><span class="rd-value">${escd(decision.provider)}</span></div>
+      ${decision.elapsed != null ? `<div class="routing-diag-row"><span class="rd-label">${t('rd_elapsed')}</span><span class="rd-value">${escd(decision.elapsed)} ms</span></div>` : ''}
     </div>`;
   const details = document.getElementById('ml-diagDetails');
   if (details) details.open = true;

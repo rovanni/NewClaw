@@ -16,6 +16,7 @@ import path from 'path';
 import { Server } from 'http';
 import { AgentController, NewClawConfig } from '../core/AgentController';
 import { ProviderFactory } from '../core/ProviderFactory';
+import { ModelRegistryService } from '../core/ModelRegistryService';
 import { MemoryManager } from '../memory/MemoryManager';
 import { MemoryCurator } from '../memory/MemoryCurator';
 import { SkillInstaller } from '../skills/SkillInstaller';
@@ -25,6 +26,7 @@ import { authMiddleware, createAuthRouter, dashboardAuth, initAuthPersistence } 
 import { rateLimitMiddleware, loginRateLimit, csrfOriginCheck } from './security';
 import { createConfigRouter } from './routes/config';
 import { createProvidersRouter } from './routes/providers';
+import { createModelsRouter } from './routes/models';
 import { createSkillsRouter } from './routes/skills';
 import { createToolsRouter } from './routes/tools';
 import { createStatusRouter, healthHandler } from './routes/status';
@@ -84,6 +86,7 @@ export class DashboardServer {
         this.app.use('/api/auth', createAuthRouter());
         this.app.use('/api/config', createConfigRouter(ctx));
         this.app.use('/api', createProvidersRouter(ctx));   // handles /api/providers, /api/models/add, /api/ollama/*
+        this.app.use('/api/models', createModelsRouter(ctx)); // handles /api/models/catalog
         this.app.use('/api/skills', createSkillsRouter(ctx));
         this.app.use('/api/tools', createToolsRouter());
         this.app.use('/api', createStatusRouter(ctx));       // handles /api/status, /api/restart
@@ -103,6 +106,10 @@ export class DashboardServer {
 
     public setProviderFactory(pf: ProviderFactory) {
         this.ctx.providerFactory = pf;
+    }
+
+    public setModelRegistryService(mrs: ModelRegistryService) {
+        this.ctx.modelRegistryService = mrs;
     }
 
     public setSkillLearner(sl: SkillLearner): void {

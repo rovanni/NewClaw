@@ -1,6 +1,7 @@
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
-import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall } from './providerTypes';
+import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo } from './providerTypes';
+import { guessCapabilities } from './modelCapabilityHeuristics';
 import { taskQueue, TaskPriority } from './providerQueue';
 
 const log = createLogger('Providerfactory');
@@ -102,6 +103,25 @@ export class OllamaProvider implements ILLMProvider {
     getModel(): string { return this.model; }
     setModel(model: string): void { this.model = model; }
     setBaseUrl(url: string): void { this.baseUrl = url; }
+
+    /**
+     * Lista os modelos instalados no servidor Ollama (local ou cloud) via /api/tags.
+     * Único ponto de leitura desse endpoint — antes duplicado inline em routes/providers.ts.
+     */
+    async discoverModels(): Promise<ModelInfo[]> {
+        const headers: Record<string, string> = {};
+        if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+        const resp = await fetch(`${this.baseUrl}/api/tags`, { headers });
+        if (!resp.ok) throw new Error(`Ollama /api/tags error: ${resp.status}`);
+        const data = await resp.json() as { models?: Array<{ name: string; details?: { parameter_size?: string } }> };
+        return (data.models || []).map(m => ({
+            id: m.name,
+            provider: 'ollama',
+            label: m.name,
+            capabilities: guessCapabilities(m.name),
+            status: 'available' as const,
+        }));
+    }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         const priority = this.model.includes(':cloud') ? TaskPriority.INTERACTIVE : TaskPriority.BACKGROUND;

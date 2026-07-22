@@ -4,7 +4,7 @@ import {
 import {
   getConfig, getStatus, getProviders, getTools,
   getSkills, getPatterns, aggregateToolStats, saveConfig as apiSaveConfig,
-  modelExists, pullModel as apiPullModel, addModel,
+  modelExists, pullModel as apiPullModel, addModel, getModelCatalog,
 } from './api.js';
 import { showToast } from './components/Toast.js';
 import { installGlobalHelpers, updateDropdownModels } from './components/ModelDropdown.js';
@@ -16,7 +16,6 @@ window.__configStore = configStore;
 const VIEW_MAP = {
   dashboard:   'DashboardView',
   modelos:     'ModelosView',
-  providers:   'ProvidersView',
   ferramentas: 'FerramentasView',
   skills:      'SkillsView',
   integracoes: 'IntegracoesView',
@@ -202,6 +201,7 @@ async function loadConfig() {
       hasOllamaApiKey:        c.hasOllamaApiKey   || false,
       currentModel:           c.currentModel  || c.ollamaModel || '—',
       modelRouter:            c.modelRouter   || {},
+      customProviders:        c.customProviders || [],
     });
   } catch {}
 }
@@ -223,7 +223,7 @@ async function loadStatus() {
   }
 }
 
-async function loadProviders() {
+export async function loadProviders(forceRefresh = false) {
   try {
     const p = await getProviders();
     const ollama = p.ollama;
@@ -233,9 +233,15 @@ async function loadProviders() {
         models,
         ollamaOnline: true,
         ollamaModelCount: models.length,
+        health: p.health || [],
       });
       updateDropdownModels(models);
     }
+  } catch {}
+
+  try {
+    const { models } = await getModelCatalog(forceRefresh);
+    providersStore.patch({ catalog: models || [], lastSync: Date.now() });
   } catch {}
 }
 

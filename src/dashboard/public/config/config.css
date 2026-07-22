@@ -427,6 +427,23 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .provider-name { font-size:.9rem; font-weight:700; display:flex; align-items:center; gap:8px; }
 .provider-health { display:flex; align-items:center; gap:6px; font-size:.72rem; color:var(--text-soft); }
 
+.provider-toolbar { display:flex; align-items:center; gap:12px; margin-bottom:13px; }
+
+/* ════════════════════════════════════
+   MODEL REGISTRY
+════════════════════════════════════ */
+
+.model-registry-toolbar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:13px; }
+.model-filter-chips { display:flex; gap:6px; flex-wrap:wrap; }
+.chip.chip-active { border-color:var(--accent); color:var(--accent); background:var(--accent-bg); }
+.model-registry-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:11px; margin-bottom:8px; }
+.model-card { background:var(--bg-input); border:1px solid var(--border-color); border-radius:10px; padding:12px 14px; transition:box-shadow .2s, transform .2s; }
+.model-card:hover { transform:translateY(-2px); box-shadow:0 4px 16px rgba(0,0,0,.2); }
+.model-card-header { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.model-card-id { font-size:.82rem; font-weight:700; word-break:break-all; }
+.model-card-caps { display:flex; gap:5px; flex-wrap:wrap; }
+.model-cap-tag { font-size:.66rem; padding:2px 7px; border-radius:5px; background:var(--bg-muted); color:var(--text-muted); }
+
 /* ════════════════════════════════════
    MODEL DROPDOWN
 ════════════════════════════════════ */

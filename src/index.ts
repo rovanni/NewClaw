@@ -21,6 +21,18 @@ const log = createLogger('Index');
 // Inicializar Logger (adiciona timestamps ao console.log)
 Logger.hookGlobalConsole();
 
+/** CUSTOM_PROVIDERS é um array JSON ({label,baseUrl,apiKey}[]) — env var malformada não deve derrubar o boot. */
+function parseCustomProviders(raw?: string): { label: string; baseUrl: string; apiKey?: string }[] {
+    if (!raw) return [];
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
+        log.warn(`CUSTOM_PROVIDERS inválido (não é JSON), ignorando: ${raw.slice(0, 100)}`);
+        return [];
+    }
+}
+
 const config = {
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
     telegramAllowedUserIds: (process.env.TELEGRAM_ALLOWED_USER_IDS || '').split(',').map(id => id.trim()).filter(id => id.length > 0),
@@ -53,6 +65,7 @@ const config = {
     ownerLocked: process.env.OWNER_LOCKED === 'true',
     dashboardPort: parseInt(process.env.DASHBOARD_PORT || '3090'),
     customModels: (process.env.CUSTOM_MODELS || '').split(',').map(m => m.trim()).filter(m => m.length > 0),
+    customProviders: parseCustomProviders(process.env.CUSTOM_PROVIDERS),
     modelRouter: {
         chat: process.env.MODEL_CHAT,
         code: process.env.MODEL_CODE,
@@ -178,6 +191,7 @@ async function main() {
     const dashboard = new DashboardServer(config);
     dashboard.setController(controller);
     dashboard.setProviderFactory(controller.getProviderFactory());
+    dashboard.setModelRegistryService(controller.getModelRegistryService());
     dashboard.setMemoryManager(controller.getMemory(), controller.getMemoryCurator());
     dashboard.setSkillLearner(controller.getSkillLearner());
     dashboard.start(config.dashboardPort);

@@ -67,6 +67,25 @@ export async function addModel(name) {
   });
 }
 
+// ── Model Registry ──────────────────────────────────────────────────────────
+
+export async function getModelCatalog(refresh = false) {
+  const d = await json(f(`/api/models/catalog${refresh ? '?refresh=true' : ''}`));
+  return d;
+}
+
+export async function addCustomProvider({ label, baseUrl, apiKey }) {
+  return json(f('/api/providers/custom', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label, baseUrl, apiKey }),
+  }));
+}
+
+export async function removeCustomProvider(label) {
+  return json(f(`/api/providers/custom/${encodeURIComponent(label)}`, { method: 'DELETE' }));
+}
+
 // ── Tools ─────────────────────────────────────────────────────────────────────
 
 export async function getTools() {

@@ -1,22 +1,53 @@
-import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, OpenAIChatResponse, RawToolCall } from './providerTypes';
+import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, OpenAIChatResponse, RawToolCall, ModelInfo } from './providerTypes';
 import { taskQueue, TaskPriority } from './providerQueue';
 import { createLogger } from '../shared/AppLogger';
+import { guessCapabilities } from './modelCapabilityHeuristics';
 
 const log = createLogger('OpenAIProvider');
 
+/**
+ * Provider genérico para qualquer endpoint compatível com a API da OpenAI
+ * (`/chat/completions`, `/models`) — cobre OpenAI oficial, LM Studio, vLLM e endpoints
+ * "custom" apontados pelo usuário. Um único adapter parametrizado por baseUrl/label em vez de
+ * uma classe por produto (ver docs/ANALISE_ARQUITETURAL_MODEL_REGISTRY_2026-07-22.md, Fase 3).
+ */
 export class OpenAIProvider implements ILLMProvider {
     name = 'openai';
     private apiKey: string;
     private model: string;
     protected baseUrl: string;
+    private label: string;
 
-    constructor(apiKey: string, model: string = 'gpt-4o', baseUrl: string = 'https://api.openai.com/v1') {
+    constructor(apiKey: string, model: string = 'gpt-4o', baseUrl: string = 'https://api.openai.com/v1', label?: string) {
         this.apiKey = apiKey;
         this.model = model;
         this.baseUrl = baseUrl;
+        this.label = label || this.name;
     }
 
     setModel(model: string): void { this.model = model; }
+    getBaseUrl(): string { return this.baseUrl; }
+    getLabel(): string { return this.label; }
+
+    /**
+     * Lista os modelos expostos por /models. Funciona para qualquer servidor
+     * OpenAI-Compatible (OpenAI oficial, LM Studio, vLLM, custom) — todos implementam
+     * esse endpoint com o mesmo formato `{ data: [{ id }, ...] }`.
+     */
+    async discoverModels(): Promise<ModelInfo[]> {
+        const headers: Record<string, string> = {};
+        if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+        const resp = await fetch(`${this.baseUrl}/models`, { headers });
+        if (!resp.ok) throw new Error(`${this.label} /models error: ${resp.status}`);
+        const data = await resp.json() as { data?: Array<{ id: string }> };
+        return (data.data || []).map(m => ({
+            id: m.id,
+            provider: this.label,
+            label: m.id,
+            capabilities: guessCapabilities(m.id),
+            status: 'available' as const,
+        }));
+    }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         const queueEntryTime = Date.now();
@@ -63,7 +94,7 @@ export class OpenAIProvider implements ILLMProvider {
 
 export class OpenRouterProvider extends OpenAIProvider {
     constructor(apiKey: string, model: string = 'anthropic/claude-3.5-sonnet') {
-        super(apiKey, model, 'https://openrouter.ai/api/v1');
+        super(apiKey, model, 'https://openrouter.ai/api/v1', 'openrouter');
         this.name = 'openrouter';
     }
 

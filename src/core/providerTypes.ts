@@ -130,6 +130,29 @@ export interface ILLMProvider {
     name: string;
     chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse>;
     setModel(model: string): void;
+    /** Lista os modelos disponíveis no endpoint deste provider, quando suportado. */
+    discoverModels?(): Promise<ModelInfo[]>;
+}
+
+/** Heurísticas de capacidade — inferidas do nome do modelo, não garantidas pelo provider. */
+export type ModelCapability = 'chat' | 'vision' | 'tool_calling' | 'reasoning' | 'code' | 'embedding';
+
+/** Modelo normalizado do catálogo, independente de qual provider o descobriu. */
+export interface ModelInfo {
+    id: string;
+    provider: string;
+    label: string;
+    family?: string;
+    contextWindow?: number;
+    capabilities: ModelCapability[];
+    status: 'available';
+}
+
+/** Endpoint OpenAI-Compatible configurado pelo usuário (LM Studio, vLLM, OpenAI oficial, custom). */
+export interface CustomProviderConfig {
+    label: string;
+    baseUrl: string;
+    apiKey?: string;
 }
 
 export interface ChatOptions {

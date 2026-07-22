@@ -34,6 +34,7 @@ export function persistConfigToEnv(ctx: DashboardContext): void {
             'CLASSIFIER_MODEL': ctx.config.modelRouter?.classifierModel || '',
             'CLASSIFIER_SERVER': ctx.config.modelRouter?.classifierServer || '',
             'CUSTOM_MODELS':      (ctx.config.customModels || []).join(','),
+            'CUSTOM_PROVIDERS':   JSON.stringify(ctx.config.customProviders || []),
             'PROVIDER_CHAT':      ctx.config.modelRouter?.provider_chat      || '',
             'PROVIDER_CODE':      ctx.config.modelRouter?.provider_code      || '',
             'PROVIDER_VISION':    ctx.config.modelRouter?.provider_vision    || '',
@@ -102,7 +103,8 @@ export function createConfigRouter(ctx: DashboardContext): Router {
                 hasOpenrouterKey: !!ctx.config.openrouterApiKey,
                 hasAnthropicKey: !!ctx.config.anthropicApiKey,
                 hasOllamaApiKey: !!ctx.config.ollamaApiKey,
-                modelRouter: ctx.config.modelRouter || {}
+                modelRouter: ctx.config.modelRouter || {},
+                customProviders: (ctx.config.customProviders || []).map(p => ({ label: p.label, baseUrl: p.baseUrl, hasKey: !!p.apiKey }))
             }
         });
     });

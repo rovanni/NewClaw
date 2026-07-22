@@ -42,6 +42,7 @@ export const configStore = new Store({
   hasGeminiKey: false, hasDeepseekKey: false, hasGroqKey: false, hasOpenrouterKey: false, hasAnthropicKey: false, hasOllamaApiKey: false,
   currentModel: '—',
   geminiKey: '', deepseekKey: '', groqKey: '', openrouterKey: '', anthropicKey: '',
+  customProviders: [],
 });
 
 export const runtimeStore = new Store({
@@ -57,6 +58,9 @@ export const providersStore = new Store({
   models: [],
   ollamaOnline: false,
   ollamaModelCount: 0,
+  catalog: [],      // ModelInfo[] — catálogo normalizado (Model Registry)
+  health: [],       // ProviderHealth[] — status por provider configurado
+  lastSync: null,   // timestamp (ms) da última sincronização bem-sucedida
 });
 
 export const toolsStore = new Store({

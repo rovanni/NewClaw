@@ -12,11 +12,11 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
     router.get('/providers', async (_req: Request, res: Response) => {
         let ollamaModels: string[] = [];
         try {
-            const ollamaUrl = ctx.config.ollamaUrl || 'http://localhost:11434';
-            const resp = await fetch(`${ollamaUrl}/api/tags`);
-            if (resp.ok) {
-                const data = await resp.json() as { models?: Array<{ name: string }> };
-                ollamaModels = (data.models || []).map(m => m.name);
+            // Fonte única de discovery — ModelRegistryService delega para OllamaProvider.discoverModels(),
+            // que é o mesmo /api/tags que antes era chamado inline aqui (agora só num lugar).
+            if (ctx.modelRegistryService) {
+                const catalog = await ctx.modelRegistryService.getCatalog();
+                ollamaModels = catalog.filter(m => m.provider === 'ollama').map(m => m.id);
             }
         } catch (err) {
             log.warn(`Could not fetch Ollama models for dashboard: ${errorMessage(err)}`);
@@ -52,6 +52,13 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
             ...customModels
         ])].sort();
 
+        const customProviders = (ctx.config.customProviders || []).map(p => ({
+            label: p.label,
+            baseUrl: p.baseUrl,
+            available: true,
+            hasKey: !!p.apiKey,
+        }));
+
         res.json({
             success: true,
             providers: {
@@ -62,9 +69,41 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
                 anthropic:   { available: !!ctx.config.anthropicApiKey,   name: 'Anthropic (Claude)' },
                 ollama:      { available: true, name: 'Ollama (Local/Cloud)', url: ctx.config.ollamaUrl, models: allModels },
             },
+            customProviders,
+            health: ctx.modelRegistryService?.getLastHealth() || [],
             currentProvider: ctx.config.defaultProvider,
             currentModel: currentModel || 'unknown'
         });
+    });
+
+    router.post('/providers/custom', (req: Request, res: Response) => {
+        const { label, baseUrl, apiKey } = req.body;
+        if (!label?.trim() || !baseUrl?.trim()) {
+            return res.status(400).json({ success: false, error: 'label e baseUrl são obrigatórios' });
+        }
+        const customProviders = ctx.config.customProviders || [];
+        const name = String(label).trim();
+        if (customProviders.some(p => p.label === name)) {
+            return res.status(400).json({ success: false, error: `Já existe um provider "${name}"` });
+        }
+        customProviders.push({ label: name, baseUrl: String(baseUrl).trim(), apiKey: apiKey ? String(apiKey) : undefined });
+        ctx.config.customProviders = customProviders;
+        persistConfigToEnv(ctx);
+        log.info(`Custom provider added: ${name} (${baseUrl})`);
+        res.json({ success: true, message: `Provider "${name}" adicionado` });
+    });
+
+    router.delete('/providers/custom/:label', (req: Request, res: Response) => {
+        const { label } = req.params;
+        const customProviders = ctx.config.customProviders || [];
+        const next = customProviders.filter(p => p.label !== label);
+        if (next.length === customProviders.length) {
+            return res.status(404).json({ success: false, error: `Provider "${label}" não encontrado` });
+        }
+        ctx.config.customProviders = next;
+        persistConfigToEnv(ctx);
+        log.info(`Custom provider removed: ${label}`);
+        res.json({ success: true });
     });
 
     router.post('/models/add', (req: Request, res: Response) => {

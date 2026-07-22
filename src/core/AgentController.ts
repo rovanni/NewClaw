@@ -7,6 +7,7 @@
 
 import Database from 'better-sqlite3';
 import { ProviderFactory } from './ProviderFactory';
+import { ModelRegistryService } from './ModelRegistryService';
 import { AgentLoop } from '../loop/AgentLoop';
 import type { ChannelContext } from '../loop/agentLoopTypes';
 import { MemoryManager } from '../memory/MemoryManager';
@@ -89,6 +90,7 @@ export class AgentController {
     private goalOrchestrator!: GoalOrchestrator;
     private goalStore!: GoalStore;
     private providerFactory: ProviderFactory;
+    private modelRegistryService: ModelRegistryService;
     private memory: MemoryManager;
     private memoryFacade: MemoryFacade;
     private lifecycle = new LifecycleManager();
@@ -117,6 +119,7 @@ export class AgentController {
     public getMemory(): MemoryManager { return this.memory; }
     public getSkillLearner(): SkillLearner { return this.skillLearner; }
     public getProviderFactory(): ProviderFactory { return this.providerFactory; }
+    public getModelRegistryService(): ModelRegistryService { return this.modelRegistryService; }
     public getMemoryGovernor(): MemoryGovernor { return this.memoryGovernor; }
     public getSessionLearner(): SessionLearner { return this.sessionLearner; }
     public getMessageBus(): MessageBus { return this.messageBus; }
@@ -180,6 +183,7 @@ export class AgentController {
             ollamaApiKey: config.ollamaApiKey,
             defaultProvider: config.defaultProvider
         });
+        this.modelRegistryService = new ModelRegistryService(this.providerFactory, () => this.config.customProviders || []);
 
         this.skillLoader = new SkillLoader(config.skillsDir);
         this.skillLearner = new SkillLearner(this.db, config.skillsDir);
