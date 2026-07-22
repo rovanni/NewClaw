@@ -35,6 +35,14 @@ const CAPABILITY_LABELS = {
   reasoning: '🧠 Reasoning', code: '💻 Code', tool_calling: '🔧 Function Calling',
 };
 
+const TABS = [
+  { id: 'overview',  icon: '📡', label: 'Overview' },
+  { id: 'registry',  icon: '📚', label: 'Registry' },
+  { id: 'routing',   icon: '🧭', label: 'Routing' },
+  { id: 'providers', icon: '🔌', label: 'Providers' },
+  { id: 'advanced',  icon: '⚙️', label: 'Advanced' },
+];
+
 // Estado local do filtro do Model Registry — reiniciado a cada render() (troca de página).
 let registrySearch = '';
 let registryFilters = new Set();
@@ -47,242 +55,265 @@ export function render(container) {
         <p>${t('models_page_desc')}</p>
       </div>
 
-      <!-- 1. Provider Overview -->
-      <div class="page-header" style="margin-bottom:8px;padding-top:4px;">
-        <h1 style="font-size:1.05rem;">🔌 Providers</h1>
-        <p>Endpoints configurados e saúde da conexão. "Sincronizar" redescobre os modelos de todos.</p>
+      <div class="ml-tabs" id="ml-tabs">
+        ${TABS.map((tab, i) => `<button type="button" class="ml-tab${i === 0 ? ' active' : ''}" data-tab="${tab.id}">${tab.icon} ${tab.label}</button>`).join('')}
       </div>
-      <div class="provider-toolbar">
-        <button class="btn btn-primary btn-sm" id="ml-syncBtn">🔄 Sincronizar Modelos</button>
-        <span class="form-hint" id="ml-lastSync">Última sincronização: —</span>
-      </div>
-      <div class="provider-grid" id="ml-providerGrid"></div>
 
-      <details class="cfg-details">
-        <summary>➕ Adicionar provider OpenAI-Compatible (LM Studio / vLLM / OpenAI / custom)</summary>
-        <div class="cfg-details-body">
-          <div class="chips" style="margin-bottom:10px;">
-            ${CUSTOM_PROVIDER_PRESETS.map(p => `<div class="chip" data-preset="${p.label}" data-url="${p.baseUrl}">${p.label}</div>`).join('')}
-          </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">Nome</label>
-              <input type="text" class="form-input" id="ml-newProvLabel" placeholder="Ex: LM Studio">
-            </div>
-            <div class="form-group">
-              <label class="form-label">Base URL</label>
-              <input type="text" class="form-input" id="ml-newProvUrl" placeholder="http://localhost:1234/v1">
-            </div>
-            <div class="form-group">
-              <label class="form-label">API Key (opcional)</label>
-              <input type="password" class="form-input" id="ml-newProvKey" placeholder="Opcional">
-            </div>
-          </div>
-          <button class="btn btn-primary btn-sm" id="ml-addProvBtn">Adicionar</button>
+      <!-- ═══ Overview ═══ -->
+      <div class="ml-panel active" data-panel="overview">
+        <div class="overview-card">
+          <div class="overview-row"><span class="overview-label">Provider</span><span class="overview-value" id="ov-provider">—</span></div>
+          <div class="overview-row"><span class="overview-label">Status</span><span class="overview-value"><span class="dot" id="ov-dot"></span> <span id="ov-status">—</span></span></div>
+          <div class="overview-row"><span class="overview-label">Modelos</span><span class="overview-value" id="ov-count">—</span></div>
+          <div class="overview-row"><span class="overview-label">Última sincronização</span><span class="overview-value" id="ov-lastsync">—</span></div>
+          <div class="overview-row"><span class="overview-label">Modelo padrão</span><span class="overview-value" id="ov-defaultmodel">—</span></div>
         </div>
-      </details>
-
-      <!-- 2. Model Registry -->
-      <div class="page-header" style="margin-bottom:8px;padding-top:14px;">
-        <h1 style="font-size:1.05rem;">📚 Model Registry</h1>
-        <p>Catálogo de modelos descobertos nos providers acima.</p>
+        <button class="btn btn-primary btn-sm" id="ml-syncBtn" style="margin-top:14px;">🔄 Sincronizar Modelos</button>
       </div>
-      <div class="model-registry-toolbar">
-        <input type="text" class="form-input" id="mr-search" placeholder="Buscar modelo..." style="max-width:260px;">
-        <div class="model-filter-chips" id="mr-filters">
-          ${Object.keys(CAPABILITY_LABELS).map(cap => `<div class="chip" data-cap="${cap}">${CAPABILITY_LABELS[cap]}</div>`).join('')}
+
+      <!-- ═══ Registry ═══ -->
+      <div class="ml-panel" data-panel="registry">
+        <div class="model-registry-toolbar">
+          <input type="text" class="form-input" id="mr-search" placeholder="Buscar modelo..." style="max-width:260px;">
+          <div class="model-filter-chips" id="mr-filters">
+            ${Object.keys(CAPABILITY_LABELS).map(cap => `<div class="chip" data-cap="${cap}">${CAPABILITY_LABELS[cap]}</div>`).join('')}
+          </div>
         </div>
-      </div>
-      <div class="model-registry-grid" id="mr-grid"></div>
-
-      <!-- Configuração Efetiva -->
-      <div class="cfg-efetiva" style="margin-top:18px;">
-        <div class="cfg-efetiva-title">📌 ${t('effective_config_title')}</div>
-        <div class="cfg-efetiva-body">
-          <div class="cfg-efetiva-routes">
-            ${effRouteRow('chat',      '💬', 'Chat')}
-            ${effRouteRow('code',      '💻', t('route_code_cat'))}
-            ${effRouteRow('vision',    '👁️', t('route_vision_cat'))}
-            ${effRouteRow('light',     '⚡', t('route_light_cat'))}
-            ${effRouteRow('analysis',  '📊', t('route_analysis_cat'))}
-            ${effRouteRow('execution', '🧠', t('route_execution_cat'))}
-          </div>
-          <div class="cfg-efetiva-meta">
-            <div class="cfg-efetiva-meta-row">
-              <span class="cfg-efetiva-meta-label">${t('provider_active_label')}</span>
-              <span class="cfg-efetiva-meta-value" id="ml-eff-provider">—</span>
-            </div>
-            <div class="cfg-efetiva-meta-row">
-              <span class="cfg-efetiva-meta-label">${t('classifier_model_label')}</span>
-              <span class="cfg-efetiva-meta-value" id="ml-eff-classifier">—</span>
-            </div>
-          </div>
+        <div class="model-table-wrap">
+          <table class="model-table">
+            <thead>
+              <tr><th>Nome</th><th>Provider</th><th>Capabilities</th><th>Status</th><th>Context</th></tr>
+            </thead>
+            <tbody id="mr-tbody"></tbody>
+          </table>
         </div>
       </div>
 
-      <!-- 3. Model Router: pipeline visual -->
-      <div class="pipeline-wrap">
-        <div class="pipeline-title">${t('pipeline_title')}</div>
-        <div class="pipeline">
-          <div class="pipe-node">
-            <div class="pipe-box">
-              <div class="pipe-icon">📩</div>
-              <div class="pipe-label">${t('pipe_input')}</div>
-              <div class="pipe-value">${t('pipe_message')}</div>
+      <!-- ═══ Routing ═══ -->
+      <div class="ml-panel" data-panel="routing">
+        <div class="cfg-efetiva">
+          <div class="cfg-efetiva-title">📌 ${t('effective_config_title')}</div>
+          <div class="cfg-efetiva-body">
+            <div class="cfg-efetiva-routes">
+              ${effRouteRow('chat',      '💬', 'Chat')}
+              ${effRouteRow('code',      '💻', t('route_code_cat'))}
+              ${effRouteRow('vision',    '👁️', t('route_vision_cat'))}
+              ${effRouteRow('light',     '⚡', t('route_light_cat'))}
+              ${effRouteRow('analysis',  '📊', t('route_analysis_cat'))}
+              ${effRouteRow('execution', '🧠', t('route_execution_cat'))}
             </div>
-          </div>
-          <div class="pipe-arrow">→</div>
-          <div class="pipe-node" style="min-width:130px;">
-            <div class="pipe-box accent">
-              <div class="pipe-icon">🔎</div>
-              <div class="pipe-label">${t('pipe_classifier')}</div>
-              <div class="pipe-value" id="ml-pipeClassifier">—</div>
-            </div>
-          </div>
-          <div class="pipe-arrow">→</div>
-          <div class="pipe-node">
-            <div class="pipe-box">
-              <div class="pipe-icon">📂</div>
-              <div class="pipe-label">${t('pipe_category')}</div>
-              <div class="pipe-value">${t('pipe_detected')}</div>
-            </div>
-          </div>
-          <div class="pipe-arrow">→</div>
-          <div class="pipe-expand">
-            ${pipeRoute('chat',      '💬', 'chat')}
-            ${pipeRoute('code',      '💻', t('route_code_cat'))}
-            ${pipeRoute('vision',    '👁️', t('route_vision_cat'))}
-            ${pipeRoute('light',     '⚡', t('route_light_cat'))}
-            ${pipeRoute('analysis',  '📊', t('route_analysis_cat'))}
-            ${pipeRoute('execution', '🧠', t('route_execution_cat'))}
-          </div>
-        </div>
-      </div>
-
-      <!-- Route cards -->
-      <details class="cfg-details" open>
-        <summary>${t('edit_routes_title')}</summary>
-        <div class="cfg-details-body">
-          <div class="route-grid">
-            ${routeCard('modelChat',     '💬', 'Chat',                      t('route_chat_desc'),     'glm-5.2:cloud')}
-            ${routeCard('modelCode',     '💻', t('route_code_cat'),         t('route_code_desc'),     'gemma4:e4b')}
-            ${routeCard('modelVision',   '👁️', t('route_vision_cat'),      t('route_vision_desc'),   'gemma4:e4b')}
-            ${routeCard('modelLight',    '⚡', t('route_light_cat'),        t('route_light_desc'),    'gemma4:e4b')}
-            ${routeCard('modelAnalysis', '📊', t('route_analysis_cat'),     t('route_analysis_desc'), 'glm-5.2:cloud')}
-            ${routeCard('modelExecution','🧠', t('route_execution_cat'),    t('route_execution_desc'),'kimi-k2.6:cloud')}
-          </div>
-        </div>
-      </details>
-
-      <!-- Provider + Classifier -->
-      <details class="cfg-details">
-        <summary>${t('provider_classifier_title')}</summary>
-        <div class="cfg-details-body">
-          <div class="form-group">
-            <label class="form-label">${t('default_provider_label')}</label>
-            <select class="form-select" id="ml-defaultProvider" style="max-width:280px;">
-              <option value="ollama">Ollama (Local + Cloud)</option>
-              <option value="gemini">Google Gemini</option>
-              <option value="openrouter">🔀 OpenRouter</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="groq">Groq</option>
-              <option value="anthropic">🧠 Anthropic (Claude)</option>
-            </select>
-          </div>
-          <div id="ml-ollamaSection">
-            <div class="form-group">
-              <label class="form-label">${t('main_ollama_model_label')} <span class="badge badge-cloud">cloud</span></label>
-              <div class="model-select-container" id="container-ollamaModel">
-                <input type="text" class="model-select-input" autocomplete="off" id="ollamaModel" placeholder="glm-5.2:cloud">
-                <svg class="msa" width="11" height="11" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
-                <div class="model-dropdown" id="dropdown-ollamaModel"></div>
+            <div class="cfg-efetiva-meta">
+              <div class="cfg-efetiva-meta-row">
+                <span class="cfg-efetiva-meta-label">${t('provider_active_label')}</span>
+                <span class="cfg-efetiva-meta-value" id="ml-eff-provider">—</span>
               </div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">${t('download_models_label')}</label>
-              <div class="chips" style="margin-bottom:8px;">
-                <div class="chip" data-pull="qwen2.5:7b">qwen2.5:7b</div>
-                <div class="chip" data-pull="llama3.1:8b">llama3.1:8b</div>
-                <div class="chip" data-pull="gemma4:31b-cloud">gemma4:31b-cloud</div>
-                <div class="chip" data-pull="mistral:7b">mistral:7b</div>
-                <div class="chip" data-pull="deepseek-coder-v2:16b">deepseek-coder-v2:16b</div>
-              </div>
-              <div style="display:flex;gap:8px;">
-                <input type="text" id="ml-customPull" placeholder="modelo:tag"
-                  style="flex:1;max-width:180px;padding:7px 10px;font-size:.77rem;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-input);color:var(--text-main);outline:none;">
-                <button class="btn btn-primary btn-sm" id="ml-pullBtn">⬇️ Pull</button>
+              <div class="cfg-efetiva-meta-row">
+                <span class="cfg-efetiva-meta-label">${t('classifier_model_label')}</span>
+                <span class="cfg-efetiva-meta-value" id="ml-eff-classifier">—</span>
               </div>
             </div>
           </div>
-          <div class="form-row">
+        </div>
+
+        <!-- Fluxo — recolhido por padrão: muda pouco na prática, não precisa ficar sempre visível -->
+        <details class="cfg-details">
+          <summary>${t('pipeline_title')}</summary>
+          <div class="pipeline-wrap">
+            <div class="pipeline">
+              <div class="pipe-node">
+                <div class="pipe-box">
+                  <div class="pipe-icon">📩</div>
+                  <div class="pipe-label">${t('pipe_input')}</div>
+                  <div class="pipe-value">${t('pipe_message')}</div>
+                </div>
+              </div>
+              <div class="pipe-arrow">→</div>
+              <div class="pipe-node" style="min-width:130px;">
+                <div class="pipe-box accent">
+                  <div class="pipe-icon">🔎</div>
+                  <div class="pipe-label">${t('pipe_classifier')}</div>
+                  <div class="pipe-value" id="ml-pipeClassifier">—</div>
+                </div>
+              </div>
+              <div class="pipe-arrow">→</div>
+              <div class="pipe-node">
+                <div class="pipe-box">
+                  <div class="pipe-icon">📂</div>
+                  <div class="pipe-label">${t('pipe_category')}</div>
+                  <div class="pipe-value">${t('pipe_detected')}</div>
+                </div>
+              </div>
+              <div class="pipe-arrow">→</div>
+              <div class="pipe-expand">
+                ${pipeRoute('chat',      '💬', 'chat')}
+                ${pipeRoute('code',      '💻', t('route_code_cat'))}
+                ${pipeRoute('vision',    '👁️', t('route_vision_cat'))}
+                ${pipeRoute('light',     '⚡', t('route_light_cat'))}
+                ${pipeRoute('analysis',  '📊', t('route_analysis_cat'))}
+                ${pipeRoute('execution', '🧠', t('route_execution_cat'))}
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <!-- Route cards -->
+        <details class="cfg-details" open>
+          <summary>${t('edit_routes_title')}</summary>
+          <div class="cfg-details-body">
+            <div class="route-grid">
+              ${routeCard('modelChat',     '💬', 'Chat',                      t('route_chat_desc'),     'glm-5.2:cloud')}
+              ${routeCard('modelCode',     '💻', t('route_code_cat'),         t('route_code_desc'),     'gemma4:e4b')}
+              ${routeCard('modelVision',   '👁️', t('route_vision_cat'),      t('route_vision_desc'),   'gemma4:e4b')}
+              ${routeCard('modelLight',    '⚡', t('route_light_cat'),        t('route_light_desc'),    'gemma4:e4b')}
+              ${routeCard('modelAnalysis', '📊', t('route_analysis_cat'),     t('route_analysis_desc'), 'glm-5.2:cloud')}
+              ${routeCard('modelExecution','🧠', t('route_execution_cat'),    t('route_execution_desc'),'kimi-k2.6:cloud')}
+            </div>
+          </div>
+        </details>
+
+        <!-- Provider padrão + Classificador -->
+        <details class="cfg-details">
+          <summary>${t('provider_classifier_title')}</summary>
+          <div class="cfg-details-body">
             <div class="form-group">
-              <label class="form-label">${t('classifier_model_label')}</label>
-              <div class="model-select-container" id="container-classifierModel">
-                <input type="text" class="model-select-input" autocomplete="off" id="classifierModel" placeholder="gemma4:31b-cloud">
-                <svg class="msa" width="11" height="11" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
-                <div class="model-dropdown" id="dropdown-classifierModel"></div>
+              <label class="form-label">${t('default_provider_label')}</label>
+              <select class="form-select" id="ml-defaultProvider" style="max-width:280px;">
+                <option value="ollama">Ollama (Local + Cloud)</option>
+                <option value="gemini">Google Gemini</option>
+                <option value="openrouter">🔀 OpenRouter</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="groq">Groq</option>
+                <option value="anthropic">🧠 Anthropic (Claude)</option>
+              </select>
+            </div>
+            <div id="ml-ollamaSection">
+              <div class="form-group">
+                <label class="form-label">${t('main_ollama_model_label')} <span class="badge badge-cloud">cloud</span></label>
+                <div class="model-select-container" id="container-ollamaModel">
+                  <input type="text" class="model-select-input" autocomplete="off" id="ollamaModel" placeholder="glm-5.2:cloud">
+                  <svg class="msa" width="11" height="11" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+                  <div class="model-dropdown" id="dropdown-ollamaModel"></div>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">${t('download_models_label')}</label>
+                <div class="chips" style="margin-bottom:8px;">
+                  <div class="chip" data-pull="qwen2.5:7b">qwen2.5:7b</div>
+                  <div class="chip" data-pull="llama3.1:8b">llama3.1:8b</div>
+                  <div class="chip" data-pull="gemma4:31b-cloud">gemma4:31b-cloud</div>
+                  <div class="chip" data-pull="mistral:7b">mistral:7b</div>
+                  <div class="chip" data-pull="deepseek-coder-v2:16b">deepseek-coder-v2:16b</div>
+                </div>
+                <div style="display:flex;gap:8px;">
+                  <input type="text" id="ml-customPull" placeholder="modelo:tag"
+                    style="flex:1;max-width:180px;padding:7px 10px;font-size:.77rem;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-input);color:var(--text-main);outline:none;">
+                  <button class="btn btn-primary btn-sm" id="ml-pullBtn">⬇️ Pull</button>
+                </div>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">${t('classifier_model_label')}</label>
+                <div class="model-select-container" id="container-classifierModel">
+                  <input type="text" class="model-select-input" autocomplete="off" id="classifierModel" placeholder="gemma4:31b-cloud">
+                  <svg class="msa" width="11" height="11" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
+                  <div class="model-dropdown" id="dropdown-classifierModel"></div>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">${t('classifier_server_label')}</label>
+                <input type="text" class="form-input" id="ml-classifierServer" placeholder="http://localhost:11434">
               </div>
             </div>
             <div class="form-group">
-              <label class="form-label">${t('classifier_server_label')}</label>
-              <input type="text" class="form-input" id="ml-classifierServer" placeholder="http://localhost:11434">
+              <label class="form-label">${t('vision_server_label')}</label>
+              <input type="text" class="form-input" id="ml-visionServer" placeholder="http://localhost:11434" style="max-width:320px;">
             </div>
           </div>
-          <div class="form-group">
-            <label class="form-label">${t('vision_server_label')}</label>
-            <input type="text" class="form-input" id="ml-visionServer" placeholder="http://localhost:11434" style="max-width:320px;">
-          </div>
-        </div>
-      </details>
+        </details>
 
-      <!-- Provider por perfil -->
-      <details class="cfg-details">
-        <summary>${t('provider_per_profile_title')}</summary>
-        <div class="cfg-details-body">
-          <div class="form-hint" style="margin-bottom:12px;">${t('provider_per_profile_hint')}</div>
-          <div class="route-grid">
-            ${providerCard('chat',      '💬', 'Chat')}
-            ${providerCard('code',      '💻', t('route_code_cat'))}
-            ${providerCard('vision',    '👁️', t('route_vision_cat'))}
-            ${providerCard('light',     '⚡', t('route_light_cat'))}
-            ${providerCard('analysis',  '📊', t('route_analysis_cat'))}
-            ${providerCard('execution', '🧠', t('route_execution_cat'))}
-          </div>
-        </div>
-      </details>
-
-      <!-- 4. Health: modelos dos componentes internos -->
-      <details class="cfg-details" id="ml-internalDetails">
-        <summary>
-          ${t('internal_models_title')}
-          <span id="ml-internalBadge" style="display:none;margin-left:8px;padding:2px 8px;border-radius:10px;font-size:.72rem;font-weight:600;background:rgba(255,160,0,.15);color:#f59e0b;border:1px solid rgba(255,160,0,.3);">⚠️ ${t('internal_unconfigured_badge')}</span>
-        </summary>
-        <div class="cfg-details-body">
-          <div id="ml-internalWarning" style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:8px;background:rgba(255,160,0,.08);border:1px solid rgba(255,160,0,.3);font-size:.82rem;line-height:1.5;color:var(--text-main);">
-            ⚠️ <strong>Um ou mais modelos internos estão vazios.</strong> O sistema usará defaults, mas pode falhar se o provider ativo não os tiver disponíveis.<br>
-            Preencha os campos abaixo e clique <strong>Salvar &amp; Reiniciar</strong>.
-          </div>
-          <div class="form-hint" style="margin-bottom:14px;">${t('internal_models_hint')}</div>
-          <div class="internal-comp-grid">
-            ${internalCompCard('ml-plannerModel',  '📋', 'GoalPlanner',       t('internal_planner_desc'),  'gemma4:31b-cloud')}
-            ${internalCompCard('ml-riskModel',     '🛡️', 'RiskAnalyzer',      t('internal_risk_desc'),     'gemma4:31b-cloud')}
-            ${internalCompCard('ml-observerModel', '🔬', 'ObserverValidator', t('internal_observer_desc'), 'qwen3.5:cloud')}
-          </div>
-        </div>
-      </details>
-
-      <!-- Diagnóstico de Roteamento -->
-      <details class="cfg-details" id="ml-diagDetails">
-        <summary>🔍 ${t('routing_diag_title')}</summary>
-        <div class="cfg-details-body">
-          <div id="ml-diagContent">
-            <div class="routing-diag-empty">
-              <span>📡</span>
-              <span>${t('routing_diag_waiting')}</span>
+        <!-- Provider por perfil -->
+        <details class="cfg-details">
+          <summary>${t('provider_per_profile_title')}</summary>
+          <div class="cfg-details-body">
+            <div class="form-hint" style="margin-bottom:12px;">${t('provider_per_profile_hint')}</div>
+            <div class="route-grid">
+              ${providerCard('chat',      '💬', 'Chat')}
+              ${providerCard('code',      '💻', t('route_code_cat'))}
+              ${providerCard('vision',    '👁️', t('route_vision_cat'))}
+              ${providerCard('light',     '⚡', t('route_light_cat'))}
+              ${providerCard('analysis',  '📊', t('route_analysis_cat'))}
+              ${providerCard('execution', '🧠', t('route_execution_cat'))}
             </div>
           </div>
+        </details>
+      </div>
+
+      <!-- ═══ Providers ═══ -->
+      <div class="ml-panel" data-panel="providers">
+        <div class="provider-toolbar">
+          <span class="form-hint" id="ml-lastSync">Última sincronização: —</span>
         </div>
-      </details>
+        <div class="provider-grid" id="ml-providerGrid"></div>
+
+        <details class="cfg-details">
+          <summary>➕ Adicionar provider OpenAI-Compatible (LM Studio / vLLM / OpenAI / custom)</summary>
+          <div class="cfg-details-body">
+            <div class="chips" style="margin-bottom:10px;">
+              ${CUSTOM_PROVIDER_PRESETS.map(p => `<div class="chip" data-preset="${p.label}" data-url="${p.baseUrl}">${p.label}</div>`).join('')}
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Nome</label>
+                <input type="text" class="form-input" id="ml-newProvLabel" placeholder="Ex: LM Studio">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Base URL</label>
+                <input type="text" class="form-input" id="ml-newProvUrl" placeholder="http://localhost:1234/v1">
+              </div>
+              <div class="form-group">
+                <label class="form-label">API Key (opcional)</label>
+                <input type="password" class="form-input" id="ml-newProvKey" placeholder="Opcional">
+              </div>
+            </div>
+            <button class="btn btn-primary btn-sm" id="ml-addProvBtn">Adicionar</button>
+          </div>
+        </details>
+      </div>
+
+      <!-- ═══ Advanced ═══ -->
+      <div class="ml-panel" data-panel="advanced">
+        <details class="cfg-details" id="ml-internalDetails" open>
+          <summary>
+            ${t('internal_models_title')}
+            <span id="ml-internalBadge" style="display:none;margin-left:8px;padding:2px 8px;border-radius:10px;font-size:.72rem;font-weight:600;background:rgba(255,160,0,.15);color:#f59e0b;border:1px solid rgba(255,160,0,.3);">⚠️ ${t('internal_unconfigured_badge')}</span>
+          </summary>
+          <div class="cfg-details-body">
+            <div id="ml-internalWarning" style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:8px;background:rgba(255,160,0,.08);border:1px solid rgba(255,160,0,.3);font-size:.82rem;line-height:1.5;color:var(--text-main);">
+              ⚠️ <strong>Um ou mais modelos internos estão vazios.</strong> O sistema usará defaults, mas pode falhar se o provider ativo não os tiver disponíveis.<br>
+              Preencha os campos abaixo e clique <strong>Salvar &amp; Reiniciar</strong>.
+            </div>
+            <div class="form-hint" style="margin-bottom:14px;">${t('internal_models_hint')}</div>
+            <div class="internal-comp-grid">
+              ${internalCompCard('ml-plannerModel',  '📋', 'GoalPlanner',       t('internal_planner_desc'),  'gemma4:31b-cloud')}
+              ${internalCompCard('ml-riskModel',     '🛡️', 'RiskAnalyzer',      t('internal_risk_desc'),     'gemma4:31b-cloud')}
+              ${internalCompCard('ml-observerModel', '🔬', 'ObserverValidator', t('internal_observer_desc'), 'qwen3.5:cloud')}
+            </div>
+          </div>
+        </details>
+
+        <details class="cfg-details" id="ml-diagDetails">
+          <summary>🔍 ${t('routing_diag_title')}</summary>
+          <div class="cfg-details-body">
+            <div id="ml-diagContent">
+              <div class="routing-diag-empty">
+                <span>📡</span>
+                <span>${t('routing_diag_waiting')}</span>
+              </div>
+            </div>
+          </div>
+        </details>
+      </div>
     </div>`;
 
   const cs = configStore;
@@ -320,10 +351,11 @@ export function render(container) {
     toggleOllamaSection(prov);
     updateProviderHints(prov);
     updateEffectiveConfig(cs.get('modelRouter') || {}, prov);
+    updateOverview();
   });
 
   // Ollama main model
-  el('ollamaModel').addEventListener('input', e => cs.set('ollamaModel', e.target.value));
+  el('ollamaModel').addEventListener('input', e => { cs.set('ollamaModel', e.target.value); updateOverview(); });
 
   // Route inputs
   Object.keys(ROUTE_MAP).forEach(inputId => {
@@ -385,12 +417,16 @@ export function render(container) {
   updateDropdownModels(providersStore.get('models') || []);
   initDropdowns(ddIds);
 
-  // ── Provider Overview + Model Registry ──────────────────────────
+  // ── Tabs ─────────────────────────────────────────────────────
+  wireTabs(container);
+
+  // ── Overview + Provider grid + Model Registry table ──────────
   registrySearch = '';
   registryFilters = new Set();
 
   renderProviderGrid();
-  renderModelGrid();
+  renderModelTable();
+  updateOverview();
   wireProviderOverview();
   wireModelRegistry(container);
 
@@ -399,11 +435,11 @@ export function render(container) {
     updateDropdownModels(models);
     updateModelStatus(models, cs.get('modelRouter') || {});
   });
-  const unsubCatalog = providersStore.on('catalog', () => renderModelGrid());
+  const unsubCatalog = providersStore.on('catalog', () => renderModelTable());
   // Atualização leve (só dots/texto de saúde) — NUNCA um renderProviderGrid() completo aqui:
   // isso recriaria os <input> do card (URL/API key) a cada poll e apagaria o que o usuário
   // estivesse digitando no meio de uma edição.
-  const unsubHealthSync = providersStore.on('*', () => { updateProviderHealthUI(); updateLastSync(); });
+  const unsubHealthSync = providersStore.on('*', () => { updateProviderHealthUI(); updateOverview(); });
 
   // Subscribe to configStore router
   const unsubRouter = cs.on('modelRouter', mr => {
@@ -440,6 +476,39 @@ export function render(container) {
     if (warning) warning.style.display = unconfigured ? 'block'  : 'none';
     if (details && unconfigured) details.open = true;
   }
+}
+
+// ─── Tabs ────────────────────────────────────────────────────
+
+function wireTabs(container) {
+  const tabs   = container.querySelectorAll('.ml-tab');
+  const panels = container.querySelectorAll('.ml-panel');
+  tabs.forEach(tabBtn => {
+    tabBtn.addEventListener('click', () => {
+      tabs.forEach(b => b.classList.toggle('active', b === tabBtn));
+      panels.forEach(p => p.classList.toggle('active', p.dataset.panel === tabBtn.dataset.tab));
+    });
+  });
+}
+
+// ─── Overview ───────────────────────────────────────────────
+
+function updateOverview() {
+  const cs = configStore;
+  const s = cs.snap();
+  const health = providersStore.get('health') || [];
+  const ollamaHealth = health.find(h => h.provider === 'ollama');
+  const ollamaOnline = providersStore.get('ollamaOnline');
+  const ollamaCount  = providersStore.get('ollamaModelCount') || 0;
+  const lastSync     = providersStore.get('lastSync');
+
+  const el = id => document.getElementById(id);
+  el('ov-provider')     && (el('ov-provider').textContent = PROV_LABELS[s.defaultProvider] || s.defaultProvider || '—');
+  el('ov-dot')          && (el('ov-dot').className = `dot ${ollamaOnline ? 'online' : 'offline'}`);
+  el('ov-status')       && (el('ov-status').textContent = ollamaOnline ? 'Online' : (ollamaHealth?.error || 'Offline'));
+  el('ov-count')        && (el('ov-count').textContent = `${ollamaCount} disponíveis`);
+  el('ov-lastsync')     && (el('ov-lastsync').textContent = lastSync ? new Date(lastSync).toLocaleTimeString() : '—');
+  el('ov-defaultmodel') && (el('ov-defaultmodel').textContent = s.currentModel || s.ollamaModel || '—');
 }
 
 // ─── Provider Overview ─────────────────────────────────────────
@@ -544,6 +613,7 @@ function updateProviderHealthUI() {
     elHealth.querySelector('.dot').className = `dot ${h.online ? 'online' : 'offline'}`;
     elHealth.querySelector('span:last-child').textContent = h.online ? `${h.modelCount} modelos` : 'offline';
   }
+  updateLastSync();
 }
 
 function wireProviderOverview() {
@@ -626,9 +696,9 @@ function updateLastSync() {
 
 // ─── Model Registry ────────────────────────────────────────────
 
-function renderModelGrid() {
-  const grid = document.getElementById('mr-grid');
-  if (!grid) return;
+function renderModelTable() {
+  const tbody = document.getElementById('mr-tbody');
+  if (!tbody) return;
   const catalog = providersStore.get('catalog') || [];
   const term = registrySearch.toLowerCase();
   const filtered = catalog.filter(m => {
@@ -638,29 +708,27 @@ function renderModelGrid() {
   });
 
   if (filtered.length === 0) {
-    grid.innerHTML = `<div class="empty" style="padding:20px;color:var(--text-soft);">
-      ${catalog.length === 0 ? 'Nenhum modelo descoberto ainda — clique em "Sincronizar Modelos".' : 'Nenhum modelo bate com a busca/filtro.'}
-    </div>`;
+    tbody.innerHTML = `<tr><td colspan="5" class="empty" style="padding:20px;color:var(--text-soft);">
+      ${catalog.length === 0 ? 'Nenhum modelo descoberto ainda — clique em "Sincronizar Modelos" na aba Overview.' : 'Nenhum modelo bate com a busca/filtro.'}
+    </td></tr>`;
     return;
   }
 
-  grid.innerHTML = filtered.map(m => `
-    <div class="model-card">
-      <div class="model-card-header">
-        <span class="model-card-id">${esc(m.id)}</span>
-        <span class="badge badge-${m.provider === 'ollama' ? 'local' : 'cloud'}">${esc(m.provider)}</span>
-      </div>
-      <div class="model-card-caps">
-        ${(m.capabilities || []).map(c => `<span class="model-cap-tag">${CAPABILITY_LABELS[c] || c}</span>`).join('')}
-      </div>
-    </div>`).join('');
+  tbody.innerHTML = filtered.map(m => `
+    <tr>
+      <td class="model-table-id">${esc(m.id)}</td>
+      <td><span class="badge badge-${m.provider === 'ollama' ? 'local' : 'cloud'}">${esc(m.provider)}</span></td>
+      <td>${(m.capabilities || []).map(c => `<span class="model-cap-tag">${CAPABILITY_LABELS[c] || c}</span>`).join(' ')}</td>
+      <td><span class="dot online" style="display:inline-block;"></span> Disponível</td>
+      <td>${esc(formatContextWindow(m.contextWindow))}</td>
+    </tr>`).join('');
 }
 
 function wireModelRegistry(container) {
   const searchInput = document.getElementById('mr-search');
   searchInput?.addEventListener('input', e => {
     registrySearch = e.target.value;
-    renderModelGrid();
+    renderModelTable();
   });
 
   container.querySelectorAll('#mr-filters .chip').forEach(chip => {
@@ -668,9 +736,16 @@ function wireModelRegistry(container) {
       const cap = chip.dataset.cap;
       if (registryFilters.has(cap)) { registryFilters.delete(cap); chip.classList.remove('chip-active'); }
       else { registryFilters.add(cap); chip.classList.add('chip-active'); }
-      renderModelGrid();
+      renderModelTable();
     });
   });
+}
+
+function formatContextWindow(tokens) {
+  if (!tokens) return '—';
+  if (tokens >= 1_000_000) return `${Math.round(tokens / 1_000_000)}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1024)}K`;
+  return String(tokens);
 }
 
 // ─── HTML helpers ─────────────────────────────────────────────

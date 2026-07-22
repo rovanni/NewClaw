@@ -430,19 +430,39 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .provider-toolbar { display:flex; align-items:center; gap:12px; margin-bottom:13px; }
 
 /* ════════════════════════════════════
+   MODELOS — TABS
+════════════════════════════════════ */
+
+.ml-tabs { display:flex; gap:4px; border-bottom:1px solid var(--border-color); margin-bottom:18px; flex-wrap:wrap; }
+.ml-tab {
+  padding:9px 16px; font-size:.82rem; font-weight:600; color:var(--text-soft);
+  background:none; border:none; border-bottom:2px solid transparent; cursor:pointer; transition:all .15s;
+}
+.ml-tab:hover { color:var(--text-main); }
+.ml-tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+.ml-panel { display:none; }
+.ml-panel.active { display:block; }
+
+.overview-card { background:var(--bg-input); border:1px solid var(--border-color); border-radius:12px; padding:4px 18px; max-width:420px; }
+.overview-row { display:flex; align-items:center; justify-content:space-between; padding:11px 0; border-bottom:1px solid var(--border-color); font-size:.84rem; }
+.overview-row:last-child { border-bottom:none; }
+.overview-label { color:var(--text-soft); }
+.overview-value { font-weight:600; display:flex; align-items:center; gap:6px; }
+
+/* ════════════════════════════════════
    MODEL REGISTRY
 ════════════════════════════════════ */
 
 .model-registry-toolbar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:13px; }
 .model-filter-chips { display:flex; gap:6px; flex-wrap:wrap; }
 .chip.chip-active { border-color:var(--accent); color:var(--accent); background:var(--accent-bg); }
-.model-registry-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:11px; margin-bottom:8px; }
-.model-card { background:var(--bg-input); border:1px solid var(--border-color); border-radius:10px; padding:12px 14px; transition:box-shadow .2s, transform .2s; }
-.model-card:hover { transform:translateY(-2px); box-shadow:0 4px 16px rgba(0,0,0,.2); }
-.model-card-header { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
-.model-card-id { font-size:.82rem; font-weight:700; word-break:break-all; }
-.model-card-caps { display:flex; gap:5px; flex-wrap:wrap; }
-.model-cap-tag { font-size:.66rem; padding:2px 7px; border-radius:5px; background:var(--bg-muted); color:var(--text-muted); }
+.model-cap-tag { font-size:.66rem; padding:2px 7px; border-radius:5px; background:var(--bg-muted); color:var(--text-muted); display:inline-block; margin:1px; }
+.model-table-wrap { overflow-x:auto; border:1px solid var(--border-color); border-radius:10px; }
+.model-table { width:100%; border-collapse:collapse; font-size:.8rem; }
+.model-table th { text-align:left; padding:9px 13px; background:var(--bg-muted); color:var(--text-muted); font-size:.68rem; text-transform:uppercase; letter-spacing:.05em; }
+.model-table td { padding:9px 13px; border-top:1px solid var(--border-color); vertical-align:middle; }
+.model-table tbody tr:hover { background:var(--accent-bg); }
+.model-table-id { font-weight:600; word-break:break-all; }
 
 /* ════════════════════════════════════
    MODEL DROPDOWN

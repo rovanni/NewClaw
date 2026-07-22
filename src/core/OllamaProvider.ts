@@ -1,7 +1,7 @@
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo } from './providerTypes';
-import { guessCapabilities } from './modelCapabilityHeuristics';
+import { guessCapabilities, mapOllamaCapabilities } from './modelCapabilityHeuristics';
 import { taskQueue, TaskPriority } from './providerQueue';
 
 const log = createLogger('Providerfactory');
@@ -113,12 +113,22 @@ export class OllamaProvider implements ILLMProvider {
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
         const resp = await fetch(`${this.baseUrl}/api/tags`, { headers });
         if (!resp.ok) throw new Error(`Ollama /api/tags error: ${resp.status}`);
-        const data = await resp.json() as { models?: Array<{ name: string; details?: { parameter_size?: string } }> };
+        const data = await resp.json() as {
+            models?: Array<{
+                name: string;
+                capabilities?: string[];
+                details?: { family?: string; context_length?: number };
+            }>
+        };
         return (data.models || []).map(m => ({
             id: m.name,
             provider: 'ollama',
             label: m.name,
-            capabilities: guessCapabilities(m.name),
+            family: m.details?.family,
+            contextWindow: m.details?.context_length,
+            // Ollama devolve capabilities reais em /api/tags — só cai pra heurística por nome
+            // se, por algum motivo, o campo vier ausente (versão antiga do servidor).
+            capabilities: m.capabilities?.length ? mapOllamaCapabilities(m.capabilities) : guessCapabilities(m.name),
             status: 'available' as const,
         }));
     }

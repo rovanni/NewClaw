@@ -8,16 +8,20 @@
  *
  * Verifica:
  * 1. guessCapabilities() classifica por padrão de nome (vision/code/reasoning/embedding/tool_calling).
- * 2. OllamaProvider.discoverModels() normaliza a resposta de /api/tags em ModelInfo[].
+ * 2. OllamaProvider.discoverModels() normaliza a resposta de /api/tags em ModelInfo[], preferindo
+ *    as capabilities REAIS que o Ollama devolve (confirmado ao vivo contra instância real:
+ *    'completion'|'tools'|'vision'|'thinking'|'insert'|'embedding') e capturando family/context_length.
  * 3. OpenAIProvider.discoverModels() normaliza a resposta de /models (mesmo endpoint usado por
- *    OpenAI oficial/LM Studio/vLLM/custom) e usa o label configurado, não o nome fixo da classe.
+ *    OpenAI oficial/LM Studio/vLLM/custom) e usa o label configurado, não o nome fixo da classe —
+ *    esse endpoint não devolve capabilities reais, então cai na heurística por nome.
  * 4. ModelRegistryService.discoverAll() combina Ollama + providers customizados e registra saúde
  *    (online/offline) por provider, inclusive quando um deles falha.
  * 5. ModelRegistryService.getCatalog() cacheia entre chamadas (não bate no fetch de novo) até
  *    forceRefresh=true.
+ * 6. mapOllamaCapabilities()/formatContextWindow() — helpers usados pela UI.
  */
 
-import { guessCapabilities } from '../../core/modelCapabilityHeuristics';
+import { guessCapabilities, mapOllamaCapabilities, formatContextWindow } from '../../core/modelCapabilityHeuristics';
 import { OllamaProvider } from '../../core/OllamaProvider';
 import { OpenAIProvider } from '../../core/OpenAIProvider';
 import { ModelRegistryService } from '../../core/ModelRegistryService';
@@ -57,19 +61,42 @@ async function main() {
         assert(guessCapabilities('llama3.1:8b').includes('tool_calling'), 'modelo de propósito geral ganha tool_calling', guessCapabilities('llama3.1:8b'));
     }
 
-    // 2. OllamaProvider.discoverModels() — normaliza /api/tags
+    // 2. OllamaProvider.discoverModels() — normaliza /api/tags, preferindo capabilities reais
     {
         const { restore } = mockFetch(url => {
             assert(url.includes('/api/tags'), 'OllamaProvider bate em /api/tags', url);
-            return { ok: true, json: async () => ({ models: [{ name: 'glm-5.2:cloud' }, { name: 'gemma3:27b' }] }) };
+            return {
+                ok: true, json: async () => ({
+                    models: [
+                        // formato real confirmado ao vivo contra Ollama (curl /api/tags, 22/07/2026)
+                        { name: 'qwen3.5:4b-q4_K_M', capabilities: ['vision', 'completion', 'tools', 'thinking'], details: { family: 'qwen35', context_length: 262144 } },
+                        { name: 'nomic-embed-text:latest', capabilities: ['embedding'], details: { family: 'nomic-bert', context_length: 2048 } },
+                        // modelo sem campo capabilities (servidor antigo) — cai na heurística por nome
+                        { name: 'gemma3:27b' },
+                    ]
+                })
+            };
         });
         try {
             const ollama = new OllamaProvider('http://localhost:11434', 'glm-5.2:cloud', '');
             const models = await ollama.discoverModels!();
-            assert(models.length === 2, 'discoverModels retorna 2 modelos', models);
+            assert(models.length === 3, 'discoverModels retorna 3 modelos', models);
             assert(models[0].provider === 'ollama', 'provider marcado como ollama', models[0]);
-            assert(models[1].capabilities.includes('vision'), 'gemma3 carrega capability vision', models[1]);
+            assert(models[0].capabilities.includes('vision') && models[0].capabilities.includes('reasoning'), 'capabilities reais mapeadas (vision+thinking→reasoning)', models[0]);
+            assert(models[0].contextWindow === 262144, 'context_length real capturado', models[0]);
+            assert(models[0].family === 'qwen35', 'family real capturado', models[0]);
+            assert(models[1].capabilities.length === 1 && models[1].capabilities[0] === 'embedding', 'embedding real não vira chat/tools', models[1]);
+            assert(models[2].capabilities.includes('vision'), 'modelo sem campo capabilities cai na heurística por nome (gemma3→vision)', models[2]);
         } finally { restore(); }
+    }
+
+    // 2b. mapOllamaCapabilities / formatContextWindow — helpers usados pela tabela do Model Registry
+    {
+        assert(mapOllamaCapabilities(['completion', 'tools']).includes('chat') && mapOllamaCapabilities(['completion', 'tools']).includes('tool_calling'), 'completion+tools mapeiam pra chat+tool_calling', mapOllamaCapabilities(['completion', 'tools']));
+        assert(mapOllamaCapabilities(['insert']).includes('code'), 'insert mapeia pra code (fill-in-the-middle)', mapOllamaCapabilities(['insert']));
+        assert(formatContextWindow(262144) === '256K', '262144 formata como 256K', formatContextWindow(262144));
+        assert(formatContextWindow(1_000_000) === '1M', '1_000_000 formata como 1M', formatContextWindow(1_000_000));
+        assert(formatContextWindow(undefined) === '—', 'undefined formata como travessão', formatContextWindow(undefined));
     }
 
     // 3. OpenAIProvider.discoverModels() — normaliza /models e usa o label
