@@ -38,6 +38,7 @@
     "@types/multer": "^2.1.0"
   },
   "overrides": {
-    "undici": "6.27.0"
+    "undici": "6.27.0",
+    "sharp": "^0.35.0"
   }
 }

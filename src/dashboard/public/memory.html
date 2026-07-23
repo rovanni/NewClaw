@@ -164,7 +164,7 @@
       const q = document.getElementById('searchInput').value.trim();
       try {
         const url = q ? `/api/memory/search?q=${encodeURIComponent(q)}` : '/api/memory/nodes';
-        const r = await fetch(url); const d = await r.json();
+        const r = await newclawFetch(url); const d = await r.json();
         if (d.success) { nodes = d.nodes || []; renderNodes(); }
       } catch {}
     }
@@ -173,7 +173,7 @@
       currentFilter = type;
       try {
         const url = type ? `/api/memory/nodes?type=${type}` : '/api/memory/nodes';
-        const r = await fetch(url); const d = await r.json();
+        const r = await newclawFetch(url); const d = await r.json();
         if (d.success) { nodes = d.nodes || []; renderNodes(); loadStats(); }
       } catch {}
     }
@@ -199,7 +199,7 @@
       selectedNodeId = id;
       renderNodes();
       try {
-        const r = await fetch(`/api/memory/nodes/${encodeURIComponent(id)}`); const d = await r.json();
+        const r = await newclawFetch(`/api/memory/nodes/${encodeURIComponent(id)}`); const d = await r.json();
         if (!d.success) return;
         const n = d.node;
         const edges = d.edges || [];

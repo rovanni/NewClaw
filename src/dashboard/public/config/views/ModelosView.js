@@ -4,14 +4,20 @@ import { initDropdowns, updateDropdownModels } from '../components/ModelDropdown
 import { addCustomProvider, removeCustomProvider, getCloudCatalog } from '../api.js';
 import { loadProviders } from '../app.js';
 
-const CATEGORY_META = [
-  { key: 'chat',      icon: '💬', label: 'Chat' },
-  { key: 'code',      icon: '💻', label: 'Código' },
-  { key: 'vision',    icon: '👁️', label: 'Visão' },
-  { key: 'light',     icon: '⚡', label: 'Leve' },
-  { key: 'analysis',  icon: '📊', label: 'Análise' },
-  { key: 'execution', icon: '🧠', label: 'Execução' },
-];
+// Funções (não const) porque t() precisa ser avaliado a cada render() — se fossem consts de
+// módulo, ficariam presas no idioma ativo no momento em que o arquivo foi importado pela primeira
+// vez e nunca atualizariam depois de uma troca de idioma (mesma classe de bug do header — ver
+// newclawSetLang() em shared.js).
+function getCategoryMeta() {
+  return [
+    { key: 'chat',      icon: '💬', label: 'Chat' },
+    { key: 'code',      icon: '💻', label: t('route_code_cat') },
+    { key: 'vision',    icon: '👁️', label: t('route_vision_cat') },
+    { key: 'light',     icon: '⚡', label: t('route_light_cat') },
+    { key: 'analysis',  icon: '📊', label: t('route_analysis_cat') },
+    { key: 'execution', icon: '🧠', label: t('route_execution_cat') },
+  ];
+}
 
 // Capability mínima exigida por categoria — reaproveita as capabilities já calculadas no
 // discovery (ModelRegistryService/modelCapabilityHeuristics), nenhuma regra nova é criada aqui.
@@ -40,18 +46,22 @@ const CUSTOM_PROVIDER_PRESETS = [
   { label: 'vLLM',       baseUrl: 'http://localhost:8000/v1' },
 ];
 
-const CAPABILITY_LABELS = {
-  chat: '💬 Chat', vision: '👁️ Vision', embedding: '🧬 Embedding',
-  reasoning: '🧠 Reasoning', code: '💻 Code', tool_calling: '🔧 Function Calling',
-};
+function getCapabilityLabels() {
+  return {
+    chat: t('ml_cap_chat'), vision: t('ml_cap_vision'), embedding: t('ml_cap_embedding'),
+    reasoning: t('ml_cap_reasoning'), code: t('ml_cap_code'), tool_calling: t('ml_cap_toolcalling'),
+  };
+}
 
-const TABS = [
-  { id: 'overview',  icon: '📡', label: 'Overview' },
-  { id: 'registry',  icon: '📚', label: 'Registry' },
-  { id: 'routing',   icon: '🧭', label: 'Routing' },
-  { id: 'providers', icon: '🔌', label: 'Providers' },
-  { id: 'advanced',  icon: '⚙️', label: 'Advanced' },
-];
+function getTabs() {
+  return [
+    { id: 'overview',  icon: '📡', label: t('ml_tab_overview') },
+    { id: 'registry',  icon: '📚', label: t('ml_tab_registry') },
+    { id: 'routing',   icon: '🧭', label: t('ml_tab_routing') },
+    { id: 'providers', icon: '🔌', label: t('ml_tab_providers') },
+    { id: 'advanced',  icon: '⚙️', label: t('ml_tab_advanced') },
+  ];
+}
 
 // Estado local do filtro do Model Registry — reiniciado a cada render() (troca de página).
 let registrySearch = '';
@@ -67,6 +77,9 @@ let registryMode = 'installed';
 let cloudCatalog = null;
 
 export function render(container) {
+  const tabs = getTabs();
+  const capLabels = getCapabilityLabels();
+  const categoryMeta = getCategoryMeta();
   container.innerHTML = `
     <div class="page-view">
       <div class="page-header">
@@ -75,37 +88,37 @@ export function render(container) {
       </div>
 
       <div class="ml-tabs" id="ml-tabs">
-        ${TABS.map((tab, i) => `<button type="button" class="ml-tab${i === 0 ? ' active' : ''}" data-tab="${tab.id}">${tab.icon} ${tab.label}</button>`).join('')}
+        ${tabs.map((tab, i) => `<button type="button" class="ml-tab${i === 0 ? ' active' : ''}" data-tab="${tab.id}">${tab.icon} ${tab.label}</button>`).join('')}
       </div>
 
       <!-- ═══ Overview ═══ -->
       <div class="ml-panel active" data-panel="overview">
         <div class="overview-card">
-          <div class="overview-row"><span class="overview-label">Provider</span><span class="overview-value" id="ov-provider">—</span></div>
-          <div class="overview-row"><span class="overview-label">Status</span><span class="overview-value"><span class="dot" id="ov-dot"></span> <span id="ov-status">—</span></span></div>
-          <div class="overview-row"><span class="overview-label">Modelos</span><span class="overview-value" id="ov-count">—</span></div>
-          <div class="overview-row"><span class="overview-label">Última sincronização</span><span class="overview-value" id="ov-lastsync">—</span></div>
-          <div class="overview-row"><span class="overview-label">Modelo padrão</span><span class="overview-value" id="ov-defaultmodel">—</span></div>
+          <div class="overview-row"><span class="overview-label">${t('ml_ov_provider')}</span><span class="overview-value" id="ov-provider">—</span></div>
+          <div class="overview-row"><span class="overview-label">${t('ml_ov_status')}</span><span class="overview-value"><span class="dot" id="ov-dot"></span> <span id="ov-status">—</span></span></div>
+          <div class="overview-row"><span class="overview-label">${t('ml_ov_models')}</span><span class="overview-value" id="ov-count">—</span></div>
+          <div class="overview-row"><span class="overview-label">${t('ml_ov_lastsync')}</span><span class="overview-value" id="ov-lastsync">—</span></div>
+          <div class="overview-row"><span class="overview-label">${t('ml_ov_defaultmodel')}</span><span class="overview-value" id="ov-defaultmodel">—</span></div>
         </div>
-        <button class="btn btn-primary btn-sm" id="ml-syncBtn" style="margin-top:14px;">🔄 Sincronizar Modelos</button>
+        <button class="btn btn-primary btn-sm" id="ml-syncBtn" style="margin-top:14px;">${t('ml_ov_syncbtn')}</button>
       </div>
 
       <!-- ═══ Registry ═══ -->
       <div class="ml-panel" data-panel="registry">
         <div class="cat-selector" id="mr-modeToggle">
-          <button type="button" class="cat-btn active" data-mode="installed">📦 Instalados</button>
-          <button type="button" class="cat-btn" data-mode="cloud">☁️ Disponíveis na nuvem</button>
+          <button type="button" class="cat-btn active" data-mode="installed">${t('ml_mode_installed')}</button>
+          <button type="button" class="cat-btn" data-mode="cloud">${t('ml_mode_cloud')}</button>
         </div>
         <div class="model-registry-toolbar">
-          <input type="text" class="form-input" id="mr-search" placeholder="Buscar modelo (ex: kimi)..." style="max-width:260px;">
+          <input type="text" class="form-input" id="mr-search" placeholder="${t('ml_search_placeholder')}" style="max-width:260px;">
           <div class="model-filter-chips" id="mr-filters">
-            ${Object.keys(CAPABILITY_LABELS).map(cap => `<div class="chip" data-cap="${cap}">${CAPABILITY_LABELS[cap]}</div>`).join('')}
+            ${Object.keys(capLabels).map(cap => `<div class="chip" data-cap="${cap}">${capLabels[cap]}</div>`).join('')}
           </div>
         </div>
         <div class="model-table-wrap">
           <table class="model-table">
             <thead>
-              <tr><th>Nome</th><th>Provider</th><th>Capabilities</th><th>Context</th><th>Status</th></tr>
+              <tr><th>${t('ml_col_name')}</th><th>${t('ml_col_provider')}</th><th>${t('ml_col_capabilities')}</th><th>${t('ml_col_context')}</th><th>${t('ml_col_status')}</th></tr>
             </thead>
             <tbody id="mr-tbody"></tbody>
           </table>
@@ -184,25 +197,25 @@ export function render(container) {
         <div class="cfg-details">
           <div class="cfg-details-body">
             <div class="cat-selector" id="rt-catSelector">
-              ${CATEGORY_META.map((c, i) => `<button type="button" class="cat-btn${i === 0 ? ' active' : ''}" data-cat="${c.key}">${c.icon} ${c.label}</button>`).join('')}
+              ${categoryMeta.map((c, i) => `<button type="button" class="cat-btn${i === 0 ? ' active' : ''}" data-cat="${c.key}">${c.icon} ${c.label}</button>`).join('')}
             </div>
 
             <div class="rt-picker-header">
               <div class="rt-picker-info">
-                <span class="overview-label">Modelo atual</span>
+                <span class="overview-label">${t('ml_routing_current')}</span>
                 <span class="rt-current-model" id="rt-currentModel">—</span>
               </div>
               <div class="rt-picker-info" id="rt-pendingWrap" style="display:none;">
-                <span class="overview-label">→ Selecionado</span>
+                <span class="overview-label">${t('ml_routing_selected')}</span>
                 <span class="rt-pending-model" id="rt-pendingModel">—</span>
               </div>
-              <button class="btn btn-primary btn-sm" id="rt-applyBtn" disabled>✅ Aplicar</button>
+              <button class="btn btn-primary btn-sm" id="rt-applyBtn" disabled>${t('ml_routing_apply')}</button>
             </div>
 
             <div class="model-table-wrap">
               <table class="model-table">
                 <thead>
-                  <tr><th></th><th>Nome</th><th>Provider</th><th>Capabilities</th><th>Context</th><th>Status</th></tr>
+                  <tr><th></th><th>${t('ml_col_name')}</th><th>${t('ml_col_provider')}</th><th>${t('ml_col_capabilities')}</th><th>${t('ml_col_context')}</th><th>${t('ml_col_status')}</th></tr>
                 </thead>
                 <tbody id="rt-tbody"></tbody>
               </table>
@@ -296,26 +309,26 @@ export function render(container) {
         <div class="provider-grid" id="ml-providerGrid"></div>
 
         <details class="cfg-details">
-          <summary>➕ Adicionar provider OpenAI-Compatible (LM Studio / vLLM / OpenAI / custom)</summary>
+          <summary>${t('ml_add_provider_title')}</summary>
           <div class="cfg-details-body">
             <div class="chips" style="margin-bottom:10px;">
               ${CUSTOM_PROVIDER_PRESETS.map(p => `<div class="chip" data-preset="${p.label}" data-url="${p.baseUrl}">${p.label}</div>`).join('')}
             </div>
             <div class="form-row">
               <div class="form-group">
-                <label class="form-label">Nome</label>
+                <label class="form-label">${t('ml_col_name')}</label>
                 <input type="text" class="form-input" id="ml-newProvLabel" placeholder="Ex: LM Studio">
               </div>
               <div class="form-group">
-                <label class="form-label">Base URL</label>
+                <label class="form-label">${t('ml_provider_baseurl_label')}</label>
                 <input type="text" class="form-input" id="ml-newProvUrl" placeholder="http://localhost:1234/v1">
               </div>
               <div class="form-group">
-                <label class="form-label">API Key (opcional)</label>
-                <input type="password" class="form-input" id="ml-newProvKey" placeholder="Opcional">
+                <label class="form-label">${t('ml_provider_apikey_optional')}</label>
+                <input type="password" class="form-input" id="ml-newProvKey" placeholder="${t('ml_optional_placeholder')}">
               </div>
             </div>
-            <button class="btn btn-primary btn-sm" id="ml-addProvBtn">Adicionar</button>
+            <button class="btn btn-primary btn-sm" id="ml-addProvBtn">${t('ml_add_btn')}</button>
           </div>
         </details>
       </div>
@@ -541,8 +554,8 @@ function updateOverview() {
   const el = id => document.getElementById(id);
   el('ov-provider')     && (el('ov-provider').textContent = PROV_LABELS[s.defaultProvider] || s.defaultProvider || '—');
   el('ov-dot')          && (el('ov-dot').className = `dot ${ollamaOnline ? 'online' : 'offline'}`);
-  el('ov-status')       && (el('ov-status').textContent = ollamaOnline ? 'Online' : (ollamaHealth?.error || 'Offline'));
-  el('ov-count')        && (el('ov-count').textContent = `${ollamaCount} disponíveis`);
+  el('ov-status')       && (el('ov-status').textContent = ollamaOnline ? t('ml_ov_online') : (ollamaHealth?.error || t('ml_ov_offline')));
+  el('ov-count')        && (el('ov-count').textContent = `${ollamaCount} ${t('ml_ov_available_suffix')}`);
   el('ov-lastsync')     && (el('ov-lastsync').textContent = lastSync ? new Date(lastSync).toLocaleTimeString() : '—');
   el('ov-defaultmodel') && (el('ov-defaultmodel').textContent = s.currentModel || s.ollamaModel || '—');
 }
@@ -569,7 +582,7 @@ function renderProviderGrid() {
         <div class="provider-name">🦙 Ollama <span class="badge badge-local">local</span><span class="badge badge-cloud">cloud</span></div>
         <div class="provider-health" data-health="ollama">
           <span class="dot ${ollamaOnline ? 'online' : 'offline'}"></span>
-          <span>${ollamaOnline ? `${ollamaCount} modelos` : (ollamaHealth?.error || 'offline')}</span>
+          <span>${ollamaOnline ? t('ollama_models_count', { n: ollamaCount }) : (ollamaHealth?.error || t('offline'))}</span>
         </div>
       </div>
       <div class="form-row">
@@ -578,8 +591,8 @@ function renderProviderGrid() {
           <input type="text" class="form-input" id="pv-ollamaUrl" placeholder="http://localhost:11434" value="${esc(s.ollamaUrl || '')}">
         </div>
         <div class="form-group">
-          <label class="form-label">API Key (cloud)</label>
-          <input type="password" class="form-input" id="pv-ollamaApiKey" placeholder="Opcional">
+          <label class="form-label">${t('ml_apikey_cloud_label')}</label>
+          <input type="password" class="form-input" id="pv-ollamaApiKey" placeholder="${t('ml_optional_placeholder')}">
         </div>
       </div>
     </div>`);
@@ -593,11 +606,11 @@ function renderProviderGrid() {
           <div class="provider-name">🔗 ${esc(p.label)} <span class="badge badge-cloud">OpenAI-Compatible</span></div>
           <div class="provider-health" data-health="${esc(p.label)}">
             <span class="dot ${h ? (h.online ? 'online' : 'offline') : ''}"></span>
-            <span>${h ? (h.online ? `${h.modelCount} modelos` : 'offline') : '—'}</span>
+            <span>${h ? (h.online ? t('ollama_models_count', { n: h.modelCount }) : t('offline')) : '—'}</span>
           </div>
         </div>
         <div class="form-hint" style="margin-bottom:8px;word-break:break-all;">${esc(p.baseUrl)}</div>
-        <button class="btn btn-ghost btn-sm btn-remove-key" data-remove-provider="${esc(p.label)}">✕ Remover</button>
+        <button class="btn btn-ghost btn-sm btn-remove-key" data-remove-provider="${esc(p.label)}">${t('ml_remove_btn')}</button>
       </div>`);
   }
 
@@ -611,11 +624,11 @@ function renderProviderGrid() {
           <div class="provider-health"><span class="dot ${hasKey ? 'online' : 'offline'}"></span></div>
         </div>
         <div class="form-group">
-          <label class="form-label">API Key</label>
+          <label class="form-label">${t('ml_apikey_label')}</label>
           <div class="api-key-group">
             <input type="password" class="form-input" id="pv-${cp.key}Key" placeholder="${cp.placeholder}">
-            <span class="api-key-status">${hasKey ? '✓ OK' : t('key_missing') || 'não configurada'}</span>
-            <button class="btn btn-ghost btn-sm btn-remove-key" data-remove-key="${cp.key}" style="${hasKey ? '' : 'display:none'}" title="Remover chave">✕</button>
+            <span class="api-key-status">${hasKey ? '✓ OK' : t('key_missing')}</span>
+            <button class="btn btn-ghost btn-sm btn-remove-key" data-remove-key="${cp.key}" style="${hasKey ? '' : 'display:none'}" title="${t('ml_remove_btn')}">✕</button>
           </div>
         </div>
       </div>`);
@@ -639,7 +652,7 @@ function updateProviderHealthUI() {
   if (ollamaEl) {
     const ollamaHealth = healthByProvider['ollama'];
     ollamaEl.querySelector('.dot').className = `dot ${ollamaOnline ? 'online' : 'offline'}`;
-    ollamaEl.querySelector('span:last-child').textContent = ollamaOnline ? `${ollamaCount} modelos` : (ollamaHealth?.error || 'offline');
+    ollamaEl.querySelector('span:last-child').textContent = ollamaOnline ? t('ollama_models_count', { n: ollamaCount }) : (ollamaHealth?.error || t('offline'));
   }
 
   for (const [label, h] of Object.entries(healthByProvider)) {
@@ -647,7 +660,7 @@ function updateProviderHealthUI() {
     const elHealth = document.querySelector(`[data-health="${CSS.escape(label)}"]`);
     if (!elHealth) continue;
     elHealth.querySelector('.dot').className = `dot ${h.online ? 'online' : 'offline'}`;
-    elHealth.querySelector('span:last-child').textContent = h.online ? `${h.modelCount} modelos` : 'offline';
+    elHealth.querySelector('span:last-child').textContent = h.online ? t('ollama_models_count', { n: h.modelCount }) : t('offline');
   }
   updateLastSync();
 }
@@ -742,8 +755,9 @@ function updateLastSync() {
  */
 function buildModelRows(models, { selectable = false, selectedId = null, currentId = null, installedIds = null } = {}) {
   if (!models.length) {
-    return `<tr><td colspan="${selectable ? 6 : 5}" class="empty" style="padding:20px;color:var(--text-soft);">Nenhum modelo encontrado.</td></tr>`;
+    return `<tr><td colspan="${selectable ? 6 : 5}" class="empty" style="padding:20px;color:var(--text-soft);">${t('ml_none_found')}</td></tr>`;
   }
+  const capLabels = getCapabilityLabels();
   return models.map(m => {
     const isCurrent = !!currentId && m.id === currentId;
     const isSelected = selectable && !!selectedId && m.id === selectedId;
@@ -752,15 +766,15 @@ function buildModelRows(models, { selectable = false, selectedId = null, current
     // selecionar), fica mais fácil de achar no final da linha em vez de no meio da tabela.
     const lastCell = installedIds
       ? (installedIds.has(m.id)
-          ? `<span class="model-installed-badge">✓ Instalado</span>`
-          : `<button type="button" class="btn btn-primary btn-sm" data-activate-cloud="${esc(m.id)}">⬇️ Instalar</button>`)
-      : `<span class="dot online" style="display:inline-block;"></span> Disponível`;
+          ? `<span class="model-installed-badge">${t('ml_installed_badge')}</span>`
+          : `<button type="button" class="btn btn-primary btn-sm" data-activate-cloud="${esc(m.id)}">${t('ml_install_btn')}</button>`)
+      : `<span class="dot online" style="display:inline-block;"></span> ${t('ml_available_status')}`;
     return `
     <tr class="${rowClass}" data-model-id="${esc(m.id)}">
       ${selectable ? `<td class="model-radio-cell">${isSelected ? '🔘' : '⚪'}</td>` : ''}
-      <td class="model-table-id">${esc(m.id)}${isCurrent ? ' <span class="model-current-badge">atual</span>' : ''}</td>
+      <td class="model-table-id">${esc(m.id)}${isCurrent ? ` <span class="model-current-badge">${t('ml_current_badge')}</span>` : ''}</td>
       <td><span class="badge badge-${m.provider === 'ollama' ? 'local' : 'cloud'}">${esc(m.provider)}</span></td>
-      <td>${(m.capabilities || []).map(c => `<span class="model-cap-tag">${CAPABILITY_LABELS[c] || c}</span>`).join(' ')}</td>
+      <td>${(m.capabilities || []).map(c => `<span class="model-cap-tag">${capLabels[c] || c}</span>`).join(' ')}</td>
       <td>${esc(formatContextWindow(m.contextWindow))}</td>
       <td>${lastCell}</td>
     </tr>`;
@@ -783,7 +797,7 @@ async function renderModelTable() {
 
   if (registryMode === 'cloud') {
     if (cloudCatalog === null) {
-      tbody.innerHTML = `<tr><td colspan="5" class="empty" style="padding:20px;color:var(--text-soft);">Carregando catálogo cloud...</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="5" class="empty" style="padding:20px;color:var(--text-soft);">${t('ml_cloud_loading')}</td></tr>`;
       cloudCatalog = await getCloudCatalog();
       if (registryMode !== 'cloud') return; // usuário trocou de modo enquanto o fetch rodava
     }
@@ -794,10 +808,10 @@ async function renderModelTable() {
       // um modelo real (custom/privado) que só não está nessa lista. Em vez de um campo de "puxar"
       // separado (confundia com a busca), a própria busca sem resultado já oferece essa saída.
       const fallback = (cloudCatalog.length > 0 && term)
-        ? `<div style="margin-top:10px;">Não achou "${esc(term)}" no catálogo? <button type="button" class="btn btn-ghost btn-sm" data-pull-term="${esc(term)}">⬇️ Tentar puxar "${esc(term)}" mesmo assim</button></div>`
+        ? `<div style="margin-top:10px;">${t('ml_not_found_hint', { term: esc(term) })} <button type="button" class="btn btn-ghost btn-sm" data-pull-term="${esc(term)}">${t('ml_try_pull_btn', { term: esc(term) })}</button></div>`
         : '';
       tbody.innerHTML = `<tr><td colspan="5" class="empty" style="padding:20px;color:var(--text-soft);">
-        ${cloudCatalog.length === 0 ? 'Catálogo cloud indisponível no momento — tente novamente mais tarde.' : `Nenhum modelo bate com "${esc(term)}".`}
+        ${cloudCatalog.length === 0 ? t('ml_cloud_unavailable') : t('ml_no_match_term', { term: esc(term) })}
         ${fallback}
       </td></tr>`;
       return;
@@ -811,7 +825,7 @@ async function renderModelTable() {
   const filtered = filterCatalog(catalog);
   if (filtered.length === 0) {
     tbody.innerHTML = `<tr><td colspan="5" class="empty" style="padding:20px;color:var(--text-soft);">
-      ${catalog.length === 0 ? 'Nenhum modelo descoberto ainda — clique em "Sincronizar Modelos" na aba Overview.' : 'Nenhum modelo bate com a busca/filtro.'}
+      ${catalog.length === 0 ? t('ml_no_models_yet') : t('ml_no_match_filter')}
     </td></tr>`;
     return;
   }
@@ -848,7 +862,7 @@ function wireModelRegistry(container) {
     if (activateBtn) {
       const name = activateBtn.dataset.activateCloud;
       activateBtn.disabled = true;
-      activateBtn.textContent = '⏳ Instalando...';
+      activateBtn.textContent = t('ml_installing_btn');
       await pullIntoRegistry(name); // já ressincroniza o catálogo local (loadProviders(true))
       renderModelTable(); // badge "Instalado" substitui o botão automaticamente
       return;
@@ -859,7 +873,7 @@ function wireModelRegistry(container) {
     if (fallbackBtn) {
       const term = fallbackBtn.dataset.pullTerm;
       fallbackBtn.disabled = true;
-      fallbackBtn.textContent = '⏳ Tentando...';
+      fallbackBtn.textContent = t('ml_trying_btn');
       await pullIntoRegistry(term);
       renderModelTable();
     }
@@ -879,7 +893,7 @@ function renderCategoryPicker() {
   const compatible = catalog.filter(m => !requiredCap || m.capabilities?.includes(requiredCap));
 
   const curEl = document.getElementById('rt-currentModel');
-  if (curEl) curEl.textContent = currentModel || '(não configurado)';
+  if (curEl) curEl.textContent = currentModel || t('ml_routing_notconfigured');
 
   const pendingWrap = document.getElementById('rt-pendingWrap');
   const pendingEl = document.getElementById('rt-pendingModel');
@@ -920,7 +934,7 @@ function wireCategoryPicker(container) {
     const mr = { ...cs.get('modelRouter') };
     mr[routingSelectedCategory] = routingPendingModel;
     cs.set('modelRouter', mr);
-    const catLabel = CATEGORY_META.find(c => c.key === routingSelectedCategory)?.label || routingSelectedCategory;
+    const catLabel = getCategoryMeta().find(c => c.key === routingSelectedCategory)?.label || routingSelectedCategory;
     showToast(`Modelo de ${catLabel} atualizado para "${routingPendingModel}"`, 'success');
     routingPendingModel = null;
     renderCategoryPicker();
