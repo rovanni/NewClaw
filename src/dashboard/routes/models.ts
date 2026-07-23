@@ -23,5 +23,16 @@ export function createModelsRouter(ctx: DashboardContext): Router {
         }
     });
 
+    router.get('/cloud-catalog', async (req: Request, res: Response) => {
+        if (!ctx.modelRegistryService) {
+            return res.json({ success: true, models: [] });
+        }
+        // getCloudCatalog() já é best-effort internamente (nunca rejeita) — sem try/catch aqui
+        // pra não esconder um bug real caso o contrato mude.
+        const forceRefresh = req.query.refresh === 'true';
+        const models = await ctx.modelRegistryService.getCloudCatalog(forceRefresh);
+        res.json({ success: true, models });
+    });
+
     return router;
 }

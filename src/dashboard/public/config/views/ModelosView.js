@@ -1,7 +1,7 @@
 import { configStore, providersStore } from '../state.js';
 import { showToast } from '../components/Toast.js';
 import { initDropdowns, updateDropdownModels } from '../components/ModelDropdown.js';
-import { addCustomProvider, removeCustomProvider } from '../api.js';
+import { addCustomProvider, removeCustomProvider, getCloudCatalog } from '../api.js';
 import { loadProviders } from '../app.js';
 
 const CATEGORY_META = [
@@ -61,6 +61,11 @@ let registryFilters = new Set();
 let routingSelectedCategory = 'chat';
 let routingPendingModel = null;
 
+// Estado local do toggle Instalados/Cloud no Registry — idem. cloudCatalog é lazy (só busca no
+// remoto quando o usuário troca pro modo cloud, não no carregamento da página).
+let registryMode = 'installed';
+let cloudCatalog = null;
+
 export function render(container) {
   container.innerHTML = `
     <div class="page-view">
@@ -87,11 +92,20 @@ export function render(container) {
 
       <!-- ═══ Registry ═══ -->
       <div class="ml-panel" data-panel="registry">
+        <div class="cat-selector" id="mr-modeToggle">
+          <button type="button" class="cat-btn active" data-mode="installed">📦 Instalados</button>
+          <button type="button" class="cat-btn" data-mode="cloud">☁️ Disponíveis na nuvem</button>
+        </div>
         <div class="model-registry-toolbar">
           <input type="text" class="form-input" id="mr-search" placeholder="Buscar modelo..." style="max-width:260px;">
           <div class="model-filter-chips" id="mr-filters">
             ${Object.keys(CAPABILITY_LABELS).map(cap => `<div class="chip" data-cap="${cap}">${CAPABILITY_LABELS[cap]}</div>`).join('')}
           </div>
+        </div>
+        <div class="model-pull-bar">
+          <input type="text" class="form-input" id="mr-pullInput" placeholder="Puxar modelo pelo nome exato (ex: kimi-k2.6:cloud)" style="max-width:340px;">
+          <button class="btn btn-primary btn-sm" id="mr-pullBtn">⬇️ Puxar</button>
+          <span class="form-hint">Não achou na lista "Disponíveis na nuvem"? Registre pelo nome exato aqui.</span>
         </div>
         <div class="model-table-wrap">
           <table class="model-table">
@@ -443,6 +457,8 @@ export function render(container) {
   // ── Overview + Provider grid + Model Registry table ──────────
   registrySearch = '';
   registryFilters = new Set();
+  registryMode = 'installed';
+  cloudCatalog = null;
   routingSelectedCategory = 'chat';
   routingPendingModel = null;
 
@@ -722,48 +738,78 @@ function updateLastSync() {
 // ─── Model Registry (tabela reutilizada — browse em Registry, seleção em Routing) ─────
 
 /**
- * Gera as linhas <tr> do catálogo. Único ponto de renderização de linha de modelo — tanto a
- * tabela de consulta (Registry) quanto o seletor por categoria (Routing) chamam esta função,
- * em vez de duplicar a lógica de escapamento/badges/capability tags (Sprint UX-002).
+ * Gera as linhas <tr> do catálogo. Único ponto de renderização de linha de modelo — a tabela de
+ * consulta (Registry, modos Instalados/Cloud) e o seletor por categoria (Routing) chamam esta
+ * mesma função, em vez de duplicar a lógica de escapamento/badges/capability tags (Sprint UX-002).
+ *
+ * installedIds !== null implica "modo cloud": a última coluna vira ação de instalar em vez de
+ * status, e modelos já instalados ganham um badge "Instalado" em vez do botão — nunca escondidos.
  */
-function buildModelRows(models, { selectable = false, selectedId = null, currentId = null } = {}) {
+function buildModelRows(models, { selectable = false, selectedId = null, currentId = null, installedIds = null } = {}) {
   if (!models.length) {
-    return `<tr><td colspan="${selectable ? 6 : 5}" class="empty" style="padding:20px;color:var(--text-soft);">Nenhum modelo compatível encontrado.</td></tr>`;
+    return `<tr><td colspan="${selectable ? 6 : 5}" class="empty" style="padding:20px;color:var(--text-soft);">Nenhum modelo encontrado.</td></tr>`;
   }
   return models.map(m => {
     const isCurrent = !!currentId && m.id === currentId;
     const isSelected = selectable && !!selectedId && m.id === selectedId;
     const rowClass = [selectable ? 'model-row-selectable' : '', isCurrent ? 'model-row-current' : ''].filter(Boolean).join(' ');
+    const lastCell = installedIds
+      ? (installedIds.has(m.id)
+          ? `<span class="model-installed-badge">✓ Instalado</span>`
+          : `<button type="button" class="btn btn-primary btn-sm" data-activate-cloud="${esc(m.id)}">⬇️ Instalar</button>`)
+      : `<span class="dot online" style="display:inline-block;"></span> Disponível`;
     return `
     <tr class="${rowClass}" data-model-id="${esc(m.id)}">
       ${selectable ? `<td class="model-radio-cell">${isSelected ? '🔘' : '⚪'}</td>` : ''}
       <td class="model-table-id">${esc(m.id)}${isCurrent ? ' <span class="model-current-badge">atual</span>' : ''}</td>
       <td><span class="badge badge-${m.provider === 'ollama' ? 'local' : 'cloud'}">${esc(m.provider)}</span></td>
       <td>${(m.capabilities || []).map(c => `<span class="model-cap-tag">${CAPABILITY_LABELS[c] || c}</span>`).join(' ')}</td>
-      <td><span class="dot online" style="display:inline-block;"></span> Disponível</td>
+      <td>${lastCell}</td>
       <td>${esc(formatContextWindow(m.contextWindow))}</td>
     </tr>`;
   }).join('');
 }
 
-function renderModelTable() {
-  const tbody = document.getElementById('mr-tbody');
-  if (!tbody) return;
-  const catalog = providersStore.get('catalog') || [];
+/** Busca + filtro de capability — mesmo critério nos dois modos (Instalados/Cloud). */
+function filterCatalog(list) {
   const term = registrySearch.toLowerCase();
-  const filtered = catalog.filter(m => {
+  return list.filter(m => {
     if (term && !m.id.toLowerCase().includes(term)) return false;
     if (registryFilters.size > 0 && !m.capabilities?.some(c => registryFilters.has(c))) return false;
     return true;
   });
+}
 
+async function renderModelTable() {
+  const tbody = document.getElementById('mr-tbody');
+  if (!tbody) return;
+
+  if (registryMode === 'cloud') {
+    if (cloudCatalog === null) {
+      tbody.innerHTML = `<tr><td colspan="5" class="empty" style="padding:20px;color:var(--text-soft);">Carregando catálogo cloud...</td></tr>`;
+      cloudCatalog = await getCloudCatalog();
+      if (registryMode !== 'cloud') return; // usuário trocou de modo enquanto o fetch rodava
+    }
+    const filtered = filterCatalog(cloudCatalog);
+    if (filtered.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" class="empty" style="padding:20px;color:var(--text-soft);">
+        ${cloudCatalog.length === 0 ? 'Catálogo cloud indisponível no momento — tente novamente mais tarde.' : 'Nenhum modelo bate com a busca/filtro.'}
+      </td></tr>`;
+      return;
+    }
+    const installedIds = new Set((providersStore.get('catalog') || []).map(m => m.id));
+    tbody.innerHTML = buildModelRows(filtered, { installedIds });
+    return;
+  }
+
+  const catalog = providersStore.get('catalog') || [];
+  const filtered = filterCatalog(catalog);
   if (filtered.length === 0) {
     tbody.innerHTML = `<tr><td colspan="5" class="empty" style="padding:20px;color:var(--text-soft);">
       ${catalog.length === 0 ? 'Nenhum modelo descoberto ainda — clique em "Sincronizar Modelos" na aba Overview.' : 'Nenhum modelo bate com a busca/filtro.'}
     </td></tr>`;
     return;
   }
-
   tbody.innerHTML = buildModelRows(filtered);
 }
 
@@ -782,6 +828,35 @@ function wireModelRegistry(container) {
       renderModelTable();
     });
   });
+
+  container.querySelectorAll('#mr-modeToggle .cat-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      container.querySelectorAll('#mr-modeToggle .cat-btn').forEach(b => b.classList.toggle('active', b === btn));
+      registryMode = btn.dataset.mode;
+      renderModelTable();
+    });
+  });
+
+  // Delegação — sobrevive ao innerHTML do tbody sendo trocado a cada renderModelTable().
+  document.getElementById('mr-tbody')?.addEventListener('click', async e => {
+    const btn = e.target.closest('[data-activate-cloud]');
+    if (!btn) return;
+    const name = btn.dataset.activateCloud;
+    btn.disabled = true;
+    btn.textContent = '⏳ Instalando...';
+    await pullIntoRegistry(name); // já ressincroniza o catálogo local (loadProviders(true))
+    renderModelTable(); // badge "Instalado" substitui o botão automaticamente
+  });
+
+  const pullInput = document.getElementById('mr-pullInput');
+  const triggerPull = () => {
+    const name = pullInput?.value.trim();
+    if (!name) return;
+    pullIntoRegistry(name).then(() => { if (registryMode === 'cloud') renderModelTable(); });
+    pullInput.value = '';
+  };
+  document.getElementById('mr-pullBtn')?.addEventListener('click', triggerPull);
+  pullInput?.addEventListener('keydown', e => { if (e.key === 'Enter') triggerPull(); });
 }
 
 // ─── Seletor de modelo por categoria (Routing) ────────────────────────
@@ -1001,19 +1076,46 @@ function updatePipeline(r) {
   el('ml-pr-execution')   && (el('ml-pr-execution').textContent   = short(s.execution));
 }
 
+/** POST /api/ollama/pull cru — único ponto de chamada desse endpoint nesta view. */
+async function pullOllamaModel(name) {
+  const f = window.newclawFetch || fetch;
+  const res = await f('/api/ollama/pull', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name }) });
+  return res.json();
+}
+
+/** Pull a partir de Routing → Provider & Classificador: também define como "Modelo Ollama Principal". */
 async function doPull(name) {
   if (!name?.trim()) return;
   name = name.trim();
   showToast('⬇️ Baixando "' + name + '"...', 'success');
-  const f = window.newclawFetch || fetch;
   try {
-    const res  = await f('/api/ollama/pull', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ model:name }) });
-    const data = await res.json();
+    const data = await pullOllamaModel(name);
     if (data.success) {
       showToast('✅ "' + name + '" pronto!', 'success');
       const inp = document.getElementById('ollamaModel');
       if (inp) inp.value = name;
       configStore.set('ollamaModel', name);
+    } else {
+      showToast('❌ ' + (data.error || 'desconhecido'), 'error');
+    }
+  } catch (e) {
+    showToast('❌ ' + e.message, 'error');
+  }
+}
+
+/**
+ * Pull a partir do Registry: só registra o modelo no Ollama e ressincroniza o catálogo — não
+ * mexe no "Modelo Ollama Principal" (esse pull é pra ampliar o catálogo, não pra trocar de modelo).
+ */
+async function pullIntoRegistry(name) {
+  if (!name?.trim()) return;
+  name = name.trim();
+  showToast('⬇️ Registrando "' + name + '"...', 'success');
+  try {
+    const data = await pullOllamaModel(name);
+    if (data.success) {
+      showToast('✅ "' + name + '" adicionado ao catálogo!', 'success');
+      await loadProviders(true);
     } else {
       showToast('❌ ' + (data.error || 'desconhecido'), 'error');
     }

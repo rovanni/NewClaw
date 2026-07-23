@@ -150,6 +150,38 @@ async function main() {
         } finally { restore(); }
     }
 
+    // 7. ModelRegistryService.getCloudCatalog() — catálogo remoto da Ollama Cloud (best-effort)
+    {
+        const { restore } = mockFetch(url => {
+            assert(url === 'https://ollama.com/api/tags', 'getCloudCatalog bate em ollama.com/api/tags', url);
+            return {
+                ok: true, json: async () => ({
+                    models: [
+                        { name: 'kimi-k2.5' },       // nome puro — precisa virar kimi-k2.5:cloud pra instalar
+                        { name: 'gemma4:31b' },      // já tem tag — usado como está, sem inventar sufixo
+                    ]
+                })
+            };
+        });
+        try {
+            const factory = new ProviderFactory({ defaultProvider: 'ollama', ollamaUrl: 'http://localhost:11434' });
+            const registry = new ModelRegistryService(factory);
+            const cloud = await registry.getCloudCatalog();
+            assert(cloud.length === 2, 'getCloudCatalog retorna os 2 modelos do catálogo remoto', cloud);
+            assert(cloud.some(m => m.id === 'kimi-k2.5:cloud'), 'nome puro ganha sufixo :cloud pra virar instalável', cloud);
+            assert(cloud.some(m => m.id === 'gemma4:31b'), 'nome com tag explícita não é alterado (evita sufixo inválido)', cloud);
+        } finally { restore(); }
+
+        // Falha de rede/endpoint não deve propagar — best-effort, devolve [] em vez de rejeitar
+        const { restore: restoreFail } = mockFetch(() => { throw new Error('network down'); });
+        try {
+            const factory = new ProviderFactory({ defaultProvider: 'ollama', ollamaUrl: 'http://localhost:11434' });
+            const registry = new ModelRegistryService(factory);
+            const cloud = await registry.getCloudCatalog();
+            assert(Array.isArray(cloud) && cloud.length === 0, 'falha no catálogo remoto devolve [] em vez de rejeitar', cloud);
+        } finally { restoreFail(); }
+    }
+
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S138 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
     if (failed > 0) process.exit(1);

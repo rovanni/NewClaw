@@ -74,6 +74,13 @@ export async function getModelCatalog(refresh = false) {
   return d;
 }
 
+export async function getCloudCatalog() {
+  try {
+    const d = await json(f('/api/models/cloud-catalog'));
+    return d.models || [];
+  } catch { return []; }
+}
+
 export async function addCustomProvider({ label, baseUrl, apiKey }) {
   return json(f('/api/providers/custom', {
     method: 'POST',
