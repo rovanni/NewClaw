@@ -94,6 +94,31 @@ python3 tmp/gerar_pptx_NOME_UNICO_DO_ASSUNTO.py
 
 **Nunca informar ao usuário que o Marp não estava disponível ou que foi usado um método alternativo** — simplesmente entregar o arquivo gerado.
 
+### Passo 0B.4 — Aplicando o tema "academico" via python-pptx
+
+Se o usuário pediu texto editável **e** escolheu o tema `academico` (ver seção de temas abaixo),
+replique a paleta e o layout com estas constantes — mantém o resultado visualmente consistente
+com o mesmo tema do caminho Marp:
+
+```python
+from pptx.dml.color import RGBColor
+from pptx.util import Pt
+
+NAVY = RGBColor(0x16, 0x3A, 0x5F)       # fundo de capa/divisores, cabeçalho de tabela
+NAVY_DARK = RGBColor(0x0F, 0x29, 0x42)  # slide de encerramento
+RED = RGBColor(0xE8, 0x42, 0x5F)        # barra sob o título, subtítulos em destaque
+GRAY_BG = RGBColor(0xF4, 0xF6, 0xF9)    # linhas pares de tabela (zebra)
+GRAY_TEXT = RGBColor(0x6B, 0x72, 0x80)  # rodapé
+
+# Slide de capa/divisor: fundo NAVY, título branco, subtítulo RED
+# Slide de conteúdo: fundo branco, título NAVY com uma forma retangular fina RED
+#   logo abaixo (simula a barra vermelha do tema Marp), texto padrão #1F2933
+# Tabelas: primeira linha (cabeçalho) com fill NAVY e fonte branca; linhas
+#   pares com fill GRAY_BG
+# Rodapé: caixa de texto pequena (Pt(11), GRAY_TEXT) no rodapé de cada slide,
+#   com o texto que o usuário informou (ex: "CÓDIGO — Disciplina | Aula N | Professor")
+```
+
 ---
 
 ## Passos 1-4 — Caminho Marp CLI (rápido, mas NÃO gera texto editável — ver aviso no topo)
@@ -155,9 +180,52 @@ size: 16:9
 | Dado 1   | Dado 2   |
 ```
 
-**Temas disponíveis:** `default` (limpo), `gaia` (colorido/moderno), `uncover` (negrito)
+**Temas disponíveis:**
+- `default` (limpo), `gaia` (colorido/moderno), `uncover` (negrito) — temas nativos do Marp
+- `academico` — tema institucional customizado deste skill (capa/divisores em fundo azul-marinho,
+  título com barra vermelha, tabelas com cabeçalho escuro, rodapé fixo). Definido em
+  `skills/pptx-generator/themes/academico.css` — ver Passo 3 para o comando de conversão.
 
-**Dica para aulas:** usar `theme: gaia` com `paginate: true`
+**Se o pedido não especificar tema** (ex: só "gera os slides da aula"), pergunte ao usuário se
+prefere `gaia` (padrão, rápido) ou `academico` (visual institucional formal) antes de gerar — não
+escolha silenciosamente por ele. Se o usuário já citar o nome de um tema, use-o direto sem
+perguntar.
+
+**Dica para aulas (tema gaia):** usar `theme: gaia` com `paginate: true`
+
+**Usando o tema `academico`:** além de `theme: academico` no frontmatter, use as diretivas abaixo
+para reproduzir capa/divisores/rodapé:
+
+```markdown
+---
+marp: true
+theme: academico
+paginate: true
+size: 16:9
+footer: "CÓDIGO — Nome da Disciplina | Aula N | Nome do Professor"
+---
+
+<!-- _class: lead -->
+
+# Título da Aula
+
+## Subtítulo
+
+---
+
+<!-- _class: divider -->
+
+# Parte 1
+
+## Nome da Seção
+
+---
+
+# Slide de Conteúdo Normal
+
+- 📦 Ponto com ícone (emoji funciona bem neste tema, no lugar dos ícones do PDF original)
+- 🔄 Outro ponto
+```
 
 ## Passo 3 — Converter para .pptx
 
@@ -174,8 +242,11 @@ size: 16:9
 # Converter Markdown para PowerPoint (arquivo ANTES das flags) — nomes de exemplo, adapte ao assunto
 marp aula_dhcp.md -o aula_dhcp.pptx
 
-# Com tema específico
+# Com tema nativo específico
 marp aula_dhcp.md --theme gaia -o aula_dhcp.pptx
+
+# Com o tema customizado "academico" — precisa registrar o CSS via --theme-set
+marp aula_dhcp.md --theme-set skills/pptx-generator/themes/academico.css --theme academico -o aula_dhcp.pptx
 
 # Verificar que o arquivo foi criado
 ls -lh aula_dhcp.pptx

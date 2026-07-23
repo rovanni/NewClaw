@@ -1,0 +1,202 @@
+/* @theme academico */
+
+/**
+ * Tema Marp "academico" — capa e divisores em azul-marinho sólido, conteúdo em
+ * fundo branco com título sublinhado em vermelho, tabelas com cabeçalho escuro
+ * e rodapé fixo. Pensado para aulas/apresentações institucionais formais.
+ *
+ * Uso:
+ *   marp entrada.md --theme-set skills/pptx-generator/themes/academico.css \
+ *     --theme academico -o saida.pptx
+ *
+ * Diretivas por slide (frontmatter ou comentário `<!-- ... -->`):
+ *   footer: "CÓDIGO — Nome da Disciplina | Aula N | Nome do Professor"
+ *   <!-- _class: lead -->      → slide de capa (fundo azul-marinho)
+ *   <!-- _class: divider -->   → slide de transição de seção (fundo azul-marinho)
+ */
+
+:root {
+  --academico-navy: #163a5f;
+  --academico-navy-dark: #0f2942;
+  --academico-red: #e8425f;
+  --academico-gray-bg: #f4f6f9;
+  --academico-gray-border: #e2e5ea;
+  --academico-gray-text: #6b7280;
+}
+
+section {
+  background: #ffffff;
+  color: #1f2933;
+  font-family: 'Segoe UI', 'Calibri', Arial, sans-serif;
+  font-size: 26px;
+  padding: 56px 68px 70px;
+}
+
+section h1 {
+  color: var(--academico-navy);
+  font-size: 38px;
+  border-bottom: 4px solid var(--academico-red);
+  padding-bottom: 10px;
+  margin-bottom: 22px;
+}
+
+section h2 {
+  color: var(--academico-navy);
+  font-size: 30px;
+}
+
+section h3 {
+  color: var(--academico-navy);
+  font-size: 24px;
+}
+
+section a {
+  color: var(--academico-red);
+}
+
+section strong {
+  color: var(--academico-navy);
+}
+
+/* Tabelas: cabeçalho azul-marinho, linhas zebradas */
+section table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72em;
+}
+
+section table th {
+  background: var(--academico-navy);
+  color: #ffffff;
+  text-align: left;
+  padding: 10px 14px;
+}
+
+section table td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--academico-gray-border);
+}
+
+section table tr:nth-child(even) td {
+  background: var(--academico-gray-bg);
+}
+
+/* Rodapé (usar diretiva `footer:` do Marp) */
+section footer {
+  position: absolute;
+  left: 68px;
+  right: 68px;
+  bottom: 22px;
+  font-size: 13px;
+  color: var(--academico-gray-text);
+  border-top: 1px solid var(--academico-gray-border);
+  padding-top: 6px;
+}
+
+/* Paginação. O ::after nativo do motor do Marp tem uma caixa/posicionamento
+   herdado que não se alinha de forma confiável com o rodapé customizado deste
+   tema (fica "flutuando" bem acima da linha do rodapé) — por isso ele é
+   escondido, e o número é recriado do zero via ::before, reaproveitando o
+   mesmo atributo `data-marpit-pagination` que o motor já preenche. */
+section[data-marpit-pagination]::after {
+  display: none !important;
+}
+
+section[data-marpit-pagination]::before {
+  content: attr(data-marpit-pagination);
+  position: absolute;
+  bottom: 20px;
+  right: 68px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--academico-gray-text);
+}
+
+section.lead[data-marpit-pagination]::before,
+section.divider[data-marpit-pagination]::before,
+section.closing[data-marpit-pagination]::before {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* Slide de capa — <!-- _class: lead --> */
+section.lead {
+  background: var(--academico-navy);
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+section.lead h1 {
+  color: #ffffff;
+  border-bottom: none;
+  font-size: 46px;
+  margin-bottom: 8px;
+}
+
+section.lead h2 {
+  color: var(--academico-red);
+  font-weight: 700;
+  font-size: 26px;
+  margin-top: 0;
+}
+
+section.lead p {
+  color: #d7dde5;
+  font-size: 20px;
+}
+
+section.lead footer {
+  color: rgba(255, 255, 255, 0.55);
+  border-top-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Slide de transição de seção — <!-- _class: divider --> */
+section.divider {
+  background: var(--academico-navy);
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+}
+
+section.divider h1 {
+  color: #ffffff;
+  border-bottom: none;
+  font-size: 34px;
+  margin-bottom: 6px;
+}
+
+section.divider h2 {
+  color: var(--academico-red);
+  font-size: 24px;
+  font-weight: 700;
+}
+
+section.divider footer {
+  color: rgba(255, 255, 255, 0.55);
+  border-top-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Slide de encerramento (mesmo tratamento visual do divisor, tom mais escuro) */
+section.closing {
+  background: var(--academico-navy-dark);
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+}
+
+section.closing h1 {
+  color: #ffffff;
+  border-bottom: none;
+}
+
+section.closing h2 {
+  color: var(--academico-red);
+}
