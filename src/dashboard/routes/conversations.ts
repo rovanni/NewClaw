@@ -5,12 +5,13 @@ import { DashboardContext } from './types';
 export function createConversationsRouter(ctx: DashboardContext): Router {
     const router = Router();
 
-    router.get('/', (req: Request, res: Response) => {
+    router.get('/', (_req: Request, res: Response) => {
         if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
         try {
             const repo = ctx.memoryManager.getDashboardRepository();
-            const userId = String(req.query.userId || 'web-dashboard');
-            const convs = repo.listConversationsByUser(userId);
+            // provider='web' — não userId: cada conversa web é salva com user_id=sessionId (id
+            // local gerado no browser), nunca um "usuário" fixo. Ver DashboardMemoryRepository.
+            const convs = repo.listWebConversations();
             res.json({ success: true, conversations: convs });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
@@ -23,6 +24,17 @@ export function createConversationsRouter(ctx: DashboardContext): Router {
             const repo = ctx.memoryManager.getDashboardRepository();
             const { conversations, messages } = repo.exportAllConversations();
             res.json({ success: true, export: { conversations, messages, exportedAt: new Date().toISOString() } });
+        } catch (err) {
+            res.status(500).json({ error: errorMessage(err) });
+        }
+    });
+
+    router.delete('/', (_req: Request, res: Response) => {
+        if (!ctx.memoryManager) return res.status(500).json({ error: 'Memory not available' });
+        try {
+            const repo = ctx.memoryManager.getDashboardRepository();
+            const deleted = repo.deleteAllWebConversations();
+            res.json({ success: true, deleted });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
         }

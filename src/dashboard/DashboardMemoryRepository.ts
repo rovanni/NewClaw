@@ -80,6 +80,19 @@ export class DashboardMemoryRepository {
         ).all(userId) as ConvRow[];
     }
 
+    /**
+     * Lista todas as conversas do canal web — cada conversa é salva com user_id = sessionId
+     * (gerado no frontend, ex: "conv_1721234567890"), não por um "usuário" real (o dashboard é
+     * single-owner). listConversationsByUser('web-dashboard') nunca bateu com nada de verdade —
+     * achado ao validar o botão "Limpar Histórico" contra uma instância real. Escopar por
+     * provider='web' é o que de fato corresponde a "todo o histórico do chat web".
+     */
+    listWebConversations(): ConvRow[] {
+        return this.db.prepare(
+            "SELECT id, user_id, provider, created_at, updated_at FROM conversations WHERE provider = 'web' ORDER BY updated_at DESC"
+        ).all() as ConvRow[];
+    }
+
     exportAllConversations(): { conversations: unknown[]; messages: unknown[] } {
         const conversations = this.db.prepare('SELECT * FROM conversations').all();
         const messages = this.db.prepare('SELECT * FROM messages').all();
@@ -91,6 +104,22 @@ export class DashboardMemoryRepository {
             'SELECT role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?'
         ).all(convId, limit) as MsgRow[];
         return rows.reverse();
+    }
+
+    /**
+     * Apaga TODAS as conversas (e mensagens) do canal web. Irreversível — botão "Limpar
+     * Histórico". Escopado por provider='web' (ver listWebConversations) — nunca afeta o
+     * histórico de outros canais (Telegram/Discord/WhatsApp/Signal), que este botão não deveria
+     * tocar mesmo sendo tecnicamente a mesma tabela.
+     */
+    deleteAllWebConversations(): number {
+        const deleteAll = this.db.transaction(() => {
+            this.db.prepare(
+                "DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE provider = 'web')"
+            ).run();
+            return this.db.prepare("DELETE FROM conversations WHERE provider = 'web'").run().changes;
+        });
+        return deleteAll();
     }
 
     // ── Nodes ────────────────────────────────────────────────────────────────

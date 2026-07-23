@@ -119,7 +119,7 @@
     /* User message */
     .msg-row.user { display: flex; justify-content: flex-end; }
     .msg-bubble.user {
-      max-width: 78%; background: var(--accent-bg); color: var(--text-main);
+      background: var(--accent-bg); color: var(--text-main);
       padding: 11px 16px; border-radius: 20px; border-bottom-right-radius: 6px;
       font-size: 0.9375rem; line-height: 1.55; word-wrap: break-word;
     }
@@ -199,6 +199,9 @@
       display: flex; gap: 2px; margin-top: 8px; opacity: 0; transition: opacity 0.15s; pointer-events: none;
     }
     .msg-row.agent:hover .msg-actions-row { opacity: 1; pointer-events: auto; }
+    .msg-user-col { display: flex; flex-direction: column; align-items: flex-end; max-width: 78%; }
+    .msg-user-col .msg-actions-row { margin-top: 4px; margin-right: 2px; }
+    .msg-row.user:hover .msg-actions-row { opacity: 1; pointer-events: auto; }
     .ghost-action-btn {
       border: none; background: transparent; color: var(--text-soft); font-family: inherit;
       font-size: 0.75rem; font-weight: 600; padding: 5px 9px; border-radius: 7px; cursor: pointer; transition: all 0.15s;
@@ -298,7 +301,7 @@
 
     @media (max-width: 640px) {
       .chat-scroll, .composer-outer { padding-left: 12px; padding-right: 12px; }
-      .msg-bubble.user { max-width: 88%; }
+      .msg-user-col { max-width: 88%; }
     }
   </style>
 </head>
@@ -330,6 +333,9 @@
             </button>
             <button class="icon-ghost-sm" onclick="importConversations()" title="Importar">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="M6 13l6-6 6 6"/><path d="M4 21h16"/></svg>
+            </button>
+            <button class="icon-ghost-sm" onclick="clearAllHistory()" title="Limpar Histórico">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
             </button>
           </div>
         </div>
@@ -502,7 +508,7 @@
     // === Sync conversations with server DB ===
     async function syncFromServer() {
       try {
-        const res = await newclawFetch('/api/conversations?userId=web-dashboard');
+        const res = await newclawFetch('/api/conversations');
         const data = await res.json();
         if (!data.success) return;
         // Merge server convs into local (keep local if newer)
@@ -549,6 +555,19 @@
       conversations = conversations.filter(c => c.id !== id);
       if (currentConvId === id) currentConvId = conversations[0]?.id || null;
       save(); renderSidebar(); renderChat();
+    }
+    async function clearAllHistory() {
+      if (!confirm('Apagar TODO o histórico de conversas? Essa ação não pode ser desfeita.')) return;
+      try {
+        const res = await newclawFetch('/api/conversations', { method: 'DELETE' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'desconhecido');
+        conversations = [];
+        currentConvId = null;
+        save();
+        newConversation();
+        showToast('🧹 Histórico apagado');
+      } catch (e) { showToast('❌ Erro ao limpar histórico: ' + e.message); }
     }
     function getConv() { return conversations.find(c => c.id === currentConvId); }
     function save() {
@@ -717,7 +736,12 @@
 
         if (m.role === 'user') {
           return `<div class="msg-row user" data-idx="${idx}">
-            <div class="msg-bubble user">${content}${attachHtml}<div class="msg-time">${time}</div></div>
+            <div class="msg-user-col">
+              <div class="msg-bubble user">${content}${attachHtml}<div class="msg-time">${time}</div></div>
+              <div class="msg-actions-row">
+                <button class="ghost-action-btn" onclick="copyMsg(${idx})">Copiar</button>
+              </div>
+            </div>
           </div>`;
         }
 
