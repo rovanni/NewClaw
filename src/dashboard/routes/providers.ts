@@ -3,6 +3,11 @@ import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import { DashboardContext } from './types';
 import { persistConfigToEnv } from './config';
+import { interpretOllamaPullFailure, interpretOllamaPullException } from './ollamaPullError';
+
+/** Teto de segurança pro pull — generoso o bastante pra um download local real grande, mas finito:
+ *  evita que um nome ambíguo (Ollama tenta resolver e nunca responde) prenda a requisição pra sempre. */
+const OLLAMA_PULL_TIMEOUT_MS = 5 * 60_000;
 
 const log = createLogger('Dashboardserver');
 
@@ -159,16 +164,19 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
             const pullRes = await fetch(`${ollamaUrl}/api/pull`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: model, stream: false })
+                body: JSON.stringify({ name: model, stream: false }),
+                signal: AbortSignal.timeout(OLLAMA_PULL_TIMEOUT_MS)
             });
             if (pullRes.ok) {
                 res.json({ success: true, message: `Model "${model}" pulled successfully` });
             } else {
                 const errText = await pullRes.text();
-                res.status(500).json({ success: false, error: `Pull failed: ${errText.slice(0, 200)}` });
+                const { status, error } = interpretOllamaPullFailure(model, errText);
+                res.status(status).json({ success: false, error });
             }
         } catch (err) {
-            res.status(500).json({ success: false, error: errorMessage(err) });
+            const { status, error } = interpretOllamaPullException(model, err);
+            res.status(status).json({ success: false, error });
         }
     });
 
