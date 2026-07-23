@@ -464,6 +464,26 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .model-table tbody tr:hover { background:var(--accent-bg); }
 .model-table-id { font-weight:600; word-break:break-all; }
 
+/* ─── seletor de modelo por categoria (Routing) — reutiliza .model-table acima ─── */
+.cat-selector { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px; }
+.cat-btn {
+  padding:8px 14px; font-size:.8rem; font-weight:600; color:var(--text-soft);
+  background:var(--bg-input); border:1px solid var(--border-color); border-radius:20px;
+  cursor:pointer; transition:all .15s;
+}
+.cat-btn:hover { border-color:var(--accent); color:var(--text-main); }
+.cat-btn.active { background:var(--accent-bg); border-color:var(--accent); color:var(--accent); }
+
+.rt-picker-header { display:flex; align-items:center; gap:22px; flex-wrap:wrap; margin-bottom:13px; padding:11px 14px; background:var(--bg-input); border:1px solid var(--border-color); border-radius:10px; }
+.rt-picker-info { display:flex; flex-direction:column; gap:2px; font-size:.8rem; }
+.rt-current-model, .rt-pending-model { font-weight:700; }
+.rt-pending-model { color:var(--accent); }
+
+.model-radio-cell { width:26px; text-align:center; }
+.model-row-selectable { cursor:pointer; }
+.model-row-current { background:rgba(74,222,128,.06); }
+.model-current-badge { font-size:.62rem; padding:1px 6px; border-radius:8px; background:rgba(74,222,128,.15); color:var(--success); font-weight:600; margin-left:4px; }
+
 /* ════════════════════════════════════
    MODEL DROPDOWN
 ════════════════════════════════════ */

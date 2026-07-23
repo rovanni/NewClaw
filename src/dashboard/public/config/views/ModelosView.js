@@ -4,10 +4,20 @@ import { initDropdowns, updateDropdownModels } from '../components/ModelDropdown
 import { addCustomProvider, removeCustomProvider } from '../api.js';
 import { loadProviders } from '../app.js';
 
-const ROUTE_MAP = {
-  modelChat: 'chat', modelCode: 'code', modelVision: 'vision',
-  modelLight: 'light', modelAnalysis: 'analysis', modelExecution: 'execution',
-  classifierModel: 'classifierModel',
+const CATEGORY_META = [
+  { key: 'chat',      icon: '💬', label: 'Chat' },
+  { key: 'code',      icon: '💻', label: 'Código' },
+  { key: 'vision',    icon: '👁️', label: 'Visão' },
+  { key: 'light',     icon: '⚡', label: 'Leve' },
+  { key: 'analysis',  icon: '📊', label: 'Análise' },
+  { key: 'execution', icon: '🧠', label: 'Execução' },
+];
+
+// Capability mínima exigida por categoria — reaproveita as capabilities já calculadas no
+// discovery (ModelRegistryService/modelCapabilityHeuristics), nenhuma regra nova é criada aqui.
+const CATEGORY_CAPABILITY = {
+  chat: 'chat', light: 'chat', analysis: 'chat',
+  code: 'code', vision: 'vision', execution: 'tool_calling',
 };
 
 const PROV_LABELS = {
@@ -46,6 +56,10 @@ const TABS = [
 // Estado local do filtro do Model Registry — reiniciado a cada render() (troca de página).
 let registrySearch = '';
 let registryFilters = new Set();
+
+// Estado local do seletor de categoria em Routing — idem.
+let routingSelectedCategory = 'chat';
+let routingPendingModel = null;
 
 export function render(container) {
   container.innerHTML = `
@@ -156,20 +170,36 @@ export function render(container) {
           </div>
         </details>
 
-        <!-- Route cards -->
-        <details class="cfg-details" open>
-          <summary>${t('edit_routes_title')}</summary>
+        <!-- Seleção de modelo por categoria — reutiliza a tabela do Model Registry como seletor,
+             em vez de 6 dropdowns/autocompletes independentes (Sprint UX-002). -->
+        <div class="cfg-details">
           <div class="cfg-details-body">
-            <div class="route-grid">
-              ${routeCard('modelChat',     '💬', 'Chat',                      t('route_chat_desc'),     'glm-5.2:cloud')}
-              ${routeCard('modelCode',     '💻', t('route_code_cat'),         t('route_code_desc'),     'gemma4:e4b')}
-              ${routeCard('modelVision',   '👁️', t('route_vision_cat'),      t('route_vision_desc'),   'gemma4:e4b')}
-              ${routeCard('modelLight',    '⚡', t('route_light_cat'),        t('route_light_desc'),    'gemma4:e4b')}
-              ${routeCard('modelAnalysis', '📊', t('route_analysis_cat'),     t('route_analysis_desc'), 'glm-5.2:cloud')}
-              ${routeCard('modelExecution','🧠', t('route_execution_cat'),    t('route_execution_desc'),'kimi-k2.6:cloud')}
+            <div class="cat-selector" id="rt-catSelector">
+              ${CATEGORY_META.map((c, i) => `<button type="button" class="cat-btn${i === 0 ? ' active' : ''}" data-cat="${c.key}">${c.icon} ${c.label}</button>`).join('')}
+            </div>
+
+            <div class="rt-picker-header">
+              <div class="rt-picker-info">
+                <span class="overview-label">Modelo atual</span>
+                <span class="rt-current-model" id="rt-currentModel">—</span>
+              </div>
+              <div class="rt-picker-info" id="rt-pendingWrap" style="display:none;">
+                <span class="overview-label">→ Selecionado</span>
+                <span class="rt-pending-model" id="rt-pendingModel">—</span>
+              </div>
+              <button class="btn btn-primary btn-sm" id="rt-applyBtn" disabled>✅ Aplicar</button>
+            </div>
+
+            <div class="model-table-wrap">
+              <table class="model-table">
+                <thead>
+                  <tr><th></th><th>Nome</th><th>Provider</th><th>Capabilities</th><th>Status</th><th>Context</th></tr>
+                </thead>
+                <tbody id="rt-tbody"></tbody>
+              </table>
             </div>
           </div>
-        </details>
+        </div>
 
         <!-- Provider padrão + Classificador -->
         <details class="cfg-details">
@@ -324,12 +354,6 @@ export function render(container) {
   // Populate inputs
   el('ml-defaultProvider').value  = s.defaultProvider || 'ollama';
   el('ollamaModel').value         = s.ollamaModel || '';
-  el('modelChat').value           = r.chat      || '';
-  el('modelCode').value           = r.code      || '';
-  el('modelVision').value         = r.vision    || '';
-  el('modelLight').value          = r.light     || '';
-  el('modelAnalysis').value       = r.analysis  || '';
-  el('modelExecution').value      = r.execution || '';
   el('classifierModel').value     = r.classifierModel  || '';
   el('ml-classifierServer').value = r.classifierServer || '';
   el('ml-visionServer').value     = r.visionServer     || '';
@@ -357,15 +381,11 @@ export function render(container) {
   // Ollama main model
   el('ollamaModel').addEventListener('input', e => { cs.set('ollamaModel', e.target.value); updateOverview(); });
 
-  // Route inputs
-  Object.keys(ROUTE_MAP).forEach(inputId => {
-    const inputEl = el(inputId);
-    if (!inputEl) return;
-    inputEl.addEventListener('input', e => {
-      const mr = { ...cs.get('modelRouter') };
-      mr[ROUTE_MAP[inputId]] = e.target.value;
-      cs.set('modelRouter', mr);
-    });
+  // Classifier model (os 6 modelos de categoria agora são selecionados via rt-tbody, não digitados)
+  el('classifierModel').addEventListener('input', e => {
+    const mr = { ...cs.get('modelRouter') };
+    mr.classifierModel = e.target.value;
+    cs.set('modelRouter', mr);
   });
 
   // Classifier server / vision server
@@ -412,8 +432,8 @@ export function render(container) {
     if (name) doPull(name);
   });
 
-  // Init model dropdowns
-  const ddIds = ['ollamaModel','modelChat','modelCode','modelVision','modelLight','modelAnalysis','modelExecution','classifierModel'];
+  // Init model dropdowns (só os 2 campos que ainda são texto livre — o resto usa o seletor)
+  const ddIds = ['ollamaModel', 'classifierModel'];
   updateDropdownModels(providersStore.get('models') || []);
   initDropdowns(ddIds);
 
@@ -423,19 +443,23 @@ export function render(container) {
   // ── Overview + Provider grid + Model Registry table ──────────
   registrySearch = '';
   registryFilters = new Set();
+  routingSelectedCategory = 'chat';
+  routingPendingModel = null;
 
   renderProviderGrid();
   renderModelTable();
+  renderCategoryPicker();
   updateOverview();
   wireProviderOverview();
   wireModelRegistry(container);
+  wireCategoryPicker(container);
 
   // Subscribe to providersStore
   const unsubModels = providersStore.on('models', models => {
     updateDropdownModels(models);
     updateModelStatus(models, cs.get('modelRouter') || {});
   });
-  const unsubCatalog = providersStore.on('catalog', () => renderModelTable());
+  const unsubCatalog = providersStore.on('catalog', () => { renderModelTable(); renderCategoryPicker(); });
   // Atualização leve (só dots/texto de saúde) — NUNCA um renderProviderGrid() completo aqui:
   // isso recriaria os <input> do card (URL/API key) a cada poll e apagaria o que o usuário
   // estivesse digitando no meio de uma edição.
@@ -446,6 +470,7 @@ export function render(container) {
     updatePipeline(mr);
     updateEffectiveConfig(mr, cs.get('defaultProvider'));
     updateModelStatus(providersStore.get('models') || [], mr);
+    renderCategoryPicker();
   });
   const unsubCustomProviders = cs.on('customProviders', () => renderProviderGrid());
 
@@ -694,7 +719,32 @@ function updateLastSync() {
   el.textContent = 'Última sincronização: ' + (ts ? new Date(ts).toLocaleTimeString() : '—');
 }
 
-// ─── Model Registry ────────────────────────────────────────────
+// ─── Model Registry (tabela reutilizada — browse em Registry, seleção em Routing) ─────
+
+/**
+ * Gera as linhas <tr> do catálogo. Único ponto de renderização de linha de modelo — tanto a
+ * tabela de consulta (Registry) quanto o seletor por categoria (Routing) chamam esta função,
+ * em vez de duplicar a lógica de escapamento/badges/capability tags (Sprint UX-002).
+ */
+function buildModelRows(models, { selectable = false, selectedId = null, currentId = null } = {}) {
+  if (!models.length) {
+    return `<tr><td colspan="${selectable ? 6 : 5}" class="empty" style="padding:20px;color:var(--text-soft);">Nenhum modelo compatível encontrado.</td></tr>`;
+  }
+  return models.map(m => {
+    const isCurrent = !!currentId && m.id === currentId;
+    const isSelected = selectable && !!selectedId && m.id === selectedId;
+    const rowClass = [selectable ? 'model-row-selectable' : '', isCurrent ? 'model-row-current' : ''].filter(Boolean).join(' ');
+    return `
+    <tr class="${rowClass}" data-model-id="${esc(m.id)}">
+      ${selectable ? `<td class="model-radio-cell">${isSelected ? '🔘' : '⚪'}</td>` : ''}
+      <td class="model-table-id">${esc(m.id)}${isCurrent ? ' <span class="model-current-badge">atual</span>' : ''}</td>
+      <td><span class="badge badge-${m.provider === 'ollama' ? 'local' : 'cloud'}">${esc(m.provider)}</span></td>
+      <td>${(m.capabilities || []).map(c => `<span class="model-cap-tag">${CAPABILITY_LABELS[c] || c}</span>`).join(' ')}</td>
+      <td><span class="dot online" style="display:inline-block;"></span> Disponível</td>
+      <td>${esc(formatContextWindow(m.contextWindow))}</td>
+    </tr>`;
+  }).join('');
+}
 
 function renderModelTable() {
   const tbody = document.getElementById('mr-tbody');
@@ -714,14 +764,7 @@ function renderModelTable() {
     return;
   }
 
-  tbody.innerHTML = filtered.map(m => `
-    <tr>
-      <td class="model-table-id">${esc(m.id)}</td>
-      <td><span class="badge badge-${m.provider === 'ollama' ? 'local' : 'cloud'}">${esc(m.provider)}</span></td>
-      <td>${(m.capabilities || []).map(c => `<span class="model-cap-tag">${CAPABILITY_LABELS[c] || c}</span>`).join(' ')}</td>
-      <td><span class="dot online" style="display:inline-block;"></span> Disponível</td>
-      <td>${esc(formatContextWindow(m.contextWindow))}</td>
-    </tr>`).join('');
+  tbody.innerHTML = buildModelRows(filtered);
 }
 
 function wireModelRegistry(container) {
@@ -738,6 +781,67 @@ function wireModelRegistry(container) {
       else { registryFilters.add(cap); chip.classList.add('chip-active'); }
       renderModelTable();
     });
+  });
+}
+
+// ─── Seletor de modelo por categoria (Routing) ────────────────────────
+
+function renderCategoryPicker() {
+  const cs = configStore;
+  const r = cs.get('modelRouter') || {};
+  const currentModel = r[routingSelectedCategory] || '';
+  const requiredCap = CATEGORY_CAPABILITY[routingSelectedCategory];
+  const catalog = providersStore.get('catalog') || [];
+  // Filtra por compatibilidade usando as capabilities já calculadas no discovery — nunca lista
+  // um modelo incompatível (ex: nomic-embed na categoria Visão).
+  const compatible = catalog.filter(m => !requiredCap || m.capabilities?.includes(requiredCap));
+
+  const curEl = document.getElementById('rt-currentModel');
+  if (curEl) curEl.textContent = currentModel || '(não configurado)';
+
+  const pendingWrap = document.getElementById('rt-pendingWrap');
+  const pendingEl = document.getElementById('rt-pendingModel');
+  const showPending = !!routingPendingModel && routingPendingModel !== currentModel;
+  if (pendingWrap) pendingWrap.style.display = showPending ? '' : 'none';
+  if (pendingEl && showPending) pendingEl.textContent = routingPendingModel;
+
+  const applyBtn = document.getElementById('rt-applyBtn');
+  if (applyBtn) applyBtn.disabled = !showPending;
+
+  const tbody = document.getElementById('rt-tbody');
+  if (tbody) {
+    tbody.innerHTML = buildModelRows(compatible, { selectable: true, selectedId: routingPendingModel || currentModel, currentId: currentModel });
+  }
+}
+
+function wireCategoryPicker(container) {
+  container.querySelectorAll('#rt-catSelector .cat-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      container.querySelectorAll('#rt-catSelector .cat-btn').forEach(b => b.classList.toggle('active', b === btn));
+      routingSelectedCategory = btn.dataset.cat;
+      routingPendingModel = null;
+      renderCategoryPicker();
+    });
+  });
+
+  // Delegação de evento — sobrevive a innerHTML sendo trocado a cada renderCategoryPicker().
+  document.getElementById('rt-tbody')?.addEventListener('click', e => {
+    const tr = e.target.closest('tr[data-model-id]');
+    if (!tr) return;
+    routingPendingModel = tr.dataset.modelId;
+    renderCategoryPicker();
+  });
+
+  document.getElementById('rt-applyBtn')?.addEventListener('click', () => {
+    if (!routingPendingModel) return;
+    const cs = configStore;
+    const mr = { ...cs.get('modelRouter') };
+    mr[routingSelectedCategory] = routingPendingModel;
+    cs.set('modelRouter', mr);
+    const catLabel = CATEGORY_META.find(c => c.key === routingSelectedCategory)?.label || routingSelectedCategory;
+    showToast(`Modelo de ${catLabel} atualizado para "${routingPendingModel}"`, 'success');
+    routingPendingModel = null;
+    renderCategoryPicker();
   });
 }
 
@@ -771,21 +875,6 @@ function pipeRoute(cat, icon, label) {
       <span class="pipe-route-cat">${label}</span>
       <span class="pipe-route-model" id="ml-pr-${cat}">—</span>
       <span class="dot" id="ml-status-${cat}" title=""></span>
-    </div>`;
-}
-
-function routeCard(id, icon, label, sub, placeholder) {
-  return `
-    <div class="route-card">
-      <div class="route-card-header">
-        <span class="route-card-icon">${icon}</span>
-        <div><div class="route-card-label">${label}</div><div class="route-card-sub">${sub}</div></div>
-      </div>
-      <div class="model-select-container" id="container-${id}">
-        <input type="text" class="model-select-input" autocomplete="off" id="${id}" placeholder="${placeholder}">
-        <svg class="msa" width="11" height="11" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
-        <div class="model-dropdown" id="dropdown-${id}"></div>
-      </div>
     </div>`;
 }
 
