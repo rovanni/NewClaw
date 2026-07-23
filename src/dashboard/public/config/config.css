@@ -454,7 +454,6 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 ════════════════════════════════════ */
 
 .model-registry-toolbar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:13px; }
-.model-pull-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:13px; }
 .model-filter-chips { display:flex; gap:6px; flex-wrap:wrap; }
 .chip.chip-active { border-color:var(--accent); color:var(--accent); background:var(--accent-bg); }
 .model-cap-tag { font-size:.66rem; padding:2px 7px; border-radius:5px; background:var(--bg-muted); color:var(--text-muted); display:inline-block; margin:1px; }

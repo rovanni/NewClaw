@@ -97,20 +97,15 @@ export function render(container) {
           <button type="button" class="cat-btn" data-mode="cloud">☁️ Disponíveis na nuvem</button>
         </div>
         <div class="model-registry-toolbar">
-          <input type="text" class="form-input" id="mr-search" placeholder="Buscar modelo..." style="max-width:260px;">
+          <input type="text" class="form-input" id="mr-search" placeholder="Buscar modelo (ex: kimi)..." style="max-width:260px;">
           <div class="model-filter-chips" id="mr-filters">
             ${Object.keys(CAPABILITY_LABELS).map(cap => `<div class="chip" data-cap="${cap}">${CAPABILITY_LABELS[cap]}</div>`).join('')}
           </div>
         </div>
-        <div class="model-pull-bar">
-          <input type="text" class="form-input" id="mr-pullInput" placeholder="Puxar modelo pelo nome exato (ex: kimi-k2.6:cloud)" style="max-width:340px;">
-          <button class="btn btn-primary btn-sm" id="mr-pullBtn">⬇️ Puxar</button>
-          <span class="form-hint">Não achou na lista "Disponíveis na nuvem"? Registre pelo nome exato aqui.</span>
-        </div>
         <div class="model-table-wrap">
           <table class="model-table">
             <thead>
-              <tr><th>Nome</th><th>Provider</th><th>Capabilities</th><th>Status</th><th>Context</th></tr>
+              <tr><th>Nome</th><th>Provider</th><th>Capabilities</th><th>Context</th><th>Status</th></tr>
             </thead>
             <tbody id="mr-tbody"></tbody>
           </table>
@@ -207,7 +202,7 @@ export function render(container) {
             <div class="model-table-wrap">
               <table class="model-table">
                 <thead>
-                  <tr><th></th><th>Nome</th><th>Provider</th><th>Capabilities</th><th>Status</th><th>Context</th></tr>
+                  <tr><th></th><th>Nome</th><th>Provider</th><th>Capabilities</th><th>Context</th><th>Status</th></tr>
                 </thead>
                 <tbody id="rt-tbody"></tbody>
               </table>
@@ -753,6 +748,8 @@ function buildModelRows(models, { selectable = false, selectedId = null, current
     const isCurrent = !!currentId && m.id === currentId;
     const isSelected = selectable && !!selectedId && m.id === selectedId;
     const rowClass = [selectable ? 'model-row-selectable' : '', isCurrent ? 'model-row-current' : ''].filter(Boolean).join(' ');
+    // Ação/status sempre na ÚLTIMA coluna — é o que o usuário mais precisa clicar (instalar/
+    // selecionar), fica mais fácil de achar no final da linha em vez de no meio da tabela.
     const lastCell = installedIds
       ? (installedIds.has(m.id)
           ? `<span class="model-installed-badge">✓ Instalado</span>`
@@ -764,8 +761,8 @@ function buildModelRows(models, { selectable = false, selectedId = null, current
       <td class="model-table-id">${esc(m.id)}${isCurrent ? ' <span class="model-current-badge">atual</span>' : ''}</td>
       <td><span class="badge badge-${m.provider === 'ollama' ? 'local' : 'cloud'}">${esc(m.provider)}</span></td>
       <td>${(m.capabilities || []).map(c => `<span class="model-cap-tag">${CAPABILITY_LABELS[c] || c}</span>`).join(' ')}</td>
-      <td>${lastCell}</td>
       <td>${esc(formatContextWindow(m.contextWindow))}</td>
+      <td>${lastCell}</td>
     </tr>`;
   }).join('');
 }
@@ -792,8 +789,16 @@ async function renderModelTable() {
     }
     const filtered = filterCatalog(cloudCatalog);
     if (filtered.length === 0) {
+      const term = registrySearch.trim();
+      // Nada no catálogo dos ~18 modelos cloud conhecidos bate com a busca — ainda assim pode ser
+      // um modelo real (custom/privado) que só não está nessa lista. Em vez de um campo de "puxar"
+      // separado (confundia com a busca), a própria busca sem resultado já oferece essa saída.
+      const fallback = (cloudCatalog.length > 0 && term)
+        ? `<div style="margin-top:10px;">Não achou "${esc(term)}" no catálogo? <button type="button" class="btn btn-ghost btn-sm" data-pull-term="${esc(term)}">⬇️ Tentar puxar "${esc(term)}" mesmo assim</button></div>`
+        : '';
       tbody.innerHTML = `<tr><td colspan="5" class="empty" style="padding:20px;color:var(--text-soft);">
-        ${cloudCatalog.length === 0 ? 'Catálogo cloud indisponível no momento — tente novamente mais tarde.' : 'Nenhum modelo bate com a busca/filtro.'}
+        ${cloudCatalog.length === 0 ? 'Catálogo cloud indisponível no momento — tente novamente mais tarde.' : `Nenhum modelo bate com "${esc(term)}".`}
+        ${fallback}
       </td></tr>`;
       return;
     }
@@ -839,24 +844,26 @@ function wireModelRegistry(container) {
 
   // Delegação — sobrevive ao innerHTML do tbody sendo trocado a cada renderModelTable().
   document.getElementById('mr-tbody')?.addEventListener('click', async e => {
-    const btn = e.target.closest('[data-activate-cloud]');
-    if (!btn) return;
-    const name = btn.dataset.activateCloud;
-    btn.disabled = true;
-    btn.textContent = '⏳ Instalando...';
-    await pullIntoRegistry(name); // já ressincroniza o catálogo local (loadProviders(true))
-    renderModelTable(); // badge "Instalado" substitui o botão automaticamente
+    const activateBtn = e.target.closest('[data-activate-cloud]');
+    if (activateBtn) {
+      const name = activateBtn.dataset.activateCloud;
+      activateBtn.disabled = true;
+      activateBtn.textContent = '⏳ Instalando...';
+      await pullIntoRegistry(name); // já ressincroniza o catálogo local (loadProviders(true))
+      renderModelTable(); // badge "Instalado" substitui o botão automaticamente
+      return;
+    }
+    // Fallback: nada no catálogo cloud bateu com a busca, mas o usuário quer tentar o termo
+    // digitado mesmo assim (ex: nome custom/privado que não está entre os ~18 conhecidos).
+    const fallbackBtn = e.target.closest('[data-pull-term]');
+    if (fallbackBtn) {
+      const term = fallbackBtn.dataset.pullTerm;
+      fallbackBtn.disabled = true;
+      fallbackBtn.textContent = '⏳ Tentando...';
+      await pullIntoRegistry(term);
+      renderModelTable();
+    }
   });
-
-  const pullInput = document.getElementById('mr-pullInput');
-  const triggerPull = () => {
-    const name = pullInput?.value.trim();
-    if (!name) return;
-    pullIntoRegistry(name).then(() => { if (registryMode === 'cloud') renderModelTable(); });
-    pullInput.value = '';
-  };
-  document.getElementById('mr-pullBtn')?.addEventListener('click', triggerPull);
-  pullInput?.addEventListener('keydown', e => { if (e.key === 'Enter') triggerPull(); });
 }
 
 // ─── Seletor de modelo por categoria (Routing) ────────────────────────
