@@ -31,6 +31,7 @@ import { ProactiveRecovery, ToolExecutorLike } from './ProactiveRecovery';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { CaseMemory } from '../memory/CaseMemory';
+import { OperationalKnowledge } from '../memory/OperationalKnowledge';
 import { permissionRegistry } from '../core/PermissionRegistry';
 import { MemoryManager } from '../memory/MemoryManager';
 import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
@@ -135,6 +136,8 @@ export class GoalExecutionLoop {
         private readonly providerFactory: ProviderFactory,
         private readonly memory: MemoryManager,
         private readonly caseMemory: CaseMemory,
+        /** M2 (RFC-001) — opcional: sem ela, captura simplesmente não acontece (fail-open). */
+        private readonly operationalKnowledge?: OperationalKnowledge,
     ) {
         this.riskAnalyzer = new RiskAnalyzer(providerFactory, toolRegistry, reflectionMemory);
         this.semanticValidator = new StepSemanticValidator(providerFactory);
@@ -1272,6 +1275,9 @@ export class GoalExecutionLoop {
         // S5 (modo sombra): captura Caso só se houver evidência de nível de goal
         // (successCriteria met OU sentArtifacts real) — nunca influencia o resultado.
         this.caseMemory.captureIfEligible(this.goalStore.getById(goal.id)!);
+        // M2 (RFC-001): mesmo gate de elegibilidade (goal já validado como concluído de
+        // verdade) — captura só grava, nunca influencia o resultado deste goal.
+        this.operationalKnowledge?.captureFromGoal(this.goalStore.getById(goal.id)!);
         return { action: 'earlyReturn', result: this.buildResult(goal, true, totalCycles, totalReplans, validation.summary) };
     }
 
@@ -1846,6 +1852,8 @@ export class GoalExecutionLoop {
                     this.goalStore.setStatus(currentGoal.id, 'completed');
                     // S5 (modo sombra): mesma captura condicionada a evidência do outro call site.
                     this.caseMemory.captureIfEligible(this.goalStore.getById(currentGoal.id)!);
+                    // M2 (RFC-001): mesmo gate, mesmo call site espelhado do CaseMemory acima.
+                    this.operationalKnowledge?.captureFromGoal(this.goalStore.getById(currentGoal.id)!);
                     return this.buildResult(currentGoal, true, totalCycles, totalReplans, validation.summary);
                 } else {
                     log.warn(`[GoalLoop] goal=${currentGoal.id} completed step but ran out of cycles before final milestone`);
@@ -3086,9 +3094,11 @@ export class GoalExecutionLoop {
             log.warn('[GoalLoop] Q1 skill discovery error:', String(err));
         }
 
-        // Padrões de falha conhecidos (tools já tentadas)
+        // Padrões de falha conhecidos (tools já tentadas) — ARCH-006: findToolFailures()
+        // agrega por tool_used real (não por `pattern` livre), então falhas do mesmo tool
+        // gravadas sob patterns diferentes somam num único sinal em vez de se fragmentarem.
         const failureHints = goal.toolsTried
-            .map(t => this.reflectionMemory.buildContextHint(`tool_${t}`))
+            .map(t => this.reflectionMemory.findToolFailures(t))
             .filter(Boolean);
         if (failureHints.length > 0) {
             parts.push(`Histórico de execuções com ferramentas já usadas:\n${failureHints.join('\n')}`);

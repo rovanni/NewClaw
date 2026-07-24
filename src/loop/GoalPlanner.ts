@@ -25,6 +25,8 @@ import { PLACEHOLDER_ARG_PATTERN } from '../shared/placeholderPatterns';
 import { makeContentStubClassifier, ContentStubClassifier } from '../shared/contentStubClassifier';
 import { sanitizePlanSteps } from './planning/sanitizePlanSteps';
 import { isWindows } from '../utils/crossPlatform';
+import { permissionRegistry } from '../core/PermissionRegistry';
+import { OperationalKnowledge } from '../memory/OperationalKnowledge';
 
 const log = createLogger('GoalPlanner');
 
@@ -308,7 +310,7 @@ function buildLoopDirective(opts: {
     return lines.join('\n') + '\n';
 }
 
-function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, availableTools: string[], runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string, skillContext?: string, diversityBlock?: string, progressModel?: GoalProgressModel): string {
+function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, availableTools: string[], runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string, skillContext?: string, diversityBlock?: string, progressModel?: GoalProgressModel, operationalHint?: string): string {
     const goalText            = `${goal.objective} ${goal.userIntent}`;
     const compressedRefl      = PromptComposer.compressReflection(reflectionHint);
     const capBlock            = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary, compressedRefl);
@@ -331,6 +333,17 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
         ? `\nCONTEXTO (memória + feedback):\n${memContext}\n`
         : '';
 
+    // ARCH-007: as 4 diretivas de loop abaixo (pip/venv, exec_command, análise-sem-implementar,
+    // content-stub) não têm nenhum enforcement de código por trás — "será bloqueado/descartado
+    // automaticamente" é só texto de prompt, nada em RiskAnalyzer/sanitizePlanSteps de fato
+    // descarta esses steps depois. Antes desta correção, o texto se apresentava como regra
+    // absoluta em QUALQUER modo, inclusive GOD — onde o operador pediu explicitamente mais
+    // autonomia. Mesmo flag que ReflectionMemory já usa para o mesmo propósito (patternToConstraint):
+    // em bypassMode, o conteúdo informativo permanece (o loop detectado continua sendo dado real
+    // e útil), só a linguagem de imposição incondicional muda para consultiva.
+    const bypassMode = permissionRegistry.can('bypass_reflection_constraints');
+    const closingFor = (enforced: string, advisory: string) => bypassMode ? advisory : enforced;
+
     // Detecta loop de pip/venv: se já falhou 2+ vezes por environment_limit relacionado a
     // pip ou venv, injeta diretiva crítica para forçar abordagem sem instalação de pacotes.
     // O modelo tende a ignorar as regras gerais de PEP 668 quando o blocker não menciona
@@ -352,7 +365,10 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
                 "sed -i 's/NomeAntigo/NovoNome/g' arquivo.xml — para edição de XML dentro de zips",
             ],
             numbered: true,
-            closing: 'Escolha UMA dessas abordagens. Qualquer plano com pip ou venv será bloqueado automaticamente.',
+            closing: closingFor(
+                'Escolha UMA dessas abordagens. Qualquer plano com pip ou venv será bloqueado automaticamente.',
+                'Escolha UMA dessas abordagens — pip/venv já falharam repetidamente neste ambiente (modo GOD: sua decisão, não é imposto).',
+            ),
         })
         : '';
 
@@ -389,7 +405,10 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
                 'Para converter arquivos: use a skill correspondente via {sem toolName} descrevendo a conversão desejada',
                 'Para enviar resultado: use send_document com o arquivo já criado via write ou AgentLoop',
             ],
-            closing: 'Qualquer step com toolName="exec_command" será descartado automaticamente.',
+            closing: closingFor(
+                'Qualquer step com toolName="exec_command" será descartado automaticamente.',
+                'exec_command já falhou repetidamente neste goal (modo GOD: sua decisão, não é imposto).',
+            ),
         })
         : '';
 
@@ -410,7 +429,10 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
                 'ENTREGUE: inclua step final que confirme o resultado ao usuário (send_document ou write com resumo).',
             ],
             numbered: true,
-            closing: 'Um plano que só lê arquivos sem modificar/entregar será rejeitado novamente.',
+            closing: closingFor(
+                'Um plano que só lê arquivos sem modificar/entregar será rejeitado novamente.',
+                'Ciclos anteriores só leram, sem implementar (modo GOD: sua decisão, não é imposto).',
+            ),
         })
         : '';
 
@@ -432,7 +454,10 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
                 'O AgentLoop tem acesso ao output de web_search/read e produzirá o artefato final — você NÃO precisa pré-gerar content.',
             ],
             numbered: true,
-            closing: 'Qualquer step com toolName="write" e content curto/placeholder será bloqueado novamente.',
+            closing: closingFor(
+                'Qualquer step com toolName="write" e content curto/placeholder será bloqueado novamente.',
+                'Tentativas anteriores gravaram placeholder em vez de conteúdo real (modo GOD: sua decisão, não é imposto).',
+            ),
         })
         : '';
 
@@ -462,6 +487,10 @@ MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
 
     const diversitySection = diversityBlock ? `\n${diversityBlock}\n` : '';
     const progressSection = progressModel ? `\n${buildProgressBlock(progressModel)}\n` : '';
+    // M2 (RFC-001): Evidence Provider próprio, bloco separado do reflectionBlock — conhecimento
+    // operacional (ferramenta×plataforma) é um eixo distinto de padrão de falha, não deve ser
+    // fundido no mesmo texto (ver docs/RFC-001_APRENDIZADO_OPERACIONAL.md pergunta 8, matriz).
+    const operationalSection = operationalHint ? `\nCONHECIMENTO OPERACIONAL APRENDIDO NESTA INSTÂNCIA:\n${operationalHint}\n` : '';
 
     return `Você é um planejador de tarefas. Um blocker foi detectado. Proponha uma NOVA estratégia.
 
@@ -469,7 +498,7 @@ OBJETIVO GLOBAL: ${goal.objective}
 ${milestoneInstruction}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}${retryHint}${ratioLimitHint}
-${pipVenvLoopDirective}${execCommandBanDirective}${contentStubDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${contextBlock}${progressSection}${diversitySection}
+${pipVenvLoopDirective}${execCommandBanDirective}${contentStubDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${operationalSection}${contextBlock}${progressSection}${diversitySection}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 
 ${buildToolContracts(availableTools)}
@@ -635,6 +664,9 @@ export class GoalPlanner {
         private readonly reflectionMemory: ReflectionMemory,
         /** Injeção de teste — quando omitido, usa o classificador LLM real via providerFactory. */
         classifyContentStub?: ContentStubClassifier,
+        /** M2 (RFC-001) — opcional: sem ele, o bloco de conhecimento operacional aprendido
+         *  simplesmente não aparece no prompt, mesmo fail-open que os demais Evidence Providers. */
+        private readonly operationalKnowledge?: OperationalKnowledge,
     ) {
         this.classifyContentStub = classifyContentStub ?? makeContentStubClassifier(providerFactory);
     }
@@ -789,6 +821,16 @@ export class GoalPlanner {
             log.debug(`[GoalPlanner] reflectionHint injected (${reflectionHint.length} chars)`);
         }
 
+        // M2 (RFC-001): só consulta quando o blocker tem uma dependência ausente identificada —
+        // missingDependency (ex: 'yq'), NUNCA blocker.toolName (ex: 'exec_command', a tool que
+        // falhou) — OperationalKnowledge é chaveado por (dependência, plataforma), não por tool.
+        const operationalHint = blocker.missingDependency
+            ? (this.operationalKnowledge?.buildEvidenceHint(blocker.missingDependency) ?? '')
+            : '';
+        if (operationalHint) {
+            log.info(`[OPKNOW-INJECT] goal=${goal.id} dependency=${blocker.missingDependency} chars=${operationalHint.length} — conhecimento operacional incluído no contexto de replan`);
+        }
+
         const skillsSummary     = this.loadSkillsSummary();
         const availableTools    = ToolRegistry.getEnabled().map(t => t.name);
         const compressedRefl    = PromptComposer.compressReflection(reflectionHint);
@@ -800,7 +842,7 @@ export class GoalPlanner {
             ` forbidden=${diversityConstraints.forbiddenFingerprints.length}` +
             ` exhausted=${diversityConstraints.exhaustedTools.length}`
         );
-        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, availableTools, runtimeContext, capabilityContext, skillsSummary, activeMilestone, this.skillContext, diversityConstraints.promptBlock, progressModel);
+        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, availableTools, runtimeContext, capabilityContext, skillsSummary, activeMilestone, this.skillContext, diversityConstraints.promptBlock, progressModel, operationalHint);
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
 
         PromptComposer.recordReplan();
@@ -1075,18 +1117,21 @@ Regras:
     }
 
     private emergencyFallback(goal: Goal, blocker: GoalBlocker): PlanResult {
-        // Se o blocker é missing_tool, tenta uma instalação genérica
-        if (blocker.kind === 'missing_tool' && blocker.toolName) {
+        // Se o blocker é missing_tool, tenta uma instalação genérica — usa missingDependency (nome
+        // real do binário ausente, ex: 'yq'), nunca blocker.toolName (a tool que falhou, ex:
+        // 'exec_command' — verificar "where exec_command" nunca faria sentido).
+        if (blocker.kind === 'missing_tool' && blocker.missingDependency) {
+            const dep = blocker.missingDependency;
             return {
                 steps: [
                     {
                         id: 'step_install',
-                        description: `Instalar ${blocker.toolName}`,
+                        description: `Instalar ${dep}`,
                         toolName: 'exec_command',
                         // 'which' não existe no cmd.exe (Windows) — 'where' é o equivalente nativo.
                         toolArgs: { command: isWindows
-                            ? `where ${blocker.toolName} || echo "NOT FOUND"`
-                            : `which ${blocker.toolName} || echo "NOT FOUND"` },
+                            ? `where ${dep} || echo "NOT FOUND"`
+                            : `which ${dep} || echo "NOT FOUND"` },
                         status: 'pending',
                         fallbackSteps: [],
                     },
@@ -1097,7 +1142,7 @@ Regras:
                         fallbackSteps: [],
                     },
                 ],
-                strategy: `instalar ${blocker.toolName} e retry`,
+                strategy: `instalar ${dep} e retry`,
             };
         }
 

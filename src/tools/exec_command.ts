@@ -474,8 +474,13 @@ export class ExecCommandTool implements ToolExecutor {
                         }
                         // Non-zero exit is a failure — reject so the caller sees success: false.
                         // Preserve stdout/stderr in combinedOutput so GoalEvaluator can classify it.
+                        // exitCode também propagado como dado estruturado (ToolResult.exitCode) —
+                        // GoalEvaluator não precisa mais fazer regex sobre "[exit code: N]" no texto.
                         const fullOutput = (combined.trim() || error.message) + `\n[exit code: ${exitCode}]`;
-                        reject(Object.assign(error, { combinedOutput: fullOutput.trim() }));
+                        reject(Object.assign(error, {
+                            combinedOutput: fullOutput.trim(),
+                            exitCode: typeof exitCode === 'number' ? exitCode : undefined,
+                        }));
                     } else {
                         resolve(combined);
                     }
@@ -494,9 +499,9 @@ export class ExecCommandTool implements ToolExecutor {
                 ...(artifactPaths.length > 0 ? { artifactPaths } : {}),
             };
         } catch (err) {
-            const e = err as NodeJS.ErrnoException & { combinedOutput?: string };
+            const e = err as NodeJS.ErrnoException & { combinedOutput?: string; exitCode?: number };
             const msg = (e.combinedOutput || errorMessage(err)).slice(0, 16000);
-            return { success: false, output: msg, error: msg };
+            return { success: false, output: msg, error: msg, ...(e.exitCode !== undefined ? { exitCode: e.exitCode } : {}) };
         }
     }
 }

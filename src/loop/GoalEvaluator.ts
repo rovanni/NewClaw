@@ -49,6 +49,16 @@ const KNOWN_DEPS: Record<string, DependencyInfo> = {
     // — migrada para installByPlatform explícito em vez de installCmd legado, para não depender
     // do fallback "só Linux" e não perder a instalação automática em Windows/macOS.
     marp:        { name: '@marp-team/marp-cli',    installByPlatform: { windows: 'npm install -g @marp-team/marp-cli', linux: 'npm install -g @marp-team/marp-cli', macos: 'npm install -g @marp-team/marp-cli' }, manualInstructions: 'Instale o marp-cli globalmente: npm install -g @marp-team/marp-cli', type: 'node' },
+    // puppeteer: mesmo padrão do marp acima — `npm install puppeteer` já baixa um Chromium
+    // embutido, então é genuinamente cross-platform e não depende de instalar Chrome no SO
+    // (evita também o problema conhecido de `apt install chromium` redirecionar para pacote
+    // snap no Ubuntu moderno, que costuma falhar em ambiente headless/VPS sem sessão gráfica).
+    // Usado por scripts/html2pdf.sh (modo PDF e modo screenshot/PNG da revisão visual).
+    puppeteer:   { name: 'puppeteer',              installByPlatform: { windows: 'npm install puppeteer', linux: 'npm install puppeteer', macos: 'npm install puppeteer' }, manualInstructions: 'Instale com: npm install puppeteer (inclui Chromium embutido, sem precisar de Chrome do sistema)', type: 'node' },
+    // tesseract: fallback de OCR em read_document.ts (extractOcr/pdfOcr) — mesmo padrão
+    // apt-only das demais entradas de sistema acima (sem installByPlatform: não há comando
+    // Windows/macOS validado neste projeto para propor automaticamente).
+    tesseract:   { name: 'tesseract-ocr',          installCmd: 'sudo apt install tesseract-ocr tesseract-ocr-por -y', manualInstructions: 'Instale com: sudo apt install tesseract-ocr tesseract-ocr-por -y', type: 'system' },
     pip:         { name: 'python3-pip',            installCmd: 'sudo apt install python3-pip -y',             manualInstructions: 'Instale com: sudo apt install python3-pip -y',                 type: 'python' },
     pip3:        { name: 'python3-pip',            installCmd: 'sudo apt install python3-pip -y',             manualInstructions: 'Instale com: sudo apt install python3-pip -y',                 type: 'python' },
     // edge-tts: SEM installCmd/installByPlatform de propósito nesta rodada. O execution loop
@@ -89,10 +99,13 @@ const ERROR_PATTERNS: ErrorPattern[] = [
         ],
         isRetryable: false,
     },
-    // Ferramenta não encontrada (inclui exit code 127 = command not found no Unix e o
-    // texto literal do cmd.exe no Windows quando um executável não existe no PATH)
+    // Ferramenta não encontrada — fallback de ÚLTIMO recurso, só alcançado quando nem exitCode
+    // estruturado (127) nem extractMissingExecutable() (que já cobre "is not recognized..." em
+    // inglês e pt-BR, e o "[exit code: 127]" some daqui porque classifyError() checa exitCode
+    // ANTES desta lista) identificaram o caso — mantido só pra texto solto tipo "not found" sem
+    // formato reconhecido o bastante pra extrair um nome.
     {
-        pattern: /command not found|not found|no such file|ENOENT|which: no|cannot find|\[exit code: 127\]|is not recognized as an internal or external command/i,
+        pattern: /command not found|not found|no such file|ENOENT|which: no|cannot find/i,
         kind: 'missing_tool',
         description: (_, tool) => `Ferramenta '${tool}' não encontrada no sistema`,
         suggestedActions: [
@@ -247,8 +260,9 @@ export class GoalEvaluator {
             };
         }
 
-        // Classificar o tipo de falha
-        const blocker = this.classifyError(error, toolName);
+        // Classificar o tipo de falha — exitCode é dado estruturado (ToolResult.exitCode),
+        // checado antes de qualquer regex sobre o texto de error/output.
+        const blocker = this.classifyError(error, toolName, toolResult.exitCode);
 
         log.info(`[GoalEvaluator] step=${planStep.id} tool=${toolName} blocker=${blocker.kind}`);
 
@@ -259,7 +273,9 @@ export class GoalEvaluator {
 
         // Dependência ausente → perguntar ao usuário / tentar instalar
         if (blocker.kind === 'missing_tool') {
-            const missingCmd = extractMissingExecutable(error) ?? '';
+            // missingDependency já foi extraído uma única vez em classifyError() (mesma chamada de
+            // extractMissingExecutable() — sem reextrair aqui, sem duplicar a extração).
+            const missingCmd = blocker.missingDependency ?? '';
             log.debug(`[GoalEvaluator] missing_tool extracted="${missingCmd || '(not extracted)'}" from error="${error.slice(0, 80)}"`);
             const dep = KNOWN_DEPS[missingCmd.toLowerCase()];
             if (dep) {
@@ -331,45 +347,74 @@ export class GoalEvaluator {
         return 'progressing';
     }
 
-    private classifyError(error: string, toolName: string): GoalBlocker {
-        const matched = this.findMatchedPattern(error);
+    private classifyError(error: string, toolName: string, exitCode?: number): GoalBlocker {
+        // Sinal ESTRUTURADO tem prioridade sobre qualquer parsing de texto: exit code 127 é
+        // convenção POSIX garantida pelo shell (não pela mensagem que o SO produziu) para "comando
+        // não encontrado". Quando disponível (ToolResult.exitCode, propagado por exec_command.ts),
+        // decide missing_tool sem depender de nenhuma regex — elimina a dependência de mensagens em
+        // inglês para o caso mais comum (Linux/macOS via exec_command).
+        const posixCommandNotFound = exitCode === 127;
 
-        if (matched) {
-            // exec_command: distingue entre "exec_command ausente" (exit 127 = shell não achou o
-            // binário) e "PATH do argumento não existe" (exit 2 = o arquivo/dir não foi encontrado).
-            // Sem esta distinção, o GoalPlanner acredita que a ferramenta exec_command em si está
-            // faltando e gera replans que evitam exec_command — mas o problema real é o binário interno.
-            if (matched.kind === 'missing_tool' && toolName === 'exec_command') {
-                // extractMissingExecutable() é a mesma função usada no lookup de KNOWN_DEPS logo
-                // abaixo (em evaluate()) — antes desta unificação, este branch usava uma regex
-                // local própria que não reconhecia "is not recognized as an internal or external
-                // command" (texto do cmd.exe no Windows para um binário ausente do PATH),
-                // reclassificando incorretamente esse caso como "caminho não encontrado" em vez
-                // de "binário ausente".
-                const missingBinary = extractMissingExecutable(error);
-                if (!missingBinary) {
-                    return {
-                        kind: 'tool_error',
-                        toolName,
-                        description: `Caminho não encontrado ao executar '${toolName}': ${error.slice(0, 200)}`,
-                        suggestedActions: [
-                            'Verificar se o caminho existe com list_workspace',
-                            'Listar o workspace: list_workspace',
-                            'Corrigir o caminho no próximo passo',
-                        ],
-                        detectedAt: Date.now(),
-                    };
-                }
-                // exec_command encontrou a shell, mas o BINÁRIO invocado não existe.
+        // extractMissingExecutable() é a MESMA função usada no lookup de KNOWN_DEPS em evaluate() —
+        // uma só fonte de verdade para "este erro indica um executável ausente, e qual é o nome?".
+        // Ela já exclui internamente ENOENT de arquivo/diretório (FS_ENOENT_PATTERN), então checá-la
+        // aqui não rouba o branch 'tool_error' de fs — e cobre qualquer tool que rode um processo,
+        // não só exec_command. Quando ela reconhece um binário, essa classificação prevalece sobre
+        // ERROR_PATTERNS — elimina a duplicação de regex que causou o gap: mensagem pt-BR do cmd.exe
+        // do Windows ("não é reconhecido como um comando interno ou externo") nunca batia no regex
+        // inglês de ERROR_PATTERNS, então o blocker nunca virava missing_tool (achado: validação E2E
+        // real, 24/07 — docs/DIRETRIZ_ARQUITETURA_2026-07-13.md, Validação Progressiva).
+        const missingBinary = extractMissingExecutable(error);
+
+        if (posixCommandNotFound || missingBinary) {
+            if (missingBinary) {
                 const binaryLabel = `'${missingBinary}'`;
                 return {
                     kind: 'missing_tool',
                     toolName,
-                    description: `Binário ${binaryLabel} não encontrado no sistema (chamado via exec_command). Instale-o ou use uma abordagem alternativa que não dependa dele.`,
+                    missingDependency: missingBinary,
+                    description: `Binário ${binaryLabel} não encontrado no sistema (chamado via '${toolName}'). Instale-o ou use uma abordagem alternativa que não dependa dele.`,
                     suggestedActions: [
-                        missingBinary ? `Instalar ${missingBinary} via gerenciador de pacotes` : 'Instalar a dependência ausente',
+                        `Instalar ${missingBinary} via gerenciador de pacotes`,
                         'Verificar capabilities disponíveis com EnvironmentProbe',
                         'Usar ferramenta nativa do NewClaw em vez de binário externo',
+                    ],
+                    detectedAt: Date.now(),
+                };
+            }
+            // exit code 127 confirma "comando não encontrado" sem nenhum texto, mas o nome do
+            // binário não foi extraível (formato de mensagem que extractMissingExecutable() ainda
+            // não reconhece). Ainda assim é missing_tool — evaluate() só não vai achar match em
+            // KNOWN_DEPS, e o replan segue para o LLM decidir sem atalho determinístico.
+            return {
+                kind: 'missing_tool',
+                toolName,
+                description: `Comando não encontrado ao executar '${toolName}' (exit code 127 — binário ausente do PATH).`,
+                suggestedActions: [
+                    'Instalar a dependência ausente via gerenciador de pacotes',
+                    'Verificar capabilities disponíveis com EnvironmentProbe',
+                    'Usar ferramenta nativa do NewClaw em vez de binário externo',
+                ],
+                detectedAt: Date.now(),
+            };
+        }
+
+        const matched = this.findMatchedPattern(error);
+
+        if (matched) {
+            // exec_command: sem exitCode estruturado disponível pra decidir, o padrão genérico de
+            // missing_tool em ERROR_PATTERNS bateu (texto solto) mas extractMissingExecutable() não
+            // conseguiu extrair um binário — sinal de que o problema real é um PATH de ARGUMENTO
+            // inexistente, não o binário do próprio exec_command.
+            if (matched.kind === 'missing_tool' && toolName === 'exec_command') {
+                return {
+                    kind: 'tool_error',
+                    toolName,
+                    description: `Caminho não encontrado ao executar '${toolName}': ${error.slice(0, 200)}`,
+                    suggestedActions: [
+                        'Verificar se o caminho existe com list_workspace',
+                        'Listar o workspace: list_workspace',
+                        'Corrigir o caminho no próximo passo',
                     ],
                     detectedAt: Date.now(),
                 };

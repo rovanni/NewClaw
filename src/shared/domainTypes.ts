@@ -43,7 +43,15 @@ export type BlockerKind =
 
 export interface GoalBlocker {
     kind: BlockerKind;
+    /** Nome da tool/step que falhou (ex: 'exec_command') — NUNCA o nome da dependência ausente. */
     toolName?: string;
+    /**
+     * Nome normalizado da dependência/binário ausente (ex: 'yq'), só presente quando
+     * kind === 'missing_tool' e a extração teve sucesso. Distinto de `toolName`: um
+     * exec_command com binário 'yq' ausente tem toolName='exec_command' e
+     * missingDependency='yq' — os dois nunca compartilham o mesmo significado.
+     */
+    missingDependency?: string;
     description: string;
     /** Ações sugeridas — GoalPlanner usa isso como input para replan */
     suggestedActions: string[];

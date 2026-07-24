@@ -25,6 +25,7 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { CaseMemory } from '../memory/CaseMemory';
+import { OperationalKnowledge } from '../memory/OperationalKnowledge';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { GOAL_LIMITS } from './GoalLimits';
@@ -77,7 +78,8 @@ export class GoalOrchestrator {
 
         const reflectionMemory = new ReflectionMemory(memory);
         const caseMemory = new CaseMemory(memory);
-        const planner = new GoalPlanner(providerFactory, reflectionMemory);
+        const operationalKnowledge = new OperationalKnowledge(memory);
+        const planner = new GoalPlanner(providerFactory, reflectionMemory, undefined, operationalKnowledge);
 
         this.executionLoop = new GoalExecutionLoop(
             agentLoop,
@@ -88,6 +90,7 @@ export class GoalOrchestrator {
             providerFactory,
             memory,
             caseMemory,
+            operationalKnowledge,
         );
 
         // Aquece o CapabilityRegistry em background — não bloqueia a inicialização.

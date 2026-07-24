@@ -15,6 +15,13 @@ export interface ToolResult {
      * Propagado para GoalAttempt.producedArtifactPaths pelo GoalExecutionLoop.
      */
     artifactPaths?: string[];
+    /**
+     * Código de saída do processo, quando a tool invoca um processo externo (hoje só
+     * exec_command). Dado estruturado — GoalEvaluator usa isso antes de qualquer regex sobre
+     * `error`/`output`: exit code 127 é convenção POSIX garantida pelo shell para "comando não
+     * encontrado", independente do idioma da mensagem que o SO produziu.
+     */
+    exitCode?: number;
 }
 
 export interface ToolExecutor {

@@ -373,7 +373,7 @@ export class GoalStore {
             if (!goal) return;
             const blockers = [...goal.blockers, blocker];
             this.update(goalId, { blockers, status: 'blocked' });
-            log.info(`[GoalStore] goal=${goalId} blocker: kind=${blocker.kind} tool=${blocker.toolName ?? 'none'} desc="${blocker.description.slice(0, 100)}"`);
+            log.info(`[GoalStore] goal=${goalId} blocker: kind=${blocker.kind} tool=${blocker.toolName ?? 'none'} dep=${blocker.missingDependency ?? 'none'} desc="${blocker.description.slice(0, 100)}"`);
         })();
     }
 
@@ -394,7 +394,7 @@ export class GoalStore {
             if (!goal) return;
             const blockers = [...goal.blockers, blocker];
             this.update(goalId, { blockers });
-            log.info(`[GoalStore] goal=${goalId} blocker recorded (status inalterado): kind=${blocker.kind} tool=${blocker.toolName ?? 'none'} desc="${blocker.description.slice(0, 100)}"`);
+            log.info(`[GoalStore] goal=${goalId} blocker recorded (status inalterado): kind=${blocker.kind} tool=${blocker.toolName ?? 'none'} dep=${blocker.missingDependency ?? 'none'} desc="${blocker.description.slice(0, 100)}"`);
         })();
     }
 
