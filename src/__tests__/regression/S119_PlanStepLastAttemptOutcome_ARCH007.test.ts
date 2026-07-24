@@ -71,7 +71,7 @@ function makeLoop(agentLoopResponse?: string) {
     const fakeAgentLoop = { process: async () => agentLoopResponse ?? '' } as any;
     const loop = new GoalExecutionLoop(
         fakeAgentLoop, goalStore, fakePlanner,
-        { record: () => {}, buildContextHint: () => '', findHardConstraints: () => [] } as any,
+        { record: () => {}, findToolFailures: () => '', findHardConstraints: () => [] } as any,
         ToolRegistry, makeFakeProviderFactory(), fakeMemory,
         { findApplicableCasesShadow: async () => [], backfillMissingEmbeddings: async () => {}, captureIfEligible: () => {}, findSimilarShadow: () => [] } as any,
     );
@@ -164,7 +164,7 @@ async function main() {
         const fakePlanner = { getAvailableSkills: () => [], setSkillContext: () => {}, setModel: () => {}, replan: async () => ({ steps: [], strategy: 'n/a' }) } as any;
         const loop = new GoalExecutionLoop(
             {} as any, goalStore, fakePlanner,
-            { record: () => {}, buildContextHint: () => '', findHardConstraints: () => [] } as any,
+            { record: () => {}, findToolFailures: () => '', findHardConstraints: () => [] } as any,
             ToolRegistry, mismatchProviderFactory, fakeMemory,
             { findApplicableCasesShadow: async () => [], backfillMissingEmbeddings: async () => {}, captureIfEligible: () => {}, findSimilarShadow: () => [] } as any,
         );

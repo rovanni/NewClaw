@@ -86,7 +86,7 @@ function makeLoop(providerFactory: import('../../core/ProviderFactory').Provider
         {} as any,
         goalStore,
         fakePlanner,
-        { record: () => {}, buildContextHint: () => '', findHardConstraints: () => [] } as any,
+        { record: () => {}, findToolFailures: () => '', findHardConstraints: () => [] } as any,
         ToolRegistry,
         providerFactory,
         fakeMemory,
@@ -186,7 +186,7 @@ async function main() {
             const fakeMemory = { getDatabase: () => db } as any;
             const l = new GoalExecutionLoop(
                 {} as any, gs, replanningPlanner,
-                { record: () => {}, buildContextHint: () => '', findHardConstraints: () => [] } as any,
+                { record: () => {}, findToolFailures: () => '', findHardConstraints: () => [] } as any,
                 ToolRegistry, makeFakeProviderFactory(async () => ({ status: 'success', content: JSON.stringify({ achieved: false, summary: 'n/a' }) })),
                 fakeMemory,
                 { findApplicableCasesShadow: async () => [], backfillMissingEmbeddings: async () => {}, captureIfEligible: () => {}, findSimilarShadow: () => [] } as any,

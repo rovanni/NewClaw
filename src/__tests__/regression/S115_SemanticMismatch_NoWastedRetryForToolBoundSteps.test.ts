@@ -67,7 +67,7 @@ function makeLoop(providerFactory: import('../../core/ProviderFactory').Provider
     const fakeAgentLoop = { process: async () => agentLoopResponse ?? '' } as any;
     const loop = new GoalExecutionLoop(
         fakeAgentLoop, goalStore, fakePlanner,
-        { record: () => {}, buildContextHint: () => '', findHardConstraints: () => [] } as any,
+        { record: () => {}, findToolFailures: () => '', findHardConstraints: () => [] } as any,
         ToolRegistry, providerFactory, fakeMemory,
         { findApplicableCasesShadow: async () => [], backfillMissingEmbeddings: async () => {}, captureIfEligible: () => {}, findSimilarShadow: () => [] } as any,
     );
@@ -139,7 +139,7 @@ async function main() {
         const fakePlanner = { getAvailableSkills: () => [], setSkillContext: () => {}, setModel: () => {}, replan: async () => ({ steps: [], strategy: 'n/a' }) } as any;
         const loop = new GoalExecutionLoop(
             fakeAgentLoop as any, goalStore, fakePlanner,
-            { record: () => {}, buildContextHint: () => '', findHardConstraints: () => [] } as any,
+            { record: () => {}, findToolFailures: () => '', findHardConstraints: () => [] } as any,
             ToolRegistry, makeMismatchProviderFactory(), fakeMemory,
             { findApplicableCasesShadow: async () => [], backfillMissingEmbeddings: async () => {}, captureIfEligible: () => {}, findSimilarShadow: () => [] } as any,
         );

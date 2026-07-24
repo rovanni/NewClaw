@@ -205,66 +205,6 @@ export class ReflectionMemory {
 
     // ── Read / Query ───────────────────────────────────────────────────
 
-    /**
-     * Retorna um hint de contexto baseado em padrões de falha similares.
-     * Retorna string vazia se não há nada relevante.
-     */
-    buildContextHint(category: string): string {
-        try {
-            const patterns = this.getFailurePatterns(category);
-            if (patterns.length === 0) return '';
-
-            const lines: string[] = ['Padrões de erro similares detectados no histórico:'];
-            for (const p of patterns) {
-                const pct = Math.round(p.failure_rate * 100);
-                lines.push(`- Ferramenta: ${p.tool_used} | Padrão: ${p.pattern} | Falha: ${pct}% (${p.failures}/${p.total})`);
-                if (p.top_fix) {
-                    lines.push(`  Sugestão baseada em histórico: "${p.top_fix}"`);
-                }
-            }
-            lines.push('Use essas informações como guia; priorize abordagens que tiveram mais sucesso.');
-            return lines.join('\n');
-        } catch {
-            return '';
-        }
-    }
-
-    /**
-     * Padrões de falha agrupados por (pattern, tool_used), com taxa de falha >= 30%
-     * e ao menos 2 registros — relevantes para o input atual.
-     *
-     * Quando category é 'tool_xxx', também pesquisa registros goal_blocker_* cuja
-     * tool_used seja 'xxx' — corrige o mismatch entre a chave de escrita
-     * (GoalExecutionLoop usa `goal_blocker_${kind}`) e a chave de leitura
-     * (GoalPlanner usa `tool_${toolName}`).
-     */
-    private getFailurePatterns(category: string): PatternAggRow[] {
-        return this.db.prepare(`
-            SELECT
-                pattern,
-                tool_used,
-                COUNT(*) AS total,
-                SUM(CASE WHEN approved = 0 THEN 1 ELSE 0 END) AS failures,
-                CAST(SUM(CASE WHEN approved = 0 THEN 1 ELSE 0 END) AS REAL) / COUNT(*) AS failure_rate,
-                (SELECT suggested_fix FROM reflection_annotations r2
-                 WHERE r2.pattern = r1.pattern AND r2.tool_used = r1.tool_used
-                   AND r2.approved = 0 AND r2.suggested_fix IS NOT NULL
-                 ORDER BY r2.created_at DESC LIMIT 1) AS top_fix
-            FROM reflection_annotations r1
-            WHERE pattern = ?
-              AND created_at > datetime('now', '-7 days')
-            GROUP BY pattern, tool_used
-            HAVING total >= 2 AND failure_rate >= 0.30
-              AND (
-                SELECT COUNT(*) FROM reflection_annotations r3
-                WHERE r3.pattern = r1.pattern AND r3.tool_used = r1.tool_used
-                  AND r3.approved = 1 AND r3.outcome IS NOT 'partial' AND r3.created_at > datetime('now', '-3 hours')
-              ) = 0
-            ORDER BY failure_rate DESC, total DESC
-            LIMIT 3
-        `).all(category) as PatternAggRow[];
-    }
-
     /** Retorna as últimas N anotações (para observabilidade/dashboard). */
     getRecent(limit = 20): ReflectionAnnotation[] {
         return (this.db.prepare(`
@@ -296,80 +236,17 @@ export class ReflectionMemory {
     }
 
     // ── Constraint Injection ───────────────────────────────────────────
+    // ARCH-006: buildConstraints()/getHardFailurePatterns() (geração de API anterior à S3,
+    // chave por `pattern` livre) removidos — zero chamadores em produção confirmados antes da
+    // remoção. O caminho vivo equivalente é findHardConstraints() (abaixo), que já cobre os
+    // mesmos consumidores (RiskAnalyzer, GoalPlanner) por `tool_used` real.
 
     /**
-     * Retorna constraints duras baseadas em padrões com 100% de falha.
-     *
-     * Diferente de buildContextHint() (que sugere), constraints são proibições
-     * absolutas injetadas no prompt do GoalPlanner como regras a seguir.
-     *
-     * @param planTools Lista de toolNames presentes no plano atual. Quando fornecida,
-     *   constraints de tools que NÃO estão no plano são descartadas — evita noise
-     *   de constraints irrelevantes (ex: web_search bloqueada num plano que não a usa).
-     *
-     * Exemplos de output:
-     *   ["NÃO use pip install direto — PEP 668 bloqueado neste ambiente",
-     *    "NÃO use python3 -m venv — ensurepip ausente neste ambiente"]
+     * ARCH-005 — fatos de ambiente conhecidos a priori, não aprendidos por repetição.
+     * Retorna null quando o padrão não corresponde a nenhum workaround conhecido — nesse
+     * caso o chamador segue para a lógica estatística padrão de patternToConstraint().
      */
-    buildConstraints(goalContext: string, planTools?: string[]): string[] {
-        try {
-            const patterns = this.getHardFailurePatterns(goalContext);
-            const planToolSet = planTools && planTools.length > 0 ? new Set(planTools) : null;
-            const constraints: string[] = [];
-
-            for (const p of patterns) {
-                // Se temos a lista de tools do plano, descarta constraints cujas tools
-                // não aparecem no plano — evita que falhas históricas de web_search
-                // poluam plans de edição de arquivo, por exemplo.
-                if (planToolSet && p.tool_used && p.tool_used !== 'unknown' && p.tool_used !== 'agentloop') {
-                    if (!planToolSet.has(p.tool_used)) continue;
-                }
-                const constraint = this.patternToConstraint(p.pattern, p.tool_used, p.top_fix);
-                if (constraint) constraints.push(constraint);
-            }
-
-            return constraints;
-        } catch {
-            return [];
-        }
-    }
-
-    /**
-     * Padrões com taxa de falha = 100% e ao menos 2 registros nos últimos 7 dias.
-     * Esses se tornam constraints duras no planner.
-     */
-    private getHardFailurePatterns(category: string): PatternAggRow[] {
-        return this.db.prepare(`
-            SELECT
-                pattern,
-                tool_used,
-                COUNT(*) AS total,
-                SUM(CASE WHEN approved = 0 THEN 1 ELSE 0 END) AS failures,
-                CAST(SUM(CASE WHEN approved = 0 THEN 1 ELSE 0 END) AS REAL) / COUNT(*) AS failure_rate,
-                (SELECT suggested_fix FROM reflection_annotations r2
-                 WHERE r2.pattern = r1.pattern AND r2.tool_used = r1.tool_used
-                   AND r2.approved = 0 AND r2.suggested_fix IS NOT NULL
-                 ORDER BY r2.created_at DESC LIMIT 1) AS top_fix
-            FROM reflection_annotations r1
-            WHERE pattern = ?
-              AND created_at > datetime('now', '-7 days')
-            GROUP BY pattern, tool_used
-            HAVING total >= 2 AND failure_rate >= 0.90
-              AND (
-                SELECT COUNT(*) FROM reflection_annotations r3
-                WHERE r3.pattern = r1.pattern AND r3.tool_used = r1.tool_used
-                  AND r3.approved = 1 AND r3.outcome IS NOT 'partial' AND r3.created_at > datetime('now', '-3 hours')
-              ) = 0
-            ORDER BY failure_rate DESC, total DESC
-            LIMIT 5
-        `).all(category) as PatternAggRow[];
-    }
-
-    /**
-     * Converte um padrão de falha em texto de constraint para o planner.
-     * Retorna null se o padrão não mapear para uma constraint conhecida.
-     */
-    private patternToConstraint(pattern: string, toolUsed: string, topFix: string | null): string | null {
+    private environmentWorkaroundForPattern(pattern: string): string | null {
         // PEP 668 / pip bloqueado
         if (/environment_limit|pep.?668|externally.managed/i.test(pattern)) {
             return `NÃO use 'pip install' direto — bloqueado pelo sistema operacional (PEP 668). Use venv isolado ou alternativa sem pip.`;
@@ -378,6 +255,25 @@ export class ReflectionMemory {
         if (/ensurepip|python3.?venv/i.test(pattern)) {
             return `NÃO use 'python3 -m venv' — ensurepip indisponível neste ambiente. Use pandoc, marp ou outra abordagem.`;
         }
+        return null;
+    }
+
+    /**
+     * Converte um padrão de falha em texto de constraint para o planner.
+     * Retorna null se o padrão não mapear para uma constraint conhecida.
+     */
+    private patternToConstraint(pattern: string, toolUsed: string, topFix: string | null): string | null {
+        // ARCH-005: fatos de ambiente conhecidos a priori (não estatística de falha) —
+        // separados explicitamente do restante do método, que é sobre INFERÊNCIA a partir de
+        // taxa de falha observada. O gatilho (chamado só quando getHardFailurePatterns já
+        // confirmou >=90% de falha recente) continua estatístico; o CONTEÚDO da regra abaixo,
+        // não — é sempre o mesmo texto fixo, verdadeiro independente de quantas vezes ocorreu.
+        // Localização ainda em aberto (ver docs/RFC-001_APRENDIZADO_OPERACIONAL.md) — mantido
+        // aqui por ora, isolado nesta função para não ficar implícito dentro da lógica
+        // estatística que segue.
+        const environmentWorkaround = this.environmentWorkaroundForPattern(pattern);
+        if (environmentWorkaround) return environmentWorkaround;
+
         // Ferramentas core nunca devem ser bloqueadas por constraints duras em SAFE/DEVELOPER.
         // Em GOD mode (bypass_reflection_constraints=true), exec_command pode receber constraints
         // reais — mas o RiskAnalyzer as marcará como [CONSTRAINT-BYPASSED] sem enforceá-las.

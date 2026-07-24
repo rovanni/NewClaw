@@ -133,33 +133,43 @@ async function main() {
     assert(planBody.includes('this.reflectionMemory.findHardConstraints('), "plan() (primeira tentativa) agora referencia reflectionMemory.findHardConstraints — gap da S0 fechado");
     assert(replanBody.includes('this.reflectionMemory.findBlockerLessons('), "replan() (só após falha) referencia reflectionMemory.findBlockerLessons — método estruturado da S3b, inalterado");
 
-    // ── Baseline 5 — GROUP BY (pattern, tool_used) fragmenta padrão categórico amplo ────
-    console.log("\n=== S16.5 — getFailurePatterns('conversation') retorna vazio apesar de sinal agregado suficiente ===");
+    // ── Baseline 5 — INVERTIDO NA ARCH-006 (build sobre a S4/findCategoryHints) ──────────
+    // Original (S0): GROUP BY (pattern, tool_used) fragmentava um padrão categórico amplo —
+    // getFailurePatterns('conversation')/buildContextHint('conversation') retornavam vazio
+    // mesmo com 20 registros / 30% de falha agregada, porque nenhum subgrupo (pattern,
+    // tool_used) isolado atingia total>=2 E failure_rate>=0.30 simultaneamente.
+    // Correção real (já existente desde a S3d, consolidada quando buildContextHint() foi
+    // removida na ARCH-006 — geração de API antiga sem chamador em produção): findCategoryHints()
+    // agrega pela categoria INTEIRA, sem sub-agrupar por tool_used — a mesma fragmentação que
+    // motivou este teste deixa de ser possível por construção.
+    console.log("\n=== S16.5 — findCategoryHints('conversation') encontra o sinal agregado (invertido na ARCH-006) ===");
 
     const rm = createInMemoryReflectionMemory();
-    // Reproduz a distribuição real observada em produção: 20 registros 'conversation'
-    // espalhados por múltiplas ferramentas, 6 falhas (30% agregado) — mas nenhum subgrupo
-    // (pattern, tool_used) isolado atinge total>=2 E failure_rate>=0.30 simultaneamente.
-    const toolSpread = ['memory_search', 'read', 'write', 'send_document', 'web_search', 'crypto_analysis', 'weather'];
+    // 20 falhas de 'conversation', cada uma com um tool_used DISTINTO — isola a fragmentação
+    // real: nenhum subgrupo (pattern, tool_used) isolado passa de total=1, então o agrupamento
+    // antigo (por pattern+tool_used) nunca atinge total>=2, mesmo a categoria inteira tendo
+    // sinal muito acima do threshold (100% de falha, 20 registros). Deliberadamente sem
+    // nenhum registro approved=true: a supressão por "sucesso recente" (mesmo mecanismo de
+    // findHardConstraints/getHardFailurePatterns — sucesso nas últimas 3h suprime o sinal de
+    // falha) é um comportamento correto e distinto do que este teste mede; misturar sucesso e
+    // falha no mesmo instante de seed dispararia essa supressão e confundiria os dois sinais.
     let recorded = 0;
     for (let i = 0; i < 20; i++) {
-        const tool = toolSpread[i % toolSpread.length];
-        const isFailure = i < 6; // 6/20 = 30% agregado
         rm.record({
             userInput: `mensagem de conversa ${i}`,
             intent: 'conversation',
-            toolUsed: tool,
-            approved: !isFailure,
-            reason: isFailure ? 'resposta insatisfatória' : 'ok',
+            toolUsed: `tool_${i}`,
+            approved: false,
+            reason: 'resposta insatisfatória',
             confidence: 0.6,
             pattern: 'conversation',
         });
         recorded++;
     }
-    assert(recorded === 20, 'seed de 20 registros pattern=conversation gravado com sucesso');
+    assert(recorded === 20, 'seed de 20 registros pattern=conversation (tool_used distinto cada) gravado com sucesso');
 
-    const hint = rm.buildContextHint('conversation');
-    assert(hint === '', `buildContextHint('conversation') retorna vazio mesmo com 20 registros / 30% falha agregada (retornou: "${hint.slice(0, 60) || '(vazio)'}")`);
+    const hint = rm.findCategoryHints('conversation');
+    assert(hint.length > 0, `findCategoryHints('conversation') ENCONTRA o sinal agregado (20 registros, fragmentados por tool_used) — bug de fragmentação corrigido (retornou: "${hint.slice(0, 60) || '(vazio)'}")`);
 
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S16 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
