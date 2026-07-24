@@ -27,6 +27,7 @@ import { sanitizePlanSteps } from './planning/sanitizePlanSteps';
 import { isWindows } from '../utils/crossPlatform';
 import { permissionRegistry } from '../core/PermissionRegistry';
 import { OperationalKnowledge } from '../memory/OperationalKnowledge';
+import { CaseMemory } from '../memory/CaseMemory';
 
 const log = createLogger('GoalPlanner');
 
@@ -667,6 +668,9 @@ export class GoalPlanner {
         /** M2 (RFC-001) — opcional: sem ele, o bloco de conhecimento operacional aprendido
          *  simplesmente não aparece no prompt, mesmo fail-open que os demais Evidence Providers. */
         private readonly operationalKnowledge?: OperationalKnowledge,
+        /** RFC-002 — opcional: sem ele, o bloco de Casos semelhantes simplesmente não aparece
+         *  no prompt de plan(), mesmo fail-open que os demais Evidence Providers. */
+        private readonly caseMemory?: CaseMemory,
     ) {
         this.classifyContentStub = classifyContentStub ?? makeContentStubClassifier(providerFactory);
     }
@@ -746,6 +750,16 @@ export class GoalPlanner {
             log.debug(`[GoalPlanner] plan: evidência histórica injetada (${priorEvidence.length} restrição(ões))`);
             const evidenceBlock = `[EVIDÊNCIA HISTÓRICA — sinal a considerar antes de escolher a ferramenta]\n${priorEvidence.map(c => `- ${c}`).join('\n')}`;
             enrichedContext = enrichedContext ? `${enrichedContext}\n\n${evidenceBlock}` : evidenceBlock;
+        }
+
+        // RFC-002 (24/07): "já resolvi algo suficientemente relacionado a ESTE objetivo, com
+        // operação compatível?" — só depende do objective, disponível antes de qualquer plano
+        // existir. Substitui a consulta fire-and-forget que existia em GoalExecutionLoop (nunca
+        // lida pelo chamador) por uma consulta real, cujo resultado efetivamente chega ao prompt.
+        const caseEvidence = await this.caseMemory?.buildCaseEvidenceHint(goal.objective) ?? '';
+        if (caseEvidence) {
+            log.info(`[CASE-EVIDENCE-INJECT] goal=${goal.id} chars=${caseEvidence.length} — casos semelhantes incluídos no contexto de planejamento`);
+            enrichedContext = enrichedContext ? `${enrichedContext}\n\n${caseEvidence}` : caseEvidence;
         }
 
         const skillsSummary  = this.loadSkillsSummary();

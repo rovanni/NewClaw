@@ -79,7 +79,7 @@ export class GoalOrchestrator {
         const reflectionMemory = new ReflectionMemory(memory);
         const caseMemory = new CaseMemory(memory);
         const operationalKnowledge = new OperationalKnowledge(memory);
-        const planner = new GoalPlanner(providerFactory, reflectionMemory, undefined, operationalKnowledge);
+        const planner = new GoalPlanner(providerFactory, reflectionMemory, undefined, operationalKnowledge, caseMemory);
 
         this.executionLoop = new GoalExecutionLoop(
             agentLoop,

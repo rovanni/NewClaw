@@ -127,10 +127,15 @@ async function main() {
     assert(!caseMemorySrc.includes('finalScore'), 'nenhum score final combinado foi introduzido — semanticScore e operationalCompatibility continuam campos separados no retorno');
     console.log('  ℹ️  RISCO ARQUITETURAL PARA O FUTURO (não é bug hoje): como não há threshold de produção, um candidato com semanticScore BAIXO ainda pode ter operationalCompatibility=true (mesma classe, tema totalmente diferente — ver Grupo M). Nenhum consumidor hoje usa isso sozinho (shadow mode), mas qualquer Sprint futura de "Controlled Case Influence" DEVE exigir score semântico suficiente E compatibility===true — nunca compatibility sozinho.');
 
-    // ══════════ Fase 13 — Shadow mode: reconfirmado (não confiar no relatório da S7) ══════════
-    console.log('\n=== S26.10 — Shadow mode reconfirmado por inspeção direta (não por confiança no relatório anterior) ===');
-    assert(!plannerSrc.includes('CaseMemory'), 'GoalPlanner.ts: zero referência a CaseMemory (plan()/replan() inalterados)');
-    assert(!riskSrc.includes('CaseMemory'), 'RiskAnalyzer.ts: zero referência a CaseMemory');
+    // ══════════ Fase 13 — Ativação (RFC-002, 24/07): reconfirmado por inspeção direta ══════════
+    // Este bloco originalmente reconfirmava modo sombra (não confiar no relatório da S7). RFC-002
+    // ativou de propósito o Applicability Gate como consumidor real em GoalPlanner.plan() — e é
+    // exatamente por causa do risco que ESTE arquivo (S26) nomeou ("compatibility sozinho não
+    // basta") que buildCaseEvidenceHint() exige também MIN_SEMANTIC_SCORE_FOR_EVIDENCE — ver S144.
+    console.log('\n=== S26.10 — GoalPlanner ativado via buildCaseEvidenceHint(); RiskAnalyzer permanece sem CaseMemory; gate de score do achado S26 aplicado ===');
+    assert(plannerSrc.includes('CaseMemory') && plannerSrc.includes('buildCaseEvidenceHint'), 'GoalPlanner.ts referencia CaseMemory via buildCaseEvidenceHint (RFC-002 — antes desta RFC, zero referência)');
+    assert(!riskSrc.includes('CaseMemory'), 'RiskAnalyzer.ts: zero referência a CaseMemory — RFC-002 não estendeu a ativação até ali');
+    assert(caseMemorySrc.includes('MIN_SEMANTIC_SCORE_FOR_EVIDENCE'), 'CaseMemory.ts aplica o gate de score semântico que este arquivo (S26) exigiu antes de qualquer consumidor real existir — compatibility===true sozinho não basta');
     assert(
         orchestratorSrc.includes("import { CaseMemory } from '../memory/CaseMemory'") &&
         /const caseMemory = new CaseMemory\(memory\)/.test(orchestratorSrc),

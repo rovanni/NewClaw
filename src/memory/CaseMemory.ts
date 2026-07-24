@@ -476,8 +476,9 @@ export class CaseMemory {
      * com score 0.9645 e nada sinaliza que são operações opostas (ver docstring do módulo).
      * NÃO filtra, NÃO reordena, NÃO combina semanticScore+compatibilidade em score único — só
      * anota cada candidato com dois campos explícitos e separados (ver "NÃO COMBINAR SCORES
-     * ARBITRARIAMENTE"). Ainda modo sombra: o único consumidor hoje é logging diagnóstico em
-     * GoalExecutionLoop — zero influência em GoalPlanner/RiskAnalyzer/execução.
+     * ARBITRARIAMENTE"). RFC-002 (24/07): consumido por buildCaseEvidenceHint() abaixo, que só
+     * lê candidatos com operationalCompatibility===true — este método continua não decidindo
+     * nada sozinho, só anota; a decisão de usar (ou ignorar) a evidência é do GoalPlanner/LLM.
      */
     async findApplicableCasesShadow(objective: string, topK = 5): Promise<ApplicableCaseRecord[]> {
         const candidates = await this.findRelevantCasesShadow(objective, topK);
@@ -499,6 +500,68 @@ export class CaseMemory {
             ` candidates=${applicable.length} compatible=${compatible} incompatible=${incompatible} unknown=${unknown}`
         );
         return applicable;
+    }
+
+    /**
+     * S26 (auditoria adversarial, achado registrado no próprio teste de regressão): compatibilidade
+     * operacional sozinha NÃO basta para um consumidor real — "mesma classe, tema totalmente
+     * diferente" (candidato com operationalCompatibility===true mas semanticScore baixo) ainda
+     * passaria pelo Applicability Gate. S26 exigiu explicitamente "score semântico suficiente E
+     * compatibility===true — nunca compatibility sozinho" para qualquer Sprint futura que deixasse
+     * de ser modo sombra. RFC-002 é essa Sprint. 0.7234 é o único ponto de referência real
+     * medido no projeto (S6.5, Ollama+nomic-embed-text) para um par GENUINAMENTE equivalente
+     * ("criar apresentação" × "gerar slides") — usado aqui como piso conservador, não um valor
+     * calibrado estatisticamente (não há dados de produção suficientes ainda). Recalibrar quando
+     * houver evidência real de falso-positivo/negativo em uso (ver "Nunca Adivinhar" —
+     * `docs/ARCHITECTURE/NUNCA_ADIVINHAR.md`: preferir um piso grosseiro e nomeado a nenhum piso).
+     */
+    private static readonly MIN_SEMANTIC_SCORE_FOR_EVIDENCE = 0.7;
+
+    /**
+     * RFC-002 (24/07) — Evidence Provider: texto para o GoalPlanner ponderar em plan(), nunca
+     * uma ordem. Mesmo contrato de OperationalKnowledge.buildEvidenceHint() — vazio quando não
+     * há nada relevante, silêncio é saída válida e esperada.
+     *
+     * Só reporta candidatos com operationalCompatibility===true E score >= MIN_SEMANTIC_SCORE_
+     * FOR_EVIDENCE — 'unknown'/false nunca viram evidência positiva (mesma regra que
+     * findApplicableCasesShadow já usa para logar), e compatibilidade sozinha também não basta
+     * (achado S26, ver docstring da constante acima). Isso exclui por construção o caso que
+     * motivou o Applicability Gate (S6.5): "criar PPTX" recuperando "analisar PPTX" por
+     * similaridade textual alta, mas operação oposta — e também exclui "mesma operação, tema
+     * totalmente diferente" (risco nomeado pelo S26, nunca coberto até agora).
+     */
+    async buildCaseEvidenceHint(objective: string, topK = 3): Promise<string> {
+        // Fail-open: mesmo contrato de OperationalKnowledge.buildEvidenceHint() — este método é
+        // chamado de dentro de GoalPlanner.plan() (não mais fire-and-forget com .catch() externo,
+        // ver RFC-002), então precisa absorver a própria falha aqui. Sem isso, uma exceção real
+        // (ex.: DB indisponível) propagaria e derrubaria o planejamento inteiro do goal — uma
+        // regressão muito pior do que "conhecimento operacional ausente".
+        try {
+            const applicable = await this.findApplicableCasesShadow(objective, topK);
+            const compatible = applicable.filter(c =>
+                c.operationalCompatibility === true && c.score >= CaseMemory.MIN_SEMANTIC_SCORE_FOR_EVIDENCE
+            );
+
+            if (compatible.length === 0) {
+                log.debug(`[CASE-EVIDENCE-RECOVER] objective="${objective.slice(0, 60)}" result=nothing_relevant`);
+                return '';
+            }
+            log.info(`[CASE-EVIDENCE-RECOVER] objective="${objective.slice(0, 60)}" candidates=${compatible.length}`);
+
+            const lines: string[] = ['Casos anteriores com objetivo e operação semelhantes já resolvidos nesta instância:'];
+            for (const c of compatible) {
+                lines.push(
+                    `- "${c.objective}" — ferramentas: ${c.toolsUsed.join(', ') || 'nenhuma'}` +
+                    ` (evidência: ${c.evidenceTier === 'deterministic_criteria' ? 'critério cumprido' : 'entrega confirmada'},` +
+                    ` similaridade ${c.score.toFixed(2)})`
+                );
+            }
+            lines.push('Evidência de execuções anteriores nesta instância — não é garantia, pondere como qualquer outro sinal.');
+            return lines.join('\n');
+        } catch (err) {
+            log.warn(`[CASE-EVIDENCE-RECOVER] objective="${objective.slice(0, 60)}" failed=${String(err)}`);
+            return '';
+        }
     }
 
     /**

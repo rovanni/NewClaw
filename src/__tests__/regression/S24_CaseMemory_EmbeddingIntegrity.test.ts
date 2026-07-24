@@ -188,22 +188,32 @@ async function main() {
         assert(candidates.every((c, i) => i === 0 || c.score <= candidates[i - 1].score), 'candidatos vêm ordenados por score decrescente');
     }
 
-    // ══════════ 9. Falha da consulta sombra não altera execução ══════════
-    console.log('\n=== S24.9 — consulta sombra (agora findApplicableCasesShadow, S7) lançando erro é sempre .catch()-ado no ponto de chamada (fire-and-forget) ===');
+    // ══════════ 9. Falha da consulta de Casos não derruba o planejamento ══════════
+    // RFC-002 (24/07): a chamada saiu de GoalExecutionLoop (fire-and-forget com .catch() externo)
+    // e passou para dentro de GoalPlanner.plan() (awaited, real) — a garantia de "falha isolada"
+    // agora precisa vir de DENTRO de buildCaseEvidenceHint() (try/catch fail-open), não mais de um
+    // .catch() no chamador. Mesmo contrato que OperationalKnowledge.buildEvidenceHint() já segue.
+    console.log('\n=== S24.9 — buildCaseEvidenceHint() é fail-open (try/catch interno) — falha real não derruba plan() ===');
     assert(
-        /void this\.caseMemory\.findApplicableCasesShadow\(goal\.objective\)\.catch/.test(gelSrc),
-        'chamada em GoalExecutionLoop continua fire-and-forget com .catch() — falha nunca propaga para executeGoal() ' +
-        '(S7: redirecionada de findRelevantCasesShadow para findApplicableCasesShadow, que reaproveita a mesma busca internamente — ver S25)'
+        /async buildCaseEvidenceHint\(objective: string, topK = 3\): Promise<string> \{[\s\S]{0,700}try \{/.test(caseMemorySrc),
+        'buildCaseEvidenceHint() envolve o próprio corpo em try/catch — falha na consulta (ex.: DB indisponível) não propaga para GoalPlanner.plan()'
+    );
+    assert(
+        /catch \(err\) \{\s*log\.warn\(`\[CASE-EVIDENCE-RECOVER\]/.test(caseMemorySrc),
+        'catch de buildCaseEvidenceHint() loga e retorna vazio — mesmo padrão fail-open que os demais Evidence Providers (silêncio, nunca exceção)'
     );
     assert(
         /void this\.caseMemory\.backfillMissingEmbeddings\(\)\.catch/.test(gelSrc),
         'backfill também é fire-and-forget com .catch() — nunca bloqueia nem propaga erro para o goal'
     );
 
-    // ══════════ 10. Zero influência comportamental (não regressão) ══════════
-    console.log('\n=== S24.10 — Planner/RiskAnalyzer continuam sem qualquer referência a CaseMemory ===');
-    assert(!plannerSrc.includes('CaseMemory'), 'GoalPlanner.ts inalterado nesta Sprint');
+    // ══════════ 10. Zero influência comportamental na integridade de embedding (não regressão) ══════════
+    // RFC-002 (24/07) ativou findApplicableCasesShadow em GoalPlanner.plan() — GoalPlanner.ts
+    // passou a referenciar CaseMemory por isso (fora do escopo desta Sprint S24, que testa só a
+    // integridade do ciclo de embedding/backfill). RiskAnalyzer permanece inalterado.
+    console.log('\n=== S24.10 — RiskAnalyzer continua sem qualquer referência a CaseMemory; backfill inalterado pela ativação ===');
     assert(!riskSrc.includes('CaseMemory'), 'RiskAnalyzer.ts inalterado nesta Sprint');
+    assert(plannerSrc.includes('CaseMemory'), 'GoalPlanner.ts referencia CaseMemory (RFC-002, fora do escopo desta Sprint) — só confirma que o wiring de ativação existe, não testa seu comportamento aqui');
     assert(caseMemorySrc.includes('backfillMissingEmbeddings'), 'backfillMissingEmbeddings existe em CaseMemory.ts');
     assert(!caseMemorySrc.includes('setInterval'), 'nenhum setInterval/scheduler novo foi criado — backfill é disparado pelo gatilho já existente (início de goal), não por um cron');
 

@@ -323,20 +323,19 @@ async function main() {
     console.log('  F/G/H (overlap léxico parcial):     new=score parcial, SEM threshold/confiança declarada (risco residual documentado)');
     console.log('  I (objetivo ambíguo):                new=não crasha, não afirma confiança artificial');
 
-    // ══════════ Modo sombra: zero influência (não regressão) ══════════
-    console.log('\n=== S23.SHADOW — Zero influência comportamental (GoalPlanner/RiskAnalyzer inalterados) ===');
-    assert(!plannerSrc.includes('CaseMemory'), 'GoalPlanner.ts continua sem qualquer referência a CaseMemory');
-    assert(!riskSrc.includes('CaseMemory'), 'RiskAnalyzer.ts continua sem qualquer referência a CaseMemory');
+    // ══════════ RFC-002 (24/07): findApplicableCasesShadow ativado em GoalPlanner.plan() ══════════
+    // Este bloco originalmente provava "zero influência" (modo sombra). RFC-002 ativou de
+    // propósito a dimensão de similaridade de problema — ver docs/RFC-002_ATIVACAO_CASEMEMORY.md.
+    // Assertions atualizadas para provar a NOVA garantia: a consulta saiu de GoalExecutionLoop
+    // (fire-and-forget, removida) e passou para dentro de GoalPlanner.plan() (awaited, real).
+    console.log('\n=== S23.RFC-002 — findApplicableCasesShadow agora consultado de verdade dentro de GoalPlanner.plan() ===');
+    assert(plannerSrc.includes('CaseMemory') && plannerSrc.includes('buildCaseEvidenceHint'), 'GoalPlanner.ts referencia CaseMemory via buildCaseEvidenceHint (RFC-002)');
+    assert(!riskSrc.includes('CaseMemory'), 'RiskAnalyzer.ts continua sem qualquer referência a CaseMemory — RFC-002 não estendeu a ativação até ali');
     assert(
-        /void this\.caseMemory\.findApplicableCasesShadow\(goal\.objective\)\.catch/.test(gelSrc),
-        'chamada em GoalExecutionLoop é fire-and-forget (void ... .catch) — nunca bloqueia o fluxo real do goal ' +
-        '(S7: redirecionada de findRelevantCasesShadow para findApplicableCasesShadow, que reaproveita a mesma busca internamente — ver S25)'
+        !/void this\.caseMemory\.findApplicableCasesShadow\(goal\.objective\)\.catch/.test(gelSrc),
+        'GoalExecutionLoop NÃO chama mais findApplicableCasesShadow fire-and-forget — call site removido (RFC-002), substituído pela consulta real em GoalPlanner.plan()'
     );
-    assert(
-        gelSrc.indexOf('void this.caseMemory.findApplicableCasesShadow(goal.objective)') <
-        gelSrc.indexOf('const q1Context = await this.contextualize('),
-        'consulta por problema ocorre ANTES da contextualização/planejamento — não depende do plano que ainda será escolhido'
-    );
+    assert(caseMemorySrc.includes('async buildCaseEvidenceHint('), 'CaseMemory.ts expõe buildCaseEvidenceHint() — Evidence Provider que encapsula findApplicableCasesShadow para o novo consumidor real');
 
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S23 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);

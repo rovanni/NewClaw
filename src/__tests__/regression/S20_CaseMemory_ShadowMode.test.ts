@@ -185,10 +185,15 @@ async function main() {
         );
     }
 
-    // ══════════ 8. Modo sombra: zero influência em Planner/RiskAnalyzer/execução ══════════
-    console.log('\n=== S20.8 — Modo sombra: GoalPlanner e RiskAnalyzer não referenciam CaseMemory ===');
-    assert(!plannerSrc.includes('CaseMemory'), 'GoalPlanner.ts não importa nem referencia CaseMemory');
-    assert(!riskSrc.includes('CaseMemory'), 'RiskAnalyzer.ts não importa nem referencia CaseMemory');
+    // ══════════ 8. Modo sombra (findSimilarShadow): zero influência em Planner/RiskAnalyzer/execução ══════════
+    // RFC-002 (24/07, docs/RFC-002_ATIVACAO_CASEMEMORY.md) ativou a dimensão de similaridade de
+    // PROBLEMA (findApplicableCasesShadow, via GoalPlanner.buildCaseEvidenceHint) — por isso
+    // GoalPlanner.ts AGORA referencia CaseMemory. A dimensão de similaridade de ESTRATÉGIA
+    // (findSimilarShadow, testada abaixo) continua deliberadamente em modo sombra — só ela é
+    // coberta pelas assertions "zero influência" deste bloco.
+    console.log('\n=== S20.8 — findSimilarShadow continua modo sombra; RiskAnalyzer segue sem CaseMemory ===');
+    assert(plannerSrc.includes('CaseMemory') && plannerSrc.includes('buildCaseEvidenceHint'), 'GoalPlanner.ts referencia CaseMemory via buildCaseEvidenceHint (RFC-002 — dimensão de problema, não de estratégia)');
+    assert(!riskSrc.includes('CaseMemory'), 'RiskAnalyzer.ts continua sem importar nem referenciar CaseMemory');
     assert(
         !/planResult\.steps\s*=.*findSimilarShadow|enrichedContext.*findSimilarShadow/.test(gelSrc),
         'GoalExecutionLoop não atribui o retorno de findSimilarShadow a planResult.steps nem a enrichedContext — puramente observacional'

@@ -184,11 +184,14 @@ async function main() {
         assert(reversedOrder.length === 0, 'ordem invertida → NÃO recuperado — fingerprint diferencia corretamente por ordem (não é um Set/bag-of-tools)');
     }
 
-    // ══════════ Modo sombra preservado (não regressão) ══════════
+    // ══════════ Modo sombra preservado para findSimilarShadow (não regressão) ══════════
+    // RFC-002 (24/07) ativou findApplicableCasesShadow (via buildCaseEvidenceHint) em
+    // GoalPlanner.plan() — GoalPlanner.ts passou a referenciar CaseMemory por isso. findSimilarShadow
+    // (dimensão de ESTRATÉGIA, testada nesta Sprint S22) continua fora do caminho de decisão.
     console.log('\n=== S22.SHADOW — findSimilarShadow continua sem influenciar GoalPlanner/RiskAnalyzer ===');
     const plannerSrc = readSource('loop/GoalPlanner.ts');
     const riskSrc = readSource('loop/RiskAnalyzer.ts');
-    assert(!plannerSrc.includes('CaseMemory') && !plannerSrc.includes('findSimilarShadow'), 'GoalPlanner.ts continua sem qualquer referência a CaseMemory/findSimilarShadow');
+    assert(!plannerSrc.includes('findSimilarShadow'), 'GoalPlanner.ts continua sem qualquer referência a findSimilarShadow (dimensão de estratégia, RFC-002 não ativou)');
     assert(!riskSrc.includes('CaseMemory') && !riskSrc.includes('findSimilarShadow'), 'RiskAnalyzer.ts continua sem qualquer referência a CaseMemory/findSimilarShadow');
 
     console.log(`\n${'─'.repeat(60)}`);

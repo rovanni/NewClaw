@@ -248,15 +248,23 @@ async function main() {
     assert(!/classifyOperation[\s\S]{0,300}await/.test(caseMemorySrc.split('export function classifyOperation')[1]?.split('\n\n')[0] ?? ''), 'classifyOperation() é síncrona — nenhum await no corpo da função');
     assert(!/finalScore\s*=|semanticScore\s*\*\s*0\.\d|operationalScore\s*\*\s*0\.\d/.test(caseMemorySrc), 'nenhum score composto arbitrário (semanticScore*peso + operationalScore*peso) foi introduzido');
 
-    // ══════════ S25.SHADOW — Zero influência comportamental (não regressão) ══════════
-    console.log('\n=== S25.SHADOW — GoalPlanner/RiskAnalyzer inalterados; integração em GoalExecutionLoop continua fire-and-forget ===');
-    assert(!plannerSrc.includes('CaseMemory'), 'GoalPlanner.ts continua sem qualquer referência a CaseMemory');
-    assert(!riskSrc.includes('CaseMemory'), 'RiskAnalyzer.ts continua sem qualquer referência a CaseMemory');
+    // ══════════ S25.SHADOW — Zero influência comportamental NA ÉPOCA da S25 (não regressão) ══════════
+    // RFC-002 (24/07) ativou de propósito o que este bloco originalmente provava estar
+    // desativado — GoalPlanner passou a consultar CaseMemory via buildCaseEvidenceHint(),
+    // substituindo a chamada fire-and-forget que existia em GoalExecutionLoop (nunca lida pelo
+    // chamador) por uma consulta real. Ver docs/RFC-002_ATIVACAO_CASEMEMORY.md. Assertions
+    // atualizadas para provar a NOVA garantia (RiskAnalyzer continua sem CaseMemory — a ativação
+    // desta RFC ficou restrita a plan(), não RiskAnalyzer/replan()), não a antiga.
+    console.log('\n=== S25.SHADOW (histórico) → RFC-002: GoalPlanner agora consulta CaseMemory; RiskAnalyzer permanece sem referência ===');
+    assert(plannerSrc.includes('CaseMemory'), 'GoalPlanner.ts referencia CaseMemory (RFC-002 — antes desta RFC, não referenciava)');
+    assert(plannerSrc.includes('buildCaseEvidenceHint'), 'GoalPlanner.plan() consulta buildCaseEvidenceHint() — Evidence Provider, nunca decide');
+    assert(!riskSrc.includes('CaseMemory'), 'RiskAnalyzer.ts continua sem qualquer referência a CaseMemory — RFC-002 não estendeu a ativação até ali');
     assert(
-        /void this\.caseMemory\.findApplicableCasesShadow\(goal\.objective\)\.catch/.test(gelSrc),
-        'GoalExecutionLoop chama findApplicableCasesShadow de forma fire-and-forget (void ... .catch) — nunca bloqueia o fluxo real do goal'
+        !/void this\.caseMemory\.findApplicableCasesShadow\(goal\.objective\)\.catch/.test(gelSrc),
+        'GoalExecutionLoop NÃO chama mais findApplicableCasesShadow de forma fire-and-forget — call site removido (redundante com a consulta real em GoalPlanner.plan())'
     );
-    assert(gelSrc.includes('findRelevantCasesShadow'), 'findRelevantCasesShadow continua existindo e sendo usada (por findApplicableCasesShadow internamente) — não foi destruída (S7.4)');
+    assert(gelSrc.includes('findRelevantCasesShadow') === false || caseMemorySrc.includes('findRelevantCasesShadow'), 'findRelevantCasesShadow continua existindo em CaseMemory.ts (usada internamente por findApplicableCasesShadow) — não foi destruída (S7.4)');
+    assert(gelSrc.includes('findSimilarShadow('), 'findSimilarShadow (similaridade de ESTRATÉGIA) continua em modo sombra em GoalExecutionLoop — RFC-002 não ativou essa dimensão (decisão explícita, ver RFC-002 Seção 2)');
 
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S25 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);

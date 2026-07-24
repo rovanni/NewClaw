@@ -163,16 +163,11 @@ export class GoalExecutionLoop {
     ): Promise<GoalResult> {
         log.info(`[GoalLoop] start goal=${goal.id} replanBudget=${goal.replanBudget}`);
 
-        // S6/S7 (modo sombra): consulta de similaridade de PROBLEMA + Applicability Gate —
-        // "já resolvi algo suficientemente relacionado a ESTE objetivo, com uma operação
-        // compatível?" — disparada aqui porque goal.objective já existe e nenhum plano foi
-        // escolhido ainda (a pergunta não pode depender do plano). findApplicableCasesShadow
-        // reaproveita findRelevantCasesShadow internamente (mesma busca semântica, sem
-        // duplicar) e só anota operationalIntent/operationalCompatibility por cima — ver
-        // CaseMemory.ts para a justificativa completa (S7). Fire-and-forget: nunca aguardada,
-        // nunca bloqueia a execução real do goal — latência de embedding (Ollama) e falhas de
-        // rede ficam inteiramente isoladas do caminho crítico.
-        void this.caseMemory.findApplicableCasesShadow(goal.objective).catch(() => []);
+        // RFC-002 (24/07): a consulta de similaridade de PROBLEMA + Applicability Gate que
+        // rodava aqui em modo sombra (fire-and-forget, resultado nunca lido) foi substituída
+        // pela consulta real dentro de GoalPlanner.plan() (CaseMemory.buildCaseEvidenceHint) —
+        // mesmo método (findApplicableCasesShadow) por baixo, agora com resultado efetivamente
+        // usado. Manter as duas rodaria a mesma busca semântica 2x por goal à toa.
         // S6.5a: reaproveita o mesmo gatilho (início de todo goal) para tentar recuperar, em
         // lote pequeno, Casos que ficaram sem embedding por falha do provider — sem scheduler
         // novo, sem bloquear a execução real (também fire-and-forget).
