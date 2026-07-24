@@ -169,6 +169,24 @@ existe uma justificativa de segurança/integridade/conformidade explícita e nom
 `isDestructive()` ou o corte de 90% do `ReflectionMemory`)? Se não houver, a proposta deve ser
 redesenhada para devolver fato/texto em vez de decisão.
 
+## Princípios formalizados (Milestone C1)
+
+Três princípios nascidos das auditorias de 2026-07-23/24 têm documento normativo próprio em
+`docs/ARCHITECTURE/` — leitura obrigatória antes de propor qualquer componente novo de
+conhecimento ou decisão:
+
+- **Evidence Provider Pattern** (`docs/ARCHITECTURE/EVIDENCE_PROVIDER_PATTERN.md`) — mecanismo
+  concreto pelo qual o Princípio da Preservação do Raciocínio (acima) se realiza: componentes de
+  conhecimento produzem texto para o Planner ponderar, nunca decidem por ele, exceto as duas
+  exceções nomeadas ali (Seção 7).
+- **Separação Distribuído × Aprendido** (`docs/ARCHITECTURE/SEPARACAO_DISTRIBUIDO_APRENDIDO.md`)
+  — conhecimento versionado em código-fonte (`KNOWN_DEPS`) e conhecimento aprendido em runtime
+  (`ReflectionMemory`, `CaseMemory`, `OperationalKnowledge`) são categorias físicas distintas;
+  travessia de uma para outra exige revisão humana (PR), nunca é automática.
+- **Nunca Adivinhar** (`docs/ARCHITECTURE/NUNCA_ADIVINHAR.md`) — diante de um dado necessário que
+  não foi observado ou configurado explicitamente, o comportamento correto é reportar ausência,
+  nunca inferir um valor plausível e apresentá-lo como fato.
+
 ## Filosofia do projeto
 
 Prioriza: simplicidade arquitetural, baixo acoplamento, conceitos universais, evolução incremental, decisões fundamentadas em evidências, documentação antes da implementação. Elegância arquitetural é mais importante que velocidade de implementação. Sempre preferir eliminar a causa estrutural em vez de corrigir sintomas isolados.

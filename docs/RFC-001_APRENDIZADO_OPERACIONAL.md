@@ -1,6 +1,10 @@
 # RFC-001 — Arquitetura do Aprendizado Operacional do NewClaw
 
-> Status: proposta arquitetural, sem implementação. Referência para a Milestone M2.
+> Status (atualizado 24/07/2026): primeira fatia da Milestone M2 (`OperationalKnowledge`) já
+> implementada e validada em ambiente real (Windows e Linux) — estritamente o caminho
+> informativo descrito na pergunta 5 (Evidence Provider puro). A extensão tática discutida na
+> pergunta 10 permanece proposta, não implementada — ver "Itens deliberadamente adiados" em
+> `docs/ADR-001_BASELINE_ARQUITETURAL.md`, Seção 6.
 > Origem: investigação arquitetural de 2026-07-23/24, decorrente da Milestone M1
 > (Self-Healing de Dependências — `docs/DIRETRIZ_ARQUITETURA_2026-07-13.md`).
 
@@ -17,7 +21,15 @@ violar os princípios arquiteturais do NewClaw?**
 1. `GoalPlanner` continua sendo o único decisor estratégico.
 2. Nenhum novo mecanismo pode reduzir a autonomia do agente fora dos casos já considerados
    determinísticos.
-3. Todo conhecimento aprendido deve funcionar como um Evidence Provider.
+3. Todo conhecimento aprendido deve funcionar como um Evidence Provider — com a mesma exceção,
+   já nomeada e pré-existente a esta RFC, formalizada em
+   `docs/ARCHITECTURE/EVIDENCE_PROVIDER_PATTERN.md` (Seção 7, item 2): resolução determinística
+   de dependência catalogada, restrita a um catálogo pequeno e nomeado, nunca a inferência livre.
+   Essa exceção se aplica hoje só ao catálogo **distribuído** (`KNOWN_DEPS`) — nunca a
+   conhecimento **aprendido** (ver pergunta 3 e `docs/ARCHITECTURE/SEPARACAO_DISTRIBUIDO_APRENDIDO.md`).
+   A análise crítica da pergunta 10 (abaixo) detalha por que esta formulação, sem a ressalva, era
+   forte demais; a implementação real desta fatia optou por não usar a exceção — ver caminho
+   informativo (pergunta 5).
 4. O Planner continua decidindo se utilizará ou não qualquer conhecimento aprendido.
 5. O aprendizado nunca deve introduzir regras imperativas escondidas.
 
@@ -175,6 +187,16 @@ mecânica sem ambiguidade.
 *o conhecimento operacional não deve competir com o julgamento ESTRATÉGICO do Planner — mas
 pode, nos mesmos limites que `KNOWN_DEPS` já demonstra, substituir uma decisão TÁTICA mecânica
 sem ambiguidade.*
+
+**Resolução (ARCH-004, 24/07/2026)**: o Princípio 3 (acima) foi revisado para incorporar esta
+ressalva explicitamente, em vez de deixá-la implícita só nesta análise crítica — apontando para a
+mesma exceção já nomeada em `EVIDENCE_PROVIDER_PATTERN.md`, Seção 7, item 2. A contradição era
+entre o texto do Princípio 3 (absoluto) e este achado (que mostra uma exceção já em produção);
+não era uma contradição na prática — `GoalExecutionLoop.ts:906` já operava dentro do limite
+descrito aqui antes mesmo desta RFC existir. A implementação real da primeira fatia de M2
+(`OperationalKnowledge`) não usa essa exceção — segue o caminho informativo puro (pergunta 5) —,
+então nenhuma mudança de comportamento foi necessária para fechar esta contradição, só a
+formulação do princípio.
 
 ## Síntese
 
