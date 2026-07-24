@@ -639,7 +639,7 @@ export class AgentController {
             createDomainClassifierLLM(this.providerFactory, this.agentLoop.getClassifierModel())
         );
         ToolRegistry.register(memoryWriteTool);
-        ToolRegistry.register(new ReadDocumentTool());
+        ToolRegistry.register(new ReadDocumentTool(this.providerFactory, this.agentLoop.getProfileRegistry()));
         ToolRegistry.register(new ListWorkspaceTool());
         ToolRegistry.register(new RefreshWorkspaceTool(this.memory));
         ToolRegistry.register(new AnalyzeWorkspaceGroupsTool(this.db));

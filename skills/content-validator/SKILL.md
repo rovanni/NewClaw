@@ -1,10 +1,10 @@
 ---
 name: content-validator
-description: Valida arquivos gerados (HTML, JS, Python, JSON) antes de enviar ao usuário, detectando erros de sintaxe e problemas comuns.
-version: "1.0"
-triggers: erro, error, syntax error, não abre, não renderiza, diagrama, mermaid, broken, corrija, corrigir, verificar, validar, checar
-tools: exec_command, read, edit
-tags: validation, quality, syntax, check, debug, html, javascript, python, json
+description: Valida arquivos gerados (HTML, JS, Python, JSON) antes de enviar ao usuário, detectando erros de sintaxe e problemas comuns. Também faz revisão visual (Self Review) de artefatos renderizados — HTML, dashboards, slides, PDF — usando o modelo de visão já configurado.
+version: "1.1"
+triggers: erro, error, syntax error, não abre, não renderiza, diagrama, mermaid, broken, corrija, corrigir, verificar, validar, checar, revisar visualmente, ficou bom, qualidade visual, self review
+tools: exec_command, read, edit, read_document
+tags: validation, quality, syntax, check, debug, html, javascript, python, json, visual, screenshot, vision, self-review
 ---
 
 # Content Validator Skill
@@ -14,6 +14,41 @@ Quando o usuário reportar erro em um arquivo gerado, ou quando você acabou de 
 ## Protocolo de Validação Pós-Geração
 
 Após salvar qualquer arquivo com `write`, execute a verificação correspondente ao tipo:
+
+### Artefatos visuais (HTML renderizado, dashboard, slides, PDF, webapp) — Self Review
+
+Quando o artefato gerado é algo que precisa ser *visto* pra saber se ficou bom — não só
+sintaticamente válido — use este protocolo em vez de (ou além de) checar tags/sintaxe:
+
+1. **Capturar screenshot** com o script já usado pra gerar PDF, em modo PNG:
+   ```bash
+   bash scripts/html2pdf.sh ARQUIVO.html screenshot.png --png
+   # ou, para uma URL/webapp já rodando (ex: dashboard local):
+   bash scripts/html2pdf.sh http://localhost:PORTA/caminho screenshot.png --png
+   ```
+   O script imprime `PNG_GERADO: <caminho>` quando funciona — use exatamente esse caminho no
+   próximo passo.
+
+2. **Pedir crítica ao modelo de visão** com `read_document`, passando um `prompt` — sem
+   `prompt`, `read_document` faz OCR simples; com `prompt`, ele manda a imagem pro modelo de
+   visão já configurado e devolve o texto da análise:
+   ```
+   read_document: filename="screenshot.png" prompt="Critique esta interface como um revisor de UI/UX exigente: layout, espaçamento, contraste, elementos cortados ou sobrepostos, texto ilegível, alinhamento quebrado. Se estiver bom o suficiente para entregar, diga 'APROVADO'. Se não, liste os problemas concretos a corrigir."
+   ```
+
+3. **Decidir com base na crítica.** Se a resposta indicar problemas reais (não só
+   preferência estética menor), corrija o arquivo com `edit`/`write` e repita os passos 1-2.
+   Se a resposta disser que está bom (ou os problemas apontados forem irrelevantes), finalize
+   normalmente.
+
+4. **Limite de rounds:** no máximo 3 ciclos de captura→crítica→correção para o mesmo artefato.
+   Se depois de 3 rounds ainda não estiver aprovado, entregue o melhor resultado obtido e
+   informe ao usuário quais problemas residuais o modelo de visão apontou — não trave o goal
+   tentando atingir perfeição.
+
+**Não usar este protocolo para:** validação de sintaxe (HTML com tags quebradas, JS/Python com
+erro de sintaxe) — isso é mais rápido e mais barato com as checagens determinísticas abaixo.
+Self Review é para julgamento de qualidade visual/layout, não para bugs estruturais.
 
 ### HTML com diagramas (Mermaid, KaTeX, etc.)
 

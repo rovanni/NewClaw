@@ -15,6 +15,9 @@ import fs from 'fs';
 import { promisify } from 'util';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
+import { processVision } from '../core/agentMediaHandlers';
+import type { ProviderFactory } from '../core/ProviderFactory';
+import type { ModelProfileRegistry } from '../loop/ModelProfileRegistry';
 
 const execAsync = promisify(exec);
 // execFile não passa pelo shell — elimina risco de injeção de comandos via args
@@ -26,7 +29,7 @@ const TIMEOUT_MS = 60_000;
 
 export class ReadDocumentTool implements ToolExecutor {
     name = 'read_document';
-    description = 'Extrai e retorna o conteúdo textual de um documento (PDF, DOCX, ODT, TXT, etc.) salvo no workspace. Use quando o usuário enviar um arquivo e você precisar ler seu conteúdo. Tenta pdftotext → pdfminer → tesseract (OCR) automaticamente.';
+    description = 'Extrai e retorna o conteúdo textual de um documento (PDF, DOCX, ODT, TXT, etc.) salvo no workspace. Use quando o usuário enviar um arquivo e você precisar ler seu conteúdo. Tenta pdftotext → pdfminer → tesseract (OCR) automaticamente. Para imagens (.png/.jpg/etc), forneça "prompt" para pedir uma análise/crítica do modelo de visão em vez de OCR simples — útil para revisar visualmente um screenshot que você mesmo gerou.';
     parameters = {
         type: 'object',
         properties: {
@@ -37,16 +40,26 @@ export class ReadDocumentTool implements ToolExecutor {
             pages: {
                 type: 'string',
                 description: 'Intervalo de páginas para extrair (ex: "1-5"). Opcional — padrão: todas as páginas.'
+            },
+            prompt: {
+                type: 'string',
+                description: 'Somente para imagens: instrução customizada para o modelo de visão (ex: "critique a qualidade visual e o layout desta página"). Opcional — sem isso, imagens passam por OCR simples.'
             }
         },
         required: ['filename']
     };
+
+    constructor(
+        private providerFactory?: ProviderFactory,
+        private profileRegistry?: ModelProfileRegistry
+    ) {}
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
         const rawFilename = (args.filename as string || '').trim();
         if (!rawFilename) {
             return { success: false, output: '', error: 'filename é obrigatório.' };
         }
+        const prompt = (args.prompt as string || '').trim() || undefined;
 
         // Resolve path: absolute or relative to workspace
         const filePath = path.isAbsolute(rawFilename)
@@ -64,10 +77,10 @@ export class ReadDocumentTool implements ToolExecutor {
                     error: `Arquivo "${rawFilename}" não encontrado no workspace (${WORKSPACE}). Verifique se o arquivo foi enviado corretamente.`
                 };
             }
-            return this.extractText(found, args.pages as string | undefined);
+            return this.extractText(found, args.pages as string | undefined, prompt);
         }
 
-        return this.extractText(filePath, args.pages as string | undefined);
+        return this.extractText(filePath, args.pages as string | undefined, prompt);
     }
 
     private findInWorkspace(name: string): string | null {
@@ -78,7 +91,7 @@ export class ReadDocumentTool implements ToolExecutor {
         } catch { return null; }
     }
 
-    private async extractText(filePath: string, pages?: string): Promise<ToolResult> {
+    private async extractText(filePath: string, pages?: string, prompt?: string): Promise<ToolResult> {
         const ext = path.extname(filePath).toLowerCase();
         log.info(`read_document: extracting "${filePath}" (${ext})`);
 
@@ -101,11 +114,33 @@ export class ReadDocumentTool implements ToolExecutor {
         }
 
         if (['.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif'].includes(ext)) {
+            // Prompt explícito (ex: crítica visual de um screenshot) → modelo de visão.
+            // Sem prompt → comportamento original (OCR), não muda para nenhum caller existente.
+            if (prompt) {
+                return this.extractVision(filePath, prompt);
+            }
             return this.extractOcr(filePath);
         }
 
         // Fallback: try strings
         return this.extractStrings(filePath);
+    }
+
+    private async extractVision(filePath: string, prompt: string): Promise<ToolResult> {
+        const visionProfile = this.profileRegistry?.getProfileByCategory('vision') ?? null;
+        if (visionProfile && this.providerFactory) {
+            try {
+                const buffer = fs.readFileSync(filePath);
+                const description = await processVision(buffer, path.basename(filePath), visionProfile, this.providerFactory, prompt);
+                if (!description.startsWith('(Visão não configurada)') && !description.startsWith('Erro ao processar visão:')) {
+                    return { success: true, output: this.formatOutput(description, filePath, `vision:${visionProfile.model}`) };
+                }
+                log.warn(`read_document: vision falhou ("${description}"), caindo para OCR`);
+            } catch (e) {
+                log.warn(`read_document: vision falhou (${errorMessage(e)}), caindo para OCR`);
+            }
+        }
+        return this.extractOcr(filePath);
     }
 
     private async extractPdf(filePath: string, pages?: string): Promise<ToolResult> {

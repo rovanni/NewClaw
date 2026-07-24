@@ -301,7 +301,8 @@ export async function processVision(
     fileBuffer: Buffer,
     fileName: string,
     visionProfile: VisionProfile | null,
-    providerFactory?: ProviderFactory
+    providerFactory?: ProviderFactory,
+    customPrompt?: string
 ): Promise<string> {
     if (!visionProfile) {
         visionLog.warn('vision_not_configured', 'Perfil de visão não encontrado no ModelProfileRegistry.');
@@ -313,10 +314,12 @@ export async function processVision(
         const visionProvider = providerFactory
             ? providerFactory.getProviderWithModel(visionProfile.model, visionProfile.provider)
             : new (await import('./ProviderFactory')).OllamaProvider(visionProfile.server, visionProfile.model);
+        const prompt = customPrompt?.trim()
+            || 'Descreva esta imagem em detalhes. Se houver texto, faça o OCR completo e extraia o conteúdo.';
         const response = await visionProvider.chat([
             {
                 role: 'user',
-                content: 'Descreva esta imagem em detalhes. Se houver texto, faça o OCR completo e extraia o conteúdo.',
+                content: prompt,
                 images: [base64Image]
             }
         ]);
