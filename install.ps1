@@ -2,7 +2,7 @@
 #  NewClaw — Instalador Interativo para Windows
 #
 #  Uso:
-#    irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
+#    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1)))
 #    .\install.ps1
 #    .\install.ps1 -Help
 #    .\install.ps1 -DryRun
@@ -175,7 +175,7 @@ if ($Help) {
 🪐 NewClaw — Instalador Interativo para Windows
 
 USO:
-  irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
+  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1)))
   .\install.ps1 [OPÇÕES]
 
 OPÇÕES:
@@ -201,7 +201,7 @@ VARIÁVEIS DE AMBIENTE:
 
 EXEMPLOS:
   # Instalação interativa
-  irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1 | iex
+  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1)))
 
   # Com token pré-definido
   .\install.ps1 -Token "123:ABC" -UserId "123456789" -NoPrompt
@@ -278,9 +278,19 @@ function Step-CheckSystem {
             Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction Stop
             Write-Ok "Política de execução PowerShell: $currentUserPolicy → RemoteSigned (ajustado para o usuário atual)"
         } catch {
-            Write-Warn "Política de execução PowerShell: $currentUserPolicy — não foi possível ajustar automaticamente"
-            Write-Info "  Rode manualmente: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
-            Write-Info "  (sem isso, comandos npm podem falhar em terminais futuros)"
+            # Set-ExecutionPolicy pode lançar mesmo tendo gravado o valor com sucesso no
+            # escopo CurrentUser — acontece quando um escopo mais específico (ex: Process,
+            # que este próprio script define como Bypass no início) já sobrepõe a política
+            # efetiva da sessão. A exceção reflete só esse aviso de sobreposição, não uma
+            # falha de gravação — por isso reconferimos o valor real antes de reportar erro.
+            $recheck = Get-ExecutionPolicy -Scope CurrentUser
+            if ($recheck -notin @('Restricted', 'Undefined', 'AllSigned')) {
+                Write-Ok "Política de execução PowerShell: $currentUserPolicy → $recheck (ajustado para o usuário atual)"
+            } else {
+                Write-Warn "Política de execução PowerShell: $currentUserPolicy — não foi possível ajustar automaticamente"
+                Write-Info "  Rode manualmente: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
+                Write-Info "  (sem isso, comandos npm podem falhar em terminais futuros)"
+            }
         }
     } else {
         Write-Ok "Política de execução PowerShell: $currentUserPolicy — ok"
