@@ -2,7 +2,7 @@
 #  NewClaw — Instalador Interativo para Windows
 #
 #  Uso:
-#    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1)))
+#    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1).TrimStart([char]0xFEFF)))
 #    .\install.ps1
 #    .\install.ps1 -Help
 #    .\install.ps1 -DryRun
@@ -175,7 +175,7 @@ if ($Help) {
 🪐 NewClaw — Instalador Interativo para Windows
 
 USO:
-  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1)))
+  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1).TrimStart([char]0xFEFF)))
   .\install.ps1 [OPÇÕES]
 
 OPÇÕES:
@@ -201,7 +201,7 @@ VARIÁVEIS DE AMBIENTE:
 
 EXEMPLOS:
   # Instalação interativa
-  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1)))
+  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1).TrimStart([char]0xFEFF)))
 
   # Com token pré-definido
   .\install.ps1 -Token "123:ABC" -UserId "123456789" -NoPrompt

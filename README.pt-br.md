@@ -76,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | b
 
 **Windows (PowerShell como Administrador):**
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1)))
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/rovanni/NewClaw/main/install.ps1).TrimStart([char]0xFEFF)))
 ```
 
 ### Requisitos
