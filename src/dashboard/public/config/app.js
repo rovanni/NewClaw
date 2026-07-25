@@ -12,6 +12,34 @@ import { installGlobalHelpers, updateDropdownModels } from './components/ModelDr
 // ── Expose configStore for views that need window.__configStore ──
 window.__configStore = configStore;
 
+// ── Dirty state (alterações não salvas) ──────────────────────────
+// Toda edição de config passa pelo configStore; persistir em disco só acontece no doSave().
+// Este rastreio fecha o buraco entre os dois: qualquer mudança após o carregamento inicial
+// marca os botões Salvar/Reiniciar até o próximo save bem-sucedido.
+let configLoaded = false;
+let configDirty  = false;
+
+configStore.on('*', () => { if (configLoaded && !configDirty) setConfigDirty(true); });
+
+function setConfigDirty(v) {
+  configDirty = v;
+  updateDirtyUI();
+}
+
+function updateDirtyUI() {
+  const hint = configDirty ? t('unsaved_changes_hint') : '';
+  ['btnSave', 'btnRestart'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.classList.toggle('btn-dirty', configDirty);
+    btn.title = hint;
+  });
+}
+
+window.addEventListener('beforeunload', e => {
+  if (configDirty) { e.preventDefault(); e.returnValue = ''; }
+});
+
 // ── Router ──────────────────────────────────────────────────────
 const VIEW_MAP = {
   dashboard:   'DashboardView',
@@ -49,6 +77,7 @@ async function navigate(page) {
 
 window.addEventListener('newclaw-lang-changed', () => {
   window.newclawApplyI18n?.();
+  updateDirtyUI(); // re-traduz o title dos botões Salvar/Reiniciar
   navigate(currentPage);
 });
 
@@ -97,9 +126,9 @@ async function doSave() {
     try {
       const exists = await modelExists(model);
       if (!exists) {
-        showToast((model.includes(':cloud') ? '✨ Registrando "' : '⬇️ Baixando "') + model + '"…', 'success');
+        showToast(t(model.includes(':cloud') ? 'ml_model_registering_toast' : 'ml_pulling_toast', { model }), 'success');
         apiPullModel(model)
-          .then(() => { showToast('✅ "' + model + '" pronto!', 'success'); loadProviders(); })
+          .then(() => { showToast(t('ml_model_ready_toast', { model }), 'success'); loadProviders(); })
           .catch(() => {});
       }
     } catch {}
@@ -107,7 +136,8 @@ async function doSave() {
 
   try {
     await apiSaveConfig(config);
-    showToast('✅ Configuração salva!', 'success');
+    setConfigDirty(false);
+    showToast(t('config_saved_toast'), 'success');
   } catch (e) {
     showToast('❌ ' + e.message, 'error');
   }
@@ -115,11 +145,11 @@ async function doSave() {
 
 async function doRestart() {
   await doSave();
-  if (!confirm('Reiniciar o NewClaw agora?')) return;
+  if (!confirm(t('restart_confirm'))) return;
   const f = window.newclawFetch || fetch;
   try {
     await f('/api/restart', { method: 'POST' });
-    showToast('🔄 Reiniciando...', 'success');
+    showToast(t('restarting_toast'), 'success');
     let tries = 0;
     const check = async () => {
       try { const r = await f('/api/status'); if (r.ok) { location.reload(); return; } } catch {}
@@ -204,6 +234,9 @@ async function loadConfig() {
       customProviders:        c.customProviders || [],
     });
   } catch {}
+  // Só a partir daqui mudanças no configStore contam como "não salvas" — o patch inicial acima
+  // (e o estado default caso o fetch falhe) não são edição do usuário.
+  configLoaded = true;
 }
 
 async function loadStatus() {

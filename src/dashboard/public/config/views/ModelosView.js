@@ -88,7 +88,7 @@ export function render(container) {
       </div>
 
       <div class="ml-tabs" id="ml-tabs">
-        ${tabs.map((tab, i) => `<button type="button" class="ml-tab${i === 0 ? ' active' : ''}" data-tab="${tab.id}">${tab.icon} ${tab.label}</button>`).join('')}
+        ${tabs.map((tab, i) => `<button type="button" class="ml-tab${i === 0 ? ' active' : ''}" data-tab="${tab.id}">${tab.icon} ${tab.label}${tab.id === 'advanced' ? ' <span id="ml-advTabWarn" style="display:none;">⚠️</span>' : ''}</button>`).join('')}
       </div>
 
       <!-- ═══ Overview ═══ -->
@@ -101,6 +101,7 @@ export function render(container) {
           <div class="overview-row"><span class="overview-label">${t('ml_ov_defaultmodel')}</span><span class="overview-value" id="ov-defaultmodel">—</span></div>
         </div>
         <button class="btn btn-primary btn-sm" id="ml-syncBtn" style="margin-top:14px;">${t('ml_ov_syncbtn')}</button>
+        <div class="form-hint" style="margin-top:14px;max-width:640px;line-height:1.6;">${t('ml_ov_guide')}</div>
       </div>
 
       <!-- ═══ Registry ═══ -->
@@ -112,6 +113,7 @@ export function render(container) {
         <div class="model-registry-toolbar">
           <input type="text" class="form-input" id="mr-search" placeholder="${t('ml_search_placeholder')}" style="max-width:260px;">
           <div class="model-filter-chips" id="mr-filters">
+            <span class="model-filter-label">🔎 ${t('ml_filter_label')}</span>
             ${Object.keys(capLabels).map(cap => `<div class="chip" data-cap="${cap}">${capLabels[cap]}</div>`).join('')}
           </div>
         </div>
@@ -197,7 +199,7 @@ export function render(container) {
         <div class="cfg-details">
           <div class="cfg-details-body">
             <div class="cat-selector" id="rt-catSelector">
-              ${categoryMeta.map((c, i) => `<button type="button" class="cat-btn${i === 0 ? ' active' : ''}" data-cat="${c.key}">${c.icon} ${c.label}</button>`).join('')}
+              ${categoryMeta.map((c, i) => `<button type="button" class="cat-btn${i === 0 ? ' active' : ''}" data-cat="${c.key}"><span>${c.icon} ${c.label}</span><span class="cat-btn-model" id="rt-catmodel-${c.key}">—</span></button>`).join('')}
             </div>
 
             <div class="rt-picker-header">
@@ -304,7 +306,7 @@ export function render(container) {
       <!-- ═══ Providers ═══ -->
       <div class="ml-panel" data-panel="providers">
         <div class="provider-toolbar">
-          <span class="form-hint" id="ml-lastSync">Última sincronização: —</span>
+          <span class="form-hint" id="ml-lastSync">${t('ml_ov_lastsync')}: —</span>
         </div>
         <div class="provider-grid" id="ml-providerGrid"></div>
 
@@ -342,8 +344,7 @@ export function render(container) {
           </summary>
           <div class="cfg-details-body">
             <div id="ml-internalWarning" style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:8px;background:rgba(255,160,0,.08);border:1px solid rgba(255,160,0,.3);font-size:.82rem;line-height:1.5;color:var(--text-main);">
-              ⚠️ <strong>Um ou mais modelos internos estão vazios.</strong> O sistema usará defaults, mas pode falhar se o provider ativo não os tiver disponíveis.<br>
-              Preencha os campos abaixo e clique <strong>Salvar &amp; Reiniciar</strong>.
+              ⚠️ <strong>${t('internal_warn_title')}</strong> ${t('internal_warn_body')}
             </div>
             <div class="form-hint" style="margin-bottom:14px;">${t('internal_models_hint')}</div>
             <div class="internal-comp-grid">
@@ -445,13 +446,14 @@ export function render(container) {
     });
   });
 
-  // Pull chips
+  // Pull chips — mesmo comportamento do "Instalar" do Registry (pullIntoRegistry): baixa e
+  // ressincroniza o catálogo, sem sobrescrever silenciosamente o "Modelo Ollama Principal".
   container.querySelectorAll('.chip[data-pull]').forEach(chip => {
-    chip.addEventListener('click', () => doPull(chip.dataset.pull));
+    chip.addEventListener('click', () => pullIntoRegistry(chip.dataset.pull));
   });
   el('ml-pullBtn').addEventListener('click', () => {
     const name = el('ml-customPull').value.trim();
-    if (name) doPull(name);
+    if (name) pullIntoRegistry(name);
   });
 
   // Init model dropdowns (só os 2 campos que ainda são texto livre — o resto usa o seletor)
@@ -521,8 +523,10 @@ export function render(container) {
     const badge   = el('ml-internalBadge');
     const warning = el('ml-internalWarning');
     const details = el('ml-internalDetails');
+    const tabWarn = el('ml-advTabWarn');
     if (badge)   badge.style.display   = unconfigured ? 'inline' : 'none';
     if (warning) warning.style.display = unconfigured ? 'block'  : 'none';
+    if (tabWarn) tabWarn.style.display = unconfigured ? 'inline' : 'none';
     if (details && unconfigured) details.open = true;
   }
 }
@@ -670,9 +674,9 @@ function wireProviderOverview() {
   const el = id => document.getElementById(id);
 
   el('ml-syncBtn')?.addEventListener('click', async () => {
-    showToast('🔄 Sincronizando...', 'success');
+    showToast(t('ml_syncing_toast'), 'success');
     await loadProviders(true);
-    showToast('✅ Sincronizado', 'success');
+    showToast(t('ml_synced_toast'), 'success');
   });
 
   document.getElementById('ml-providerGrid')?.addEventListener('input', e => {
@@ -686,27 +690,27 @@ function wireProviderOverview() {
   document.getElementById('ml-providerGrid')?.addEventListener('click', async e => {
     const removeKey = e.target.closest('[data-remove-key]')?.dataset.removeKey;
     if (removeKey) {
-      if (!confirm(`Remover a API key do ${removeKey}?`)) return;
+      if (!confirm(t('ml_remove_key_confirm', { provider: removeKey }))) return;
       try {
         const f = window.newclawFetch || fetch;
         const res = await f(`/api/providers/key/${removeKey}`, { method: 'DELETE' });
         if ((await res.json()).success) {
           const hasKey = `has${removeKey.charAt(0).toUpperCase() + removeKey.slice(1)}Key`;
           cs.set(hasKey, false);
-          showToast(`Chave ${removeKey} removida`, 'success');
+          showToast(t('ml_key_removed_toast', { provider: removeKey }), 'success');
           renderProviderGrid();
         }
-      } catch (err) { showToast('Erro ao remover chave: ' + err.message, 'error'); }
+      } catch (err) { showToast('❌ ' + err.message, 'error'); }
       return;
     }
     const removeProvider = e.target.closest('[data-remove-provider]')?.dataset.removeProvider;
     if (removeProvider) {
-      if (!confirm(`Remover o provider "${removeProvider}"?`)) return;
+      if (!confirm(t('ml_remove_provider_confirm', { label: removeProvider }))) return;
       try {
         await removeCustomProvider(removeProvider);
         cs.set('customProviders', (cs.get('customProviders') || []).filter(p => p.label !== removeProvider));
-        showToast(`Provider "${removeProvider}" removido`, 'success');
-      } catch (err) { showToast('Erro: ' + err.message, 'error'); }
+        showToast(t('ml_provider_removed_toast', { label: removeProvider }), 'success');
+      } catch (err) { showToast('❌ ' + err.message, 'error'); }
     }
   });
 
@@ -724,11 +728,11 @@ function wireProviderOverview() {
     const label   = document.getElementById('ml-newProvLabel')?.value.trim();
     const baseUrl = document.getElementById('ml-newProvUrl')?.value.trim();
     const apiKey  = document.getElementById('ml-newProvKey')?.value.trim();
-    if (!label || !baseUrl) { showToast('Preencha nome e Base URL', 'error'); return; }
+    if (!label || !baseUrl) { showToast(t('ml_provider_fill_required'), 'error'); return; }
     try {
       await addCustomProvider({ label, baseUrl, apiKey: apiKey || undefined });
       cs.set('customProviders', [...(cs.get('customProviders') || []), { label, baseUrl, hasKey: !!apiKey }]);
-      showToast(`Provider "${label}" adicionado`, 'success');
+      showToast(t('ml_provider_added_toast', { label }), 'success');
       document.getElementById('ml-newProvLabel').value = '';
       document.getElementById('ml-newProvUrl').value   = '';
       document.getElementById('ml-newProvKey').value   = '';
@@ -740,7 +744,7 @@ function updateLastSync() {
   const el = document.getElementById('ml-lastSync');
   if (!el) return;
   const ts = providersStore.get('lastSync');
-  el.textContent = 'Última sincronização: ' + (ts ? new Date(ts).toLocaleTimeString() : '—');
+  el.textContent = t('ml_ov_lastsync') + ': ' + (ts ? new Date(ts).toLocaleTimeString() : '—');
 }
 
 // ─── Model Registry (tabela reutilizada — browse em Registry, seleção em Routing) ─────
@@ -895,6 +899,12 @@ function renderCategoryPicker() {
   const curEl = document.getElementById('rt-currentModel');
   if (curEl) curEl.textContent = currentModel || t('ml_routing_notconfigured');
 
+  // Modelo atribuído visível em cada botão de categoria — o slot se explica sem precisar clicar.
+  ['chat','code','vision','light','analysis','execution'].forEach(cat => {
+    const sub = document.getElementById(`rt-catmodel-${cat}`);
+    if (sub) sub.textContent = r[cat] || '—';
+  });
+
   const pendingWrap = document.getElementById('rt-pendingWrap');
   const pendingEl = document.getElementById('rt-pendingModel');
   const showPending = !!routingPendingModel && routingPendingModel !== currentModel;
@@ -935,7 +945,9 @@ function wireCategoryPicker(container) {
     mr[routingSelectedCategory] = routingPendingModel;
     cs.set('modelRouter', mr);
     const catLabel = getCategoryMeta().find(c => c.key === routingSelectedCategory)?.label || routingSelectedCategory;
-    showToast(`Modelo de ${catLabel} atualizado para "${routingPendingModel}"`, 'success');
+    // O toast é honesto sobre persistência: "Aplicar" só grava no configStore em memória — a
+    // gravação em disco acontece no Salvar/Salvar & Reiniciar da sidebar.
+    showToast(t('ml_routing_applied_toast', { cat: catLabel, model: mr[routingSelectedCategory] }), 'success');
     routingPendingModel = null;
     renderCategoryPicker();
   });
@@ -1034,13 +1046,13 @@ function updateModelStatus(models, r) {
       statusEl.title = '';
     } else if (isCloud(model)) {
       statusEl.className = 'dot dot-cloud';
-      statusEl.title = 'Cloud';
+      statusEl.title = t('ml_status_cloud');
     } else if (available.has(model)) {
       statusEl.className = 'dot online';
-      statusEl.title = 'Disponível (local)';
+      statusEl.title = t('ml_status_local_ok');
     } else {
       statusEl.className = 'dot dot-missing';
-      statusEl.title = 'Não instalado localmente';
+      statusEl.title = t('ml_status_missing');
     }
   });
 }
@@ -1104,41 +1116,23 @@ async function pullOllamaModel(name) {
   return res.json();
 }
 
-/** Pull a partir de Routing → Provider & Classificador: também define como "Modelo Ollama Principal". */
-async function doPull(name) {
-  if (!name?.trim()) return;
-  name = name.trim();
-  showToast('⬇️ Baixando "' + name + '"...', 'success');
-  try {
-    const data = await pullOllamaModel(name);
-    if (data.success) {
-      showToast('✅ "' + name + '" pronto!', 'success');
-      const inp = document.getElementById('ollamaModel');
-      if (inp) inp.value = name;
-      configStore.set('ollamaModel', name);
-    } else {
-      showToast('❌ ' + (data.error || 'desconhecido'), 'error');
-    }
-  } catch (e) {
-    showToast('❌ ' + e.message, 'error');
-  }
-}
-
 /**
- * Pull a partir do Registry: só registra o modelo no Ollama e ressincroniza o catálogo — não
- * mexe no "Modelo Ollama Principal" (esse pull é pra ampliar o catálogo, não pra trocar de modelo).
+ * Caminho único de download de modelo nesta view (Registry "Instalar", chips e Pull custom do
+ * Routing): registra o modelo no Ollama e ressincroniza o catálogo. Nunca troca o "Modelo Ollama
+ * Principal" nem nenhuma categoria — instalar amplia o catálogo; usar é decisão explícita do
+ * usuário no Roteamento (o toast aponta esse próximo passo).
  */
 async function pullIntoRegistry(name) {
   if (!name?.trim()) return;
   name = name.trim();
-  showToast('⬇️ Registrando "' + name + '"...', 'success');
+  showToast(t('ml_pulling_toast', { model: name }), 'success');
   try {
     const data = await pullOllamaModel(name);
     if (data.success) {
-      showToast('✅ "' + name + '" adicionado ao catálogo!', 'success');
+      showToast(t('ml_pull_registered_toast', { model: name }), 'success');
       await loadProviders(true);
     } else {
-      showToast('❌ ' + (data.error || 'desconhecido'), 'error');
+      showToast('❌ ' + (data.error || 'error'), 'error');
     }
   } catch (e) {
     showToast('❌ ' + e.message, 'error');

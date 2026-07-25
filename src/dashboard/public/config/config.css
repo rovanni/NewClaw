@@ -32,6 +32,9 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
   padding:12px; border-top:1px solid var(--border-color);
   display:flex; flex-direction:column; gap:7px; margin-top:auto;
 }
+/* Alterações não salvas — ponto pulsante via ::after: sobrevive ao textContent do applyI18n() */
+.btn-dirty::after { content:'●'; margin-left:6px; color:var(--warning); animation:dirtyPulse 1.2s ease-in-out infinite; }
+@keyframes dirtyPulse { 0%,100%{opacity:.35} 50%{opacity:1} }
 
 /* ─── Content ─── */
 .content { flex:1; overflow-y:auto; background:var(--bg-base); }
@@ -454,7 +457,8 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 ════════════════════════════════════ */
 
 .model-registry-toolbar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:13px; }
-.model-filter-chips { display:flex; gap:6px; flex-wrap:wrap; }
+.model-filter-chips { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.model-filter-label { font-size:.72rem; color:var(--text-muted); margin-right:2px; }
 .chip.chip-active { border-color:var(--accent); color:var(--accent); background:var(--accent-bg); }
 .model-cap-tag { font-size:.66rem; padding:2px 7px; border-radius:5px; background:var(--bg-muted); color:var(--text-muted); display:inline-block; margin:1px; }
 .model-table-wrap { overflow-x:auto; border:1px solid var(--border-color); border-radius:10px; }
@@ -470,9 +474,16 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
   padding:8px 14px; font-size:.8rem; font-weight:600; color:var(--text-soft);
   background:var(--bg-input); border:1px solid var(--border-color); border-radius:20px;
   cursor:pointer; transition:all .15s;
+  display:flex; flex-direction:column; align-items:center; gap:1px;
 }
 .cat-btn:hover { border-color:var(--accent); color:var(--text-main); }
 .cat-btn.active { background:var(--accent-bg); border-color:var(--accent); color:var(--accent); }
+/* Modelo atualmente atribuído à categoria — visível no próprio botão, para o slot se explicar sozinho */
+.cat-btn-model {
+  font-size:.6rem; font-weight:500; color:var(--text-muted);
+  max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.cat-btn.active .cat-btn-model { color:var(--accent); opacity:.85; }
 
 .rt-picker-header { display:flex; align-items:center; gap:22px; flex-wrap:wrap; margin-bottom:13px; padding:11px 14px; background:var(--bg-input); border:1px solid var(--border-color); border-radius:10px; }
 .rt-picker-info { display:flex; flex-direction:column; gap:2px; font-size:.8rem; }
