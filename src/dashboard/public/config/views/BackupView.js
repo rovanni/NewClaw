@@ -74,7 +74,13 @@ export function render(container) {
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <label class="btn btn-secondary" style="cursor:pointer">
                 ${t('backup_upload_btn')}
-                <input type="file" id="bkp-uploadInput" accept=".bak,.db" style="display:none">
+                <!-- Sem accept=".bak,.db": confirmado no Windows (Chrome e Edge) que o
+                     diálogo nativo aplica só a primeira extensão da lista e desabilita
+                     "Abrir" pras demais, mesmo com accept correto. A validação real já
+                     roda em duas camadas independentes disso (extensão no 'change' logo
+                     abaixo, integridade SQLite no backend) — accept aqui só quebrava o
+                     upload sem adicionar segurança nenhuma. -->
+                <input type="file" id="bkp-uploadInput" style="display:none">
               </label>
               <span id="bkp-uploadName" style="font-size:.82rem;color:var(--text-soft)"></span>
             </div>
