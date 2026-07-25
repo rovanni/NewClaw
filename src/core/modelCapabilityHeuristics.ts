@@ -1,12 +1,25 @@
 import { ModelCapability } from './providerTypes';
 
+// Único ponto de detecção de "modelo de código" por nome — usado tanto por guessCapabilities()
+// (heurística pura, sem sinal real) quanto por mapOllamaCapabilities() (ver comentário abaixo
+// sobre por que precisa disso mesmo com capabilities reais do Ollama).
+const CODE_NAME_PATTERN = /(coder|code|deepseek-coder|starcoder|codestral)/;
+
 /**
  * Mapeia as capabilities REAIS que o Ollama devolve em /api/tags (confirmado em produção contra
  * Ollama local: 'completion'|'tools'|'vision'|'thinking'|'insert'|'embedding') para o vocabulário
  * interno. Preferir sempre isto a guessCapabilities() quando o provider expõe o campo — só
  * OpenAI-Compatible genérico (/v1/models não devolve capabilities) precisa da heurística por nome.
+ *
+ * Exceção: 'code'. O Ollama não tem uma flag real equivalente a "modelo treinado pra código" —
+ * 'insert' sinaliza só suporte a fill-in-middle (autocomplete de IDE), um recurso técnico bem mais
+ * estreito. Confirmado em produção (2026-07-25): kimi-k2.7-code:cloud, um modelo de código de
+ * verdade, reporta capabilities=[vision,thinking,completion,tools] — sem 'insert' — e por isso
+ * nunca aparecia na categoria "Código" do Model Router. Por não existir sinal real pra essa
+ * categoria específica, complementamos sempre com a detecção por nome (mesmo padrão usado em
+ * guessCapabilities), em vez do "ou capabilities reais, ou heurística" que o caller aplicava antes.
  */
-export function mapOllamaCapabilities(raw: string[]): ModelCapability[] {
+export function mapOllamaCapabilities(raw: string[], modelId?: string): ModelCapability[] {
     const caps = new Set<ModelCapability>();
     for (const c of raw) {
         switch (c) {
@@ -17,6 +30,9 @@ export function mapOllamaCapabilities(raw: string[]): ModelCapability[] {
             case 'insert':     caps.add('code'); break;
             case 'embedding':  caps.add('embedding'); break;
         }
+    }
+    if (modelId && CODE_NAME_PATTERN.test(modelId.toLowerCase())) {
+        caps.add('code');
     }
     return [...caps];
 }
@@ -47,7 +63,7 @@ export function guessCapabilities(modelId: string): ModelCapability[] {
     if (/(^|[-:/])(vl|vision|llava|gemma3|qwen.?vl|pixtral|moondream)([-:]|$)/.test(id) || id.includes('vision')) {
         caps.push('vision');
     }
-    if (/(coder|code|deepseek-coder|starcoder|codestral)/.test(id)) {
+    if (CODE_NAME_PATTERN.test(id)) {
         caps.push('code');
     }
     if (/(r1|reasoning|qwq|o1|think)/.test(id)) {

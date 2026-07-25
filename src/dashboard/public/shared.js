@@ -452,7 +452,6 @@ const TRANSLATIONS = {
     // Modelos — UX (jornada, filtro × seleção, persistência)
     ml_filter_label: "Filtrar por capacidade:",
     ml_ov_guide: "Como configurar: 1️⃣ Provedores — conecte seu provider · 2️⃣ Registro — instale modelos · 3️⃣ Roteamento — escolha o modelo de cada tarefa · depois clique em Salvar & Reiniciar.",
-    ml_routing_applied_toast: '✅ {cat}: "{model}" selecionado — clique em Salvar & Reiniciar para aplicar.',
     ml_pulling_toast: '⬇️ Baixando "{model}"...',
     ml_pull_registered_toast: '✅ "{model}" instalado no catálogo — atribua-o a uma categoria na aba Roteamento.',
     ml_model_ready_toast: '✅ "{model}" pronto!',
@@ -923,7 +922,6 @@ const TRANSLATIONS = {
     // Models — UX (journey, filter × selection, persistence)
     ml_filter_label: "Filter by capability:",
     ml_ov_guide: "How to set up: 1️⃣ Providers — connect your provider · 2️⃣ Registry — install models · 3️⃣ Routing — pick the model for each task · then click Save & Restart.",
-    ml_routing_applied_toast: '✅ {cat}: "{model}" selected — click Save & Restart to apply.',
     ml_pulling_toast: '⬇️ Pulling "{model}"...',
     ml_pull_registered_toast: '✅ "{model}" installed in the catalog — assign it to a category in the Routing tab.',
     ml_model_ready_toast: '✅ "{model}" ready!',
@@ -1371,7 +1369,6 @@ const TRANSLATIONS = {
     // Modelos — UX (recorrido, filtro × selección, persistencia)
     ml_filter_label: "Filtrar por capacidad:",
     ml_ov_guide: "Cómo configurar: 1️⃣ Proveedores — conecta tu proveedor · 2️⃣ Registro — instala modelos · 3️⃣ Enrutamiento — elige el modelo de cada tarea · luego haz clic en Guardar y Reiniciar.",
-    ml_routing_applied_toast: '✅ {cat}: "{model}" seleccionado — haz clic en Guardar y Reiniciar para aplicar.',
     ml_pulling_toast: '⬇️ Descargando "{model}"...',
     ml_pull_registered_toast: '✅ "{model}" instalado en el catálogo — asígnalo a una categoría en la pestaña Enrutamiento.',
     ml_model_ready_toast: '✅ ¡"{model}" listo!',

@@ -2,7 +2,7 @@ import { configStore, providersStore } from '../state.js';
 import { showToast } from '../components/Toast.js';
 import { initDropdowns, updateDropdownModels } from '../components/ModelDropdown.js';
 import { addCustomProvider, removeCustomProvider, getCloudCatalog } from '../api.js';
-import { loadProviders } from '../app.js';
+import { loadProviders, doSave } from '../app.js';
 
 // Funções (não const) porque t() precisa ser avaliado a cada render() — se fossem consts de
 // módulo, ficariam presas no idioma ativo no momento em que o arquivo foi importado pela primeira
@@ -21,9 +21,17 @@ function getCategoryMeta() {
 
 // Capability mínima exigida por categoria — reaproveita as capabilities já calculadas no
 // discovery (ModelRegistryService/modelCapabilityHeuristics), nenhuma regra nova é criada aqui.
+//
+// 'code' usa 'chat' (mesma exigência de chat/light/analysis), não 'code': diferente de vision e
+// tool_calling — exigências técnicas reais, um modelo sem elas literalmente não processa imagem
+// ou não chama ferramenta — não existe "modelo tecnicamente incapaz de código", só modelos mais
+// ou menos especializados. Filtrar Código por capability 'code' escondia da lista modelos de
+// propósito geral genuinamente capazes (achado 2026-07-25: glm-5.2:cloud, gpt-oss — sem "code" no
+// nome nem flag real de FIM no Ollama, mas perfeitamente aptos). A tag "Código" continua aparecendo
+// na tabela como informação — só não filtra mais quem pode ser escolhido.
 const CATEGORY_CAPABILITY = {
   chat: 'chat', light: 'chat', analysis: 'chat',
-  code: 'code', vision: 'vision', execution: 'tool_calling',
+  code: 'chat', vision: 'vision', execution: 'tool_calling',
 };
 
 const PROV_LABELS = {
@@ -938,16 +946,22 @@ function wireCategoryPicker(container) {
     renderCategoryPicker();
   });
 
-  document.getElementById('rt-applyBtn')?.addEventListener('click', () => {
+  document.getElementById('rt-applyBtn')?.addEventListener('click', async e => {
     if (!routingPendingModel) return;
     const cs = configStore;
     const mr = { ...cs.get('modelRouter') };
     mr[routingSelectedCategory] = routingPendingModel;
     cs.set('modelRouter', mr);
-    const catLabel = getCategoryMeta().find(c => c.key === routingSelectedCategory)?.label || routingSelectedCategory;
-    // O toast é honesto sobre persistência: "Aplicar" só grava no configStore em memória — a
-    // gravação em disco acontece no Salvar/Salvar & Reiniciar da sidebar.
-    showToast(t('ml_routing_applied_toast', { cat: catLabel, model: mr[routingSelectedCategory] }), 'success');
+    // Aplicar grava direto em disco (mesmo caminho do botão Salvar global) — clicar Aplicar e
+    // precisar clicar num Salvar separado depois, em outro lugar da página, pra essa mudança
+    // não se perder era o comportamento reportado como confuso (2026-07-25).
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      await doSave();
+    } finally {
+      btn.disabled = false;
+    }
     routingPendingModel = null;
     renderCategoryPicker();
   });

@@ -127,8 +127,10 @@ export class OllamaProvider implements ILLMProvider {
             family: m.details?.family,
             contextWindow: m.details?.context_length,
             // Ollama devolve capabilities reais em /api/tags — só cai pra heurística por nome
-            // se, por algum motivo, o campo vier ausente (versão antiga do servidor).
-            capabilities: m.capabilities?.length ? mapOllamaCapabilities(m.capabilities) : guessCapabilities(m.name),
+            // inteira (guessCapabilities) se, por algum motivo, o campo vier ausente (versão
+            // antiga do servidor). Quando o campo vem preenchido, mapOllamaCapabilities ainda
+            // recebe o nome pra complementar 'code' — ver comentário em modelCapabilityHeuristics.ts.
+            capabilities: m.capabilities?.length ? mapOllamaCapabilities(m.capabilities, m.name) : guessCapabilities(m.name),
             status: 'available' as const,
         }));
     }

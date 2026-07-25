@@ -73,6 +73,11 @@ async function main() {
                         { name: 'nomic-embed-text:latest', capabilities: ['embedding'], details: { family: 'nomic-bert', context_length: 2048 } },
                         // modelo sem campo capabilities (servidor antigo) — cai na heurística por nome
                         { name: 'gemma3:27b' },
+                        // ACHADO 2026-07-25: modelo de código real (kimi-k2.7-code:cloud, confirmado
+                        // ao vivo via curl /api/show) que reporta capabilities reais SEM 'insert' —
+                        // Ollama não tem flag real pra "treinado pra código", só pra fill-in-middle.
+                        // Antes desta correção, nunca aparecia na categoria "Código" do Model Router.
+                        { name: 'kimi-k2.7-code:cloud', capabilities: ['vision', 'thinking', 'completion', 'tools'] },
                     ]
                 })
             };
@@ -80,13 +85,15 @@ async function main() {
         try {
             const ollama = new OllamaProvider('http://localhost:11434', 'glm-5.2:cloud', '');
             const models = await ollama.discoverModels!();
-            assert(models.length === 3, 'discoverModels retorna 3 modelos', models);
+            assert(models.length === 4, 'discoverModels retorna 4 modelos', models);
             assert(models[0].provider === 'ollama', 'provider marcado como ollama', models[0]);
             assert(models[0].capabilities.includes('vision') && models[0].capabilities.includes('reasoning'), 'capabilities reais mapeadas (vision+thinking→reasoning)', models[0]);
             assert(models[0].contextWindow === 262144, 'context_length real capturado', models[0]);
             assert(models[0].family === 'qwen35', 'family real capturado', models[0]);
             assert(models[1].capabilities.length === 1 && models[1].capabilities[0] === 'embedding', 'embedding real não vira chat/tools', models[1]);
             assert(models[2].capabilities.includes('vision'), 'modelo sem campo capabilities cai na heurística por nome (gemma3→vision)', models[2]);
+            assert(models[3].capabilities.includes('code'), 'modelo de código sem insert ainda ganha code via nome (kimi-k2.7-code)', models[3]);
+            assert(models[3].capabilities.includes('vision') && models[3].capabilities.includes('reasoning') && models[3].capabilities.includes('chat'), 'capabilities reais preservadas junto com o code complementado', models[3]);
         } finally { restore(); }
     }
 
@@ -94,6 +101,8 @@ async function main() {
     {
         assert(mapOllamaCapabilities(['completion', 'tools']).includes('chat') && mapOllamaCapabilities(['completion', 'tools']).includes('tool_calling'), 'completion+tools mapeiam pra chat+tool_calling', mapOllamaCapabilities(['completion', 'tools']));
         assert(mapOllamaCapabilities(['insert']).includes('code'), 'insert mapeia pra code (fill-in-the-middle)', mapOllamaCapabilities(['insert']));
+        assert(!mapOllamaCapabilities(['completion', 'tools']).includes('code'), 'sem insert nem nome de código, não ganha code (evita falso positivo)', mapOllamaCapabilities(['completion', 'tools']));
+        assert(mapOllamaCapabilities(['completion', 'tools'], 'kimi-k2.7-code:cloud').includes('code'), 'nome de código complementa mesmo com capabilities reais presentes', mapOllamaCapabilities(['completion', 'tools'], 'kimi-k2.7-code:cloud'));
         assert(formatContextWindow(262144) === '256K', '262144 formata como 256K', formatContextWindow(262144));
         assert(formatContextWindow(1_000_000) === '1M', '1_000_000 formata como 1M', formatContextWindow(1_000_000));
         assert(formatContextWindow(undefined) === '—', 'undefined formata como travessão', formatContextWindow(undefined));

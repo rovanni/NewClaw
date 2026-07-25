@@ -90,7 +90,7 @@ document.querySelectorAll('#sidebar-nav .nav-item').forEach(item => {
 document.getElementById('btnSave').addEventListener('click', doSave);
 document.getElementById('btnRestart').addEventListener('click', doRestart);
 
-async function doSave() {
+export async function doSave() {
   const c = configStore.snap();
 
   const config = {
