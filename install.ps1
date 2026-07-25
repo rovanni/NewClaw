@@ -391,8 +391,15 @@ function Step-InstallOllama {
         Write-Warn "Ollama não está rodando. Iniciando..."
         if (-not $DryRun) {
             Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
+            # 20 tentativas x 2s = até 40s. Antes eram 6 tentativas (12s), curto demais logo
+            # após um winget install fresco: instalação real (2026-07-24) mostrou Ollama
+            # ainda não respondendo em 11434 depois de 12s, fazendo Step-DownloadModel tentar
+            # `ollama pull` contra um daemon que ainda não tinha subido e falhar com uma
+            # mensagem de erro assustadora — mesmo o Ollama vindo a funcionar normalmente
+            # segundos depois (confirmado: o modelo apareceu em `ollama list` minutos depois,
+            # e um pull manual subsequente funcionou de primeira).
             $retries = 0
-            while ($retries -lt 6) {
+            while ($retries -lt 20) {
                 Start-Sleep -Seconds 2
                 try {
                     $null = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
