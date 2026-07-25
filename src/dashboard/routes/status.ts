@@ -1,12 +1,14 @@
 import { Router, Request, Response } from 'express';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import os from 'os';
+import path from 'path';
 import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import { getEventLoopMonitor } from '../../shared/EventLoopMonitor';
 import { DashboardContext } from './types';
 
 const log = createLogger('Dashboardserver');
+const DIR = process.cwd();
 
 export function formatUptime(seconds: number): string {
     const d = Math.floor(seconds / 86400);
@@ -115,7 +117,11 @@ export function createStatusRouter(ctx: DashboardContext): Router {
 
     router.post('/restart', (_req: Request, res: Response) => {
         res.json({ success: true, message: 'Restarting...' });
-        exec('bash ./start.sh restart', { windowsHide: true }, (err) => {
+        // Delega pro bin/newclaw restart (Node puro, PM2-first com fallback pra spawn cru)
+        // em vez de chamar bash ./start.sh restart direto: bash não existe no Windows por
+        // padrão, e bin/newclaw já é a implementação única e testada de restart usada
+        // pelo CLI e pelo fluxo de update — evita duas lógicas de restart divergindo.
+        execFile(process.execPath, [path.join(DIR, 'bin', 'newclaw'), 'restart'], { windowsHide: true, cwd: DIR }, (err) => {
             if (err) log.error('Restart error:', errorMessage(err));
         });
     });
