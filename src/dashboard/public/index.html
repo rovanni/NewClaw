@@ -642,7 +642,7 @@
       const box = document.getElementById('attachPreview');
       box.innerHTML = pendingAttachments.map((a, idx) => `
         <div class="attach-chip">
-          ${a.previewUrl ? `<img src="${a.previewUrl}">` : `<span class="attach-tag mono">${fileExt(a.fileName)}</span>`}
+          ${a.previewUrl ? `<img src="${a.previewUrl}" alt="">` : `<span class="attach-tag mono">${fileExt(a.fileName)}</span>`}
           <span class="attach-name" title="${esc(a.fileName)}">${esc(a.fileName)}</span>
           <span class="attach-remove" onclick="removeAttachment(${idx})">✕</span>
         </div>`).join('');

@@ -61,7 +61,7 @@ const TRANSLATIONS = {
     iterations_label: "Iterações Máximas",
     memory_window_label: "Janela de Memória",
     keys_title: "🔑 Outros Provedores",
-    system_prompt_title: "💬 System Prompt",
+    system_prompt_title: "Instruções para o Sistema",
     system_prompt_label: "Instruções do Sistema",
     tools_title: "🛠️ Ferramentas",
     save_btn: "💾 Salvar",
@@ -153,9 +153,11 @@ const TRANSLATIONS = {
     sidebar_update: "Atualização",
     sidebar_backup: "Backup",
     sidebar_integrations: "Integrações",
+    sidebar_developer: "Desenvolvedor",
 
     // Integrations view
     integrations_page_desc: "Instale e gerencie extensões e integrações do NewClaw com outros softwares.",
+    ig_page_guide: "🔌 Aqui você instala extensões que conectam o NewClaw a outros softwares no seu computador (ex: o suplemento do PowerPoint). Clique em Instalar/Ativar no card da integração desejada.",
     pptx_addin_title: "Suplemento PowerPoint",
     pptx_addin_desc: "Gere slides e apresentações diretamente dentro do Microsoft PowerPoint usando o NewClaw.",
     req_label: "Requisitos:",
@@ -178,6 +180,7 @@ const TRANSLATIONS = {
 
     // Update view
     update_page_desc: "Verifique e aplique atualizações do NewClaw.",
+    upd_page_guide: "⬆️ Aqui você escolhe como o NewClaw recebe atualizações (Estável, Antecipado, ou uma branch específica de desenvolvimento) e verifica/aplica novas versões — igual o Windows Update, mas pro NewClaw.",
     update_channel_title: "Canal de atualização",
     update_channel_desc: "Escolha como o NewClaw recebe atualizações — igual ao Windows Update.",
     update_channel_stable: "Stable (recomendado) — versões oficiais, máxima estabilidade",
@@ -212,6 +215,7 @@ const TRANSLATIONS = {
 
     // Backup view
     backup_page_desc: "Crie backups manuais e configure a retenção automática.",
+    bkp_page_guide: "💾 Aqui você cria backups manuais (do sistema/config ou do banco de dados), baixa backups existentes, ou restaura um backup anterior. Backups automáticos, se configurados, aparecem na lista sem precisar de ação sua.",
     backup_schedule_title: "🕐 Agendamento",
     backup_schedule_info: "O backup automático do banco é gerenciado pelo <strong>crontab do sistema</strong> (<code>backup_db.sh</code>, a cada 6h). Para alterar o intervalo, edite o crontab no servidor. Os arquivos gerados aparecem automaticamente na lista abaixo.",
     backup_retention_title: "🗑️ Retenção",
@@ -259,6 +263,31 @@ const TRANSLATIONS = {
     no_patterns_yet: "Padrões surgem com o uso. Nenhum ainda.",
     no_channel_data: "Dados de canal indisponíveis.",
     online: "Online",
+    // Dashboard — Estado Geral / Serviços / Alertas (2026-07-25)
+    dash_alerts_title: "Alertas",
+    dash_alerts_none: "Nenhum alerta encontrado.",
+    dash_alert_system_offline: "Sistema offline.",
+    dash_alert_provider_down: "Provider indisponível: {provider}.",
+    dash_alert_key_missing: "Chave de API ausente para o provider ativo: {provider}.",
+    dash_alert_no_model: "Nenhum modelo padrão configurado.",
+    dash_alert_channel_down: "Canal desconectado: {channel}.",
+    dash_state_system: "Sistema",
+    dash_state_provider: "Provider",
+    dash_state_model: "Modelo ativo",
+    dash_state_ready: "Sistema pronto",
+    dash_ready_yes: "✅ Sim",
+    dash_ready_no: "⚠️ Não",
+    dash_key_configured: "🟢 Chave configurada",
+    dash_key_missing: "🔴 Chave ausente",
+    dash_services_title: "Serviços",
+    dash_page_desc: "Visão consolidada da saúde operacional do NewClaw. Monitore o estado do sistema, dos serviços, dos modelos e das integrações, com destaque para alertas que exijam atenção.",
+    // Modo Desenvolvedor
+    dev_mode_enabled_toast: "🎉 Modo Desenvolvedor ativado.",
+    dev_mode_disabled_toast: "Modo Desenvolvedor desativado.",
+    dev_page_title: "Desenvolvedor",
+    dev_page_desc: "Telemetria e diagnóstico interno do motor cognitivo — não afeta o uso normal do NewClaw.",
+    dev_page_guide: "🔬 Esta área concentra informações técnicas usadas pra investigar o comportamento interno do NewClaw (quais ferramentas são mais usadas, quais padrões o sistema aprendeu). Não é necessária pro uso do dia a dia — fica separada de propósito do Dashboard principal.",
+    dev_disable_btn: "Desativar Modo Desenvolvedor",
     offline: "Offline",
     tg_connected: "Conectado",
     tg_cooldown: "Cooldown após conflito",
@@ -289,19 +318,20 @@ const TRANSLATIONS = {
     route_analysis_desc: "Cripto / Mercado",
     route_execution_desc: "Tools / Raciocínio",
     edit_routes_title: "🎛️ Editar Rotas de Modelo",
-    default_provider_label: "Provider Padrão",
+    default_provider_label: "Provedor Padrão",
     main_ollama_model_label: "Modelo Ollama Principal",
     download_models_label: "Download de Modelos",
     classifier_model_label: "Modelo Classificador",
     classifier_server_label: "Servidor Classificador",
     vision_server_label: "Servidor Visão",
-    provider_classifier_title: "🔌 Provider & Classificador",
-    provider_per_profile_title: "🔌 Provider por Perfil (opcional)",
-    provider_per_profile_hint: "Sobrescreve o provider padrão para cada categoria. Deixe em branco para usar o provider padrão.",
-    internal_models_title: "⚙️ Modelos dos Componentes Internos",
-    internal_models_hint: "Modelos usados pelo GoalPlanner, RiskAnalyzer e ObserverValidator. Devem ser compatíveis com o provider padrão.",
+    provider_classifier_title: "🔌 Provedor Padrão",
+    default_model_classifier_title: "🧭 Modelo Padrão & Classificador (Model Router)",
+    provider_per_profile_title: "🔌 Provedor por Perfil (opcional)",
+    provider_per_profile_hint: "Sobrescreve o provedor padrão para cada categoria. Deixe em branco para usar o provedor padrão.",
+    internal_models_title: "⚙️ Modelos Internos do NewClaw",
+    internal_models_hint: "Estes são os modelos que o próprio NewClaw utiliza internamente para planejar, analisar e validar suas ações. Eles não são os modelos utilizados nas conversas com o usuário.<br><br>Se esses campos permanecerem em branco, o sistema utilizará os modelos padrão configurados. Dependendo do provedor ativo, alguns componentes internos podem não funcionar corretamente.",
     effective_config_title: "Configuração Efetiva",
-    provider_active_label: "Provider Ativo",
+    provider_active_label: "Provedor Ativo",
     internal_planner_desc: "Planejamento de objetivos e decomposição de tarefas complexas",
     internal_risk_desc: "Análise de risco e validação de segurança antes da execução",
     internal_observer_desc: "Validação e observação contínua dos resultados das ações",
@@ -315,11 +345,12 @@ const TRANSLATIONS = {
     rd_classifier: "Classificador",
     rd_category: "Categoria",
     rd_model: "Modelo Escolhido",
-    rd_provider: "Provider",
+    rd_provider: "Provedor",
     rd_elapsed: "Tempo de Decisão",
 
     // Advanced view
-    advanced_page_desc: "System prompt e configurações especializadas",
+    advanced_page_desc: "Instruções do sistema e configurações especializadas",
+    av_page_guide: "⚙️ Aqui você edita o prompt de sistema do agente (as instruções de base que moldam seu comportamento) e pode restaurar todos os valores desta página pro padrão de fábrica, se precisar.",
     system_prompt_placeholder: "Instruções personalizadas do sistema...",
     system_prompt_hint_text: "Deixe vazio para usar o prompt padrão",
     reset_form_title: "🔄 Reset de Formulário",
@@ -340,13 +371,20 @@ const TRANSLATIONS = {
 
     // Tools view
     tools_page_desc: "Módulos operacionais do agente — uso real calculado dos padrões aprendidos",
+    ft_page_guide: "🛠️ Aqui você liga/desliga as ferramentas que o agente pode usar (buscar na web, executar comandos, mexer em arquivos, etc). Clique no botão ON/OFF de cada módulo, ou use <strong>Ativar Tudo</strong>/<strong>Desativar Tudo</strong> pra mudar todos de uma vez (respeita a busca, se estiver filtrando). Módulos com ⚠️ são mais sensíveis — desative com cuidado.",
     search_tools_placeholder: "🔍  Buscar ferramentas...",
     loading_modules: "Carregando módulos...",
     no_tools_available: "Nenhuma ferramenta disponível.",
+    enable_all_btn: "Ativar Tudo",
+    disable_all_btn: "Desativar Tudo",
+    bulk_toggle_none_toast: "Nada pra mudar — já estão todas nesse estado.",
+    bulk_enabled_toast: "✅ {n} ferramenta(s) ativada(s).",
+    bulk_disabled_toast: "🚫 {n} ferramenta(s) desativada(s).",
     no_usage_data: "Sem dados de uso",
 
     // Skills view
     skills_page_desc: "Sistema de aprendizado autônomo — skills emergem de padrões de uso real",
+    sk_page_guide: "🎓 O NewClaw aprende sozinho: quando repete um padrão de uso com sucesso, ele propõe transformar isso numa <strong>skill</strong> (atalho reutilizável). Skills propostas aparecem aqui pra você revisar — <strong>ativar</strong> se forem úteis, ou <strong>descartar</strong> se não forem. Skills já ativas continuam sendo usadas automaticamente pelo agente.",
     metric_active: "Ativas",
     metric_awaiting_review: "Aguardando revisão",
     metric_patterns_registered: "Padrões registrados",
@@ -372,6 +410,7 @@ const TRANSLATIONS = {
 
     // Security view
     security_page_desc: "Controle de acesso e usuários autorizados",
+    sg_page_guide: "🔒 Aqui você controla dois pontos de segurança: o <strong>Modo Operacional</strong> (quão livre o agente é pra executar ações — God Mode exige confirmação explícita) e a <strong>senha do Dashboard</strong> (protege o acesso a essa interface web).",
     telegram_whitelist_title: "📱 Telegram — Whitelist de Usuários",
     authorized_ids_label: "IDs Autorizados",
     telegram_ids_hint: "IDs numéricos separados por vírgula · use @userinfobot para descobrir o seu",
@@ -395,26 +434,31 @@ const TRANSLATIONS = {
     auth_disabled_label: "Sem autenticação",
     auth_open_desc: "qualquer pessoa na rede pode acessar o dashboard.",
     ml_tab_overview: "Visão Geral",
-    ml_tab_registry: "Registro",
-    ml_tab_routing: "Roteamento",
+    ml_tab_registry: "Instalar Modelo",
+    ml_tab_routing: "Escolher Modelo",
     ml_tab_providers: "Provedores",
     ml_tab_advanced: "Avançado",
-    ml_ov_provider: "Provider",
-    ml_ov_status: "Status",
+    ml_ov_provider: "Provedor",
     ml_ov_models: "Modelos",
-    ml_ov_lastsync: "Última sincronização",
     ml_ov_defaultmodel: "Modelo padrão",
-    ml_ov_syncbtn: "🔄 Sincronizar Modelos",
+    ml_ov_ready: "Sistema pronto",
+    ml_ov_ready_yes: "✅ Sim",
+    ml_ov_ready_no: "⚠️ Não — confira Provedores e Instalar Modelo",
+    ml_ov_syncbtn: "🔄 Atualizar Catálogo",
     ml_ov_online: "Online",
     ml_ov_offline: "Offline",
     ml_ov_available_suffix: "disponíveis",
+    ml_cat_count: "Modelos disponíveis",
+    ml_cat_lastsync: "Última sincronização",
+    ml_cat_origin: "Origem do catálogo",
+    ml_cat_syncstatus: "Estado da sincronização",
     ml_mode_installed: "📦 Instalados",
     ml_mode_cloud: "☁️ Disponíveis na nuvem",
     ml_search_placeholder: "Buscar modelo (ex: kimi)...",
     ml_col_name: "Nome",
-    ml_col_provider: "Provider",
-    ml_col_capabilities: "Capabilities",
-    ml_col_context: "Context",
+    ml_col_provider: "Provedor",
+    ml_col_capabilities: "Capacidades",
+    ml_col_context: "Contexto",
     ml_col_status: "Status",
     ml_routing_current: "Modelo atual",
     ml_routing_selected: "→ Selecionado",
@@ -438,6 +482,7 @@ const TRANSLATIONS = {
     ml_provider_baseurl_label: "Base URL",
     ml_provider_apikey_optional: "API Key (opcional)",
     ml_optional_placeholder: "Opcional",
+    ml_pull_btn: "Baixar Modelo",
     ml_add_btn: "Adicionar",
     ml_remove_btn: "✕ Remover",
     ml_apikey_label: "API Key",
@@ -451,7 +496,11 @@ const TRANSLATIONS = {
 
     // Modelos — UX (jornada, filtro × seleção, persistência)
     ml_filter_label: "Filtrar por capacidade:",
-    ml_ov_guide: "Como configurar: 1️⃣ Provedores — conecte seu provider · 2️⃣ Registro — instale modelos · 3️⃣ Roteamento — escolha o modelo de cada tarefa · depois clique em Salvar & Reiniciar.",
+    ml_ov_guide: "👋 Primeira vez aqui? Siga esta ordem:<br><br>1️⃣ <strong>Provedores</strong> — conecte a IA (o Ollama já vem pronto, não precisa mexer).<br>2️⃣ <strong>Instalar Modelo</strong> — baixe um modelo de IA pra usar.<br>3️⃣ <strong>Escolher Modelo</strong> — diga qual modelo cuida de cada tipo de tarefa (conversa, código, etc).<br><br>Depois clique em <strong>Salvar & Reiniciar</strong> no menu lateral.",
+    ml_tab_registry_guide: "📚 Aqui você baixa modelos de IA pra usar no NewClaw.<br><br>1️⃣ Use o <strong>Download rápido</strong> abaixo ou busque na lista.<br>2️⃣ Clique em <strong>Instalar</strong> ao lado do modelo desejado.<br>3️⃣ Depois, vá em 🧭 <strong>Escolher Modelo</strong> pra definir onde ele vai ser usado.<br>4️⃣ Não esqueça de clicar em <strong>Salvar & Reiniciar</strong> no menu lateral.",
+    ml_tab_routing_guide: "🧭 Aqui você diz qual modelo de IA cuida de cada tipo de tarefa: conversar, escrever código, analisar imagens, etc.<br><br>1️⃣ Clique numa categoria acima.<br>2️⃣ Escolha um modelo na lista.<br>3️⃣ Clique em <strong>Aplicar</strong>.",
+    ml_tab_providers_guide: "🔌 Aqui você conecta o NewClaw a um serviço de IA.<br><br>O <strong>Ollama</strong> já vem configurado e funciona sem custo — não precisa mexer.<br>Quer usar outro serviço (Google Gemini, OpenRouter, etc.)? Cole a chave de API dele aqui.",
+    ml_tab_advanced_guide: "⚙️ Estes são os modelos que o próprio NewClaw usa internamente pra planejar e validar suas ações — <strong>não</strong> é o modelo que conversa com você.<br><br>Se ficarem em branco, o sistema usa um padrão, mas pode falhar dependendo do provedor ativo.",
     ml_pulling_toast: '⬇️ Baixando "{model}"...',
     ml_pull_registered_toast: '✅ "{model}" instalado no catálogo — atribua-o a uma categoria na aba Roteamento.',
     ml_model_ready_toast: '✅ "{model}" pronto!',
@@ -531,7 +580,7 @@ const TRANSLATIONS = {
     iterations_label: "Max Iterations",
     memory_window_label: "Memory Window",
     keys_title: "🔑 Other Providers",
-    system_prompt_title: "💬 System Prompt",
+    system_prompt_title: "System Prompt",
     system_prompt_label: "System Instructions",
     tools_title: "🛠️ Tools",
     save_btn: "💾 Save",
@@ -623,9 +672,11 @@ const TRANSLATIONS = {
     sidebar_update: "Update",
     sidebar_backup: "Backup",
     sidebar_integrations: "Integrations",
+    sidebar_developer: "Developer",
 
     // Integrations view
     integrations_page_desc: "Install and manage NewClaw extensions and integrations with other software.",
+    ig_page_guide: "🔌 Here you install extensions that connect NewClaw to other software on your computer (e.g., the PowerPoint add-in). Click Install/Enable on the card for the integration you want.",
     pptx_addin_title: "PowerPoint Add-in",
     pptx_addin_desc: "Generate slides and presentations directly inside Microsoft PowerPoint using NewClaw.",
     req_label: "Requirements:",
@@ -648,6 +699,7 @@ const TRANSLATIONS = {
 
     // Update view
     update_page_desc: "Check and apply NewClaw updates.",
+    upd_page_guide: "⬆️ Here you choose how NewClaw receives updates (Stable, Preview, or a specific development branch) and check/apply new versions — like Windows Update, but for NewClaw.",
     update_channel_title: "Update channel",
     update_channel_desc: "Choose how NewClaw receives updates — like Windows Update.",
     update_channel_stable: "Stable (recommended) — official releases, maximum stability",
@@ -682,6 +734,7 @@ const TRANSLATIONS = {
 
     // Backup view
     backup_page_desc: "Create manual backups and configure automatic retention.",
+    bkp_page_guide: "💾 Here you create manual backups (system/config or database), download existing backups, or restore a previous one. Automatic backups, if configured, show up in the list without any action from you.",
     backup_schedule_title: "🕐 Scheduling",
     backup_schedule_info: "Automatic database backup is managed by the <strong>system crontab</strong> (<code>backup_db.sh</code>, every 6h). To change the interval, edit the crontab on the server. Files generated by crontab appear automatically in the list below.",
     backup_retention_title: "🗑️ Retention",
@@ -729,6 +782,31 @@ const TRANSLATIONS = {
     no_patterns_yet: "Patterns emerge with use. None yet.",
     no_channel_data: "Channel data unavailable.",
     online: "Online",
+    // Dashboard — Overview / Services / Alerts (2026-07-25)
+    dash_alerts_title: "Alerts",
+    dash_alerts_none: "No alerts found.",
+    dash_alert_system_offline: "System offline.",
+    dash_alert_provider_down: "Provider unavailable: {provider}.",
+    dash_alert_key_missing: "API key missing for the active provider: {provider}.",
+    dash_alert_no_model: "No default model configured.",
+    dash_alert_channel_down: "Channel disconnected: {channel}.",
+    dash_state_system: "System",
+    dash_state_provider: "Provider",
+    dash_state_model: "Active model",
+    dash_state_ready: "System ready",
+    dash_ready_yes: "✅ Yes",
+    dash_ready_no: "⚠️ No",
+    dash_key_configured: "🟢 Key configured",
+    dash_key_missing: "🔴 Key missing",
+    dash_services_title: "Services",
+    dash_page_desc: "Consolidated view of NewClaw's operational health. Monitor the status of the system, services, models, and integrations, with alerts requiring attention highlighted.",
+    // Developer Mode
+    dev_mode_enabled_toast: "🎉 Developer Mode enabled.",
+    dev_mode_disabled_toast: "Developer Mode disabled.",
+    dev_page_title: "Developer",
+    dev_page_desc: "Internal cognitive engine telemetry and diagnostics — doesn't affect normal NewClaw usage.",
+    dev_page_guide: "🔬 This area concentrates technical information used to investigate NewClaw's internal behavior (which tools are used most, which patterns the system learned). Not needed for day-to-day use — kept separate from the main Dashboard on purpose.",
+    dev_disable_btn: "Disable Developer Mode",
     offline: "Offline",
     tg_connected: "Connected",
     tg_cooldown: "Cooldown after conflict",
@@ -765,11 +843,12 @@ const TRANSLATIONS = {
     classifier_model_label: "Classifier Model",
     classifier_server_label: "Classifier Server",
     vision_server_label: "Vision Server",
-    provider_classifier_title: "🔌 Provider & Classifier",
+    provider_classifier_title: "🔌 Default Provider",
+    default_model_classifier_title: "🧭 Default Model & Classifier (Model Router)",
     provider_per_profile_title: "🔌 Provider per Profile (optional)",
     provider_per_profile_hint: "Overrides the default provider per category. Leave blank to use the default provider.",
-    internal_models_title: "⚙️ Internal Component Models",
-    internal_models_hint: "Models used by GoalPlanner, RiskAnalyzer and ObserverValidator. Must be compatible with the default provider.",
+    internal_models_title: "⚙️ NewClaw Internal Models",
+    internal_models_hint: "These are the models NewClaw itself uses internally to plan, analyze, and validate its actions. They are not the models used in conversations with the user.<br><br>If these fields are left blank, the system will use the configured default models. Depending on the active provider, some internal components may not work correctly.",
     effective_config_title: "Effective Configuration",
     provider_active_label: "Active Provider",
     internal_planner_desc: "Goal planning and complex task decomposition",
@@ -790,6 +869,7 @@ const TRANSLATIONS = {
 
     // Advanced view
     advanced_page_desc: "System prompt and specialized settings",
+    av_page_guide: "⚙️ Here you edit the agent's system prompt (the base instructions that shape its behavior), and you can reset all the values on this page back to factory defaults if needed.",
     system_prompt_placeholder: "Custom system instructions...",
     system_prompt_hint_text: "Leave empty to use the default prompt",
     reset_form_title: "🔄 Form Reset",
@@ -810,13 +890,20 @@ const TRANSLATIONS = {
 
     // Tools view
     tools_page_desc: "Agent operational modules — real usage calculated from learned patterns",
+    ft_page_guide: "🛠️ Here you turn the tools the agent can use on or off (web search, running commands, editing files, etc). Click each module's ON/OFF button, or use <strong>Enable All</strong>/<strong>Disable All</strong> to change them all at once (respects the search filter, if you're filtering). Modules marked ⚠️ are more sensitive — disable with care.",
     search_tools_placeholder: "🔍  Search tools...",
     loading_modules: "Loading modules...",
     no_tools_available: "No tools available.",
+    enable_all_btn: "Enable All",
+    disable_all_btn: "Disable All",
+    bulk_toggle_none_toast: "Nothing to change — they're all already in that state.",
+    bulk_enabled_toast: "✅ {n} tool(s) enabled.",
+    bulk_disabled_toast: "🚫 {n} tool(s) disabled.",
     no_usage_data: "No usage data",
 
     // Skills view
     skills_page_desc: "Autonomous learning system — skills emerge from real usage patterns",
+    sk_page_guide: "🎓 NewClaw learns on its own: when it repeats a successful usage pattern, it proposes turning it into a <strong>skill</strong> (a reusable shortcut). Proposed skills show up here for you to review — <strong>activate</strong> them if useful, or <strong>discard</strong> if not. Already-active skills keep being used automatically by the agent.",
     metric_active: "Active",
     metric_awaiting_review: "Awaiting review",
     metric_patterns_registered: "Registered patterns",
@@ -842,6 +929,7 @@ const TRANSLATIONS = {
 
     // Security view
     security_page_desc: "Access control and authorized users",
+    sg_page_guide: "🔒 Here you control two security points: the <strong>Operational Mode</strong> (how free the agent is to execute actions — God Mode requires explicit confirmation) and the <strong>Dashboard password</strong> (protects access to this web interface).",
     telegram_whitelist_title: "📱 Telegram — User Whitelist",
     authorized_ids_label: "Authorized IDs",
     telegram_ids_hint: "Numeric IDs separated by comma · use @userinfobot to find yours",
@@ -865,19 +953,24 @@ const TRANSLATIONS = {
     auth_disabled_label: "No authentication",
     auth_open_desc: "anyone on the network can access the dashboard.",
     ml_tab_overview: "Overview",
-    ml_tab_registry: "Registry",
-    ml_tab_routing: "Routing",
+    ml_tab_registry: "Install Model",
+    ml_tab_routing: "Choose Model",
     ml_tab_providers: "Providers",
     ml_tab_advanced: "Advanced",
     ml_ov_provider: "Provider",
-    ml_ov_status: "Status",
     ml_ov_models: "Models",
-    ml_ov_lastsync: "Last sync",
     ml_ov_defaultmodel: "Default model",
-    ml_ov_syncbtn: "🔄 Sync Models",
+    ml_ov_ready: "System ready",
+    ml_ov_ready_yes: "✅ Yes",
+    ml_ov_ready_no: "⚠️ No — check Providers and Install Model",
+    ml_ov_syncbtn: "🔄 Update Catalog",
     ml_ov_online: "Online",
     ml_ov_offline: "Offline",
     ml_ov_available_suffix: "available",
+    ml_cat_count: "Available models",
+    ml_cat_lastsync: "Last sync",
+    ml_cat_origin: "Catalog source",
+    ml_cat_syncstatus: "Sync status",
     ml_mode_installed: "📦 Installed",
     ml_mode_cloud: "☁️ Available in cloud",
     ml_search_placeholder: "Search model (e.g. kimi)...",
@@ -908,6 +1001,7 @@ const TRANSLATIONS = {
     ml_provider_baseurl_label: "Base URL",
     ml_provider_apikey_optional: "API Key (optional)",
     ml_optional_placeholder: "Optional",
+    ml_pull_btn: "Pull",
     ml_add_btn: "Add",
     ml_remove_btn: "✕ Remove",
     ml_apikey_label: "API Key",
@@ -921,7 +1015,11 @@ const TRANSLATIONS = {
 
     // Models — UX (journey, filter × selection, persistence)
     ml_filter_label: "Filter by capability:",
-    ml_ov_guide: "How to set up: 1️⃣ Providers — connect your provider · 2️⃣ Registry — install models · 3️⃣ Routing — pick the model for each task · then click Save & Restart.",
+    ml_ov_guide: "👋 First time here? Follow this order:<br><br>1️⃣ <strong>Providers</strong> — connect the AI (Ollama comes ready, no setup needed).<br>2️⃣ <strong>Install Model</strong> — download an AI model to use.<br>3️⃣ <strong>Choose Model</strong> — decide which model handles each type of task (chat, code, etc).<br><br>Then click <strong>Save & Restart</strong> in the sidebar.",
+    ml_tab_registry_guide: "📚 Here you download AI models to use in NewClaw.<br><br>1️⃣ Use the <strong>Quick download</strong> section below or search the list.<br>2️⃣ Click <strong>Install</strong> next to the model you want.<br>3️⃣ Then go to 🧭 <strong>Choose Model</strong> to decide where it's used.<br>4️⃣ Don't forget to click <strong>Save & Restart</strong> in the sidebar menu.",
+    ml_tab_routing_guide: "🧭 Here you decide which AI model handles each type of task: chatting, writing code, analyzing images, etc.<br><br>1️⃣ Click a category above.<br>2️⃣ Pick a model from the list.<br>3️⃣ Click <strong>Apply</strong>.",
+    ml_tab_providers_guide: "🔌 Here you connect NewClaw to an AI service.<br><br><strong>Ollama</strong> comes already configured and works at no cost — no setup needed.<br>Want to use another service (Google Gemini, OpenRouter, etc.)? Paste its API key here.",
+    ml_tab_advanced_guide: "⚙️ These are the models NewClaw uses internally to plan and validate its own actions — <strong>not</strong> the model that talks to you.<br><br>If left blank, the system uses a default, but it may fail depending on the active provider.",
     ml_pulling_toast: '⬇️ Pulling "{model}"...',
     ml_pull_registered_toast: '✅ "{model}" installed in the catalog — assign it to a category in the Routing tab.',
     ml_model_ready_toast: '✅ "{model}" ready!',
@@ -1001,7 +1099,7 @@ const TRANSLATIONS = {
     iterations_label: "Iteraciones Máximas",
     memory_window_label: "Ventana de Memoria",
     keys_title: "🔑 Otros Proveedores",
-    system_prompt_title: "💬 System Prompt",
+    system_prompt_title: "Prompt de Sistema",
     system_prompt_label: "Instrucciones del Sistema",
     tools_title: "🛠️ Herramientas",
     save_btn: "💾 Guardar",
@@ -1092,9 +1190,11 @@ const TRANSLATIONS = {
     sidebar_advanced: "Avanzado",
     sidebar_update: "Actualización",
     sidebar_backup: "Copia de seguridad",
+    sidebar_developer: "Desarrollador",
 
     // Update view
     update_page_desc: "Verifique y aplique actualizaciones de NewClaw.",
+    upd_page_guide: "⬆️ Aquí eliges cómo NewClaw recibe actualizaciones (Estable, Anticipado, o una rama específica de desarrollo) y verificas/aplicas nuevas versiones — como Windows Update, pero para NewClaw.",
     update_channel_title: "Canal de actualización",
     update_channel_desc: "Elija cómo NewClaw recibe actualizaciones — igual que Windows Update.",
     update_channel_stable: "Stable (recomendado) — versiones oficiales, máxima estabilidad",
@@ -1129,6 +1229,7 @@ const TRANSLATIONS = {
 
     // Backup view
     backup_page_desc: "Crea copias de seguridad manuales y configura la retención automática.",
+    bkp_page_guide: "💾 Aquí creas copias de seguridad manuales (del sistema/configuración o de la base de datos), descargas copias existentes, o restauras una anterior. Las copias automáticas, si están configuradas, aparecen en la lista sin necesidad de ninguna acción tuya.",
     backup_schedule_title: "🕐 Programación",
     backup_schedule_info: "La copia de seguridad automática de la base de datos es gestionada por el <strong>crontab del sistema</strong> (<code>backup_db.sh</code>, cada 6h). Para cambiar el intervalo, edite el crontab en el servidor.",
     backup_retention_title: "🗑️ Retención",
@@ -1176,6 +1277,31 @@ const TRANSLATIONS = {
     no_patterns_yet: "Los patrones emergen con el uso. Ninguno aún.",
     no_channel_data: "Datos de canal no disponibles.",
     online: "Online",
+    // Dashboard — Estado General / Servicios / Alertas (2026-07-25)
+    dash_alerts_title: "Alertas",
+    dash_alerts_none: "No se encontraron alertas.",
+    dash_alert_system_offline: "Sistema fuera de línea.",
+    dash_alert_provider_down: "Proveedor no disponible: {provider}.",
+    dash_alert_key_missing: "Falta la clave de API para el proveedor activo: {provider}.",
+    dash_alert_no_model: "Ningún modelo predeterminado configurado.",
+    dash_alert_channel_down: "Canal desconectado: {channel}.",
+    dash_state_system: "Sistema",
+    dash_state_provider: "Proveedor",
+    dash_state_model: "Modelo activo",
+    dash_state_ready: "Sistema listo",
+    dash_ready_yes: "✅ Sí",
+    dash_ready_no: "⚠️ No",
+    dash_key_configured: "🟢 Clave configurada",
+    dash_key_missing: "🔴 Clave ausente",
+    dash_services_title: "Servicios",
+    dash_page_desc: "Vista consolidada de la salud operativa de NewClaw. Supervisa el estado del sistema, los servicios, los modelos y las integraciones, con alertas que requieren atención destacadas.",
+    // Modo Desarrollador
+    dev_mode_enabled_toast: "🎉 Modo Desarrollador activado.",
+    dev_mode_disabled_toast: "Modo Desarrollador desactivado.",
+    dev_page_title: "Desarrollador",
+    dev_page_desc: "Telemetría y diagnóstico interno del motor cognitivo — no afecta el uso normal de NewClaw.",
+    dev_page_guide: "🔬 Esta área concentra información técnica usada para investigar el comportamiento interno de NewClaw (qué herramientas se usan más, qué patrones aprendió el sistema). No es necesaria para el uso diario — se mantiene separada del Dashboard principal a propósito.",
+    dev_disable_btn: "Desactivar Modo Desarrollador",
     offline: "Offline",
     tg_connected: "Conectado",
     tg_cooldown: "Cooldown tras conflicto",
@@ -1212,11 +1338,12 @@ const TRANSLATIONS = {
     classifier_model_label: "Modelo Clasificador",
     classifier_server_label: "Servidor Clasificador",
     vision_server_label: "Servidor Visión",
-    provider_classifier_title: "🔌 Proveedor y Clasificador",
+    provider_classifier_title: "🔌 Proveedor Predeterminado",
+    default_model_classifier_title: "🧭 Modelo Predeterminado y Clasificador (Model Router)",
     provider_per_profile_title: "🔌 Proveedor por Perfil (opcional)",
     provider_per_profile_hint: "Reemplaza el proveedor predeterminado por categoría. Déjelo en blanco para usar el proveedor predeterminado.",
-    internal_models_title: "⚙️ Modelos de Componentes Internos",
-    internal_models_hint: "Modelos usados por GoalPlanner, RiskAnalyzer y ObserverValidator. Deben ser compatibles con el proveedor predeterminado.",
+    internal_models_title: "⚙️ Modelos Internos de NewClaw",
+    internal_models_hint: "Estos son los modelos que el propio NewClaw utiliza internamente para planificar, analizar y validar sus acciones. No son los modelos utilizados en las conversaciones con el usuario.<br><br>Si estos campos quedan vacíos, el sistema utilizará los modelos predeterminados configurados. Según el proveedor activo, algunos componentes internos pueden no funcionar correctamente.",
     effective_config_title: "Configuración Efectiva",
     provider_active_label: "Proveedor Activo",
     internal_planner_desc: "Planificación de objetivos y descomposición de tareas complejas",
@@ -1236,7 +1363,8 @@ const TRANSLATIONS = {
     rd_elapsed: "Tiempo de Decisión",
 
     // Advanced view
-    advanced_page_desc: "System prompt y configuraciones especializadas",
+    advanced_page_desc: "Instrucciones del sistema y configuraciones especializadas",
+    av_page_guide: "⚙️ Aquí editas el prompt de sistema del agente (las instrucciones base que moldean su comportamiento) y puedes restaurar todos los valores de esta página a los valores de fábrica, si lo necesitas.",
     system_prompt_placeholder: "Instrucciones personalizadas del sistema...",
     system_prompt_hint_text: "Deje vacío para usar el prompt predeterminado",
     reset_form_title: "🔄 Reinicio del Formulario",
@@ -1257,13 +1385,20 @@ const TRANSLATIONS = {
 
     // Tools view
     tools_page_desc: "Módulos operacionales del agente — uso real calculado de los patrones aprendidos",
+    ft_page_guide: "🛠️ Aquí activas o desactivas las herramientas que el agente puede usar (buscar en la web, ejecutar comandos, editar archivos, etc). Haz clic en el botón ON/OFF de cada módulo, o usa <strong>Activar Todo</strong>/<strong>Desactivar Todo</strong> para cambiarlos todos a la vez (respeta el filtro de búsqueda, si estás filtrando). Los módulos marcados con ⚠️ son más sensibles — desactívalos con cuidado.",
     search_tools_placeholder: "🔍  Buscar herramientas...",
     loading_modules: "Cargando módulos...",
     no_tools_available: "No hay herramientas disponibles.",
+    enable_all_btn: "Activar Todo",
+    disable_all_btn: "Desactivar Todo",
+    bulk_toggle_none_toast: "Nada que cambiar — ya están todas en ese estado.",
+    bulk_enabled_toast: "✅ {n} herramienta(s) activada(s).",
+    bulk_disabled_toast: "🚫 {n} herramienta(s) desactivada(s).",
     no_usage_data: "Sin datos de uso",
 
     // Skills view
     skills_page_desc: "Sistema de aprendizaje autónomo — skills emergen de patrones de uso real",
+    sk_page_guide: "🎓 NewClaw aprende solo: cuando repite un patrón de uso con éxito, propone convertirlo en una <strong>skill</strong> (atajo reutilizable). Las skills propuestas aparecen aquí para que las revises — <strong>actívalas</strong> si son útiles, o <strong>descártalas</strong> si no. Las skills ya activas siguen siendo usadas automáticamente por el agente.",
     metric_active: "Activas",
     metric_awaiting_review: "Esperando revisión",
     metric_patterns_registered: "Patrones registrados",
@@ -1289,6 +1424,7 @@ const TRANSLATIONS = {
 
     // Security view
     security_page_desc: "Control de acceso y usuarios autorizados",
+    sg_page_guide: "🔒 Aquí controlas dos puntos de seguridad: el <strong>Modo Operacional</strong> (qué tan libre es el agente para ejecutar acciones — el Modo Dios requiere confirmación explícita) y la <strong>contraseña del Dashboard</strong> (protege el acceso a esta interfaz web).",
     telegram_whitelist_title: "📱 Telegram — Lista blanca de usuarios",
     authorized_ids_label: "IDs Autorizados",
     telegram_ids_hint: "IDs numéricos separados por coma · usa @userinfobot para encontrar el tuyo",
@@ -1312,19 +1448,24 @@ const TRANSLATIONS = {
     auth_disabled_label: "Sin autenticación",
     auth_open_desc: "cualquier persona en la red puede acceder al dashboard.",
     ml_tab_overview: "Resumen",
-    ml_tab_registry: "Registro",
-    ml_tab_routing: "Enrutamiento",
+    ml_tab_registry: "Instalar Modelo",
+    ml_tab_routing: "Elegir Modelo",
     ml_tab_providers: "Proveedores",
     ml_tab_advanced: "Avanzado",
     ml_ov_provider: "Proveedor",
-    ml_ov_status: "Estado",
     ml_ov_models: "Modelos",
-    ml_ov_lastsync: "Última sincronización",
     ml_ov_defaultmodel: "Modelo predeterminado",
-    ml_ov_syncbtn: "🔄 Sincronizar Modelos",
+    ml_ov_ready: "Sistema listo",
+    ml_ov_ready_yes: "✅ Sí",
+    ml_ov_ready_no: "⚠️ No — revisa Proveedores e Instalar Modelo",
+    ml_ov_syncbtn: "🔄 Actualizar Catálogo",
     ml_ov_online: "En línea",
     ml_ov_offline: "Fuera de línea",
     ml_ov_available_suffix: "disponibles",
+    ml_cat_count: "Modelos disponibles",
+    ml_cat_lastsync: "Última sincronización",
+    ml_cat_origin: "Origen del catálogo",
+    ml_cat_syncstatus: "Estado de la sincronización",
     ml_mode_installed: "📦 Instalados",
     ml_mode_cloud: "☁️ Disponibles en la nube",
     ml_search_placeholder: "Buscar modelo (ej: kimi)...",
@@ -1355,6 +1496,7 @@ const TRANSLATIONS = {
     ml_provider_baseurl_label: "URL base",
     ml_provider_apikey_optional: "Clave API (opcional)",
     ml_optional_placeholder: "Opcional",
+    ml_pull_btn: "Descargar Modelo",
     ml_add_btn: "Agregar",
     ml_remove_btn: "✕ Eliminar",
     ml_apikey_label: "Clave API",
@@ -1368,7 +1510,11 @@ const TRANSLATIONS = {
 
     // Modelos — UX (recorrido, filtro × selección, persistencia)
     ml_filter_label: "Filtrar por capacidad:",
-    ml_ov_guide: "Cómo configurar: 1️⃣ Proveedores — conecta tu proveedor · 2️⃣ Registro — instala modelos · 3️⃣ Enrutamiento — elige el modelo de cada tarea · luego haz clic en Guardar y Reiniciar.",
+    ml_ov_guide: "👋 ¿Primera vez aquí? Sigue este orden:<br><br>1️⃣ <strong>Proveedores</strong> — conecta la IA (Ollama ya viene listo, no necesita configuración).<br>2️⃣ <strong>Instalar Modelo</strong> — descarga un modelo de IA para usar.<br>3️⃣ <strong>Elegir Modelo</strong> — decide qué modelo se encarga de cada tipo de tarea (chat, código, etc).<br><br>Luego haz clic en <strong>Guardar y Reiniciar</strong> en el menú lateral.",
+    ml_tab_registry_guide: "📚 Aquí descargas modelos de IA para usar en NewClaw.<br><br>1️⃣ Usa la <strong>Descarga rápida</strong> abajo o busca en la lista.<br>2️⃣ Haz clic en <strong>Instalar</strong> junto al modelo que quieras.<br>3️⃣ Luego ve a 🧭 <strong>Elegir Modelo</strong> para decidir dónde se usa.<br>4️⃣ No olvides hacer clic en <strong>Guardar y Reiniciar</strong> en el menú lateral.",
+    ml_tab_routing_guide: "🧭 Aquí decides qué modelo de IA se encarga de cada tipo de tarea: conversar, escribir código, analizar imágenes, etc.<br><br>1️⃣ Haz clic en una categoría arriba.<br>2️⃣ Elige un modelo de la lista.<br>3️⃣ Haz clic en <strong>Aplicar</strong>.",
+    ml_tab_providers_guide: "🔌 Aquí conectas NewClaw a un servicio de IA.<br><br><strong>Ollama</strong> ya viene configurado y funciona sin costo — no necesita configuración.<br>¿Prefieres usar otro servicio (Google Gemini, OpenRouter, etc.)? Pega su clave de API aquí.",
+    ml_tab_advanced_guide: "⚙️ Estos son los modelos que el propio NewClaw usa internamente para planificar y validar sus acciones — <strong>no</strong> es el modelo que conversa contigo.<br><br>Si se dejan vacíos, el sistema usa un valor predeterminado, pero puede fallar según el proveedor activo.",
     ml_pulling_toast: '⬇️ Descargando "{model}"...',
     ml_pull_registered_toast: '✅ "{model}" instalado en el catálogo — asígnalo a una categoría en la pestaña Enrutamiento.',
     ml_model_ready_toast: '✅ ¡"{model}" listo!',
@@ -1394,6 +1540,7 @@ const TRANSLATIONS = {
     // Integraciones / complemento de PowerPoint
     sidebar_integrations: "Integraciones",
     integrations_page_desc: "Instala y administra extensiones e integraciones de NewClaw con otros programas.",
+    ig_page_guide: "🔌 Aquí instalas extensiones que conectan NewClaw con otros programas de tu computadora (ej: el complemento de PowerPoint). Haz clic en Instalar/Activar en la tarjeta de la integración que quieras.",
     pptx_addin_title: "Complemento de PowerPoint",
     pptx_addin_desc: "Genera diapositivas y presentaciones directamente dentro de Microsoft PowerPoint usando NewClaw.",
     req_label: "Requisitos:",
@@ -1507,7 +1654,7 @@ function newclawHeader(activePage) {
 
   return '<div class="newclaw-header">' +
     '<div class="newclaw-header-left">' +
-      '<div class="newclaw-header-logo">N</div>' +
+      '<div class="newclaw-header-logo" onclick="newclawDevModeClick()">N</div>' +
       '<div class="newclaw-header-title">NewClaw</div>' +
     '</div>' +
     '<nav class="newclaw-tabs">' + navLinks + '</nav>' +
@@ -1522,6 +1669,39 @@ function newclawHeader(activePage) {
       '<div class="newclaw-avatar" title="' + t('chat') + '">' + initials + '</div>' +
     '</div>' +
   '</div>';
+}
+
+// ── Modo Desenvolvedor ───────────────────────────────────────────
+// Inspirado nas "Opções do Desenvolvedor" do Android: oculto por padrão, ativado por um gesto
+// discreto (7 cliques no logo do header, presente em toda página), persistido em localStorage.
+// Objetivo (diretriz 2026-07-25): interface limpa pra usuário comum, telemetria/diagnóstico do
+// motor cognitivo só visível pra quem sabe que o recurso existe e o ativa de propósito.
+const NEWCLAW_DEV_KEY = NEWCLAW_KEY + 'dev_mode';
+
+function newclawIsDevMode() {
+  return localStorage.getItem(NEWCLAW_DEV_KEY) === 'true';
+}
+
+function newclawSetDevMode(enabled) {
+  if (enabled) localStorage.setItem(NEWCLAW_DEV_KEY, 'true');
+  else localStorage.removeItem(NEWCLAW_DEV_KEY);
+  // Cada página decide o que fazer (o Config mostra/esconde a aba Desenvolvedor e avisa via
+  // toast; Chat/Traces/Memória não têm nada pra reagir e simplesmente ignoram o evento).
+  window.dispatchEvent(new CustomEvent('newclaw-devmode-changed', { detail: { enabled } }));
+}
+
+let _newclawDevClicks = 0;
+let _newclawDevClickTimer = null;
+
+function newclawDevModeClick() {
+  clearTimeout(_newclawDevClickTimer);
+  _newclawDevClicks++;
+  // Janela de 2s entre cliques — clique deliberado e rápido, não 7 cliques ao longo do dia.
+  _newclawDevClickTimer = setTimeout(() => { _newclawDevClicks = 0; }, 2000);
+  if (_newclawDevClicks >= 7) {
+    _newclawDevClicks = 0;
+    newclawSetDevMode(!newclawIsDevMode());
+  }
 }
 
 // Auto-init

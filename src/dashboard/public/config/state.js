@@ -11,7 +11,12 @@ class Store {
   snap()      { return structuredClone(this.#s); }
 
   set(k, v)   { this.#s[k] = v;               this.#emit(k, v); this.#emit('*', this.#s); }
-  patch(p)    { Object.assign(this.#s, p);     this.#emit('*', this.#s); }
+  // Precisa emitir por-chave igual set(), não só '*': quem assina uma chave específica (ex:
+  // providersStore.on('catalog', ...)) nunca disparava quando essa chave só era atualizada via
+  // patch() (é o caso de 'catalog'/'models' em loadProviders() — nunca usam set()). Bug real
+  // encontrado 2026-07-25: modelo baixado não aparecia em "Escolher Modelo" sem F5, porque o
+  // re-render de renderModelTable()/renderCategoryPicker() só estava plugado no evento 'catalog'.
+  patch(p)    { Object.assign(this.#s, p);     for (const k of Object.keys(p)) this.#emit(k, this.#s[k]); this.#emit('*', this.#s); }
 
   /** Subscribe. Returns unsubscribe function. */
   on(k, fn) {

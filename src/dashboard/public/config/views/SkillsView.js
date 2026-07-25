@@ -1,6 +1,7 @@
 import { skillsStore, toolsStore } from '../state.js';
 import { reviewSkill, activateSkill, deactivateSkill, deleteAutoSkill, getSkills, getPatterns, aggregateToolStats } from '../api.js';
 import { showToast } from '../components/Toast.js';
+import { guideBox } from '../app.js';
 
 export function render(container) {
   container.innerHTML = `
@@ -9,6 +10,8 @@ export function render(container) {
         <h1>🎓 SkillLearner</h1>
         <p>${t('skills_page_desc')}</p>
       </div>
+
+      ${guideBox(t('sk_page_guide'))}
 
       <div class="skills-metrics">
         <div class="skill-metric">

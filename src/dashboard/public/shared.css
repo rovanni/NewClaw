@@ -25,10 +25,17 @@
   --bg-muted: #f6f7f9;
   --text-main: #202124;
   --text-muted: #5f6368;
-  --text-soft: #9aa0a6;
+  /* Auditoria WCAG 2.1 AA 2026-07-25 (fórmula de contraste real, não estimativa): as 5 cores
+     abaixo foram escurecidas — os valores antigos (comentados) ficavam entre 2.1:1 e 4.4:1 contra
+     os fundos onde são usadas como texto (badges, botões, .form-hint etc.), abaixo do mínimo de
+     4.5:1 pra texto normal. Cada valor novo foi calculado pra passar 4.5:1 tanto contra bg-surface
+     quanto contra o próprio *-bg (badge). Tema escuro já passava, não precisou de ajuste.
+     text-soft: era #9aa0a6 (2.6:1) */
+  --text-soft: #6c7074;
   --border-color: #ecedf0;
   --border-color-strong: #dadce0;
-  --accent: #1a73e8;
+  /* accent: era #1a73e8 (4.4:1 sobre accent-bg) */
+  --accent: #1767d1;
   --accent-hover: #1b66c9;
   --accent-bg: #e8f0fe;
   --accent-border: #d2e3fc;
@@ -39,11 +46,14 @@
   --btn-icon-hover: #f1f3f4;
   --bg-glass: rgba(255, 255, 255, 0.85);
   --bg-glass-strong: rgba(255, 255, 255, 0.96);
-  --success: #34a853;
+  /* success: era #34a853 (2.95:1 sobre bg-surface, 2.69:1 sobre success-bg — falha até o mínimo de 3:1) */
+  --success: #24763a;
   --success-bg: #e6f4ea;
-  --danger: #d93025;
+  /* danger: era #d93025 (4.05:1 sobre danger-bg) */
+  --danger: #c32b21;
   --danger-bg: #fce8e6;
-  --warning: #f29900;
+  /* warning: era #f29900 (2.18:1 sobre bg-surface, 2.10:1 sobre warning-bg — o pior caso, quase ilegível) */
+  --warning: #9d6300;
   --warning-bg: #fef7e0;
 }
 
@@ -55,7 +65,10 @@
   --bg-muted: #171b22;
   --text-main: #e6e9ef;
   --text-muted: #9aa4b2;
-  --text-soft: #6b7686;
+  /* text-soft: era #6b7686 (4.11:1 sobre bg-base) — abaixo de 4.5:1 pra texto normal. Único
+     ajuste necessário no tema escuro (auditoria WCAG 2.1 AA 2026-07-25); accent/success/
+     danger/warning já passavam. */
+  --text-soft: #778190;
   --border-color: rgba(255, 255, 255, 0.07);
   --border-color-strong: rgba(255, 255, 255, 0.12);
   --accent: #4c8dff;

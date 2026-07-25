@@ -1,5 +1,6 @@
 import { configStore } from '../state.js';
 import { showToast } from '../components/Toast.js';
+import { guideBox } from '../app.js';
 
 export function render(container) {
   container.innerHTML = `
@@ -8,6 +9,8 @@ export function render(container) {
         <h1>⚙️ ${t('sidebar_advanced')}</h1>
         <p>${t('advanced_page_desc')}</p>
       </div>
+
+      ${guideBox(t('av_page_guide'))}
 
       <details class="cfg-details" open>
         <summary>💬 ${t('system_prompt_title')}</summary>

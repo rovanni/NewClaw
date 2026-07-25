@@ -234,13 +234,25 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .channel-status{ color:var(--text-muted); flex:1; }
 .channel-detail{ color:var(--text-soft); font-size:.69rem; text-align:right; }
 
+/* Alert rows (Dashboard) — problema em destaque, "sem alerta" com tom neutro/positivo */
+.alert-row {
+  display:flex; align-items:center; gap:10px; padding:8px 4px; font-size:.82rem;
+  color:var(--warning); border-bottom:1px solid var(--border-color);
+}
+.alert-row:last-child { border-bottom:none; }
+.alert-row-ok { color:var(--success); }
+.alert-icon { flex-shrink:0; }
+
 /* Config collapse (details) */
 .cfg-details {
   background:var(--bg-surface); border:1px solid var(--border-color);
   border-radius:12px; margin-bottom:12px; overflow:hidden;
   transition:box-shadow .2s;
 }
-.cfg-details[open] { box-shadow:0 4px 20px rgba(0,0,0,.18); }
+/* overflow:visible quando aberto — fechado precisa do hidden pra manter os cantos arredondados
+   limpos, mas aberto ele cortava dropdowns de modelo (position:absolute) que precisam "vazar"
+   pra fora da caixa. Achado 2026-07-25: "Modelo Classificador" dentro de Escolher Modelo. */
+.cfg-details[open] { box-shadow:0 4px 20px rgba(0,0,0,.18); overflow:visible; }
 .cfg-details summary {
   padding:15px 20px; cursor:pointer; font-size:.84rem; font-weight:600;
   color:var(--text-muted); list-style:none; display:flex; align-items:center; gap:8px;
@@ -253,6 +265,13 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 }
 .cfg-details[open] summary::after { transform:rotate(180deg); }
 .cfg-details-body { padding:18px 20px 22px; border-top:1px solid var(--border-color); }
+
+/* Card estático (sem colapsar) — mesma linguagem visual do .cfg-details, pra agrupar blocos que
+   não fazem sentido como accordion (ex: busca+filtros+tabela do Model Registry). */
+.ml-static-card {
+  background:var(--bg-surface); border:1px solid var(--border-color);
+  border-radius:12px; padding:18px 20px; margin-bottom:12px;
+}
 
 /* ════════════════════════════════════
    MODELOS PAGE — Pipeline visual
@@ -335,9 +354,12 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
   padding:3px 9px; border-radius:5px; font-size:.67rem; font-weight:700;
   cursor:pointer; border:1px solid; transition:all .15s; flex-shrink:0;
 }
-.tm-toggle.on { background:rgba(248,113,113,.1); color:var(--danger); border-color:rgba(248,113,113,.3); }
+/* Cores por ESTADO atual (ligado=verde, desligado=vermelho) — antes era por AÇÃO (cor do que
+   aconteceria ao clicar), o que combinado com o texto "OFF"/"ON" fazia parecer que um módulo
+   ligado estava desligado. Achado 2026-07-25. */
+.tm-toggle.on { background:rgba(74,222,128,.1); color:var(--success); border-color:rgba(74,222,128,.3); }
 .tm-toggle.on:hover { background:var(--danger); color:#fff; border-color:var(--danger); }
-.tm-toggle.off { background:rgba(74,222,128,.1); color:var(--success); border-color:rgba(74,222,128,.3); }
+.tm-toggle.off { background:rgba(248,113,113,.1); color:var(--danger); border-color:rgba(248,113,113,.3); }
 .tm-toggle.off:hover { background:var(--success); color:#fff; border-color:var(--success); }
 .tm-desc {
   font-size:.69rem; color:var(--text-soft); line-height:1.4;
@@ -363,6 +385,11 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
   transition:border-color .2s, box-shadow .2s;
 }
 .tool-search:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-bg); }
+
+/* Ferramentas — busca + ações em massa (Ativar/Desativar Tudo) na mesma linha */
+.ft-toolbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+.ft-toolbar .tool-search { flex:1; min-width:200px; margin-bottom:0; }
+.ft-bulk-actions { display:flex; gap:8px; flex-shrink:0; }
 
 /* ════════════════════════════════════
    SKILLS PAGE
@@ -445,6 +472,9 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .ml-tab.active { color:var(--accent); border-bottom-color:var(--accent); }
 .ml-panel { display:none; }
 .ml-panel.active { display:block; }
+
+.ml-guide-box { font-size:.82rem; line-height:1.8; color:var(--text-main); background:var(--bg-input); border:1px solid var(--border-color); border-radius:10px; padding:14px 18px; margin-bottom:18px; }
+.ml-guide-box strong { color:var(--accent); }
 
 .overview-card { background:var(--bg-input); border:1px solid var(--border-color); border-radius:12px; padding:4px 18px; max-width:420px; }
 .overview-row { display:flex; align-items:center; justify-content:space-between; padding:11px 0; border-bottom:1px solid var(--border-color); font-size:.84rem; }
@@ -546,7 +576,10 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
   background:linear-gradient(90deg, var(--text-main) 70%, var(--accent));
   -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
 }
-.page-header p { font-size:.78rem; color:var(--text-soft); }
+/* text-muted em vez de text-soft (2026-07-25): --text-soft é claro demais pra texto de leitura
+   (#9aa0a6 sobre #fbfbfc no tema claro, abaixo do mínimo de contraste WCAG AA) — reservado pra
+   detalhe secundário mesmo, não pra subtítulo de página, que precisa ser lido de verdade. */
+.page-header p { font-size:.78rem; color:var(--text-muted); }
 
 /* ─── Toast ─── */
 .toast {
@@ -603,17 +636,19 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .prov-hint-override { color:var(--warning); }
 
 /* ════════════════════════════════════
-   MODELOS — Internal component cards
+   MODELOS — Internal component list
 ════════════════════════════════════ */
 
-.internal-comp-grid {
-  display:grid; grid-template-columns:repeat(auto-fill,minmax(215px,1fr)); gap:12px;
-}
-.internal-comp-card {
+/* Lista vertical (não grid de cards): descrição em largura total fica mais legível, e escala
+   sem depender de reflow — cada componente novo é só mais uma linha (2026-07-25). */
+.internal-comp-list { display:flex; flex-direction:column; gap:10px; }
+.internal-comp-row {
+  display:flex; align-items:center; gap:16px; flex-wrap:wrap;
   background:var(--bg-input); border:1px solid var(--border-color);
-  border-radius:10px; padding:13px;
+  border-radius:10px; padding:12px 16px;
 }
-.internal-comp-header { display:flex; align-items:flex-start; gap:10px; margin-bottom:10px; }
+.internal-comp-info { display:flex; align-items:flex-start; gap:10px; flex:1; min-width:220px; }
+.internal-comp-row input { flex:0 0 220px; max-width:100%; }
 .internal-comp-icon { font-size:1.15rem; flex-shrink:0; margin-top:1px; }
 .internal-comp-name { font-size:.85rem; font-weight:700; color:var(--text-main); margin-bottom:3px; }
 .internal-comp-desc { font-size:.69rem; color:var(--text-soft); line-height:1.45; }

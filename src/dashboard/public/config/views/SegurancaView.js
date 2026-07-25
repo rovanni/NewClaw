@@ -1,6 +1,7 @@
 import { configStore } from '../state.js';
 import { getAuthStatus, changePassword } from '../api.js';
 import { showToast } from '../components/Toast.js';
+import { guideBox } from '../app.js';
 
 async function getCapabilityMode() {
   const f = window.newclawFetch || fetch;
@@ -29,6 +30,8 @@ export function render(container) {
         <h1>🔒 ${t('sidebar_security')}</h1>
         <p>${t('security_page_desc')}</p>
       </div>
+
+      ${guideBox(t('sg_page_guide'))}
 
       <details class="cfg-details" open>
         <summary>⚡ Modo Operacional</summary>

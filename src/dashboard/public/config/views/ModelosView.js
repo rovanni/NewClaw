@@ -2,7 +2,7 @@ import { configStore, providersStore } from '../state.js';
 import { showToast } from '../components/Toast.js';
 import { initDropdowns, updateDropdownModels } from '../components/ModelDropdown.js';
 import { addCustomProvider, removeCustomProvider, getCloudCatalog } from '../api.js';
-import { loadProviders, doSave } from '../app.js';
+import { loadProviders, doSave, guideBox } from '../app.js';
 
 // Funções (não const) porque t() precisa ser avaliado a cada render() — se fossem consts de
 // módulo, ficariam presas no idioma ativo no momento em que o arquivo foi importado pela primeira
@@ -96,47 +96,89 @@ export function render(container) {
       </div>
 
       <div class="ml-tabs" id="ml-tabs">
-        ${tabs.map((tab, i) => `<button type="button" class="ml-tab${i === 0 ? ' active' : ''}" data-tab="${tab.id}">${tab.icon} ${tab.label}${tab.id === 'advanced' ? ' <span id="ml-advTabWarn" style="display:none;">⚠️</span>' : ''}</button>`).join('')}
+        ${tabs.map((tab, i) => `<button type="button" class="ml-tab${i === 0 ? ' active' : ''}" data-tab="${tab.id}">${tab.icon} ${tab.label}${tab.id === 'routing' ? ' <span id="ml-routingTabWarn" style="display:none;">⚠️</span>' : ''}</button>`).join('')}
       </div>
 
       <!-- ═══ Overview ═══ -->
       <div class="ml-panel active" data-panel="overview">
+        ${guideBox(t('ml_ov_guide'))}
+        <!-- Painel só-leitura: responde "o sistema está pronto?", sem ações operacionais (2026-07-25).
+             Timestamp exato de sincronização e contagem detalhada têm local canônico único no card
+             "Catálogo de Modelos" (Instalar Modelo) — aqui só o resumo de prontidão. -->
         <div class="overview-card">
-          <div class="overview-row"><span class="overview-label">${t('ml_ov_provider')}</span><span class="overview-value" id="ov-provider">—</span></div>
-          <div class="overview-row"><span class="overview-label">${t('ml_ov_status')}</span><span class="overview-value"><span class="dot" id="ov-dot"></span> <span id="ov-status">—</span></span></div>
+          <div class="overview-row"><span class="overview-label">${t('ml_ov_provider')}</span><span class="overview-value"><span class="dot" id="ov-dot"></span> <span id="ov-provider">—</span></span></div>
           <div class="overview-row"><span class="overview-label">${t('ml_ov_models')}</span><span class="overview-value" id="ov-count">—</span></div>
-          <div class="overview-row"><span class="overview-label">${t('ml_ov_lastsync')}</span><span class="overview-value" id="ov-lastsync">—</span></div>
           <div class="overview-row"><span class="overview-label">${t('ml_ov_defaultmodel')}</span><span class="overview-value" id="ov-defaultmodel">—</span></div>
+          <div class="overview-row"><span class="overview-label">${t('ml_ov_ready')}</span><span class="overview-value" id="ov-ready">—</span></div>
         </div>
-        <button class="btn btn-primary btn-sm" id="ml-syncBtn" style="margin-top:14px;">${t('ml_ov_syncbtn')}</button>
-        <div class="form-hint" style="margin-top:14px;max-width:640px;line-height:1.6;">${t('ml_ov_guide')}</div>
       </div>
 
       <!-- ═══ Registry ═══ -->
       <div class="ml-panel" data-panel="registry">
-        <div class="cat-selector" id="mr-modeToggle">
-          <button type="button" class="cat-btn active" data-mode="installed">${t('ml_mode_installed')}</button>
-          <button type="button" class="cat-btn" data-mode="cloud">${t('ml_mode_cloud')}</button>
+        ${guideBox(t('ml_tab_registry_guide'))}
+
+        <!-- Catálogo de Modelos — local canônico único das métricas de catálogo (2026-07-25):
+             antes espalhadas entre o card da Visão Geral e o botão Sincronizar solto lá.
+             Visão Geral agora só reflete prontidão agregada; aqui é o detalhe operacional. -->
+        <div class="overview-card" style="margin-bottom:16px;">
+          <div class="overview-row"><span class="overview-label">${t('ml_cat_count')}</span><span class="overview-value" id="cat-count">—</span></div>
+          <div class="overview-row"><span class="overview-label">${t('ml_cat_lastsync')}</span><span class="overview-value" id="cat-lastsync">—</span></div>
+          <div class="overview-row"><span class="overview-label">${t('ml_cat_origin')}</span><span class="overview-value" id="cat-origin">—</span></div>
+          <div class="overview-row"><span class="overview-label">${t('ml_cat_syncstatus')}</span><span class="overview-value"><span class="dot" id="cat-dot"></span> <span id="cat-syncstatus">—</span></span></div>
         </div>
-        <div class="model-registry-toolbar">
-          <input type="text" class="form-input" id="mr-search" placeholder="${t('ml_search_placeholder')}" style="max-width:260px;">
-          <div class="model-filter-chips" id="mr-filters">
-            <span class="model-filter-label">🔎 ${t('ml_filter_label')}</span>
-            ${Object.keys(capLabels).map(cap => `<div class="chip" data-cap="${cap}">${capLabels[cap]}</div>`).join('')}
+
+        <!-- Download rápido (Ollama) — relocado de "Escolher Modelo" (2026-07-25): é instalação,
+             não seleção; pertence conceitualmente aqui, não na aba de roteamento. -->
+        <details class="cfg-details" open>
+          <summary>${t('download_models_label')}</summary>
+          <div class="cfg-details-body">
+            <div class="chips" style="margin-bottom:8px;">
+              <div class="chip" data-pull="qwen2.5:7b">qwen2.5:7b</div>
+              <div class="chip" data-pull="llama3.1:8b">llama3.1:8b</div>
+              <div class="chip" data-pull="gemma4:31b-cloud">gemma4:31b-cloud</div>
+              <div class="chip" data-pull="mistral:7b">mistral:7b</div>
+              <div class="chip" data-pull="deepseek-coder-v2:16b">deepseek-coder-v2:16b</div>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <input type="text" id="ml-customPull" placeholder="modelo:tag" class="form-input"
+                style="flex:1;max-width:180px;padding:7px 10px;font-size:.77rem;">
+              <button class="btn btn-primary btn-sm" id="ml-pullBtn">⬇️ ${t('ml_pull_btn')}</button>
+            </div>
           </div>
-        </div>
-        <div class="model-table-wrap">
-          <table class="model-table">
-            <thead>
-              <tr><th>${t('ml_col_name')}</th><th>${t('ml_col_provider')}</th><th>${t('ml_col_capabilities')}</th><th>${t('ml_col_context')}</th><th>${t('ml_col_status')}</th></tr>
-            </thead>
-            <tbody id="mr-tbody"></tbody>
-          </table>
+        </details>
+
+        <!-- Buscar/instalar do catálogo — agrupado num card próprio (2026-07-25): toggle+busca+
+             filtros+tabela estavam soltos direto no fundo da página, sem borda, inconsistente com
+             o resto (Download rápido, Catálogo etc. já são cards). -->
+        <div class="ml-static-card">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px;">
+            <div class="cat-selector" id="mr-modeToggle" style="margin-bottom:0;">
+              <button type="button" class="cat-btn active" data-mode="installed">${t('ml_mode_installed')}</button>
+              <button type="button" class="cat-btn" data-mode="cloud">${t('ml_mode_cloud')}</button>
+            </div>
+            <button class="btn btn-primary btn-sm" id="ml-syncBtn">${t('ml_ov_syncbtn')}</button>
+          </div>
+          <div class="model-registry-toolbar">
+            <input type="text" class="form-input" id="mr-search" placeholder="${t('ml_search_placeholder')}" style="max-width:260px;">
+            <div class="model-filter-chips" id="mr-filters">
+              <span class="model-filter-label">🔎 ${t('ml_filter_label')}</span>
+              ${Object.keys(capLabels).map(cap => `<div class="chip" data-cap="${cap}">${capLabels[cap]}</div>`).join('')}
+            </div>
+          </div>
+          <div class="model-table-wrap">
+            <table class="model-table">
+              <thead>
+                <tr><th>${t('ml_col_name')}</th><th>${t('ml_col_provider')}</th><th>${t('ml_col_capabilities')}</th><th>${t('ml_col_context')}</th><th>${t('ml_col_status')}</th></tr>
+              </thead>
+              <tbody id="mr-tbody"></tbody>
+            </table>
+          </div>
         </div>
       </div>
 
       <!-- ═══ Routing ═══ -->
       <div class="ml-panel" data-panel="routing">
+        ${guideBox(t('ml_tab_routing_guide'))}
         <div class="cfg-efetiva">
           <div class="cfg-efetiva-title">📌 ${t('effective_config_title')}</div>
           <div class="cfg-efetiva-body">
@@ -233,21 +275,12 @@ export function render(container) {
           </div>
         </div>
 
-        <!-- Provider padrão + Classificador -->
+        <!-- Modelo Padrão + Classificador (Model Router) — volta pra "Escolher Modelo" (2026-07-25):
+             são config de roteamento ("modelo padrão" e motor do Model Router), não infraestrutura
+             de provider. Provider Padrão em si (qual backend usar) continua em Provedores. -->
         <details class="cfg-details">
-          <summary>${t('provider_classifier_title')}</summary>
+          <summary>${t('default_model_classifier_title')}</summary>
           <div class="cfg-details-body">
-            <div class="form-group">
-              <label class="form-label">${t('default_provider_label')}</label>
-              <select class="form-select" id="ml-defaultProvider" style="max-width:280px;">
-                <option value="ollama">Ollama (Local + Cloud)</option>
-                <option value="gemini">Google Gemini</option>
-                <option value="openrouter">🔀 OpenRouter</option>
-                <option value="deepseek">DeepSeek</option>
-                <option value="groq">Groq</option>
-                <option value="anthropic">🧠 Anthropic (Claude)</option>
-              </select>
-            </div>
             <div id="ml-ollamaSection">
               <div class="form-group">
                 <label class="form-label">${t('main_ollama_model_label')} <span class="badge badge-cloud">cloud</span></label>
@@ -255,21 +288,6 @@ export function render(container) {
                   <input type="text" class="model-select-input" autocomplete="off" id="ollamaModel" placeholder="glm-5.2:cloud">
                   <svg class="msa" width="11" height="11" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
                   <div class="model-dropdown" id="dropdown-ollamaModel"></div>
-                </div>
-              </div>
-              <div class="form-group">
-                <label class="form-label">${t('download_models_label')}</label>
-                <div class="chips" style="margin-bottom:8px;">
-                  <div class="chip" data-pull="qwen2.5:7b">qwen2.5:7b</div>
-                  <div class="chip" data-pull="llama3.1:8b">llama3.1:8b</div>
-                  <div class="chip" data-pull="gemma4:31b-cloud">gemma4:31b-cloud</div>
-                  <div class="chip" data-pull="mistral:7b">mistral:7b</div>
-                  <div class="chip" data-pull="deepseek-coder-v2:16b">deepseek-coder-v2:16b</div>
-                </div>
-                <div style="display:flex;gap:8px;">
-                  <input type="text" id="ml-customPull" placeholder="modelo:tag"
-                    style="flex:1;max-width:180px;padding:7px 10px;font-size:.77rem;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-input);color:var(--text-main);outline:none;">
-                  <button class="btn btn-primary btn-sm" id="ml-pullBtn">⬇️ Pull</button>
                 </div>
               </div>
             </div>
@@ -287,6 +305,54 @@ export function render(container) {
                 <input type="text" class="form-input" id="ml-classifierServer" placeholder="http://localhost:11434">
               </div>
             </div>
+          </div>
+        </details>
+
+        <!-- Modelos Internos — movido de "Avançado" (2026-07-25): são configuração de modelo
+             (GoalPlanner/RiskAnalyzer/ObserverValidator), não config técnica de sistema. Pertencem
+             conceitualmente ao Model Router, junto com o resto do que já está nesta aba. -->
+        <details class="cfg-details" id="ml-internalDetails" open>
+          <summary>
+            ${t('internal_models_title')}
+            <span id="ml-internalBadge" style="display:none;margin-left:8px;padding:2px 8px;border-radius:10px;font-size:.72rem;font-weight:600;background:rgba(255,160,0,.15);color:#f59e0b;border:1px solid rgba(255,160,0,.3);">⚠️ ${t('internal_unconfigured_badge')}</span>
+          </summary>
+          <div class="cfg-details-body">
+            <div id="ml-internalWarning" style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:8px;background:rgba(255,160,0,.08);border:1px solid rgba(255,160,0,.3);font-size:.82rem;line-height:1.5;color:var(--text-main);">
+              ⚠️ <strong>${t('internal_warn_title')}</strong> ${t('internal_warn_body')}
+            </div>
+            <div class="form-hint" style="margin-bottom:14px;">${t('internal_models_hint')}</div>
+            <div class="internal-comp-list">
+              ${internalCompRow('ml-plannerModel',  '📋', 'GoalPlanner',       t('internal_planner_desc'),  'gemma4:31b-cloud')}
+              ${internalCompRow('ml-riskModel',     '🛡️', 'RiskAnalyzer',      t('internal_risk_desc'),     'gemma4:31b-cloud')}
+              ${internalCompRow('ml-observerModel', '🔬', 'ObserverValidator', t('internal_observer_desc'), 'qwen3.5:cloud')}
+            </div>
+          </div>
+        </details>
+
+      </div>
+
+      <!-- ═══ Providers ═══ -->
+      <div class="ml-panel" data-panel="providers">
+        ${guideBox(t('ml_tab_providers_guide'))}
+        <div class="provider-grid" id="ml-providerGrid"></div>
+
+        <!-- Provider padrão — infraestrutura/conexão, fica em Provedores. Modelo Ollama Principal
+             e Classificador voltaram pra "Escolher Modelo" (2026-07-25): são config de roteamento
+             ("Modelo padrão" e "Model Router"), não de infraestrutura de provider. -->
+        <details class="cfg-details">
+          <summary>${t('provider_classifier_title')}</summary>
+          <div class="cfg-details-body">
+            <div class="form-group">
+              <label class="form-label">${t('default_provider_label')}</label>
+              <select class="form-select" id="ml-defaultProvider" style="max-width:280px;">
+                <option value="ollama">Ollama (Local + Cloud)</option>
+                <option value="gemini">Google Gemini</option>
+                <option value="openrouter">🔀 OpenRouter</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="groq">Groq</option>
+                <option value="anthropic">🧠 Anthropic (Claude)</option>
+              </select>
+            </div>
             <div class="form-group">
               <label class="form-label">${t('vision_server_label')}</label>
               <input type="text" class="form-input" id="ml-visionServer" placeholder="http://localhost:11434" style="max-width:320px;">
@@ -294,7 +360,7 @@ export function render(container) {
           </div>
         </details>
 
-        <!-- Provider por perfil -->
+        <!-- Provider por perfil — relocado de "Escolher Modelo" (2026-07-25), mesmo motivo. -->
         <details class="cfg-details">
           <summary>${t('provider_per_profile_title')}</summary>
           <div class="cfg-details-body">
@@ -309,14 +375,6 @@ export function render(container) {
             </div>
           </div>
         </details>
-      </div>
-
-      <!-- ═══ Providers ═══ -->
-      <div class="ml-panel" data-panel="providers">
-        <div class="provider-toolbar">
-          <span class="form-hint" id="ml-lastSync">${t('ml_ov_lastsync')}: —</span>
-        </div>
-        <div class="provider-grid" id="ml-providerGrid"></div>
 
         <details class="cfg-details">
           <summary>${t('ml_add_provider_title')}</summary>
@@ -345,24 +403,7 @@ export function render(container) {
 
       <!-- ═══ Advanced ═══ -->
       <div class="ml-panel" data-panel="advanced">
-        <details class="cfg-details" id="ml-internalDetails" open>
-          <summary>
-            ${t('internal_models_title')}
-            <span id="ml-internalBadge" style="display:none;margin-left:8px;padding:2px 8px;border-radius:10px;font-size:.72rem;font-weight:600;background:rgba(255,160,0,.15);color:#f59e0b;border:1px solid rgba(255,160,0,.3);">⚠️ ${t('internal_unconfigured_badge')}</span>
-          </summary>
-          <div class="cfg-details-body">
-            <div id="ml-internalWarning" style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:8px;background:rgba(255,160,0,.08);border:1px solid rgba(255,160,0,.3);font-size:.82rem;line-height:1.5;color:var(--text-main);">
-              ⚠️ <strong>${t('internal_warn_title')}</strong> ${t('internal_warn_body')}
-            </div>
-            <div class="form-hint" style="margin-bottom:14px;">${t('internal_models_hint')}</div>
-            <div class="internal-comp-grid">
-              ${internalCompCard('ml-plannerModel',  '📋', 'GoalPlanner',       t('internal_planner_desc'),  'gemma4:31b-cloud')}
-              ${internalCompCard('ml-riskModel',     '🛡️', 'RiskAnalyzer',      t('internal_risk_desc'),     'gemma4:31b-cloud')}
-              ${internalCompCard('ml-observerModel', '🔬', 'ObserverValidator', t('internal_observer_desc'), 'qwen3.5:cloud')}
-            </div>
-          </div>
-        </details>
-
+        ${guideBox(t('ml_tab_advanced_guide'))}
         <details class="cfg-details" id="ml-diagDetails">
           <summary>🔍 ${t('routing_diag_title')}</summary>
           <div class="cfg-details-body">
@@ -531,7 +572,7 @@ export function render(container) {
     const badge   = el('ml-internalBadge');
     const warning = el('ml-internalWarning');
     const details = el('ml-internalDetails');
-    const tabWarn = el('ml-advTabWarn');
+    const tabWarn = el('ml-routingTabWarn');
     if (badge)   badge.style.display   = unconfigured ? 'inline' : 'none';
     if (warning) warning.style.display = unconfigured ? 'block'  : 'none';
     if (tabWarn) tabWarn.style.display = unconfigured ? 'inline' : 'none';
@@ -561,15 +602,41 @@ function updateOverview() {
   const ollamaHealth = health.find(h => h.provider === 'ollama');
   const ollamaOnline = providersStore.get('ollamaOnline');
   const ollamaCount  = providersStore.get('ollamaModelCount') || 0;
+  const defaultModel = s.currentModel || s.ollamaModel || '';
+
+  const el = id => document.getElementById(id);
+  const providerLabel = PROV_LABELS[s.defaultProvider] || s.defaultProvider || '—';
+  const statusText = ollamaOnline ? t('ml_ov_online') : (ollamaHealth?.error || t('ml_ov_offline'));
+  el('ov-provider')     && (el('ov-provider').textContent = `${providerLabel} — ${statusText}`);
+  el('ov-dot')          && (el('ov-dot').className = `dot ${ollamaOnline ? 'online' : 'offline'}`);
+  el('ov-count')        && (el('ov-count').textContent = `${ollamaCount} ${t('ml_ov_available_suffix')}`);
+  el('ov-defaultmodel') && (el('ov-defaultmodel').textContent = defaultModel || '—');
+
+  // "Sistema pronto pra uso?" — agregado das 3 condições acima, é a resposta que a Visão Geral
+  // deve dar (nunca uma ação); detalhe operacional (sync, catálogo) mora só em Instalar Modelo.
+  const ready = ollamaOnline && ollamaCount > 0 && !!defaultModel;
+  el('ov-ready') && (el('ov-ready').textContent = ready ? t('ml_ov_ready_yes') : t('ml_ov_ready_no'));
+
+  updateCatalogCard();
+}
+
+/** Card "Catálogo de Modelos" (Instalar Modelo) — local canônico único pras métricas de catálogo
+ * (contagem, última sincronização, origem, estado); Visão Geral só reflete prontidão agregada. */
+function updateCatalogCard() {
+  const cs = configStore;
+  const s = cs.snap();
+  const health = providersStore.get('health') || [];
+  const ollamaHealth = health.find(h => h.provider === 'ollama');
+  const ollamaOnline = providersStore.get('ollamaOnline');
+  const ollamaCount  = providersStore.get('ollamaModelCount') || 0;
   const lastSync     = providersStore.get('lastSync');
 
   const el = id => document.getElementById(id);
-  el('ov-provider')     && (el('ov-provider').textContent = PROV_LABELS[s.defaultProvider] || s.defaultProvider || '—');
-  el('ov-dot')          && (el('ov-dot').className = `dot ${ollamaOnline ? 'online' : 'offline'}`);
-  el('ov-status')       && (el('ov-status').textContent = ollamaOnline ? t('ml_ov_online') : (ollamaHealth?.error || t('ml_ov_offline')));
-  el('ov-count')        && (el('ov-count').textContent = `${ollamaCount} ${t('ml_ov_available_suffix')}`);
-  el('ov-lastsync')     && (el('ov-lastsync').textContent = lastSync ? new Date(lastSync).toLocaleTimeString() : '—');
-  el('ov-defaultmodel') && (el('ov-defaultmodel').textContent = s.currentModel || s.ollamaModel || '—');
+  el('cat-count')      && (el('cat-count').textContent = `${ollamaCount} ${t('ml_ov_available_suffix')}`);
+  el('cat-lastsync')   && (el('cat-lastsync').textContent = lastSync ? new Date(lastSync).toLocaleTimeString() : '—');
+  el('cat-origin')     && (el('cat-origin').textContent = PROV_LABELS[s.defaultProvider] || s.defaultProvider || '—');
+  el('cat-syncstatus') && (el('cat-syncstatus').textContent = ollamaOnline ? t('ml_ov_online') : (ollamaHealth?.error || t('ml_ov_offline')));
+  el('cat-dot')        && (el('cat-dot').className = `dot ${ollamaOnline ? 'online' : 'offline'}`);
 }
 
 // ─── Provider Overview ─────────────────────────────────────────
@@ -647,7 +714,6 @@ function renderProviderGrid() {
   }
 
   grid.innerHTML = cards.join('');
-  updateLastSync();
 }
 
 /**
@@ -674,7 +740,6 @@ function updateProviderHealthUI() {
     elHealth.querySelector('.dot').className = `dot ${h.online ? 'online' : 'offline'}`;
     elHealth.querySelector('span:last-child').textContent = h.online ? t('ollama_models_count', { n: h.modelCount }) : t('offline');
   }
-  updateLastSync();
 }
 
 function wireProviderOverview() {
@@ -746,13 +811,6 @@ function wireProviderOverview() {
       document.getElementById('ml-newProvKey').value   = '';
     } catch (err) { showToast('Erro: ' + err.message, 'error'); }
   });
-}
-
-function updateLastSync() {
-  const el = document.getElementById('ml-lastSync');
-  if (!el) return;
-  const ts = providersStore.get('lastSync');
-  el.textContent = t('ml_ov_lastsync') + ': ' + (ts ? new Date(ts).toLocaleTimeString() : '—');
 }
 
 // ─── Model Registry (tabela reutilizada — browse em Registry, seleção em Routing) ─────
@@ -980,6 +1038,10 @@ function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** Caixa de ajuda passo a passo no topo de cada aba — usuário leigo entende o que fazer ali
+ * antes de ver a UI técnica embaixo. Um único ponto de estilo pras 5 abas (Overview/Registry/
+ * Routing/Providers/Advanced), via classe dedicada em config.css (.ml-guide-box) — sem
+ * max-width próprio, então ocupa a mesma largura da tabela/barra de busca abaixo dela. */
 function effRouteRow(cat, icon, label) {
   return `
     <div class="cfg-efetiva-row">
@@ -1020,10 +1082,13 @@ function providerCard(cat, icon, label) {
     </div>`;
 }
 
-function internalCompCard(id, icon, name, desc, placeholder) {
+/** Lista vertical em vez de cards de grid (2026-07-25): descrições mais longas ficam legíveis em
+ * largura total, e escala melhor se mais componentes internos forem adicionados no futuro — basta
+ * uma linha nova, sem depender de reflow de grid. */
+function internalCompRow(id, icon, name, desc, placeholder) {
   return `
-    <div class="internal-comp-card">
-      <div class="internal-comp-header">
+    <div class="internal-comp-row">
+      <div class="internal-comp-info">
         <span class="internal-comp-icon">${icon}</span>
         <div>
           <div class="internal-comp-name">${name}</div>

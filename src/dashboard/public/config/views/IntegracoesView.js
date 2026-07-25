@@ -1,5 +1,6 @@
 import { showToast } from '../components/Toast.js';
 import { runtimeStore } from '../state.js';
+import { guideBox } from '../app.js';
 
 export function render(container) {
   const isWindows = runtimeStore.snap().platform === 'win32';
@@ -10,6 +11,8 @@ export function render(container) {
         <h1>🔌 ${t('sidebar_integrations')}</h1>
         <p>${t('integrations_page_desc')}</p>
       </div>
+
+      ${guideBox(t('ig_page_guide'))}
 
       <div class="provider-grid" style="margin-top: 24px;">
 

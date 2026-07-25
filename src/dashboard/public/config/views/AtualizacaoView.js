@@ -1,5 +1,6 @@
 import { checkUpdate, applyUpdate, getStatus, getUpdateBranches } from '../api.js';
 import { showToast } from '../components/Toast.js';
+import { guideBox } from '../app.js';
 
 const TELEGRAM_WAIT = 30; // segundos — limite para Telegram liberar polling
 const GENERIC_WAIT  = 5;  // segundos — quando Telegram não está configurado
@@ -11,6 +12,8 @@ export function render(container) {
         <h1>⬆️ ${t('sidebar_update')}</h1>
         <p>${t('update_page_desc')}</p>
       </div>
+
+      ${guideBox(t('upd_page_guide'))}
 
       <details class="cfg-details" open>
         <summary>${t('update_channel_title')}</summary>

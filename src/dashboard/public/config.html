@@ -44,6 +44,11 @@
         <div class="nav-item" data-page="backup">
           <span class="ni">💾</span><span data-i18n="sidebar_backup">Backup</span>
         </div>
+        <!-- Oculto por padrão — só aparece com Modo Desenvolvedor ativado (7 cliques no logo do
+             header). Ver newclawIsDevMode()/newclaw-devmode-changed em shared.js/app.js. -->
+        <div class="nav-item" data-page="desenvolvedor" id="nav-desenvolvedor" style="display:none;">
+          <span class="ni">🔬</span><span data-i18n="sidebar_developer">Desenvolvedor</span>
+        </div>
       </nav>
       <div class="sidebar-footer">
         <button class="btn btn-primary"  id="btnSave"    data-i18n="save_btn">💾 Salvar</button>

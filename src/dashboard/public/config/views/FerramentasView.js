@@ -1,5 +1,7 @@
 import { toolsStore } from '../state.js';
 import { getTools, toggleTool } from '../api.js';
+import { showToast } from '../components/Toast.js';
+import { guideBox } from '../app.js';
 
 const TOOL_CAT = {
   web_search:'web', web_navigate:'web', web_scrape:'web',
@@ -23,17 +25,26 @@ export function render(container) {
         <h1>🛠️ ${t('sidebar_tools')}</h1>
         <p>${t('tools_page_desc')}</p>
       </div>
-      <input type="text" class="tool-search" id="ft-search" placeholder="${t('search_tools_placeholder')}">
+      ${guideBox(t('ft_page_guide'))}
+      <div class="ft-toolbar">
+        <input type="text" class="tool-search" id="ft-search" placeholder="${t('search_tools_placeholder')}">
+        <div class="ft-bulk-actions">
+          <button class="btn btn-ghost btn-sm" id="ft-enableAll">✅ ${t('enable_all_btn')}</button>
+          <button class="btn btn-ghost btn-sm" id="ft-disableAll">🚫 ${t('disable_all_btn')}</button>
+        </div>
+      </div>
       <div class="module-grid" id="ft-grid"><div class="empty">${t('loading_modules')}</div></div>
     </div>`;
 
   let allTools = [];
+  let visibleTools = [];
 
   function renderGrid(tools) {
     const stats  = toolsStore.get('stats') || {};
     const maxC   = Math.max(1, ...tools.map(tool => stats[tool.name]?.calls || 0));
     const grid   = document.getElementById('ft-grid');
     if (!grid) return;
+    visibleTools = tools;
     if (!tools.length) { grid.innerHTML = `<div class="empty">${t('no_tools_available')}</div>`; return; }
     grid.innerHTML = tools.map(tool => {
       const icon    = TOOL_ICONS[tool.name] || '🔧';
@@ -52,7 +63,7 @@ export function render(container) {
             <div class="tm-icon">${icon}</div>
             <div class="tm-name">${tool.name}${warnBadge}</div>
             <button class="tm-toggle ${tool.enabled ? 'on' : 'off'}" data-tname="${tool.name}" data-enabled="${tool.enabled}">
-              ${tool.enabled ? 'OFF' : 'ON'}
+              ${tool.enabled ? 'ON' : 'OFF'}
             </button>
           </div>
           <div class="tm-desc">${tool.description || ''}</div>
@@ -95,6 +106,30 @@ export function render(container) {
     const q = e.target.value.toLowerCase().trim();
     renderGrid(q ? allTools.filter(tool => tool.name.toLowerCase().includes(q) || (tool.description||'').toLowerCase().includes(q)) : allTools);
   });
+
+  // Ativar Tudo / Desativar Tudo — age sobre os módulos atualmente visíveis (respeita a busca
+  // ativa: buscar "web" e clicar Desativar Tudo desliga só os módulos web, não o app inteiro).
+  async function bulkToggle(enable) {
+    const targets = visibleTools.filter(tool => tool.enabled !== enable);
+    const enableBtn  = document.getElementById('ft-enableAll');
+    const disableBtn = document.getElementById('ft-disableAll');
+    if (!targets.length) { showToast(t('bulk_toggle_none_toast'), 'success'); return; }
+    enableBtn.disabled = true;
+    disableBtn.disabled = true;
+    try {
+      await Promise.all(targets.map(tool => toggleTool(tool.name, enable)));
+      const tools = await getTools();
+      toolsStore.set('tools', tools);
+      showToast(t(enable ? 'bulk_enabled_toast' : 'bulk_disabled_toast', { n: targets.length }), 'success');
+    } catch (err) {
+      showToast('❌ ' + err.message, 'error');
+    } finally {
+      enableBtn.disabled = false;
+      disableBtn.disabled = false;
+    }
+  }
+  document.getElementById('ft-enableAll').addEventListener('click', () => bulkToggle(true));
+  document.getElementById('ft-disableAll').addEventListener('click', () => bulkToggle(false));
 
   // Subscribe to store updates
   const unsubTools = toolsStore.on('tools', tools => { allTools = tools; renderGrid(allTools); });

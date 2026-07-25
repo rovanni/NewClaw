@@ -51,6 +51,7 @@ const VIEW_MAP = {
   avancado:    'AvancadoView',
   atualizacao: 'AtualizacaoView',
   backup:      'BackupView',
+  desenvolvedor: 'DesenvolvedorView',
 };
 
 let currentCleanup = null;
@@ -84,6 +85,19 @@ window.addEventListener('newclaw-lang-changed', () => {
 // ── Sidebar nav ──────────────────────────────────────────────────
 document.querySelectorAll('#sidebar-nav .nav-item').forEach(item => {
   item.addEventListener('click', () => navigate(item.dataset.page));
+});
+
+// ── Modo Desenvolvedor — mostra/esconde a aba conforme o estado persistido/ativado ──────────
+function applyDevModeVisibility(enabled) {
+  const nav = document.getElementById('nav-desenvolvedor');
+  if (nav) nav.style.display = enabled ? 'flex' : 'none';
+  // Se a aba sumiu enquanto o usuário estava nela, não deixa a página orfã — volta pro Dashboard.
+  if (!enabled && currentPage === 'desenvolvedor') navigate('dashboard');
+}
+applyDevModeVisibility(newclawIsDevMode());
+window.addEventListener('newclaw-devmode-changed', e => {
+  applyDevModeVisibility(e.detail.enabled);
+  showToast(e.detail.enabled ? t('dev_mode_enabled_toast') : t('dev_mode_disabled_toast'), 'success');
 });
 
 // ── Save & Restart ───────────────────────────────────────────────
@@ -254,6 +268,13 @@ async function loadStatus() {
   } catch {
     runtimeStore.patch({ status: 'offline', uptime: '—', ram: '—', platform: null, hostname: null, arch: null, telegramChannel: null });
   }
+}
+
+// Caixa de ajuda passo a passo no topo de cada aba — nasceu em ModelosView.js (2026-07-25),
+// extraída pra cá pra virar ponto único compartilhado por todas as views, em vez de cada uma
+// duplicar a mesma função. Evita precisar de uma página de ajuda separada.
+export function guideBox(text) {
+  return `<div class="ml-guide-box">${text}</div>`;
 }
 
 export async function loadProviders(forceRefresh = false) {

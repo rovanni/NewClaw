@@ -3,6 +3,7 @@ import {
   getBackupConfig, saveBackupConfig, getBackupSchedule, restoreBackup, uploadBackup,
 } from '../api.js';
 import { showToast } from '../components/Toast.js';
+import { guideBox } from '../app.js';
 
 function fmtDate(iso) {
   if (!iso) return '—';
@@ -21,6 +22,8 @@ export function render(container) {
         <h1>💾 ${t('sidebar_backup')}</h1>
         <p>${t('backup_page_desc')}</p>
       </div>
+
+      ${guideBox(t('bkp_page_guide'))}
 
       <details class="cfg-details" open>
         <summary>${t('backup_schedule_title')}</summary>

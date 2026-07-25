@@ -1,15 +1,19 @@
-import { runtimeStore, skillsStore, toolsStore } from '../state.js';
+import { runtimeStore, skillsStore, toolsStore, providersStore } from '../state.js';
 
-const TOOL_ICONS = {
-  exec_command:'💻', web_search:'🔍', web_navigate:'🌐', crypto_report:'📊',
-  crypto_analysis:'📉', send_audio:'🔊', send_document:'📄', memory_search:'🔎',
-  memory_write:'✍️', memory_admin:'⚙️', ssh_exec:'🖥️', write:'📝', read:'📖',
-  edit:'✏️', list_dir:'📂', weather:'🌤️', schedule:'📅', file_ops:'📁',
-};
+// Diretriz 2026-07-25: o Dashboard principal responde só "o sistema está funcionando?" — cada
+// painel aqui precisa responder a pelo menos uma dessas perguntas (sistema online, provider
+// conectado, modelo ativo, serviço indisponível, canal desconectado, preciso agir?). Telemetria
+// do motor cognitivo (Top Ferramentas por Uso, Padrões Cognitivos) foi movida pra DesenvolvedorView
+// — não responde nenhuma dessas perguntas, é análise de comportamento interno.
 
 export function render(container) {
   container.innerHTML = `
     <div class="v-dashboard">
+      <div class="page-header">
+        <h1>📡 Dashboard</h1>
+        <p>${t('dash_page_desc')}</p>
+      </div>
+
       <div class="agent-hero">
         <div class="agent-avatar">
           <div class="avatar-ring" id="avatarRing"></div>
@@ -33,27 +37,36 @@ export function render(container) {
         </div>
       </div>
 
+      <!-- Alertas primeiro — problemas antes de estatísticas (diretriz UX 2026-07-25). -->
+      <div class="activity-panel" id="dashAlertsPanel">
+        <div class="activity-panel-title">🚨 ${t('dash_alerts_title')}</div>
+        <div id="dashAlerts"><div class="empty">${t('waiting_data')}</div></div>
+      </div>
+
+      <!-- Estado Geral — checklist de prontidão, mesma linguagem visual do overview-card de Modelos. -->
+      <div class="overview-card" style="max-width:none;margin-bottom:16px;">
+        <div class="overview-row"><span class="overview-label">${t('dash_state_system')}</span><span class="overview-value"><span class="dot" id="dashSysDot"></span> <span id="dashSysText">—</span></span></div>
+        <div class="overview-row"><span class="overview-label">${t('dash_state_provider')}</span><span class="overview-value" id="dashProvText">—</span></div>
+        <div class="overview-row"><span class="overview-label">${t('dash_state_model')}</span><span class="overview-value" id="dashModelText">—</span></div>
+        <div class="overview-row"><span class="overview-label">${t('dash_state_ready')}</span><span class="overview-value" id="dashReadyText">—</span></div>
+      </div>
+
+      <div class="activity-panel">
+        <div class="activity-panel-title">🧩 ${t('dash_services_title')}</div>
+        <div id="dashServices"><div class="empty">${t('waiting_data')}</div></div>
+      </div>
+
+      <div class="activity-panel" id="channelsPanel">
+        <div class="activity-panel-title"><div class="live-dot"></div>${t('channels_section_title')}</div>
+        <div id="channelsList"><div class="empty">${t('waiting_data')}</div></div>
+      </div>
+
       <div class="metrics-strip">
         <div class="metric-card"><div class="metric-val accent" id="mRam">—</div><div class="metric-lbl">RAM Heap</div></div>
         <div class="metric-card"><div class="metric-val green" id="mActiveSkills">—</div><div class="metric-lbl">${t('metric_active_skills')}</div></div>
         <div class="metric-card"><div class="metric-val warn" id="mProposedSkills">—</div><div class="metric-lbl">${t('metric_proposed')}</div></div>
         <div class="metric-card"><div class="metric-val" id="mPatterns">—</div><div class="metric-lbl">${t('metric_patterns')}</div></div>
         <div class="metric-card"><div class="metric-val accent" id="mTopTool">—</div><div class="metric-lbl">${t('metric_top_tool')}</div></div>
-      </div>
-
-      <div class="activity-panel">
-        <div class="activity-panel-title"><div class="live-dot"></div>${t('activity_tools_title')}</div>
-        <div id="dashToolBars"><div class="empty">${t('waiting_data')}</div></div>
-      </div>
-
-      <div class="activity-panel">
-        <div class="activity-panel-title"><div class="live-dot"></div>${t('cognitive_patterns_title')}</div>
-        <div id="dashPatterns"><div class="empty">${t('waiting_data')}</div></div>
-      </div>
-
-      <div class="activity-panel" id="channelsPanel">
-        <div class="activity-panel-title"><div class="live-dot"></div>${t('channels_section_title')}</div>
-        <div id="channelsList"><div class="empty">${t('waiting_data')}</div></div>
       </div>
 
       <details class="cfg-details">
@@ -101,15 +114,18 @@ export function render(container) {
   const unsubs = [
     runtimeStore.on('*', updateRuntime),
     runtimeStore.on('*', s => updateChannels(s.telegramChannel)),
-    toolsStore.on('stats', () => updateActivity()),
-    toolsStore.on('tools', () => updateActivity()),
+    runtimeStore.on('*', updateHealthPanels),
+    toolsStore.on('stats', updateTopToolMetric),
     skillsStore.on('*', updateSkillMetrics),
+    providersStore.on('*', updateHealthPanels),
+    cs ? cs.on('*', updateHealthPanels) : () => {},
   ];
 
   updateRuntime(runtimeStore.snap());
   updateSkillMetrics(skillsStore.snap());
-  updateActivity();
+  updateTopToolMetric();
   updateChannels(runtimeStore.get('telegramChannel'));
+  updateHealthPanels();
 
   return () => unsubs.forEach(fn => fn());
 }
@@ -144,22 +160,13 @@ function updateSkillMetrics(s) {
   if (el('mActiveSkills'))   el('mActiveSkills').textContent   = s.activeCount   ?? '—';
   if (el('mProposedSkills')) el('mProposedSkills').textContent = s.proposedCount  ?? '—';
   if (el('mPatterns'))       el('mPatterns').textContent       = (s.patterns || []).length;
+}
 
-  // Patterns feed
-  const patterns = s.patterns || [];
-  const pEl = el('dashPatterns');
-  if (!pEl) return;
-  if (!patterns.length) { pEl.innerHTML = `<div class="empty">${t('no_patterns_yet')}</div>`; return; }
-  const recent = [...patterns].sort((a, b) => ((b.success_count||0)+(b.fail_count||0)) - ((a.success_count||0)+(a.fail_count||0))).slice(0, 8);
-  pEl.innerHTML = recent.map(p => {
-    const total = (p.success_count||0)+(p.fail_count||0);
-    const name = p.pattern.length > 42 ? p.pattern.slice(0, 40) + '…' : p.pattern;
-    return `<div class="pattern-row">
-      <span class="pr-name" title="${p.pattern}">${name}</span>
-      <span class="pr-tool">${p.tool_name}</span>
-      <span class="pr-stat">${total} · ${p.avg_latency_ms}ms</span>
-    </div>`;
-  }).join('');
+function updateTopToolMetric() {
+  const stats = toolsStore.get('stats') || {};
+  const el = id => document.getElementById(id);
+  const entries = Object.entries(stats).sort((a, b) => b[1].calls - a[1].calls);
+  if (el('mTopTool')) el('mTopTool').textContent = entries[0]?.[0] || '—';
 }
 
 function updateChannels(tg) {
@@ -206,39 +213,73 @@ function updateChannels(tg) {
     ${clusterWarn}`;
 }
 
-function updateActivity() {
-  const stats = toolsStore.get('stats') || {};
-  const tools = toolsStore.get('tools') || [];
+// ─── Estado Geral / Serviços / Alertas ──────────────────────────────────────
+// Só usa dado real já buscado por app.js (runtimeStore/providersStore/configStore) — nenhum dos
+// três painéis inventa uma checagem nova. Serviços sem health check de verdade no backend (Redis,
+// MCP, scheduler como serviço externo) não aparecem aqui — ver auditoria 2026-07-25.
+
+function updateHealthPanels() {
+  const cs = window.__configStore;
+  if (!cs) return;
+  const s = cs.snap();
+  const rt = runtimeStore.snap();
+  const health = providersStore.get('health') || [];
+  const ollamaOnline = providersStore.get('ollamaOnline');
+  const model = s.currentModel || s.ollamaModel || '';
+  const sysOnline = rt.status === 'online';
+
+  const defaultProvider = s.defaultProvider || 'ollama';
+  const providerHealth = health.find(h => h.provider === defaultProvider);
+  const providerOnline = defaultProvider === 'ollama' ? ollamaOnline : !!providerHealth?.online;
+  const providerHasKeyOnly = defaultProvider !== 'ollama' && !providerHealth; // cloud API-key provider, sem health check real
+
+  // ── Estado Geral ──
   const el = id => document.getElementById(id);
+  el('dashSysDot')  && (el('dashSysDot').className = `dot ${sysOnline ? 'online' : 'offline'}`);
+  el('dashSysText') && (el('dashSysText').textContent = sysOnline ? t('online') : t('offline'));
+  el('dashProvText') && (el('dashProvText').textContent =
+    providerHasKeyOnly
+      ? (s[`has${defaultProvider.charAt(0).toUpperCase() + defaultProvider.slice(1)}Key`] ? t('dash_key_configured') : t('dash_key_missing'))
+      : (providerOnline ? t('ml_ov_online') : t('ml_ov_offline')));
+  el('dashModelText') && (el('dashModelText').textContent = model || t('dash_ready_no'));
+  const ready = sysOnline && (providerOnline || providerHasKeyOnly) && !!model;
+  el('dashReadyText') && (el('dashReadyText').textContent = ready ? t('dash_ready_yes') : t('dash_ready_no'));
 
-  const entries = Object.entries(stats).sort((a, b) => b[1].calls - a[1].calls).slice(0, 7);
-  const maxC = entries[0]?.[1].calls || 1;
-
-  const barsEl = el('dashToolBars');
-  if (!barsEl) return;
-
-  if (!entries.length) {
-    barsEl.innerHTML = `<div class="empty">${t('waiting_data')}</div>`;
-    el('mTopTool') && (el('mTopTool').textContent = '—');
-    return;
+  // ── Serviços (só o que tem health check real) ──
+  const svcEl = el('dashServices');
+  if (svcEl) {
+    const rows = [];
+    rows.push(serviceRow('🦙', 'Ollama', ollamaOnline));
+    for (const h of health) {
+      if (h.provider === 'ollama') continue;
+      rows.push(serviceRow('🔗', h.provider, h.online));
+    }
+    svcEl.innerHTML = rows.join('') || `<div class="empty">${t('waiting_data')}</div>`;
   }
 
-  barsEl.innerHTML = entries.map(([name, s]) => {
-    const pct  = Math.round(s.calls / maxC * 100);
-    const icon = TOOL_ICONS[name] || '🔧';
-    const cls  = s.successRate >= 80 ? 'ok' : s.successRate >= 50 ? 'warn' : 'neutral';
-    return `<div class="usage-bar-row">
-      <div class="usage-bar-icon">${icon}</div>
-      <div class="usage-bar-name">${name}</div>
-      <div class="usage-bar-track"><div class="usage-bar-fill ${cls}" style="width:0%" data-pct="${pct}"></div></div>
-      <div class="usage-bar-stat">${s.calls} · ${s.successRate}% ✓ · ${s.avgLat}ms</div>
-    </div>`;
-  }).join('');
+  // ── Alertas (derivados do mesmo dado, nunca uma checagem nova) ──
+  const alerts = [];
+  if (!sysOnline) alerts.push(t('dash_alert_system_offline'));
+  if (!providerOnline && !providerHasKeyOnly) alerts.push(t('dash_alert_provider_down', { provider: defaultProvider }));
+  if (providerHasKeyOnly && !s[`has${defaultProvider.charAt(0).toUpperCase() + defaultProvider.slice(1)}Key`]) alerts.push(t('dash_alert_key_missing', { provider: defaultProvider }));
+  if (!model) alerts.push(t('dash_alert_no_model'));
+  const tg = rt.telegramChannel;
+  if (tg && tg.state !== 'connected') alerts.push(t('dash_alert_channel_down', { channel: 'Telegram' }));
 
-  if (el('mTopTool')) el('mTopTool').textContent = entries[0][0];
+  const alertsEl = el('dashAlerts');
+  if (alertsEl) {
+    alertsEl.innerHTML = alerts.length
+      ? alerts.map(a => `<div class="alert-row"><span class="alert-icon">⚠️</span><span>${a}</span></div>`).join('')
+      : `<div class="alert-row alert-row-ok"><span class="alert-icon">✅</span><span>${t('dash_alerts_none')}</span></div>`;
+  }
+}
 
-  // Animate bars
-  requestAnimationFrame(() => {
-    document.querySelectorAll('#dashToolBars .usage-bar-fill').forEach(b => { b.style.width = b.dataset.pct + '%'; });
-  });
+function serviceRow(icon, name, online) {
+  const dot = online ? '🟢' : '🔴';
+  const status = online ? t('ml_ov_online') : t('ml_ov_offline');
+  return `<div class="channel-row">
+    <span class="channel-icon">${icon}</span>
+    <span class="channel-name">${name}</span>
+    <span class="channel-status">${dot} ${status}</span>
+  </div>`;
 }
