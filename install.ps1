@@ -585,7 +585,7 @@ function Configure-Telegram {
     Write-Host "    Você vai precisar de 2 códigos:" -ForegroundColor Cyan
     Write-Host "      1. Bot Token  → Crie um bot com @BotFather no Telegram"
     Write-Host "         Exemplo: 123456789:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    Write-Host "      2. Seu User ID → Envie /start para @userinfobot"
+    Write-Host "      2. Seu User ID → No Telegram, envie /start para @userinfobot"
     Write-Host "         Exemplo: 987654321"
     Write-Host ""
 

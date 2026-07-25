@@ -592,7 +592,7 @@ configure() {
     echo -e "  ${CYAN}Você vai precisar de 2 códigos:${NC}"
     echo -e "    1. ${BOLD}Bot Token${NC}  → Crie um bot com @BotFather no Telegram"
     echo -e "       Exemplo: 123456789:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    echo -e "    2. ${BOLD}Seu User ID${NC} → Envie /start para @userinfobot"
+    echo -e "    2. ${BOLD}Seu User ID${NC} → No Telegram, envie /start para @userinfobot"
     echo -e "       Exemplo: 987654321"
     echo ""
     local token_ok=0
