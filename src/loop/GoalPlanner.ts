@@ -490,7 +490,7 @@ MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
     const progressSection = progressModel ? `\n${buildProgressBlock(progressModel)}\n` : '';
     // M2 (RFC-001): Evidence Provider próprio, bloco separado do reflectionBlock — conhecimento
     // operacional (ferramenta×plataforma) é um eixo distinto de padrão de falha, não deve ser
-    // fundido no mesmo texto (ver docs/RFC-001_APRENDIZADO_OPERACIONAL.md pergunta 8, matriz).
+    // fundido no mesmo texto (ver docs/decisoes/RFC-001_APRENDIZADO_OPERACIONAL.md pergunta 8, matriz).
     const operationalSection = operationalHint ? `\nCONHECIMENTO OPERACIONAL APRENDIDO NESTA INSTÂNCIA:\n${operationalHint}\n` : '';
 
     return `Você é um planejador de tarefas. Um blocker foi detectado. Proponha uma NOVA estratégia.

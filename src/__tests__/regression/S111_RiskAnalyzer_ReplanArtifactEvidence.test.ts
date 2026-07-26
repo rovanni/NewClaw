@@ -2,8 +2,8 @@
 /**
  * TESTE DE REGRESSÃO — S111
  *
- * Piloto arquitetural especificado em docs/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md
- * (fase de análise: R1 → R7, docs/AUDITORIA_PIPELINE_ARTEFATOS_SPRINT_R1_2026-07-13.md e
+ * Piloto arquitetural especificado em docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md
+ * (fase de análise: R1 → R7, docs/sprints-r1-r7-2026-07-13/AUDITORIA_PIPELINE_ARTEFATOS_SPRINT_R1_2026-07-13.md e
  * seguintes). Causa raiz original (R1 §5): `RiskAnalyzer` resolvia `file_path` de
  * `send_document` só por proximidade sintática com um `write` NO MESMO BATCH de steps sendo
  * revisado — se o `write` que produziu o arquivo aconteceu num CICLO ANTERIOR (típico de

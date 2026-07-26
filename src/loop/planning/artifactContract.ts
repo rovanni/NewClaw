@@ -6,7 +6,7 @@ import { inferExpectedExtensions, SOURCE_SCRIPT_EXTENSIONS } from './inferExpect
  * Tamanho mínimo (bytes) para um arquivo contar como deliverable real, não stub/placeholder.
  * Fonte única — antes duplicado como literal `200` só em GoalExecutionLoop.deliverable_check
  * (Fix S1). Reusado agora também para verificar declarações `ARTIFACT:` de exec_command
- * (docs/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md §2).
+ * (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md §2).
  */
 export const MIN_DELIVERABLE_SIZE = 200;
 

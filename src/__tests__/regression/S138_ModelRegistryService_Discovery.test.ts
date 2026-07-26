@@ -2,7 +2,7 @@
 /**
  * TESTE DE REGRESSÃO — S138
  *
- * Fatia 1 do Model Registry (docs/ANALISE_ARQUITETURAL_MODEL_REGISTRY_2026-07-22.md): discovery
+ * Fatia 1 do Model Registry (docs/analises-arquiteturais/ANALISE_ARQUITETURAL_MODEL_REGISTRY_2026-07-22.md): discovery
  * unificado de modelos via OllamaProvider.discoverModels()/OpenAIProvider.discoverModels() +
  * ModelRegistryService como fachada de cache/normalização.
  *

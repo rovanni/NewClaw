@@ -487,7 +487,7 @@ export class ExecCommandTool implements ToolExecutor {
                 });
             });
 
-            // Contrato de artefato (docs/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md): scripts
+            // Contrato de artefato (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md): scripts
             // podem declarar o(s) arquivo(s) que produziram via linha "ARTIFACT: <path>" no
             // stdout — declarativo (opt-in do script), nunca varredura do workspace. Cada
             // declaração é verificada contra o disco antes de virar evidência confiável.

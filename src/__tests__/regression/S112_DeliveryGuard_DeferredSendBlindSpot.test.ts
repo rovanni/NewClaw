@@ -1,6 +1,6 @@
 /// <reference types="node" />
 /**
- * TESTE DE REGRESSÃO — S112 (FIX E de docs/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md)
+ * TESTE DE REGRESSÃO — S112 (FIX E de docs/analises-arquiteturais/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md)
  *
  * Achado da investigação do loop TOOL-DEDUP (13/07/2026, análise de código + 2 execuções
  * reais): depois de um `write` + `send_document` (diferido para pós-validação) bem-sucedidos

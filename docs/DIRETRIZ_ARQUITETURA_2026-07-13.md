@@ -2,7 +2,7 @@
 
 A partir de 2026-07-13, toda mudança arquitetural neste projeto segue obrigatoriamente o processo abaixo antes de qualquer implementação. Objetivo: evitar que uma boa ideia seja implementada antes de ser suficientemente criticada.
 
-Origem: Sprint R1/R2 (`docs/AUDITORIA_PIPELINE_ARTEFATOS_SPRINT_R1_2026-07-13.md`, `docs/ANALISE_ARQUITETURAL_COGNITIVE_ENVELOPE_SPRINT_R2_2026-07-13.md`).
+Origem: Sprint R1/R2 (`docs/sprints-r1-r7-2026-07-13/AUDITORIA_PIPELINE_ARTEFATOS_SPRINT_R1_2026-07-13.md`, `docs/sprints-r1-r7-2026-07-13/ANALISE_ARQUITETURAL_COGNITIVE_ENVELOPE_SPRINT_R2_2026-07-13.md`).
 
 ## Princípio fundamental
 

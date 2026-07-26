@@ -186,7 +186,7 @@ async function main() {
     }
 
     // ══════════ 8. Modo sombra (findSimilarShadow): zero influência em Planner/RiskAnalyzer/execução ══════════
-    // RFC-002 (24/07, docs/RFC-002_ATIVACAO_CASEMEMORY.md) ativou a dimensão de similaridade de
+    // RFC-002 (24/07, docs/decisoes/RFC-002_ATIVACAO_CASEMEMORY.md) ativou a dimensão de similaridade de
     // PROBLEMA (findApplicableCasesShadow, via GoalPlanner.buildCaseEvidenceHint) — por isso
     // GoalPlanner.ts AGORA referencia CaseMemory. A dimensão de similaridade de ESTRATÉGIA
     // (findSimilarShadow, testada abaixo) continua deliberadamente em modo sombra — só ela é

@@ -1,6 +1,6 @@
 /// <reference types="node" />
 /**
- * TESTE DE REGRESSÃO — S142 (Milestone M2, primeira fatia — docs/RFC-001_APRENDIZADO_OPERACIONAL.md)
+ * TESTE DE REGRESSÃO — S142 (Milestone M2, primeira fatia — docs/decisoes/RFC-001_APRENDIZADO_OPERACIONAL.md)
  *
  * Prova o ciclo completo da primeira fatia de Aprendizado Operacional:
  *   captureFromGoal() (goal validado, blocker missing_tool + fix causal) →

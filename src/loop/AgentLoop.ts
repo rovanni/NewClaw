@@ -2676,7 +2676,7 @@ export class AgentLoop {
                 content: deferMsg,
                 tool_call_id: toolCall.id,
             });
-            // FIX E (docs/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md): este branch nunca
+            // FIX E (docs/analises-arquiteturais/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md): este branch nunca
             // escrevia em cycleHistory, deixando o DELIVERY-GUARD (abaixo, no fim do
             // loop) cego a um defer bem-sucedido — ele recalcula `sentFile` só a
             // partir de cycleHistory, então via achar `wroteFile && !sentFile` e

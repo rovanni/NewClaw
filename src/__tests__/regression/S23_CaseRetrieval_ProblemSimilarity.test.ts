@@ -325,7 +325,7 @@ async function main() {
 
     // ══════════ RFC-002 (24/07): findApplicableCasesShadow ativado em GoalPlanner.plan() ══════════
     // Este bloco originalmente provava "zero influência" (modo sombra). RFC-002 ativou de
-    // propósito a dimensão de similaridade de problema — ver docs/RFC-002_ATIVACAO_CASEMEMORY.md.
+    // propósito a dimensão de similaridade de problema — ver docs/decisoes/RFC-002_ATIVACAO_CASEMEMORY.md.
     // Assertions atualizadas para provar a NOVA garantia: a consulta saiu de GoalExecutionLoop
     // (fire-and-forget, removida) e passou para dentro de GoalPlanner.plan() (awaited, real).
     console.log('\n=== S23.RFC-002 — findApplicableCasesShadow agora consultado de verdade dentro de GoalPlanner.plan() ===');

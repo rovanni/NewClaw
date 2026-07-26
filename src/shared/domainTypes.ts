@@ -185,7 +185,7 @@ export interface GoalAttempt {
      */
     subToolCalls?: string[];
     /**
-     * Sprint R1-R7 (docs/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md): artefatos que este
+     * Sprint R1-R7 (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md): artefatos que este
      * attempt declarou ter produzido — populado por `write` (o próprio `file_path`) e por
      * `exec_command` (linhas `ARTIFACT: <path>` no stdout, verificadas contra o disco antes
      * de entrar aqui). Fonte de evidência real para `RiskAnalyzer` resolver `file_path` de

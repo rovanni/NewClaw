@@ -9,7 +9,7 @@ const log = createLogger('OpenAIProvider');
  * Provider genérico para qualquer endpoint compatível com a API da OpenAI
  * (`/chat/completions`, `/models`) — cobre OpenAI oficial, LM Studio, vLLM e endpoints
  * "custom" apontados pelo usuário. Um único adapter parametrizado por baseUrl/label em vez de
- * uma classe por produto (ver docs/ANALISE_ARQUITETURAL_MODEL_REGISTRY_2026-07-22.md, Fase 3).
+ * uma classe por produto (ver docs/analises-arquiteturais/ANALISE_ARQUITETURAL_MODEL_REGISTRY_2026-07-22.md, Fase 3).
  */
 export class OpenAIProvider implements ILLMProvider {
     name = 'openai';

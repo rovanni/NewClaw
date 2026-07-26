@@ -35,7 +35,7 @@ export interface ProviderHealth {
  * Fachada fina de descoberta de modelos — delega para os adapters que já implementam
  * discoverModels() (OllamaProvider, OpenAIProvider) em vez de embutir a lógica de rede aqui.
  * Não é um God Object: cache + normalização são a única responsabilidade própria desta classe.
- * Ver docs/ANALISE_ARQUITETURAL_MODEL_REGISTRY_2026-07-22.md (Fase 2-3) para o racional.
+ * Ver docs/analises-arquiteturais/ANALISE_ARQUITETURAL_MODEL_REGISTRY_2026-07-22.md (Fase 2-3) para o racional.
  */
 export class ModelRegistryService {
     private cache: ModelInfo[] | null = null;

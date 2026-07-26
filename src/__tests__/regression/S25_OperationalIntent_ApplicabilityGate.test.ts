@@ -252,7 +252,7 @@ async function main() {
     // RFC-002 (24/07) ativou de propósito o que este bloco originalmente provava estar
     // desativado — GoalPlanner passou a consultar CaseMemory via buildCaseEvidenceHint(),
     // substituindo a chamada fire-and-forget que existia em GoalExecutionLoop (nunca lida pelo
-    // chamador) por uma consulta real. Ver docs/RFC-002_ATIVACAO_CASEMEMORY.md. Assertions
+    // chamador) por uma consulta real. Ver docs/decisoes/RFC-002_ATIVACAO_CASEMEMORY.md. Assertions
     // atualizadas para provar a NOVA garantia (RiskAnalyzer continua sem CaseMemory — a ativação
     // desta RFC ficou restrita a plan(), não RiskAnalyzer/replan()), não a antiga.
     console.log('\n=== S25.SHADOW (histórico) → RFC-002: GoalPlanner agora consulta CaseMemory; RiskAnalyzer permanece sem referência ===');

@@ -25,7 +25,7 @@ aquele SO tem disponível).
 Misturar as duas é o erro que esta separação existe para prevenir: um fato aprendido por acidente
 numa única instância, se promovido automaticamente ao catálogo distribuído, se torna "verdade" para
 todo clone do projeto — inclusive ambientes onde nunca foi validado. A investigação que originou
-este documento (`docs/RFC-001_APRENDIZADO_OPERACIONAL.md`, pergunta 3) descartou explicitamente
+este documento (`docs/decisoes/RFC-001_APRENDIZADO_OPERACIONAL.md`, pergunta 3) descartou explicitamente
 qualquer desenho onde conhecimento aprendido localmente pudesse promover-se sozinho ao catálogo
 estático, pela mesma razão.
 
@@ -88,7 +88,7 @@ pergunta ("como resolver essa dependência ausente"), nunca misturar as duas na 
 A única forma legítima de um fato aprendido virar conhecimento distribuído é promoção manual: um
 humano revisa o que foi aprendido, decide que generaliza, e o adiciona ao catálogo via PR comum —
 exatamente o mesmo processo que qualquer outra mudança de código-fonte já segue. Não existe, e não
-deve existir, um caminho automatizado para essa travessia. `docs/ADR-001_BASELINE_ARQUITETURAL.md`
+deve existir, um caminho automatizado para essa travessia. `docs/decisoes/ADR-001_BASELINE_ARQUITETURAL.md`
 (seção 6) registra essa promoção como item deliberadamente adiado para `OperationalKnowledge` —
 "adiada até o caminho informativo se provar útil em uso real", nunca implementada como atalho.
 

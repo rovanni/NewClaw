@@ -49,7 +49,7 @@ exigida para o código funcionar direito).
   sem `write` no mesmo lote): 1 tool-step, 1 "inválido" (porque `file_path` ainda não tinha sido
   resolvido), 100% > 50%, plano rejeitado antes mesmo de tentar resolver o path.
 - **Histórico real:** o comentário confirma que essa JÁ FOI a ordem original, e JÁ CAUSOU esse
-  bug — corrigido na Sprint R5-R7 (`docs/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md`). Não é
+  bug — corrigido na Sprint R5-R7 (`docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md`). Não é
   hipotético, é um bug real de produção que uma reordenação silenciosa reintroduziria.
 - **O que impede reordenar por engano:** só o comentário.
 

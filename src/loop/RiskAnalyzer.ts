@@ -594,7 +594,7 @@ OU
             // replan de UM step só (só send_document, sem write no mesmo batch — o caso mais
             // comum de replan "só reenviar o que já existe"): 1 tool-step, 1 inválido, 100% >
             // 50%, plano rejeitado antes mesmo de tentar resolver o file_path. Corrigido junto
-            // com a Sprint R5-R7 (docs/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md) — achado
+            // com a Sprint R5-R7 (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md) — achado
             // durante a implementação do piloto, não coberto pela análise arquitetural em si.
             // send_document sem file_path tenta inferir do último 'write' anterior no mesmo
             // batch de steps — evita criar um AgentLoop aninhado só pra descobrir qual arquivo
@@ -771,7 +771,7 @@ OU
             // roda nem a descrição do step) era descartada silenciosamente: adjustedPlan tinha o
             // file_path certo, mas planAdjusted=false fazia analyze() devolver `plan` (original,
             // sem o argumento) em vez de `adjustedPlan`. Achado durante a implementação do piloto
-            // R7 (docs/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md) — pré-existente, não
+            // R7 (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md) — pré-existente, não
             // introduzido por ele: já neutralizava silenciosamente a inferência sintática original
             // sempre que o plano revisado preservava toolName/description do plano original.
             const planAdjusted =

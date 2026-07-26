@@ -1,5 +1,5 @@
 /**
- * OperationalKnowledge — Milestone M2 (docs/RFC-001_APRENDIZADO_OPERACIONAL.md)
+ * OperationalKnowledge — Milestone M2 (docs/decisoes/RFC-001_APRENDIZADO_OPERACIONAL.md)
  *
  * Metade APRENDIDA do papel que KNOWN_DEPS (GoalEvaluator.ts) já ocupa de forma estática:
  * aprende, em runtime, comandos que resolveram dependências ausentes fora do catálogo

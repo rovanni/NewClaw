@@ -1,6 +1,6 @@
 // Extensões de código-fonte/script — nunca contam como deliverable esperado, mesmo se
 // mencionadas literalmente no texto (um script é meio, não fim). Achado ao vivo em 13/07/2026
-// (docs/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md, validação end-to-end do piloto):
+// (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md, validação end-to-end do piloto):
 // RiskAnalyzer.resolveArtifactPathFromEvidence() escolheu um .py em vez do .txt que o usuário
 // pediu, porque .txt não tinha nenhuma keyword aqui — sem extensão esperada, o filtro virava
 // permissivo e o candidato mais recente (o script-fonte) venceu. Mesma classe de bug que o
@@ -33,7 +33,7 @@ export const DELIVERABLE_EXTENSIONS: readonly string[] = ['.html', '.pdf', '.md'
  *
  * Extraído de GoalExecutionLoop (era método privado, dois call sites: checkDeliverables e
  * checkClaimsAgainstEvidence) para reuso por RiskAnalyzer na resolução de file_path durante o
- * replan (docs/REVISAO_ARQUITETURAL_SPRINT_R6_2026-07-13.md §1) — mesmo padrão de extração já
+ * replan (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R6_2026-07-13.md §1) — mesmo padrão de extração já
  * aplicado a sanitizePlanSteps/toolAliasResolver/CONTENT_STUB_PATTERNS neste projeto.
  */
 export function inferExpectedExtensions(userIntent: string): string[] {

@@ -1,34 +1,136 @@
 # NewClaw — Documentação Técnica
 
-Índice da documentação interna do projeto.
+Índice da documentação interna do projeto. Reorganizado em 2026-07-26 (histórico completo dessa
+reorganização: [analises-arquiteturais/DOCUMENTATION_AUDIT_REPORT.md](./analises-arquiteturais/DOCUMENTATION_AUDIT_REPORT.md)
+e [refatoracao-arquitetural-2026/PLANO_REORGANIZACAO_DOCUMENTAL.md](./refatoracao-arquitetural-2026/PLANO_REORGANIZACAO_DOCUMENTAL.md)
+— este é o terceiro esforço de organização documental do projeto; se `docs/` voltar a ficar
+bagunçado, comece lendo esses dois antes de propor uma estrutura nova).
+
+**Nota:** parte de `docs/` é pública (rastreada pelo git, o que você vê aqui) e parte é privada
+(local, nunca commitada — `docs/Auditorias/`, `docs/melhorias/`, `docs/issues/`, `docs/task.md`,
+`docs/plano-correcao-bugs.md`, ver `.gitignore` linha 8). Este índice cobre as duas, mas só a
+parte pública está em `git log`.
 
 ---
 
-## Arquitetura & Estado Atual
+## Comece aqui
 
-- [ROADMAP.md](./ROADMAP.md) — Roadmap estratégico de evolução do projeto
-- [walkthrough.md](./walkthrough.md) — Walkthrough da evolução da memória cognitiva
-- [plano-correcao-bugs.md](./plano-correcao-bugs.md) — Plano de correção de bugs
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — arquitetura de canais do NewClaw (Core vs. ChannelAdapters), carregado automaticamente pelo `CLAUDE.md`
+- [DIRETRIZ_ARQUITETURA_2026-07-13.md](./DIRETRIZ_ARQUITETURA_2026-07-13.md) — processo obrigatório de 5 fases + Validação Progressiva para qualquer mudança arquitetural, carregado automaticamente pelo `CLAUDE.md`
+- [ROADMAP.md](./ROADMAP.md) — roadmap estratégico do projeto
+- [walkthrough.md](./walkthrough.md) — walkthrough da evolução da memória cognitiva
 
-## Skills
+## Princípios arquiteturais normativos — `ARCHITECTURE/`
 
-- [skills/CURRENT_STATE.md](./skills/CURRENT_STATE.md) — Estado atual do sistema de Skills: fluxos, lacunas, duplicações
-- [skills/SKILL_DISCOVERY_PROPOSAL.md](./skills/SKILL_DISCOVERY_PROPOSAL.md) — Proposta arquitetural de Skill Discovery
-- [skills/SKILL_SYSTEM_ARCHITECTURE.md](./skills/SKILL_SYSTEM_ARCHITECTURE.md) — Arquitetura detalhada do sistema de Skills
+Documentos que a Diretriz cita como leitura obrigatória antes de propor componentes novos de
+conhecimento ou decisão:
 
-## Sprints & Implementações
+- [ARCHITECTURE/EVIDENCE_PROVIDER_PATTERN.md](./ARCHITECTURE/EVIDENCE_PROVIDER_PATTERN.md) — componentes de conhecimento produzem texto para o Planner ponderar, nunca decidem por ele
+- [ARCHITECTURE/SEPARACAO_DISTRIBUIDO_APRENDIDO.md](./ARCHITECTURE/SEPARACAO_DISTRIBUIDO_APRENDIDO.md) — conhecimento versionado em código vs. aprendido em runtime são categorias físicas distintas
+- [ARCHITECTURE/NUNCA_ADIVINHAR.md](./ARCHITECTURE/NUNCA_ADIVINHAR.md) — diante de um dado não observado, reportar ausência, nunca inferir
+- [ARCHITECTURE/PIPELINE_CURADORIA_DEPENDENCIAS.md](./ARCHITECTURE/PIPELINE_CURADORIA_DEPENDENCIAS.md) — processo pelo qual conhecimento de instalação entra em `KNOWN_DEPS`
+- [ARCHITECTURE/README.md](./ARCHITECTURE/README.md) + `architecture.json`/`dependency-graph.json`/`metrics.json`/`index.html` — snapshot gerado da arquitetura do repositório (Architecture Knowledge Base)
 
-- [sprints/SPRINT_3_6_IMPLEMENTATION_REPORT.md](./sprints/SPRINT_3_6_IMPLEMENTATION_REPORT.md) — P1–P5: organize_workspace, artifact groups, deferred send, observabilidade
-- [sprints/SPRINT_3_6D_EXECUTION_INTEGRITY.md](./sprints/SPRINT_3_6D_EXECUTION_INTEGRITY.md) — Execution Integrity: anti-alucinação, validação baseada em evidências
-- [sprints/SPRINT_3_7A_IMPLEMENTATION_REPORT.md](./sprints/SPRINT_3_7A_IMPLEMENTATION_REPORT.md) — Skill Discovery Evolution + organização da documentação
+## Decisões formais — `decisoes/`
 
-## Auditorias
+ADRs (Architecture Decision Record) e RFCs (Request for Comments) — decisões pontuais registradas
+formalmente, distintas de um programa inteiro de Sprints:
 
-- [Auditorias/01/](./Auditorias/01/) — Auditoria arquitetural v1
-- [Auditorias/02/](./Auditorias/02/) — Checklist de auditoria 2026-05-15
-- [DOCUMENTATION_AUDIT_REPORT.md](./DOCUMENTATION_AUDIT_REPORT.md) — Auditoria da estrutura de documentação (2026-06-01)
+- [decisoes/ADR-001_BASELINE_ARQUITETURAL.md](./decisoes/ADR-001_BASELINE_ARQUITETURAL.md)
+- [decisoes/RFC-001_APRENDIZADO_OPERACIONAL.md](./decisoes/RFC-001_APRENDIZADO_OPERACIONAL.md)
+- [decisoes/RFC-002_ATIVACAO_CASEMEMORY.md](./decisoes/RFC-002_ATIVACAO_CASEMEMORY.md)
+- [decisoes/DECISAO_CANAL_UPDATE_UX_2026-07-13.md](./decisoes/DECISAO_CANAL_UPDATE_UX_2026-07-13.md)
 
-## Investigações & Melhorias
+## Análises arquiteturais avulsas — `analises-arquiteturais/`
 
-- [issues/](./issues/) — Issues técnicos documentados
-- [melhorias/](./melhorias/) — Análises de performance e melhorias
+Documentos que seguem o processo formal da Diretriz (Fases 1-5) para uma mudança específica, sem
+constituir um programa de Sprints inteiro — inclui as auditorias que motivaram este próprio
+reorganização de `docs/`:
+
+- [analises-arquiteturais/ANALISE_ARQUITETURAL_MODEL_REGISTRY_2026-07-22.md](./analises-arquiteturais/ANALISE_ARQUITETURAL_MODEL_REGISTRY_2026-07-22.md) — redesign do Model Registry & Discovery
+- [analises-arquiteturais/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md](./analises-arquiteturais/INVESTIGACAO_TOOL_DEDUP_2026-07-13.md) — loop de repetição pós-entrega diferida
+- [analises-arquiteturais/AUDITORIA_ADVERSARIAL_2026-07-12.md](./analises-arquiteturais/AUDITORIA_ADVERSARIAL_2026-07-12.md) + [PLANO_SPRINTS_CORRECAO_2026-07-12.md](./analises-arquiteturais/PLANO_SPRINTS_CORRECAO_2026-07-12.md) — auditoria adversarial do codebase + plano de sprints de correção
+- [analises-arquiteturais/DOCUMENTATION_AUDIT_REPORT.md](./analises-arquiteturais/DOCUMENTATION_AUDIT_REPORT.md) — primeira auditoria de organização documental (2026-06-01)
+
+## Programa Sprints R1-R7 — `sprints-r1-r7-2026-07-13/`
+
+O programa que originou a própria `DIRETRIZ_ARQUITETURA_2026-07-13.md` (pipeline de artefatos +
+cognitive envelope). Ordem de leitura: R1 (auditoria) → R2 (cognitive envelope) → R3 (validação
+Fase 5) → R4 (revisão final) → R5 → R6 → R7.
+
+- [sprints-r1-r7-2026-07-13/AUDITORIA_PIPELINE_ARTEFATOS_SPRINT_R1_2026-07-13.md](./sprints-r1-r7-2026-07-13/AUDITORIA_PIPELINE_ARTEFATOS_SPRINT_R1_2026-07-13.md)
+- [sprints-r1-r7-2026-07-13/ANALISE_ARQUITETURAL_COGNITIVE_ENVELOPE_SPRINT_R2_2026-07-13.md](./sprints-r1-r7-2026-07-13/ANALISE_ARQUITETURAL_COGNITIVE_ENVELOPE_SPRINT_R2_2026-07-13.md)
+- [sprints-r1-r7-2026-07-13/VALIDACAO_FASE5_ARTIFACTTRACE_SPRINT_R3_2026-07-13.md](./sprints-r1-r7-2026-07-13/VALIDACAO_FASE5_ARTIFACTTRACE_SPRINT_R3_2026-07-13.md)
+- [sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_FINAL_SPRINT_R4_2026-07-13.md](./sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_FINAL_SPRINT_R4_2026-07-13.md)
+- [sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R5_2026-07-13.md](./sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R5_2026-07-13.md)
+- [sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R6_2026-07-13.md](./sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R6_2026-07-13.md)
+- [sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md](./sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md)
+
+## Programa de Refatoração Arquitetural (2026) — `refatoracao-arquitetural-2026/`
+
+Concluído em 2026-07-18, 27 Sprints (ARCH-001 a ARCH-026) + 5 Checkpoints. **Comece por
+[refatoracao-arquitetural-2026/README.md](./refatoracao-arquitetural-2026/README.md)** — é o
+índice do próprio programa (resultado final, guia de leitura, lições).
+
+- `ARCHITECTURAL_BACKLOG.md` — o quê/por quê de cada uma das 26 mudanças
+- `MASTER_EXECUTION_PLAN.md` — índice/dashboard operacional
+- `SPRINTS/` (27 arquivos) — uma Sprint por arquivo
+- `CHECKPOINTS/` (5 arquivos)
+- `METRICAS.md` — tabela comparável de todas as Sprints
+- `RETROSPECTIVA_PREMISSAS_AUDITORIA.md` / `DEPENDENCIAS_ORDEM_IMPLICITA.md` / `EXECUCAO_DECISOES_DE_DESIGN.md` — catálogos cumulativos de conhecimento
+- `RFC_ARCH-012_UnifiedDeliveryProof.md`, `RFC_ARCH-015_SchemaGeneratedRequiredArgs.md`, `RFC_ARCH-024_DeliveryTrackingContext.md` — RFCs específicas do programa
+- `REVISAO_CONSOLIDADA_TIPOS_PENDENTE.md`, `PLANO_REORGANIZACAO_DOCUMENTAL.md` — auxiliares
+
+## Skills — `skills/`
+
+- [skills/SKILL_SYSTEM_ARCHITECTURE.md](./skills/SKILL_SYSTEM_ARCHITECTURE.md) — arquitetura completa do sistema de Skills
+- [skills/CURRENT_STATE.md](./skills/CURRENT_STATE.md) — estado atual: fluxos, lacunas, duplicações
+- [skills/SKILL_DISCOVERY_PROPOSAL.md](./skills/SKILL_DISCOVERY_PROPOSAL.md) — proposta arquitetural de Skill Discovery
+
+## Sprints & Implementações — `sprints/`
+
+Relatórios de implementação de Sprints numeradas (3.6, 3.7A/B, validações operacionais):
+
+- [sprints/SPRINT_006_VALIDACAO_OPERACIONAL_REPORT.md](./sprints/SPRINT_006_VALIDACAO_OPERACIONAL_REPORT.md)
+- [sprints/SPRINT_3_6_IMPLEMENTATION_REPORT.md](./sprints/SPRINT_3_6_IMPLEMENTATION_REPORT.md)
+- [sprints/SPRINT_3_6D_EXECUTION_INTEGRITY.md](./sprints/SPRINT_3_6D_EXECUTION_INTEGRITY.md)
+- [sprints/SPRINT_3_7A_IMPLEMENTATION_REPORT.md](./sprints/SPRINT_3_7A_IMPLEMENTATION_REPORT.md)
+- [sprints/SPRINT_3_7B_IMPLEMENTATION_REPORT.md](./sprints/SPRINT_3_7B_IMPLEMENTATION_REPORT.md)
+
+## Issues técnicas — `issues/`
+
+Convenção do projeto inteiro (não de um programa específico): `docs/issues/{NNN}-{kebab-case}.md`,
+achados fora do escopo da Sprint atual, registrados para correção futura.
+
+**Estado misto, achado nesta reorganização (2026-07-26):** `docs/issues/` está no `.gitignore`,
+mas 6 arquivos (`001`, `002`, `008`, `009`, `010`, `011`) foram commitados *antes* dessa regra
+existir (21/05/2026) e continuam públicos — `.gitignore` só bloqueia arquivos NOVOS, nunca
+"destrackeia" o que já foi commitado. Os outros 16 itens (`003`-`007`, `012`-`016`, e toda a
+subpasta [issues/seguranca-codeql-2026-07-20/](./issues/seguranca-codeql-2026-07-20/)) são locais,
+mesma pasta, mesma convenção de nome — não dá para saber pelo nome do arquivo se é público sem
+rodar `git ls-files`. Não decidi nada sobre isso (nem tornar os 16 públicos, nem "consertar" os
+6 já públicos) — é uma escolha deliberada sobre o que vai para o GitHub público, não uma
+inconsistência para eu corrigir sozinho.
+
+---
+
+## Área privada (local, nunca commitada — ver `.gitignore`)
+
+Regra do `.gitignore` (linha 8, comentário original: "apenas assets, ROADMAP e walkthrough são
+públicos"): `Auditorias/`, `melhorias/`, `issues/`, `task.md`, `plano-correcao-bugs.md` ficam fora
+do repositório — com a ressalva de `issues/` acima (parcialmente público por herança histórica).
+
+- `Auditorias/` — auditorias técnicas locais, subpastas `01/`, `02/`, datadas (`2026-06-28/`,
+  `2026-07-26/`) — mesma convenção de subpasta-por-data/número do resto de `docs/`
+- `melhorias/` — diagnósticos de performance e melhorias
+- `issues/` — ver seção "Issues técnicas" acima (estado misto, não totalmente privado)
+- `task.md`, `plano-correcao-bugs.md` — artefatos de trabalho históricos
+
+Se algo aqui parecer que deveria ser público, é uma decisão a tomar deliberadamente (editar
+`.gitignore`), nunca uma correção automática — o comentário original no `.gitignore`
+("apenas assets, ROADMAP e walkthrough são públicos") indica que isso foi intencional.
+
+## Assets — `assets/`
+
+Imagens e diagramas usados no `README.md` da raiz do projeto (`banner.png`,
+`architecture-flow.svg`, `install-flow.svg`, `newclaw-graph-2x.png`, `dashboard-graph.png`).

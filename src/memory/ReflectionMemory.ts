@@ -268,7 +268,7 @@ export class ReflectionMemory {
         // taxa de falha observada. O gatilho (chamado só quando getHardFailurePatterns já
         // confirmou >=90% de falha recente) continua estatístico; o CONTEÚDO da regra abaixo,
         // não — é sempre o mesmo texto fixo, verdadeiro independente de quantas vezes ocorreu.
-        // Localização ainda em aberto (ver docs/RFC-001_APRENDIZADO_OPERACIONAL.md) — mantido
+        // Localização ainda em aberto (ver docs/decisoes/RFC-001_APRENDIZADO_OPERACIONAL.md) — mantido
         // aqui por ora, isolado nesta função para não ficar implícito dentro da lógica
         // estatística que segue.
         const environmentWorkaround = this.environmentWorkaroundForPattern(pattern);
