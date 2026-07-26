@@ -91,8 +91,11 @@ console.log('\n=== S48-5 — fix presente estruturalmente em GoalExecutionLoop.t
         'constante GENERIC_CRITERIA_SUMMARY definida uma única vez (módulo)',
     );
     assert(
-        /summary: criteriaEval\.summary \|\| GENERIC_CRITERIA_SUMMARY/.test(source),
-        'validateGoalCompletion usa a constante compartilhada (não um literal duplicado)',
+        /criteriaEval\.summary \|\| GENERIC_CRITERIA_SUMMARY/.test(source),
+        'validateGoalCompletion usa a constante compartilhada (não um literal duplicado) — ' +
+        'padrão amplo o suficiente para sobreviver a `summary: X` (object shorthand) ou ' +
+        '`let summary = X` (Sprint 005/5.5, composeDeliverySummaryAfterFriction), o que importa ' +
+        'é nunca duplicar o literal da string',
     );
     assert(
         /const hasGenericSummary = overrideOutput === GENERIC_CRITERIA_SUMMARY;/.test(source),

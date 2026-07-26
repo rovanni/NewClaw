@@ -5,12 +5,15 @@
  * disponíveis, evitando planos inviáveis desde o início.
  *
  * Cache de 5 minutos para evitar overhead em goals sequenciais.
- * O probe é não-destrutivo: usa apenas `which` e imports passivos.
+ * O probe é não-destrutivo: usa apenas `which`, imports passivos (Python) e require() passivo
+ * (Node) — o mecanismo varia por dependência (DependencyInfo.probeVia em GoalTypes.ts), nunca
+ * por suposição.
  */
 
 import { createLogger } from '../shared/AppLogger';
 import { ToolRegistry } from './ToolRegistry';
-import { probeToolCmd, resolvePython3Runtime, defaultPython3Candidates, runPython3Import, isBashFunctional } from '../utils/crossPlatform';
+import { probeToolCmd, resolvePython3Runtime, defaultPython3Candidates, runPython3Import, isBashFunctional, probeNodeRequire } from '../utils/crossPlatform';
+import { KNOWN_DEPS } from '../loop/GoalEvaluator';
 
 const log = createLogger('EnvironmentProbe');
 
@@ -30,11 +33,39 @@ export interface EnvironmentCapabilities {
 // edge-tts adicionado após bug real (04/07/2026): send_audio dependia dele silenciosamente —
 // sem entrar neste probe, o planner nunca via "INDISPONÍVEL" e só descobria via ENOENT em
 // runtime, depois de já ter tentado (e, por um bug relacionado no debounce, mascarado a falha).
-const TOOLS_TO_PROBE = [
+//
+// magick/soffice/pdfimages/jq/unzip/gs/ghostscript/exiftool/npx/tesseract adicionados em
+// Sprint 005/5.2 (docs/Auditorias/2026-07-26/AUDITORIA_CATALOGOS_FERRAMENTAS_2026-07-26.md, Caso 1): estavam em
+// KNOWN_DEPS (GoalEvaluator.ts) com comando de instalação pronto, mas ausentes daqui — o
+// planner nunca via "INDISPONÍVEL" proativamente para eles, só reativamente após ENOENT real.
+// Ver S153_CatalogConsistency para o teste que impede esse tipo de gap reaparecer sem aviso.
+//
+// 'puppeteer' (também presente em KNOWN_DEPS) permanece deliberadamente FORA desta lista: não
+// é um binário no PATH, é um módulo Node consumido via `require('puppeteer')`
+// (scripts/html2pdf.sh:174) — o mecanismo de probe abaixo (`where`/`command -v`) sempre
+// reportaria "ausente" mesmo com o pacote npm instalado e funcional, um FALSO NEGATIVO pior
+// do que nenhuma informação. Verificado por um mecanismo diferente, não por exclusão silenciosa:
+// ver NODE_REQUIRE_PROBE_TARGETS abaixo — qualquer entrada de KNOWN_DEPS com
+// `probeVia: 'node-require'` (GoalTypes.ts) é sondada via probeNodeRequire() (crossPlatform.ts,
+// mesmo padrão de runPython3Import) em vez de where/command -v. Isso é declarado uma vez, no
+// próprio KNOWN_DEPS — a próxima dependência Node "require-only" (não só puppeteer) fica
+// coberta corretamente por construção, sem exigir lembrar de adicionar uma segunda exceção
+// manual aqui. Ver S154_CatalogConsistency para o teste que garante essa cobertura.
+// Exportado para o teste de consistência de catálogos (S154_CatalogConsistency) verificar
+// paridade com KNOWN_DEPS (GoalEvaluator.ts) sem duplicar esta lista via parsing de código-fonte.
+export const TOOLS_TO_PROBE = [
     'pandoc', 'marp', 'python3', 'pip3', 'node', 'npm',
     'ffmpeg', 'convert', 'libreoffice', 'pdftotext',
     'git', 'zip', 'wget', 'curl', 'edge-tts',
+    'magick', 'soffice', 'pdfimages', 'jq', 'unzip',
+    'gs', 'ghostscript', 'exiftool', 'npx', 'tesseract',
 ];
+
+// Dependências de KNOWN_DEPS cujo mecanismo correto de verificação é require(), não PATH —
+// derivado da própria fonte única (GoalEvaluator.ts), não de uma lista mantida à mão aqui.
+export const NODE_REQUIRE_PROBE_TARGETS = Object.entries(KNOWN_DEPS)
+    .filter(([, dep]) => dep.probeVia === 'node-require')
+    .map(([key]) => key);
 
 const PYTHON_PKGS_TO_PROBE = ['pptx', 'docx', 'PIL', 'markdown'];
 
@@ -84,6 +115,19 @@ export class EnvironmentProbe {
             // causou replans desperdiçados em produção (ver isBashFunctional() em
             // crossPlatform.ts). Só um probe de execução real detecta isso.
             tools['bash'] = await isBashFunctional();
+
+            // 'puppeteer' e qualquer outra entrada de KNOWN_DEPS com probeVia: 'node-require'
+            // não são binários de PATH — probadas via `node -e require(...)` (probeNodeRequire,
+            // crossPlatform.ts), mesmo padrão do probe de pacotes Python abaixo. Mescladas no
+            // mesmo mapa `tools` (não um bucket separado): para o texto de evidência gerado mais
+            // abaixo, "disponível"/"indisponível" já trata todo mundo igual — a diferença é só
+            // no MECANISMO de verificação, nunca na forma como a evidência chega ao Planner.
+            if (NODE_REQUIRE_PROBE_TARGETS.length > 0) {
+                const nodeReqResults = await Promise.all(
+                    NODE_REQUIRE_PROBE_TARGETS.map(async (m): Promise<[string, boolean]> => [m, await probeNodeRequire(m)])
+                );
+                for (const [m, available] of nodeReqResults) tools[m] = available;
+            }
 
             // ── 2. Python package probe — resolve o runtime Python 3 UMA VEZ e reutiliza
             // para os 4 pacotes (nunca via exec_command/shell: um path absoluto com espaços

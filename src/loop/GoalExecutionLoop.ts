@@ -3384,6 +3384,66 @@ export class GoalExecutionLoop {
         };
     }
 
+    /**
+     * Compõe uma resposta final melhor que a confirmação genérica da tool quando o goal teve
+     * fricção real (blockers) antes da entrega determinística ser confirmada. NUNCA decide
+     * `achieved` — isso já foi provado deterministicamente pelo caller (tool_succeeded real,
+     * ver ensureDeliverySuccessCriteria.ts). Esta função só melhora a PROSA da resposta final.
+     * Falha suave por design: qualquer erro, timeout, ou resposta vazia faz o caller manter o
+     * summary genérico já usado hoje — sem risco de regressão, só oportunidade perdida.
+     */
+    private async composeDeliverySummaryAfterFriction(
+        goal: Goal,
+        activeMilestone: string | undefined,
+        state: GoalExecutionState,
+    ): Promise<string | undefined> {
+        void state; // reservado para uso futuro (ex: progressModel) — não usado nesta versão mínima
+        const stepsContext = goal.currentPlan
+            .filter(s => s.status === 'completed')
+            .map(s => `- ${s.description}: ${s.result || '(sem output)'}`)
+            .join('\n');
+        const attemptsContext = goal.attempts
+            .filter(a => a.result === 'success')
+            .map(a => `- ${a.toolName}: ${a.output || '(sem output)'}`)
+            .join('\n');
+        const blockersContext = goal.blockers
+            .map(b => `- ${b.kind}: ${b.description}`)
+            .join('\n');
+        const validationTarget = activeMilestone
+            ? `MARCO ATUAL: ${activeMilestone} (Objetivo Global: ${goal.objective})`
+            : `OBJETIVO: ${goal.objective}`;
+
+        const prompt = `A entrega deste objetivo já foi CONFIRMADA (uma ferramenta de entrega real, como send_document/send_audio, teve sucesso comprovado — isso não está em questão). Sua única tarefa é compor a MENSAGEM FINAL para o usuário, em texto simples (não JSON, sem markdown de código), curta e direta.
+
+${validationTarget}
+INTENÇÃO ORIGINAL DO USUÁRIO: ${goal.userIntent}
+
+DIFICULDADES REAIS ENCONTRADAS NO CAMINHO (confirmadas, não hipotéticas):
+${blockersContext || '(nenhuma)'}
+
+STEPS CONCLUÍDOS:
+${stepsContext || '(nenhum)'}
+
+RESULTADOS DAS FERRAMENTAS:
+${attemptsContext || '(nenhum)'}
+
+Se a intenção original pedia uma explicação condicional (ex: "se não conseguir X, explique o motivo") e X de fato não foi alcançado, inclua essa explicação na mensagem. Não invente nada que não esteja nas dificuldades/steps acima. Responda só com o texto da mensagem final, nada mais.`;
+
+        try {
+            const llmResult = await this.providerFactory.chatWithFallback(
+                [{ role: 'user', content: prompt }] as LLMMessage[],
+                undefined,
+                undefined,
+                30_000,
+            );
+            if (llmResult.status !== 'success' || !llmResult.content?.trim()) return undefined;
+            return llmResult.content.trim();
+        } catch (err) {
+            log.warn(`[GoalLoop] composeDeliverySummaryAfterFriction falhou (mantendo summary genérico): ${String(err)}`);
+            return undefined;
+        }
+    }
+
     private async validateGoalCompletion(goal: Goal, activeMilestone: string | undefined, state: GoalExecutionState): Promise<{
         achieved: boolean;
         summary?: string;
@@ -3404,7 +3464,21 @@ export class GoalExecutionLoop {
             // Persiste o estado atualizado dos critérios no store
             this.goalStore.update(goal.id, { successCriteria: criteriaEval.updated });
             log.info(`[GoalLoop] LLM validation: todos os critérios cumpridos — achieved=true sem LLM`);
-            return { achieved: true, summary: criteriaEval.summary || GENERIC_CRITERIA_SUMMARY };
+            let summary = criteriaEval.summary || GENERIC_CRITERIA_SUMMARY;
+            // Achado real (verify 26/07/2026, goal_1785101055539_4xk5g): pedido pedia explicação
+            // condicional ("se não conseguir gerar o PDF, explique o motivo"); o motivo real foi
+            // até verificado num ciclo anterior (blocker registrado), mas como o único critério
+            // satisfeito foi a entrega automática, summary caiu no genérico e a resposta final
+            // virou só a confirmação bruta da tool ("Documento anexado") — sem a explicação
+            // pedida. `achieved` continua 100% determinístico (linha acima, inalterado) — só a
+            // PROSA é melhorada aqui, e só quando não há nenhum conteúdo real no summary e houve
+            // fricção real (blockers) no caminho. Falha suave por design: qualquer erro/timeout/
+            // desacordo do LLM mantém o summary genérico atual — sem risco de regressão.
+            if (summary === GENERIC_CRITERIA_SUMMARY && goal.blockers.length > 0) {
+                const composed = await this.composeDeliverySummaryAfterFriction(goal, activeMilestone, state);
+                if (composed) summary = composed;
+            }
+            return { achieved: true, summary };
         }
         // Persiste atualizações parciais (critérios recém-marcados como met)
         if (criteriaEval.updated.length > 0) {

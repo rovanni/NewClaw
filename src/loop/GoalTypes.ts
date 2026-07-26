@@ -72,6 +72,16 @@ export interface DependencyInfo {
     /** Instrução legível para o usuário instalar manualmente */
     manualInstructions: string;
     type: 'system' | 'python' | 'node';
+    /**
+     * Mecanismo que EnvironmentProbe deve usar para verificar presença real desta dependência.
+     * Omitido (padrão): binário de PATH, verificado via where/command -v (probeToolCmd).
+     * 'node-require': módulo Node consumido via require(), nunca aparece no PATH — verificar
+     * assim produziria falso negativo mesmo com o pacote instalado e funcional (achado real:
+     * puppeteer, ver EnvironmentProbe.ts). Declarar aqui em vez de manter uma lista de exceção
+     * separada é o que torna a escolha do mecanismo correta por construção para toda entrada
+     * futura do mesmo tipo, não dependente de alguém lembrar de atualizar uma segunda lista.
+     */
+    probeVia?: 'node-require';
 }
 
 export interface CycleResult {

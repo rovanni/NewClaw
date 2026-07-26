@@ -24,7 +24,11 @@ const log = createLogger('GoalEvaluator');
 // ── Mapa de dependências instaláveis automaticamente ─────────────────────────
 // Chave: nome do executável que aparece na mensagem de erro (lowercase)
 
-const KNOWN_DEPS: Record<string, DependencyInfo> = {
+// Exportado (Sprint 005/5.1, docs/Auditorias/2026-07-26/AUDITORIA_CATALOGOS_FERRAMENTAS_2026-07-26.md): única fonte
+// de verdade para metadados de dependência de SO — RiskAnalyzer.ts deriva seu aviso de risco
+// pré-execução (bloco "1b") a partir daqui em vez de manter uma cópia própria (KNOWN_SYSTEM_DEPS,
+// removida). Nenhum outro consumidor deve reimplementar este mapa.
+export const KNOWN_DEPS: Record<string, DependencyInfo> = {
     pandoc:      { name: 'pandoc',                 installCmd: 'sudo apt install pandoc -y',                  manualInstructions: 'Instale com: sudo apt install pandoc -y',                       type: 'system' },
     ffmpeg:      { name: 'ffmpeg',                 installCmd: 'sudo apt install ffmpeg -y',                  manualInstructions: 'Instale com: sudo apt install ffmpeg -y',                       type: 'system' },
     convert:     { name: 'imagemagick',            installCmd: 'sudo apt install imagemagick -y',             manualInstructions: 'Instale com: sudo apt install imagemagick -y',                  type: 'system' },
@@ -54,7 +58,9 @@ const KNOWN_DEPS: Record<string, DependencyInfo> = {
     // (evita também o problema conhecido de `apt install chromium` redirecionar para pacote
     // snap no Ubuntu moderno, que costuma falhar em ambiente headless/VPS sem sessão gráfica).
     // Usado por scripts/html2pdf.sh (modo PDF e modo screenshot/PNG da revisão visual).
-    puppeteer:   { name: 'puppeteer',              installByPlatform: { windows: 'npm install puppeteer', linux: 'npm install puppeteer', macos: 'npm install puppeteer' }, manualInstructions: 'Instale com: npm install puppeteer (inclui Chromium embutido, sem precisar de Chrome do sistema)', type: 'node' },
+    // probeVia: 'node-require' — não é binário de PATH, é módulo consumido via
+    // require('puppeteer') (scripts/html2pdf.sh:174). Ver EnvironmentProbe.ts.
+    puppeteer:   { name: 'puppeteer',              installByPlatform: { windows: 'npm install puppeteer', linux: 'npm install puppeteer', macos: 'npm install puppeteer' }, manualInstructions: 'Instale com: npm install puppeteer (inclui Chromium embutido, sem precisar de Chrome do sistema)', type: 'node', probeVia: 'node-require' },
     // tesseract: fallback de OCR em read_document.ts (extractOcr/pdfOcr) — mesmo padrão
     // apt-only das demais entradas de sistema acima (sem installByPlatform: não há comando
     // Windows/macOS validado neste projeto para propor automaticamente).

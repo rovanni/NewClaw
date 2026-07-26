@@ -153,6 +153,28 @@ export function runPython3Import(runtime: Python3Runtime, pkg: string): Promise<
     return runPython3Check(runtime, `import ${pkg}`);
 }
 
+const NODE_REQUIRE_PROBE_TIMEOUT_MS = 3000;
+
+/**
+ * Testa se um módulo Node é resolvível via require() — para dependências que nunca aparecem
+ * no PATH (ex: puppeteer, consumido só como `require('puppeteer')` em scripts/html2pdf.sh).
+ * Mesmo mecanismo já usado ad-hoc ali (`node -e "require('puppeteer')"`), agora reutilizável.
+ * JSON.stringify em vez de interpolação direta na string do -e: mesmo o nome do módulo vindo
+ * de config interna (KNOWN_DEPS), não de string crua sem escaping em código executado via node -e.
+ * Decide só pelo exit code (require() lança e sai != 0 se o módulo não resolver), nunca por
+ * texto de stdout/stderr — mesmo critério de probePython3Runtime acima.
+ */
+export function probeNodeRequire(moduleName: string): Promise<boolean> {
+    return new Promise((resolve) => {
+        execFile(
+            'node',
+            ['-e', `require(${JSON.stringify(moduleName)})`],
+            { timeout: NODE_REQUIRE_PROBE_TIMEOUT_MS, windowsHide: true },
+            (error) => resolve(!error),
+        );
+    });
+}
+
 /**
  * Candidatos de runtime Python 3 por plataforma, em ordem de preferência.
  * DECISÃO DE POLÍTICA (não é comportamento histórico do NewClaw): no Windows,
