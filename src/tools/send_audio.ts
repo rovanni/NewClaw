@@ -15,9 +15,24 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { MessageBus } from '../channels/MessageBus';
 import { ChannelType } from '../channels/ChannelAdapter';
-import { resolvePython3Runtime, defaultPython3Candidates } from '../utils/crossPlatform';
+import { resolvePython3Runtime, defaultPython3Candidates, which } from '../utils/crossPlatform';
+import { EdgeTTS } from 'node-edge-tts';
 
 const log = createLogger('SendAudio');
+
+// Voz padrão para todo áudio em português — mesma escolhida e validada no projeto irmão
+// (Thorial/OpenClaw, ver docs/Auditorias/2026-07-26/LIMITACAO_EDGE_TTS_PYTHON_2026-07-26.md).
+const DEFAULT_VOICE = 'pt-BR-AntonioNeural';
+
+// Piper (offline, GPL-3.0, invocado só como subprocesso — nunca linkado ao processo do
+// NewClaw, mesmo padrão de "agregação" já usado para ffmpeg neste mesmo arquivo) é uma camada
+// OPCIONAL, nunca obrigatória: só é usada quando o operador explicitamente baixou os modelos
+// (sinal de intenção explícita, não uma suposição — ver "Nunca Adivinhar",
+// docs/DIRETRIZ_ARQUITETURA_2026-07-13.md). Ausência dos arquivos = comportamento inalterado
+// (node-edge-tts continua o padrão zero-configuração). Ver
+// docs/Auditorias/2026-07-26/LIMITACAO_EDGE_TTS_PYTHON_2026-07-26.md para o histórico completo desta decisão.
+const PIPER_MODELS_DIR = process.env.PIPER_MODELS_DIR || path.join(process.cwd(), 'models', 'piper');
+const PIPER_MODEL_FILE = 'pt-BR-razo-medium.onnx';
 
 export class SendAudioTool implements ToolExecutor {
     name = 'send_audio';
@@ -60,7 +75,7 @@ export class SendAudioTool implements ToolExecutor {
             return { success: true, output: '🔊 Áudio já enviado recentemente.' };
         }
         let text = args.text as string;
-        const voice = (args.voice as string) || 'pt-BR-AntonioNeural';
+        const voice = (args.voice as string) || DEFAULT_VOICE;
         if (!text) return { success: false, output: '', error: 'Texto não fornecido.' };
 
         // Normalize text for TTS (avoid spelling out acronyms)
@@ -83,44 +98,25 @@ export class SendAudioTool implements ToolExecutor {
         if (!existsSync(audioDir)) mkdirSync(audioDir, { recursive: true });
 
         const timestamp = Date.now();
-        const mp3File = path.join(audioDir, `tts_${timestamp}.mp3`);
         const oggFile = path.join(audioDir, `tts_${timestamp}.ogg`);
+        // Extensão real definida pela engine que de fato gerar o áudio (Piper → .wav,
+        // node-edge-tts/CLI Python → .mp3) — ver generateAudio().
+        let rawAudioFile = '';
 
         try {
-            // Generate audio with edge-tts (ASYNC — non-blocking)
-            const edgeTtsCmd = await this.resolveEdgeTtsCommand();
-
-            log.info(`Generating MP3 with voice=${voice}...`);
+            log.info(`Generating audio with voice=${voice}...`);
             const ttsStart = Date.now();
-            try {
-                await this.runCommand(edgeTtsCmd.command, [
-                    ...edgeTtsCmd.argsPrefix,
-                    '--voice', voice,
-                    '--text', text,
-                    '--write-media', mp3File
-                ], 30000);
-            } catch (ttsErr) {
-                log.error(`edge-tts failed with voice ${voice}:`, errorMessage(ttsErr));
-                if (voice !== 'pt-BR-AntonioNeural') {
-                    log.info('Falling back to pt-BR-AntonioNeural...');
-                    await this.runCommand(edgeTtsCmd.command, [
-                        ...edgeTtsCmd.argsPrefix,
-                        '--voice', 'pt-BR-AntonioNeural',
-                        '--text', text,
-                        '--write-media', mp3File
-                    ], 30000);
-                } else {
-                    throw ttsErr;
-                }
-            }
-            log.info(`edge-tts done in ${Date.now() - ttsStart}ms`);
+            rawAudioFile = await this.generateAudio(text, voice, audioDir, timestamp);
+            log.info(`TTS done in ${Date.now() - ttsStart}ms (${path.basename(rawAudioFile)})`);
 
-            // Convert to OGG with ffmpeg (ASYNC — non-blocking)
+            // Convert to OGG with ffmpeg (ASYNC — non-blocking). ffmpeg detecta o formato de
+            // entrada pelo conteúdo do arquivo, não pela extensão — funciona igual para
+            // .wav (Piper) e .mp3 (node-edge-tts/CLI Python), sem branch adicional aqui.
             log.info(`Converting to OGG...`);
             const ffmpegStart = Date.now();
             await this.runCommand('ffmpeg', [
                 '-y',
-                '-i', mp3File,
+                '-i', rawAudioFile,
                 '-c:a', 'libopus',
                 '-b:a', '48k',
                 '-ar', '48000',
@@ -131,7 +127,7 @@ export class SendAudioTool implements ToolExecutor {
 
             if (!this.chatId) {
                 log.error('Missing channel context: chatId=' + this.chatId);
-                this.cleanupFiles([mp3File, oggFile]);
+                this.cleanupFiles([rawAudioFile, oggFile]);
                 return { success: false, output: '', error: 'Contexto de canal não configurado.' };
             }
 
@@ -148,13 +144,128 @@ export class SendAudioTool implements ToolExecutor {
             }
 
             // Cleanup
-            this.cleanupFiles([mp3File, oggFile]);
+            this.cleanupFiles([rawAudioFile, oggFile]);
 
             return { success: true, output: '🔊 Áudio enviado com sucesso!' };
         } catch (error) {
             // Cleanup on error
-            this.cleanupFiles([mp3File, oggFile]);
+            this.cleanupFiles([rawAudioFile, oggFile]);
             return { success: false, output: '', error: `Erro ao gerar áudio: ${errorMessage(error)}` };
+        }
+    }
+
+    /**
+     * Gera o arquivo de áudio, em ordem de preferência, e retorna o caminho do arquivo
+     * realmente produzido (extensão varia por engine):
+     *   0. Piper (subprocesso, offline, 100% local) — só tentado quando o operador já baixou
+     *      os modelos (PIPER_MODELS_DIR) explicitamente; presença dos arquivos É o sinal de
+     *      intenção, nunca assumido por padrão. Elimina a dependência do serviço da Microsoft
+     *      para quem configurou — relevante para escala/uso intenso, não para instalação padrão.
+     *   1. node-edge-tts (pacote npm, WebSocket direto ao serviço da Microsoft) — não depende
+     *      de runtime Python. Padrão de fábrica (zero configuração) quando Piper não está
+     *      instalado.
+     *   2. CLI Python `edge-tts` (comportamento histórico) — só tentado se (0) e (1) falharem
+     *      de ponta a ponta.
+     * Em node-edge-tts/CLI Python, tenta a voz pedida e, se falhar e for diferente de
+     * DEFAULT_VOICE, tenta DEFAULT_VOICE antes de escalar para a próxima engine. Piper usa
+     * sempre sua própria voz padrão (catálogo de vozes diferente do edge-tts, não há
+     * correspondência 1:1 com o parâmetro `voice`).
+     *
+     * Contexto da escolha: docs/Auditorias/2026-07-26/LIMITACAO_EDGE_TTS_PYTHON_2026-07-26.md — o pacote npm
+     * `edge-tts` (nome parecido, projeto diferente) foi avaliado e rejeitado por licença
+     * CC BY-NC-SA (não-comercial) e conflito de peer-dependency. `node-edge-tts` é MIT, sem
+     * peer-deps, instalação limpa. Piper (`piper-tts`) é GPL-3.0 — invocado só como
+     * subprocesso independente (nunca linkado ao processo do NewClaw), mesmo padrão de
+     * "agregação" já usado para ffmpeg neste arquivo, não uma vinculação de biblioteca.
+     */
+    private async generateAudio(text: string, voice: string, audioDir: string, timestamp: number): Promise<string> {
+        const piper = this.findPiperInstallation();
+        if (piper) {
+            const wavFile = path.join(audioDir, `tts_${timestamp}.wav`);
+            try {
+                log.info(`Piper detectado (${PIPER_MODELS_DIR}) — usando engine offline.`);
+                await this.generateViaPiper(text, piper, wavFile);
+                return wavFile;
+            } catch (piperErr) {
+                log.error('Piper failed, falling back to node-edge-tts:', errorMessage(piperErr));
+            }
+        }
+
+        const mp3File = path.join(audioDir, `tts_${timestamp}.mp3`);
+        try {
+            await this.generateViaNodeEdgeTts(text, voice, mp3File);
+            return mp3File;
+        } catch (npmErr) {
+            log.error(`node-edge-tts failed with voice ${voice}:`, errorMessage(npmErr));
+            if (voice !== DEFAULT_VOICE) {
+                try {
+                    log.info('node-edge-tts: falling back to ' + DEFAULT_VOICE + '...');
+                    await this.generateViaNodeEdgeTts(text, DEFAULT_VOICE, mp3File);
+                    return mp3File;
+                } catch (npmDefaultErr) {
+                    log.error('node-edge-tts failed with default voice too:', errorMessage(npmDefaultErr));
+                }
+            }
+        }
+
+        // Fallback: CLI Python (histórico) — só chega aqui se Piper (se detectado) e
+        // node-edge-tts falharam de ponta a ponta.
+        log.info('Falling back to Python edge-tts CLI...');
+        const edgeTtsCmd = await this.resolveEdgeTtsCommand();
+        try {
+            await this.runCommand(edgeTtsCmd.command, [
+                ...edgeTtsCmd.argsPrefix, '--voice', voice, '--rate=-5%', '--text', text, '--write-media', mp3File,
+            ], 30000);
+            return mp3File;
+        } catch (cliErr) {
+            log.error(`Python edge-tts CLI failed with voice ${voice}:`, errorMessage(cliErr));
+            if (voice === DEFAULT_VOICE) throw cliErr;
+            log.info('Python edge-tts CLI: falling back to ' + DEFAULT_VOICE + '...');
+            await this.runCommand(edgeTtsCmd.command, [
+                ...edgeTtsCmd.argsPrefix, '--voice', DEFAULT_VOICE, '--rate=-5%', '--text', text, '--write-media', mp3File,
+            ], 30000);
+            return mp3File;
+        }
+    }
+
+    /** Gera áudio via node-edge-tts (biblioteca npm) — sem subprocesso, sem Python. */
+    private async generateViaNodeEdgeTts(text: string, voice: string, outputPath: string): Promise<void> {
+        const tts = new EdgeTTS({ voice, lang: 'pt-BR', rate: '-5%' });
+        await tts.ttsPromise(text, outputPath);
+    }
+
+    /**
+     * Verifica se o operador já configurou o Piper (offline) — nunca assume, só detecta
+     * presença real: modelo + config em PIPER_MODELS_DIR (env var ou `<cwd>/models/piper`) E
+     * o binário `piper` alcançável no PATH (mesma função `which()` já usada por
+     * CapabilityRegistry/probes de ambiente). Ausência de qualquer um dos três = null,
+     * comportamento idêntico ao anterior a esta mudança (node-edge-tts como padrão).
+     */
+    private findPiperInstallation(): { piperBin: string; model: string; config: string } | null {
+        const model = path.join(PIPER_MODELS_DIR, PIPER_MODEL_FILE);
+        const config = path.join(PIPER_MODELS_DIR, `${PIPER_MODEL_FILE}.json`);
+        if (!existsSync(model) || !existsSync(config)) return null;
+
+        const piperBin = process.env.PIPER_BIN || which('piper');
+        if (!piperBin) return null;
+
+        return { piperBin, model, config };
+    }
+
+    /** Gera áudio via Piper (subprocesso — texto entra por stdin, WAV sai por -f). */
+    private async generateViaPiper(
+        text: string,
+        piper: { piperBin: string; model: string; config: string },
+        outputWav: string,
+    ): Promise<void> {
+        await this.runCommandWithStdin(
+            piper.piperBin,
+            ['-m', piper.model, '-c', piper.config, '-f', outputWav],
+            text,
+            30000,
+        );
+        if (!existsSync(outputWav)) {
+            throw new Error('Piper não gerou o arquivo de áudio esperado.');
         }
     }
 
@@ -202,6 +313,26 @@ export class SendAudioTool implements ToolExecutor {
                     resolve({ stdout, stderr });
                 }
             });
+        });
+    }
+
+    /**
+     * Mesmo padrão de runCommand(), mas escreve `stdinText` no stdin do processo antes de
+     * fechar — necessário para o Piper, que lê o texto a converter via stdin (mesma
+     * convenção do CLI oficial, sem passar texto como argumento de linha de comando).
+     * Sem shell (execFile puro) — stdinText nunca é interpretado como comando, só como dado.
+     */
+    private runCommandWithStdin(command: string, args: string[], stdinText: string, timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
+        return new Promise((resolve, reject) => {
+            const child = execFile(command, args, { timeout: timeoutMs, encoding: 'utf-8', windowsHide: true }, (err, stdout, stderr) => {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve({ stdout, stderr });
+                }
+            });
+            child.stdin?.write(stdinText, 'utf-8');
+            child.stdin?.end();
         });
     }
 
