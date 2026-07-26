@@ -261,6 +261,43 @@ export class GoalOrchestrator {
         );
         const classificationMs = Date.now() - classifyStart;
 
+        // Fase 3 da migração GoalExtractor → UnifiedIntentRouter (ver
+        // docs/Auditorias/2026-07-26/REVISAO_ADVERSARIAL_GOALEXTRACTOR_2026-07-25.md, "Arquitetura Final"). Validado
+        // com tráfego real (skill verify, 2026-07-26, instância isolada/LLM real): em 5 mensagens
+        // testadas ("Oi tudo bem... manda um áudio...", "A previsão do tempo, em áudio." sem
+        // verbo, "Weather forecast as audio please.", "Hola, envíame el clima en audio."), o
+        // UnifiedIntentRouter acertou 5/5; o GoalExtractor (heurística de regex + lista de verbos
+        // em PT) errou 3/5 — sempre que a mensagem não tinha verbo reconhecido em PT ou começava
+        // com saudação (bug de regex sem âncora de fim, GoalExtractor.ts NOT_GOAL_SIGNALS).
+        // `routerRequiresGoal` passa a decidir o roteamento. `classification` continua sendo
+        // computado por inteiro logo acima — `objective`/`isAmbiguous`/`isConstruction`/
+        // `isRefinement`/`requiredTools` não têm equivalente no router hoje e continuam vindo
+        // dele (usados abaixo); só o papel de decidir `isGoal` foi substituído. Reaproveita a
+        // MESMA instância de UnifiedIntentRouter já usada por AgentLoop
+        // (this.agentLoop.getIntentRouter()), sem criar uma segunda nem uma chamada de LLM extra.
+        let routerRequiresGoal: boolean;
+        let routerCategory = 'unknown';
+        try {
+            const routerDecision = await this.agentLoop.getIntentRouter().route(message, {
+                sessionId: sessionKey,
+                recentMessages: classifyMessages,
+            });
+            routerRequiresGoal = routerDecision.requiresTools;
+            routerCategory = routerDecision.category;
+        } catch (err) {
+            // Fail-open: se o router falhar, volta ao sinal do GoalExtractor (comportamento
+            // vigente antes desta migração) em vez de introduzir um novo ponto único de falha.
+            log.warn('[GOAL-ROUTING] UnifiedIntentRouter falhou — fail-open para GoalExtractor.isGoal:', String(err));
+            routerRequiresGoal = classification.isGoal;
+        }
+        log.info(
+            `[GOAL-ROUTING-COMPARISON] extractor_isGoal=${classification.isGoal}` +
+            ` router_requiresTools=${routerRequiresGoal}` +
+            ` router_category=${routerCategory}` +
+            ` agree=${routerRequiresGoal === classification.isGoal}` +
+            ` message="${message.slice(0, 80)}"`
+        );
+
         // P0.2 — Fail-open: GoalExtractor timeout ou conteúdo não-JSON (thinking recuperado).
         // Em vez de aceitar uma classificação arbitrária, roteamos para AgentLoop
         // que demonstrou resolver tarefas de criação sem GoalPlanner.
@@ -273,7 +310,7 @@ export class GoalOrchestrator {
         }
 
         // P1 — Telemetria de roteamento: emitida em TODAS as decisões de routing.
-        const route = classification.isGoal ? 'goal_orchestrator' : 'agentloop';
+        const route = routerRequiresGoal ? 'goal_orchestrator' : 'agentloop';
         log.info(
             `[GOAL-ROUTING] route=${route}` +
             ` reason=${classification.reason ?? 'none'}` +
@@ -283,7 +320,7 @@ export class GoalOrchestrator {
             ` confidence=${classification.confidence}`
         );
 
-        if (!classification.isGoal) {
+        if (!routerRequiresGoal) {
             log.debug(`[GoalOrchestrator] not-goal reason=${classification.reason}`);
             const roiStart = Date.now();
             const agentResult = await this.agentLoop.process(conversationId, message, userId, context);
