@@ -338,8 +338,22 @@ export class GoalStore {
             return;
         }
 
-        const completedAt = (status === 'completed' || status === 'failed' || status === 'abandoned') ? now : null;
-        this.db.prepare('UPDATE goals SET status = ?, updated_at = ?, completed_at = COALESCE(completed_at, ?) WHERE id = ?')
+        const isTerminal = status === 'completed' || status === 'failed' || status === 'abandoned';
+        const completedAt = isTerminal ? now : null;
+        // Sprint 005 (achado de código, não hipotético): resumeGoal() (GoalExecutionLoop.ts) e
+        // abortGoalFromAuth() (GoalOrchestrator.ts) já limpam pending_txn_id/requires_auth
+        // (Sprint 0.11) — mas são só 2 dos muitos caminhos que levam um goal a estado terminal.
+        // 'blocked' permite transição direta para 'failed'/'abandoned' (ALLOWED_TRANSITIONS
+        // acima) através de 14 call sites de setStatus() em GoalExecutionLoop.ts/
+        // GoalOrchestrator.ts, nenhum deles passando por resumeGoal()/abortGoalFromAuth() — um
+        // goal 'blocked' com pendingTxnId+requiresAuth=true vira 'failed'/'abandoned' por
+        // qualquer um deles e fica com esses dois campos travados para sempre num goal que já
+        // não pode mais transicionar (estado terminal, ALLOWED_TRANSITIONS[terminal] = []).
+        // Limpar aqui, incondicionalmente ao entrar em QUALQUER estado terminal, fecha a classe
+        // inteira do problema numa única função — nunca faz sentido um goal terminal ainda
+        // "aguardar autorização".
+        const terminalClause = isTerminal ? ', pending_txn_id = NULL, requires_auth = 0' : '';
+        this.db.prepare(`UPDATE goals SET status = ?, updated_at = ?, completed_at = COALESCE(completed_at, ?)${terminalClause} WHERE id = ?`)
             .run(status, now, completedAt, id);
         log.info(`[GoalStore] goal=${id} ${prev} → ${status}`);
     }
@@ -483,8 +497,12 @@ export class GoalStore {
     /** Marca como abandoned todos os goals expirados. Retorna count. */
     expireStale(): number {
         const now = Date.now();
+        // Sprint 005: mesma correção de setStatus() — este UPDATE é SQL bruto, não passa por
+        // setStatus(), então precisa limpar pending_txn_id/requires_auth aqui também. Um goal
+        // 'blocked' com auth pendente que expira via TTL virava 'abandoned' sem nunca limpar
+        // esses dois campos.
         const result = this.db.prepare(`
-            UPDATE goals SET status = 'abandoned', updated_at = ?
+            UPDATE goals SET status = 'abandoned', updated_at = ?, pending_txn_id = NULL, requires_auth = 0
             WHERE expires_at < ? AND status IN ('active', 'executing', 'blocked', 'replanning')
         `).run(now, now);
         if (result.changes > 0) {
