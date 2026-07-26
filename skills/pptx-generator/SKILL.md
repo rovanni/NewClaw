@@ -1,7 +1,7 @@
 ---
 name: pptx-generator
-description: Converte Markdown ou HTML em arquivos PowerPoint (.pptx). Ativar APENAS quando o usuário pedir explicitamente .pptx, PowerPoint ou um arquivo editável no formato Office. NÃO ativar para pedidos genéricos de "slides" ou "apresentação" sem formato específico. Quando o pedido exigir texto REALMENTE editável (não apenas um .pptx que abre no PowerPoint), usar o caminho python-pptx (Passo 0B), não o Marp CLI — ver aviso abaixo.
-version: "1.1"
+description: Converte Markdown ou HTML em arquivos PowerPoint (.pptx). Ativar APENAS quando o usuário pedir explicitamente .pptx, PowerPoint ou um arquivo editável no formato Office. NÃO ativar para pedidos genéricos de "slides" ou "apresentação" sem formato específico. Quando o pedido exigir texto REALMENTE editável (não apenas um .pptx que abre no PowerPoint), usar python-pptx OU pptxgenjs (Passo 0B), conforme o que o [CAPACIDADES DO AMBIENTE] indicar disponível — nunca o Marp CLI puro — ver aviso abaixo.
+version: "1.2"
 triggers: powerpoint, pptx, arquivo pptx, slides powerpoint, slides em pptx, apresentação editável, exportar pptx, marp, converter para pptx
 tools: exec_command, write, read, send_document
 tags: export, office, document-generation, powerpoint, marp, convert
@@ -9,8 +9,9 @@ tags: export, office, document-generation, powerpoint, marp, convert
 
 # PPTX Generator Skill
 
-Converte conteúdo em arquivos PowerPoint (.pptx) usando **Marp CLI** ou **python-pptx**,
-dependendo do que o usuário realmente precisa (ver aviso abaixo).
+Converte conteúdo em arquivos PowerPoint (.pptx) usando **Marp CLI**, **python-pptx** ou
+**pptxgenjs**, dependendo do que o usuário realmente precisa (ver aviso abaixo) e do que o
+ambiente atual realmente suporta (ver Passo 0B).
 
 ## ⚠️ AVISO IMPORTANTE: o `.pptx` gerado pelo Marp CLI NÃO é editável
 
@@ -25,12 +26,12 @@ nativa.
 - Se o usuário pedir só "gerar um .pptx" ou "exportar para PowerPoint" (sem enfatizar edição),
   o Marp CLI (Passo 1-4 abaixo) é aceitável — é rápido e o resultado abre e projeta bem.
 - Se o usuário pedir explicitamente algo **editável** ("slides editáveis", "quero poder mudar o
-  texto depois", "preciso editar no PowerPoint"), **use python-pptx desde o início (Passo 0B)**
-  — não tente o Marp CLI primeiro. Gerar via Marp e descobrir depois que não é editável só
-  desperdiça um ciclo inteiro.
+  texto depois", "preciso editar no PowerPoint"), **use o Passo 0B desde o início** (python-pptx
+  ou pptxgenjs, conforme o ambiente — ver critério de escolha no Passo 0B) — não tente o Marp CLI
+  primeiro. Gerar via Marp e descobrir depois que não é editável só desperdiça um ciclo inteiro.
 - **Se o usuário já recebeu um `.pptx` (gerado por este skill ou não) e disser que "não está
   editando", "não consigo mudar o texto", ou algo equivalente**: NÃO gere de novo com Marp CLI —
-  o resultado será idêntico (imagem por slide). Vá direto para o Passo 0B (python-pptx).
+  o resultado será idêntico (imagem por slide). Vá direto para o Passo 0B.
 
 ## Passo 0 — Verificar Marp (apenas se for usar o caminho Marp CLI)
 
@@ -46,22 +47,40 @@ Se não estiver instalado, tentar instalar silenciosamente:
 npm install -g @marp-team/marp-cli 2>/dev/null && marp --version
 ```
 
-**Se a instalação falhar:** não mencionar o erro ao usuário e não revelar detalhes de infraestrutura (como "no servidor", "no ambiente", caminhos internos ou comandos de instalação). Usar automaticamente o fallback via `python-pptx` (Passo 0B) sem comentários.
+**Se a instalação falhar:** não mencionar o erro ao usuário e não revelar detalhes de infraestrutura (como "no servidor", "no ambiente", caminhos internos ou comandos de instalação). Usar automaticamente o fallback via Passo 0B (python-pptx ou pptxgenjs, conforme o ambiente) sem comentários.
 
-## Passo 0B — python-pptx (quando o usuário precisa de texto realmente editável, ou quando o Marp está indisponível)
+## Passo 0B — texto realmente editável: escolher python-pptx OU pptxgenjs conforme o ambiente
 
-Para gerar um `.pptx` com texto nativo editável — ou quando o Marp não está disponível — usar um script Python com `python-pptx`.
+Para gerar um `.pptx` com texto nativo editável — ou quando o Marp não está disponível — usar um
+script que gere o `.pptx` programaticamente. Existem DOIS caminhos equivalentes em resultado
+(ambos produzem texto nativo editável, nenhum é "melhor" no output final); a escolha entre eles
+NÃO é preferência de estilo, é o que o próprio ambiente relatado em
+**[CAPACIDADES DO AMBIENTE — detectadas automaticamente]** permite:
 
-**REGRA CRÍTICA:** escrever o script com `write` **não é o fim da tarefa**. O arquivo `.pptx`
-só existe depois que o script for **executado** com `exec_command`. Uma resposta que diz "gerei
-os slides" sem antes ter rodado o script é uma alucinação — o usuário não recebeu nada. Sempre
-faça: `write` do script → `exec_command` para rodá-lo → confirmar que o `.pptx` foi criado →
-`send_document`.
+- Se a linha `Ferramentas:` listar `python3` (ou `python`) como disponível **e** a linha
+  `Indisponíveis (não usar)` NÃO os listar → use **Passo 0B.1-Python** (`python-pptx`).
+- Se `python3`/`python` aparecerem em `Indisponíveis (não usar)` (comum no Windows: o Python
+  "aparece" no PATH como um App Execution Alias da Microsoft Store, mas não executa nada de
+  verdade) → pule DIRETO para o **Passo 0B.1-Node** (`pptxgenjs`). Node.js sempre está disponível
+  neste ambiente (o próprio NewClaw roda sobre ele), então este caminho nunca fica bloqueado.
+- Se o bloco de capacidades não estiver disponível no contexto atual, tente `python-pptx`
+  primeiro; se o primeiro `exec_command` relacionado a Python falhar (não apenas um erro de
+  conteúdo do script, mas o interpretador em si não rodar), troque para `pptxgenjs` no replan
+  seguinte em vez de insistir em variações do mesmo comando Python.
 
-**REGRA:** NUNCA usar `python3 -c "..."` com código multilinha — o shell trunca o conteúdo.
-Sempre criar o script em arquivo separado e depois executar:
+**REGRA CRÍTICA (vale para os dois caminhos):** escrever o script com `write` **não é o fim da
+tarefa**. O arquivo `.pptx` só existe depois que o script for **executado** com `exec_command`.
+Uma resposta que diz "gerei os slides" sem antes ter rodado o script é uma alucinação — o usuário
+não recebeu nada. Sempre faça: `write` do script → `exec_command` para rodá-lo → confirmar que o
+`.pptx` foi criado → `send_document`.
 
-**Passo 0B.1** — Instalar a lib (se necessário):
+**REGRA (vale para os dois caminhos):** NUNCA usar `python3 -c "..."`/`node -e "..."` com código
+multilinha — o shell trunca o conteúdo. Sempre criar o script em arquivo separado e depois
+executar.
+
+### Passo 0B.1-Python — python-pptx
+
+Instalar a lib (se necessário):
 
 ```bash
 pip install python-pptx -q 2>/dev/null || pip install --break-system-packages python-pptx -q 2>/dev/null
@@ -117,6 +136,68 @@ GRAY_TEXT = RGBColor(0x6B, 0x72, 0x80)  # rodapé
 #   pares com fill GRAY_BG
 # Rodapé: caixa de texto pequena (Pt(11), GRAY_TEXT) no rodapé de cada slide,
 #   com o texto que o usuário informou (ex: "CÓDIGO — Disciplina | Aula N | Professor")
+```
+
+### Passo 0B.1-Node — pptxgenjs (quando python3/python aparecem como INDISPONÍVEIS no ambiente)
+
+Gera o mesmo resultado (texto nativo editável, `.pptx` real) sem depender de Python. Instalar a
+lib no workspace (se necessário):
+
+```bash
+npm install pptxgenjs 2>&1 | tail -5
+```
+
+**Passo 0B.2-Node** — Usar `write` para salvar o script com nome **ÚNICO derivado do
+assunto/arquivo de origem** — mesma regra e mesmo motivo do Passo 0B.2-Python (workspace
+persistente entre conversas: um nome genérico como `tmp/gerar_pptx.js` pode coincidir com o de
+uma tarefa anterior e enviar o arquivo errado). Use o mesmo padrão de nome em todos os lugares
+(script E saída), ex. para uma aula sobre DHCP: `tmp/gerar_pptx_dhcp.js` → `aula_dhcp.pptx`.
+
+```javascript
+const pptxgen = require('pptxgenjs');
+const prs = new pptxgen();
+prs.defineLayout({ name: 'WIDE', width: 13.33, height: 7.5 });
+prs.layout = 'WIDE';
+
+// ... gerar slides a partir do conteúdo, ex:
+const slide = prs.addSlide();
+slide.addText('Título do Slide', { x: 0.5, y: 0.3, fontSize: 28, bold: true });
+slide.addText('Texto normal, nativamente editável no PowerPoint', { x: 0.5, y: 1.2, fontSize: 16 });
+
+prs.writeFile({ fileName: 'NOME_UNICO_DO_ASSUNTO.pptx' }); // ex: 'aula_dhcp.pptx' — nunca 'apresentacao.pptx'
+```
+
+**Passo 0B.3-Node** — Executar via `exec_command`, usando o MESMO nome único do Passo 0B.2-Node,
+e SEMPRE confirmar que o arquivo foi de fato criado antes de prosseguir para `send_document`
+(a mesma regra crítica do topo — rodar o script uma vez não garante que ele terminou sem erro):
+
+```bash
+node tmp/gerar_pptx_NOME_UNICO_DO_ASSUNTO.js && ls -la NOME_UNICO_DO_ASSUNTO.pptx
+```
+
+**Nunca informar ao usuário que o Marp ou o Python não estavam disponíveis** — simplesmente
+entregar o arquivo gerado (mesma regra do caminho Python).
+
+### Passo 0B.4-Node — Aplicando o tema "academico" via pptxgenjs
+
+Mesma paleta do Passo 0B.4-Python, em formato de string hex (pptxgenjs usa hex sem `#`):
+
+```javascript
+const NAVY = '163A5F';       // fundo de capa/divisores, cabeçalho de tabela
+const NAVY_DARK = '0F2942';  // slide de encerramento
+const RED = 'E8425F';        // barra sob o título, subtítulos em destaque
+const GRAY_BG = 'F4F6F9';    // linhas pares de tabela (zebra)
+const GRAY_TEXT = '6B7280';  // rodapé
+
+// Slide de capa/divisor: addSlide({ background: { color: NAVY } }), título com color:'FFFFFF',
+//   subtítulo com color: RED
+// Slide de conteúdo: fundo branco (padrão), título com color: NAVY + addShape('rect', {...,
+//   fill: { color: RED }}) fino logo abaixo (simula a barra vermelha do tema Marp), texto
+//   padrão color: '1F2933'
+// Tabelas (slide.addTable): primeira linha com fill: { color: NAVY } e color: 'FFFFFF'; linhas
+//   pares com fill: { color: GRAY_BG }
+// Rodapé: addText pequeno (fontSize: 11, color: GRAY_TEXT) no rodapé de cada slide, com o texto
+//   que o usuário informou (ex: "CÓDIGO — Disciplina | Aula N | Professor")
 ```
 
 ---
@@ -350,17 +431,18 @@ Extrair o conteúdo relevante e montar o .md manualmente, slide a slide.
 
 | Erro | Solução |
 |------|---------|
-| `marp: command not found` | Usar fallback python-pptx (Passo 0B) sem informar o usuário |
+| `marp: command not found` | Usar fallback do Passo 0B (python-pptx ou pptxgenjs, conforme o ambiente) sem informar o usuário |
 | `.pptx` com 0 bytes | Verificar se o .md tem frontmatter `marp: true` |
 | Slides sem separação | Adicionar `---` entre cada slide |
 | Fonte não encontrada | Usar apenas fontes CSS padrão no `style:` |
-| Usuário diz "não está editando" após receber `.pptx` do Marp | Não gere de novo com Marp — vá para o Passo 0B (python-pptx) e EXECUTE o script antes de responder |
+| Usuário diz "não está editando" após receber `.pptx` do Marp | Não gere de novo com Marp — vá para o Passo 0B e EXECUTE o script antes de responder |
+| `python3`/`python` listados em "Indisponíveis" no bloco de capacidades, ou `pip install`/`python3 script.py` falha com "Python was not found"/"não é reconhecido" | NÃO insista tentando localizar o Python (não gaste steps procurando o binário em `Program Files`, `AppData`, etc.) — vá direto para o Passo 0B.1-Node (pptxgenjs) |
 <!-- TASK_ONLY_END -->
 
 ## Regra Geral
 
-**Nunca declare que não é possível gerar .pptx.** O Marp está disponível no sistema ou pode ser instalado com um único comando npm. Se o usuário tem um HTML de slides, extraia o conteúdo e converta — não rejeite a tarefa sem tentar.
+**Nunca declare que não é possível gerar .pptx.** O Marp está disponível no sistema ou pode ser instalado com um único comando npm; se ele falhar, python-pptx OU pptxgenjs (Node.js, sempre presente neste ambiente) resolvem o caminho editável. Se o usuário tem um HTML de slides, extraia o conteúdo e converta — não rejeite a tarefa sem tentar.
 
-**Nunca diga que o resultado é "editável" a menos que tenha usado o caminho python-pptx (Passo 0B).** Um `.pptx` gerado pelo Marp CLI existir e ter tamanho adequado não significa que o texto é editável — são coisas diferentes (ver aviso no topo).
+**Nunca diga que o resultado é "editável" a menos que tenha usado o Passo 0B (python-pptx ou pptxgenjs).** Um `.pptx` gerado pelo Marp CLI existir e ter tamanho adequado não significa que o texto é editável — são coisas diferentes (ver aviso no topo).
 
 **Escrever o script de geração não é entregar o resultado.** Se você usou o Passo 0B, o `.pptx` só existe depois do `exec_command` que roda o script. Nunca finalize a resposta dizendo que os slides foram gerados se o script ainda não foi executado.

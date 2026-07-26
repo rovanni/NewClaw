@@ -19,6 +19,7 @@ const TRANSLATIONS = {
     status_thinking: "Pensando...",
     status_sending: "Enviando...",
     status_receiving: "Recebendo resposta...",
+    status_cancelling: "Cancelando...",
     status_processing: "⚙️ Processando...",
     status_tool: "🔧 Executando ferramenta...",
     status_error: "❌ Erro",
@@ -40,6 +41,7 @@ const TRANSLATIONS = {
     msg_placeholder: "Pergunte ao NewClaw…",
     tts_title: "Ouvir resposta",
     send_title: "Enviar",
+    stop_title: "Parar",
 
     // Memory
     memory_search_title: "🔍 Buscar na Memória",
@@ -538,6 +540,7 @@ const TRANSLATIONS = {
     status_thinking: "Thinking...",
     status_sending: "Sending...",
     status_receiving: "Receiving response...",
+    status_cancelling: "Cancelling...",
     status_processing: "⚙️ Processing...",
     status_tool: "🔧 Running tool...",
     status_error: "❌ Error",
@@ -559,6 +562,7 @@ const TRANSLATIONS = {
     msg_placeholder: "Ask NewClaw…",
     tts_title: "Listen to response",
     send_title: "Send",
+    stop_title: "Stop",
 
     // Memory
     memory_search_title: "🔍 Search Memory",
@@ -1057,6 +1061,7 @@ const TRANSLATIONS = {
     status_thinking: "Pensando...",
     status_sending: "Enviando...",
     status_receiving: "Recibiendo respuesta...",
+    status_cancelling: "Cancelando...",
     status_processing: "⚙️ Procesando...",
     status_tool: "🔧 Ejecutando herramienta...",
     status_error: "❌ Error",
@@ -1078,6 +1083,7 @@ const TRANSLATIONS = {
     msg_placeholder: "Pregúntale a NewClaw…",
     tts_title: "Escuchar respuesta",
     send_title: "Enviar",
+    stop_title: "Detener",
 
     // Memory
     memory_search_title: "🔍 Buscar en Memoria",

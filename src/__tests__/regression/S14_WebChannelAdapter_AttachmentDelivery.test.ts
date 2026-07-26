@@ -219,6 +219,49 @@ async function main() {
         );
     }
 
+    // ── NOVO 26/07/2026: anexo acumulado ANTES do timeout não pode se perder ───────────────
+    // Causa raiz auditada (log de produção, 26/07/2026): send_document foi chamado ~4min após
+    // a requisição — bem DENTRO do teto de 10min (pending ainda vivo, diferente do caso "S14 —
+    // resposta órfã combinando TEXTO + ANEXO" acima, onde sendDocument já roda depois do
+    // timeout). O anexo ficou acumulado em p.attachments normalmente. Só que o GOAL em si demorou
+    // ~8min a mais para terminar — quando o timeout do HTTP finalmente disparou (ainda sem o
+    // send() final), o `pending` inteiro (incluindo p.attachments, já com o arquivo pronto) era
+    // descartado sem olhar seu conteúdo. O texto final virava entrega órfã normalmente
+    // (mergeOrphaned já cobria isso), mas o ANEXO já tinha sumido — usuário via "arquivo entregue
+    // com sucesso" sem nenhum arquivo anexado.
+    console.log('\n=== S14 — anexo acumulado ANTES do timeout (pending ainda vivo) sobrevive ao timeout e chega na próxima mensagem ===');
+    {
+        const adapter = new WebChannelAdapter();
+        const chatId = 'conv_anexo_pre_timeout';
+        const responsePromise = adapter.waitForResponse('req-apt-1', chatId, 20);
+        responsePromise.catch(() => {});
+
+        // send_document chamado ENQUANTO o pending ainda está vivo (goal em andamento) —
+        // acumula em p.attachments, não em orphanedDeliveries.
+        await adapter.sendDocument(chatId, Buffer.from('conteudo do pptx'), 'aula.pptx');
+
+        // Só DEPOIS disso o timeout dispara (goal ainda não terminou).
+        await new Promise(r => setTimeout(r, 60));
+
+        // O goal só termina bem depois — send() final chega para o mesmo requestId, tarde demais
+        // pro pending original (já removido pelo timeout).
+        await adapter.send({ text: 'Arquivo criado e entregue com sucesso', format: 'markdown' }, 'req-apt-1');
+
+        const nextResponsePromise = adapter.waitForResponse('req-apt-2', chatId, 5000);
+        await adapter.send({ text: 'próxima mensagem', format: 'plain' }, 'req-apt-2');
+        const nextResponse = await nextResponsePromise;
+        check(
+            'anexo acumulado antes do timeout NÃO se perde — chega na próxima resposta',
+            nextResponse.attachments?.length === 1 && nextResponse.attachments?.[0]?.fileName === 'aula.pptx',
+            JSON.stringify(nextResponse)
+        );
+        check(
+            'texto final do goal (órfão) também chega, junto do anexo',
+            nextResponse.text.includes('Arquivo criado e entregue com sucesso'),
+            nextResponse.text
+        );
+    }
+
     console.log('\n=== S14 — múltiplas sessões simultâneas em timeout não vazam entre si ===');
     {
         const adapter = new WebChannelAdapter();

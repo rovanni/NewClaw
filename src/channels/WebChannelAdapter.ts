@@ -32,6 +32,21 @@
  * PRÓXIMA mensagem dessa mesma sessão, qualquer que seja o assunto dela. Um único mecanismo
  * cobre os dois casos que antes eram tratados de formas diferentes (anexo tinha fallback,
  * texto não tinha nenhum).
+ *
+ * ── Anexo acumulado ANTES do timeout (gap fechado em 26/07/2026) ────────────────────
+ * O caso acima cobre sendDocument()/send() chamados DEPOIS que o timeout já disparou. Havia
+ * uma lacuna diferente: send_document chamado enquanto o `pending` AINDA estava vivo (goal
+ * em andamento, dentro do teto de 10min) acumulava o buffer em `p.attachments` — mas se o
+ * MESMO goal só terminasse (e chamasse send() com o texto final) depois que o timeout já
+ * tivesse disparado, o `pending` inteiro — junto com `p.attachments`, que já tinha o arquivo
+ * pronto — era descartado no callback do timer, sem que ninguém olhasse seu conteúdo. Perda
+ * real reproduzida ao vivo em 26/07/2026: send_document de um aula.pptx teve sucesso ~4min
+ * após a requisição (bem dentro do teto de 10min), mas o goal só terminou ~8min depois disso
+ * — quando send() finalmente rodou, o texto "arquivo entregue com sucesso" virou entrega órfã
+ * (mergeOrphaned, ver acima) normalmente, mas o anexo já tinha sumido junto com o `pending`
+ * expirado. Fix: o callback do timeout agora resgata `p.attachments` (se houver) e os enfileira
+ * como entrega órfã imediatamente, antes de descartar o `pending` — mesmo mecanismo de sempre,
+ * só chamado um passo mais cedo.
  */
 import { ChannelAdapter, ChannelType, NormalizedResponse, ResponseAttachment } from './ChannelAdapter';
 import { createLogger } from '../shared/AppLogger';
@@ -117,10 +132,17 @@ export class WebChannelAdapter implements ChannelAdapter {
     waitForResponse(requestId: string, chatId: string, timeoutMs: number): Promise<NormalizedResponse> {
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
+                const timedOutPending = this.pending.get(requestId);
                 this.pending.delete(requestId);
                 const cleanupTimer = setTimeout(() => this.timedOutRequests.delete(requestId), TIMED_OUT_REQUEST_TTL_MS);
                 cleanupTimer.unref?.();
                 this.timedOutRequests.set(requestId, { chatId, cleanupTimer });
+                // Anexos já acumulados via sendDocument()/sendVoice() ANTES deste timeout (tool
+                // chamada no meio de um goal ainda em execução) não podem se perder junto com o
+                // `pending` acima — ver nota de classe "Anexo acumulado ANTES do timeout".
+                if (timedOutPending && timedOutPending.attachments.length > 0) {
+                    this.queueOrphaned(chatId, { text: '', format: 'plain', attachments: timedOutPending.attachments });
+                }
                 reject(new Error('Timeout aguardando resposta do agente'));
             }, timeoutMs);
             this.pending.set(requestId, { resolve, reject, timer, chatId, attachments: [] });

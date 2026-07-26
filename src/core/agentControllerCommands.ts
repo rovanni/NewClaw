@@ -7,6 +7,7 @@ import type { AuditorService } from '../services/auditor/AuditorService';
 import { registerAuditCommand } from '../services/auditor/auditCommand';
 import type { NewClawConfig } from './agentControllerTypes';
 import type { AgentLoop } from '../loop/AgentLoop';
+import type { GoalOrchestrator } from '../loop/GoalOrchestrator';
 
 export function registerCommands(
     messageBus: MessageBus,
@@ -15,12 +16,19 @@ export function registerCommands(
     sessionManager: SessionManager,
     auditor: AuditorService,
     config: NewClawConfig,
-    agentLoop: AgentLoop
+    agentLoop: AgentLoop,
+    goalOrchestrator: GoalOrchestrator
 ): void {
     for (const cmd of ['/cancelar', '/cancel', '/stop', '/pare']) {
         messageBus.registerPriorityCommand(cmd, async (msg) => {
+            // agentLoop.cancel() por si só só aborta a chamada de LLM/tool EM CURSO — se essa
+            // chamada pertence a um step de Goal, o GoalExecutionLoop pode tratar o abort como
+            // uma falha comum de step e replanejar/continuar o MESMO goal. cancelActiveGoal()
+            // marca o goal ativo da sessão como 'abandoned', para que o checkpoint dedicado em
+            // GoalExecutionLoop.ts realmente encerre o loop (ver comentário no método).
             agentLoop.cancel(msg.userId);
-            return '⏹ Operação cancelada.';
+            const cancelledGoal = goalOrchestrator.cancelActiveGoal(msg.channel, msg.userId);
+            return cancelledGoal ? '⏹ Operação cancelada.' : '⏹ Nada em andamento para cancelar.';
         });
     }
 

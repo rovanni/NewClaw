@@ -2,7 +2,7 @@
 
 **Data:** 2026-07-13
 **Branch:** `experimental/artifact-pipeline-refactor`
-**Escopo:** resposta às 6 perguntas da revisão crítica sobre R4 (`docs/REVISAO_ARQUITETURAL_FINAL_SPRINT_R4_2026-07-13.md`). Nenhum código alterado.
+**Escopo:** resposta às 6 perguntas da revisão crítica sobre R4 (`docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_FINAL_SPRINT_R4_2026-07-13.md`). Nenhum código alterado.
 
 A ressalva levantada está correta e a R4 não tinha essa distinção explícita: hash responde "este conteúdo é exatamente igual?", não "isto continua sendo o mesmo objeto de negócio?". Um documento corrigido é o mesmo documento lógico com hash diferente; um `.md` e o `.pdf` gerado a partir dele são o mesmo documento lógico com hashes que nunca vão bater. A R4 usou "identidade por conteúdo" sem declarar que estava resolvendo só a camada física — esta sprint corrige isso.
 

@@ -260,6 +260,11 @@
     .send-btn:hover { background: var(--accent-hover); }
     .send-btn:active { transform: scale(0.94); }
     .send-btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+    /* Enquanto uma mensagem está em processamento, o mesmo botão vira "Parar" (ver
+       sendMessage()/cancelMessage() em vez de ficar só desabilitado sem nenhuma ação possível. */
+    .send-btn.stop { background: #d93025; box-shadow: 0 4px 14px rgba(217,48,37,0.35); }
+    .send-btn.stop:hover { background: #b0241a; }
+    .send-btn.stop:disabled { opacity: 0.6; cursor: wait; }
     .composer-hint { text-align: center; font-size: 0.6875rem; color: var(--text-soft); margin-top: 9px; }
 
     /* Attachments */
@@ -862,19 +867,54 @@
       save(); renderChat(); renderSidebar();
     }
 
+    // Um Goal pode legitimamente levar vários minutos (várias chamadas de LLM/tool) — sem
+    // isso, o único feedback do usuário durante a espera era um botão desabilitado, sem
+    // nenhuma ação possível. Enquanto uma requisição está em voo, o mesmo botão de enviar
+    // vira "Parar" (ver setSendBtnBusy) e dispara cancelMessage(), que reusa o MESMO comando
+    // de prioridade /cancelar que Telegram/Discord/WhatsApp/Signal já usam (MessageBus bypassa
+    // a fila para comandos de prioridade e o backend marca o Goal ativo como abandonado —
+    // ver GoalOrchestrator.cancelActiveGoal). currentChatSessionId guarda o sessionId da
+    // requisição em voo para que o clique em "Parar" cancele a sessão certa.
+    let currentChatSessionId = null;
+
+    function setSendBtnBusy(busy) {
+      sendBtn.classList.toggle('stop', busy);
+      sendBtn.onclick = busy ? cancelMessage : sendMessage;
+      sendBtn.title = busy ? t('stop_title') : t('send_title');
+      sendBtn.innerHTML = busy ? '■' : '↑';
+      sendBtn.disabled = false;
+    }
+
+    async function cancelMessage() {
+      if (!currentChatSessionId) return;
+      sendBtn.disabled = true; // evita clique duplo enquanto o /cancelar está em voo
+      showStatus('processing', t('status_cancelling'));
+      try {
+        const formData = new FormData();
+        formData.append('message', '/cancelar');
+        formData.append('sessionId', currentChatSessionId);
+        await newclawFetch('/api/chat', { method: 'POST', body: formData });
+      } catch (err) { /* a requisição original (sendMessage) trata seu próprio erro/timeout */ }
+      // Não reabilita o botão nem restaura o status aqui: a requisição original em sendMessage()
+      // ainda está em voo e é ela quem, ao resolver (com o goal já cancelado no backend), decide
+      // o estado final do botão e da mensagem exibida.
+    }
+
     async function sendMessage() {
       const msg = messageInput.value.trim();
       const attachments = pendingAttachments;
       if (!msg && attachments.length === 0) return;
       addMsg('user', msg || '📎 (anexo)', attachments.map(a => ({ fileName: a.fileName, type: a.type })));
-      messageInput.value = ''; messageInput.style.height = 'auto'; sendBtn.disabled = true;
+      messageInput.value = ''; messageInput.style.height = 'auto';
+      currentChatSessionId = currentConvId || 'web-session';
+      setSendBtnBusy(true);
       clearAttachments();
       showStatus('thinking', t('status_thinking'));
       try {
         showStatus('sending', t('status_sending'));
         const formData = new FormData();
         formData.append('message', msg);
-        formData.append('sessionId', currentConvId || 'web-session');
+        formData.append('sessionId', currentChatSessionId);
         attachments.forEach(a => formData.append('files', a.file, a.fileName));
         // Sem header Content-Type: o browser define o boundary multipart automaticamente.
         const res = await newclawFetch('/api/chat', { method: 'POST', body: formData });
@@ -885,7 +925,8 @@
         addMsg('bot', response, mapServerAttachments(data.attachments));
         speakText(response.replace(/```[\s\S]*?```/g,'(código)').replace(/[*#`_]/g,'').slice(0,500));
       } catch (err) { hideStatus(); addMsg('bot', `⚠️ Falha: ${err.message}`); }
-      sendBtn.disabled = false; messageInput.focus();
+      currentChatSessionId = null;
+      setSendBtnBusy(false); messageInput.focus();
     }
 
     // ── Status indicator ──

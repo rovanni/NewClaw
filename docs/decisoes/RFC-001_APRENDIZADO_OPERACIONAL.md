@@ -4,7 +4,7 @@
 > implementada e validada em ambiente real (Windows e Linux) — estritamente o caminho
 > informativo descrito na pergunta 5 (Evidence Provider puro). A extensão tática discutida na
 > pergunta 10 permanece proposta, não implementada — ver "Itens deliberadamente adiados" em
-> `docs/ADR-001_BASELINE_ARQUITETURAL.md`, Seção 6.
+> `docs/decisoes/ADR-001_BASELINE_ARQUITETURAL.md`, Seção 6.
 > Origem: investigação arquitetural de 2026-07-23/24, decorrente da Milestone M1
 > (Self-Healing de Dependências — `docs/DIRETRIZ_ARQUITETURA_2026-07-13.md`).
 

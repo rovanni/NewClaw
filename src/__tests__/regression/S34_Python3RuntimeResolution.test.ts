@@ -251,6 +251,27 @@ console.log('\n=== S34-15 — regressão: pptx/docx/PIL/markdown preservados em 
     assert(!/PYPKG_OK|PYPKG_MISSING/.test(src), 'marcadores de texto do shell antigo removidos (parsing agora é por exit code, não por prefixo de linha)', null);
 }
 
+// ── 16: tools['python3']/tools['python'] refletem o runtime validado, não `where`/`command -v` ──
+// Causa raiz auditada (log de produção, 26/07/2026): no Windows, `where python3` encontra o
+// stub do App Execution Alias da Microsoft Store mesmo sem Python real instalado (mesma classe
+// de falso positivo já corrigida para 'bash' via isBashFunctional() — ver S110). Antes deste
+// fix, EnvironmentProbe.probe() deixava 'python3' no probe genérico (TOOLS_TO_PROBE), então
+// `tools.python3` podia ficar `true` mesmo com resolvePython3Runtime() retornando null (nenhum
+// candidato validado por execução real) — o GoalPlanner via "python3 disponível" no bloco de
+// capacidades e montava um plano que exec_command nunca conseguia cumprir.
+console.log('\n=== S34-16 — tools.python3/tools.python derivam de pythonRuntime, não de where/command -v ===');
+{
+    const envProbePath = path.join(process.cwd(), 'src', 'core', 'EnvironmentProbe.ts');
+    const src = fs.readFileSync(envProbePath, 'utf-8');
+    assert(!/'pandoc', 'marp', 'python3'/.test(src), '"python3" removido do array TOOLS_TO_PROBE (não é mais checado via where/command -v)', null);
+    assert(/tools\['python3'\]\s*=\s*pythonRuntime\s*!==\s*null/.test(src), 'tools.python3 é atribuído a partir do pythonRuntime já resolvido (mesmo padrão de tools.bash/isBashFunctional)', null);
+    assert(/tools\['python'\]\s*=\s*pythonRuntime\s*!==\s*null/.test(src), 'tools.python (chave nova, antes inexistente) também deriva do runtime validado', null);
+    // Garante que a atribuição acontece DEPOIS de resolvePython3Runtime (não usa um valor stale).
+    const pyRuntimeIdx = src.indexOf('const pythonRuntime = await resolvePython3Runtime');
+    const toolsPy3Idx  = src.indexOf("tools['python3'] = pythonRuntime");
+    assert(pyRuntimeIdx > 0 && toolsPy3Idx > pyRuntimeIdx, 'atribuição de tools.python3 ocorre depois da resolução do runtime, nunca antes', { pyRuntimeIdx, toolsPy3Idx });
+}
+
 console.log(`\n${'─'.repeat(60)}`);
 console.log(`S34 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
 if (failed > 0) process.exitCode = 1;

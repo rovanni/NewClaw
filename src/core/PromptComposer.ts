@@ -83,10 +83,16 @@ const LAYER_PATTERNS: Record<GoalLayer, RegExp> = {
 };
 
 // Fallback strategy por binário bloqueado
+// pandoc/marp: 'pptxgenjs' (Node.js) adicionado a 26/07/2026 ao lado de 'python-pptx' —
+// ambos geram .pptx com texto nativo editável (não são intercambiáveis com o Marp CLI puro,
+// que produz slide-como-imagem), mas 'python-pptx' sozinho falha por completo em qualquer
+// ambiente sem runtime Python real (comum no Windows — ver comentário sobre o App Execution
+// Alias em EnvironmentProbe.ts). 'pptxgenjs' roda sobre Node.js, que o próprio NewClaw exige
+// para existir — não depende de nenhuma instalação externa opcional.
 const TOOL_FALLBACKS: Record<string, string[]> = {
-    pandoc:      ['python-pptx', 'html'],
+    pandoc:      ['python-pptx', 'pptxgenjs', 'html'],
     ffmpeg:      ['moviepy', 'pil'],
-    marp:        ['python-pptx', 'html'],
+    marp:        ['python-pptx', 'pptxgenjs', 'html'],
     libreoffice: ['python-pptx', 'python-docx'],
     pdftotext:   ['pdfplumber', 'pdfminer'],
     pdfimages:   ['pdfplumber'],

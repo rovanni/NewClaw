@@ -58,6 +58,15 @@ interface GoalRow {
 export class GoalStore {
     private readonly db: SqliteDb;
 
+    // Motivo (texto livre) da última transição para 'abandoned' de cada goal — efêmero, nunca
+    // persistido (mesma natureza de cache-de-processo de GoalOrchestrator.recentCompletedGoals).
+    // O checkpoint em GoalExecutionLoop.ts (goal.status==='abandoned', entre ciclos) só sabia
+    // mostrar UMA mensagem fixa ("nova mensagem do usuário"), mesmo quando o motivo real era
+    // outro (ex: /cancelar explícito — ver GoalOrchestrator.cancelActiveGoal). A janela entre
+    // setStatus('abandoned') e o checkpoint do mesmo ciclo é de milissegundos, no mesmo
+    // processo — não precisa sobreviver a um restart.
+    private readonly abandonReasons = new Map<string, string>();
+
     constructor(db: SqliteDb) {
         this.db = db;
         this.initSchema();
@@ -356,6 +365,22 @@ export class GoalStore {
         this.db.prepare(`UPDATE goals SET status = ?, updated_at = ?, completed_at = COALESCE(completed_at, ?)${terminalClause} WHERE id = ?`)
             .run(status, now, completedAt, id);
         log.info(`[GoalStore] goal=${id} ${prev} → ${status}`);
+    }
+
+    /**
+     * Registra o motivo de uma transição para 'abandoned' que está prestes a acontecer —
+     * chamar ANTES de setStatus(id, 'abandoned'). Consumido uma única vez por
+     * consumeAbandonReason() (GoalExecutionLoop.ts); nunca persistido em disco.
+     */
+    markAbandonReason(id: string, reason: string): void {
+        this.abandonReasons.set(id, reason);
+    }
+
+    /** Lê e remove o motivo registrado — nunca deve "vazar" para uma abandonagem futura do mesmo id. */
+    consumeAbandonReason(id: string): string | undefined {
+        const reason = this.abandonReasons.get(id);
+        this.abandonReasons.delete(id);
+        return reason;
     }
 
     addAttempt(goalId: string, attempt: GoalAttempt): void {

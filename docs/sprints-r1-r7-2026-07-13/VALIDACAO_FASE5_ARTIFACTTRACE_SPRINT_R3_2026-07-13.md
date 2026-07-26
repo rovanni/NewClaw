@@ -2,7 +2,7 @@
 
 **Data:** 2026-07-13
 **Branch:** `experimental/artifact-pipeline-refactor`
-**Escopo:** aplicar o checklist de Validação de `docs/DIRETRIZ_ARQUITETURA_2026-07-13.md` (Fase 5) à proposta `ArtifactTrace` (`docs/ANALISE_ARQUITETURAL_COGNITIVE_ENVELOPE_SPRINT_R2_2026-07-13.md`, §11-§12), antes de qualquer implementação. Nenhum código alterado.
+**Escopo:** aplicar o checklist de Validação de `docs/DIRETRIZ_ARQUITETURA_2026-07-13.md` (Fase 5) à proposta `ArtifactTrace` (`docs/sprints-r1-r7-2026-07-13/ANALISE_ARQUITETURAL_COGNITIVE_ENVELOPE_SPRINT_R2_2026-07-13.md`, §11-§12), antes de qualquer implementação. Nenhum código alterado.
 
 As Fases 1-4 já foram cobertas: Compreensão e Crítica na Sprint R1, Pesquisa de Alternativas e Síntese na Sprint R2. Esta sprint fecha só a Fase 5.
 

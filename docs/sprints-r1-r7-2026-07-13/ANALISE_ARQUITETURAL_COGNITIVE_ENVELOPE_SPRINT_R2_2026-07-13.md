@@ -3,7 +3,7 @@
 **Data:** 2026-07-13
 **Branch:** `experimental/artifact-pipeline-refactor`
 **Escopo:** apenas análise. Nenhuma linha de código alterada nesta sprint.
-**Base:** achados da Sprint R1 (`docs/AUDITORIA_PIPELINE_ARTEFATOS_SPRINT_R1_2026-07-13.md`) + histórico real do `ArtifactDeliveryRegistry` (implementado em `1dafdab`, integrado parcialmente, removido em `a7862d3` por "8 bugs críticos, 3 interdependentes, zero callers em `src/`").
+**Base:** achados da Sprint R1 (`docs/sprints-r1-r7-2026-07-13/AUDITORIA_PIPELINE_ARTEFATOS_SPRINT_R1_2026-07-13.md`) + histórico real do `ArtifactDeliveryRegistry` (implementado em `1dafdab`, integrado parcialmente, removido em `a7862d3` por "8 bugs críticos, 3 interdependentes, zero callers em `src/`").
 
 ---
 

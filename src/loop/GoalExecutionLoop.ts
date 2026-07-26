@@ -1514,14 +1514,17 @@ export class GoalExecutionLoop {
             isAudioAlreadySent,
         );
 
-        // Recarrega o goal — pode ter sido abandonado durante o step (nova mensagem do usuário)
+        // Recarrega o goal — pode ter sido abandonado durante o step (nova mensagem do usuário
+        // OU cancelamento explícito via /cancelar — ver GoalOrchestrator.cancelActiveGoal, que
+        // registra o motivo real via markAbandonReason() antes de mudar o status).
         goal = this.goalStore.getById(goal.id)!;
         if (goal.status === 'abandoned') {
-            log.info(`[GoalLoop] goal=${goal.id} foi abandonado durante execução do step — saindo do loop`);
+            const abandonReason = this.goalStore.consumeAbandonReason(goal.id)
+                ?? 'Goal interrompido: nova mensagem do usuário recebida durante execução.';
+            log.info(`[GoalLoop] goal=${goal.id} foi abandonado durante execução do step — saindo do loop (${abandonReason})`);
             return {
                 action: 'earlyReturn',
-                result: this.buildResult(goal, false, totalCycles, totalReplans,
-                    'Goal interrompido: nova mensagem do usuário recebida durante execução.'),
+                result: this.buildResult(goal, false, totalCycles, totalReplans, abandonReason),
             };
         }
 

@@ -294,7 +294,7 @@ export class AgentController {
             maxFindingsPerCategory: 20,
         }, this.db);
 
-        registerCommands(this.messageBus, this.memory, this.memoryFacade, this.sessionManager, this.auditor, this.config, this.agentLoop);
+        registerCommands(this.messageBus, this.memory, this.memoryFacade, this.sessionManager, this.auditor, this.config, this.agentLoop, this.goalOrchestrator);
 
         eventBus.on('circuit:open', (data) => {
             log.warn(`[CircuitBreaker] ${data.name} OPEN — ${data.failures}/${data.threshold} failures`);

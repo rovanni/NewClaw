@@ -2,7 +2,7 @@
 
 > Status: aprovada, implementação nesta mesma sessão (24/07/2026).
 > Origem: `docs/RFC-001_APRENDIZADO_OPERACIONAL.md` já mapeava `CaseMemory` como um dos 3
-> componentes de conhecimento existentes (Seção 8, matriz); `docs/ADR-001_BASELINE_ARQUITETURAL.md`
+> componentes de conhecimento existentes (Seção 8, matriz); `docs/decisoes/ADR-001_BASELINE_ARQUITETURAL.md`
 > (decisão 4) manteve `CaseMemory` "especializado em sucesso relacionado a objetivo, em modo
 > sombra" como baseline aprovada. Este documento não reabre nenhuma dessas decisões — cobre
 > apenas a sub-etapa final do roadmap já definido (memória `project_session_bugs_jul2026_s`):

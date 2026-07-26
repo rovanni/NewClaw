@@ -2,7 +2,7 @@
 
 **Data:** 2026-07-13
 **Branch:** `experimental/artifact-pipeline-refactor`
-**Escopo:** última revisão crítica antes de tocar código, aplicando Fase 2/3 (`docs/DIRETRIZ_ARQUITETURA_2026-07-13.md`) de novo sobre a proposta já aprovada condicionalmente na Sprint R3 (`docs/VALIDACAO_FASE5_ARTIFACTTRACE_SPRINT_R3_2026-07-13.md`). Nenhum código alterado.
+**Escopo:** última revisão crítica antes de tocar código, aplicando Fase 2/3 (`docs/DIRETRIZ_ARQUITETURA_2026-07-13.md`) de novo sobre a proposta já aprovada condicionalmente na Sprint R3 (`docs/sprints-r1-r7-2026-07-13/VALIDACAO_FASE5_ARTIFACTTRACE_SPRINT_R3_2026-07-13.md`). Nenhum código alterado.
 
 Resultado resumido: **o piloto aprovado em R3 pode — e deve — ficar ainda menor.** `Event Log` + `Projection` não são necessários para o escopo já travado (§11/§12 da R2, hard gate da R3); e existe um mecanismo de identidade mais simples e mais alinhado à filosofia do Kernel do que UUID+log: **hash de conteúdo**, que por sinal já existe informalmente no próprio arquivo que o piloto vai tocar. Achado concreto, não hipotético — ver §3.
 

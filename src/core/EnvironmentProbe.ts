@@ -53,8 +53,18 @@ export interface EnvironmentCapabilities {
 // manual aqui. Ver S154_CatalogConsistency para o teste que garante essa cobertura.
 // Exportado para o teste de consistência de catálogos (S154_CatalogConsistency) verificar
 // paridade com KNOWN_DEPS (GoalEvaluator.ts) sem duplicar esta lista via parsing de código-fonte.
+// 'python3' fica FORA desta lista deliberadamente — mesmo motivo de 'bash' (ver abaixo):
+// no Windows, `where python3` (e `where python`) encontram o stub do App Execution Alias
+// da Microsoft Store mesmo sem nenhum Python real instalado — o arquivo existe no PATH,
+// mas rodá-lo abre a Store ou falha ("Python was not found..."). Falso positivo reproduzido
+// ao vivo em 26/07/2026: probe reportou "python3 disponível", o planner gerou um step
+// python-pptx, e 5+ minutos de exec_command (`pip install`, `python3 script.py`) falharam
+// um a um até o replan finalmente trocar de estratégia. 'pip3' permanece no probe genérico:
+// diferente de python.exe/python3.exe, pip3.exe não é um alvo do App Execution Alias — só
+// existe no PATH quando um Python real já instalou seus Scripts, então `where pip3` não
+// sofre do mesmo falso positivo (sem evidência de que esteja errado, não é alterado aqui).
 export const TOOLS_TO_PROBE = [
-    'pandoc', 'marp', 'python3', 'pip3', 'node', 'npm',
+    'pandoc', 'marp', 'pip3', 'node', 'npm',
     'ffmpeg', 'convert', 'libreoffice', 'pdftotext',
     'git', 'zip', 'wget', 'curl', 'edge-tts',
     'magick', 'soffice', 'pdfimages', 'jq', 'unzip',
@@ -136,6 +146,16 @@ export class EnvironmentProbe {
             // array de args evita esse problema por construção).
             const pythonPkgs: Record<string, boolean> = {};
             const pythonRuntime = await resolvePython3Runtime(defaultPython3Candidates());
+
+            // 'python3'/'python' em `tools` refletem o MESMO runtime validado por execução real
+            // acima (nunca o resultado de `where`/`command -v`, que o stub do Windows Store
+            // engana) — mesmo padrão de 'bash'/isBashFunctional(). Isso é o que chega ao
+            // GoalPlanner via CapabilityRegistry.getCapabilitySummary() ("Indisponíveis (não
+            // usar): ..."), então um Windows sem Python real agora aparece como tal ANTES do
+            // plano ser montado, em vez de só ser descoberto depois de vários exec_command falhos.
+            tools['python3'] = pythonRuntime !== null;
+            tools['python']  = pythonRuntime !== null;
+
             if (pythonRuntime) {
                 const pkgResults = await Promise.all(
                     PYTHON_PKGS_TO_PROBE.map(async (p): Promise<[string, boolean]> => [p, await runPython3Import(pythonRuntime, p)])

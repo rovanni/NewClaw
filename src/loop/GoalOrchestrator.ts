@@ -17,6 +17,7 @@
 import { createLogger } from '../shared/AppLogger';
 import { AgentLoop, ProcessedResult } from './AgentLoop';
 import { GoalStore } from './GoalStore';
+import type { Goal } from './GoalTypes';
 import { GoalExtractor } from './GoalExtractor';
 import { GoalPlanner } from './GoalPlanner';
 import { GoalExecutionLoop } from './GoalExecutionLoop';
@@ -603,6 +604,30 @@ export class GoalOrchestrator {
         // requiresAuth: false — Sprint 0.11, ver nota em GoalExecutionLoop.ts (branch 'needs_auth').
         this.goalStore.update(goal.id, { status: 'failed', pendingTxnId: undefined, requiresAuth: false });
         return '❌ Ação cancelada. O objetivo foi encerrado sem executar o comando.';
+    }
+
+    /**
+     * Cancela explicitamente o goal ativo da sessão (comandos /cancelar, /cancel, /stop, /pare
+     * — ver agentControllerCommands.ts, canal-agnóstico: Telegram/Discord/WhatsApp/Signal/Web
+     * chegam aqui pelo mesmo caminho). Marca o goal como 'abandoned' para que o checkpoint em
+     * GoalExecutionLoop.ts (goal.status==='abandoned', reavaliado entre ciclos) encerre o loop
+     * de verdade. Sem isso, `AgentLoop.cancel()` sozinho só aborta a chamada de LLM/tool em
+     * curso — o GoalExecutionLoop pode simplesmente tratar isso como uma falha comum de step e
+     * replanejar/continuar o MESMO goal, tornando "⏹ Operação cancelada." uma mensagem
+     * enganosa (achado real, 26/07/2026: usuário sem nenhuma forma de parar um goal de vários
+     * minutos no Dashboard web).
+     *
+     * Retorna o goal cancelado, ou null se não havia nenhum goal ativo (não-terminal) na sessão
+     * — permite ao chamador diferenciar "cancelei algo" de "não havia nada rodando".
+     */
+    cancelActiveGoal(channel: string, userId: string): Goal | null {
+        const sessionKey = composeSessionKey({ channel, userId });
+        const goal = this.goalStore.getActiveBySession(sessionKey);
+        if (!goal || ['completed', 'failed', 'abandoned'].includes(goal.status)) return null;
+        this.goalStore.markAbandonReason(goal.id, 'Goal interrompido: cancelado explicitamente pelo usuário.');
+        this.goalStore.setStatus(goal.id, 'abandoned');
+        log.info(`[GoalOrchestrator] goal=${goal.id} cancelado explicitamente pelo usuário (trigger=user_cancel)`);
+        return goal;
     }
 
     getGoalStore(): GoalStore { return this.goalStore; }
