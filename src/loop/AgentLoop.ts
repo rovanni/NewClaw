@@ -2874,9 +2874,11 @@ export class AgentLoop {
         }
 
         const manualSkills = this.skillLoader.loadAll();
-        const matchedManual = manualSkills.filter(s =>
-            s.triggers?.some(t => userText.toLowerCase().includes(t.toLowerCase()))
-        );
+        // S149: matching por trigger unificado com SkillDiscovery.matchSkillByTrigger() (mesma
+        // lógica que estava duplicada inline aqui). Usa só `.byTrigger`, nunca `.all` —
+        // `.all` incluiria matches por capacidade/tag que este call site nunca considerou.
+        const { discoverSkills } = require('../skills/SkillDiscovery') as typeof import('../skills/SkillDiscovery');
+        const matchedManual = discoverSkills(manualSkills, userText).byTrigger;
         if (matchedManual.length > 0) {
             // Usa conteúdo completo (com seções TASK_ONLY) apenas quando a skill é a
             // tarefa primária do turno — alta confiança e intent diretamente relacionada.
