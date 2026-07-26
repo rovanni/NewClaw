@@ -117,7 +117,10 @@ uma chamada à camada de julgamento. Duas classes de exceção comprovada existe
    solução conhecida com alta confiança para o ambiente detectado, o sistema pode aplicar essa
    solução diretamente, sem consultar a camada de julgamento sobre aquele passo específico —
    restrito a um catálogo pequeno e nomeado, nunca a uma inferência livre, e sempre condicionado
-   ao modo operacional configurado.
+   ao modo operacional configurado. O processo que sustenta essa "alta confiança" ao longo do
+   tempo é o Pipeline de Curadoria de Dependências
+   (`docs/ARCHITECTURE/PIPELINE_CURADORIA_DEPENDENCIAS.md`) — pesquisa e evidência sempre
+   antecedem qualquer entrada nova no catálogo.
 
 Fora dessas duas classes, qualquer componente que decida em vez de informar deve ser tratado como
 desvio do padrão, não como uma terceira exceção implícita.

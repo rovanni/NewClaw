@@ -1,0 +1,1178 @@
+{
+ "generatedAt": "2026-07-25T22:05:31.763Z",
+ "scope": "src/**, scripts/**, skills/**/SKILL.md (repo root). Nao inclui bin/, prompts/, addins/, especificacoes soltas em specs/ -- ver README.md secao \"Fora de escopo\".",
+ "totals": {
+  "modulos_analisados_ts_js": 397,
+  "componentes_arquiteturais": 397,
+  "classes": 135,
+  "interfaces": 233,
+  "funcoes_exportadas": 203,
+  "consts_exportadas": 58,
+  "scripts_codigo_ts_js": 14,
+  "scripts_nao_codigo_sh_ps1_service": 13,
+  "scripts_total_arquivos": 27,
+  "skills_pasta_raiz": 6,
+  "testes_regressao": 147,
+  "todos_fixmes_encontrados": 2,
+  "arestas_import_verificadas": 1113
+ },
+ "componentes_por_camada": {
+  "API": 17,
+  "Agents": 7,
+  "Channels": 10,
+  "Cognitive": 1,
+  "Core": 25,
+  "Dashboard": 19,
+  "Goal Execution": 24,
+  "Infrastructure": 20,
+  "Memory": 36,
+  "Models": 1,
+  "Planner": 15,
+  "Providers": 11,
+  "Scripts": 14,
+  "Services": 11,
+  "Session": 8,
+  "Skills": 4,
+  "Tests": 147,
+  "Tools": 27
+ },
+ "componentes_por_tipo": {
+  "adapter": 7,
+  "class": 77,
+  "engine": 4,
+  "entrypoint": 5,
+  "function-module": 31,
+  "interface-module": 13,
+  "loop": 2,
+  "manager": 6,
+  "module": 26,
+  "orchestrator": 2,
+  "provider": 6,
+  "registry": 7,
+  "repository": 6,
+  "route": 17,
+  "script": 14,
+  "service": 10,
+  "store": 2,
+  "test": 148,
+  "tool": 4,
+  "types": 10
+ },
+ "fanIn": {
+  "src/loop/WorkflowTypes.ts": 7,
+  "src/channels/ChannelAdapter.ts": 17,
+  "src/channels/MessageBus.ts": 13,
+  "src/channels/accessControl.ts": 5,
+  "src/shared/AppLogger.ts": 122,
+  "src/shared/errors.ts": 60,
+  "src/shared/stripHtmlTags.ts": 4,
+  "src/loop/AgentLoop.ts": 13,
+  "src/session/SessionManager.ts": 12,
+  "src/session/SessionKeyFactory.ts": 11,
+  "src/services/OnboardingService.ts": 2,
+  "src/core/ConversationQueueManager.ts": 1,
+  "src/loop/GoalOrchestrator.ts": 3,
+  "src/shared/TelegramFormatter.ts": 1,
+  "src/channels/TelegramPollingSupervisor.ts": 1,
+  "src/dashboard/routes/powerpointBroker.ts": 4,
+  "src/core/ProviderFactory.ts": 36,
+  "src/core/ModelRegistryService.ts": 4,
+  "src/loop/agentLoopTypes.ts": 53,
+  "src/memory/MemoryManager.ts": 43,
+  "src/memory/MemoryFacade.ts": 9,
+  "src/skills/SkillLoader.ts": 7,
+  "src/loop/SkillLearner.ts": 6,
+  "src/tools/exec_command.ts": 10,
+  "src/tools/web_search.ts": 3,
+  "src/tools/powerpoint_control.ts": 1,
+  "src/tools/web_navigate.ts": 3,
+  "src/tools/write_tool.ts": 5,
+  "src/tools/edit_tool.ts": 4,
+  "src/tools/read_tool.ts": 5,
+  "src/tools/memory_search.ts": 1,
+  "src/tools/memory_write.ts": 5,
+  "src/tools/read_document.ts": 2,
+  "src/tools/list_workspace.ts": 4,
+  "src/tools/refresh_workspace.ts": 1,
+  "src/tools/analyze_workspace_groups.ts": 2,
+  "src/tools/organize_workspace.ts": 1,
+  "src/tools/send_audio.ts": 2,
+  "src/tools/send_document.ts": 4,
+  "src/tools/memory_admin.ts": 1,
+  "src/tools/crypto_analysis.ts": 2,
+  "src/tools/ssh_exec.ts": 1,
+  "src/tools/weather.ts": 1,
+  "src/core/ToolRegistry.ts": 32,
+  "src/session/SessionContext.ts": 2,
+  "src/memory/ClassificationMemory.ts": 5,
+  "src/memory/DecisionMemory.ts": 5,
+  "src/services/SchedulerService.ts": 2,
+  "src/tools/schedule_tool.ts": 1,
+  "src/session/SessionLearner.ts": 1,
+  "src/memory/MemoryGovernor.ts": 1,
+  "src/channels/WebChannelAdapter.ts": 3,
+  "src/channels/TelegramAdapter.ts": 1,
+  "src/channels/DiscordAdapter.ts": 2,
+  "src/channels/WhatsAppAdapter.ts": 1,
+  "src/channels/SignalAdapter.ts": 1,
+  "src/services/auditor/AuditorService.ts": 3,
+  "src/core/EventBus.ts": 5,
+  "src/core/CircuitBreaker.ts": 3,
+  "src/core/PromptRegistry.ts": 1,
+  "src/core/ConfidenceClassifier.ts": 3,
+  "src/session/SessionAutoCleaner.ts": 1,
+  "src/memory/MemoryCurator.ts": 4,
+  "src/core/LifecycleManager.ts": 1,
+  "src/shared/EventLoopMonitor.ts": 3,
+  "src/core/agentControllerTypes.ts": 2,
+  "src/core/agentControllerSetup.ts": 1,
+  "src/services/OwnerProfileService.ts": 4,
+  "src/memory/DomainRegistry.ts": 11,
+  "src/loop/WorkflowEngine.ts": 4,
+  "src/loop/GoalStore.ts": 28,
+  "src/loop/BackgroundCognitionQueue.ts": 1,
+  "src/core/agentControllerCommands.ts": 1,
+  "src/core/agentMediaHandlers.ts": 4,
+  "src/services/auditor/auditCommand.ts": 1,
+  "src/core/providerTypes.ts": 11,
+  "src/core/providerQueue.ts": 7,
+  "src/core/EnvironmentProbe.ts": 1,
+  "src/utils/crossPlatform.ts": 22,
+  "src/loop/AgentFSM.ts": 4,
+  "src/core/OpenAIProvider.ts": 3,
+  "src/core/modelCapabilityHeuristics.ts": 4,
+  "src/core/CapabilityMode.ts": 6,
+  "src/core/GeminiProvider.ts": 1,
+  "src/core/DeepSeekProvider.ts": 1,
+  "src/core/GroqProvider.ts": 1,
+  "src/core/OllamaProvider.ts": 3,
+  "src/core/AnthropicProvider.ts": 2,
+  "src/core/AgentStateManager.ts": 3,
+  "src/core/AgentController.ts": 4,
+  "src/skills/SkillInstaller.ts": 3,
+  "src/dashboard/routes/auth.ts": 3,
+  "src/dashboard/security.ts": 2,
+  "src/dashboard/routes/config.ts": 2,
+  "src/dashboard/routes/providers.ts": 1,
+  "src/dashboard/routes/models.ts": 1,
+  "src/dashboard/routes/skills.ts": 1,
+  "src/dashboard/routes/tools.ts": 1,
+  "src/dashboard/routes/status.ts": 1,
+  "src/dashboard/routes/chat.ts": 2,
+  "src/dashboard/routes/traces.ts": 1,
+  "src/dashboard/routes/memory.ts": 1,
+  "src/dashboard/routes/conversations.ts": 1,
+  "src/dashboard/routes/system.ts": 1,
+  "src/dashboard/routes/maintenance.ts": 1,
+  "src/dashboard/routes/integrations.ts": 2,
+  "src/dashboard/routes/types.ts": 11,
+  "src/dashboard/routes/ollamaPullError.ts": 2,
+  "src/core/PermissionRegistry.ts": 10,
+  "src/core/ExecutionTrace.ts": 6,
+  "src/memory/EmbeddingService.ts": 10,
+  "src/core/dbRecovery.ts": 2,
+  "src/core/UncaughtExceptionPolicy.ts": 2,
+  "src/dashboard/DashboardServer.ts": 1,
+  "src/shared/Logger.ts": 1,
+  "src/shared/dynamicTimeout.ts": 3,
+  "src/cognitive/CognitiveWorkspace.ts": 1,
+  "src/loop/ModelProfileRegistry.ts": 3,
+  "src/loop/UnifiedIntentRouter.ts": 2,
+  "src/loop/ResponseAdapter.ts": 3,
+  "src/loop/AuthorizationManager.ts": 2,
+  "src/loop/ProtocolParser.ts": 1,
+  "src/shared/analysisIntentPattern.ts": 2,
+  "src/loop/FSMHistoryStore.ts": 1,
+  "src/loop/ObserverValidator.ts": 1,
+  "src/memory/ReflectionMemory.ts": 15,
+  "src/loop/ProactiveRecovery.ts": 2,
+  "src/loop/agentPrompts.ts": 1,
+  "src/loop/agentOutputParser.ts": 3,
+  "src/loop/agentMetrics.ts": 1,
+  "src/loop/planning/extractMissingExecutable.ts": 3,
+  "src/loop/planning/computeToolInputKey.ts": 3,
+  "src/loop/planning/inferExpectedExtensions.ts": 4,
+  "src/loop/ContentExtractor.ts": 3,
+  "src/shared/destructiveCommandPatterns.ts": 2,
+  "src/memory/DomainSummaryService.ts": 3,
+  "src/memory/EpisodicMemoryService.ts": 3,
+  "src/memory/CognitiveReflectionEngine.ts": 3,
+  "src/memory/MultiLayerRetriever.ts": 5,
+  "src/memory/CognitiveMemoryIndex.ts": 4,
+  "src/shared/keywordBoundary.ts": 5,
+  "src/loop/GoalTypes.ts": 55,
+  "src/shared/transientErrorPatterns.ts": 2,
+  "src/loop/GoalPlanner.ts": 9,
+  "src/loop/GoalEvaluator.ts": 5,
+  "src/loop/RiskAnalyzer.ts": 4,
+  "src/core/CapabilityRegistry.ts": 4,
+  "src/memory/CaseMemory.ts": 13,
+  "src/memory/OperationalKnowledge.ts": 5,
+  "src/loop/StepSemanticValidator.ts": 2,
+  "src/loop/GracefulDeliveryOrchestrator.ts": 1,
+  "src/shared/StrategyDiversityGuard.ts": 5,
+  "src/loop/planning/ensureDeliverySuccessCriteria.ts": 5,
+  "src/loop/planning/resolveInstallCommand.ts": 3,
+  "src/loop/planning/artifactContract.ts": 6,
+  "src/loop/GoalLimits.ts": 3,
+  "src/loop/GoalExtractor.ts": 3,
+  "src/loop/GoalExecutionLoop.ts": 21,
+  "src/core/PromptComposer.ts": 2,
+  "src/shared/placeholderPatterns.ts": 4,
+  "src/shared/contentStubClassifier.ts": 4,
+  "src/loop/planning/sanitizePlanSteps.ts": 6,
+  "src/shared/domainTypes.ts": 7,
+  "src/loop/planning/toolAliasResolver.ts": 2,
+  "src/shared/extractText.ts": 2,
+  "src/shared/boundedHash.ts": 3,
+  "src/memory/DomainGravityService.ts": 2,
+  "src/session/SessionTranscript.ts": 8,
+  "src/memory/conversational/cmiTypes.ts": 5,
+  "src/memory/conversational/CMIBuffer.ts": 1,
+  "src/memory/conversational/CMIRepository.ts": 1,
+  "src/memory/conversational/CMIIngestionPipeline.ts": 1,
+  "src/memory/memoryTypes.ts": 4,
+  "src/memory/CognitiveDomains.ts": 1,
+  "src/memory/MemoryGraphRepository.ts": 4,
+  "src/memory/memorySchema.ts": 4,
+  "src/memory/GraphAnalytics.ts": 1,
+  "src/memory/AttentionFeedback.ts": 2,
+  "src/memory/AttentionLayer.ts": 1,
+  "src/memory/conversationRepository.ts": 1,
+  "src/memory/graphRepository.ts": 1,
+  "src/memory/snapshotRepository.ts": 1,
+  "src/dashboard/DashboardMemoryRepository.ts": 1,
+  "src/memory/TemporalLayer.ts": 2,
+  "src/memory/ProceduralMemoryService.ts": 3,
+  "src/services/auditor/types.ts": 6,
+  "src/services/auditor/codeChecker.ts": 1,
+  "src/services/auditor/runtimeChecker.ts": 1,
+  "src/services/auditor/dataChecker.ts": 1,
+  "src/services/auditor/integrationChecker.ts": 1,
+  "src/services/auditor/reporter.ts": 1,
+  "src/loop/ContextBuilder.ts": 4,
+  "src/loop/ContextBudget.ts": 1,
+  "src/loop/ContextCompressor.ts": 1,
+  "src/memory/conversational/CMIEngine.ts": 2,
+  "src/skills/SkillDiscovery.ts": 1,
+  "src/tools/server_config.ts": 3,
+  "src/shared/htmlEntities.ts": 3,
+  "src/shared/contentStubPatterns.ts": 9,
+  "scripts/testes/integration-campaign.ts": 1
+ },
+ "fanOut": {
+  "src/channels/DiscordAdapter.ts": 7,
+  "src/channels/MessageBus.ts": 9,
+  "src/channels/SignalAdapter.ts": 6,
+  "src/channels/TelegramAdapter.ts": 8,
+  "src/channels/TelegramPollingSupervisor.ts": 3,
+  "src/channels/WebChannelAdapter.ts": 3,
+  "src/channels/WhatsAppAdapter.ts": 6,
+  "src/cognitive/CognitiveWorkspace.ts": 1,
+  "src/core/AgentController.ts": 67,
+  "src/core/agentControllerCommands.ts": 9,
+  "src/core/agentControllerSetup.ts": 1,
+  "src/core/agentMediaHandlers.ts": 6,
+  "src/core/AgentStateManager.ts": 2,
+  "src/core/AnthropicProvider.ts": 3,
+  "src/core/CapabilityRegistry.ts": 3,
+  "src/core/CircuitBreaker.ts": 3,
+  "src/core/ConfidenceClassifier.ts": 2,
+  "src/core/ConversationQueueManager.ts": 1,
+  "src/core/dbRecovery.ts": 1,
+  "src/core/DeepSeekProvider.ts": 3,
+  "src/core/EnvironmentProbe.ts": 3,
+  "src/core/EventBus.ts": 2,
+  "src/core/ExecutionTrace.ts": 1,
+  "src/core/GeminiProvider.ts": 3,
+  "src/core/GroqProvider.ts": 3,
+  "src/core/LifecycleManager.ts": 1,
+  "src/core/modelCapabilityHeuristics.ts": 1,
+  "src/core/ModelRegistryService.ts": 6,
+  "src/core/OllamaProvider.ts": 5,
+  "src/core/OpenAIProvider.ts": 4,
+  "src/core/PermissionRegistry.ts": 2,
+  "src/core/PromptComposer.ts": 1,
+  "src/core/PromptRegistry.ts": 1,
+  "src/core/ProviderFactory.ts": 10,
+  "src/core/StateStabilityGuard.ts": 2,
+  "src/core/ToolRegistry.ts": 2,
+  "src/core/UncaughtExceptionPolicy.ts": 2,
+  "src/dashboard/DashboardServer.ts": 24,
+  "src/dashboard/routes/chat.ts": 3,
+  "src/dashboard/routes/config.ts": 3,
+  "src/dashboard/routes/conversations.ts": 2,
+  "src/dashboard/routes/integrations.ts": 5,
+  "src/dashboard/routes/maintenance.ts": 2,
+  "src/dashboard/routes/memory.ts": 4,
+  "src/dashboard/routes/models.ts": 2,
+  "src/dashboard/routes/ollamaPullError.ts": 1,
+  "src/dashboard/routes/providers.ts": 5,
+  "src/dashboard/routes/skills.ts": 2,
+  "src/dashboard/routes/status.ts": 4,
+  "src/dashboard/routes/system.ts": 4,
+  "src/dashboard/routes/tools.ts": 1,
+  "src/dashboard/routes/traces.ts": 1,
+  "src/dashboard/routes/types.ts": 11,
+  "src/index.ts": 7,
+  "src/loop/AgentLoop.ts": 37,
+  "src/loop/agentLoopTypes.ts": 1,
+  "src/loop/agentMetrics.ts": 2,
+  "src/loop/agentOutputParser.ts": 4,
+  "src/loop/agentPrompts.ts": 1,
+  "src/loop/AuthorizationManager.ts": 3,
+  "src/loop/BackgroundCognitionQueue.ts": 1,
+  "src/loop/ContextBuilder.ts": 10,
+  "src/loop/ContextCompressor.ts": 3,
+  "src/loop/FSMHistoryStore.ts": 4,
+  "src/loop/GoalEvaluator.ts": 6,
+  "src/loop/GoalExecutionLoop.ts": 30,
+  "src/loop/GoalExtractor.ts": 5,
+  "src/loop/GoalOrchestrator.ts": 19,
+  "src/loop/GoalPlanner.ts": 16,
+  "src/loop/GoalStateMachine.ts": 2,
+  "src/loop/GoalStore.ts": 2,
+  "src/loop/GoalTypes.ts": 1,
+  "src/loop/GracefulDeliveryOrchestrator.ts": 2,
+  "src/loop/ModelProfileRegistry.ts": 3,
+  "src/loop/ObserverValidator.ts": 4,
+  "src/loop/planning/artifactContract.ts": 2,
+  "src/loop/planning/ensureDeliverySuccessCriteria.ts": 1,
+  "src/loop/planning/resolveInstallCommand.ts": 1,
+  "src/loop/planning/sanitizePlanSteps.ts": 5,
+  "src/loop/ProactiveRecovery.ts": 3,
+  "src/loop/ProtocolParser.ts": 2,
+  "src/loop/ResponseBuilder.ts": 5,
+  "src/loop/RiskAnalyzer.ts": 12,
+  "src/loop/SkillLearner.ts": 2,
+  "src/loop/StepSemanticValidator.ts": 3,
+  "src/loop/UnifiedIntentRouter.ts": 6,
+  "src/loop/WorkflowEngine.ts": 3,
+  "src/memory/AttentionFeedback.ts": 1,
+  "src/memory/AttentionLayer.ts": 1,
+  "src/memory/CaseMemory.ts": 5,
+  "src/memory/ClassificationMemory.ts": 1,
+  "src/memory/CognitiveMemoryIndex.ts": 1,
+  "src/memory/CognitiveReflectionEngine.ts": 1,
+  "src/memory/conversational/CMIBuffer.ts": 4,
+  "src/memory/conversational/CMIEngine.ts": 7,
+  "src/memory/conversational/CMIIngestionPipeline.ts": 6,
+  "src/memory/conversational/CMIRepository.ts": 2,
+  "src/memory/conversationRepository.ts": 2,
+  "src/memory/DecisionMemory.ts": 1,
+  "src/memory/DomainGravityService.ts": 2,
+  "src/memory/DomainRegistry.ts": 4,
+  "src/memory/DomainSummaryService.ts": 2,
+  "src/memory/EpisodicMemoryService.ts": 1,
+  "src/memory/GraphAnalytics.ts": 3,
+  "src/memory/graphRepository.ts": 4,
+  "src/memory/MemoryCurator.ts": 9,
+  "src/memory/MemoryFacade.ts": 2,
+  "src/memory/MemoryGovernor.ts": 6,
+  "src/memory/MemoryManager.ts": 22,
+  "src/memory/memorySchema.ts": 3,
+  "src/memory/MemoryScoringEngine.ts": 2,
+  "src/memory/MultiLayerRetriever.ts": 3,
+  "src/memory/OperationalKnowledge.ts": 5,
+  "src/memory/ProceduralMemoryService.ts": 1,
+  "src/memory/ReflectionMemory.ts": 5,
+  "src/memory/snapshotRepository.ts": 1,
+  "src/memory/TemporalLayer.ts": 1,
+  "src/services/auditor/auditCommand.ts": 5,
+  "src/services/auditor/AuditorService.ts": 8,
+  "src/services/auditor/codeChecker.ts": 3,
+  "src/services/auditor/dataChecker.ts": 3,
+  "src/services/auditor/integrationChecker.ts": 4,
+  "src/services/auditor/reporter.ts": 2,
+  "src/services/auditor/runtimeChecker.ts": 3,
+  "src/services/OnboardingService.ts": 3,
+  "src/services/OwnerProfileService.ts": 3,
+  "src/services/SchedulerService.ts": 1,
+  "src/session/EventRanker.ts": 1,
+  "src/session/SessionAutoCleaner.ts": 4,
+  "src/session/SessionContext.ts": 6,
+  "src/session/SessionLearner.ts": 5,
+  "src/session/SessionManager.ts": 8,
+  "src/session/SessionTranscript.ts": 2,
+  "src/shared/contentStubClassifier.ts": 2,
+  "src/shared/dynamicTimeout.ts": 1,
+  "src/shared/EventLoopMonitor.ts": 1,
+  "src/shared/StrategyDiversityGuard.ts": 2,
+  "src/skills/SkillDiscovery.ts": 1,
+  "src/skills/SkillInstaller.ts": 2,
+  "src/skills/SkillLoader.ts": 2,
+  "src/skills/__tests__/SkillDiscovery.test.ts": 2,
+  "src/tools/analyze_workspace_groups.ts": 2,
+  "src/tools/api_request.ts": 2,
+  "src/tools/cmi_inspect.ts": 4,
+  "src/tools/crypto_analysis.ts": 2,
+  "src/tools/crypto_report.ts": 2,
+  "src/tools/edit_tool.ts": 4,
+  "src/tools/exec_command.ts": 6,
+  "src/tools/list_workspace.ts": 2,
+  "src/tools/manage_memory.ts": 4,
+  "src/tools/memory_admin.ts": 4,
+  "src/tools/memory_search.ts": 3,
+  "src/tools/memory_write.ts": 8,
+  "src/tools/organize_workspace.ts": 4,
+  "src/tools/powerpoint_control.ts": 2,
+  "src/tools/read_document.ts": 6,
+  "src/tools/read_tool.ts": 5,
+  "src/tools/refresh_workspace.ts": 3,
+  "src/tools/schedule_tool.ts": 3,
+  "src/tools/send_audio.ts": 6,
+  "src/tools/send_document.ts": 6,
+  "src/tools/ssh_exec.ts": 4,
+  "src/tools/ToolRegistry.ts": 2,
+  "src/tools/weather.ts": 3,
+  "src/tools/web_navigate.ts": 3,
+  "src/tools/web_search.ts": 2,
+  "src/tools/write_tool.ts": 7,
+  "src/__tests__/regression/CrossPlatform_ResolvePath_NoRegression.test.ts": 1,
+  "src/__tests__/regression/P0_2_MarpCommand_NoInput.test.ts": 1,
+  "src/__tests__/regression/P1_2_ContextContamination_RankingInversion.test.ts": 2,
+  "src/__tests__/regression/S100_Compression_OutsideCriticalSection.test.ts": 2,
+  "src/__tests__/regression/S101_AgentLoopState_ConcurrencyIsolation.test.ts": 1,
+  "src/__tests__/regression/S102_GoalStore_TransactionalAppend.test.ts": 2,
+  "src/__tests__/regression/S103_RemoveNode_CascadeCleanup.test.ts": 2,
+  "src/__tests__/regression/S104_Embedding_DimensionGuard.test.ts": 2,
+  "src/__tests__/regression/S105_EventBus_OnAnyUnsubscribe.test.ts": 1,
+  "src/__tests__/regression/S106_MessageBus_SelfHealingSkip.test.ts": 2,
+  "src/__tests__/regression/S107_UncaughtExceptionPolicy_ConfigurableRestart.test.ts": 1,
+  "src/__tests__/regression/S108_AnthropicProvider_MessageConversion.test.ts": 3,
+  "src/__tests__/regression/S109_SendDocument_StalePathCorrection.test.ts": 5,
+  "src/__tests__/regression/S110_BashHealthProbe_WSLStubDetection.test.ts": 1,
+  "src/__tests__/regression/S111_RiskAnalyzer_ReplanArtifactEvidence.test.ts": 7,
+  "src/__tests__/regression/S112_ArtifactContract_ToolLevelFixes.test.ts": 3,
+  "src/__tests__/regression/S113_ResumeGoal_ArtifactPathsPropagation.test.ts": 4,
+  "src/__tests__/regression/S115_SemanticMismatch_NoWastedRetryForToolBoundSteps.test.ts": 5,
+  "src/__tests__/regression/S116_GetPendingSteps_SingleAccessor.test.ts": 4,
+  "src/__tests__/regression/S117_StrategyDiversityGuard_ToolsTriedPrimarySource.test.ts": 2,
+  "src/__tests__/regression/S118_GoalPlanner_LoopDirectivesSharedTemplate.test.ts": 2,
+  "src/__tests__/regression/S119_PlanStepLastAttemptOutcome_ARCH007.test.ts": 7,
+  "src/__tests__/regression/S11_ExecCommandAutoFix_AlwaysRuns.test.ts": 1,
+  "src/__tests__/regression/S120_GoalEvaluator_HasIdenticalFailedAttempt.test.ts": 2,
+  "src/__tests__/regression/S121_DeliverableCheck_PathNormalization.test.ts": 5,
+  "src/__tests__/regression/S122_ExecuteStep_Decomposition_FourFailureScenarios.test.ts": 5,
+  "src/__tests__/regression/S123_HandleBlockedOutcome_PriorFeedbackPassthrough.test.ts": 4,
+  "src/__tests__/regression/S124_GoalPlanner_RequiredArgsHintFromToolRegistry.test.ts": 11,
+  "src/__tests__/regression/S125_ARCH012_DeliveryTypeMatchAcrossPaths.test.ts": 7,
+  "src/__tests__/regression/S126_ARCH013_SemanticPromotionReplacesEscalation.test.ts": 3,
+  "src/__tests__/regression/S127_ARCH008_BuildInitialProgressModel.test.ts": 4,
+  "src/__tests__/regression/S128_ARCH018_StructuralBypassAsCriterion.test.ts": 5,
+  "src/__tests__/regression/S12_RiskAnalyzer_SanitizePlanSteps.test.ts": 10,
+  "src/__tests__/regression/S130_SkillInstaller_GitCloneCommandInjection.test.ts": 1,
+  "src/__tests__/regression/S132_GoalExtractor_PolynomialRedos.test.ts": 1,
+  "src/__tests__/regression/S134_BoundedHash_LoopBoundInjection.test.ts": 1,
+  "src/__tests__/regression/S135_HtmlSanitization_S3Cluster.test.ts": 4,
+  "src/__tests__/regression/S136_SessionTranscript_PathTraversal.test.ts": 2,
+  "src/__tests__/regression/S137_DashboardSecurity_RateLimitCSRF.test.ts": 1,
+  "src/__tests__/regression/S138_ModelRegistryService_Discovery.test.ts": 5,
+  "src/__tests__/regression/S139_OllamaPull_KnownModelNames.test.ts": 1,
+  "src/__tests__/regression/S13_ExecCommand_ResolvePath_Redirect.test.ts": 2,
+  "src/__tests__/regression/S140_ReadDocument_VisionPromptSelfReview.test.ts": 4,
+  "src/__tests__/regression/S141_KnownDeps_PuppeteerTesseractSelfHealing.test.ts": 4,
+  "src/__tests__/regression/S142_OperationalKnowledge_M2FirstSlice.test.ts": 2,
+  "src/__tests__/regression/S143_OperationalKnowledge_RealEnvironmentIntegration.test.ts": 5,
+  "src/__tests__/regression/S144_CaseMemory_FullActivation.test.ts": 6,
+  "src/__tests__/regression/S14_WebChannelAdapter_AttachmentDelivery.test.ts": 3,
+  "src/__tests__/regression/S15_LsFlags_PowerShellCLIXML.test.ts": 1,
+  "src/__tests__/regression/S16_ReflectionMemory_Baseline.test.ts": 1,
+  "src/__tests__/regression/S17_ReflectionMemory_ProducerContract.test.ts": 1,
+  "src/__tests__/regression/S18_ReflectionMemory_ConsumerContract.test.ts": 1,
+  "src/__tests__/regression/S19_GoalPlanner_InitialPlanEvidence.test.ts": 1,
+  "src/__tests__/regression/S20_CaseMemory_ShadowMode.test.ts": 2,
+  "src/__tests__/regression/S21_OutcomeIntegrity_ValidationFallbacks.test.ts": 4,
+  "src/__tests__/regression/S22_CaseQualityGate_RetrievalSemantics.test.ts": 3,
+  "src/__tests__/regression/S23_CaseRetrieval_ProblemSimilarity.test.ts": 3,
+  "src/__tests__/regression/S24_CaseMemory_EmbeddingIntegrity.test.ts": 2,
+  "src/__tests__/regression/S25_OperationalIntent_ApplicabilityGate.test.ts": 3,
+  "src/__tests__/regression/S26_OperationalApplicability_AdversarialAudit.test.ts": 1,
+  "src/__tests__/regression/S27_RiskAnalyzer_SendDocumentInference_ScriptOutput.test.ts": 9,
+  "src/__tests__/regression/S28_SendAudioTool_DebounceMasksFailure.test.ts": 1,
+  "src/__tests__/regression/S29_MessageBus_SilentDeliveryNoOps.test.ts": 3,
+  "src/__tests__/regression/S30_EnsureDeliverySuccessCriteria.test.ts": 3,
+  "src/__tests__/regression/S31_ResolveInstallCommand_CrossPlatform.test.ts": 2,
+  "src/__tests__/regression/S33_UnifiedMissingExecutableClassifier.test.ts": 5,
+  "src/__tests__/regression/S34_Python3RuntimeResolution.test.ts": 1,
+  "src/__tests__/regression/S35_CapabilityRegistry_PipProbe.test.ts": 2,
+  "src/__tests__/regression/S36_AudioWeatherFailureFeedback.test.ts": 1,
+  "src/__tests__/regression/S37_SendAudio_EdgeTtsPathResolution.test.ts": 1,
+  "src/__tests__/regression/S38_ContentStub_SendAudioTextLeak.test.ts": 2,
+  "src/__tests__/regression/S39_ContentStub_BraceFreeMetaPlaceholder.test.ts": 2,
+  "src/__tests__/regression/S40_PromptComposer_AccentedMediaLayer.test.ts": 1,
+  "src/__tests__/regression/S41_MemoryWrite_AccentedFamilyRelation.test.ts": 2,
+  "src/__tests__/regression/S42_AmoSubstringCollision.test.ts": 3,
+  "src/__tests__/regression/S43_ExtractFinalText_ToolCallJsonLeak.test.ts": 2,
+  "src/__tests__/regression/S45_CryptoAnalysis_MinimalPromptContracts.test.ts": 1,
+  "src/__tests__/regression/S46_ContentStub_PreviousStepsPortuguese.test.ts": 1,
+  "src/__tests__/regression/S47_CriteriaSummary_AutoDeliveryLeak.test.ts": 2,
+  "src/__tests__/regression/S49_GoalPlanner_KeywordMemoryRetrieval.test.ts": 2,
+  "src/__tests__/regression/S50_ContentStub_GeneratedByAssistant.test.ts": 1,
+  "src/__tests__/regression/S57_GoalOrchestrator_AmbiguityMemoryLookup.test.ts": 2,
+  "src/__tests__/regression/S59_ContentStub_PortuguesePassoStepReference.test.ts": 1,
+  "src/__tests__/regression/S60_SanitizePlanSteps_StructuralDataDependency.test.ts": 2,
+  "src/__tests__/regression/S61_DomainRegistry_KeywordBoundaryCollision.test.ts": 2,
+  "src/__tests__/regression/S62_DestructiveCommand_Consolidation.test.ts": 3,
+  "src/__tests__/regression/S63_ContextBuilder_PersonalEntityBoundary.test.ts": 1,
+  "src/__tests__/regression/S64_AccentBoundary_MultipleModules.test.ts": 5,
+  "src/__tests__/regression/S65_DomainClassifierLLM.test.ts": 2,
+  "src/__tests__/regression/S70_SessionKeyFactory_ConversationIdentity.test.ts": 1,
+  "src/__tests__/regression/S71_UnifiedIntentRouter_ContextualClassification.test.ts": 1,
+  "src/__tests__/regression/S72_OllamaProvider_ReasoningBudgetLeak.test.ts": 2,
+  "src/__tests__/regression/S73_GoalEvaluator_StrategiesTriedLeak.test.ts": 2,
+  "src/__tests__/regression/S75_CircuitBreaker_HalfOpenStuck.test.ts": 1,
+  "src/__tests__/regression/S76_ContentStub_SnakeCaseBracketPlaceholder.test.ts": 1,
+  "src/__tests__/regression/S77_ContentStubClassifier_LLMReplacesRegex.test.ts": 2,
+  "src/__tests__/regression/S78_GoalExecutionState_Isolation.test.ts": 5,
+  "src/__tests__/regression/S79_GoalStore_RecordBlocker_NoStatusSideEffect.test.ts": 5,
+  "src/__tests__/regression/S7_PlannerTimeout_90s.test.ts": 2,
+  "src/__tests__/regression/S80_DeferredSend_BlockerPreserved.test.ts": 5,
+  "src/__tests__/regression/S81_ExecutionTrace_LifecycleGuaranteed.test.ts": 4,
+  "src/__tests__/regression/S82_ReflectionMemory_PruneScheduled.test.ts": 3,
+  "src/__tests__/regression/S83_TraceCleanup_DoesNotMaskCausalError.test.ts": 5,
+  "src/__tests__/regression/S84_NeedsAuth_NeedsDependency_BlockerPreserved.test.ts": 7,
+  "src/__tests__/regression/S85_PartialAttemptResult_LowConfidenceSuccess.test.ts": 5,
+  "src/__tests__/regression/S86_DuplicateGoalAttempt_MarkStepDoneNoSkip.test.ts": 7,
+  "src/__tests__/regression/S88_GoalStore_TransitionValidation.test.ts": 2,
+  "src/__tests__/regression/S89_AgentloopSubTurn_TraceCorrelation.test.ts": 6,
+  "src/__tests__/regression/S90_ComputeToolInputKey_SendDocumentFilePathScoped.test.ts": 1,
+  "src/__tests__/regression/S91_GoalStore_ConfidenceAndAuthWiring.test.ts": 2,
+  "src/__tests__/regression/S92_SessionCompression_RecentWindowPreserved.test.ts": 3,
+  "src/__tests__/regression/S95_ChannelAllowlist_FailClosed.test.ts": 1,
+  "src/__tests__/regression/S96_AutoRecover_StaleWalCleanup.test.ts": 1,
+  "src/__tests__/regression/S97_MessageDedup_ReprocessOnFailure.test.ts": 2,
+  "src/__tests__/regression/S98_Transcript_ConcurrentWriteOrdering.test.ts": 2,
+  "src/__tests__/regression/S99_WorkflowCallback_SerializedWithTurn.test.ts": 2,
+  "scripts/evaluate-case-retrieval.ts": 2,
+  "scripts/testes/integration-campaign-runner.ts": 2,
+  "scripts/testes/integration-campaign.ts": 17,
+  "scripts/testes/test_integrations_job.ts": 2,
+  "scripts/testes/test_powerpoint_broker.ts": 1
+ },
+ "mostCentral": [
+  {
+   "path": "src/shared/AppLogger.ts",
+   "fanIn": 122,
+   "fanOut": 0,
+   "total": 122
+  },
+  {
+   "path": "src/core/AgentController.ts",
+   "fanIn": 4,
+   "fanOut": 67,
+   "total": 71
+  },
+  {
+   "path": "src/memory/MemoryManager.ts",
+   "fanIn": 43,
+   "fanOut": 22,
+   "total": 65
+  },
+  {
+   "path": "src/shared/errors.ts",
+   "fanIn": 60,
+   "fanOut": 0,
+   "total": 60
+  },
+  {
+   "path": "src/loop/GoalTypes.ts",
+   "fanIn": 55,
+   "fanOut": 1,
+   "total": 56
+  },
+  {
+   "path": "src/loop/agentLoopTypes.ts",
+   "fanIn": 53,
+   "fanOut": 1,
+   "total": 54
+  },
+  {
+   "path": "src/loop/GoalExecutionLoop.ts",
+   "fanIn": 21,
+   "fanOut": 30,
+   "total": 51
+  },
+  {
+   "path": "src/loop/AgentLoop.ts",
+   "fanIn": 13,
+   "fanOut": 37,
+   "total": 50
+  },
+  {
+   "path": "src/core/ProviderFactory.ts",
+   "fanIn": 36,
+   "fanOut": 10,
+   "total": 46
+  },
+  {
+   "path": "src/core/ToolRegistry.ts",
+   "fanIn": 32,
+   "fanOut": 2,
+   "total": 34
+  },
+  {
+   "path": "src/loop/GoalStore.ts",
+   "fanIn": 28,
+   "fanOut": 2,
+   "total": 30
+  },
+  {
+   "path": "src/dashboard/DashboardServer.ts",
+   "fanIn": 1,
+   "fanOut": 24,
+   "total": 25
+  },
+  {
+   "path": "src/loop/GoalPlanner.ts",
+   "fanIn": 9,
+   "fanOut": 16,
+   "total": 25
+  },
+  {
+   "path": "src/channels/MessageBus.ts",
+   "fanIn": 13,
+   "fanOut": 9,
+   "total": 22
+  },
+  {
+   "path": "src/dashboard/routes/types.ts",
+   "fanIn": 11,
+   "fanOut": 11,
+   "total": 22
+  },
+  {
+   "path": "src/loop/GoalOrchestrator.ts",
+   "fanIn": 3,
+   "fanOut": 19,
+   "total": 22
+  },
+  {
+   "path": "src/utils/crossPlatform.ts",
+   "fanIn": 22,
+   "fanOut": 0,
+   "total": 22
+  },
+  {
+   "path": "src/memory/ReflectionMemory.ts",
+   "fanIn": 15,
+   "fanOut": 5,
+   "total": 20
+  },
+  {
+   "path": "src/session/SessionManager.ts",
+   "fanIn": 12,
+   "fanOut": 8,
+   "total": 20
+  },
+  {
+   "path": "src/memory/CaseMemory.ts",
+   "fanIn": 13,
+   "fanOut": 5,
+   "total": 18
+  },
+  {
+   "path": "scripts/testes/integration-campaign.ts",
+   "fanIn": 1,
+   "fanOut": 17,
+   "total": 18
+  },
+  {
+   "path": "src/channels/ChannelAdapter.ts",
+   "fanIn": 17,
+   "fanOut": 0,
+   "total": 17
+  },
+  {
+   "path": "src/loop/RiskAnalyzer.ts",
+   "fanIn": 4,
+   "fanOut": 12,
+   "total": 16
+  },
+  {
+   "path": "src/tools/exec_command.ts",
+   "fanIn": 10,
+   "fanOut": 6,
+   "total": 16
+  },
+  {
+   "path": "src/memory/DomainRegistry.ts",
+   "fanIn": 11,
+   "fanOut": 4,
+   "total": 15
+  },
+  {
+   "path": "src/loop/ContextBuilder.ts",
+   "fanIn": 4,
+   "fanOut": 10,
+   "total": 14
+  },
+  {
+   "path": "src/memory/MemoryCurator.ts",
+   "fanIn": 4,
+   "fanOut": 9,
+   "total": 13
+  },
+  {
+   "path": "src/tools/memory_write.ts",
+   "fanIn": 5,
+   "fanOut": 8,
+   "total": 13
+  },
+  {
+   "path": "src/core/PermissionRegistry.ts",
+   "fanIn": 10,
+   "fanOut": 2,
+   "total": 12
+  },
+  {
+   "path": "src/tools/write_tool.ts",
+   "fanIn": 5,
+   "fanOut": 7,
+   "total": 12
+  },
+  {
+   "path": "src/core/providerTypes.ts",
+   "fanIn": 11,
+   "fanOut": 0,
+   "total": 11
+  },
+  {
+   "path": "src/loop/GoalEvaluator.ts",
+   "fanIn": 5,
+   "fanOut": 6,
+   "total": 11
+  },
+  {
+   "path": "src/loop/planning/sanitizePlanSteps.ts",
+   "fanIn": 6,
+   "fanOut": 5,
+   "total": 11
+  },
+  {
+   "path": "src/memory/MemoryFacade.ts",
+   "fanIn": 9,
+   "fanOut": 2,
+   "total": 11
+  },
+  {
+   "path": "src/services/auditor/AuditorService.ts",
+   "fanIn": 3,
+   "fanOut": 8,
+   "total": 11
+  },
+  {
+   "path": "src/session/SessionKeyFactory.ts",
+   "fanIn": 11,
+   "fanOut": 0,
+   "total": 11
+  },
+  {
+   "path": "src/__tests__/regression/S124_GoalPlanner_RequiredArgsHintFromToolRegistry.test.ts",
+   "fanIn": 0,
+   "fanOut": 11,
+   "total": 11
+  },
+  {
+   "path": "src/core/agentControllerCommands.ts",
+   "fanIn": 1,
+   "fanOut": 9,
+   "total": 10
+  },
+  {
+   "path": "src/core/agentMediaHandlers.ts",
+   "fanIn": 4,
+   "fanOut": 6,
+   "total": 10
+  },
+  {
+   "path": "src/core/ModelRegistryService.ts",
+   "fanIn": 4,
+   "fanOut": 6,
+   "total": 10
+  }
+ ],
+ "largestFiles": [
+  {
+   "path": "src/loop/GoalExecutionLoop.ts",
+   "loc": 3954
+  },
+  {
+   "path": "src/loop/AgentLoop.ts",
+   "loc": 3574
+  },
+  {
+   "path": "src/dashboard/public/shared.js",
+   "loc": 1802
+  },
+  {
+   "path": "src/dashboard/public/config/views/ModelosView.js",
+   "loc": 1220
+  },
+  {
+   "path": "src/loop/GoalPlanner.ts",
+   "loc": 1175
+  },
+  {
+   "path": "src/loop/ContextBuilder.ts",
+   "loc": 1150
+  },
+  {
+   "path": "src/loop/UnifiedIntentRouter.ts",
+   "loc": 1100
+  },
+  {
+   "path": "src/memory/MemoryCurator.ts",
+   "loc": 959
+  },
+  {
+   "path": "src/memory/AttentionFeedback.ts",
+   "loc": 888
+  },
+  {
+   "path": "src/memory/MemoryGovernor.ts",
+   "loc": 872
+  },
+  {
+   "path": "src/loop/RiskAnalyzer.ts",
+   "loc": 802
+  },
+  {
+   "path": "src/loop/SkillLearner.ts",
+   "loc": 794
+  },
+  {
+   "path": "src/session/SessionManager.ts",
+   "loc": 745
+  },
+  {
+   "path": "src/core/CapabilityRegistry.ts",
+   "loc": 729
+  },
+  {
+   "path": "src/core/AgentController.ts",
+   "loc": 662
+  },
+  {
+   "path": "src/channels/TelegramAdapter.ts",
+   "loc": 660
+  },
+  {
+   "path": "src/memory/AttentionLayer.ts",
+   "loc": 657
+  },
+  {
+   "path": "src/tools/memory_write.ts",
+   "loc": 650
+  },
+  {
+   "path": "src/channels/MessageBus.ts",
+   "loc": 623
+  },
+  {
+   "path": "src/memory/CaseMemory.ts",
+   "loc": 610
+  },
+  {
+   "path": "src/core/OllamaProvider.ts",
+   "loc": 594
+  },
+  {
+   "path": "src/loop/GoalOrchestrator.ts",
+   "loc": 573
+  },
+  {
+   "path": "src/memory/MemoryGraphRepository.ts",
+   "loc": 571
+  },
+  {
+   "path": "src/loop/GoalStore.ts",
+   "loc": 554
+  },
+  {
+   "path": "src/loop/ProtocolParser.ts",
+   "loc": 544
+  },
+  {
+   "path": "src/memory/MemoryManager.ts",
+   "loc": 540
+  },
+  {
+   "path": "src/dashboard/routes/maintenance.ts",
+   "loc": 526
+  },
+  {
+   "path": "src/memory/memorySchema.ts",
+   "loc": 518
+  },
+  {
+   "path": "src/core/ProviderFactory.ts",
+   "loc": 516
+  },
+  {
+   "path": "src/tools/exec_command.ts",
+   "loc": 507
+  }
+ ],
+ "circularDependencies": [
+  {
+   "cycle": [
+    "src/memory/DomainRegistry.ts",
+    "src/memory/DomainSummaryService.ts",
+    "src/memory/MemoryFacade.ts",
+    "src/memory/MemoryManager.ts"
+   ],
+   "size": 4
+  },
+  {
+   "cycle": [
+    "src/loop/WorkflowEngine.ts",
+    "src/loop/ProactiveRecovery.ts",
+    "src/loop/AgentLoop.ts"
+   ],
+   "size": 3
+  }
+ ],
+ "orphanComponents": [
+  "src/channels/index.ts",
+  "src/core/CapabilityProbe.ts",
+  "src/core/CapabilityTypes.ts",
+  "src/core/index.ts",
+  "src/dashboard/public/config/api.js",
+  "src/dashboard/public/config/app.js",
+  "src/dashboard/public/config/components/ModelDropdown.js",
+  "src/dashboard/public/config/components/Toast.js",
+  "src/dashboard/public/config/state.js",
+  "src/dashboard/public/config/views/AtualizacaoView.js",
+  "src/dashboard/public/config/views/AvancadoView.js",
+  "src/dashboard/public/config/views/BackupView.js",
+  "src/dashboard/public/config/views/DashboardView.js",
+  "src/dashboard/public/config/views/DesenvolvedorView.js",
+  "src/dashboard/public/config/views/FerramentasView.js",
+  "src/dashboard/public/config/views/IntegracoesView.js",
+  "src/dashboard/public/config/views/ModelosView.js",
+  "src/dashboard/public/config/views/SegurancaView.js",
+  "src/dashboard/public/config/views/SkillsView.js",
+  "src/dashboard/public/shared.js",
+  "src/loop/ContextPlanner.ts",
+  "src/loop/ContextValidator.ts",
+  "src/loop/DecisionPostProcessor.ts",
+  "src/memory/conversational/index.ts",
+  "src/session/index.ts",
+  "src/__tests__/regression/P1_1_ArtifactPersistence_CrossGoal.test.ts",
+  "src/__tests__/regression/S10_SentArtifacts_DeliveryGuard.test.ts",
+  "src/__tests__/regression/S111_UpdateChannelResolution.test.ts",
+  "src/__tests__/regression/S112_DeliveryGuard_DeferredSendBlindSpot.test.ts",
+  "src/__tests__/regression/S114_DeferredSend_SameStepSupersession.test.ts",
+  "src/__tests__/regression/S129_DashboardAuth_GHSA_jpx8_29mp_v4hw.test.ts",
+  "src/__tests__/regression/S131_DashboardAuth_ScryptPasswordMigration.test.ts",
+  "src/__tests__/regression/S133_SshExec_NoLocalShellEscaping.test.ts",
+  "src/__tests__/regression/S147_DashboardI18n_KeyParity.test.ts",
+  "src/__tests__/regression/S44_SendAudio_GoalReplanDedup.test.ts",
+  "src/__tests__/regression/S48_BuildResult_GenericSummaryFallback.test.ts",
+  "src/__tests__/regression/S4_ArtifactsDedup_ValidationInput.test.ts",
+  "src/__tests__/regression/S51_SendAudio_DirectStepDedup.test.ts",
+  "src/__tests__/regression/S52_DeliveryGuard_Html2pdfPending.test.ts",
+  "src/__tests__/regression/S53_StepBudget_RealWorkUpgrade.test.ts",
+  "src/__tests__/regression/S54_ContextGuard_WriteExtension.test.ts",
+  "src/__tests__/regression/S55_ContextGuard_ExecReconFalsePositive.test.ts",
+  "src/__tests__/regression/S56_CommitResponse_PendingActionPromise.test.ts",
+  "src/__tests__/regression/S58_ContaminationWatchTerms_EnvConfig.test.ts",
+  "src/__tests__/regression/S5_FundamentalTools_Q2Skip.test.ts",
+  "src/__tests__/regression/S66_ValidationPrompt_AgentloopDeliveredArtifacts.test.ts",
+  "src/__tests__/regression/S67_PptxGenerator_UniqueScriptNaming.test.ts",
+  "src/__tests__/regression/S68_AgentLoop_SessionKeyChannel.test.ts",
+  "src/__tests__/regression/S69_GoalOrchestrator_RecentGoalOverwriteOnSuccess.test.ts",
+  "src/__tests__/regression/S6_SkillHints_AllSkillsPrefix.test.ts",
+  "src/__tests__/regression/S74_AgentLoop_ToolCallPersistence.test.ts",
+  "src/__tests__/regression/S87_SshExec_ExitCodeConsistency.test.ts",
+  "src/__tests__/regression/S8_AgentLoopWrites_GoalAttempts.test.ts",
+  "src/__tests__/regression/S93_CommitResponse_PendingPromiseDespiteToolSuccess.test.ts",
+  "src/__tests__/regression/S94_QuotedTextReply_ContextInjection.test.ts",
+  "src/__tests__/regression/S9_CheckDeliverables_NativeScan.test.ts",
+  "scripts/fix_fts5.js",
+  "scripts/fix_fts5_final.js",
+  "scripts/migrate_cognitive_graph.ts",
+  "scripts/migrate_memory.ts",
+  "scripts/newclaw-tts.js",
+  "scripts/newclaw-tts.mjs",
+  "scripts/recover-db.cjs",
+  "scripts/run-regression-tests.cjs",
+  "scripts/setup.ts"
+ ],
+ "godObjectCandidates": [
+  {
+   "path": "src/loop/GoalExecutionLoop.ts",
+   "loc": 3954,
+   "fanIn": 21,
+   "fanOut": 30
+  },
+  {
+   "path": "src/loop/AgentLoop.ts",
+   "loc": 3574,
+   "fanIn": 13,
+   "fanOut": 37
+  },
+  {
+   "path": "src/core/AgentController.ts",
+   "loc": 662,
+   "fanIn": 4,
+   "fanOut": 67
+  },
+  {
+   "path": "src/memory/MemoryManager.ts",
+   "loc": 540,
+   "fanIn": 43,
+   "fanOut": 22
+  },
+  {
+   "path": "src/loop/GoalPlanner.ts",
+   "loc": 1175,
+   "fanIn": 9,
+   "fanOut": 16
+  },
+  {
+   "path": "src/core/ProviderFactory.ts",
+   "loc": 516,
+   "fanIn": 36,
+   "fanOut": 10
+  },
+  {
+   "path": "src/loop/GoalStore.ts",
+   "loc": 554,
+   "fanIn": 28,
+   "fanOut": 2
+  },
+  {
+   "path": "src/loop/ContextBuilder.ts",
+   "loc": 1150,
+   "fanIn": 4,
+   "fanOut": 10
+  },
+  {
+   "path": "src/session/SessionManager.ts",
+   "loc": 745,
+   "fanIn": 12,
+   "fanOut": 8
+  },
+  {
+   "path": "src/channels/MessageBus.ts",
+   "loc": 623,
+   "fanIn": 13,
+   "fanOut": 9
+  },
+  {
+   "path": "src/loop/RiskAnalyzer.ts",
+   "loc": 802,
+   "fanIn": 4,
+   "fanOut": 12
+  },
+  {
+   "path": "src/loop/GoalOrchestrator.ts",
+   "loc": 573,
+   "fanIn": 3,
+   "fanOut": 19
+  },
+  {
+   "path": "src/memory/MemoryCurator.ts",
+   "loc": 959,
+   "fanIn": 4,
+   "fanOut": 9
+  },
+  {
+   "path": "src/memory/CaseMemory.ts",
+   "loc": 610,
+   "fanIn": 13,
+   "fanOut": 5
+  },
+  {
+   "path": "src/memory/ReflectionMemory.ts",
+   "loc": 497,
+   "fanIn": 15,
+   "fanOut": 5
+  },
+  {
+   "path": "src/utils/crossPlatform.ts",
+   "loc": 447,
+   "fanIn": 22,
+   "fanOut": 0
+  },
+  {
+   "path": "src/tools/memory_write.ts",
+   "loc": 650,
+   "fanIn": 5,
+   "fanOut": 8
+  },
+  {
+   "path": "src/tools/exec_command.ts",
+   "loc": 507,
+   "fanIn": 10,
+   "fanOut": 6
+  },
+  {
+   "path": "src/channels/TelegramAdapter.ts",
+   "loc": 660,
+   "fanIn": 1,
+   "fanOut": 8
+  },
+  {
+   "path": "src/loop/GoalEvaluator.ts",
+   "loc": 500,
+   "fanIn": 5,
+   "fanOut": 6
+  },
+  {
+   "path": "src/session/SessionTranscript.ts",
+   "loc": 481,
+   "fanIn": 8,
+   "fanOut": 2
+  },
+  {
+   "path": "src/channels/DiscordAdapter.ts",
+   "loc": 462,
+   "fanIn": 2,
+   "fanOut": 7
+  }
+ ],
+ "highCoupling": [
+  {
+   "path": "src/core/AgentController.ts",
+   "fanOut": 67
+  },
+  {
+   "path": "src/loop/AgentLoop.ts",
+   "fanOut": 37
+  },
+  {
+   "path": "src/loop/GoalExecutionLoop.ts",
+   "fanOut": 30
+  },
+  {
+   "path": "src/dashboard/DashboardServer.ts",
+   "fanOut": 24
+  },
+  {
+   "path": "src/memory/MemoryManager.ts",
+   "fanOut": 22
+  },
+  {
+   "path": "src/loop/GoalOrchestrator.ts",
+   "fanOut": 19
+  },
+  {
+   "path": "scripts/testes/integration-campaign.ts",
+   "fanOut": 17
+  },
+  {
+   "path": "src/loop/GoalPlanner.ts",
+   "fanOut": 16
+  }
+ ],
+ "methodology_notes": [
+  "Fan-in/fan-out contam apenas arestas \"imports\" internas (relative import resolvido para um arquivo real do repo), deduplicadas por par (from,to).",
+  "Dependencia circular = Strongly Connected Component (algoritmo de Tarjan) de tamanho > 1 no grafo de imports.",
+  "God Object candidate = LOC > 400 E (fanIn+fanOut) > 8, ordenado por LOC*(fanIn+fanOut) decrescente -- limiar arbitrario, documentado aqui para poder ser recalibrado.",
+  "Orfao = fanIn=0 E fanOut=0 no grafo de imports estatico. Nao significa necessariamente \"morto\": puppeteer/tesseract-style scripts chamados via exec_command, arquivos .js carregados via <script src> no dashboard, e entrypoints (index.ts, bin/) aparecem aqui legitimamente -- ver campo \"observations\" de cada componente em architecture.json.",
+  "Acoplamento elevado = fanOut > 12 (limiar arbitrario)."
+ ]
+}

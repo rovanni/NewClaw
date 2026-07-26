@@ -186,6 +186,12 @@ conhecimento ou decisão:
 - **Nunca Adivinhar** (`docs/ARCHITECTURE/NUNCA_ADIVINHAR.md`) — diante de um dado necessário que
   não foi observado ou configurado explicitamente, o comportamento correto é reportar ausência,
   nunca inferir um valor plausível e apresentá-lo como fato.
+- **Pipeline de Curadoria de Dependências**
+  (`docs/ARCHITECTURE/PIPELINE_CURADORIA_DEPENDENCIAS.md`) — o processo oficial (Sprints 007-009)
+  pelo qual conhecimento sobre instalação cross-platform entra em `KNOWN_DEPS`: pesquisa (Skill
+  `dependency-curator`, assíncrona, fora do caminho de execução de goals) sempre separada de
+  execução (Runtime — `GoalEvaluator`/`resolveInstallCommand`/`EnvironmentProbe` — nunca pesquisa,
+  só consome catálogo já validado por PR humano).
 
 ## Filosofia do projeto
 
