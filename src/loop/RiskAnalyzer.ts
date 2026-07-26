@@ -25,6 +25,7 @@ import { makeContentStubClassifier, ContentStubClassifier } from '../shared/cont
 import { sanitizePlanSteps } from './planning/sanitizePlanSteps';
 import { resolveToolAlias } from './planning/toolAliasResolver';
 import { resolveArtifactPathFromEvidence } from './planning/artifactContract';
+import { KNOWN_DEPS } from './GoalEvaluator';
 
 const log = createLogger('RiskAnalyzer');
 
@@ -58,25 +59,20 @@ const FUNDAMENTAL_AGENT_TOOLS = new Set([
 ]);
 
 // Executáveis comumente usados em exec_command que podem não estar instalados.
-// Chave: nome do executável (lowercase). Valor: pacote a instalar.
-const KNOWN_SYSTEM_DEPS: Record<string, string> = {
-    pandoc: 'pandoc',
-    ffmpeg: 'ffmpeg',
-    convert: 'imagemagick',
-    magick: 'imagemagick',
-    libreoffice: 'libreoffice',
-    soffice: 'libreoffice',
-    pdftotext: 'poppler-utils',
-    pdfimages: 'poppler-utils',
-    jq: 'jq',
-    zip: 'zip',
-    unzip: 'unzip',
-    gs: 'ghostscript',
-    ghostscript: 'ghostscript',
-    exiftool: 'libimage-exiftool-perl',
-    marp: '@marp-team/marp-cli (npm)',
-    npx: 'npm',
-};
+// Escopo do aviso de risco "1b" abaixo — mesmo conjunto de 16 chaves que antes vivia
+// duplicado em KNOWN_SYSTEM_DEPS (Record<string,string> próprio, nome do pacote copiado à
+// mão). Sprint 005/5.1 (docs/Auditorias/2026-07-26/AUDITORIA_CATALOGOS_FERRAMENTAS_2026-07-26.md) eliminou essa
+// cópia: aqui só o CONJUNTO de chaves é decidido (escopo do aviso, não duplicação de dado);
+// o nome do pacote em si é sempre lido de KNOWN_DEPS[x].name (GoalEvaluator.ts), única fonte
+// de verdade. Escopo mantido idêntico ao anterior — não expandido nesta sprint.
+// Exportado para o teste de consistência de catálogos (S153_CatalogConsistency) verificar que
+// toda chave aqui tem entrada correspondente em KNOWN_DEPS (senão `pkg` resolveria undefined e
+// o aviso de risco silenciosamente deixaria de disparar para essa ferramenta).
+export const KNOWN_SYSTEM_DEP_KEYS = new Set([
+    'pandoc', 'ffmpeg', 'convert', 'magick', 'libreoffice', 'soffice',
+    'pdftotext', 'pdfimages', 'jq', 'zip', 'unzip', 'gs', 'ghostscript',
+    'exiftool', 'marp', 'npx',
+]);
 
 export interface RiskReport {
     risks: string[];
@@ -222,7 +218,7 @@ export class RiskAnalyzer {
             const tokens = cmdValue.trim().split(/\s+/).filter(t => t !== 'sudo' && t !== 'env' && !t.includes('='));
             const firstToken = (tokens[0] ?? '').toLowerCase().replace(/^.*\//, '');
 
-            const pkg = KNOWN_SYSTEM_DEPS[firstToken];
+            const pkg = KNOWN_SYSTEM_DEP_KEYS.has(firstToken) ? KNOWN_DEPS[firstToken]?.name : undefined;
             if (pkg) {
                 // Obs #9: verifica se o CapabilityRegistry já tem resultado do probe para este binário.
                 // probeResult=null significa cache frio (probe não foi executado) — NUNCA assuma disponível.
