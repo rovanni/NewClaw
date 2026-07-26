@@ -17,6 +17,7 @@ parte pública está em `git log`.
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — arquitetura de canais do NewClaw (Core vs. ChannelAdapters), carregado automaticamente pelo `CLAUDE.md`
 - [DIRETRIZ_ARQUITETURA_2026-07-13.md](./DIRETRIZ_ARQUITETURA_2026-07-13.md) — processo obrigatório de 5 fases + Validação Progressiva para qualquer mudança arquitetural, carregado automaticamente pelo `CLAUDE.md`
+- **[CONVENCOES_DOCUMENTAIS.md](./CONVENCOES_DOCUMENTAIS.md)** — onde colocar um documento novo em `docs/`. Consulte **antes** de criar um arquivo aqui — é o que faltou nas duas reorganizações anteriores.
 - [ROADMAP.md](./ROADMAP.md) — roadmap estratégico do projeto
 - [walkthrough.md](./walkthrough.md) — walkthrough da evolução da memória cognitiva
 
