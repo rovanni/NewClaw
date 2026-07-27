@@ -860,8 +860,17 @@ export class AgentLoop {
                 log.warn(
                     `[${this.ts()}] [COMMIT] False-success after read-only turn (last=read, no write) — blocking hallucinated write claim`
                 );
+                // NUNCA prescrever uma linguagem/runtime específico aqui (ex: "usará Python") —
+                // essa é uma decisão do planner, informada pelo bloco [CAPACIDADES DO AMBIENTE]
+                // (EnvironmentProbe), não algo que este guard determinístico possa garantir. Uma
+                // versão anterior deste texto prometia "exec_command com Python", que é falso em
+                // qualquer ambiente sem runtime Python real (comum no Windows — ver
+                // EnvironmentProbe.ts) e reforçava exatamente o mesmo diagnóstico errado que
+                // outras correções desta sessão eliminaram (ver extractMissingExecutable.ts,
+                // pptx-generator/SKILL.md). A estratégia (script via exec_command em vez de
+                // read+write inline) continua válida e é mencionada sem amarrar a uma linguagem.
                 return 'Li o arquivo mas não consegui concluir a modificação: o contexto ficou grande demais para processar read+write no mesmo turno. ' +
-                       'Tente novamente — o sistema usará exec_command com Python para modificar o arquivo diretamente, sem carregar o conteúdo inteiro no contexto.';
+                       'Tente novamente — prefira gerar um script executado via exec_command (na linguagem disponível no ambiente) para modificar o arquivo diretamente, sem carregar o conteúdo inteiro no contexto de uma chamada de LLM.';
             }
             // Analysis intent: success claims are legitimate read outcomes, not hallucinated writes
             log.info(`[${this.ts()}] [COMMIT] Read-only success-claim allowed for analysis intent: "${userText.slice(0, 80)}"`);
