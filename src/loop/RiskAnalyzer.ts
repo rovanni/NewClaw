@@ -26,6 +26,7 @@ import { sanitizePlanSteps } from './planning/sanitizePlanSteps';
 import { resolveToolAlias } from './planning/toolAliasResolver';
 import { resolveArtifactPathFromEvidence } from './planning/artifactContract';
 import { KNOWN_DEPS } from './GoalEvaluator';
+import { resolvePath } from '../utils/crossPlatform';
 
 const log = createLogger('RiskAnalyzer');
 
@@ -609,6 +610,14 @@ OU
             // para OUTROS steps quebrados no mesmo batch (ex: um 'read' sem 'path' que nada aqui
             // conserta escaparia da rejeição só porque o send_document ao lado foi corrigido).
             const repairedStepIndices = new Set<number>();
+            // Paths (resolvidos) validados via evidência real de goal.attempts/sentArtifacts de
+            // um CICLO ANTERIOR (não produzidos por nenhum step do plano ATUAL) — repassados pra
+            // sanitizePlanSteps() como knownExistingPaths, senão o check de referência prematura
+            // de arquivo (missing_file_reference) trataria um file_path já vetted por evidência
+            // real como se fosse uma referência inventada. Achado durante a implementação desta
+            // mesma correção: S111_RiskAnalyzer_ReplanArtifactEvidence (fix anterior, "file_path
+            // não é mais perdido no replan") teria regredido sem isso.
+            const evidenceBackedPaths = new Set<string>();
             rawSteps.forEach((s, i) => {
                 const rawTool = s.toolName ? String(s.toolName) : undefined;
                 if (!rawTool || resolveToolAlias(rawTool) !== 'send_document') return;
@@ -662,6 +671,7 @@ OU
 
                 s.toolArgs = { ...(toolArgs ?? {}), file_path: evidencePath };
                 repairedStepIndices.add(i);
+                evidenceBackedPaths.add(resolvePath(evidencePath).resolved);
                 log.info(
                     `[STEP-MUTATION]` +
                     ` step=${String(s.id ?? `step_${i + 1}`)}` +
@@ -716,6 +726,7 @@ OU
                 '[RiskAnalyzer] adjusted step',
                 detectMissingRequiredArgs,
                 this.classifyContentStub,
+                evidenceBackedPaths,
             );
             const adjustedPlan: PlanStep[] = sanitized.steps;
 
