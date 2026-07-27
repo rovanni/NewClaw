@@ -117,21 +117,33 @@ python3 tmp/gerar_pptx_NOME_UNICO_DO_ASSUNTO.py
 
 Se o usuário pediu texto editável **e** escolheu o tema `academico` (ver seção de temas abaixo),
 replique a paleta e o layout com estas constantes — mantém o resultado visualmente consistente
-com o mesmo tema do caminho Marp:
+com o mesmo tema do caminho Marp. Desde 26/07/2026 (pedido explícito do usuário) **todo slide
+tem fundo claro** — nenhum slide do tema usa mais fundo escuro sólido (NAVY é só cor de título/
+elemento decorativo, nunca mais cor de fundo de slide inteiro).
+
+**REGRA WCAG (contraste de texto):** `RED` (0xE8425F) só passa em 3,9:1 sobre fundo claro —
+abaixo do mínimo AA de 4,5:1 para texto normal (WCAG 2.2, critério 1.4.3). Use `RED` **só**
+para elementos decorativos não-textuais (a barra fina sob o título). Para **texto** vermelho
+(links, subtítulos), use sempre `RED_TEXT` — nunca `RED` puro.
 
 ```python
 from pptx.dml.color import RGBColor
 from pptx.util import Pt
 
-NAVY = RGBColor(0x16, 0x3A, 0x5F)       # fundo de capa/divisores, cabeçalho de tabela
-NAVY_DARK = RGBColor(0x0F, 0x29, 0x42)  # slide de encerramento
-RED = RGBColor(0xE8, 0x42, 0x5F)        # barra sob o título, subtítulos em destaque
-GRAY_BG = RGBColor(0xF4, 0xF6, 0xF9)    # linhas pares de tabela (zebra)
-GRAY_TEXT = RGBColor(0x6B, 0x72, 0x80)  # rodapé
+NAVY = RGBColor(0x16, 0x3A, 0x5F)       # título (capa/divisor/conteúdo), cabeçalho de tabela
+NAVY_DARK = RGBColor(0x0F, 0x29, 0x42)  # título do slide de encerramento (tom mais forte)
+RED = RGBColor(0xE8, 0x42, 0x5F)        # APENAS decorativo: barra sob o título (não usar em texto)
+RED_TEXT = RGBColor(0xC8, 0x1E, 0x3C)   # todo texto vermelho: links, subtítulos (5,67:1 vs branco)
+GRAY_BG = RGBColor(0xF4, 0xF6, 0xF9)    # linhas pares de tabela (zebra); fundo do slide de encerramento
+GRAY_TEXT = RGBColor(0x6B, 0x72, 0x80)  # rodapé, texto de apoio da capa (4,83:1 vs branco — dentro do mínimo AA)
 
-# Slide de capa/divisor: fundo NAVY, título branco, subtítulo RED
-# Slide de conteúdo: fundo branco, título NAVY com uma forma retangular fina RED
-#   logo abaixo (simula a barra vermelha do tema Marp), texto padrão #1F2933
+# Slide de capa/divisor: fundo BRANCO (igual ao conteúdo), título NAVY com barra RED decorativa
+#   sob ele, subtítulo em RED_TEXT
+# Slide de encerramento: fundo GRAY_BG (cinza muito claro, distingue sutilmente sem recorrer a
+#   fundo escuro), título em NAVY_DARK, subtítulo em RED_TEXT
+# Slide de conteúdo: fundo branco, título NAVY com uma forma retangular fina RED (decorativa)
+#   logo abaixo (simula a barra vermelha do tema Marp), texto padrão #1F2933; se houver texto
+#   vermelho no corpo (ex: um link), usar RED_TEXT, nunca RED
 # Tabelas: primeira linha (cabeçalho) com fill NAVY e fonte branca; linhas
 #   pares com fill GRAY_BG
 # Rodapé: caixa de texto pequena (Pt(11), GRAY_TEXT) no rodapé de cada slide,
@@ -180,20 +192,31 @@ entregar o arquivo gerado (mesma regra do caminho Python).
 
 ### Passo 0B.4-Node — Aplicando o tema "academico" via pptxgenjs
 
-Mesma paleta do Passo 0B.4-Python, em formato de string hex (pptxgenjs usa hex sem `#`):
+Mesma paleta do Passo 0B.4-Python, em formato de string hex (pptxgenjs usa hex sem `#`). Desde
+26/07/2026 (pedido explícito do usuário) **todo slide tem fundo claro** — nenhum slide do tema
+usa mais `background: { color: NAVY }` para o slide inteiro.
+
+**REGRA WCAG (contraste de texto) — mesma do caminho Python:** `RED` (E8425F) só passa em
+3,9:1 sobre fundo claro, abaixo do mínimo AA de 4,5:1 para texto normal (WCAG 2.2, critério
+1.4.3). Use `RED` **só** no `addShape('rect', ...)` decorativo (a barra fina sob o título) —
+**nunca** em `addText({ color: RED })`. Para texto vermelho use sempre `RED_TEXT`.
 
 ```javascript
-const NAVY = '163A5F';       // fundo de capa/divisores, cabeçalho de tabela
-const NAVY_DARK = '0F2942';  // slide de encerramento
-const RED = 'E8425F';        // barra sob o título, subtítulos em destaque
-const GRAY_BG = 'F4F6F9';    // linhas pares de tabela (zebra)
-const GRAY_TEXT = '6B7280';  // rodapé
+const NAVY = '163A5F';       // título (capa/divisor/conteúdo), cabeçalho de tabela
+const NAVY_DARK = '0F2942';  // título do slide de encerramento (tom mais forte)
+const RED = 'E8425F';        // APENAS decorativo: barra sob o título (não usar em addText)
+const RED_TEXT = 'C81E3C';   // todo texto vermelho: links, subtítulos (5,67:1 vs branco)
+const GRAY_BG = 'F4F6F9';    // linhas pares de tabela (zebra); fundo do slide de encerramento
+const GRAY_TEXT = '6B7280';  // rodapé, texto de apoio da capa (4,83:1 vs branco — dentro do mínimo AA)
 
-// Slide de capa/divisor: addSlide({ background: { color: NAVY } }), título com color:'FFFFFF',
-//   subtítulo com color: RED
+// Slide de capa/divisor: fundo branco (igual ao conteúdo), título com color: NAVY +
+//   addShape('rect', { fill: { color: RED } }) fino decorativo sob o título, subtítulo com
+//   color: RED_TEXT
+// Slide de encerramento: addSlide({ background: { color: GRAY_BG } }) — cinza muito claro,
+//   título com color: NAVY_DARK, subtítulo com color: RED_TEXT
 // Slide de conteúdo: fundo branco (padrão), título com color: NAVY + addShape('rect', {...,
-//   fill: { color: RED }}) fino logo abaixo (simula a barra vermelha do tema Marp), texto
-//   padrão color: '1F2933'
+//   fill: { color: RED }}) fino logo abaixo (simula a barra vermelha do tema Marp, decorativo),
+//   texto padrão color: '1F2933'; texto vermelho no corpo (ex: link) usa RED_TEXT, nunca RED
 // Tabelas (slide.addTable): primeira linha com fill: { color: NAVY } e color: 'FFFFFF'; linhas
 //   pares com fill: { color: GRAY_BG }
 // Rodapé: addText pequeno (fontSize: 11, color: GRAY_TEXT) no rodapé de cada slide, com o texto
@@ -262,10 +285,16 @@ size: 16:9
 ```
 
 **Temas disponíveis:**
-- `default` (limpo), `gaia` (colorido/moderno), `uncover` (negrito) — temas nativos do Marp
-- `academico` — tema institucional customizado deste skill (capa/divisores em fundo azul-marinho,
-  título com barra vermelha, tabelas com cabeçalho escuro, rodapé fixo). Definido em
-  `skills/pptx-generator/themes/academico.css` — ver Passo 3 para o comando de conversão.
+- `default` (limpo, fundo branco), `gaia` (fundo creme claro; capa `_class: lead` usa azul
+  sólido — nesse caso específico o contraste do subtítulo cai para ~3,6:1, abaixo do mínimo AA
+  de 4,5:1 para texto normal), `uncover` (negrito, fundo quase-branco) — temas nativos do Marp,
+  não mantidos por este projeto.
+- `academico` — tema institucional customizado deste skill, **fundo claro em todo slide** (branco
+  na capa/divisores/conteúdo, cinza muito claro no encerramento — nenhum slide usa fundo escuro
+  sólido), título com barra vermelha decorativa, tabelas com cabeçalho escuro, rodapé fixo. Todo
+  par texto/fundo auditado e conforme WCAG 2.2 AA (≥4,5:1 para texto normal — ver Passos
+  0B.4/0B.4-Node). Definido em `skills/pptx-generator/themes/academico.css` — ver Passo 3 para o
+  comando de conversão.
 
 **Se o pedido não especificar tema** (ex: só "gera os slides da aula"), pergunte ao usuário se
 prefere `gaia` (padrão, rápido) ou `academico` (visual institucional formal) antes de gerar — não
@@ -446,3 +475,13 @@ Extrair o conteúdo relevante e montar o .md manualmente, slide a slide.
 **Nunca diga que o resultado é "editável" a menos que tenha usado o Passo 0B (python-pptx ou pptxgenjs).** Um `.pptx` gerado pelo Marp CLI existir e ter tamanho adequado não significa que o texto é editável — são coisas diferentes (ver aviso no topo).
 
 **Escrever o script de geração não é entregar o resultado.** Se você usou o Passo 0B, o `.pptx` só existe depois do `exec_command` que roda o script. Nunca finalize a resposta dizendo que os slides foram gerados se o script ainda não foi executado.
+
+**Todo texto de todo slide precisa de contraste AA da WCAG 2.2 (≥4,5:1 para texto normal, ≥3:1
+só para texto grande — 18pt+ regular ou 14pt+ negrito) contra o fundo em que ele realmente
+aparece.** Vale para qualquer texto: título, subtítulo, corpo, tabela, rodapé, link — e para
+qualquer cor, seja a paleta `academico` (já auditada e corrigida — ver `RED` vs `RED_TEXT` nos
+Passos 0B.4/0B.4-Node e `themes/academico.css`) ou uma paleta nova pedida
+pelo usuário. Ao escolher/gerar uma cor de texto nova, calcule o contraste contra o fundo real
+daquele texto (não presuma — o mesmo tom pode passar sobre um fundo e falhar sobre outro, como
+aconteceu com `RED`: passa como decoração, falha como texto). Nunca reutilize uma cor de "marca"
+como texto sem antes confirmar que ela atinge o mínimo no fundo específico onde vai aparecer.

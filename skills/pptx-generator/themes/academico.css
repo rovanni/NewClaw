@@ -1,9 +1,9 @@
 /* @theme academico */
 
 /**
- * Tema Marp "academico" — capa e divisores em azul-marinho sólido, conteúdo em
- * fundo branco com título sublinhado em vermelho, tabelas com cabeçalho escuro
- * e rodapé fixo. Pensado para aulas/apresentações institucionais formais.
+ * Tema Marp "academico" — fundo branco (ou cinza muito claro no encerramento) em TODOS os
+ * slides, título em azul-marinho sublinhado em vermelho, tabelas com cabeçalho escuro e
+ * rodapé fixo. Pensado para aulas/apresentações institucionais formais.
  *
  * Uso:
  *   marp entrada.md --theme-set skills/pptx-generator/themes/academico.css \
@@ -11,14 +11,23 @@
  *
  * Diretivas por slide (frontmatter ou comentário `<!-- ... -->`):
  *   footer: "CÓDIGO — Nome da Disciplina | Aula N | Nome do Professor"
- *   <!-- _class: lead -->      → slide de capa (fundo azul-marinho)
- *   <!-- _class: divider -->   → slide de transição de seção (fundo azul-marinho)
+ *   <!-- _class: lead -->      → slide de capa
+ *   <!-- _class: divider -->   → slide de transição de seção
+ *
+ * Histórico: até 26/07/2026 a capa/divisores/encerramento tinham fundo azul-marinho sólido
+ * (texto branco/vermelho por cima). Trocado para fundo branco/cinza-claro a pedido explícito
+ * do usuário — nenhum slide do tema usa mais fundo escuro sólido.
  */
 
 :root {
   --academico-navy: #163a5f;
   --academico-navy-dark: #0f2942;
+  /* --academico-red: SÓ para uso decorativo não-textual (a barra sob o h1 abaixo) — como cor
+     de TEXTO, e8425f só atinge 3.9:1 sobre branco, abaixo do mínimo AA de 4.5:1 para texto
+     normal (WCAG 2.2, critério 1.4.3). Todo texto vermelho usa --academico-red-text (mais
+     escuro, 5.67:1 vs branco) — nunca --academico-red puro. Auditado em 26/07/2026. */
   --academico-red: #e8425f;
+  --academico-red-text: #c81e3c; /* texto/links/subtítulos sobre fundo claro — 5.67:1 vs #ffffff */
   --academico-gray-bg: #f4f6f9;
   --academico-gray-border: #e2e5ea;
   --academico-gray-text: #6b7280;
@@ -51,7 +60,7 @@ section h3 {
 }
 
 section a {
-  color: var(--academico-red);
+  color: var(--academico-red-text);
 }
 
 section strong {
@@ -97,7 +106,10 @@ section footer {
    herdado que não se alinha de forma confiável com o rodapé customizado deste
    tema (fica "flutuando" bem acima da linha do rodapé) — por isso ele é
    escondido, e o número é recriado do zero via ::before, reaproveitando o
-   mesmo atributo `data-marpit-pagination` que o motor já preenche. */
+   mesmo atributo `data-marpit-pagination` que o motor já preenche. Como todo
+   slide do tema agora tem fundo claro (branco ou cinza muito claro), a mesma
+   cor de --academico-gray-text serve para capa/divisor/encerramento também —
+   não precisa mais de uma variante clara-sobre-escuro separada. */
 section[data-marpit-pagination]::after {
   display: none !important;
 }
@@ -112,16 +124,10 @@ section[data-marpit-pagination]::before {
   color: var(--academico-gray-text);
 }
 
-section.lead[data-marpit-pagination]::before,
-section.divider[data-marpit-pagination]::before,
-section.closing[data-marpit-pagination]::before {
-  color: rgba(255, 255, 255, 0.55);
-}
-
 /* Slide de capa — <!-- _class: lead --> */
 section.lead {
-  background: var(--academico-navy);
-  color: #ffffff;
+  background: #ffffff;
+  color: #1f2933;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -129,33 +135,31 @@ section.lead {
 }
 
 section.lead h1 {
-  color: #ffffff;
-  border-bottom: none;
+  color: var(--academico-navy);
+  border-bottom: 4px solid var(--academico-red);
+  padding-bottom: 10px;
   font-size: 46px;
-  margin-bottom: 8px;
+  margin-bottom: 16px;
 }
 
 section.lead h2 {
-  color: var(--academico-red);
+  color: var(--academico-red-text);
   font-weight: 700;
   font-size: 26px;
   margin-top: 0;
 }
 
 section.lead p {
-  color: #d7dde5;
+  color: var(--academico-gray-text);
   font-size: 20px;
 }
 
-section.lead footer {
-  color: rgba(255, 255, 255, 0.55);
-  border-top-color: rgba(255, 255, 255, 0.2);
-}
+/* section.lead footer: sem override — herda o mesmo footer de fundo claro do slide de conteúdo. */
 
 /* Slide de transição de seção — <!-- _class: divider --> */
 section.divider {
-  background: var(--academico-navy);
-  color: #ffffff;
+  background: #ffffff;
+  color: #1f2933;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -164,27 +168,26 @@ section.divider {
 }
 
 section.divider h1 {
-  color: #ffffff;
-  border-bottom: none;
+  color: var(--academico-navy);
+  border-bottom: 4px solid var(--academico-red);
+  padding-bottom: 10px;
   font-size: 34px;
-  margin-bottom: 6px;
+  margin-bottom: 12px;
 }
 
 section.divider h2 {
-  color: var(--academico-red);
+  color: var(--academico-red-text);
   font-size: 24px;
   font-weight: 700;
 }
 
-section.divider footer {
-  color: rgba(255, 255, 255, 0.55);
-  border-top-color: rgba(255, 255, 255, 0.2);
-}
+/* section.divider footer: sem override — herda o mesmo footer de fundo claro do slide de conteúdo. */
 
-/* Slide de encerramento (mesmo tratamento visual do divisor, tom mais escuro) */
+/* Slide de encerramento — fundo cinza muito claro (mesmo tom da zebra das tabelas) para
+   diferenciar sutilmente da capa/conteúdo, sem recorrer a fundo escuro sólido. */
 section.closing {
-  background: var(--academico-navy-dark);
-  color: #ffffff;
+  background: var(--academico-gray-bg);
+  color: #1f2933;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -193,10 +196,11 @@ section.closing {
 }
 
 section.closing h1 {
-  color: #ffffff;
-  border-bottom: none;
+  color: var(--academico-navy-dark);
+  border-bottom: 4px solid var(--academico-red);
+  padding-bottom: 10px;
 }
 
 section.closing h2 {
-  color: var(--academico-red);
+  color: var(--academico-red-text);
 }
