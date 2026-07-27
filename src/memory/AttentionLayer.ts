@@ -118,13 +118,20 @@ export class AttentionLayer {
     constructor(db: Database.Database, weights?: Partial<AttentionWeights>) {
         this.db = db;
         this.gravityService = new DomainGravityService(db);
+        // Pesos normalizados para somarem 1.0 (proporções relativas preservadas: contexto
+        // ainda pesa 2x embedding, recency 1.5x etc). Sem isso, attentionScore final soma até
+        // 6.5 (x scopeMultiplier até 1.15 => ~7.475) numa escala interna só válida para o
+        // AttentionLayer ordenar seus próprios candidatos — mas consumidores externos como
+        // ContextBuilder.rankNodes() tratam attentionScore como "similarity" em escala [0,1],
+        // o que inflaciona nós com contextRelevance/recency altos (ex: preferência de clima)
+        // muito acima de nós de identidade cujo score vem de outra origem já em [0,1].
         this.weights = {
-            w1_embedding:  1.0,
-            w2_context:    2.0,  // High priority for active context
-            w3_recency:    1.5,
-            w4_relation:   1.0,
-            w5_domain:     0.5,
-            w6_pagerank:   0.5,  // Graph centrality boost for structurally important nodes
+            w1_embedding:  1.0  / 6.5,
+            w2_context:    2.0  / 6.5,  // High priority for active context
+            w3_recency:    1.5  / 6.5,
+            w4_relation:   1.0  / 6.5,
+            w5_domain:     0.5  / 6.5,
+            w6_pagerank:   0.5  / 6.5,  // Graph centrality boost for structurally important nodes
             ...weights,
         };
         this.initSchema();
