@@ -77,6 +77,12 @@ const DATA_PRODUCING_TOOLS = new Set([
  * natureza continua distinto (uma decide por sawDataProducingTool + classificador de stub; a
  * outra por writtenPaths + existência real em disco) — fundir os DOIS mapas não significa que
  * as duas checagens sejam a mesma coisa, só que vivem na mesma tabela de consulta.
+ *
+ * Antes de adicionar uma TERCEIRA entrada com um `kind` novo aqui (ou antes de propor o próximo
+ * passo óbvio — cada Tool declarar seus próprios contratos produces/consumes, eliminando este
+ * arquivo precisar conhecer nominalmente cada tool) — ver docs/issues/017-tool-dependency-arg-
+ * declarative-contracts-trigger.md (privado) para os gatilhos já definidos de quando essa
+ * generalização deixa de ser prematura.
  */
 type StepDependencyKind = 'content' | 'file_reference';
 
