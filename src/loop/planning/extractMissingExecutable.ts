@@ -60,6 +60,19 @@ function normalizeExecutableName(raw: string): string {
 export function extractMissingExecutable(errorText: string): string | null {
     if (FS_ENOENT_PATTERN.test(errorText)) return null;
 
+    // "Cannot find module 'pptxgenjs'" (Node.js require()/import falhando) — categoricamente
+    // DIFERENTE de um executável ausente no PATH: o alvo é um pacote npm, não um binário de
+    // sistema. Precisa ser checado ANTES do padrão genérico 'cannot find' mais abaixo: sem isso,
+    // aquela regex casa com a primeira palavra depois de "Cannot find " — que é sempre "module",
+    // nunca alcançando o nome real do pacote entre aspas mais adiante na frase. Reproduzido ao
+    // vivo (26/07/2026): "Error: Cannot find module 'pptxgenjs'" virou missing_tool com
+    // dep="module", e o replanner tentou descobrir como "instalar o binário module" em vez de
+    // corrigir o require/instalação do pacote real — um ciclo de replan inteiro desperdiçado
+    // perseguindo um diagnóstico sem sentido. Retorna null (não é executável ausente) — o
+    // chamador cai no classificador de erro genérico (tool_error), que expõe o texto real do
+    // erro ao LLM em vez de uma extração errada.
+    if (/cannot find module/i.test(errorText)) return null;
+
     // Node child_process: "spawn <cmd> ENOENT" / "spawnSync <cmd> ENOENT" — mensagem gerada
     // pelo próprio runtime (exec/execFile usam "spawn" internamente; execFileSync/spawnSync
     // usam "spawnSync"). Só ocorre quando o SO falhou ao localizar o processo a rodar — nunca

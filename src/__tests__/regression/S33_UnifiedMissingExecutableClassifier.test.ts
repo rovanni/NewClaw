@@ -110,6 +110,34 @@ assert(extractMissingExecutable('spawn marp.bat ENOENT') === 'marp', 'strip .bat
 console.log('\n=== S33-13 — extensão arbitrária → não remover cegamente ===');
 assert(extractMissingExecutable('spawn script.py ENOENT') === 'script.py', 'extensão .py preservada', extractMissingExecutable('spawn script.py ENOENT'));
 
+// ── NOVO 26/07/2026: "Cannot find module 'X'" (Node require/import) → null, nunca "module" ──
+// Achado real de produção: "Error: Cannot find module 'pptxgenjs'" (falha real, node gerar_pptx_
+// wcag_branco.js depois de `cd tmp && npm install pptxgenjs && node ...`) virava missing_tool
+// com dep="module" — o padrão genérico "cannot find 'X'" (S33-13c abaixo, caso legítimo com
+// 'marp') casava com a primeira palavra depois de "Cannot find " ("module"), nunca alcançando o
+// nome real do pacote entre aspas mais adiante. O replanner tentava "instalar o binário module",
+// um ciclo de replan inteiro desperdiçado perseguindo um diagnóstico sem sentido — evidência real
+// no log de auditoria (26/07/2026, goal_1785112504607_nykx1, step_3). 'pptxgenjs' é um pacote
+// npm (require), não um executável de PATH — por isso null, não "pptxgenjs": o chamador
+// (GoalEvaluator) cai no classificador de erro genérico (tool_error), que expõe o texto real do
+// erro ao LLM em vez de uma extração errada de qualquer tipo.
+console.log('\n=== S33-13a — "Cannot find module \'pptxgenjs\'" → null (nunca "module") ===');
+{
+    const msg = "Error: Cannot find module 'pptxgenjs'\nRequire stack:\n- /workspace/tmp/gerar_pptx_wcag_branco.js";
+    const result = extractMissingExecutable(msg);
+    assert(result === null, 'null — "Cannot find module" NÃO é executável ausente de PATH (é módulo npm)', result);
+    assert(result !== 'module', 'NUNCA extrai a palavra "module" (bug real reproduzido em produção)', result);
+}
+
+console.log('\n=== S33-13b — "cannot find module" case-insensitive e com nome de pacote com hífen ===');
+{
+    const msg = "Cannot find module 'edge-tts-wrapper'";
+    assert(extractMissingExecutable(msg) === null, 'case variando + hífen no nome do pacote, ainda null', extractMissingExecutable(msg));
+}
+
+console.log('\n=== S33-13c — regressão: "cannot find \'marp\'" (executável real) continua funcionando ===');
+assert(extractMissingExecutable("cannot find 'marp'") === 'marp', 'padrão genérico "cannot find \'X\'" preservado para casos que NÃO mencionam "module"', extractMissingExecutable("cannot find 'marp'"));
+
 // ── 14-15, 18: GoalEvaluator (consumidor real) ──────────────────────────────
 
 function makeGoal(overrides: Partial<Goal> = {}): Goal {
