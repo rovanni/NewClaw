@@ -341,12 +341,36 @@ export class MessageBus {
             }
         }
 
+        // Complemento a um Goal já em execução: mensagem de TEXTO comum (não comando, sem
+        // anexo) chegando enquanto já existe um goal ativo nesta sessão — desvia para
+        // GoalOrchestrator.trySupplementActiveGoal() em vez de enfileirar como um turno
+        // totalmente novo (que só começaria a ser processado depois que o goal atual
+        // terminasse POR COMPLETO). Ver nota do método lá — GoalExecutionLoop.ts consome isso
+        // a cada ciclo e ajusta o raciocínio em andamento, em vez de só responder "aguarde".
+        // Anexos (voz/foto/documento) sempre seguem o fluxo normal — não têm pipeline
+        // mid-flight equivalente (whisper/vision rodam só no início de um turno).
+        if (this.goalOrchestrator && msg.type === 'text' && !msg.text.startsWith('/') && msg.text.trim()) {
+            const capturedGoal = this.goalOrchestrator.trySupplementActiveGoal(msg.channel, msg.userId, msg.text);
+            if (capturedGoal) {
+                if (adapter) {
+                    await adapter.send(
+                        { text: '📎 Anotado — vou considerar isso no que já está em andamento.', format: 'plain' },
+                        msg.rawContext
+                    ).catch(() => {});
+                }
+                log.info('message_supplemented_active_goal', `goal=${capturedGoal.id}`, { queueId, correlationId });
+                markDone();
+                return;
+            }
+        }
+
         const result = this.conversationQueues.enqueue(
             queueId,
             async () => {
                 try {
                     await this.processMessageCore(msg, correlationId);
                     markDone();
+                    await this.reprocessOrphanedSupplements(msg, queueId, correlationId);
                 } catch (err) {
                     // processMessageCore captura seus próprios erros e responde ao usuário no caminho
                     // normal; só chega aqui uma exceção realmente inesperada (sem resposta enviada).
@@ -387,6 +411,52 @@ export class MessageBus {
         }
 
         log.debug('message_queued', `queued=${result.queued} position=${result.position}`, { queueId, correlationId });
+    }
+
+    /**
+     * Rede de segurança para complemento "órfão": um complemento capturado por
+     * GoalOrchestrator.trySupplementActiveGoal() só é lido no próximo checkpoint de ciclo do
+     * goal (GoalExecutionLoop.ts). Se o goal terminar (completed/failed/abandoned) ANTES desse
+     * checkpoint rodar de novo — ex: o usuário mandou o complemento bem quando o goal já estava
+     * no último ciclo — o texto ficaria preso para sempre num Map que ninguém mais vai ler.
+     * Chamado sempre depois que processMessageCore() resolve (mesma task da fila, então
+     * serializado corretamente): olha o goal mais recente da sessão e, se ele acabou de virar
+     * terminal com complemento ainda não consumido, reprocessa como se fosse uma mensagem nova
+     * — nunca perde silenciosamente o que o usuário mandou.
+     *
+     * NUNCA deve lançar: é chamado depois de markDone() já ter marcado a mensagem ORIGINAL
+     * (msg, não o complemento órfão) como concluída — um erro daqui vazando pro try/catch do
+     * chamador chamaria markFailed() e desfaria esse markDone() por engano, arriscando
+     * reprocessar msg inteira (side effects duplicados) por causa de uma falha na rede de
+     * segurança de uma mensagem totalmente diferente.
+     */
+    private async reprocessOrphanedSupplements(msg: NormalizedMessage, queueId: string, correlationId: string): Promise<void> {
+        try {
+            if (!this.goalOrchestrator) return;
+            const sessionKey = composeSessionKey({ channel: msg.channel, userId: msg.userId });
+            const goalStore = this.goalOrchestrator.getGoalStore();
+            const [recentGoal] = goalStore.getRecentBySession(sessionKey, 1);
+            if (!recentGoal || !goalStore.hasSupplements(recentGoal.id)) return;
+
+            const orphaned = goalStore.consumeSupplements(recentGoal.id);
+            if (orphaned.length === 0) return;
+
+            log.info('orphaned_supplement_reprocessed', `goal=${recentGoal.id} count=${orphaned.length}`, { queueId, correlationId });
+            const syntheticMsg: NormalizedMessage = {
+                messageId: crypto.randomUUID(),
+                channel: msg.channel,
+                userId: msg.userId,
+                type: 'text',
+                text: orphaned.join('\n'),
+                // Sem requisição HTTP viva esperando por isso — sempre cai no caminho de entrega
+                // órfã/push direto de cada adapter (mesmo mecanismo de qualquer resposta tardia).
+                rawContext: crypto.randomUUID(),
+                chatId: msg.chatId,
+            };
+            await this.processMessage(syntheticMsg);
+        } catch (err) {
+            log.error('orphaned_supplement_reprocess_failed', err instanceof Error ? err : undefined, undefined, { queueId, correlationId });
+        }
     }
 
     /**

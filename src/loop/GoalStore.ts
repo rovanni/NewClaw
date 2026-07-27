@@ -67,6 +67,16 @@ export class GoalStore {
     // processo — não precisa sobreviver a um restart.
     private readonly abandonReasons = new Map<string, string>();
 
+    // Mensagens comuns (não-comando) enviadas pelo usuário ENQUANTO o goal já estava em
+    // execução — ver GoalOrchestrator.trySupplementActiveGoal() / MessageBus.ts (desvia a
+    // mensagem para cá em vez de criar um goal novo na fila). Efêmero, mesma natureza de
+    // abandonReasons acima: só precisa sobreviver dentro do mesmo processo, entre o instante em
+    // que a mensagem chega e o próximo checkpoint de ciclo de GoalExecutionLoop.runLoopInternal()
+    // ler. Se o goal terminar antes de alguém consumir, MessageBus.ts detecta a sobra (goal
+    // recém-terminado com supplements não-lidos) e reprocessa como mensagem nova — nunca perde
+    // silenciosamente o que o usuário mandou.
+    private readonly supplements = new Map<string, string[]>();
+
     constructor(db: SqliteDb) {
         this.db = db;
         this.initSchema();
@@ -381,6 +391,28 @@ export class GoalStore {
         const reason = this.abandonReasons.get(id);
         this.abandonReasons.delete(id);
         return reason;
+    }
+
+    /** Registra um complemento do usuário chegado durante a execução do goal — ver nota de classe. */
+    addSupplement(id: string, text: string): void {
+        const list = this.supplements.get(id) ?? [];
+        list.push(text);
+        this.supplements.set(id, list);
+    }
+
+    /** Lê e remove TODOS os complementos pendentes de um goal — nunca reentrega os mesmos duas vezes. */
+    consumeSupplements(id: string): string[] {
+        const list = this.supplements.get(id);
+        if (!list || list.length === 0) return [];
+        this.supplements.delete(id);
+        return list;
+    }
+
+    /** Existe complemento pendente ainda não consumido para este goal? Usado pela rede de
+     * segurança em MessageBus.ts para detectar complemento "órfão" (goal terminou antes de
+     * alguém ler) sem precisar consumir/descartar como side effect. */
+    hasSupplements(id: string): boolean {
+        return (this.supplements.get(id)?.length ?? 0) > 0;
     }
 
     addAttempt(goalId: string, attempt: GoalAttempt): void {

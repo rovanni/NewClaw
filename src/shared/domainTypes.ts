@@ -39,7 +39,8 @@ export type BlockerKind =
     | 'workspace_missing'        // step precisa de contexto do workspace que não foi coletado
     | 'required_artifact_missing'  // artefato obrigatório existe mas está vazio — goal de modificação não pode prosseguir
     | 'semantic_mismatch'          // tool retornou sucesso mas output não é relevante para a intenção do step
-    | 'content_stub';              // step write gravou placeholder em vez de conteúdo real — usar AgentLoop para síntese
+    | 'content_stub'               // step write gravou placeholder em vez de conteúdo real — usar AgentLoop para síntese
+    | 'user_supplement';           // NÃO é falha: usuário mandou info adicional durante a execução (ver GoalOrchestrator.trySupplementActiveGoal) — dispara replan levando em conta, sem registrar como falha de tool/step
 
 export interface GoalBlocker {
     kind: BlockerKind;

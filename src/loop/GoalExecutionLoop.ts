@@ -1826,6 +1826,37 @@ export class GoalExecutionLoop {
             totalReplans = outcomeHandled.totalReplans;
             priorFeedback = outcomeHandled.priorFeedback;
 
+            // Complemento do usuário chegado durante a execução (ver MessageBus.ts,
+            // GoalOrchestrator.trySupplementActiveGoal) — roda DEPOIS do switch de outcome
+            // acima, então o resultado real do step (sucesso/falha) já foi processado e
+            // registrado normalmente (ReflectionMemory, progressModel, etc.) sem interferência;
+            // o complemento nunca mascara nem substitui esse resultado, só soma um replan extra.
+            // 'user_supplement' NÃO é uma falha — por isso usa recordBlocker() (não altera
+            // status) em vez de addBlocker() (força 'blocked'), e não passa por
+            // reflectionMemory.record()/recordFailedStrategy() como um blocker real passaria.
+            const supplements = this.goalStore.consumeSupplements(currentGoal.id);
+            if (supplements.length > 0 && currentGoal.replanBudget > 0) {
+                const supplementBlocker: GoalBlocker = {
+                    kind: 'user_supplement',
+                    description: `O usuário enviou uma informação adicional enquanto esta tarefa já estava em andamento: "${supplements.join('\n')}". Avalie se isso muda o objetivo, adiciona um requisito, corrige algo, ou é só uma observação — ajuste o plano se for relevante; ignore se não afetar o que já está sendo feito.`,
+                    suggestedActions: [],
+                    detectedAt: Date.now(),
+                };
+                log.info(`[GoalLoop] goal=${currentGoal.id} incorporando complemento do usuário (${supplements.length} msg) — replan extra`);
+                this.goalStore.recordBlocker(currentGoal.id, supplementBlocker);
+                this.goalStore.update(currentGoal.id, { status: 'replanning', replanBudget: currentGoal.replanBudget - 1 });
+                currentGoal = this.goalStore.getById(currentGoal.id)!;
+                currentGoal = await this.planWithSpiral(currentGoal, supplementBlocker, priorFeedback, totalReplans + 1, state);
+                totalReplans++;
+                priorFeedback = supplementBlocker.description;
+            } else if (supplements.length > 0) {
+                // Sem replanBudget para um replan dedicado — não descarta: soma ao priorFeedback,
+                // que Q1/contextualize() já injeta no contexto de qualquer chamada de LLM
+                // seguinte (validação, próximo step), mesmo sem forçar uma replanejada completa.
+                log.warn(`[GoalLoop] goal=${currentGoal.id} recebeu complemento mas replanBudget esgotado — anexando como feedback sem replan dedicado`);
+                priorFeedback = `${priorFeedback ?? ''}\n[Complemento do usuário]: ${supplements.join('\n')}`.trim();
+            }
+
             // Verificar TTL após cada ciclo
             if (Date.now() > currentGoal.expiresAt) {
                 this.goalStore.setStatus(currentGoal.id, 'abandoned');

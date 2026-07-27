@@ -630,5 +630,32 @@ export class GoalOrchestrator {
         return goal;
     }
 
+    /**
+     * Desvia uma mensagem comum (não-comando) para o goal ativo da sessão, em vez de criar um
+     * goal novo na fila — ver MessageBus.ts. Achado real (26/07/2026): hoje, se o usuário manda
+     * um complemento/detalhe adicional ENQUANTO o goal anterior ainda está rodando, a fila
+     * serial só processa a segunda mensagem depois que a primeira termina POR COMPLETO, como um
+     * goal totalmente novo — o complemento nunca chega a influenciar o raciocínio do goal em
+     * andamento. Isso captura o texto e devolve o goal capturado (para o chamador responder na
+     * hora, sem esperar a fila); GoalExecutionLoop.ts consome esses complementos a cada ciclo
+     * (ver runLoopInternal()) e dispara um replan levando a informação nova em conta.
+     *
+     * Não se aplica quando o goal está 'blocked' aguardando aprovação de uma ação perigosa —
+     * esse caso já tem seu próprio caminho de resposta curta sim/não (ver linha ~170 acima) e
+     * misturar os dois desviaria uma aprovação/rejeição para o caminho errado.
+     *
+     * Retorna o goal capturado, ou null se não havia goal ativo capturável (o chamador segue o
+     * fluxo normal: cria um goal novo via fila, como sempre foi).
+     */
+    trySupplementActiveGoal(channel: string, userId: string, message: string): Goal | null {
+        const sessionKey = composeSessionKey({ channel, userId });
+        const goal = this.goalStore.getActiveBySession(sessionKey);
+        if (!goal || ['completed', 'failed', 'abandoned'].includes(goal.status)) return null;
+        if (goal.status === 'blocked' && goal.pendingTxnId) return null;
+        this.goalStore.addSupplement(goal.id, message);
+        log.info(`[GoalOrchestrator] goal=${goal.id} recebeu complemento do usuário durante execução`);
+        return goal;
+    }
+
     getGoalStore(): GoalStore { return this.goalStore; }
 }
