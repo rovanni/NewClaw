@@ -112,7 +112,7 @@ type StepExecutionPhaseResult =
     | { action: 'proceedToSwitch'; goal: Goal; cycleResult: CycleResult };
 
 export class GoalExecutionLoop {
-    private readonly evaluator = new GoalEvaluator();
+    private readonly evaluator: GoalEvaluator;
     private readonly riskAnalyzer: RiskAnalyzer;
     private readonly semanticValidator: StepSemanticValidator;
     private readonly gracefulDelivery = new GracefulDeliveryOrchestrator();
@@ -139,6 +139,10 @@ export class GoalExecutionLoop {
         /** M2 (RFC-001) — opcional: sem ela, captura simplesmente não acontece (fail-open). */
         private readonly operationalKnowledge?: OperationalKnowledge,
     ) {
+        // RFC-003 Sprint C — Research: evaluator recebe operationalKnowledge para consultar
+        // getTacticalCommand() (Sprint A) na classificação missing_tool, quando KNOWN_DEPS não
+        // tem entrada — mesmo padrão de injeção opcional/fail-open já usado nesta classe.
+        this.evaluator = new GoalEvaluator(operationalKnowledge);
         this.riskAnalyzer = new RiskAnalyzer(providerFactory, toolRegistry, reflectionMemory);
         this.semanticValidator = new StepSemanticValidator(providerFactory);
     }
@@ -912,10 +916,34 @@ export class GoalExecutionLoop {
             log.info(`[GoalLoop] needs_dependency: sem comando de instalação seguro para este SO (dep=${depInfo.name}) — caminho manual/AgentLoop`);
         }
 
-        // Reconstrói o plano: steps já concluídos + installStep + step que falhou + resto
+        // RFC-003 Sprint D — Validação: quando a instalação é automática E a entrada declara um
+        // comando de verificação (depInfo.verifyCmd, hoje só populado para 'ffmpeg', nunca
+        // adivinhado para as demais), injeta um step de verificação logo após o de instalação.
+        // OperationalKnowledge.captureFromGoal() exige a evidência desse step (id prefixado
+        // 'verify_', sucesso real) antes de creditar aprendizado — fecha a lacuna que o próprio
+        // captureFromGoal() já documentava ("não é prova formal de causalidade"). Sem verifyCmd
+        // declarado, nenhum step novo é injetado — comportamento idêntico ao anterior a esta Sprint.
+        const verifyStepId = `verify_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
+        const verifyStep: PlanStep | null = (autoInstall && depInfo.verifyCmd)
+            ? {
+                id: verifyStepId,
+                description: `Verificar que '${depInfo.name}' foi instalado corretamente: ${depInfo.verifyCmd}`,
+                toolName: 'exec_command',
+                toolArgs: { command: depInfo.verifyCmd },
+                status: 'pending',
+                fallbackSteps: [],
+            }
+            : null;
+        if (verifyStep) {
+            log.info(`[GoalLoop] dep='${depInfo.name}' com verifyCmd declarado — injetando step de verificação=${verifyStepId}`);
+        }
+
+        // Reconstrói o plano: steps já concluídos + installStep + verifyStep (se houver) + step
+        // que falhou + resto
         const updatedPlan: PlanStep[] = [
             ...goal.currentPlan.filter(s => s.status === 'completed'),
             installStep,
+            ...(verifyStep ? [verifyStep] : []),
             step,
             ...this.getPendingSteps(goal.currentPlan).filter(s => s.id !== step.id),
         ];

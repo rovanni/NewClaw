@@ -15,6 +15,9 @@
 import { createLogger } from '../shared/AppLogger';
 import { ToolResult } from './agentLoopTypes';
 import { Goal, PlanStep, CycleResult, GoalBlocker, BlockerKind, DependencyInfo } from './GoalTypes';
+import { OperationalKnowledge, currentPlatform } from '../memory/OperationalKnowledge';
+import { permissionRegistry } from '../core/PermissionRegistry';
+import { resolveInstallCommand } from './planning/resolveInstallCommand';
 import { extractMissingExecutable } from './planning/extractMissingExecutable';
 import { computeToolInputKey } from './planning/computeToolInputKey';
 import { ECONNRESET_PATTERN, ETIMEDOUT_PATTERN, TIMEOUT_PATTERN, NETWORK_PATTERN, RATE_LIMIT_PATTERN, HTTP_429_PATTERN, combineRegExp } from '../shared/transientErrorPatterns';
@@ -28,27 +31,44 @@ const log = createLogger('GoalEvaluator');
 // de verdade para metadados de dependência de SO — RiskAnalyzer.ts deriva seu aviso de risco
 // pré-execução (bloco "1b") a partir daqui em vez de manter uma cópia própria (KNOWN_SYSTEM_DEPS,
 // removida). Nenhum outro consumidor deve reimplementar este mapa.
+// Instruções manuais no formato "Windows: X | Linux: Y | macOS: Z" (mesmo padrão já
+// estabelecido e testado em KNOWN_DEPS['edge-tts'] e nas skills system-provisioner/skill-manager,
+// ver S148_SkillCrossPlatform_WindowsInstructions.test.ts) — IDs de pacote winget confirmados
+// via busca (não adivinhados) em 27/07/2026. `installCmd` (legado, só usado em Linux por
+// resolveInstallCommand()) permanece intocado; nenhuma entrada abaixo ganhou installByPlatform —
+// isso deliberadamente NÃO habilita auto-instalação via winget nesta rodada (ver comentário do
+// tesseract mais abaixo para o motivo). `ffmpeg` chegou a ganhar installByPlatform.windows
+// brevemente em 2026-07-28 para um teste real — revertido no mesmo dia: o objetivo do teste era
+// justamente provar que o agente descobre e instala SEM entrada prévia no catálogo (ciclo de
+// Pesquisa da RFC-003, Sprint C parte 2) — hardcoded o comando aqui reproduziria exatamente o
+// padrão que essa RFC existe para eliminar.
 export const KNOWN_DEPS: Record<string, DependencyInfo> = {
-    pandoc:      { name: 'pandoc',                 installCmd: 'sudo apt install pandoc -y',                  manualInstructions: 'Instale com: sudo apt install pandoc -y',                       type: 'system' },
-    ffmpeg:      { name: 'ffmpeg',                 installCmd: 'sudo apt install ffmpeg -y',                  manualInstructions: 'Instale com: sudo apt install ffmpeg -y',                       type: 'system' },
-    convert:     { name: 'imagemagick',            installCmd: 'sudo apt install imagemagick -y',             manualInstructions: 'Instale com: sudo apt install imagemagick -y',                  type: 'system' },
-    magick:      { name: 'imagemagick',            installCmd: 'sudo apt install imagemagick -y',             manualInstructions: 'Instale com: sudo apt install imagemagick -y',                  type: 'system' },
-    libreoffice: { name: 'libreoffice',            installCmd: 'sudo apt install libreoffice -y',             manualInstructions: 'Instale com: sudo apt install libreoffice -y',                  type: 'system' },
-    soffice:     { name: 'libreoffice',            installCmd: 'sudo apt install libreoffice -y',             manualInstructions: 'Instale com: sudo apt install libreoffice -y',                  type: 'system' },
-    pdftotext:   { name: 'poppler-utils',          installCmd: 'sudo apt install poppler-utils -y',           manualInstructions: 'Instale com: sudo apt install poppler-utils -y',               type: 'system' },
-    pdfimages:   { name: 'poppler-utils',          installCmd: 'sudo apt install poppler-utils -y',           manualInstructions: 'Instale com: sudo apt install poppler-utils -y',               type: 'system' },
-    jq:          { name: 'jq',                     installCmd: 'sudo apt install jq -y',                      manualInstructions: 'Instale com: sudo apt install jq -y',                          type: 'system' },
-    zip:         { name: 'zip',                    installCmd: 'sudo apt install zip -y',                     manualInstructions: 'Instale com: sudo apt install zip -y',                         type: 'system' },
-    unzip:       { name: 'unzip',                  installCmd: 'sudo apt install unzip -y',                   manualInstructions: 'Instale com: sudo apt install unzip -y',                       type: 'system' },
-    curl:        { name: 'curl',                   installCmd: 'sudo apt install curl -y',                    manualInstructions: 'Instale com: sudo apt install curl -y',                        type: 'system' },
-    wget:        { name: 'wget',                   installCmd: 'sudo apt install wget -y',                    manualInstructions: 'Instale com: sudo apt install wget -y',                        type: 'system' },
-    git:         { name: 'git',                    installCmd: 'sudo apt install git -y',                     manualInstructions: 'Instale com: sudo apt install git -y',                         type: 'system' },
-    gs:          { name: 'ghostscript',            installCmd: 'sudo apt install ghostscript -y',             manualInstructions: 'Instale com: sudo apt install ghostscript -y',                 type: 'system' },
-    ghostscript: { name: 'ghostscript',            installCmd: 'sudo apt install ghostscript -y',             manualInstructions: 'Instale com: sudo apt install ghostscript -y',                 type: 'system' },
-    exiftool:    { name: 'libimage-exiftool-perl', installCmd: 'sudo apt install libimage-exiftool-perl -y', manualInstructions: 'Instale com: sudo apt install libimage-exiftool-perl -y',      type: 'system' },
-    npm:         { name: 'npm',                    installCmd: 'sudo apt install npm -y',                     manualInstructions: 'Instale com: sudo apt install npm -y',                         type: 'node'   },
-    npx:         { name: 'npm',                    installCmd: 'sudo apt install npm -y',                     manualInstructions: 'Instale npm (inclui npx): sudo apt install npm -y',            type: 'node'   },
-    node:        { name: 'nodejs',                 installCmd: 'sudo apt install nodejs npm -y',              manualInstructions: 'Instale com: sudo apt install nodejs npm -y',                  type: 'node'   },
+    pandoc:      { name: 'pandoc',                 installCmd: 'sudo apt install pandoc -y',                  manualInstructions: 'Windows: winget install JohnMacFarlane.Pandoc | Linux: sudo apt install pandoc -y | macOS: brew install pandoc',                       type: 'system' },
+    // verifyCmd: 'ffmpeg -version' — comando padrão e estável do próprio ffmpeg (funciona
+    // idêntico em Windows/Linux/macOS, sem flag específica de plataforma) — único verifyCmd
+    // populado nesta Sprint (RFC-003 Sprint D), por ser a entrada com evidência concreta que
+    // originou toda a investigação. SEM installByPlatform de propósito: o ciclo de Pesquisa
+    // (Sprint C parte 2) é o caminho que deve resolver ffmpeg quando ausente, não uma entrada
+    // hardcoded — ver comentário acima da tabela.
+    ffmpeg:      { name: 'ffmpeg',                 installCmd: 'sudo apt install ffmpeg -y',                  manualInstructions: 'Windows: winget install Gyan.FFmpeg | Linux: sudo apt install ffmpeg -y | macOS: brew install ffmpeg', verifyCmd: 'ffmpeg -version',              type: 'system' },
+    convert:     { name: 'imagemagick',            installCmd: 'sudo apt install imagemagick -y',             manualInstructions: 'Windows: winget install ImageMagick.ImageMagick | Linux: sudo apt install imagemagick -y | macOS: brew install imagemagick',                  type: 'system' },
+    magick:      { name: 'imagemagick',            installCmd: 'sudo apt install imagemagick -y',             manualInstructions: 'Windows: winget install ImageMagick.ImageMagick | Linux: sudo apt install imagemagick -y | macOS: brew install imagemagick',                  type: 'system' },
+    libreoffice: { name: 'libreoffice',            installCmd: 'sudo apt install libreoffice -y',             manualInstructions: 'Windows: winget install TheDocumentFoundation.LibreOffice | Linux: sudo apt install libreoffice -y | macOS: brew install --cask libreoffice',                  type: 'system' },
+    soffice:     { name: 'libreoffice',            installCmd: 'sudo apt install libreoffice -y',             manualInstructions: 'Windows: winget install TheDocumentFoundation.LibreOffice | Linux: sudo apt install libreoffice -y | macOS: brew install --cask libreoffice',                  type: 'system' },
+    pdftotext:   { name: 'poppler-utils',          installCmd: 'sudo apt install poppler-utils -y',           manualInstructions: 'Windows: winget install oschwartz10612.Poppler | Linux: sudo apt install poppler-utils -y | macOS: brew install poppler',               type: 'system' },
+    pdfimages:   { name: 'poppler-utils',          installCmd: 'sudo apt install poppler-utils -y',           manualInstructions: 'Windows: winget install oschwartz10612.Poppler | Linux: sudo apt install poppler-utils -y | macOS: brew install poppler',               type: 'system' },
+    jq:          { name: 'jq',                     installCmd: 'sudo apt install jq -y',                      manualInstructions: 'Windows: winget install jqlang.jq | Linux: sudo apt install jq -y | macOS: brew install jq',                          type: 'system' },
+    zip:         { name: 'zip',                    installCmd: 'sudo apt install zip -y',                     manualInstructions: 'Windows: sem "zip" nativo — use Compress-Archive do PowerShell, ou winget install 7zip.7zip (sintaxe de comando diferente) | Linux: sudo apt install zip -y | macOS: já vem no sistema',                         type: 'system' },
+    unzip:       { name: 'unzip',                  installCmd: 'sudo apt install unzip -y',                   manualInstructions: 'Windows: sem "unzip" nativo — use Expand-Archive do PowerShell, ou winget install 7zip.7zip (sintaxe de comando diferente) | Linux: sudo apt install unzip -y | macOS: já vem no sistema',                       type: 'system' },
+    curl:        { name: 'curl',                   installCmd: 'sudo apt install curl -y',                    manualInstructions: 'Windows: já vem instalado desde o Windows 10 1803+; se ausente: winget install cURL.cURL | Linux: sudo apt install curl -y | macOS: já vem no sistema',                        type: 'system' },
+    wget:        { name: 'wget',                   installCmd: 'sudo apt install wget -y',                    manualInstructions: 'Windows: winget install JernejSimoncic.Wget | Linux: sudo apt install wget -y | macOS: brew install wget',                        type: 'system' },
+    git:         { name: 'git',                    installCmd: 'sudo apt install git -y',                     manualInstructions: 'Windows: winget install Git.Git | Linux: sudo apt install git -y | macOS: brew install git (ou Xcode Command Line Tools)',                         type: 'system' },
+    gs:          { name: 'ghostscript',            installCmd: 'sudo apt install ghostscript -y',             manualInstructions: 'Windows: winget install ArtifexSoftware.GhostScript | Linux: sudo apt install ghostscript -y | macOS: brew install ghostscript',                 type: 'system' },
+    ghostscript: { name: 'ghostscript',            installCmd: 'sudo apt install ghostscript -y',             manualInstructions: 'Windows: winget install ArtifexSoftware.GhostScript | Linux: sudo apt install ghostscript -y | macOS: brew install ghostscript',                 type: 'system' },
+    exiftool:    { name: 'libimage-exiftool-perl', installCmd: 'sudo apt install libimage-exiftool-perl -y', manualInstructions: 'Windows: winget install OliverBetz.ExifTool | Linux: sudo apt install libimage-exiftool-perl -y | macOS: brew install exiftool',      type: 'system' },
+    npm:         { name: 'npm',                    installCmd: 'sudo apt install npm -y',                     manualInstructions: 'Windows: winget install OpenJS.NodeJS (inclui npm) | Linux: sudo apt install npm -y | macOS: brew install node',                         type: 'node'   },
+    npx:         { name: 'npm',                    installCmd: 'sudo apt install npm -y',                     manualInstructions: 'Instale npm (inclui npx) — Windows: winget install OpenJS.NodeJS | Linux: sudo apt install npm -y | macOS: brew install node',            type: 'node'   },
+    node:        { name: 'nodejs',                 installCmd: 'sudo apt install nodejs npm -y',              manualInstructions: 'Windows: winget install OpenJS.NodeJS | Linux: sudo apt install nodejs npm -y | macOS: brew install node',                  type: 'node'   },
     // marp é a única entrada hoje cujo comando (npm install -g) já é genuinamente cross-platform
     // — migrada para installByPlatform explícito em vez de installCmd legado, para não depender
     // do fallback "só Linux" e não perder a instalação automática em Windows/macOS.
@@ -61,12 +81,14 @@ export const KNOWN_DEPS: Record<string, DependencyInfo> = {
     // probeVia: 'node-require' — não é binário de PATH, é módulo consumido via
     // require('puppeteer') (scripts/html2pdf.sh:174). Ver EnvironmentProbe.ts.
     puppeteer:   { name: 'puppeteer',              installByPlatform: { windows: 'npm install puppeteer', linux: 'npm install puppeteer', macos: 'npm install puppeteer' }, manualInstructions: 'Instale com: npm install puppeteer (inclui Chromium embutido, sem precisar de Chrome do sistema)', type: 'node', probeVia: 'node-require' },
-    // tesseract: fallback de OCR em read_document.ts (extractOcr/pdfOcr) — mesmo padrão
-    // apt-only das demais entradas de sistema acima (sem installByPlatform: não há comando
-    // Windows/macOS validado neste projeto para propor automaticamente).
-    tesseract:   { name: 'tesseract-ocr',          installCmd: 'sudo apt install tesseract-ocr tesseract-ocr-por -y', manualInstructions: 'Instale com: sudo apt install tesseract-ocr tesseract-ocr-por -y', type: 'system' },
-    pip:         { name: 'python3-pip',            installCmd: 'sudo apt install python3-pip -y',             manualInstructions: 'Instale com: sudo apt install python3-pip -y',                 type: 'python' },
-    pip3:        { name: 'python3-pip',            installCmd: 'sudo apt install python3-pip -y',             manualInstructions: 'Instale com: sudo apt install python3-pip -y',                 type: 'python' },
+    // tesseract: fallback de OCR em read_document.ts (extractOcr/pdfOcr). manualInstructions
+    // ganhou o comando Windows (UB-Mannheim.TesseractOCR, confirmado por busca) — mas sem
+    // installByPlatform: instalação automática via winget costuma pedir confirmação interativa
+    // (--accept-package-agreements/--accept-source-agreements) que exec_command não trata hoje;
+    // habilitar auto-install fica para quando esse tratamento existir, não nesta rodada.
+    tesseract:   { name: 'tesseract-ocr',          installCmd: 'sudo apt install tesseract-ocr tesseract-ocr-por -y', manualInstructions: 'Windows: winget install UB-Mannheim.TesseractOCR | Linux: sudo apt install tesseract-ocr tesseract-ocr-por -y | macOS: brew install tesseract tesseract-lang', type: 'system' },
+    pip:         { name: 'python3-pip',            installCmd: 'sudo apt install python3-pip -y',             manualInstructions: 'Windows: winget install --id Python.Python.3 (inclui pip) | Linux: sudo apt install python3-pip -y | macOS: já vem com o Python 3 do Homebrew (brew install python)',                 type: 'python' },
+    pip3:        { name: 'python3-pip',            installCmd: 'sudo apt install python3-pip -y',             manualInstructions: 'Windows: winget install --id Python.Python.3 (inclui pip) | Linux: sudo apt install python3-pip -y | macOS: já vem com o Python 3 do Homebrew (brew install python)',                 type: 'python' },
     // edge-tts: SEM installCmd/installByPlatform de propósito nesta rodada. O execution loop
     // (GoalExecutionLoop.ts, needs_dependency) resolve o comando via resolveInstallCommand()
     // e o executa direto via exec_command sem antes checar se o runtime Python (python3/pip3)
@@ -235,6 +257,12 @@ const ERROR_PATTERNS: ErrorPattern[] = [
 // ── GoalEvaluator ─────────────────────────────────────────────────────────────
 
 export class GoalEvaluator {
+    /**
+     * RFC-003 Sprint C (`docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`) — opcional,
+     * mesmo padrão fail-open já usado em `GoalExecutionLoop`/`GoalPlanner`: sem ela, o
+     * comportamento é idêntico ao anterior a esta Sprint (só `KNOWN_DEPS` é consultado).
+     */
+    constructor(private readonly operationalKnowledge?: OperationalKnowledge) {}
 
     evaluate(goal: Goal, planStep: PlanStep, toolResult: ToolResult): CycleResult {
         if (toolResult.success) {
@@ -298,8 +326,97 @@ export class GoalEvaluator {
                         depInfo: dep,
                     };
                 }
-                log.info(`[GoalEvaluator] dep='${dep.name}' missing and installable — outcome=needs_dependency`);
-                return { outcome: 'needs_dependency', confidence: 0.8, blocker, depInfo: dep };
+
+                // RFC-003 Sprint C — Ajuste (teste real, 2026-07-28): KNOWN_DEPS ter uma entrada
+                // não significa ter um comando executável PARA ESTA plataforma — a maioria do
+                // catálogo (só installCmd legado/Linux, sem installByPlatform) resolve pra
+                // undefined em Windows/macOS via resolveInstallCommand(). Confirmado ao vivo:
+                // 'ffmpeg' caía direto em needs_dependency mesmo sem comando pra Windows,
+                // nunca chegando ao ramo de Pesquisa abaixo — o mesmo vale hoje pra ~24 das 26
+                // entradas do catálogo (só marp/puppeteer têm installByPlatform completo).
+                // Só segue no caminho normal (needs_dependency) quando: o comando realmente
+                // resolve pra esta plataforma, OU o modo não permite aquisição de qualquer forma
+                // (SAFE — comportamento idêntico ao anterior a este ajuste, nada muda pra SAFE).
+                const resolvedForThisPlatform = resolveInstallCommand(dep, { platform: currentPlatform() });
+                if (resolvedForThisPlatform !== undefined || !permissionRegistry.can('install_dependencies')) {
+                    log.info(`[GoalEvaluator] dep='${dep.name}' missing and installable — outcome=needs_dependency`);
+                    return { outcome: 'needs_dependency', confidence: 0.8, blocker, depInfo: dep };
+                }
+
+                // Conhecido em KNOWN_DEPS, mas sem comando resolvido pra esta plataforma, e o
+                // modo permite aquisição: trata como conhecimento insuficiente (mesma categoria
+                // que dependência totalmente desconhecida) — cai no MESMO ciclo de
+                // OperationalKnowledge→Pesquisa logo abaixo, sem duplicar nenhuma lógica.
+                log.info(`[GoalEvaluator] dep='${dep.name}' conhecido em KNOWN_DEPS mas sem comando resolvido para plataforma=${currentPlatform()} — tratando como conhecimento insuficiente`);
+            }
+
+            // RFC-003 Sprint C — Research: chega aqui em dois casos (ambos "conhecimento
+            // Distribuído insuficiente"): sem entrada nenhuma em KNOWN_DEPS, OU com entrada mas
+            // sem comando resolvido pra esta plataforma (ajuste de 2026-07-28). Consulta
+            // OperationalKnowledge (conhecimento Aprendido) antes de desistir — ordem de
+            // "Reutilização" já definida na RFC (1. Distribuído, 2. Aprendido, 3. novo ciclo).
+            // getTacticalCommand() só devolve algo acima do limiar de confiança de RFC-001 §2 —
+            // abaixo disso seria só evidência textual fraca (buildEvidenceHint, já consumido em
+            // GoalPlanner.replan()), nunca um atalho aqui. O objeto sintetizado usa o mesmo campo
+            // `installByPlatform` que `marp`/`puppeteer` já usam em KNOWN_DEPS — resolveInstallCommand()
+            // e GoalExecutionLoop.handleNeedsDependencyOutcome() consomem sem precisar de nenhuma
+            // mudança própria (decisão de design registrada na auditoria de impacto, Sprint A).
+            if (missingCmd) {
+                const learnedCommand = this.operationalKnowledge?.getTacticalCommand(missingCmd);
+                if (learnedCommand) {
+                    const platform = currentPlatform();
+                    const learnedDep: DependencyInfo = {
+                        name: missingCmd,
+                        installByPlatform: { [platform]: learnedCommand },
+                        manualInstructions: `Conhecimento aprendido nesta instância: ${learnedCommand}`,
+                        type: 'system',
+                    };
+                    const installKey = `install_dep_${learnedDep.name}`;
+                    if (goal.strategiesTried.some(s => s.includes(installKey))) {
+                        const msg = `'${learnedDep.name}' não pôde ser instalado automaticamente.\n${learnedDep.manualInstructions}`;
+                        log.warn(`[GoalEvaluator] dep=${learnedDep.name} (aprendido) install already tried — escalating to failed`);
+                        return {
+                            outcome: 'failed',
+                            confidence: 0.1,
+                            output: msg,
+                            blocker: { ...blocker, description: msg, suggestedActions: [learnedDep.manualInstructions] },
+                            depInfo: learnedDep,
+                        };
+                    }
+                    log.info(`[GoalEvaluator] dep='${learnedDep.name}' resolvido via OperationalKnowledge (aprendido, plataforma=${platform}) — outcome=needs_dependency`);
+                    return { outcome: 'needs_dependency', confidence: 0.75, blocker, depInfo: learnedDep };
+                }
+
+                // RFC-003 Sprint C — Research (segunda metade): nem KNOWN_DEPS (Distribuído) nem
+                // OperationalKnowledge (Aprendido) resolvem — antes desta Sprint, isso caía direto
+                // no blocked/failed genérico abaixo, sem NENHUMA sugestão de pesquisa, e o LLM
+                // não tinha motivo pra pensar em usar web_search para uma dependência ausente.
+                // Gated pelo mesmo permissionRegistry.can('install_dependencies') que já condiciona
+                // as duas resoluções automáticas acima (SAFE: comportamento idêntico a antes desta
+                // Sprint) e pelo mesmo replanBudget que já gate o 'blocked' genérico logo abaixo —
+                // nenhum orçamento paralelo. Esta função NUNCA decide a hipótese nem chama
+                // web_search sozinha — só enriquece blocker.description/suggestedActions, o mesmo
+                // texto que buildReplanPrompt() (GoalPlanner.ts) já injeta no prompt de replan
+                // ("BLOCKER ATUAL"/"AÇÕES SUGERIDAS") — quem decide pesquisar, com o quê, e qual
+                // hipótese formar continua sendo exclusivamente o GoalPlanner/LLM, usando
+                // web_search/web_navigate (tools já existentes, nenhuma tool nova).
+                if (permissionRegistry.can('install_dependencies') && goal.replanBudget > 0) {
+                    const researchDescription = `'${missingCmd}' não é conhecido (sem entrada em KNOWN_DEPS nem conhecimento aprendido nesta instância). Pesquise a documentação oficial antes de propor um comando de instalação.`;
+                    log.info(`[GoalEvaluator] dep='${missingCmd}' desconhecido (sem KNOWN_DEPS/OperationalKnowledge) — sugerindo pesquisa via web_search/web_navigate (modo permite aquisição)`);
+                    return {
+                        outcome: 'blocked',
+                        confidence: 0.4,
+                        blocker: {
+                            ...blocker,
+                            description: researchDescription,
+                            suggestedActions: [
+                                `Usar web_search para localizar a fonte oficial de instalação de '${missingCmd}' (site do projeto, repositório GitHub oficial, ou página do gerenciador de pacotes)`,
+                                `Usar web_navigate para confirmar o comando exato na fonte encontrada`,
+                                `Formular um step de instalação citando a fonte, apropriado ao sistema operacional detectado — nunca inventar um comando sem fonte`,
+                            ],
+                        },
+                    };
+                }
             }
         }
 

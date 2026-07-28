@@ -119,6 +119,15 @@ as duas metades resolvem a mesma pergunta ("como instalar X") por processos estr
 distintos, sem um substituir o outro (mesma relação já documentada entre `KNOWN_DEPS` e
 `OperationalKnowledge`, `SEPARACAO_DISTRIBUIDO_APRENDIDO.md`, Seção 5).
 
+**Extensão (RFC-003, `docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`)**: além do
+papel puramente informativo descrito acima, `OperationalKnowledge` acima do limiar de confiança
+(≥2 sucessos confirmados, sem falha recente — RFC-001 §2) passa a ser elegível ao mesmo atalho
+tático que `KNOWN_DEPS` já tem (`EVIDENCE_PROVIDER_PATTERN.md` §7 item 2) — nunca escrevendo em
+`KNOWN_DEPS`, permanecendo Conhecimento Aprendido por definição. A origem do comando aprendido
+também deixa de ser só "o LLM improvisou até acertar": pode vir de uma pesquisa ao vivo mediada
+pelo `GoalPlanner` (ciclo tático de RFC-003), gated por modo operacional — nunca de um componente
+determinístico decidindo sozinho entre fontes conflitantes.
+
 ### 4.4 resolveInstallCommand (`src/loop/planning/resolveInstallCommand.ts`)
 
 Função pura de consumo, não de conhecimento. Documentado explicitamente por este pipeline:
@@ -161,16 +170,27 @@ Documentado explicitamente por este pipeline:
   Curator (que registra `não encontrado` em vez de propor um comando sem fonte) quanto
   `resolveInstallCommand` (que retorna `undefined` em vez de estender um comando por analogia
   entre plataformas) seguem o mesmo princípio, em pontos diferentes do pipeline.
-- **O Runtime não pesquisa documentação**: `GoalEvaluator`, `resolveInstallCommand` e
-  `EnvironmentProbe` nunca fazem uma requisição de busca ou leitura de página externa para
-  descobrir como instalar algo — essa responsabilidade é exclusiva da Skill, fora do caminho de
-  execução de goals.
+- **O Runtime não pesquisa documentação para alimentar o catálogo distribuído**: `GoalEvaluator`,
+  `resolveInstallCommand` e `EnvironmentProbe` nunca fazem uma requisição de busca ou leitura de
+  página externa para decidir o que entra em `KNOWN_DEPS` — essa responsabilidade permanece
+  exclusiva da Skill, fora do caminho de execução de goals, sempre seguida de PR humano. **Escopo
+  explícito (`docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`)**: esta frase protege
+  a integridade do catálogo **distribuído** — não proíbe pesquisa ao vivo dentro de um goal quando
+  o resultado só alimenta conhecimento **aprendido** (`OperationalKnowledge`), nunca `KNOWN_DEPS`
+  diretamente, e gated por modo operacional (`SAFE` continua sem nenhuma pesquisa ao vivo). Ver
+  Seção 6 abaixo para os dois caminhos de pesquisa que passam a coexistir.
 - **O Runtime apenas executa conhecimento previamente validado**: tudo que o `GoalExecutionLoop`
-  executa no fluxo `needs_dependency` já passou por `KNOWN_DEPS` — nunca por uma pesquisa feita
-  na hora.
+  executa no fluxo `needs_dependency` já passou por `KNOWN_DEPS`, por `OperationalKnowledge` já
+  confirmado, ou — no caminho tático de RFC-003 — por uma hipótese que o próprio `GoalPlanner`
+  aprovou e que só é aprendida depois de validação objetiva. Nunca por uma pesquisa cujo resultado
+  é executado sem mediação de julgamento.
 - **Pesquisa e execução são responsabilidades distintas**: a Skill nunca tem `exec_command` (não
-  instala o que pesquisa); o Runtime nunca tem `web_search`/`web_navigate` no caminho de
-  `needs_dependency` (não pesquisa o que executa). Nenhum componente faz as duas coisas.
+  instala o que pesquisa); o Runtime clássico (`GoalEvaluator`/`resolveInstallCommand`/
+  `EnvironmentProbe`) nunca tem `web_search`/`web_navigate` no caminho de `needs_dependency` (não
+  pesquisa o que executa) — nenhum componente faz as duas coisas. O ciclo tático de RFC-003 não é
+  uma exceção a isso: a pesquisa ali produz evidência para o `GoalPlanner` decidir, exatamente como
+  qualquer outro Evidence Provider — quem "pesquisa e depois executa sem mediação" continua sendo,
+  estruturalmente, ninguém.
 
 ## 6. Limites — o que este pipeline não cobre
 
@@ -181,9 +201,23 @@ Documentado explicitamente por este pipeline:
 - Não promove automaticamente relatórios do Dependency Curator para `KNOWN_DEPS` — mesma regra de
   travessia manual que já vale para `OperationalKnowledge`
   (`docs/ARCHITECTURE/SEPARACAO_DISTRIBUIDO_APRENDIDO.md`, Seção 6): sempre PR humano.
-- Não define QUANDO uma dependência deve ser pesquisada — isso é acionado por um humano/operador
-  identificando uma lacuna (como a Sprint 007 fez), não por um gatilho automático dentro do
-  Runtime.
+- Este pipeline (a Skill `dependency-curator`) não define QUANDO uma dependência deve ser
+  pesquisada — continua acionado por um humano/operador identificando uma lacuna (como a Sprint
+  007 fez), nunca por um gatilho automático dentro do Runtime.
+  **Adendo (RFC-003, `docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`)**: a partir
+  desta RFC, dois caminhos de pesquisa coexistem, distintos por desenho — não uma contradição
+  entre este documento e a RFC-003:
+  - **Este pipeline (assíncrono)**: acionado por humano, produz relatório
+    (`docs/Auditorias/dependencias/<nome>.md`), alimenta `KNOWN_DEPS` só via PR — inalterado por
+    RFC-003.
+  - **Ciclo tático de RFC-003 (dentro do goal)**: acionado automaticamente quando
+    `needs_dependency` não encontra entrada em `KNOWN_DEPS` nem em `OperationalKnowledge`, gated
+    por modo operacional (`SAFE` nunca aciona), mediado pelo `GoalPlanner` na formação da
+    hipótese, e que **nunca escreve em `KNOWN_DEPS`** — só em `OperationalKnowledge`, após
+    validação objetiva. O "gatilho automático dentro do Runtime" que esta seção historicamente
+    proibia era especificamente a escrita automática no catálogo **distribuído**; isso continua
+    proibido sem exceção. O que RFC-003 introduz é uma pesquisa automática que só pode resultar em
+    conhecimento **aprendido**, local, nunca promovido ao catálogo sem PR humano.
 
 ## 7. Benefícios
 

@@ -21,6 +21,14 @@
  * REGRESSÃO SE: wrapForWindowsPowerShell() parar de chamar translateLsFlagsForPowerShell(),
  * ou se o comando final ainda contiver "-la"/"-lh" após a tradução.
  *
+ * EXTENSÃO (27/07/2026): mesma função (wrapForWindowsPowerShell) também ganhou um fix de
+ * encoding — reproduzido ao vivo em log de auditoria real do mesmo dia: um exec_command de
+ * diagnóstico que imprimia "ffmpeg não encontrado" voltou mangled ("ffmpeg n?o encontrado"),
+ * porque powershell.exe -NonInteractive escreve stdout redirecionado na code page legada do
+ * sistema, não em UTF-8, enquanto child_process.exec() decodifica como UTF-8. Fix: forçar
+ * [Console]::OutputEncoding/$OutputEncoding = UTF8 dentro do comando encaminhado, antes do
+ * comando real. Casos abaixo cobrem essa extensão além do escopo original (flags de `ls`).
+ *
  * Execução: npx ts-node src/__tests__/regression/S15_LsFlags_PowerShellCLIXML.test.ts
  */
 
@@ -73,6 +81,19 @@ async function main() {
         const result = await tool.execute({ command: `ls -la "${process.execPath}"` });
         assert(result.success === true, `ls -la em arquivo real funciona sem CLIXML (output: "${(result.output || result.error || '').slice(0, 200)}")`);
         assert(!/CLIXML/i.test(result.output || '') && !/CLIXML/i.test(result.error || ''), 'saída não contém erro CLIXML');
+
+        console.log('\n=== S15 — wrapForWindowsPowerShell: comando decodificado força UTF-8 na saída ===');
+        const wrappedUtf8 = wrapForWindowsPowerShell('Write-Output "teste"');
+        const encodedUtf8Match = wrappedUtf8.match(/-EncodedCommand (\S+)/);
+        if (encodedUtf8Match) {
+            const decodedUtf8 = Buffer.from(encodedUtf8Match[1], 'base64').toString('utf16le');
+            assert(/\[Console\]::OutputEncoding = \[System\.Text\.Encoding\]::UTF8/.test(decodedUtf8), 'comando decodificado seta [Console]::OutputEncoding = UTF8');
+        }
+
+        console.log('\n=== S15 — Reprodução ao vivo: acento pt-BR sobrevive via ExecCommandTool (bug real 27/07/2026) ===');
+        const accentResult = await tool.execute({ command: 'Write-Output "ffmpeg não encontrado"' });
+        assert(accentResult.success === true, `comando com acento executa com sucesso (output: "${(accentResult.output || accentResult.error || '').slice(0, 200)}")`);
+        assert((accentResult.output || '').includes('não encontrado'), `"não encontrado" preservado sem mangling (output real: "${(accentResult.output || '').slice(0, 200)}")`);
     } else {
         console.log('\n  ⏭️  pulado (não é Windows) — needsPowerShellWrap não ativa fora do win32');
     }

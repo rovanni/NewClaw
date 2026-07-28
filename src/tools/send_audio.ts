@@ -228,8 +228,20 @@ export class SendAudioTool implements ToolExecutor {
         }
     }
 
-    /** Gera áudio via node-edge-tts (biblioteca npm) — sem subprocesso, sem Python. */
+    /**
+     * Gera áudio via node-edge-tts (biblioteca npm) — sem subprocesso, sem Python.
+     *
+     * DISABLE_NODE_EDGE_TTS=true: escape hatch só para teste determinístico (mesmo espírito de
+     * EDGE_TTS_PATH/PIPER_BIN abaixo) — sem isso, um teste que força falha de TTS via
+     * EDGE_TTS_PATH (binário CLI inexistente) não conseguia forçar falha aqui, porque este
+     * engine roda antes do fallback CLI e não depende de nenhum binário local, só de rede —
+     * um teste rodando com rede real disponível "passava" no engine que deveria estar simulando
+     * falha, mascarando o cenário que o teste (S28) existe pra provar. Nunca lido em produção.
+     */
     private async generateViaNodeEdgeTts(text: string, voice: string, outputPath: string): Promise<void> {
+        if (process.env.DISABLE_NODE_EDGE_TTS === 'true') {
+            throw new Error('node-edge-tts desabilitado via DISABLE_NODE_EDGE_TTS (teste)');
+        }
         const tts = new EdgeTTS({ voice, lang: 'pt-BR', rate: '-5%' });
         await tts.ttsPromise(text, outputPath);
     }

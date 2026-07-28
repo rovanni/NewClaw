@@ -18,13 +18,26 @@
  * Uma tentativa que falha (edge-tts ausente, ffmpeg falhou, upload falhou) nunca marca o
  * debounce — a próxima chamada tenta de novo (e reporta o erro real) em vez de fingir sucesso.
  *
- * Este teste força a falha do edge-tts via EDGE_TTS_PATH apontando pra um binário inexistente
- * (determinístico, não depende de edge-tts estar instalado na máquina de teste).
+ * Este teste força a falha de TODOS os engines de TTS de forma determinística, sem depender de
+ * rede nem de nada estar (ou não) instalado na máquina de teste:
+ *   - node-edge-tts (engine primário, npm/WebSocket): DISABLE_NODE_EDGE_TTS=true.
+ *   - CLI Python edge-tts (fallback histórico): EDGE_TTS_PATH apontando pra binário inexistente.
+ *   - Piper (offline, opcional): já fica de fora naturalmente — PIPER_MODELS_DIR não configurado
+ *     no ambiente de teste, então findPiperInstallation() já retorna null sem precisar de flag.
+ *
+ * REGRESSÃO CORRIGIDA (2026-07-27): antes de DISABLE_NODE_EDGE_TTS existir, este teste só forçava
+ * falha no fallback CLI (EDGE_TTS_PATH) — mas generateAudio() tenta node-edge-tts PRIMEIRO, que
+ * não lê EDGE_TTS_PATH (não depende de nenhum binário local, só de rede). Numa máquina com rede
+ * disponível, node-edge-tts gerava áudio de verdade, ffmpeg convertia de verdade, e o teste via
+ * `success: true` onde esperava uma falha forçada — falso negativo do próprio teste, não um bug
+ * de produção. DISABLE_NODE_EDGE_TTS (src/tools/send_audio.ts, generateViaNodeEdgeTts()) fecha
+ * essa lacuna sem introduzir dependência de mock de módulo nem de timing de rede.
  *
  * Execução: npx ts-node src/__tests__/regression/S28_SendAudioTool_DebounceMasksFailure.test.ts
  */
 
 process.env.EDGE_TTS_PATH = 'newclaw-testes-binario-inexistente-xyz';
+process.env.DISABLE_NODE_EDGE_TTS = 'true';
 
 import { SendAudioTool } from '../../tools/send_audio';
 

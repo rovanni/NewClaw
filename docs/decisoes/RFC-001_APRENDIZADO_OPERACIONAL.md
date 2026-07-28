@@ -1,10 +1,14 @@
 # RFC-001 — Arquitetura do Aprendizado Operacional do NewClaw
 
-> Status (atualizado 24/07/2026): primeira fatia da Milestone M2 (`OperationalKnowledge`) já
+> Status (atualizado 2026-07-27): primeira fatia da Milestone M2 (`OperationalKnowledge`) já
 > implementada e validada em ambiente real (Windows e Linux) — estritamente o caminho
 > informativo descrito na pergunta 5 (Evidence Provider puro). A extensão tática discutida na
-> pergunta 10 permanece proposta, não implementada — ver "Itens deliberadamente adiados" em
-> `docs/decisoes/ADR-001_BASELINE_ARQUITETURAL.md`, Seção 6.
+> pergunta 10 **deixou de estar adiada** — `docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`
+> (2026-07-27) formaliza essa extensão, reutilizando integralmente o modelo de confiança definido
+> na pergunta 2 abaixo, e adiciona os passos que antecedem a cadeia original desta RFC
+> (Identificar → Descobrir → Pesquisar → Formular hipótese, cobrindo o caso "não sei como
+> resolver, preciso pesquisar" que esta RFC não cobria) — ver "Adendo (RFC-003)" ao final deste
+> documento. Implementação de código ainda pendente (RFC-003, seção "Próximos Passos").
 > Origem: investigação arquitetural de 2026-07-23/24, decorrente da Milestone M1
 > (Self-Healing de Dependências — `docs/DIRETRIZ_ARQUITETURA_2026-07-13.md`).
 
@@ -211,3 +215,58 @@ distribuído no código.
 **Riscos em aberto, não resolvidos por esta RFC:** critério de decaimento por versão de
 ferramenta (sem precedente no projeto); limite de confiança explícito e quantificado para a
 promoção de tática determinística (aqui só comparado qualitativamente).
+
+## Adendo (RFC-003, 2026-07-27)
+
+Esta RFC assumia, do início ao fim, que o agente **já sabe** improvisar uma correção (via
+`exec_command` espontâneo, tentativa e erro do LLM) — a cadeia original nunca cobriu o caso "não
+sei como resolver isto, preciso descobrir". `docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`
+fecha essa lacuna, adicionando um ciclo que antecede a captura descrita aqui:
+
+```text
+Problema desconhecido
+        │
+        ▼
+Identificar               ── novo (RFC-003)
+        │
+        ▼
+Descobrir (ambiente)       ── novo (RFC-003)
+        │
+        ▼
+Pesquisar (fonte citada)   ── novo (RFC-003)
+        │
+        ▼
+Formular hipótese          ── novo (RFC-003) — sempre mediado pelo GoalPlanner/LLM
+        │
+        ▼
+Executar                   ┐
+        │                  │  cadeia original desta RFC-001,
+        ▼                  │  inalterada — captureFromGoal(),
+Validar objetivamente      │  buildEvidenceHint(), modelo de
+        │                  │  confiança da pergunta 2
+        ▼                  │
+Aprender/Reutilizar        ┘
+```
+
+O que a RFC-003 reutiliza integralmente desta RFC-001, sem redefinir:
+
+- **Unidade de conhecimento** (pergunta 1): `(ferramenta, plataforma)`, nunca por objetivo.
+- **Modelo de confiança em dois níveis** (pergunta 2): 1 sucesso validado = evidência fraca;
+  sucessos confirmados repetidos, sem falha recente = elegível a atalho tático. RFC-003 não
+  introduz um terceiro nível nem redefine os dois existentes.
+- **Separação Distribuído × Aprendido** (pergunta 3): conhecimento adquirido pelo novo ciclo de
+  descoberta continua sendo Aprendido, nunca escreve em `KNOWN_DEPS` automaticamente — a origem do
+  fato (LLM improvisou vs. pesquisa mediada pelo Planner) não muda a categoria física onde ele
+  vive.
+- **Validação em nível de goal** (pergunta 4/6): a "Validação" que a RFC-003 exige é a mesma
+  validação de nível de goal já definida aqui — RFC-003 apenas torna mais rigoroso o mecanismo de
+  captura hoje existente (`captureFromGoal()`), que credita sucesso por uma heurística mais fraca
+  do que o exigido (ver RFC-003, seção "Validação").
+- **Resolução da pergunta 10** (extensão tática): deixa de ser hipótese — é a decisão formalizada
+  por RFC-003, com uma fronteira explícita (seção "Fronteira entre Julgamento do Planner e Atalho
+  Determinístico" da RFC-003) que esta RFC-001 não havia detalhado: a formação de hipótese **nova**
+  é sempre mediada pelo Planner; só a **reutilização** de conhecimento já validado herda o atalho
+  determinístico.
+
+Nada do que esta RFC-001 já definia foi revertido — a RFC-003 estende a cadeia por cima,
+cobrindo a etapa que faltava.

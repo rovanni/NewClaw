@@ -99,9 +99,15 @@ Todos os 5 princípios estão referenciados em `docs/DIRETRIZ_ARQUITETURA_2026-0
 
 ## 6. Itens deliberadamente adiados
 
-- Extensão tática do `OperationalKnowledge` (atalho determinístico tipo `needs_dependency`,
+- ~~Extensão tática do `OperationalKnowledge` (atalho determinístico tipo `needs_dependency`,
   exigiria injetar dependências novas em `GoalEvaluator`) — adiada até o caminho informativo se
-  provar útil em uso real.
+  provar útil em uso real.~~ **Não é mais adiado (2026-07-27)**: a condição definida acima foi
+  satisfeita — uso real (fricção recorrente relatada pelo operador, ao longo de ~3 gerações do
+  projeto) mais um precedente de segunda instância (OpenClaw, já referenciado como precedente em
+  `src/tools/exec_command.ts`/`src/tools/send_audio.ts`) juntos motivaram
+  `docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`, que formaliza esta extensão.
+  Este item deixa de estar "adiado" e passa a ser rastreado como decisão aprovada, com
+  implementação ainda pendente (ver RFC-003, seção "Próximos Passos").
 - Ativação plena do `CaseMemory` (roadmap próprio, S5).
 - Coordenação dos 3 pontos de injeção de reflection — **Won't Fix**, não "adiado" (ver Seção 4.1):
   decisão definitiva, não pendência.
@@ -130,3 +136,28 @@ concluídas) — registrado aqui como desvio consciente de sequência, não como
 M2 foi fundamentado em evidências e validado de forma independente por si só (145/145 testes,
 validação E2E ao vivo duas vezes, VPS Linux real), e fechar C1-C4 retroativamente não invalidou
 nada do que M2 já tinha implementado — só formalizou documentação que já era verdade na prática.
+
+## 9. Baseline B2.0 — Operational Knowledge Acquisition — publicada
+
+Escrita e aprovada em 2026-07-27, persistida no repositório na mesma data. Origem:
+`docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md` — passou por consolidação (Fase 1),
+segunda auditoria crítica adversarial (Fase 1b, 3 achados corrigidos: fronteira Planner×atalho
+determinístico, lista de impacto documental, condição de parada do ciclo) e alinhamento de toda a
+documentação normativa consequente (Fase 2: `EVIDENCE_PROVIDER_PATTERN.md`,
+`PIPELINE_CURADORIA_DEPENDENCIAS.md`, este ADR §6, `RFC-001`). Fase 3 (auditoria de impacto no
+código, `docs/analises-arquiteturais/AUDITORIA_IMPACTO_RFC003_AQUISICAO_CONHECIMENTO_2026-07-27.md`)
+concluída na mesma data.
+
+A partir desta baseline:
+
+- RFC-003 = aprovada e consolidada;
+- documentos normativos = alinhados entre si (nenhuma contradição textual conhecida);
+- arquitetura = **congelada** para fins de implementação — qualquer mudança de arquitetura durante
+  os Sprints de implementação (ver auditoria de impacto, Seção 3, Sprints A-G) é tratada como
+  exceção a ser registrada numa ADR/RFC futura, nunca incorporada diretamente ao código sem
+  documentação prévia. Isso preserva a mesma disciplina que produziu esta baseline: a
+  implementação não deve "contaminar" de volta a arquitetura recém-estabilizada.
+
+Nenhum código foi alterado para esta baseline — só documentação. A implementação em si (Sprints
+A-G da auditoria de impacto) começa a partir daqui como trabalho separado e explicitamente
+solicitado, não incluído neste fechamento.

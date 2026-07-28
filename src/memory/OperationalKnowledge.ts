@@ -114,10 +114,18 @@ export class OperationalKnowledge {
      * Heurística de captura: para cada blocker 'missing_tool' com missingDependency (nome real da
      * dependência ausente, ex: 'yq' — NUNCA blocker.toolName, que é a tool que falhou, ex:
      * 'exec_command'), procura o primeiro attempt de exec_command bem-sucedido ocorrido DEPOIS da
-     * detecção do blocker — candidato razoável a "comando que resolveu". Não é prova formal de
-     * causalidade (poderia ser um exec_command não relacionado que coincidentemente sucedeu
-     * depois) — por isso o resultado nunca vira atalho determinístico sozinho: uma captura isolada
-     * é evidência fraca (ver buildEvidenceHint), só ganha peso com confirmações repetidas.
+     * detecção do blocker — candidato razoável a "comando que resolveu".
+     *
+     * VALIDAÇÃO OBJETIVA (RFC-003 Sprint D, `docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`):
+     * a captura só é creditada quando também existe, DEPOIS do fixAttempt, um attempt cujo
+     * `planStepId` começa com `'verify_'` e terminou em sucesso — o step de verificação que
+     * `GoalExecutionLoop.handleNeedsDependencyOutcome()` injeta quando `DependencyInfo.verifyCmd`
+     * está declarado (hoje só 'ffmpeg' — Nunca Adivinhar, não populado para o resto do catálogo
+     * sem evidência própria). Sem essa evidência, a captura é pulada — mais conservador que a
+     * heurística antiga, que creditava mesmo sem nenhuma verificação real ("não é prova formal de
+     * causalidade" era o comentário original aqui). Uma captura isolada (mesmo já verificada)
+     * continua sendo só evidência fraca (ver buildEvidenceHint) — só ganha peso de atalho tático
+     * com confirmações repetidas (getTacticalCommand(), RFC-001 §2).
      */
     captureFromGoal(goal: Goal): { captured: number } {
         let captured = 0;
@@ -132,7 +140,18 @@ export class OperationalKnowledge {
                     (a.args.command as string).trim().length > 0
                 );
                 if (!fixAttempt) continue;
-                log.info(`[OPKNOW-CAPTURE] goal=${goal.id} dependency=${blocker.missingDependency} command="${String(fixAttempt.args.command).trim().slice(0, 80)}" blocker_detected_at=${blocker.detectedAt} fix_executed_at=${fixAttempt.executedAt}`);
+
+                const verified = goal.attempts.some(a =>
+                    a.result === 'success' &&
+                    a.executedAt >= fixAttempt.executedAt &&
+                    a.planStepId.startsWith('verify_')
+                );
+                if (!verified) {
+                    log.debug(`[OPKNOW-CAPTURE] goal=${goal.id} dependency=${blocker.missingDependency} fixAttempt encontrado mas sem step de verificação bem-sucedido depois — não captura (validação objetiva ausente)`);
+                    continue;
+                }
+
+                log.info(`[OPKNOW-CAPTURE] goal=${goal.id} dependency=${blocker.missingDependency} command="${String(fixAttempt.args.command).trim().slice(0, 80)}" blocker_detected_at=${blocker.detectedAt} fix_executed_at=${fixAttempt.executedAt} verified=true`);
                 this.recordAttempt(blocker.missingDependency!, String(fixAttempt.args.command).trim(), true);
                 captured++;
             }
@@ -169,6 +188,54 @@ export class OperationalKnowledge {
             return lines.join('\n');
         } catch {
             return '';
+        }
+    }
+
+    /**
+     * Limiar mínimo de sucessos confirmados para um registro ser elegível ao atalho tático
+     * (RFC-003, `docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`) — mesmo modelo de
+     * confiança em dois níveis já definido em `docs/decisoes/RFC-001_APRENDIZADO_OPERACIONAL.md`
+     * §2: abaixo disto, o conhecimento só circula como evidência textual fraca
+     * (`buildEvidenceHint()`), nunca decide sozinho.
+     */
+    private static readonly MIN_SUCCESS_COUNT_FOR_TACTICAL = 2;
+
+    /**
+     * Consulta tática (RFC-003, Sprint A — Infraestrutura): retorna o comando aprendido SOMENTE
+     * quando o registro atinge o limiar de confiança elegível ao mesmo atalho determinístico que
+     * `KNOWN_DEPS` já tem (`EVIDENCE_PROVIDER_PATTERN.md` §7 item 2) — nunca decide por conta
+     * própria o que fazer com a ausência (retorna `null`, Nunca Adivinhar). O CALLER (Sprint C,
+     * ainda não implementado nesta rodada: `GoalEvaluator`/`GoalExecutionLoop`) é responsável por
+     * checar `permissionRegistry.can('install_dependencies')` antes de agir sobre este resultado —
+     * este método não conhece modo operacional, só conhecimento aprendido.
+     *
+     * Limitação conhecida e deliberadamente não resolvida nesta Sprint: RFC-001 §2 fala em "sem
+     * falha recente" (distinguir uma falha antiga de uma fresca), mas o schema atual
+     * (`success_count`/`failure_count` agregados, sem timestamp por evento de falha) só permite
+     * expressar "nenhuma falha já registrada, alguma vez" — usa-se essa forma mais conservadora
+     * aqui de propósito, em vez de inventar uma noção de "recência" que o dado hoje não sustenta.
+     * Adicionar timestamp de última falha (para closed a lacuna de verdade) é trabalho de uma
+     * Sprint futura (D ou E), não desta.
+     */
+    getTacticalCommand(tool: string): string | null {
+        try {
+            const platform = currentPlatform();
+            const row = this.db.prepare(`
+                SELECT * FROM operational_knowledge
+                WHERE tool = ? AND platform = ? AND success_count >= ? AND failure_count = 0
+                ORDER BY success_count DESC, last_confirmed_at DESC
+                LIMIT 1
+            `).get(tool, platform, OperationalKnowledge.MIN_SUCCESS_COUNT_FOR_TACTICAL) as KnowledgeRow | undefined;
+
+            if (!row) {
+                log.debug(`[OPKNOW-TACTICAL] tool=${tool} platform=${platform} result=not_eligible`);
+                return null;
+            }
+            log.info(`[OPKNOW-TACTICAL] tool=${tool} platform=${platform} eligible: success_count=${row.success_count} command="${row.command.slice(0, 80)}"`);
+            return row.command;
+        } catch (e) {
+            log.warn('get_tactical_command_failed', errorMessage(e));
+            return null;
         }
     }
 

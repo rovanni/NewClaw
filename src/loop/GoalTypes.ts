@@ -82,6 +82,15 @@ export interface DependencyInfo {
      * futura do mesmo tipo, não dependente de alguém lembrar de atualizar uma segunda lista.
      */
     probeVia?: 'node-require';
+    /**
+     * RFC-003 Sprint D (`docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`) — comando
+     * de verificação objetiva a rodar DEPOIS da instalação (ex.: "ffmpeg -version"), antes de
+     * `OperationalKnowledge` creditar a instalação como validada. Opcional e nunca adivinhado:
+     * só populado quando um humano confirmou o comando exato (mesma disciplina de
+     * `installByPlatform`) — ausência aqui simplesmente pula a etapa de verificação, nunca infere
+     * um comando de verificação plausível para preencher a lacuna.
+     */
+    verifyCmd?: string;
 }
 
 export interface CycleResult {

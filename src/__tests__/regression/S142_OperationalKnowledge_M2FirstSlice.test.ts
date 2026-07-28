@@ -7,9 +7,22 @@
  *   recordAttempt() (persistência, chave ferramenta×plataforma) →
  *   buildEvidenceHint() (Evidence Provider — texto, nunca decisão).
  *
- * Escopo desta fatia (ver docstring de OperationalKnowledge.ts): só o caminho informativo.
- * A extensão tática (needs_dependency-style, condicionada a permissionRegistry) fica para
- * incremento futuro — não testada aqui porque não existe ainda.
+ * Escopo original desta fatia (ver docstring de OperationalKnowledge.ts): só o caminho
+ * informativo (buildEvidenceHint).
+ *
+ * EXTENSÃO (2026-07-27, RFC-003 Sprint A — Infraestrutura,
+ * `docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`): getTacticalCommand() — consulta
+ * de elegibilidade ao atalho determinístico (RFC-001 §2: ≥2 sucessos confirmados, sem falha
+ * registrada), casos 11-15 abaixo. Wiring em GoalEvaluator/GoalExecutionLoop (Sprint C —
+ * Research) permanece fora do escopo desta Sprint — não testado aqui porque não existe ainda.
+ *
+ * EXTENSÃO (2026-07-28, mesma RFC, Sprint D — Validação): captureFromGoal() passou a exigir
+ * evidência de um step de verificação bem-sucedido (planStepId prefixado 'verify_', injetado por
+ * GoalExecutionLoop.handleNeedsDependencyOutcome() quando DependencyInfo.verifyCmd está
+ * declarado) — não basta mais "algum exec_command deu certo depois do blocker". O caso 5
+ * (positivo) foi atualizado para incluir essa evidência; os casos 19-20 provam explicitamente
+ * que SEM verificação (ou com verificação que falhou), a captura é recusada — mesmo com um
+ * fixAttempt real presente.
  *
  * Execução: npx ts-node src/__tests__/regression/S142_OperationalKnowledge_M2FirstSlice.test.ts
  */
@@ -135,7 +148,9 @@ async function main() {
         assert(ok.buildEvidenceHint('tesseract') === '', 'comando registrado só como falha (success_count=0) não aparece como evidência positiva');
     }
 
-    // 5. captureFromGoal — caminho causal correto: fix ocorre DEPOIS do blocker
+    // 5. captureFromGoal — caminho causal correto: fix ocorre DEPOIS do blocker, E existe um
+    //    step de verificação bem-sucedido depois do fix (RFC-003 Sprint D — sem essa evidência,
+    //    ver casos 19-20, a captura é recusada).
     {
         const ok = freshOperationalKnowledge();
         const t0 = Date.now();
@@ -146,10 +161,17 @@ async function main() {
             args: { command: 'npm install puppeteer' },
             executedAt: t0 + 1000,
         });
-        const goal = makeGoal([blocker], [fixAttempt]);
+        const verifyAttempt = makeAttempt({
+            planStepId: 'verify_123_abc',
+            toolName: 'exec_command',
+            result: 'success',
+            args: { command: 'puppeteer -version' },
+            executedAt: t0 + 2000,
+        });
+        const goal = makeGoal([blocker], [fixAttempt, verifyAttempt]);
 
         const result = ok.captureFromGoal(goal);
-        assert(result.captured === 1, 'captureFromGoal captura 1 quando há fix causal (attempt após o blocker)', result);
+        assert(result.captured === 1, 'captureFromGoal captura 1 quando há fix causal E verificação bem-sucedida depois', result);
         assert(ok.buildEvidenceHint('puppeteer').includes('npm install puppeteer'), 'comando capturado aparece na evidência subsequente');
     }
 
@@ -223,6 +245,91 @@ async function main() {
         const loopSrc = readSource('loop/GoalExecutionLoop.ts');
         const captureSites = (loopSrc.match(/this\.operationalKnowledge\?\.captureFromGoal\(/g) ?? []).length;
         assert(captureSites === 2, `GoalExecutionLoop chama captureFromGoal nos 2 mesmos pontos onde CaseMemory.captureIfEligible já é chamado (encontrados: ${captureSites})`, captureSites);
+    }
+
+    // 11. getTacticalCommand — abaixo do limiar (1 sucesso) não é elegível
+    {
+        const ok = freshOperationalKnowledge();
+        ok.recordAttempt('ffmpeg', 'winget install Gyan.FFmpeg', true);
+        assert(ok.getTacticalCommand('ffmpeg') === null, '1 sucesso confirmado ainda não é elegível ao atalho tático (limiar é 2)');
+    }
+
+    // 12. getTacticalCommand — no limiar (2 sucessos, 0 falhas) é elegível e devolve o comando
+    {
+        const ok = freshOperationalKnowledge();
+        ok.recordAttempt('ffmpeg', 'winget install Gyan.FFmpeg', true);
+        ok.recordAttempt('ffmpeg', 'winget install Gyan.FFmpeg', true);
+        assert(ok.getTacticalCommand('ffmpeg') === 'winget install Gyan.FFmpeg', '2 sucessos confirmados, sem falha: elegível, devolve o comando exato');
+    }
+
+    // 13. getTacticalCommand — qualquer falha já registrada bloqueia o atalho, mesmo com sucessos suficientes
+    {
+        const ok = freshOperationalKnowledge();
+        ok.recordAttempt('ffmpeg', 'winget install Gyan.FFmpeg', true);
+        ok.recordAttempt('ffmpeg', 'winget install Gyan.FFmpeg', true);
+        ok.recordAttempt('ffmpeg', 'winget install Gyan.FFmpeg', false);
+        assert(ok.getTacticalCommand('ffmpeg') === null, 'falha já registrada (mesmo após 2 sucessos) impede o atalho — RFC-001 §2 "sem falha recente", forma conservadora que o schema atual sustenta');
+    }
+
+    // 14. getTacticalCommand — sem nenhum registro, devolve null (Nunca Adivinhar: silêncio, não suposição)
+    {
+        const ok = freshOperationalKnowledge();
+        assert(ok.getTacticalCommand('inexistente') === null, 'ferramenta nunca registrada: null, nunca um palpite');
+    }
+
+    // 15. getTacticalCommand — entre múltiplos comandos elegíveis para a mesma ferramenta, escolhe o de maior success_count
+    {
+        const ok = freshOperationalKnowledge();
+        ok.recordAttempt('ffmpeg', 'choco install ffmpeg', true);
+        ok.recordAttempt('ffmpeg', 'choco install ffmpeg', true);
+        ok.recordAttempt('ffmpeg', 'winget install Gyan.FFmpeg', true);
+        ok.recordAttempt('ffmpeg', 'winget install Gyan.FFmpeg', true);
+        ok.recordAttempt('ffmpeg', 'winget install Gyan.FFmpeg', true);
+        assert(ok.getTacticalCommand('ffmpeg') === 'winget install Gyan.FFmpeg', 'com 2 comandos elegíveis, escolhe o de maior success_count (3 > 2)');
+    }
+
+    // 19. captureFromGoal — RFC-003 Sprint D: fixAttempt real presente, mas SEM nenhum step de
+    //     verificação depois — a captura é recusada (comportamento novo, mais rigoroso que a
+    //     heurística antiga, que capturava só com o fixAttempt).
+    {
+        const ok = freshOperationalKnowledge();
+        const t0 = Date.now();
+        const blocker = makeBlocker({ detectedAt: t0, missingDependency: 'graphviz' });
+        const fixAttempt = makeAttempt({
+            toolName: 'exec_command',
+            result: 'success',
+            args: { command: 'winget install Graphviz.Graphviz' },
+            executedAt: t0 + 1000,
+        });
+        const goal = makeGoal([blocker], [fixAttempt]); // nenhum attempt com planStepId 'verify_*'
+
+        const result = ok.captureFromGoal(goal);
+        assert(result.captured === 0, 'sem step de verificação, captureFromGoal NÃO captura (mesmo com fixAttempt real)', result);
+        assert(ok.buildEvidenceHint('graphviz') === '', 'nada foi aprendido — buildEvidenceHint continua vazio');
+    }
+
+    // 20. captureFromGoal — step de verificação existe, mas FALHOU: também não captura.
+    {
+        const ok = freshOperationalKnowledge();
+        const t0 = Date.now();
+        const blocker = makeBlocker({ detectedAt: t0, missingDependency: 'graphviz' });
+        const fixAttempt = makeAttempt({
+            toolName: 'exec_command',
+            result: 'success',
+            args: { command: 'winget install Graphviz.Graphviz' },
+            executedAt: t0 + 1000,
+        });
+        const failedVerify = makeAttempt({
+            planStepId: 'verify_456_def',
+            toolName: 'exec_command',
+            result: 'failure',
+            args: { command: 'graphviz -V' },
+            executedAt: t0 + 2000,
+        });
+        const goal = makeGoal([blocker], [fixAttempt, failedVerify]);
+
+        const result = ok.captureFromGoal(goal);
+        assert(result.captured === 0, 'step de verificação que FALHOU também não credita a captura', result);
     }
 
     console.log(`\n${'─'.repeat(60)}`);

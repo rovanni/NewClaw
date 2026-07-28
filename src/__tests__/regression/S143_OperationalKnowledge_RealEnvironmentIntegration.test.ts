@@ -148,10 +148,16 @@ async function main() {
             id: 'goal_1_dashboard_review',
             objective: 'revisar visualmente o dashboard.html',
             blockers: [makeBlocker({ detectedAt: t0, missingDependency: 'puppeteer' })],
-            attempts: [makeAttempt({ args: { command: 'npm install puppeteer' }, executedAt: t0 + 500 })],
+            attempts: [
+                makeAttempt({ args: { command: 'npm install puppeteer' }, executedAt: t0 + 500 }),
+                // RFC-003 Sprint D — Validação: captureFromGoal() exige evidência de um step de
+                // verificação bem-sucedido (planStepId prefixado 'verify_') depois do fixAttempt,
+                // não só "algum exec_command deu certo depois do blocker".
+                makeAttempt({ planStepId: 'verify_s143_1', args: { command: 'puppeteer -version' }, executedAt: t0 + 1000 }),
+            ],
         });
         const captureResult = ok.captureFromGoal(goal1);
-        assert(captureResult.captured === 1, 'goal 1 (objetivo A) captura o fix de puppeteer', captureResult);
+        assert(captureResult.captured === 1, 'goal 1 (objetivo A) captura o fix de puppeteer (com verificação bem-sucedida)', captureResult);
 
         // goal 2: objetivo completamente diferente, sem relação semântica com goal 1 — só o
         // MESMO problema de ambiente. Prova o ponto central do M2/RFC-001: recuperação por

@@ -182,10 +182,23 @@ export function decodeClixmlError(output: string): string {
  * primeiro uso"). Reproduzido ao vivo: mesmo um `Get-ChildItem` bem-sucedido vinha com
  * "#< CLIXML\n<Objs...>" anexado à saída, poluindo o resultado que volta pro LLM/validador.
  * Setar a preferência ANTES do comando real elimina esse stream na origem.
+ *
+ * [Console]::OutputEncoding / $OutputEncoding = UTF8: sem host interativo, o powershell.exe
+ * escreve stdout redirecionado na code page legada do sistema (cp1252/850 em máquinas pt-BR),
+ * não em UTF-8 — mas child_process.exec() decodifica o buffer capturado como UTF-8 (padrão do
+ * Node). Qualquer caractere acentuado que o comando (ou um script que ele chama) imprima vira
+ * bytes ilegíveis (ex: "não" -> "n?o") do lado do LLM. Reproduzido ao vivo em produção (log de
+ * auditoria, 27/07/2026): um `exec_command` de diagnóstico que imprimia "ffmpeg não encontrado"
+ * voltou como "ffmpeg n?o encontrado" — no mesmo goal, comandos vizinhos gerados pelo próprio
+ * LLM evitavam acento de propósito ("nao disponivel" em vez de "não disponível"), sinal de que
+ * o modelo já tinha "aprendido" a evitar acentos como contorno em vez da causa raiz ser
+ * corrigida. Mesma classe de problema (mismatch de encoding entre o que o processo filho
+ * escreve e o que o Node espera) já resolvida para Python via PYTHONIOENCODING/PYTHONUTF8
+ * logo abaixo — aqui é o equivalente para quando o comando é encaminhado ao PowerShell.
  */
 export function wrapForWindowsPowerShell(command: string): string {
     const translated = translateHeadTailForPowerShell(translateLsFlagsForPowerShell(translateDevNullForPowerShell(translateChainOperatorsForPowerShell(command))));
-    const withoutProgressNoise = `$ProgressPreference = 'SilentlyContinue'; ${translated}`;
+    const withoutProgressNoise = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; ${translated}`;
     const encoded = Buffer.from(withoutProgressNoise, 'utf16le').toString('base64');
     return `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
 }

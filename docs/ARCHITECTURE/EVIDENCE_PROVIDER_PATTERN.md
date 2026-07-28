@@ -99,9 +99,12 @@ Um Evidence Provider **NÃO DEVE**:
 | Carregador de skills | Arquivos de skill com gatilhos textuais | Camada de planejamento | Disponibilizar instruções procedurais quando um gatilho é reconhecido no pedido do usuário |
 | Guarda de diversidade de estratégia | Histórico de planos já tentados dentro do mesmo objetivo | Camada de planejamento | Sinalizar repetição de abordagem, sem impedir a repetição |
 | Modelo de progresso do objetivo | Estado dos componentes concluídos/pendentes do objetivo corrente | Camada de planejamento | Descrever o que já foi alcançado e o que falta |
+| Conhecimento operacional aprendido (`OperationalKnowledge`) | Comandos que resolveram dependências ausentes, validados nesta instância (chave: ferramenta × plataforma) | Camada de planejamento (sempre); Runtime tático (só acima do limiar de confiança, RFC-001 §2) | Reportar o que já funcionou nesta instância; acima do limiar, é também a exceção nomeada da Seção 7, item 2, estendida por `docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md` |
 
 Cada um destes aplica seu próprio critério de relevância antes de produzir saída, e nenhum altera
-o plano diretamente — todos entregam texto à camada de julgamento.
+o plano diretamente — todos entregam texto à camada de julgamento, exceto `OperationalKnowledge`
+acima do limiar de confiança, que segue a exceção nomeada da Seção 7 (mesmo estatuto que
+`KNOWN_DEPS` já tem).
 
 ## 7. Exceções
 
@@ -119,8 +122,17 @@ uma chamada à camada de julgamento. Duas classes de exceção comprovada existe
    restrito a um catálogo pequeno e nomeado, nunca a uma inferência livre, e sempre condicionado
    ao modo operacional configurado. O processo que sustenta essa "alta confiança" ao longo do
    tempo é o Pipeline de Curadoria de Dependências
-   (`docs/ARCHITECTURE/PIPELINE_CURADORIA_DEPENDENCIAS.md`) — pesquisa e evidência sempre
-   antecedem qualquer entrada nova no catálogo.
+   (`docs/ARCHITECTURE/PIPELINE_CURADORIA_DEPENDENCIAS.md`) para o catálogo **distribuído**
+   (`KNOWN_DEPS`) — pesquisa e evidência sempre antecedem qualquer entrada nova no catálogo.
+   **Extensão (RFC-003, `docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`)**: a mesma
+   exceção cobre também conhecimento **aprendido** e taticamente validado
+   (`OperationalKnowledge`) — nunca a formação de uma hipótese nova a partir de pesquisa ao vivo
+   (isso continua exigindo julgamento do `GoalPlanner`, ver a seção "Fronteira entre Julgamento do
+   Planner e Atalho Determinístico" da RFC-003), só a **reutilização** de uma estratégia já
+   confirmada, com confiança suficiente (RFC-001 §2), na mesma instância. "Catálogo pequeno e
+   nomeado" passa a significar, precisamente: `KNOWN_DEPS` (distribuído) **ou**
+   `OperationalKnowledge` acima do limiar de confiança (aprendido) — nunca um resultado de busca
+   ainda não validado.
 
 Fora dessas duas classes, qualquer componente que decida em vez de informar deve ser tratado como
 desvio do padrão, não como uma terceira exceção implícita.
