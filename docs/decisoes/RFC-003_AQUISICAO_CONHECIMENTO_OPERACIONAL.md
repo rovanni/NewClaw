@@ -430,6 +430,47 @@ já validada e persistida em `OperationalKnowledge`, com confiança suficiente**
 quando `KNOWN_DEPS` resolve uma dependência conhecida. Bloqueios de segurança absolutos
 (`isDestructive()`) nunca são bypassados por nenhum dos dois caminhos.
 
+## Débito conhecido, não corrigido (Sprint F — Integração, 2026-07-29)
+
+A auditoria de integração da Sprint F (`src/__tests__/regression/S158_RFC003_SprintF_FullCycleIntegration.test.ts`,
+caso S158.1) encontrou, com evidência de um teste de ponta a ponta real (não leitura de código
+isolada), que a etapa "Aprender" desta tabela **nunca é alcançada pelo caminho "Pesquisar"** —
+apesar de a tabela acima descrevê-las como estágios sequenciais do mesmo ciclo.
+
+Causa raiz: `OperationalKnowledge.captureFromGoal()` (Sprint D) só credita aprendizado quando
+existe um `GoalAttempt` cujo `planStepId` começa com `'verify_'` — prefixo gerado
+exclusivamente por `GoalExecutionLoop.handleNeedsDependencyOutcome()`, código exclusivo do
+outcome `needs_dependency` (caminho Distribuído/determinístico). O outcome `blocked` que a etapa
+"Pesquisar" produz (`GoalEvaluator.ts`, ramo de dependência totalmente desconhecida) nunca passa
+por esse método — o plano que eventualmente resolve o problema vem inteiro de
+`GoalPlanner.replan()`, com ids de step atribuídos por `sanitizePlanSteps.ts`
+(`s.id ?? step_N`), nunca `'verify_*'` a menos que o próprio LLM escolha esse nome, o que nada no
+prompt hoje instrui.
+
+Efeito prático: o conhecimento que a etapa "Pesquisar" foi desenhada para primeiro *adquirir*
+(dependências fora de `KNOWN_DEPS`, o caso central que motivou esta RFC) nunca chega a
+"Reutilização futura" — só chega lá conhecimento que já tinha, desde o início, uma entrada
+Distribuída completa (`installByPlatform` + `verifyCmd`), categoria que hoje não existe de forma
+real em `KNOWN_DEPS` (a única entrada com `verifyCmd`, `ffmpeg`, não tem `installByPlatform` — só
+resolve via `installCmd` legado, e só em Linux).
+
+**Por que não foi corrigido na própria Sprint F:** fechar esta lacuna exige decidir *como* um
+plano gerado por Planner/LLM sinaliza "este step é a verificação objetiva do anterior" — uma
+extensão do contrato entre o prompt de replan e `OperationalKnowledge`, portanto uma decisão de
+responsabilidade, não uma correção de wiring. O escopo da Sprint F (`docs/decisoes/
+RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`, ver instruções da própria Sprint) restringe
+explicitamente: "não introduzir novas arquiteturas"; "qualquer ideia descoberta... deve virar
+futura ADR/RFC, nunca implementada diretamente". Candidatos de design a avaliar nessa ADR/RFC
+futura (não decidido aqui): (a) o Planner passar a nomear explicitamente, no JSON do plano, qual
+step é a verificação (`"role": "verify"` ou convenção equivalente, em vez de depender de um
+prefixo de id); (b) `GoalExecutionLoop` inferir a verificação heuristicamente (ex.: o último step
+bem-sucedido do ciclo de replan que motivou o blocker) — heurística mais fraca, provavelmente
+incompatível com "validação objetiva" que esta RFC exige na seção "Validação"; (c) aceitar que o
+caminho Pesquisa nunca alimenta `OperationalKnowledge` diretamente e, em vez disso, depender de um
+humano promover manualmente um caso de sucesso repetido a uma entrada de `KNOWN_DEPS` (mantém a
+Separação Distribuído×Aprendido, mas descarta o valor de aprendizado automático que motivou a
+Sprint E).
+
 ---
 
 # Camadas de Conhecimento

@@ -3891,7 +3891,17 @@ OU
             const isDeliveryClaim = rule.requiredTools.includes('send_document') || rule.requiredTools.includes('send_audio');
 
             const evidenceAttempt = successfulAttempts.find(a => {
-                if (!rule.requiredTools.includes(a.toolName)) return false;
+                // Um attempt toolName='agentloop' é uma caixa-preta pra este checker — o
+                // step_1 write() do incidente de 29-30/07/2026 (goal_1785377727278_guufa)
+                // rodou DENTRO do sub-turno do AgentLoop (não como tool direto do plano) e por
+                // isso nunca batia contra rule.requiredTools, mesmo com o arquivo já criado e
+                // subToolCalls=['write',...] no mesmo attempt (ver GoalStep, linha ~2255).
+                // Mesma classe de bug que a S8 (comentário acima) já cobriu para send_document
+                // via deferredSendArgs — generalizado aqui para qualquer tool interna do
+                // AgentLoop, não só entregas.
+                const toolMatches = rule.requiredTools.includes(a.toolName)
+                    || (a.toolName === 'agentloop' && (a.subToolCalls ?? []).some(t => rule.requiredTools.includes(t)));
+                if (!toolMatches) return false;
                 if (rule.requireNonEmptyOutput) {
                     return (a.output ?? '').trim().length > 10;
                 }

@@ -8,6 +8,7 @@
 
 import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { exec } from 'child_process';
+import fs from 'fs';
 import { resolveHost, isDestructive } from './server_config';
 import path from 'path';
 import { errorMessage } from '../shared/errors';
@@ -442,6 +443,43 @@ export class ExecCommandTool implements ToolExecutor {
         const execOptions: { timeout: number; cwd?: string; windowsHide: boolean; env: NodeJS.ProcessEnv } =
             { timeout, windowsHide: true, env: { ...process.env } };
         execOptions.cwd = effectiveWorkdir;
+
+        // Windows: processos lançados via Tarefa Agendada/serviço/PM2 (autostart em background,
+        // sem shell interativo) às vezes herdam um env sem SystemRoot/SystemDrive/ComSpec, ou
+        // com a chave PATH em outra capitalização — o objeto plano `{ ...process.env }` acima
+        // perde a semântica case-insensitive que o Windows dá a process.env nativamente. Sem
+        // esses valores, o spawn do PRÓPRIO cmd.exe falha com "spawn ...cmd.exe ENOENT" mesmo
+        // com o binário existindo em disco no caminho exato reportado — o erro não aponta pra
+        // causa real (env, não o arquivo). Reproduzido ao vivo em produção 29-30/07/2026
+        // (goal_1785377727278_guufa, newclaw-audit.log): bloqueou um step válido e custou 2
+        // replans extras num goal que já ia estourar o teto de 10min do dashboard web. Fix
+        // originalmente escrito em 14/07/2026 (branch investigation/tool-dedup-loop, nunca
+        // mergeada) — portado aqui, guardado por platform, sem efeito em Linux/macOS.
+        if (process.platform === 'win32') {
+            const env = execOptions.env;
+            const envKeys = Object.keys(env);
+            const pathKey = envKeys.find(k => k.toLowerCase() === 'path');
+            if (pathKey && pathKey !== 'PATH') {
+                env.PATH = env[pathKey];
+                delete env[pathKey];
+            }
+            if (!env.SystemRoot) env.SystemRoot = process.env.SystemRoot || 'C:\\Windows';
+            if (!env.SystemDrive) env.SystemDrive = process.env.SystemDrive || 'C:';
+            if (!env.ComSpec) env.ComSpec = process.env.ComSpec || 'C:\\Windows\\system32\\cmd.exe';
+        }
+
+        // cwd inexistente derruba o spawn do shell com ENOENT no Windows (CreateProcess não
+        // distingue "cwd não existe" de "executável não existe" — o erro sempre aponta pro
+        // shell). Garantir que o diretório existe antes do spawn evita esse falso-diagnóstico;
+        // fallback para o workspace raiz (que sempre existe) se a criação falhar.
+        if (execOptions.cwd && !fs.existsSync(execOptions.cwd)) {
+            try {
+                fs.mkdirSync(execOptions.cwd, { recursive: true });
+            } catch {
+                log.warn(`[CWD-FALLBACK] workdir "${execOptions.cwd}" não existe e não pôde ser criado — usando workspace raiz`);
+                execOptions.cwd = workspaceDir;
+            }
+        }
 
         // Scripts Python gerados pelo LLM usam print() com emojis/box-drawing (✅, 📊, ─...) por
         // hábito estilístico — o modelo foi treinado majoritariamente em ambientes Linux/macOS,

@@ -24,13 +24,22 @@
  * que SEM verificação (ou com verificação que falhou), a captura é recusada — mesmo com um
  * fixAttempt real presente.
  *
+ * EXTENSÃO (2026-07-29, RFC-003 Sprint E — Modelo de Confiança): `computeConfidenceLevel()`
+ * exportado como função pura ('none'|'weak'|'degraded'|'validated', ver OperationalKnowledge.ts)
+ * substitui os limiares crus que já existiam. Casos 21-25 abaixo cobrem: conhecimento novo inicia
+ * 'weak' (não 'validated'); confirmações sucessivas elevam a 'validated'; uma falha subsequente
+ * degrada mesmo com histórico de sucessos (getTacticalCommand para de reutilizar); RECUPERAÇÃO —
+ * um sucesso novo depois de uma falha volta a tornar elegível (comportamento que o schema antigo,
+ * baseado em failure_count>0, não permitia); buildEvidenceHint nomeia o nível de confiança no
+ * texto (Evidence Provider — só enriquece o texto, não decide).
+ *
  * Execução: npx ts-node src/__tests__/regression/S142_OperationalKnowledge_M2FirstSlice.test.ts
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
-import { OperationalKnowledge, currentPlatform } from '../../memory/OperationalKnowledge';
+import { OperationalKnowledge, currentPlatform, computeConfidenceLevel } from '../../memory/OperationalKnowledge';
 import { Goal, GoalAttempt, GoalBlocker } from '../../loop/GoalTypes';
 
 let passed = 0;
@@ -330,6 +339,66 @@ async function main() {
 
         const result = ok.captureFromGoal(goal);
         assert(result.captured === 0, 'step de verificação que FALHOU também não credita a captura', result);
+    }
+
+    // 21. computeConfidenceLevel — conhecimento novo (1 sucesso, sem falha) inicia 'weak', nunca
+    //     direto em 'validated' (limiar de confirmações repetidas ainda não atingido).
+    {
+        const level = computeConfidenceLevel({ success_count: 1, last_event: 'success' });
+        assert(level === 'weak', `conhecimento novo (1 sucesso) inicia com confiança 'weak', não 'validated' (veio: ${level})`);
+    }
+
+    // 22. computeConfidenceLevel — sem nenhum sucesso ainda, nível é 'none'
+    {
+        const level = computeConfidenceLevel({ success_count: 0, last_event: null });
+        assert(level === 'none', `sem sucesso registrado, confiança é 'none' (veio: ${level})`);
+    }
+
+    // 23. computeConfidenceLevel — confirmações sucessivas (>=2 sucessos, evento mais recente =
+    //     sucesso) elevam a confiança a 'validated'
+    {
+        const level = computeConfidenceLevel({ success_count: 2, last_event: 'success' });
+        assert(level === 'validated', `2 confirmações sucessivas elevam a confiança a 'validated' (veio: ${level})`);
+    }
+
+    // 24. computeConfidenceLevel — falha posterior degrada a confiança mesmo com histórico de
+    //     sucessos suficiente pro limiar de 'validated'
+    {
+        const level = computeConfidenceLevel({ success_count: 3, last_event: 'failure' });
+        assert(level === 'degraded', `falha como evento mais recente degrada a confiança mesmo com 3 sucessos no histórico (veio: ${level})`);
+    }
+
+    // 25. getTacticalCommand — RECUPERAÇÃO end-to-end: 2 sucessos (validated) → 1 falha
+    //     (degrada, deixa de ser reutilizado) → 1 sucesso novo (volta a ser elegível). O schema
+    //     antigo (failure_count>0 bloqueava pra sempre) não permitia essa recuperação.
+    {
+        const ok = freshOperationalKnowledge();
+        ok.recordAttempt('graphviz', 'winget install Graphviz.Graphviz', true);
+        ok.recordAttempt('graphviz', 'winget install Graphviz.Graphviz', true);
+        assert(ok.getTacticalCommand('graphviz') === 'winget install Graphviz.Graphviz', 'graphviz: 2 sucessos, elegível ao atalho tático');
+
+        ok.recordAttempt('graphviz', 'winget install Graphviz.Graphviz', false);
+        assert(ok.getTacticalCommand('graphviz') === null, 'graphviz: após falha, degrada e deixa de ser reutilizado pelo atalho tático');
+
+        ok.recordAttempt('graphviz', 'winget install Graphviz.Graphviz', true);
+        assert(ok.getTacticalCommand('graphviz') === 'winget install Graphviz.Graphviz', 'graphviz: novo sucesso após a falha recupera a elegibilidade (comportamento novo da Sprint E)');
+    }
+
+    // 26. buildEvidenceHint — o texto nomeia o nível de confiança (Evidence Provider: só
+    //     enriquece o texto que o Planner pondera, nunca decide por ele)
+    {
+        const ok = freshOperationalKnowledge();
+        ok.recordAttempt('graphviz', 'winget install Graphviz.Graphviz', true);
+        const weakHint = ok.buildEvidenceHint('graphviz');
+        assert(weakHint.includes('recém-aprendido'), 'buildEvidenceHint nomeia conhecimento recém-aprendido (weak) explicitamente', weakHint);
+
+        ok.recordAttempt('graphviz', 'winget install Graphviz.Graphviz', true);
+        const validatedHint = ok.buildEvidenceHint('graphviz');
+        assert(validatedHint.includes('validado'), 'buildEvidenceHint nomeia conhecimento validado explicitamente', validatedHint);
+
+        ok.recordAttempt('graphviz', 'winget install Graphviz.Graphviz', false);
+        const degradedHint = ok.buildEvidenceHint('graphviz');
+        assert(degradedHint.includes('degradado'), 'buildEvidenceHint nomeia conhecimento degradado explicitamente após falha', degradedHint);
     }
 
     console.log(`\n${'─'.repeat(60)}`);
