@@ -44,7 +44,7 @@ import { resolvePath } from '../utils/crossPlatform';
 import { ensureDeliverySuccessCriteria, AUTO_DELIVERY_CRITERION_IDS } from './planning/ensureDeliverySuccessCriteria';
 import { resolveInstallCommand } from './planning/resolveInstallCommand';
 import { inferExpectedExtensions, isExpectedDeliverableFile } from './planning/inferExpectedExtensions';
-import { MIN_DELIVERABLE_SIZE } from './planning/artifactContract';
+import { MIN_DELIVERABLE_SIZE, resolveArtifactPathFromEvidence } from './planning/artifactContract';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext, ContextAwareTool } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
@@ -1214,6 +1214,43 @@ export class GoalExecutionLoop {
                         );
                         sendStep.toolArgs = { ...sendStep.toolArgs, file_path: candidates[0] };
                         filePath = candidates[0];
+                    } else {
+                        // Achado real (goal_1785451137648_rf6nv, 30/07/2026): RiskAnalyzer pode
+                        // inferir este file_path de um step 'write' IRMÃO no mesmo batch de plano
+                        // (ver RiskAnalyzer.ts "file_path inferred from prior write") sem nunca
+                        // confirmar que aquele write realmente rodou com sucesso — e este
+                        // send_document, uma vez diferido, só é despachado bem depois, atravessando
+                        // replans que podem ter abandonado aquele write sem executá-lo. O caso
+                        // acima (validation.artifactPaths) já resolve quando a própria validação do
+                        // goal aponta exatamente 1 artefato alternativo; quando isso não é
+                        // suficiente (0 ou >1 candidatos), resolveArtifactPathFromEvidence() busca
+                        // em goal.attempts reais (result='success', producedArtifactPaths
+                        // verificados em disco) — mesma fonte de verdade que RiskAnalyzer já usa
+                        // pra replan, só que consultada de novo aqui, no momento real do despacho,
+                        // em vez de confiar numa inferência de tempo de planejamento que pode ter
+                        // ficado obsoleta.
+                        //
+                        // Tenta primeiro COM a descrição do step (mais preciso quando o goal produz
+                        // vários artefatos de tipos diferentes de verdade) — mas se isso não resolver,
+                        // tenta de novo só com goal.userIntent (sem a descrição do step). Achado ao
+                        // escrever o teste desta correção (S163): a PRÓPRIA descrição do step que
+                        // falhou ("Enviar o documento...") pode carregar a mesma inferência de tipo
+                        // equivocada que gerou o file_path errado em primeiro lugar (ex.: a palavra
+                        // "documento" infere .docx via inferExpectedExtensions, mesmo quando o
+                        // artefato real e correto é .txt) — nesse caso, a descrição do step é parte
+                        // do problema, não deveria continuar restringindo a busca pela correção.
+                        const evidencePath = resolveArtifactPathFromEvidence(goal, String(sendStep.description ?? ''))
+                            ?? resolveArtifactPathFromEvidence(goal, '');
+                        if (evidencePath && evidencePath !== filePath && !sentArtifacts.has(evidencePath) && fs.existsSync(resolvePath(evidencePath).resolved)) {
+                            log.warn(
+                                `[SEND-PATH-CORRECTED] goal=${goal.id}` +
+                                ` requested="${filePath}"` +
+                                ` corrected="${evidencePath}"` +
+                                ` reason=requested_file_missing_evidence_based_fallback`
+                            );
+                            sendStep.toolArgs = { ...sendStep.toolArgs, file_path: evidencePath };
+                            filePath = evidencePath;
+                        }
                     }
                 }
             }

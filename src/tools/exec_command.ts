@@ -140,14 +140,44 @@ export function translateLsFlagsForPowerShell(command: string): string {
 // `head -N`/`tail -N` (e a variante `-n N`) não têm alias no PowerShell — encaminhados
 // verbatim, o powershell.exe lança CommandNotFoundException, serializada como CLIXML bruto
 // pelo host -NonInteractive (ver comentário de POSIX_ONLY_NO_WIN_EQUIVALENT acima).
-// Select-Object -First/-Last é o equivalente universal, funciona tanto lendo um arquivo
-// quanto recebendo objetos de um pipe anterior (o caso mais comum: `cmd 2>&1 | tail -N`).
+// Select-Object -First/-Last é o equivalente quando os dados já vêm de um pipe anterior (o
+// caso mais comum: `cmd 2>&1 | tail -N`) — MAS NÃO quando head/tail recebe um arquivo direto
+// como argumento (`head -30 arquivo.txt`, sem pipe): "Select-Object -First 30 arquivo.txt"
+// não lê o arquivo (Select-Object não tem parâmetro posicional de path) — reproduzido ao vivo
+// nesta máquina (30/07/2026): exit code 0, porém output="" (falha silenciosa, sem nenhum erro
+// visível pro LLM/validador achar o problema). Precisa envolver em Get-Content explicitamente
+// quando há um arquivo depois da flag; só cai no Select-Object "nu" quando não há.
 export function translateHeadTailForPowerShell(command: string): string {
-    return command
+    // Forma com arquivo direto — captura o path e envolve em Get-Content. Roda ANTES da forma
+    // "nua" abaixo (senão o path ficaria órfão depois de head/tail já ter virado Select-Object).
+    // [^\s;&|]+ evita capturar o `; if ($?) { ... }` que translateChainOperatorsForPowerShell
+    // já injetou antes deste fixup rodar (ver ordem de composição em wrapForWindowsPowerShell).
+    let out = command
+        .replace(/\bhead\s+-n\s*(\d+)\s+([^\s;&|]+)/gi, '(Get-Content $2 | Select-Object -First $1)')
+        .replace(/\bhead\s+-(\d+)\s+([^\s;&|]+)/gi, '(Get-Content $2 | Select-Object -First $1)')
+        .replace(/\btail\s+-n\s*(\d+)\s+([^\s;&|]+)/gi, '(Get-Content $2 | Select-Object -Last $1)')
+        .replace(/\btail\s+-(\d+)\s+([^\s;&|]+)/gi, '(Get-Content $2 | Select-Object -Last $1)');
+    // Forma via pipe (nada além da flag) — Select-Object já lê do pipe anterior sem precisar
+    // de Get-Content.
+    out = out
         .replace(/\bhead\s+-n\s*(\d+)/gi, 'Select-Object -First $1')
         .replace(/\bhead\s+-(\d+)\b/gi, 'Select-Object -First $1')
         .replace(/\btail\s+-n\s*(\d+)/gi, 'Select-Object -Last $1')
         .replace(/\btail\s+-(\d+)\b/gi, 'Select-Object -Last $1');
+    return out;
+}
+
+// `wc -l` não tem alias no PowerShell e — diferente do que o comentário de
+// POSIX_ONLY_NO_WIN_EQUIVALENT alerta para o conjunto em geral — NÃO pode depender de um
+// wc.exe resolvido via PATH: reproduzido ao vivo em produção (newclaw-audit.log, 29/07/2026,
+// goal_1785377727278_guufa) — a máquina de produção roda via Tarefa Agendada, cujo PATH não
+// inclui os utilitários GNU do Git for Windows que um shell de desenvolvedor interativo tem
+// (por isso o mesmo comando funciona num teste manual mas falha em produção). Só `-l`
+// (contagem de linhas) é traduzido — único uso real observado neste projeto.
+export function translateWcForPowerShell(command: string): string {
+    let out = command.replace(/\bwc\s+-l\s+([^\s;&|]+)/gi, '(Get-Content $1 | Measure-Object -Line).Lines');
+    out = out.replace(/\bwc\s+-l\b/gi, 'Measure-Object -Line | Select-Object -ExpandProperty Lines');
+    return out;
 }
 
 /**
@@ -198,7 +228,7 @@ export function decodeClixmlError(output: string): string {
  * logo abaixo — aqui é o equivalente para quando o comando é encaminhado ao PowerShell.
  */
 export function wrapForWindowsPowerShell(command: string): string {
-    const translated = translateHeadTailForPowerShell(translateLsFlagsForPowerShell(translateDevNullForPowerShell(translateChainOperatorsForPowerShell(command))));
+    const translated = translateWcForPowerShell(translateHeadTailForPowerShell(translateLsFlagsForPowerShell(translateDevNullForPowerShell(translateChainOperatorsForPowerShell(command)))));
     const withoutProgressNoise = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; ${translated}`;
     const encoded = Buffer.from(withoutProgressNoise, 'utf16le').toString('base64');
     return `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`;

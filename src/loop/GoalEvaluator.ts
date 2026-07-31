@@ -555,6 +555,29 @@ export class GoalEvaluator {
             };
         }
 
+        // error/output vazios (não "sem padrão reconhecido", mas SEM NADA pra reconhecer) —
+        // caso real: step 'agentloop' (toolName cai no default 'unknown' logo em evaluate())
+        // termina sem texto final utilizável — extractText()/extractFinalText() falharam tanto
+        // na síntese quanto no fallback, e lastBestContent também estava vazio (turno só teve
+        // tool-calls, nenhuma resposta narrativa no meio) — reproduzido ao vivo em produção
+        // (newclaw-audit.log, 29/07/2026, goal_1785377727278_guufa): blocker chegou como
+        // "Erro em 'unknown': " (sufixo vazio), sem nenhum sinal pro GoalPlanner decidir o que
+        // fazer no replan — pior que não ter mensagem nenhuma, porque parece um bug de
+        // formatação em vez de dizer o que realmente faltou.
+        if (!error || !error.trim()) {
+            log.debug(`[GoalEvaluator] classify: tool=${toolName} kind=tool_error (error/output vazios)`);
+            return {
+                kind: 'tool_error',
+                toolName,
+                description: `'${toolName}' não produziu saída nem mensagem de erro — provável falha silenciosa a montante (ex.: AgentLoop terminou sem texto final utilizável). Verifique os logs do step anterior.`,
+                suggestedActions: [
+                    'Reformular o step para exigir uma ação observável (write/send_document) em vez de só texto',
+                    'Verificar logs do AgentLoop para a causa real (ex.: falha de extração de síntese)',
+                ],
+                detectedAt: Date.now(),
+            };
+        }
+
         // Fallback genérico — sem padrão reconhecido
         log.debug(`[GoalEvaluator] classify: tool=${toolName} kind=tool_error (no pattern matched) error="${error.slice(0, 100)}"`);
         return {
