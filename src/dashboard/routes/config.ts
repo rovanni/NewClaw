@@ -104,7 +104,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
                 hasAnthropicKey: !!ctx.config.anthropicApiKey,
                 hasOllamaApiKey: !!ctx.config.ollamaApiKey,
                 modelRouter: ctx.config.modelRouter || {},
-                customProviders: (ctx.config.customProviders || []).map(p => ({ label: p.label, baseUrl: p.baseUrl, hasKey: !!p.apiKey }))
+                customProviders: (ctx.config.customProviders || []).map(p => ({ label: p.label, baseUrl: p.baseUrl, hasKey: !!p.apiKey, model: p.model }))
             }
         });
     });

@@ -1,7 +1,7 @@
 import { configStore, providersStore } from '../state.js';
 import { showToast } from '../components/Toast.js';
 import { initDropdowns, updateDropdownModels } from '../components/ModelDropdown.js';
-import { addCustomProvider, removeCustomProvider, getCloudCatalog } from '../api.js';
+import { addCustomProvider, removeCustomProvider, editCustomProvider, getCloudCatalog } from '../api.js';
 import { loadProviders, doSave, guideBox } from '../app.js';
 
 // Funções (não const) porque t() precisa ser avaliado a cada render() — se fossem consts de
@@ -84,6 +84,12 @@ let routingPendingModel = null;
 // remoto quando o usuário troca pro modo cloud, não no carregamento da página).
 let registryMode = 'installed';
 let cloudCatalog = null;
+
+// Label do provider custom sendo editado no momento (null = formulário em modo "adicionar
+// novo"). Achado real (2026-07-31): sem edição, corrigir uma URL digitada errada ou trocar o
+// modelo exigia apagar o card inteiro e recriar do zero — e não havia como desfazer uma adição
+// feita sem querer (ex.: clique duplo) a não ser apagando.
+let editingProviderLabel = null;
 
 export function render(container) {
   const tabs = getTabs();
@@ -377,10 +383,10 @@ export function render(container) {
           </div>
         </details>
 
-        <details class="cfg-details">
-          <summary>${t('ml_add_provider_title')}</summary>
+        <details class="cfg-details" id="ml-addProvDetails">
+          <summary id="ml-addProvSummary">${t('ml_add_provider_title')}</summary>
           <div class="cfg-details-body">
-            <div class="chips" style="margin-bottom:10px;">
+            <div class="chips" style="margin-bottom:10px;" id="ml-addProvPresets">
               ${CUSTOM_PROVIDER_PRESETS.map(p => `<div class="chip" data-preset="${p.label}" data-url="${p.baseUrl}">${p.label}</div>`).join('')}
             </div>
             <div class="form-row">
@@ -401,7 +407,10 @@ export function render(container) {
                 <input type="text" class="form-input" id="ml-newProvModel" placeholder="${t('ml_optional_placeholder')}">
               </div>
             </div>
-            <button class="btn btn-primary btn-sm" id="ml-addProvBtn">${t('ml_add_btn')}</button>
+            <div style="display:flex;gap:8px;">
+              <button class="btn btn-primary btn-sm" id="ml-addProvBtn">${t('ml_add_btn')}</button>
+              <button class="btn btn-ghost btn-sm" id="ml-cancelEditProvBtn" style="display:none;">${t('ml_cancel_btn')}</button>
+            </div>
           </div>
         </details>
       </div>
@@ -479,6 +488,7 @@ export function render(container) {
   ['chat','code','vision','light','analysis','execution'].forEach(cat => {
     const sel = el(`ml-prov-${cat}`);
     if (!sel) return;
+    populateDefaultProviderOptions(s.customProviders || [], r[`provider_${cat}`] || '', sel);
     sel.value = r[`provider_${cat}`] || '';
     sel.addEventListener('change', e => {
       const mr = { ...cs.get('modelRouter') };
@@ -523,6 +533,7 @@ export function render(container) {
   cloudCatalog = null;
   routingSelectedCategory = 'chat';
   routingPendingModel = null;
+  editingProviderLabel = null;
 
   renderProviderGrid();
   renderModelTable();
@@ -707,6 +718,7 @@ function renderProviderGrid() {
           ${isPrimary
             ? `<button class="btn btn-ghost btn-sm" data-use-as-fallback="${esc(p.label)}">${t('ml_provider_use_as_fallback_btn')}</button>`
             : `<button class="btn btn-ghost btn-sm" data-use-as-primary="${esc(p.label)}">${t('ml_provider_use_as_primary_btn')}</button>`}
+          <button class="btn btn-ghost btn-sm" data-edit-provider="${esc(p.label)}">${t('ml_edit_btn')}</button>
           <button class="btn btn-ghost btn-sm btn-remove-key" data-remove-provider="${esc(p.label)}">${t('ml_remove_btn')}</button>
         </div>
       </div>`);
@@ -821,6 +833,12 @@ function wireProviderOverview() {
     if (useAsFallback) {
       applyDefaultProviderChange('ollama');
       showToast(t('ml_provider_set_fallback_toast', { label: useAsFallback }), 'success');
+      return;
+    }
+
+    const editProvider = e.target.closest('[data-edit-provider]')?.dataset.editProvider;
+    if (editProvider) {
+      startEditingCustomProvider(editProvider);
     }
   });
 
@@ -837,19 +855,38 @@ function wireProviderOverview() {
   document.getElementById('ml-addProvBtn')?.addEventListener('click', async () => {
     const label   = document.getElementById('ml-newProvLabel')?.value.trim();
     const baseUrl = document.getElementById('ml-newProvUrl')?.value.trim();
-    const apiKey  = document.getElementById('ml-newProvKey')?.value.trim();
+    const apiKeyRaw = document.getElementById('ml-newProvKey')?.value.trim();
     const model   = document.getElementById('ml-newProvModel')?.value.trim();
     if (!label || !baseUrl) { showToast(t('ml_provider_fill_required'), 'error'); return; }
+
+    const btn = document.getElementById('ml-addProvBtn');
+    btn.disabled = true; // evita duplo-clique disparar 2 requisições (ex.: rede lenta)
     try {
-      await addCustomProvider({ label, baseUrl, apiKey: apiKey || undefined, model: model || undefined });
-      cs.set('customProviders', [...(cs.get('customProviders') || []), { label, baseUrl, hasKey: !!apiKey }]);
-      showToast(t('ml_provider_added_toast', { label }), 'success');
-      document.getElementById('ml-newProvLabel').value = '';
-      document.getElementById('ml-newProvUrl').value   = '';
-      document.getElementById('ml-newProvKey').value   = '';
-      document.getElementById('ml-newProvModel').value = '';
+      if (editingProviderLabel) {
+        // Campo de senha em branco → apiKey undefined → PUT preserva a chave já salva
+        // (ver editCustomProvider em api.js). Label não muda (é a chave do provider).
+        await editCustomProvider(editingProviderLabel, { baseUrl, apiKey: apiKeyRaw || undefined, model: model || undefined });
+        cs.set('customProviders', (cs.get('customProviders') || []).map(p =>
+          p.label === editingProviderLabel
+            ? { ...p, baseUrl, model: model || undefined, hasKey: apiKeyRaw ? true : p.hasKey }
+            : p
+        ));
+        showToast(t('ml_provider_updated_toast', { label: editingProviderLabel }), 'success');
+        stopEditingCustomProvider();
+      } else {
+        await addCustomProvider({ label, baseUrl, apiKey: apiKeyRaw || undefined, model: model || undefined });
+        cs.set('customProviders', [...(cs.get('customProviders') || []), { label, baseUrl, model: model || undefined, hasKey: !!apiKeyRaw }]);
+        showToast(t('ml_provider_added_toast', { label }), 'success');
+        document.getElementById('ml-newProvLabel').value = '';
+        document.getElementById('ml-newProvUrl').value   = '';
+        document.getElementById('ml-newProvKey').value   = '';
+        document.getElementById('ml-newProvModel').value = '';
+      }
     } catch (err) { showToast('Erro: ' + err.message, 'error'); }
+    finally { btn.disabled = false; }
   });
+
+  document.getElementById('ml-cancelEditProvBtn')?.addEventListener('click', () => stopEditingCustomProvider());
 }
 
 // ─── Model Registry (tabela reutilizada — browse em Registry, seleção em Routing) ─────
@@ -1216,8 +1253,13 @@ function updateRoutingDiag(decision) {
 // automático (que já funciona por conta da ordem de getFallbackOrder(), sem UI nenhuma).
 // Idempotente: remove as <option> customizadas antigas antes de reinserir, então pode ser
 // chamada de novo sempre que customProviders mudar sem duplicar nem acumular opções obsoletas.
-function populateDefaultProviderOptions(customProviders, preserveValue) {
-    const select = document.getElementById('ml-defaultProvider');
+// Generalizada (2026-07-31) para popular QUALQUER <select> de provider — antes só cobria
+// "Provider padrão" (ml-defaultProvider); "Provider por perfil" (ml-prov-${cat}, um por
+// categoria: chat/code/vision/light/analysis/execution) tinha a MESMA lista hardcoded e o
+// MESMO buraco, achado ao investigar como o usuário selecionaria um modelo llamafile por
+// categoria depois de cadastrar o provider.
+function populateDefaultProviderOptions(customProviders, preserveValue, selectEl) {
+    const select = selectEl || document.getElementById('ml-defaultProvider');
     if (!select) return;
     const currentValue = preserveValue ?? select.value;
     select.querySelectorAll('option[data-custom-provider]').forEach(opt => opt.remove());
@@ -1251,6 +1293,65 @@ function applyDefaultProviderChange(prov) {
     updateEffectiveConfig(cs.get('modelRouter') || {}, prov);
     updateOverview();
     renderProviderGrid(); // atualiza os badges/botões "Principal"/"Usar como..." nos cards
+}
+
+/**
+ * Abre o formulário "Adicionar provider" em modo edição, pré-preenchido com os dados do
+ * provider custom clicado. Label fica travada (não é editável — é a chave de identidade do
+ * provider; renomear equivale a remover+adicionar, já coberto pelos botões existentes). apiKey
+ * fica em branco de propósito mesmo se já configurada (nunca ecoa segredo salvo de volta pro
+ * campo) — o placeholder avisa que deixar em branco preserva a chave atual.
+ */
+function startEditingCustomProvider(label) {
+    const p = (configStore.get('customProviders') || []).find(cp => cp.label === label);
+    if (!p) return;
+    editingProviderLabel = label;
+
+    const details = document.getElementById('ml-addProvDetails');
+    if (details) details.open = true;
+
+    const labelInput = document.getElementById('ml-newProvLabel');
+    if (labelInput) { labelInput.value = p.label; labelInput.disabled = true; }
+    const urlInput = document.getElementById('ml-newProvUrl');
+    if (urlInput) urlInput.value = p.baseUrl || '';
+    const keyInput = document.getElementById('ml-newProvKey');
+    if (keyInput) { keyInput.value = ''; keyInput.placeholder = p.hasKey ? t('ml_provider_key_unchanged_placeholder') : t('ml_optional_placeholder'); }
+    const modelInput = document.getElementById('ml-newProvModel');
+    if (modelInput) modelInput.value = p.model || '';
+
+    const summary = document.getElementById('ml-addProvSummary');
+    if (summary) summary.textContent = t('ml_edit_provider_title', { label: p.label });
+    const presets = document.getElementById('ml-addProvPresets');
+    if (presets) presets.style.display = 'none'; // presets são só pra criar novo, não fazem sentido editando
+    const addBtn = document.getElementById('ml-addProvBtn');
+    if (addBtn) addBtn.textContent = t('save_btn');
+    const cancelBtn = document.getElementById('ml-cancelEditProvBtn');
+    if (cancelBtn) cancelBtn.style.display = '';
+
+    details?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+/** Volta o formulário "Adicionar provider" ao modo normal (criar novo) — chamado após salvar
+ *  uma edição com sucesso, ou pelo botão Cancelar. */
+function stopEditingCustomProvider() {
+    editingProviderLabel = null;
+    const labelInput = document.getElementById('ml-newProvLabel');
+    if (labelInput) { labelInput.value = ''; labelInput.disabled = false; }
+    const urlInput = document.getElementById('ml-newProvUrl');
+    if (urlInput) urlInput.value = '';
+    const keyInput = document.getElementById('ml-newProvKey');
+    if (keyInput) { keyInput.value = ''; keyInput.placeholder = t('ml_optional_placeholder'); }
+    const modelInput = document.getElementById('ml-newProvModel');
+    if (modelInput) modelInput.value = '';
+
+    const summary = document.getElementById('ml-addProvSummary');
+    if (summary) summary.textContent = t('ml_add_provider_title');
+    const presets = document.getElementById('ml-addProvPresets');
+    if (presets) presets.style.display = '';
+    const addBtn = document.getElementById('ml-addProvBtn');
+    if (addBtn) addBtn.textContent = t('ml_add_btn');
+    const cancelBtn = document.getElementById('ml-cancelEditProvBtn');
+    if (cancelBtn) cancelBtn.style.display = 'none';
 }
 
 function toggleOllamaSection(provider) {

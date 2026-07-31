@@ -93,6 +93,16 @@ export async function removeCustomProvider(label) {
   return json(f(`/api/providers/custom/${encodeURIComponent(label)}`, { method: 'DELETE' }));
 }
 
+// apiKey ausente (undefined, não string vazia) preserva a chave já salva no servidor — deixar o
+// campo de senha em branco no formulário de edição significa "não mudar", não "apagar".
+export async function editCustomProvider(label, { baseUrl, apiKey, model }) {
+  return json(f(`/api/providers/custom/${encodeURIComponent(label)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ baseUrl, apiKey, model }),
+  }));
+}
+
 // ── Tools ─────────────────────────────────────────────────────────────────────
 
 export async function getTools() {

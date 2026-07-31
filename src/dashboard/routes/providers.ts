@@ -62,6 +62,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
             baseUrl: p.baseUrl,
             available: true,
             hasKey: !!p.apiKey,
+            model: p.model,
         }));
 
         res.json({
@@ -106,6 +107,42 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
         ctx.providerFactory?.addCustomProvider(entry);
         log.info(`Custom provider added: ${name} (${baseUrl})`);
         res.json({ success: true, message: `Provider "${name}" adicionado` });
+    });
+
+    // Edita um provider custom já cadastrado (baseUrl/apiKey/model) sem precisar remover e
+    // recriar — achado real (2026-07-31): sem isso, um erro de digitação na URL ou querer trocar
+    // o modelo exigia apagar o card inteiro e preencher tudo de novo, e não havia como corrigir
+    // uma adição feita sem querer (ex.: clique duplo) a não ser apagando. A label em si não pode
+    // ser editada aqui (ela é a chave de identidade do provider no Map do ProviderFactory —
+    // renomear é equivalente a remover+adicionar, então usa as rotas já existentes pra isso).
+    router.put('/providers/custom/:label', (req: Request, res: Response) => {
+        const { label } = req.params;
+        const name = String(label);
+        const { baseUrl, apiKey, model } = req.body;
+        if (!baseUrl?.trim()) {
+            return res.status(400).json({ success: false, error: 'baseUrl é obrigatório' });
+        }
+        const customProviders = ctx.config.customProviders || [];
+        const idx = customProviders.findIndex(p => p.label === name);
+        if (idx === -1) {
+            return res.status(404).json({ success: false, error: `Provider "${name}" não encontrado` });
+        }
+        const updated = {
+            label: name,
+            baseUrl: String(baseUrl).trim(),
+            // apiKey/model vazios no body apagam o valor anterior (usuário limpou o campo de
+            // propósito) — só undefined (campo nem enviado) preserva o que já estava salvo.
+            apiKey: apiKey !== undefined ? (apiKey ? String(apiKey) : undefined) : customProviders[idx].apiKey,
+            model: model !== undefined ? (model ? String(model).trim() : undefined) : customProviders[idx].model,
+        };
+        customProviders[idx] = updated;
+        ctx.config.customProviders = customProviders;
+        persistConfigToEnv(ctx);
+        // addCustomProvider() sobrescreve a instância existente no Map (mesma label = mesma
+        // chave) — não precisa remover antes, Map.set() já substitui.
+        ctx.providerFactory?.addCustomProvider(updated);
+        log.info(`Custom provider updated: ${name} (${updated.baseUrl})`);
+        res.json({ success: true, message: `Provider "${name}" atualizado` });
     });
 
     router.delete('/providers/custom/:label', (req: Request, res: Response) => {
