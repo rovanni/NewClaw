@@ -429,6 +429,9 @@ export function render(container) {
   const el = id => document.getElementById(id);
 
   // Populate inputs
+  populateDefaultProviderOptions(s.customProviders || []); // ANTES de setar .value — senão um
+  // customProvider salvo como defaultProvider (ex.: llamafile local) não existiria ainda como
+  // <option> e o browser ignoraria silenciosamente a atribuição, voltando pro primeiro item.
   el('ml-defaultProvider').value  = s.defaultProvider || 'ollama';
   el('ollamaModel').value         = s.ollamaModel || '';
   el('classifierModel').value     = r.classifierModel  || '';
@@ -447,12 +450,7 @@ export function render(container) {
 
   // Provider select
   el('ml-defaultProvider').addEventListener('change', e => {
-    const prov = e.target.value;
-    cs.set('defaultProvider', prov);
-    toggleOllamaSection(prov);
-    updateProviderHints(prov);
-    updateEffectiveConfig(cs.get('modelRouter') || {}, prov);
-    updateOverview();
+    applyDefaultProviderChange(e.target.value);
   });
 
   // Ollama main model
@@ -552,7 +550,10 @@ export function render(container) {
     updateModelStatus(providersStore.get('models') || [], mr);
     renderCategoryPicker();
   });
-  const unsubCustomProviders = cs.on('customProviders', () => renderProviderGrid());
+  const unsubCustomProviders = cs.on('customProviders', custom => {
+    renderProviderGrid();
+    populateDefaultProviderOptions(custom || [], el('ml-defaultProvider')?.value);
+  });
 
   // Routing diagnostics
   if (window._newclawLastRoutingDecision) {
@@ -681,20 +682,33 @@ function renderProviderGrid() {
       </div>
     </div>`);
 
-  // Custom providers (OpenAI-Compatible)
+  // Custom providers (OpenAI-Compatible) — cada um pode ser usado como PRINCIPAL (tentado
+  // primeiro em toda requisição) ou como FALLBACK (papel padrão: só entra automaticamente se
+  // todo o resto falhar, via getFallbackOrder() no ProviderFactory — nenhuma ação extra
+  // necessária). O botão aqui é só um atalho pro mesmo mecanismo do <select> "Provider padrão"
+  // (defaultProvider) — não introduz nenhum conceito novo, só um jeito mais direto de acionar
+  // o que já existe sem precisar navegar até outra seção da página.
+  const isCurrentDefault = label => label === (s.defaultProvider || 'ollama');
   for (const p of (s.customProviders || [])) {
     const h = healthByProvider[p.label];
+    const isPrimary = isCurrentDefault(p.label);
     cards.push(`
       <div class="provider-card">
         <div class="provider-head">
-          <div class="provider-name">🔗 ${esc(p.label)} <span class="badge badge-cloud">OpenAI-Compatible</span></div>
+          <div class="provider-name">🔗 ${esc(p.label)} <span class="badge badge-cloud">OpenAI-Compatible</span>${isPrimary ? `<span class="badge badge-primary">${t('ml_provider_role_primary')}</span>` : ''}</div>
           <div class="provider-health" data-health="${esc(p.label)}">
             <span class="dot ${h ? (h.online ? 'online' : 'offline') : ''}"></span>
             <span>${h ? (h.online ? t('ollama_models_count', { n: h.modelCount }) : t('offline')) : '—'}</span>
           </div>
         </div>
         <div class="form-hint" style="margin-bottom:8px;word-break:break-all;">${esc(p.baseUrl)}</div>
-        <button class="btn btn-ghost btn-sm btn-remove-key" data-remove-provider="${esc(p.label)}">${t('ml_remove_btn')}</button>
+        <div class="form-hint" style="margin-bottom:8px;">${isPrimary ? t('ml_provider_role_primary_hint') : t('ml_provider_role_fallback_hint')}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          ${isPrimary
+            ? `<button class="btn btn-ghost btn-sm" data-use-as-fallback="${esc(p.label)}">${t('ml_provider_use_as_fallback_btn')}</button>`
+            : `<button class="btn btn-ghost btn-sm" data-use-as-primary="${esc(p.label)}">${t('ml_provider_use_as_primary_btn')}</button>`}
+          <button class="btn btn-ghost btn-sm btn-remove-key" data-remove-provider="${esc(p.label)}">${t('ml_remove_btn')}</button>
+        </div>
       </div>`);
   }
 
@@ -789,6 +803,24 @@ function wireProviderOverview() {
         cs.set('customProviders', (cs.get('customProviders') || []).filter(p => p.label !== removeProvider));
         showToast(t('ml_provider_removed_toast', { label: removeProvider }), 'success');
       } catch (err) { showToast('❌ ' + err.message, 'error'); }
+      return;
+    }
+
+    // "Usar como Principal" / "Usar como Fallback" — atalho direto no card do provider custom
+    // pro mesmo mecanismo do <select> "Provider padrão" (ver applyDefaultProviderChange acima).
+    // "Fallback" aqui significa voltar ao Ollama (o padrão de fábrica) — não existe um conceito
+    // de "nenhum principal": sempre há exatamente um provider preferido, os demais entram na
+    // ordem de fallback automaticamente (getFallbackOrder no ProviderFactory).
+    const useAsPrimary = e.target.closest('[data-use-as-primary]')?.dataset.useAsPrimary;
+    if (useAsPrimary) {
+      applyDefaultProviderChange(useAsPrimary);
+      showToast(t('ml_provider_set_primary_toast', { label: useAsPrimary }), 'success');
+      return;
+    }
+    const useAsFallback = e.target.closest('[data-use-as-fallback]')?.dataset.useAsFallback;
+    if (useAsFallback) {
+      applyDefaultProviderChange('ollama');
+      showToast(t('ml_provider_set_fallback_toast', { label: useAsFallback }), 'success');
     }
   });
 
@@ -1175,6 +1207,50 @@ function updateRoutingDiag(decision) {
     </div>`;
   const details = document.getElementById('ml-diagDetails');
   if (details) details.open = true;
+}
+
+// O <select> de provider padrão (linha ~348) só listava os 6 providers nativos, hardcoded no
+// template — um customProvider (LM Studio/vLLM/llamafile local) nunca aparecia como opção,
+// mesmo já sendo um provider "de verdade" no ProviderFactory (ver addCustomProvider()). Sem
+// isso, não havia como escolher via UI usar o modelo local como PRIMÁRIO — só como fallback
+// automático (que já funciona por conta da ordem de getFallbackOrder(), sem UI nenhuma).
+// Idempotente: remove as <option> customizadas antigas antes de reinserir, então pode ser
+// chamada de novo sempre que customProviders mudar sem duplicar nem acumular opções obsoletas.
+function populateDefaultProviderOptions(customProviders, preserveValue) {
+    const select = document.getElementById('ml-defaultProvider');
+    if (!select) return;
+    const currentValue = preserveValue ?? select.value;
+    select.querySelectorAll('option[data-custom-provider]').forEach(opt => opt.remove());
+    for (const p of (customProviders || [])) {
+        if (!p?.label) continue;
+        const opt = document.createElement('option');
+        opt.value = p.label;
+        opt.dataset.customProvider = 'true';
+        opt.textContent = `🔗 ${p.label} (OpenAI-Compatible)`;
+        select.appendChild(opt);
+    }
+    if (currentValue && select.querySelector(`option[value="${CSS.escape(currentValue)}"]`)) {
+        select.value = currentValue;
+    }
+}
+
+/**
+ * Único ponto que muda o provider padrão (principal) — usado pelo <select> "Provider padrão"
+ * E pelos botões "Usar como Principal/Fallback" nos cards de provider custom (mesmo mecanismo,
+ * dois pontos de entrada na UI, sem duplicar lógica). cs.set('defaultProvider', ...) já dispara
+ * o rastreio de "alterações não salvas" (configStore.on('*', ...) em app.js) — o usuário ainda
+ * precisa clicar em Salvar pra persistir, igual a qualquer outro campo desta página.
+ */
+function applyDefaultProviderChange(prov) {
+    const cs = configStore;
+    cs.set('defaultProvider', prov);
+    const select = document.getElementById('ml-defaultProvider');
+    if (select) select.value = prov;
+    toggleOllamaSection(prov);
+    updateProviderHints(prov);
+    updateEffectiveConfig(cs.get('modelRouter') || {}, prov);
+    updateOverview();
+    renderProviderGrid(); // atualiza os badges/botões "Principal"/"Usar como..." nos cards
 }
 
 function toggleOllamaSection(provider) {
