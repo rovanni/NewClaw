@@ -6,13 +6,19 @@
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
-import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions } from './providerTypes';
+import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig } from './providerTypes';
 import { GeminiProvider } from './GeminiProvider';
 import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
-import { OpenRouterProvider } from './OpenAIProvider';
+import { OpenAIProvider, OpenRouterProvider } from './OpenAIProvider';
 import { OllamaProvider } from './OllamaProvider';
 import { AnthropicProvider } from './AnthropicProvider';
+
+// Nomes reservados pelos providers nativos — um customProvider com label colidente seria
+// silenciosamente sobrescrito no Map (ou sobrescreveria o nativo, dependendo da ordem de
+// registro), confundindo getFallbackOrder() e updateCredential()/removeCredential(). Ver
+// addCustomProvider() abaixo.
+const RESERVED_PROVIDER_NAMES = new Set(['gemini', 'deepseek', 'groq', 'openrouter', 'anthropic', 'ollama']);
 
 // Re-export everything so all existing imports continue to work unchanged
 export type { LLMMessage, LLMResponse, ToolCall, ToolDefinition, FallbackReason, AttemptInfo, LLMResult, MetricsSummary, ILLMProvider, ChatOptions, StreamChunk } from './providerTypes';
@@ -51,6 +57,7 @@ export class ProviderFactory {
         ollamaModel?: string;
         ollamaApiKey?: string;
         defaultProvider: string;
+        customProviders?: CustomProviderConfig[];
     }) {
         this.defaultProvider = config.defaultProvider || 'gemini';
         this.circuitBreakers = circuitRegistry;
@@ -75,6 +82,27 @@ export class ProviderFactory {
             config.ollamaModel || 'glm-5.2:cloud',
             config.ollamaApiKey || ''
         ));
+
+        // Providers custom (LM Studio, vLLM, llamafile local etc.) — registrados por ÚLTIMO,
+        // depois dos nativos, então uma label colidente com um nome reservado é logada e
+        // ignorada em vez de sobrescrever silenciosamente o provider nativo correspondente.
+        // Como não entram em getFallbackOrder()'s lista fixa (linha ~471), caem naturalmente
+        // em "remaining" — último recurso do fallback automático, exatamente o comportamento
+        // desejado (tenta Ollama/cloud primeiro, só usa o modelo local se tudo mais falhar).
+        for (const custom of config.customProviders ?? []) {
+            this.registerCustomProvider(custom);
+        }
+    }
+
+    /** Retorna true se o provider foi de fato registrado (false = label vazia ou colidente). */
+    private registerCustomProvider(custom: CustomProviderConfig): boolean {
+        if (!custom.label?.trim() || !custom.baseUrl?.trim()) return false;
+        if (RESERVED_PROVIDER_NAMES.has(custom.label)) {
+            log.warn(`Custom provider "${custom.label}" ignorado — nome reservado por um provider nativo`);
+            return false;
+        }
+        this.providers.set(custom.label, new OpenAIProvider(custom.apiKey || '', custom.model || 'default', custom.baseUrl, custom.label));
+        return true;
     }
 
     getProvider(name?: string): ILLMProvider {
@@ -500,6 +528,28 @@ export class ProviderFactory {
             case 'anthropicKey':  this.providers.delete('anthropic');  break;
         }
         log.info(`Credential removed: ${key.replace('Key', '')}`);
+    }
+
+    /**
+     * Registra (ou substitui, se a label já existir) um provider custom em runtime — chamado
+     * pelo dashboard depois que o usuário salva um endpoint OpenAI-compatible (LM Studio, vLLM,
+     * llamafile local etc.) via POST /providers/custom. Mesmo padrão de updateCredential(): a
+     * config persistida (ctx.config.customProviders) e a instância viva no Map precisam ficar em
+     * sincronia, senão o provider aparece na lista mas nunca participa do fallback de verdade.
+     */
+    addCustomProvider(custom: CustomProviderConfig): void {
+        // Log de sucesso só quando de fato registrado — registerCustomProvider() já loga o warn
+        // de rejeição (label vazia ou colidente com nome reservado); logar "registered" aqui
+        // incondicionalmente mascararia essa rejeição.
+        if (this.registerCustomProvider(custom)) {
+            log.info(`Custom provider registered: ${custom.label} (${custom.baseUrl})`);
+        }
+    }
+
+    removeCustomProvider(label: string): void {
+        if (RESERVED_PROVIDER_NAMES.has(label)) return; // nunca remove um provider nativo por engano
+        this.providers.delete(label);
+        log.info(`Custom provider removed: ${label}`);
     }
 
     getOllamaProvider(): OllamaProvider | undefined {

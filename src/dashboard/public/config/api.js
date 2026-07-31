@@ -81,11 +81,11 @@ export async function getCloudCatalog() {
   } catch { return []; }
 }
 
-export async function addCustomProvider({ label, baseUrl, apiKey }) {
+export async function addCustomProvider({ label, baseUrl, apiKey, model }) {
   return json(f('/api/providers/custom', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ label, baseUrl, apiKey }),
+    body: JSON.stringify({ label, baseUrl, apiKey, model }),
   }));
 }
 

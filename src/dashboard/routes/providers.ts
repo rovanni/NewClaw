@@ -82,7 +82,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
     });
 
     router.post('/providers/custom', (req: Request, res: Response) => {
-        const { label, baseUrl, apiKey } = req.body;
+        const { label, baseUrl, apiKey, model } = req.body;
         if (!label?.trim() || !baseUrl?.trim()) {
             return res.status(400).json({ success: false, error: 'label e baseUrl são obrigatórios' });
         }
@@ -91,9 +91,19 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
         if (customProviders.some(p => p.label === name)) {
             return res.status(400).json({ success: false, error: `Já existe um provider "${name}"` });
         }
-        customProviders.push({ label: name, baseUrl: String(baseUrl).trim(), apiKey: apiKey ? String(apiKey) : undefined });
+        const entry = {
+            label: name,
+            baseUrl: String(baseUrl).trim(),
+            apiKey: apiKey ? String(apiKey) : undefined,
+            model: model ? String(model).trim() : undefined,
+        };
+        customProviders.push(entry);
         ctx.config.customProviders = customProviders;
         persistConfigToEnv(ctx);
+        // Sem isto, o provider aparece na lista/config mas nunca entra de fato no fallback
+        // automático do ProviderFactory — só existe no config até o próximo restart (achado ao
+        // investigar viabilidade de fallback pra modelos locais via llamafile, 2026-07-31).
+        ctx.providerFactory?.addCustomProvider(entry);
         log.info(`Custom provider added: ${name} (${baseUrl})`);
         res.json({ success: true, message: `Provider "${name}" adicionado` });
     });
@@ -107,6 +117,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
         }
         ctx.config.customProviders = next;
         persistConfigToEnv(ctx);
+        ctx.providerFactory?.removeCustomProvider(String(label));
         log.info(`Custom provider removed: ${label}`);
         res.json({ success: true });
     });

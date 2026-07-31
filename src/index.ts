@@ -21,8 +21,8 @@ const log = createLogger('Index');
 // Inicializar Logger (adiciona timestamps ao console.log)
 Logger.hookGlobalConsole();
 
-/** CUSTOM_PROVIDERS é um array JSON ({label,baseUrl,apiKey}[]) — env var malformada não deve derrubar o boot. */
-function parseCustomProviders(raw?: string): { label: string; baseUrl: string; apiKey?: string }[] {
+/** CUSTOM_PROVIDERS é um array JSON ({label,baseUrl,apiKey,model}[]) — env var malformada não deve derrubar o boot. */
+function parseCustomProviders(raw?: string): { label: string; baseUrl: string; apiKey?: string; model?: string }[] {
     if (!raw) return [];
     try {
         const parsed = JSON.parse(raw);

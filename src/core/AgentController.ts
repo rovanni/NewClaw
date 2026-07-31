@@ -181,7 +181,8 @@ export class AgentController {
             ollamaUrl: config.ollamaUrl,
             ollamaModel: config.ollamaModel,
             ollamaApiKey: config.ollamaApiKey,
-            defaultProvider: config.defaultProvider
+            defaultProvider: config.defaultProvider,
+            customProviders: config.customProviders
         });
         this.modelRegistryService = new ModelRegistryService(this.providerFactory, () => this.config.customProviders || []);
 

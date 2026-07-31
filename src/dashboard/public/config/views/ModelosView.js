@@ -52,6 +52,7 @@ const CUSTOM_PROVIDER_PRESETS = [
   { label: 'OpenAI',     baseUrl: 'https://api.openai.com/v1' },
   { label: 'LM Studio',  baseUrl: 'http://localhost:1234/v1' },
   { label: 'vLLM',       baseUrl: 'http://localhost:8000/v1' },
+  { label: 'llamafile',  baseUrl: 'http://localhost:8080/v1' },
 ];
 
 function getCapabilityLabels() {
@@ -394,6 +395,10 @@ export function render(container) {
               <div class="form-group">
                 <label class="form-label">${t('ml_provider_apikey_optional')}</label>
                 <input type="password" class="form-input" id="ml-newProvKey" placeholder="${t('ml_optional_placeholder')}">
+              </div>
+              <div class="form-group">
+                <label class="form-label">${t('ml_provider_model_optional')}</label>
+                <input type="text" class="form-input" id="ml-newProvModel" placeholder="${t('ml_optional_placeholder')}">
               </div>
             </div>
             <button class="btn btn-primary btn-sm" id="ml-addProvBtn">${t('ml_add_btn')}</button>
@@ -801,14 +806,16 @@ function wireProviderOverview() {
     const label   = document.getElementById('ml-newProvLabel')?.value.trim();
     const baseUrl = document.getElementById('ml-newProvUrl')?.value.trim();
     const apiKey  = document.getElementById('ml-newProvKey')?.value.trim();
+    const model   = document.getElementById('ml-newProvModel')?.value.trim();
     if (!label || !baseUrl) { showToast(t('ml_provider_fill_required'), 'error'); return; }
     try {
-      await addCustomProvider({ label, baseUrl, apiKey: apiKey || undefined });
+      await addCustomProvider({ label, baseUrl, apiKey: apiKey || undefined, model: model || undefined });
       cs.set('customProviders', [...(cs.get('customProviders') || []), { label, baseUrl, hasKey: !!apiKey }]);
       showToast(t('ml_provider_added_toast', { label }), 'success');
       document.getElementById('ml-newProvLabel').value = '';
       document.getElementById('ml-newProvUrl').value   = '';
       document.getElementById('ml-newProvKey').value   = '';
+      document.getElementById('ml-newProvModel').value = '';
     } catch (err) { showToast('Erro: ' + err.message, 'error'); }
   });
 }

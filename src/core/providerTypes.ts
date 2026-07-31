@@ -148,11 +148,15 @@ export interface ModelInfo {
     status: 'available';
 }
 
-/** Endpoint OpenAI-Compatible configurado pelo usuário (LM Studio, vLLM, OpenAI oficial, custom). */
+/** Endpoint OpenAI-Compatible configurado pelo usuário (LM Studio, vLLM, OpenAI oficial, custom,
+ *  llamafile local). `model` é opcional — servidores de um modelo só (ex.: llamafile rodando um
+ *  único .gguf) ignoram o campo `model` do payload e sempre respondem com o que já está carregado;
+ *  fica disponível pra quando o endpoint hospeda múltiplos modelos (ex.: LM Studio, vLLM). */
 export interface CustomProviderConfig {
     label: string;
     baseUrl: string;
     apiKey?: string;
+    model?: string;
 }
 
 export interface ChatOptions {

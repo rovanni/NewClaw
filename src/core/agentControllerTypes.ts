@@ -31,7 +31,7 @@ export interface NewClawConfig {
     ownerLocked?: boolean;
     systemPrompt?: string;
     customModels?: string[];
-    customProviders?: { label: string; baseUrl: string; apiKey?: string }[];
+    customProviders?: { label: string; baseUrl: string; apiKey?: string; model?: string }[];
     modelRouter?: {
         chat?: string;
         code?: string;
