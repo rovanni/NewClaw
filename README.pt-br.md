@@ -8,6 +8,9 @@
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue.svg)](https://github.com/rovanni/NewClaw)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/rovanni/NewClaw/pulls)
 
+
+> **Segurança:** [Política de Segurança](SECURITY.pt-br.md) — como relatar uma vulnerabilidade em privado.
+
 ---
 
 > **Você:** "Minha filha adora matemática."
