@@ -39,11 +39,34 @@ export interface IntentDecision {
     executionMode: ExecutionMode;
     /** Whether LLM reasoning is needed */
     requiresReasoning: boolean;
-    /** Whether tool execution is needed */
+    /**
+     * Whether tool execution is needed.
+     *
+     * ATENÇÃO — isto NÃO responde "isto é um goal?". O AgentLoop também executa tools; um
+     * `requiresTools: true` só diz que alguma ferramenta pode ser necessária, não que o
+     * objetivo precise de planejamento. Quem responde a outra pergunta é `requiresPlanning`.
+     * Confundir os dois foi um bug real — ver o comentário de contrato em `requiresPlanning`.
+     */
     requiresTools: boolean;
     /** Whether memory retrieval is needed */
     requiresMemory: boolean;
-    /** Whether multi-step planning is needed */
+    /**
+     * Whether multi-step planning is needed — isto é, se a mensagem se beneficia do ciclo
+     * plan → execute → validate → replan do `GoalOrchestrator`/`GoalExecutionLoop`.
+     *
+     * CONTRATO: `true` quando há etapas que dependem umas das outras, um desfecho verificável
+     * de forma objetiva (arquivo criado, comando concluído, artefato entregue) e falha que
+     * possa ser recuperada tentando outra estratégia. `false` quando o entregável é uma única
+     * resposta e replanejar apenas regeneraria o mesmo texto.
+     *
+     * É o ÚNICO campo que o `GoalOrchestrator` deve consultar para decidir a rota. Até
+     * 02/08/2026 ele lia `requiresTools` — que é verdadeiro para qualquer pergunta capaz de
+     * usar `memory_search` — e por isso "Explique melhor scaffolding (andaime pedagógico)?"
+     * virava um goal com ciclo de replan completo. Neste mesmo dia esse caminho produziu um
+     * goal de 38min31s que terminou em falha (goal_1785682989222_q7r69). Enquanto isso, este
+     * campo — cujo nome já descrevia exatamente a pergunta certa — era `false` em TODAS as 10
+     * regras determinísticas e em 7 das 12 categorias: estava morto, nunca consultado.
+     */
     requiresPlanning: boolean;
     /** Whether streaming response is preferred */
     requiresStreaming: boolean;
@@ -190,7 +213,7 @@ const DETERMINISTIC_RULES: DeterministicRule[] = [
         requiresReasoning: true,
         requiresTools: true,
         requiresMemory: false,
-        requiresPlanning: false,
+        requiresPlanning: true,
         requiresStreaming: false,
         modelCategory: 'execution',
         terminalAction: false,
@@ -211,7 +234,7 @@ const DETERMINISTIC_RULES: DeterministicRule[] = [
         requiresReasoning: false,
         requiresTools: true,
         requiresMemory: false,
-        requiresPlanning: false,
+        requiresPlanning: true,
         requiresStreaming: false,
         modelCategory: 'chat',
         terminalAction: false,
@@ -276,7 +299,7 @@ const DETERMINISTIC_RULES: DeterministicRule[] = [
         requiresReasoning: false,
         requiresTools: true,
         requiresMemory: false,
-        requiresPlanning: false,
+        requiresPlanning: true,
         requiresStreaming: false,
         modelCategory: 'execution',
         terminalAction: false,
@@ -819,6 +842,10 @@ export class UnifiedIntentRouter {
                 executionMode = requiresReasoning ? 'hybrid' : 'tool';
                 requiresTools = true;
                 requiresMemory = true;
+                // Uma pergunta se resolve numa resposta: um passo, sem dependência entre etapas e
+                // sem desfecho verificável além de "o modelo respondeu". Replanejar não produz
+                // nada de novo. O AgentLoop tem acesso total às tools — `requiresTools` continua
+                // true e é ele quem chama memory_search/web_search se precisar.
                 requiresPlanning = false;
                 requiresStreaming = false;
                 riskLevel = 'low';
@@ -829,7 +856,7 @@ export class UnifiedIntentRouter {
                 executionMode = 'hybrid'; // LLM generates, tool saves
                 requiresTools = true;
                 requiresMemory = false;
-                requiresPlanning = true;
+                requiresPlanning = true; // gerar → salvar → entregar, com artefato verificável
                 requiresStreaming = true; // Long generation
                 riskLevel = 'medium';
                 terminalAction = false;
@@ -839,7 +866,7 @@ export class UnifiedIntentRouter {
                 executionMode = 'tool';
                 requiresTools = true;
                 requiresMemory = false;
-                requiresPlanning = false;
+                requiresPlanning = true; // comandos encadeados, recuperação de falha, autorização
                 requiresStreaming = false;
                 riskLevel = 'medium';
                 terminalAction = false;
@@ -849,7 +876,7 @@ export class UnifiedIntentRouter {
                 executionMode = 'hybrid'; // Fetch data + LLM analysis
                 requiresTools = true;
                 requiresMemory = true;
-                requiresPlanning = false;
+                requiresPlanning = true; // buscar dado → analisar → entregar
                 requiresStreaming = true;
                 riskLevel = 'low';
                 terminalAction = false;
@@ -859,6 +886,8 @@ export class UnifiedIntentRouter {
                 executionMode = 'tool';
                 requiresTools = true;
                 requiresMemory = true;
+                // Uma escrita ou busca na memória é uma chamada de tool só. O AgentLoop tem
+                // memory_write/memory_search/memory_admin no conjunto dele.
                 requiresPlanning = false;
                 requiresStreaming = false;
                 riskLevel = 'low';
@@ -869,7 +898,7 @@ export class UnifiedIntentRouter {
                 executionMode = 'hybrid'; // May need data + TTS
                 requiresTools = true;
                 requiresMemory = false;
-                requiresPlanning = false;
+                requiresPlanning = true; // obter conteúdo → sintetizar → enviar arquivo
                 requiresStreaming = false;
                 riskLevel = 'low';
                 terminalAction = false;
@@ -879,7 +908,7 @@ export class UnifiedIntentRouter {
                 executionMode = 'hybrid';
                 requiresTools = true;
                 requiresMemory = false;
-                requiresPlanning = false;
+                requiresPlanning = true; // analisar imagem → agir sobre o que foi visto
                 requiresStreaming = true;
                 riskLevel = 'low';
                 terminalAction = false;

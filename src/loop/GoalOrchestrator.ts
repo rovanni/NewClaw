@@ -285,14 +285,23 @@ export class GoalOrchestrator {
         // dele (usados abaixo); só o papel de decidir `isGoal` foi substituído. Reaproveita a
         // MESMA instância de UnifiedIntentRouter já usada por AgentLoop
         // (this.agentLoop.getIntentRouter()), sem criar uma segunda nem uma chamada de LLM extra.
+        // `requiresPlanning` — e não `requiresTools` — é o campo que responde "isto precisa do
+        // ciclo de goal?". Ver o contrato em IntentDecision.requiresPlanning. `requiresTools` é
+        // verdadeiro para qualquer mensagem que POSSA usar uma tool, incluindo toda pergunta
+        // capaz de disparar memory_search — e o AgentLoop também executa tools, então isso nunca
+        // separou os dois caminhos. Evidência real (02/08/2026): "Explique melhor scaffolding
+        // (andaime pedagógico)?" caiu no ciclo completo de goal 5 vezes; uma delas
+        // (goal_1785682989222_q7r69) rodou 38min31s, 5 ciclos, 2 replans, e terminou em falha.
         let routerRequiresGoal: boolean;
         let routerCategory = 'unknown';
+        let routerRequiresTools = false;
         try {
             const routerDecision = await this.agentLoop.getIntentRouter().route(message, {
                 sessionId: sessionKey,
                 recentMessages: classifyMessages,
             });
-            routerRequiresGoal = routerDecision.requiresTools;
+            routerRequiresGoal = routerDecision.requiresPlanning;
+            routerRequiresTools = routerDecision.requiresTools;
             routerCategory = routerDecision.category;
         } catch (err) {
             // Fail-open: se o router falhar, volta ao sinal do GoalExtractor (comportamento
@@ -302,7 +311,8 @@ export class GoalOrchestrator {
         }
         log.info(
             `[GOAL-ROUTING-COMPARISON] extractor_isGoal=${classification.isGoal}` +
-            ` router_requiresTools=${routerRequiresGoal}` +
+            ` router_requiresPlanning=${routerRequiresGoal}` +
+            ` router_requiresTools=${routerRequiresTools}` +
             ` router_category=${routerCategory}` +
             ` agree=${routerRequiresGoal === classification.isGoal}` +
             ` message="${message.slice(0, 80)}"`
