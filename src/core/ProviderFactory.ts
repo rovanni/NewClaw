@@ -34,6 +34,11 @@ const log = createLogger('Providerfactory');
 
 export class ProviderFactory {
     private providers: Map<string, ILLMProvider> = new Map();
+    // Config original de cada provider custom registrado, guardada pelo mesmo motivo que `creds`
+    // guarda as chaves dos nativos: getProviderWithModel() precisa CRIAR uma instância nova por
+    // requisição (com outro modelo) sem mutar a instância compartilhada do Map. Sem isto não há
+    // como reconstruir um OpenAIProvider — baseUrl/apiKey são privados na instância.
+    private customConfigs: Map<string, CustomProviderConfig> = new Map();
     private defaultProvider: string;
     public readonly circuitBreakers: typeof circuitRegistry;
     // Credenciais guardadas para criar instâncias per-model sem mutar o provider compartilhado
@@ -102,6 +107,7 @@ export class ProviderFactory {
             return false;
         }
         this.providers.set(custom.label, new OpenAIProvider(custom.apiKey || '', custom.model || 'default', custom.baseUrl, custom.label));
+        this.customConfigs.set(custom.label, { ...custom });
         return true;
     }
 
@@ -146,6 +152,24 @@ export class ProviderFactory {
                     return new AnthropicProvider(this.creds.anthropicKey, model);
                 break;
         }
+
+        // Provider custom (qualquer endpoint OpenAI-Compatible: LM Studio, vLLM, llamafile,
+        // OpenAI oficial, servidor próprio). Sem este bloco, `target` não batia em nenhum `case`
+        // acima e a requisição caía no `return new OllamaProvider(...)` abaixo — ou seja: eleger
+        // um provider custom como principal mandava a chamada para o Ollama silenciosamente, e o
+        // endpoint do usuário nunca era chamado. Como todo perfil do ModelProfileRegistry já
+        // nasce com um modelo preenchido, `modelOverride` é sempre truthy e este caminho é o
+        // único usado pelo provider primário em chatWithFallback() — o provider custom era
+        // inalcançável na prática, mesmo estando corretamente registrado no Map.
+        const custom = this.customConfigs.get(target);
+        if (custom) {
+            // `model` (a escolha por categoria do Model Router) vence a config fixa do provider,
+            // mesma precedência dos nativos acima. `custom.model` é o default de quem hospeda um
+            // modelo só e nunca escolheu nada por categoria; 'default' é o placeholder aceito por
+            // servidores de modelo único (llamafile serve o .gguf carregado e ignora o campo).
+            return new OpenAIProvider(custom.apiKey || '', model || custom.model || 'default', custom.baseUrl, custom.label);
+        }
+
         // Ollama (padrão) ou fallback quando a key do provider alvo não está configurada
         return new OllamaProvider(this.creds.ollamaUrl, model, this.creds.ollamaApiKey);
     }
@@ -496,10 +520,19 @@ export class ProviderFactory {
         if (preferred) {
             log.warn(`Provider "${preferred}" requested but not available (missing credential?). Using default fallback order.`);
         }
+        // defaultProvider (DEFAULT_PROVIDER / "Provider padrão" no dashboard) é a preferência
+        // declarada pelo usuário — antes ela era ignorada aqui e a ordem começava sempre em
+        // 'ollama', então escolher outro provider padrão (inclusive um custom) não tinha efeito
+        // nenhum sobre qual provider era realmente tentado primeiro. Continua sendo só a ORDEM:
+        // todos os demais seguem atrás, na mesma sequência de sempre, como fallback.
         const order = ['ollama', 'openrouter', 'anthropic', 'gemini', 'deepseek', 'groq'];
         const sorted = order.filter(p => this.providers.has(p));
         const remaining = all.filter(p => !sorted.includes(p));
-        return [...sorted, ...remaining];
+        const byPriority = [...sorted, ...remaining];
+        if (this.providers.has(this.defaultProvider)) {
+            return [this.defaultProvider, ...byPriority.filter(p => p !== this.defaultProvider)];
+        }
+        return byPriority;
     }
 
     /**
@@ -549,6 +582,7 @@ export class ProviderFactory {
     removeCustomProvider(label: string): void {
         if (RESERVED_PROVIDER_NAMES.has(label)) return; // nunca remove um provider nativo por engano
         this.providers.delete(label);
+        this.customConfigs.delete(label);
         log.info(`Custom provider removed: ${label}`);
     }
 
@@ -560,6 +594,11 @@ export class ProviderFactory {
     getCurrentModel(): string {
         const provider = this.getProvider();
         if (provider instanceof OllamaProvider) return provider.getModel();
-        return provider.name;
+        // Todo provider guarda o modelo ativo em `model`; devolvê-lo é o que o nome do método
+        // promete. Antes o retorno era `provider.name` — o nome da CLASSE — então o dashboard
+        // exibia "Modelo padrão: openai" (ou "gemini") para qualquer provider não-Ollama, o que
+        // não é modelo nenhum. `name` fica só como último recurso, se o modelo não existir.
+        const model = (provider as { model?: string }).model;
+        return model || provider.name;
     }
 }

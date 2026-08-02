@@ -58,13 +58,21 @@ const DEFAULT_CONFIG: ProfileRegistryConfig = {
     defaultProfile: 'chat-primary',
     classifierModel: "gemma4:31b-cloud",
     classifierServer: 'http://localhost:11434',
+    // `provider` deliberadamente AUSENTE nos defaults — ver o contrato declarado em ModelProfile
+    // acima ("undefined = defaultProvider"). Antes cada perfil vinha com provider:'ollama' fixo,
+    // o que contradizia esse contrato e tornava o "Provider padrão" do dashboard decorativo: o
+    // AgentLoop passa chatProfile.provider como `preferred` para chatWithFallback(), então um
+    // 'ollama' hardcoded aqui sobrescrevia, em toda requisição, qualquer DEFAULT_PROVIDER
+    // escolhido pelo usuário. Só um PROVIDER_<CATEGORIA> explícito (Provider por perfil, na UI)
+    // preenche este campo agora — que é exatamente o que a opção "— herdar padrão —" promete.
+    // Para quem usa DEFAULT_PROVIDER=ollama (o caso comum) a ordem final é idêntica à anterior.
     profiles: [
-        { id: 'chat-primary',      provider: 'ollama', model: 'glm-5.2:cloud',   server: 'http://localhost:11434', category: 'chat',      description: 'Conversa geral e raciocínio' },
-        { id: 'code-primary',      provider: 'ollama', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'code',      description: 'Programação e criação de conteúdo' },
-        { id: 'light-chat',        provider: 'ollama', model: 'glm-5.2:cloud',   server: 'http://localhost:11434', category: 'light',     description: 'Conversa leve e rápida' },
-        { id: 'vision-primary',    provider: 'ollama', model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'vision',    description: 'Análise de imagens e OCR' },
-        { id: 'analysis-primary',  provider: 'ollama', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'analysis',  description: 'Análise profunda e cripto' },
-        { id: 'execution-primary', provider: 'ollama', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'execution', description: 'Execução de ferramentas e tarefas complexas' },
+        { id: 'chat-primary',      model: 'glm-5.2:cloud',   server: 'http://localhost:11434', category: 'chat',      description: 'Conversa geral e raciocínio' },
+        { id: 'code-primary',      model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'code',      description: 'Programação e criação de conteúdo' },
+        { id: 'light-chat',        model: 'glm-5.2:cloud',   server: 'http://localhost:11434', category: 'light',     description: 'Conversa leve e rápida' },
+        { id: 'vision-primary',    model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'vision',    description: 'Análise de imagens e OCR' },
+        { id: 'analysis-primary',  model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'analysis',  description: 'Análise profunda e cripto' },
+        { id: 'execution-primary', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'execution', description: 'Execução de ferramentas e tarefas complexas' },
     ],
     fallbackRules: [
         {
