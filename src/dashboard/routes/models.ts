@@ -17,6 +17,51 @@ const LOCAL_MODEL_EXTENSIONS = ['.gguf'];
  *  sozinho. Convenção estável do ecossistema llama.cpp (prefixo "mmproj-"). */
 const COMPANION_FILE_PREFIXES = ['mmproj-'];
 
+/** Normaliza um nome de arquivo para comparação: minúsculas, sem extensão, sem o prefixo de
+ *  projetor e sem separadores — assim "gemma-4-26B" e "gemma4-26b" viram a mesma coisa. */
+function normalizeModelName(name: string): string {
+    return name.toLowerCase()
+        .replace(/\.gguf$/, '')
+        .replace(/^mmproj[-_]?/, '')
+        .replace(/[^a-z0-9]/g, '');
+}
+
+/** Tamanho do prefixo comum entre dois nomes normalizados. */
+function commonPrefixLength(a: string, b: string): number {
+    let i = 0;
+    while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    return i;
+}
+
+/**
+ * Ordena os projetores por afinidade com o modelo, do mais provável ao menos.
+ *
+ * Usar o projetor errado não dá erro: o modelo carrega e responde LIXO (tokens repetidos), o que
+ * é bem pior que uma falha honesta — o próprio usuário documentou um caso desses. Mostrar todos
+ * em ordem alfabética convidava ao engano.
+ *
+ * O critério é o prefixo comum dos nomes, porque a convenção do ecossistema é o projetor repetir
+ * a família do modelo (`gemma-4-26B-...` ↔ `mmproj-gemma4-26b-...`). É uma HEURÍSTICA declarada,
+ * não verificação de compatibilidade real: por isso nenhum projetor é escondido e a interface diz
+ * que a sugestão vem do nome. Se o usuário renomeou os arquivos, ele continua podendo escolher.
+ */
+export function rankProjectors(modelFile: string, projectors: string[]): Array<{ file: string; likely: boolean; score: number }> {
+    const model = normalizeModelName(modelFile);
+    const scored = projectors
+        .map(file => ({ file, score: commonPrefixLength(model, normalizeModelName(file)) }))
+        .sort((a, b) => b.score - a.score || a.file.localeCompare(b.file));
+
+    // Critério RELATIVO, não um número fixo: o que importa é quem se aproxima MAIS deste modelo,
+    // e a escala varia com o nome. Um corte fixo errava nos dois extremos (verificado com uma
+    // coleção real, 02/08/2026): marcava três projetores "gemma*" como prováveis para o mesmo
+    // modelo, por compartilharem só o começo da família, e ao mesmo tempo não marcava nenhum para
+    // "GLM-4.6V" — cujo projetor certo casa apenas em 3 caracteres ("glm").
+    // O mínimo de 3 evita coincidência de uma ou duas letras; empate real deixa ambos marcados,
+    // que é a resposta honesta quando os nomes não permitem desempatar.
+    const max = scored.length ? scored[0].score : 0;
+    return scored.map(({ file, score }) => ({ file, likely: score >= 3 && score === max, score }));
+}
+
 /** Nomes de servidor local reconhecidos ao varrer a pasta. llamafile distribui um único
  *  executável; llama.cpp compila `llama-server`. Em Windows vêm com .exe, em Linux/macOS sem — o
  *  match é por prefixo justamente para cobrir os dois sem uma lista por sistema operacional. */
@@ -367,12 +412,22 @@ export function createModelsRouter(ctx: DashboardContext): Router {
         const options = String(req.body?.options ?? (ctx.config.localModelOptions || {})[file] ?? '');
         const binary = dir ? findLocalServerBinary(dir) : null;
         const args = buildServerArgs(file, LOCAL_SERVER_PORT, options);
+        // Projetores ordenados por afinidade COM ESTE modelo — a lista muda conforme o modelo,
+        // então vem daqui e não da listagem geral da pasta.
+        let projectors: Array<{ file: string; likely: boolean }> = [];
+        try {
+            const nomes = fs.readdirSync(dir, { withFileTypes: true })
+                .filter(e => e.isFile() && COMPANION_FILE_PREFIXES.some(p => e.name.toLowerCase().startsWith(p)))
+                .map(e => e.name);
+            projectors = rankProjectors(file, nomes).map(({ file: f, likely }) => ({ file: f, likely }));
+        } catch { /* sem pasta legível: lista vazia, a UI só não oferece projetor */ }
         // Aspas só onde são necessárias — o comando exibido deve poder ser copiado e colado.
         const quote = (s: string) => (/\s/.test(s) ? `"${s}"` : s);
         res.json({
             success: true,
             binary: binary ? path.basename(binary) : null,
             command: `${quote(binary ? path.basename(binary) : 'servidor')} ${args.map(quote).join(' ')}`,
+            projectors,
         });
     });
 

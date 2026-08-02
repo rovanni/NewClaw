@@ -26,7 +26,7 @@ import express from 'express';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createModelsRouter, getLastKnownLocalServer, parseServerOptions } from '../../dashboard/routes/models';
+import { createModelsRouter, getLastKnownLocalServer, parseServerOptions, rankProjectors } from '../../dashboard/routes/models';
 import type { DashboardContext } from '../../dashboard/routes/types';
 import type { NewClawConfig } from '../../core/AgentController';
 
@@ -269,6 +269,41 @@ async function main() {
             !/--n-gpu-layers|--no-mmap|--mmproj|-fit\b/.test(semComentarios),
             'nenhuma flag de hardware embutida no código executável — elas dependem da GPU de cada máquina'
         );
+    }
+
+    console.log('\n=== S171 — projetor de visão sugerido por afinidade de nome ===');
+    {
+        // Usar o projetor errado NÃO dá erro: o modelo carrega e responde lixo (tokens repetidos),
+        // o que é pior que uma falha honesta. Mostrar todos em ordem alfabética convidava ao
+        // engano. Casos reais de uma coleção com 5 projetores de 4 famílias diferentes.
+        const projetores = [
+            'mmproj-gemma4-12b-Q8_0.gguf', 'mmproj-gemma4-26b-F16.gguf', 'mmproj-gemma4e4b-F16.gguf',
+            'mmproj-glm-F16.gguf', 'mmproj-qwen3vl-F16.gguf',
+        ];
+        const esperado: Array<[string, string]> = [
+            ['gemma-4-26B-A4B-it-Q4_K_M.gguf', 'mmproj-gemma4-26b-F16.gguf'],
+            ['gemma-4-12B-it-Q4_K_M.gguf', 'mmproj-gemma4-12b-Q8_0.gguf'],
+            ['gemma-4-E4B-it-Q4_K_M.gguf', 'mmproj-gemma4e4b-F16.gguf'],
+            // Casa em apenas 3 caracteres ("glm") — um corte fixo o descartaria, mesmo sendo o certo.
+            ['GLM-4.6V-Flash-Q3_K_M.gguf', 'mmproj-glm-F16.gguf'],
+            ['Qwen3VL-8B-Instruct-Q4_K_M.gguf', 'mmproj-qwen3vl-F16.gguf'],
+        ];
+        for (const [modelo, certo] of esperado) {
+            const r = rankProjectors(modelo, projetores);
+            const sugeridos = r.filter(x => x.likely).map(x => x.file);
+            assert(r[0].file === certo, `${modelo}: o projetor da família vem primeiro`, { obtido: r[0].file });
+            assert(
+                sugeridos.length === 1 && sugeridos[0] === certo,
+                `${modelo}: exatamente um sugerido, e é o certo`,
+                { sugeridos }
+            );
+        }
+
+        const r = rankProjectors('gemma-4-26B-A4B-it-Q4_K_M.gguf', projetores);
+        assert(r.length === projetores.length, 'nenhum projetor é escondido — é sugestão por nome, não verificação de compatibilidade');
+        assert(rankProjectors('modelo-sem-familia.gguf', ['mmproj-xyz.gguf'])[0].likely === false,
+            'nomes sem nada em comum não geram sugestão falsa');
+        assert(rankProjectors('qualquer.gguf', []).length === 0, 'pasta sem projetores não quebra');
     }
 
     console.log(`\n${'─'.repeat(60)}`);

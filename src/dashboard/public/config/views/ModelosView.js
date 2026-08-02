@@ -1348,17 +1348,19 @@ function renderLocalOptionsEditor() {
     </div>`;
   }).join('');
 
-  // Projetor de visão: lista os arquivos que existem NA PASTA, em vez de exigir o nome de cabeça.
+  // Projetor de visão. Separado em dois grupos porque o projetor errado não dá erro — o modelo
+  // responde lixo, que é pior. A ordenação vem do servidor (por semelhança de nome com ESTE
+  // modelo) e nenhum é escondido: é sugestão pelo nome, não verificação de compatibilidade.
+  // A lista sai vazia aqui de propósito e é preenchida por buildMmprojOptions() assim que o
+  // servidor responde COM A ORDEM PARA ESTE MODELO. Desenhar com o que estava em memória mostrava
+  // a sugestão do modelo aberto anteriormente — visto na tela em 02/08/2026, e perigoso: o
+  // projetor errado não falha, faz o modelo responder lixo.
   const mmVal = readParam(tokens, '--mmproj', true);
-  const projetores = localProjectors || [];
-  const mmprojRow = projetores.length ? `
-    <div class="param-chip${mmVal !== null ? ' on' : ''}" title="${esc(t('ml_param_mmproj'))}">
+  const mmprojRow = `
+    <div class="param-chip${mmVal !== null ? ' on' : ''}" id="mr-mmprojChip" title="${esc(t('ml_param_mmproj'))}" style="display:none;">
       <span class="param-toggle-static">🖼️ <code>--mmproj</code></span>
-      <select class="param-value" id="mr-mmprojSelect" style="min-width:220px;">
-        <option value="">${t('ml_param_mmproj_none')}</option>
-        ${projetores.map(f => `<option value="${esc(f)}"${mmVal === f ? ' selected' : ''}>${esc(f)}</option>`).join('')}
-      </select>
-    </div>` : '';
+      <select class="param-value" id="mr-mmprojSelect" style="min-width:240px;"></select>
+    </div>`;
 
   box.style.display = '';
   box.className = 'ml-test-result';
@@ -1390,6 +1392,9 @@ function renderLocalOptionsEditor() {
       const r = await previewLocalCommand(localOptionsFor, input.value);
       const el = document.getElementById('mr-optsPreview');
       if (el) el.textContent = r.command || '';
+      // A ordenação dos projetores depende do modelo e vem junto com o preview; o select só é
+      // preenchido aqui, quando existe resposta PARA ESTE modelo.
+      if (r.projectors) { localProjectors = r.projectors; buildMmprojOptions(); }
     } catch { /* preview é auxiliar: falhar aqui não pode atrapalhar a edição */ }
   };
   const schedulePreview = () => { clearTimeout(timer); timer = setTimeout(refresh, 350); };
@@ -1427,6 +1432,33 @@ function renderLocalOptionsEditor() {
   });
 
   refresh();
+}
+
+/**
+ * Preenche a lista de projetores com a ordem calculada para o modelo aberto. Separado do desenho
+ * do editor porque depende de uma resposta do servidor: até ela chegar, o campo fica escondido em
+ * vez de mostrar a lista do modelo anterior.
+ */
+function buildMmprojOptions() {
+  const chip = document.getElementById('mr-mmprojChip');
+  const sel = document.getElementById('mr-mmprojSelect');
+  const input = document.getElementById('mr-optsInput');
+  if (!chip || !sel || !input) return;
+
+  const lista = localProjectors || [];
+  if (!lista.length) { chip.style.display = 'none'; return; }
+
+  const tokens = input.value.trim() ? input.value.trim().split(/\s+/) : [];
+  const atual = readParam(tokens, '--mmproj', true);
+  const sugeridos = lista.filter(p => p.likely);
+  const outros = lista.filter(p => !p.likely);
+  const opt = p => `<option value="${esc(p.file)}"${atual === p.file ? ' selected' : ''}>${esc(p.file)}</option>`;
+
+  sel.innerHTML = `<option value="">${t('ml_param_mmproj_none')}</option>
+    ${sugeridos.length ? `<optgroup label="${t('ml_param_mmproj_likely')}">${sugeridos.map(opt).join('')}</optgroup>` : ''}
+    ${outros.length ? `<optgroup label="${t('ml_param_mmproj_others')}">${outros.map(opt).join('')}</optgroup>` : ''}`;
+  chip.style.display = '';
+  chip.classList.toggle('on', atual !== null);
 }
 
 /** Repete o preview depois de um redesenho do editor (o elemento anterior deixou de existir). */
@@ -1674,6 +1706,7 @@ function wireModelRegistry(container) {
     if (optsBtn) {
       const file = optsBtn.dataset.optsLocal;
       localOptionsFor = (localOptionsFor === file) ? null : file; // clicar de novo fecha
+      localProjectors = [];  // a ordem é por modelo — não reaproveitar a do anterior
       renderLocalOptionsEditor();
       document.getElementById('mr-optsInput')?.focus();
       return;
