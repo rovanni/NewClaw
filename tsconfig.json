@@ -16,7 +16,12 @@
     "declarationMap": true,
     "sourceMap": true,
     "noUnusedLocals": true,
-    "noUnusedParameters": true
+    // Desligado pelo mesmo motivo documentado em cognitive-kernel/tsconfig.json:
+    // Decision<D> (kernel-core) mantém D não utilizado (trilha permanece opaca, A2 §2.2).
+    // Antes de CognitiveKernelGate.ts, nenhum arquivo de src/ importava
+    // newclaw-kernel-adapter/kernel-sdk/kernel-core, então este tsconfig nunca precisava
+    // compilar aquele código-fonte (skipLibCheck não cobre .ts fonte, só .d.ts).
+    "noUnusedParameters": false
   },
   "include": [
     "src/**/*"

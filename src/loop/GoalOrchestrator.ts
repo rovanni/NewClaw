@@ -21,6 +21,7 @@ import type { Goal } from './GoalTypes';
 import { GoalExtractor } from './GoalExtractor';
 import { GoalPlanner } from './GoalPlanner';
 import { GoalExecutionLoop } from './GoalExecutionLoop';
+import { avaliarGoal, KERNEL_ESCALATION_PREFIX } from './CognitiveKernelGate';
 import { ProviderFactory } from '../core/ProviderFactory';
 import { MemoryManager } from '../memory/MemoryManager';
 import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
@@ -178,6 +179,14 @@ export class GoalOrchestrator {
                 const txnId = activeGoal.pendingTxnId;
                 const decision = isShortApproval ? 'approved' : 'rejected';
                 log.info(`[GoalOrchestrator] [AUTH-DETECTED] goal=${activeGoal.id} txn=${txnId} decision=${decision} source=text channel=${context?.channel ?? 'unknown'}`);
+
+                // Goal pausado pelo Cognitive Kernel Gate (ESCALATE), não por uma tool call
+                // bloqueada — não existe transação de WorkflowEngine nenhuma para retomar aqui.
+                if (txnId.startsWith(KERNEL_ESCALATION_PREFIX)) {
+                    return decision === 'approved'
+                        ? this.resumeFromKernelEscalation(activeGoal, context ?? { channel: 'unknown', chatId: conversationId, userId })
+                        : this.abortFromKernelEscalation(activeGoal.id);
+                }
 
                 if (this.workflowEngine) {
                     const wfResult = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
@@ -461,6 +470,35 @@ export class GoalOrchestrator {
             successCriteria: [],   // preenchido pelo GoalPlanner no plan inicial
         });
 
+        // ── Cognitive Kernel Gate (COGNITIVE_KERNEL_ENABLED, default off) ───────────
+        // Único ponto onde a Decision do Cognitive Kernel pode mudar o comportamento real
+        // de um Goal — ver CognitiveKernelGate.ts. Com a flag desligada (default) ou
+        // qualquer falha do Kernel, `gate.action` é sempre 'proceed' e nada muda abaixo.
+        const gate = await avaliarGoal(goal, this.goalStore);
+        if (gate.action === 'escalate') {
+            // active→blocked não é uma transição direta permitida (ALLOWED_TRANSITIONS) —
+            // passa por 'executing' primeiro, mesmo destino que todo goal alcançaria de
+            // qualquer forma ao começar a rodar.
+            this.goalStore.setStatus(goal.id, 'executing');
+            this.goalStore.update(goal.id, {
+                status: 'blocked',
+                pendingTxnId: `${KERNEL_ESCALATION_PREFIX}${goal.id}`,
+                requiresAuth: true,
+            });
+            log.info(`[GoalOrchestrator] [KERNEL-ESCALATION] goal=${goal.id} aguardando confirmação`);
+            return { text: gate.message, options: gate.authOptions };
+        }
+        if (gate.action === 'ask_info' || gate.action === 'defer') {
+            // Goal recém-criado não prossegue nesta rodada — mesmo mecanismo de
+            // pendingClarifications já usado para classification.isAmbiguous (linha ~382):
+            // a próxima mensagem do usuário reclassifica o texto combinado do zero, então
+            // este goal específico (sem execução alguma) é abandonado, não reaproveitado.
+            this.goalStore.setStatus(goal.id, 'abandoned');
+            this.pendingClarifications.set(sessionKey, { originalMessage: message, timestamp: Date.now() });
+            log.info(`[GoalOrchestrator] [KERNEL-${gate.action.toUpperCase()}] goal=${goal.id} abandonado, aguardando contexto`);
+            return gate.message;
+        }
+
         log.info(`[GoalOrchestrator] executing goal=${goal.id}`);
         log.info(`[GOAL-LIFECYCLE] goal=${goal.id} session=${sessionKey} state=created intent="${message.slice(0, 80)}" timestamp=${Date.now()}`);
 
@@ -604,6 +642,36 @@ export class GoalOrchestrator {
         // requiresAuth: false — Sprint 0.11, ver nota em GoalExecutionLoop.ts (branch 'needs_auth').
         this.goalStore.update(goal.id, { status: 'failed', pendingTxnId: undefined, requiresAuth: false });
         return '❌ Ação cancelada. O objetivo foi encerrado sem executar o comando.';
+    }
+
+    /**
+     * Retoma um goal pausado pelo Cognitive Kernel Gate (ESCALATE) após aprovação do
+     * usuário. Ao contrário de resumeFromAuth() (que retoma uma tool call bloqueada via
+     * WorkflowEngine), aqui não existe execução parcial nenhuma para retomar — o goal
+     * nunca chegou a rodar um step — então chama executionLoop.executeGoal() diretamente,
+     * igual a um goal novo.
+     */
+    private async resumeFromKernelEscalation(goal: Goal, channelContext: ChannelContext): Promise<string> {
+        log.info(`[GoalOrchestrator] [KERNEL-ESCALATION-APPROVED] goal=${goal.id}`);
+        this.goalStore.update(goal.id, { status: 'executing', pendingTxnId: undefined, requiresAuth: false });
+        const result = await this.executionLoop.executeGoal(
+            goal,
+            channelContext,
+            async (update) => {
+                log.debug(`[GoalOrchestrator] progress goal=${update.goalId} cycle=${update.cycle} event=${update.event}`);
+            }
+        );
+        return result.finalOutput;
+    }
+
+    /**
+     * Aborta um goal pausado pelo Cognitive Kernel Gate (ESCALATE) quando o usuário
+     * rejeita — mesmo padrão de abortGoalFromAuth(), sem depender de WorkflowEngine.
+     */
+    private abortFromKernelEscalation(goalId: string): string {
+        log.info(`[GoalOrchestrator] [KERNEL-ESCALATION-REJECTED] goal=${goalId}`);
+        this.goalStore.update(goalId, { status: 'failed', pendingTxnId: undefined, requiresAuth: false });
+        return '❌ Ação cancelada. O objetivo foi encerrado sem executar.';
     }
 
     /**

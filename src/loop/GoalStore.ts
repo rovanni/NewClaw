@@ -239,6 +239,31 @@ export class GoalStore {
         return rows.map(r => this.rowToGoal(r));
     }
 
+    /**
+     * Estatísticas de precedente da sessão antes de um timestamp — quantos goals terminais
+     * (completed/failed/abandoned) já existiram nesta sessão, e quantos deles tiveram sucesso.
+     * Mesma query de `newclaw-kernel-adapter/src/runtime/NewClawReadOnlyClient.ts`
+     * (`precedenteStats`), reaproveitando a conexão já aberta pelo GoalStore em vez de abrir uma
+     * segunda conexão sqlite só para o Cognitive Kernel Gate calcular `GoalLike.precedente`.
+     */
+    getPrecedentStats(sessionKey: string, beforeTimestamp: number): { completados: number; terminais: number } {
+        const rows = this.db.prepare(`
+            SELECT status, COUNT(*) as n
+            FROM goals
+            WHERE session_key = ?
+              AND created_at < ?
+              AND status IN ('completed', 'failed', 'abandoned')
+            GROUP BY status
+        `).all(sessionKey, beforeTimestamp) as { status: string; n: number }[];
+        let completados = 0;
+        let terminais = 0;
+        for (const row of rows) {
+            terminais += row.n;
+            if (row.status === 'completed') completados += row.n;
+        }
+        return { completados, terminais };
+    }
+
     // ── Atualização ───────────────────────────────────────────────────────────
 
     /**
