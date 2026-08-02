@@ -11,8 +11,87 @@ interface SimpleDb {
 }
 let persistDb: SimpleDb | null = null;
 
+// ── Precedência entre as DUAS fontes de verdade da autenticação ──────────────
+//
+// (1) `DASHBOARD_PASSWORD` no ambiente — provisionamento de deploy (.env, `docker -e`,
+//     systemd). (2) Estado persistido no banco — escolha explícita do operador pelo painel.
+//
+// Até 02/08/2026 não havia precedência declarada: o ambiente vencia sempre, em silêncio. O
+// botão "desativar" do painel funcionava em runtime (zerava `enabled` e o hash), mas o bloco de
+// boot mais abaixo reativava tudo a partir de `process.env` no próximo start — e o "Salvar" da
+// config nunca escreveu `DASHBOARD_PASSWORD` no .env (37 chaves gravadas, essa não). Resultado
+// observado em produção: o operador desativava, reiniciava, e a senha voltava. Indefinidamente.
+//
+// Regra agora explícita: uma DESATIVAÇÃO EXPLÍCITA do operador é persistida e vence o ambiente.
+// Qualquer outro caso mantém o comportamento anterior — quem só define `DASHBOARD_PASSWORD` e
+// nunca toca no painel (o caso de container/systemd) não percebe diferença nenhuma.
+//
+// Por que não apagar a chave do .env em vez disso: a variável pode não vir de arquivo nenhum
+// (`docker run -e`, unit do systemd, export no shell). Reescrever o .env resolveria só um dos
+// casos e continuaria mentindo nos outros — além de apagar um segredo do operador sem que ele
+// tenha pedido isso.
+const AUTH_DISABLED_KEY = 'dashboard_auth_disabled';
+
+/** De onde veio o estado atual — reportado no /status para a UI não precisar adivinhar. */
+export type AuthSource = 'environment' | 'dashboard' | 'operator_disabled' | 'none';
+let authSource: AuthSource = 'none';
+
+export function getAuthSource(): AuthSource {
+    return authSource;
+}
+
+/** `DASHBOARD_PASSWORD` presente no ambiente, independente de estar em efeito. */
+export function isEnvManaged(): boolean {
+    return !!process.env.DASHBOARD_PASSWORD;
+}
+
+function readOperatorDisabled(): boolean {
+    if (!persistDb) return false;
+    try {
+        const row = persistDb.prepare(
+            'SELECT value FROM memory WHERE key = ?'
+        ).get(AUTH_DISABLED_KEY) as { value: string } | undefined;
+        return row?.value === '1';
+    } catch {
+        // Tabela ausente/ilegível: falha FECHADA — na dúvida a autenticação continua como está,
+        // nunca desligada por não conseguirmos ler o estado.
+        return false;
+    }
+}
+
+function writeOperatorDisabled(disabled: boolean): void {
+    if (!persistDb) return;
+    try {
+        if (disabled) {
+            persistDb.prepare(
+                "INSERT OR REPLACE INTO memory (key, value, category) VALUES (?, '1', 'system')"
+            ).run(AUTH_DISABLED_KEY);
+        } else {
+            persistDb.prepare('DELETE FROM memory WHERE key = ?').run(AUTH_DISABLED_KEY);
+        }
+    } catch { /* ignore */ }
+}
+
 function loadPersistedHash(): void {
     if (!persistDb) return;
+
+    // Desativação explícita do operador vence o ambiente — e diz isso em voz alta, porque um
+    // dashboard sem autenticação com a variável definida é exatamente o tipo de estado que não
+    // pode ficar implícito para quem opera o servidor.
+    if (readOperatorDisabled()) {
+        dashboardAuth.enabled = false;
+        dashboardAuth.passwordHash = '';
+        authSource = 'operator_disabled';
+        if (process.env.DASHBOARD_PASSWORD) {
+            console.warn(
+                '[auth] DASHBOARD_PASSWORD está definida no ambiente, mas a autenticação foi '
+                + 'DESATIVADA explicitamente no painel — a variável está sendo ignorada. '
+                + 'Para reativar: painel → Segurança → ativar autenticação.'
+            );
+        }
+        return;
+    }
+
     try {
         const row = persistDb.prepare(
             "SELECT value FROM memory WHERE key = 'dashboard_password_hash'"
@@ -20,6 +99,7 @@ function loadPersistedHash(): void {
         if (row?.value && !process.env.DASHBOARD_PASSWORD) {
             dashboardAuth.enabled = true;
             dashboardAuth.passwordHash = row.value;
+            authSource = 'dashboard';
         }
     } catch { /* table pode não existir ainda */ }
 }
@@ -144,9 +224,14 @@ function verifySignedToken(token: string): boolean {
     return false;
 }
 
+// Boot: o ambiente ativa a autenticação por padrão. Isto roda ANTES de `initAuthPersistence()`
+// (que só é chamado quando o DashboardServer já tem o banco), então `loadPersistedHash()` ainda
+// pode reverter este estado se o operador tiver desativado explicitamente — ver a nota de
+// precedência no topo do arquivo.
 if (process.env.DASHBOARD_PASSWORD) {
     dashboardAuth.enabled = true;
     dashboardAuth.passwordHash = hashPassword(process.env.DASHBOARD_PASSWORD);
+    authSource = 'environment';
 }
 
 export function authMiddleware(req: Request, res: Response, next: express.NextFunction): void {
@@ -205,7 +290,15 @@ export function createAuthRouter(): Router {
     router.get('/status', (_req: Request, res: Response) => {
         res.json({
             success: true,
-            auth: { enabled: dashboardAuth.enabled, hasPassword: !!dashboardAuth.passwordHash },
+            auth: {
+                enabled: dashboardAuth.enabled,
+                hasPassword: !!dashboardAuth.passwordHash,
+                // De onde veio o estado, para a UI reportar em vez de adivinhar. `envManaged`
+                // continua true mesmo quando a variável está sendo IGNORADA por desativação
+                // explícita — é justamente aí que o operador precisa saber que ela existe.
+                source: authSource,
+                envManaged: isEnvManaged(),
+            },
         });
     });
 
@@ -220,10 +313,17 @@ export function createAuthRouter(): Router {
         }
         if (typeof enabled === 'boolean') {
             dashboardAuth.enabled = enabled;
-            // Desativando auth: remove hash persistido
+            // Desativando auth: remove hash persistido E registra a decisão, para que ela
+            // sobreviva ao restart mesmo com DASHBOARD_PASSWORD no ambiente. Sem este registro,
+            // o bloco de boot reativava tudo e o botão virava um no-op silencioso após reiniciar.
             if (!enabled) {
                 dashboardAuth.passwordHash = '';
                 clearPersistedHash();
+                writeOperatorDisabled(true);
+                authSource = 'operator_disabled';
+            } else {
+                writeOperatorDisabled(false);
+                authSource = isEnvManaged() ? 'environment' : 'dashboard';
             }
         }
         if (password) {
@@ -231,10 +331,22 @@ export function createAuthRouter(): Router {
             dashboardAuth.passwordHash = hash;
             dashboardAuth.enabled = true;
             savePersistedHash(hash);
+            // Definir senha é reativar: limpa a desativação explícita, senão o próximo boot
+            // desligaria a autenticação que acabou de ser configurada.
+            writeOperatorDisabled(false);
+            authSource = isEnvManaged() ? 'environment' : 'dashboard';
             // Invalida todos os tokens antigos — obriga novo login com a nova senha
             API_TOKENS.clear();
         }
-        res.json({ success: true, auth: { enabled: dashboardAuth.enabled, hasPassword: !!dashboardAuth.passwordHash } });
+        res.json({
+            success: true,
+            auth: {
+                enabled: dashboardAuth.enabled,
+                hasPassword: !!dashboardAuth.passwordHash,
+                source: authSource,
+                envManaged: isEnvManaged(),
+            },
+        });
     });
 
     return router;

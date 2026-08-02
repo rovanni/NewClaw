@@ -75,8 +75,8 @@ export function render(container) {
             <button class="btn btn-secondary" id="sg-disableAuth" style="display:none">${t('disable_auth_btn')}</button>
           </div>
           <div class="form-hint" style="margin-top:8px">
-            A senha é salva no banco de dados e persiste entre reinicializações.<br>
-            Se a variável <code>DASHBOARD_PASSWORD</code> estiver definida no ambiente, ela tem prioridade.
+            ${t('dashboard_password_hint')}
+            <span id="sg-authSourceNote"></span>
           </div>
         </div>
       </details>
@@ -93,10 +93,26 @@ export function render(container) {
   // ── Auth status ───────────────────────────────────────────────────────────
   const statusEl    = document.getElementById('sg-authStatus');
   const disableBtn  = document.getElementById('sg-disableAuth');
+  const sourceEl    = document.getElementById('sg-authSourceNote');
+
+  // Reporta a origem real do estado em vez de deixar o operador deduzir. Antes desta nota, a
+  // tela afirmava que DASHBOARD_PASSWORD "tem prioridade" — o botão de desativar parecia
+  // funcionar, mas a variável reativava tudo no restart seguinte, sem nada explicando por quê.
+  function renderAuthSource(auth) {
+    if (!sourceEl) return;
+    if (auth.source === 'operator_disabled' && auth.envManaged) {
+      sourceEl.innerHTML = `<br>⚠️ ${t('auth_operator_disabled_note')}`;
+    } else if (auth.envManaged && auth.enabled) {
+      sourceEl.innerHTML = `<br>${t('auth_env_managed_note')}`;
+    } else {
+      sourceEl.innerHTML = '';
+    }
+  }
 
   async function refreshAuthStatus() {
     try {
       const auth = await getAuthStatus();
+      renderAuthSource(auth);
       if (auth.enabled && auth.hasPassword) {
         statusEl.innerHTML = `<span style="color:var(--success)">✅ ${t('auth_active_label')}</span> — ${t('auth_active_desc')}`;
         disableBtn.style.display = 'inline-flex';
