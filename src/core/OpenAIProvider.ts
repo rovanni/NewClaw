@@ -6,6 +6,20 @@ import { guessCapabilities } from './modelCapabilityHeuristics';
 const log = createLogger('OpenAIProvider');
 
 /**
+ * Teto para ESTABELECER a conexão — não para a resposta inteira.
+ *
+ * Um endpoint que não devolve nem os cabeçalhos nesse prazo está fora do ar; esperar mais só
+ * atrasa o fallback. Sem essa separação, um provider morto consumia o timeout completo da
+ * requisição antes de o próximo da fila ser tentado: observado em produção (02/08/2026) com um
+ * servidor local desligado e timeout dinâmico de 5,8 min — cada mensagem levava minutos para
+ * chegar a um provider saudável, e com o retry o dobro disso.
+ *
+ * Depois que a resposta começa, quem manda é o timeout normal: gerar texto pode levar minutos e
+ * isso é legítimo.
+ */
+const CONNECT_TIMEOUT_MS = 15_000;
+
+/**
  * Provider genérico para qualquer endpoint compatível com a API da OpenAI
  * (`/chat/completions`, `/models`) — cobre OpenAI oficial, LM Studio, vLLM e endpoints
  * "custom" apontados pelo usuário. Um único adapter parametrizado por baseUrl/label em vez de
@@ -54,19 +68,39 @@ export class OpenAIProvider implements ILLMProvider {
         return await taskQueue.add(async () => {
             const queueWaitMs = Date.now() - queueEntryTime;
             if (queueWaitMs > 500) log.info(`Queue wait: ${queueWaitMs}ms (budget: ${options?.timeoutMs ?? 'none'}ms)`);
-            const response = await fetch(`${this.baseUrl}/chat/completions`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
-                signal: options?.signal,
-                body: JSON.stringify({
-                    model: this.model,
-                    messages,
-                    tools: tools ? tools.map(t => ({
-                        type: 'function',
-                        function: { name: t.name, description: t.description, parameters: t.parameters }
-                    })) : undefined
-                })
-            });
+            // Aborta se a conexão não se estabelecer a tempo, mas encadeia o signal externo para
+            // que um cancelamento do usuário continue valendo depois disso.
+            const connectAbort = new AbortController();
+            const connectTimer = setTimeout(() => connectAbort.abort(), CONNECT_TIMEOUT_MS);
+            const onExternalAbort = () => connectAbort.abort();
+            options?.signal?.addEventListener('abort', onExternalAbort, { once: true });
+
+            let response: Response;
+            try {
+                response = await fetch(`${this.baseUrl}/chat/completions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
+                    signal: connectAbort.signal,
+                    body: JSON.stringify({
+                        model: this.model,
+                        messages,
+                        tools: tools ? tools.map(t => ({
+                            type: 'function',
+                            function: { name: t.name, description: t.description, parameters: t.parameters }
+                        })) : undefined
+                    })
+                });
+            } catch (err) {
+                // Distingue "servidor fora do ar" de "usuário cancelou" — a primeira é um motivo
+                // para tentar o próximo provider, a segunda não.
+                if (connectAbort.signal.aborted && !options?.signal?.aborted) {
+                    throw new Error(`${this.label} não respondeu em ${CONNECT_TIMEOUT_MS / 1000}s (${this.baseUrl})`);
+                }
+                throw err;
+            } finally {
+                clearTimeout(connectTimer);  // conectou (ou falhou): daqui em diante vale o timeout normal
+                options?.signal?.removeEventListener('abort', onExternalAbort);
+            }
 
             if (!response.ok) {
                 const error = await response.text();

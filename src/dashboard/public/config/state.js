@@ -61,6 +61,7 @@ export const runtimeStore = new Store({
   ram: '—',
   platform: null,
   hostname: null,
+  version: null,   // versão do NewClaw, lida do package.json pelo servidor
   arch: null,
 });
 

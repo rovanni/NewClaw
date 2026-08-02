@@ -69,6 +69,49 @@ export function serializeAttachment(a: ResponseAttachment): { type: string; file
 export function createChatRouter(ctx: DashboardContext): Router {
     const router = Router();
 
+    /**
+     * Conversas processando agora — GET /api/chat/active.
+     *
+     * A interface consulta isto ao carregar para restaurar o indicador de progresso e o botão de
+     * parar. Sem isso, o estado "processando" existia só na aba que enviou a mensagem: recarregar
+     * a página, trocar de tela ou reiniciar o servidor deixava o usuário sem indicação nenhuma e
+     * sem como interromper, com o turno seguindo em execução e o modelo ocupando a GPU.
+     *
+     * Leitura de memória, sem I/O: pode ser chamado no polling do dashboard.
+     */
+    router.get('/active', (_req: Request, res: Response) => {
+        const controller = ctx.controller as unknown as {
+            agentLoop?: { getActiveTurns?: () => Array<{ conversationId: string; elapsedMs: number }> };
+            goalOrchestrator?: { getActiveGoals?: () => Array<{ id: string; sessionKey: string; status: string; createdAt: number }> };
+        };
+
+        const active: Array<{ conversationId: string; elapsedMs: number; kind: 'turn' | 'goal'; status?: string }> = [];
+        for (const t of controller?.agentLoop?.getActiveTurns?.() ?? []) {
+            active.push({ ...t, kind: 'turn' });
+        }
+
+        // Goals TAMBÉM contam, e são o caso que mais demora: uma pergunta pode ser roteada para o
+        // GoalOrchestrator em vez do AgentLoop, e aí `activeTurns` fica vazio enquanto o trabalho
+        // continua por minutos. Foi exatamente o que aconteceu em 02/08/2026 (route=goal, 189s de
+        // execução) — olhar só os turnos deixaria a tela dizendo "ocioso" com o goal rodando.
+        const now = Date.now();
+        for (const g of controller?.goalOrchestrator?.getActiveGoals?.() ?? []) {
+            // sessionKey costuma ser "canal:usuário"; a interface web usa a parte do usuário como
+            // id de conversa. Sem a chave, o goal ainda aparece — o essencial é o usuário saber
+            // que existe algo em andamento.
+            const conversationId = (g.sessionKey ?? '').split(':').pop() || g.id;
+            if (active.some(a => a.conversationId === conversationId)) continue;  // já contado como turno
+            active.push({
+                conversationId,
+                elapsedMs: g.createdAt ? now - g.createdAt : 0,
+                kind: 'goal',
+                status: g.status,
+            });
+        }
+
+        res.json({ success: true, active });
+    });
+
     router.post('/', upload.array('files', 5), async (req: Request, res: Response) => {
         const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
         const now = Date.now();

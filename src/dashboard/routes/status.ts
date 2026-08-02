@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { execFile } from 'child_process';
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { errorMessage } from '../../shared/errors';
@@ -9,6 +10,39 @@ import { DashboardContext } from './types';
 
 const log = createLogger('Dashboardserver');
 const DIR = process.cwd();
+
+/** Resolvida uma vez: o arquivo não muda enquanto o processo vive. */
+let cachedAppVersion: string | null | undefined;
+
+/**
+ * Versão do NewClaw, lida do próprio `package.json` — fonte única, nunca digitada em outro lugar.
+ *
+ * Sobe a partir deste arquivo procurando o package.json do projeto, em vez de usar um caminho
+ * relativo fixo: em desenvolvimento o código roda de `src/`, em produção de `dist/`, e as duas
+ * profundidades são diferentes. Confere `name` para não pegar por engano o package.json de uma
+ * dependência.
+ *
+ * Devolve `null` quando não encontra — a interface mostra "—" em vez de um número inventado.
+ */
+export function getAppVersion(): string | null {
+    if (cachedAppVersion !== undefined) return cachedAppVersion;
+    let dir = __dirname;
+    for (let i = 0; i < 8; i++) {
+        try {
+            const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'));
+            if (pkg.name === 'newclaw' && typeof pkg.version === 'string') {
+                cachedAppVersion = pkg.version as string;
+                return cachedAppVersion;
+            }
+        } catch { /* não é aqui: continua subindo */ }
+        const parent = path.dirname(dir);
+        if (parent === dir) break;   // chegou na raiz do sistema de arquivos
+        dir = parent;
+    }
+    log.warn('package.json do NewClaw não encontrado — versão não será exibida');
+    cachedAppVersion = null;
+    return null;
+}
 
 export function formatUptime(seconds: number): string {
     const d = Math.floor(seconds / 86400);
@@ -105,6 +139,7 @@ export function createStatusRouter(ctx: DashboardContext): Router {
                     heapUsed: formatBytes(mem.heapUsed),
                     heapTotal: formatBytes(mem.heapTotal),
                 },
+                version: getAppVersion(),
                 nodeVersion: process.version,
                 platform: process.platform,
                 arch: process.arch,

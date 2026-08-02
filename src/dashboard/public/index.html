@@ -937,6 +937,29 @@
       sendBtn.disabled = false;
     }
 
+    /**
+     * Restaura o estado de "processando" ao abrir a página.
+     *
+     * O botão de parar e o indicador de progresso viviam só na aba que enviou a mensagem: bastava
+     * recarregar, trocar de tela ou o servidor reiniciar para o usuário perder qualquer indicação
+     * de que algo continuava rodando — e qualquer forma de interromper. O servidor sabe quais
+     * conversas têm turno ativo; aqui só perguntamos a ele.
+     */
+    async function restoreActiveTurn() {
+      try {
+        const res = await newclawFetch('/api/chat/active');
+        const { active = [] } = await res.json();
+        if (!active.length) return;
+        // Prefere a conversa aberta; se o turno ativo é de outra, ainda assim mostra, porque o
+        // ponto é o usuário saber que existe algo em andamento.
+        const mine = active.find(a => a.conversationId === (currentConvId || 'web-session')) || active[0];
+        currentChatSessionId = mine.conversationId;
+        setSendBtnBusy(true);
+        const min = Math.floor(mine.elapsedMs / 60000);
+        showStatus('processing', min >= 1 ? t('status_still_running', { min }) : t('status_thinking'));
+      } catch { /* sem conexão: a tela segue no estado normal */ }
+    }
+
     async function cancelMessage() {
       if (!currentChatSessionId) return;
       sendBtn.disabled = true; // evita clique duplo enquanto o /cancelar está em voo
@@ -1053,6 +1076,9 @@
         if (!currentConvId || !conversations.find(c => c.id === currentConvId)) currentConvId = conversations[0].id;
         renderSidebar(); renderChat();
       }
+      // Depois de saber qual conversa está aberta: se o servidor ainda está processando alguma,
+      // devolve o indicador e o botão de parar em vez de deixar a tela parecendo ociosa.
+      restoreActiveTurn();
     });
     newclawFetch('/api/config').then(r=>r.json()).then(d=>{ if(d.success) document.querySelector('.newclaw-header-subtitle')?.remove(); });
 

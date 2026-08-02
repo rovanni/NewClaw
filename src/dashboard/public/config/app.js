@@ -224,7 +224,7 @@ runtimeStore.on('platform', () => {
   if (badge && s.platform) {
     const osIcon = s.platform === 'win32' ? '🪟' : (s.platform === 'darwin' ? '🍏' : '🐧');
     const osName = s.platform === 'win32' ? 'Windows' : (s.platform === 'darwin' ? 'macOS' : 'Linux');
-    badge.innerHTML = `<span title="Servidor NewClaw (${s.arch || 'unknown'})" style="font-size: 0.85rem; color: var(--text-soft); padding: 4px 8px; background: rgba(255,255,255,0.05); border-radius: 4px; margin-right: 12px; display: inline-flex; align-items: center; gap: 4px;">Servidor: ${osIcon} ${osName} · ${s.hostname || 'Desconhecido'}</span>`;
+    badge.innerHTML = `<span title="Servidor NewClaw (${s.arch || 'unknown'})" style="font-size: 0.85rem; color: var(--text-soft); padding: 4px 8px; background: rgba(255,255,255,0.05); border-radius: 4px; margin-right: 12px; display: inline-flex; align-items: center; gap: 4px;">Servidor: ${osIcon} ${osName} · ${s.hostname || 'Desconhecido'}${s.version ? ' · v' + s.version : ''}</span>`;
   }
 });
 
@@ -268,6 +268,7 @@ async function loadStatus() {
       ram:    s.memory?.heapUsed || '—',
       platform: s.platform || null,
       hostname: s.hostname || null,
+      version: s.version || null,
       arch: s.arch || null,
       telegramChannel: s.telegramChannel || null,
     });

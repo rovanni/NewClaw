@@ -985,6 +985,25 @@ export class AgentLoop {
 
     // ── Entry points ───────────────────────────────────────────────────────────
 
+    /**
+     * Conversas com um turno em andamento agora, com há quanto tempo começaram.
+     *
+     * Existe porque o estado "está processando" vivia apenas no navegador: recarregar a página,
+     * navegar para outra tela ou reiniciar o servidor deixava a interface sem o indicador de
+     * progresso e sem o botão de parar — enquanto o turno continuava rodando aqui, consumindo
+     * modelo e GPU. Quem não conhecesse o comando `/cancelar` ficava sem saída (relatado em
+     * 02/08/2026, com um turno de ~50 minutos invisível na tela).
+     *
+     * Só leitura de mapas em memória: pode ser chamado no polling do dashboard.
+     */
+    public getActiveTurns(): Array<{ conversationId: string; elapsedMs: number }> {
+        const now = Date.now();
+        return [...this.activeTurns.keys()].map(conversationId => ({
+            conversationId,
+            elapsedMs: now - (this.turnStartTimes.get(conversationId) ?? now),
+        }));
+    }
+
     public cancel(conversationId: string): void {
         const ctrl = this.activeTurns.get(conversationId);
         if (ctrl) {

@@ -17,6 +17,7 @@ const TRANSLATIONS = {
 
     // Chat status
     status_thinking: "Pensando...",
+    status_still_running: "Ainda processando — já faz {min} min. Clique em ■ para parar.",
     status_sending: "Enviando...",
     status_receiving: "Recebendo resposta...",
     status_cancelling: "Cancelando...",
@@ -615,6 +616,7 @@ const TRANSLATIONS = {
     
     // Chat status
     status_thinking: "Thinking...",
+    status_still_running: "Still working — {min} min so far. Click ■ to stop.",
     status_sending: "Sending...",
     status_receiving: "Receiving response...",
     status_cancelling: "Cancelling...",
@@ -1213,6 +1215,7 @@ const TRANSLATIONS = {
 
     // Chat status
     status_thinking: "Pensando...",
+    status_still_running: "Aún procesando — ya van {min} min. Haz clic en ■ para detener.",
     status_sending: "Enviando...",
     status_receiving: "Recibiendo respuesta...",
     status_cancelling: "Cancelando...",

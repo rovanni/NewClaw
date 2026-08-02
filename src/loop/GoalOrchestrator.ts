@@ -675,6 +675,24 @@ export class GoalOrchestrator {
     }
 
     /**
+     * Goals em andamento agora, para a interface mostrar que há trabalho rodando e oferecer como
+     * pará-lo.
+     *
+     * Complementa `AgentLoop.getActiveTurns()`: uma mensagem pode ser roteada para o
+     * GoalOrchestrator em vez do AgentLoop, e nesse caso não existe "turno ativo" nenhum — só um
+     * goal, que é justamente o caso que mais demora. Olhar apenas os turnos deixava a tela
+     * dizendo "ocioso" com um goal de minutos em execução (relatado em 02/08/2026).
+     */
+    getActiveGoals(): Array<{ id: string; sessionKey: string; status: string; createdAt: number }> {
+        return this.goalStore.getAllActive().map(g => ({
+            id: g.id,
+            sessionKey: g.sessionKey,
+            status: g.status,
+            createdAt: g.createdAt,
+        }));
+    }
+
+    /**
      * Cancela explicitamente o goal ativo da sessão (comandos /cancelar, /cancel, /stop, /pare
      * — ver agentControllerCommands.ts, canal-agnóstico: Telegram/Discord/WhatsApp/Signal/Web
      * chegam aqui pelo mesmo caminho). Marca o goal como 'abandoned' para que o checkpoint em
