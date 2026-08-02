@@ -230,7 +230,20 @@ export class ProviderFactory {
 
         log.info(`[${requestId}] Active providers after circuit check: [${activeProviders.join(',')}]`);
 
-        const primaryProviderName = activeProviders[0];
+        // Dono do modelOverride: o provider PARA O QUAL aquele modelo foi escolhido — não "o
+        // primeiro que sobrou". Um nome de modelo só existe dentro do provider que o serve.
+        //
+        // Antes isto era `activeProviders[0]`, e bastava o provider preferido cair (circuito
+        // aberto ou falha) para o modelo dele ser aplicado ao PRÓXIMO da fila, que não o tem.
+        // Visto em produção (02/08/2026): com um servidor local fora do ar, o Ollama passou a
+        // receber `gemma-4-26B-A4B-it-Q4_K_M.gguf` e respondeu HTTP 404 em toda tentativa, até
+        // `EXHAUSTED attempts=4` — o goal do usuário falhou inteiro tendo um provider saudável
+        // disponível. Vale para qualquer par (provider A com modelo X → fallback B sem X), não
+        // só para modelos locais.
+        //
+        // Os demais providers usam a instância compartilhada, com o modelo que cada um já tem
+        // configurado — que é justamente o sentido de existir um fallback.
+        const modelOverrideOwner = preferredProvider || this.defaultProvider;
 
         for (const providerName of activeProviders) {
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -264,7 +277,7 @@ export class ProviderFactory {
                     if (!sharedProvider) break;
                     // Use a dedicated per-request instance for the primary provider so concurrent
                     // requests on different channels don't race to mutate the same shared object.
-                    const provider = (modelOverride && providerName === primaryProviderName)
+                    const provider = (modelOverride && providerName === modelOverrideOwner)
                         ? this.getProviderWithModel(modelOverride, providerName)
                         : sharedProvider;
                     const modelUsed = (provider instanceof OllamaProvider) ? provider.getModel() : (provider as { model?: string }).model || provider.name;
