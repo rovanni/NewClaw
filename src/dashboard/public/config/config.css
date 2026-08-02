@@ -564,6 +564,17 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 /* Modelos em disco (modo "Meus arquivos"): tamanho do arquivo e estado de carga. Reaproveita os
    mesmos tokens neutros/sucesso já usados nas outras badges da tabela — nenhuma cor nova. */
 .model-size-badge { font-size:.62rem; padding:1px 6px; border-radius:8px; background:rgba(148,163,184,.15); color:var(--text-soft); font-weight:600; margin-left:4px; }
+/* Comando final montado, no editor de opções — monoespaçado e quebrando linha para caber. */
+/* Botões de parâmetro do servidor local: o nome é fixo, o usuário só preenche o valor. */
+.param-grid { display:flex; flex-wrap:wrap; gap:8px; }
+.param-chip { display:flex; align-items:center; gap:6px; padding:4px 8px; border-radius:8px; background:var(--bg-input); border:1px solid var(--border-color); }
+.param-chip.on { border-color:var(--accent); background:var(--accent-bg); }
+.param-toggle, .param-toggle-static { background:none; border:none; color:var(--text-main); cursor:pointer; font-size:.76rem; padding:0; display:flex; align-items:center; gap:5px; }
+.param-toggle-static { cursor:default; }
+.param-chip code { font-family:var(--font-mono,monospace); font-size:.72rem; }
+.param-value { width:82px; padding:3px 7px; font-size:.74rem; border-radius:5px; background:var(--bg-surface); border:1px solid var(--border-color); color:var(--text-main); }
+.param-value:disabled { opacity:.4; }
+.ml-cmd-preview { margin:4px 0 0; padding:8px 10px; border-radius:6px; background:var(--bg-input); border:1px solid var(--border-color); font-family:var(--font-mono,monospace); font-size:.72rem; line-height:1.5; color:var(--text-muted); white-space:pre-wrap; word-break:break-all; }
 .model-opts-btn { padding:2px 7px; font-size:.85rem; line-height:1; opacity:.55; }
 .model-opts-btn:hover { opacity:1; }
 /* Marcado quando o modelo já tem opções — dá para ver de relance quais foram ajustados. */

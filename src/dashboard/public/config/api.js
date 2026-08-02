@@ -124,6 +124,16 @@ export async function serveLocalModel(file) {
   }));
 }
 
+// Comando final que será executado com aquelas opções. Vem do servidor, e não montado aqui, para
+// que a tela nunca mostre algo diferente do que roda de verdade.
+export async function previewLocalCommand(file, options) {
+  return json(f('/api/models/local/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file, options }),
+  }));
+}
+
 export async function stopLocalModel() {
   return json(f('/api/models/local/stop', { method: 'POST' }));
 }

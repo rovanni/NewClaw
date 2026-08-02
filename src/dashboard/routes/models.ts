@@ -54,6 +54,36 @@ export function parseServerOptions(raw: string): string[] {
     return out;
 }
 
+/** Flags que o NewClaw controla — se vierem repetidas nas opções do usuário, valeriam duas vezes
+ *  na linha de comando e o servidor não sobe. As de valor consomem também o argumento seguinte. */
+const MANAGED_FLAGS_WITH_VALUE = ['--model', '-m', '--port', '--host'];
+const MANAGED_FLAGS_STANDALONE = ['--server'];
+
+/**
+ * Limpa a linha de opções do usuário, removendo o que o NewClaw já controla.
+ *
+ * Existe porque colar o COMANDO COMPLETO é o gesto natural: é assim que a documentação de
+ * qualquer servidor local mostra o exemplo, e foi o que aconteceu na prática (02/08/2026) —
+ * o usuário colou `llamafile.exe --server --model X -fit off ...` e o comando final saiu com o
+ * executável e o modelo duplicados, então o servidor morria sem subir.
+ *
+ * Ser tolerante aqui é mais barato que ensinar a diferença entre "comando" e "flags extras":
+ * as duas formas passam a funcionar, e ninguém precisa entender o que o NewClaw monta por baixo.
+ */
+export function sanitizeServerOptions(tokens: string[]): string[] {
+    const out: string[] = [];
+    let i = 0;
+    // Um primeiro token que não é flag é o executável do comando colado (llamafile.exe, ./llamafile).
+    if (tokens.length > 0 && !tokens[0].startsWith('-')) i = 1;
+    for (; i < tokens.length; i++) {
+        const tok = tokens[i];
+        if (MANAGED_FLAGS_STANDALONE.includes(tok)) continue;
+        if (MANAGED_FLAGS_WITH_VALUE.includes(tok)) { i++; continue; } // pula a flag e o valor dela
+        out.push(tok);
+    }
+    return out;
+}
+
 /**
  * Argumentos finais do servidor: o mínimo que o NewClaw precisa controlar, mais as opções que o
  * usuário definiu para AQUELE modelo.
@@ -64,8 +94,8 @@ export function parseServerOptions(raw: string): string[] {
  * de 16GB é errada numa de 8GB, e um projetor de visão só existe para alguns modelos. Embutir
  * uma tabela dessas no projeto seria distribuir o ambiente de quem a escreveu.
  */
-function buildServerArgs(file: string, port: number, userOptions: string): string[] {
-    const extra = parseServerOptions(userOptions || '');
+export function buildServerArgs(file: string, port: number, userOptions: string): string[] {
+    const extra = sanitizeServerOptions(parseServerOptions(userOptions || ''));
     const args = ['--server', '--model', file, '--port', String(port), '--host', '127.0.0.1'];
     // Contexto padrão só quando o usuário não escolheu um: a nossa escolha é um piso de
     // funcionamento (prompts do agente passam de 5k tokens), não uma preferência a impor.
@@ -90,6 +120,18 @@ let localServer: { child: ChildProcess | null; file: string; port: number; start
 /** Onde o estado do servidor local é anotado entre reinícios do NewClaw. Fica em ./data (mesma
  *  base do banco), que já é por instância — duas instâncias isoladas não se confundem. */
 const SERVER_STATE_FILE = path.join(process.cwd(), 'data', 'local-model-server.json');
+
+/** Saída do servidor local. Sem isto, uma falha na largada não deixava nenhuma pista do motivo. */
+const SERVER_LOG_FILE = path.join(process.cwd(), 'data', 'local-model-server.log');
+
+/** Últimas linhas úteis da saída do servidor, para explicar uma falha ao usuário. */
+function readServerLogTail(maxLines = 12): string {
+    try {
+        return fs.readFileSync(SERVER_LOG_FILE, 'utf-8')
+            .split('\n').map(l => l.trim()).filter(Boolean)
+            .slice(-maxLines).join('\n');
+    } catch { return ''; }
+}
 
 function persistServerState(state: { pid?: number; file: string; port: number } | null): void {
     try {
@@ -290,13 +332,47 @@ export function createModelsRouter(ctx: DashboardContext): Router {
             })
             .sort((a, b) => a.id.localeCompare(b.id));
 
+        // Projetores multimodais: não são modelos servíveis (por isso ficam fora da lista), mas o
+        // usuário precisa indicar um para modelos de visão funcionarem. Devolvidos à parte para a
+        // interface poder oferecê-los numa lista, em vez de exigir que se lembre do nome exato.
+        const projectors = entries
+            .filter(e => e.isFile())
+            .map(e => e.name)
+            .filter(n => COMPANION_FILE_PREFIXES.some(p => n.toLowerCase().startsWith(p)))
+            .sort();
+
         res.json({
-            success: true, configured: true, dir, models,
+            success: true, configured: true, dir, models, projectors,
             // A UI precisa saber se dá para oferecer o botão "Usar" ou se tem que explicar que
             // falta o executável do servidor — sem isso o usuário só veria "Não carregado" sem
             // nenhuma pista do que fazer, que foi a lacuna real relatada (2026-08-02).
             serverBinary: findLocalServerBinary(dir) ? path.basename(findLocalServerBinary(dir)!) : null,
             running: localServer ? { file: localServer.file, url: localServerUrl(localServer.port) } : null,
+        });
+    });
+
+    /**
+     * Mostra o comando exato que será executado — POST /api/models/local/preview {file, options}.
+     *
+     * A interface exibe isso enquanto o usuário digita as opções, para que ninguém precise saber
+     * o que o NewClaw acrescenta por baixo nem em que ordem. Nasceu de uma falha real: o usuário
+     * colou o comando completo (o formato que toda documentação de servidor local usa) e não tinha
+     * como perceber que o resultado ficaria duplicado. Ver o comando final elimina a adivinhação.
+     *
+     * Usa a MESMA função do carregamento — se preview e execução divergissem, a tela mentiria.
+     */
+    router.post('/local/preview', (req: Request, res: Response) => {
+        const dir = (ctx.config.localModelsDir || '').trim();
+        const file = String(req.body?.file || '');
+        const options = String(req.body?.options ?? (ctx.config.localModelOptions || {})[file] ?? '');
+        const binary = dir ? findLocalServerBinary(dir) : null;
+        const args = buildServerArgs(file, LOCAL_SERVER_PORT, options);
+        // Aspas só onde são necessárias — o comando exibido deve poder ser copiado e colado.
+        const quote = (s: string) => (/\s/.test(s) ? `"${s}"` : s);
+        res.json({
+            success: true,
+            binary: binary ? path.basename(binary) : null,
+            command: `${quote(binary ? path.basename(binary) : 'servidor')} ${args.map(quote).join(' ')}`,
         });
     });
 
@@ -362,8 +438,14 @@ export function createModelsRouter(ctx: DashboardContext): Router {
             // junto, e o sistema voltava apontando para uma porta vazia — "fetch failed" a cada
             // discovery, sem nenhuma pista do motivo. Carregar um modelo de 16 GB não pode ser
             // desfeito por reiniciar o aplicativo.
-            child = spawn(binary, args, { cwd: dir, windowsHide: true, detached: true, stdio: 'ignore' });
+            // Saída redirecionada para ARQUIVO, não descartada: com `stdio:'ignore'` o servidor
+            // podia morrer na largada e não sobrava nenhuma pista do motivo — aconteceu em
+            // 02/08/2026 com uma linha de opções malformada. Arquivo (e não pipe) porque o
+            // processo é detached: um pipe manteria o NewClaw preso ao filho.
+            const logFd = fs.openSync(SERVER_LOG_FILE, 'w');
+            child = spawn(binary, args, { cwd: dir, windowsHide: true, detached: true, stdio: ['ignore', logFd, logFd] });
             child.unref();
+            fs.closeSync(logFd);
         } catch (err) {
             return res.status(500).json({ success: false, error: `Falha ao iniciar o servidor: ${errorMessage(err)}` });
         }
@@ -377,9 +459,15 @@ export function createModelsRouter(ctx: DashboardContext): Router {
         child.on('error', err => { exitedEarly = errorMessage(err); });
         child.on('exit', code => {
             if (localServer?.child === child) localServer = null;
-            if (!exitedEarly) exitedEarly = `o servidor encerrou com código ${code}`;
+            if (!exitedEarly) {
+                // A saída real do servidor é a única coisa que explica POR QUE ele não subiu —
+                // "encerrou com código 1" sozinho não ajuda ninguém a corrigir as opções.
+                const tail = readServerLogTail();
+                exitedEarly = tail
+                    ? `o servidor encerrou (código ${code}):\n${tail}`
+                    : `o servidor encerrou com código ${code}`;
+            }
         });
-        child.stderr?.on('data', (d: Buffer) => log.info(`[servidor local] ${d.toString().trim().slice(0, 200)}`));
 
         // Espera o modelo carregar de verdade: enquanto carrega, o servidor já aceita conexão mas
         // responde 503. Só devolver sucesso quando /v1/models listar algo evita a UI dizer

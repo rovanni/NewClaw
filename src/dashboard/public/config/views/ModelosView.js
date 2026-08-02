@@ -1,7 +1,7 @@
 import { configStore, providersStore } from '../state.js';
 import { showToast } from '../components/Toast.js';
 import { initDropdowns, updateDropdownModels } from '../components/ModelDropdown.js';
-import { addCustomProvider, removeCustomProvider, editCustomProvider, getCloudCatalog, testCustomProvider, getLocalModels, serveLocalModel, stopLocalModel } from '../api.js';
+import { addCustomProvider, removeCustomProvider, editCustomProvider, getCloudCatalog, testCustomProvider, getLocalModels, serveLocalModel, stopLocalModel, previewLocalCommand } from '../api.js';
 import { loadProviders, doSave, guideBox } from '../app.js';
 
 // Funções (não const) porque t() precisa ser avaliado a cada render() — se fossem consts de
@@ -137,6 +137,9 @@ let localServerBinary = null;
 let localRunning = null;
 // Modelo cujas opções de carregamento estão abertas para edição (null = painel fechado).
 let localOptionsFor = null;
+// Projetores multimodais (mmproj-*.gguf) encontrados na pasta — oferecidos numa lista para
+// modelos de visão, em vez de exigir que o usuário lembre o nome do arquivo.
+let localProjectors = [];
 
 // Label do provider custom sendo editado no momento (null = formulário em modo "adicionar
 // novo"). Achado real (2026-07-31): sem edição, corrigir uma URL digitada errada ou trocar o
@@ -1259,6 +1262,7 @@ async function loadLocalModels() {
     localConfigured = !!r.configured;
     localError = r.error || '';
     localServerBinary = r.serverBinary || null;
+    localProjectors = r.projectors || [];
     localRunning = r.running || null;
   } catch (err) {
     localCatalog = [];
@@ -1266,7 +1270,51 @@ async function loadLocalModels() {
     localError = err.message;
     localServerBinary = null;
     localRunning = null;
+    localProjectors = [];
   }
+}
+
+/**
+ * Parâmetros oferecidos como botão no editor de opções.
+ *
+ * São ATALHOS para quem não conhece a sintaxe, não uma lista fechada: o campo de texto continua
+ * aceitando qualquer coisa, porque cada servidor local tem o seu vocabulário. Os nomes aqui são
+ * os do ecossistema llama.cpp/llamafile, que é o caso de uso mais comum.
+ *
+ * Note que nenhum VALOR vem preenchido: `--n-gpu-layers 12` é a divisão certa numa placa de 16GB
+ * e errada numa de 8GB. O botão oferece o parâmetro; o número é de quem conhece a própria máquina.
+ */
+function getServerParams() {
+  return [
+    { flag: '--n-gpu-layers', value: true,  placeholder: 'ex.: 12',   desc: t('ml_param_ngl') },
+    { flag: '-c',             value: true,  placeholder: 'ex.: 8192', desc: t('ml_param_ctx') },
+    { flag: '-fit',           value: true,  placeholder: 'off',       desc: t('ml_param_fit') },
+    { flag: '-ctxcp',         value: true,  placeholder: '0',         desc: t('ml_param_ctxcp') },
+    { flag: '--no-mmap',      value: false,                            desc: t('ml_param_nommap') },
+    { flag: '--no-warmup',    value: false,                            desc: t('ml_param_nowarmup') },
+  ];
+}
+
+/** Lê o valor atual de um parâmetro na linha de opções (null = não está presente). */
+function readParam(tokens, flag, hasValue) {
+  const i = tokens.indexOf(flag);
+  if (i === -1) return null;
+  return hasValue ? (tokens[i + 1] ?? '') : '';
+}
+
+/** Reescreve a linha de opções com um parâmetro ligado (com valor) ou desligado. */
+function writeParam(raw, flag, hasValue, valueOrNull) {
+  const tokens = raw.trim() ? raw.trim().split(/\s+/) : [];
+  const out = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i] === flag) { if (hasValue) i++; continue; }  // remove ocorrência anterior
+    out.push(tokens[i]);
+  }
+  if (valueOrNull !== null) {
+    out.push(flag);
+    if (hasValue && valueOrNull) out.push(valueOrNull);
+  }
+  return out.join(' ');
 }
 
 /**
@@ -1286,18 +1334,109 @@ function renderLocalOptionsEditor() {
   if (!model) { box.style.display = 'none'; return; }
 
   const atual = (configStore.get('localModelOptions') || {})[localOptionsFor] || '';
+  const tokens = atual.trim() ? atual.trim().split(/\s+/) : [];
+  const params = getServerParams();
+
+  // Botões de parâmetro: marcados quando presentes na linha. Clicar liga/desliga, e quem tem
+  // valor ganha um campo ao lado. Assim ninguém precisa conhecer a sintaxe para configurar.
+  const paramChips = params.map(p => {
+    const val = readParam(tokens, p.flag, p.value);
+    const on = val !== null;
+    return `<div class="param-chip${on ? ' on' : ''}" title="${esc(p.desc)}">
+      <button type="button" class="param-toggle" data-param="${esc(p.flag)}" data-hasvalue="${p.value}">${on ? '☑' : '☐'} <code>${esc(p.flag)}</code></button>
+      ${p.value ? `<input type="text" class="param-value" data-param-value="${esc(p.flag)}" placeholder="${esc(p.placeholder)}" value="${esc(val ?? '')}" ${on ? '' : 'disabled'}>` : ''}
+    </div>`;
+  }).join('');
+
+  // Projetor de visão: lista os arquivos que existem NA PASTA, em vez de exigir o nome de cabeça.
+  const mmVal = readParam(tokens, '--mmproj', true);
+  const projetores = localProjectors || [];
+  const mmprojRow = projetores.length ? `
+    <div class="param-chip${mmVal !== null ? ' on' : ''}" title="${esc(t('ml_param_mmproj'))}">
+      <span class="param-toggle-static">🖼️ <code>--mmproj</code></span>
+      <select class="param-value" id="mr-mmprojSelect" style="min-width:220px;">
+        <option value="">${t('ml_param_mmproj_none')}</option>
+        ${projetores.map(f => `<option value="${esc(f)}"${mmVal === f ? ' selected' : ''}>${esc(f)}</option>`).join('')}
+      </select>
+    </div>` : '';
+
   box.style.display = '';
   box.className = 'ml-test-result';
   box.innerHTML = `
     <div class="ml-test-title">⚙️ ${t('ml_local_opts_for', { model: esc(model.id) })}</div>
     <div class="form-hint" style="margin:6px 0;">${t('ml_local_opts_hint')}</div>
+
+    <div class="form-hint" style="margin:10px 0 4px;">${t('ml_local_opts_click_hint')}</div>
+    <div class="param-grid">${paramChips}${mmprojRow}</div>
+
+    <div class="form-hint" style="margin:12px 0 4px;">${t('ml_local_opts_advanced')}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
       <input type="text" class="form-input" id="mr-optsInput" style="flex:1;min-width:260px;font-family:var(--font-mono,monospace);font-size:.8rem;"
              placeholder="${t('ml_local_opts_placeholder')}" value="${esc(atual)}">
       <button type="button" class="btn btn-primary btn-sm" id="mr-optsSave">${t('ml_local_opts_save')}</button>
       <button type="button" class="btn btn-ghost btn-sm" id="mr-optsCancel">${t('ml_cancel_btn')}</button>
     </div>
+    <!-- Comando final montado. É o que responde "como eu ia saber?": em vez de o usuário precisar
+         entender o que o NewClaw acrescenta por baixo, ele VÊ a linha que será executada. -->
+    <div class="form-hint" style="margin-top:10px;">${t('ml_local_opts_preview_label')}</div>
+    <pre class="ml-cmd-preview" id="mr-optsPreview">…</pre>
     <div class="form-hint" style="margin-top:8px;">${t('ml_local_opts_examples')}</div>`;
+
+  const input = document.getElementById('mr-optsInput');
+  // Atualiza a cada digitação, com uma pequena espera para não disparar a cada tecla.
+  let timer = null;
+  const refresh = async () => {
+    try {
+      const r = await previewLocalCommand(localOptionsFor, input.value);
+      const el = document.getElementById('mr-optsPreview');
+      if (el) el.textContent = r.command || '';
+    } catch { /* preview é auxiliar: falhar aqui não pode atrapalhar a edição */ }
+  };
+  const schedulePreview = () => { clearTimeout(timer); timer = setTimeout(refresh, 350); };
+  input?.addEventListener('input', schedulePreview);
+
+  // O campo de texto continua sendo a fonte de verdade; os botões apenas o reescrevem. Uma única
+  // representação evita que botão e texto discordem — o que apareceria como uma opção "ligada"
+  // que não está no comando, ou o contrário.
+  box.querySelectorAll('.param-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const flag = btn.dataset.param;
+      const hasValue = btn.dataset.hasvalue === 'true';
+      const ligado = input.value.trim().split(/\s+/).includes(flag);
+      const campo = box.querySelector(`[data-param-value="${CSS.escape(flag)}"]`);
+      input.value = writeParam(input.value, flag, hasValue, ligado ? null : (campo?.value || ''));
+      renderLocalOptionsEditor();   // redesenha marcações e estados
+      document.getElementById('mr-optsInput').value = input.value;
+      schedulePreviewAfterRerender();
+    });
+  });
+
+  box.querySelectorAll('[data-param-value]').forEach(campo => {
+    campo.addEventListener('input', () => {
+      const flag = campo.dataset.paramValue;
+      const el = document.getElementById('mr-optsInput');
+      el.value = writeParam(el.value, flag, true, campo.value);
+      schedulePreview();
+    });
+  });
+
+  document.getElementById('mr-mmprojSelect')?.addEventListener('change', e => {
+    const el = document.getElementById('mr-optsInput');
+    el.value = writeParam(el.value, '--mmproj', true, e.target.value || null);
+    schedulePreview();
+  });
+
+  refresh();
+}
+
+/** Repete o preview depois de um redesenho do editor (o elemento anterior deixou de existir). */
+function schedulePreviewAfterRerender() {
+  setTimeout(async () => {
+    const el = document.getElementById('mr-optsInput');
+    const out = document.getElementById('mr-optsPreview');
+    if (!el || !out) return;
+    try { out.textContent = (await previewLocalCommand(localOptionsFor, el.value)).command || ''; } catch {}
+  }, 50);
 }
 
 /**
