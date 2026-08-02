@@ -271,7 +271,9 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
    não fazem sentido como accordion (ex: busca+filtros+tabela do Model Registry). */
 .ml-static-card {
   background:var(--bg-surface); border:1px solid var(--border-color);
-  border-radius:12px; padding:18px 20px; margin-bottom:12px;
+  /* 18px horizontais = mesma coluna de texto da faixa de status e das caixas de guia desta tela
+     (era 20px, e o conteúdo começava 2px à direita do bloco de cima). */
+  border-radius:12px; padding:18px; margin-bottom:12px;
 }
 
 /* ════════════════════════════════════
@@ -527,6 +529,43 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .model-current-badge { font-size:.62rem; padding:1px 6px; border-radius:8px; background:rgba(74,222,128,.15); color:var(--success); font-weight:600; margin-left:4px; }
 .model-installed-badge { font-size:.72rem; padding:3px 9px; border-radius:8px; background:rgba(74,222,128,.15); color:var(--success); font-weight:600; }
 
+/* Resultado do teste de conexão de um provider OpenAI-Compatible. Mesmos tokens de cor de
+   sucesso/erro já usados em .badge-local / .api-key-status.missing — nenhuma cor nova. */
+.ml-test-result { padding:10px 14px; border-radius:8px; font-size:.82rem; line-height:1.5; }
+.ml-test-ok { background:rgba(74,222,128,.08); border:1px solid rgba(74,222,128,.3); }
+.ml-test-fail { background:rgba(248,113,113,.08); border:1px solid rgba(248,113,113,.3); }
+.ml-test-title { font-weight:600; margin-bottom:2px; }
+.ml-test-ok .ml-test-title { color:var(--success); }
+.ml-test-fail .ml-test-title { color:var(--danger); }
+.ml-test-detail { color:var(--text-soft); word-break:break-word; }
+.ml-test-result .chip { cursor:pointer; }
+
+/* Faixa de status acima das abas: compacta de propósito — está sempre na tela, então não pode
+   competir em peso visual com o conteúdo da aba. Em telas largas as 4 informações ficam lado a
+   lado; abaixo de 900px voltam a empilhar, sem quebrar nada. */
+/* Rótulo que separa os dois grupos do seletor (tarefas × componentes internos). Discreto de
+   propósito: são grupos do MESMO controle, não seções diferentes. */
+.cat-group-label { font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--text-soft); margin:14px 0 6px; display:flex; align-items:center; gap:8px; }
+.cat-group-label:first-child { margin-top:0; }
+
+/* Alinhada com as abas e os cards do painel: .overview-card nasceu com max-width:420px porque era
+   um painel estreito dentro da aba "Visão Geral"; como faixa de topo isso a deixava com pouco mais
+   de um terço da largura da página, destoando de tudo abaixo. Padding horizontal igual ao dos
+   cards para que o conteúdo — e não só a borda — fique na mesma coluna. 18px é o padding que o
+   próprio .overview-card já usava e o mesmo da caixa de guia que costuma vir logo abaixo; os
+   demais cards da tela variam entre 16 e 22px, inconsistência que já existia e não cabe a esta
+   mudança uniformizar. */
+.ml-statusbar { margin-bottom:14px; max-width:none; padding:10px 18px; }
+@media (min-width: 900px) {
+  .ml-statusbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px 32px; }
+  .ml-statusbar .overview-row { border:0; padding:2px 0; flex:0 1 auto; gap:8px; justify-content:flex-start; }
+}
+
+/* Modelos em disco (modo "Meus arquivos"): tamanho do arquivo e estado de carga. Reaproveita os
+   mesmos tokens neutros/sucesso já usados nas outras badges da tabela — nenhuma cor nova. */
+.model-size-badge { font-size:.62rem; padding:1px 6px; border-radius:8px; background:rgba(148,163,184,.15); color:var(--text-soft); font-weight:600; margin-left:4px; }
+.model-notserved-badge { font-size:.72rem; padding:3px 9px; border-radius:8px; background:rgba(148,163,184,.12); color:var(--text-soft); font-weight:600; }
+
 /* ════════════════════════════════════
    MODEL DROPDOWN
 ════════════════════════════════════ */
@@ -601,7 +640,8 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .cfg-efetiva {
   background:linear-gradient(135deg, var(--accent-bg) 0%, var(--bg-surface) 100%);
   border:1px solid rgba(125,211,252,.25); border-radius:14px;
-  padding:18px 22px; margin-bottom:14px;
+  /* idem — era 22px, o texto começava 4px à direita dos demais blocos da mesma tela. */
+  padding:18px; margin-bottom:14px;
 }
 .cfg-efetiva-title {
   font-size:.72rem; font-weight:700; text-transform:uppercase;

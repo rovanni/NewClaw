@@ -48,6 +48,9 @@ export const configStore = new Store({
   currentModel: '—',
   geminiKey: '', deepseekKey: '', groqKey: '', openrouterKey: '', anthropicKey: '',
   customProviders: [],
+  // Vazio por padrão — nunca um caminho de exemplo: um default embutido só valeria na máquina de
+  // quem o escreveu, e o projeto roda em Windows, Linux e macOS.
+  localModelsDir: '',
 });
 
 export const runtimeStore = new Store({
@@ -66,6 +69,7 @@ export const providersStore = new Store({
   catalog: [],      // ModelInfo[] — catálogo normalizado (Model Registry)
   health: [],       // ProviderHealth[] — status por provider configurado
   lastSync: null,   // timestamp (ms) da última sincronização bem-sucedida
+  lastKnownLocalModel: null, // {file, port} do último modelo local carregado — no ar ou não
 });
 
 export const toolsStore = new Store({

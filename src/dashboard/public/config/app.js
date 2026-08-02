@@ -117,6 +117,9 @@ export async function doSave() {
     ollamaModel:            c.ollamaModel  || 'glm-5.2:cloud',
     telegramAllowedUserIds: c.telegramAllowedUserIds || '',
     modelRouter:            c.modelRouter  || {},
+    // Sempre enviado (mesmo vazio): '' significa "não uso pasta local", uma escolha que precisa
+    // chegar ao servidor para apagar um valor anterior — ver o !== undefined na rota.
+    localModelsDir:         c.localModelsDir || '',
   };
 
   // Include API keys only if user typed something
@@ -246,6 +249,7 @@ async function loadConfig() {
       currentModel:           c.currentModel  || c.ollamaModel || '—',
       modelRouter:            c.modelRouter   || {},
       customProviders:        c.customProviders || [],
+      localModelsDir:         c.localModelsDir || '',
     });
   } catch {}
   // Só a partir daqui mudanças no configStore contam como "não salvas" — o patch inicial acima
@@ -279,15 +283,25 @@ export function guideBox(text) {
 
 export async function loadProviders(forceRefresh = false) {
   try {
-    const p = await getProviders();
+    const resp = await getProviders();
+    const p = resp.providers || {};
+    const health = resp.health || [];
     const ollama = p.ollama;
     if (ollama?.models) {
       const models = ollama.models;
+      // `models` é a lista de NOMES oferecida ao autocomplete (instalados + cloud conhecidos +
+      // custom + digitados pelo usuário) — nunca foi a contagem de modelos do Ollama. Usar
+      // models.length como "ollamaModelCount" inflava o número exibido (ex.: 21 com 6 instalados).
+      // O discovery real já devolve a contagem por provider em `health`.
+      const ollamaHealth = health.find(h => h.provider === 'ollama');
       providersStore.patch({
         models,
-        ollamaOnline: true,
-        ollamaModelCount: models.length,
-        health: p.health || [],
+        ollamaOnline: ollamaHealth ? ollamaHealth.online : true,
+        ollamaModelCount: ollamaHealth ? ollamaHealth.modelCount : models.length,
+        health,
+        // Último modelo local carregado (pode não estar no ar) — a UI usa junto com o health para
+        // oferecer recarregá-lo depois de um reinício da máquina.
+        lastKnownLocalModel: resp.lastKnownLocalModel || null,
       });
       updateDropdownModels(models);
     }

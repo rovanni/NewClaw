@@ -78,8 +78,12 @@ assert(
     /el\('ml-defaultProvider'\)\.addEventListener\('change', e => \{\s*applyDefaultProviderChange\(e\.target\.value\);/.test(src),
     'o <select> "Provider padrão" usa a MESMA função applyDefaultProviderChange (não duplica lógica)'
 );
+// O que importa é que o clique passe pela MESMA função (sem lógica duplicada), não a linha exata
+// em que ela aparece dentro do bloco: em 02/08/2026 um showToast passou a vir antes da chamada
+// (para que o aviso de "modelos reajustados" não fosse sobrescrito na tela) e o padrão anterior,
+// que exigia a chamada colada ao `if`, quebrou sem que nada do comportamento tivesse mudado.
 assert(
-    /dataset\.useAsPrimary;\s*if \(useAsPrimary\) \{\s*applyDefaultProviderChange\(useAsPrimary\)/.test(src),
+    /dataset\.useAsPrimary;\s*if \(useAsPrimary\) \{[\s\S]{0,400}applyDefaultProviderChange\(useAsPrimary\)/.test(src),
     'clique em "usar como principal" chama applyDefaultProviderChange com o label do card'
 );
 assert(
@@ -89,7 +93,10 @@ assert(
 // Idempotência/sincronia: applyDefaultProviderChange precisa re-renderizar os cards depois de
 // mudar o provider padrão, senão os badges "Principal"/botões ficam desatualizados até reload.
 assert(
-    /function applyDefaultProviderChange\(prov\) \{[\s\S]{0,400}renderProviderGrid\(\)/.test(src),
+    // Janela ampliada: a função ganhou o realinhamento dos modelos por categoria ao trocar de
+    // provider (02/08/2026) e passou dos 400 chars. Continua sendo a mesma garantia — a
+    // re-renderização acontece dentro desta função, não em cada call site.
+    /function applyDefaultProviderChange\(prov\) \{[\s\S]{0,1200}renderProviderGrid\(\)/.test(src),
     'applyDefaultProviderChange() chama renderProviderGrid() — badges/botões ficam sincronizados sem reload'
 );
 
