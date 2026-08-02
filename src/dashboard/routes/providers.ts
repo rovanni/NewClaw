@@ -2,12 +2,18 @@ import { Router, Request, Response } from 'express';
 import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import { DashboardContext } from './types';
+import { OpenAIProvider } from '../../core/OpenAIProvider';
+import { getLastKnownLocalServer } from './models';
 import { persistConfigToEnv } from './config';
 import { interpretOllamaPullFailure, interpretOllamaPullException } from './ollamaPullError';
 
 /** Teto de segurança pro pull — generoso o bastante pra um download local real grande, mas finito:
  *  evita que um nome ambíguo (Ollama tenta resolver e nunca responde) prenda a requisição pra sempre. */
 const OLLAMA_PULL_TIMEOUT_MS = 5 * 60_000;
+
+/** Teste de conexão é interativo (usuário esperando na tela) — curto de propósito: um servidor
+ *  local que não responde em 10s está inutilizável para chat de qualquer forma. */
+const PROVIDER_TEST_TIMEOUT_MS = 10_000;
 
 const log = createLogger('Dashboardserver');
 
@@ -77,9 +83,49 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
             },
             customProviders,
             health: ctx.modelRegistryService?.getLastHealth() || [],
+            // Vai junto do health porque a UI precisa dos dois para decidir se oferece "carregar
+            // agora": provedor local offline + existe um modelo que estava carregado = a máquina
+            // foi reiniciada e o modelo não voltou. Leitura de arquivo, sem custo de rede.
+            lastKnownLocalModel: getLastKnownLocalServer(),
             currentProvider: ctx.config.defaultProvider,
             currentModel: currentModel || 'unknown'
         });
+    });
+
+    // Testa um endpoint OpenAI-Compatible ANTES de cadastrá-lo — o que faltava para "colocar o
+    // endereço e testar". Nenhuma lógica de rede nova: reusa OpenAIProvider.discoverModels(), o
+    // mesmo GET /models que o ModelRegistryService já usa para montar o catálogo, e não persiste
+    // nada (nem config, nem instância no ProviderFactory). Devolver a LISTA de modelos, e não só
+    // um ok/falhou, é o ponto: é ela que diz ao usuário quais nomes o servidor dele aceita — em
+    // servidores de modelo único (llamafile) costuma vir um id só, e é esse que vale.
+    router.post('/providers/test', async (req: Request, res: Response) => {
+        const { baseUrl, apiKey } = req.body;
+        if (!baseUrl?.trim()) {
+            return res.status(400).json({ success: false, error: 'baseUrl é obrigatório' });
+        }
+        const url = String(baseUrl).trim().replace(/\/+$/, '');
+        if (!/^https?:\/\//i.test(url)) {
+            return res.status(400).json({ success: false, error: 'baseUrl deve começar com http:// ou https://' });
+        }
+        try {
+            const probe = new OpenAIProvider(apiKey ? String(apiKey) : '', undefined, url, 'test');
+            // discoverModels() não expõe AbortSignal — o teto de tempo fica aqui para que um
+            // host que aceita a conexão e nunca responde não pendure a requisição do dashboard.
+            const models = await Promise.race([
+                probe.discoverModels(),
+                new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error('Timeout')), PROVIDER_TEST_TIMEOUT_MS)
+                ),
+            ]);
+            log.info(`Provider test OK: ${url} (${models.length} modelos)`);
+            res.json({ success: true, online: true, models: models.map(m => m.id) });
+        } catch (err) {
+            // 200 com online:false, não 5xx: "o endpoint do usuário não respondeu" é um RESULTADO
+            // de teste bem-sucedido, não uma falha do dashboard — a UI precisa da mensagem para
+            // exibi-la, e um status de erro faria o wrapper de fetch tratá-la como erro de rota.
+            log.info(`Provider test FAILED: ${url} — ${errorMessage(err)}`);
+            res.json({ success: true, online: false, models: [], error: errorMessage(err) });
+        }
     });
 
     router.post('/providers/custom', (req: Request, res: Response) => {

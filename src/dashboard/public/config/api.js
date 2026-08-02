@@ -39,9 +39,13 @@ export async function restartAgent() {
 
 // ── Providers ────────────────────────────────────────────────────────────────
 
+// Devolve a resposta inteira, não só `d.providers`: o servidor manda junto `health` (estado de
+// CADA provider descoberto, nativo e custom) e `currentProvider`/`currentModel`, e todos eram
+// descartados aqui. Efeito real: providersStore.health ficava permanentemente [], então os cards
+// de provider OpenAI-Compatible mostravam "—" para sempre e a Visão Geral não tinha como saber o
+// estado de nada que não fosse o Ollama.
 export async function getProviders() {
-  const d = await json(f('/api/providers'));
-  return d.providers;
+  return json(f('/api/providers'));
 }
 
 export async function pullModel(name) {
@@ -100,6 +104,38 @@ export async function editCustomProvider(label, { baseUrl, apiKey, model }) {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ baseUrl, apiKey, model }),
+  }));
+}
+
+// Modelos que o usuário já tem em disco (.gguf). `dir` opcional sobrescreve a pasta salva —
+// permite pré-visualizar um caminho digitado antes de salvar a configuração.
+export async function getLocalModels(dir) {
+  const q = dir ? `?dir=${encodeURIComponent(dir)}` : '';
+  return json(f(`/api/models/local${q}`));
+}
+
+// Carrega um modelo local no servidor embutido. Demora o tempo de ler o modelo do disco (pode
+// passar de um minuto em arquivos grandes) — a rota só responde quando ele está pronto de fato.
+export async function serveLocalModel(file) {
+  return json(f('/api/models/local/serve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file }),
+  }));
+}
+
+export async function stopLocalModel() {
+  return json(f('/api/models/local/stop', { method: 'POST' }));
+}
+
+// Testa um endpoint OpenAI-Compatible sem cadastrá-lo. A rota responde 200 mesmo quando o
+// endpoint do usuário está fora do ar (online:false + error) — por isso o retorno é o objeto
+// inteiro, não um booleano: a UI mostra o motivo da falha e a lista de modelos do sucesso.
+export async function testCustomProvider({ baseUrl, apiKey }) {
+  return json(f('/api/providers/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ baseUrl, apiKey }),
   }));
 }
 
