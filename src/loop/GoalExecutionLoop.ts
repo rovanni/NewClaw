@@ -62,6 +62,37 @@ const log = createLogger('GoalExecutionLoop');
 // ("🔊 Áudio enviado com sucesso!").
 const GENERIC_CRITERIA_SUMMARY = 'Todos os critérios do checklist foram satisfeitos.';
 
+// ── Limites de output de um GoalAttempt ──────────────────────────────────────
+// Um attempt guarda output com DOIS propósitos distintos, e conflatá-los num único limite
+// destrói um deles:
+//
+//  • EVIDÊNCIA — rastro de uma tool (exec_command, read, write): o planner e o validador leem
+//    isso para raciocinar sobre o que aconteceu. Um excerto basta, e manter curto é o que
+//    impede o registro do goal (e o prompt de validação) de crescer sem limite.
+//
+//  • ENTREGÁVEL — a resposta em prosa do AgentLoop (`toolName === 'agentloop'`): quando o goal
+//    não produz arquivo, esse texto É a resposta ao usuário. Truncá-lo destrói o entregável
+//    antes que qualquer camada abaixo tenha chance de entregá-lo.
+//
+// Evidência real (02/08/2026, goal_1785694336666_u96ic e goal_1785695904700_lt1jt): pergunta
+// "Explique melhor scaffolding (andaime pedagógico)?" — o AgentLoop produziu a explicação, mas
+// ela foi cortada em 300 chars ao virar attempt (`[VALIDATION-INPUT] attempts_chars=313` =
+// "- agentloop: " + 300). A mesma pergunta pela rota direta (15:43, sem goal) devolveu 2448
+// chars íntegros. O usuário reperguntou duas vezes em 32 minutos.
+const ATTEMPT_OUTPUT_EVIDENCE_LIMIT = 300;
+const ATTEMPT_OUTPUT_DELIVERABLE_LIMIT = 8000;
+
+/**
+ * Limite de armazenamento do output de um attempt, conforme o papel que ele cumpre.
+ * Fonte única — usada nos dois pontos que gravam `GoalAttempt.output`, para que a regra não
+ * volte a divergir entre eles.
+ */
+function attemptOutputLimit(toolName: string | undefined): number {
+    return (toolName ?? 'agentloop') === 'agentloop'
+        ? ATTEMPT_OUTPUT_DELIVERABLE_LIMIT
+        : ATTEMPT_OUTPUT_EVIDENCE_LIMIT;
+}
+
 export type ProgressCallback = (update: GoalProgressUpdate) => Promise<void>;
 
 /**
@@ -2366,7 +2397,7 @@ export class GoalExecutionLoop {
             // para valer como evidência de sucesso (GoalEvaluator.ts:312 já trata 'partial'
             // como progresso equivalente a 'success', só não como prova de conclusão).
             result: !toolResult.success ? 'failure' : (stepSuccessConfident ? 'success' : 'partial'),
-            output: toolResult.output?.slice(0, 300),
+            output: toolResult.output?.slice(0, attemptOutputLimit(step.toolName)),
             error: toolResult.error,
             durationMs: Date.now() - startMs,
             executedAt: Date.now(),
@@ -2644,7 +2675,7 @@ export class GoalExecutionLoop {
                 toolName: step.toolName ?? 'agentloop',
                 args: step.toolArgs ?? {},
                 result: 'success',
-                output: output.slice(0, 300),
+                output: output.slice(0, attemptOutputLimit(step.toolName)),
                 durationMs: 0,
                 executedAt: Date.now(),
                 producedArtifactPaths,
@@ -3503,7 +3534,11 @@ export class GoalExecutionLoop {
             .join('\n');
         const attemptsContext = goal.attempts
             .filter(a => a.result === 'success')
-            .map(a => `- ${a.toolName}: ${a.output || '(sem output)'}`)
+            // Excerto, não o texto inteiro: o output de um attempt 'agentloop' passou a ser
+            // guardado íntegro (é o entregável — ver ATTEMPT_OUTPUT_DELIVERABLE_LIMIT), mas o
+            // prompt do LLM precisa de evidência para julgar, não da resposta completa. Truncar
+            // aqui mantém este prompt idêntico ao que ele já recebia antes dessa mudança.
+            .map(a => `- ${a.toolName}: ${a.output?.slice(0, ATTEMPT_OUTPUT_EVIDENCE_LIMIT) || '(sem output)'}`)
             .join('\n');
         const blockersContext = goal.blockers
             .map(b => `- ${b.kind}: ${b.description}`)
@@ -3591,7 +3626,11 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
 
         const attemptsContext = goal.attempts
             .filter(a => a.result === 'success')
-            .map(a => `- ${a.toolName}: ${a.output || '(sem output)'}`)
+            // Excerto, não o texto inteiro: o output de um attempt 'agentloop' passou a ser
+            // guardado íntegro (é o entregável — ver ATTEMPT_OUTPUT_DELIVERABLE_LIMIT), mas o
+            // prompt do LLM precisa de evidência para julgar, não da resposta completa. Truncar
+            // aqui mantém este prompt idêntico ao que ele já recebia antes dessa mudança.
+            .map(a => `- ${a.toolName}: ${a.output?.slice(0, ATTEMPT_OUTPUT_EVIDENCE_LIMIT) || '(sem output)'}`)
             .join('\n');
 
         const validationTarget = activeMilestone
@@ -4092,8 +4131,41 @@ OU
         // (ex: "🔊 Áudio enviado com sucesso!") em vez de repetir a frase genérica ao usuário.
         // Evidência real: 2026-07-05, goal_1783273986121_ptyfp e goal_1783274167642_xqep6.
         const hasGenericSummary = overrideOutput === GENERIC_CRITERIA_SUMMARY;
+
+        // ── Resumo é nota de acompanhamento, nunca substituto do entregável ──────────────
+        // `overrideOutput`, num goal bem-sucedido, é `validation.summary` — e o prompt do
+        // validador pede literalmente "resumo do que foi feito e entregue". É uma DESCRIÇÃO do
+        // entregável, não o entregável.
+        //
+        // Isso é correto quando existe entrega separada: o arquivo já foi enviado por
+        // `send_document`/`send_audio` e o texto da mensagem é só a nota que o acompanha — aí um
+        // resumo em prosa é melhor que o output cru da tool ("Documento anexado").
+        //
+        // É destrutivo quando NÃO existe entrega separada: sem artefato, o texto produzido É a
+        // resposta, e um resumo sobre ele apaga a resposta. Evidência real (02/08/2026,
+        // goal_1785694336666_u96ic): à pergunta "Explique melhor scaffolding?" o usuário recebeu
+        // "A explicação sobre scaffolding foi fornecida com sucesso..." em vez da explicação —
+        // com `artifact_count=0` registrado no próprio log da validação. Repetiu a pergunta duas
+        // vezes em 32 minutos; só obteve a resposta quando a mensagem seguinte escapou pela rota
+        // AgentLoop, fora do goal.
+        //
+        // Terceira ocorrência desta mesma classe: 2026-07-05 vazou "Entrega confirmada via
+        // send_audio" (corrigido filtrando AUTO_DELIVERY_IDS) e GENERIC_CRITERIA_SUMMARY
+        // (corrigido pelo caso especial logo acima). As duas correções trataram a STRING que
+        // vazou; a regra estrutural — um resumo tem prioridade sobre o conteúdo — seguia intacta.
+        // Esta condição é a regra; os casos especiais anteriores viram consequência dela.
+        //
+        // Também remove um vazamento de idioma: o entregável vem do AgentLoop, que recebe
+        // `buildLanguageDirective(config.language)` no system prompt, enquanto o prompt do
+        // validador é fixo em pt-BR e não recebe diretiva nenhuma — para um usuário en-US/es-ES,
+        // preferir o resumo entregava a mensagem final no idioma errado.
+        const hasSeparateDelivery = (goal.sentArtifacts ?? []).length > 0;
+        // Numa falha, `overrideOutput` é a explicação do que deu errado (buildFailureExplanation,
+        // blockReason, erro de envio) — continua tendo prioridade, como sempre teve.
+        const summaryIsCoverNote = !success || hasSeparateDelivery;
+
         // Usa || para tratar string vazia como ausente (exec_command com outputLen=0)
-        const finalOutput = (hasGenericSummary ? undefined : overrideOutput)
+        const finalOutput = (summaryIsCoverNote && !hasGenericSummary ? overrideOutput : undefined)
             ?? (lastSuccess?.output || undefined)
             ?? lastCompletedStep?.result
             ?? (success ? overrideOutput ?? 'Tarefa concluída com sucesso.' : this.evaluator.buildFailureExplanation(goal));

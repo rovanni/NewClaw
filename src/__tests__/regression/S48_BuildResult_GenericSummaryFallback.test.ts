@@ -47,9 +47,16 @@ function computeFinalOutput(
     lastSuccessOutput: string | undefined,
     lastCompletedStepResult: string | undefined,
     success: boolean,
+    // S175 (02/08/2026): o resumo do validador é NOTA DE ACOMPANHAMENTO de uma entrega separada
+    // (arquivo/áudio já enviado), não substituto do entregável. Todos os cenários originais deste
+    // teste modelam entregas com artefato ("🔊 Áudio enviado", "Documento entregue"), por isso
+    // `true` é o padrão aqui — as garantias de S48 seguem valendo sem alteração. O caso sem
+    // artefato (a resposta em texto É o entregável) é coberto por S175.
+    hasSeparateDelivery: boolean = true,
 ): string {
     const hasGenericSummary = overrideOutput === GENERIC_CRITERIA_SUMMARY;
-    return (hasGenericSummary ? undefined : overrideOutput)
+    const summaryIsCoverNote = !success || hasSeparateDelivery;
+    return (summaryIsCoverNote && !hasGenericSummary ? overrideOutput : undefined)
         ?? (lastSuccessOutput || undefined)
         ?? lastCompletedStepResult
         ?? (success ? overrideOutput ?? 'Tarefa concluída com sucesso.' : 'Falha ao concluir o objetivo.');
