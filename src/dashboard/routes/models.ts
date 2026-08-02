@@ -28,8 +28,52 @@ const LOCAL_SERVER_BINARY_PREFIXES = ['llamafile', 'llama-server'];
 const LOCAL_SERVER_PORT = parseInt(process.env.LOCAL_SERVER_PORT || '8080', 10) || 8080;
 
 /** Contexto do servidor local. 2048 (padrão de vários binários) é pequeno demais: o prompt do
- *  agente passa de 5k tokens e o servidor devolve HTTP 400 — observado ao vivo em 2026-08-01. */
+ *  agente passa de 5k tokens e o servidor devolve HTTP 400 — observado ao vivo em 2026-08-01.
+ *  Só é aplicado quando o usuário NÃO define o contexto nas opções do modelo. */
 const LOCAL_SERVER_CTX = 16384;
+
+/** Formas de dizer "tamanho do contexto" aceitas pelos servidores — se o usuário já passou uma
+ *  delas, não acrescentamos a nossa (duas ocorrências fariam a segunda vencer em silêncio). */
+const CTX_FLAGS = ['-c', '--ctx-size', '--context-size'];
+
+/**
+ * Quebra a linha de opções do usuário em argumentos, respeitando aspas — nomes de arquivo com
+ * espaço (`--mmproj "meu projetor.gguf"`) chegariam partidos ao meio sem isso.
+ *
+ * Os argumentos vão para `spawn` como ARRAY, nunca por shell: não há interpretação de `;`, `&&`
+ * ou redirecionamento, então uma string maliciosa aqui vira apenas um argumento inválido que o
+ * servidor recusa.
+ */
+export function parseServerOptions(raw: string): string[] {
+    const out: string[] = [];
+    const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(raw)) !== null) {
+        out.push(m[1] ?? m[2] ?? m[3]);
+    }
+    return out;
+}
+
+/**
+ * Argumentos finais do servidor: o mínimo que o NewClaw precisa controlar, mais as opções que o
+ * usuário definiu para AQUELE modelo.
+ *
+ * O NewClaw controla só o essencial para conseguir falar com o processo (modo servidor, arquivo,
+ * host e porta). Todo o resto — `--n-gpu-layers`, `-fit off`, `--mmproj`, `--no-mmap` — é do
+ * usuário, porque depende da GPU e da RAM da máquina dele: a divisão de camadas ideal numa placa
+ * de 16GB é errada numa de 8GB, e um projetor de visão só existe para alguns modelos. Embutir
+ * uma tabela dessas no projeto seria distribuir o ambiente de quem a escreveu.
+ */
+function buildServerArgs(file: string, port: number, userOptions: string): string[] {
+    const extra = parseServerOptions(userOptions || '');
+    const args = ['--server', '--model', file, '--port', String(port), '--host', '127.0.0.1'];
+    // Contexto padrão só quando o usuário não escolheu um: a nossa escolha é um piso de
+    // funcionamento (prompts do agente passam de 5k tokens), não uma preferência a impor.
+    if (!extra.some(a => CTX_FLAGS.includes(a))) {
+        args.push('-c', String(LOCAL_SERVER_CTX));
+    }
+    return [...args, ...extra];
+}
 
 /** Tempo máximo esperando o modelo carregar antes de desistir. Modelos grandes lidos de disco
  *  lento levam minutos; abaixo disso o usuário veria "falhou" num carregamento que ia dar certo. */
@@ -238,6 +282,9 @@ export function createModelsRouter(ctx: DashboardContext): Router {
                     sizeBytes,
                     path: full,
                     served: servedIds.has(e.name),
+                    // Opções que o usuário definiu para ESTE modelo (vazio = nenhuma). Vai na
+                    // listagem para o campo da UI já abrir preenchido, sem uma segunda requisição.
+                    options: (ctx.config.localModelOptions || {})[e.name] || '',
                     status: 'available' as const,
                 };
             })
@@ -304,7 +351,7 @@ export function createModelsRouter(ctx: DashboardContext): Router {
         // pasta: os servidores usam o valor de --model COMO ID do modelo em /v1/models, e passar o
         // caminho fazia o modelo aparecer como "/D/IA/.../arquivo.gguf" no catálogo e quebrava o
         // cruzamento com a listagem da pasta (que casa por nome de arquivo). Visto ao vivo, 02/08.
-        const args = ['--server', '--model', file, '--port', String(port), '--host', '127.0.0.1', '-c', String(LOCAL_SERVER_CTX)];
+        const args = buildServerArgs(file, port, (ctx.config.localModelOptions || {})[file] || '');
         log.info(`Subindo servidor local: ${path.basename(binary)} (${file})`);
 
         let child: ChildProcess;

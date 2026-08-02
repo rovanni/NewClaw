@@ -35,6 +35,11 @@ export interface NewClawConfig {
      *  configurada por quem instala — um caminho embutido no código só funcionaria na máquina de
      *  quem o escreveu, e este projeto é distribuído para Windows, Linux e macOS. */
     localModelsDir?: string;
+    /** Opções extras de carregamento por arquivo de modelo: `{ "modelo.gguf": "-fit off --n-gpu-layers 12" }`.
+     *  Nunca vem preenchido de fábrica — o valor certo depende da GPU e da RAM de CADA máquina
+     *  (`--n-gpu-layers 12` é a divisão ideal numa placa de 16GB e errada em outra), então é
+     *  configuração de ambiente, não conhecimento que o projeto possa distribuir. */
+    localModelOptions?: Record<string, string>;
     customProviders?: { label: string; baseUrl: string; apiKey?: string; model?: string }[];
     modelRouter?: {
         chat?: string;

@@ -26,7 +26,7 @@ import express from 'express';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createModelsRouter, getLastKnownLocalServer } from '../../dashboard/routes/models';
+import { createModelsRouter, getLastKnownLocalServer, parseServerOptions } from '../../dashboard/routes/models';
 import type { DashboardContext } from '../../dashboard/routes/types';
 import type { NewClawConfig } from '../../core/AgentController';
 
@@ -221,6 +221,54 @@ async function main() {
         assert(/spawn\([^)]*detached:\s*true/s.test(src), 'spawn com detached:true');
         assert(/child\.unref\(\)/.test(src), 'child.unref() — o NewClaw não espera pelo processo nem o arrasta ao morrer');
         assert(/process\.env\.LOCAL_SERVER_PORT/.test(src), 'porta configurável: duas instâncias na mesma máquina não disputam a mesma');
+    }
+
+    console.log('\n=== S171 — opções de carregamento por modelo ===');
+    {
+        // Cada modelo/máquina precisa de parâmetros próprios (camadas na GPU, projetor de visão,
+        // contexto). O NewClaw controla só o mínimo para falar com o processo; o resto é do
+        // usuário, porque depende do hardware dele — uma tabela embutida no projeto distribuiria
+        // o ambiente de quem a escreveu (`--n-gpu-layers 12` é certo em 16GB, errado em 8GB).
+        const casos: Array<[string, string[], string]> = [
+            ['-fit off --n-gpu-layers 12 -c 8192 -ctxcp 0 --no-mmap --no-warmup',
+             ['-fit', 'off', '--n-gpu-layers', '12', '-c', '8192', '-ctxcp', '0', '--no-mmap', '--no-warmup'],
+             'linha completa de flags'],
+            ['--mmproj "meu projetor.gguf"', ['--mmproj', 'meu projetor.gguf'], 'nome de arquivo com espaço entre aspas'],
+            ["--mmproj 'outro projetor.gguf'", ['--mmproj', 'outro projetor.gguf'], 'aspas simples'],
+            ['   -c   4096   ', ['-c', '4096'], 'espaços extras'],
+            ['', [], 'vazio'],
+        ];
+        for (const [entrada, esperado, descricao] of casos) {
+            const obtido = parseServerOptions(entrada);
+            assert(JSON.stringify(obtido) === JSON.stringify(esperado), `divide corretamente: ${descricao}`, { entrada, obtido });
+        }
+
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'dashboard', 'routes', 'models.ts'), 'utf-8');
+        const build = src.slice(src.indexOf('function buildServerArgs'), src.indexOf('let localServer:'));
+        assert(
+            /CTX_FLAGS\.includes/.test(build),
+            'o contexto padrão só entra quando o usuário não definiu um — duas ocorrências fariam a segunda vencer em silêncio'
+        );
+        assert(
+            /\.\.\.args, \.\.\.extra/.test(build),
+            'as opções do usuário vêm DEPOIS das nossas, podendo ajustar o comportamento'
+        );
+        assert(
+            !/shell:\s*true/.test(src),
+            'spawn nunca usa shell — as opções vão como array de argumentos, sem interpretação de ; ou &&'
+        );
+
+        // O projeto é OSS e cada máquina tem hardware diferente: nenhum valor de flag pode vir
+        // embutido. REGRESSÃO SE alguém "ajudar" pondo uma tabela de flags por modelo no código.
+        // Comentários citam flags como EXEMPLO ao explicar o porquê da decisão — isso é
+        // documentação, não configuração embutida. A verificação olha só o código executável.
+        const semComentarios = src
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+        assert(
+            !/--n-gpu-layers|--no-mmap|--mmproj|-fit\b/.test(semComentarios),
+            'nenhuma flag de hardware embutida no código executável — elas dependem da GPU de cada máquina'
+        );
     }
 
     console.log(`\n${'─'.repeat(60)}`);

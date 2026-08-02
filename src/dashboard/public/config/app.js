@@ -120,6 +120,7 @@ export async function doSave() {
     // Sempre enviado (mesmo vazio): '' significa "não uso pasta local", uma escolha que precisa
     // chegar ao servidor para apagar um valor anterior — ver o !== undefined na rota.
     localModelsDir:         c.localModelsDir || '',
+    localModelOptions:      c.localModelOptions || {},
   };
 
   // Include API keys only if user typed something
@@ -250,6 +251,7 @@ async function loadConfig() {
       modelRouter:            c.modelRouter   || {},
       customProviders:        c.customProviders || [],
       localModelsDir:         c.localModelsDir || '',
+      localModelOptions:      c.localModelOptions || {},
     });
   } catch {}
   // Só a partir daqui mudanças no configStore contam como "não salvas" — o patch inicial acima

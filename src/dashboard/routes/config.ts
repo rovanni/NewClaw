@@ -35,6 +35,7 @@ export function persistConfigToEnv(ctx: DashboardContext): void {
             'CLASSIFIER_SERVER': ctx.config.modelRouter?.classifierServer || '',
             'CUSTOM_MODELS':      (ctx.config.customModels || []).join(','),
             'LOCAL_MODELS_DIR':   ctx.config.localModelsDir || '',
+            'LOCAL_MODEL_OPTIONS': JSON.stringify(ctx.config.localModelOptions || {}),
             'CUSTOM_PROVIDERS':   JSON.stringify(ctx.config.customProviders || []),
             'PROVIDER_CHAT':      ctx.config.modelRouter?.provider_chat      || '',
             'PROVIDER_CODE':      ctx.config.modelRouter?.provider_code      || '',
@@ -106,6 +107,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
                 hasOllamaApiKey: !!ctx.config.ollamaApiKey,
                 modelRouter: ctx.config.modelRouter || {},
                 localModelsDir: ctx.config.localModelsDir || '',
+                localModelOptions: ctx.config.localModelOptions || {},
                 customProviders: (ctx.config.customProviders || []).map(p => ({ label: p.label, baseUrl: p.baseUrl, hasKey: !!p.apiKey, model: p.model }))
             }
         });
@@ -113,7 +115,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
 
     router.post('/', (req: Request, res: Response) => {
         const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl, telegramAllowedUserIds, modelRouter,
-                localModelsDir, geminiKey, deepseekKey, groqKey, openrouterKey, anthropicKey } = req.body;
+                localModelsDir, localModelOptions, geminiKey, deepseekKey, groqKey, openrouterKey, anthropicKey } = req.body;
 
         log.info(`POST /api/config — ollamaModel="${ollamaModel}" provider="${defaultProvider}"`);
 
@@ -121,6 +123,9 @@ export function createConfigRouter(ctx: DashboardContext): Router {
         // !== undefined e não truthy: string vazia significa "limpar a pasta configurada", uma
         // escolha legítima do usuário, e um `if (localModelsDir)` a descartaria calado.
         if (localModelsDir !== undefined) ctx.config.localModelsDir = String(localModelsDir).trim();
+        // Objeto inteiro substitui o anterior: a UI sempre manda o mapa completo, e um merge aqui
+        // impediria APAGAR as opções de um modelo (a chave removida simplesmente não chegaria).
+        if (localModelOptions && typeof localModelOptions === 'object') ctx.config.localModelOptions = localModelOptions;
         if (systemPrompt !== undefined) ctx.config.systemPrompt = systemPrompt;
         if (maxIterations) ctx.config.maxIterations = parseInt(String(maxIterations));
         if (memoryWindowSize) ctx.config.memoryWindowSize = parseInt(String(memoryWindowSize));

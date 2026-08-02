@@ -135,6 +135,8 @@ let localError = '';
 // modelo carregado por este dashboard agora.
 let localServerBinary = null;
 let localRunning = null;
+// Modelo cujas opções de carregamento estão abertas para edição (null = painel fechado).
+let localOptionsFor = null;
 
 // Label do provider custom sendo editado no momento (null = formulário em modo "adicionar
 // novo"). Achado real (2026-07-31): sem edição, corrigir uma URL digitada errada ou trocar o
@@ -207,6 +209,8 @@ export function render(container) {
             <div class="form-hint" style="margin-top:6px;">${t('ml_local_dir_hint')}</div>
             <!-- Explica o estado atual e o próximo passo. Ver updateLocalExplainer(). -->
             <div id="mr-localExplain" style="display:none;margin-top:12px;"></div>
+            <!-- Opções de carregamento do modelo selecionado. Ver renderLocalOptionsEditor(). -->
+            <div id="mr-localOpts" style="display:none;margin-top:12px;"></div>
           </div>
           <div class="model-registry-toolbar">
             <input type="text" class="form-input" id="mr-search" placeholder="${t('ml_search_placeholder')}" style="max-width:260px;">
@@ -1225,6 +1229,12 @@ function buildModelRows(models, { selectable = false, selectedId = null, current
         : `<span class="dot online" style="display:inline-block;"></span> ${t('ml_available_status')}`;
     const sizeBadge = (localFiles && m.sizeBytes)
       ? ` <span class="model-size-badge">${esc(formatBytes(m.sizeBytes))}</span>` : '';
+    // Engrenagem por modelo: opções de carregamento dependem da GPU/RAM da máquina e do modelo
+    // (camadas na GPU, projetor de visão, contexto). Marcada quando já há algo configurado, para
+    // o usuário ver de relance quais modelos ele já ajustou.
+    const optionsBtn = localFiles
+      ? ` <button type="button" class="btn btn-ghost btn-sm model-opts-btn${m.options ? ' has-options' : ''}" data-opts-local="${esc(m.id)}" title="${t('ml_local_opts_title')}">⚙️</button>`
+      : '';
     return `
     <tr class="${rowClass}" data-model-id="${esc(m.id)}" data-model-provider="${esc(m.provider)}">
       ${selectable ? `<td class="model-radio-cell">${isSelected ? '🔘' : '⚪'}</td>` : ''}
@@ -1232,7 +1242,7 @@ function buildModelRows(models, { selectable = false, selectedId = null, current
       <td><span class="badge badge-${m.provider === 'ollama' ? 'local' : 'cloud'}">${esc(m.provider)}</span></td>
       <td>${(m.capabilities || []).map(c => `<span class="model-cap-tag">${capLabels[c] || c}</span>`).join(' ')}</td>
       <td>${esc(formatContextWindow(m.contextWindow))}</td>
-      <td>${lastCell}</td>
+      <td>${lastCell}${optionsBtn}</td>
     </tr>`;
   }).join('');
 }
@@ -1257,6 +1267,37 @@ async function loadLocalModels() {
     localServerBinary = null;
     localRunning = null;
   }
+}
+
+/**
+ * Editor das opções de carregamento de um modelo local.
+ *
+ * Existe porque o NewClaw sobe o servidor com o mínimo necessário para falar com ele, e cada
+ * modelo/máquina precisa de mais: quantas camadas cabem na GPU, qual projetor de visão usar, se
+ * o contexto precisa ser limitado para o cache não estourar a VRAM. Esses valores NÃO podem vir
+ * embutidos no projeto — `--n-gpu-layers 12` é a divisão certa numa placa de 16GB e errada numa
+ * de 8GB, e um projetor só existe para alguns modelos. É configuração de máquina, por modelo.
+ */
+function renderLocalOptionsEditor() {
+  const box = document.getElementById('mr-localOpts');
+  if (!box) return;
+  if (!localOptionsFor) { box.style.display = 'none'; return; }
+  const model = (localCatalog || []).find(m => m.id === localOptionsFor);
+  if (!model) { box.style.display = 'none'; return; }
+
+  const atual = (configStore.get('localModelOptions') || {})[localOptionsFor] || '';
+  box.style.display = '';
+  box.className = 'ml-test-result';
+  box.innerHTML = `
+    <div class="ml-test-title">⚙️ ${t('ml_local_opts_for', { model: esc(model.id) })}</div>
+    <div class="form-hint" style="margin:6px 0;">${t('ml_local_opts_hint')}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <input type="text" class="form-input" id="mr-optsInput" style="flex:1;min-width:260px;font-family:var(--font-mono,monospace);font-size:.8rem;"
+             placeholder="${t('ml_local_opts_placeholder')}" value="${esc(atual)}">
+      <button type="button" class="btn btn-primary btn-sm" id="mr-optsSave">${t('ml_local_opts_save')}</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="mr-optsCancel">${t('ml_cancel_btn')}</button>
+    </div>
+    <div class="form-hint" style="margin-top:8px;">${t('ml_local_opts_examples')}</div>`;
 }
 
 /**
@@ -1329,6 +1370,7 @@ async function renderModelTable() {
       canServe: !!localServerBinary,
     });
     updateLocalExplainer();
+    renderLocalOptionsEditor();
     return;
   }
 
@@ -1391,6 +1433,31 @@ function wireModelRegistry(container) {
       registryMode = btn.dataset.mode;
       renderModelTable();
     });
+  });
+
+  // Salvar/cancelar as opções de carregamento. Delegação no container porque o painel é recriado
+  // a cada renderização da tabela.
+  document.getElementById('mr-localOpts')?.addEventListener('click', async e => {
+    if (e.target.id === 'mr-optsCancel') { localOptionsFor = null; renderLocalOptionsEditor(); return; }
+    if (e.target.id !== 'mr-optsSave') return;
+    const valor = document.getElementById('mr-optsInput')?.value.trim() || '';
+    const mapa = { ...(configStore.get('localModelOptions') || {}) };
+    // Campo vazio REMOVE a entrada em vez de guardar string vazia: assim o .env não acumula
+    // modelos sem opção nenhuma, e "sem opções" tem uma representação só.
+    if (valor) mapa[localOptionsFor] = valor; else delete mapa[localOptionsFor];
+    configStore.set('localModelOptions', mapa);
+    const btn = document.getElementById('mr-optsSave');
+    btn.disabled = true;
+    try {
+      await doSave();
+      showToast(t('ml_local_opts_saved', { model: localOptionsFor }), 'success');
+      localOptionsFor = null;
+      localCatalog = null;          // recarrega para o marcador da engrenagem refletir o estado
+      await renderModelTable();
+    } catch (err) {
+      showToast('❌ ' + err.message, 'error');
+      btn.disabled = false;
+    }
   });
 
   // Pasta de modelos locais: digitar guarda no configStore (o Salvar global persiste, como
@@ -1460,6 +1527,16 @@ function wireModelRegistry(container) {
         serveBtn.disabled = false;
         serveBtn.textContent = t('ml_local_serve_btn');
       }
+      return;
+    }
+
+    // ── Abrir as opções de carregamento daquele modelo ──────────────────────
+    const optsBtn = e.target.closest('[data-opts-local]');
+    if (optsBtn) {
+      const file = optsBtn.dataset.optsLocal;
+      localOptionsFor = (localOptionsFor === file) ? null : file; // clicar de novo fecha
+      renderLocalOptionsEditor();
+      document.getElementById('mr-optsInput')?.focus();
       return;
     }
 

@@ -51,6 +51,8 @@ export const configStore = new Store({
   // Vazio por padrão — nunca um caminho de exemplo: um default embutido só valeria na máquina de
   // quem o escreveu, e o projeto roda em Windows, Linux e macOS.
   localModelsDir: '',
+  // { "modelo.gguf": "-fit off --n-gpu-layers 12" } — opções de carregamento por modelo local
+  localModelOptions: {},
 });
 
 export const runtimeStore = new Store({

@@ -41,6 +41,18 @@ function parseCustomProviders(raw?: string): { label: string; baseUrl: string; a
     }
 }
 
+/** Opções de carregamento por modelo local: `{"modelo.gguf": "-fit off --n-gpu-layers 12"}`. */
+function parseLocalModelOptions(raw?: string): Record<string, string> {
+    if (!raw) return {};
+    try {
+        const parsed = JSON.parse(raw);
+        return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+    } catch {
+        log.warn(`LOCAL_MODEL_OPTIONS inválido (não é JSON), ignorando: ${raw.slice(0, 100)}`);
+        return {};
+    }
+}
+
 const config = {
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
     telegramAllowedUserIds: (process.env.TELEGRAM_ALLOWED_USER_IDS || '').split(',').map(id => id.trim()).filter(id => id.length > 0),
@@ -75,6 +87,7 @@ const config = {
     customModels: (process.env.CUSTOM_MODELS || '').split(',').map(m => m.trim()).filter(m => m.length > 0),
     customProviders: parseCustomProviders(process.env.CUSTOM_PROVIDERS),
     localModelsDir: process.env.LOCAL_MODELS_DIR || '',
+    localModelOptions: parseLocalModelOptions(process.env.LOCAL_MODEL_OPTIONS),
     modelRouter: {
         chat: process.env.MODEL_CHAT,
         code: process.env.MODEL_CODE,

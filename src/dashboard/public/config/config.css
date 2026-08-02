@@ -564,6 +564,10 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 /* Modelos em disco (modo "Meus arquivos"): tamanho do arquivo e estado de carga. Reaproveita os
    mesmos tokens neutros/sucesso já usados nas outras badges da tabela — nenhuma cor nova. */
 .model-size-badge { font-size:.62rem; padding:1px 6px; border-radius:8px; background:rgba(148,163,184,.15); color:var(--text-soft); font-weight:600; margin-left:4px; }
+.model-opts-btn { padding:2px 7px; font-size:.85rem; line-height:1; opacity:.55; }
+.model-opts-btn:hover { opacity:1; }
+/* Marcado quando o modelo já tem opções — dá para ver de relance quais foram ajustados. */
+.model-opts-btn.has-options { opacity:1; border-color:var(--success); }
 .model-notserved-badge { font-size:.72rem; padding:3px 9px; border-radius:8px; background:rgba(148,163,184,.12); color:var(--text-soft); font-weight:600; }
 
 /* ════════════════════════════════════
