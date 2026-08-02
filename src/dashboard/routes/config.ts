@@ -34,6 +34,7 @@ export function persistConfigToEnv(ctx: DashboardContext): void {
             'CLASSIFIER_MODEL': ctx.config.modelRouter?.classifierModel || '',
             'CLASSIFIER_SERVER': ctx.config.modelRouter?.classifierServer || '',
             'CUSTOM_MODELS':      (ctx.config.customModels || []).join(','),
+            'LOCAL_MODELS_DIR':   ctx.config.localModelsDir || '',
             'CUSTOM_PROVIDERS':   JSON.stringify(ctx.config.customProviders || []),
             'PROVIDER_CHAT':      ctx.config.modelRouter?.provider_chat      || '',
             'PROVIDER_CODE':      ctx.config.modelRouter?.provider_code      || '',
@@ -104,6 +105,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
                 hasAnthropicKey: !!ctx.config.anthropicApiKey,
                 hasOllamaApiKey: !!ctx.config.ollamaApiKey,
                 modelRouter: ctx.config.modelRouter || {},
+                localModelsDir: ctx.config.localModelsDir || '',
                 customProviders: (ctx.config.customProviders || []).map(p => ({ label: p.label, baseUrl: p.baseUrl, hasKey: !!p.apiKey, model: p.model }))
             }
         });
@@ -111,11 +113,14 @@ export function createConfigRouter(ctx: DashboardContext): Router {
 
     router.post('/', (req: Request, res: Response) => {
         const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl, telegramAllowedUserIds, modelRouter,
-                geminiKey, deepseekKey, groqKey, openrouterKey, anthropicKey } = req.body;
+                localModelsDir, geminiKey, deepseekKey, groqKey, openrouterKey, anthropicKey } = req.body;
 
         log.info(`POST /api/config — ollamaModel="${ollamaModel}" provider="${defaultProvider}"`);
 
         if (language) ctx.config.language = language;
+        // !== undefined e não truthy: string vazia significa "limpar a pasta configurada", uma
+        // escolha legítima do usuário, e um `if (localModelsDir)` a descartaria calado.
+        if (localModelsDir !== undefined) ctx.config.localModelsDir = String(localModelsDir).trim();
         if (systemPrompt !== undefined) ctx.config.systemPrompt = systemPrompt;
         if (maxIterations) ctx.config.maxIterations = parseInt(String(maxIterations));
         if (memoryWindowSize) ctx.config.memoryWindowSize = parseInt(String(memoryWindowSize));

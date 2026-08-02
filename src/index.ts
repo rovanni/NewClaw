@@ -3,6 +3,14 @@
  * Agente pessoal de IA multi-canal (Telegram, Discord, WhatsApp, Signal, Web)
  */
 
+// newclaw-kernel-adapter (e kernel-sdk/kernel-core, transitivamente) expõem a API pública
+// apontando direto para .ts fonte (main/types: src/index.ts) — sem isso, o dist/index.js
+// compilado (rodado via `node` puro, sem ts-node, no PM2/produção) falha com
+// ERR_MODULE_NOT_FOUND ao tentar carregar aquele .ts. ts-node já é dependência de produção
+// (não dev) deste projeto — registrar aqui, antes de qualquer outro import, resolve para
+// toda a árvore de módulos, sem exigir que os três pacotes mudem para consumo via dist/.
+require('ts-node/register');
+
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
@@ -66,6 +74,7 @@ const config = {
     dashboardPort: parseInt(process.env.DASHBOARD_PORT || '3090'),
     customModels: (process.env.CUSTOM_MODELS || '').split(',').map(m => m.trim()).filter(m => m.length > 0),
     customProviders: parseCustomProviders(process.env.CUSTOM_PROVIDERS),
+    localModelsDir: process.env.LOCAL_MODELS_DIR || '',
     modelRouter: {
         chat: process.env.MODEL_CHAT,
         code: process.env.MODEL_CODE,

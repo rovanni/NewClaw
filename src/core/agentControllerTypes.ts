@@ -31,6 +31,10 @@ export interface NewClawConfig {
     ownerLocked?: boolean;
     systemPrompt?: string;
     customModels?: string[];
+    /** Pasta onde o usuário guarda arquivos de modelo locais (.gguf). Sempre vazia por padrão e
+     *  configurada por quem instala — um caminho embutido no código só funcionaria na máquina de
+     *  quem o escreveu, e este projeto é distribuído para Windows, Linux e macOS. */
+    localModelsDir?: string;
     customProviders?: { label: string; baseUrl: string; apiKey?: string; model?: string }[];
     modelRouter?: {
         chat?: string;

@@ -60,7 +60,12 @@ export function guessCapabilities(modelId: string): ModelCapability[] {
 
     const caps: ModelCapability[] = ['chat', 'tool_calling'];
 
-    if (/(^|[-:/])(vl|vision|llava|gemma3|qwen.?vl|pixtral|moondream)([-:]|$)/.test(id) || id.includes('vision')) {
+    // O segundo padrão cobre a família GLM multimodal, cujo sufixo de visão vem colado à versão
+    // (glm-4.6v, glm-4v) em vez de ser um token separado como nas demais — a lista acima exige
+    // delimitador e por isso nunca casava. Confirmado com arquivo real (GLM-4.6V-Flash, 2026-08-01).
+    if (/(^|[-:/])(vl|vision|llava|gemma3|qwen.?vl|pixtral|moondream)([-:]|$)/.test(id)
+        || id.includes('vision')
+        || /glm-[\d.]+v([-._]|$)/.test(id)) {
         caps.push('vision');
     }
     if (CODE_NAME_PATTERN.test(id)) {
