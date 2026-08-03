@@ -143,7 +143,10 @@ export async function doSave() {
     if (model.includes('groq') || model.includes('gemini') || model.includes('deepseek')) continue;
     try {
       const exists = await modelExists(model);
-      if (!exists) {
+      // `null` = não deu para verificar (provedor fora do ar, timeout). Nesse caso não se oferece
+      // baixar nada: seria agir sobre um "não existe" que ninguém confirmou. Só um `false`
+      // explícito — o servidor respondeu e disse que não tem — dispara o download.
+      if (exists === false) {
         showToast(t(model.includes(':cloud') ? 'ml_model_registering_toast' : 'ml_pulling_toast', { model }), 'success');
         apiPullModel(model)
           .then(() => { showToast(t('ml_model_ready_toast', { model }), 'success'); loadProviders(); })

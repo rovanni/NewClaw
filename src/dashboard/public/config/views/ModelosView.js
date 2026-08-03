@@ -373,6 +373,10 @@ export function render(container) {
               <button class="btn btn-ghost btn-sm" id="rt-applyAllBtn" disabled>${t('ml_routing_apply_all')}</button>
               <button class="btn btn-primary btn-sm" id="rt-applyBtn" disabled>${t('ml_routing_apply')}</button>
             </div>
+            <!-- Por que o Aplicar está cinza. O atributo title cobre quem passa o mouse; esta
+                 linha cobre quem não passa — e é a maioria.
+                 (Sem crases neste comentário: ele vive dentro de um template literal.) -->
+            <div class="form-hint" id="rt-applyHint" style="display:none;margin-top:6px;"></div>
 
             <div class="model-table-wrap">
               <table class="model-table">
@@ -1865,8 +1869,24 @@ function renderCategoryPicker() {
   if (pendingWrap) pendingWrap.style.display = showPending ? '' : 'none';
   if (pendingEl && showPending) pendingEl.textContent = routingPendingModel;
 
+  // Um botão desabilitado sem explicação é indistinguível de um botão quebrado — foi esse o
+  // relato ("os botões não respondem", 02/08/2026). Duas razões distintas levam ao mesmo estado
+  // cinza, e nenhuma delas era dita: (a) nada selecionado; (b) o modelo clicado JÁ é o aplicado
+  // nesta categoria, então clicar na linha parece não surtir efeito.
   const applyBtn = document.getElementById('rt-applyBtn');
-  if (applyBtn) applyBtn.disabled = !showPending;
+  if (applyBtn) {
+    applyBtn.disabled = !showPending;
+    applyBtn.title = showPending
+      ? ''
+      : (routingPendingModel
+        ? t('ml_routing_apply_why_same', { model: routingPendingModel })
+        : t('ml_routing_apply_why_nosel'));
+  }
+  const applyHint = document.getElementById('rt-applyHint');
+  if (applyHint) {
+    applyHint.textContent = applyBtn && applyBtn.disabled ? applyBtn.title : '';
+    applyHint.style.display = applyBtn && applyBtn.disabled ? '' : 'none';
+  }
   // "Usar para tudo" continua disponível mesmo sem seleção pendente: aplicar a todos os slots o
   // modelo que já está neste é uma ação legítima (e comum) — só exige que exista algum modelo.
   const applyAllBtn = document.getElementById('rt-applyAllBtn');
@@ -1907,6 +1927,9 @@ function wireCategoryPicker(container) {
     const model = routingPendingModel || (configStore.get('modelRouter') || {})[routingSelectedCategory];
     if (!model) {
       logAcaoUI('usar-para-tudo', 'NADA FEITO — nenhum modelo selecionado e a categoria atual está vazia');
+      // Este botão não é desabilitado (aplicar a todos o modelo já vigente é ação legítima), então
+      // sem aviso ele simplesmente não fazia nada visível. Console não serve para o operador.
+      showToast(t('ml_routing_apply_why_nosel'), 'warn');
       return;
     }
     logAcaoUI('usar-para-tudo', 'iniciando', model);

@@ -56,11 +56,37 @@ export async function pullModel(name) {
   }));
 }
 
+/**
+ * Teto de espera para verificações AUXILIARES da interface — as que existem só para decidir se
+ * vale a pena oferecer algo a mais, nunca para concluir a ação principal.
+ *
+ * Motivo (diagnóstico 02/08/2026): `doSave()` chama `modelExists()` uma vez por modelo
+ * configurado, em série. Sem teto, um provedor fora do ar (llamafile, `fetch failed` a cada
+ * minuto no log) pendurava a chamada, `doSave()` nunca resolvia, e o `finally` de quem chamou
+ * nunca devolvia o botão — que ficava `disabled` para sempre, em silêncio. Do lado de fora:
+ * "os botões não respondem".
+ */
+const TIMEOUT_VERIFICACAO_MS = 4000;
+
+/**
+ * O modelo existe no servidor?
+ *
+ * Três respostas, não duas: `true`, `false` e `null` = NÃO FOI POSSÍVEL VERIFICAR. Antes o
+ * `catch` devolvia `false`, isto é, afirmava "não existe" a partir de uma falha em checar —
+ * e quem chamava então oferecia baixar um modelo que talvez já estivesse lá. Falha de
+ * verificação não é evidência de ausência (diretriz "Nunca Adivinhar").
+ */
 export async function modelExists(name) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_VERIFICACAO_MS);
   try {
-    const d = await json(f(`/api/ollama/exists/${encodeURIComponent(name)}`));
+    const d = await json(f(`/api/ollama/exists/${encodeURIComponent(name)}`, { signal: ctrl.signal }));
     return d.exists;
-  } catch { return false; }
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function addModel(name) {
