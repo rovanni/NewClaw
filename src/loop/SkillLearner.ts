@@ -147,6 +147,51 @@ export class SkillLearner {
         }
 
         this.cleanupCorruptedSkills();
+        this.migrateSkillsWithHardcodedCity();
+    }
+
+    /**
+     * Reescreve skills já gravadas que carregam uma cidade fixa no prompt.
+     *
+     * Por que uma migração e não só a correção do template: a linha em `auto_skills` foi GERADA
+     * a partir do template do código, mas depois vive por conta própria no banco. Corrigir só o
+     * template conserta instalações futuras e deixa todas as existentes com a instrução ruim
+     * para sempre — num projeto que qualquer pessoa instala, isso é a maioria dos casos.
+     *
+     * Escopo deliberadamente estreito: só toca linhas cujo prompt ainda tem a FORMA do template
+     * quebrado (uma query de clima com local escrito). Uma skill que o operador editou à mão não
+     * casa com o padrão e não é tocada — a fronteira de "conhecimento aprendido não é reescrito
+     * por código" (docs/ARCHITECTURE/SEPARACAO_DISTRIBUIDO_APRENDIDO.md) continua valendo para
+     * tudo que não seja este defeito conhecido.
+     *
+     * Origem: incidente de 03/08/2026 — o assistente respondeu o clima de uma cidade que o
+     * usuário nunca mencionou, seguindo esta instrução.
+     */
+    private migrateSkillsWithHardcodedCity(): void {
+        const modelo = this.createSkillFromPattern('weather', 'weather', 0);
+
+        const afetadas = this.db.prepare(
+            `SELECT id, name FROM auto_skills
+             WHERE prompt LIKE '%weather"}%' AND prompt LIKE '%web_search%'`
+        ).all() as Array<{ id: string; name: string }>;
+
+        if (afetadas.length === 0) return;
+
+        const update = this.db.prepare(
+            `UPDATE auto_skills
+                SET description = ?, prompt = ?, tool_sequence = ?, updated_at = ?
+              WHERE id = ?`
+        );
+        for (const linha of afetadas) {
+            update.run(
+                modelo.description,
+                modelo.prompt,
+                modelo.tool_sequence,
+                new Date().toISOString(),
+                linha.id
+            );
+            log.info(`Skill "${linha.name}" migrada: instrução com cidade fixa substituída por "perguntar quando não souber"`);
+        }
     }
 
     private cleanupCorruptedSkills(): void {
