@@ -559,11 +559,40 @@ export class SkillLearner {
 
             const skill = this.createSkillFromPattern(item.pattern, item.tool_name, item.success_count);
 
+            // A identidade de uma skill é (source_pattern, source_tool) — já verificada acima. O
+            // NOME, porém, vem de `skillDefs`, que é indexado só por `pattern`: `crypto_query`
+            // com read, write, web_search e memory_search nasce quatro vezes como "Consulta
+            // Cripto". Com o guarda de nome aplicado sobre isso, o PRIMEIRO tool a cruzar o
+            // limiar gravava a skill e todos os demais eram descartados em silêncio, para sempre
+            // — as duas chaves de deduplicação discordavam, e a mais grosseira vencia.
+            //
+            // Evidência real (03/08/2026, instância do operador): 8 skills ativas, ZERO propostas,
+            // e ao mesmo tempo `crypto_query→read` com 367 sucessos, `write→read` com 225 e
+            // `crypto_query→write` com 169 — todos elegíveis, nenhum proposto. O operador
+            // percebeu como "o gerador parou de sugerir skills".
+            //
+            // Agora o nome é desambiguado pela ferramenta quando colide, preservando a intenção
+            // do guarda (não criar duas skills com o mesmo rótulo na lista) sem descartar uma
+            // skill legítima.
             const nameExists = this.db.prepare(
                 "SELECT id FROM auto_skills WHERE name = ? LIMIT 1"
             ).get(skill.name) as { id: string } | undefined;
 
-            if (nameExists) continue;
+            if (nameExists) {
+                skill.name = `${skill.name} (${item.tool_name})`;
+                const aindaColide = this.db.prepare(
+                    "SELECT id FROM auto_skills WHERE name = ? LIMIT 1"
+                ).get(skill.name) as { id: string } | undefined;
+                if (aindaColide) {
+                    // Só aqui é duplicata de verdade. Sai com log — o `continue` mudo era o que
+                    // tornava o problema invisível por meses.
+                    log.info(
+                        `Proposta ignorada: já existe skill chamada "${skill.name}" `
+                        + `(${item.pattern} -> ${item.tool_name})`
+                    );
+                    continue;
+                }
+            }
 
             this.db.prepare(
                 `INSERT INTO auto_skills
@@ -610,12 +639,30 @@ export class SkillLearner {
                 prompt: 'Use web_search para buscar dados de criptomoedas. Sempre inclua preço, variação 24h e volume.',
                 toolSeq: ['web_search']
             },
+            // NÃO nomear cidade aqui. Um template embarcado no código vale para TODA instalação
+            // do NewClaw, no mundo inteiro — uma cidade escrita neste prompt vira o palpite
+            // padrão de quem mora em qualquer outro lugar.
+            //
+            // Evidência real (03/08/2026, 05:02): à pergunta "Vai chover hoje, qual a temperatura
+            // para hoje?", o log mostra o caminho rápido acertando —
+            // `[FAST-PATH] No city in intent or memory — falling back to cognition loop` — e logo
+            // depois a ferramenta sendo chamada com a cidade escrita neste prompt. A tool exige
+            // `city` e recusa sem ela; quem inventou a cidade foi o modelo, seguindo este texto.
+            // O usuário mora em outro estado e recebeu o clima de uma cidade distante como fato.
+            //
+            // É a diretriz "Nunca Adivinhar" aplicada onde ela mais importa: diante de um dado
+            // não observado, perguntar — nunca inferir um valor plausível e apresentá-lo como
+            // verdade. E `weather`, não `web_search`: a própria descrição da ferramenta diz
+            // "Sempre use esta ferramenta para clima — NÃO use web_search para isso".
             weather: {
                 name: 'Previsão do Tempo',
                 trigger: '(clima|tempo|temperatura|previs[aã]o|chovendo)',
-                description: 'Busca previsão do tempo com cidade padrão quando a mensagem não especifica local.',
-                prompt: 'Use web_search com {"query": "São Paulo Brasil weather"} para clima. Se o usuário citar outra cidade, use essa cidade.',
-                toolSeq: ['web_search']
+                description: 'Consulta o tempo pela ferramenta dedicada, usando a cidade que o usuário informou.',
+                prompt: 'Use a ferramenta weather com a cidade que o usuário informou nesta mensagem, '
+                    + 'ou com a que já for conhecida da conversa/memória. '
+                    + 'Se nenhuma cidade for conhecida, PERGUNTE ao usuário de qual cidade ele quer a '
+                    + 'previsão — nunca escolha uma cidade por conta própria.',
+                toolSeq: ['weather']
             },
             audio_request: {
                 name: 'Pedido de Áudio',

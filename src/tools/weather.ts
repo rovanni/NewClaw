@@ -14,7 +14,17 @@ export class WeatherTool implements ToolExecutor {
     parameters = {
         type: 'object',
         properties: {
-            city: { type: 'string', description: 'Nome da cidade (ex: São Paulo, Curitiba)' },
+            // Sem exemplos de cidade: num parâmetro obrigatório, o exemplo vira o palpite. Num
+            // incidente real (03/08/2026) o modelo chamou esta ferramenta com o primeiro exemplo
+            // que estava escrito aqui, para um usuário que não havia informado cidade nenhuma e
+            // mora em outro estado — e o resultado foi apresentado como se fosse o clima dele.
+            // A instrução substitui o exemplo.
+            city: {
+                type: 'string',
+                description: 'Cidade informada pelo usuário nesta conversa, ou já conhecida da memória. '
+                    + 'NUNCA invente nem use uma cidade de exemplo: se nenhuma cidade for conhecida, '
+                    + 'pergunte ao usuário em vez de chamar esta ferramenta.',
+            },
             format: { type: 'string', enum: ['simple', 'detailed', 'full'], description: 'Nível de detalhe: simple (1 linha), detailed (resumo), full (completo). Padrão: detailed' }
         },
         required: ['city']
