@@ -172,6 +172,8 @@ export function render(container) {
            status acima, que só fala do que está em vigor — misturar os dois foi o que fez a tela
            exibir "Ollama — Online / Sistema pronto: Sim" com o servidor rodando llamafile. -->
       <div id="ov-pending" style="display:none;margin-bottom:14px;"></div>
+      <!-- Dois provedores no mesmo host:porta. Ver checkDuplicateEndpoints(). -->
+      <div id="ov-dupendpoint" style="display:none;margin-bottom:14px;"></div>
       <div id="ov-coherence" style="display:none;margin-bottom:14px;"></div>
       <!-- "Seu modelo local não está carregado" + ação. Ver checkLocalModelDown(). -->
       <div id="ov-localdown" style="display:none;margin-bottom:14px;"></div>
@@ -756,7 +758,7 @@ function activeProviderHealth() {
       error: health.find(h => h.provider === 'ollama')?.error,
     };
   }
-  return { provider: prov, online: !!entry.online, count: entry.modelCount || 0, error: entry.error };
+  return { provider: prov, online: !!entry.online, loading: !!entry.loading, count: entry.modelCount || 0, error: entry.error };
 }
 
 /**
@@ -789,6 +791,57 @@ function renderPendingChanges() {
     <div class="form-hint" style="margin-top:6px;">${t('ml_ov_pending_desc', { campos: esc(nomes.join(', ')) })}</div>`;
 }
 
+/**
+ * Avisa quando dois provedores apontam para o MESMO endereço.
+ *
+ * `localhost:8080` e `127.0.0.1:8080` são a mesma máquina e a mesma porta — dois rótulos para um
+ * servidor só. Enquanto tudo funciona isso é inofensivo; quando algo dá errado, torna o
+ * diagnóstico impossível: os dois aparecem com a mesma saúde, o mesmo catálogo e o mesmo modelo,
+ * e nada indica quem está atendendo.
+ *
+ * Evidência real (02/08/2026): o operador subiu um segundo servidor na 8080 por fora do NewClaw
+ * enquanto um modelo já estava carregado ali. O painel passou horas alternando entre dois
+ * modelos diferentes, o estado interno afirmava um terceiro, e não havia como perceber a colisão
+ * pela tela — só comparando `.env`, `/v1/models` e a lista de processos à mão.
+ *
+ * É aviso, não bloqueio: apontar dois rótulos para o mesmo endpoint é legítimo (um como padrão,
+ * outro como reserva do mesmo servidor). O que não pode é ser invisível.
+ */
+function checkDuplicateEndpoints() {
+  const box = document.getElementById('ov-dupendpoint');
+  if (!box) return;
+
+  // Normaliza só o que é equivalência garantida: localhost e 127.0.0.1 são o mesmo host, e a
+  // barra final não muda o destino. Nada de heurística além disso — nomes de máquina diferentes
+  // PODEM resolver para o mesmo IP, mas afirmar isso sem consultar DNS seria adivinhação.
+  const chave = url => String(url || '')
+    .trim().toLowerCase()
+    .replace(/\/+$/, '')
+    .replace(/^https?:\/\//, '')
+    .replace(/^localhost([:/]|$)/, '127.0.0.1$1');
+
+  const grupos = new Map();
+  for (const p of configStore.salvo('customProviders') || []) {
+    if (!p?.baseUrl) continue;
+    const k = chave(p.baseUrl);
+    if (!grupos.has(k)) grupos.set(k, []);
+    grupos.get(k).push(p.label);
+  }
+
+  const colisoes = [...grupos.entries()].filter(([, labels]) => labels.length > 1);
+  if (!colisoes.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  box.style.display = '';
+  box.className = 'ml-test-result ml-test-pending';
+  box.innerHTML = `
+    <div class="ml-test-title">${t('ml_dup_endpoint_title')}</div>
+    <ul style="margin:6px 0 0;padding-left:18px;">
+      ${colisoes.map(([endereco, labels]) =>
+        `<li>${t('ml_dup_endpoint_item', { labels: esc(labels.join(' e ')), endereco: esc(endereco) })}</li>`
+      ).join('')}
+    </ul>`;
+}
+
 function updateOverview() {
   const cs = configStore;
   const h = activeProviderHealth();
@@ -804,7 +857,11 @@ function updateOverview() {
 
   const el = id => document.getElementById(id);
   const providerLabel = PROV_LABELS[provSalvo] || provSalvo || '—';
-  const statusText = h.online ? t('ml_ov_online') : (h.error || t('ml_ov_offline'));
+  // "carregando" tem texto próprio: dizer "fetch failed" enquanto o modelo sobe faz o operador
+  // concluir que falhou e ir mexer na configuração — quando bastava esperar.
+  const statusText = h.online
+    ? t('ml_ov_online')
+    : (h.loading ? t('ml_ov_loading') : (h.error || t('ml_ov_offline')));
   el('ov-provider')     && (el('ov-provider').textContent = `${providerLabel} — ${statusText}`);
   el('ov-dot')          && (el('ov-dot').className = `dot ${h.online ? 'online' : 'offline'}`);
   el('ov-count')        && (el('ov-count').textContent = `${h.count} ${t('ml_ov_available_suffix')}`);
@@ -828,6 +885,7 @@ function updateOverview() {
   el('ov-ready') && (el('ov-ready').textContent = ready ? t('ml_ov_ready_yes') : t('ml_ov_ready_no'));
 
   renderPendingChanges();
+  checkDuplicateEndpoints();
   checkConfigCoherence();
   checkLocalModelDown();
   updateCatalogCard();
@@ -2143,7 +2201,22 @@ function providerCard(cat, icon, label) {
 
 // ─── Reactive update functions ────────────────────────────────
 
-function updateEffectiveConfig(r, defaultProvider) {
+/**
+ * Preenche o painel "CONFIGURAÇÃO EFETIVA".
+ *
+ * Os argumentos são IGNORADOS de propósito — o painel lê o espelho do servidor
+ * (`configStore.salvo`), não o rascunho da tela. Ele se chama "efetiva"; exibir uma escolha
+ * ainda não salva ali é a contradição mais direta possível.
+ *
+ * Evidência real (02/08/2026): durante um teste ponta a ponta, o cabeçalho do topo dizia
+ * "llamafile" (correto, era o que estava em vigor) e este painel, cinco centímetros abaixo,
+ * dizia "PROVEDOR ATIVO: Ollama" — o rascunho. Dois painéis da mesma tela, discordando, e o
+ * que prometia ser o efetivo era o errado. A assinatura foi mantida para não tocar nos três
+ * pontos de chamada; o que muda é de onde o dado vem.
+ */
+function updateEffectiveConfig(_rIgnorado, _defaultProviderIgnorado) {
+  const r = configStore.salvo('modelRouter') || {};
+  const defaultProvider = configStore.salvo('defaultProvider');
   const s = v => v || '—';
   ['chat','code','vision','light','analysis','execution'].forEach(cat => {
     const e = document.getElementById(`ml-eff-${cat}`);

@@ -52,7 +52,17 @@ export class OpenAIProvider implements ILLMProvider {
         const headers: Record<string, string> = {};
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
         const resp = await fetch(`${this.baseUrl}/models`, { headers });
-        if (!resp.ok) throw new Error(`${this.label} /models error: ${resp.status}`);
+        if (!resp.ok) {
+            // O status vai anexado ao erro para quem chama poder distinguir estados que não são
+            // "fora do ar". O caso concreto é o llamafile: ele ABRE a porta assim que sobe e
+            // responde 503 {"message":"Loading model"} durante toda a carga — que pode levar mais
+            // de dois minutos. Tratar isso como offline faz o painel dizer que o provedor caiu
+            // exatamente enquanto ele está subindo (observado em 02/08/2026). Detectar por texto
+            // da mensagem seria frágil; o status é o dado.
+            const err = new Error(`${this.label} /models error: ${resp.status}`) as Error & { status?: number };
+            err.status = resp.status;
+            throw err;
+        }
         const data = await resp.json() as { data?: Array<{ id: string }> };
         return (data.data || []).map(m => ({
             id: m.id,

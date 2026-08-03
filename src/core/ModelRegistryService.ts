@@ -29,6 +29,15 @@ export interface ProviderHealth {
     online: boolean;
     modelCount: number;
     error?: string;
+    /**
+     * O provedor está no ar mas ainda CARREGANDO o modelo — terceiro estado, distinto de online
+     * e de offline.
+     *
+     * Um servidor local (llamafile) abre a porta assim que sobe e responde 503 durante toda a
+     * carga, que pode passar de dois minutos. Sem esta distinção o painel afirma "provedor
+     * indisponível" justamente enquanto ele está subindo, e o operador conclui que falhou.
+     */
+    loading?: boolean;
 }
 
 /**
@@ -124,8 +133,24 @@ export class ModelRegistryService {
                 results.push(...models);
                 health.push({ provider: custom.label, baseUrl: custom.baseUrl, online: true, modelCount: models.length });
             } catch (err) {
-                log.warn(`${custom.label} discovery failed: ${errorMessage(err)}`);
-                health.push({ provider: custom.label, baseUrl: custom.baseUrl, online: false, modelCount: 0, error: errorMessage(err) });
+                // 503 = servidor no ar, modelo ainda carregando. Não é falha: registrar como tal
+                // encheria o log de "discovery failed" durante toda a carga (foi o que aconteceu
+                // em 02/08/2026 — dezenas de linhas idênticas enquanto o modelo subia) e faria a
+                // tela declarar o provedor fora do ar no pior momento possível.
+                const carregando = (err as { status?: number }).status === 503;
+                if (carregando) {
+                    log.info(`${custom.label}: servidor no ar, modelo ainda carregando (503)`);
+                } else {
+                    log.warn(`${custom.label} discovery failed: ${errorMessage(err)}`);
+                }
+                health.push({
+                    provider: custom.label,
+                    baseUrl: custom.baseUrl,
+                    online: false,
+                    loading: carregando,
+                    modelCount: 0,
+                    error: errorMessage(err),
+                });
             }
         }
 
