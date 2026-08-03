@@ -83,11 +83,16 @@ assert(
 // (para que o aviso de "modelos reajustados" não fosse sobrescrito na tela) e o padrão anterior,
 // que exigia a chamada colada ao `if`, quebrou sem que nada do comportamento tivesse mudado.
 assert(
-    /dataset\.useAsPrimary;\s*if \(useAsPrimary\) \{[\s\S]{0,400}applyDefaultProviderChange\(useAsPrimary\)/.test(src),
+    /dataset\.useAsPrimary;\s*if \(useAsPrimary\) \{[\s\S]{0,700}applyDefaultProviderChange\(useAsPrimary\)/.test(src),
     'clique em "usar como principal" chama applyDefaultProviderChange com o label do card'
 );
+// S179 (Sprint 1): a janela deixou de exigir a chamada COLADA ao `{` — instrumentação
+// (`logAcaoUI`) passou a preceder a ação. O que este teste garante é que o clique chama
+// `applyDefaultProviderChange` com o argumento certo, não a distância entre as duas linhas;
+// fixar a distância já tinha quebrado antes por uma mudança que não alterou comportamento algum
+// (ver o comentário logo acima).
 assert(
-    /dataset\.useAsFallback;\s*if \(useAsFallback\) \{\s*applyDefaultProviderChange\('ollama'\)/.test(src),
+    /dataset\.useAsFallback;\s*if \(useAsFallback\) \{[\s\S]{0,300}applyDefaultProviderChange\('ollama'\)/.test(src),
     "clique em \"usar como fallback\" volta o principal pro Ollama (não existe estado \"sem principal\")"
 );
 // Idempotência/sincronia: applyDefaultProviderChange precisa re-renderizar os cards depois de

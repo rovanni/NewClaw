@@ -125,9 +125,13 @@ console.log('\n=== S172 — trocar de provedor realinha os modelos ===');
     // categorias. Funcionava até o próximo restart, quando o Ollama respondia 404 model not found.
     const realign = block('function realignRouterToProvider', '\nfunction applyDefaultProviderChange');
     assert(realign.length > 0, 'realignRouterToProvider existe');
+    // S178 (02/08/2026): a regra saiu do `if` inline e virou `isModelOutsideProvider()`, porque
+    // um modelo pode ser servido por VÁRIOS provedores e o mapa de dono único descartava as
+    // duplicatas em silêncio. A garantia protegida aqui é a mesma — não adivinhar sobre modelo
+    // fora do catálogo —, agora verificada onde ela passou a morar.
     assert(
-        /providerOf\[mr\[k\]\]\s*&&\s*providerOf\[mr\[k\]\]\s*!==\s*prov/.test(realign),
-        'só troca modelos cujo provedor de origem é CONHECIDO e diferente — não adivinha sobre o que não está no catálogo'
+        /isModelOutsideProvider\(owners, mr\[k\], prov\)/.test(realign),
+        'só troca modelos cujo provedor de origem é CONHECIDO e não serve o modelo — não adivinha sobre o que não está no catálogo'
     );
     assert(
         /if\s*\(!target\)\s*return null/.test(realign),
@@ -148,7 +152,14 @@ console.log('\n=== S172 — avisos de estado inconsistente e de modelo local for
         'compara contra o provedor EFETIVO da categoria (respeita override por perfil) — senão acusaria configuração correta'
     );
     assert(
-        /if \(owner && owner !== effective\)/.test(coherence),
+        /if \(isModelOutsideProvider\(owners, model, effective\)\)/.test(coherence),
+        'a acusação passa pela regra única — que exige o modelo conhecido E nenhum dos provedores que o servem ser o efetivo'
+    );
+    // A garantia "modelo desconhecido não é acusado" mudou de lugar junto com a regra: passou a
+    // ser a primeira condição de isModelOutsideProvider(). Verificada na origem para não virar
+    // uma promessa que ninguém guarda (cobertura de comportamento em S178-3).
+    assert(
+        /function isModelOutsideProvider[\s\S]{0,400}?return !!servedBy && servedBy\.size > 0 && !servedBy\.has\(provider\);/.test(src),
         'modelo ausente do catálogo não é acusado: não há como saber a que provedor pertence'
     );
 

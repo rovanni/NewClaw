@@ -1,4 +1,4 @@
-import { configStore, providersStore } from '../state.js';
+import { configStore, providersStore, logAcaoUI } from '../state.js';
 import { showToast } from '../components/Toast.js';
 import { initDropdowns, updateDropdownModels } from '../components/ModelDropdown.js';
 import { addCustomProvider, removeCustomProvider, editCustomProvider, getCloudCatalog, testCustomProvider, getLocalModels, serveLocalModel, stopLocalModel, previewLocalCommand } from '../api.js';
@@ -820,6 +820,43 @@ function checkLocalModelDown() {
  * Só reporta o que dá para afirmar: um modelo ausente do catálogo não é acusado de nada — não há
  * como saber a que provedor pertence, e inventar um veredito seria pior que ficar calado.
  */
+/**
+ * Mapa `modelo → TODOS os provedores que o servem`.
+ *
+ * Um mesmo modelo pode ser oferecido por mais de um provedor: dois apelidos apontando para o
+ * mesmo servidor local (`localhost:8080` e `127.0.0.1:8080` são a mesma máquina e a mesma porta),
+ * ou dois serviços distintos que hospedam o mesmo modelo aberto. Antes, este mapa era construído
+ * com `Object.fromEntries()`, que só admite UM valor por chave — a duplicata silenciosamente
+ * descartava todos os provedores menos o último, e o provedor legítimo passava a ser acusado de
+ * não ser o dono.
+ *
+ * Evidência real (02/08/2026, instância do operador): o catálogo trazia
+ * `GLM-4.6V-Flash-Q3_K_M.gguf` duas vezes — `llamafile` e `Modelo local` —, ambos apontando para
+ * 127.0.0.1:8080, servidor que de fato servia esse modelo (HTTP 200, id idêntico). A tela exibia
+ * "Configuração inconsistente — os modelos abaixo pertencem a outro provedor e vão falhar quando
+ * forem usados" nas 6 categorias, sobre uma configuração que estava funcionando, e mandava
+ * corrigir de duas formas que não existiam: trocar de provedor (os dois estavam certos) ou trocar
+ * de modelo (só havia um). O alerta afirmava o futuro — "vão falhar" — sem base para isso.
+ */
+function buildModelOwners(catalog) {
+  const owners = new Map();
+  for (const m of catalog) {
+    if (!m || !m.id) continue;
+    if (!owners.has(m.id)) owners.set(m.id, new Set());
+    owners.get(m.id).add(m.provider);
+  }
+  return owners;
+}
+
+/**
+ * O modelo está fora do provedor em uso? Só responde `true` quando o catálogo conhece o modelo
+ * E nenhum dos provedores que o servem é o efetivo — modelo desconhecido continua sem veredito.
+ */
+function isModelOutsideProvider(owners, modelId, provider) {
+  const servedBy = owners.get(modelId);
+  return !!servedBy && servedBy.size > 0 && !servedBy.has(provider);
+}
+
 function checkConfigCoherence() {
   const box = document.getElementById('ov-coherence');
   if (!box) return;
@@ -827,7 +864,7 @@ function checkConfigCoherence() {
   const catalog = providersStore.get('catalog') || [];
   if (!catalog.length) { box.style.display = 'none'; return; }
 
-  const providerOf = Object.fromEntries(catalog.map(m => [m.id, m.provider]));
+  const owners = buildModelOwners(catalog);
   const prov = cs.get('defaultProvider') || 'ollama';
   const mr = cs.get('modelRouter') || {};
   const labels = { chat: 'Chat', code: t('route_code_cat'), vision: t('route_vision_cat'),
@@ -840,8 +877,12 @@ function checkConfigCoherence() {
     // Um provider por categoria explícito manda nessa categoria — comparar contra o padrão daria
     // um falso alarme em quem configurou justamente essa combinação de propósito.
     const effective = mr[`provider_${cat}`] || prov;
-    const owner = providerOf[model];
-    if (owner && owner !== effective) problems.push({ label, model, owner, effective });
+    if (isModelOutsideProvider(owners, model, effective)) {
+      // Lista todos os provedores que servem o modelo — dizer "é do provedor X" quando existem
+      // dois é meia verdade, e é justamente o que tornava a instrução impossível de seguir.
+      const owner = [...owners.get(model)].join(', ');
+      problems.push({ label, model, owner, effective });
+    }
   }
 
   if (!problems.length) { box.style.display = 'none'; return; }
@@ -1059,6 +1100,7 @@ function wireProviderOverview() {
     // ordem de fallback automaticamente (getFallbackOrder no ProviderFactory).
     const useAsPrimary = e.target.closest('[data-use-as-primary]')?.dataset.useAsPrimary;
     if (useAsPrimary) {
+      logAcaoUI('definir-provedor-principal', 'iniciando', useAsPrimary);
       // Toast do "virou principal" PRIMEIRO: applyDefaultProviderChange pode emitir logo depois o
       // aviso de modelos reajustados, que é a informação mais importante das duas — se viesse
       // antes, seria substituída na tela e o usuário nunca saberia que os modelos mudaram.
@@ -1068,6 +1110,7 @@ function wireProviderOverview() {
     }
     const useAsFallback = e.target.closest('[data-use-as-fallback]')?.dataset.useAsFallback;
     if (useAsFallback) {
+      logAcaoUI('voltar-para-ollama', 'iniciando', useAsFallback);
       applyDefaultProviderChange('ollama');
       showToast(t('ml_provider_set_fallback_toast', { label: useAsFallback }), 'success');
       return;
@@ -1813,16 +1856,21 @@ function wireCategoryPicker(container) {
   // Delegação de evento — sobrevive a innerHTML sendo trocado a cada renderCategoryPicker().
   document.getElementById('rt-tbody')?.addEventListener('click', e => {
     const tr = e.target.closest('tr[data-model-id]');
-    if (!tr) return;
+    if (!tr) { logAcaoUI('selecionar-modelo', 'ignorado — clique fora de uma linha'); return; }
     routingPendingModel = tr.dataset.modelId;
     routingPendingProvider = tr.dataset.modelProvider || '';
+    logAcaoUI('selecionar-modelo', 'selecionado', `${routingPendingModel} (${routingPendingProvider || 'provedor desconhecido'})`);
     renderCategoryPicker();
   });
 
   // ── "Usar para tudo" ──────────────────────────────────────────────────────
   document.getElementById('rt-applyAllBtn')?.addEventListener('click', async e => {
     const model = routingPendingModel || (configStore.get('modelRouter') || {})[routingSelectedCategory];
-    if (!model) return;
+    if (!model) {
+      logAcaoUI('usar-para-tudo', 'NADA FEITO — nenhum modelo selecionado e a categoria atual está vazia');
+      return;
+    }
+    logAcaoUI('usar-para-tudo', 'iniciando', model);
     const cs = configStore;
     const mr = { ...(cs.get('modelRouter') || {}) };
     const catalog = providersStore.get('catalog') || [];
@@ -1860,7 +1908,11 @@ function wireCategoryPicker(container) {
   });
 
   document.getElementById('rt-applyBtn')?.addEventListener('click', async e => {
-    if (!routingPendingModel) return;
+    if (!routingPendingModel) {
+      logAcaoUI('aplicar', `NADA FEITO — nenhum modelo selecionado (categoria alvo: ${routingSelectedCategory})`);
+      return;
+    }
+    logAcaoUI('aplicar', `iniciando para categoria '${routingSelectedCategory}'`, routingPendingModel);
     const cs = configStore;
     const mr = { ...cs.get('modelRouter') };
     mr[routingSelectedCategory] = routingPendingModel;
@@ -2141,7 +2193,7 @@ function realignRouterToProvider(prov) {
     const cs = configStore;
     const catalog = providersStore.get('catalog') || [];
     if (!catalog.length) return null;
-    const providerOf = Object.fromEntries(catalog.map(m => [m.id, m.provider]));
+    const owners = buildModelOwners(catalog);
 
     let target = '';
     if (prov === 'ollama') {
@@ -2156,7 +2208,9 @@ function realignRouterToProvider(prov) {
     const keys = ['chat', 'code', 'vision', 'light', 'analysis', 'execution', 'classifierModel', 'plannerModel', 'riskModel', 'observerModel'];
     // Um modelo ausente do catálogo (ex.: modelo de nuvem ainda não instalado) fica como está —
     // não dá para afirmar a que provider pertence, e o certo diante de dado desconhecido é não mexer.
-    const stale = keys.filter(k => mr[k] && providerOf[mr[k]] && providerOf[mr[k]] !== prov);
+    // Mesma regra da checagem de coerência: um modelo que o provedor de destino JÁ serve não é
+    // stale — realinhá-lo trocaria uma configuração correta por outra sem motivo.
+    const stale = keys.filter(k => mr[k] && isModelOutsideProvider(owners, mr[k], prov));
     if (!stale.length) return null;
 
     stale.forEach(k => { mr[k] = target; });
