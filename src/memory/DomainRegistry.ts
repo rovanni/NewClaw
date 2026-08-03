@@ -147,8 +147,9 @@ export function getDomainById(id: string): DomainDefinition | undefined {
 
 export type DomainClassifierLLM = (text: string) => Promise<DomainClassification | null>;
 
-/** Classificação de domínio não justifica esperar um LLM lento — timeout curto. */
-const DOMAIN_CLASSIFIER_TIMEOUT_MS = 6_000;
+// A intenção original ("classificação de domínio não justifica esperar um LLM lento") continua
+// valendo e virou o perfil 'classificacao' em shared/auxTimeout.ts. O que saiu foi o número
+// fixo: 6s descrevia a velocidade de um modelo de nuvem, não a natureza da chamada.
 
 function buildDomainClassificationPrompt(text: string): string {
     const domainList = DOMAIN_DEFINITIONS.map(d => `- ${d.id}: ${d.description}`).join('\n');
@@ -188,11 +189,16 @@ export function createDomainClassifierLLM(
 
         try {
             const prompt = buildDomainClassificationPrompt(text);
+            // Orçamento derivado da latência observada do provedor (shared/auxTimeout.ts). O teto
+            // fixo de 6s abortava em TODO turno com modelo local — medido em 03/08/2026:
+            // `FAILED This operation was aborted duration=6010ms`, sempre, enquanto o mesmo
+            // classificador levava 1,3s num modelo de nuvem.
+            const orcamento = providerFactory.getBudgetAuxiliar('classificacao');
             const result = await providerFactory.chatWithFallback(
                 [{ role: 'user', content: prompt }],
                 undefined,
                 undefined,
-                DOMAIN_CLASSIFIER_TIMEOUT_MS,
+                orcamento.timeoutMs,
                 undefined,
                 model,
             );

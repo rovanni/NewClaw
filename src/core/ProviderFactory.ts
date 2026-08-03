@@ -10,6 +10,7 @@ import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, Fallba
 import { GeminiProvider } from './GeminiProvider';
 import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
+import { getBudgetAuxiliar, PerfilAuxiliar, OrcamentoAuxiliar } from '../shared/auxTimeout';
 import { OpenAIProvider, OpenRouterProvider } from './OpenAIProvider';
 import { OllamaProvider } from './OllamaProvider';
 import { AnthropicProvider } from './AnthropicProvider';
@@ -176,6 +177,21 @@ export class ProviderFactory {
 
     getAvailableProviders(): string[] { return Array.from(this.providers.keys()); }
     getDefaultProvider(): string { return this.defaultProvider; }
+
+    /**
+     * Orçamento de tempo para uma chamada LLM auxiliar, derivado da latência que este provedor
+     * de fato apresenta — ver shared/auxTimeout.ts para o porquê de não ser um número fixo.
+     *
+     * Mora aqui porque o ProviderFactory é quem sabe as duas coisas ao mesmo tempo: qual
+     * provedor será tentado primeiro e quanto ele tem levado. Assim o ponto de chamada declara
+     * só a intenção ("isto é uma classificação") e não precisa conhecer o registro de circuitos.
+     */
+    getBudgetAuxiliar(perfil: PerfilAuxiliar): OrcamentoAuxiliar {
+        return getBudgetAuxiliar(perfil, this.defaultProvider, {
+            getLatenciaTipicaMs: (provedor: string) =>
+                this.circuitBreakers.getOrCreate({ name: provedor }).getLatenciaTipicaMs(),
+        });
+    }
 
     setDefaultProvider(name: string): void {
         if (this.providers.has(name)) {
@@ -351,7 +367,10 @@ export class ProviderFactory {
 
                     if ((result.content && result.content.trim().length > 0) || (result.toolCalls && result.toolCalls.length > 0)) {
                         attemptLog.push({ provider: providerName, model: modelUsed, duration, status: 'success' });
-                        this.circuitBreakers.getOrCreate({ name: providerName }).recordSuccess();
+                        // `duration` já era calculado aqui e só ia para o log. Passá-lo adiante
+                        // alimenta a latência típica do provedor, de onde saem os orçamentos das
+                        // chamadas auxiliares (ver getBudgetAuxiliar em shared/auxTimeout.ts).
+                        this.circuitBreakers.getOrCreate({ name: providerName }).recordSuccess(duration);
                         log.info(`[${attemptId}] SUCCESS content=${result.content.length}chars thinking=${(result.thinking || '').length}chars toolCalls=${result.toolCalls?.length || 0} duration=${duration}ms`);
                         return {
                             status: 'success',

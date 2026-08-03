@@ -168,9 +168,41 @@ export class CircuitBreaker {
     }
 
     /**
-     * Record a successful execution (manual API).
+     * Latência típica observada deste provedor, em ms — média móvel exponencial das chamadas
+     * bem-sucedidas. `null` enquanto não houver nenhuma medição.
+     *
+     * Existe porque orçamentos de tempo fixos em milissegundos assumem uma classe de hardware.
+     * Evidência real (03/08/2026): o mesmo classificador respondeu em 1.329 ms num modelo de
+     * nuvem e em 18.030 ms num .gguf local na mesma máquina — 14× de diferença. Os tetos do
+     * projeto foram calibrados para a primeira situação, e na segunda abortavam em TODO turno.
+     *
+     * O CircuitBreaker já é o objeto de estado por provedor e já recebe cada desfecho; medir
+     * aqui evita criar um segundo registro paralelo dizendo respeito ao mesmo provedor.
      */
-    recordSuccess(): void {
+    private latenciaMediaMs: number | null = null;
+
+    /** Peso da amostra nova na média móvel. Baixo o bastante para um pico não dominar. */
+    private static readonly PESO_AMOSTRA = 0.25;
+
+    getLatenciaTipicaMs(): number | null {
+        return this.latenciaMediaMs;
+    }
+
+    /**
+     * Record a successful execution (manual API).
+     *
+     * `durationMs` é opcional para não quebrar chamadores existentes: quem não informa apenas
+     * não contribui para a média, e o consumidor cai no padrão — nunca num número inventado.
+     */
+    recordSuccess(durationMs?: number): void {
+        if (typeof durationMs === 'number' && durationMs > 0) {
+            this.latenciaMediaMs = this.latenciaMediaMs === null
+                ? durationMs
+                : Math.round(
+                    this.latenciaMediaMs * (1 - CircuitBreaker.PESO_AMOSTRA)
+                    + durationMs * CircuitBreaker.PESO_AMOSTRA
+                );
+        }
         this.onSuccess(0);
     }
 

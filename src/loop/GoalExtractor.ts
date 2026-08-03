@@ -17,11 +17,11 @@ import { ChannelContext } from './agentLoopTypes';
 
 const log = createLogger('GoalExtractor');
 
-// P0.4 — timeout dedicado ao classificador: uma resposta binária não justifica 45s.
-// 15s acomoda modelos que emitem thinking tokens antes do JSON (ex: minimax-m3).
-// Abaixo de 8s, modelos com reasoning pipeline ultrapassam o limite e o conteúdo
-// recuperado é o thinking em texto natural, que não é JSON → fail-open indesejado.
-const GOAL_EXTRACTOR_TIMEOUT_MS = 15_000;
+// P0.4 estabeleceu o princípio certo — uma resposta binária não justifica os 45s de uma
+// validação — mas o expressava como um número fixo (15s), o que embute uma suposição sobre a
+// velocidade do hardware de quem roda. Medido em 03/08/2026: o mesmo classificador leva 1,3s
+// num modelo de nuvem e 18s num .gguf local, e com o segundo os 15s abortavam em TODO turno.
+// O princípio virou o perfil 'classificacao' em shared/auxTimeout.ts; o número agora é medido.
 
 // ── Heurísticas determinísticas ───────────────────────────────────────────────
 
@@ -238,11 +238,21 @@ Regras:
             // P0.1: se o stream expirar e o provider recuperar o campo "thinking" como content,
             //       parseClassificationResponse não encontrará JSON válido e devolverá reason:'parse_error'.
             //       Ambos os casos (status!=success e parse_error) caem no fail-open para AgentLoop.
+            // O orçamento vem da latência observada deste provedor, não de um número fixo — ver
+            // shared/auxTimeout.ts. Com um modelo de nuvem o valor fica próximo dos 15s antigos;
+            // com um .gguf local que leva ~18s por classificação, cresce o suficiente para a
+            // chamada terminar em vez de abortar em todo turno (evidência de 03/08/2026).
+            const orcamento = this.providerFactory.getBudgetAuxiliar('classificacao');
+            log.info(
+                `[GoalExtractor] orçamento=${Math.round(orcamento.timeoutMs / 1000)}s `
+                + `origem=${orcamento.origem}`
+                + (orcamento.latenciaTipicaMs !== null ? ` latência_típica=${orcamento.latenciaTipicaMs}ms` : '')
+            );
             const result = await this.providerFactory.chatWithFallback(
                 messages,
                 undefined,
                 undefined,
-                GOAL_EXTRACTOR_TIMEOUT_MS,
+                orcamento.timeoutMs,
                 undefined,
                 this.classifierModel
             );

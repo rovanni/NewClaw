@@ -43,6 +43,13 @@ function assert(condition: boolean, message: string, detail?: unknown): void {
 function makeFakeProviderFactory(response: () => { status: string; content: string }) {
     return {
         chatWithFallback: async () => response(),
+        // S186: o classificador passou a pedir o orçamento de tempo ao ProviderFactory em vez de
+        // usar uma constante — o número agora vem da latência observada do provedor. Um duplo
+        // que omite este método faz a chamada lançar TypeError, que o `catch` do classificador
+        // engole, degradando em silêncio para a heurística de keywords: os testes continuavam
+        // "passando" com um resultado vindo de outro caminho. O duplo precisa honrar o contrato
+        // que ele declara implementar.
+        getBudgetAuxiliar: () => ({ timeoutMs: 15_000, origem: 'padrao' as const, latenciaTipicaMs: null }),
     } as unknown as ProviderFactory;
 }
 
