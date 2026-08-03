@@ -812,7 +812,19 @@ function updateOverview() {
 
   // "Sistema pronto pra uso?" — agregado das 3 condições acima, é a resposta que a Visão Geral
   // deve dar (nunca uma ação); detalhe operacional (sync, catálogo) mora só em Instalar Modelo.
-  const ready = h.online && h.count > 0 && !!defaultModel;
+  // Prontidão exige que o modelo configurado esteja ENTRE OS SERVIDOS pelo provedor em uso —
+  // não basta o provedor estar no ar com algum modelo e haver um nome escrito na configuração.
+  // Evidência real (02/08/2026): o painel deu "Sistema pronto ✅ Sim" com o provedor llamafile
+  // servindo GLM-4.6V-Flash-Q3_K_M.gguf enquanto a configuração pedia glm-4.7-flash-Q4_K_M.gguf.
+  // Toda conversa nesse estado falharia, e a tela dizia que estava tudo certo.
+  //
+  // Catálogo vazio (provedor de nuvem que não expõe /models, discovery ainda não rodou) NÃO
+  // reprova: sem lista não há como afirmar ausência — mesma regra de checkConfigCoherence.
+  const servidos = (providersStore.get('catalog') || [])
+    .filter(m => m.provider === provSalvo)
+    .map(m => m.id);
+  const modeloServido = servidos.length === 0 || servidos.includes(defaultModel);
+  const ready = h.online && h.count > 0 && !!defaultModel && modeloServido;
   el('ov-ready') && (el('ov-ready').textContent = ready ? t('ml_ov_ready_yes') : t('ml_ov_ready_no'));
 
   renderPendingChanges();

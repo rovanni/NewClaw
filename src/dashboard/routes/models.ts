@@ -205,9 +205,26 @@ function readServerState(): { pid?: number; file: string; port: number } | null 
  * ocupa a GPU, e alguém que reiniciou o computador para jogar não quer o modelo subindo por conta
  * própria. Só leitura de arquivo — sem I/O de rede, seguro no caminho do polling do dashboard.
  */
-export function getLastKnownLocalServer(): { file: string; port: number } | null {
+export function getLastKnownLocalServer(): { file: string; port: number; running: boolean } | null {
     const saved = readServerState();
-    return saved ? { file: saved.file, port: saved.port } : null;
+    if (!saved) return null;
+    // `running` é a resposta verificada para "esse modelo está no ar AGORA?" — antes, quem
+    // consumia este registro recebia só {file, port} e não tinha como distinguir "escolhido e
+    // rodando" de "escolhido há horas, processo morto". Em 02/08/2026 o arquivo apontava
+    // pid 45736 / GLM-4.6V com o processo inexistente e ninguém na porta; a tela apresentava
+    // isso ao lado de um "Modelo padrão" diferente, e nada dizia qual dos dois era real.
+    //
+    // Só checagem de PID: barata e síncrona, segura no caminho do polling do dashboard (o
+    // comentário acima proíbe I/O de rede aqui). Um PID vivo não garante que a porta responde —
+    // quem precisa dessa garantia usa adoptRunningServer(), que checa os dois.
+    let running = false;
+    if (saved.pid) {
+        try {
+            process.kill(saved.pid, 0); // sinal 0 = só testa existência
+            running = true;
+        } catch { running = false; }
+    }
+    return { file: saved.file, port: saved.port, running };
 }
 
 /**

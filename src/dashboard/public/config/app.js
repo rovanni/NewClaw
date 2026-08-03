@@ -1,5 +1,5 @@
 import {
-  configStore, runtimeStore, providersStore, toolsStore, skillsStore,
+  configStore, runtimeStore, providersStore, toolsStore, skillsStore, logAcaoUI,
 } from './state.js';
 import {
   getConfig, getStatus, getProviders, getTools,
@@ -101,7 +101,15 @@ window.addEventListener('newclaw-devmode-changed', e => {
 });
 
 // ── Save & Restart ───────────────────────────────────────────────
-document.getElementById('btnSave').addEventListener('click', doSave);
+// O clique é registrado ANTES de doSave() porque a pergunta que precisava de resposta era
+// "o clique chegou?". Numa sessão de diagnóstico (02/08/2026) o Salvar da barra lateral foi
+// clicado quatro vezes sem efeito visível e sem UMA linha de log — não havia como distinguir
+// clique perdido, handler ausente ou save que falhou. Toda a instrumentação do Sprint 1 cobria
+// a aba Modelos e deixava de fora justamente a ação mais importante do painel.
+document.getElementById('btnSave').addEventListener('click', () => {
+  logAcaoUI('salvar', 'clique recebido', configStore.camposPendentes().join(', ') || '(nada pendente)');
+  return doSave();
+});
 document.getElementById('btnRestart').addEventListener('click', doRestart);
 
 export async function doSave() {
@@ -155,6 +163,7 @@ export async function doSave() {
     } catch {}
   }
 
+  const pendentesAntes = configStore.camposPendentes();
   try {
     await apiSaveConfig(config);
     // Só AQUI o rascunho vira verdade vigente — depois do servidor confirmar. Enquanto isso não
@@ -163,8 +172,12 @@ export async function doSave() {
     // tela continua honesta sobre o que o servidor tem.
     configStore.marcarSalvo();
     setConfigDirty(false);
+    logAcaoUI('salvar', 'SALVO no servidor', pendentesAntes.join(', ') || '(nada mudou)');
     showToast(t('config_saved_toast'), 'success');
   } catch (e) {
+    // Falha de save era invisível fora do toast, que some em segundos. Sem esta linha, um erro
+    // aqui vira "cliquei e não aconteceu nada" sem nenhum rastro para investigar depois.
+    logAcaoUI('salvar', `FALHOU — ${e.message}`, pendentesAntes.join(', ') || '(nada pendente)');
     showToast('❌ ' + e.message, 'error');
   }
 }

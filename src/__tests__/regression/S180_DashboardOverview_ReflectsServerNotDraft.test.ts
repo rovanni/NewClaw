@@ -169,8 +169,10 @@ console.log('\n=== S180-7 — save que FALHA não move o que está valendo ===')
         !/configStore\.marcarSalvo\(\)[\s\S]{0,200}await apiSaveConfig/.test(APP),
         'e nunca antes — um save que falha não pode virar verdade',
     );
+    // S182 (Sprint 4): o catch ganhou uma linha de log antes do toast. A garantia verificada
+    // aqui é que a falha CHEGA ao operador, não que as duas linhas sejam adjacentes.
     assert(
-        /\} catch \(e\) \{\s*showToast\('❌ ' \+ e\.message, 'error'\);/.test(APP),
+        /\} catch \(e\) \{[\s\S]{0,300}showToast\('❌ ' \+ e\.message, 'error'\);/.test(APP),
         'a falha continua sendo reportada ao operador',
     );
 }
