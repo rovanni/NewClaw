@@ -168,6 +168,10 @@ export function render(container) {
         <div class="overview-row"><span class="overview-label">${t('ml_ov_defaultmodel')}</span><span class="overview-value" id="ov-defaultmodel">—</span></div>
         <div class="overview-row"><span class="overview-label">${t('ml_ov_ready')}</span><span class="overview-value" id="ov-ready">—</span></div>
       </div>
+      <!-- Alterações feitas na tela e ainda não enviadas ao servidor. Fica FORA do cartão de
+           status acima, que só fala do que está em vigor — misturar os dois foi o que fez a tela
+           exibir "Ollama — Online / Sistema pronto: Sim" com o servidor rodando llamafile. -->
+      <div id="ov-pending" style="display:none;margin-bottom:14px;"></div>
       <div id="ov-coherence" style="display:none;margin-bottom:14px;"></div>
       <!-- "Seu modelo local não está carregado" + ação. Ver checkLocalModelDown(). -->
       <div id="ov-localdown" style="display:none;margin-bottom:14px;"></div>
@@ -731,8 +735,11 @@ function wireTabs(container) {
  * já publica health de todo provider descoberto (nativo e custom); é só perguntar ao certo.
  */
 function activeProviderHealth() {
-  const s = configStore.snap();
-  const prov = s.defaultProvider || 'ollama';
+  // `salvo()`, não `snap()`: a saúde reportada tem que ser a do provedor que está de fato em uso
+  // no servidor. Lendo o rascunho, trocar o seletor fazia a tela exibir a saúde de um provedor
+  // que ainda não está valendo — foi assim que ela mostrou "Ollama — Online, 6 disponíveis"
+  // enquanto o servidor rodava com llamafile offline.
+  const prov = configStore.salvo('defaultProvider') || 'ollama';
   const health = providersStore.get('health') || [];
   const entry = health.find(h => h.provider === prov);
   if (prov === 'ollama' || !entry) {
@@ -748,20 +755,51 @@ function activeProviderHealth() {
   return { provider: prov, online: !!entry.online, count: entry.modelCount || 0, error: entry.error };
 }
 
+/**
+ * Mostra, separado do cartão de status, o que foi alterado na tela e ainda não foi para o
+ * servidor. Só nomeia os campos que o operador reconhece — chaves internas do store não
+ * significam nada para quem está configurando.
+ */
+function renderPendingChanges() {
+  const box = document.getElementById('ov-pending');
+  if (!box) return;
+  const cs = configStore;
+
+  const ROTULOS = {
+    defaultProvider: t('ml_ov_provider'),
+    modelRouter: t('ml_ov_defaultmodel'),
+    ollamaModel: t('ml_ov_defaultmodel'),
+    ollamaUrl: 'URL Ollama',
+    customProviders: t('ml_tab_providers'),
+    localModelsDir: t('ml_local_dir_label'),
+  };
+
+  const alterados = cs.camposPendentes().filter(k => ROTULOS[k]);
+  if (!alterados.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  const nomes = [...new Set(alterados.map(k => ROTULOS[k]))];
+  box.style.display = '';
+  box.className = 'ml-test-result ml-test-pending';
+  box.innerHTML = `
+    <div class="ml-test-title">${t('ml_ov_pending_title')}</div>
+    <div class="form-hint" style="margin-top:6px;">${t('ml_ov_pending_desc', { campos: esc(nomes.join(', ')) })}</div>`;
+}
+
 function updateOverview() {
   const cs = configStore;
-  const s = cs.snap();
   const h = activeProviderHealth();
   // O modelo roteado para conversa é o que o sistema de fato usa quando o usuário fala com ele —
   // e é sempre escolha explícita dele. Vem antes de currentModel porque este último, num provider
   // de modelo único, é o placeholder 'default' (o servidor ignora o campo e serve o que carregou):
   // exibir "Modelo padrão: default" não informa nada. Sem adivinhar nada: se nenhum dos dois
   // estiver definido, continua '—'.
-  const r = cs.get('modelRouter') || {};
-  const defaultModel = r.chat || s.currentModel || s.ollamaModel || '';
+  // Toda a Visão Geral fala do que está EM VIGOR no servidor — nunca do rascunho da tela.
+  const provSalvo = cs.salvo('defaultProvider');
+  const r = cs.salvo('modelRouter') || {};
+  const defaultModel = r.chat || cs.salvo('currentModel') || cs.salvo('ollamaModel') || '';
 
   const el = id => document.getElementById(id);
-  const providerLabel = PROV_LABELS[s.defaultProvider] || s.defaultProvider || '—';
+  const providerLabel = PROV_LABELS[provSalvo] || provSalvo || '—';
   const statusText = h.online ? t('ml_ov_online') : (h.error || t('ml_ov_offline'));
   el('ov-provider')     && (el('ov-provider').textContent = `${providerLabel} — ${statusText}`);
   el('ov-dot')          && (el('ov-dot').className = `dot ${h.online ? 'online' : 'offline'}`);
@@ -773,6 +811,7 @@ function updateOverview() {
   const ready = h.online && h.count > 0 && !!defaultModel;
   el('ov-ready') && (el('ov-ready').textContent = ready ? t('ml_ov_ready_yes') : t('ml_ov_ready_no'));
 
+  renderPendingChanges();
   checkConfigCoherence();
   checkLocalModelDown();
   updateCatalogCard();

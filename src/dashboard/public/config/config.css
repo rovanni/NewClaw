@@ -534,9 +534,13 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .ml-test-result { padding:10px 14px; border-radius:8px; font-size:.82rem; line-height:1.5; }
 .ml-test-ok { background:rgba(74,222,128,.08); border:1px solid rgba(74,222,128,.3); }
 .ml-test-fail { background:rgba(248,113,113,.08); border:1px solid rgba(248,113,113,.3); }
+/* Alteração feita na tela e ainda não enviada. Cor própria, distinta do verde de "está tudo
+   certo" e do vermelho de "há um problema": não é nenhum dos dois — é "falta um passo seu". */
+.ml-test-pending { background:rgba(250,204,21,.08); border:1px solid rgba(250,204,21,.35); }
 .ml-test-title { font-weight:600; margin-bottom:2px; }
 .ml-test-ok .ml-test-title { color:var(--success); }
 .ml-test-fail .ml-test-title { color:var(--danger); }
+.ml-test-pending .ml-test-title { color:var(--warning); }
 .ml-test-detail { color:var(--text-soft); word-break:break-word; }
 .ml-test-result .chip { cursor:pointer; }
 

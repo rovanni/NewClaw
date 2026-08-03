@@ -51,11 +51,38 @@ export function logAcaoUI(acao, resultado, detalhe) {
 }
 
 class Store {
-  #s; #m = new Map(); #auditado;
-  constructor(init = {}, auditado = false) { this.#s = structuredClone(init); this.#auditado = auditado; }
+  #s; #m = new Map(); #auditado; #salvo;
+  constructor(init = {}, auditado = false) {
+    this.#s = structuredClone(init);
+    // Espelho do que o SERVIDOR tem. Só muda na hidratação e depois de um save confirmado —
+    // nunca por edição na tela. É o que permite a interface distinguir "o que está valendo" de
+    // "o que você acabou de digitar", em vez de exibir as duas coisas como se fossem uma.
+    this.#salvo = structuredClone(init);
+    this.#auditado = auditado;
+  }
 
   get(k)      { return this.#s[k]; }
   snap()      { return structuredClone(this.#s); }
+
+  /**
+   * Valor atualmente em vigor no servidor — o que responde "o que está valendo agora?".
+   *
+   * Motivo (diagnóstico 02/08/2026): a Visão Geral da aba Modelos lia o rascunho e exibia
+   * "Ollama (Local + Cloud) — Online · 6 disponíveis · Sistema pronto ✅ Sim" enquanto o
+   * servidor tinha `defaultProvider = llamafile` e o .env `DEFAULT_PROVIDER=llamafile`. O
+   * operador mexe, tudo fica verde e coerente, ele fecha a página — e nada foi aplicado.
+   * Área de ESTADO não pode exibir INTENÇÃO; é a diretriz "Nunca Adivinhar" aplicada à tela.
+   */
+  salvo(k)    { return this.#salvo[k]; }
+
+  /** Este campo foi alterado na tela e ainda não chegou ao servidor? */
+  pendente(k) { return JSON.stringify(this.#s[k]) !== JSON.stringify(this.#salvo[k]); }
+
+  /** Campos alterados e ainda não salvos. Vazio = tela e servidor batem. */
+  camposPendentes() { return Object.keys(this.#s).filter(k => this.pendente(k)); }
+
+  /** Chamado após um save confirmado pelo servidor: o rascunho passa a ser a verdade vigente. */
+  marcarSalvo() { this.#salvo = structuredClone(this.#s); this.#emit('*', this.#s); }
 
   /**
    * Registra a transição no console do navegador. Só para o store de configuração — os demais
@@ -79,6 +106,9 @@ class Store {
   // encontrado 2026-07-25: modelo baixado não aparecia em "Escolher Modelo" sem F5, porque o
   // re-render de renderModelTable()/renderCategoryPicker() só estava plugado no evento 'catalog'.
   patch(p)    { const antes = { ...this.#s }; Object.assign(this.#s, p);
+                // Hidratação é o servidor falando: atualiza o espelho junto, senão tudo que vem
+                // de lá apareceria como "alteração pendente" logo ao abrir a página.
+                Object.assign(this.#salvo, structuredClone(p));
                 for (const k of Object.keys(p)) this.#auditar(k, antes[k], this.#s[k], 'carregado do servidor');
                 for (const k of Object.keys(p)) this.#emit(k, this.#s[k]); this.#emit('*', this.#s); }
 

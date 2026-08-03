@@ -154,6 +154,11 @@ export async function doSave() {
 
   try {
     await apiSaveConfig(config);
+    // Só AQUI o rascunho vira verdade vigente — depois do servidor confirmar. Enquanto isso não
+    // acontece, a Visão Geral continua mostrando o que está de fato valendo, e a alteração
+    // aparece marcada como pendente. Se o save falhar (catch abaixo), o espelho não se move e a
+    // tela continua honesta sobre o que o servidor tem.
+    configStore.marcarSalvo();
     setConfigDirty(false);
     showToast(t('config_saved_toast'), 'success');
   } catch (e) {
