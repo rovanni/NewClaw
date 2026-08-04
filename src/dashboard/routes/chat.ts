@@ -99,6 +99,12 @@ export function createChatRouter(ctx: DashboardContext): Router {
             // sessionKey costuma ser "canal:usuário"; a interface web usa a parte do usuário como
             // id de conversa. Sem a chave, o goal ainda aparece — o essencial é o usuário saber
             // que existe algo em andamento.
+            // Goal `blocked` NÃO é trabalho em andamento: ele está parado esperando uma decisão
+            // humana (autorização) ou um replan. Reportá-lo como ativo fazia a interface exibir
+            // "processando" e manter o botão de enviar em modo "Parar" — o usuário não conseguia
+            // nem responder à autorização que o próprio sistema estava pedindo (observado ao
+            // dirigir o painel em 04/08/2026). Quem representa esse estado é `pendingAuth` abaixo.
+            if (g.status === 'blocked') continue;
             const conversationId = (g.sessionKey ?? '').split(':').pop() || g.id;
             if (active.some(a => a.conversationId === conversationId)) continue;  // já contado como turno
             active.push({
