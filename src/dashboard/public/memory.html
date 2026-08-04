@@ -36,6 +36,9 @@
     .node-type.context { background: rgba(74,222,128,0.15); color: var(--success); }
     .node-type.fact { background: rgba(248,113,113,0.15); color: var(--danger); }
     .node-type.skill { background: rgba(14,165,233,0.15); color: var(--accent); }
+    /* `domain` existe de verdade no grafo (hubs de domínio cognitivo) e aparecia sem cor
+       nenhuma — o painel de detalhe usa esta classe, não só TYPE_COLORS. Issue 015. */
+    .node-type.domain { background: rgba(244,114,182,0.15); color: #f472b6; }
     .node-name { font-size: 0.85rem; font-weight: 500; margin-bottom: 4px; }
     .node-content { font-size: 0.78rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-height: 40px; }
     .node-meta { font-size: 0.68rem; color: var(--text-soft); margin-top: 4px; }
@@ -77,30 +80,17 @@
   <script src="/shared.js"></script>
   <script>
     document.getElementById('header-root').innerHTML = newclawHeader('memory') + '<a href="/memory" style="display:none"></a>';
-    // Fix nav to add memory link
-    document.querySelectorAll('.newclaw-nav').forEach(nav => {
-      if (!nav.querySelector('a[href="/memory"]')) {
-        const helpLink = nav.querySelector('a[href="/help"]');
-        if (helpLink) {
-          const memLink = document.createElement('a');
-          memLink.href = '/memory';
-          memLink.textContent = '🧠 Memory';
-          if (location.pathname === '/memory') memLink.className = 'active';
-          nav.insertBefore(memLink, helpLink);
-        }
-      }
-    });
     newclawInitTheme();
     newclawApplyI18n();
 
     const TYPE_COLORS = {
       identity: '#a855f7', preference: '#fbbf24', project: '#60a5fa',
-      context: '#4ade80', fact: '#f87171', skill: '#38bdf8'
+      context: '#4ade80', fact: '#f87171', skill: '#38bdf8', domain: '#f472b6'
     };
     const TYPE_BG = {
       identity: 'rgba(168,85,247,0.15)', preference: 'rgba(251,191,36,0.15)',
       project: 'rgba(96,165,250,0.15)', context: 'rgba(74,222,128,0.15)',
-      fact: 'rgba(248,113,113,0.15)', skill: 'rgba(56,189,248,0.15)'
+      fact: 'rgba(248,113,113,0.15)', skill: 'rgba(56,189,248,0.15)', domain: 'rgba(244,114,182,0.15)'
     };
 
     let nodes = [], currentFilter = '', selectedNodeId = null;
@@ -219,7 +209,10 @@
         const allNodesRes = await newclawFetch('/api/memory/nodes?limit=200');
         const allNodesData = await allNodesRes.json();
         const allNodesList = allNodesData.success ? allNodesData.nodes : [];
-        const toOptions = allNodesList.filter(n => n.id !== n.id).map(n => `<option value="${escAttr(n.id)}">${esc(n.name || n.id)} (${n.type})</option>`).join('');
+        // `n.id !== n.id` era sempre falso: a lista de destinos nascia vazia (issue 015). A
+        // intenção é excluir o próprio nó aberto — uma relação de um nó para ele mesmo não faz
+        // sentido —, então a comparação é contra o nó selecionado, não contra ele mesmo.
+        const toOptions = allNodesList.filter(other => other.id !== n.id).map(other => `<option value="${escAttr(other.id)}">${esc(other.name || other.id)} (${other.type})</option>`).join('');
 
         panel.innerHTML = `
           <div class="detail-id">${esc(n.id)} <span class="node-type ${n.type}" style="margin-left:8px">${n.type}</span></div>
@@ -231,7 +224,7 @@
             </div>
           </div>
           <select id="editType" style="margin-bottom:8px;background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;padding:4px 8px;color:var(--text-main);font-size:0.78rem;">
-            ${['identity','preference','project','context','fact','skill'].map(t => `<option value="${t}" ${t===n.type?'selected':''}>${t}</option>`).join('')}
+            ${['identity','preference','project','context','fact','skill','domain'].map(t => `<option value="${t}" ${t===n.type?'selected':''}>${t}</option>`).join('')}
           </select>
           <textarea id="editContent" style="width:100%;min-height:200px;background:rgba(0,0,0,0.15);padding:12px;border-radius:8px;color:var(--text-main);font-size:0.82rem;line-height:1.5;border:1px solid var(--border-color);resize:vertical;">${esc(n.content || '')}</textarea>
           ${n.metadata ? `<div style="margin-top:8px;font-size:0.72rem;color:var(--text-soft);">Meta: ${esc(typeof n.metadata === 'string' ? n.metadata : JSON.stringify(n.metadata))}</div>` : ''}
