@@ -33,6 +33,8 @@ import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { CaseMemory } from '../memory/CaseMemory';
 import { OperationalKnowledge } from '../memory/OperationalKnowledge';
 import { permissionRegistry } from '../core/PermissionRegistry';
+import { WorkflowEngine } from './WorkflowEngine';
+import { AuthorizationManager } from './AuthorizationManager';
 import { MemoryManager } from '../memory/MemoryManager';
 import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
@@ -156,6 +158,18 @@ export class GoalExecutionLoop {
     /** Injeta SessionManager após construção para evitar dependência circular. */
     setSessionManager(sm: SessionManager): void {
         this.sessionManager = sm;
+    }
+
+    /**
+     * WorkflowEngine para o gate de ação perigosa do caminho de goal (ADR-005). Sem ele, um step
+     * barrado não teria transação para o usuário aprovar — foi exatamente esse o defeito que
+     * levou à remoção do pre-flight antigo (ver executeStep).
+     */
+    private workflowEngine: WorkflowEngine | null = null;
+    private readonly authManager = new AuthorizationManager();
+
+    setWorkflowEngine(engine: WorkflowEngine): void {
+        this.workflowEngine = engine;
     }
 
     constructor(
@@ -2016,8 +2030,44 @@ export class GoalExecutionLoop {
             // sem criar uma transação no WorkflowEngine e sem `authOptions`, deixando
             // o goal permanentemente preso com `pendingTxnId = undefined` e nenhum
             // botão de autorização enviado ao usuário.
-            // A autorização real de ferramentas perigosas (exec_command, etc.) é gerida
-            // corretamente pelo WorkflowEngine via AgentLoop — não precisa deste pre-flight.
+            //
+            // ADR-005 (04/08/2026): a premissa que ficou no lugar — "a autorização real é gerida
+            // pelo WorkflowEngine via AgentLoop" — não valia para step com `toolName` explícito,
+            // que nunca passa pelo AgentLoop. Resultado reproduzido ao vivo em modo SAFE: um
+            // `exec_command` planejado executava sem gate nenhum. O gate volta, agora sem o
+            // defeito original: pergunta ao MESMO ponto que o AgentLoop
+            // (`ToolRegistry.requiresAuthorization`) e cria a transação real, devolvendo
+            // `authOptions` — é isso que o handler de `needs_auth` precisa para bloquear o goal
+            // com `pendingTxnId` e dar ao usuário como aprovar (botão nos canais de mensageria,
+            // rota no Dashboard, ou "sim" por texto via GoalOrchestrator).
+            if (step.toolName && this.workflowEngine
+                && ToolRegistry.requiresAuthorization(step.toolName, step.toolArgs ?? {})) {
+                const txn = this.workflowEngine.createTransaction(
+                    goal.conversationId,
+                    step.toolName,
+                    (step.toolArgs ?? {}) as Record<string, unknown>,
+                    {
+                        workflow: 'goal_step',
+                        step: step.toolName,
+                        userGoal: goal.userIntent.slice(0, 200),
+                    },
+                );
+                const authReq = this.authManager.formatRequest(step.toolName, step.toolArgs ?? {}, txn.id);
+                log.warn(`[GoalLoop] [AUTH] step=${step.id} tool=${step.toolName} BLOQUEADO — aguardando autorização txn=${txn.id} (mode=${permissionRegistry.getMode()})`);
+                return {
+                    outcome: 'needs_auth',
+                    confidence: 0.9,
+                    output: authReq.text,
+                    authOptions: authReq.options,
+                    blocker: {
+                        kind: 'missing_permission',
+                        toolName: step.toolName,
+                        description: `'${step.toolName}' exige autorização do usuário no modo ${permissionRegistry.getMode()}`,
+                        detectedAt: Date.now(),
+                        suggestedActions: ['Aguardar decisão do usuário'],
+                    },
+                };
+            }
 
             if (step.toolName) {
                 const { toolResult, stepMutations } = await this.dispatchToolStep(goal, step, step.toolName, channelContext, isAudioAlreadySent);

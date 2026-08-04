@@ -112,9 +112,15 @@ export class GoalOrchestrator {
         if (classifierModel) this.extractor.setClassifierModel(classifierModel);
     }
 
-    /** Injeta WorkflowEngine para resolução de auth por texto (sem clique no botão). */
+    /**
+     * Injeta WorkflowEngine para resolução de auth por texto (sem clique no botão) e — desde a
+     * ADR-005 — também para o executionLoop, que precisa dele para CRIAR a transação quando barra
+     * um step perigoso. Sem repassar, o gate do caminho de goal não teria como oferecer
+     * aprovação nenhuma (o defeito que motivou a remoção do pre-flight antigo).
+     */
     setWorkflowEngine(engine: WorkflowEngine): void {
         this.workflowEngine = engine;
+        this.executionLoop.setWorkflowEngine(engine);
     }
 
     /**

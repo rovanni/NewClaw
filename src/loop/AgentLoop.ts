@@ -32,7 +32,7 @@ import { traceManager, ExecutionTrace } from '../core/ExecutionTrace';
 import { AgentFSM, AgentFSMEvent } from './AgentFSM';
 import { FSMHistoryStore } from './FSMHistoryStore';
 import { ToolRegistry } from '../core/ToolRegistry';
-import { permissionRegistry } from '../core/PermissionRegistry';
+import { isReadOnlyExecCommand } from '../tools/exec_command';
 import { SkillLoader } from '../skills/SkillLoader';
 import { ModelProfile } from './ModelProfileRegistry';
 import { errorMessage } from '../shared/errors';
@@ -502,52 +502,6 @@ export class AgentLoop {
                 log.info(`[updateConfig] internal models → planner=${plannerModel ?? '—'} risk=${riskModel ?? '—'} classifier=${classifierModel ?? '—'}`);
             }
         }
-    }
-
-    /**
-     * Returns true for exec_command calls that are read-only and safe to run without user authorization.
-     * Multi-line scripts and any command with destructive patterns always require authorization.
-     */
-    private isSafeExecCommand(toolName: string, args: Record<string, unknown>): boolean {
-        if (toolName !== 'exec_command') return false;
-        const cmd = String(args.command || '').trim();
-
-        // Multi-line scripts (more than 3 non-empty lines) always require auth
-        const nonEmptyLines = cmd.split('\n').filter(l => l.trim().length > 0);
-        if (nonEmptyLines.length > 3) return false;
-
-        // Destructive patterns always require auth
-        if (/\brm\s+-r|\brm\s+--?\w*r|\bmkfs\b|drop\s+table|truncate\s+table/i.test(cmd)) return false;
-
-        // File writes always require auth — strip null redirects first, then check
-        const cmdWithoutNullRedirects = cmd.replace(/\d*>>?\/dev\/null/g, '');
-        if (/(?<![0-9a-z&|])>>?\s*\/(?!dev\/null)/i.test(cmdWithoutNullRedirects)) return false;
-
-        // Pipe into destructive commands always requires auth
-        if (/\|\s*(rm|dd|mkfs|shred)\b/.test(cmd)) return false;
-
-        // Version/help checks are always read-only regardless of the tool name
-        if (/^\S+\s+(--version|-v|-V|--help|-h)$/.test(cmd)) return true;
-
-        const SAFE_COMMANDS = new Set([
-            'ls', 'cat', 'find', 'pwd', 'echo', 'which', 'command', 'type',
-            'head', 'tail', 'grep', 'wc', 'stat', 'file', 'node', 'npm', 'npx',
-            'env', 'printenv', 'df', 'du', 'ps', 'uname', 'hostname',
-            'id', 'whoami', 'date', 'uptime', 'lsb_release', 'readlink',
-            'marp',  // file-format converter, not destructive
-        ]);
-
-        // Split on && or ; to get individual sub-commands, then strip leading `cd /path` parts.
-        // A command like `cd /some/dir && ls` is safe if all non-cd parts are safe.
-        const subCmds = cmd.split(/&&|;/).map(s => s.trim()).filter(Boolean);
-        const nonCdSubCmds = subCmds.filter(s => !/^cd(\s|$)/.test(s));
-        if (nonCdSubCmds.length === 0) return false; // pure `cd` offers no read value
-        return nonCdSubCmds.every(sub => {
-            const word = sub.split(/[\s;|&]/)[0].replace(/^\.\//, '');
-            // Also check basename so full-path invocations like /usr/local/bin/marp are safe
-            const basename = word.includes('/') ? word.split('/').pop()! : word;
-            return SAFE_COMMANDS.has(word) || SAFE_COMMANDS.has(basename);
-        });
     }
 
     public getIntentRouter(): UnifiedIntentRouter { return this.intentRouter; }
@@ -2103,7 +2057,7 @@ export class AgentLoop {
                     return { action: 'earlyReturn', result: result.output };
                 }
 
-                if (result.success && !this.isSafeExecCommand(toolName, atomicData.action?.input as Record<string, unknown> || {})) {
+                if (result.success && !isReadOnlyExecCommand(toolName, atomicData.action?.input as Record<string, unknown> || {})) {
                     this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
                     void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
                 }
@@ -2230,9 +2184,9 @@ export class AgentLoop {
         dedupAbortTool: string,
         move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
     ): Promise<ExecuteAndRecordResult> {
-        const isDangerous = ToolRegistry.isDangerous(toolName)
-            && !this.isSafeExecCommand(toolName, toolCall.arguments)
-            && !permissionRegistry.can('auto_approve_exec');
+        // ADR-005: a pergunta é do ToolRegistry, não deste caminho de execução — o
+        // GoalExecutionLoop faz exatamente a mesma, com a mesma resposta.
+        const isDangerous = ToolRegistry.requiresAuthorization(toolName, toolCall.arguments);
         if (isDangerous) {
             log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
 
@@ -2547,7 +2501,7 @@ export class AgentLoop {
         }
 
         const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
-        if (result.success && !terminalTools.includes(toolName) && !this.isSafeExecCommand(toolName, toolCall.arguments)) {
+        if (result.success && !terminalTools.includes(toolName) && !isReadOnlyExecCommand(toolName, toolCall.arguments)) {
             this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
             void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
         }

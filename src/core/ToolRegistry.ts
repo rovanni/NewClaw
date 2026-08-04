@@ -4,6 +4,8 @@
 
 import { ToolExecutor } from '../loop/agentLoopTypes';
 import { createLogger } from '../shared/AppLogger';
+import { permissionRegistry } from './PermissionRegistry';
+import { isReadOnlyExecCommand } from '../tools/exec_command';
 const log = createLogger('Toolregistry');
 
 interface ToolEntry {
@@ -60,6 +62,24 @@ export class ToolRegistryClass {
 
     isDangerous(name: string): boolean {
         return this.tools.get(name)?.dangerous || false;
+    }
+
+    /**
+     * Ponto ÚNICO da pergunta "esta chamada precisa de autorização humana?" (ADR-005).
+     *
+     * Existe aqui, e não dentro de um caminho de execução, porque a promessa do modo SAFE é do
+     * sistema inteiro: `AgentLoop` (turno conversacional) e `GoalExecutionLoop` (step de plano)
+     * consultam esta mesma função. Enquanto a regra morava no AgentLoop, um `exec_command`
+     * planejado executava sem gate nenhum em modo SAFE — reproduzido em execução real
+     * (04/08/2026, `docs/decisoes/ADR-005_ONDE_VIVE_O_GATE_DE_ACAO_PERIGOSA.md`).
+     *
+     * Decide por nome de tool, flag `dangerous` do registro, modo operacional e análise
+     * estrutural do comando — nunca por texto de interface ou mensagem traduzida.
+     */
+    requiresAuthorization(name: string, args: Record<string, unknown>): boolean {
+        return this.isDangerous(name)
+            && !isReadOnlyExecCommand(name, args)
+            && !permissionRegistry.can('auto_approve_exec');
     }
 
     has(name: string): boolean {

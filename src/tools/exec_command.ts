@@ -87,6 +87,62 @@ const POSIX_ONLY_NO_WIN_EQUIVALENT = new Set([
 // x.pptx && ls -lh x.pptx" tem 'ls' no segundo segmento, não no primeiro.
 const COMMAND_SEPARATOR = /&&|\|\||;|\|/;
 
+/**
+ * Invocações de `exec_command` que são leitura-apenas e podem rodar sem autorização humana.
+ * Script multi-linha, padrão destrutivo, escrita em arquivo ou pipe para comando destrutivo
+ * sempre exigem autorização.
+ *
+ * Morava como método privado do `AgentLoop` (ADR-005). Foi movido para cá porque este módulo já
+ * é o dono da semântica de comando — e porque, enquanto vivia dentro de um dos caminhos de
+ * execução, o outro (`GoalExecutionLoop`) não tinha como fazer a mesma pergunta: em modo SAFE,
+ * um step de plano com `exec_command` executava sem gate nenhum (reproduzido ao vivo, 04/08/2026).
+ * Quem consome é `ToolRegistry.requiresAuthorization()`, ponto único da decisão.
+ *
+ * Análise estrutural do comando — nunca texto de interface nem mensagem traduzida — então vale
+ * igual em Windows, Linux e macOS e em qualquer idioma da interface.
+ */
+export function isReadOnlyExecCommand(toolName: string, args: Record<string, unknown>): boolean {
+    if (toolName !== 'exec_command') return false;
+    const cmd = String(args.command || '').trim();
+
+    // Script multi-linha (mais de 3 linhas não vazias) sempre exige autorização
+    const nonEmptyLines = cmd.split('\n').filter(l => l.trim().length > 0);
+    if (nonEmptyLines.length > 3) return false;
+
+    // Padrões destrutivos sempre exigem autorização
+    if (/\brm\s+-r|\brm\s+--?\w*r|\bmkfs\b|drop\s+table|truncate\s+table/i.test(cmd)) return false;
+
+    // Escrita em arquivo sempre exige autorização — ignora redirecionamentos para /dev/null
+    const cmdWithoutNullRedirects = cmd.replace(/\d*>>?\/dev\/null/g, '');
+    if (/(?<![0-9a-z&|])>>?\s*\/(?!dev\/null)/i.test(cmdWithoutNullRedirects)) return false;
+
+    // Pipe para comando destrutivo sempre exige autorização
+    if (/\|\s*(rm|dd|mkfs|shred)\b/.test(cmd)) return false;
+
+    // Checagem de versão/ajuda é leitura-apenas, seja qual for o binário
+    if (/^\S+\s+(--version|-v|-V|--help|-h)$/.test(cmd)) return true;
+
+    const SAFE_COMMANDS = new Set([
+        'ls', 'cat', 'find', 'pwd', 'echo', 'which', 'command', 'type',
+        'head', 'tail', 'grep', 'wc', 'stat', 'file', 'node', 'npm', 'npx',
+        'env', 'printenv', 'df', 'du', 'ps', 'uname', 'hostname',
+        'id', 'whoami', 'date', 'uptime', 'lsb_release', 'readlink',
+        'marp',  // conversor de formato, não destrutivo
+    ]);
+
+    // Separa em sub-comandos por && ou ; e ignora os `cd /caminho`: `cd /dir && ls` é seguro se
+    // todas as partes que não são `cd` forem seguras.
+    const subCmds = cmd.split(/&&|;/).map(s => s.trim()).filter(Boolean);
+    const nonCdSubCmds = subCmds.filter(s => !/^cd(\s|$)/.test(s));
+    if (nonCdSubCmds.length === 0) return false; // `cd` puro não entrega leitura nenhuma
+    return nonCdSubCmds.every(sub => {
+        const word = sub.split(/[\s;|&]/)[0].replace(/^\.\//, '');
+        // Também confere o basename, para invocação por caminho completo (/usr/local/bin/marp)
+        const basename = word.includes('/') ? word.split('/').pop()! : word;
+        return SAFE_COMMANDS.has(word) || SAFE_COMMANDS.has(basename);
+    });
+}
+
 export function needsPowerShellWrap(command: string): boolean {
     if (/^\s*(powershell|pwsh)(\.exe)?\b/i.test(command)) return false; // já encaminhado
     if (POWERSHELL_CMDLET_PATTERN.test(command)) return true;
