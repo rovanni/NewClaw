@@ -38,8 +38,11 @@ ADRs (Architecture Decision Record) e RFCs (Request for Comments) — decisões 
 formalmente, distintas de um programa inteiro de Sprints:
 
 - [decisoes/ADR-001_BASELINE_ARQUITETURAL.md](./decisoes/ADR-001_BASELINE_ARQUITETURAL.md)
+- [decisoes/ADR-002_SERVIDOR_MODELO_LOCAL.md](./decisoes/ADR-002_SERVIDOR_MODELO_LOCAL.md)
+- [decisoes/ADR-003_APRENDIZADO_POR_EVIDENCIA_DE_AMBIENTE.md](./decisoes/ADR-003_APRENDIZADO_POR_EVIDENCIA_DE_AMBIENTE.md) — decisão de 03/08/2026, implementada; pendente a Sprint G (validação em execução real)
 - [decisoes/RFC-001_APRENDIZADO_OPERACIONAL.md](./decisoes/RFC-001_APRENDIZADO_OPERACIONAL.md)
 - [decisoes/RFC-002_ATIVACAO_CASEMEMORY.md](./decisoes/RFC-002_ATIVACAO_CASEMEMORY.md)
+- [decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md](./decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md)
 - [decisoes/DECISAO_CANAL_UPDATE_UX_2026-07-13.md](./decisoes/DECISAO_CANAL_UPDATE_UX_2026-07-13.md)
 
 ## Análises arquiteturais avulsas — `analises-arquiteturais/`

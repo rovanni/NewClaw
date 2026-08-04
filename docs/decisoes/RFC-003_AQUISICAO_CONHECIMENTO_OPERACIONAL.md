@@ -340,6 +340,19 @@ mais fraca do que a validação objetiva que esta RFC exige; fechar essa lacuna 
 verificação explícito por dependência, não apenas "algo rodou depois e deu certo") é um requisito
 de implementação desta RFC, não uma reabertura do princípio.
 
+**Atualização de 03/08/2026 — o mecanismo de validação foi decidido em `ADR-003`.** A nota acima
+propunha "um comando de verificação explícito por dependência" (implementado na Sprint D como
+`DependencyInfo.verifyCmd` + step de id prefixado `verify_`). A investigação registrada em
+`ADR-003_APRENDIZADO_POR_EVIDENCIA_DE_AMBIENTE.md` mostrou que esse desenho deixa o aprendizado
+dependente de por qual ramo de código o goal passou, e que na prática ele só se completa numa
+única combinação (Linux + `ffmpeg`). A `ADR-003` decide que a validação objetiva de uma
+dependência ausente passa a ser **evidência do estado do ambiente** — o probe que responde se a
+dependência existe agora — e não a identificação de qual step foi a verificação. Isso é a
+realização do **primeiro exemplo já listado nesta seção** ("o executável passou a existir"), não
+uma exceção a ela: o requisito de validação objetiva permanece exatamente como escrito aqui;
+muda apenas o mecanismo que o cumpre. O step `verify_` continua existindo como sinal de replan
+mid-goal (`ADR-003` §5.2), sem ser mais o único gatilho de captura.
+
 ## Condição de Parada do Ciclo
 
 O ciclo de aquisição **não introduz orçamento próprio**. Ele consome exatamente o mesmo
@@ -430,7 +443,20 @@ já validada e persistida em `OperationalKnowledge`, com confiança suficiente**
 quando `KNOWN_DEPS` resolve uma dependência conhecida. Bloqueios de segurança absolutos
 (`isDestructive()`) nunca são bypassados por nenhum dos dois caminhos.
 
-## Débito conhecido, não corrigido (Sprint F — Integração, 2026-07-29)
+## Débito conhecido (Sprint F — Integração, 2026-07-29) — decidido em `ADR-003` (03/08/2026)
+
+> **Situação:** este débito está **fechado**. Foi decidido em
+> `docs/decisoes/ADR-003_APRENDIZADO_POR_EVIDENCIA_DE_AMBIENTE.md` (03/08/2026) e implementado no
+> mesmo dia — cobertura em `S158.1` (dependência ausente do ambiente → não aprende) e `S158.1b`
+> (caminho de Pesquisa, dependência presente → aprende, sem nenhum step `verify_*` envolvido).
+> Falta apenas a Sprint G (validação em execução real). Os três candidatos listados no fim desta
+> seção foram todos avaliados e
+> **descartados** — a decisão foi um quarto caminho (verificação objetiva do estado do ambiente),
+> pelas razões registradas na ADR §4. A investigação que motivou a ADR também encontrou que o
+> problema é maior do que esta seção descreve: o gate de captura não falha só no caminho
+> "Pesquisar" — ele torna a etapa "Aprender" inalcançável em **qualquer** caminho fora da
+> combinação Linux + `ffmpeg` (ADR-003 §2.5). O texto abaixo é preservado como registro do que a
+> Sprint F encontrou e de por que não corrigiu na ocasião.
 
 A auditoria de integração da Sprint F (`src/__tests__/regression/S158_RFC003_SprintF_FullCycleIntegration.test.ts`,
 caso S158.1) encontrou, com evidência de um teste de ponta a ponta real (não leitura de código
@@ -686,9 +712,33 @@ Em outras palavras:
    orçamento já existente de `GoalExecutionLoop` (sem contador paralelo); lista de impacto
    documental corrigida de 4 para 6 itens (2 contradições novas encontradas: tabela de
    componentes do Evidence Provider Pattern e a Seção 6 do Pipeline de Curadoria).
-3. ⏳ **Fase 2 — Alinhamento da documentação**: aplicar as 6 mudanças listadas em "Impacto na
-   Documentação Existente" — `EVIDENCE_PROVIDER_PATTERN.md` (2 pontos),
-   `PIPELINE_CURADORIA_DEPENDENCIAS.md` (2 pontos), `ADR-001`, `RFC-001` — como etapa própria,
-   separada desta RFC.
-4. ⏳ **Fase 3 — Auditoria de impacto e implementação**: só após a Fase 2 concluída, seguindo
-   integralmente a Validação Progressiva (`docs/DIRETRIZ_ARQUITETURA_2026-07-13.md`).
+3. ✅ **Fase 2 — Alinhamento da documentação**: as 6 mudanças listadas em "Impacto na
+   Documentação Existente" foram aplicadas — `EVIDENCE_PROVIDER_PATTERN.md` (2 pontos),
+   `PIPELINE_CURADORIA_DEPENDENCIAS.md` (2 pontos), `ADR-001`, `RFC-001`.
+4. ✅ **Fase 3 — Auditoria de impacto**:
+   `docs/analises-arquiteturais/AUDITORIA_IMPACTO_RFC003_AQUISICAO_CONHECIMENTO_2026-07-27.md`.
+5. ✅ **Sprints A-F** implementadas (B pulada por decisão explícita — não era necessária para o
+   que foi construído). A Sprint F não mudou código de produção: foi auditoria de integração +
+   testes, e foi ela que encontrou o débito "Pesquisa → Aprender".
+
+## Sequência a partir de 03/08/2026
+
+A ordem abaixo é deliberada: a documentação vira fonte de verdade **antes** de existir código, de
+modo que a implementação passe a implementar uma decisão já consolidada, em vez de a decisão ter
+que ser inferida do código depois.
+
+```text
+ADR-003                    ✅ escrita em 03/08/2026 (§4.4 e §6.4 corrigidas depois do código — ver o status da ADR)
+   ↓
+RFC-003                    ✅ este documento, alinhado à ADR-003 (seções "Validação" e "Débito conhecido")
+   ↓
+README / Arquitetura       ✅ índice de decisões atualizado; os 3 documentos de princípio não precisaram mudar
+   ↓
+Implementação              ✅ captureFromGoal(goal, isDependencyAvailable) + commandExists injetado nos 2 call sites
+   ↓
+Atualização dos testes     ✅ S158.1 reescrito (ausente → não aprende) + S158.1b novo (presente → aprende)
+   ↓
+Sprint G                   ⏳ Validação Progressiva formal, etapa 4: execução real (ADR-003 §6.5)
+   ↓
+Publicação                 ⏳
+```
