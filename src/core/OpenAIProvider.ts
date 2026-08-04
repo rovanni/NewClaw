@@ -30,6 +30,43 @@ const CONNECT_TIMEOUT_MS = 15_000;
 const LIVENESS_PROBE_TIMEOUT_MS = 3_000;
 
 /**
+ * Converte mensagens que carregam imagem para o formato multimodal da API da OpenAI.
+ *
+ * `LLMMessage.images` é o formato interno do projeto (base64 puro), desenhado sobre o campo
+ * `images` do Ollama. A API da OpenAI — e todo servidor compatível com ela (llamafile, LM Studio,
+ * vLLM, OpenAI oficial) — espera as imagens DENTRO de `content`, como partes tipadas. Um campo
+ * `images` solto no corpo é simplesmente ignorado.
+ *
+ * Sem esta conversão, visão/OCR ficava silenciosamente quebrado em todos esses providers: o
+ * modelo recebia só o texto "Descreva esta imagem..." sem imagem nenhuma e respondia o que
+ * conseguisse inventar — que o NewClaw então entregava ao usuário rotulado como "extraído via
+ * vision". Observado ao vivo em 04/08/2026 com uma imagem de nota fiscal: valores, número e datas
+ * completamente fabricados (cobertura: S192).
+ *
+ * O tipo MIME sai da assinatura dos próprios bytes, não do nome do arquivo (que o provider nem
+ * recebe) — mesma decisão de "ler o dado, não adivinhar pelo rótulo" usada no resto do projeto.
+ */
+function toOpenAIContent(m: LLMMessage): unknown {
+    if (!m.images?.length) return m.content;
+    return [
+        ...(m.content ? [{ type: 'text', text: m.content }] : []),
+        ...m.images.map(b64 => ({
+            type: 'image_url',
+            image_url: { url: `data:${sniffImageMime(b64)};base64,${b64}` },
+        })),
+    ];
+}
+
+/** Assinatura dos primeiros bytes em base64. Sem dependência externa e sem chute por extensão. */
+function sniffImageMime(b64: string): string {
+    if (b64.startsWith('/9j/')) return 'image/jpeg';
+    if (b64.startsWith('iVBORw0KGgo')) return 'image/png';
+    if (b64.startsWith('R0lGOD')) return 'image/gif';
+    if (b64.startsWith('UklGR')) return 'image/webp';
+    return 'image/png';   // padrão do formato mais comum em captura de tela
+}
+
+/**
  * Provider genérico para qualquer endpoint compatível com a API da OpenAI
  * (`/chat/completions`, `/models`) — cobre OpenAI oficial, LM Studio, vLLM e endpoints
  * "custom" apontados pelo usuário. Um único adapter parametrizado por baseUrl/label em vez de
@@ -144,7 +181,10 @@ export class OpenAIProvider implements ILLMProvider {
                     signal: connectAbort.signal,
                     body: JSON.stringify({
                         model: this.model,
-                        messages,
+                        // Imagem viaja dentro de `content` (ver toOpenAIContent) — um campo
+                        // `images` solto seria ignorado pelo servidor, e a visão responderia
+                        // sobre uma imagem que nunca chegou.
+                        messages: messages.map(m => ({ ...m, images: undefined, content: toOpenAIContent(m) })),
                         tools: tools ? tools.map(t => ({
                             type: 'function',
                             function: { name: t.name, description: t.description, parameters: t.parameters }
