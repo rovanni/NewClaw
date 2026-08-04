@@ -24,7 +24,7 @@
 
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
-import { isWindows, isMac } from '../utils/crossPlatform';
+import { isWindows, isMac, isToolExistenceProbe } from '../utils/crossPlatform';
 import type { MemoryManager } from './MemoryManager';
 import type { Goal } from '../shared/domainTypes';
 
@@ -171,7 +171,9 @@ export class OperationalKnowledge {
      * Heurística de captura: para cada blocker 'missing_tool' com missingDependency (nome real da
      * dependência ausente, ex: 'yq' — NUNCA blocker.toolName, que é a tool que falhou, ex:
      * 'exec_command'), procura o primeiro attempt de exec_command bem-sucedido ocorrido DEPOIS da
-     * detecção do blocker — candidato razoável a "comando que resolveu".
+     * detecção do blocker — candidato razoável a "comando que resolveu". Comandos que só
+     * VERIFICAM a existência da dependência (`where`/`which`/`command -v`) são excluídos da
+     * candidatura (ADR-004): verificar não é instalar.
      *
      * VALIDAÇÃO OBJETIVA (RFC-003 Sprint D, revista por
      * `docs/decisoes/ADR-003_APRENDIZADO_POR_EVIDENCIA_DE_AMBIENTE.md`): a captura só é creditada
@@ -209,7 +211,13 @@ export class OperationalKnowledge {
                     a.result === 'success' &&
                     a.executedAt > blocker.detectedAt &&
                     typeof a.args?.command === 'string' &&
-                    (a.args.command as string).trim().length > 0
+                    (a.args.command as string).trim().length > 0 &&
+                    // ADR-004: verificar não é instalar. Um `where`/`which`/`command -v` sobre a
+                    // própria dependência não pode ter sido a causa de ela passar a existir —
+                    // fora da candidatura, senão a heurística "primeiro sucesso depois do
+                    // blocker" grava o diagnóstico no lugar do comando real (observado na
+                    // Sprint G, em execução real).
+                    !isToolExistenceProbe(a.args.command as string, blocker.missingDependency!)
                 );
                 if (!fixAttempt) continue;
 

@@ -90,6 +90,36 @@ export function commandExists(cmd: string): boolean {
 }
 
 /**
+ * Reconhece um comando cujo propósito é só PERGUNTAR se `tool` existe — `where`/`which`/
+ * `command -v`/`type`/`Get-Command` sobre a própria dependência. Verificar não é instalar: um
+ * comando desses nunca pode ser a causa de a dependência ter passado a existir.
+ *
+ * Vive ao lado de quem GERA esses comandos (`probeToolCmd` abaixo, `commandExists` acima) de
+ * propósito: se a forma do probe mudar, gerador e reconhecedor mudam no mesmo arquivo.
+ *
+ * Consumidor: `OperationalKnowledge.captureFromGoal()` (ADR-004), que exclui esses comandos da
+ * candidatura a "comando que resolveu a dependência". Achado em execução real (Sprint G,
+ * 03/08/2026): o LLM rodou `where sprintg-tool3 || echo "NOT FOUND"` antes do comando que de
+ * fato criou o binário, e a heurística "primeiro sucesso depois do blocker" gravou o `where`.
+ *
+ * Erro assimétrico por construção: reconhecer demais faz o sistema NÃO aprender (silêncio);
+ * nunca faz aprender algo falso.
+ */
+export function isToolExistenceProbe(command: string, tool: string): boolean {
+    if (!command || !tool) return false;
+    // Só o primeiro comando da linha importa: `where X || echo ...` continua sendo um probe;
+    // `npm i -g X && where X` NÃO é (o que decide é o que a linha começa fazendo).
+    const head = command.trim().split(/\s*(?:&&|\|\||[;&|])\s*/)[0].trim();
+    const escapedTool = tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // `command -v X`, `where X`, `where.exe X`, `which X`, `type X`, `Get-Command X`
+    const probeHead = new RegExp(
+        `^(?:command\\s+-v|where(?:\\.exe)?|which|type|get-command)\\s+["']?${escapedTool}["']?\\s*$`,
+        'i',
+    );
+    return probeHead.test(head);
+}
+
+/**
  * Build a shell one-liner that prints "OK:<tool>" or "MISSING:<tool>".
  * Used when building probe command strings for exec_command.
  */
