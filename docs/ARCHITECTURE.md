@@ -214,6 +214,15 @@ Correção real exigiria, por canal:
 Isso não foi implementado agora porque é uma mudança em dois canais de produção que não há como
 testar neste ambiente (sem sessão WhatsApp/Signal ativa) — ver com o operador antes de mexer.
 
+**~~O Web Dashboard não consegue aprovar ações perigosas.~~ CORRIGIDO em 04/08/2026.** O
+`WebChannelAdapter` recebe a mesma closure de `AgentController.createWorkflowCallback()` que os
+outros quatro canais; a decisão chega por `POST /api/chat/auth-decision` (o equivalente do clique
+no botão inline, já que o canal web não tem botão de plataforma) e a pendência é descoberta por
+`GET /api/chat/active?sessionId=`, que consulta `WorkflowEngine.getPendingByConversation()`.
+Cobertura: `S187`. Durante essa correção, a validação em execução real descobriu que o modo SAFE
+não estava sendo aplicado no caminho de goal — ver `docs/decisoes/ADR-005_ONDE_VIVE_O_GATE_DE_ACAO_PERIGOSA.md`
+(cobertura `S188`). O texto original do gap fica abaixo como registro histórico.
+
 **O Web Dashboard não consegue aprovar ações perigosas.** Diferente de
 Telegram/Discord/WhatsApp/Signal (ver seção "workflowCallback" acima), `WebChannelAdapter` nunca
 recebe um `workflowCallback` — `AgentController` só injeta essa closure nos 4 adapters de
