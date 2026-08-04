@@ -1,5 +1,20 @@
 import { normalizeFromRaw } from './ResponseAdapter';
-import type { ParsedLLMResponse } from './ContentExtractor';
+/**
+ * Dados atômicos que o LLM emite no protocolo estruturado (action/thought/evaluation).
+ *
+ * Morava em `ContentExtractor.ts` junto com uma segunda implementação de `parseLLMResponse`/
+ * `sanitizeContent`/`extractText` que ninguém mais consumia (issue 004: duas `extractText` com
+ * o mesmo nome e assinaturas diferentes, uma delas com docstring apontando consumidores que já
+ * tinham migrado). O módulo inteiro foi removido; o tipo mora aqui, no parser que de fato o
+ * produz.
+ */
+export interface ParsedLLMResponse {
+    action?: { type?: string; name?: string; content?: string; input?: Record<string, unknown> };
+    thought?: string;
+    evaluation?: { is_complete?: boolean; confidence?: 'low' | 'medium' | 'high'; reason?: string };
+    content?: string;
+}
+
 import type { LLMResult } from '../core/ProviderFactory';
 import { stripHtmlTags } from '../shared/stripHtmlTags';
 

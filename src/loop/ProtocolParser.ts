@@ -16,7 +16,7 @@
  */
 
 import { createLogger } from '../shared/AppLogger';
-import type { ParsedLLMResponse } from './ContentExtractor';
+import type { ParsedLLMResponse } from './agentOutputParser';
 
 // ── Protocol Types (inlined from ProtocolTypes.ts) ────────────────────────────
 

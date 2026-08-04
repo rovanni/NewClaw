@@ -12,7 +12,7 @@
  * Nenhum pós-processamento oculto.
  */
 
-import type { ParsedLLMResponse } from './ContentExtractor';
+import type { ParsedLLMResponse } from './agentOutputParser';
 import { sanitizeContent } from './agentOutputParser';
 import { AgentState } from '../core/AgentStateManager';
 import { ToolResult } from './AgentLoop';
