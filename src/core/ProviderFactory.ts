@@ -544,10 +544,62 @@ export class ProviderFactory {
         throw new Error(`Classification failed: ${errors.join('; ')}`);
     }
 
+    /**
+     * Chave de identidade de um endpoint — dois rótulos com a MESMA chave são o mesmo servidor.
+     *
+     * Normaliza só equivalência garantida: `localhost` e `127.0.0.1` são o mesmo host, barra final
+     * não muda o destino, e o esquema não distingue o alvo. Nada além disso — nomes de máquina
+     * diferentes PODEM resolver para o mesmo IP, mas afirmar isso sem consultar DNS seria
+     * adivinhação (`docs/ARCHITECTURE/NUNCA_ADIVINHAR.md`).
+     *
+     * MESMA REGRA da tela de Modelos (`checkDuplicateEndpoints`, ModelosView.js) — o painel avisa
+     * sobre a colisão e o motor precisa enxergá-la igual, senão um diz uma coisa e o outro faz
+     * outra. A paridade entre as duas implementações é travada por teste (S190).
+     */
+    private static endpointKey(baseUrl: string, apiKey?: string): string {
+        const url = String(baseUrl || '')
+            .trim().toLowerCase()
+            .replace(/\/+$/, '')
+            .replace(/^https?:\/\//, '')
+            .replace(/^localhost([:/]|$)/, '127.0.0.1$1');
+        return `${url}|${apiKey || ''}`;
+    }
+
+    /**
+     * Remove da cadeia de fallback rótulos que apontam para o MESMO endpoint com a MESMA
+     * credencial — eles não oferecem resiliência nenhuma: se o primeiro falhou porque o servidor
+     * caiu, o segundo falha pelo mesmo motivo, gastando outro timeout de conexão inteiro.
+     *
+     * Evidência real (log do operador, 04/08/2026): `providers=[Modelo local,ollama,llamafile]`,
+     * com `Modelo local` e `llamafile` ambos em 127.0.0.1:8080 — três nomes, dois endereços. Com
+     * o servidor local fora do ar, duas das três tentativas eram a mesma tentativa.
+     *
+     * Credencial entra na chave de propósito: dois rótulos no mesmo gateway com chaves de API
+     * diferentes são contas diferentes e PODEM se cobrir mutuamente — esses continuam ambos.
+     * Só colapsa o que é comprovadamente o mesmo caminho.
+     */
+    private dedupeByEndpoint(order: string[]): string[] {
+        const seen = new Map<string, string>();
+        const kept: string[] = [];
+        for (const label of order) {
+            const cfg = this.customConfigs.get(label);
+            if (!cfg?.baseUrl) { kept.push(label); continue; }   // nativos: endpoint próprio
+            const key = ProviderFactory.endpointKey(cfg.baseUrl, cfg.apiKey);
+            const winner = seen.get(key);
+            if (winner) {
+                log.info(`[FALLBACK] "${label}" ignorado na cadeia — mesmo endpoint e credencial de "${winner}" (quem atende é "${winner}")`);
+                continue;
+            }
+            seen.set(key, label);
+            kept.push(label);
+        }
+        return kept;
+    }
+
     private getFallbackOrder(preferred?: string): string[] {
         const all = Array.from(this.providers.keys());
         if (preferred && this.providers.has(preferred)) {
-            return [preferred, ...all.filter(p => p !== preferred)];
+            return this.dedupeByEndpoint([preferred, ...all.filter(p => p !== preferred)]);
         }
         if (preferred) {
             log.warn(`Provider "${preferred}" requested but not available (missing credential?). Using default fallback order.`);
@@ -562,9 +614,9 @@ export class ProviderFactory {
         const remaining = all.filter(p => !sorted.includes(p));
         const byPriority = [...sorted, ...remaining];
         if (this.providers.has(this.defaultProvider)) {
-            return [this.defaultProvider, ...byPriority.filter(p => p !== this.defaultProvider)];
+            return this.dedupeByEndpoint([this.defaultProvider, ...byPriority.filter(p => p !== this.defaultProvider)]);
         }
-        return byPriority;
+        return this.dedupeByEndpoint(byPriority);
     }
 
     /**
