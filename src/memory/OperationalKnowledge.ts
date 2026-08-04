@@ -173,18 +173,33 @@ export class OperationalKnowledge {
      * 'exec_command'), procura o primeiro attempt de exec_command bem-sucedido ocorrido DEPOIS da
      * detecção do blocker — candidato razoável a "comando que resolveu".
      *
-     * VALIDAÇÃO OBJETIVA (RFC-003 Sprint D, `docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md`):
-     * a captura só é creditada quando também existe, DEPOIS do fixAttempt, um attempt cujo
-     * `planStepId` começa com `'verify_'` e terminou em sucesso — o step de verificação que
-     * `GoalExecutionLoop.handleNeedsDependencyOutcome()` injeta quando `DependencyInfo.verifyCmd`
-     * está declarado (hoje só 'ffmpeg' — Nunca Adivinhar, não populado para o resto do catálogo
-     * sem evidência própria). Sem essa evidência, a captura é pulada — mais conservador que a
-     * heurística antiga, que creditava mesmo sem nenhuma verificação real ("não é prova formal de
-     * causalidade" era o comentário original aqui). Uma captura isolada (mesmo já verificada)
-     * continua sendo só evidência fraca (ver buildEvidenceHint) — só ganha peso de atalho tático
-     * com confirmações repetidas (getTacticalCommand(), RFC-001 §2).
+     * VALIDAÇÃO OBJETIVA (RFC-003 Sprint D, revista por
+     * `docs/decisoes/ADR-003_APRENDIZADO_POR_EVIDENCIA_DE_AMBIENTE.md`): a captura só é creditada
+     * mediante fato observável, nunca julgamento. Duas evidências valem, nesta ordem:
+     *
+     * 1. um attempt bem-sucedido DEPOIS do fixAttempt cujo `planStepId` começa com `'verify_'` —
+     *    o step de verificação que `GoalExecutionLoop.handleNeedsDependencyOutcome()` injeta
+     *    quando `DependencyInfo.verifyCmd` está declarado. Checado primeiro por ser evidência já
+     *    registrada no goal (custo zero, sem tocar o sistema);
+     * 2. `isDependencyAvailable(dep)` — veredito do ESTADO DO AMBIENTE ("a dependência existe
+     *    agora?"), injetado pelo chamador. Este componente nunca executa comando: quem tem a
+     *    capacidade de observar o sistema é o `GoalExecutionLoop`, aqui só entra o resultado
+     *    (fronteira do Evidence Provider Pattern preservada).
+     *
+     * Por que a evidência 2 existe (ADR-003 §2): a evidência 1 sozinha tornava a captura
+     * dependente de POR QUAL RAMO DE CÓDIGO o goal passou — o prefixo `verify_` é um carimbo de
+     * origem, só existe no caminho `needs_dependency`. Efeito real medido: como só `ffmpeg`
+     * declara `verifyCmd` e essa entrada só resolve instalação no Linux, o aprendizado era
+     * inalcançável em Windows/macOS e em todo o caminho de Pesquisa. A pergunta objetiva é sobre
+     * o mundo, não sobre o plano.
+     *
+     * Sem verifier injetado, o comportamento é exatamente o anterior a esta mudança (só a
+     * evidência 1) — nunca cai para a heurística antiga de creditar sem verificação nenhuma.
+     * Uma captura isolada (mesmo já verificada) continua sendo só evidência fraca (ver
+     * buildEvidenceHint) — só ganha peso de atalho tático com confirmações repetidas
+     * (getTacticalCommand(), RFC-001 §2).
      */
-    captureFromGoal(goal: Goal): { captured: number } {
+    captureFromGoal(goal: Goal, isDependencyAvailable?: (dependency: string) => boolean): { captured: number } {
         let captured = 0;
         try {
             const missingToolBlockers = goal.blockers.filter(b => b.kind === 'missing_tool' && b.missingDependency);
@@ -198,17 +213,24 @@ export class OperationalKnowledge {
                 );
                 if (!fixAttempt) continue;
 
-                const verified = goal.attempts.some(a =>
+                const verifiedByStep = goal.attempts.some(a =>
                     a.result === 'success' &&
                     a.executedAt >= fixAttempt.executedAt &&
                     a.planStepId.startsWith('verify_')
                 );
-                if (!verified) {
-                    log.debug(`[OPKNOW-CAPTURE] goal=${goal.id} dependency=${blocker.missingDependency} fixAttempt encontrado mas sem step de verificação bem-sucedido depois — não captura (validação objetiva ausente)`);
+                // Só observa o ambiente quando a evidência já registrada no goal não basta —
+                // evita tocar o sistema à toa no caminho determinístico, que já provou o fato.
+                const verifiedByEnvironment = !verifiedByStep
+                    && isDependencyAvailable !== undefined
+                    && isDependencyAvailable(blocker.missingDependency!);
+
+                if (!verifiedByStep && !verifiedByEnvironment) {
+                    log.debug(`[OPKNOW-CAPTURE] goal=${goal.id} dependency=${blocker.missingDependency} fixAttempt encontrado mas sem evidência objetiva (nem step verify_ bem-sucedido, nem dependência presente no ambiente) — não captura`);
                     continue;
                 }
 
-                log.info(`[OPKNOW-CAPTURE] goal=${goal.id} dependency=${blocker.missingDependency} command="${String(fixAttempt.args.command).trim().slice(0, 80)}" blocker_detected_at=${blocker.detectedAt} fix_executed_at=${fixAttempt.executedAt} verified=true`);
+                const evidence = verifiedByStep ? 'verify_step' : 'environment_state';
+                log.info(`[OPKNOW-CAPTURE] goal=${goal.id} dependency=${blocker.missingDependency} command="${String(fixAttempt.args.command).trim().slice(0, 80)}" blocker_detected_at=${blocker.detectedAt} fix_executed_at=${fixAttempt.executedAt} evidence=${evidence}`);
                 this.recordAttempt(blocker.missingDependency!, String(fixAttempt.args.command).trim(), true);
                 captured++;
             }

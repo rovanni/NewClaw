@@ -40,7 +40,7 @@ import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdat
 import { StepSemanticValidator } from './StepSemanticValidator';
 import { GracefulDeliveryOrchestrator } from './GracefulDeliveryOrchestrator';
 import { StrategyDiversityGuard } from '../shared/StrategyDiversityGuard';
-import { resolvePath } from '../utils/crossPlatform';
+import { resolvePath, commandExists } from '../utils/crossPlatform';
 import { ensureDeliverySuccessCriteria, AUTO_DELIVERY_CRITERION_IDS } from './planning/ensureDeliverySuccessCriteria';
 import { resolveInstallCommand } from './planning/resolveInstallCommand';
 import { inferExpectedExtensions, isExpectedDeliverableFile } from './planning/inferExpectedExtensions';
@@ -1368,7 +1368,7 @@ export class GoalExecutionLoop {
         this.caseMemory.captureIfEligible(this.goalStore.getById(goal.id)!);
         // M2 (RFC-001): mesmo gate de elegibilidade (goal já validado como concluído de
         // verdade) — captura só grava, nunca influencia o resultado deste goal.
-        this.operationalKnowledge?.captureFromGoal(this.goalStore.getById(goal.id)!);
+        this.operationalKnowledge?.captureFromGoal(this.goalStore.getById(goal.id)!, commandExists);
         return { action: 'earlyReturn', result: this.buildResult(goal, true, totalCycles, totalReplans, validation.summary) };
     }
 
@@ -1978,7 +1978,7 @@ export class GoalExecutionLoop {
                     // S5 (modo sombra): mesma captura condicionada a evidência do outro call site.
                     this.caseMemory.captureIfEligible(this.goalStore.getById(currentGoal.id)!);
                     // M2 (RFC-001): mesmo gate, mesmo call site espelhado do CaseMemory acima.
-                    this.operationalKnowledge?.captureFromGoal(this.goalStore.getById(currentGoal.id)!);
+                    this.operationalKnowledge?.captureFromGoal(this.goalStore.getById(currentGoal.id)!, commandExists);
                     return this.buildResult(currentGoal, true, totalCycles, totalReplans, validation.summary);
                 } else {
                     log.warn(`[GoalLoop] goal=${currentGoal.id} completed step but ran out of cycles before final milestone`);
