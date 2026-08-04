@@ -401,6 +401,84 @@ async function main() {
         assert(degradedHint.includes('degradado'), 'buildEvidenceHint nomeia conhecimento degradado explicitamente após falha', degradedHint);
     }
 
+    // ── ADR-004 — um probe não pode ser eleito "comando que resolveu" ────────────────────────
+    // Regressão do defeito observado em EXECUÇÃO REAL (Sprint G, 03/08/2026): o LLM rodou
+    // `where sprintg-tool3 || echo "NOT FOUND"` antes do comando que de fato criou o binário, e a
+    // heurística "primeiro exec_command bem-sucedido depois do blocker" gravou o `where` como
+    // conhecimento operacional. Verificar não é instalar.
+    {
+        const ok = freshOperationalKnowledge();
+        const t0 = Date.now();
+        const blocker = makeBlocker({ detectedAt: t0, missingDependency: 'sprintg-tool3' });
+        const probeAttempt = makeAttempt({
+            toolName: 'exec_command', result: 'success',
+            args: { command: 'where sprintg-tool3 || echo "NOT FOUND"' },
+            executedAt: t0 + 1000,
+        });
+        const realFix = makeAttempt({
+            toolName: 'exec_command', result: 'success',
+            args: { command: 'echo @echo sprint-g3-ok > C:\\bin\\sprintg-tool3.cmd' },
+            executedAt: t0 + 2000,
+        });
+        const goal = makeGoal([blocker], [probeAttempt, realFix]);
+
+        const result = ok.captureFromGoal(goal, () => true);
+        assert(result.captured === 1, 'ADR-004: captura acontece — o probe é pulado, não invalida o goal inteiro', result);
+        const hint = ok.buildEvidenceHint('sprintg-tool3');
+        assert(!hint.includes('where sprintg-tool3'), 'ADR-004: o comando de diagnóstico NÃO é o conhecimento aprendido', hint);
+        assert(hint.includes('sprintg-tool3.cmd'), 'ADR-004: o comando aprendido é o que veio depois do probe', hint);
+    }
+
+    // Só probe, nenhum outro sucesso: silêncio, nunca gravar o diagnóstico como se fosse a solução.
+    {
+        const ok = freshOperationalKnowledge();
+        const t0 = Date.now();
+        const blocker = makeBlocker({ detectedAt: t0, missingDependency: 'yq' });
+        const onlyProbe = makeAttempt({
+            toolName: 'exec_command', result: 'success',
+            args: { command: 'command -v yq' },
+            executedAt: t0 + 1000,
+        });
+        const goal = makeGoal([blocker], [onlyProbe]);
+
+        const result = ok.captureFromGoal(goal, () => true);
+        assert(result.captured === 0, 'ADR-004: com apenas um probe como candidato, não captura nada (silêncio)', result);
+    }
+
+    // O reconhecedor não pode ser guloso: um comando que INSTALA e depois confere continua sendo
+    // uma instalação — o que decide é o que a linha começa fazendo.
+    {
+        const ok = freshOperationalKnowledge();
+        const t0 = Date.now();
+        const blocker = makeBlocker({ detectedAt: t0, missingDependency: 'yq' });
+        const installThenCheck = makeAttempt({
+            toolName: 'exec_command', result: 'success',
+            args: { command: 'winget install yq && where yq' },
+            executedAt: t0 + 1000,
+        });
+        const goal = makeGoal([blocker], [installThenCheck]);
+
+        const result = ok.captureFromGoal(goal, () => true);
+        assert(result.captured === 1, 'ADR-004: "instalar && verificar" continua elegível — não é um probe', result);
+        assert(ok.buildEvidenceHint('yq').includes('winget install yq'), 'ADR-004: comando de instalação preservado inteiro', ok.buildEvidenceHint('yq'));
+    }
+
+    // Probe de OUTRA dependência não bloqueia a captura da dependência sob análise.
+    {
+        const ok = freshOperationalKnowledge();
+        const t0 = Date.now();
+        const blocker = makeBlocker({ detectedAt: t0, missingDependency: 'yq' });
+        const otherProbe = makeAttempt({
+            toolName: 'exec_command', result: 'success',
+            args: { command: 'where jq' },
+            executedAt: t0 + 1000,
+        });
+        const goal = makeGoal([blocker], [otherProbe]);
+
+        const result = ok.captureFromGoal(goal, () => true);
+        assert(result.captured === 1, 'ADR-004: `where jq` não é probe de `yq` — segue candidato normal', result);
+    }
+
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S142 RESULTADO: ${passed} passou | ${failed} falhou`);
     if (failed > 0) process.exit(1);
