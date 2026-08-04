@@ -210,7 +210,7 @@ const ROUTER_KEYS = {
 installGlobalHelpers(
   model => {
     apiPullModel(model)
-      .then(() => { showToast('✅ "' + model + '" pronto!', 'success'); loadProviders(); })
+      .then(() => { showToast(t('ui_model_ready', { model }), 'success'); loadProviders(); })
       .catch(e => showToast('❌ ' + e.message, 'error'));
   },
   async (id, model) => {

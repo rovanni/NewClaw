@@ -156,7 +156,7 @@ export function render(container) {
       // Força recarregamento após 2s — token anterior foi invalidado
       setTimeout(() => location.reload(), 2000);
     } catch (err) {
-      showToast('❌ Erro ao salvar senha: ' + err.message, 'error');
+      showToast(t('ui_save_password_error') + ': ' + err.message, 'error');
     }
   });
 
@@ -168,7 +168,7 @@ export function render(container) {
       showToast(t('auth_disabled_toast'), 'success');
       await refreshAuthStatus();
     } catch (err) {
-      showToast('❌ Erro: ' + err.message, 'error');
+      showToast('❌ ' + t('ui_error_prefix') + ': ' + err.message, 'error');
     }
   });
 
@@ -223,7 +223,7 @@ export function render(container) {
 
           try {
             await setCapabilityMode(mode, godModeConfirmed);
-            showToast(`✅ Modo alterado para ${mode}`, 'success');
+            showToast(t('ui_mode_changed', { mode }), 'success');
             await renderModeCards();
           } catch (err) {
             showToast(`❌ ${err.message}`, 'error');

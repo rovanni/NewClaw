@@ -1275,7 +1275,7 @@ function wireProviderOverview() {
         document.getElementById('ml-newProvKey').value   = '';
         document.getElementById('ml-newProvModel').value = '';
       }
-    } catch (err) { showToast('Erro: ' + err.message, 'error'); }
+    } catch (err) { showToast(t('ui_error_prefix') + ': ' + err.message, 'error'); }
     finally { btn.disabled = false; }
   });
 

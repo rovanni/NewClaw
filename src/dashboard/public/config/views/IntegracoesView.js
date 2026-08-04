@@ -154,7 +154,7 @@ export function render(container) {
                 showToast(data.message || 'Suplemento desinstalado.', 'success');
                 setupUI(false);
             } catch (err) {
-                showToast('Erro: ' + err.message, 'error');
+                showToast(t('ui_error_prefix') + ': ' + err.message, 'error');
                 btn.disabled = false;
                 btn.innerHTML = `<span class="ni">🗑️</span> ${t('pptx_uninstall_btn')}`;
             }
