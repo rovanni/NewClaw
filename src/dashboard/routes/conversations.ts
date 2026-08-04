@@ -12,7 +12,17 @@ export function createConversationsRouter(ctx: DashboardContext): Router {
             // provider='web' — não userId: cada conversa web é salva com user_id=sessionId (id
             // local gerado no browser), nunca um "usuário" fixo. Ver DashboardMemoryRepository.
             const convs = repo.listWebConversations();
-            res.json({ success: true, conversations: convs });
+            // `id` da linha é a CHAVE DE SESSÃO composta (`canal:usuário`, ver SessionKeyFactory);
+            // `sessionId` é o que o cliente deve mandar de volta em POST /api/chat. São coisas
+            // diferentes, e o cliente não deve precisar deduzir a regra de composição para
+            // separá-las: o painel usava `id` como sessionId, o servidor compunha de novo, e a
+            // conversa passava a viver sob `web:web:<id>` — sessão, transcrição e goals
+            // fragmentados a cada retomada (observado ao vivo em 04/08/2026). Campo aditivo:
+            // `id` continua valendo para /api/conversations/:id/messages.
+            res.json({
+                success: true,
+                conversations: convs.map(c => ({ ...c, sessionId: c.user_id })),
+            });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
         }

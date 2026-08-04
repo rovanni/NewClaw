@@ -462,6 +462,47 @@
 
     let conversations = JSON.parse(localStorage.getItem(SKEY + SKEY_VERSION + 'conversations') || '[]');
     let currentConvId = localStorage.getItem(SKEY + SKEY_VERSION + 'current_conv') || null;
+
+    /**
+     * Conserta ids de conversa que a sincronização antiga gravou já compostos (`canal:usuário`).
+     *
+     * Enquanto existirem no localStorage, esta aba continua mandando a chave composta como
+     * sessionId e o servidor compõe de novo (`web:web:...`) — o histórico do usuário fica
+     * espalhado por chaves diferentes mesmo depois do servidor e do sync já estarem corretos.
+     * Ids criados localmente são `conv_<timestamp>` e nunca contêm ':', então a presença de ':'
+     * identifica com segurança o que veio da sincronização. Mesma regra de `parseSessionKey`:
+     * delimita no PRIMEIRO ':', preservando um userId que contenha ':'.
+     */
+    (function migrateComposedConversationIds() {
+      let changed = 0;
+      for (const c of conversations) {
+        const idx = typeof c.id === 'string' ? c.id.indexOf(':') : -1;
+        if (idx === -1) continue;
+        if (!c.serverId) c.serverId = c.id;
+        c.id = c.id.slice(idx + 1);
+        if (c.title === c.serverId) c.title = c.id;
+        changed++;
+      }
+      if (!changed) return;
+      // Dedupe: a mesma conversa pode existir com o id antigo e com o novo. Mantém a que tem
+      // mais mensagens (empate: a atualizada mais recentemente) — nunca descarta a mais completa.
+      const byId = new Map();
+      for (const c of conversations) {
+        const prev = byId.get(c.id);
+        if (!prev) { byId.set(c.id, c); continue; }
+        const better = (c.messages?.length ?? 0) !== (prev.messages?.length ?? 0)
+          ? ((c.messages?.length ?? 0) > (prev.messages?.length ?? 0) ? c : prev)
+          : ((c.updatedAt ?? 0) >= (prev.updatedAt ?? 0) ? c : prev);
+        byId.set(c.id, better);
+      }
+      conversations = Array.from(byId.values());
+      if (currentConvId && currentConvId.includes(':')) {
+        currentConvId = currentConvId.slice(currentConvId.indexOf(':') + 1);
+        localStorage.setItem(SKEY + SKEY_VERSION + 'current_conv', currentConvId);
+      }
+      localStorage.setItem(SKEY + SKEY_VERSION + 'conversations', JSON.stringify(conversations));
+      console.log(`[MIGRATE] ${changed} id(s) de conversa normalizados (chave composta → sessionId)`);
+    })();
     let ttsEnabled = localStorage.getItem(SKEY + SKEY_VERSION + 'tts') === '1';
     let recognition = null;
     let isListening = false;
@@ -565,14 +606,22 @@
         const res = await newclawFetch('/api/conversations');
         const data = await res.json();
         if (!data.success) return;
-        // Merge server convs into local (keep local if newer)
+        // Merge server convs into local (keep local if newer).
+        //
+        // `sc.id` é a CHAVE DE SESSÃO composta (`canal:usuário`); `sc.sessionId` é o que o
+        // servidor espera receber de volta em POST /api/chat. Usar `sc.id` como id local fazia o
+        // painel devolver a chave já composta, o servidor compor de novo, e a conversa passar a
+        // viver sob `web:web:<id>` — sessão, transcrição e goals fragmentados a cada retomada.
+        // O id local é o sessionId; o id do servidor fica em `serverId`, só para buscar mensagens.
         for (const sc of data.conversations) {
-          const local = conversations.find(c => c.id === sc.id);
+          const localId = sc.sessionId || sc.user_id || sc.id;
+          const local = conversations.find(c => c.id === localId);
           if (!local) {
             const msgRes = await fetch(`/api/conversations/${sc.id}/messages?limit=50`);
             const msgData = await msgRes.json();
             conversations.push({
-              id: sc.id, title: sc.id, messages: (msgData.messages || []).map(m => ({role: m.role, content: m.content, timestamp: new Date(m.created_at).getTime()})),
+              id: localId, serverId: sc.id, title: localId,
+              messages: (msgData.messages || []).map(m => ({role: m.role, content: m.content, timestamp: new Date(m.created_at).getTime()})),
               createdAt: new Date(sc.created_at).getTime(), updatedAt: new Date(sc.updated_at).getTime()
             });
           }
