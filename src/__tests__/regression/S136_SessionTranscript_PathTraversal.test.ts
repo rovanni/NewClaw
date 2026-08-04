@@ -74,6 +74,16 @@ async function main() {
         const rel = path.relative(path.resolve(transcriptDir), path.resolve(filePath));
         const escaped = rel.startsWith('..') || path.isAbsolute(rel);
         assert(!escaped, 'filePath do SessionTranscript fica dentro de transcriptDir mesmo com sessionId adversarial', { filePath, rel });
+
+        // init() abre o stream de append com fs.createWriteStream() e NÃO espera o evento 'open'
+        // — o arquivo só passa a existir em disco de forma assíncrona. Checar existsSync() logo
+        // após o init() era uma corrida: passava quando o open ganhava, falhava sob a carga da
+        // suíte cheia (era esta a "instabilidade" histórica do S136, nunca uma falha de
+        // contenção de path — as asserções de traversal acima e abaixo sempre passaram).
+        // flush() só resolve depois que o callback de write do stream dispara, o que exige o fd
+        // já aberto: é a barreira correta. A asserção continua sendo sobre ONDE o arquivo é
+        // criado, não sobre o instante em que o stream abre.
+        await transcript.flush();
         assert(fs.existsSync(filePath), 'o arquivo de sessão foi criado no local esperado (dentro de transcriptDir)', filePath);
 
         // Confirma que NADA foi criado no path que o ataque tentava atingir.
