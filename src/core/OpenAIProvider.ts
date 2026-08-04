@@ -8,16 +8,26 @@ const log = createLogger('OpenAIProvider');
 /**
  * Teto para ESTABELECER a conexão — não para a resposta inteira.
  *
- * Um endpoint que não devolve nem os cabeçalhos nesse prazo está fora do ar; esperar mais só
- * atrasa o fallback. Sem essa separação, um provider morto consumia o timeout completo da
- * requisição antes de o próximo da fila ser tentado: observado em produção (02/08/2026) com um
- * servidor local desligado e timeout dinâmico de 5,8 min — cada mensagem levava minutos para
- * chegar a um provider saudável, e com o retry o dobro disso.
+ * Motivo original (02/08/2026): um provider morto consumia o timeout completo da requisição
+ * antes de o próximo da fila ser tentado — com um servidor local desligado e timeout dinâmico de
+ * 5,8 min, cada mensagem levava minutos para chegar a um provider saudável, e o dobro com retry.
  *
- * Depois que a resposta começa, quem manda é o timeout normal: gerar texto pode levar minutos e
- * isso é legítimo.
+ * CORREÇÃO (04/08/2026): a premissa original — "quem não devolve os cabeçalhos em 15s está fora
+ * do ar" — vale para API de nuvem com streaming, e é FALSA aqui. Esta requisição é não-streaming
+ * (não há `stream: true` no corpo), então um servidor local só devolve cabeçalho quando termina
+ * de gerar: o teto virava, na prática, um limite de GERAÇÃO de 15s. Um modelo local saudável era
+ * declarado morto assim que o prompt crescia — observado ao vivo com timeout dinâmico de 197s e
+ * requisição abortada aos 15,01s, com o servidor gerando normalmente (cobertura: S191).
+ *
+ * Agora o teto não decide sozinho: ao estourar, pergunta ao servidor via `isResponsive()`. Vivo
+ * → segue até o timeout do chamador (gerar texto pode levar minutos, e isso é legítimo). Sem
+ * resposta → aborta como antes, preservando o fallback rápido que motivou o teto.
  */
 const CONNECT_TIMEOUT_MS = 15_000;
+
+/** Teto do probe de vida (`/models`). Curto de propósito: um servidor saudável responde em
+ *  milissegundos; se nem isso ele faz, esperar mais não muda o veredito. */
+const LIVENESS_PROBE_TIMEOUT_MS = 3_000;
 
 /**
  * Provider genérico para qualquer endpoint compatível com a API da OpenAI
@@ -42,6 +52,33 @@ export class OpenAIProvider implements ILLMProvider {
     setModel(model: string): void { this.model = model; }
     getBaseUrl(): string { return this.baseUrl; }
     getLabel(): string { return this.label; }
+
+    /**
+     * O servidor está atendendo AGORA? Pergunta objetiva a `/models` — o mesmo endpoint que o
+     * discovery usa, aqui só pelo veredito, sem ler o corpo.
+     *
+     * Existe para separar duas coisas que a requisição de chat não distingue sozinha:
+     * "servidor morto/travado" e "modelo local ainda gerando". Sem essa separação, o teto de
+     * 15s virava um teto de GERAÇÃO de 15s para qualquer endpoint não-streaming — um modelo
+     * local saudável era declarado fora do ar assim que o prompt crescia (observado ao vivo em
+     * 04/08/2026: timeout dinâmico de 197s, requisição abortada aos 15,01s, servidor gerando
+     * normalmente).
+     *
+     * Nunca lança: qualquer falha é resposta "não está respondendo".
+     */
+    async isResponsive(timeoutMs: number = LIVENESS_PROBE_TIMEOUT_MS): Promise<boolean> {
+        try {
+            const headers: Record<string, string> = {};
+            if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+            const resp = await fetch(`${this.baseUrl}/models`, {
+                headers,
+                signal: AbortSignal.timeout(timeoutMs),
+            });
+            return resp.ok;
+        } catch {
+            return false;
+        }
+    }
 
     /**
      * Lista os modelos expostos por /models. Funciona para qualquer servidor
@@ -81,7 +118,21 @@ export class OpenAIProvider implements ILLMProvider {
             // Aborta se a conexão não se estabelecer a tempo, mas encadeia o signal externo para
             // que um cancelamento do usuário continue valendo depois disso.
             const connectAbort = new AbortController();
-            const connectTimer = setTimeout(() => connectAbort.abort(), CONNECT_TIMEOUT_MS);
+            // Ao estourar o teto, NÃO presume morte — pergunta ao servidor. Ver nota do
+            // CONNECT_TIMEOUT_MS: esta requisição é não-streaming, então os cabeçalhos de um
+            // servidor local só chegam quando a geração termina, e "demorou 15s" é
+            // indistinguível de "está gerando" sem perguntar. `/models` responde na hora num
+            // servidor saudável (é o mesmo endpoint que o discovery já usa) e falha rápido num
+            // morto/travado — que é exatamente a distinção que faltava.
+            const connectTimer = setTimeout(async () => {
+                const alive = await this.isResponsive(LIVENESS_PROBE_TIMEOUT_MS);
+                if (alive) {
+                    log.info(`${this.label}: sem resposta em ${CONNECT_TIMEOUT_MS / 1000}s, mas /models respondeu — modelo está gerando, seguindo até o timeout do chamador`);
+                    return;
+                }
+                log.warn(`${this.label}: sem resposta em ${CONNECT_TIMEOUT_MS / 1000}s e /models não respondeu — tratando como fora do ar`);
+                connectAbort.abort();
+            }, CONNECT_TIMEOUT_MS);
             const onExternalAbort = () => connectAbort.abort();
             options?.signal?.addEventListener('abort', onExternalAbort, { once: true });
 
