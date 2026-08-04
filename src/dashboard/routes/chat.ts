@@ -109,7 +109,72 @@ export function createChatRouter(ctx: DashboardContext): Router {
             });
         }
 
-        res.json({ success: true, active });
+        // Ações perigosas esperando decisão do usuário NESTA conversa. Vive aqui, e não num
+        // endpoint próprio, porque é a mesma pergunta que a tela já faz ("o que está acontecendo
+        // com a minha conversa?") no mesmo polling — um goal em `needs_auth` está justamente
+        // PARADO, então nunca apareceria na lista `active` acima.
+        const conversationId = typeof _req.query.sessionId === 'string' ? _req.query.sessionId : undefined;
+        const workflowEngine = (ctx.controller as unknown as {
+            getWorkflowEngine?: () => { getPendingByConversation?: (id: string) => Array<{ id: string; tool: string; params: Record<string, unknown>; createdAt: number }> };
+        }).getWorkflowEngine?.();
+        const pendingAuth = (conversationId && workflowEngine?.getPendingByConversation)
+            ? workflowEngine.getPendingByConversation(conversationId).map(t => ({
+                txnId: t.id,
+                tool: t.tool,
+                // Só o comando/alvo, para a interface poder mostrar o que está sendo aprovado.
+                // Nunca o objeto inteiro de params: pode conter conteúdo grande de arquivo.
+                detail: typeof t.params?.command === 'string' ? t.params.command as string : undefined,
+                createdAt: t.createdAt,
+            }))
+            : [];
+
+        res.json({ success: true, active, pendingAuth });
+    });
+
+    /**
+     * Decisão de autorização vinda do Dashboard — POST /api/chat/auth-decision.
+     *
+     * Telegram/Discord/WhatsApp/Signal entregam essa decisão pelo botão inline da plataforma
+     * (texto `auth:<approve|reject>:<txnId>`), e os quatro chamam a MESMA closure de
+     * `AgentController.createWorkflowCallback()`. O canal web não tem botão de plataforma — esta
+     * rota é o equivalente dele, e chama exatamente a mesma closure. Nenhuma regra de
+     * autorização, de goal ou de sessão é reimplementada aqui: a rota só traduz "o usuário
+     * clicou" para a chamada que já existe, e devolve à tela o texto que o callback produziu
+     * (mesmo caminho `waitForResponse` do POST /api/chat).
+     */
+    router.post('/auth-decision', async (req: Request, res: Response) => {
+        const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+        const txnId = typeof req.body?.txnId === 'string' ? req.body.txnId.trim() : '';
+        const decision = req.body?.decision === 'approved' ? 'approved'
+            : req.body?.decision === 'rejected' ? 'rejected' : null;
+
+        if (!sessionId || !txnId || !decision) {
+            return res.status(400).json({ success: false, error: 'sessionId, txnId e decision ("approved"|"rejected") são obrigatórios' });
+        }
+
+        if (!ctx.controller) {
+            return res.status(503).json({ success: false, error: 'Agente não inicializado' });
+        }
+
+        try {
+            const webAdapter = ctx.controller.getWebAdapter();
+            if (!webAdapter.workflowCallback) {
+                return res.status(503).json({ success: false, error: 'Canal web sem callback de autorização registrado' });
+            }
+
+            const requestId = crypto.randomUUID();
+            const responsePromise = webAdapter.waitForResponse(requestId, sessionId, AGENT_RESPONSE_TIMEOUT_MS);
+            await webAdapter.workflowCallback(sessionId, txnId, decision, requestId);
+            const response = await responsePromise;
+
+            res.json({
+                success: true,
+                response: response.text,
+                attachments: (response.attachments ?? []).map(serializeAttachment),
+            });
+        } catch (err) {
+            res.status(500).json({ success: false, error: errorMessage(err) });
+        }
     });
 
     router.post('/', upload.array('files', 5), async (req: Request, res: Response) => {

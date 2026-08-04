@@ -124,6 +124,7 @@ export class AgentController {
     public getSessionLearner(): SessionLearner { return this.sessionLearner; }
     public getMessageBus(): MessageBus { return this.messageBus; }
     public getWebAdapter(): WebChannelAdapter { return this.webAdapter; }
+    public getWorkflowEngine(): WorkflowEngine { return this.workflowEngine; }
     public getEventBus() { return this._eventBus; }
     public getCircuitBreakers() { return this.circuitBreakers; }
     public getTelegramAdapter(): TelegramAdapter | null { return this.telegramAdapter; }
@@ -340,6 +341,12 @@ export class AgentController {
         // (NormalizedMessage → ChannelAttachment[] → agentMediaHandlers) do Telegram/Discord/etc.
         this.webAdapter = new WebChannelAdapter();
         this.messageBus.registerAdapter(this.webAdapter);
+        // O Dashboard é canal como os outros também para aprovar ação perigosa: mesma closure,
+        // mesma fábrica. Antes, só os 4 canais de mensageria recebiam workflowCallback — um goal
+        // disparado pelo painel que atingisse `needs_auth` ficava `blocked` esperando uma
+        // aprovação que o canal não tinha como entregar, até expirar (gap registrado em
+        // docs/ARCHITECTURE.md). Quem dispara a decisão aqui é POST /api/chat/auth-decision.
+        this.webAdapter.workflowCallback = this.createWorkflowCallback(this.webAdapter, 'web');
 
         const { tmpDir } = config;
         this.messageBus.registerMediaHandler('voice', async (msg, attachment) =>

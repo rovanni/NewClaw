@@ -49,6 +49,7 @@
  * só chamado um passo mais cedo.
  */
 import { ChannelAdapter, ChannelType, NormalizedResponse, ResponseAttachment } from './ChannelAdapter';
+import type { WorkflowCallbackFn } from '../loop/WorkflowTypes';
 import { createLogger } from '../shared/AppLogger';
 import { powerpointBroker } from '../dashboard/routes/powerpointBroker';
 
@@ -87,6 +88,16 @@ export class WebChannelAdapter implements ChannelAdapter {
     readonly channelType: ChannelType = 'web';
     readonly displayName: string = 'Web Dashboard';
     readonly isConnected: boolean = true;
+
+    /**
+     * Mesma closure que Telegram/Discord/WhatsApp/Signal recebem de
+     * `AgentController.createWorkflowCallback()` — aprovar/rejeitar uma ação perigosa é o mesmo
+     * fluxo em todo canal. A diferença é só de onde vem o clique: os outros quatro reconhecem o
+     * padrão de texto `auth:<approve|reject>:<txnId>` do botão inline da plataforma; aqui quem
+     * dispara é uma rota HTTP do Dashboard (`POST /api/chat/auth-decision`), porque o canal web
+     * não tem botão de plataforma. Nenhuma lógica de autorização vive neste adapter.
+     */
+    workflowCallback?: WorkflowCallbackFn;
 
     private pending: Map<string, PendingRequest> = new Map();
     // Requisições cujo waitForResponse já expirou, mas cujo Goal correspondente pode ainda

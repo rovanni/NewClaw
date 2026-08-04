@@ -241,6 +241,28 @@
     .empty-state p { font-size: 0.85rem; max-width: 340px; text-align: center; line-height: 1.5; }
 
     /* Status indicator */
+    /* ── Autorização pendente ────────────────────────────────── */
+    /* Usa só variáveis do tema compartilhado (shared.css) — acompanha claro/escuro sem
+       cor fixa, igual ao resto do painel. */
+    .auth-pending-slot { max-width: 768px; margin: 0 auto; padding: 0 24px; }
+    .auth-pending-card {
+      border: 1px solid var(--border-color-strong); border-radius: var(--radius-md, 10px);
+      background: var(--bg-input); padding: 12px 14px; margin-bottom: 10px;
+    }
+    .auth-pending-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 6px; }
+    .auth-pending-detail {
+      font-size: 0.78rem; color: var(--text-muted); word-break: break-all;
+      margin-bottom: 10px; white-space: pre-wrap;
+    }
+    .auth-pending-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .auth-approve-btn, .auth-reject-btn {
+      border-radius: var(--radius-pill, 999px); padding: 6px 16px; font-size: 0.8rem;
+      cursor: pointer; border: 1px solid var(--border-color-strong); background: var(--bg-input);
+      color: var(--text-color);
+    }
+    .auth-approve-btn { border-color: var(--accent-color, currentColor); font-weight: 600; }
+    .auth-approve-btn:disabled, .auth-reject-btn:disabled { opacity: 0.5; cursor: default; }
+
     .status-indicator-slot { max-width: 768px; margin: 0 auto; padding: 0 24px; }
     #statusIndicator {
       display: none; align-items: center; gap: 8px; font-size: 0.78rem; color: var(--text-muted);
@@ -381,6 +403,10 @@
            num chat longo, rolar para reler o começo deixava o usuário sem caminho de volta a não
            ser arrastar tudo de novo. Padrão consagrado nos chats de IA. -->
       <button class="scroll-bottom-btn" id="scrollBottomBtn" data-i18n-title="scroll_to_bottom" title="Ir para o final" aria-label="Ir para o final">↓</button>
+      <!-- Ação perigosa esperando decisão. Slot próprio (não entra em conv.messages) porque é
+           estado do servidor, não histórico: renderChat() reconstrói as mensagens do zero a cada
+           atualização e apagaria os botões. -->
+      <div class="auth-pending-slot" id="authPendingSlot"></div>
       <div class="status-indicator-slot" id="statusIndicatorSlot"></div>
 
       <div class="composer-outer">
@@ -945,10 +971,75 @@
      * de que algo continuava rodando — e qualquer forma de interromper. O servidor sabe quais
      * conversas têm turno ativo; aqui só perguntamos a ele.
      */
+    /**
+     * Ações perigosas esperando decisão nesta conversa.
+     *
+     * Telegram/Discord/WhatsApp/Signal mostram dois botões inline; o canal web não tem botão de
+     * plataforma, então a tela pergunta ao servidor e desenha os mesmos dois botões. A decisão
+     * vai para POST /api/chat/auth-decision, que chama a MESMA closure dos outros canais.
+     */
+    function renderPendingAuth(pending) {
+      const slot = document.getElementById('authPendingSlot');
+      if (!slot) return;
+      if (!pending || !pending.length) { slot.innerHTML = ''; return; }
+      slot.innerHTML = pending.map(p => `
+        <div class="auth-pending-card">
+          <div class="auth-pending-title">${esc(t('auth_pending_title'))}</div>
+          <div class="auth-pending-detail mono">${esc(p.detail || p.tool)}</div>
+          <div class="auth-pending-actions">
+            <button class="auth-approve-btn" onclick="decideAuth('${esc(p.txnId)}','approved')">${esc(t('auth_approve'))}</button>
+            <button class="auth-reject-btn" onclick="decideAuth('${esc(p.txnId)}','rejected')">${esc(t('auth_reject'))}</button>
+          </div>
+        </div>`).join('');
+    }
+
+    async function decideAuth(txnId, decision) {
+      const slot = document.getElementById('authPendingSlot');
+      if (slot) slot.querySelectorAll('button').forEach(b => b.disabled = true);
+      showStatus('processing', t('auth_deciding'));
+      try {
+        const res = await newclawFetch('/api/chat/auth-decision', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: currentConvId || 'web-session', txnId, decision }),
+        });
+        const data = await res.json();
+        hideStatus();
+        renderPendingAuth([]);
+        // Ação sem saída de texto é comum e legítima (`mkdir` não imprime nada), e a resposta de
+        // um goal é o conteúdo produzido, não um resumo sobre ele. Sem este fallback, autorizar
+        // um comando desses deixava uma bolha vazia na conversa — observado na validação ao vivo.
+        const authText = data.error
+          ? `⚠️ ${data.error}`
+          : (data.response && data.response.trim() ? data.response : t('auth_done_no_output'));
+        addMsg('bot', authText, mapServerAttachments(data.attachments));
+      } catch (err) {
+        hideStatus();
+        showStatus('error', t('auth_decide_failed'));
+        syncServerState();
+      }
+    }
+
+    // O card é construído com t(), então trocar de idioma precisa redesenhá-lo — mesmo padrão
+    // que config/app.js já usa para conteúdo gerado por JavaScript (data-i18n só alcança HTML
+    // estático).
+    window.addEventListener('newclaw-lang-changed', () => syncServerState());
+
+    async function syncServerState() {
+      try {
+        const sid = encodeURIComponent(currentConvId || 'web-session');
+        const res = await newclawFetch('/api/chat/active?sessionId=' + sid);
+        const { pendingAuth = [] } = await res.json();
+        renderPendingAuth(pendingAuth);
+      } catch { /* sem conexão: a tela segue no estado normal */ }
+    }
+
     async function restoreActiveTurn() {
       try {
-        const res = await newclawFetch('/api/chat/active');
-        const { active = [] } = await res.json();
+        const sid = encodeURIComponent(currentConvId || 'web-session');
+        const res = await newclawFetch('/api/chat/active?sessionId=' + sid);
+        const { active = [], pendingAuth = [] } = await res.json();
+        renderPendingAuth(pendingAuth);
         if (!active.length) return;
         // Prefere a conversa aberta; se o turno ativo é de outra, ainda assim mostra, porque o
         // ponto é o usuário saber que existe algo em andamento.
@@ -1002,6 +1093,9 @@
       } catch (err) { hideStatus(); addMsg('bot', `⚠️ Falha: ${err.message}`); }
       currentChatSessionId = null;
       setSendBtnBusy(false); messageInput.focus();
+      // O turno pode ter parado justamente esperando autorização (goal em needs_auth): sem esta
+      // consulta, os botões só apareceriam ao recarregar a página.
+      syncServerState();
     }
 
     // ── Status indicator ──

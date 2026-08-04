@@ -132,6 +132,31 @@ export class WorkflowEngine {
         return txn;
     }
 
+    /**
+     * Transações desta conversa ainda esperando decisão do usuário.
+     *
+     * Existe porque um canal precisa saber "há algo pendente aqui?" sem ter recebido o clique —
+     * o caso do Dashboard web, que não tem botão inline como Telegram/Discord e descobre a
+     * pendência consultando o servidor. Vale para os dois tipos de autorização (a de um goal e a
+     * de um turno do AgentLoop): ambos passam por `createTransaction()`, então esta é a fonte
+     * única — nenhum canal precisa saber que `Goal.pendingTxnId` existe.
+     *
+     * Usa o índice `idx_wtxn_conv (conversation_id, status)` que o schema já declara.
+     */
+    getPendingByConversation(conversationId: string): AuthTransaction[] {
+        if (this.db) {
+            const rows = this.db.prepare(
+                `SELECT * FROM workflow_transactions
+                 WHERE conversation_id = ? AND status = 'pending_auth'
+                 ORDER BY created_at ASC`
+            ).all(conversationId) as Record<string, unknown>[];
+            return rows.map(r => this.rowToTxn(r));
+        }
+        return Array.from(this.mem.values())
+            .filter(t => t.conversationId === conversationId && t.status === 'pending_auth')
+            .sort((a, b) => a.createdAt - b.createdAt);
+    }
+
     // ── Execução ─────────────────────────────────────────────────────────────
 
     async resume(

@@ -32,6 +32,14 @@ const TRANSLATIONS = {
     today_label: "Hoje",
     scroll_to_bottom: "Ir para o final",
 
+    // Autorização de ação perigosa (mesmo fluxo dos botões inline do Telegram/Discord)
+    auth_pending_title: "⚠️ Precisa da sua autorização para executar:",
+    auth_approve: "Autorizar",
+    auth_reject: "Recusar",
+    auth_deciding: "Enviando decisão...",
+    auth_decide_failed: "Não foi possível enviar a decisão",
+    auth_done_no_output: "✅ Ação autorizada e executada (sem saída de texto).",
+
     // Chat
     conv_sidebar_title: "Recentes",
     new_conv: "Nova conversa",
@@ -640,6 +648,14 @@ const TRANSLATIONS = {
     reasoning_chip_label_generic: "Reasoned",
     today_label: "Today",
     scroll_to_bottom: "Go to bottom",
+
+    // Dangerous-action authorization (same flow as the Telegram/Discord inline buttons)
+    auth_pending_title: "⚠️ Needs your authorization to run:",
+    auth_approve: "Authorize",
+    auth_reject: "Decline",
+    auth_deciding: "Sending decision...",
+    auth_decide_failed: "Could not send the decision",
+    auth_done_no_output: "✅ Action authorized and executed (no text output).",
     
     // Chat
     conv_sidebar_title: "Recent",
@@ -1252,6 +1268,14 @@ const TRANSLATIONS = {
     conv_sidebar_title: "Recientes",
     today_label: "Hoy",
     scroll_to_bottom: "Ir al final",
+
+    // Autorización de acción peligrosa (mismo flujo que los botones en línea de Telegram/Discord)
+    auth_pending_title: "⚠️ Necesita su autorización para ejecutar:",
+    auth_approve: "Autorizar",
+    auth_reject: "Rechazar",
+    auth_deciding: "Enviando decisión...",
+    auth_decide_failed: "No se pudo enviar la decisión",
+    auth_done_no_output: "✅ Acción autorizada y ejecutada (sin salida de texto).",
     new_conv: "Nueva conversación",
     search_conv_placeholder: "Buscar conversaciones",
     agent_active_label: "Agente activo",
