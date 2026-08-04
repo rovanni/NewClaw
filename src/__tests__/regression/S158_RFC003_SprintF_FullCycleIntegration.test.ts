@@ -33,14 +33,23 @@
  * "Reutilização futura" — só chega lá conhecimento que já tinha uma entrada distribuída completa
  * (installByPlatform + verifyCmd), categoria que hoje não existe em KNOWN_DEPS de forma real (só
  * `ffmpeg` tem verifyCmd, e só resolve via fallback `installCmd` legado em Linux — nunca em
- * Windows/macOS, ver comentário de KNOWN_DEPS em GoalEvaluator.ts). Isto NÃO é corrigido nesta
- * Sprint: fechar essa lacuna exigiria decidir COMO um plano gerado por LLM/Pesquisa sinaliza "este
- * step é a verificação objetiva" — uma extensão do contrato entre `GoalPlanner`/prompt e
- * `OperationalKnowledge`, portanto uma decisão de responsabilidade (RFC-003 restringe
+ * Windows/macOS, ver comentário de KNOWN_DEPS em GoalEvaluator.ts). Isto NÃO foi corrigido na
+ * Sprint F: fechar a lacuna exigia decidir COMO reconhecer a verificação objetiva de um plano
+ * gerado por LLM/Pesquisa — decisão de responsabilidade, não conserto de fiação (RFC-003 restringe
  * explicitamente a Sprint F: "não introduzir novas arquiteturas", "qualquer ideia... deve virar
- * futura ADR/RFC"). Registrado aqui como teste que documenta o comportamento ATUAL (não o
- * desejado) — se alguém "corrigir" isto sem uma ADR/RFC, este teste será o primeiro a acusar a
- * mudança de responsabilidade não planejada.
+ * futura ADR/RFC").
+ *
+ * FECHADO EM 03/08/2026 por `docs/decisoes/ADR-003_APRENDIZADO_POR_EVIDENCIA_DE_AMBIENTE.md`.
+ * A decisão NÃO foi ensinar o plano a se rotular (os 3 candidatos registrados na Sprint F foram
+ * avaliados e descartados, ADR-003 §4): a validação objetiva passou a ser o ESTADO DO AMBIENTE —
+ * "a dependência existe agora?" — veredito produzido pelo `GoalExecutionLoop` (`commandExists`)
+ * e apenas consumido por `captureFromGoal()`, que continua sem executar nada. O step `verify_`
+ * da Sprint D permanece como evidência de custo zero, checada primeiro, e como sinal de replan
+ * mid-goal — só deixou de ser o único gatilho.
+ *
+ * Os casos abaixo refletem a decisão: S158.1 (dependência que continua ausente do ambiente →
+ * NÃO aprende, silêncio em vez de chute) e S158.1b (mesmo caminho de Pesquisa, dependência
+ * objetivamente presente → aprende, sem nenhum step `verify_*` envolvido).
  *
  * Execução: npx ts-node src/__tests__/regression/S158_RFC003_SprintF_FullCycleIntegration.test.ts
  */
@@ -54,6 +63,7 @@ import { OperationalMode } from '../../core/CapabilityMode';
 import { CapabilityRegistry } from '../../core/CapabilityRegistry';
 import { OperationalKnowledge } from '../../memory/OperationalKnowledge';
 import { KNOWN_DEPS } from '../../loop/GoalEvaluator';
+import { commandExists } from '../../utils/crossPlatform';
 import { Goal, PlanStep, DependencyInfo } from '../../loop/GoalTypes';
 import { ChannelContext } from '../../loop/agentLoopTypes';
 
@@ -165,11 +175,89 @@ async function main() {
             assert(stored.status === 'completed', 'goal completa após o replan (pesquisa) resolver o problema', stored.status);
             assert(
                 ok.buildEvidenceHint(SYNTH_DEP) === '',
-                'ACHADO S158: mesmo com sucesso real após a Pesquisa, OperationalKnowledge continua vazio para esta dependência — captureFromGoal() exige um step "verify_*" que só o caminho needs_dependency injeta, nunca o caminho Pesquisa/blocked',
+                'dependência que continua AUSENTE do ambiente não é aprendida, mesmo com o goal concluído — o "sucesso" veio de uma tool sintética, não da dependência passar a existir (ADR-003 §5.4: silêncio, nunca chute)',
                 ok.buildEvidenceHint(SYNTH_DEP)
             );
         } finally {
             permissionRegistry.setMode(OperationalMode.SAFE, 'test-s158-1-restore');
+        }
+    }
+
+    console.log('\n--- S158.1b — mesmo caminho Pesquisa/blocked, mas com a dependência REALMENTE presente no ambiente: aprende (ADR-003) ---');
+    {
+        // Binário real, escolhido do próprio ambiente e verificado com a MESMA primitiva que o
+        // código usa (commandExists) — nada de mock: o ponto do teste é justamente que a prova
+        // vem do estado do sistema. Nenhum dos candidatos está em KNOWN_DEPS, então o fluxo cai
+        // no ramo de Pesquisa, não em needs_dependency.
+        const REAL_BIN = ['whoami', 'hostname', 'sh', 'cmd'].find(b => commandExists(b));
+        if (!REAL_BIN) {
+            console.log('  SKIP nenhum binário candidato (whoami/hostname/sh/cmd) existe nesta máquina — caso não executado');
+        } else {
+            assert(
+                KNOWN_DEPS[REAL_BIN] === undefined,
+                `pré-requisito do caso: '${REAL_BIN}' não está em KNOWN_DEPS (garante que o fluxo é o de Pesquisa, não o determinístico)`,
+                REAL_BIN
+            );
+
+            const DEP_TOOL_ENV = '__s158_pesquisa_env_tool__';
+            let envCalls = 0;
+            ToolRegistry.register({
+                name: DEP_TOOL_ENV, description: 'test', parameters: {},
+                execute: async () => {
+                    envCalls++;
+                    if (envCalls === 1) return { success: false, output: '', error: `spawn ${REAL_BIN} ENOENT` };
+                    return { success: true, output: 'tarefa original concluída' };
+                },
+            });
+            // Mesmo fake de S158.2 (inclusive `dangerous: true`); removido no fim deste bloco
+            // para que aquele caso continue registrando o seu próprio.
+            ToolRegistry.register({
+                name: 'exec_command', description: 'test', parameters: {},
+                execute: async (args: any) => ({ success: true, output: `ok: ${args?.command}` }),
+            }, { dangerous: true });
+
+            permissionRegistry.setMode(OperationalMode.DEVELOPER, 'test-s158-1b', true);
+            try {
+                const ok = freshOperationalKnowledge();
+                const replanImpl: ReplanFn = async () => ({
+                    steps: [{
+                        id: 'pesquisado_env_1',
+                        description: 'Instalar via comando encontrado na documentação oficial (pesquisa)',
+                        toolName: 'exec_command',
+                        toolArgs: { command: `instalar-${REAL_BIN}-via-comando-pesquisado` },
+                        status: 'pending', fallbackSteps: [],
+                    }],
+                    strategy: 'pesquisa',
+                });
+                const { loop, goalStore } = makeLoop(ok, replanImpl);
+                const goal = makeGoal(goalStore, [
+                    { id: 'stepInicialEnv', description: 'Usar ferramenta desconhecida do catálogo', toolName: DEP_TOOL_ENV, toolArgs: {}, status: 'pending', fallbackSteps: [] },
+                ]);
+                const state = emptyState(goal.id) as any;
+                await (loop as any).runLoopInternal(goal, channelContext, undefined, 0, 0, undefined, state);
+                const stored = goalStore.getById(goal.id)!;
+
+                assert(
+                    stored.blockers.some(b => b.kind === 'missing_tool' && b.missingDependency === REAL_BIN),
+                    'blocker de Pesquisa registrado para o binário escolhido (mesmo ramo do S158.1, nenhum step "verify_" envolvido)',
+                    stored.blockers
+                );
+                assert(
+                    !stored.attempts.some(a => a.planStepId.startsWith('verify_')),
+                    'nenhum attempt "verify_*" existe neste goal — a captura abaixo NÃO pode vir do mecanismo da Sprint D',
+                    stored.attempts.map(a => a.planStepId)
+                );
+                const hint = ok.buildEvidenceHint(REAL_BIN);
+                assert(
+                    hint !== '' && hint.includes(`instalar-${REAL_BIN}-via-comando-pesquisado`),
+                    'ADR-003: o caminho Pesquisa alimenta OperationalKnowledge quando a dependência está objetivamente presente no ambiente — a lacuna registrada em S158.1 (Sprint F) está fechada',
+                    hint
+                );
+            } finally {
+                permissionRegistry.setMode(OperationalMode.SAFE, 'test-s158-1b-restore');
+                ToolRegistry.unregister('exec_command');
+                ToolRegistry.unregister(DEP_TOOL_ENV);
+            }
         }
     }
 
