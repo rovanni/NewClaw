@@ -217,6 +217,18 @@ depois do blocker, e o probe prova o **estado**, não a **causalidade**. Essa li
 hoje, já está documentada no próprio `captureFromGoal()`, e esta ADR não a resolve nem a agrava.
 Registrada aqui para não ser lida como resolvida.
 
+**Atualização de 04/08/2026 — esta limitação deixou de ser abstrata.** A Sprint G (§6.5, etapa 4)
+observou, em execução real, o primeiro caso concreto: o LLM rodou `where sprintg-tool3 || echo
+"NOT FOUND"` antes do comando que de fato criou o binário, e a heurística gravou o **diagnóstico**
+como conhecimento operacional (`[OPKNOW-CAPTURE] ... command="where sprintg-tool3 ..."
+evidence=environment_state`). Com repetição, um registro assim atingiria `validated` e viraria
+atalho tático — um "comando de instalação" que não instala nada. A fraqueza é anterior a esta ADR
+(vem da RFC-001/Sprint D), mas foi esta ADR que a tornou alcançável, ao destravar o aprendizado
+fora de Linux + `ffmpeg`. Uma classe desse defeito foi fechada em
+`ADR-004_SELECAO_DO_COMANDO_APRENDIDO.md` (um probe da própria dependência deixa de ser elegível
+a `fixAttempt`). O restante do problema de causalidade **permanece aberto**: a ADR-004 remove um
+falso-positivo observado, não prova que o comando creditado seja o que instalou.
+
 ## 6. Consequências
 
 ### 6.1 O Planner permanece inalterado
