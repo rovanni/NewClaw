@@ -44,8 +44,11 @@ export async function restartAgent() {
 // descartados aqui. Efeito real: providersStore.health ficava permanentemente [], então os cards
 // de provider OpenAI-Compatible mostravam "—" para sempre e a Visão Geral não tinha como saber o
 // estado de nada que não fosse o Ollama.
-export async function getProviders() {
-  return json(f('/api/providers'));
+export async function getProviders(forceRefresh = false) {
+  // `refresh=1` obriga o servidor a redescobrir em vez de responder do cache de 30s. Sem isso,
+  // quem acabou de carregar um modelo local recebia a saúde de ANTES do modelo ficar pronto, e a
+  // tela continuava dizendo "não está carregado" sobre um servidor que já estava no ar.
+  return json(f('/api/providers' + (forceRefresh ? '?refresh=1' : '')));
 }
 
 export async function pullModel(name) {

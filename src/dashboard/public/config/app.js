@@ -307,7 +307,7 @@ export function guideBox(text) {
 
 export async function loadProviders(forceRefresh = false) {
   try {
-    const resp = await getProviders();
+    const resp = await getProviders(forceRefresh);
     const p = resp.providers || {};
     const health = resp.health || [];
     const ollama = p.ollama;

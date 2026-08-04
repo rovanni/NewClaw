@@ -20,13 +20,20 @@ const log = createLogger('Dashboardserver');
 export function createProvidersRouter(ctx: DashboardContext): Router {
     const router = Router();
 
-    router.get('/providers', async (_req: Request, res: Response) => {
+    router.get('/providers', async (req: Request, res: Response) => {
+        // `?refresh=1` — a UI pede redescoberta quando ACABOU de mudar o mundo (carregou um modelo
+        // local, parou um servidor, cadastrou um provider). Sem isso, a resposta vinha do cache de
+        // 30s do catálogo e `getLastHealth()` devolvia a saúde da descoberta ANTERIOR: quem
+        // carregava um modelo local via a tela continuar dizendo "não está carregado" sobre um
+        // servidor que já estava no ar (evidência: log do operador em 04/08/2026 — servidor pronto
+        // às 13:14:14, última descoberta às 13:13:44, nenhuma depois).
+        const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
         let ollamaModels: string[] = [];
         try {
             // Fonte única de discovery — ModelRegistryService delega para OllamaProvider.discoverModels(),
             // que é o mesmo /api/tags que antes era chamado inline aqui (agora só num lugar).
             if (ctx.modelRegistryService) {
-                const catalog = await ctx.modelRegistryService.getCatalog();
+                const catalog = await ctx.modelRegistryService.getCatalog(forceRefresh);
                 ollamaModels = catalog.filter(m => m.provider === 'ollama').map(m => m.id);
             }
         } catch (err) {
