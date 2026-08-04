@@ -39,7 +39,7 @@ process.env.WORKSPACE_DIR = process.env.WORKSPACE_DIR || 'D:/IA/newclaw/workspac
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFile } from 'child_process';
-import { resolvePython3Runtime, defaultPython3Candidates, Python3Runtime } from '../../utils/crossPlatform';
+import { resolvePython3Runtime, defaultPython3Candidates, runPython3Import, Python3Runtime } from '../../utils/crossPlatform';
 
 let passed = 0;
 let failed = 0;
@@ -95,20 +95,49 @@ console.log('\n=== S37-3 — fallback pro binário solto só quando nenhum runti
 
 // ── 4-5: subprocess real, reproduzindo o incidente exato ──
 
+// Os casos 4 e 5 exigem o pacote `edge_tts` REALMENTE instalado — é isso que eles provam
+// (o incidente foi "instalado, mas fora do PATH"). Numa máquina sem o pacote, a premissa do
+// teste não existe: falhar ali não denuncia regressão nenhuma, só ausência de ambiente — e uma
+// suíte que nunca fecha verde ensina a ignorar vermelho. Declaram SKIP explícito nesse caso.
+//
+// A detecção reusa `runPython3Import` (mesma função do EnvironmentProbe), que decide pelo EXIT
+// CODE de um `import` real — nunca por texto de mensagem de erro, então vale igual em Windows,
+// Linux e macOS e em qualquer idioma do sistema. Note a distinção que importa: pacote AUSENTE
+// pula; pacote PRESENTE que falha ao rodar continua sendo falha — que é exatamente o incidente
+// sob guarda.
+const edgeTtsRuntime = await resolvePython3Runtime(defaultPython3Candidates());
+const edgeTtsInstalled = edgeTtsRuntime ? await runPython3Import(edgeTtsRuntime, 'edge_tts') : false;
+
+// Guarda contra o pior desfecho de um SKIP: virar permanente sem ninguém notar. Se
+// `runPython3Import` quebrar (ou o runtime resolver para algo que não executa), ele passaria a
+// responder "não instalado" para tudo e os casos 4-5 sumiriam em silêncio para sempre. Um
+// módulo da biblioteca padrão SEMPRE existe onde há Python 3 — se nem ele for detectado, o
+// problema é o detector, não o ambiente, e isso precisa falhar alto.
+if (edgeTtsRuntime && !edgeTtsInstalled) {
+    const stdlibDetected = await runPython3Import(edgeTtsRuntime, 'json');
+    assert(stdlibDetected,
+        'o detector de pacote Python funciona nesta máquina (módulo da stdlib é detectado) — o SKIP abaixo é ausência real de edge_tts, não detector quebrado',
+        { runtime: edgeTtsRuntime });
+}
+
 console.log('\n=== S37-4 — subprocess real: "<runtime> -m edge_tts --version" funciona nesta máquina ===');
-{
-    const runtime = await resolvePython3Runtime(defaultPython3Candidates());
+if (!edgeTtsInstalled) {
+    console.log(`  SKIP pacote 'edge_tts' não instalado nesta máquina${edgeTtsRuntime ? '' : ' (nenhum runtime Python 3 resolvido)'} — caso não executado`);
+} else {
+    const runtime = edgeTtsRuntime!;
     assert(runtime !== null, 'runtime Python 3 resolvido nesta máquina (pré-requisito)', runtime);
-    if (runtime) {
+    {
         const { ok, stdout } = await runViaModule(runtime, ['--version']);
         assert(ok && /edge-tts/i.test(stdout), '`-m edge_tts --version` executa com sucesso — mesmo pacote instalado no incidente real', { ok, stdout });
     }
 }
 
 console.log('\n=== S37-5 — subprocess real: geração de MP3 via -m edge_tts (reproduz o cenário do incidente) ===');
-{
-    const runtime = await resolvePython3Runtime(defaultPython3Candidates());
-    if (runtime) {
+if (!edgeTtsInstalled) {
+    console.log("  SKIP pacote 'edge_tts' não instalado nesta máquina — caso não executado");
+} else {
+    const runtime = edgeTtsRuntime!;
+    {
         const outFile = path.join(process.env.WORKSPACE_DIR!, '_s37_test_audio.mp3');
         try { fs.unlinkSync(outFile); } catch { /* não existia */ }
         const { ok } = await runViaModule(runtime, [
