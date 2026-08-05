@@ -13,6 +13,8 @@
 import { createHash } from 'crypto';
 import { ToolResult } from './AgentLoop';
 import { createLogger } from '../shared/AppLogger';
+import { ToolRegistry } from '../core/ToolRegistry';
+import { permissionRegistry } from '../core/PermissionRegistry';
 import { CORE_TRANSIENT_PATTERNS, NETWORK_PATTERN, RATE_LIMIT_PATTERN, HTTP_429_PATTERN } from '../shared/transientErrorPatterns';
 
 const log = createLogger('ProactiveRecovery');
@@ -206,6 +208,33 @@ export class ProactiveRecovery {
         /** Contexto do goal — permite evitar fallbacks já tentados e enriquecer queries */
         goalContext?: { toolsTried: string[]; userIntent: string },
     ): Promise<RecoveryResult> {
+
+        // ── Step 0: autorização humana (ADR-005, emenda de 05/08/2026) ──────────
+        //
+        // Este é o executor por onde passam TODAS as chamadas de ferramenta pedidas pelo modelo
+        // — os quatro caminhos do AgentLoop e o step de plano do GoalExecutionLoop. O gate mora
+        // aqui, e não em cada um deles, porque a ADR-005 original o colocou em UM caminho e a
+        // validação operacional encontrou outros três sem proteção nenhuma: em modo SAFE, o
+        // laço de entrega executou `bash scripts/html2pdf.sh` sem pedir nada (05/08/2026).
+        // Repetir o `if` em quatro lugares só marcaria hora para a próxima divergência.
+        //
+        // Quem faz o gate ANTES (executeAndRecordNativeToolCall, executeStep) nunca chega aqui
+        // com uma tool que exige autorização — cria a transação e devolve os botões. Quem não
+        // faz recebe recusa: falha fechada, nunca execução silenciosa. Probes internos
+        // (EnvironmentProbe) não passam por este executor e seguem intocados.
+        if (ToolRegistry.requiresAuthorization(toolName, args)) {
+            log.warn(`[RECOVERY] "${toolName}" exige autorização do usuário no modo ${permissionRegistry.getMode()} — execução recusada`);
+            return {
+                result: {
+                    success: false,
+                    output: '',
+                    error: `A ferramenta '${toolName}' exige autorização explícita do usuário neste modo de operação.`,
+                },
+                finalToolName: toolName,
+                finalArgs: args,
+                recovered: false,
+            };
+        }
 
         // ── Step 1: try with original args (+ retry on transient errors) ────────
         const step1 = await this.tryWithRetry(toolName, args, getTool, usedInputs, signal);

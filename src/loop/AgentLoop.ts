@@ -1259,6 +1259,16 @@ export class AgentLoop {
             }
         }
 
+        // ADR-005 (emenda de 05/08/2026): único despacho de tool pedida pelo modelo que NÃO passa
+        // pelo ProactiveRecovery — onde o gate agora vive. Sem esta checagem, o atalho tool-first
+        // seria a porta de saída que anula a proteção dos outros caminhos. Aqui não há transação
+        // a criar: o atalho existe para ser barato, e devolver null faz o turno seguir pelo fluxo
+        // completo, que sabe pedir autorização direito.
+        if (ToolRegistry.requiresAuthorization(toolName, toolArgs)) {
+            log.info(`[${this.ts()}] [FAST-PATH] "${toolName}" exige autorização — saindo do atalho para o fluxo com gate`);
+            return null;
+        }
+
         log.info(`[${this.ts()}] [FAST-PATH] Tool-first "${toolName}" args=${JSON.stringify(toolArgs)}`);
 
         if (typeof (tool as unknown as ContextAwareTool).setContext === 'function' && channelContext) {

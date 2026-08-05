@@ -124,6 +124,11 @@ export function isReadOnlyExecCommand(toolName: string, args: Record<string, unk
 
     const SAFE_COMMANDS = new Set([
         'ls', 'cat', 'find', 'pwd', 'echo', 'which', 'command', 'type',
+        // Equivalentes Windows de `which` — mesma natureza (resolvem caminho de comando, não
+        // mudam nada). Sem eles, o MESMO comando de leitura exigia autorização no Windows e não
+        // no Linux: comportamento dependente de sistema operacional num projeto que roda nos
+        // três. Achado ao mapear os despachantes de tool (05/08/2026).
+        'where', 'where.exe', 'get-command',
         'head', 'tail', 'grep', 'wc', 'stat', 'file', 'node', 'npm', 'npx',
         'env', 'printenv', 'df', 'du', 'ps', 'uname', 'hostname',
         'id', 'whoami', 'date', 'uptime', 'lsb_release', 'readlink',
@@ -139,7 +144,12 @@ export function isReadOnlyExecCommand(toolName: string, args: Record<string, unk
         const word = sub.split(/[\s;|&]/)[0].replace(/^\.\//, '');
         // Também confere o basename, para invocação por caminho completo (/usr/local/bin/marp)
         const basename = word.includes('/') ? word.split('/').pop()! : word;
-        return SAFE_COMMANDS.has(word) || SAFE_COMMANDS.has(basename);
+        if (SAFE_COMMANDS.has(word) || SAFE_COMMANDS.has(basename)) return true;
+        // Cmdlet do PowerShell (Verbo-Substantivo) é case-insensitive POR DEFINIÇÃO — `Get-Command`
+        // e `get-command` são o mesmo comando. A comparação continua exata para o resto: em
+        // Linux/macOS `LS` não é `ls`, e afrouxar isso para todos abriria a lista sem necessidade.
+        if (POWERSHELL_CMDLET_PATTERN.test(basename)) return SAFE_COMMANDS.has(basename.toLowerCase());
+        return false;
     });
 }
 
