@@ -50,6 +50,7 @@ export class ProviderFactory {
         openrouterKey?: string;
         anthropicKey?: string;
         ollamaUrl: string;
+        ollamaModel?: string;
         ollamaApiKey: string;
     };
 
@@ -75,6 +76,9 @@ export class ProviderFactory {
             anthropicKey:   config.anthropicKey,
             ollamaUrl:      config.ollamaUrl      || 'http://localhost:11434',
             ollamaApiKey:   config.ollamaApiKey   || '',
+            // Guardado para responder "qual modelo?" quando quem chama não especifica — ver
+            // getProviderWithModel(). Antes só a instância compartilhada do Map sabia disso.
+            ollamaModel:    config.ollamaModel    || '',
         };
 
         if (config.geminiKey)      this.providers.set('gemini',      new GeminiProvider(config.geminiKey));
@@ -129,7 +133,21 @@ export class ProviderFactory {
      * modelo em vez de sempre criar um OllamaProvider.
      * providerName opcional permite sobrescrever o provider para um perfil específico.
      */
-    getProviderWithModel(model: string, providerName?: string): ILLMProvider {
+    /**
+     * Instância dedicada do provider alvo com um modelo específico.
+     *
+     * `model` é OPCIONAL desde 05/08/2026 (issue 019): quem chama sem modelo está dizendo "use o
+     * que este provedor serve", e não "escolha um por mim". Antes, componentes internos
+     * (planner, análise de risco, validador semântico, classificadores) traziam um nome de
+     * modelo de NUVEM embutido como padrão — e esse nome era enviado ao provedor ATIVO, que numa
+     * instalação só-local não o serve. Sintoma real: `START provider=Modelo local/gemma4:31b-cloud`
+     * numa instância sem nenhum provedor de nuvem configurado.
+     *
+     * Quem sabe qual modelo um provedor serve é o próprio provedor — `custom.model` para os
+     * OpenAI-compatible, `OLLAMA_MODEL` para o Ollama. A decisão mora aqui, não espalhada em `??`
+     * por cinco arquivos.
+     */
+    getProviderWithModel(model?: string, providerName?: string): ILLMProvider {
         const target = providerName ?? this.defaultProvider;
         switch (target) {
             case 'openrouter':
@@ -171,8 +189,9 @@ export class ProviderFactory {
             return new OpenAIProvider(custom.apiKey || '', model || custom.model || 'default', custom.baseUrl, custom.label);
         }
 
-        // Ollama (padrão) ou fallback quando a key do provider alvo não está configurada
-        return new OllamaProvider(this.creds.ollamaUrl, model, this.creds.ollamaApiKey);
+        // Ollama (padrão) ou fallback quando a key do provider alvo não está configurada.
+        // Sem modelo pedido, usa o configurado pelo operador (OLLAMA_MODEL).
+        return new OllamaProvider(this.creds.ollamaUrl, model || this.creds.ollamaModel || undefined, this.creds.ollamaApiKey);
     }
 
     getAvailableProviders(): string[] { return Array.from(this.providers.keys()); }

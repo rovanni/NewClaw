@@ -21,7 +21,10 @@ import { PlanStep } from './GoalTypes';
 
 const log = createLogger('StepSemanticValidator');
 
-const VALIDATOR_MODEL = process.env['SEMANTIC_VALIDATOR_MODEL'] ?? 'gemma4:31b-cloud';
+// Sem padrão embutido (issue 019): quando o operador não configura, quem decide o modelo é o
+// provedor ativo — via getProviderWithModel() sem modelo. Um nome de modelo de NUVEM como padrão
+// aqui era enviado ao provedor em uso, e numa instalação só-local ele não existe.
+const VALIDATOR_MODEL = process.env['SEMANTIC_VALIDATOR_MODEL'] ?? '';
 const FAST_PATH_CONFIDENCE_THRESHOLD = 0.72;
 const LLM_MISMATCH_CONFIDENCE_THRESHOLD = 0.80;
 const TIMEOUT_MS = 8_000;

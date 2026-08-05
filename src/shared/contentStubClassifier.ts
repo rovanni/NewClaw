@@ -24,7 +24,10 @@ import { createLogger } from './AppLogger';
 
 const log = createLogger('ContentStubClassifier');
 
-const CLASSIFIER_MODEL = process.env['CONTENT_STUB_CLASSIFIER_MODEL'] ?? 'gemma4:31b-cloud';
+// Sem padrão embutido (issue 019): quando o operador não configura, quem decide o modelo é o
+// provedor ativo — via getProviderWithModel() sem modelo. Um nome de modelo de NUVEM como padrão
+// aqui era enviado ao provedor em uso, e numa instalação só-local ele não existe.
+const CLASSIFIER_MODEL = process.env['CONTENT_STUB_CLASSIFIER_MODEL'] ?? '';
 const TIMEOUT_MS = 6_000;
 
 export interface ContentStubVerdict {

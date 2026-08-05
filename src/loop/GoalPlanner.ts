@@ -649,8 +649,10 @@ export function detectMissingRequiredArgs(tool: string, args: Record<string, unk
 // ── GoalPlanner ───────────────────────────────────────────────────────────────
 
 // Configurável via PLANNER_MODEL — usar nome de modelo compatível com DEFAULT_PROVIDER
-// Ollama: 'gemma4:31b-cloud' | OpenRouter: 'google/gemini-2.0-flash' | Gemini: 'gemini-2.0-flash'
-const PLANNER_MODEL_DEFAULT = process.env.PLANNER_MODEL || 'gemma4:31b-cloud';
+// Sem padrão embutido (issue 019): quando o operador não configura, quem decide o modelo é o
+// provedor ativo — via getProviderWithModel() sem modelo. Um nome de modelo de NUVEM como padrão
+// aqui era enviado ao provedor em uso, e numa instalação só-local ele não existe.
+const PLANNER_MODEL_DEFAULT = process.env.PLANNER_MODEL || '';
 
 export class GoalPlanner {
     private model: string = PLANNER_MODEL_DEFAULT;

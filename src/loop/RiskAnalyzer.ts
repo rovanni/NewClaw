@@ -33,8 +33,10 @@ const log = createLogger('RiskAnalyzer');
 // Modelo dedicado à revisão de riscos: gera JSON rápido e não entra em extended thinking.
 // kimi-k2.6 e outros thinking models são inadequados — raciocinam 150s+ sem produzir output.
 // Configurável via RISK_MODEL — usar nome compatível com DEFAULT_PROVIDER
-// Ollama: 'gemma4:31b-cloud' | OpenRouter: 'google/gemini-2.0-flash' | Gemini: 'gemini-2.0-flash'
-const RISK_REVIEW_MODEL_DEFAULT = process.env.RISK_MODEL || 'gemma4:31b-cloud';
+// Sem padrão embutido (issue 019): quando o operador não configura, quem decide o modelo é o
+// provedor ativo — via getProviderWithModel() sem modelo. Um nome de modelo de NUVEM como padrão
+// aqui era enviado ao provedor em uso, e numa instalação só-local ele não existe.
+const RISK_REVIEW_MODEL_DEFAULT = process.env.RISK_MODEL || '';
 
 // Binários universais presentes em qualquer shell POSIX sem necessidade de instalação —
 // válido apenas para Linux/macOS. No Windows a MAIORIA destes não existe no cmd.exe (shell

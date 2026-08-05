@@ -56,7 +56,9 @@ const CATEGORY_DESCRIPTIONS: Record<Category, string> = {
 
 const DEFAULT_CONFIG: ProfileRegistryConfig = {
     defaultProfile: 'chat-primary',
-    classifierModel: "gemma4:31b-cloud",
+    // Vazio de propósito (issue 019): sem CLASSIFIER_MODEL configurado, o classificador usa o
+    // modelo do provedor ativo em vez de pedir um modelo de nuvem que a instalação pode não ter.
+    classifierModel: "",
     classifierServer: 'http://localhost:11434',
     // `provider` deliberadamente AUSENTE nos defaults — ver o contrato declarado em ModelProfile
     // acima ("undefined = defaultProvider"). Antes cada perfil vinha com provider:'ollama' fixo,
