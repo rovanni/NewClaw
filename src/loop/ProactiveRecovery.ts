@@ -13,6 +13,7 @@
 import { createHash } from 'crypto';
 import { ToolResult } from './AgentLoop';
 import { createLogger } from '../shared/AppLogger';
+import { computeToolInputKey } from './planning/computeToolInputKey';
 import { ToolRegistry } from '../core/ToolRegistry';
 import { permissionRegistry } from '../core/PermissionRegistry';
 import { CORE_TRANSIENT_PATTERNS, NETWORK_PATTERN, RATE_LIMIT_PATTERN, HTTP_429_PATTERN } from '../shared/transientErrorPatterns';
@@ -180,12 +181,26 @@ const RECOVERY: Record<string, ToolRecoveryConfig> = {
 // Avoids storing giant serializations in the usedInputs Set when args contain
 // large values (e.g. file contents). Short args keep the readable form; large
 // args are hashed to a compact fingerprint.
+/**
+ * Chave de identidade de uma chamada de tool.
+ *
+ * Delega a `computeToolInputKey` — a MESMA função que o caminho de protocolo JSON
+ * (`AgentLoop.runJsonActionDispatch`) e o `GoalEvaluator` já usam. Antes esta função tinha regra
+ * própria, e os dois formatos conviviam no MESMO `Set` de inputs usados: uma chamada registrada
+ * por um caminho era invisível para o dedup do outro. Duas chaves para o mesmo conceito.
+ *
+ * O hash para argumentos longos é preservado aqui (a chave canônica não trunca) — só o formato
+ * base passa a ser compartilhado.
+ */
 function makeKey(toolName: string, args: Record<string, unknown>): string {
-    const json = JSON.stringify(args);
-    if (json.length <= 256) return `${toolName}:${json}`;
-    const hash = createHash('sha1').update(json).digest('hex').slice(0, 16);
+    const canonica = computeToolInputKey(toolName, args);
+    if (canonica.length <= 256) return canonica;
+    const hash = createHash('sha1').update(canonica).digest('hex').slice(0, 16);
     return `${toolName}:h:${hash}`;
 }
+
+/** Marca de "esta chamada exata já falhou neste turno" dentro do mesmo Set de inputs usados. */
+const FALHOU = 'falhou:';
 
 // ── ProactiveRecovery class ─────────────────────────────────────────────────────
 
@@ -236,9 +251,39 @@ export class ProactiveRecovery {
             };
         }
 
+        // ── Step 0b: repetição idêntica que já falhou (issue 020) ───────────────
+        //
+        // Repetir a MESMA chamada com os MESMOS argumentos depois de ela ter falhado não tem
+        // valor esperado nenhum — é a definição de laço. A regra já existia em dois lugares
+        // (`GoalEvaluator.hasIdenticalFailedAttempt` e o dedup do protocolo JSON) e faltava
+        // exatamente no laço de entrega do AgentLoop, que não tem contador próprio: observado ao
+        // vivo, `bash scripts/html2pdf.sh` executado 22 vezes seguidas, ~1 por segundo, sempre
+        // falhando, enquanto o usuário esperava 10 minutos por um timeout genérico.
+        //
+        // Fica aqui, no executor comum, pelo mesmo motivo do gate de autorização (ADR-005 §5.1):
+        // uma política que vale num caminho e não nos outros é uma política que ainda não existe.
+        //
+        // Erro transiente NÃO cai aqui: `tryWithRetry` já reexecuta internamente antes de
+        // devolver falha, então quando a marca é gravada a chamada já esgotou sua própria chance.
+        const chaveEntrada = makeKey(toolName, args);
+        if (usedInputs.has(FALHOU + chaveEntrada)) {
+            log.warn(`[RECOVERY] "${toolName}" com estes mesmos argumentos já falhou neste turno — repetição bloqueada`);
+            return {
+                result: {
+                    success: false,
+                    output: '',
+                    error: `'${toolName}' já falhou com estes mesmos argumentos — repetir não produz resultado diferente. Mude a abordagem: outros argumentos, outra ferramenta, ou responda com o que já tem.`,
+                },
+                finalToolName: toolName,
+                finalArgs: args,
+                recovered: false,
+            };
+        }
+
         // ── Step 1: try with original args (+ retry on transient errors) ────────
         const step1 = await this.tryWithRetry(toolName, args, getTool, usedInputs, signal);
         if (step1.result.success) return { ...step1, recovered: false };
+        usedInputs.add(FALHOU + chaveEntrada);
 
         const config = RECOVERY[toolName];
 
