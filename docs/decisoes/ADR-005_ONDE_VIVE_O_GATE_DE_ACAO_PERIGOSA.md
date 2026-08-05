@@ -88,6 +88,52 @@ como ser validada ao vivo**, porque pelo painel nenhuma autorização chega a fi
 registro que já classifica tools perigosas, uma função exportada de um módulo que já existe, e o
 handler de `needs_auth` que já estava escrito e sem quem o alimentasse pelo caminho de goal.
 
+## 5.1 Emenda de 05/08/2026 — eram cinco caminhos, não dois
+
+A decisão acima está certa e estava **incompleta**. Ela fala em "os dois caminhos de execução" —
+`AgentLoop` e `GoalExecutionLoop` — porque eram os dois que a investigação enxergou. A validação
+operacional (teste de uso como usuário leigo, pedido de apresentação em `.pptx`) encontrou o
+resto: o `AgentLoop` tem **quatro** pontos que despacham ferramenta pedida pelo modelo, e o gate
+estava em um.
+
+Evidência: modo SAFE confirmado por API, e mesmo assim
+`[ExecCommandTool] [AUTO-FIX] fix=wrap_powershell original="bash scripts/html2pdf.sh ..."` —
+executado 22 vezes seguidas pelo laço de entrega, sem nenhum pedido de autorização.
+
+| Caminho | Gate antes da emenda |
+|---|---|
+| `executeAndRecordNativeToolCall` | ✅ (o tratado na decisão original) |
+| `runDeliveryGuardPhase` | ❌ |
+| `runJsonActionDispatch` | ❌ |
+| `toolFirstFastPath` | ❌ |
+| `GoalExecutionLoop.executeStep` | ✅ (o tratado na decisão original) |
+
+**Por que não bastou repetir o `if`:** quatro cópias da mesma regra é exatamente o que a §4.1
+descarta — e a prova de que contar caminhos à mão não funciona é que a própria ADR contou errado.
+
+**Emenda:** o gate passa a viver no `ProactiveRecovery.execute()`, o executor comum por onde
+passam todos os despachos de tool pedida pelo modelo (três caminhos do AgentLoop + o step de
+plano). Quem faz o gate ANTES (os dois já corretos) nunca chega lá com tool que exige
+autorização — cria a transação e devolve os botões, comportamento inalterado. Quem não faz
+recebe **recusa**: falha fechada, nunca execução silenciosa. O `toolFirstFastPath`, único
+despacho que não passa pelo executor comum, ganhou checagem própria — sai do atalho e deixa o
+fluxo completo pedir autorização direito.
+
+Probes internos (`EnvironmentProbe`) não passam pelo executor comum e seguem intocados: o gate
+existe para tool que o MODELO pediu, não para verificação determinística do sistema.
+
+**Correção de plataforma encontrada junto:** `which` estava na lista de leitura-apenas e seus
+equivalentes Windows (`where`, `where.exe`, `Get-Command`) não — o mesmo comando de leitura
+exigia autorização num sistema operacional e dispensava no outro. Cmdlet do PowerShell compara
+sem diferenciar caixa (é assim por definição); o resto da lista continua exato, porque em
+Linux/macOS `LS` não é `ls`.
+
+**Cobertura:** `S188` deixou de conferir "os dois caminhos" e passa a varrer o fonte — no máximo
+um despacho direto no `AgentLoop` (com gate próprio), gate presente no executor comum, e um teste
+de comportamento provando que a tool NÃO executa quando falta autorização. Validado ao vivo: o
+mesmo pedido de apresentação que executava `bash` calado agora devolve o card de autorização, e o
+único `exec_command` que roda sozinho é o probe interno de leitura.
+
 ## 6. Consequências
 
 * **Modo SAFE passa a valer nos dois caminhos.** Um plano com `exec_command` não-trivial para e
