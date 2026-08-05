@@ -832,6 +832,8 @@ DASHBOARD_PORT=$Port
 DASHBOARD_PASSWORD=$DashboardPassword
 
 # ─── Whisper / TTS (opcional) ────────────────────────────────
+# Vazio = transcrição local (whisper-cli), sem requisição de rede.
+# Preencha apenas se tiver uma API Whisper própria (ex: http://localhost:8177).
 WHISPER_API_URL=
 WHISPER_API_FALLBACK=
 WHISPER_PATH=

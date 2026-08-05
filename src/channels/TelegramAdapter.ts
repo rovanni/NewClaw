@@ -31,11 +31,6 @@ const log = createLogger('TelegramAdapter');
 export interface TelegramConfig extends ChannelConfig {
     botToken: string;
     allowedUserIds: string[];
-    /** Whisper config for voice transcription */
-    whisperApiUrl?: string;
-    whisperApiFallback?: string;
-    whisperPath?: string;
-    whisperModel?: string;
     tmpDir?: string;
     /** TTS config */
     audioVoice?: string;
@@ -73,11 +68,12 @@ export class TelegramAdapter implements ChannelAdapter {
     private handlersRegistered = false;
 
     constructor(config: TelegramConfig) {
+        // A transcrição vive inteiramente no Core (`agentMediaHandlers.transcribeAttachment`),
+        // que lê WHISPER_* do ambiente por conta própria. Os campos whisper* que existiam aqui
+        // eram escritos e nunca lidos — configuração de IA dentro de um adapter, contrariando o
+        // princípio 6 de docs/ARCHITECTURE.md, e um deles trazia caminho Unix absoluto que
+        // quebraria no Windows se algum dia fosse usado (RFC-004, Correção 0).
         this.config = {
-            whisperApiUrl: process.env.WHISPER_API_URL || 'http://localhost:8177',
-            whisperApiFallback: process.env.WHISPER_API_FALLBACK || '',
-            whisperPath: process.env.WHISPER_PATH || '/usr/local/bin/whisper',
-            whisperModel: process.env.WHISPER_MODEL || 'tiny',
             tmpDir: './tmp',
             audioVoice: 'pt-BR-AntonioNeural',
             audioRate: '+0%',

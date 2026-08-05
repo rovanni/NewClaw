@@ -6,7 +6,11 @@
  *
  * Env vars:
  *   NEWCLAW_SSH_HOSTS = "alias:user@host,alias2:user@host2"
- *   Example: NEWCLAW_SSH_HOSTS="prod:admin@192.168.1.10,staging:dev@192.168.1.20"
+ *   Example: NEWCLAW_SSH_HOSTS="prod:admin@203.0.113.10,staging:dev@203.0.113.20"
+ *
+ * Os endereços de exemplo vêm do bloco 203.0.113.0/24, reservado pela RFC 5737 exatamente para
+ * documentação. Exemplos com faixas privadas reais (192.168.x, 10.x) são indistinguíveis de
+ * configuração de alguém vazada e falham em S195 — ver RFC-004, Correção 0.
  */
 
 // isDestructive: implementação real movida para shared/destructiveCommandPatterns.ts (fonte

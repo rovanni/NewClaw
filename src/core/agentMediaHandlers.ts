@@ -147,9 +147,19 @@ export async function transcribeAttachment(
             await fs.unlink(tmpWav).catch(() => {});
         }
 
-        const whisperApiUrl = process.env.WHISPER_API_URL || 'http://10.0.0.1:8177';
-        const whisperApiFallback = process.env.WHISPER_API_FALLBACK || '';
-        const whisperUrls = [whisperApiUrl, whisperApiFallback].filter(Boolean);
+        // Sem endereço padrão: uma API remota de transcrição só é usada quando explicitamente
+        // configurada. Variáveis ausentes ou vazias significam "transcrever localmente" — o
+        // fallback whisper-cli logo abaixo. Havia aqui um endereço de rede privada embutido como
+        // padrão; como os instaladores gravam WHISPER_API_URL vazia e string vazia é falsy, toda
+        // instalação nova saía apontando para aquele host — em rede doméstica, tipicamente o
+        // roteador do próprio usuário (RFC-004, Correção 0; cobertura S195).
+        const whisperUrls = [process.env.WHISPER_API_URL, process.env.WHISPER_API_FALLBACK]
+            .map(url => (url || '').trim())
+            .filter(Boolean);
+
+        if (whisperUrls.length === 0) {
+            voiceLog.info('whisper_api_not_configured', 'WHISPER_API_URL não configurado — transcrevendo com whisper local.');
+        }
 
         for (const whisperUrl of whisperUrls) {
             try {
