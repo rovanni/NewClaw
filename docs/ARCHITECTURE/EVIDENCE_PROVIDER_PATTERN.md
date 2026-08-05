@@ -154,6 +154,17 @@ desvio do padrão, não como uma terceira exceção implícita.
   Preservação do Raciocínio se realiza — um Evidence Provider é, por definição, um componente
   determinístico que fornece fato em vez de substituir julgamento. As exceções descritas na
   Seção 7 deste documento são as mesmas exceções previstas por aquele princípio.
+- **Ingestão de mídia** (`docs/decisoes/RFC-004_INGESTAO_DE_MIDIA_MULTIPLA.md`, Princípio 2): a
+  camada que pré-processa anexos recebidos (transcrição de áudio, visão/OCR de imagem, leitura de
+  documento) é um Evidence Provider como qualquer outro — observa todos os anexos, reporta o que
+  observou **e o que não conseguiu observar** como fato textual, e deixa a decisão com a camada de
+  julgamento. Não é exceção da Seção 7: uma falha de obtenção de anexo não é questão de segurança,
+  integridade ou conformidade — é um fato sobre o ambiente, exatamente o tipo de informação que
+  este padrão manda reportar em vez de resolver por conta própria.
+
+  *Desvio conhecido, em correção:* hoje essa camada interrompe no primeiro anexo processado e, em
+  caso de falha, redige ela mesma a resposta ao usuário, encerrando o turno. É desvio do padrão,
+  não uma terceira exceção implícita — corrigido na Sprint 013 da RFC-004.
 - **Gate de Extensão antes de Criação**: antes de introduzir um novo Evidence Provider, deve-se
   provar que nenhuma extensão de um provider existente resolve a necessidade — um novo
   componente de evidência só se justifica quando representa um tipo de conhecimento
