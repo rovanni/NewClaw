@@ -48,7 +48,13 @@
     .edge-list { margin-top: 12px; }
     .edge-item { font-size: 0.78rem; color: var(--text-muted); padding: 4px 0; border-bottom: 1px solid var(--border-color); }
     .edge-relation { color: var(--accent); font-weight: 500; }
-    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    /* minmax(0,1fr) e não 1fr: filho de grid nasce com min-width:auto, então conteúdo que não
+       quebra — o path do workspace nos nós, um id longo — empurra a coluna em vez de ser cortado
+       pelo text-overflow do .node-content. Media 1084px de conteúdo numa janela de 946px, com o
+       painel de detalhe fora da tela e rolagem lateral na página inteira (05/08/2026). O mesmo
+       construto existe em traces.html e config.css, medidos SEM estouro hoje — armadilha latente
+       ali, não defeito: não mexo no que está provado funcionando. */
+    .two-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
     @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
     .empty-state { text-align: center; padding: 40px; color: var(--text-soft); }
   </style>
@@ -205,14 +211,13 @@
             '</div>';
         }
 
-        // Fetch all nodes for the "To" dropdown
-        const allNodesRes = await newclawFetch('/api/memory/nodes?limit=200');
-        const allNodesData = await allNodesRes.json();
-        const allNodesList = allNodesData.success ? allNodesData.nodes : [];
-        // `n.id !== n.id` era sempre falso: a lista de destinos nascia vazia (issue 015). A
-        // intenção é excluir o próprio nó aberto — uma relação de um nó para ele mesmo não faz
-        // sentido —, então a comparação é contra o nó selecionado, não contra ele mesmo.
-        const toOptions = allNodesList.filter(other => other.id !== n.id).map(other => `<option value="${escAttr(other.id)}">${esc(other.name || other.id)} (${other.type})</option>`).join('');
+        // A busca de 200 nós que existia aqui alimentava um `<option>` que NUNCA foi renderizado:
+        // o destino da relação é escolhido por `edgeToSearch`/`searchEdgeTarget()`, que usa
+        // `allNodesForEdge` (carregado sob demanda ao abrir o formulário). A issue 015 pediu para
+        // corrigir a comparação `n.id !== n.id` desse filtro — feito na primeira rodada —, e o
+        // teste de uso mostrou que o valor corrigido continuava sem leitor: uma requisição de 200
+        // nós disparada a cada clique em nó, para montar HTML que ninguém insere. Removido: o
+        // conserto certo de código morto é apagá-lo, não deixá-lo correto e inútil.
 
         panel.innerHTML = `
           <div class="detail-id">${esc(n.id)} <span class="node-type ${n.type}" style="margin-left:8px">${n.type}</span></div>
