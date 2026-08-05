@@ -106,7 +106,15 @@ export class ModelProfileRegistry {
     private providerFactory: ProviderFactory | null = null;
 
     constructor(config?: Partial<ProfileRegistryConfig> & Record<string, string>, providerFactory?: ProviderFactory) {
-        this.config = { ...DEFAULT_CONFIG };
+        // Cópia rasa de DEFAULT_CONFIG copiaria a REFERÊNCIA do array `profiles` — e o laço logo
+        // abaixo escreve em `profile.model`/`profile.provider`, ou seja, gravaria na constante do
+        // módulo. Efeito: um registry construído com config poluía os defaults de qualquer outro
+        // registry criado depois no mesmo processo. Cada instância recebe seus próprios objetos
+        // (RFC-004, Princípio 1; cobertura S196).
+        this.config = {
+            ...DEFAULT_CONFIG,
+            profiles: DEFAULT_CONFIG.profiles.map(p => ({ ...p })),
+        };
         this.providerFactory = providerFactory || null;
 
         if (config) {
@@ -134,7 +142,7 @@ export class ModelProfileRegistry {
     /**
      * Resolução de perfil: determinístico primeiro (0ms), LLM como fallback.
      */
-    async resolveProfile(query: string): Promise<ModelProfile> {
+    async resolveProfile(query: string): Promise<Readonly<ModelProfile>> {
         // 1. Deterministic classification FIRST (0ms, instant)
         const detCategory = this.fallbackClassify(query);
         if (detCategory !== 'chat') {
@@ -168,9 +176,14 @@ export class ModelProfileRegistry {
             return profile;
         }
 
-        return this.getProfileByCategory('chat')
-            ?? this.config.profiles.find(p => p.id === this.config.defaultProfile)
+        return this.getProfileByCategory('chat') ?? this.defaultProfileCopy();
+    }
+
+    /** Cópia do perfil padrão (ou do primeiro, se o padrão não existir). Nunca a referência. */
+    private defaultProfileCopy(): Readonly<ModelProfile> {
+        const found = this.config.profiles.find(p => p.id === this.config.defaultProfile)
             ?? this.config.profiles[0];
+        return { ...found };
     }
 
     /** Retorna o modelo configurado para classificação rápida. */
@@ -181,10 +194,9 @@ export class ModelProfileRegistry {
     /**
      * Resolução síncrona de perfil (apenas determinístico — para contextos não-async).
      */
-    resolveProfileSync(query: string): ModelProfile {
+    resolveProfileSync(query: string): Readonly<ModelProfile> {
         const category = this.fallbackClassify(query);
-        const profile = this.getProfileByCategory(category);
-        return profile || this.config.profiles.find(p => p.id === this.config.defaultProfile) || this.config.profiles[0];
+        return this.getProfileByCategory(category) ?? this.defaultProfileCopy();
     }
 
     /**
@@ -290,22 +302,36 @@ Category:`;
         return bestCategory;
     }
 
-    getProfileByCategory(category: Category): ModelProfile | undefined {
-        return this.config.profiles.find(p => p.category === category);
+    // ── Leitura: sempre cópia, nunca a referência interna ───────────────────────
+    //
+    // RFC-004, Princípio 1 — "configuração compartilhada é imutável para quem lê". Estes métodos
+    // devolviam o próprio objeto do array de perfis. Um único chamador (AgentLoop, override de
+    // modelo pelo roteador de intenção) escrevia nesse objeto e reatribuía `category`; quando o
+    // perfil sorteado era o de visão e a intenção classificada era `execution`, o perfil de visão
+    // deixava de existir para `getProfileByCategory('vision')` — o sistema ficava permanentemente
+    // cego para imagens, sem lançar exceção e sem registrar erro, até reiniciar o processo.
+    // Incidente real de 04/08/2026; a escrita continua possível, só que por `setProfile()`.
+
+    getProfileByCategory(category: Category): Readonly<ModelProfile> | undefined {
+        const found = this.config.profiles.find(p => p.category === category);
+        return found ? { ...found } : undefined;
     }
 
-    getProfile(id: string): ModelProfile | undefined {
-        return this.config.profiles.find(p => p.id === id);
+    getProfile(id: string): Readonly<ModelProfile> | undefined {
+        const found = this.config.profiles.find(p => p.id === id);
+        return found ? { ...found } : undefined;
     }
 
-    getProfiles(): ModelProfile[] {
-        return this.config.profiles;
+    getProfiles(): Readonly<ModelProfile>[] {
+        return this.config.profiles.map(p => ({ ...p }));
     }
 
+    /** Única via de escrita de perfil. Guarda uma cópia — o chamador não mantém alça para dentro. */
     setProfile(profile: ModelProfile): void {
-        const idx = this.config.profiles.findIndex(p => p.id === profile.id);
-        if (idx >= 0) this.config.profiles[idx] = profile;
-        else this.config.profiles.push(profile);
+        const copy = { ...profile };
+        const idx = this.config.profiles.findIndex(p => p.id === copy.id);
+        if (idx >= 0) this.config.profiles[idx] = copy;
+        else this.config.profiles.push(copy);
     }
 
     setDefault(profileId: string): void {
@@ -330,9 +356,9 @@ Category:`;
     }
 
     /** Retorna o perfil completo de execução. Fallback: chat. */
-    getExecutionProfile(): ModelProfile {
+    getExecutionProfile(): Readonly<ModelProfile> {
         return this.getProfileByCategory('execution')
             ?? this.getProfileByCategory('chat')
-            ?? this.config.profiles[0];
+            ?? this.defaultProfileCopy();
     }
 }

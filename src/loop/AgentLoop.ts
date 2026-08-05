@@ -2896,12 +2896,18 @@ export class AgentLoop {
 
         const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision);
 
-        const chatProfile = await this.profileRegistry.resolveProfile(userText);
-        if (chatProfile && intentDecision.modelCategory && intentDecision.confidence >= 0.8) {
+        // O override do roteador vale só para ESTE turno. Antes, `resolveProfile()` devolvia a
+        // referência do perfil guardado no registry e estas linhas escreviam nele: quando o perfil
+        // resolvido era o de visão e a intenção era `execution`, o perfil de visão ganhava
+        // category='execution' e sumia do registry — o sistema ficava cego para imagens até
+        // reiniciar (incidente de 04/08/2026; RFC-004 Princípio 1, cobertura S196). Hoje o registry
+        // devolve cópia; o objeto local abaixo deixa explícito que a troca é por turno.
+        const resolvedProfile = await this.profileRegistry.resolveProfile(userText);
+        let chatProfile: ModelProfile = { ...resolvedProfile };
+        if (intentDecision.modelCategory && intentDecision.confidence >= 0.8) {
             const intentProfile = this.profileRegistry.getProfileByCategory(intentDecision.modelCategory);
             if (intentProfile) {
-                chatProfile.model = intentProfile.model;
-                chatProfile.category = intentProfile.category;
+                chatProfile = { ...chatProfile, model: intentProfile.model, category: intentProfile.category };
                 log.info(`[${this.ts()}] [UNIFIED-ROUTER] Overriding model: ${intentDecision.modelCategory} → ${intentProfile.model}`);
             }
         }
