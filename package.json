@@ -13,6 +13,10 @@
     "test:regression:selftest": "node scripts/run-regression-tests.cjs --selftest",
     "test:integration": "ts-node scripts/testes/integration-campaign-runner.ts"
   },
+  "//optionalDependencies": "newclaw-kernel-adapter é um pacote NÃO publicado, resolvido por caminho relativo (file:../newclaw-kernel-adapter) que só existe quando os dois repositórios são irmãos na mesma máquina. Como dependência normal, quebrava `npm run build` em toda instalação que não fosse a do autor — inclusive qualquer clone do GitHub. Fica como opcional: npm ignora a falha de instalação, e CognitiveKernelGate carrega o pacote sob demanda, desativando o gate quando ausente.",
+  "optionalDependencies": {
+    "newclaw-kernel-adapter": "file:../newclaw-kernel-adapter"
+  },
   "dependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/cookie-parser": "^1.4.10",
@@ -30,7 +34,6 @@
     "form-data": "^4.0.5",
     "grammy": "^1.42.0",
     "multer": "^2.2.0",
-    "newclaw-kernel-adapter": "file:../newclaw-kernel-adapter",
     "node-edge-tts": "^1.2.10",
     "p-queue": "^9.2.0",
     "ts-node": "^10.9.0",
