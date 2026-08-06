@@ -75,6 +75,17 @@ function isLikelyHallucination(text: string): boolean {
     return false;
 }
 
+/**
+ * Acrescenta a transcrição ao texto da mensagem sem apagar o que já existe.
+ *
+ * Antes era `msg.text = transcription`, atribuição direta: a legenda que acompanhava o áudio era
+ * perdida, e num canal que aceita vários anexos por mensagem (Discord, Dashboard) o segundo áudio
+ * apagava a transcrição do primeiro. RFC-004, Princípio 2 — ingestão não descarta input do usuário.
+ */
+function appendTranscription(msg: NormalizedMessage, transcription: string): void {
+    msg.text = msg.text ? `${msg.text}\n${transcription}` : transcription;
+}
+
 export async function transcribeAttachment(
     msg: NormalizedMessage,
     attachment: ChannelAttachment,
@@ -181,7 +192,7 @@ export async function transcribeAttachment(
                             return '⚠️ Não consegui entender o áudio (muito baixo ou com ruído). Pode falar novamente ou enviar como texto?';
                         }
                         voiceLog.info('whisper_transcription_ok', `textLen=${transcription.length}`);
-                        msg.text = transcription.trim();
+                        appendTranscription(msg, transcription.trim());
                         return null;
                     }
                 }
@@ -214,7 +225,7 @@ export async function transcribeAttachment(
                     return '⚠️ Não consegui entender o áudio (muito baixo ou com ruído). Pode falar novamente ou enviar como texto?';
                 }
                 voiceLog.info('local_whisper_ok', `textLen=${transcription.length}`);
-                msg.text = transcription;
+                appendTranscription(msg, transcription);
                 return null;
             }
         } catch (e) {

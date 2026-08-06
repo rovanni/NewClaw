@@ -29,7 +29,33 @@ import type { GoalOrchestrator } from '../loop/GoalOrchestrator';
 
 const log = createLogger('MessageBus');
 
+/**
+ * Rótulo curto e seguro de um anexo, para compor os fatos que vão ao Core.
+ * Sem `fileName` (Telegram não manda em foto), o tipo já identifica o suficiente.
+ */
+function describeAttachment(attachment: ChannelAttachment): string {
+    return attachment.fileName?.trim() || attachment.type;
+}
+
+/**
+ * Acrescenta um fato observado ao texto da mensagem, preservando o que já existe.
+ *
+ * Nunca sobrescreve: a legenda do usuário, a transcrição de um áudio anterior e a descrição de
+ * uma imagem coexistem na mesma mensagem. É o que permite ao Core ver a pergunta ("explique cada
+ * projeto") junto de todos os anexos que a acompanham.
+ */
+function appendFact(msg: NormalizedMessage, fact: string): void {
+    msg.text = msg.text ? `${msg.text}\n${fact}` : fact;
+}
+
 export class MessageBus {
+    /**
+     * Teto de anexos pré-processados por mensagem. O excedente não é descartado em silêncio —
+     * vira fato no texto, para o Core informar o usuário. Mesmo princípio do MAX_PENDING da
+     * ConversationQueueManager: backpressure explícito em vez de fila/custo ilimitado.
+     */
+    static readonly MAX_ATTACHMENTS_PER_MESSAGE = parseInt(process.env.MAX_ATTACHMENTS_PER_MESSAGE || '10', 10);
+
     private adapters: Map<ChannelType, ChannelAdapter> = new Map();
     private agentLoop: AgentLoop;
     private sessionManager: SessionManager;
@@ -494,17 +520,12 @@ export class MessageBus {
             // 2. Handle media attachments (photo, voice, audio, document)
             // O preprocessamento (Whisper, vision, download) ocorre dentro da fila,
             // garantindo que a ordem lógica da conversa seja preservada.
+            //
+            // Não há mais saída antecipada aqui: o pré-processamento só acrescenta fatos à
+            // mensagem — inclusive sobre o que falhou — e o turno SEMPRE segue para o Core, que
+            // decide o que responder e em qual idioma (RFC-004, Princípio 2).
             if (msg.attachments && msg.attachments.length > 0) {
-                const mediaResult = await this.processAttachments(msg, sessionKey);
-                if (mediaResult) {
-                    if (adapter) {
-                        await adapter.send(
-                            { text: mediaResult, format: 'markdown' },
-                            msg.rawContext
-                        );
-                    }
-                    return;
-                }
+                await this.processAttachments(msg, sessionKey);
             }
 
             // 3. Text processing through AgentLoop
@@ -619,28 +640,73 @@ export class MessageBus {
         }
     }
 
-    /** Process attachments via registered handlers */
-    private async processAttachments(msg: NormalizedMessage, _sessionKey: SessionKey): Promise<string | null> {
-        for (const attachment of msg.attachments || []) {
+    /**
+     * Pré-processa TODOS os anexos, registrando na própria mensagem o que foi observado e o que
+     * não foi. Não decide, não responde, não encerra o turno — quem faz isso é o Core.
+     *
+     * RFC-004, Princípio 2 ("ingestão produz fatos, não decisões"). O que existia aqui antes:
+     *
+     *   - o laço dava `return` no PRIMEIRO anexo processado com sucesso. Doze imagens numa
+     *     mensagem viravam uma imagem analisada e onze descartadas em silêncio — sem log, sem
+     *     aviso ao usuário, sem nada no texto que indicasse a perda (incidente de 04/08/2026);
+     *   - quando um anexo falhava, devolvia uma mensagem PRONTA que o canal enviava crua e
+     *     encerrava o turno. Além de o canal decidir pelo Core, a mensagem saía sempre em
+     *     português: texto fixo emitido aqui nunca passa por `buildLanguageDirective`, então um
+     *     usuário en-US/es-ES recebia erro em pt-BR.
+     *
+     * A falha agora é um FATO como qualquer outro — vai para `msg.text`, o turno segue, e quem
+     * verbaliza (no idioma configurado) é o LLM. Cobertura: S197, S198, S199.
+     */
+    private async processAttachments(msg: NormalizedMessage, _sessionKey: SessionKey): Promise<void> {
+        const attachments = msg.attachments || [];
+        if (attachments.length === 0) return;
+
+        const limit = MessageBus.MAX_ATTACHMENTS_PER_MESSAGE;
+        const accepted = attachments.slice(0, limit);
+        const overflow = attachments.length - accepted.length;
+
+        let processed = 0;
+        let failed = 0;
+
+        for (const attachment of accepted) {
+            const label = describeAttachment(attachment);
             const handler = this.mediaHandlers.get(attachment.type);
-            if (handler) {
-                const result = await handler(msg, attachment);
-                if (result === null) {
-                    // Handler processed successfully (e.g., voice transcribed → msg.text set)
-                    // Continue to text processing pipeline
-                    return null;
+
+            if (!handler) {
+                failed++;
+                appendFact(msg, `[ANEXO NÃO PROCESSADO: ${label} — nenhum processador de mídia registrado para este tipo neste canal]`);
+                continue;
+            }
+
+            try {
+                // Contrato do handler (inalterado): null = processou e já anexou o resultado a
+                // msg.text; string = motivo da falha, hoje tratado como fato e não como resposta.
+                const failureReason = await handler(msg, attachment);
+                if (failureReason === null) {
+                    processed++;
+                } else {
+                    failed++;
+                    appendFact(msg, `[ANEXO NÃO PROCESSADO: ${label} — ${failureReason}]`);
                 }
-                if (result !== null) return result;
+            } catch (err) {
+                // Um anexo que explode não pode derrubar os outros nem a conversa.
+                failed++;
+                log.error('attachment_handler_threw', err instanceof Error ? err : undefined, `type=${attachment.type}`);
+                appendFact(msg, `[ANEXO NÃO PROCESSADO: ${label} — erro inesperado: ${errorMessage(err)}]`);
             }
         }
 
-        // No handler registered — return generic message
-        if (msg.attachments && msg.attachments.length > 0) {
-            const types = msg.attachments.map(a => a.type).join(', ');
-            return `📎 Anexo recebido (${types}). Processamento de mídia não configurado para este canal.`;
+        if (overflow > 0) {
+            // Backpressure explícito, nunca descarte silencioso — mesmo princípio do
+            // MAX_PENDING da ConversationQueueManager.
+            appendFact(msg, `[${overflow} ANEXO(S) NÃO PROCESSADO(S): o limite é ${limit} por mensagem — peça ao usuário para reenviar os restantes]`);
         }
 
-        return null;
+        log.info(
+            'attachments_processed',
+            `total=${attachments.length} ok=${processed} falhou=${failed} excedente=${overflow}`,
+            { channel: msg.channel, userId: msg.userId },
+        );
     }
 
     /** Baixar arquivo por fileId no canal especificado */

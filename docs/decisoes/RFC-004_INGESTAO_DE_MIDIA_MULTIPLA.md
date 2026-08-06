@@ -80,6 +80,13 @@ A verificação por `grep` em todo `src/**/*.ts` mostra que essas duas linhas s�
 projeto** que modifica um perfil obtido do registro. Não é um padrão disseminado; é uma porta aberta
 atravessada uma vez.
 
+**Segundo aliasing na mesma classe, encontrado durante a implementação (Sprint 012):** o construtor
+fazia `this.config = { ...DEFAULT_CONFIG }` — cópia **rasa**, que compartilha o array `profiles` com
+a constante do módulo. O laço de override do próprio construtor então escrevia nessa constante, de
+modo que um registro construído com configuração contaminava os valores padrão de qualquer outro
+registro criado depois no mesmo processo. Mesma causa estrutural, alcance maior: não dependia de
+nenhum chamador externo mal-comportado. Corrigido junto, coberto pela mesma bateria de testes.
+
 ## Causa B — O canal decide o que a IA vê
 
 `MessageBus.processAttachments()` percorre os anexos, mas interrompe no primeiro que é processado
@@ -234,8 +241,16 @@ sensitive data in repo' guidance"*. Permaneceu como observação e nunca virou c
 > escrita em métodos explícitos. Nenhum leitor pode alterar o estado global por efeito colateral.
 
 O registro de perfis passa a devolver cópia defensiva nos métodos de leitura, com tipo de retorno
-`Readonly<ModelProfile>` — o que transfere a detecção da violação para o compilador, a custo zero em
-tempo de execução. A escrita continua existindo por `setProfile()`, que é a via usada pelo Dashboard.
+`Readonly<ModelProfile>`. A escrita continua existindo por `setProfile()`, que é a via usada pelo
+Dashboard.
+
+**Correção de uma afirmação da primeira versão desta RFC:** o `Readonly<T>` foi apresentado aqui
+como se transferisse a detecção da violação para o compilador. Ele faz isso apenas parcialmente —
+TypeScript considera `Readonly<T>` atribuível a `T`, então basta o chamador anotar a variável como
+`ModelProfile` para que a mutação volte a compilar. O `Readonly` barra somente a mutação direta na
+expressão (`registry.getProfileByCategory('x')!.model = y`). **Quem garante a invariante é a cópia
+defensiva em tempo de execução**; o `Readonly` documenta a intenção e cobre o caso mais óbvio. Por
+isso o teste de regressão inclui uma guarda estática contra a reintrodução do padrão no chamador.
 
 Este princípio não é específico de perfis de modelo: aplica-se a qualquer registro de configuração
 que venha a existir no projeto.
@@ -480,8 +495,20 @@ ou cai — mais suíte de regressão completa.
 Núcleo da RFC e maior superfície de alteração: percorrer todos os anexos, transformar falha em fato
 textual, nunca encerrar o turno no canal.
 
-**Testes novos:** `S197` (N anexos resultam em N handlers executados), `S198` (anexo com falha não
-encerra o turno e o fato entra na mensagem), `S199` (excedente do limite vira fato, não descarte).
+**Teste novo `S197`** (as três invariantes previstas como `S197`/`S198`/`S199` ficaram num arquivo
+só — compartilham o mesmo cenário e o mesmo `MessageBus` instanciado, e separá-las triplicaria o
+setup sem ganho de rastreabilidade): todo anexo chega ao seu handler e em ordem; anexo que falha
+vira fato e não interrompe os demais; handler que lança exceção não derruba os outros; tipo sem
+handler vira fato; excedente do limite vira fato; o texto original do usuário nunca é sobrescrito;
+e guarda estática contra o retorno do encerramento de turno pela ingestão.
+
+Descoberto durante a implementação e corrigido junto: `transcribeAttachment` fazia
+`msg.text = transcription`, atribuição direta que apagava a legenda enviada com o áudio — e, num
+canal que aceita vários anexos por mensagem, fazia o segundo áudio apagar a transcrição do
+primeiro. Passa a concatenar, pelo mesmo motivo que motiva toda a Correção 2.
+
+**Numeração das sprints seguintes**, ajustada por consequência: Sprint 014 usa `S198`; Sprint 015
+usa `S199` mais a extensão de `S147`; Sprint 016 usa `S200` e `S201`.
 
 **Critério de conclusão:** execução real com três imagens em uma mensagem — as três descritas, uma
 única resposta.
