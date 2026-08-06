@@ -625,7 +625,13 @@ const TRANSLATIONS = {
     unsaved_changes_hint: "Há alterações não salvas — clique em Salvar para persistir",
     config_saved_toast: "✅ Configuração salva!",
     restart_confirm: "Reiniciar o NewClaw agora?",
-    restarting_toast: "🔄 Reiniciando..."
+    restarting_toast: "🔄 Reiniciando...",
+
+    // Anexos do chat (RFC-004): o backend devolve código estável, o texto é escolhido aqui
+    attach_limit: "⚠️ Máximo de {n} anexos por mensagem",
+    attach_too_large: "⚠️ Arquivo muito grande: {name}",
+    attach_too_large_generic: "⚠️ Arquivo acima do limite de {mb} MB",
+    attach_upload_failed: "⚠️ Não foi possível enviar o anexo. Tente novamente."
   },
   'en-US': {
     chat: "💬 Chat",
@@ -1246,7 +1252,13 @@ const TRANSLATIONS = {
     unsaved_changes_hint: "You have unsaved changes — click Save to persist",
     config_saved_toast: "✅ Configuration saved!",
     restart_confirm: "Restart NewClaw now?",
-    restarting_toast: "🔄 Restarting..."
+    restarting_toast: "🔄 Restarting...",
+
+    // Chat attachments (RFC-004): the backend returns a stable code, the wording is picked here
+    attach_limit: "⚠️ Maximum of {n} attachments per message",
+    attach_too_large: "⚠️ File too large: {name}",
+    attach_too_large_generic: "⚠️ File exceeds the {mb} MB limit",
+    attach_upload_failed: "⚠️ Could not upload the attachment. Please try again."
   },
   'es-ES': {
     chat: "💬 Chat",
@@ -1844,6 +1856,12 @@ const TRANSLATIONS = {
     config_saved_toast: "✅ ¡Configuración guardada!",
     restart_confirm: "¿Reiniciar NewClaw ahora?",
     restarting_toast: "🔄 Reiniciando...",
+
+    // Adjuntos del chat (RFC-004): el backend devuelve un código estable, el texto se elige aquí
+    attach_limit: "⚠️ Máximo de {n} adjuntos por mensaje",
+    attach_too_large: "⚠️ Archivo demasiado grande: {name}",
+    attach_too_large_generic: "⚠️ El archivo supera el límite de {mb} MB",
+    attach_upload_failed: "⚠️ No se pudo enviar el adjunto. Inténtalo de nuevo.",
 
     // Integraciones / complemento de PowerPoint
     sidebar_integrations: "Integraciones",

@@ -5,6 +5,7 @@ import path from 'path';
 import { errorMessage } from '../../shared/errors';
 import { DashboardContext } from './types';
 import type { ChannelAttachment, NormalizedMessage, ResponseAttachment } from '../../channels/ChannelAdapter';
+import { MessageBus } from '../../channels/MessageBus';
 
 const chatRateLimit = new Map<string, number[]>();
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -15,10 +16,50 @@ const AGENT_RESPONSE_TIMEOUT_MS = 10 * 60_000;
 
 // Middleware multipart isolado desta rota — não substitui nem afeta o express.json() global
 // usado pelas demais rotas do dashboard.
+//
+// O teto de arquivos é o MESMO da ingestão (MessageBus.MAX_ATTACHMENTS_PER_MESSAGE): aceitar aqui
+// mais do que o Core processa só produziria upload desperdiçado e anexo virando fato de excedente.
+// Antes eram dois números literais independentes — 5 aqui e 5 na interface — que podiam divergir
+// numa edição e ninguém perceberia (RFC-004, Correção 5).
+export const MAX_UPLOAD_FILES = MessageBus.MAX_ATTACHMENTS_PER_MESSAGE;
+export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
 const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 20 * 1024 * 1024, files: 5 },
+    limits: { fileSize: MAX_UPLOAD_BYTES, files: MAX_UPLOAD_FILES },
 });
+
+/**
+ * Envolve o multer para que uma recusa vire JSON com código estável, e não a página HTML de erro
+ * padrão do Express.
+ *
+ * O que acontecia antes: enviar mais arquivos que o limite produzia `HTTP 500` com corpo
+ * `<!DOCTYPE html>…MulterError: Too many files…`. A interface faz `res.json()` nessa resposta,
+ * o parse explode e o usuário vê "Unexpected token '<'" — mensagem sem nenhuma relação com o que
+ * ele fez. O código (`too_many_files`) é traduzido no cliente, nos três idiomas; o backend não
+ * emite texto de usuário, que sairia sempre em português.
+ */
+export function uploadFiles(req: Request, res: Response, next: (err?: unknown) => void): void {
+    upload.array('files', MAX_UPLOAD_FILES)(req, res, (err: unknown) => {
+        if (err instanceof multer.MulterError) {
+            const code = err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE'
+                ? 'too_many_files'
+                : err.code === 'LIMIT_FILE_SIZE' ? 'file_too_large' : 'upload_failed';
+            res.status(400).json({
+                success: false,
+                error: code,
+                max: MAX_UPLOAD_FILES,
+                maxBytes: MAX_UPLOAD_BYTES,
+            });
+            return;
+        }
+        if (err) {
+            res.status(400).json({ success: false, error: 'upload_failed' });
+            return;
+        }
+        next();
+    });
+}
 
 function classifyAttachmentType(mimeType: string): ChannelAttachment['type'] {
     if (mimeType.startsWith('image/')) return 'photo';
@@ -183,7 +224,7 @@ export function createChatRouter(ctx: DashboardContext): Router {
         }
     });
 
-    router.post('/', upload.array('files', 5), async (req: Request, res: Response) => {
+    router.post('/', uploadFiles, async (req: Request, res: Response) => {
         const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
         const now = Date.now();
         const timestamps = chatRateLimit.get(clientIp) || [];
