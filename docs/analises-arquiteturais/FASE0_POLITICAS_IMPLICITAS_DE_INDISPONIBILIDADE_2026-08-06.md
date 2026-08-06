@@ -226,10 +226,97 @@ Nenhum deles é sobre "tratar erro melhor". Todos são sobre reduzir a quantidad
 sistema decide sozinho e não conta a ninguém — que é a mesma classe de defeito que a `RFC-004`
 encontrou na ingestão de mídia, replicada em outras camadas.
 
-## Pergunta em aberto para a RFC-005
+## Achado — a capacidade de ciclo de vida do runtime existe, na camada errada
 
-O documento de origem sugere oferecer "iniciar modelo local" como opção ao usuário, e ao mesmo
-tempo afirma que o sistema não deve iniciar o llamafile automaticamente porque "GPU é um recurso do
-usuário". A leitura provável é que a distinção esteja entre **iniciar sob pedido explícito** e
-**iniciar por conta própria** — mas isso precisa ser confirmado antes de virar requisito, porque
-define se o NewClaw pode ou não gerenciar o ciclo de vida do processo do llamafile.
+A pergunta original ("o NewClaw pode iniciar o llamafile?") foi reformulada pelo operador para uma
+forma arquitetural: **o gerenciamento do ciclo de vida do runtime é responsabilidade do Core, ou é
+uma capacidade oferecida por um Runtime Adapter?** A investigação mostrou que a resposta de facto
+hoje não é nenhuma das duas.
+
+**A capacidade não está ausente — está implementada e validada.** `src/dashboard/routes/models.ts`
+já faz, com cobertura do `S171`:
+
+* `spawn` do servidor local (desacoplado, `detached` + `unref`);
+* `kill` sob pedido explícito;
+* estado persistido em `data/local-model-server.json`;
+* reencontro de um servidor sobrevivente após restart do NewClaw (confere PID **e** porta viva);
+* validação do modelo pedido contra a listagem real da pasta configurada.
+
+O problema não é funcional; é de localização. A capacidade pertence ao domínio de **Runtime**, mas
+está acoplada ao **Dashboard** — uma camada de apresentação. Verificado por `grep`: nenhum arquivo
+de `src/core/` ou `src/loop/` a consome, e não poderia consumi-la sem inverter a arquitetura de
+canais que `docs/ARCHITECTURE.md` protege. O único consumidor externo é outra rota do próprio
+Dashboard (`routes/providers.ts`).
+
+### Consequência observada
+
+`ProviderFactory`/`CircuitBreaker` não conseguem distinguir:
+
+* **runtime desligado pelo usuário** — estado normal, esperado, reversível com um clique;
+* **runtime realmente avariado** — falha que justifica abrir o circuito.
+
+Por isso tratam ambos como falha e acumulam erros indevidamente (observado em produção:
+`CIRCUIT-OPEN: Skipping 'Modelo local' (failures: 72)` e, num único turno, `Circuit CLOSED → OPEN —
+5/5 failures`). A informação necessária para a distinção **existe** — o Dashboard sabe qual modelo
+foi escolhido, em que porta, e se o processo responde — mas está fora do alcance de quem precisa
+dela.
+
+É o princípio da Localidade da Recuperação lido ao contrário: aqui não é a recuperação que está na
+camada errada, é o **diagnóstico**. A falha ocorre na camada do provider; o que permite entendê-la
+mora na camada de apresentação.
+
+### As políticas já estão decididas — e não são o que falta
+
+`ADR-002` fixou o comportamento, e essas decisões independem de onde o código mora:
+
+* **§2.2** o servidor roda desacoplado do processo do NewClaw (nasceu de um incidente real: o
+  "Salvar & Reiniciar" da própria interface matava o modelo junto);
+* **§2.3** o NewClaw nunca religa o modelo sozinho — *"um servidor de modelo local ocupa a placa de
+  vídeo; quem reiniciou o computador pode estar querendo usá-la para outra coisa. Religar
+  automaticamente não seria apenas inconveniente, seria errado"*;
+* **§2.4** o registro do modelo escolhido só é apagado por decisão explícita.
+
+Isso responde à pergunta que estava em aberto neste documento sobre "iniciar sob pedido versus
+iniciar por conta própria": **§2.3 já decidiu, com argumento registrado.** O que falta não é
+política — é a capacidade ser alcançável por quem precisa dela.
+
+### Status desta investigação
+
+Registrada como **achado**, não como proposta. Nesta rodada, deliberadamente:
+
+* não se propõe implementação;
+* não se move código;
+* não se abre RFC.
+
+O que fica registrado é que a investigação identificou **uma capacidade existente, madura e
+testada, porém localizada numa camada inadequada para reutilização**.
+
+### Padrão recorrente no projeto
+
+O NewClaw já apresentou esse padrão anteriormente: uma capacidade nasce próxima do seu primeiro
+consumidor e, quando passa a servir múltiplos consumidores, torna-se candidata a um serviço
+compartilhado de domínio.
+
+* `ToolRegistry.requiresAuthorization()` — o gate de ação perigosa existia no caminho do
+  `AgentLoop`; quando `GoalExecutionLoop` passou a executar `exec_command` por conta própria, em
+  modo SAFE, executava sem gate nenhum (reproduzido ao vivo em 04/08/2026). A capacidade virou
+  ponto único de decisão consumido pelos dois caminhos — `ADR-005`.
+* `ModelProfileRegistry.resolveTextProfile()` — a regra "turno sem imagem não usa perfil de visão"
+  seria natural no chamador; foi colocada no registry justamente para valer para qualquer
+  consumidor futuro que envie apenas texto (`S202`, 06/08/2026).
+
+O ciclo de vida do runtime parece ser mais um candidato dessa classe: hoje tem um consumidor (o
+Dashboard) e já se sabe de um segundo que precisa dele e não pode alcançá-lo (`ProviderFactory`).
+
+## Pergunta que estava em aberto — respondida durante a investigação
+
+Este documento registrava uma dúvida: o material de origem sugeria oferecer "iniciar modelo local"
+como opção ao usuário e, ao mesmo tempo, afirmava que o sistema não deve iniciar o llamafile
+automaticamente porque "GPU é um recurso do usuário". A leitura proposta era que a distinção
+estivesse entre **iniciar sob pedido explícito** e **iniciar por conta própria**.
+
+**A leitura estava correta, e a decisão já existia**: `ADR-002` §2.3, com argumento registrado.
+Nada a decidir aqui — a pergunta era sobre política, e a política estava tomada desde 02/08/2026.
+O que a investigação encontrou no lugar foi um problema diferente: a política é boa, está
+implementada, e não alcança quem precisa dela (ver "Achado — a capacidade de ciclo de vida do
+runtime existe, na camada errada").
