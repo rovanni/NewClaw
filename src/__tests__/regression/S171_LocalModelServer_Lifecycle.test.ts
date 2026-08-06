@@ -26,7 +26,10 @@ import express from 'express';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createModelsRouter, getLastKnownLocalServer, parseServerOptions, rankProjectors } from '../../dashboard/routes/models';
+import { createModelsRouter, parseServerOptions, rankProjectors } from '../../dashboard/routes/models';
+// Diagnóstico do runtime local mudou de camada na Sprint 020 (`ADR-006`) — a atuação (spawn/kill)
+// continua na rota, e é o que o resto deste teste exercita.
+import { getLastKnownLocalServer } from '../../core/localRuntimeState';
 import type { DashboardContext } from '../../dashboard/routes/types';
 import type { NewClawConfig } from '../../core/AgentController';
 
@@ -199,7 +202,7 @@ async function main() {
         assert(elapsed < 200, `é leitura local, sem I/O de rede (levou ${elapsed}ms)`);
 
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'dashboard', 'routes', 'models.ts'), 'utf-8');
-        const adopt = src.slice(src.indexOf('async function adoptRunningServer'), src.indexOf('export function getLastKnownLocalServer'));
+        const adopt = src.slice(src.indexOf('async function adoptRunningServer'), src.indexOf('function localServerUrl'));
         assert(
             !/catch\s*\{\s*persistServerState\(null\)/.test(adopt),
             'processo morto NÃO apaga o registro — ele é a única memória de qual modelo o usuário escolheu'

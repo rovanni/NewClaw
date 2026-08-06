@@ -292,10 +292,33 @@ Depende de o recurso ter ou não ciclo de vida gerenciado:
 
 | Sinal | Estado |
 |---|---|
-| Sem registro em `data/local-model-server.json` | `nao_declarado` |
+| Sem registro em `data/local-model-server.json` | `avariado` — **sem ciclo de vida gerenciado**, ver abaixo |
 | Registro presente; PID morto **ou** porta muda | `parado_por_decisao` |
 | Registro presente; PID vivo **e** porta responde; requisição falha | `avariado` |
-| Registro inalcançável por quem precisa classificar | `indeterminado` |
+| Registro presente porém ilegível ou inalcançável | `indeterminado` |
+
+**Correção de contradição interna (06/08/2026, antes da Sprint 020).** A primeira redação desta
+tabela classificava "sem registro" como `nao_declarado`, e a Seção de Validação pedia que "ausência
+de sinal produza `indeterminado`, nunca `avariado`". Ambas estavam erradas pelo mesmo motivo, e
+contradiziam o próprio bullet acima.
+
+O caso que expõe o erro: alguém sobe o llamafile **por fora** do dashboard. O provider aponta para
+`127.0.0.1:8080`, não existe registro, e hoje o circuito abre normalmente após cinco falhas. Sob a
+redação anterior isso viraria `nao_declarado`/`indeterminado`, o circuito nunca abriria, e cada
+turno pagaria o timeout inteiro — mudança de comportamento observável exatamente onde esta RFC
+promete preservação (Critério de sucesso 3).
+
+A regra correta, e a que vale: **ausência de registro não é indeterminação — é ausência de
+gerenciamento**, e cai no comportamento de hoje. Um runtime iniciado à mão é, do ponto de vista do
+NewClaw, indistinguível de um provider de nuvem: foi declarado, logo espera-se que esteja de pé.
+
+`indeterminado` fica reservado a: **existe mecanismo de ciclo de vida e o sinal não pôde ser
+lido** — registro corrompido, ilegível, ou o módulo de diagnóstico ainda não alcançável. É um
+estado raro por construção, e é isso que o torna útil como indicador de dívida (ver abaixo).
+
+`nao_declarado` permanece na taxonomia conceitual — um recurso que o usuário nunca escolheu — mas
+**não ocorre na classificação de providers**: estar na cadeia de fallback já significa ter sido
+configurado.
 
 **Por que a segunda linha não pode ser `avariado`** — e este é o ponto onde uma leitura descuidada
 recriaria o defeito que a RFC existe para corrigir: `ADR-002` §2.4 determina que o registro
@@ -482,9 +505,11 @@ Segue a Validação Progressiva da diretriz — as quatro etapas, em ordem, com 
 
 1. **Unitários** — classificação de estado a partir de sinais sintéticos; matriz política ×
    fronteira.
-2. **Regressão** — suíte completa. Casos novos cobrindo: `parado_por_decisao` não incrementa o
-   circuito; ausência de sinal produz `indeterminado`, nunca `avariado`; provider de nuvem
-   preserva o comportamento atual.
+2. **Regressão** — suíte completa. Casos novos cobrindo os três estados que a classificação de
+   provider pode produzir (`parado_por_decisao` não incrementa o circuito; `avariado` incrementa;
+   registro ilegível produz `indeterminado`) **e** um teste dedicado a provar que, sem sinal de
+   ciclo de vida, o comportamento permanece byte-idêntico ao atual — escrito para falhar se a
+   Sprint mudar isso.
 3. **E2E sintético** — turno completo com provider local declarado e parado, LLM mockado,
    verificando que a substituição aparece como fato na resposta.
 4. **Execução real** — instância isolada (`skill verify`), modelo local declarado, servidor

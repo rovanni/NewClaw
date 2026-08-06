@@ -42,6 +42,12 @@ function assert(condition: boolean, message: string, detail?: unknown): void {
 const APP = fs.readFileSync(path.join(process.cwd(), 'src', 'dashboard', 'public', 'config', 'app.js'), 'utf-8');
 const MODELOS = fs.readFileSync(path.join(process.cwd(), 'src', 'dashboard', 'public', 'config', 'views', 'ModelosView.js'), 'utf-8');
 const ROUTE = fs.readFileSync(path.join(process.cwd(), 'src', 'dashboard', 'routes', 'models.ts'), 'utf-8');
+/**
+ * O diagnóstico do runtime local saiu da rota para o domínio na Sprint 020 (`ADR-006`): o Core
+ * precisa alcançá-lo para distinguir "desligado pelo usuário" de "avariado", e não podia importar
+ * de `dashboard/`. As asserções de S182-3 seguem valendo — mudou onde procuram, não o que exigem.
+ */
+const RUNTIME_STATE = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'localRuntimeState.ts'), 'utf-8');
 
 console.log('\n=== S182-1 — o clique no Salvar é registrado ANTES de qualquer trabalho ===');
 {
@@ -81,16 +87,15 @@ console.log('\n=== S182-2 — o desfecho do save é registrado nos DOIS caminhos
 console.log('\n=== S182-3 — o estado do modelo local informa se está vivo ===');
 {
     assert(
-        /export function getLastKnownLocalServer\(\): \{ file: string; port: number; running: boolean \} \| null/.test(ROUTE),
+        /export function getLastKnownLocalServer\(\): \{ file: string; port: number; running: boolean \} \| null/.test(RUNTIME_STATE),
         'o contrato passou a incluir `running`',
     );
     assert(
-        /process\.kill\(saved\.pid, 0\); \/\/ sinal 0 = só testa existência/.test(ROUTE),
+        /process\.kill\(pid, 0\)/.test(RUNTIME_STATE),
         'liveness verificada por sinal 0 — não encerra nada',
     );
     assert(
-        /catch \{ running = false; \}/.test(ROUTE)
-        && /return \{ file: saved\.file, port: saved\.port, running \};/.test(ROUTE),
+        /running: typeof pid === 'number' \? isPidAlive\(pid\) : false/.test(RUNTIME_STATE),
         'PID morto devolve running=false, e o campo sempre acompanha o retorno',
     );
     // O registro NÃO pode ser apagado quando o processo morre: é a memória da escolha do operador.

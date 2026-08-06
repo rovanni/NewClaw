@@ -5,6 +5,12 @@ import { spawn, ChildProcess } from 'child_process';
 import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import { guessCapabilities } from '../../core/modelCapabilityHeuristics';
+import {
+    LOCAL_RUNTIME_STATE_FILE,
+    LocalRuntimeRecord,
+    readLocalRuntimeRecord,
+    isPidAlive,
+} from '../../core/localRuntimeState';
 import { DashboardContext } from './types';
 
 const log = createLogger('ModelsRoute');
@@ -162,9 +168,10 @@ const LOCAL_SERVER_READY_TIMEOUT_MS = 5 * 60_000;
  */
 let localServer: { child: ChildProcess | null; file: string; port: number; startedAt: number } | null = null;
 
-/** Onde o estado do servidor local é anotado entre reinícios do NewClaw. Fica em ./data (mesma
- *  base do banco), que já é por instância — duas instâncias isoladas não se confundem. */
-const SERVER_STATE_FILE = path.join(process.cwd(), 'data', 'local-model-server.json');
+/** Onde o estado do servidor local é anotado entre reinícios do NewClaw. O caminho, o formato e a
+ *  leitura vivem em `core/localRuntimeState` desde a `ADR-006` — esta rota continua sendo a única
+ *  que ESCREVE nele, e a única que sobe ou derruba o servidor. */
+const SERVER_STATE_FILE = LOCAL_RUNTIME_STATE_FILE;
 
 /** Saída do servidor local. Sem isto, uma falha na largada não deixava nenhuma pista do motivo. */
 const SERVER_LOG_FILE = path.join(process.cwd(), 'data', 'local-model-server.log');
@@ -190,41 +197,14 @@ function persistServerState(state: { pid?: number; file: string; port: number } 
     }
 }
 
-function readServerState(): { pid?: number; file: string; port: number } | null {
-    try {
-        return JSON.parse(fs.readFileSync(SERVER_STATE_FILE, 'utf-8'));
-    } catch { return null; }
-}
-
 /**
- * Último modelo local que o usuário mandou carregar, esteja ele no ar ou não.
- *
- * Serve para o dashboard poder dizer "o modelo X não está carregado — carregar agora?" depois de
- * um reinício da máquina, em vez de deixar o provedor padrão apontando para uma porta muda (foi
- * exatamente a falha vivida em 02/08/2026). Deliberadamente NÃO religa nada sozinho: o servidor
- * ocupa a GPU, e alguém que reiniciou o computador para jogar não quer o modelo subindo por conta
- * própria. Só leitura de arquivo — sem I/O de rede, seguro no caminho do polling do dashboard.
+ * Leitura do registro no formato que esta rota já consumia. A interpretação do arquivo (e a
+ * distinção entre "não existe" e "não consegui ler", que a taxonomia da `RFC-005` precisa) vive em
+ * `core/localRuntimeState`; aqui basta "tem registro utilizável ou não".
  */
-export function getLastKnownLocalServer(): { file: string; port: number; running: boolean } | null {
-    const saved = readServerState();
-    if (!saved) return null;
-    // `running` é a resposta verificada para "esse modelo está no ar AGORA?" — antes, quem
-    // consumia este registro recebia só {file, port} e não tinha como distinguir "escolhido e
-    // rodando" de "escolhido há horas, processo morto". Em 02/08/2026 o arquivo apontava
-    // pid 45736 / GLM-4.6V com o processo inexistente e ninguém na porta; a tela apresentava
-    // isso ao lado de um "Modelo padrão" diferente, e nada dizia qual dos dois era real.
-    //
-    // Só checagem de PID: barata e síncrona, segura no caminho do polling do dashboard (o
-    // comentário acima proíbe I/O de rede aqui). Um PID vivo não garante que a porta responde —
-    // quem precisa dessa garantia usa adoptRunningServer(), que checa os dois.
-    let running = false;
-    if (saved.pid) {
-        try {
-            process.kill(saved.pid, 0); // sinal 0 = só testa existência
-            running = true;
-        } catch { running = false; }
-    }
-    return { file: saved.file, port: saved.port, running };
+function readServerState(): LocalRuntimeRecord | null {
+    const read = readLocalRuntimeRecord();
+    return read.kind === 'record' ? read.record : null;
 }
 
 /**
@@ -240,13 +220,7 @@ async function adoptRunningServer(): Promise<void> {
     // memória de qual modelo o usuário escolheu, e é com ela que o dashboard consegue oferecer
     // "carregar agora" em vez de deixar o sistema apontando para uma porta muda. O registro só sai
     // num descarregamento explícito (stopLocalServer) — ver getLastKnownLocalServer().
-    if (saved.pid) {
-        try {
-            process.kill(saved.pid, 0); // sinal 0 = só testa existência, não encerra nada
-        } catch {
-            return;
-        }
-    }
+    if (saved.pid && !isPidAlive(saved.pid)) return;
     try {
         const r = await fetch(`${localServerUrl(saved.port)}/models`, { signal: AbortSignal.timeout(2000) });
         if (!r.ok) return;

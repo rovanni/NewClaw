@@ -3,7 +3,7 @@ import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import { DashboardContext } from './types';
 import { OpenAIProvider } from '../../core/OpenAIProvider';
-import { getLastKnownLocalServer } from './models';
+import { getLastKnownLocalServer } from '../../core/localRuntimeState';
 import { persistConfigToEnv } from './config';
 import { interpretOllamaPullFailure, interpretOllamaPullException } from './ollamaPullError';
 

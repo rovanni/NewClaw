@@ -6,6 +6,7 @@
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
+import { getLocalRuntimeLifecycle } from './localRuntimeState';
 import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig } from './providerTypes';
 import { GeminiProvider } from './GeminiProvider';
 import { DeepSeekProvider } from './DeepSeekProvider';
@@ -442,7 +443,7 @@ export class ProviderFactory {
                         errorMessage: errorMessage(error)
                     });
 
-                    this.circuitBreakers.getOrCreate({ name: providerName }).recordFailure(errorMessage(error));
+                    this.registrarFalhaSeForAvaria(providerName, errorMessage(error));
 
                     if (isRetryable && attempt < MAX_RETRIES) continue;
                     break;
@@ -561,6 +562,61 @@ export class ProviderFactory {
         }
 
         throw new Error(`Classification failed: ${errors.join('; ')}`);
+    }
+
+    /**
+     * Porta de loopback deste provider, ou `null` se ele não for um endpoint local.
+     *
+     * Só providers **custom** são considerados: o servidor de modelo local do NewClaw é sempre
+     * registrado como um (`ADR-002` §2.7). Provider nativo — inclusive um Ollama em `localhost` —
+     * nunca é gerenciado por nós, e por isso nem chega a consultar o ciclo de vida: o caminho dele
+     * permanece byte-idêntico ao de antes desta mudança.
+     */
+    private loopbackPortOf(providerName: string): number | null {
+        const baseUrl = this.customConfigs.get(providerName)?.baseUrl;
+        if (!baseUrl) return null;
+        let url: URL;
+        try { url = new URL(String(baseUrl)); } catch { return null; }
+        if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost' && url.hostname !== '::1') return null;
+        const port = Number(url.port);
+        return Number.isFinite(port) && port > 0 ? port : null;
+    }
+
+    /**
+     * Registra a falha no circuito **apenas quando ela representa avaria real**.
+     *
+     * `RFC-005` (taxonomia de estados de indisponibilidade): um runtime local que o usuário
+     * desligou é estado normal, esperado e reversível com um clique — não é avaria, e contá-lo como
+     * tal foi o que produziu `CIRCUIT-OPEN: Skipping 'Modelo local' (failures: 72)` em produção.
+     *
+     * Regra, e o que ela deliberadamente NÃO muda:
+     *
+     * - provider que não é loopback (nuvem, Ollama, qualquer nativo) → conta, como sempre contou;
+     * - loopback **sem registro** de ciclo de vida (ex.: llamafile subido à mão, fora do dashboard)
+     *   → conta. Ausência de registro é ausência de gerenciamento, não indeterminação: o recurso
+     *   foi declarado, logo espera-se que esteja de pé. Preservar isso é o que impede esta mudança
+     *   de desligar o circuito de quem nunca usou o dashboard para carregar modelo;
+     * - loopback gerenciado e **em execução** → conta (`avariado`: está de pé e falhou mesmo assim);
+     * - loopback gerenciado e **parado** → NÃO conta (`parado_por_decisao`);
+     * - registro ilegível → NÃO conta (`indeterminado`). Nunca inferir daqui
+     *   (`NUNCA_ADIVINHAR.md`); o efeito fica contido aos endpoints de loopback, para que um JSON
+     *   corrompido não possa desativar o circuito dos providers de nuvem.
+     */
+    private registrarFalhaSeForAvaria(providerName: string, mensagemErro: string): void {
+        const breaker = this.circuitBreakers.getOrCreate({ name: providerName });
+        const porta = this.loopbackPortOf(providerName);
+        if (porta === null) { breaker.recordFailure(mensagemErro); return; }
+
+        const cicloDeVida = getLocalRuntimeLifecycle(porta);
+        if (cicloDeVida === 'parado') {
+            log.info(`[RUNTIME-PARADO] '${providerName}' está declarado e desligado (porta ${porta}) — falha não contabilizada como avaria.`);
+            return;
+        }
+        if (cicloDeVida === 'indeterminado') {
+            log.warn(`[RUNTIME-INDETERMINADO] Não foi possível classificar o runtime de '${providerName}' (porta ${porta}) — falha não contabilizada como avaria.`);
+            return;
+        }
+        breaker.recordFailure(mensagemErro);
     }
 
     /**
