@@ -161,3 +161,54 @@ A partir desta baseline:
 Nenhum código foi alterado para esta baseline — só documentação. A implementação em si (Sprints
 A-G da auditoria de impacto) começa a partir daqui como trabalho separado e explicitamente
 solicitado, não incluído neste fechamento.
+
+## 10. Baseline B2.1 — Ingestão de Mídia — parcial (Sprints 010-015)
+
+Escrita em 2026-08-05. Origem: `docs/decisoes/RFC-004_INGESTAO_DE_MIDIA_MULTIPLA.md`, aprovada na
+mesma data após análise em cinco fases de um incidente real — 12 imagens enviadas numa conversa
+produziram 4 análises, 3 perdas silenciosas e 9 respostas desconexas em 27 minutos.
+
+**Esta baseline é parcial por escolha, não por omissão.** As Sprints 016 (agrupamento de álbum no
+Telegram) e 017 (validação end-to-end do incidente) permanecem abertas; a 016 depende de uma
+decisão de projeto ainda não tomada (janela de espera do álbum) e a 017 exige canal real. O que
+está congelado aqui é o que já foi implementado, validado e commitado.
+
+### Princípios normativos adicionados
+
+1. **Configuração compartilhada é imutável para quem lê** — um componente que mantém configuração
+   compartilhada entrega cópias e concentra a escrita em métodos explícitos. Nenhum leitor altera
+   estado global por efeito colateral.
+2. **Pré-processamento de mídia produz fatos, nunca decisões** — a camada de ingestão observa todos
+   os anexos, registra o que conseguiu e o que não conseguiu como fato textual, e entrega ao Core.
+   Não encerra o turno, não escolhe o que a IA vê, não redige a resposta ao usuário. É o Evidence
+   Provider Pattern aplicado à ingestão (`docs/ARCHITECTURE/EVIDENCE_PROVIDER_PATTERN.md`, §9).
+
+### Estado consolidado
+
+| Sprint | Entrega | Cobertura |
+|---|---|---|
+| 010 | Alinhamento documental dos dois princípios | — |
+| 011 | Nenhum endereço de rede embutido no código-fonte ou instaladores | `S195` |
+| 012 | Registro de perfis entrega cópia, nunca a referência interna | `S196` |
+| 013 | Ingestão percorre todos os anexos; falha vira fato, não resposta | `S197` |
+| 014 | Política única de retry de download para os três tipos de mídia | `S198` |
+| 015 | Limite de anexos com fonte única e erro traduzível no Dashboard | `S199` |
+
+Suíte de regressão: **199 testes** (194 antes desta baseline, mais os cinco acima). Validação em
+execução real da Sprint 013 realizada em instância isolada com LLM real: três imagens numa única
+mensagem produziram três análises de visão e uma resposta — no mesmo cenário, antes da correção,
+duas das três imagens desapareciam sem rastro.
+
+### Débitos e achados registrados nesta baseline
+
+- **`S158` instável** (`docs/issues/021`): duas de três rodadas isoladas passam. Hipótese
+  registrada — o dedup de chamada repetida (issue `020`) pode estar bloqueando a segunda
+  verificação que o ciclo do `RFC-003` precisa repetir para promover conhecimento a `validated`.
+  Duas regras publicadas que se contradizem; a fronteira entre elas exige decisão própria.
+- **A suíte não isola estado entre testes** — `S158` depende de conhecimento persistido e muda de
+  resultado conforme o histórico de execuções. Achado secundário da mesma investigação.
+- **Resposta textual vira mensagem de deduplicação quando o goal entrega por áudio** — observado na
+  validação real da Sprint 013. Quem não puder ouvir o áudio fica sem resposta. Área distinta.
+- **O Core continua sem sistema de tradução** — a `RFC-004` reduz o texto fixo emitido pelo Core em
+  vez de introduzir um; o débito permanece para ACK de fila e validador de objetivos
+  (`docs/ARCHITECTURE.md`, "Gaps conhecidos").
