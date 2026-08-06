@@ -233,6 +233,12 @@ forma arquitetural: **o gerenciamento do ciclo de vida do runtime é responsabil
 uma capacidade oferecida por um Runtime Adapter?** A investigação mostrou que a resposta de facto
 hoje não é nenhuma das duas.
 
+**Esta investigação não escolhe entre elas.** "Runtime Adapter" aparece aqui como uma das
+alternativas da pergunta, não como solução preferida — nenhuma das duas foi avaliada, comparada ou
+adotada. O que está confirmado é apenas o achado descrito abaixo: a capacidade existe, no Dashboard,
+e não é alcançável pelas camadas que precisam dela. Decidir onde ela deveria viver é trabalho da
+RFC-005.
+
 **A capacidade não está ausente — está implementada e validada.** `src/dashboard/routes/models.ts`
 já faz, com cobertura do `S171`:
 
@@ -305,8 +311,11 @@ compartilhado de domínio.
   seria natural no chamador; foi colocada no registry justamente para valer para qualquer
   consumidor futuro que envie apenas texto (`S202`, 06/08/2026).
 
-O ciclo de vida do runtime parece ser mais um candidato dessa classe: hoje tem um consumidor (o
-Dashboard) e já se sabe de um segundo que precisa dele e não pode alcançá-lo (`ProviderFactory`).
+O ciclo de vida do runtime apresenta a mesma configuração inicial dessa classe: hoje tem um
+consumidor (o Dashboard) e já se sabe de um segundo que precisa dele e não pode alcançá-lo
+(`ProviderFactory`). Registrar a semelhança de padrão não é escolher o desfecho — nos dois
+precedentes a capacidade virou serviço de domínio, mas isso foi decidido caso a caso, com ADR
+própria no caso do gate de autorização.
 
 ## Pergunta que estava em aberto — respondida durante a investigação
 
@@ -320,3 +329,117 @@ Nada a decidir aqui — a pergunta era sobre política, e a política estava tom
 O que a investigação encontrou no lugar foi um problema diferente: a política é boa, está
 implementada, e não alcança quem precisa dela (ver "Achado — a capacidade de ciclo de vida do
 runtime existe, na camada errada").
+
+---
+
+# Balanço final da Fase 0
+
+Releitura integral de `ADR-002`, `ADR-005`, `RFC-004` e deste documento, para separar o que já foi
+decidido do que permanece aberto. **Objetivo: garantir que a RFC-005 trate apenas de lacunas reais,
+sem reabrir decisões consolidadas.**
+
+## 1. Decisões já tomadas — não rediscutir
+
+### Ciclo de vida do runtime local (`ADR-002`, 01-02/08/2026)
+
+| § | Decisão | Justificativa registrada |
+|---|---|---|
+| 2.1 | A pasta de modelos nunca tem valor padrão no código | Projeto OSS multiplataforma; caminho embutido vazaria o ambiente de quem o escreveu |
+| 2.2 | O servidor roda desacoplado do processo (`detached` + `unref`) | Incidente real: "Salvar & Reiniciar" da própria interface matava o modelo junto |
+| 2.3 | **O NewClaw nunca religa o modelo sozinho** | A GPU é recurso do usuário; religar por conta própria "não seria apenas inconveniente, seria errado" |
+| 2.4 | O registro do último modelo só é apagado por decisão explícita | É a única memória de qual modelo o usuário escolheu |
+| 2.5 | O cliente informa o nome do modelo; caminho e argumentos são do servidor | A rota executa um binário da máquina |
+| 2.6 | A porta é configurável (`LOCAL_SERVER_PORT`) | Duas instâncias na mesma máquina disputavam a mesma porta |
+| 2.7 | Escolher um modelo escolhe também o provedor | Falha adiada (404 só no restart seguinte) é pior que falha imediata |
+
+### Gate de ação perigosa (`ADR-005`, 04-05/08/2026)
+
+* `ToolRegistry.requiresAuthorization()` é a **única** resposta para "precisa de autorização
+  humana?".
+* O gate vive no **executor comum** (`ProactiveRecovery.execute`), não em cada caminho de execução.
+  A emenda de 05/08 registra por quê: contar caminhos à mão falhou — a própria ADR contou dois
+  quando eram cinco.
+* Quem não passa pelo gate antes recebe **recusa**: falha fechada, nunca execução silenciosa.
+* Probes determinísticos internos não passam pelo gate — ele existe para tool que o **modelo**
+  pediu.
+
+### Princípios normativos consolidados
+
+1. Configuração compartilhada é imutável para quem lê (`RFC-004`, Princípio 1).
+2. Pré-processamento de mídia produz fatos, nunca decisões (`RFC-004`, Princípio 2).
+3. Ferramentas de entrega devolvem o conteúdo entregue (`FERRAMENTAS_DE_ENTREGA.md`).
+4. Turno que envia somente texto não usa o perfil de visão (`S202`).
+5. Dependência opcional não pode quebrar o build (`S203`).
+
+### Não-objetivos já declarados (`RFC-004`)
+
+* Não introduzir sistema de tradução no Core — o caminho escolhido é reduzir o texto que o Core
+  emite diretamente.
+* Não paralelizar inferências de visão — hardware muito variado; trocaria um defeito por outro.
+* Não alterar canais que já entregam múltiplos anexos corretamente (Discord, Web).
+
+### Limitações declaradas e deliberadamente preservadas
+
+* `ADR-002`: validado apenas no Windows; um servidor por vez; capacidade do modelo inferida do nome
+  do arquivo.
+* `ADR-005`: comando cujo caminho contém espaço não é reconhecido como leitura-apenas — o gate
+  **erra pedindo autorização a mais, nunca a menos**.
+
+## 2. Questões arquiteturais ainda em aberto
+
+### Sem decisão alguma
+
+1. **Soberania da Configuração do Usuário** — formulada e evidenciada, **ainda candidata**. Não há
+   documento normativo; `ADR-002` e a issue 019 são aplicações dela em casos isolados, sem a regra
+   geral nomeada.
+2. **Localidade da Recuperação** — idem: formulada em 06/08, testada contra os catorze casos deste
+   levantamento, ainda candidata.
+3. **Taxonomia de indisponibilidade.** O sistema tem um único conceito: falhou. Não existe
+   "desligado pelo usuário" como estado de primeira classe. Consequência medida em produção:
+   `72 failures` acumuladas tratando estado normal como avaria.
+4. **Onde deve viver a capacidade de ciclo de vida do runtime.** Permanece aberta. O que esta
+   investigação acrescentou é apenas que hoje ela vive no Dashboard e não é alcançável por
+   `ProviderFactory`/`CircuitBreaker` — nenhuma alternativa foi escolhida.
+5. **Modo de Operação (Online / Offline / Híbrido).** Conceito proposto pelo operador; nada
+   decidido. Hoje a configuração diz *qual modelo por perfil*, mas não *o que fazer quando ele não
+   estiver disponível* — não existe forma de expressar "não troque".
+6. **`searXNG` local → servidor público.** Nenhuma decisão existe. Único caso do levantamento em que
+   a camada está certa e o comportamento continua errado; implicação é privacidade, não
+   disponibilidade.
+7. **A regra alcança também a substituição de decisões do LLM?** `ProactiveRecovery` reescreve
+   argumentos e troca ferramentas; `exec_command` reescreve comandos. É fronteira distinta da
+   configuração do usuário, já coberta por Evidence Provider Pattern e Preservação do Raciocínio.
+
+### Decisões parciais que deixaram lacuna
+
+8. **O que fazer quando o runtime escolhido está parado.** `ADR-002` §2.3 decidiu o que **não**
+   fazer (religar sozinho); não decidiu o que fazer no lugar. Comportamento atual: fallback
+   silencioso para nuvem.
+9. **`resolveProfile ?? chat ?? profiles[0]`** — perfil ausente cai em outro sem aviso.
+   Classificado como legado (L); nunca foi objeto de decisão.
+10. **`remap_foreign_workspace_paths`** roda sem log, por decisão explícita de não acrescentar uma
+    linha nova. É a única substituição do sistema que não deixa rastro.
+
+## 3. Débitos conhecidos — fora do escopo da RFC-005
+
+Registrados aqui para que **não** sejam absorvidos por proximidade temática. Só entram no escopo se
+surgir evidência de dependência arquitetural direta:
+
+| Débito | Onde está registrado | Por que fica fora |
+|---|---|---|
+| **`S158` instável / issue 021** | `docs/issues/021` | Conflito entre a issue 020 (não repetir chamada que falhou) e o ciclo de verificação do `RFC-003` (repetir para confirmar aprendizado). Duas decisões publicadas que se contradizem — exige decisão própria, provavelmente uma ADR, em investigação separada |
+| **i18n do texto que o Core emite** | `ARCHITECTURE.md` "Gaps conhecidos"; `ADR-005` §6 | `RFC-004` decidiu não resolver e reduziu o problema removendo sete mensagens fixas do caminho do usuário. O que resta (ACK de fila, validador de objetivos, rótulos de autorização) é trabalho de escopo próprio |
+| **Suíte não isola estado entre testes** | `docs/issues/021`, achado secundário | Qualidade da suíte, não arquitetura de indisponibilidade |
+
+# Critério para iniciar a RFC-005
+
+A RFC só deve começar depois de decidirmos:
+
+1. se **Soberania da Configuração do Usuário** vira princípio normativo;
+2. se **Localidade da Recuperação** vira princípio normativo;
+3. qual **taxonomia** distingue indisponibilidade intencional de falha;
+4. qual é o **escopo da política**: apenas modelos/providers, ou recursos substituíveis em geral.
+
+Estes quatro pontos ficam deliberadamente **sem resposta proposta** neste documento. Enquanto não
+forem decididos, qualquer RFC nasceria escolhendo implicitamente por eles — que é exatamente a
+classe de decisão implícita que esta investigação existiu para tornar visível.
