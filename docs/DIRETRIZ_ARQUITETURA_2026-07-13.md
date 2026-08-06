@@ -171,9 +171,10 @@ redesenhada para devolver fato/texto em vez de decisão.
 
 ## Princípios formalizados (Milestone C1)
 
-Três princípios nascidos das auditorias de 2026-07-23/24 têm documento normativo próprio em
-`docs/ARCHITECTURE/` — leitura obrigatória antes de propor qualquer componente novo de
-conhecimento ou decisão:
+Os princípios abaixo, nascidos das auditorias de 2026-07-23/24 e das que se seguiram, têm
+documento normativo próprio em `docs/ARCHITECTURE/` — leitura obrigatória antes de propor qualquer
+componente novo de conhecimento ou decisão. O índice completo, com a pergunta que cada um responde,
+está em `docs/ARCHITECTURE/README.md`:
 
 - **Evidence Provider Pattern** (`docs/ARCHITECTURE/EVIDENCE_PROVIDER_PATTERN.md`) — mecanismo
   concreto pelo qual o Princípio da Preservação do Raciocínio (acima) se realiza: componentes de
@@ -197,6 +198,18 @@ conhecimento ou decisão:
   `dependency-curator`, assíncrona, fora do caminho de execução de goals) sempre separada de
   execução (Runtime — `GoalEvaluator`/`resolveInstallCommand`/`EnvironmentProbe` — nunca pesquisa,
   só consome catálogo já validado por PR humano).
+- **Soberania da Configuração do Usuário** (`docs/ARCHITECTURE/SOBERANIA_DA_CONFIGURACAO.md`) —
+  quando o usuário declara explicitamente qual recurso usar, nenhum componente o substitui sem que
+  a troca seja permitida pela política declarada **e** visível no resultado entregue. Não vale para
+  ausência de configuração (isso é `NUNCA_ADIVINHAR`), nem para recusa por segurança (isso é
+  `ADR-005`). Nasceu de um turno que pediu modelo local e recebeu resposta de nuvem sem aviso, e de
+  uma busca em instância local que, fora do ar, ia para um servidor público de terceiros.
+- **Localidade da Recuperação** (`docs/ARCHITECTURE/LOCALIDADE_DA_RECUPERACAO.md`) — políticas de
+  recuperação vivem na mesma camada em que a falha pode ocorrer, e precisam ser **alcançáveis** no
+  instante da falha. Nasceu do `CognitiveKernelGate`: degradação graciosa correta, documentada e
+  testada, que nunca executava porque o `import` era estático e a falha acontecia em tempo de
+  compilação. Vale também para o **diagnóstico** — quem não alcança o sinal que classifica a causa
+  deve reportar indeterminação, nunca escolher a mais provável.
 
 ## Filosofia do projeto
 

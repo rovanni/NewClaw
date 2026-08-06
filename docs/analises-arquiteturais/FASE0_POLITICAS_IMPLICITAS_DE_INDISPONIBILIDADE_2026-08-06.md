@@ -1,5 +1,10 @@
 # Fase 0 — Levantamento das políticas implícitas de indisponibilidade
 
+**Status:** **encerrada** em 06/08/2026. As quatro perguntas do critério final foram respondidas e
+o trabalho seguiu para `docs/decisoes/RFC-005_POLITICAS_DE_SUBSTITUICAO_DE_RECURSOS.md` — ver
+"Encerramento", ao final deste documento. Nada aqui foi revisado retroativamente: o levantamento
+permanece como foi escrito, inclusive onde a RFC-005 chegou a conclusão diferente.
+
 **Data:** 2026-08-06
 **Objetivo:** mapear todos os pontos onde o NewClaw toma uma decisão automática diante da
 indisponibilidade de um recurso, e classificar cada decisão, antes de escrever qualquer RFC.
@@ -443,3 +448,45 @@ A RFC só deve começar depois de decidirmos:
 Estes quatro pontos ficam deliberadamente **sem resposta proposta** neste documento. Enquanto não
 forem decididos, qualquer RFC nasceria escolhendo implicitamente por eles — que é exatamente a
 classe de decisão implícita que esta investigação existiu para tornar visível.
+
+---
+
+# Encerramento
+
+O operador respondeu os quatro pontos em 06/08/2026:
+
+| # | Decisão |
+|---|---|
+| 1 | Soberania da Configuração do Usuário → **princípio normativo** |
+| 2 | Localidade da Recuperação → **princípio normativo** |
+| 3 | Taxonomia → **definida dentro da RFC-005**, por ser trabalho de solução, não de investigação |
+| 4 | Escopo → **conceitual geral, primeira aplicação prática restrita a providers/modelos** |
+
+A investigação foi encerrada e o trabalho seguiu para
+`docs/decisoes/RFC-005_POLITICAS_DE_SUBSTITUICAO_DE_RECURSOS.md`.
+
+## O que a RFC-005 concluiu diferente deste levantamento
+
+Registrado aqui para quem chegar a este documento primeiro:
+
+* **A cadeia de TTS não é integralmente o exemplo a generalizar.** Este documento a apresentou como
+  o melhor caso existente do princípio respeitado. Verificando o código, a RFC-005 encontrou que
+  `send_audio.ts:199` cai do Piper para o serviço da Microsoft registrando apenas `log.error` — o
+  usuário nunca é informado de que o texto saiu da máquina. A cadeia acerta **quem decide** e erra
+  **quem fica sabendo**; é essa evidência que fez a Soberania nascer com duas cláusulas.
+* **A presença do registro de modelo local não indica que o servidor deveria estar de pé.** Uma
+  primeira versão da taxonomia classificaria assim, e a revisão contra `ADR-002` §2.4 mostrou que
+  isso recriaria o próprio defeito das `72 failures` — o registro sobrevive à morte do processo por
+  ser a única memória da escolha do usuário.
+
+## Questões deste levantamento que a RFC-005 **não** fechou
+
+Permanecem abertas, e não devem ser tratadas como resolvidas por proximidade:
+
+* **#4 — onde vive a capacidade de ciclo de vida do runtime.** Vai para ADR própria (Sprint 019),
+  pelo precedente da `ADR-005`.
+* **#5 — Modo de Operação (Online/Offline/Híbrido).** Descartado como *primitivo* pela RFC-005
+  (alternativa A3), não como conveniência futura.
+* **#7 — a regra alcança a substituição de decisões do LLM?** Segue aberta; fronteira distinta, já
+  coberta por `EVIDENCE_PROVIDER_PATTERN.md` e pela Preservação do Raciocínio.
+* Os três débitos da Seção 3 continuam fora de escopo, pelos motivos ali registrados.

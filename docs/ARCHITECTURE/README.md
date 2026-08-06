@@ -4,6 +4,26 @@ Sprint 01. Engenharia reversa completa do repositório, sem nenhuma alteração 
 código. Objetivo: uma base navegável, baseada em evidências, para servir de fundação às
 próximas sprints (que devem **refinar/enriquecer esta base, não reconstruí-la**).
 
+## Documentos normativos
+
+Esta pasta guarda duas coisas distintas: os **documentos normativos** abaixo — regras vigentes,
+leitura obrigatória antes de propor componente novo — e o **retrato do repositório** gerado pela
+Sprint 01 (`index.html` + os três JSONs), descrito no resto deste arquivo. O retrato é um
+instantâneo datado; as normas são vivas.
+
+| Documento | Pergunta que responde |
+|---|---|
+| `EVIDENCE_PROVIDER_PATTERN.md` | *O que* um componente de conhecimento pode decidir (nunca decidir pelo Planner) |
+| `SEPARACAO_DISTRIBUIDO_APRENDIDO.md` | *Onde* mora conhecimento versionado vs. aprendido em runtime |
+| `NUNCA_ADIVINHAR.md` | O que fazer diante de dado ausente (reportar, nunca inferir) |
+| `FERRAMENTAS_DE_ENTREGA.md` | O que uma ferramenta de entrega devolve (conteúdo, nunca recibo) |
+| `PIPELINE_CURADORIA_DEPENDENCIAS.md` | Como conhecimento de instalação entra em `KNOWN_DEPS` |
+| `SOBERANIA_DA_CONFIGURACAO.md` | *Quem* decide qual recurso usar, e o que o usuário fica sabendo |
+| `LOCALIDADE_DA_RECUPERACAO.md` | *Em que camada* uma política de recuperação deve viver |
+
+Os dois últimos foram formalizados pela `docs/decisoes/RFC-005_POLITICAS_DE_SUBSTITUICAO_DE_RECURSOS.md`
+(06/08/2026). Todos são citados por `docs/DIRETRIZ_ARQUITETURA_2026-07-13.md`.
+
 ## Como abrir
 
 Abra `index.html` diretamente no navegador (duplo-clique ou `file://.../docs/architecture/index.html`).
@@ -125,7 +145,8 @@ desta base, não reconstrução.
 ## Nota sobre o nome da pasta
 
 O prompt original pediu `docs/architecture/` (minúsculo). Este repositório já tinha
-`docs/ARCHITECTURE/` (maiúsculo, com os 3 documentos normativos citados em `CLAUDE.md`). No
+`docs/ARCHITECTURE/` (maiúsculo, com os documentos normativos citados em `CLAUDE.md` — três à
+época desta sprint, sete hoje; ver "Documentos normativos" acima). No
 Windows/NTFS (case-insensitive, case-preserving) os dois nomes apontam para a mesma pasta física,
 e o Git deste repositório já rastreia o caminho em maiúsculo — por isso os arquivos desta sprint
 foram gravados ali (`git status` confirma: `docs/ARCHITECTURE/architecture.json` etc.), e não em

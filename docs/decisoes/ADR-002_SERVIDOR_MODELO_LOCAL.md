@@ -69,6 +69,19 @@ não seria apenas inconveniente, seria **errado**.
 Alternativa descartada: religar no boot. Deixaria o boot esperando minutos carregando o modelo e
 falharia em silêncio se o arquivo tivesse mudado de lugar — além do problema de GPU acima.
 
+> **Nota acrescentada em 06/08/2026.** Esta decisão diz o que **não** fazer (religar sozinho) e
+> deixou em aberto o que fazer no lugar. A lacuna foi preenchida por
+> `docs/decisoes/RFC-005_POLITICAS_DE_SUBSTITUICAO_DE_RECURSOS.md`: o comportamento vigente até
+> então era substituir o modelo local por um de nuvem, em silêncio. A RFC-005 não reabre esta
+> decisão — o NewClaw continua não religando nada por conta própria — e acrescenta que a
+> indisponibilidade decorrente deve ser **comunicada**, não mascarada por substituição silenciosa.
+>
+> A RFC-005 também depende de §2.4 de um modo que vale registrar aqui: como o registro em
+> `data/local-model-server.json` sobrevive à morte do processo, sua mera presença **não** significa
+> que o servidor deveria estar de pé. O sinal correto é o que esta ADR já implementa — PID vivo *e*
+> porta respondendo. Classificar por presença do registro faria de todo reinício de máquina uma
+> avaria.
+
 ### 2.4 O registro do último modelo só é apagado por decisão explícita
 
 `data/local-model-server.json` guarda `{pid, file, port}`. Processo morto **não** apaga o
