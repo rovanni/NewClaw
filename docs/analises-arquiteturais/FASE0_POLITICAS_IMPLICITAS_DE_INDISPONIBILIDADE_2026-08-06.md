@@ -153,6 +153,79 @@ Quatro observações que devem moldar a RFC-005:
    indisponibilidade acontecia numa fase anterior àquela em que a proteção vivia. A RFC precisa
    exigir que o mecanismo de degradação seja alcançável no momento da falha — não apenas existir.
 
+## Princípio candidato — Localidade da Recuperação
+
+Formulado pelo operador ao ver o incidente do `newclaw-kernel-adapter`:
+
+> **As políticas de recuperação devem ser implementadas na mesma camada em que a falha pode
+> ocorrer.**
+
+| Tipo de falha | Camada que deve tratá-la |
+|---|---|
+| Dependência ausente (import) | resolução de módulos / composição |
+| Provider indisponível | `ProviderFactory` / Circuit Breaker |
+| Modelo recusou a requisição | camada do provider |
+| Ferramenta retornou erro | executor da ferramenta |
+| Prompt inválido | Planner |
+
+O objetivo é evitar recuperações **corretas porém inalcançáveis** — exatamente o que o
+`CognitiveKernelGate` era.
+
+### Teste do princípio contra os casos levantados
+
+Um princípio só é útil se separar casos. Aplicado aos catorze pontos deste levantamento, ele
+classifica assim:
+
+| Caso | Camada da falha | Camada do tratamento | Veredito |
+|---|---|---|---|
+| `newclaw-kernel-adapter` | resolução de módulo (build) | runtime (`try/catch`) | ❌ violava — corrigido |
+| Circuit breaker sobre provider local | transporte/provider | `CircuitBreaker` | ✅ camada certa |
+| `chatWithFallback` | provider | `ProviderFactory` | ✅ camada certa |
+| Whisper remoto → local | handler de mídia | mesmo handler | ✅ camada certa |
+| TTS Piper → edge-tts | geração de áudio | `send_audio` | ✅ camada certa |
+| `ProactiveRecovery` (args/tools) | execução de ferramenta | executor | ✅ camada certa |
+| `exec_command` AUTO-FIX | execução de comando | executor | ✅ camada certa |
+| Classificação LLM → keyword | classificador | classificador | ✅ camada certa |
+| `resolveProfile ?? chat ?? [0]` | configuração de perfil | registry | ✅ camada certa |
+| **`searXNG` local → público** | serviço de busca | método de busca | ⚠️ ver abaixo |
+
+**O princípio isola exatamente um caso: o do `searXNG`.** E o que ele revela ali é instrutivo — a
+camada está *certa* e o comportamento continua *errado*. Tratar "instância local fora do ar" dentro
+do método de busca é apropriado; o que não pertence àquela camada é a decisão de **enviar a consulta
+do usuário para um terceiro**. Isso não é recuperação técnica, é política de privacidade.
+
+### O que o teste revelou: são dois eixos, não um
+
+O princípio da Localidade responde **onde** a recuperação deve morar. O da Soberania responde
+**quem** tem autoridade para decidir o que fazer. São perguntas independentes, e um caso pode
+acertar uma e errar a outra:
+
+| | Camada certa | Camada errada |
+|---|---|---|
+| **Autoridade certa** | Whisper, TTS, ProactiveRecovery | — |
+| **Autoridade errada** | `searXNG`, fallback local→nuvem | `newclaw-kernel-adapter` (errava as duas) |
+
+Essa separação é o resultado mais útil da Fase 0 para a RFC-005: ela impede que a RFC trate os
+casos como se fossem todos do mesmo tipo. Um fallback pode estar no lugar certo e ainda assim
+usurpar uma decisão do usuário; e uma decisão pode ser legítima e estar num lugar onde nunca será
+executada.
+
+### Convergência dos princípios existentes
+
+Os três princípios já consolidados e este candidato são ortogonais, mas apontam para o mesmo
+objetivo — **comportamento previsível, explícito e verificável**, com menos decisão implícita:
+
+| Princípio | Pergunta que responde | Origem |
+|---|---|---|
+| Ingestão produz fatos, não decisões | *o que* uma camada pode decidir | `RFC-004` |
+| Ferramentas de entrega devolvem conteúdo | *o que* a resposta deve conter | `RFC-004` |
+| Soberania da Configuração do Usuário | *quem* decide | `ADR-002`, issue 019, este levantamento |
+| Localidade da Recuperação | *onde* a recuperação vive | incidente do adapter, 06/08 |
+
+Nenhum deles é sobre "tratar erro melhor". Todos são sobre reduzir a quantidade de coisas que o
+sistema decide sozinho e não conta a ninguém — que é a mesma classe de defeito que a `RFC-004`
+encontrou na ingestão de mídia, replicada em outras camadas.
+
 ## Pergunta em aberto para a RFC-005
 
 O documento de origem sugere oferecer "iniciar modelo local" como opção ao usuário, e ao mesmo
