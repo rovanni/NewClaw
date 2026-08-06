@@ -312,6 +312,70 @@ Category:`;
     // cego para imagens, sem lançar exceção e sem registrar erro, até reiniciar o processo.
     // Incidente real de 04/08/2026; a escrita continua possível, só que por `setProfile()`.
 
+    // ── Perfil para chamadas que enviam SOMENTE TEXTO ──────────────────────────
+    //
+    // O perfil `vision` existe para quem envia bytes de imagem ao modelo. Hoje um único ponto do
+    // projeto faz isso: `processVision`, na ingestão — é o único lugar que popula `images:[base64]`
+    // numa LLMMessage. Quando a ingestão termina, a imagem já virou TEXTO (a descrição) e nada mais
+    // no turno é imagem.
+    //
+    // Selecionar o modelo de visão para o turno de raciocínio é, portanto, escolher a ferramenta
+    // pela etiqueta e não pela tarefa: pede-se a um modelo escolhido por saber OLHAR que RACIOCINE
+    // sobre vários KB de texto — coisa que modelos multimodais pequenos costumam fazer mal.
+    //
+    // Observado em produção (05/08/2026): três imagens analisadas corretamente (2016, 1818 e 2496
+    // caracteres de descrição), e a resposta final ignorou tudo, agarrando a palavra "projetos" da
+    // memória do sistema. O roteador havia classificado o turno como `vision` e trocado o modelo
+    // para o perfil de visão — um modelo local de 4B parâmetros — que respondeu no lugar do modelo
+    // de chat. Ficou visível porque o provider de chat estava fora do ar, mas o desvio existe
+    // sempre que a classificação dá `vision`.
+    //
+    // Há DOIS caminhos que levavam a isso, e ambos passam por aqui:
+    //   1. o override por `IntentDecision.modelCategory === 'vision'`;
+    //   2. `resolveProfile()`, cuja heurística pontua "imagem"/"foto" — e o texto do turno contém
+    //      `[IMAGEM RECEBIDA: ...]`, escrito pela própria ingestão. O sistema classificava como
+    //      visão o texto que ele mesmo produziu.
+    //
+    // A regra vive aqui, e não no chamador, para valer também para qualquer consumidor futuro que
+    // envie apenas texto.
+
+    /** Categoria de raciocínio equivalente, quando a categoria pedida é de percepção. */
+    private textCategoryFor(category: Category): Category {
+        if (category !== 'vision') return category;
+        // 'chat' é o destino natural: descrever/explicar/interpretar conteúdo já extraído.
+        return this.getProfileByCategoryRaw('chat') ? 'chat' : 'execution';
+    }
+
+    /**
+     * Resolve o perfil de um turno que envia SOMENTE texto ao modelo.
+     * Idêntico a `resolveProfile`, exceto que nunca devolve o perfil de visão.
+     */
+    async resolveTextProfile(query: string): Promise<Readonly<ModelProfile>> {
+        const profile = await this.resolveProfile(query);
+        if (profile.category !== 'vision') return profile;
+
+        const replacement = this.getProfileByCategory(this.textCategoryFor('vision'));
+        log.info(`[TEXT-TURN] perfil 'vision' substituído por '${replacement?.category}' — o turno não envia imagem ao modelo`);
+        return replacement ?? profile;
+    }
+
+    /**
+     * Perfil por categoria para um turno que envia SOMENTE texto.
+     * Pedir `vision` aqui devolve o perfil de raciocínio equivalente.
+     */
+    getTextProfileByCategory(category: Category): Readonly<ModelProfile> | undefined {
+        const effective = this.textCategoryFor(category);
+        if (effective !== category) {
+            log.info(`[TEXT-TURN] categoria '${category}' → '${effective}' — o turno não envia imagem ao modelo`);
+        }
+        return this.getProfileByCategory(effective);
+    }
+
+    /** Acesso interno sem cópia — só para checar existência. */
+    private getProfileByCategoryRaw(category: Category): ModelProfile | undefined {
+        return this.config.profiles.find(p => p.category === category);
+    }
+
     getProfileByCategory(category: Category): Readonly<ModelProfile> | undefined {
         const found = this.config.profiles.find(p => p.category === category);
         return found ? { ...found } : undefined;
