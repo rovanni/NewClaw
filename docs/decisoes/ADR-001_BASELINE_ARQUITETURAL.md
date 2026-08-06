@@ -162,14 +162,22 @@ Nenhum código foi alterado para esta baseline — só documentação. A impleme
 A-G da auditoria de impacto) começa a partir daqui como trabalho separado e explicitamente
 solicitado, não incluído neste fechamento.
 
-## 10. Baseline B2.1 — Ingestão de Mídia (Sprints 010-017)
+## 10. Baseline B2.1 — Ingestão de Mídia (Sprints 010-017) — versão 2.3.1
 
 Escrita em 2026-08-05. Origem: `docs/decisoes/RFC-004_INGESTAO_DE_MIDIA_MULTIPLA.md`, aprovada na
 mesma data após análise em cinco fases de um incidente real — 12 imagens enviadas numa conversa
 produziram 4 análises, 3 perdas silenciosas e 9 respostas desconexas em 27 minutos.
 
-**Estado:** todas as sete sprints implementadas, cobertas por teste e validadas. Uma pendência
-nomeada permanece — ver "Validação" abaixo.
+**Estado:** todas as sete sprints implementadas, cobertas por teste e validadas; branch integrada à
+`main` por merge `--no-ff`. Encerramento documentado em `docs/sprints/RFC-004_CLOSING_REPORT.md`.
+Uma pendência nomeada permanece — ver "Validação" abaixo.
+
+**Sobre o número de versão:** publicada como `2.3.1`. O ciclo é majoritariamente corretivo, mas
+inclui três mudanças de comportamento observável pelo usuário — o teto de anexos por mensagem passou
+de 5 para 10 (`MAX_ATTACHMENTS_PER_MESSAGE`), a resposta de uma entrega por áudio passou a conter o
+texto falado em vez do recibo, e um álbum do Telegram passou a produzir uma resposta em vez de N.
+Registrado aqui para que a escolha de `patch` em vez de `minor` seja uma decisão explícita, não um
+descuido.
 
 ### Princípios normativos adicionados
 
