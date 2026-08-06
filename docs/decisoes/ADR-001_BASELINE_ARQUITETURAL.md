@@ -162,16 +162,14 @@ Nenhum código foi alterado para esta baseline — só documentação. A impleme
 A-G da auditoria de impacto) começa a partir daqui como trabalho separado e explicitamente
 solicitado, não incluído neste fechamento.
 
-## 10. Baseline B2.1 — Ingestão de Mídia — parcial (Sprints 010-015)
+## 10. Baseline B2.1 — Ingestão de Mídia (Sprints 010-017)
 
 Escrita em 2026-08-05. Origem: `docs/decisoes/RFC-004_INGESTAO_DE_MIDIA_MULTIPLA.md`, aprovada na
 mesma data após análise em cinco fases de um incidente real — 12 imagens enviadas numa conversa
 produziram 4 análises, 3 perdas silenciosas e 9 respostas desconexas em 27 minutos.
 
-**Esta baseline é parcial por escolha, não por omissão.** As Sprints 016 (agrupamento de álbum no
-Telegram) e 017 (validação end-to-end do incidente) permanecem abertas; a 016 depende de uma
-decisão de projeto ainda não tomada (janela de espera do álbum) e a 017 exige canal real. O que
-está congelado aqui é o que já foi implementado, validado e commitado.
+**Estado:** todas as sete sprints implementadas, cobertas por teste e validadas. Uma pendência
+nomeada permanece — ver "Validação" abaixo.
 
 ### Princípios normativos adicionados
 
@@ -182,6 +180,12 @@ está congelado aqui é o que já foi implementado, validado e commitado.
    os anexos, registra o que conseguiu e o que não conseguiu como fato textual, e entrega ao Core.
    Não encerra o turno, não escolhe o que a IA vê, não redige a resposta ao usuário. É o Evidence
    Provider Pattern aplicado à ingestão (`docs/ARCHITECTURE/EVIDENCE_PROVIDER_PATTERN.md`, §9).
+3. **Ferramentas de entrega devolvem o conteúdo entregue**
+   (`docs/ARCHITECTURE/FERRAMENTAS_DE_ENTREGA.md`) — diagnóstico operacional pertence ao log, nunca
+   à resposta final. Nasceu de uma entrega por áudio cuja resposta textual era a mensagem interna do
+   mecanismo de deduplicação; quem não pudesse ouvir ficava sem resposta. Vale para `send_audio`,
+   `send_document`, `send_image` e qualquer ferramenta futura cujo sucesso signifique "o usuário
+   recebeu algo".
 
 ### Estado consolidado
 
@@ -193,11 +197,29 @@ está congelado aqui é o que já foi implementado, validado e commitado.
 | 013 | Ingestão percorre todos os anexos; falha vira fato, não resposta | `S197` |
 | 014 | Política única de retry de download para os três tipos de mídia | `S198` |
 | 015 | Limite de anexos com fonte única e erro traduzível no Dashboard | `S199` |
+| 016 | Álbum do Telegram vira uma única mensagem com N anexos | `S200` |
+| 017 | Validação end-to-end do incidente | relatório |
+| — | Ferramentas de entrega devolvem conteúdo, não recibo | `S201` |
 
-Suíte de regressão: **199 testes** (194 antes desta baseline, mais os cinco acima). Validação em
-execução real da Sprint 013 realizada em instância isolada com LLM real: três imagens numa única
-mensagem produziram três análises de visão e uma resposta — no mesmo cenário, antes da correção,
-duas das três imagens desapareciam sem rastro.
+Suíte de regressão: **201 testes** (194 antes desta baseline, mais os sete acima).
+
+### Validação
+
+Execução real em instância isolada (LLM real, visão real, filesystem real), documentada em
+`docs/sprints/SPRINT_017_VALIDACAO_RFC004_REPORT.md`:
+
+| | Incidente (04/08) | Validação (05/08) |
+|---|---|---|
+| Imagens analisadas | 4 de 12 | 10 de 10 |
+| Perdidas em silêncio | 3 | 0 |
+| Respostas | 9 desconexas | 1 |
+| Tempo | 27 min | 4 min 25 s |
+| Pergunta respondida | não | sim |
+
+**Pendência nomeada:** o agrupamento de álbum da Sprint 016 **não foi validado em canal real**. O
+Dashboard já entrega N anexos numa única mensagem, então a validação end-to-end não exercita o
+buffer por `media_group_id`; a cobertura é o `S200` (15 verificações). Reproduzir a entrega
+fragmentada exige enviar um álbum de verdade ao bot do Telegram.
 
 ### Débitos e achados registrados nesta baseline
 
