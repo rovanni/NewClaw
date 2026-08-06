@@ -227,6 +227,28 @@ pendente, envio da resposta, registro na sessão). Isso foi consolidado em
 `AgentController.createWorkflowCallback(adapter, channel, format)` — um único ponto de
 implementação parametrizado pelo adapter/canal/formato de saída.
 
+### Agrupamento de álbum no Telegram — estado e janela de tempo dentro de um adapter
+
+O `TelegramAdapter` mantém um buffer curto (`TELEGRAM_ALBUM_WINDOW_MS`, padrão 1500 ms) que junta
+as mídias de um mesmo `media_group_id` numa única `NormalizedMessage` com N anexos.
+
+É a única exceção onde um adapter guarda estado entre mensagens, e por isso está documentada aqui.
+A justificativa: **o Telegram é a única plataforma suportada que fragmenta um álbum** — entrega um
+update por item e anexa a legenda apenas ao primeiro. Discord e o Dashboard web já entregam N
+anexos numa única mensagem. Sem o agrupamento, doze fotos enviadas juntas com a pergunta "explique
+cada projeto" viravam doze conversas independentes, onze delas sem pergunta nenhuma (incidente de
+04/08/2026: 27 minutos, nove respostas desconexas).
+
+Isso é tradução do formato da plataforma para o idioma comum — exatamente o que o princípio 7
+autoriza ao adapter. A alternativa, coalescer no `MessageBus`, imporia uma janela temporal a todos
+os canais e também a mensagens de texto, mudando a semântica da conversa inteira para resolver a
+peculiaridade de um canal.
+
+Garantias do mecanismo: a janela conta a partir da primeira mídia e **não** é reiniciada a cada
+item (um álbum grande não adia o próprio envio); atingir o teto de anexos despacha na hora; `stop()`
+despacha o que estiver em montagem (mídia recebida não se perde no desligamento); mídia avulsa, sem
+`media_group_id`, não espera nada. Cobertura: `S200`.
+
 ## Gaps conhecidos (não corrigidos nesta rodada — fora do escopo original)
 
 **O Core não tem sistema de tradução — só o Dashboard tem.** O único mecanismo de idioma do Core é
