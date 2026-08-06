@@ -122,9 +122,12 @@ Situação em 06/08/2026, verificada caso a caso na Fase 0:
 | `resolveProfile ?? chat ?? [0]` | configuração de perfil | registry | ✅ |
 | `searXNG` local → público | serviço de busca | método de busca | ✅ camada certa, ver Seção 7 |
 
-**Onde vive a capacidade de ciclo de vida do runtime local permanece questão aberta**, a ser
-decidida em ADR própria (`RFC-005`, Sprint 019). O que está estabelecido é apenas o achado: a
-capacidade existe, é madura e testada (`S171`), e não é alcançável por quem precisa dela.
+**Onde vive a capacidade de ciclo de vida do runtime local foi decidido** em
+`docs/decisoes/ADR-006_ONDE_VIVE_O_CICLO_DE_VIDA_DO_RUNTIME_LOCAL.md`: o **diagnóstico** (leitura
+de estado) desce para o domínio, alcançável por quem sofre a falha; a **atuação** (subir/derrubar o
+servidor) permanece fora do Core. A regra que ficou: *o Core pode saber o estado de um runtime
+local, não pode mudá-lo*. O movimento de código é a Sprint 020 — até lá, o achado original continua
+valendo na prática.
 
 ## 9. Relação com outros princípios
 

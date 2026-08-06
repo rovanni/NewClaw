@@ -483,8 +483,9 @@ Registrado aqui para quem chegar a este documento primeiro:
 
 Permanecem abertas, e não devem ser tratadas como resolvidas por proximidade:
 
-* **#4 — onde vive a capacidade de ciclo de vida do runtime.** Vai para ADR própria (Sprint 019),
-  pelo precedente da `ADR-005`.
+* ~~**#4 — onde vive a capacidade de ciclo de vida do runtime.**~~ **Fechada** em 06/08/2026 por
+  `docs/decisoes/ADR-006_ONDE_VIVE_O_CICLO_DE_VIDA_DO_RUNTIME_LOCAL.md`: diagnóstico desce para o
+  domínio, atuação permanece fora do Core.
 * **#5 — Modo de Operação (Online/Offline/Híbrido).** Descartado como *primitivo* pela RFC-005
   (alternativa A3), não como conveniência futura.
 * **#7 — a regra alcança a substituição de decisões do LLM?** Segue aberta; fronteira distinta, já
