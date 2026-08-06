@@ -70,9 +70,13 @@ export class SendAudioTool implements ToolExecutor {
         // Bug real: goal de áudio marcado completed sem NENHUM áudio jamais gerado (edge-tts
         // ENOENT em todas as tentativas) — usuário nunca recebeu nada.
         const now = Date.now();
+        const spokenText = (args.text as string) || '';
         if (now - this.lastSendTime < SendAudioTool.MIN_INTERVAL_MS) {
-            log.info('Debounced — audio already sent recently, skipping.');
-            return { success: true, output: '🔊 Áudio já enviado recentemente.' };
+            // Princípio das ferramentas de entrega (docs/ARCHITECTURE/FERRAMENTAS_DE_ENTREGA.md):
+            // o output devolve o CONTEÚDO entregue, não o recibo da operação. O fato de o envio ter
+            // sido pulado por debounce é diagnóstico — pertence ao log, não à resposta do usuário.
+            log.info('Debounced — audio already sent recently, skipping.', `textLen=${spokenText.length}`);
+            return { success: true, output: spokenText };
         }
         let text = args.text as string;
         const voice = (args.voice as string) || DEFAULT_VOICE;
@@ -146,7 +150,12 @@ export class SendAudioTool implements ToolExecutor {
             // Cleanup
             this.cleanupFiles([rawAudioFile, oggFile]);
 
-            return { success: true, output: '🔊 Áudio enviado com sucesso!' };
+            // Devolve o texto que foi falado, não a confirmação de envio: quem não puder ouvir o
+            // áudio — canal sem reprodução, ambiente barulhento, deficiência auditiva — precisa
+            // receber o conteúdo mesmo assim. E o texto já vem no idioma configurado, porque foi
+            // o próprio LLM que o produziu (o Core não traduz texto fixo).
+            log.info('Audio sent', `textLen=${spokenText.length}`);
+            return { success: true, output: spokenText };
         } catch (error) {
             // Cleanup on error
             this.cleanupFiles([rawAudioFile, oggFile]);

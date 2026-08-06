@@ -186,6 +186,11 @@ conhecimento ou decisão:
 - **Nunca Adivinhar** (`docs/ARCHITECTURE/NUNCA_ADIVINHAR.md`) — diante de um dado necessário que
   não foi observado ou configurado explicitamente, o comportamento correto é reportar ausência,
   nunca inferir um valor plausível e apresentá-lo como fato.
+- **Ferramentas de Entrega** (`docs/ARCHITECTURE/FERRAMENTAS_DE_ENTREGA.md`) — toda ferramenta cujo
+  propósito é entregar conteúdo ao usuário (`send_audio`, `send_document`, `send_image`, e futuras
+  como `send_email`) devolve no `output` o **conteúdo entregue**, nunca o recibo da operação;
+  status e diagnóstico pertencem ao log. Nasceu de uma entrega por áudio cuja resposta textual era
+  a mensagem interna do mecanismo de deduplicação — quem não pudesse ouvir ficava sem resposta.
 - **Pipeline de Curadoria de Dependências**
   (`docs/ARCHITECTURE/PIPELINE_CURADORIA_DEPENDENCIAS.md`) — o processo oficial (Sprints 007-009)
   pelo qual conhecimento sobre instalação cross-platform entra em `KNOWN_DEPS`: pesquisa (Skill

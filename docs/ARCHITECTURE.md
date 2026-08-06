@@ -18,6 +18,9 @@ Um canal é apenas uma porta de entrada/saída — nunca um lugar onde a IA "pen
 6. `ChannelAdapter`s não contêm regras de negócio de IA.
 7. Diferenças entre adapters só existem para atender limitações específicas da API de cada
    plataforma (chunking de mensagem longa, markdown→HTML, emojis, formato de anexo).
+8. O pré-processamento de mídia produz **fatos** na `NormalizedMessage` — nunca decide o que a IA
+   vai ver, nunca encerra o turno e nunca redige a resposta ao usuário (ver
+   "Ingestão de mídia: fatos, não decisões", abaixo).
 
 ## Fluxo oficial
 
@@ -87,6 +90,33 @@ Canal
 
 Nenhum arquivo em `src/loop/` importa qualquer `*Adapter` — confirmado por auditoria (zero
 referências). O Core não sabe que Telegram, Discord, WhatsApp, Signal ou o Dashboard existem.
+
+## Ingestão de mídia: fatos, não decisões
+
+Origem: `docs/decisoes/RFC-004_INGESTAO_DE_MIDIA_MULTIPLA.md` (Princípio 2), nascida de um
+incidente real em que 12 imagens enviadas numa mesma conversa produziram 4 análises, 3 perdas
+silenciosas e 9 respostas desconexas.
+
+O pré-processamento de anexos (`MessageBus.processAttachments` → `agentMediaHandlers`) fica na
+fronteira entre o canal e o Core, e por isso é o ponto onde é mais fácil — e mais danoso —
+transformar uma etapa de tradução em uma etapa de decisão. A regra normativa:
+
+> O pré-processamento observa **todos** os anexos, registra o que conseguiu e o que não conseguiu
+> como **fato textual** na `NormalizedMessage`, e entrega ao Core. Ele nunca encerra o turno, nunca
+> escolhe qual anexo a IA vai ver e nunca redige a resposta ao usuário.
+
+É a mesma regra que `docs/ARCHITECTURE/EVIDENCE_PROVIDER_PATTERN.md` já estabelece para componentes
+de conhecimento, aplicada à camada de ingestão: fornecer evidência para o Core ponderar, em vez de
+decidir por ele.
+
+Duas consequências que não são acidentais:
+
+* **Um anexo que falha não interrompe os outros nem a conversa.** A falha é um fato como qualquer
+  outro — o Core decide o que fazer com ela.
+* **Mensagens de erro de anexo deixam de ser texto fixo do canal.** Quem verbaliza a falha é o LLM,
+  que já obedece à diretiva de idioma (`buildLanguageDirective`) — e portanto responde em pt-BR,
+  en-US ou es-ES conforme a configuração. Texto fixo emitido pelo canal nunca passa por esse
+  mecanismo (ver "Gaps conhecidos").
 
 ## ChannelAdapters
 
@@ -197,7 +227,41 @@ pendente, envio da resposta, registro na sessão). Isso foi consolidado em
 `AgentController.createWorkflowCallback(adapter, channel, format)` — um único ponto de
 implementação parametrizado pelo adapter/canal/formato de saída.
 
+### Agrupamento de álbum no Telegram — estado e janela de tempo dentro de um adapter
+
+O `TelegramAdapter` mantém um buffer curto (`TELEGRAM_ALBUM_WINDOW_MS`, padrão 1500 ms) que junta
+as mídias de um mesmo `media_group_id` numa única `NormalizedMessage` com N anexos.
+
+É a única exceção onde um adapter guarda estado entre mensagens, e por isso está documentada aqui.
+A justificativa: **o Telegram é a única plataforma suportada que fragmenta um álbum** — entrega um
+update por item e anexa a legenda apenas ao primeiro. Discord e o Dashboard web já entregam N
+anexos numa única mensagem. Sem o agrupamento, doze fotos enviadas juntas com a pergunta "explique
+cada projeto" viravam doze conversas independentes, onze delas sem pergunta nenhuma (incidente de
+04/08/2026: 27 minutos, nove respostas desconexas).
+
+Isso é tradução do formato da plataforma para o idioma comum — exatamente o que o princípio 7
+autoriza ao adapter. A alternativa, coalescer no `MessageBus`, imporia uma janela temporal a todos
+os canais e também a mensagens de texto, mudando a semântica da conversa inteira para resolver a
+peculiaridade de um canal.
+
+Garantias do mecanismo: a janela conta a partir da primeira mídia e **não** é reiniciada a cada
+item (um álbum grande não adia o próprio envio); atingir o teto de anexos despacha na hora; `stop()`
+despacha o que estiver em montagem (mídia recebida não se perde no desligamento); mídia avulsa, sem
+`media_group_id`, não espera nada. Cobertura: `S200`.
+
 ## Gaps conhecidos (não corrigidos nesta rodada — fora do escopo original)
+
+**O Core não tem sistema de tradução — só o Dashboard tem.** O único mecanismo de idioma do Core é
+`buildLanguageDirective(config.language)`, que instrui o **LLM** a responder em pt-BR/en-US/es-ES.
+Toda string fixa que o Core emite diretamente ao usuário (mensagens de erro de anexo, ACK de fila
+em `MessageBus`, texto do validador de objetivos em `GoalExecutionLoop`) sai **sempre em
+português**, para qualquer usuário. O Dashboard, por outro lado, tem tabela de traduções nos três
+idiomas com paridade de chaves garantida por teste (`S147`).
+
+O caminho escolhido pela `RFC-004` não é criar um sistema de tradução no Core, e sim **reduzir a
+quantidade de texto que o Core emite diretamente**: transformar o que hoje é resposta fixa em fato
+para o LLM verbalizar. As mensagens de erro de anexo saem desse caminho na Sprint 013; as demais
+permanecem como débito conhecido.
 
 **WhatsApp e Signal não conseguem processar anexos hoje.** Ambos os adapters populam
 `ChannelAttachment.fileId` mas nunca implementam `downloadFile()` nem preenchem `.data`/`.url`.

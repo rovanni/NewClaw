@@ -2184,7 +2184,13 @@ export class GoalExecutionLoop {
                 ` reason=already_sent_in_goal_session` +
                 ` decision=skip`
             );
-            return { toolResult: { success: true, output: '🔊 Áudio já enviado nesta execução do objetivo — reenvio evitado.' } };
+            // O reenvio é evitado, mas o CONTEÚDO não pode sumir: este output é o que chega ao
+            // usuário quando o send_audio é o último step. Devolver aqui "reenvio evitado" fazia
+            // a resposta final ser um diagnóstico interno do dedup — observado em execução real
+            // (05/08/2026): o usuário recebeu 73 caracteres de telemetria e um .ogg de 450 KB,
+            // sem nenhum texto do que havia sido explicado.
+            // Ver docs/ARCHITECTURE/FERRAMENTAS_DE_ENTREGA.md.
+            return { toolResult: { success: true, output: String(resolvedArgs['text'] ?? '') } };
         }
         if (!registered) {
             return { toolResult: { success: false, output: '', error: `command not found: ${toolName}` } };

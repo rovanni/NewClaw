@@ -738,8 +738,21 @@
     // === Attachments ===
     // Enviados como multipart/form-data (campo "files") — o backend classifica o tipo
     // (photo/audio/document) pelo mimetype e roda o mesmo pipeline usado por Telegram/Discord.
-    const MAX_ATTACHMENTS = 5;
+    // Fonte de verdade do limite é o backend (MessageBus.MAX_ATTACHMENTS_PER_MESSAGE, exposto em
+    // /api/config). O valor abaixo é só o palpite inicial até a resposta chegar — se divergir, quem
+    // manda é o servidor, que também recusa com {error:'too_many_files', max}.
+    let MAX_ATTACHMENTS = 10;
     const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024; // 20MB por arquivo (mesmo limite do multer no backend)
+
+    (async () => {
+      try {
+        const res = await newclawFetch('/api/config');
+        const data = await res.json();
+        if (data?.success && Number.isFinite(data.config?.maxAttachmentsPerMessage)) {
+          MAX_ATTACHMENTS = data.config.maxAttachmentsPerMessage;
+        }
+      } catch (e) { /* mantém o palpite inicial; o backend recusa o excedente de qualquer forma */ }
+    })();
     let pendingAttachments = []; // { file, fileName, mimeType, type, previewUrl }
 
     function classifyAttachmentType(mimeType) {
@@ -752,14 +765,26 @@
       return m ? m[1].toUpperCase().slice(0, 4) : 'FILE';
     }
     function addAttachment(file) {
-      if (pendingAttachments.length >= MAX_ATTACHMENTS) { alert(`⚠️ Máximo de ${MAX_ATTACHMENTS} anexos por mensagem`); return; }
-      if (file.size > MAX_ATTACHMENT_BYTES) { alert(`⚠️ Arquivo muito grande: ${file.name}`); return; }
+      if (pendingAttachments.length >= MAX_ATTACHMENTS) { alert(t('attach_limit', { n: MAX_ATTACHMENTS })); return; }
+      if (file.size > MAX_ATTACHMENT_BYTES) { alert(t('attach_too_large', { name: file.name })); return; }
       const mimeType = file.type || 'application/octet-stream';
       const type = classifyAttachmentType(mimeType);
       const previewUrl = type === 'photo' ? URL.createObjectURL(file) : null;
       pendingAttachments.push({ file, fileName: file.name, mimeType, type, previewUrl });
       renderAttachPreview();
     }
+    /**
+     * Converte a resposta de erro do servidor em texto para o usuário.
+     * Códigos conhecidos são traduzidos; qualquer outro erro é mostrado como veio, para não
+     * esconder informação de diagnóstico.
+     */
+    function uploadErrorText(data) {
+      const known = { too_many_files: 'attach_limit', file_too_large: 'attach_too_large_generic', upload_failed: 'attach_upload_failed' };
+      const key = known[data.error];
+      if (!key) return `⚠️ ${data.error}`;
+      return t(key, { n: data.max ?? MAX_ATTACHMENTS, mb: Math.round((data.maxBytes ?? MAX_ATTACHMENT_BYTES) / (1024 * 1024)) });
+    }
+
     function removeAttachment(idx) {
       const [removed] = pendingAttachments.splice(idx, 1);
       if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
@@ -975,7 +1000,7 @@
         showStatus('receiving', t('status_receiving'));
         const data = await res.json();
         hideStatus();
-        const response = data.error ? `⚠️ Erro: ${data.error}` : (data.response || '...');
+        const response = data.error ? uploadErrorText(data) : (data.response || '...');
         conv.messages[idx] = { role: 'bot', content: response, timestamp: Date.now(), attachments: mapServerAttachments(data.attachments) };
         conv.updatedAt = Date.now();
         save(); renderChat(); renderSidebar();
@@ -1136,7 +1161,7 @@
         showStatus('receiving', t('status_receiving'));
         const data = await res.json();
         hideStatus();
-        const response = data.error ? `⚠️ Erro: ${data.error}` : (data.response || '...');
+        const response = data.error ? uploadErrorText(data) : (data.response || '...');
         addMsg('bot', response, mapServerAttachments(data.attachments));
         speakText(response.replace(/```[\s\S]*?```/g,'(código)').replace(/[*#`_]/g,'').slice(0,500));
       } catch (err) { hideStatus(); addMsg('bot', `⚠️ Falha: ${err.message}`); }

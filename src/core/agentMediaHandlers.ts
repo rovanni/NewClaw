@@ -75,6 +75,60 @@ function isLikelyHallucination(text: string): boolean {
     return false;
 }
 
+/**
+ * Tentativas de download antes de desistir de um anexo. Um único lugar para os três tipos.
+ *
+ * Três falhas transitórias de rede custaram três imagens no incidente de 04/08/2026: o áudio já
+ * tentava três vezes com backoff, foto e documento tentavam uma. A política existia; faltava estar
+ * no mesmo lugar para todos (RFC-004, Correção 3; cobertura S198).
+ */
+const MAX_DOWNLOAD_ATTEMPTS = 3;
+
+/**
+ * Executa um download com repetição e espera progressiva. Devolve o buffer, ou `null` quando as
+ * tentativas se esgotam — o chamador decide como reportar a falha.
+ *
+ * Agnóstico de canal e de origem dos bytes: serve tanto para `downloadFile` por fileId (Telegram)
+ * quanto para `fetch` de URL (Discord), que antes não tinha repetição nenhuma.
+ */
+async function downloadWithRetry(
+    what: string,
+    logger: { warn: (event: string, detail: string) => void; error: (event: string, detail: unknown) => void },
+    download: () => Promise<Buffer>,
+): Promise<Buffer | null> {
+    for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
+        try {
+            return await download();
+        } catch (e) {
+            logger.warn('download_failed', `${what} attempt=${attempt}/${MAX_DOWNLOAD_ATTEMPTS} error=${errorMessage(e)}`);
+            if (attempt === MAX_DOWNLOAD_ATTEMPTS) {
+                logger.error('download_exhausted', e);
+                return null;
+            }
+            await new Promise(r => setTimeout(r, 1000 * attempt));
+        }
+    }
+    return null;
+}
+
+/** Baixa de uma URL pública (CDN do Discord), tratando status HTTP != 2xx como falha retentável. */
+async function fetchBuffer(url: string): Promise<Buffer> {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * Acrescenta a transcrição ao texto da mensagem sem apagar o que já existe.
+ *
+ * Antes era `msg.text = transcription`, atribuição direta: a legenda que acompanhava o áudio era
+ * perdida, e num canal que aceita vários anexos por mensagem (Discord, Dashboard) o segundo áudio
+ * apagava a transcrição do primeiro. RFC-004, Princípio 2 — ingestão não descarta input do usuário.
+ */
+function appendTranscription(msg: NormalizedMessage, transcription: string): void {
+    msg.text = msg.text ? `${msg.text}\n${transcription}` : transcription;
+}
+
 export async function transcribeAttachment(
     msg: NormalizedMessage,
     attachment: ChannelAttachment,
@@ -91,12 +145,12 @@ export async function transcribeAttachment(
             voiceLog.info('audio_from_inline_data', `size=${audioBuffer.length} type=${attachment.type}`);
         } else if (attachment.url) {
             // Discord entrega o áudio via CDN URL — sem fileId/downloadFile por adapter.
-            const audioRes = await fetch(attachment.url);
-            if (!audioRes.ok) {
-                voiceLog.error('audio_url_download_failed', `status=${audioRes.status} url=${attachment.url}`);
+            const url = attachment.url;
+            const downloaded = await downloadWithRetry('audio_url', voiceLog, () => fetchBuffer(url));
+            if (!downloaded) {
                 return `⚠️ Falha ao baixar o arquivo de áudio do canal ${msg.channel}. Tente reenviar.`;
             }
-            audioBuffer = Buffer.from(await audioRes.arrayBuffer());
+            audioBuffer = downloaded;
             voiceLog.info('audio_from_url', `size=${audioBuffer.length} type=${attachment.type}`);
         } else {
             if (!fileId) {
@@ -104,20 +158,13 @@ export async function transcribeAttachment(
                 return '⚠️ Não foi possível obter o arquivo de áudio (fileId ausente).';
             }
 
-            const MAX_DOWNLOAD_ATTEMPTS = 3;
-            for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
-                try {
-                    audioBuffer = await messageBus.downloadFile(msg.channel, fileId);
-                    break;
-                } catch (e) {
-                    voiceLog.warn('audio_download_failed', `attempt=${attempt}/${MAX_DOWNLOAD_ATTEMPTS} error=${errorMessage(e)}`);
-                    if (attempt === MAX_DOWNLOAD_ATTEMPTS) {
-                        voiceLog.error('audio_download_exhausted', e);
-                        return `⚠️ Falha ao baixar o arquivo de áudio do canal ${msg.channel}. Tente reenviar.`;
-                    }
-                    await new Promise(r => setTimeout(r, 1000 * attempt));
-                }
+            const downloaded = await downloadWithRetry(
+                'audio_file', voiceLog, () => messageBus.downloadFile(msg.channel, fileId),
+            );
+            if (!downloaded) {
+                return `⚠️ Falha ao baixar o arquivo de áudio do canal ${msg.channel}. Tente reenviar.`;
             }
+            audioBuffer = downloaded;
             voiceLog.info('audio_downloaded', `size=${audioBuffer.length} type=${attachment.type}`);
         }
 
@@ -147,9 +194,19 @@ export async function transcribeAttachment(
             await fs.unlink(tmpWav).catch(() => {});
         }
 
-        const whisperApiUrl = process.env.WHISPER_API_URL || 'http://10.0.0.1:8177';
-        const whisperApiFallback = process.env.WHISPER_API_FALLBACK || '';
-        const whisperUrls = [whisperApiUrl, whisperApiFallback].filter(Boolean);
+        // Sem endereço padrão: uma API remota de transcrição só é usada quando explicitamente
+        // configurada. Variáveis ausentes ou vazias significam "transcrever localmente" — o
+        // fallback whisper-cli logo abaixo. Havia aqui um endereço de rede privada embutido como
+        // padrão; como os instaladores gravam WHISPER_API_URL vazia e string vazia é falsy, toda
+        // instalação nova saía apontando para aquele host — em rede doméstica, tipicamente o
+        // roteador do próprio usuário (RFC-004, Correção 0; cobertura S195).
+        const whisperUrls = [process.env.WHISPER_API_URL, process.env.WHISPER_API_FALLBACK]
+            .map(url => (url || '').trim())
+            .filter(Boolean);
+
+        if (whisperUrls.length === 0) {
+            voiceLog.info('whisper_api_not_configured', 'WHISPER_API_URL não configurado — transcrevendo com whisper local.');
+        }
 
         for (const whisperUrl of whisperUrls) {
             try {
@@ -171,7 +228,7 @@ export async function transcribeAttachment(
                             return '⚠️ Não consegui entender o áudio (muito baixo ou com ruído). Pode falar novamente ou enviar como texto?';
                         }
                         voiceLog.info('whisper_transcription_ok', `textLen=${transcription.length}`);
-                        msg.text = transcription.trim();
+                        appendTranscription(msg, transcription.trim());
                         return null;
                     }
                 }
@@ -204,7 +261,7 @@ export async function transcribeAttachment(
                     return '⚠️ Não consegui entender o áudio (muito baixo ou com ruído). Pode falar novamente ou enviar como texto?';
                 }
                 voiceLog.info('local_whisper_ok', `textLen=${transcription.length}`);
-                msg.text = transcription;
+                appendTranscription(msg, transcription);
                 return null;
             }
         } catch (e) {
@@ -248,17 +305,15 @@ export async function handleDocumentAttachment(
             if (!fileId) {
                 documentLog.error('missing_file_id', 'fileId ausente no attachment');
             } else {
-                try {
-                    documentLog.info('downloading_from_telegram', `Downloading ${fileName}`);
-                    fileBuffer = await messageBus.downloadFile('telegram', fileId);
-                } catch (e) {
-                    documentLog.error('telegram_download_failed', e);
-                }
+                documentLog.info('downloading_from_telegram', `Downloading ${fileName}`);
+                fileBuffer = await downloadWithRetry(
+                    'document', documentLog, () => messageBus.downloadFile('telegram', fileId),
+                );
             }
         } else if (channel === 'discord' && attachment.url) {
-            documentLog.info('downloading_from_discord', `Downloading ${fileName}`, { url: attachment.url });
-            const docRes = await fetch(attachment.url);
-            if (docRes.ok) fileBuffer = Buffer.from(await docRes.arrayBuffer());
+            const url = attachment.url;
+            documentLog.info('downloading_from_discord', `Downloading ${fileName}`, { url });
+            fileBuffer = await downloadWithRetry('document_url', documentLog, () => fetchBuffer(url));
         } else if (attachment.data) {
             fileBuffer = Buffer.from(attachment.data, 'base64');
         }
@@ -355,16 +410,14 @@ export async function handlePhotoAttachment(
         if (channel === 'telegram') {
             const fileId = attachment.fileId;
             if (fileId) {
-                try {
-                    fileBuffer = await messageBus.downloadFile('telegram', fileId);
-                    fileName = `photo_${Date.now()}.jpg`;
-                } catch (e) {
-                    visionLog.warn('telegram_photo_download_failed', errorMessage(e));
-                }
+                fileBuffer = await downloadWithRetry(
+                    'photo', visionLog, () => messageBus.downloadFile('telegram', fileId),
+                );
+                if (fileBuffer) fileName = `photo_${Date.now()}.jpg`;
             }
         } else if (channel === 'discord' && attachment.url) {
-            const imgRes = await fetch(attachment.url);
-            if (imgRes.ok) fileBuffer = Buffer.from(await imgRes.arrayBuffer());
+            const url = attachment.url;
+            fileBuffer = await downloadWithRetry('photo_url', visionLog, () => fetchBuffer(url));
         } else if (attachment.data) {
             fileBuffer = Buffer.from(attachment.data, 'base64');
         }

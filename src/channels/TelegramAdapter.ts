@@ -31,11 +31,6 @@ const log = createLogger('TelegramAdapter');
 export interface TelegramConfig extends ChannelConfig {
     botToken: string;
     allowedUserIds: string[];
-    /** Whisper config for voice transcription */
-    whisperApiUrl?: string;
-    whisperApiFallback?: string;
-    whisperPath?: string;
-    whisperModel?: string;
     tmpDir?: string;
     /** TTS config */
     audioVoice?: string;
@@ -50,7 +45,15 @@ interface TelegramMsg {
     audio?: { file_id: string; file_name?: string; duration?: number; file_size?: number; mime_type?: string };
     document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
     caption?: string;
+    /** Presente quando a mídia faz parte de um álbum — o Telegram entrega um update por item. */
+    media_group_id?: string;
     [key: string]: unknown;
+}
+
+/** Álbum em montagem: a mensagem normalizada da primeira mídia, acumulando as demais. */
+interface PendingAlbum {
+    msg: NormalizedMessage;
+    timer: NodeJS.Timeout;
 }
 
 export class TelegramAdapter implements ChannelAdapter {
@@ -73,11 +76,12 @@ export class TelegramAdapter implements ChannelAdapter {
     private handlersRegistered = false;
 
     constructor(config: TelegramConfig) {
+        // A transcrição vive inteiramente no Core (`agentMediaHandlers.transcribeAttachment`),
+        // que lê WHISPER_* do ambiente por conta própria. Os campos whisper* que existiam aqui
+        // eram escritos e nunca lidos — configuração de IA dentro de um adapter, contrariando o
+        // princípio 6 de docs/ARCHITECTURE.md, e um deles trazia caminho Unix absoluto que
+        // quebraria no Windows se algum dia fosse usado (RFC-004, Correção 0).
         this.config = {
-            whisperApiUrl: process.env.WHISPER_API_URL || 'http://localhost:8177',
-            whisperApiFallback: process.env.WHISPER_API_FALLBACK || '',
-            whisperPath: process.env.WHISPER_PATH || '/usr/local/bin/whisper',
-            whisperModel: process.env.WHISPER_MODEL || 'tiny',
             tmpDir: './tmp',
             audioVoice: 'pt-BR-AntonioNeural',
             audioRate: '+0%',
@@ -143,6 +147,30 @@ export class TelegramAdapter implements ChannelAdapter {
     /** Max age for pending messages to be processed after restart (15 minutes) */
     private static readonly PENDING_MAX_AGE_MS = 15 * 60 * 1000;
 
+    /**
+     * Janela de espera para juntar as mídias de um álbum numa única mensagem.
+     *
+     * O Telegram é a única plataforma suportada que fragmenta um álbum: cada foto chega como um
+     * update separado, e a legenda vem só na primeira. Sem agrupar, doze fotos com a pergunta
+     * "explique cada projeto" viravam doze conversas independentes — onze delas sem pergunta
+     * nenhuma, cada uma abrindo seu próprio objetivo (incidente de 04/08/2026: 27 minutos, nove
+     * respostas desconexas).
+     *
+     * Agrupar aqui, e não no MessageBus, é deliberado: é tradução do formato da plataforma para o
+     * idioma comum — a diferença que ARCHITECTURE.md autoriza ao adapter. Discord e Web já
+     * entregam N anexos numa única mensagem. Impor uma janela de coalescência no Core afetaria
+     * todos os canais e também mensagens de texto, mudando a semântica da conversa inteira para
+     * resolver a peculiaridade de um canal.
+     *
+     * O valor é conservador: na prática o Telegram entrega o álbum em milissegundos, mas não há
+     * garantia formal. Janela curta demais parte o álbum em dois; longa demais atrasa toda mídia
+     * avulsa. Ajustável por TELEGRAM_ALBUM_WINDOW_MS.
+     */
+    private static readonly ALBUM_WINDOW_MS = parseInt(process.env.TELEGRAM_ALBUM_WINDOW_MS || '1500', 10);
+
+    /** Álbuns em montagem, por (chat, media_group_id). */
+    private readonly pendingAlbums = new Map<string, PendingAlbum>();
+
     async start(): Promise<void> {
         if (!this.config.enabled) {
             log.info('adapter_disabled', 'Telegram adapter is disabled');
@@ -158,7 +186,69 @@ export class TelegramAdapter implements ChannelAdapter {
     }
 
     async stop(): Promise<void> {
+        // Álbuns em montagem são despachados antes de parar: mídia já recebida do usuário não se
+        // perde por causa do desligamento.
+        for (const key of [...this.pendingAlbums.keys()]) this.flushAlbum(key);
         await this.supervisor.stop();
+    }
+
+    // ── Agrupamento de álbum ────────────────────────────────────────────────────
+
+    /**
+     * Despacha a mensagem imediatamente, ou a acumula quando faz parte de um álbum.
+     *
+     * Mídia avulsa (sem `media_group_id`) segue o caminho de sempre, sem nenhuma espera adicional.
+     */
+    private dispatchOrGroup(mediaGroupId: string | undefined, msg: NormalizedMessage): void {
+        if (!mediaGroupId) {
+            this.dispatch(msg);
+            return;
+        }
+
+        const key = `${msg.chatId}:${mediaGroupId}`;
+        const pending = this.pendingAlbums.get(key);
+
+        if (!pending) {
+            // Primeira mídia do álbum: ela vira a mensagem-base (e carrega messageId, rawContext e
+            // legenda — o Telegram só põe a legenda na primeira). A janela conta a partir daqui e
+            // NÃO é reiniciada a cada nova mídia: um álbum grande não pode adiar o próprio envio
+            // indefinidamente.
+            const timer = setTimeout(() => this.flushAlbum(key), TelegramAdapter.ALBUM_WINDOW_MS);
+            timer.unref?.();
+            this.pendingAlbums.set(key, { msg, timer });
+            return;
+        }
+
+        pending.msg.attachments = [...(pending.msg.attachments || []), ...(msg.attachments || [])];
+        // A legenda costuma vir na primeira mídia, mas se vier em outra, aproveita.
+        if (!pending.msg.text && msg.text) pending.msg.text = msg.text;
+
+        // Teto atingido: não há motivo para continuar esperando — o Core não processaria mais que
+        // isso de qualquer forma, e o excedente viraria fato de excedente.
+        if (pending.msg.attachments.length >= MessageBus.MAX_ATTACHMENTS_PER_MESSAGE) {
+            this.flushAlbum(key);
+        }
+    }
+
+    /** Fecha o álbum e o envia como UMA mensagem com N anexos. */
+    private flushAlbum(key: string): void {
+        const pending = this.pendingAlbums.get(key);
+        if (!pending) return;
+        this.pendingAlbums.delete(key);
+        clearTimeout(pending.timer);
+
+        const count = pending.msg.attachments?.length ?? 0;
+        if (count > 1) {
+            log.info('album_grouped', `key=${key} anexos=${count} janela=${TelegramAdapter.ALBUM_WINDOW_MS}ms`);
+        }
+        this.dispatch(pending.msg);
+    }
+
+    private dispatch(msg: NormalizedMessage): void {
+        if (!this.bus) return;
+        this.bus.processMessage(msg).catch(err =>
+            log.error('process_message_error', err instanceof Error ? err : undefined, String(err))
+        );
     }
 
     /** Enviar resposta normalizada via Telegram */
@@ -404,11 +494,7 @@ export class TelegramAdapter implements ChannelAdapter {
                 metadata: {},
             };
 
-            if (this.bus) {
-                this.bus.processMessage(msg).catch(err =>
-                    log.error('process_message_error', err instanceof Error ? err : undefined, String(err))
-                );
-            }
+            this.dispatchOrGroup((ctx.message as unknown as TelegramMsg)?.media_group_id, msg);
         });
 
         // Voice
@@ -522,11 +608,8 @@ export class TelegramAdapter implements ChannelAdapter {
                 metadata: {},
             };
 
-            if (this.bus) {
-                this.bus.processMessage(msg).catch(err =>
-                    log.error('process_message_error', err instanceof Error ? err : undefined, String(err))
-                );
-            }
+            // Álbum de documentos existe no Telegram tanto quanto álbum de fotos — mesmo caminho.
+            this.dispatchOrGroup((ctx.message as unknown as TelegramMsg)?.media_group_id, msg);
         });
 
         // Callback queries (Button clicks)

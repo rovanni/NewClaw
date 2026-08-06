@@ -4,6 +4,7 @@ import path from 'path';
 import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import { DashboardContext, ExtendedConfig } from './types';
+import { MAX_UPLOAD_FILES } from './chat';
 
 const log = createLogger('Dashboardserver');
 
@@ -89,6 +90,8 @@ export function createConfigRouter(ctx: DashboardContext): Router {
             success: true,
             config: {
                 language: ctx.config.language,
+                // Teto de anexos por mensagem — a interface lê daqui em vez de repetir o número.
+                maxAttachmentsPerMessage: MAX_UPLOAD_FILES,
                 defaultProvider: ctx.config.defaultProvider,
                 currentModel: ctx.providerFactory?.getCurrentModel() || ctx.config.ollamaModel || 'unknown',
                 maxIterations: ctx.config.maxIterations,
