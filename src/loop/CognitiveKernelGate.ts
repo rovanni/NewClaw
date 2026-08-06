@@ -24,10 +24,69 @@ import { createLogger } from '../shared/AppLogger';
 import { circuitRegistry } from '../core/CircuitBreaker';
 import type { GoalStore } from './GoalStore';
 import type { Goal } from './GoalTypes';
-import { goalAdapter, goalKernelInstance } from 'newclaw-kernel-adapter';
-import type { GoalLike, EfeitoSobreGoal } from 'newclaw-kernel-adapter';
 
 const log = createLogger('CognitiveKernelGate');
+
+// ── Carregamento opcional do adapter do Cognitive Kernel ──────────────────────
+//
+// O `newclaw-kernel-adapter` é um pacote NÃO PUBLICADO, declarado como
+// `file:../newclaw-kernel-adapter` — um caminho relativo que só existe na máquina onde os dois
+// repositórios são irmãos. Em qualquer outro lugar (outra máquina do próprio autor, VPS, ou
+// qualquer pessoa que clone este repositório público) o caminho não existe.
+//
+// Com `import` estático, isso quebrava o BUILD com `TS2307: Cannot find module`, impedindo
+// `npm run build` e, por consequência, o `newclaw update` de concluir. Incidente real: 06/08/2026,
+// atualização de uma segunda máquina do operador.
+//
+// O cabeçalho deste arquivo sempre prometeu degradação graciosa — "qualquer exceção (Kernel
+// quebrado, dependência ausente) sempre cai em {action:'proceed'}". A promessa estava correta e
+// implementada, mas só valia em runtime: um import estático falha antes de qualquer try/catch
+// existir. Carregar sob demanda é o que faz a promessa valer também para a ausência do pacote.
+//
+// Os tipos abaixo descrevem apenas a superfície que este gate consome — três chamadas. Declará-los
+// aqui evita depender dos .d.ts de um pacote que pode não estar instalado.
+
+interface GoalLike {
+    goalId: string;
+    sessionKey: string;
+    conversationId: string;
+    [key: string]: unknown;
+}
+
+interface EfeitoSobreGoal {
+    acao: string;
+    mensagem?: string;
+    [key: string]: unknown;
+}
+
+interface KernelDecision { tipo: string; [key: string]: unknown }
+
+interface KernelAdapterModule {
+    goalAdapter: {
+        paraEnvelope(goal: GoalLike): unknown;
+        paraDominio(decisao: KernelDecision): unknown;
+    };
+    goalKernelInstance: {
+        process(envelope: unknown): KernelDecision;
+    };
+}
+
+/** `undefined` = ainda não tentamos carregar; `null` = tentamos e o pacote não está disponível. */
+let kernelModule: KernelAdapterModule | null | undefined;
+
+function loadKernelAdapter(): KernelAdapterModule | null {
+    if (kernelModule !== undefined) return kernelModule;
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        kernelModule = require('newclaw-kernel-adapter') as KernelAdapterModule;
+        log.info('[COGNITIVE-KERNEL] adapter carregado');
+    } catch {
+        // Ausência é estado normal para quem não tem o repositório irmão — não é avaria.
+        kernelModule = null;
+        log.info('[COGNITIVE-KERNEL] adapter não instalado — gate inativo, goals seguem normalmente');
+    }
+    return kernelModule;
+}
 
 /** Lido uma única vez no load do módulo — mesmo padrão de PermissionRegistry/CAPABILITY_MODE. */
 const ENABLED = process.env.COGNITIVE_KERNEL_ENABLED === 'true';
@@ -95,15 +154,19 @@ export async function avaliarGoal(goal: Goal, goalStore: GoalStore): Promise<Gat
         return { action: 'proceed' };
     }
 
+    // Pacote ausente é estado normal (ver nota no topo), não falha: não conta para o circuito.
+    const kernel = loadKernelAdapter();
+    if (!kernel) return { action: 'proceed' };
+
     try {
         const precedente = goalStore.getPrecedentStats(goal.sessionKey, goal.createdAt);
-        const envelope = goalAdapter.paraEnvelope(toGoalLike(goal, precedente));
-        const decisao = goalKernelInstance.process(envelope);
+        const envelope = kernel.goalAdapter.paraEnvelope(toGoalLike(goal, precedente));
+        const decisao = kernel.goalKernelInstance.process(envelope);
         // paraDominio() retorna `unknown` no contrato genérico do kernel-sdk por design
         // (mesma opacidade de Decision.trilha) — EfeitoSobreGoal é a forma concreta que
         // SÓ este Adapter conhece; nenhum outro consumidor no projeto ainda precisava
         // estreitar este tipo antes deste gate.
-        const efeito = goalAdapter.paraDominio(decisao) as EfeitoSobreGoal;
+        const efeito = kernel.goalAdapter.paraDominio(decisao) as EfeitoSobreGoal;
         breaker.recordSuccess();
 
         log.info(`[COGNITIVE-KERNEL] goal=${goal.id} decision=${decisao.tipo} efeito=${efeito.acao} apply=${APPLY_DECISION}`);
