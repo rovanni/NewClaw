@@ -106,11 +106,15 @@ export class SendAudioTool implements ToolExecutor {
         // Extensão real definida pela engine que de fato gerar o áudio (Piper → .wav,
         // node-edge-tts/CLI Python → .mp3) — ver generateAudio().
         let rawAudioFile = '';
+        /** `ADR-007` — fatos sobre a entrega, se a cadeia de TTS tiver saído da máquina do usuário. */
+        let fatosDaEntrega: string[] = [];
 
         try {
             log.info(`Generating audio with voice=${voice}...`);
             const ttsStart = Date.now();
-            rawAudioFile = await this.generateAudio(text, voice, audioDir, timestamp);
+            const geracao = await this.generateAudio(text, voice, audioDir, timestamp);
+            rawAudioFile = geracao.file;
+            fatosDaEntrega = geracao.fatos;
             log.info(`TTS done in ${Date.now() - ttsStart}ms (${path.basename(rawAudioFile)})`);
 
             // Convert to OGG with ffmpeg (ASYNC — non-blocking). ffmpeg detecta o formato de
@@ -155,7 +159,12 @@ export class SendAudioTool implements ToolExecutor {
             // receber o conteúdo mesmo assim. E o texto já vem no idioma configurado, porque foi
             // o próprio LLM que o produziu (o Core não traduz texto fixo).
             log.info('Audio sent', `textLen=${spokenText.length}`);
-            return { success: true, output: spokenText };
+            // `output` continua sendo só o conteúdo (`FERRAMENTAS_DE_ENTREGA.md` §4, `S201`). O fato
+            // viaja ao lado, na terceira categoria — e é ele que faz o turno não encerrar aqui, para
+            // que exista um LLM depois capaz de verbalizá-lo no idioma da conversa (`ADR-007`).
+            return fatosDaEntrega.length > 0
+                ? { success: true, output: spokenText, deliveryFacts: fatosDaEntrega }
+                : { success: true, output: spokenText };
         } catch (error) {
             // Cleanup on error
             this.cleanupFiles([rawAudioFile, oggFile]);
@@ -187,30 +196,43 @@ export class SendAudioTool implements ToolExecutor {
      * subprocesso independente (nunca linkado ao processo do NewClaw), mesmo padrão de
      * "agregação" já usado para ffmpeg neste arquivo, não uma vinculação de biblioteca.
      */
-    private async generateAudio(text: string, voice: string, audioDir: string, timestamp: number): Promise<string> {
+    private async generateAudio(text: string, voice: string, audioDir: string, timestamp: number): Promise<{ file: string; fatos: string[] }> {
+        // Fatos sobre a entrega (`ADR-007`), acumulados durante a cadeia. Só nascem quando o
+        // operador DECLAROU o TTS local (modelos do Piper presentes — "a presença dos arquivos É o
+        // sinal de intenção") e ele não pôde ser usado: aí o texto do usuário sai da máquina para um
+        // serviço de terceiros, e isso atravessa localidade e custódia
+        // (`SOBERANIA_DA_CONFIGURACAO.md` §1.2). Sem Piper declarado não há nada a anunciar — o
+        // usuário não escolheu recurso nenhum (§1.1).
+        const fatos: string[] = [];
         const piper = this.findPiperInstallation();
         if (piper) {
             const wavFile = path.join(audioDir, `tts_${timestamp}.wav`);
             try {
                 log.info(`Piper detectado (${PIPER_MODELS_DIR}) — usando engine offline.`);
                 await this.generateViaPiper(text, piper, wavFile);
-                return wavFile;
+                return { file: wavFile, fatos };
             } catch (piperErr) {
                 log.error('Piper failed, falling back to node-edge-tts:', errorMessage(piperErr));
+                fatos.push(
+                    '[FATO DO SISTEMA] O áudio deveria ter sido gerado pelo Piper, que roda na máquina do usuário, '
+                    + 'mas ele falhou. O áudio foi sintetizado por um serviço de terceiros na Internet, '
+                    + 'ou seja, o texto saiu da máquina. Avise isso ao usuário em UMA frase curta, no mesmo idioma '
+                    + 'da conversa, sem inventar motivos técnicos.'
+                );
             }
         }
 
         const mp3File = path.join(audioDir, `tts_${timestamp}.mp3`);
         try {
             await this.generateViaNodeEdgeTts(text, voice, mp3File);
-            return mp3File;
+            return { file: mp3File, fatos };
         } catch (npmErr) {
             log.error(`node-edge-tts failed with voice ${voice}:`, errorMessage(npmErr));
             if (voice !== DEFAULT_VOICE) {
                 try {
                     log.info('node-edge-tts: falling back to ' + DEFAULT_VOICE + '...');
                     await this.generateViaNodeEdgeTts(text, DEFAULT_VOICE, mp3File);
-                    return mp3File;
+                    return { file: mp3File, fatos };
                 } catch (npmDefaultErr) {
                     log.error('node-edge-tts failed with default voice too:', errorMessage(npmDefaultErr));
                 }
@@ -225,7 +247,7 @@ export class SendAudioTool implements ToolExecutor {
             await this.runCommand(edgeTtsCmd.command, [
                 ...edgeTtsCmd.argsPrefix, '--voice', voice, '--rate=-5%', '--text', text, '--write-media', mp3File,
             ], 30000);
-            return mp3File;
+            return { file: mp3File, fatos };
         } catch (cliErr) {
             log.error(`Python edge-tts CLI failed with voice ${voice}:`, errorMessage(cliErr));
             if (voice === DEFAULT_VOICE) throw cliErr;
@@ -233,7 +255,7 @@ export class SendAudioTool implements ToolExecutor {
             await this.runCommand(edgeTtsCmd.command, [
                 ...edgeTtsCmd.argsPrefix, '--voice', DEFAULT_VOICE, '--rate=-5%', '--text', text, '--write-media', mp3File,
             ], 30000);
-            return mp3File;
+            return { file: mp3File, fatos };
         }
     }
 

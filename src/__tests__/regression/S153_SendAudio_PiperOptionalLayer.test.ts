@@ -86,7 +86,11 @@ console.log('\n=== S153-5 — sem Piper instalado, a geração de áudio (pré-f
     const { SendAudioTool } = await import('../../tools/send_audio');
     const fakeBus = {} as unknown as import('../../channels/MessageBus').MessageBus;
     const tool = new SendAudioTool(fakeBus) as unknown as {
-        generateAudio(text: string, voice: string, audioDir: string, timestamp: number): Promise<string>;
+        // Desde a `ADR-007` (Sprint 028) devolve também os fatos sobre a entrega, ao lado do
+        // arquivo: quando o Piper foi DECLARADO e falhou, o texto do usuário saiu da máquina, e
+        // isso precisa chegar a quem verbaliza. Aqui o Piper nem está instalado, então `fatos` vem
+        // vazio — não há recurso declarado a proteger (`SOBERANIA_DA_CONFIGURACAO.md` §1.1).
+        generateAudio(text: string, voice: string, audioDir: string, timestamp: number): Promise<{ file: string; fatos: string[] }>;
     };
 
     const os = await import('os');
@@ -94,7 +98,13 @@ console.log('\n=== S153-5 — sem Piper instalado, a geração de áudio (pré-f
     const timestamp = Date.now();
     let rawFile = '';
     try {
-        rawFile = await tool.generateAudio('Teste de regressão S153, camada opcional do Piper.', 'pt-BR-AntonioNeural', audioDir, timestamp);
+        const geracao = await tool.generateAudio('Teste de regressão S153, camada opcional do Piper.', 'pt-BR-AntonioNeural', audioDir, timestamp);
+        rawFile = geracao.file;
+        assert(
+            geracao.fatos.length === 0,
+            'sem Piper instalado não há fato a comunicar — o usuário não declarou TTS local',
+            geracao.fatos,
+        );
         const stats = fs.statSync(rawFile);
         assert(rawFile.endsWith('.mp3'), 'sem Piper detectado, o arquivo bruto é .mp3 (node-edge-tts), não .wav (Piper)', rawFile);
         assert(stats.size > 0, `áudio real gerado via node-edge-tts (${stats.size} bytes)`, stats.size);

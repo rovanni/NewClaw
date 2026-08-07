@@ -44,7 +44,7 @@ import type { ContinuationContext, WorkflowStepResult, AuthDecision } from './Wo
 
 import {
     ToolResult, ToolExecutor, LoopMetrics, ChannelContext,
-    AgentLoopConfig, ProcessedResult, ContextAwareTool
+    AgentLoopConfig, ProcessedResult, ContextAwareTool, toolResultForModel
 } from './agentLoopTypes';
 import { buildMasterPrompt } from './agentPrompts';
 import { parseLLMResponse, extractFinalText } from './agentOutputParser';
@@ -1589,7 +1589,7 @@ export class AgentLoop {
                             log.info(`[MUTATION] tool_mutation:\n  tool: ${result.originalToolName ?? toolCall.name}\n  kind: ${kind}\n  original: ${JSON.stringify(result.originalArgs ?? {})}\n  modified: ${JSON.stringify(result.finalArgs)}`);
                         }
                         log.info(`[${this.ts()}] [DELIVERY] ${result.finalToolName} -> ${result.result.success ? '✓' : '✗'}`);
-                        loopMessages.push({ role: 'tool', content: result.result.output, tool_call_id: toolCall.id });
+                        loopMessages.push({ role: 'tool', content: toolResultForModel(result.result), tool_call_id: toolCall.id });
                         cycleHistory.push({ step: stepCount, tool: toolCall.name, input: JSON.stringify(toolCall.arguments), status: result.result.success ? 'success' : 'error' });
                         // Mesmo fix dos caminhos nativo/json_action acima — este é justamente o
                         // caminho que despacha send_audio/send_document/send_image/send_video
@@ -1602,7 +1602,7 @@ export class AgentLoop {
                                 JSON.stringify(result.finalArgs ?? toolCall.arguments),
                             ).catch(() => {});
                         }
-                        if (ToolRegistry.isTerminalDelivery(toolCall.name) && result.result.success) {
+                        if (ToolRegistry.endsTurn(toolCall.name, result.result)) {
                             move('TOOL_COMPLETED', { step: stepCount, tool: toolCall.name, success: true });
                             move('FINAL_READY', { step: stepCount, tool: toolCall.name, terminal: true });
                             // CORREÇÃO 1: notifica GoalExecutionLoop que DELIVERY-GUARD entregou
@@ -1979,7 +1979,7 @@ export class AgentLoop {
                 this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
 
                 cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
-                loopMessages.push({ role: 'tool', content: result.output });
+                loopMessages.push({ role: 'tool', content: toolResultForModel(result) });
                 // Mesmo fix do caminho de tool-calling nativo acima (ver comentário lá) —
                 // path json_action é a 2ª cópia do mesmo dispatch, precisa do mesmo registro.
                 if (result.success && channelContext) {
@@ -2061,7 +2061,7 @@ export class AgentLoop {
                     }
                 }
 
-                if (ToolRegistry.isTerminalDelivery(toolName) && result.success) {
+                if (ToolRegistry.endsTurn(toolName, result)) {
                     // JSON-action path is always a single tool call per step, so return immediately.
                     log.info(`[${this.ts()}] [TASK-FSM] Terminal atomic tool "${toolName}" succeeded → task DONE, returning result`);
                     move('FINAL_READY', { step: stepCount, tool: toolName, terminal: true });
@@ -2302,7 +2302,7 @@ export class AgentLoop {
         this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
 
         cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
-        loopMessages.push({ role: 'tool', content: result.output, tool_call_id: toolCall.id });
+        loopMessages.push({ role: 'tool', content: toolResultForModel(result), tool_call_id: toolCall.id });
         if (result.success) usedToolOutputs.set(computeToolInputKey(toolName, toolCall.arguments), result.output.slice(0, 2000));
         // Persiste args de tool calls bem-sucedidas no transcript (mesmo padrão já
         // usado por GoalExecutionLoop.ts, que sempre teve isso — AgentLoop nunca
@@ -2520,7 +2520,7 @@ export class AgentLoop {
         if (toolName === 'send_audio' && result.success) {
             channelContext?.deliveryTracking?.onArtifactDelivered?.('__send_audio_delivered__');
         }
-        if (ToolRegistry.isTerminalDelivery(toolName) && result.success) {
+        if (ToolRegistry.endsTurn(toolName, result)) {
             log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded — continuing batch before closing turn`);
             move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: true });
             // process remaining toolCalls in this batch (e.g. multiple send_document)

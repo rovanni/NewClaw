@@ -22,6 +22,37 @@ export interface ToolResult {
      * encontrado", independente do idioma da mensagem que o SO produziu.
      */
     exitCode?: number;
+    /**
+     * Fatos sobre a entrega — a terceira categoria do contrato (`ADR-007`), ao lado do conteúdo
+     * (`output`) e do status operacional (log).
+     *
+     * **Critério de admissão:** um fato aqui muda o entendimento do usuário sobre *o que foi feito
+     * com o conteúdo dele ou para onde ele foi* — custódia, localidade, fidelidade. Nunca sobre *se*
+     * a operação deu certo. "Sintetizado por um serviço de terceiros" entra; "enviado com sucesso",
+     * "pulado por debounce", tempo de upload e tamanho do arquivo continuam sendo log.
+     *
+     * O texto aqui é **fato para o LLM verbalizar**, não frase pronta para o usuário: quem redige é
+     * o modelo, no idioma da conversa. Preencher este campo faz a ferramenta **não encerrar o
+     * turno** (ver `ToolRegistry.endsTurn`), justamente para que exista um LLM depois.
+     */
+    deliveryFacts?: string[];
+}
+
+/**
+ * O que o modelo vê de um resultado de tool: o conteúdo, mais os fatos sobre a entrega quando
+ * houver (`ADR-007`).
+ *
+ * Ponto único de propósito. Os três lugares que devolvem resultado de tool ao contexto do modelo
+ * usavam `result.output` direto; anexar os fatos em cada um deles seria a mesma regra copiada três
+ * vezes — o defeito que a Sprint 025 acabou de remover da lista de ferramentas terminais.
+ *
+ * O fato é concatenado ao texto porque é assim que ele chega à camada que sabe verbalizá-lo. Ele
+ * NUNCA vai para o `output` da tool: ali mora só o conteúdo entregue
+ * (`FERRAMENTAS_DE_ENTREGA.md` §4), que pode virar resposta final sem passar por LLM nenhum.
+ */
+export function toolResultForModel(result: ToolResult): string {
+    if (!result.deliveryFacts || result.deliveryFacts.length === 0) return result.output;
+    return [result.output, ...result.deliveryFacts].join('\n\n');
 }
 
 export interface ToolExecutor {

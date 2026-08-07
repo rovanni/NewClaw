@@ -40,7 +40,10 @@ console.log('\n=== S209-1 — nenhuma lista literal dentro do caminho de execuç
         'AgentLoop não define a lista localmente — pergunta ao ToolRegistry',
         AGENT_LOOP.match(/const\s+terminalTools\s*=.*/)?.[0],
     );
-    const usos = (AGENT_LOOP.match(/isTerminalDelivery\(/g) || []).length;
+    // Desde a `ADR-007` (Sprint 028) a decisão de encerrar não é só "esta tool é terminal?" — é
+    // `endsTurn(nome, resultado)`, que também considera se há fato sobre a entrega a comunicar.
+    // A regra combinada mora no ToolRegistry pelo mesmo motivo da lista: espalhada, divergiria.
+    const usos = (AGENT_LOOP.match(/ToolRegistry\.endsTurn\(/g) || []).length;
     assert(usos >= 3, 'os três pontos de encerramento consultam o ponto único', usos);
 }
 

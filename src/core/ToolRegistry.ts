@@ -2,7 +2,7 @@
  * ToolRegistry — Registro centralizado de tools com enable/disable
  */
 
-import { ToolExecutor } from '../loop/agentLoopTypes';
+import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { createLogger } from '../shared/AppLogger';
 import { permissionRegistry } from './PermissionRegistry';
 import { isReadOnlyExecCommand } from '../tools/exec_command';
@@ -93,6 +93,25 @@ export class ToolRegistryClass {
      */
     isTerminalDelivery(name: string): boolean {
         return TERMINAL_DELIVERY_TOOLS.includes(name);
+    }
+
+    /**
+     * Ponto ÚNICO da pergunta "este resultado encerra o turno agora?" (`ADR-007`).
+     *
+     * Encerrar o turno numa ferramenta de entrega é uma **otimização**: evita uma ida a mais ao LLM
+     * quando não há nada a dizer além do conteúdo. Quando a tool devolve um fato sobre a entrega,
+     * essa ida é exatamente o que falta — sem ela não existe quem verbalize o fato no idioma da
+     * conversa, e o Core teria que escrever a frase, reintroduzindo o texto fixo em português que
+     * `FERRAMENTAS_DE_ENTREGA.md` §5 existe para remover.
+     *
+     * Por isso a regra combinada mora aqui e não nos três pontos de encerramento do `AgentLoop`:
+     * espalhada, ela divergiria — foi exatamente o que aconteceu com a lista de ferramentas
+     * terminais antes da Sprint 025.
+     */
+    endsTurn(name: string, result: ToolResult): boolean {
+        return this.isTerminalDelivery(name)
+            && result.success
+            && !(result.deliveryFacts && result.deliveryFacts.length > 0);
     }
 
     /**
