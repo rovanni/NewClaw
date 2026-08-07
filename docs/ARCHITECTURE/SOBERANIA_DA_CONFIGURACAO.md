@@ -156,7 +156,7 @@ realidade em 06/08/2026 — não a norma:
 | `transcribeAttachment` (STT) | ✅ Conforme — ausência de configuração significa transcrever localmente |
 | `ADR-002` §2.1 (pasta de modelos) | ✅ Conforme — nunca um caminho plausível embutido |
 | `send_audio` — escolha do Piper | ✅ Cláusula (a): presença dos modelos é o sinal de intenção |
-| `send_audio` — queda para edge-tts | ❌ Cláusula (b): atravessa localidade e custódia, só registra em log |
+| `send_audio` — queda para edge-tts | ✅ Conforme desde 07/08/2026 (Sprint 028, `ADR-007`, `S210`) — a queda do Piper declarado produz um fato sobre a entrega, o turno não encerra ali, e o LLM verbaliza a troca |
 | `ProviderFactory.chatWithFallback` | ✅ Conforme desde 06/08/2026 (Sprints 021-022, `S207`/`S208`) — `estrita` recusa e diz por quê; `anunciada` substitui e o LLM verbaliza a troca quando ela sai da máquina do usuário |
 | `web_search.searXNG` | ✅ Conforme desde 06/08/2026 (Sprint 023, `S206`) — só consulta a instância declarada em `SEARXNG_URL`; sem configuração, a fonte não é usada |
 | `resolveProfile ?? chat ?? profiles[0]` | ➖ Não se aplica — reclassificado em 07/08/2026; ver abaixo |
