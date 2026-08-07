@@ -143,7 +143,7 @@ realidade em 06/08/2026 — não a norma:
 | `send_audio` — escolha do Piper | ✅ Cláusula (a): presença dos modelos é o sinal de intenção |
 | `send_audio` — queda para edge-tts | ❌ Cláusula (b): atravessa localidade e custódia, só registra em log |
 | `ProviderFactory.chatWithFallback` | ❌ Substitui local por nuvem em silêncio — **alvo primário da RFC-005** |
-| `web_search.searXNG` | ❌ Envia a consulta a `searx.be` — corrigido na Sprint 023 |
+| `web_search.searXNG` | ✅ Conforme desde 06/08/2026 (Sprint 023, `S206`) — só consulta a instância declarada em `SEARXNG_URL`; sem configuração, a fonte não é usada |
 | `resolveProfile ?? chat ?? profiles[0]` | ❌ Perfil ausente cai em outro sem aviso — legado |
 
 Violações listadas aqui são **débito conhecido e datado**, não permissão. Código novo nasce

@@ -248,32 +248,68 @@ export class WebSearchTool implements ToolExecutor {
         }
     }
 
-    private async searXNG(query: string, maxResults: number): Promise<SearchCandidate[]> {
-        const urls = ['http://localhost:8888/search', 'https://searx.be/search'];
-
-        for (const base of urls) {
-            try {
-                const resp = await fetch(`${base}?q=${encodeURIComponent(query)}&format=json`, {
-                    headers: { 'User-Agent': 'Mozilla/5.0' },
-                    signal: AbortSignal.timeout(8000)
-                });
-                if (!resp.ok) continue;
-
-                const data = await resp.json() as { results?: Array<{ title?: string; url?: string; content?: string; [key: string]: unknown }> };
-                const results = Array.isArray(data?.results) ? data.results : [];
-                return results.slice(0, maxResults).map((item: { title?: string; url?: string; content?: string; [key: string]: unknown }) => ({
-                    title: this.cleanText(item.title || ''),
-                    url: String(item.url || '').trim(),
-                    snippet: this.cleanText(item.content || ''),
-                    source: 'SearXNG',
-                    score: 1.0
-                })).filter((item: SearchCandidate) => item.title && item.url);
-            } catch {
-                continue;
-            }
+    /**
+     * Endpoint de busca a partir do que o usuário declarou em `SEARXNG_URL`.
+     *
+     * Aceita tanto a origem (`http://meu-host:8888`) quanto o endpoint completo
+     * (`http://meu-host:8888/search`): `/search` é o caminho fixo da API do SearXNG, não um palpite
+     * sobre a instalação de ninguém. String vazia quando o valor não é uma URL — melhor não buscar
+     * do que buscar em lugar nenhum.
+     */
+    private searxngEndpoint(configurado: string): string {
+        try {
+            const url = new URL(configurado);
+            if (url.pathname === '/' || url.pathname === '') url.pathname = '/search';
+            return url.toString();
+        } catch {
+            return '';
         }
+    }
 
-        return [];
+    /**
+     * SearXNG — **somente** a instância que o usuário declarou em `SEARXNG_URL`.
+     *
+     * Até 06/08/2026 esta função tentava `http://localhost:8888/search` e, falhando, caía em
+     * `https://searx.be/search` — um servidor público de terceiros. Quem sobe uma instância local
+     * faz isso justamente para que suas buscas não saiam da máquina; encontrá-la fora do ar e
+     * mandar a mesma consulta para a Internet inverte a intenção inteira, e em silêncio. Era o
+     * achado mais grave do levantamento da `RFC-005`, e o único cuja implicação é privacidade em
+     * vez de disponibilidade.
+     *
+     * Sem `SEARXNG_URL`, esta fonte simplesmente não é consultada — mesma regra que
+     * `WHISPER_API_URL` já segue desde 05/08/2026 e que o provider do Google segue neste mesmo
+     * arquivo (sem chave, devolve vazio). Ausência de configuração não é declaração
+     * (`SOBERANIA_DA_CONFIGURACAO.md` §1.1); é dado ausente (`NUNCA_ADIVINHAR.md`).
+     *
+     * Consequência assumida: para quem nunca configurou nada, o SearXNG deixa de devolver
+     * resultados — antes devolvia, via `searx.be`. É a correção, não um efeito colateral.
+     */
+    private async searXNG(query: string, maxResults: number): Promise<SearchCandidate[]> {
+        const configurado = (process.env.SEARXNG_URL || '').trim();
+        if (!configurado) return [];
+
+        const endpoint = this.searxngEndpoint(configurado);
+        if (!endpoint) return [];
+
+        try {
+            const resp = await fetch(`${endpoint}?q=${encodeURIComponent(query)}&format=json`, {
+                headers: { 'User-Agent': 'Mozilla/5.0' },
+                signal: AbortSignal.timeout(8000)
+            });
+            if (!resp.ok) return [];
+
+            const data = await resp.json() as { results?: Array<{ title?: string; url?: string; content?: string; [key: string]: unknown }> };
+            const results = Array.isArray(data?.results) ? data.results : [];
+            return results.slice(0, maxResults).map((item: { title?: string; url?: string; content?: string; [key: string]: unknown }) => ({
+                title: this.cleanText(item.title || ''),
+                url: String(item.url || '').trim(),
+                snippet: this.cleanText(item.content || ''),
+                source: 'SearXNG',
+                score: 1.0
+            })).filter((item: SearchCandidate) => item.title && item.url);
+        } catch {
+            return [];
+        }
     }
 
     private deduplicateCandidates(candidates: SearchCandidate[]): SearchCandidate[] {
