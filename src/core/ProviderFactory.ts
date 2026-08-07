@@ -7,7 +7,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
 import { getLocalRuntimeLifecycle } from './localRuntimeState';
-import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig } from './providerTypes';
+import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy } from './providerTypes';
 import { GeminiProvider } from './GeminiProvider';
 import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
@@ -23,7 +23,7 @@ import { AnthropicProvider } from './AnthropicProvider';
 const RESERVED_PROVIDER_NAMES = new Set(['gemini', 'deepseek', 'groq', 'openrouter', 'anthropic', 'ollama']);
 
 // Re-export everything so all existing imports continue to work unchanged
-export type { LLMMessage, LLMResponse, ToolCall, ToolDefinition, FallbackReason, AttemptInfo, LLMResult, MetricsSummary, ILLMProvider, ChatOptions, StreamChunk } from './providerTypes';
+export type { LLMMessage, LLMResponse, ToolCall, ToolDefinition, FallbackReason, AttemptInfo, LLMResult, MetricsSummary, ILLMProvider, ChatOptions, StreamChunk, SubstitutionPolicy } from './providerTypes';
 export { TaskPriority } from './providerQueue';
 export { GeminiProvider } from './GeminiProvider';
 export { DeepSeekProvider } from './DeepSeekProvider';
@@ -235,7 +235,17 @@ export class ProviderFactory {
             return { status: 'cancelled', content: '', fallbackReason: 'cancelled', fallbackMessage: 'Operação cancelada.', attempts: [] };
         }
 
-        const providerOrder = this.getFallbackOrder(preferredProvider);
+        // Política do recurso declarado. `semSubstituicao` exige que o provider preferido exista de
+        // fato: declarar um provider que não está registrado não dá o que proteger, e nesse caso o
+        // comportamento continua o de sempre.
+        const politicaDeSubstituicao = this.resolveSubstitutionPolicy(preferredProvider);
+        const semSubstituicao = politicaDeSubstituicao === 'estrita'
+            && !!preferredProvider
+            && this.providers.has(preferredProvider);
+
+        const providerOrder = semSubstituicao
+            ? [preferredProvider as string]
+            : this.getFallbackOrder(preferredProvider);
         const attemptLog: AttemptInfo[] = [];
         const MAX_RETRIES = 1;
         const RETRY_BACKOFF_MS = 10000 + Math.floor(Math.random() * 3000);
@@ -452,7 +462,18 @@ export class ProviderFactory {
         }
 
         // All streaming providers exhausted — try non-streaming fallback
-        if (attemptLog.every(a => a.status === 'timeout' || a.status === 'error')) {
+        //
+        // SEGUNDO caminho de substituição deste método, e por isso a política precisa valer aqui
+        // também: este bloco troca o provider preferido pelo Ollama incondicionalmente. Gatear
+        // apenas a ordem de fallback deixaria `estrita` decorativa — quem pediu o modelo local
+        // receberia resposta do Ollama assim mesmo. É o mesmo tipo de bypass que a `ADR-005` §5.1
+        // registrou ao descobrir que o gate de autorização vivia em um caminho de cinco.
+        //
+        // Quando o próprio preferido JÁ é o Ollama, isto não é substituição: é o mesmo recurso por
+        // outro transporte, e `estrita` não tem o que proibir.
+        const naoStreamingSubstituiria = preferredProvider !== 'ollama';
+        const podeTentarNaoStreaming = !semSubstituicao || !naoStreamingSubstituiria;
+        if (podeTentarNaoStreaming && attemptLog.every(a => a.status === 'timeout' || a.status === 'error')) {
             const ollamaProvider = this.providers.get('ollama');
             if (ollamaProvider instanceof OllamaProvider) {
                 log.info(`[${requestId}] All streaming attempts failed — trying non-streaming fallback`);
@@ -479,6 +500,25 @@ export class ProviderFactory {
             ? attemptLog[attemptLog.length - 1].errorMessage : '';
         const isTimeoutError = lastError?.includes('Timeout') || lastError?.includes('abort');
         log.error(`[${requestId}] EXHAUSTED attempts=${attemptLog.length}`);
+
+        // Política `estrita`: a indisponibilidade É o resultado, e o motivo precisa ser distinguível
+        // de um erro comum — senão quem lê não tem como saber que existia substituto e ele foi
+        // recusado de propósito.
+        //
+        // `fallbackMessage` fixa em português mantém o débito de i18n do Core já declarado em
+        // `ARCHITECTURE.md` ("Gaps conhecidos"). O caminho de transformar isto em fato para o LLM
+        // verbalizar é a Sprint 022; aqui seria adiantar metade dela sem o mecanismo.
+        if (semSubstituicao) {
+            log.warn(`[${requestId}] POLITICA-ESTRITA: '${preferredProvider}' indisponível e nenhum substituto foi tentado.`);
+            return {
+                status: 'error',
+                content: '',
+                toolCalls: undefined,
+                fallbackReason: 'policy_strict',
+                fallbackMessage: `O recurso configurado ("${preferredProvider}") não respondeu. A política de substituição declarada para ele é "estrita", então nenhum outro provedor foi usado em seu lugar.`,
+                attempts: attemptLog
+            };
+        }
 
         return {
             status: isTimeoutError ? 'timeout' : 'error',
@@ -562,6 +602,30 @@ export class ProviderFactory {
         }
 
         throw new Error(`Classification failed: ${errors.join('; ')}`);
+    }
+
+    /**
+     * Política de substituição do recurso que o usuário declarou para esta chamada.
+     *
+     * Ordem: o que o próprio provider declara vence; senão, o padrão global (`SUBSTITUTION_POLICY`
+     * no ambiente); senão, `anunciada` (`RFC-005` §1.3).
+     *
+     * **Sem provider preferido não há soberania a proteger** — ninguém declarou nada para esta
+     * chamada, então a política é `livre` e o comportamento é o de sempre. É a mesma fronteira que
+     * `SOBERANIA_DA_CONFIGURACAO.md` §1.1 estabelece: ausência de configuração não é declaração.
+     */
+    private resolveSubstitutionPolicy(preferredProvider?: string): SubstitutionPolicy {
+        if (!preferredProvider) return 'livre';
+
+        const doProvider = this.customConfigs.get(preferredProvider)?.substitutionPolicy;
+        if (doProvider) return doProvider;
+
+        const global = (process.env.SUBSTITUTION_POLICY || '').trim();
+        if (!global) return DEFAULT_SUBSTITUTION_POLICY;
+        if (isSubstitutionPolicy(global)) return global;
+
+        log.warn(`SUBSTITUTION_POLICY inválida ("${global}") — usando "${DEFAULT_SUBSTITUTION_POLICY}". Valores aceitos: estrita, anunciada, livre.`);
+        return DEFAULT_SUBSTITUTION_POLICY;
     }
 
     /**

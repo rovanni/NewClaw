@@ -96,7 +96,9 @@ export interface ToolDefinition {
     parameters: Record<string, any>;
 }
 
-export type FallbackReason = 'timeout' | 'error' | 'empty_response' | 'streaming_failed' | 'cancelled';
+export type FallbackReason = 'timeout' | 'error' | 'empty_response' | 'streaming_failed' | 'cancelled'
+    /** O recurso declarado falhou e a política `estrita` proibiu substituí-lo (`RFC-005` §1.3). */
+    | 'policy_strict';
 
 export interface AttemptInfo {
     provider: string;
@@ -152,11 +154,42 @@ export interface ModelInfo {
  *  llamafile local). `model` é opcional — servidores de um modelo só (ex.: llamafile rodando um
  *  único .gguf) ignoram o campo `model` do payload e sempre respondem com o que já está carregado;
  *  fica disponível pra quando o endpoint hospeda múltiplos modelos (ex.: LM Studio, vLLM). */
+/**
+ * O que fazer quando o recurso que o usuário declarou não estiver disponível.
+ *
+ * Vocabulário normativo da `RFC-005` e de `docs/ARCHITECTURE/SOBERANIA_DA_CONFIGURACAO.md` §1.3 —
+ * os valores são os mesmos do documento e do `.env` de propósito: RFC, configuração e código dizem
+ * a mesma palavra, sem camada de tradução onde um desalinhamento possa se esconder.
+ *
+ * - `estrita`   — nunca substituir; a indisponibilidade é o resultado.
+ * - `anunciada` — pode substituir, mas a substituição aparece na resposta, não só no log.
+ * - `livre`     — pode substituir em silêncio. Só válida quando a troca não atravessa fronteira
+ *                 de localidade nem de custódia (§1.2).
+ *
+ * ESTADO DE IMPLEMENTAÇÃO (Sprint 021): `estrita` está implementada por inteiro. `anunciada` existe
+ * como valor de domínio e **ainda se comporta como `livre`** — o mecanismo de anúncio é a Sprint
+ * 022. A limitação é temporária, deliberada e coberta por teste (`S207`), para que a Sprint 022
+ * seja puramente aditiva: acrescenta o comportamento deste estado sem mexer em contrato,
+ * configuração ou teste estrutural.
+ */
+export type SubstitutionPolicy = 'estrita' | 'anunciada' | 'livre';
+
+/** Padrão para recurso declarado que não diz a sua própria política (`RFC-005` §1.3). */
+export const DEFAULT_SUBSTITUTION_POLICY: SubstitutionPolicy = 'anunciada';
+
+export const SUBSTITUTION_POLICIES: readonly SubstitutionPolicy[] = ['estrita', 'anunciada', 'livre'];
+
+export function isSubstitutionPolicy(valor: unknown): valor is SubstitutionPolicy {
+    return typeof valor === 'string' && (SUBSTITUTION_POLICIES as readonly string[]).includes(valor);
+}
+
 export interface CustomProviderConfig {
     label: string;
     baseUrl: string;
     apiKey?: string;
     model?: string;
+    /** Política de substituição deste provider. Ausente = o padrão global (`SUBSTITUTION_POLICY`). */
+    substitutionPolicy?: SubstitutionPolicy;
 }
 
 export interface ChatOptions {
