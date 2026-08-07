@@ -1,6 +1,9 @@
 # RFC-005 — Políticas de Substituição de Recursos
 
-**Status:** proposta
+**Status:** **concluída** (07/08/2026) — Sprints 018-024 entregues. Relatório de encerramento e
+evidências da validação em execução real: `docs/sprints/RFC-005_CLOSING_REPORT.md`.
+
+**Status original:** proposta
 **Data:** 2026-08-06
 **Origem:** `docs/analises-arquiteturais/FASE0_POLITICAS_IMPLICITAS_DE_INDISPONIBILIDADE_2026-08-06.md`
 **Substitui/Complementa:** nada é revogado. `ADR-002` e `ADR-005` permanecem válidos integralmente.
@@ -536,7 +539,7 @@ código que depende dela.
 | **021** | Política por recurso (`estrita`/`anunciada`/`livre`) na configuração de providers; padrão `anunciada` | 020 | ✅ `fee5c15` (`S207`) |
 | **022** | Substituição atravessando fronteira vira **fato na resposta**, verbalizado pelo LLM | 021 | ✅ (`S208`) |
 | **023** | *(fora do escopo primário — ver "Escopo")* `searXNG`: remover o servidor público da cadeia | 018 | ✅ `70c0de2` (`S206`) |
-| **024** | Validação em execução real (etapa 4) e relatório de fechamento | 020-022 | ⏳ pendente |
+| **024** | Validação em execução real (etapa 4) e relatório de fechamento | 020-022 | ✅ `docs/sprints/RFC-005_CLOSING_REPORT.md` §6 |
 
 A ordem de execução não seguiu a numeração: a **023** foi feita logo após a 018, por depender apenas
 dela e por ser o único item da série cuja pendência era vazamento de privacidade confirmado.
