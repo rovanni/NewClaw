@@ -94,9 +94,14 @@ Padrão para recurso declarado: **`anunciada`**.
 >
 > * `estrita` — **implementada por inteiro** para providers/modelos, nos dois caminhos de
 >   substituição do `chatWithFallback`. Cobertura: `S207`.
-> * `anunciada` — existe como valor e **ainda se comporta como `livre`**: o mecanismo de anúncio é a
->   Sprint 022. Limitação temporária, declarada aqui, no `.env.example` e em `S207-4`.
+> * `anunciada` — **implementada** desde a Sprint 022 (06/08/2026). Quando a troca atravessa
+>   fronteira, o fato entra nas mensagens enviadas ao substituto junto com o pedido de verbalizá-lo;
+>   quem redige é o LLM, no idioma da conversa. Cobertura: `S208`.
 > * `livre` — comportamento histórico, preservado.
+>
+> O anúncio é **opt-in por chamada** (`ChatFallbackOptions.anunciarSubstituicao`): `chatWithFallback`
+> serve também classificador, extrator de goal e validador, cuja saída é estruturada e um aviso a
+> corromperia. Hoje só o turno conversacional do `AgentLoop` marca a opção.
 >
 > Fora de providers/modelos (busca, STT, TTS) a política ainda não é consultada. Este documento
 > descreve a norma; a Seção 9 descreve a realidade.
@@ -152,7 +157,7 @@ realidade em 06/08/2026 — não a norma:
 | `ADR-002` §2.1 (pasta de modelos) | ✅ Conforme — nunca um caminho plausível embutido |
 | `send_audio` — escolha do Piper | ✅ Cláusula (a): presença dos modelos é o sinal de intenção |
 | `send_audio` — queda para edge-tts | ❌ Cláusula (b): atravessa localidade e custódia, só registra em log |
-| `ProviderFactory.chatWithFallback` | ⚠️ Parcial (Sprint 021): com `estrita`, não substitui e diz por quê. No padrão `anunciada`, ainda substitui em silêncio — o anúncio é a Sprint 022 |
+| `ProviderFactory.chatWithFallback` | ✅ Conforme desde 06/08/2026 (Sprints 021-022, `S207`/`S208`) — `estrita` recusa e diz por quê; `anunciada` substitui e o LLM verbaliza a troca quando ela sai da máquina do usuário |
 | `web_search.searXNG` | ✅ Conforme desde 06/08/2026 (Sprint 023, `S206`) — só consulta a instância declarada em `SEARXNG_URL`; sem configuração, a fonte não é usada |
 | `resolveProfile ?? chat ?? profiles[0]` | ❌ Perfil ausente cai em outro sem aviso — legado |
 

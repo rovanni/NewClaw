@@ -7,7 +7,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
 import { getLocalRuntimeLifecycle } from './localRuntimeState';
-import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy } from './providerTypes';
+import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy, ChatFallbackOptions } from './providerTypes';
 import { GeminiProvider } from './GeminiProvider';
 import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
@@ -230,7 +230,7 @@ export class ProviderFactory {
      * - Only ONE response is returned — the LAST successful attempt.
      * - No partial content from failed attempts is ever included.
      */
-    async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number, externalSignal?: AbortSignal, modelOverride?: string): Promise<LLMResult> {
+    async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number, externalSignal?: AbortSignal, modelOverride?: string, opts?: ChatFallbackOptions): Promise<LLMResult> {
         if (externalSignal?.aborted) {
             return { status: 'cancelled', content: '', fallbackReason: 'cancelled', fallbackMessage: 'Operação cancelada.', attempts: [] };
         }
@@ -246,6 +246,14 @@ export class ProviderFactory {
         const providerOrder = semSubstituicao
             ? [preferredProvider as string]
             : this.getFallbackOrder(preferredProvider);
+
+        // `anunciada` só produz aviso quando quem chamou disse que este resultado vai ao usuário.
+        // Ver ChatFallbackOptions para por que o opt-in é explícito em vez de inferido.
+        const podeAnunciar = opts?.anunciarSubstituicao === true
+            && politicaDeSubstituicao === 'anunciada'
+            && !!preferredProvider;
+        let substituicao: LLMResult['substitution'];
+
         const attemptLog: AttemptInfo[] = [];
         const MAX_RETRIES = 1;
         const RETRY_BACKOFF_MS = 10000 + Math.floor(Math.random() * 3000);
@@ -340,8 +348,24 @@ export class ProviderFactory {
 
                     log.info(`[${attemptId}] START provider=${providerName}/${modelUsed} timeout=${timeoutMs || 'none'}ms`);
 
+                    // Esta tentativa é uma substituição do recurso declarado? E, se for, ela sai da
+                    // máquina do usuário? Só nesse caso o fato entra no prompt — trocar um provedor
+                    // de nuvem por outro equivalente é resiliência ordinária (§1.2).
+                    const ehSubstituicao = !!preferredProvider && providerName !== preferredProvider;
+                    const deveAnunciar = podeAnunciar && ehSubstituicao
+                        && this.substituicaoAtravessaFronteira(preferredProvider as string, providerName);
+                    if (ehSubstituicao) {
+                        substituicao = { declared: preferredProvider as string, used: providerName, announced: deveAnunciar };
+                    }
+                    if (deveAnunciar) {
+                        log.info(`[${attemptId}] SUBSTITUICAO-ANUNCIADA: '${preferredProvider}' → '${providerName}' (sai da máquina do usuário; o fato foi entregue ao modelo para verbalizar).`);
+                    }
+                    const mensagensDoProvider = deveAnunciar
+                        ? this.mensagensComFatoDaSubstituicao(messages, preferredProvider as string, providerName)
+                        : messages;
+
                     const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs };
-                    const chatPromise = provider.chat(messages, tools, chatOptions);
+                    const chatPromise = provider.chat(mensagensDoProvider, tools, chatOptions);
                     let result: LLMResponse;
 
                     if (timeoutMs) {
@@ -408,7 +432,8 @@ export class ProviderFactory {
                             thinking: result.thinking || undefined,
                             toolCalls: result.toolCalls,
                             usage: result.usage,
-                            attempts: attemptLog
+                            attempts: attemptLog,
+                            substitution: substituicao
                         };
                     }
 
@@ -477,8 +502,20 @@ export class ProviderFactory {
             const ollamaProvider = this.providers.get('ollama');
             if (ollamaProvider instanceof OllamaProvider) {
                 log.info(`[${requestId}] All streaming attempts failed — trying non-streaming fallback`);
+                // Mesmo tratamento do laço acima: este bloco também substitui o recurso declarado, e
+                // anunciar num caminho e calar no outro seria o defeito que a Sprint 021 encontrou
+                // aqui (gate aplicado a uma das duas substituições).
+                const ehSubstituicaoNaoStreaming = !!preferredProvider && preferredProvider !== 'ollama';
+                const anunciarNaoStreaming = podeAnunciar && ehSubstituicaoNaoStreaming
+                    && this.substituicaoAtravessaFronteira(preferredProvider as string, 'ollama');
+                if (ehSubstituicaoNaoStreaming) {
+                    substituicao = { declared: preferredProvider as string, used: 'ollama', announced: anunciarNaoStreaming };
+                }
+                const mensagensNaoStreaming = anunciarNaoStreaming
+                    ? this.mensagensComFatoDaSubstituicao(messages, preferredProvider as string, 'ollama')
+                    : messages;
                 try {
-                    const result = await ollamaProvider.fallbackNonStreaming(messages, tools, timeoutMs);
+                    const result = await ollamaProvider.fallbackNonStreaming(mensagensNaoStreaming, tools, timeoutMs);
                     if (result.content && result.content.trim()) {
                         attemptLog.push({ provider: 'ollama', model: 'non-streaming-fallback', duration: Date.now() - startTime, status: 'success' });
                         return {
@@ -487,7 +524,8 @@ export class ProviderFactory {
                             toolCalls: result.toolCalls,
                             usage: result.usage,
                             fallbackReason: 'streaming_failed',
-                            attempts: attemptLog
+                            attempts: attemptLog,
+                            substitution: substituicao
                         };
                     }
                 } catch (fallbackErr) {
@@ -602,6 +640,68 @@ export class ProviderFactory {
         }
 
         throw new Error(`Classification failed: ${errors.join('; ')}`);
+    }
+
+    /**
+     * A troca de `declarado` por `usado` atravessa fronteira de localidade/custódia?
+     * (`SOBERANIA_DA_CONFIGURACAO.md` §1.2)
+     *
+     * Hoje a checagem é uma só: o recurso declarado é local e o substituto não é — o processamento
+     * sai da máquina do usuário, e passa a ser tratado por alguém que ele não escolheu. As duas
+     * fronteiras coincidem nesse caso.
+     *
+     * Dois provedores de nuvem se cobrindo mutuamente NÃO atravessam fronteira: é a resiliência
+     * ordinária que o §1.2 autoriza a ser silenciosa. Reaproveita `loopbackPortOf` em vez de
+     * introduzir um segundo conceito de "isto é local".
+     */
+    private substituicaoAtravessaFronteira(declarado: string, usado: string): boolean {
+        return this.rodaNaMaquinaDoUsuario(declarado) && !this.rodaNaMaquinaDoUsuario(usado);
+    }
+
+    /**
+     * Este provider roda na máquina do usuário?
+     *
+     * Pergunta **diferente** da que `loopbackPortOf` responde, e por isso um método separado.
+     * `loopbackPortOf` responde "é um runtime local gerenciado pelo NewClaw?" e alimenta o
+     * diagnóstico de ciclo de vida (Sprint 020) — deliberadamente restrito a `customConfigs`, para
+     * que um registro corrompido não possa afetar a contabilidade de falhas de mais ninguém
+     * (`S205-4`).
+     *
+     * Aqui a pergunta é de **localidade**, e o Ollama nativo entra: ele não tem entrada em
+     * `customConfigs`, mas o endereço dele é conhecido e quase sempre é a própria máquina. Sem isto,
+     * um llamafile local caindo para um Ollama local seria anunciado como "saiu da sua máquina" —
+     * um aviso falso, que é pior que aviso nenhum.
+     */
+    private rodaNaMaquinaDoUsuario(providerName: string): boolean {
+        const baseUrl = providerName === 'ollama'
+            ? this.creds.ollamaUrl
+            : this.customConfigs.get(providerName)?.baseUrl;
+        if (!baseUrl) return false;
+        try {
+            const { hostname } = new URL(String(baseUrl));
+            return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+        } catch { return false; }
+    }
+
+    /**
+     * As mesmas mensagens, mais o **fato** de que esta resposta não vem do recurso declarado.
+     *
+     * É fato + pedido de verbalização, nunca texto pronto: quem redige é o LLM, que já recebeu
+     * `buildLanguageDirective` no system prompt e portanto responde no idioma da conversa. O Core
+     * escrevendo a frase sairia sempre em português (`ARCHITECTURE.md`, "Gaps conhecidos") — é
+     * exatamente o que a `RFC-004` decidiu parar de fazer, aplicado aqui.
+     *
+     * O array original nunca é mutado: quem o passou pode reusá-lo, e a próxima tentativa não pode
+     * herdar o aviso da anterior.
+     */
+    private mensagensComFatoDaSubstituicao(messages: LLMMessage[], declarado: string, usado: string): LLMMessage[] {
+        return [...messages, {
+            role: 'system',
+            content: `[FATO DO SISTEMA] O usuário configurou "${declarado}" para esta conversa, e esse recurso não respondeu. `
+                + `Esta resposta está sendo gerada por "${usado}", um recurso diferente e fora da máquina do usuário.\n`
+                + `Antes de responder ao pedido, avise isso em UMA frase curta, no mesmo idioma da conversa. `
+                + `Não invente motivos técnicos nem detalhes que não estejam aqui. Depois responda normalmente.`,
+        }];
     }
 
     /**

@@ -1120,7 +1120,12 @@ export class AgentLoop {
         const callStart = Date.now();
         try {
             const result = await generationQueue.add(
-                () => this.providerFactory.chatWithFallback(messages, toolDefs, chatProfile?.provider, timeoutMs, signal, chatProfile?.model),
+                // `anunciarSubstituicao`: este é o turno de conversa — o que sai daqui vai para o
+                // usuário. Se o recurso que ele configurou for substituído por outro fora da
+                // máquina, ele precisa ficar sabendo (`RFC-005` §1.3/§1.4). Os demais pontos de
+                // chamada de `chatWithFallback` (classificador, extrator de goal, validador) não
+                // marcam isto: a saída deles é estruturada e um aviso a corromperia.
+                () => this.providerFactory.chatWithFallback(messages, toolDefs, chatProfile?.provider, timeoutMs, signal, chatProfile?.model, { anunciarSubstituicao: true }),
                 { priority: TaskPriority.INTERACTIVE }
             );
 

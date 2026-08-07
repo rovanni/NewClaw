@@ -117,6 +117,14 @@ export interface LLMResult {
     fallbackReason?: FallbackReason;
     fallbackMessage?: string;
     attempts: AttemptInfo[];
+    /**
+     * Preenchido quando a resposta veio de um recurso diferente do que o usuário declarou.
+     *
+     * `anunciada: true` significa que o fato foi entregue ao LLM que gerou a resposta, para que ele
+     * o verbalize no idioma da conversa (`RFC-005` §1.4) — não que o Core tenha escrito algo.
+     * `false` significa que a troca ocorreu sem atravessar fronteira, ou sob política `livre`.
+     */
+    substitution?: { declared: string; used: string; announced: boolean };
 }
 
 export interface MetricsSummary {
@@ -181,6 +189,24 @@ export const SUBSTITUTION_POLICIES: readonly SubstitutionPolicy[] = ['estrita', 
 
 export function isSubstitutionPolicy(valor: unknown): valor is SubstitutionPolicy {
     return typeof valor === 'string' && (SUBSTITUTION_POLICIES as readonly string[]).includes(valor);
+}
+
+/**
+ * Opções por chamada de `chatWithFallback`.
+ *
+ * `anunciarSubstituicao` é **opt-in explícito** e existe porque `chatWithFallback` serve tanto o
+ * turno de conversa quanto classificador, extrator de goal e validador. Injetar "avise o usuário"
+ * numa chamada que produz JSON a corromperia.
+ *
+ * Hoje, dos sete pontos de chamada, só o turno conversacional do `AgentLoop` declara um provider
+ * preferido — os outros seis passam `undefined`. Ou seja: a fronteira da declaração já separaria os
+ * casos sozinha. O opt-in existe mesmo assim, para que essa separação não dependa de uma
+ * coincidência que a próxima chamada nova pode desfazer em silêncio — a `ADR-005` §5.1 registra o
+ * que acontece quando se conta caminhos à mão (contou dois; eram cinco).
+ */
+export interface ChatFallbackOptions {
+    /** O resultado desta chamada é entregue ao usuário, então uma substituição precisa ser dita. */
+    anunciarSubstituicao?: boolean;
 }
 
 export interface CustomProviderConfig {

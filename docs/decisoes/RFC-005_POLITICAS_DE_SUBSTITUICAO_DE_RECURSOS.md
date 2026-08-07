@@ -528,15 +528,18 @@ implementa a taxonomia tem alta chance de mockar o sinal do jeito que o código 
 Encadeamento deliberado: documentação antes de implementação, e a decisão de localização antes do
 código que depende dela.
 
-| Sprint | Conteúdo | Depende de |
-|---|---|---|
-| **018** | Documentos normativos dos dois princípios + alinhamento (`ARCHITECTURE/README`, `CLAUDE.md`, nota na `ADR-002`, encerramento da Fase 0) | esta RFC aprovada |
-| **019** | **ADR-006** — onde vive a capacidade de ciclo de vida do runtime (questão aberta #4). Decisão, não implementação | 018 |
-| **020** | Taxonomia de estados em `CircuitBreaker`: `parado_por_decisao` e `indeterminado` deixam de contar como falha | 019 |
-| **021** | Política por recurso (`estrita`/`anunciada`/`livre`) na configuração de providers; padrão `anunciada` | 020 |
-| **022** | Substituição atravessando fronteira vira **fato na resposta**, verbalizado pelo LLM | 021 |
-| **023** | *(fora do escopo primário — ver "Escopo")* `searXNG`: remover o servidor público da cadeia | 018 |
-| **024** | Validação em execução real (etapa 4) e relatório de fechamento | 020-022 |
+| Sprint | Conteúdo | Depende de | Estado |
+|---|---|---|---|
+| **018** | Documentos normativos dos dois princípios + alinhamento (`ARCHITECTURE/README`, `CLAUDE.md`, nota na `ADR-002`, encerramento da Fase 0) | esta RFC aprovada | ✅ `c4879a2` |
+| **019** | **ADR-006** — onde vive a capacidade de ciclo de vida do runtime (questão aberta #4). Decisão, não implementação | 018 | ✅ `1257d1c` |
+| **020** | Taxonomia de estados em `CircuitBreaker`: `parado_por_decisao` e `indeterminado` deixam de contar como falha | 019 | ✅ `f363051` (`S204`/`S205`) |
+| **021** | Política por recurso (`estrita`/`anunciada`/`livre`) na configuração de providers; padrão `anunciada` | 020 | ✅ `fee5c15` (`S207`) |
+| **022** | Substituição atravessando fronteira vira **fato na resposta**, verbalizado pelo LLM | 021 | ✅ (`S208`) |
+| **023** | *(fora do escopo primário — ver "Escopo")* `searXNG`: remover o servidor público da cadeia | 018 | ✅ `70c0de2` (`S206`) |
+| **024** | Validação em execução real (etapa 4) e relatório de fechamento | 020-022 | ⏳ pendente |
+
+A ordem de execução não seguiu a numeração: a **023** foi feita logo após a 018, por depender apenas
+dela e por ser o único item da série cuja pendência era vazamento de privacidade confirmado.
 
 A Sprint 019 é uma ADR e não produz código de propósito: decidir a localização enquanto se
 implementa é como o `newclaw-kernel-adapter` acabou com uma proteção inalcançável.
