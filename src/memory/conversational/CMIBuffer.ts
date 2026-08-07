@@ -20,7 +20,14 @@ const log = createLogger('CMIBuffer');
 const MAX_CHUNK_MESSAGES = 15;          // máximo de entradas por chunk
 const MAX_TIME_WINDOW_MS = 15 * 60_000; // 15 minutos de inatividade
 
-/** Nomes de tools que sinalizam conclusão de workflow */
+/**
+ * Nomes de tools que sinalizam conclusão de workflow, para decidir corte de chunk.
+ *
+ * **Conceito distinto** de `TERMINAL_DELIVERY_TOOLS` (`core/ToolRegistry`), que responde "esta tool
+ * encerra o turno?". Por isso esta inclui `write`/`edit`: eles fecham uma unidade de trabalho na
+ * memória conversacional, mas não terminam turno nenhum. As duas listas divergirem é correto —
+ * unificá-las misturaria duas perguntas diferentes.
+ */
 const TERMINAL_TOOLS = new Set([
     'send_document', 'send_audio', 'send_image',
     'write_tool', 'write', 'edit', 'edit_tool'

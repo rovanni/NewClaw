@@ -1602,8 +1602,7 @@ export class AgentLoop {
                                 JSON.stringify(result.finalArgs ?? toolCall.arguments),
                             ).catch(() => {});
                         }
-                        const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
-                        if (terminalTools.includes(toolCall.name) && result.result.success) {
+                        if (ToolRegistry.isTerminalDelivery(toolCall.name) && result.result.success) {
                             move('TOOL_COMPLETED', { step: stepCount, tool: toolCall.name, success: true });
                             move('FINAL_READY', { step: stepCount, tool: toolCall.name, terminal: true });
                             // CORREÇÃO 1: notifica GoalExecutionLoop que DELIVERY-GUARD entregou
@@ -2062,8 +2061,7 @@ export class AgentLoop {
                     }
                 }
 
-                const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
-                if (terminalTools.includes(toolName) && result.success) {
+                if (ToolRegistry.isTerminalDelivery(toolName) && result.success) {
                     // JSON-action path is always a single tool call per step, so return immediately.
                     log.info(`[${this.ts()}] [TASK-FSM] Terminal atomic tool "${toolName}" succeeded → task DONE, returning result`);
                     move('FINAL_READY', { step: stepCount, tool: toolName, terminal: true });
@@ -2515,15 +2513,14 @@ export class AgentLoop {
             }
         }
 
-        const terminalTools = ['send_audio', 'send_document', 'send_image', 'send_video'];
-        if (result.success && !terminalTools.includes(toolName) && !isReadOnlyExecCommand(toolName, toolCall.arguments)) {
+        if (result.success && !ToolRegistry.isTerminalDelivery(toolName) && !isReadOnlyExecCommand(toolName, toolCall.arguments)) {
             this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
             void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
         }
         if (toolName === 'send_audio' && result.success) {
             channelContext?.deliveryTracking?.onArtifactDelivered?.('__send_audio_delivered__');
         }
-        if (terminalTools.includes(toolName) && result.success) {
+        if (ToolRegistry.isTerminalDelivery(toolName) && result.success) {
             log.info(`[${this.ts()}] [TASK-FSM] Terminal tool "${toolName}" succeeded — continuing batch before closing turn`);
             move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: true });
             // process remaining toolCalls in this batch (e.g. multiple send_document)

@@ -8,6 +8,16 @@ import { permissionRegistry } from './PermissionRegistry';
 import { isReadOnlyExecCommand } from '../tools/exec_command';
 const log = createLogger('Toolregistry');
 
+/**
+ * Ferramentas de entrega cujo sucesso encerra o turno. Fonte única — ver `isTerminalDelivery()`.
+ *
+ * Contém apenas ferramentas que EXISTEM. Até 07/08/2026 as listas duplicadas traziam também
+ * `send_image` e `send_video`, que não têm arquivo em `src/tools/` nem registro: entradas mortas,
+ * herdadas por cópia. Se alguma delas passar a existir, acrescentar aqui — em um lugar só.
+ * `S209` falha se um nome desta lista não tiver a tool correspondente.
+ */
+export const TERMINAL_DELIVERY_TOOLS: readonly string[] = ['send_audio', 'send_document'];
+
 interface ToolEntry {
     tool: ToolExecutor;
     enabled: boolean;
@@ -62,6 +72,27 @@ export class ToolRegistryClass {
 
     isDangerous(name: string): boolean {
         return this.tools.get(name)?.dangerous || false;
+    }
+
+    /**
+     * Ponto ÚNICO da pergunta "esta tool encerra o turno?".
+     *
+     * Uma ferramenta de entrega bem-sucedida termina o turno, e o `output` dela vira a resposta que
+     * chega ao canal (`docs/ARCHITECTURE/FERRAMENTAS_DE_ENTREGA.md` §2). O `AgentLoop` consulta isso
+     * em três pontos distintos de encerramento; antes desta consolidação, a lista estava escrita
+     * literalmente nos três, idêntica — a próxima ferramenta de entrega provavelmente entraria em um
+     * ou dois deles. É a mesma razão que levou `requiresAuthorization()` para cá (`ADR-005` §4.1):
+     * regra copiada diverge na primeira mudança.
+     *
+     * **Não confundir com `TERMINAL_TOOLS` do `CMIBuffer`**, que é outro conceito: lá a lista marca
+     * "conclusão de workflow" para decidir corte de chunk na memória conversacional, e por isso
+     * inclui `write`/`edit`, que não encerram turno nenhum. As duas listas divergem de propósito.
+     *
+     * Achado registrado em
+     * `docs/analises-arquiteturais/INVESTIGACAO_TERMINO_DE_TURNO_E_FATOS_DE_ENTREGA_2026-08-07.md`.
+     */
+    isTerminalDelivery(name: string): boolean {
+        return TERMINAL_DELIVERY_TOOLS.includes(name);
     }
 
     /**
