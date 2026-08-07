@@ -123,8 +123,11 @@ Registradas para não serem absorvidas por proximidade temática:
 * **Questões que a RFC não fechou, de propósito:** #5 Modo de Operação (descartado como *primitivo*,
   não como conveniência futura) e #7 substituição de decisões do LLM.
 * **Aplicações posteriores dos princípios**, listadas na Seção 9 de
-  `SOBERANIA_DA_CONFIGURACAO.md`: TTS (cláusula de visibilidade), `resolveProfile ?? chat ?? [0]`,
-  e STT.
+  `SOBERANIA_DA_CONFIGURACAO.md`: TTS (cláusula de visibilidade) e STT.
+  * `resolveProfile ?? chat ?? [0]` **saiu desta lista em 07/08/2026**: a investigação mostrou que
+    não é violação de Soberania nem caso ativo de adivinhação, e sim código defensivo inalcançável
+    pelos caminhos de construção existentes. Evidências e limites em
+    `SOBERANIA_DA_CONFIGURACAO.md` §9.1. O código não foi alterado.
 * **Fidelidade da verbalização.** Medida, não tratada. Torná-la determinística implicaria texto fixo
   emitido pelo Core — que é o débito de i18n que a `RFC-004` decidiu reduzir, não aumentar.
 * **`S158` instável** (issue 021). Falhou uma vez em cinco execuções da suíte durante a série.

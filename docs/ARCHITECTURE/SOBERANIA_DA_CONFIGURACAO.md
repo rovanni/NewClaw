@@ -159,10 +159,50 @@ realidade em 06/08/2026 — não a norma:
 | `send_audio` — queda para edge-tts | ❌ Cláusula (b): atravessa localidade e custódia, só registra em log |
 | `ProviderFactory.chatWithFallback` | ✅ Conforme desde 06/08/2026 (Sprints 021-022, `S207`/`S208`) — `estrita` recusa e diz por quê; `anunciada` substitui e o LLM verbaliza a troca quando ela sai da máquina do usuário |
 | `web_search.searXNG` | ✅ Conforme desde 06/08/2026 (Sprint 023, `S206`) — só consulta a instância declarada em `SEARXNG_URL`; sem configuração, a fonte não é usada |
-| `resolveProfile ?? chat ?? profiles[0]` | ❌ Perfil ausente cai em outro sem aviso — legado |
+| `resolveProfile ?? chat ?? profiles[0]` | ➖ Não se aplica — reclassificado em 07/08/2026; ver abaixo |
 
 Violações listadas aqui são **débito conhecido e datado**, não permissão. Código novo nasce
 conforme.
+
+### 9.1 Reclassificação — `resolveProfile ?? chat ?? profiles[0]` (07/08/2026)
+
+Esta linha constava como ❌ desde a Fase 0, com a descrição *"perfil ausente cai em outro sem
+aviso"*. A investigação que precedeu a correção mostrou que **a descrição não corresponde ao
+comportamento do sistema**, e a entrada foi reclassificada em vez de corrigida.
+
+**Por que não é violação de Soberania.** O princípio protege escolha explícita (§1.1). Uma categoria
+de perfil que o usuário nunca configurou não é recurso declarado — não há soberania a proteger sobre
+ela. E o caso que restaria, `profiles[0]` como último recurso, é questão de adivinhação, não de
+substituição.
+
+**Por que também não é um caso ativo de `NUNCA_ADIVINHAR`.** Adivinhar exige executar, e este código
+não executa. Evidências, em `ModelProfileRegistry.ts`:
+
+| Verificação | Resultado |
+|---|---|
+| O construtor lê `config.profiles` ou `config.defaultProfile` de fora? | Não — parte sempre de `DEFAULT_CONFIG` e só sobrescreve `model`/`provider` por categoria |
+| Existe caminho de remoção de perfil? | Nenhum (`splice`, `delete`, `removeProfile`: zero ocorrências) |
+| `setDefault()` aceita id inexistente? | Não — só grava se o id já estiver em `profiles` |
+| Consequência | Os seis perfis do `DEFAULT_CONFIG` estão sempre presentes, `chat-primary` inclusive |
+
+Logo `getProfileByCategory('chat')` nunca falha, `defaultProfileCopy()` nunca é chamado, e o
+`?? profiles[0]` dentro dele nunca executa.
+
+**Classificação:** código defensivo inalcançável. Não é bug, arquitetura, configuração nem
+comportamento esperado — é uma quinta categoria, e é coerente com a Fase 0 tê-lo marcado **L
+(legado)**: foi acrescentado em quatro linhas (`6622a1f`, 19/05/2026, mensagem de uma linha, sem
+corpo), sem ADR, sem RFC e sem teste que o cubra.
+
+**O código não foi alterado, deliberadamente.** Código defensivo inalcançável volta a ser alcançável
+no dia em que alguém acrescentar remoção de perfil. Removê-lo agora trocaria uma imprecisão de
+documentação por um risco real.
+
+**Escopo e limites desta investigação.** Foram examinados: o construtor de `ModelProfileRegistry`,
+`setDefault()`, e a busca por caminhos de remoção de perfil no arquivo. **Não** foram examinados
+todos os chamadores do registry, nem os dois usos de `profiles[0]` fora de `defaultProfileCopy()`
+(`:419`, em `getExecutionModel()`), que compartilham a mesma premissa mas não foram verificados um a
+um. A afirmação sustentada é *"inalcançável pelos caminhos de construção investigados"* — não
+"impossível por construção do tipo".
 
 ## 10. Relação com outros princípios
 
