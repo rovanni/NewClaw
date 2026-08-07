@@ -402,10 +402,10 @@ interface CommandFixupStep {
     name: string;
     condition: (command: string, ctx: FixupContext) => boolean;
     transform: (command: string, ctx: FixupContext) => string;
-    /** Default true. `remap_foreign_workspace_paths` nunca teve log `[AUTO-FIX]` no código
-     *  original (sempre roda, silenciosamente) — preservado aqui para não introduzir uma linha
-     *  de log nova que não existia antes. */
-    logOnChange?: boolean;
+    // Havia aqui um `logOnChange?: boolean`, que existia só para preservar a ausência histórica de
+    // log em `remap_foreign_workspace_paths` — o que fazia dele a única substituição do sistema sem
+    // rastro (Fase 0, débito 10). Removido na Sprint 029: com o log saindo por mudança real, nenhum
+    // passo precisa de isenção, e um campo sem consumidor seria pior que nenhum.
 }
 
 // Ordem = ordem real de aplicação em execute() (ver os 2 pontos de chamada de applyFixup() mais
@@ -422,7 +422,6 @@ const COMMAND_FIXUP_PIPELINE: CommandFixupStep[] = [
         name: 'remap_foreign_workspace_paths',
         condition: () => true,
         transform: (command, ctx) => remapForeignWorkspacePaths(command, ctx.allowRelativeWorkspacePrefix),
-        logOnChange: false,
     },
     {
         name: 'add_marp_no_stdin',
@@ -448,7 +447,15 @@ function applyFixup(stepName: string, command: string, ctx: FixupContext): strin
     const step = COMMAND_FIXUP_PIPELINE.find(s => s.name === stepName);
     if (!step || !step.condition(command, ctx)) return command;
     const next = step.transform(command, ctx);
-    if (step.logOnChange !== false) {
+    // Registra quando o comando REALMENTE mudou — que é o que `logOnChange` sempre prometeu pelo
+    // nome, e não o que fazia: antes bastava a `condition` passar. A diferença só aparecia em
+    // `remap_foreign_workspace_paths`, cuja condição é `() => true`; para os demais, condição
+    // satisfeita já implicava reescrita.
+    //
+    // É essa correção que tira do sistema a sua única substituição sem rastro: o comando que o
+    // modelo pediu era reescrito em silêncio, e nada no log dizia que houve troca. Não é
+    // preferência de observabilidade — é a diferença entre depurar e adivinhar.
+    if (next !== command) {
         log.info(`[AUTO-FIX] fix=${step.name} original="${command.slice(0, 120)}"`);
     }
     return next;
