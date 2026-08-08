@@ -107,6 +107,18 @@ Em ambos os casos, a causa nunca foi falta de rigor no teste — foi que o teste
 
 **Como aplicar:** ao terminar a implementação de uma mudança arquitetural relevante, antes de declarar concluído ou abrir PR — subir a app de verdade (`ts-node src/index.ts` ou equivalente) numa instância isolada, dirigir via HTTP/CLI real o fluxo que a mudança afeta, com o LLM real configurado (não mockado), e observar o resultado real. A skill `verify` do Claude Code é o mecanismo indicado para isso quando disponível.
 
+**Armadilha conhecida ao subir a instância isolada** (08/08/2026): rodando `ts-node` a partir de um
+diretório **fora do repositório** — que é o normal, já que a instância isolada tem workspace e `data`
+próprios — o `ts-node` procura o `tsconfig.json` a partir do `cwd`, não o encontra, cai nos padrões
+próprios e liga `noImplicitAny`. O boot morre com dezenas de `TS7006: Parameter implicitly has an
+'any' type` em `AgentController.ts` e outros, **enquanto `npx tsc --noEmit` dentro do repositório
+passa normalmente**.
+
+É configuração, não código — mas parece exatamente o contrário, e já custou uma investigação falsa
+sobre o produto. Exportar `TS_NODE_PROJECT` apontando para o `tsconfig.json` do repositório resolve;
+`TS_NODE_TRANSPILE_ONLY=true` é conveniência, pulando a checagem de tipos que o `tsc --noEmit` já
+fez. Registrado aqui, e não só na skill, porque quem tropeça nisto pode não estar usando a skill.
+
 ## Princípio da Preservação do Raciocínio
 
 Origem: auditoria do padrão "Evidence Providers" (2026-07-23) — mapeamento de todos os
