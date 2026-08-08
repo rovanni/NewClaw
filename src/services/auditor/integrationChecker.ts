@@ -2,7 +2,7 @@ import fs from 'fs';
 import { createLogger } from '../../shared/AppLogger';
 import { errorMessage } from '../../shared/errors';
 import { AuditConfig, AuditFinding, OllamaModelsResponse } from './types';
-import { which, diskUsagePercent, countNodeProcesses, isWindows } from '../../utils/crossPlatform';
+import { probeCommand, diskUsagePercent, countNodeProcesses, isWindows } from '../../utils/crossPlatform';
 
 const log = createLogger('AuditIntegrationChecker');
 
@@ -162,8 +162,26 @@ export async function auditIntegration(config: AuditConfig): Promise<AuditFindin
     const signalCliPath = /^[a-zA-Z0-9_.\-/]+$/.test(rawSignalPath) ? rawSignalPath : 'signal-cli';
     if (signalNumber) {
         try {
-            const signalResult = which(signalCliPath) ? signalCliPath : 'not_found';
-            if (signalResult === 'not_found') {
+            // `ADR-008`: um relatório de auditoria que não conseguiu verificar deve dizer isso, e não
+            // afirmar ausência. Antes, qualquer falha da sondagem virava "não instalado" — e o
+            // relatório sugeria instalar um `signal-cli` que podia estar perfeitamente instalado,
+            // gerando trabalho inútil para quem lesse.
+            const probe = probeCommand(signalCliPath);
+            if (probe.kind === 'indeterminate') {
+                channelStatuses.push({
+                    channel: 'Signal', connected: false,
+                    detail: `não foi possível verificar ${signalCliPath} (${probe.cause})`,
+                });
+                findings.push({
+                    severity: 'info',
+                    category: 'integration',
+                    title: 'signal-cli não pôde ser verificado',
+                    description: `SIGNAL_PHONE_NUMBER está configurado, mas a sondagem de ${signalCliPath} não completou (${probe.cause}). Isto NÃO significa que ele esteja ausente.`,
+                    suggestion: 'Repetir a auditoria com a máquina menos carregada antes de concluir qualquer coisa.',
+                    autoFixable: false,
+                    riskLevel: 'low'
+                });
+            } else if (probe.kind === 'absent') {
                 channelStatuses.push({ channel: 'Signal', connected: false, detail: 'signal-cli não instalado' });
                 findings.push({
                     severity: 'warning',

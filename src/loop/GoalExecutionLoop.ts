@@ -1382,6 +1382,12 @@ export class GoalExecutionLoop {
         this.caseMemory.captureIfEligible(this.goalStore.getById(goal.id)!);
         // M2 (RFC-001): mesmo gate de elegibilidade (goal já validado como concluído de
         // verdade) — captura só grava, nunca influencia o resultado deste goal.
+        //
+        // `ADR-008`: usa `commandExists` de propósito, e não `probeCommand`. Aqui o colapso de
+        // "não consegui verificar" para `false` é o lado SEGURO — o sistema deixa de aprender, que é
+        // o que a `ADR-003` já escolhia diante de dúvida ("silêncio em vez de chute"). O que mudou
+        // na Sprint 034 não foi o comportamento deste ponto, foi o motivo: o resultado seguro deixou
+        // de sair por acidente de um `catch` cego e passa a sair por escolha declarada.
         this.operationalKnowledge?.captureFromGoal(this.goalStore.getById(goal.id)!, commandExists);
         return { action: 'earlyReturn', result: this.buildResult(goal, true, totalCycles, totalReplans, validation.summary) };
     }
