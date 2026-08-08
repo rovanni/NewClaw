@@ -427,6 +427,53 @@ export class ProtocolParser {
     }
 
     /**
+     * Heurística ESTRUTURAL de recuperação — NÃO é um parser nem um validador de tool-call.
+     *
+     * Responde a uma única pergunta: "este JSON tem forma forte o bastante de tool-call
+     * serializada para que promovê-lo a resposta final seja errado?". Quem responde `true`
+     * NÃO está dizendo que a estrutura é executável, nem que pertence a algum protocolo —
+     * o único efeito permitido é mandar o turno para o mecanismo de recovery já existente.
+     * Não use esta função para extrair, converter ou executar nada.
+     *
+     * Origem: incidente River (08/08/2026). O modelo emitiu, como `content`,
+     * `[{"tool":"web_search","parameters":{...}}]` (104 chars). Nenhum dos quatro
+     * reconhecedores do sistema cobre esse par de chaves — `action.type=tool`+`name`+`input`
+     * (normalizeToStructured), `"function_call"`+`"name"` e DSML (hasNativeToolCallStructure),
+     * `name`+`arguments` (ProviderFactory.extractLeakedToolCalls) — então o conteúdo caía no
+     * ramo de `final_answer` e o turno encerrava ali, descartando o resultado real de
+     * `crypto_analysis` que já estava no contexto.
+     *
+     * A conjunção (nome string não-vazia E argumentos objeto) é o que evita falso positivo:
+     * `{"tool":"web_search"}` cai por não ter args-objeto, `{"parameters":{...}}` cai por não
+     * ter nome, `[{"name":"River","price":2.93}]` cai porque `price` é número. Prosa que
+     * apenas cita as palavras nunca chega aqui — `attemptJsonParse` devolve null.
+     *
+     * FALSOS POSITIVOS RESIDUAIS, aceitos deliberadamente: um JSON legítimo cujo elemento
+     * tenha ao mesmo tempo um nome-string e um campo-objeto com um desses rótulos — ex.
+     * `{"name":"River","input":{"periodo":"24h"}}` — é classificado como vazamento. Resolver
+     * isso exigiria validar o nome contra o ToolRegistry, acoplando este parser ao registry
+     * (escopo maior, deliberadamente fora). O trade-off é assimétrico e por isso aceitável:
+     *
+     *   falso positivo → recovery → uma volta a mais no loop, resposta ainda é produzida;
+     *   falso negativo → final_answer → o turno encerra e o resultado correto se perde.
+     *
+     * Opera sobre o JSON já parseado, nunca sobre substring do texto.
+     */
+    private looksLikeLeakedToolCall(raw: unknown): boolean {
+        const CAMPOS_NOME = ['tool', 'name', 'function'];
+        const CAMPOS_ARGS = ['parameters', 'arguments', 'input', 'args'];
+        const elementos = Array.isArray(raw) ? raw : [raw];
+        if (elementos.length === 0) return false;
+        return elementos.every(elemento => {
+            if (!elemento || typeof elemento !== 'object' || Array.isArray(elemento)) return false;
+            const obj = elemento as Record<string, unknown>;
+            const temNome = CAMPOS_NOME.some(k => typeof obj[k] === 'string' && (obj[k] as string).trim().length > 0);
+            const temArgs = CAMPOS_ARGS.some(k => obj[k] !== null && typeof obj[k] === 'object' && !Array.isArray(obj[k]));
+            return temNome && temArgs;
+        });
+    }
+
+    /**
      * SEMANTIC RECOVERY — Convert unstructured content into a StructuredAgentResponse.
      *
      * Uses content length as the primary heuristic:
@@ -490,6 +537,31 @@ export class ProtocolParser {
                     is_complete: false,
                     confidence: 'low',
                     reason: 'Protocol violation: internal JSON (thought/action) detected in content — recovery required.',
+                },
+                metadata: {
+                    protocolViolation: true,
+                    rawContentLength: trimmed.length,
+                    recoveryNeeded: true,
+                },
+            };
+        }
+
+        // Guard: estrutura que PARECE uma tool-call vazada, em formato que nenhum dos
+        // reconhecedores do sistema aceita. Ver looksLikeLeakedToolCall() para o contrato —
+        // em particular, isto NÃO valida nem habilita a execução de nada.
+        const leaked = this.attemptJsonParse(trimmed);
+        if (leaked !== null && this.looksLikeLeakedToolCall(leaked)) {
+            log.warn(`[PROTOCOL] 🔄 Semantic recovery — leaked tool-call structure detected (${trimmed.length} chars) — forcing recovery`);
+            return {
+                type: 'planning',
+                content: trimmed,
+                isComplete: false,
+                confidence: 'low',
+                reasoningRequired: true,
+                evaluation: {
+                    is_complete: false,
+                    confidence: 'low',
+                    reason: 'Protocol violation: content has leaked tool-call structure outside the NewClaw protocol — recovery required.',
                 },
                 metadata: {
                     protocolViolation: true,
