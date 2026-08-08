@@ -425,7 +425,7 @@ function Step-DownloadModel {
 
     if (-not $NoPrompt) {
         Write-Host "    Escolha o modelo:" -ForegroundColor White
-        Write-Host "    1) glm-5.2:cloud     — Recomendado (grátis, inferência remota)" -ForegroundColor Cyan
+        Write-Host "    1) glm-5.2:cloud     — Recomendado (inferência remota; PAGO, exige conta e OLLAMA_API_KEY)" -ForegroundColor Cyan
         Write-Host "    2) llama3.1:8b    — Rápido, uso geral (5GB local)" -ForegroundColor Cyan
         Write-Host "    3) mistral:7b     — Rápido, conversação (4GB local)" -ForegroundColor Cyan
         Write-Host "    4) qwen2.5:3b    — Leve, máquinas modestas (2GB local)" -ForegroundColor Cyan

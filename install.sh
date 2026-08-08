@@ -454,7 +454,7 @@ download_model() {
 
   if [ "$NO_PROMPT" -eq 0 ]; then
     echo -e "  ${BOLD}Escolha o modelo:${NC}"
-    echo -e "  ${CYAN}1)${NC} glm-5:cloud     — Recomendado (grátis, inferência remota)"
+    echo -e "  ${CYAN}1)${NC} glm-5:cloud     — Recomendado (inferência remota; PAGO, exige conta e OLLAMA_API_KEY)"
     echo -e "  ${CYAN}2)${NC} llama3.1:8b    — Rápido, uso geral (5GB local)"
     echo -e "  ${CYAN}3)${NC} mistral:7b     — Rápido, conversação (4GB local)"
     echo -e "  ${CYAN}4)${NC} qwen2.5:3b    — Leve, servidores fracos (2GB local)"
