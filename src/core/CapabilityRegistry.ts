@@ -28,7 +28,7 @@ import os from 'os';
 import { promisify } from 'util';
 import { createLogger } from '../shared/AppLogger';
 import { EnvironmentProbe } from './EnvironmentProbe';
-import { which, isWindows, linuxDistro, resolvePython3Runtime, defaultPython3Candidates, Python3Runtime } from '../utils/crossPlatform';
+import { which, probeCommand, CommandProbe, isWindows, linuxDistro, resolvePython3Runtime, defaultPython3Candidates, Python3Runtime } from '../utils/crossPlatform';
 
 const log = createLogger('CapabilityRegistry');
 const dnsLookup = promisify(dns.lookup);
@@ -141,6 +141,56 @@ function runSafe(cmd: string, timeoutMs = 3000): string | null {
     } catch {
         return null;
     }
+}
+
+/**
+ * Como `runSafe`, mas preservando a causa quando a sondagem não completou (`ADR-008`).
+ *
+ * Existe porque `runSafe` tem o mesmo defeito que `which()` tinha — `catch { return null }` apaga
+ * `status`/`code`/`signal` — e a cadeia de gerenciador de pacotes no Windows depende dessa
+ * distinção para não cair no candidato seguinte quando o anterior apenas não pôde ser verificado.
+ *
+ * `runSafe` continua como está para os demais probes deste arquivo, que colapsam por escolha: ali
+ * "não consegui verificar" e "não tem" levam ao mesmo lado seguro. Só a cadeia precisa dos três
+ * estados, e é ela que usa isto.
+ *
+ * Mesmo critério de `probeCommand`, pelo mesmo motivo de portabilidade: `status` numérico significa
+ * que o processo rodou e respondeu; a ausência dele significa que nem completou.
+ */
+function probeVersionCommand(cmd: string, timeoutMs = 3000): CommandProbe {
+    try {
+        const out = execSync(cmd, {
+            timeout: timeoutMs, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8', windowsHide: true,
+        }).trim();
+        return out ? { kind: 'found', path: out } : { kind: 'indeterminate', cause: 'saida-vazia' };
+    } catch (err) {
+        const e = err as NodeJS.ErrnoException & { status?: number | null; signal?: string | null };
+        if (typeof e.status === 'number') return { kind: 'absent' };
+        if (e.code === 'ETIMEDOUT' || e.signal) return { kind: 'indeterminate', cause: `timeout (${e.code ?? e.signal})` };
+        return { kind: 'indeterminate', cause: e.code ?? 'desconhecida' };
+    }
+}
+
+/**
+ * Percorre candidatos a gerenciador de pacotes, parando na PRIMEIRA indeterminação.
+ *
+ * O ponto da função é o `break` do meio: sem ele, uma sondagem que apenas não pôde ser verificada
+ * deixa a cadeia seguir e responder o gerenciador seguinte — resposta positiva ERRADA, não ausência.
+ * `undefined` é um valor previsto; um gerenciador errado, não.
+ */
+function detectarGerenciador(
+    candidatos: ReadonlyArray<readonly [string, string]>,
+    sondar: (alvo: string) => CommandProbe,
+): string | undefined {
+    for (const [alvo, gerenciador] of candidatos) {
+        const probe = sondar(alvo);
+        if (probe.kind === 'found') return gerenciador;
+        if (probe.kind === 'indeterminate') {
+            log.warn(`[ENV-PROBE] Sondagem de '${alvo}' indeterminada (${probe.cause}) — gerenciador de pacotes fica indeterminado em vez de cair no próximo candidato.`);
+            return undefined;
+        }
+    }
+    return undefined;
 }
 
 function makeStatus(available: boolean, details?: string): CapabilityStatus {
@@ -303,9 +353,10 @@ class CapabilityProbe {
             tempDirectory = process.env['TEMP'] ?? process.env['TMP'] ?? 'C:\\Windows\\Temp';
             pathSeparator = '\\';
             executableExtension = '.exe';
-            packageManager = runSafe('choco --version', 2000) ? 'choco'
-                           : runSafe('winget --version', 2000) ? 'winget'
-                           : undefined;
+            packageManager = detectarGerenciador(
+                [['choco --version', 'choco'], ['winget --version', 'winget']],
+                (alvo) => probeVersionCommand(alvo, 2000),
+            );
         } else if (plat === 'darwin') {
             platform = 'macos';
             shell = process.env['SHELL'] ?? '/bin/zsh';
@@ -321,10 +372,23 @@ class CapabilityProbe {
             executableExtension = '';
             const lsb = runSafe('lsb_release -si', 2000);
             distro = lsb ? lsb.toLowerCase().trim() : linuxDistro();
-            if      (which('apt-get')) packageManager = 'apt';
-            else if (which('yum'))     packageManager = 'yum';
-            else if (which('pacman'))  packageManager = 'pacman';
-            else if (which('apk'))     packageManager = 'apk';
+            // `ADR-008`: uma sondagem que não conseguiu verificar INTERROMPE a cadeia, em vez de
+            // deixá-la seguir para o próximo candidato.
+            //
+            // Antes eram `else if` encadeados sobre `which()`, e uma sondagem falha era
+            // indistinguível de "não existe": numa máquina Debian cuja sondagem de `apt-get`
+            // falhasse — 3,3% sob CPU saturada, medido — a cadeia continuava e podia responder
+            // `yum`. O resultado não era "não sei", era OUTRO gerenciador, afirmado como fato.
+            //
+            // E este valor não executa nada: ele entra no bloco `[CAPACIDADES DO AMBIENTE]` que vai
+            // para o LLM (ver `describeEnvironment` abaixo). Um valor errado é um fato falso
+            // entregue à camada de julgamento como se tivesse sido verificado — exatamente o que
+            // `NUNCA_ADIVINHAR.md` §1 existe para impedir. `undefined` já é um valor previsto (o
+            // ramo macOS o produz), e omitir a linha é melhor que mentir nela.
+            packageManager = detectarGerenciador(
+                [['apt-get', 'apt'], ['yum', 'yum'], ['pacman', 'pacman'], ['apk', 'apk']],
+                probeCommand,
+            );
         }
 
         return { platform, architecture, shell, tempDirectory, pathSeparator, executableExtension, distro, packageManager, checkedAt: now };

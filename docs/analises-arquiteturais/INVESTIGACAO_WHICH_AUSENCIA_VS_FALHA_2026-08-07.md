@@ -87,7 +87,10 @@ else if (which('apk'))     packageManager = 'apk';
 
 Numa máquina Debian, se a sondagem de `apt-get` falhar, a cadeia **continua** e pode responder
 `yum`. O resultado não é "não sei qual é" — é **outro gerenciador**, afirmado como fato. E
-`packageManager` alimenta comandos de instalação.
+`packageManager` entra no bloco `[CAPACIDADES DO AMBIENTE]` que vai para o LLM
+(`CapabilityRegistry.describeEnvironment`) — ele não executa nada; é evidência apresentada à camada
+de julgamento como fato verificado. *(Precisão corrigida na Sprint 034: a redação original dizia
+"alimenta comandos de instalação".)*
 
 É o caso mais grave do levantamento porque o `else if` encadeado converte uma sondagem falha numa
 afirmação positiva incorreta. Os demais consumidores degradam para ausência; este degrada para

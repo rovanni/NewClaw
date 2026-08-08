@@ -68,24 +68,72 @@ export function isBashFunctional(): Promise<boolean> {
     });
 }
 
-/** Cross-platform equivalent of `which` / `where`. Returns full path or null. */
-export function which(cmd: string): string | null {
+/**
+ * Resultado de uma sondagem de binário — três estados, não dois (`ADR-008`).
+ *
+ * `indeterminado` existe porque "não encontrei" e "não consegui verificar" não são a mesma coisa,
+ * e tratá-las como iguais é o que `docs/ARCHITECTURE/NUNCA_ADIVINHAR.md` §4 proíbe.
+ */
+export type CommandProbe =
+    | { kind: 'found'; path: string }
+    | { kind: 'absent' }
+    | { kind: 'indeterminate'; cause: string };
+
+/**
+ * Sonda a existência de um binário, preservando a causa quando não foi possível verificar.
+ *
+ * MEDIDO (07/08/2026, Windows 11, 28 CPUs — `docs/analises-arquiteturais/INVESTIGACAO_WHICH_AUSENCIA_VS_FALHA_2026-08-07.md` §2.1):
+ * com a máquina ociosa, 400 sondagens sem nenhuma falha e margem de ~15× para o teto. Sob CPU
+ * saturada, 5 falhas em 150 (3,3%), todas por timeout — e nelas a versão anterior desta função
+ * devolvia "não existe" para um comando que certamente existia. Saturação não é cenário exótico
+ * aqui: o NewClaw existe para rodar modelos locais, e inferência local satura a máquina.
+ *
+ * **Como a classificação evita suposição de plataforma.** A medição cobriu apenas Windows, e a
+ * `ADR-008` §9 proíbe estender o observado lá para Linux/macOS por analogia. Por isso o critério
+ * não é "qual código de saída este SO usa para não-encontrado", e sim algo que independe de
+ * convenção: **o processo de sondagem chegou a terminar e responder?** Um `status` numérico
+ * significa que ele rodou e deu um veredito — isso é ausência. A falta de `status` significa que
+ * ele nem completou — isso é indeterminação, qualquer que seja o motivo.
+ */
+export function probeCommand(cmd: string): CommandProbe {
+    const bin = isWindows ? 'where.exe' : 'which';
     try {
-        const bin    = isWindows ? 'where.exe' : 'which';
-        const result = execFileSync(bin, [cmd], {
+        const out = execFileSync(bin, [cmd], {
             encoding: 'utf-8',
             stdio: ['pipe', 'pipe', 'pipe'],
             timeout: 3000,
             windowsHide: true,
         }).trim().split(/\r?\n/)[0].trim();
-        return result || null;
-    } catch {
-        return null;
+        // Saída vazia com código 0 não confirma nada — não é o mesmo que "respondeu que não há".
+        return out ? { kind: 'found', path: out } : { kind: 'indeterminate', cause: 'saida-vazia' };
+    } catch (err) {
+        const e = err as NodeJS.ErrnoException & { status?: number | null; signal?: string | null };
+        if (typeof e.status === 'number') return { kind: 'absent' };
+        if (e.code === 'ETIMEDOUT' || e.signal) return { kind: 'indeterminate', cause: `timeout (${e.code ?? e.signal})` };
+        if (e.code === 'ENOENT') return { kind: 'indeterminate', cause: `sondador inalcançável (${bin})` };
+        // Tudo o que não foi reconhecido vira indeterminação, nunca ausência: afirmar que o comando
+        // não existe exigiria uma resposta do sondador, e aqui não houve nenhuma.
+        return { kind: 'indeterminate', cause: e.code ?? 'desconhecida' };
     }
+}
+
+/**
+ * Cross-platform equivalent of `which` / `where`. Returns full path or null.
+ *
+ * Colapsa `indeterminate` em `null` — mantido para não mudar o comportamento de quem já chamava
+ * isto. Quem precisa distinguir "não existe" de "não consegui verificar" usa `probeCommand()`.
+ */
+export function which(cmd: string): string | null {
+    const probe = probeCommand(cmd);
+    return probe.kind === 'found' ? probe.path : null;
 }
 
 /** Returns true if a command is available on PATH. */
 export function commandExists(cmd: string): boolean {
+    // Colapsa `indeterminate` em `false`. Isso é ESCOLHA de quem chama, não acidente da primitiva
+    // (`ADR-008` §4.1): há consumidores para os quais falhar como "não existe" é o lado seguro — o
+    // `GoalExecutionLoop` deixa de aprender, que é o que a `ADR-003` já queria no caso de dúvida.
+    // Quem NÃO pode colapsar assim usa `probeCommand()`.
     return which(cmd) !== null;
 }
 

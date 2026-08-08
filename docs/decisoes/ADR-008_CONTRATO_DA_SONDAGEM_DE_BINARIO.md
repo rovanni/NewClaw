@@ -101,7 +101,15 @@ seguinte é testado.
 
 É o único consumidor onde o falso negativo produz **resposta positiva errada** em vez de ausência:
 numa máquina Debian cuja sondagem de `apt-get` falhe, a cadeia hoje continua e pode responder `yum`
-— e `packageManager` alimenta comandos de instalação. "Não sei" é correto; "yum" é falso.
+— e `packageManager` entra no bloco `[CAPACIDADES DO AMBIENTE]` entregue ao LLM
+(`CapabilityRegistry.describeEnvironment`). "Não sei" é correto; "yum" é falso.
+
+> **Correção de precisão (Sprint 034).** A primeira redação desta ADR dizia que `packageManager`
+> *"alimenta comandos de instalação"*. Verificado na implementação: ele não executa nada — é
+> **evidência entregue à camada de julgamento**, e o modelo é quem planeja o comando a partir dela.
+> A consequência é pior, não melhor: um valor errado é um **fato falso apresentado como verificado**,
+> que é precisamente o que `NUNCA_ADIVINHAR.md` §1 existe para impedir — *"a camada de julgamento
+> poder distinguir 'isto é verdade porque foi checado' de 'isto é uma suposição'"*.
 
 `undefined` já é um valor previsto (o ramo macOS o produz), então nenhum consumidor de
 `packageManager` precisa mudar.
