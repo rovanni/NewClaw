@@ -247,6 +247,36 @@ o seleciona — e ela erra sempre que a granularidade do relógio empata com a d
   eventos estão anormalmente próximos. A Sprint G sugere que a família do defeito aparece em
   produção; este empate específico, não foi observado lá.
 
+### 9.7 Validação: a causa explica as ocorrências observadas?
+
+**Na amostra de 30 rodadas isoladas: correlação perfeita, 30/30.** Toda rodada que gravou
+`echo verificando-…` falhou; toda rodada que gravou `echo instalando-…` nas duas capturas passou.
+Nenhuma exceção nos dois sentidos — o mecanismo é necessário **e** suficiente dentro da amostra.
+
+As duas falhas têm a assinatura idêntica, inclusive nos carimbos:
+
+| Rodada | `blocker.detectedAt` | escolhido | Comando aprendido |
+|---|---|---|---|
+| 2 | `1786181745614` | `1786181745616` | `verificando` |
+| 27 | `1786182009336` | `1786182009338` | `verificando` |
+
+**Fora da amostra — a falha na suíte completa durante a série RFC-005: consistente, não
+confirmada.** O runner guarda apenas as **últimas 15 linhas** da saída do teste
+(`scripts/run-regression-tests.cjs:55`), e essa janela foi inteiramente consumida pelo dump de
+detalhe do próprio `S158.4`. As linhas do `S158.3` e todos os eventos `OPKNOW-*` ficaram fora — a
+ausência é por truncamento, não por terem passado.
+
+O que sobreviveu no log corrobora sem provar: o blocker visível é
+`missingDependency: 'dep-sintetica-s158-determinista'` com a descrição *"não é conhecido (sem
+entrada em KNOWN_DEPS nem conhecimento aprendido)"* — exatamente o efeito a jusante de a confiança
+nunca ter chegado a `validated`. É o desfecho que o mecanismo produz, mas o comando aprendido
+naquela execução não é recuperável.
+
+**Conclusão da validação:** a cadeia de evidências está completa para as ocorrências que puderam ser
+inspecionadas (2/2, dentro de uma correlação de 30/30). A terceira ocorrência é compatível e não
+contradiz, mas não acrescenta confirmação independente. Reproduzi-la com log completo custaria ~14
+execuções da suíte (≈70 min) para um dado que a amostra isolada já fornece.
+
 # 10. Nota de rastreabilidade
 
 O commit `a23428e` (Sprint 030) versionou **apenas este documento**. A atualização correspondente da
