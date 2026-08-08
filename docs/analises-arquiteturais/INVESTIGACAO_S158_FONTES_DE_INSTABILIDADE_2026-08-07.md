@@ -59,6 +59,10 @@ o desfecho.
 **Isto não é a causa comprovada.** É a redução do espaço de busca: se a instabilidade vier do
 ambiente, entra por aqui.
 
+> **Superado pela medição de 08/08/2026 (Seção 9).** As asserções que de fato falham são de
+> promoção de confiança, não de detecção de ambiente. A sondagem de binário deixou de ser a
+> suspeita principal. Este parágrafo fica como registro do que se pensava antes de medir.
+
 ## 5. Achado independente — `which()` não distingue ausência de falha
 
 Verdadeiro por leitura, e **independente** de o `S158` ser instável ou não
@@ -113,3 +117,81 @@ defeito independente e verificável: `which()` reporta ausência quando na verda
 verificar.
 
 **Nenhuma correção é proposta neste documento.**
+
+---
+
+# 9. Medição de 08/08/2026
+
+Síntese dos fatos que passaram a fazer parte da base de conhecimento do projeto. O backlog e o
+plano de ação continuam em `docs/issues/021-…` (local, fora do versionamento — ver Seção 10).
+
+## 9.1 Metodologia
+
+30 execuções **isoladas** do `S158` (~13 s cada, uma de cada vez, fora da suíte), registrando código
+de saída e log completo de cada rodada. Nenhuma alteração no teste nem no código sob teste.
+
+A pergunta que a medição respondeu vem **antes** do passo 1 do plano da issue: *ele falha isolado?*
+Duas execuções isoladas anteriores tinham sugerido que não — amostra pequena demais contra um evento
+raro, e foi essa leitura que a medição corrigiu.
+
+## 9.2 Resultado
+
+| Medida | Valor |
+|---|---|
+| Falhas | **2 em 30 — 6,7%** (rodadas 2 e 27) |
+| Asserções que falharam | as mesmas nas duas: **`S158.3` e `S158.4`** |
+| Outras asserções | nenhuma falhou em nenhuma das 30 rodadas |
+
+**Assinatura observada:** `S158.3` (*"após a 2ª verificação real bem-sucedida,
+`computeConfidenceLevel()` eleva a confiança a `validated`"*) falha, e `S158.4` cai por depender
+dela. É uma assinatura estreita e estável — a promoção de conhecimento a `validated` não acontece.
+
+## 9.3 Hipóteses refutadas
+
+| Hipótese | Origem | Por quê caiu |
+|---|---|---|
+| Estado aprendido persistido entre execuções | achado secundário da issue 021 | O teste usa `:memory:` nos dois bancos; nada acumula |
+| Contenção entre testes paralelos | levantada nesta investigação | O runner usa `spawnSync` em laço — execução sequencial |
+| "Falha na suíte, passa isolado" | leitura desta investigação | Ele falha isolado, a 6,7%; a distinção era ruído de amostra |
+
+## 9.4 O que a medição NÃO estabeleceu
+
+* **A causa da instabilidade permanece indeterminada.** A assinatura observada é compatível com a
+  hipótese principal da issue 021 (o dedup da issue 020 bloqueando a 2ª verificação que a `RFC-003`
+  exige), mas o elo central — a 2ª chamada ser de fato deduplicada — **não foi observado
+  diretamente**.
+* **A explicação da issue para a VARIAÇÃO está refutada**, ainda que a assinatura bata: ela atribui
+  a intermitência ao estado acumulado no banco, e não há estado acumulado. O que faz a primeira
+  chamada falhar em algumas rodadas e não em outras segue sem explicação.
+* **Nenhuma relação causal foi estabelecida entre `which()` e o `S158`.** Ver 9.5.
+
+## 9.5 Por que a ADR-008 existe, e o que ela NÃO resolveu
+
+A `ADR-008` (contrato da sondagem de binário) e as Sprints 034-036 que a implementaram nasceram
+**desta investigação**, como **achado lateral**: ao procurar fontes de não-determinismo no `S158`,
+encontrou-se que `which()` reportava ausência quando não conseguira verificar — defeito real,
+verificável por leitura, medido depois em 3,3% sob CPU saturada
+(`INVESTIGACAO_WHICH_AUSENCIA_VS_FALHA_2026-08-07.md`).
+
+**A ADR-008 não explica nem corrige o `S158`.** As asserções que falham são de promoção de
+confiança; a sondagem de ambiente ficou fora do caminho. Registrado aqui de forma explícita para que
+o histórico do repositório não sugira o contrário: quem encontrar a ADR-008 e esta investigação no
+mesmo período deve saber que uma originou a outra, e que a instabilidade original continua aberta.
+
+## 9.6 Próximo passo
+
+Confirmar se a 2ª chamada de verificação é bloqueada pelo dedup — único elo da hipótese principal
+ainda não observado. Com 6,7% em execução isolada de 13 s, ~30 rodadas instrumentadas bastam; não é
+preciso a suíte completa.
+
+# 10. Nota de rastreabilidade
+
+O commit `a23428e` (Sprint 030) versionou **apenas este documento**. A atualização correspondente da
+`docs/issues/021-…` permaneceu **local**, porque `docs/issues/` está no `.gitignore` (linha 10) — o
+`git add -A` a ignorou em silêncio, e a mensagem daquele commit afirma ter corrigido a issue.
+Corrigido aqui para manter o histórico preciso.
+
+A separação é deliberada e continua valendo: `docs/issues/` é backlog e espaço de investigação
+local; `docs/analises-arquiteturais/` preserva a evidência que influencia o entendimento técnico do
+projeto. Pelo mesmo critério, a correção de boot registrada em `.claude/skills/verify/SKILL.md`
+permanece local — descreve o ambiente de trabalho deste clone, não o produto.
