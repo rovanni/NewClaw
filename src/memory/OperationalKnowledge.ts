@@ -206,24 +206,77 @@ export class OperationalKnowledge {
         try {
             const missingToolBlockers = goal.blockers.filter(b => b.kind === 'missing_tool' && b.missingDependency);
             for (const blocker of missingToolBlockers) {
-                const fixAttempt = goal.attempts.find(a =>
+                // `ADR-009` C1 — a ordem vem da POSIÇÃO no array, nunca de `executedAt`.
+                //
+                // `goal.attempts` é preenchido na ordem de execução, então o índice é uma sequência
+                // monotônica que não depende da resolução do relógio. A versão anterior comparava
+                // `a.executedAt > blocker.detectedAt` com carimbos em milissegundo: quando o comando
+                // corretivo executava no MESMO milissegundo em que o blocker foi detectado, o `>`
+                // estrito o descartava e a busca caía no sucesso seguinte — gravando o comando de
+                // verificação no lugar do de instalação. Medido em 08/08/2026: correlação 30/30
+                // entre esse empate e a falha do `S158`
+                // (`docs/analises-arquiteturais/INVESTIGACAO_S158_FONTES_DE_INSTABILIDADE_2026-08-07.md` §9).
+                //
+                // O fracasso que originou o blocker é a âncora: o que resolve vem depois do que
+                // falhou. Sem essa âncora não há como afirmar causalidade — e aí não se aprende.
+                // `GoalBlocker.toolName` é OPCIONAL e frequentemente ausente — depender dele sem
+                // tratar a ausência faz a âncora nunca ser encontrada, e o C3 então recusa aprender
+                // sempre. Observado na primeira execução desta implementação: 30/30 falhas, com
+                // `blocker_tool=` vazio no log de C4.
+                //
+                // Quando o nome existe, ele dá a âncora precisa. Quando não existe, o primeiro
+                // fracasso do goal é a melhor aproximação disponível: um blocker de tool ausente só
+                // existe porque algo falhou antes. Menos preciso, nunca inventado — e a diferença
+                // fica registrada no log.
+                const ancoraPorTool = blocker.toolName
+                    ? goal.attempts.findIndex(a => a.result !== 'success' && a.toolName === blocker.toolName)
+                    : -1;
+                const idxFalha = ancoraPorTool >= 0
+                    ? ancoraPorTool
+                    : goal.attempts.findIndex(a => a.result !== 'success');
+
+                // **Um blocker pode existir sem nenhum attempt falho registrado.** No caminho
+                // determinístico (`needs_dependency`), o blocker é produzido pela avaliação do
+                // ciclo, não necessariamente por um attempt com `result !== 'success'` gravado —
+                // medido em 08/08/2026: `motivo=nenhum_attempt_falho_no_goal` com `blocker_tool`
+                // presente. Era por isso que a versão original usava carimbo de tempo: ele não
+                // exige que o fracasso esteja em `attempts`.
+                //
+                // Quando a âncora existe, a ordenação é POSICIONAL e o relógio não participa
+                // (`ADR-009` C1 pleno). Quando não existe, degrada para a comparação temporal —
+                // agora com `>=` em vez de `>`, que é o que impede o empate de milissegundo de
+                // descartar o comando corretivo. Nesse modo o C1 é satisfeito apenas em parte, e
+                // por isso o log diz qual estratégia foi usada.
+                const modoAncora = idxFalha >= 0 ? 'posicional' : 'temporal';
+
+                const idxFix = goal.attempts.findIndex((a, i) =>
+                    (idxFalha >= 0 ? i > idxFalha : a.executedAt >= blocker.detectedAt) &&
                     a.toolName === 'exec_command' &&
                     a.result === 'success' &&
-                    a.executedAt > blocker.detectedAt &&
                     typeof a.args?.command === 'string' &&
                     (a.args.command as string).trim().length > 0 &&
-                    // ADR-004: verificar não é instalar. Um `where`/`which`/`command -v` sobre a
-                    // própria dependência não pode ter sido a causa de ela passar a existir —
-                    // fora da candidatura, senão a heurística "primeiro sucesso depois do
-                    // blocker" grava o diagnóstico no lugar do comando real (observado na
-                    // Sprint G, em execução real).
+                    // `ADR-009` C2 — corrigir não é verificar, e a distinção é por PAPEL, não por
+                    // texto do comando. O step de verificação é injetado por código determinístico
+                    // (`GoalExecutionLoop`, id prefixado `verify_`), nunca rotulado pelo LLM — por
+                    // isso usá-lo aqui não reabre a `ADR-003` §4 (C5).
+                    //
+                    // A `ADR-004` já excluía sondas de existência (`where`/`which`), depois de a
+                    // Sprint G aprender um `where` no lugar da instalação. Ela decidiu QUAIS
+                    // comandos são candidatos; faltava excluir os que rodam COMO verificação —
+                    // `echo verificando-...` não é sonda, e passava.
+                    !a.planStepId.startsWith('verify_') &&
                     !isToolExistenceProbe(a.args.command as string, blocker.missingDependency!)
                 );
-                if (!fixAttempt) continue;
+                if (idxFix < 0) {
+                    log.info(`[OPKNOW-SKIP] goal=${goal.id} dependency=${blocker.missingDependency} motivo=nenhum_comando_corretivo_candidato ancora=${modoAncora} idx_falha=${idxFalha}`);
+                    continue;
+                }
+                const fixAttempt = goal.attempts[idxFix];
+                log.info(`[OPKNOW-ANCORA] goal=${goal.id} dependency=${blocker.missingDependency} ancora=${modoAncora} idx_falha=${idxFalha} idx_fix=${idxFix}`);
 
-                const verifiedByStep = goal.attempts.some(a =>
+                const verifiedByStep = goal.attempts.some((a, i) =>
+                    i > idxFix &&
                     a.result === 'success' &&
-                    a.executedAt >= fixAttempt.executedAt &&
                     a.planStepId.startsWith('verify_')
                 );
                 // Só observa o ambiente quando a evidência já registrada no goal não basta —
