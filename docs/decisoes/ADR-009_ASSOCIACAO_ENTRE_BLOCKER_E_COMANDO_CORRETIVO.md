@@ -108,6 +108,81 @@ fosse o **estado do ambiente**, não a autodeclaração do plano. Uma solução 
 explícita reabre uma decisão publicada — o que é possível, mas exige emendar a `ADR-003`, não
 contorná-la.
 
+## 4.2 Emenda de 08/08/2026 — o relógio nunca foi necessário
+
+Esta emenda **substitui** uma versão anterior, escrita no mesmo dia, que afirmava duas coisas
+erradas: que a independência do relógio não era alcançável com a informação disponível, e que a
+assimetria entre os caminhos de execução era um limite estrutural. As duas conclusões vinham de
+observar o comportamento do `S158` sem verificar o fluxo de produção.
+
+### O que a validação por leitura de código estabeleceu
+
+A pergunta era: *todo blocker `missing_tool` tem um attempt de falha registrado antes?* A resposta é
+**sim, em produção** — e não por coincidência de três caminhos independentes, mas por construção:
+
+| Elo | Verificação |
+|---|---|
+| `GoalEvaluator.classifyError` é a **única** origem de `kind: 'missing_tool'` | `grep` em `src/**`: três ocorrências, duas dentro dela, uma é entrada de tabela |
+| `evaluate()` é o **único** chamador de `classifyError` | um único sítio, `GoalEvaluator.ts:299` |
+| Os três sítios de `evaluate()` gravam o attempt falho **antes** | `:2473` (`result: 'failure'` em `:2461`) → `:2493`; `:2110` → `:2115`; `:2396` → `:2397` |
+
+Isto é afirmação sobre a **arquitetura**, não sobre uma amostra de 30 execuções.
+
+### Consequências
+
+**1. A dependência do relógio é herança, não necessidade estrutural.** A âncora posicional está
+universalmente disponível no fluxo real. A comparação temporal existia porque ninguém havia mapeado
+o sinal que já estava lá.
+
+**2. O caso "blocker sem attempt falho" não pertence à produção.** Ele é introduzido por
+`makeSyntheticCycleResult()` no próprio `S158`
+(`src/__tests__/regression/S158_RFC003_SprintF_FullCycleIntegration.test.ts:291`), que injeta
+`outcome: 'needs_dependency'` direto para isolar `handleNeedsDependencyOutcome`, sem passar por
+`evaluate()` nem por `recordFailedAttempt`.
+
+O fallback temporal que permaneceu na implementação atual **acomoda esse cenário sintético**, não um
+caminho real. Removê-lo depende de decidir o que fazer com o teste — ver Seção 4.3.
+
+**3. O `install_` muda de papel.** Deixa de ser a informação *necessária* para eliminar o relógio e
+passa a ser o sinal *semanticamente correto*: identifica o passo corretivo por papel, sem depender de
+ordem nenhuma. Continua sendo o refinamento mais forte disponível, por outro motivo.
+
+### Estado dos critérios
+
+| Critério | Estado |
+|---|---|
+| **C1** — não depender da resolução do relógio | **Alcançável integralmente.** A âncora posicional cobre todo o fluxo de produção. O modo temporal remanescente serve ao cenário sintético do teste, e sua remoção está condicionada à Seção 4.3 |
+| **C2** — corrigir ≠ verificar, de forma geral | **Pleno.** Exclusão por papel (`verify_`), não por texto de comando. É a parte estrutural da correção do defeito medido |
+| **C3** — falhar para o lado de não aprender | **Validado na prática.** Impediu duas implementações defeituosas de gravar conhecimento sem âncora: falhas ruidosas, zero conhecimento incorreto persistido |
+| **C4** — observável quando não associa | **Validado na prática.** O `[OPKNOW-SKIP]` apontou a causa de cada implementação defeituosa na primeira linha do log |
+| **C5** — sem rótulo do plano ou do LLM | **Pleno.** `install_`/`verify_` são gerados por `GoalExecutionLoop`, código determinístico |
+
+### Enquadramento que a investigação produziu
+
+A pergunta útil deixou de ser *"qual heurística substitui o relógio?"* e passou a ser:
+
+> **Qual fato cada produtor de blocker já fornece para correlacionar blocker e remediação?**
+
+É a mesma forma do Evidence Provider Pattern aplicada à causalidade: o produtor fornece o fato, o
+consumidor aplica a política — em vez de o consumidor reconstruir a causalidade por inferência.
+
+## 4.3 Dívida descoberta — o `S158` sintetiza um estado que produção não produz
+
+Registrada aqui porque foi esta investigação que a encontrou, e porque uma decisão futura sobre o
+`fallback` temporal depende dela.
+
+`makeSyntheticCycleResult()` fabrica um `CycleResult` com `outcome: 'needs_dependency'` e o injeta
+diretamente, para exercitar `handleNeedsDependencyOutcome()` sem montar o fluxo completo. O efeito
+colateral é um goal com blocker e **sem nenhum attempt falho** — estado que o pipeline real não
+alcança.
+
+Isso **não** significa que o teste esteja errado: isolar uma unidade é legítimo. Significa que uma
+conclusão arquitetural tirada do comportamento dele pode não valer para produção — como aconteceu
+aqui, e como a emenda anterior demonstrou ao errar por isso.
+
+Duas saídas, nenhuma decidida: evoluir o teste para atravessar `evaluate()`/`recordFailedAttempt`, ou
+mantê-lo sintético com a simplificação documentada. Fora do escopo desta ADR.
+
 ## 5. O que esta ADR NÃO decide
 
 Deliberadamente em aberto, para a fase de desenho:

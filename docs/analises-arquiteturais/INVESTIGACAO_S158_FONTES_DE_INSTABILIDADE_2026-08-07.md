@@ -277,6 +277,58 @@ inspecionadas (2/2, dentro de uma correlação de 30/30). A terceira ocorrência
 contradiz, mas não acrescenta confirmação independente. Reproduzi-la com log completo custaria ~14
 execuções da suíte (≈70 min) para um dado que a amostra isolada já fornece.
 
+## 9.8 Validação por leitura de código — a âncora posicional é universal em produção
+
+As seções anteriores foram construídas sobre comportamento observado. Esta é sobre a arquitetura, e
+por isso vale para além da amostra.
+
+**Pergunta:** todo blocker `missing_tool` tem um attempt de falha registrado antes de ser avaliado?
+
+| Elo verificado | Resultado |
+|---|---|
+| Origens de `kind: 'missing_tool'` em `src/**` | três ocorrências: duas em `GoalEvaluator.classifyError`, uma é entrada de tabela de templates |
+| Chamadores de `classifyError` | **um** (`GoalEvaluator.ts:299`, dentro de `evaluate()`) |
+| Sítios de `evaluate()` no loop | três — `:2493`, `:2115`, `:2397` |
+| Attempt falho gravado antes de cada um | `:2473` com `result: 'failure'` (`:2461`); `:2110` `recordFailedAttempt`; `:2396` `recordFailedAttempt` |
+
+**Conclusão:** em produção, sempre existe o fracasso registrado. A ordenação posicional é
+universalmente disponível, e **a dependência do relógio é herança da implementação original, não
+necessidade estrutural.**
+
+### O que isso corrigiu numa conclusão anterior
+
+Uma versão anterior desta investigação — e a primeira emenda da `ADR-009` — afirmava que a
+assimetria entre caminhos era limite estrutural: o caminho determinístico não teria âncora
+posicional. **Errado.** Em produção ele passa pelo mesmo `evaluate()`, precedido do mesmo
+`addAttempt`.
+
+A conclusão errada veio de observar o `S158` sem verificar o fluxo real. É o mesmo tipo de erro que
+a §9.3 registra ter refutado noutras hipóteses, cometido dentro da própria investigação.
+
+## 9.9 Dívida do teste — o `S158` sintetiza um estado que produção não produz
+
+`makeSyntheticCycleResult()` (`S158…test.ts:291`) fabrica um `CycleResult` com
+`outcome: 'needs_dependency'` e o injeta direto, para exercitar `handleNeedsDependencyOutcome()` sem
+montar o fluxo completo. O efeito colateral é um goal com blocker e **sem nenhum attempt falho** —
+estado inalcançável pelo pipeline real.
+
+Isolar uma unidade é legítimo; o problema é outro: **uma conclusão arquitetural tirada do
+comportamento desse teste pode não valer para produção** — foi exatamente o que aconteceu, duas
+vezes, nesta investigação.
+
+Duas saídas, nenhuma decidida: evoluir o teste para atravessar `evaluate()`/`recordFailedAttempt`, ou
+mantê-lo sintético com a simplificação documentada. Registrado em `docs/issues/` (local).
+
+## 9.10 Achado adjacente, sem relação com esta investigação
+
+`GoalAttempt.cycle` está declarado em `src/shared/domainTypes.ts` com o comentário *"ciclo de
+execução do GoalExecutionLoop em que este attempt ocorreu"*, e nenhum produtor o preenche
+(`grep` por `cycle:` em `GoalStore`/`GoalExecutionLoop` no contexto de attempt: nenhuma ocorrência).
+
+Contrato declarado e nunca materializado. **Não tem relação com a `ADR-009`** — apareceu por ter sido
+avaliado como possível âncora de ordenação e descartado por não existir na prática. Registrado
+separadamente para não misturar os assuntos.
+
 # 10. Nota de rastreabilidade
 
 O commit `a23428e` (Sprint 030) versionou **apenas este documento**. A atualização correspondente da
