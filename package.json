@@ -1,6 +1,6 @@
 {
   "name": "newclaw",
-  "version": "2.3.1",
+  "version": "2.4.0",
   "description": "Agente pessoal de IA 100% local com Telegram",
   "main": "dist/index.js",
   "scripts": {

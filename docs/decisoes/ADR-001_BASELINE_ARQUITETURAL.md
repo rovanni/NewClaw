@@ -242,3 +242,98 @@ fragmentada exige enviar um álbum de verdade ao bot do Telegram.
 - **O Core continua sem sistema de tradução** — a `RFC-004` reduz o texto fixo emitido pelo Core em
   vez de introduzir um; o débito permanece para ACK de fila e validador de objetivos
   (`docs/ARCHITECTURE.md`, "Gaps conhecidos").
+
+---
+
+## 11. Baseline B2.2 — Substituição de Recursos e Sondagem (Sprints 018-040) — versão 2.4.0
+
+Escrita em 2026-08-08. Consolidação curta de um ciclo longo: a documentação detalhada já existe nos
+documentos citados, e esta seção serve para reduzir o custo de contexto de quem chegar depois.
+
+### O problema inicial
+
+Um requisito do operador: *"o NewClaw deve continuar plenamente utilizável mesmo sem conexão com a
+Internet, desde que o usuário tenha escolhido modelos locais"*. O critério que atravessou o ciclo
+inteiro: **"se a Internet cair agora, o usuário ainda consegue trabalhar da forma que configurou?"**
+
+Dois incidentes de produção deram origem: um turno que pediu modelo local e recebeu resposta de
+nuvem sem aviso, e `CIRCUIT-OPEN: Skipping 'Modelo local' (failures: 72)` — setenta e duas falhas
+contra um recurso que nunca esteve quebrado, apenas desligado.
+
+### Hipóteses refutadas
+
+Metade do valor deste ciclo está no que **não** se confirmou. Registrado para não ser reinvestigado:
+
+| Hipótese | Como caiu |
+|---|---|
+| `S158` depende de conhecimento persistido entre execuções | usa `:memory:` nos dois bancos |
+| A instabilidade vem de contenção entre testes paralelos | o runner usa `spawnSync` em laço — é sequencial |
+| O dedup da issue 020 bloqueia a 2ª verificação | **0 ativações em 30 rodadas**, incluindo as que falharam |
+| `which()` explica a instabilidade do `S158` | achado real e independente, sem relação causal estabelecida |
+| A âncora posicional não existe em todos os caminhos | existe em produção; o caso sem ela é sintetizado pelo teste |
+| `resolveProfile ?? chat ?? [0]` viola a Soberania | código defensivo inalcançável — reclassificado |
+
+As duas últimas foram conclusões **minhas**, corrigidas por evidência posterior. A revisão da
+`ADR-009` §4.2 substitui uma emenda anterior errada, em vez de ajustá-la.
+
+### ADRs e princípios produzidos
+
+* **`ADR-006`** — onde vive o ciclo de vida do runtime local. *O Core pode saber o estado, não pode
+  mudá-lo* — o que torna a `ADR-002` §2.3 garantia estrutural, não só política.
+* **`ADR-007`** — onde vive um fato sobre a entrega. Terceira categoria do contrato, ao lado do
+  conteúdo e do log; ferramenta que devolve fato não encerra o turno.
+* **`ADR-008`** — contrato da sondagem de binário. Três estados, com o colapso decidido por cada
+  consumidor, nunca imposto.
+* **`ADR-009`** — associação entre blocker e comando corretivo. Cinco critérios (C1-C5); a mecânica
+  ficou para a implementação.
+* **Dois princípios normativos** em `docs/ARCHITECTURE/`: **Soberania da Configuração do Usuário**
+  (quem decide, e o que o usuário fica sabendo) e **Localidade da Recuperação** (onde a recuperação
+  vive, e se é alcançável no instante da falha).
+
+### Mudanças implementadas
+
+| Área | Mudança | Cobertura |
+|---|---|---|
+| Taxonomia de indisponibilidade | runtime desligado deixa de contar como avaria | `S204`, `S205` |
+| Busca web | `searx.be` removido; só a instância declarada em `SEARXNG_URL` | `S206` |
+| Política de substituição | `estrita`/`anunciada`/`livre` por recurso, padrão `anunciada` | `S207` |
+| Anúncio | troca que sai da máquina vira fato verbalizado pelo LLM | `S208`, `S210` |
+| Fim de turno | `endsTurn` como ponto único; `terminalTools` deduplicada | `S209` |
+| Rastro | toda reescrita de comando loga; `send_audio` anuncia a queda do Piper | `S211`, `S213` |
+| Sondagem | três estados, com decisão local por consumidor | `S212`, `S214` |
+| Aprendizado operacional | comando corretivo deixa de ser escolhido por relógio | validação do `S158` |
+
+**Sobre o número de versão:** publicada como `2.4.0` — `minor`, não `patch`. Há capacidades novas
+(política de substituição, contrato de sondagem de três estados) e mudanças de comportamento
+observável: o SearXNG deixa de responder para quem não o configurou, uma substituição que sai da
+máquina passa a ser mencionada na resposta, e o gerenciador de pacotes pode ficar indeterminado onde
+antes respondia errado. Registrado para que a escolha seja decisão explícita.
+
+### Validação
+
+Suíte de regressão: **214 testes** (201 na baseline anterior). Etapa 4 da Validação Progressiva
+executada com LLM real em instância isolada (`docs/sprints/RFC-005_CLOSING_REPORT.md` §6): o
+mecanismo entrega o fato em 5/5 execuções; a **redação** do aviso variou — 2 fiéis, 2 parciais, 1 com
+justificativa acrescentada. A decisão é determinística; a verbalização permanece probabilística, e
+isso está declarado, não escondido.
+
+### Débitos abertos ao fim desta baseline
+
+* **Issue 022** — o `S158` sintetiza um estado que o pipeline de produção não produz. Já causou duas
+  conclusões arquiteturais erradas, e o `fallback` temporal em `captureFromGoal` existe hoje por
+  causa dele. **É o único débito com acoplamento vivo ao código.**
+* **Issue 023** — `GoalAttempt.cycle` declarado no tipo e nunca preenchido. Isolado; nada depende
+  dele porque nada o produz.
+* **Fidelidade da verbalização** — medida, não tratada. Torná-la determinística implicaria texto fixo
+  no Core, que a `RFC-004` decidiu reduzir, não aumentar.
+* **Aplicações posteriores dos princípios** — STT nunca passou pela política; `which()` não foi
+  medido em Linux/macOS.
+* **Questões que a `RFC-005` deixou abertas de propósito** — Modo de Operação global (descartado como
+  primitivo) e substituição de decisões do LLM.
+
+### Nota de método
+
+Em vários pontos deste ciclo uma hipótese convincente teve de ser abandonada, e duas conclusões
+publicadas foram revisadas por evidência posterior. Os documentos registram a versão anterior e o
+motivo da mudança em vez de reescrever o passado — é isso que permite a quem vier depois saber não só
+o que mudou, mas por que a conclusão mudou.
