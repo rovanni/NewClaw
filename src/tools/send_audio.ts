@@ -15,8 +15,23 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { MessageBus } from '../channels/MessageBus';
 import { ChannelType } from '../channels/ChannelAdapter';
-import { resolvePython3Runtime, defaultPython3Candidates, which } from '../utils/crossPlatform';
+import { resolvePython3Runtime, defaultPython3Candidates, probeCommand } from '../utils/crossPlatform';
+
 import { EdgeTTS } from 'node-edge-tts';
+
+/**
+ * Resultado da procura pela instalação do Piper (`ADR-008`).
+ *
+ * Os quatro casos existem porque "o usuário não declarou TTS local", "declarou e o binário não
+ * está lá" e "declarou e não foi possível verificar" levam a decisões diferentes — e antes desta
+ * Sprint os três colapsavam no mesmo `null`.
+ */
+type PiperLookup =
+    | { kind: 'usable'; piperBin: string; model: string; config: string }
+    | { kind: 'nao-declarado' }
+    | { kind: 'binario-ausente' }
+    | { kind: 'binario-indeterminado'; cause: string };
+
 
 const log = createLogger('SendAudio');
 
@@ -204,7 +219,23 @@ export class SendAudioTool implements ToolExecutor {
         // (`SOBERANIA_DA_CONFIGURACAO.md` §1.2). Sem Piper declarado não há nada a anunciar — o
         // usuário não escolheu recurso nenhum (§1.1).
         const fatos: string[] = [];
-        const piper = this.findPiperInstallation();
+        const lookup = this.findPiperInstallation();
+
+        // Declarado, mas não foi possível verificar o binário: o áudio segue pela engine remota —
+        // não se recusa uma entrega por causa de uma sondagem que falhou — e o usuário fica sabendo
+        // que o texto saiu da máquina. É a mesma cláusula (b) da Soberania que o `catch` abaixo
+        // atende quando o Piper existe e falha; só o motivo é outro.
+        if (lookup.kind === 'binario-indeterminado') {
+            log.warn(`[ENV-PROBE] Sondagem do binário 'piper' indeterminada (${lookup.cause}) — o TTS local está declarado, mas não pôde ser usado nesta chamada.`);
+            fatos.push(
+                '[FATO DO SISTEMA] O usuário tem o TTS local (Piper) configurado, mas não foi possível '
+                + 'verificar se ele estava disponível nesta chamada. O áudio foi sintetizado por um serviço '
+                + 'de terceiros na Internet, ou seja, o texto saiu da máquina. Avise isso ao usuário em UMA '
+                + 'frase curta, no mesmo idioma da conversa, sem inventar motivos técnicos.'
+            );
+        }
+
+        const piper = lookup.kind === 'usable' ? lookup : null;
         if (piper) {
             const wavFile = path.join(audioDir, `tts_${timestamp}.wav`);
             try {
@@ -280,19 +311,31 @@ export class SendAudioTool implements ToolExecutor {
     /**
      * Verifica se o operador já configurou o Piper (offline) — nunca assume, só detecta
      * presença real: modelo + config em PIPER_MODELS_DIR (env var ou `<cwd>/models/piper`) E
-     * o binário `piper` alcançável no PATH (mesma função `which()` já usada por
+     * o binário `piper` alcançável no PATH (via `probeCommand()`, a mesma sondagem usada por
      * CapabilityRegistry/probes de ambiente). Ausência de qualquer um dos três = null,
      * comportamento idêntico ao anterior a esta mudança (node-edge-tts como padrão).
      */
-    private findPiperInstallation(): { piperBin: string; model: string; config: string } | null {
+    private findPiperInstallation(): PiperLookup {
         const model = path.join(PIPER_MODELS_DIR, PIPER_MODEL_FILE);
         const config = path.join(PIPER_MODELS_DIR, `${PIPER_MODEL_FILE}.json`);
-        if (!existsSync(model) || !existsSync(config)) return null;
+        // Sem os modelos em disco não há TTS local declarado — nada a proteger, nada a anunciar
+        // (`SOBERANIA_DA_CONFIGURACAO.md` §1.1: ausência de configuração não é declaração).
+        if (!existsSync(model) || !existsSync(config)) return { kind: 'nao-declarado' };
 
-        const piperBin = process.env.PIPER_BIN || which('piper');
-        if (!piperBin) return null;
+        // Caminho explícito vence a sondagem: quem apontou o binário à mão já respondeu a pergunta.
+        const explicito = process.env.PIPER_BIN;
+        if (explicito) return { kind: 'usable', piperBin: explicito, model, config };
 
-        return { piperBin, model, config };
+        const probe = probeCommand('piper');
+        if (probe.kind === 'found') return { kind: 'usable', piperBin: probe.path, model, config };
+        if (probe.kind === 'absent') return { kind: 'binario-ausente' };
+
+        // `ADR-008`: uma sondagem que não conseguiu verificar NÃO desfaz a declaração do usuário.
+        // Antes desta Sprint, indeterminação e ausência caíam no mesmo `null`: o áudio ia para o
+        // serviço remoto e nenhum fato era produzido, porque o `catch` que os produz nem chegava a
+        // ser alcançado. Era a porta dos fundos que anulava a garantia da Sprint 028 — medida em
+        // 3,3% das sondagens sob CPU saturada, e saturação é o que inferência local provoca.
+        return { kind: 'binario-indeterminado', cause: probe.cause };
     }
 
     /** Gera áudio via Piper (subprocesso — texto entra por stdin, WAV sai por -f). */

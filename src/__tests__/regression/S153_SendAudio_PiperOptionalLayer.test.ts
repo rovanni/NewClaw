@@ -59,8 +59,13 @@ console.log('\n=== S153-3 — detecção do Piper exige modelo E config E binár
 {
     const detectBody = src.slice(src.indexOf('private findPiperInstallation'), src.indexOf('private async generateViaPiper'));
     assert(/existsSync\(model\)/.test(detectBody) && /existsSync\(config\)/.test(detectBody), 'checa existência real de modelo e config (não infere)');
-    assert(/which\('piper'\)/.test(detectBody), 'checa o binário piper via which() (mesma função de probe já usada no projeto)');
-    assert(/return null/.test(detectBody), 'retorna null (não uma suposição) quando qualquer pré-requisito falta');
+    // Migrado na Sprint 035 (`ADR-008`): a sondagem passou de `which('piper')` (dois estados) para
+    // `probeCommand` (três), e o retorno deixou de ser `null` para todos os casos. O que a asserção
+    // protege continua sendo o mesmo — nunca assumir que o binário está lá.
+    assert(/probeCommand\('piper'\)/.test(detectBody), 'checa o binário piper por sondagem explícita, nunca assume');
+    assert(/kind: 'binario-ausente'/.test(detectBody), 'ausência VERIFICADA tem estado próprio');
+    assert(/kind: 'binario-indeterminado'/.test(detectBody), 'e "não consegui verificar" não se confunde com ela');
+    assert(/kind: 'nao-declarado'/.test(detectBody), 'assim como "o usuário não declarou TTS local"');
 }
 
 console.log('\n=== S153-4 — runCommandWithStdin nunca usa shell (texto do usuário nunca é reinterpretado) ===');

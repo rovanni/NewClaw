@@ -74,7 +74,9 @@ console.log('\n=== S210-3 — send_audio só produz fato quando o local foi decl
 {
     const SRC = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'send_audio.ts'), 'utf-8');
 
-    const inicio = SRC.indexOf('const piper = this.findPiperInstallation();');
+    // Migrado na Sprint 035: `const piper = this.findPiperInstallation()` virou `const lookup = …`,
+    // porque a procura deixou de devolver "achou ou null" e passou a devolver quatro estados.
+    const inicio = SRC.indexOf('const lookup = this.findPiperInstallation();');
     const fim = SRC.indexOf('const mp3File =', inicio);
     const blocoPiper = SRC.slice(inicio, fim);
     assert(inicio > 0 && fim > inicio, 'bloco do Piper localizado', { inicio, fim });
@@ -84,7 +86,7 @@ console.log('\n=== S210-3 — send_audio só produz fato quando o local foi decl
         blocoPiper.slice(-300),
     );
     assert(
-        !/findPiperInstallation\(\)[\s\S]{0,200}fatos\.push\(/.test(blocoPiper.replace(/catch[\s\S]*/, '')),
+        !/'nao-declarado'[\s\S]{0,200}fatos\.push\(/.test(blocoPiper),
         'sem Piper instalado não há fato: o usuário não declarou TTS local (Soberania §1.1)',
     );
     assert(
