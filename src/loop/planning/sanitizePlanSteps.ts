@@ -167,6 +167,9 @@ export async function sanitizePlanSteps(
     for (let i = 0; i < rawSteps.length; i++) {
         const s = rawSteps[i];
         const rawToolName = s.toolName ? String(s.toolName) : undefined;
+        // Preenchido só pelo check de args obrigatórios abaixo; anexado à description no push
+        // final do step. Ver o comentário longo naquele bloco para o porquê.
+        let missingArgsIntent: string | undefined;
 
         // Resolve alias antes de validar (ex: provide_file → send_document)
         const canonicalName = rawToolName
@@ -307,6 +310,24 @@ export async function sanitizePlanSteps(
                     detail: missing,
                     description: String(s.description ?? 'Execute step'),
                 });
+                // A intenção do plano acompanha o step em vez de morrer no log. Quem executa o
+                // step rebaixado é um AgentLoop que recebe SOMENTE `description` como prompt
+                // (GoalExecutionLoop.buildStepPrompt → `[GOAL STEP] <description>`): sem isto, a
+                // única informação de que existia uma ferramenta capaz — e do que faltava para
+                // usá-la — fica retida aqui dentro. Incidente 08/08/2026 (River): o plano pediu
+                // crypto_analysis sem 'type', o step virou AgentLoop, e o AgentLoop tentou
+                // web_search 4× sem nunca voltar à ferramenta que já tinha respondido a mesma
+                // pergunta 6 minutos antes.
+                //
+                // É FATO, não ordem (EVIDENCE_PROVIDER_PATTERN): diz o que o plano pretendia e o
+                // que faltou; a decisão de usar a ferramenta, corrigir o argumento ou seguir por
+                // outro caminho continua sendo do AgentLoop. Também não repara o argumento por
+                // inferência — deduzir o valor que o planejador não forneceu seria adivinhar
+                // (NUNCA_ADIVINHAR).
+                missingArgsIntent =
+                    `[INTENÇÃO DO PLANO] Este passo seria executado pela ferramenta '${resolvedTool}', ` +
+                    `mas o plano a descreveu ${missing}. Se ela for adequada, chame-a com os ` +
+                    `argumentos corretos; caso contrário, resolva por outro caminho.`;
                 resolvedTool = undefined;
                 toolArgs = undefined;
             }
@@ -359,9 +380,10 @@ export async function sanitizePlanSteps(
             sawDataProducingTool = true;
         }
 
+        const baseDescription = String(s.description ?? 'Execute step');
         steps.push({
             id: String(s.id ?? `step_${i + 1}`),
-            description: String(s.description ?? 'Execute step'),
+            description: missingArgsIntent ? `${baseDescription}\n\n${missingArgsIntent}` : baseDescription,
             toolName: resolvedTool,
             toolArgs,
             fallbackSteps: [],

@@ -1689,8 +1689,24 @@ export class AgentLoop {
             const infoRetrievalSynthesisBody = (() => {
                 const failedTools = cycleHistory.filter(h => h.status === 'error');
                 const base = `Você consultou as seguintes fontes:\n${toolSummary}\n\nApresente os dados/resultados das fontes que FUNCIONARAM diretamente ao usuário, como se estivesse respondendo uma pergunta. Não descreva o que você fez — apresente os dados em si.`;
-                if (failedTools.length === 0) return base;
-                return base + ` Para as fontes que falharam, explique brevemente o motivo. NÃO peça ao usuário para repetir ou especificar novamente o que já foi solicitado.`;
+                // O ramo de dedup abaixo já proibia inventar FALHA ("NÃO invente falhas para
+                // ferramentas listadas como success"). Faltava a proibição simétrica exatamente
+                // onde o risco é inventar DADO: este ramo é o único que existe para apresentar
+                // valores vindos de fonte externa. Incidente 08/08/2026 (River): crypto_analysis
+                // devolveu "Preço: $2,8 | 24h: -6,62% | MCap: $54.87M" e estava PRESENTE no
+                // contexto da síntese (primeira tool message, dentro do budget) — a resposta
+                // entregue ao usuário foi "$0,7834 | alta de 5,2% | ~$95 milhões", os quatro
+                // números fabricados. Depois foram gravados em arquivo e citados, no turno
+                // seguinte, como "registros internos de cotações" (ver RFC-006).
+                const noFabrication =
+                    `\n\nREGRA ABSOLUTA — NÃO FABRIQUE DADO: todo número, preço, percentual, data ` +
+                    `ou nome próprio da sua resposta precisa aparecer LITERALMENTE no resultado de ` +
+                    `ferramenta acima. Não estime, não arredonde de memória, não complete o que ` +
+                    `faltou com valor plausível. Se o dado pedido não estiver nos resultados, diga ` +
+                    `explicitamente que não foi obtido — uma resposta incompleta e honesta é ` +
+                    `correta; um valor inventado é um erro grave.`;
+                if (failedTools.length === 0) return base + noFabrication;
+                return base + ` Para as fontes que falharam, explique brevemente o motivo. NÃO peça ao usuário para repetir ou especificar novamente o que já foi solicitado.` + noFabrication;
             })();
             const synthesisBody = isInfoRetrieval
                 ? infoRetrievalSynthesisBody

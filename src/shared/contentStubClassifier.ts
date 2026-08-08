@@ -28,7 +28,23 @@ const log = createLogger('ContentStubClassifier');
 // provedor ativo — via getProviderWithModel() sem modelo. Um nome de modelo de NUVEM como padrão
 // aqui era enviado ao provedor em uso, e numa instalação só-local ele não existe.
 const CLASSIFIER_MODEL = process.env['CONTENT_STUB_CLASSIFIER_MODEL'] ?? '';
-const TIMEOUT_MS = 6_000;
+
+// Configurável pelo mesmo motivo que o modelo acima (issue 019): o valor certo depende do provedor
+// que o operador escolheu, e não há um que sirva para os dois extremos. Os 6s originais eram
+// calibrados para modelo de nuvem; num modelo local o PRIMEIRO CHUNK pode levar mais que isso
+// (14,2s medidos em 08/08/2026 com gemma4:e4b-it-qat via llamafile), então o classificador abortava
+// antes de qualquer resposta e o fail-closed rebaixava para AgentLoop todo step 'write' com
+// conteúdo — inclusive os legítimos (2 de 3 chamadas naquela sessão).
+//
+// O fail-closed em si NÃO muda (ver doc no topo do arquivo): erro continua valendo isStub=true. O
+// que muda é parar de tratar "modelo local é mais lento" como se fosse "o LLM não conseguiu
+// classificar". Default de 30s cobre o primeiro chunk de um modelo local em CPU sem travar o
+// planejamento indefinidamente; instalações só-nuvem podem baixar via env.
+const DEFAULT_TIMEOUT_MS = 30_000;
+const TIMEOUT_MS = (() => {
+    const raw = Number(process.env['CONTENT_STUB_CLASSIFIER_TIMEOUT_MS']);
+    return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
+})();
 
 export interface ContentStubVerdict {
     isStub: boolean;
