@@ -178,11 +178,74 @@ confiança; a sondagem de ambiente ficou fora do caminho. Registrado aqui de for
 o histórico do repositório não sugira o contrário: quem encontrar a ADR-008 e esta investigação no
 mesmo período deve saber que uma originou a outra, e que a instabilidade original continua aberta.
 
-## 9.6 Próximo passo
+## 9.6 Causa encontrada (08/08/2026) — e não é o dedup
 
-Confirmar se a 2ª chamada de verificação é bloqueada pelo dedup — único elo da hipótese principal
-ainda não observado. Com 6,7% em execução isolada de 13 s, ~30 rodadas instrumentadas bastam; não é
-preciso a suíte completa.
+O passo seguinte não precisou de instrumentação: o dedup **já registra** quando bloqueia
+(`ProactiveRecovery.ts:270`, `"repetição bloqueada"`), e os 30 logs guardados respondiam sozinhos.
+
+**Zero bloqueios em 30 rodadas — incluindo as duas que falharam.** A hipótese principal da issue
+021 está **refutada no mecanismo**: o dedup nunca disparou. A assinatura que ela previa estava
+certa; a explicação, não.
+
+### O que de fato varia
+
+Comparando a rodada 1 (passa) com a 2 (falha), o segundo `OPKNOW-RECORD` grava **um comando
+diferente**:
+
+| Rodada | 1º registro | 2º registro | Efeito |
+|---|---|---|---|
+| 1 | `echo instalando-…` | `echo instalando-…` | mesmo comando → `success_count=2` → elegível |
+| 2 | `echo instalando-…` | **`echo verificando-…`** | dois comandos com 1 sucesso cada → nenhum elegível |
+
+A promoção a `validated` exige dois sucessos **do mesmo comando**. Quando a segunda captura grava o
+comando de verificação, eles não somam — e `S158.3` cai, levando `S158.4` junto.
+
+### O mecanismo
+
+`OperationalKnowledge.captureFromGoal` escolhe o comando com
+[`goal.attempts.find(...)`](../../src/memory/OperationalKnowledge.ts) — o **primeiro** que casar —
+e um dos critérios é:
+
+```ts
+a.executedAt > blocker.detectedAt
+```
+
+Comparação **estrita**, com carimbos de tempo em resolução de milissegundo. O comentário adjacente
+nomeia a heurística: *"primeiro sucesso depois do blocker"*.
+
+Timestamps observados na segunda captura de cada rodada:
+
+| Rodada | `blocker.detectedAt` | `fix.executedAt` escolhido | Comando aprendido |
+|---|---|---|---|
+| 1 | `1786181735142` | `1786181735143` | `instalando` |
+| 2 | `1786181745614` | `1786181745616` | `verificando` |
+
+Na rodada 2 o comando de instalação executou **no mesmo milissegundo** em que o blocker foi
+detectado. O `>` estrito o descartou da candidatura, e a busca caiu no sucesso seguinte — a
+verificação.
+
+**A intermitência é uma corrida em resolução de milissegundo**, não estado, não ambiente, não
+dedup. No cenário sintético do teste, blocker e correção acontecem a 1-3 ms de distância; se caírem
+no mesmo milissegundo, o comando aprendido é o errado.
+
+### Relação com a ADR-004
+
+A `ADR-004` já tratou uma face deste mesmo defeito — *"verificar não é instalar"* — excluindo
+**sondas de existência** (`where`/`which`/`command -v`) da candidatura, depois de a Sprint G ter
+observado, em execução real, o sistema aprender um `where` no lugar do comando de instalação.
+
+O filtro dela não alcança este caso: `echo verificando-…` não é sonda de existência. O que a
+`ADR-004` corrigiu foi *um tipo de comando errado*; o que resta é a **heurística de ordenação** que
+o seleciona — e ela erra sempre que a granularidade do relógio empata com a do fluxo.
+
+### O que isto NÃO conclui
+
+* **Não é proposta de correção.** Decidir entre desempatar por ordem de inserção, usar `>=`, marcar
+  o step de instalação explicitamente, ou outra coisa, é desenho — e mexe numa heurística que a
+  `ADR-004` já revisou uma vez.
+* **Não se sabe se o mesmo empate ocorre em uso real**, fora do cenário sintético do `S158`, onde os
+  eventos estão anormalmente próximos. A Sprint G sugere que a família do defeito aparece em
+  produção; este empate específico, não foi observado lá.
 
 # 10. Nota de rastreabilidade
 
