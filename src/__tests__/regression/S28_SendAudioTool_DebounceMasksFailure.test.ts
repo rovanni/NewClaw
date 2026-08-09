@@ -4,8 +4,8 @@
  * SendAudioTool não deve marcar o debounce de 10s (lastSendTime) numa tentativa que FALHOU —
  * só num envio realmente bem-sucedido.
  *
- * BUG REAL (conversa 04/07/2026, 07:47-07:51, log_conversa_newclaw.txt + newclaw-audit.log em
- * C:\Users\lucia\NewClaw): usuário pediu áudio com previsão do tempo. edge-tts não está
+ * BUG REAL (conversa 04/07/2026, 07:47-07:51, log de conversa exportado + newclaw-audit.log da
+ * instalação local): usuário pediu áudio com previsão do tempo. edge-tts não está
  * instalado nesta instalação Windows ("spawn edge-tts ENOENT") — TODAS as tentativas de gerar
  * o áudio falharam de verdade, nenhum áudio jamais foi produzido. Mas o código setava
  * `this.lastSendTime = now` no TOPO de execute(), antes de qualquer tentativa. Resultado: uma

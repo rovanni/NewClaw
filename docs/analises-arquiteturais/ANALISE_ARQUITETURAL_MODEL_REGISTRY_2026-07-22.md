@@ -4,7 +4,7 @@
 > serviço central (`ModelRegistryService`) e muda como Dashboard, `ProviderFactory` e
 > `ModelProfileRegistry` se comunicam, portanto está sujeito às 5 fases obrigatórias.
 >
-> Origem: pedido de Sprint registrado em `C:\Users\lucia\Downloads\log_conversa_newclaw.txt`
+> Origem: pedido de Sprint registrado em log de conversa exportado (fora do repositório)
 > (22/07/2026) — redesign completo da página Config → Modelos.
 
 ## Contexto

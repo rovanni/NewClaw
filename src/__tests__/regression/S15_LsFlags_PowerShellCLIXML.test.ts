@@ -6,7 +6,7 @@
  * parâmetro vem serializado como CLIXML ilegível, não como mensagem de texto.
  *
  * PROBLEMA CORRIGIDO (02/07/2026): reproduzido ao vivo em log de auditoria real —
- * `ls -la C:\Users\lucia\NewClaw\workspace\aula_marp.pptx` (step de verificação pós-conversão
+ * `ls -la <workspace>\aula_marp.pptx` (step de verificação pós-conversão
  * do skill pptx-generator) bloqueou um goal com "Erro em 'exec_command': #< CLIXML" como saída
  * inteira do erro, forçando um replan não planejado (GoalStore → blocked → replanning).
  * needsPowerShellWrap() já encaminhava 'ls' pro PowerShell (fix anterior, S11-adjacente), mas
@@ -45,7 +45,7 @@ function assert(condition: boolean, message: string): void {
 async function main() {
     console.log('\n=== S15 — translateLsFlagsForPowerShell: remove flags POSIX de `ls` ===');
 
-    const original = 'ls -la C:\\Users\\lucia\\NewClaw\\workspace\\aula_marp.pptx';
+    const original = 'ls -la C:\\Users\\SeuUsuario\\NewClaw\\workspace\\aula_marp.pptx';
     const translated = translateLsFlagsForPowerShell(original);
     assert(!/-la\b/.test(translated), `"-la" removido do comando (resultado: "${translated}")`);
     assert(/Get-ChildItem/.test(translated), 'ls foi mapeado para Get-ChildItem');

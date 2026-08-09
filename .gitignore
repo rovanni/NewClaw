@@ -27,6 +27,12 @@ backups/
 logs/
 *.pid
 
+# Grafo cognitivo (skill cognitive-graph-builder): índice semântico do workspace, gerado por
+# varredura local. É artefato derivado — reconstruível a qualquer momento com `--all`, some da
+# árvore sem perda — e carrega o caminho absoluto e a estrutura da máquina de quem o gerou.
+# Nem fonte, nem conteúdo público: fica de fora, junto com o backup que a própria skill faz.
+system/
+
 # Lançador oculto gerado pela Tarefa Agendada do Windows (install.ps1 /
 # fix-windows-autostart.ps1) na pasta de instalação de cada usuário — não é fonte.
 newclaw-hidden.vbs
@@ -57,6 +63,12 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+# Codex / convenção AGENTS.md — espelho de `.claude/`, e pelo mesmo motivo: as skills locais
+# carregam caminho de máquina e configuração de instância isolada (ex.: `.agents/skills/verify/`
+# cita o `.env` da instalação do mantenedor). O `AGENTS.md` da raiz NÃO entra aqui: ele é só a
+# lista de includes, equivalente público do `CLAUDE.md`, e serve a quem usa outro agente.
+.agents/
 
 # Relatórios de auditoria na raiz (legado)
 ARCHITECTURE_REVIEW.md

@@ -231,7 +231,7 @@ cosmético (o comentário aponta pra um path que muda de lugar), zero risco de q
 testes. Nenhuma referência encontrada em `CLAUDE.md` (só cita `ARCHITECTURE.md` e
 `DIRETRIZ_ARQUITETURA_2026-07-13.md`, nenhum dos dois se move neste plano).
 
-**Memória persistente do Claude Code** (`C:\Users\lucia\.claude\projects\...\memory\`): o arquivo
+**Memória persistente do Claude Code** (`<home>/.claude/projects/<projeto>/memory/`): o arquivo
 `project_master_execution_plan_2026-07-17.md` referenciava `docs/MASTER_EXECUTION_PLAN.md` pelo
 path antigo em dezenas de linhas de narrativa histórica. **Já corrigido na migração parcial**: a
 descrição, o parágrafo de abertura e as instruções finais de "como retomar" (os trechos que uma

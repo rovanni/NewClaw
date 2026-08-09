@@ -82,6 +82,34 @@ padrão (qualquer arquivo/pasta nova fora dessa lista é versionado automaticame
 Se um documento sobre auditoria/melhoria/issue deveria ser público, isso é uma decisão explícita
 (editar o `.gitignore` ou `git add -f`), nunca uma correção automática.
 
+### O que pode estar dentro de um arquivo público
+
+A regra acima diz **onde** um arquivo mora; esta diz **o que** ele pode conter. Vale para todo
+arquivo versionado, não só para `docs/`:
+
+> Conteúdo local — caminho pessoal, credencial, configuração privada, topologia de máquina do
+> mantenedor — permanece fora do repositório público, mesmo em documento cujo conteúdo técnico é
+> público.
+
+Quando o caminho importa para o sentido do texto, use marcador: `<workspace>`,
+`<instalação de produção>`, `<home>/.claude/...`. Preserva a informação técnica e não expõe quem
+escreveu. Em script, prefira **caminho relativo à raiz do repositório** — remove o dado e ainda
+torna o script portável.
+
+**Arquivos de instrução para agentes** (`CLAUDE.md`, `AGENTS.md`, e os equivalentes que
+ferramentas futuras criarem) são públicos e por isso só podem conter instrução independente do
+ambiente pessoal. Já os **diretórios de configuração local** dessas ferramentas (`.claude/`,
+`.agents/`) ficam ignorados: eles carregam skills e configurações que citam `.env`, portas e
+caminhos da máquina.
+
+Isso não é hipótese. Em 09/08/2026 a instalação de uma segunda ferramenta de agente espelhou
+`.claude/` em `.agents/` — copiando um arquivo **ignorado** para um caminho **não ignorado**, com
+o caminho pessoal do mantenedor dentro. A mesma varredura encontrou sete arquivos já públicos com
+caminhos pessoais, que passaram por revisão sem ninguém notar. Portanto: **ao instalar ferramenta
+nova que espelhe ou gere arquivos, classifique a exposição antes do primeiro `git add`** — e
+prefira `git add <caminho>` a `git add -A`, que é o que transforma um espelho novo em commit
+público sem ninguém decidir.
+
 ## Histórico
 
 Este documento nasceu na terceira rodada de organização de `docs/` (2026-07-26), depois que as

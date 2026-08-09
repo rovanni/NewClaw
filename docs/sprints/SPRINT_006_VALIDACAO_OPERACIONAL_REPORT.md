@@ -61,7 +61,7 @@ genuinamente ausente na máquina de teste (Windows, confirmado por `command -v` 
 - Confirmado por `git diff --stat` que `src/memory/OperationalKnowledge.ts` e
   `src/loop/GoalPlanner.ts` (consumidor via `buildEvidenceHint()`) **não fazem parte do diff da
   Sprint 005** — nenhuma interferência estrutural possível.
-- Tentativa de consulta read-only ao banco de **produção** (`C:\Users\lucia\NewClaw\data\newclaw.db`)
+- Tentativa de consulta read-only ao banco de **produção** (`<instalação de produção>/data/newclaw.db`)
   para checar entradas históricas reais foi bloqueada pelo classificador de permissões do Claude
   Code (acesso a dado fora do sandbox isolado) — respeitado, não contornado.
 - **Resultado: PASSOU** (sem evidência de interferência; validação de entradas reais históricas
