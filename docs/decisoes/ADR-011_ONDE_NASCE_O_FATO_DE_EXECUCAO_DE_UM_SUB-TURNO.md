@@ -114,17 +114,32 @@ Não há escolha a fazer: `ToolResult.error`, capturado no dispatch, é a única
 palavra da própria ferramenta — qualquer resumo ou normalização reintroduziria interpretação no
 ponto exato em que ela está sendo removida.
 
-## 7. O que fica em aberto
+## 7. Canal de transporte e nome do campo — decidido em 09/08/2026
 
-Declarado, não esquecido:
+**7.1 — O trace é o canal.** `ExecutionTrace.tool_result` passa a transportar também o erro
+estruturado da ferramenta:
 
-**7.1 — Por onde o dado atravessa do `AgentLoop` até o `GoalExecutionLoop`.** O erro existe em
-`result.error`, dentro do dispatch; quem monta o `GoalAttempt` é o `GoalExecutionLoop`. As duas
-opções são assimétricas: gravar `error` no `tool_result` do trace (três `addStep` ganham um campo, e
-o `GoalExecutionLoop` lê no mesmo ponto em que já lê `subToolCalls`) ou mudar o contrato de retorno
-de `agentLoop.process()` (atinge todos os chamadores).
+```text
+ToolResult.error → dispatch do AgentLoop → ExecutionTrace.tool_result.error
+                 → GoalExecutionLoop → GoalAttempt
+```
 
-**7.2 — O nome do campo.**
+A razão é arquitetural, não de conveniência: o trace **já é** o canal entre essas duas camadas, e o
+`GoalExecutionLoop` já o consulta no mesmo ponto em que monta o attempt. A mudança é aditiva a um
+contrato existente. A alternativa — mudar o retorno de `agentLoop.process()` — obrigaria todos os
+chamadores a mudar para transportar um dado que interessa a um só deles.
+
+Três invariantes do dado, que o transporte não pode violar:
+
+- a origem é `ToolResult.error`, capturado no dispatch;
+- **não** é derivado de `output` (que é string vazia em falha);
+- **não** é derivado da resposta textual do agente.
+
+**7.2 — O campo é `subToolFailures`**, irmão de `subToolCalls`, com `{ tool, error? }` por entrada.
+O nome diz o que ele contém — falhas — e não sugere veredito sobre o step.
+
+**7.3 — O C1 fica fora deste incremento.** Ele tem decisão semântica própria pendente (`claims=0`
+com evidência presente) e não se mistura a esta mudança.
 
 ## 8. Escopo, e o que esta ADR não resolve
 
@@ -147,6 +162,13 @@ nem se `evaluateAgentStepSuccess` sobrevive na forma atual.
   para o `GoalAttempt` persistido; a referência sozinha não basta.
 - A ausência de ordinal impede distinguir duas falhas da mesma ferramenta no mesmo sub-turno. Aceito
   conscientemente: nenhum consumidor demonstrado precisa disso hoje.
+- **Falha de fast path é invisível a este mecanismo.** Descoberto ao implementar: dos três
+  dispatches, o fast path (`AgentLoop:1384-1387`) retorna `null` quando a ferramenta falha —
+  **antes** de gravar qualquer coisa no trace. Não há `tool_call` nem `tool_result` para essa
+  invocação; o turno cai no loop de cognição e a ferramenta costuma ser chamada de novo por um dos
+  outros dois caminhos, aí sim registrada. Portanto só dois dos três sítios de `addStep` mudam, e
+  `subToolFailures` descreve as falhas **registradas no trace**, não necessariamente todas as
+  ocorridas. Consistente com o contrato do campo (§5): lista vazia é silêncio, nunca aval.
 
 ## 10. Evidência
 

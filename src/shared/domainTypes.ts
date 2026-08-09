@@ -186,6 +186,27 @@ export interface GoalAttempt {
      */
     subToolCalls?: string[];
     /**
+     * `ADR-011`: as invocações de ferramenta do sub-turno que FALHARAM, com o erro que cada uma
+     * reportou (`ToolResult.error`, sem reescrita). Fato estrutural observado, nunca veredito.
+     *
+     * Irmão de `subToolCalls`, e a fronteira entre os dois é o contrato: aquele diz o que foi
+     * TENTADO, este diz o que FALHOU. Nenhum deriva o outro, e nenhum diz se o step deu certo —
+     * isso é juízo, mora em `evaluation`.
+     *
+     * Deliberadamente NÃO existe um campo `success` aqui: a lista só contém falhas, e `success`
+     * nomearia um juízo sobre o step, de outro dono. O contrato precisa ser incapaz de expressar
+     * aprovação — é essa incapacidade que garante a separação (ADR-011 §5).
+     *
+     * Semântica das duas ausências, seguindo o precedente de `subToolCalls` travado em `S89.2`:
+     *   ausente (`undefined`) → não houve observação (attempt que não é sub-turno agentloop)
+     *   vazio (`[]`)          → houve observação e nenhuma falha REGISTRADA
+     *
+     * "Registrada" é literal: uma falha no fast path do AgentLoop não entra no trace (ele retorna
+     * antes de gravar), então lista vazia é silêncio, nunca aval. O denominador do que foi tentado
+     * continua em `subToolCalls` — só a leitura conjunta dos dois produz sentido.
+     */
+    subToolFailures?: Array<{ tool: string; error?: string }>;
+    /**
      * Sprint R1-R7 (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md): artefatos que este
      * attempt declarou ter produzido — populado por `write` (o próprio `file_path`) e por
      * `exec_command` (linhas `ARTIFACT: <path>` no stdout, verificadas contra o disco antes

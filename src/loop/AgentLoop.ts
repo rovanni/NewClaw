@@ -1990,7 +1990,11 @@ export class AgentLoop {
                 log.info(`[${this.ts()}] [ATOMIC-TOOL] ${resolvedToolName} -> ${result.success ? '✓' : '✗'}`, result.error ? `ERROR: ${result.error}` : (result.output || '').slice(0, 200));
 
                 traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
-                traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output });
+                // ADR-011: `error` viaja junto do `success`. Numa falha o `output` é string VAZIA
+                // (as tools retornam `{ success: false, output: '', error }`), então gravar só
+                // `output` registrava QUE falhou e perdia o PORQUÊ — e o GoalExecutionLoop, sem o
+                // motivo, acabava reusando a resposta ao usuário como se fosse erro.
+                traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output, error: result.error });
                 this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
                 this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
 
@@ -2313,7 +2317,9 @@ export class AgentLoop {
         );
 
         traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
-        traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output });
+        // ADR-011 — mesma razão do caminho json_action acima: sem `error`, o trace registra a
+        // falha e perde o motivo, que só existe em `ToolResult.error`.
+        traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output, error: result.error });
         this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
         this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
 

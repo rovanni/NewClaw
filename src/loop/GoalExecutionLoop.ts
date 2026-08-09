@@ -85,6 +85,14 @@ const ATTEMPT_OUTPUT_EVIDENCE_LIMIT = 300;
 const ATTEMPT_OUTPUT_DELIVERABLE_LIMIT = 8000;
 
 /**
+ * `ADR-011`: teto do erro de ferramenta guardado em `GoalAttempt.subToolFailures`. Erro de tool é
+ * uma linha na esmagadora maioria dos casos, mas `api_request` embute o corpo inteiro da resposta
+ * HTTP (`HTTP Error ${status}: ${data}`) — sem teto, um 500 com página de erro grande entraria no
+ * goal persistido. Generoso o bastante para não cortar mensagem real de diagnóstico.
+ */
+const SUB_TOOL_ERROR_LIMIT = 500;
+
+/**
  * Limite de armazenamento do output de um attempt, conforme o papel que ele cumpre.
  * Fonte única — usada nos dois pontos que gravam `GoalAttempt.output`, para que a regra não
  * volte a divergir entre eles.
@@ -2102,6 +2110,7 @@ export class GoalExecutionLoop {
                 stepSuccessConfident: agentloopResult.stepSuccessConfident,
                 agentloopTraceId: agentloopResult.agentloopTraceId,
                 agentloopSubToolCalls: agentloopResult.agentloopSubToolCalls,
+                agentloopSubToolFailures: agentloopResult.agentloopSubToolFailures,
                 deferredSendArgs,
             });
 
@@ -2270,6 +2279,7 @@ export class GoalExecutionLoop {
             stepSuccessConfident: boolean;
             agentloopTraceId?: string;
             agentloopSubToolCalls?: string[];
+            agentloopSubToolFailures?: Array<{ tool: string; error?: string }>;
         }
     > {
         // Sem tool específica → chama AgentLoop com prompt focado no step
@@ -2380,12 +2390,30 @@ export class GoalExecutionLoop {
         const relatedTrace = traceManager.getRecentTraces(10).find(t => t.sessionId === goal.conversationId);
         let agentloopTraceId: string | undefined;
         let agentloopSubToolCalls: string[] | undefined;
+        let agentloopSubToolFailures: Array<{ tool: string; error?: string }> | undefined;
         if (relatedTrace) {
             agentloopTraceId = relatedTrace.id;
             agentloopSubToolCalls = relatedTrace.steps
                 .filter(s => s.type === 'tool_call')
                 .map(s => String(s.data?.tool ?? '').trim())
                 .filter(Boolean);
+            // ADR-011: o mesmo trace que já dá os NOMES do que foi tentado também sabe o que
+            // FALHOU e por quê — `success` sempre esteve aqui, `error` passou a estar. Copiar
+            // para o attempt é obrigatório, não redundante: o trace vive num buffer podável
+            // (ver o comentário acima), e o attempt é o que persiste. A referência sozinha não
+            // basta para um fato de que o goal depende.
+            //
+            // O erro vai como a ferramenta o escreveu. Truncado só para o goal persistido não
+            // crescer sem limite — `api_request` embute o corpo da resposta HTTP no erro.
+            agentloopSubToolFailures = relatedTrace.steps
+                .filter(s => s.type === 'tool_result' && s.data?.success === false)
+                .map(s => {
+                    const tool = String(s.data?.tool ?? '').trim();
+                    const raw = s.data?.error;
+                    const error = typeof raw === 'string' && raw.trim() ? raw.slice(0, SUB_TOOL_ERROR_LIMIT) : undefined;
+                    return { tool, error };
+                })
+                .filter(f => f.tool);
         }
 
         // Guarda de saída: step-name usado como path de arquivo (CR#5)
@@ -2417,7 +2445,7 @@ export class GoalExecutionLoop {
         const stepEvalForAttempt = { confidence: stepEval.confidence, reason: stepEval.reason };
         const toolResult = { success: stepEval.success, output: text };
 
-        return { earlyReturn: false, toolResult, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls };
+        return { earlyReturn: false, toolResult, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls, agentloopSubToolFailures };
     }
 
     /**
@@ -2441,10 +2469,11 @@ export class GoalExecutionLoop {
             stepSuccessConfident: boolean;
             agentloopTraceId?: string;
             agentloopSubToolCalls?: string[];
+            agentloopSubToolFailures?: Array<{ tool: string; error?: string }>;
             deferredSendArgs: Array<Record<string, unknown>>;
         },
     ): CycleResult {
-        const { stepMutations, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls, deferredSendArgs } = opts;
+        const { stepMutations, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls, agentloopSubToolFailures, deferredSendArgs } = opts;
 
         // Registrar attempt com auditoria completa (cycle, mutations, evaluation)
         const attempt: GoalAttempt = {
@@ -2468,6 +2497,7 @@ export class GoalExecutionLoop {
             evaluation: stepEvalForAttempt,
             traceId: agentloopTraceId,
             subToolCalls: agentloopSubToolCalls,
+            subToolFailures: agentloopSubToolFailures,
             producedArtifactPaths: toolResult.artifactPaths,
         };
         this.goalStore.addAttempt(goal.id, attempt);
