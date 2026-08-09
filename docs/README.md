@@ -21,6 +21,42 @@ parte pública está em `git log`.
 - [ROADMAP.md](./ROADMAP.md) — roadmap estratégico do projeto
 - [walkthrough.md](./walkthrough.md) — walkthrough da evolução da memória cognitiva
 
+## Como encontrar algo aqui sem procurar à mão
+
+Esta documentação passou de 160 arquivos. Achar "qual norma se aplica a X" lendo pasta por pasta
+não escala, e foi assim que dois índices divergiram sem ninguém notar.
+
+Existe um grafo semântico do repositório — nós são arquivos e diretórios, arestas são citações
+reais entre documentos — construído pela ferramenta externa **cognitive-graph-builder**
+(Python 3.10+, sem dependências, sem rede). Ela não faz parte do NewClaw e não é instalada com
+ele: obtenha o repositório dela separadamente e aponte a variável `OPENCLAW_WORKSPACE` para a
+raiz deste projeto.
+
+```bash
+# Construir ou reconstruir (leva menos de um minuto)
+OPENCLAW_WORKSPACE=/caminho/para/newclaw python /caminho/para/cognitive-graph-builder/scripts/cognitive_graph_builder.py --all
+
+# Onde mora a norma sobre X? (busca por tema, não pelo nome do arquivo)
+OPENCLAW_WORKSPACE=/caminho/para/newclaw python .../cognitive_graph_builder.py --query "nunca adivinhar"
+
+# Que normas a Diretriz cita, e quem cita este documento?
+OPENCLAW_WORKSPACE=/caminho/para/newclaw python .../cognitive_graph_builder.py --related "docs/DIRETRIZ_ARQUITETURA_2026-07-13.md"
+```
+
+No Windows PowerShell, `$env:OPENCLAW_WORKSPACE = "<caminho>"` antes do comando.
+
+`--query` e `--related` são somente leitura. `--related` é a mais útil das duas para norma: mostra
+o que um documento cita **e quem o cita** — é como se descobre que um princípio recém-escrito
+ainda não é alcançável a partir do índice.
+
+O grafo fica em `system/graph/cognitive_graph.json` e os backups em `backups/GRAPH/`. Os dois são
+**artefato derivado**, ignorados pelo git (`.gitignore`): reconstruíveis a qualquer momento com
+`--all`, e embutem os caminhos absolutos da máquina que os gerou — não entram no repositório
+público. Duas limitações que valem saber antes de confiar na resposta: o grafo é um **retrato**
+(depois de mexer em documento, reconstrua, ou ele responde sobre o estado antigo) e indexa
+**nomes, caminhos e estrutura, não significado** — ele diz onde a norma está e como ela se conecta,
+não substitui lê-la.
+
 ## Princípios arquiteturais normativos — `ARCHITECTURE/`
 
 Documentos que a Diretriz cita como leitura obrigatória antes de propor componentes novos de
