@@ -77,6 +77,7 @@ formalmente, distintas de um programa inteiro de Sprints:
 - [decisoes/ADR-002_SERVIDOR_MODELO_LOCAL.md](./decisoes/ADR-002_SERVIDOR_MODELO_LOCAL.md)
 - [decisoes/ADR-003_APRENDIZADO_POR_EVIDENCIA_DE_AMBIENTE.md](./decisoes/ADR-003_APRENDIZADO_POR_EVIDENCIA_DE_AMBIENTE.md) — decisão de 03/08/2026, implementada; pendente a Sprint G (validação em execução real)
 - [decisoes/ADR-004_SELECAO_DO_COMANDO_APRENDIDO.md](./decisoes/ADR-004_SELECAO_DO_COMANDO_APRENDIDO.md) — escopo estreito: um probe (`where X`) não pode ser eleito "comando que resolveu X"
+- [decisoes/ADR-011_ONDE_NASCE_O_FATO_DE_EXECUCAO_DE_UM_SUB-TURNO.md](./decisoes/ADR-011_ONDE_NASCE_O_FATO_DE_EXECUCAO_DE_UM_SUB-TURNO.md) — decisão de 09/08/2026: o fato estrutural de um sub-turno nasce no dispatch e viaja como fato até `GoalAttempt`; duas decisões declaradas em aberto (§7)
 - [decisoes/RFC-001_APRENDIZADO_OPERACIONAL.md](./decisoes/RFC-001_APRENDIZADO_OPERACIONAL.md)
 - [decisoes/RFC-002_ATIVACAO_CASEMEMORY.md](./decisoes/RFC-002_ATIVACAO_CASEMEMORY.md)
 - [decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md](./decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md)
