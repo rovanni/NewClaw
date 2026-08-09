@@ -1,6 +1,6 @@
 /// <reference types="node" />
 /**
- * TESTE DE REGRESSÃO — S201
+ * TESTE DE REGRESSÃO — S215
  *
  * Origem: incidente "River" (08/08/2026, Windows). Servido pelo Ollama local (localhost:11434) com
  * gemma4:e4b-it-qat — apesar de defaultProvider=llamafile, os seis papéis de modelRouter.provider_*
@@ -38,7 +38,7 @@
  * Escopo tocado: loop/AgentLoop.ts, loop/planning/sanitizePlanSteps.ts,
  * shared/contentStubClassifier.ts. Nenhuma tool alterada, nenhuma string de usuário adicionada.
  *
- * Execução: npx ts-node src/__tests__/regression/S201_River_SynthesisAndStepMutation.test.ts
+ * Execução: npx ts-node src/__tests__/regression/S215_River_SynthesisAndStepMutation.test.ts
  */
 
 // Relativo ao repositório, não um caminho absoluto de uma máquina — este teste roda em
@@ -63,11 +63,11 @@ function assert(condition: boolean, message: string, detail?: unknown): void {
 // Resolve qualquer tool — o alvo destes casos é a validação de args, não o registry.
 const fakeToolRegistry = { get: (name: string) => ({ name }) };
 // Nenhum caso deste arquivo exercita conteúdo inline; classificador neutro mantém o foco.
-const neverStub = async () => ({ isStub: false, reason: 'não é o alvo de S201' });
+const neverStub = async () => ({ isStub: false, reason: 'não é o alvo de S215' });
 
 async function main(): Promise<void> {
 
-console.log('\n=== S201-1 — C1: a síntese de info-retrieval proíbe fabricar valores ===');
+console.log('\n=== S215-1 — C1: a síntese de info-retrieval proíbe fabricar valores ===');
 {
     const source = fs.readFileSync(path.join(__dirname, '../../loop/AgentLoop.ts'), 'utf-8');
 
@@ -103,7 +103,7 @@ console.log('\n=== S201-1 — C1: a síntese de info-retrieval proíbe fabricar 
     );
 }
 
-console.log('\n=== S201-2 — C2: o step rebaixado por arg ausente carrega a intenção do plano ===');
+console.log('\n=== S215-2 — C2: o step rebaixado por arg ausente carrega a intenção do plano ===');
 {
     // Reprodução literal do plano de 11:49:11: crypto_analysis sem 'type'.
     const rawSteps = [
@@ -144,7 +144,7 @@ console.log('\n=== S201-2 — C2: o step rebaixado por arg ausente carrega a int
     );
 }
 
-console.log('\n=== S201-3 — C2 é genérico: vale para qualquer tool de detectMissingRequiredArgs ===');
+console.log('\n=== S215-3 — C2 é genérico: vale para qualquer tool de detectMissingRequiredArgs ===');
 {
     // Se a correção fosse um `if (tool === "crypto_analysis")`, este bloco falharia. Cada caso
     // usa uma tool e um argumento obrigatório diferentes.
@@ -169,7 +169,7 @@ console.log('\n=== S201-3 — C2 é genérico: vale para qualquer tool de detect
     }
 }
 
-console.log('\n=== S201-4 — C2 não-regressão: step com args completos passa intacto ===');
+console.log('\n=== S215-4 — C2 não-regressão: step com args completos passa intacto ===');
 {
     const original = 'Buscar o detalhe de mercado do Bitcoin';
     const result = await sanitizePlanSteps(
@@ -182,36 +182,36 @@ console.log('\n=== S201-4 — C2 não-regressão: step com args completos passa 
     assert(result.mutations.length === 0, 'nenhuma mutation registrada para um step válido', result.mutations);
 }
 
-console.log('\n=== S201-5 — C3: o timeout do classificador de stub é configurável ===');
+console.log('\n=== S215-5 — C3: o classificador de stub usa o orçamento medido, não um teto fixo ===');
 {
+    // A cobertura profunda deste ponto é a S186 (que introduziu auxTimeout.ts e agora trava a
+    // migração em S186-9). Aqui fica só o vínculo com o incidente River: uma primeira tentativa
+    // desta sprint trocou os 6s por uma env var com default de 30s — o que a S186 pegou, e com
+    // razão: aumentar a constante é exatamente o erro que auxTimeout.ts existe para encerrar
+    // ("um número em milissegundos não descreve a chamada, descreve uma suposição sobre a
+    // velocidade do hardware de quem roda"). O certo era usar o mecanismo que já existia.
     const source = fs.readFileSync(path.join(__dirname, '../../shared/contentStubClassifier.ts'), 'utf-8');
     assert(
-        /CONTENT_STUB_CLASSIFIER_TIMEOUT_MS/.test(source),
-        'o timeout lê CONTENT_STUB_CLASSIFIER_TIMEOUT_MS do ambiente',
+        /getBudgetAuxiliar\('classificacao'\)/.test(source),
+        "deriva o prazo da latência observada, via getBudgetAuxiliar('classificacao')",
     );
     assert(
-        !/const TIMEOUT_MS = 6_000/.test(source),
-        'o valor fixo de 6s (que abortava contra modelo local) não está mais hard-coded',
+        !/const TIMEOUT_MS = \d[\d_]*;/.test(source) && !/CONTENT_STUB_CLASSIFIER_TIMEOUT_MS/.test(source),
+        'não voltou a ser número fixo nem virou env var com default fixo',
     );
     assert(
         /isStub: true, reason: 'erro na classificação LLM \(fail-closed\)'/.test(source),
-        'o fail-closed continua intacto — só o prazo mudou, não a postura em caso de erro',
-    );
-
-    const envExample = fs.readFileSync(path.join(__dirname, '../../../.env.example'), 'utf-8');
-    assert(
-        /CONTENT_STUB_CLASSIFIER_TIMEOUT_MS=/.test(envExample),
-        'a variável está documentada em .env.example (instalação em qualquer SO)',
+        'o fail-closed continua intacto — mudou o prazo, não a postura em caso de erro',
     );
 }
 
 console.log(`\n${'─'.repeat(60)}`);
-console.log(`S201 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
+console.log(`S215 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
 if (failed > 0) process.exitCode = 1;
 
 }
 
 main().catch((err) => {
-    console.error('S201 erro inesperado:', err);
+    console.error('S215 erro inesperado:', err);
     process.exitCode = 1;
 });

@@ -38,6 +38,7 @@ import { ExecCommandTool } from '../../tools/exec_command';
 import { ListWorkspaceTool } from '../../tools/list_workspace';
 import { SendDocumentTool } from '../../tools/send_document';
 import { Goal, PlanStep } from '../../loop/GoalTypes';
+import { getBudgetAuxiliar, PerfilAuxiliar } from '../../shared/auxTimeout';
 
 let passed = 0;
 let failed = 0;
@@ -85,6 +86,9 @@ function makeFakeProviderFactory(getResponse: () => string) {
         getProviderWithModel: () => ({
             chat: async () => ({ content: getResponse() }),
         }),
+        // Sprint 043 — ver a mesma nota em S77: o classificador de stub passou a derivar o prazo
+        // da latência observada; sem fonte de medição, a função real devolve o padrão do perfil.
+        getBudgetAuxiliar: (perfil: PerfilAuxiliar) => getBudgetAuxiliar(perfil, null, null),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 

@@ -31,6 +31,12 @@
  * fixos (8s, 12s, 30s, 45s, e o 6s do contentStubClassifier) não aparecem falhando e não foram
  * tocados — mexer neles seria alterar cinco comportamentos sem evidência.
  *
+ * ATUALIZAÇÃO (Sprint 043, 08/08/2026): o 6s do contentStubClassifier saiu dessa lista e migrou
+ * para getBudgetAuxiliar('classificacao'). A exclusão nunca foi "não mexer nunca", e sim "não
+ * mexer SEM evidência" — e a evidência apareceu, no mesmo formato dos dois primeiros pontos:
+ * `AbortError: This operation was aborted — fail-closed (isStub=true)` em 2 de 3 classificações
+ * do turno, contra um provedor cujo primeiro chunk levou 14,2s. Ver S186-9 abaixo.
+ *
  * REGRESSÃO SE: um dos dois pontos voltar a usar número fixo; se a latência medida deixar de
  * alimentar o cálculo; ou se um provedor sem histórico passar a receber um número inventado em
  * vez do padrão do perfil.
@@ -161,7 +167,7 @@ console.log('\n=== S186-7 — os dois pontos com evidência usam o orçamento me
     );
 }
 
-console.log('\n=== S186-8 — os cinco tetos SEM evidência não foram tocados ===');
+console.log('\n=== S186-8 — os tetos SEM evidência não foram tocados ===');
 {
     // Regra 6 do operador: só corrigir com evidência concreta. Nenhum destes aparece abortando
     // no log, então continuam como estavam — e este teste trava isso para não virar
@@ -169,12 +175,37 @@ console.log('\n=== S186-8 — os cinco tetos SEM evidência não foram tocados =
     const intactos: Array<[string, string, RegExp]> = [
         ['StepSemanticValidator', 'src/loop/StepSemanticValidator.ts', /const TIMEOUT_MS = 8_000;/],
         ['AgentLoop (commit)', 'src/loop/AgentLoop.ts', /const COMMIT_TIMEOUT_MS = 12_000;/],
-        ['contentStubClassifier', 'src/shared/contentStubClassifier.ts', /const TIMEOUT_MS = 6_000;/],
     ];
     for (const [nome, arquivo, padrao] of intactos) {
         const src = fs.readFileSync(path.join(process.cwd(), arquivo), 'utf-8');
         assert(padrao.test(src), `${nome} permanece com seu teto fixo — sem evidência, sem mudança`);
     }
+}
+
+console.log('\n=== S186-9 — contentStubClassifier: a evidência apareceu, o teto fixo saiu (Sprint 043) ===');
+{
+    // Este era o terceiro item da lista acima. A exclusão nunca foi "não mexer nunca" — era
+    // "não mexer SEM evidência". Em 08/08/2026 a evidência apareceu, no mesmo formato que
+    // justificou os dois primeiros pontos: `AbortError: This operation was aborted — fail-closed`
+    // em 2 de 3 classificações do turno, contra um provedor cujo primeiro chunk levou 14,2s.
+    // Como o classificador é fail-closed, cada aborto rebaixava para AgentLoop um step 'write'
+    // com conteúdo legítimo.
+    //
+    // O que este caso trava: que a correção tenha sido migrar para o MESMO mecanismo dos outros
+    // dois, e não aumentar o número — que é justamente o que auxTimeout.ts existe para encerrar.
+    const src = fs.readFileSync(path.join(process.cwd(), 'src/shared/contentStubClassifier.ts'), 'utf-8');
+    assert(
+        !/const TIMEOUT_MS = \d[\d_]*;/.test(src),
+        'não voltou a ser um número fixo em milissegundos',
+    );
+    assert(
+        /getBudgetAuxiliar\('classificacao'\)/.test(src),
+        "usa getBudgetAuxiliar('classificacao') — mesmo perfil de DomainRegistry e GoalExtractor",
+    );
+    assert(
+        /isStub: true, reason: 'erro na classificação LLM \(fail-closed\)'/.test(src),
+        'o fail-closed continua intacto — mudou o prazo, não a postura em caso de erro',
+    );
 }
 
 console.log(`\n${'─'.repeat(60)}`);

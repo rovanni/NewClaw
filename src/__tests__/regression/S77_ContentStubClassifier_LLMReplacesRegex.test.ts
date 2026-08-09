@@ -33,6 +33,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { makeContentStubClassifier } from '../../shared/contentStubClassifier';
+import { getBudgetAuxiliar, PerfilAuxiliar } from '../../shared/auxTimeout';
 import { sanitizePlanSteps } from '../../loop/planning/sanitizePlanSteps';
 
 let passed = 0;
@@ -53,6 +54,11 @@ function makeFakeProviderFactory(getResponse: () => string) {
         getProviderWithModel: () => ({
             chat: async () => ({ content: getResponse() }),
         }),
+        // Sprint 043: o classificador deixou de ter teto fixo de 6s e passou a derivar o prazo da
+        // latência observada (shared/auxTimeout.ts), como DomainRegistry e GoalExtractor já faziam.
+        // O dublê usa a função real sem fonte de medição — que é o caminho documentado de partida
+        // a frio ("sem medição, devolve o padrão do perfil"), não um número inventado aqui.
+        getBudgetAuxiliar: (perfil: PerfilAuxiliar) => getBudgetAuxiliar(perfil, null, null),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 
@@ -92,6 +98,7 @@ console.log('\n=== S77-3 [runtime — fail-closed] — erro de rede/timeout do L
         getProviderWithModel: () => ({
             chat: async () => { throw new Error('network error simulada'); },
         }),
+        getBudgetAuxiliar: (perfil: PerfilAuxiliar) => getBudgetAuxiliar(perfil, null, null),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
     const classifier = makeContentStubClassifier(throwingProviderFactory);
     const rawSteps = [

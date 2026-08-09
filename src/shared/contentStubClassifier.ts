@@ -29,23 +29,6 @@ const log = createLogger('ContentStubClassifier');
 // aqui era enviado ao provedor em uso, e numa instalação só-local ele não existe.
 const CLASSIFIER_MODEL = process.env['CONTENT_STUB_CLASSIFIER_MODEL'] ?? '';
 
-// Configurável pelo mesmo motivo que o modelo acima (issue 019): o valor certo depende do provedor
-// que o operador escolheu, e não há um que sirva para os dois extremos. Os 6s originais eram
-// calibrados para modelo de nuvem; num modelo local o PRIMEIRO CHUNK pode levar mais que isso
-// (14,2s medidos em 08/08/2026 com gemma4:e4b-it-qat via llamafile), então o classificador abortava
-// antes de qualquer resposta e o fail-closed rebaixava para AgentLoop todo step 'write' com
-// conteúdo — inclusive os legítimos (2 de 3 chamadas naquela sessão).
-//
-// O fail-closed em si NÃO muda (ver doc no topo do arquivo): erro continua valendo isStub=true. O
-// que muda é parar de tratar "modelo local é mais lento" como se fosse "o LLM não conseguiu
-// classificar". Default de 30s cobre o primeiro chunk de um modelo local em CPU sem travar o
-// planejamento indefinidamente; instalações só-nuvem podem baixar via env.
-const DEFAULT_TIMEOUT_MS = 30_000;
-const TIMEOUT_MS = (() => {
-    const raw = Number(process.env['CONTENT_STUB_CLASSIFIER_TIMEOUT_MS']);
-    return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
-})();
-
 export interface ContentStubVerdict {
     isStub: boolean;
     reason: string;
@@ -81,6 +64,23 @@ export function makeContentStubClassifier(providerFactory: ProviderFactory): Con
 
         const messages: LLMMessage[] = [{ role: 'user', content: lines.join('\n') }];
         const provider = providerFactory.getProviderWithModel(CLASSIFIER_MODEL);
+        // Orçamento derivado da latência observada do provedor (shared/auxTimeout.ts), como
+        // DomainRegistry e GoalExtractor já fazem. O teto fixo de 6s que existia aqui era o
+        // sétimo dos que a Sprint 7 mediu e deixou de fora por não ter evidência de abort —
+        // a evidência apareceu em 08/08/2026: `AbortError: This operation was aborted` em 2 de
+        // 3 classificações do turno, contra um provedor cujo primeiro chunk levou 14,2s. Como o
+        // classificador é fail-closed, cada aborto rebaixava para AgentLoop um step 'write' com
+        // conteúdo legítimo.
+        //
+        // Aumentar a constante seria repetir o erro que auxTimeout.ts foi criado para encerrar:
+        // um número em milissegundos não descreve a chamada, descreve uma suposição sobre a
+        // velocidade do hardware de quem roda. O perfil 'classificacao' é o mesmo dos outros dois
+        // pontos — a chamada é da mesma natureza (JSON de uma linha, veredito binário).
+        //
+        // O fail-closed NÃO muda (ver doc no topo): erro continua valendo isStub=true. O que muda
+        // é parar de tratar "este provedor é mais lento" como "o LLM não conseguiu classificar".
+        const orcamento = providerFactory.getBudgetAuxiliar('classificacao');
+        const TIMEOUT_MS = orcamento.timeoutMs;
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
