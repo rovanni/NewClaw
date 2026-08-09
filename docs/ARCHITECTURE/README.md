@@ -20,9 +20,11 @@ instantâneo datado; as normas são vivas.
 | `PIPELINE_CURADORIA_DEPENDENCIAS.md` | Como conhecimento de instalação entra em `KNOWN_DEPS` |
 | `SOBERANIA_DA_CONFIGURACAO.md` | *Quem* decide qual recurso usar, e o que o usuário fica sabendo |
 | `LOCALIDADE_DA_RECUPERACAO.md` | *Em que camada* uma política de recuperação deve viver |
+| `RESPONSABILIDADE_ANTES_DO_MECANISMO.md` | *Quem* deve tomar uma decisão de avaliação, *com qual evidência*, e só então *por qual mecanismo* (estrutura → determinismo; significado → LLM) |
 
-Os dois últimos foram formalizados pela `docs/decisoes/RFC-005_POLITICAS_DE_SUBSTITUICAO_DE_RECURSOS.md`
-(06/08/2026). Todos são citados por `docs/DIRETRIZ_ARQUITETURA_2026-07-13.md`.
+Os penúltimos dois foram formalizados pela `docs/decisoes/RFC-005_POLITICAS_DE_SUBSTITUICAO_DE_RECURSOS.md`
+(06/08/2026); o último, pela auditoria arquitetural de regressão de 09/08/2026. Todos são citados
+por `docs/DIRETRIZ_ARQUITETURA_2026-07-13.md`.
 
 ## Como abrir
 

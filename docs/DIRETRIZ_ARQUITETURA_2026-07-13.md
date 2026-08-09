@@ -31,6 +31,13 @@ Assuma que a proposta inicial pode estar errada. Procure deliberadamente:
 
 O objetivo desta fase é encontrar motivos para NÃO implementar a ideia.
 
+Quando a proposta envolver avaliação, classificação, sucesso, falha, relevância, intenção,
+grounding ou recuperação, esta fase só está completa depois de responder o questionário de
+`docs/ARCHITECTURE/RESPONSABILIDADE_ANTES_DO_MECANISMO.md` — `PERGUNTA → RESPONSABILIDADE →
+EVIDÊNCIA → AUTORIDADE → ESTADO → CONSUMIDOR`, antes de qualquer discussão sobre mecanismo. Sem
+esses seis demonstrados, não prosseguir. "Devemos usar regex ou LLM?" não é uma pergunta válida
+para iniciar uma investigação.
+
 ### Fase 3 — Pesquisa de alternativas
 Responder sempre:
 - Existe uma solução mais simples?
@@ -216,6 +223,18 @@ está em `docs/ARCHITECTURE/README.md`:
   ausência de configuração (isso é `NUNCA_ADIVINHAR`), nem para recusa por segurança (isso é
   `ADR-005`). Nasceu de um turno que pediu modelo local e recebeu resposta de nuvem sem aviso, e de
   uma busca em instância local que, fora do ar, ia para um servidor público de terceiros.
+- **Responsabilidade antes do Mecanismo**
+  (`docs/ARCHITECTURE/RESPONSABILIDADE_ANTES_DO_MECANISMO.md`) — antes de escolher COMO uma
+  decisão será implementada, define-se QUAL responsabilidade tem autoridade para tomá-la:
+  `PERGUNTA → RESPONSABILIDADE → EVIDÊNCIA → AUTORIDADE → ESTADO → MECANISMO`, nessa ordem, com o
+  mecanismo por último. Contém o questionário obrigatório de sete pontos (sem os seis primeiros
+  demonstrados, não implementar), a distinção **determinismo valida / LLM interpreta** como passo
+  6, a proibição de usar regex como interpretador semântico, a proibição de trocar só o mecanismo
+  mantendo o estado errado, a regra de evidência (`LLM + evidência insuficiente` não é solução),
+  a proibição de encadear avaliadores que se corrigem, a regra de custo (substituir, nunca somar)
+  e a regra da escalada (exceção para exceção → trocar a fonte do sinal). O incidente River está
+  registrado ali como exemplo canônico — não como justificativa: a regra vale independentemente
+  dele.
 - **Localidade da Recuperação** (`docs/ARCHITECTURE/LOCALIDADE_DA_RECUPERACAO.md`) — políticas de
   recuperação vivem na mesma camada em que a falha pode ocorrer, e precisam ser **alcançáveis** no
   instante da falha. Nasceu do `CognitiveKernelGate`: degradação graciosa correta, documentada e
