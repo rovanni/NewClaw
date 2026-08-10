@@ -42,16 +42,15 @@ const domainSrc = fs.readFileSync(path.join(__dirname, '../../shared/domainTypes
 console.log('\n=== S218-1 — o produtor grava o erro no trace ===');
 {
     const resultSteps = agentLoopSrc.match(/addStep\(trace, 'tool_result'[^)]*\)/g) ?? [];
-    assert(resultSteps.length === 3, 'os três sítios de tool_result continuam existindo', resultSteps.length);
+    assert(resultSteps.length === 4, 'quatro sítios de tool_result (fast path registra falha + sucesso, dois dispatches normais)', resultSteps.length);
 
-    const comErro = resultSteps.filter(s => /error:\s*result\.error/.test(s));
-    assert(comErro.length === 2, 'os dois sítios que podem falhar gravam `error: result.error`', comErro.length);
+    const comErro = resultSteps.filter(s => /error:\s*(?:result\.error|toolResult\.error)/.test(s));
+    assert(comErro.length === 3, 'os três sítios que podem falhar gravam `error` (inclui fast path failure — ADR-011 §9)', comErro.length);
 
-    // O terceiro é o fast path: ele retorna ANTES de gravar quando a tool falha (AgentLoop:1384-
-    // 1387), então grava `success: true` fixo e não tem erro para registrar. Não é omissão.
-    const fastPath = resultSteps.find(s => /success:\s*true/.test(s));
-    assert(!!fastPath, 'o terceiro sítio é o fast path, com success fixo em true', resultSteps);
-    assert(!!fastPath && !/error:/.test(fastPath), 'fast path não finge ter erro que não existe');
+    // O quarto é o fast path SUCCESS: grava `success: true` fixo, sem erro.
+    const fastPathSuccess = resultSteps.find(s => /success:\s*true/.test(s) && !/error:/.test(s));
+    assert(!!fastPathSuccess, 'o sítio do fast path success com success fixo em true', resultSteps);
+    assert(!!fastPathSuccess && !/error:/.test(fastPathSuccess), 'fast path success não finge ter erro que não existe');
 
     // Trava a razão de o erro não vir do output: numa falha ele é vazio.
     assert(
@@ -103,16 +102,26 @@ console.log('\n=== S218-4 — o contrato não vira veredito ===');
         'subToolCalls continua sendo apenas nomes do que foi tentado');
 }
 
-console.log('\n=== S218-5 — nada de decisão foi alterado neste incremento ===');
+console.log('\n=== S218-5 — ADR-011 incremento 2: regex de prosa removidas, fato estrutural ===');
 {
-    // O objetivo declarado: o fato chega, o comportamento não muda. Se um destes cair, o
-    // incremento deixou de ser só de transporte.
-    assert(/const failurePattern = \/\\b\(erro\|falhou/.test(goalLoopSrc),
-        'evaluateAgentStepSuccess permanece exatamente como estava (será tratado no próximo incremento)');
+    // O incremento 2 removeu failurePattern e successPattern de evaluateAgentStepSuccess —
+    // a classificação agora usa subToolFailures (fato estrutural) e comprimento da resposta.
+    assert(!/const failurePattern = /.test(goalLoopSrc),
+        'failurePattern foi removido (ADR-011 incremento 2: interpretação semântica por regex violava RESPONSABILIDADE_ANTES_DO_MECANISMO)');
+    assert(!/const successPattern = /.test(goalLoopSrc),
+        'successPattern foi removido (ADR-011 incremento 2: idem)');
+    
+    // A nova função recebe subToolFailures como parâmetro
+    assert(/private evaluateAgentStepSuccess\([^)]*subToolFailures/.test(goalLoopSrc),
+        'evaluateAgentStepSuccess recebe subToolFailures como parâmetro');
+    
+    // O call-site passa agentloopSubToolFailures
+    assert(/evaluateAgentStepSuccess\(step, text, agentloopSubToolFailures\)/.test(goalLoopSrc),
+        'o call-site passa agentloopSubToolFailures à função');
+    
+    // A conversão para toolResult permanece inalterada
     assert(/const toolResult = \{ success: stepEval\.success, output: text \}/.test(goalLoopSrc),
         'a conversão para toolResult permanece inalterada');
-    assert(!/subToolFailures/.test(goalLoopSrc.slice(goalLoopSrc.indexOf('private evaluateAgentStepSuccess('))),
-        'evaluateAgentStepSuccess NÃO consome o campo novo — transporte não é consumo');
 }
 
 console.log(`\n${'─'.repeat(60)}`);

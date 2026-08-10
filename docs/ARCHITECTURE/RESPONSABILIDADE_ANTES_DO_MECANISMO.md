@@ -261,8 +261,8 @@ ficarem implícitos; converter todos de uma vez seria a mesma pressa que a regra
 
 | componente | pergunta que responde |
 |---|---|
-| `GoalExecutionLoop:2605` `failurePattern` | esta resposta indica execução malsucedida? |
-| `GoalExecutionLoop:2612` `successPattern` | este step deu certo? |
+| ~~`GoalExecutionLoop:2605` `failurePattern`~~ | ~~esta resposta indica execução malsucedida?~~ — removido (ADR-011 incremento 2: substituído por `subToolFailures`, fato estrutural) |
+| ~~`GoalExecutionLoop:2612` `successPattern`~~ | ~~este step deu certo?~~ — removido (ADR-011 incremento 2: classificação por fato estrutural + `StepSemanticValidator`) |
 | `AgentLoop:744-783` (três detectores) | o agente alegou ação que não realizou? |
 | `SkillLearner:471-472` | qual a intenção do usuário? |
 | `StepSemanticValidator:104` `fastPathCheck` | o output é pertinente ao step? (pré-filtro) |

@@ -2432,16 +2432,15 @@ export class GoalExecutionLoop {
             return { earlyReturn: true, cycleResult: { outcome: 'needs_auth' as const, confidence: 0.9, output: text, authOptions: authOpts } };
         }
 
-        // Heurística determinística avalia se o step teve sucesso
-        const stepEval = this.evaluateAgentStepSuccess(step, goal.objective, text);
-        // Sprint 0.8 (achados L10/L11/L14/L15): 'success_signal_detected' é o único
-        // motivo de sucesso de alta confiança da heurística (sinal explícito no texto).
-        // 'substantial_response' (fallback conservador "resposta longa, assume sucesso")
-        // NÃO é confiável — vira 'partial' abaixo. ARCH-013 (S21/reabertura): a confirmação de
-        // confiança para esse caso não-confiável não vem mais de uma 2ª chamada de LLM aqui —
-        // vem de `StepSemanticValidator.shouldPromoteToConfidentSuccess`, em `runValidationPhase`
-        // (roda de qualquer forma para todo step 'success', LLM não é mais duplicado).
-        const stepSuccessConfident = stepEval.reason === 'success_signal_detected';
+        // ADR-011 incremento 2: heurística determinística usa fatos estruturais
+        // (subToolFailures, comprimento da resposta) em vez de regex sobre prosa.
+        const stepEval = this.evaluateAgentStepSuccess(step, text, agentloopSubToolFailures);
+        // Nenhuma classificação por regex de prosa é confiante o bastante para ser
+        // definitiva — `stepSuccessConfident` só é true quando subToolFailures está
+        // vazio E a resposta é não-trivial (fato estrutural). A promoção de 'partial'
+        // para 'success' confiante continua vindo de `StepSemanticValidator.
+        // shouldPromoteToConfidentSuccess` em `runValidationPhase`.
+        const stepSuccessConfident = stepEval.reason === 'no_tool_failures';
         const stepEvalForAttempt = { confidence: stepEval.confidence, reason: stepEval.reason };
         const toolResult = { success: stepEval.success, output: text };
 
@@ -2599,63 +2598,63 @@ export class GoalExecutionLoop {
         );
     }
 
-    // ── Step success evaluator (heurística determinística) ─────────────────────
+    // ── Step success evaluator (fatos estruturais) ─────────────────────────────
 
     /**
-     * Avalia via heurística determinística se a resposta do AgentLoop indica sucesso.
+     * Avalia via fatos estruturais se a resposta do sub-turno AgentLoop indica sucesso.
      * Retorna StepEvaluation com confidence.
      *
-     * ARCH-013 (S21/reabertura): a 2ª chamada de LLM que existia aqui (`escalateStepEvalToLLM`,
-     * disparada só na zona ambígua 15-200 chars) foi removida — `StepSemanticValidator`
-     * (chamado depois, em `runValidationPhase`, incondicionalmente para todo step com
-     * `outcome==='success'`) já faz uma pergunta correlata ("o output endereça a intenção do
-     * step?") com seu próprio fast path + LLM. Manter as duas era pagar 2 round-trips de LLM
-     * pro mesmo step ambíguo. A zona ambígua (antes: success=false + shouldEscalateToLLM) foi
-     * fundida com o fallback conservador de "resposta longa sem sinal claro" (sempre existiu,
-     * sempre success=true/confidence=0.70/não-confiante) — `stepSuccessConfident` continua
-     * exigindo um sinal explícito (`success_signal_detected`); a confirmação de confiança para
-     * o caso ambíguo passa a vir de `StepSemanticValidator.shouldPromoteToConfidentSuccess`
-     * (`GoalStore.promoteLastAttemptToSuccess`), não mais daqui.
+     * ADR-011 incremento 2: as regex de prosa (`failurePattern`, `successPattern`) foram
+     * removidas. Regex procurava tokens como "não consegui", "erro", "concluído" dentro da
+     * resposta textual do AgentLoop — interpretação semântica por mecanismo determinístico,
+     * violação direta de `RESPONSABILIDADE_ANTES_DO_MECANISMO.md`. O incidente River mostrou
+     * o custo: resposta correta ("não foi possível obter o preço") classificada como falha,
+     * 12 ciclos, 5 replans, ~11 minutos sem resposta ao usuário.
+     *
+     * O que fica: apenas sinais objetivos que não dependem de linguagem natural.
+     * A pergunta semântica ("a resposta cumpre a intenção?") pertence ao
+     * `StepSemanticValidator`, que roda depois para todo step com outcome==='success'.
      *
      * Ordem de precedência:
-     *  1. Sinais explícitos de falha → success=false, conf=0.95
-     *  2. Sinais explícitos de sucesso → success=true, conf=0.90
-     *  3. Resposta vazia/curta → success=false, conf=0.85
-     *  4. Qualquer outra resposta não-trivial sem sinal claro → success=true, conf=0.70,
-     *     não-confiante (promoção fica a cargo do StepSemanticValidator)
+     *  1. Resposta vazia/curta (<15 chars) → success=false, conf=0.85
+     *  2. subToolFailures undefined (attempts antigos, sem observação) → success=true,
+     *     conf=0.70, não-confiante (fallback ao comportamento anterior — ADR-011 §5)
+     *  3. subToolFailures com falhas reais → success=false, conf=0.92
+     *  4. subToolFailures vazio (nenhuma falha observada) + resposta ≥15 chars
+     *     → success=true, conf=0.80, confiante (fato: ferramentas funcionaram,
+     *     resposta produzida — StepSemanticValidator decide se endereça a intenção)
      */
     private evaluateAgentStepSuccess(
         step: PlanStep,
-        _objective: string,
         response: string,
+        subToolFailures?: Array<{ tool: string; error?: string }>,
     ): StepEvaluation {
-        const text = response.slice(0, 500);
-
-        // Sinais explícitos de falha (alta confiança)
-        const failurePattern = /\b(erro|falhou|não consegui|não foi possível|failed|error:|cannot|não pude|sem sucesso|bloqueado|não encontr[ao]d[ao]|command not found|ENOENT|Traceback|permission denied|exit code: [^0])\b/i;
-        if (failurePattern.test(text)) {
-            log.debug(`[GoalLoop] step-heuristic: failure signal tool=${step.toolName ?? 'agentloop'}`);
-            return { success: false, confidence: 0.95, reason: 'failure_signal_detected' };
-        }
-
-        // Sinais explícitos de sucesso (alta confiança)
-        const successPattern = /\b(conclu[íi]d[ao]|✓|✅|criado|gerado|enviado|salvo|feito|pronto|sucesso|executado|funcionou|ok\b|done\b)\b/i;
-        if (successPattern.test(text)) {
-            log.debug(`[GoalLoop] step-heuristic: success signal tool=${step.toolName ?? 'agentloop'}`);
-            return { success: true, confidence: 0.90, reason: 'success_signal_detected' };
-        }
-
-        // Resposta vazia ou muito curta (provavelmente falha silenciosa)
+        // 1. Resposta vazia ou muito curta — forma objetiva, não conteúdo
         if (response.trim().length < 15) {
             log.debug(`[GoalLoop] step-heuristic: empty/short response tool=${step.toolName ?? 'agentloop'}`);
             return { success: false, confidence: 0.85, reason: 'empty_response' };
         }
 
-        // Qualquer outra resposta não-trivial sem sinal claro (inclui a antiga "zona ambígua"
-        // 15-200 chars, fundida aqui — ARCH-013) → assume progresso (conservador), não-confiante;
-        // StepSemanticValidator decide depois se promove a 'success' confiante.
-        log.debug(`[GoalLoop] step-heuristic: no explicit signal — assuming progress, unconfirmed tool=${step.toolName ?? 'agentloop'}`);
-        return { success: true, confidence: 0.70, reason: 'substantial_response' };
+        // 2. Sem observação estrutural (goals persistidos antes de ADR-011, ou trace prunado)
+        //    → conservador: assume progresso não-confiante, como o fallback anterior.
+        //    ADR-011 §5: undefined = "não houve observação", nunca "nenhuma falha".
+        if (subToolFailures === undefined) {
+            log.debug(`[GoalLoop] step-heuristic: no structural observation (subToolFailures undefined) — assuming progress, unconfirmed tool=${step.toolName ?? 'agentloop'}`);
+            return { success: true, confidence: 0.70, reason: 'no_structural_observation' };
+        }
+
+        // 3. Falhas estruturais: pelo menos uma ferramenta do sub-turno falhou
+        if (subToolFailures.length > 0) {
+            const failedTools = subToolFailures.map(f => f.tool).join(', ');
+            log.debug(`[GoalLoop] step-heuristic: structural tool failures [${failedTools}] tool=${step.toolName ?? 'agentloop'}`);
+            return { success: false, confidence: 0.92, reason: 'structural_tool_failure' };
+        }
+
+        // 4. Nenhuma falha observada + resposta não-trivial → as ferramentas funcionaram
+        //    e o agente produziu resposta. Se essa resposta cumpre a intenção do step é
+        //    pergunta semântica — pertence ao StepSemanticValidator, não a esta função.
+        log.debug(`[GoalLoop] step-heuristic: no tool failures, response produced — success tool=${step.toolName ?? 'agentloop'}`);
+        return { success: true, confidence: 0.80, reason: 'no_tool_failures' };
     }
 
     // ── CR#5: Proteção contra step-name-as-path ───────────────────────────────

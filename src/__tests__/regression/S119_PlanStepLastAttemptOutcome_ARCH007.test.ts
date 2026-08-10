@@ -23,6 +23,7 @@ import Database from 'better-sqlite3';
 import { GoalExecutionLoop } from '../../loop/GoalExecutionLoop';
 import { GoalStore } from '../../loop/GoalStore';
 import { ToolRegistry } from '../../core/ToolRegistry';
+import { traceManager } from '../../core/ExecutionTrace';
 import { Goal, PlanStep } from '../../loop/GoalTypes';
 import { ChannelContext } from '../../loop/agentLoopTypes';
 import { permissionRegistry } from '../../core/PermissionRegistry';
@@ -63,7 +64,7 @@ function makeFakeProviderFactory() {
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 
-function makeLoop(agentLoopResponse?: string) {
+function makeLoop(agentLoopResponse?: string, injectTrace = true, conversationId = 'test-conv-s119') {
     const db = new (Database as any)(':memory:');
     const goalStore = new GoalStore(db);
     const fakeMemory = { getDatabase: () => db } as any;
@@ -75,12 +76,19 @@ function makeLoop(agentLoopResponse?: string) {
         ToolRegistry, makeFakeProviderFactory(), fakeMemory,
         { findApplicableCasesShadow: async () => [], backfillMissingEmbeddings: async () => {}, captureIfEligible: () => {}, findSimilarShadow: () => [] } as any,
     );
+    if (injectTrace) {
+        // ADR-011 incremento 2: evaluateAgentStepSuccess agora usa fatos estruturais.
+        // Injeta um trace vazio para que o loop leia subToolFailures=[] (nenhuma falha)
+        // em vez de undefined (falta de observação, que cai no fallback conservador).
+        const trace = traceManager.startTrace(conversationId, 'mock input');
+        traceManager.completeTrace(trace, 'completed');
+    }
     return { loop, goalStore };
 }
 
-function makeGoal(store: GoalStore, currentPlan: PlanStep[]): Goal {
+function makeGoal(store: GoalStore, currentPlan: PlanStep[], conversationId = 'test-conv-s119'): Goal {
     return store.create({
-        sessionKey: 'test:s119', conversationId: 'test-conv-s119',
+        sessionKey: 'test:s119', conversationId,
         userIntent: 'objetivo de teste S119', objective: 'Objetivo de teste S119',
         status: 'executing', attempts: [], blockers: [], toolsTried: [], strategiesTried: [],
         successCriteria: [], sentArtifacts: [], retryBudget: 3, replanBudget: 5, confidence: 0.9,
@@ -102,8 +110,8 @@ function findStep(goal: Goal, id: string): PlanStep | undefined {
 async function main() {
     console.log('\n=== S119.1 — attempt success de alta confiança: status=completed, lastAttemptOutcome=success ===');
     {
-        const { loop, goalStore } = makeLoop(TEXT_EXPLICIT_SUCCESS);
-        const goal = makeGoal(goalStore, [agentloopStep('a1')]);
+        const { loop, goalStore } = makeLoop(TEXT_EXPLICIT_SUCCESS, true, 'test-conv-s119-1');
+        const goal = makeGoal(goalStore, [agentloopStep('a1')], 'test-conv-s119-1');
         const state = emptyState(goal.id) as any;
         await (loop as any).runLoopInternal(goal, channelContext, undefined, 0, 0, undefined, state);
         const step = findStep(goalStore.getById(goal.id)!, 'a1');
@@ -117,8 +125,9 @@ async function main() {
 
     console.log('\n=== S119.2 — attempt success de BAIXA confiança (fallback substantial_response): status=completed MAS lastAttemptOutcome=partial ===');
     {
-        const { loop, goalStore } = makeLoop(TEXT_LONG_FALLBACK);
-        const goal = makeGoal(goalStore, [agentloopStep('b1')]);
+        // Para cair no fallback conservador, não podemos ter observação estrutural do trace (subToolFailures = undefined)
+        const { loop, goalStore } = makeLoop(TEXT_LONG_FALLBACK, false, 'test-conv-s119-2');
+        const goal = makeGoal(goalStore, [agentloopStep('b1')], 'test-conv-s119-2');
         const state = emptyState(goal.id) as any;
         await (loop as any).runLoopInternal(goal, channelContext, undefined, 0, 0, undefined, state);
         const stored = goalStore.getById(goal.id)!;
@@ -170,7 +179,7 @@ async function main() {
         );
         const goal = makeGoal(goalStore, [
             { id: 'e1', description: 'Buscar cotação específica de determinada criptomoeda rara', toolName: TOOL, toolArgs: {}, status: 'pending', fallbackSteps: [] },
-        ]);
+        ], 'test-conv-s119-3');
         goalStore.update(goal.id, { retryBudget: 0 });
         const state = emptyState(goal.id) as any;
         await (loop as any).runLoopInternal(goalStore.getById(goal.id)!, channelContext, undefined, 0, 0, undefined, state);
@@ -198,10 +207,10 @@ async function main() {
                 parameters: {},
                 execute: async () => ({ success: false, output: '', error: 'permission denied: needs authorization' }),
             });
-            const { loop, goalStore } = makeLoop();
+            const { loop, goalStore } = makeLoop('', false, 'test-conv-s119-4');
             const goal = makeGoal(goalStore, [
                 { id: 's1', description: 'Executar comando', toolName: 'exec_command_s119', toolArgs: {}, status: 'pending', fallbackSteps: [] },
-            ]);
+            ], 'test-conv-s119-4');
             const state = emptyState(goal.id) as any;
             await (loop as any).runLoopInternal(goal, channelContext, undefined, 0, 0, undefined, state);
             const stored = goalStore.getById(goal.id)!;

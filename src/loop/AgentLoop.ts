@@ -1283,6 +1283,11 @@ export class AgentLoop {
         const toolResult = await tool.execute(toolArgs);
 
         if (!toolResult.success) {
+            // ADR-011 §9: fast path registra a falha antes de cair no loop de cognição,
+            // para que subToolFailures descreva todas as falhas ocorridas, não só as
+            // registradas pelos outros dois dispatches. FSM permanece em THINKING.
+            traceManager.addStep(trace, 'tool_call',   { tool: toolName, input: toolArgs });
+            traceManager.addStep(trace, 'tool_result', { tool: toolName, success: false, error: toolResult.error });
             log.warn(`[FAST-PATH] Tool "${toolName}" failed (${toolResult.error}) — falling back`);
             return null; // FSM stays in THINKING — loop proceeds normally
         }
