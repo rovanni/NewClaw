@@ -1157,60 +1157,111 @@ export class AgentLoop {
     // ── Tool-first fast path ────────────────────────────────────────────────────
 
     /**
-     * Searches memory for a saved weather city preference without embeddings.
-     * Looks for nodes containing weather-related terms and extracts the city using regex.
-     * Returns null if nothing is found.
+     * Goal-Driven Evidence Resolution (Semantic-First):
+     * Resolves a missing required tool parameter by querying evidence providers (memory)
+     * and performing semantic extraction via ProviderFactory LLM capabilities.
+     * 
+     * Never Guess Principle: Returns the extracted structured value if supported by evidence,
+     * or null if provider is unavailable, evidence is absent, or value is ambiguous.
      */
-    private lookupWeatherCityPreference(): string | null {
-        // City name pattern: one or more capitalized words optionally followed by ", State/UF"
-        const CITY = '([A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][\\wáàãâéêíóõôúçÁÀÃÂÉÊÍÓÕÔÚÇ]+(?:\\s+[A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][\\wáàãâéêíóõôúçÁÀÃÂÉÊÍÓÕÔÚÇ]+)*(?:,\\s*(?:[A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][\\wáàãâéêíóõôúçÁÀÃÂÉÊÍÓÕÔÚÇ]+|[A-Z]{2}))?)';
-        const PATTERNS = [
-            // Explicit preferences: "considerar [sempre] <Cidade> como cidade/localidade"
-            new RegExp(`considerar\\s+(?:sempre\\s+)?${CITY}\\s+como\\s+(?:cidade|localidade)`, 'i'),
-            // "usar <Cidade> como cidade/localidade/padrão"
-            new RegExp(`usar\\s+${CITY}\\s+como\\s+(?:cidade|localidade|padr[aã]o)`, 'i'),
-            // "cidade padrão[: é] <Cidade>"
-            new RegExp(`cidade\\s+(?:padr[aã]o|default)[:\\sé]+${CITY}`, 'i'),
-            // "<Cidade> como cidade padrão/localidade padrão"
-            new RegExp(`${CITY}\\s+como\\s+(?:cidade|localidade)\\s+padr[aã]o`, 'i'),
-            // Natural phrasing: "clima de <Cidade>" / "previsão de <Cidade>" / "tempo em <Cidade>"
-            new RegExp(`(?:clima|previsão|tempo|temperatura)\\s+(?:de|em|para)\\s+${CITY}`, 'i'),
-            // "minha cidade [é|fica em|é] <Cidade>"
-            new RegExp(`minha\\s+cidade\\s+(?:[eé]|fica\\s+em|padr[aã]o\\s+[eé])\\s+${CITY}`, 'i'),
-            // Preference node saved format: "Preferência: sempre <Cidade> para clima"
-            new RegExp(`${CITY}\\s+(?:para|no)\\s+(?:clima|previsão|tempo)`, 'i'),
-            // "falar sobre <Cidade>" / "sobre o clima de <Cidade>"
-            new RegExp(`falar\\s+(?:sobre\\s+(?:o\\s+)?(?:clima\\s+(?:de|em)\\s+)?)?${CITY}`, 'i'),
-        ];
+    private async resolveMissingParameterFromEvidence(
+        paramName: string,
+        paramSchema?: { type?: string; description?: string; enum?: string[] },
+        intentContext?: string
+    ): Promise<unknown | null> {
         try {
-            const nodes = this.memory.keywordSearch(
-                ['previsão do tempo', 'clima', 'cidade padrão', 'localidade padrão', 'considerar', 'usar', 'sempre', 'minha cidade'],
-                12
-            );
-            for (const node of nodes) {
-                if (!node.content) continue;
-                for (const pat of PATTERNS) {
-                    const m = node.content.match(pat);
-                    if (m?.[1]) return m[1].trim();
+            if (!this.providerFactory) {
+                log.info(`[${this.ts()}] [EVIDENCE-RESOLUTION] ProviderFactory unavailable — returning null (Never Guess)`);
+                return null;
+            }
+
+            const cleanDesc = (paramSchema?.description || '').replace(/[?!.,;:]/g, '');
+            const searchQuery = `${paramName} ${cleanDesc}`.trim();
+
+            const retriever = new MultiLayerRetriever(this.memory.getDatabase());
+            const candidates = retriever.retrieve(searchQuery, []);
+
+            if (candidates.length === 0) return null;
+
+            // Filter candidates with high relevance fusedScore (>= 0.50)
+            const viable = candidates.filter(c => c.fusedScore >= 0.50);
+            if (viable.length === 0) return null;
+
+            // Fetch memory node details from DB (ensuring confidence >= 0.60 and active state)
+            const db = this.memory.getDatabase();
+            const ph = viable.map(() => '?').join(',');
+            const rows = db.prepare(`
+                SELECT id, name, content, type, confidence 
+                FROM memory_nodes 
+                WHERE id IN (${ph}) 
+                  AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')
+                  AND (confidence IS NULL OR confidence >= 0.60)
+            `).all(...viable.map(v => v.nodeId)) as Array<{ id: string; name: string; content: string; type: string; confidence: number }>;
+
+            if (rows.length === 0) return null;
+
+            const evidenceText = rows.map(r => `• ${r.name}: ${r.content}`).join('\n');
+
+            // Semantic Extraction via ProviderFactory (Semantic-First, Zero Regex)
+            const promptMessages: LLMMessage[] = [
+                {
+                    role: 'system',
+                    content: 'You are an evidence extraction engine. Your task is to extract the EXACT value for a missing parameter from the provided evidence text.\n'
+                        + 'CRITICAL RULE (NEVER GUESS): Return JSON format `{"value": "..."}` ONLY if the evidence text explicitly supports a valid value matching the parameter schema.\n'
+                        + 'If the evidence text is ambiguous, missing, or does not clearly state the parameter value, return `{"value": null}`.\n'
+                        + 'Do NOT invent, complete, or assume any value. Do NOT output any text outside the JSON object.'
+                },
+                {
+                    role: 'user',
+                    content: `Parameter Name: "${paramName}"\n`
+                        + `Expected Type: "${paramSchema?.type || 'string'}"\n`
+                        + `Description: "${paramSchema?.description || ''}"\n`
+                        + (paramSchema?.enum ? `Allowed Enum Values: ${JSON.stringify(paramSchema.enum)}\n` : '')
+                        + (intentContext ? `User Context: "${intentContext}"\n` : '')
+                        + `\nEvidence Text:\n${evidenceText}`
+                }
+            ];
+
+            const llmResult = await this.providerFactory.chatWithFallback(promptMessages, undefined, undefined, 8000);
+            if (llmResult.status !== 'success' || !llmResult.content) return null;
+
+            // Safe Structured JSON Parsing & Schema Validation
+            let raw = llmResult.content.trim().replace(/^```json\s*|\s*```$/g, '');
+            const jsonMatch = raw.match(/\{[\s\S]*"value"[\s\S]*\}/);
+            if (jsonMatch) raw = jsonMatch[0];
+
+            let parsed: { value?: unknown };
+            try {
+                parsed = JSON.parse(raw);
+            } catch {
+                return null;
+            }
+
+            const val = parsed.value;
+            if (val === null || val === undefined) return null;
+
+            // Schema Enum Validation
+            if (paramSchema?.enum && Array.isArray(paramSchema.enum)) {
+                if (!paramSchema.enum.includes(String(val))) {
+                    log.warn(`[${this.ts()}] [EVIDENCE-RESOLUTION] Extracted value "${val}" not in allowed enum: ${JSON.stringify(paramSchema.enum)}`);
+                    return null;
                 }
             }
-            // Broader fallback: extract any proper-noun sequence adjacent to a climate keyword.
-            // Covers natural-language saves like "Preferência: Não gosto de clima de outra cidade, sempre X"
-            const CITY_ADJACENT = new RegExp(
-                `(?:clima|previsão|tempo|chuva|temperatura|sempre|previsao)[^.]{0,30}${CITY}|` +
-                `${CITY}[^.]{0,20}(?:clima|previsão|tempo|chuva|temperatura|previsao)`,
-                'i'
-            );
-            for (const node of nodes) {
-                if (!node.content) continue;
-                const m = node.content.match(CITY_ADJACENT);
-                if (m) {
-                    const city = m[1] ?? m[2];
-                    if (city) return city.trim();
-                }
+
+            // Type Check Verification
+            if (paramSchema?.type === 'number') {
+                const num = Number(val);
+                return isNaN(num) ? null : num;
+            } else if (paramSchema?.type === 'boolean') {
+                if (typeof val === 'boolean') return val;
+                if (val === 'true' || val === '1') return true;
+                if (val === 'false' || val === '0') return false;
+                return null;
             }
+
+            return String(val).trim();
         } catch (err) {
-            log.warn(`[${this.ts()}] [DEFAULT-CITY] Memory search failed (non-fatal): ${errorMessage(err)}`);
+            log.warn(`[${this.ts()}] [EVIDENCE-RESOLUTION] Parameter resolution failed (non-fatal): ${errorMessage(err)}`);
         }
         return null;
     }
@@ -1251,16 +1302,23 @@ export class AgentLoop {
 
         let toolArgs: Record<string, unknown> = intentDecision.toolParams ?? {};
 
-        // Weather-specific: if no city was extracted from the query, look up the
-        // user's preferred city from memory before giving up and falling back.
-        if (toolName === 'weather' && !toolArgs.city) {
-            const preferredCity = this.lookupWeatherCityPreference();
-            if (preferredCity) {
-                toolArgs = { ...toolArgs, city: preferredCity };
-                log.info(`[${this.ts()}] [FAST-PATH] Weather city from memory: "${preferredCity}"`);
-            } else {
-                log.info(`[${this.ts()}] [FAST-PATH] No city in intent or memory — falling back to cognition loop`);
-                return null;
+        // Declarative Goal-Driven Evidence Resolution:
+        // Inspect tool.parameters.required and resolve any missing parameters from evidence providers before execution.
+        const toolSchema = (tool as unknown as { parameters?: { required?: string[]; properties?: Record<string, { type?: string; description?: string; enum?: string[] }> } }).parameters;
+        const requiredParams: string[] = Array.isArray(toolSchema?.required) ? toolSchema.required : [];
+        const props = toolSchema?.properties ?? {};
+
+        for (const paramName of requiredParams) {
+            if (toolArgs[paramName] === undefined || toolArgs[paramName] === null) {
+                const paramProp = props[paramName];
+                const resolvedValue = await this.resolveMissingParameterFromEvidence(paramName, paramProp, userText);
+                if (resolvedValue !== null) {
+                    toolArgs = { ...toolArgs, [paramName]: resolvedValue };
+                    log.info(`[${this.ts()}] [FAST-PATH] Required parameter "${paramName}" for tool "${toolName}" resolved from evidence: "${resolvedValue}"`);
+                } else {
+                    log.info(`[${this.ts()}] [FAST-PATH] Required parameter "${paramName}" missing for "${toolName}" — falling back to cognition loop`);
+                    return null;
+                }
             }
         }
 
