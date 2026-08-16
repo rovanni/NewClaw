@@ -43,7 +43,7 @@ import { StepSemanticValidator } from './StepSemanticValidator';
 import { GracefulDeliveryOrchestrator } from './GracefulDeliveryOrchestrator';
 import { StrategyDiversityGuard } from '../shared/StrategyDiversityGuard';
 import { resolvePath, commandExists } from '../utils/crossPlatform';
-import { ensureDeliverySuccessCriteria, ensureResponseContractCriterion, AUTO_DELIVERY_CRITERION_IDS } from './planning/ensureDeliverySuccessCriteria';
+import { ensureDeliverySuccessCriteria, ensureResponseContractCriterion, AUTO_DELIVERY_CRITERION_IDS, trackPromisedDeliveryTools, detectAbandonedDeliveryTools, ensureDeliveryNotAbandonedCriterion } from './planning/ensureDeliverySuccessCriteria';
 import type { IntentCategory } from '../shared/domainTypes';
 import { resolveInstallCommand } from './planning/resolveInstallCommand';
 import { inferExpectedExtensions, isExpectedDeliverableFile } from './planning/inferExpectedExtensions';
@@ -338,9 +338,18 @@ export class GoalExecutionLoop {
         // verdade. ensureDeliverySuccessCriteria garante determinsticamente um critério
         // tool_succeeded para send_document/send_audio quando presentes no plano final,
         // independente de o LLM ter lembrado de incluir isso em successCriteria.
-        const initialCriteria = ensureResponseContractCriterion(
-            intentCategory,
-            ensureDeliverySuccessCriteria(initialPlan, planResult.successCriteria ?? []),
+        //
+        // Campanha "O8": deliveryToolsEverPromised nasce aqui — nesta geração inicial nunca há
+        // abandono possível (não existe geração anterior), mas a MESMA composição roda no
+        // replan (runLoopInternal), onde uma promessa desta geração pode já ter sido derrubada.
+        const promisedDeliveryTools = trackPromisedDeliveryTools(initialPlan, []);
+        const abandonedDeliveryTools = detectAbandonedDeliveryTools(promisedDeliveryTools, initialPlan, goal.sentArtifacts ?? []);
+        const initialCriteria = ensureDeliveryNotAbandonedCriterion(
+            abandonedDeliveryTools,
+            ensureResponseContractCriterion(
+                intentCategory,
+                ensureDeliverySuccessCriteria(initialPlan, planResult.successCriteria ?? []),
+            ),
         );
         if (initialCriteria.length > 0) {
             log.info(`[GoalLoop] successCriteria stored: ${initialCriteria.map(c => `${c.id}(${c.check})`).join(', ')}`);
@@ -351,6 +360,7 @@ export class GoalExecutionLoop {
             status: 'executing',
             cycleFocus: planResult.strategy || undefined,
             successCriteria: initialCriteria,
+            deliveryToolsEverPromised: promisedDeliveryTools,
         });
         const currentGoal = this.goalStore.getById(goal.id)!;
 
@@ -602,13 +612,25 @@ export class GoalExecutionLoop {
         // a estratégia atual nem usa mais — sem apagar critérios semânticos legítimos do Goal.
         const preservedCriteria = (goal.successCriteria ?? []).filter(c =>
             c.id !== AUTO_DELIVERY_CRITERION_IDS.send_document &&
-            c.id !== AUTO_DELIVERY_CRITERION_IDS.send_audio
+            c.id !== AUTO_DELIVERY_CRITERION_IDS.send_audio &&
+            c.id !== AUTO_DELIVERY_CRITERION_IDS.delivery_not_abandoned
         );
         const mergedCriteria = [...preservedCriteria];
         for (const c of (planResult.successCriteria ?? [])) {
             if (!mergedCriteria.some(existing => existing.id === c.id)) mergedCriteria.push(c);
         }
-        const replanCriteria = ensureDeliverySuccessCriteria(finalPlan, mergedCriteria);
+        // Campanha "O8 — Contrato de Modalidade": send_document/send_audio pode sumir do plano
+        // final SEM que nenhum critério restante force a passagem pelo validador LLM (achado real:
+        // categorias fora de RESPONSE_CONTRACT_CATEGORIES, ex. system_operation/destructive, não têm
+        // response_produced protegendo). deliveryToolsEverPromised acumula por geração (nunca
+        // esquece uma promessa antiga); se a promessa não está no plano final E nada foi entregue
+        // ainda, o GATE força o validador a reler userIntent antes de fechar achieved=true.
+        const promisedDeliveryTools = trackPromisedDeliveryTools(finalPlan, goal.deliveryToolsEverPromised ?? []);
+        const abandonedDeliveryTools = detectAbandonedDeliveryTools(promisedDeliveryTools, finalPlan, goal.sentArtifacts ?? []);
+        const replanCriteria = ensureDeliveryNotAbandonedCriterion(
+            abandonedDeliveryTools,
+            ensureDeliverySuccessCriteria(finalPlan, mergedCriteria),
+        );
 
         this.goalStore.update(goal.id, {
             currentPlan: finalPlan,
@@ -619,6 +641,7 @@ export class GoalExecutionLoop {
             // capacidade de recovery dos steps do novo plano.
             retryBudget: GOAL_LIMITS.MAX_RETRY_BUDGET,
             successCriteria: replanCriteria,
+            deliveryToolsEverPromised: promisedDeliveryTools,
             // Sprint de Provenance: currentPlan está sendo SUBSTITUÍDO inteiro aqui — os `id`s de
             // step da nova chamada de GoalPlanner podem colidir com os da geração anterior (o LLM
             // reusa "step_1"/"step_2" em toda chamada). Incrementar aqui, no único ponto real de
@@ -3692,6 +3715,17 @@ export class GoalExecutionLoop {
                     criterion.status = 'unverifiable';
                     break;
                 }
+                case 'delivery_not_silently_abandoned': {
+                    // Campanha "O8 — Contrato de Modalidade": mesmo GATE estrutural de
+                    // 'response_produced' acima, para a promessa de ARTEFATO. Só existe quando
+                    // detectAbandonedDeliveryTools() já observou promessa-anterior + ausência-atual
+                    // + nada-entregue (todos fatos estruturais, decididos na injeção do critério,
+                    // não aqui). Se "isso é abandono legítimo ou falha" é pergunta semântica —
+                    // permanece 'unverifiable' de propósito, força validateGoalCompletion() (LLM)
+                    // a decidir, com o fato explícito no prompt (ver responseContractBlock-irmão).
+                    criterion.status = 'unverifiable';
+                    break;
+                }
             }
         }
 
@@ -3919,6 +3953,17 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
             ? '\n- CONTRATO DE RESPOSTA: o plano deste objetivo declarou que uma resposta em texto, endereçando a pergunta do usuário, é parte obrigatória da conclusão — não basta ter coletado dados ou executado side-effects (ex: memory_write) sem apresentá-los. Se os attempts acima produziram apenas dados brutos, recibos de side-effect, ou nenhuma resposta legível ao usuário, marque achieved=false.'
             : '';
 
+        // Campanha "O8 — Contrato de Modalidade": mesmo padrão do bloco acima, para o lado
+        // ARTEFATO. Fato estrutural (ver detectAbandonedDeliveryTools/evaluateCriteria,
+        // case 'delivery_not_silently_abandoned') — não afirma que houve falha, só informa que
+        // uma promessa de entrega anterior não está mais na estratégia atual e nada foi entregue;
+        // se é abandono legítimo (dependência ausente, já explicado ao usuário) ou entrega
+        // esquecida é julgamento do próprio validador, com a intenção original disponível acima.
+        const hasAbandonedDeliveryContract = (goal.successCriteria ?? []).some(c => c.check === 'delivery_not_silently_abandoned');
+        const abandonedDeliveryBlock = hasAbandonedDeliveryContract
+            ? '\n- POSSÍVEL ENTREGA ABANDONADA: em uma geração anterior deste plano, o sistema previu enviar um documento e/ou áudio ao usuário (send_document/send_audio); a estratégia atual não prevê mais isso, e nenhum artefato correspondente foi entregue nesta sessão. Releia a INTENÇÃO ORIGINAL DO USUÁRIO: se ela pedia explicitamente um arquivo/documento/áudio, verifique se essa mudança de estratégia foi explicada ao usuário (ex: no "summary"/reason de um blocker anterior) ou se a entrega simplesmente ficou faltando. Se ficou faltando e não há explicação, marque achieved=false.'
+            : '';
+
         const prompt = `Você é um validador de tarefas de software. Verifique se o objetivo especificado foi COMPLETAMENTE concluído.
 
 ALVO DE VALIDAÇÃO:
@@ -3939,7 +3984,7 @@ IMPORTANTE — INTERPRETAÇÃO DE OUTPUTS:
 - Se o conteúdo real do arquivo está disponível acima, use ESSE conteúdo como fonte primária de verdade.
 - Se houver ARTEFATOS JÁ ENTREGUES listados acima, o "summary" deve mencionar explicitamente esse artefato (nome do arquivo) como o resultado entregue — não descreva apenas os steps do ciclo atual (ex: releitura de um markdown de referência) como se fossem o objetivo em si.
 - Se PROGRESSO POR COMPONENTE mostra ≥70% concluído, considere entrega parcial como "achieved: true" com summary indicando o que ficou pendente.
-- QUALIDADE DE ARTEFATOS: se um arquivo criado pela ferramenta "write" tiver menos de 200 caracteres OU contiver placeholders evidentes ("[Inserir aqui", "TODO", "stub", "conteúdo será adicionado", texto genérico de uma linha sem dados reais), o objetivo NÃO foi atingido — marque achieved=false. Um arquivo de resumo de pesquisa com apenas uma frase genérica não constitui entrega real do objetivo.${responseContractBlock}
+- QUALIDADE DE ARTEFATOS: se um arquivo criado pela ferramenta "write" tiver menos de 200 caracteres OU contiver placeholders evidentes ("[Inserir aqui", "TODO", "stub", "conteúdo será adicionado", texto genérico de uma linha sem dados reais), o objetivo NÃO foi atingido — marque achieved=false. Um arquivo de resumo de pesquisa com apenas uma frase genérica não constitui entrega real do objetivo.${responseContractBlock}${abandonedDeliveryBlock}
 
 Análise crítica: o objetivo ou marco atual foi atingido E o resultado/entregável esperado foi produzido com sucesso?
 Se for um marco de desenvolvimento, verifique se os arquivos/funcionalidades desse marco foram realmente criados e testados.

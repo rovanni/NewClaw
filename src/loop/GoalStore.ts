@@ -54,6 +54,7 @@ interface GoalRow {
     success_criteria: string | null;
     sent_artifacts: string | null;
     plan_generation: number;
+    delivery_tools_ever_promised: string | null;
 }
 
 export class GoalStore {
@@ -132,6 +133,9 @@ export class GoalStore {
         // idêntico ao comportamento anterior a esta migração para eles (nenhuma distinção de
         // geração existia, então tratar tudo como "a mesma geração" não muda nada observável).
         try { this.db.exec('ALTER TABLE goals ADD COLUMN plan_generation INTEGER NOT NULL DEFAULT 0'); } catch { /* já existe */ }
+        // Campanha "O8 — Contrato de Modalidade": mesmo padrão de sent_artifacts (TEXT, JSON,
+        // sem DEFAULT — goal legado sem a coluna vira `[]` via parseJson em rowToGoal()).
+        try { this.db.exec('ALTER TABLE goals ADD COLUMN delivery_tools_ever_promised TEXT'); } catch { /* já existe */ }
         log.info('[GoalStore] schema ready');
     }
 
@@ -319,6 +323,7 @@ export class GoalStore {
         if (patch.successCriteria !== undefined)       { sets.push('success_criteria = ?');       values.push(JSON.stringify(patch.successCriteria)); }
         if (patch.sentArtifacts !== undefined)         { sets.push('sent_artifacts = ?');         values.push(JSON.stringify(patch.sentArtifacts)); }
         if (patch.planGeneration !== undefined)        { sets.push('plan_generation = ?');        values.push(patch.planGeneration); }
+        if (patch.deliveryToolsEverPromised !== undefined) { sets.push('delivery_tools_ever_promised = ?'); values.push(JSON.stringify(patch.deliveryToolsEverPromised)); }
         if (patch.retryBudget !== undefined)       { sets.push('retry_budget = ?');       values.push(patch.retryBudget); }
         if (patch.replanBudget !== undefined)      { sets.push('replan_budget = ?');      values.push(patch.replanBudget); }
         if (patch.confidence !== undefined)        { sets.push('confidence = ?');         values.push(patch.confidence); }
@@ -656,6 +661,7 @@ export class GoalStore {
             expiresAt: row.expires_at,
             completedAt: row.completed_at ?? undefined,
             sentArtifacts: this.parseJson<string[]>(row.sent_artifacts, []),
+            deliveryToolsEverPromised: this.parseJson<string[]>(row.delivery_tools_ever_promised, []),
         };
     }
 

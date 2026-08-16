@@ -87,6 +87,21 @@ export interface GoalBlocker {
  *   resposta ao usuário", emitida pelo próprio `GoalPlanner` (mesmo mecanismo já usado para os
  *   outros checks, sem chamada de LLM nova). Ver `docs/ARCHITECTURE/RESPONSABILIDADE_ANTES_DO_MECANISMO.md`
  *   — "determinismo valida existência, LLM interpreta significado".
+ * - delivery_not_silently_abandoned → campanha "O8 — Contrato de Modalidade" (2026-08-16): mesmo
+ *   GATE estrutural que `response_produced`, para a metade complementar do problema. `response_produced`
+ *   protege a promessa de RESPOSTA (persiste entre replans via `preservedCriteria`); nada protegia a
+ *   promessa de ARTEFATO (`tool_succeeded(send_document|send_audio)`), porque `ensureDeliverySuccessCriteria`
+ *   recalcula esse critério do zero a cada replan A PARTIR DO PLANO FINAL — por design (um replan que
+ *   legitimamente abandona `send_document` não deve deixar o goal preso exigindo uma tool que a
+ *   estratégia atual nem usa mais). O efeito colateral: se `send_document`/`send_audio` esteve em
+ *   QUALQUER geração anterior do plano (`Goal.deliveryToolsEverPromised`) e a geração atual não o
+ *   contém mais, e nenhum artefato correspondente foi de fato entregue (`Goal.sentArtifacts`), nenhum
+ *   critério restante força a passagem pelo validador LLM — se o resto do checklist fechar
+ *   deterministicamente, `achieved=true` sai sem que `validateGoalCompletion()` jamais releia
+ *   `userIntent` para notar a ausência. Não decide "foi abandono legítimo ou falha" (isso é semântico,
+ *   fica com o LLM) — só garante que a pergunta chegue ao validador quando a condição estrutural
+ *   (promessa anterior + ausência atual + nada entregue) é observada. Nunca fica `'met'`
+ *   deterministicamente, mesma razão de `response_produced`.
  */
 export type CriterionCheck =
     | 'tool_succeeded'
@@ -94,7 +109,8 @@ export type CriterionCheck =
     | 'output_contains'
     | 'file_exists'
     | 'pending_send_verified_on_disk'
-    | 'response_produced';
+    | 'response_produced'
+    | 'delivery_not_silently_abandoned';
 
 export interface SuccessCriterion {
     id: string;
@@ -276,6 +292,16 @@ export interface Goal {
     toolsTried: string[];              // set de tool names já tentados
     strategiesTried: string[];        // descrições de estratégias tentadas
     sentArtifacts?: string[];         // paths de artefatos já entregues — persiste entre restarts
+    /**
+     * Campanha "O8 — Contrato de Modalidade" (2026-08-16): nomes de tool ⊂ {'send_document',
+     * 'send_audio'} que estiveram em `currentPlan` em QUALQUER geração deste Goal (inicial ou
+     * qualquer replan) — monotônico, nunca removido, só acrescentado (mesmo espírito de
+     * `planGeneration`: um fato sobre o histórico, não sobre o estado atual). Usado por
+     * `detectAbandonedDeliveryTools()` para saber se a geração ATUAL do plano abandonou uma
+     * entrega que uma geração anterior prometeu — pergunta que `currentPlan` sozinho não
+     * responde, porque só contém a estratégia vigente.
+     */
+    deliveryToolsEverPromised?: string[];
 
     nextAction?: string;               // próxima ação calculada pelo GoalPlanner
     cycleFocus?: string;               // foco do ciclo atual (estratégia do planner, ex: "converter via pandoc")

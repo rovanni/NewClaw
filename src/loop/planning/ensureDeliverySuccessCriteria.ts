@@ -33,9 +33,11 @@ export const AUTO_DELIVERY_CRITERION_IDS = {
     send_audio: 'auto_delivery_send_audio',
     structural_bypass_send_document: 'auto_structural_bypass_send_document',
     response_produced: 'auto_response_produced',
+    delivery_not_abandoned: 'auto_delivery_not_abandoned',
 } as const;
 
 const DELIVERY_TOOLS = ['send_document', 'send_audio'] as const;
+const AUDIO_DELIVERED_SENTINEL = '__send_audio_delivered__';
 
 export function ensureDeliverySuccessCriteria(
     steps: PlanStep[],
@@ -146,6 +148,77 @@ export function ensureResponseContractCriterion(
             id: AUTO_DELIVERY_CRITERION_IDS.response_produced,
             description: 'Existe uma resposta em texto que endereça a pergunta do usuário',
             check: 'response_produced',
+            status: 'pending',
+        },
+    ];
+}
+
+/**
+ * trackPromisedDeliveryTools — acumula, de forma monotônica, quais tools de entrega
+ * (`send_document`/`send_audio`) já estiveram em ALGUMA geração do plano deste Goal.
+ *
+ * Puro por design, mesmo padrão de `ensureDeliverySuccessCriteria`: só examina os STEPS
+ * recebidos (geração que está prestes a valer) e o que já estava acumulado — nunca lê
+ * `goal.attempts`/`userIntent`. Chamado tanto no plano inicial quanto em todo replan; a união
+ * é o que permite `detectAbandonedDeliveryTools` responder "isso já foi prometido antes?" numa
+ * geração posterior que não contém mais a tool.
+ */
+export function trackPromisedDeliveryTools(
+    steps: PlanStep[],
+    previouslyPromised: readonly string[],
+): string[] {
+    const currentDeliveryTools = steps
+        .map(s => s.toolName)
+        .filter((t): t is string => t !== undefined && (DELIVERY_TOOLS as readonly string[]).includes(t));
+    return Array.from(new Set([...previouslyPromised, ...currentDeliveryTools]));
+}
+
+/**
+ * detectAbandonedDeliveryTools — de tudo que já foi prometido (`promisedTools`, acumulado por
+ * `trackPromisedDeliveryTools`), quais tools NÃO estão no plano final desta geração E ainda não
+ * foram entregues de fato (`sentArtifacts`)? Uma tool que sumiu do plano mas já foi entregue em
+ * ciclo anterior não é abandono — é entrega concluída, o step só não precisa mais rodar de novo.
+ *
+ * Puro e estrutural: presença/ausência de um toolName numa lista, presença/ausência de um path
+ * numa lista — nenhuma interpretação de texto. Não decide se o abandono é legítimo (ex.: pandoc
+ * ausente, usuário já avisado) ou uma falha silenciosa — só produz o fato para
+ * `ensureDeliveryNotAbandonedCriterion`/`validateGoalCompletion` (o LLM) ponderar.
+ */
+export function detectAbandonedDeliveryTools(
+    promisedTools: readonly string[],
+    finalSteps: PlanStep[],
+    sentArtifacts: readonly string[],
+): string[] {
+    const currentTools = new Set(finalSteps.map(s => s.toolName).filter((t): t is string => Boolean(t)));
+    const audioAlreadyDelivered = sentArtifacts.includes(AUDIO_DELIVERED_SENTINEL);
+    const documentAlreadyDelivered = sentArtifacts.some(p => p !== AUDIO_DELIVERED_SENTINEL);
+    return promisedTools.filter(tool => {
+        if (currentTools.has(tool)) return false;
+        if (tool === 'send_audio') return !audioAlreadyDelivered;
+        if (tool === 'send_document') return !documentAlreadyDelivered;
+        return true;
+    });
+}
+
+/**
+ * ensureDeliveryNotAbandonedCriterion — injeta o GATE `delivery_not_silently_abandoned` quando
+ * `detectAbandonedDeliveryTools` encontrou pelo menos uma tool abandonada. Mesmo padrão de
+ * `ensureResponseContractCriterion`: recalculado do zero a cada chamada (remove a versão
+ * anterior antes de decidir se injeta de novo), nunca acumula entre gerações.
+ */
+export function ensureDeliveryNotAbandonedCriterion(
+    abandonedTools: readonly string[],
+    successCriteria: SuccessCriterion[],
+): SuccessCriterion[] {
+    const kept = successCriteria.filter(c => c.id !== AUTO_DELIVERY_CRITERION_IDS.delivery_not_abandoned);
+    if (abandonedTools.length === 0) return kept;
+
+    return [
+        ...kept,
+        {
+            id: AUTO_DELIVERY_CRITERION_IDS.delivery_not_abandoned,
+            description: `Entrega de ${abandonedTools.join('/')} prometida em geração anterior do plano não está mais na estratégia atual`,
+            check: 'delivery_not_silently_abandoned',
             status: 'pending',
         },
     ];
