@@ -481,6 +481,14 @@ export class WebSearchTool implements ToolExecutor {
     private formatOutput(query: string, topResults: SearchCandidate[], pages: ReadablePage[], notes: string[]): string {
         const lines: string[] = [];
         lines.push(`Consulta: ${query}`);
+        // Achado real (16/08/2026, campanha de tool-routing/latência): sem isto, a síntese não
+        // tinha como afirmar se um valor era "de agora" ou de dias atrás — o juiz de grounding
+        // rejeitou repetidas vezes afirmações como "a cotação mais recente é da sessão de
+        // sexta-feira" (NOT_EVALUABLE: nenhuma evidência determinava a data dos dados). Isto NÃO
+        // é a data de publicação de cada página (frequentemente indisponível nos snippets) — é o
+        // instante em que ESTA busca foi executada, sempre conhecido com certeza (Date.now()),
+        // suficiente para o LLM afirmar "consultado agora" sem inventar a data de cada fonte.
+        lines.push(`Consultado em: ${new Date().toISOString()}`);
         lines.push(`Resultados agregados: ${topResults.length}`);
 
         if (pages.length > 0) {

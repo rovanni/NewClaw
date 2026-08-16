@@ -92,7 +92,7 @@ export class CryptoAnalysisTool implements ToolExecutor {
 
     private async fetchMarkets(perPage: number = 100): Promise<CoinGeckoMarket[]> {
         const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${perPage}&page=1&sparkline=false&price_change_percentage=1h%2C24h%2C7d`;
-        
+
         const cached = cache.get(url);
         if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
             return cached.data as CoinGeckoMarket[];
@@ -108,7 +108,7 @@ export class CryptoAnalysisTool implements ToolExecutor {
                 throw new Error(`CoinGecko API error: ${response.status}`);
             }
         }
-        
+
         const data = await response.json() as CoinGeckoMarket[];
         cache.set(url, { data, timestamp: Date.now() });
         return data as CoinGeckoMarket[];
@@ -280,8 +280,8 @@ export class CryptoAnalysisTool implements ToolExecutor {
         if (!md) return { success: true, output: `🔍 **${data.name ?? symbol}** — dados de mercado indisponíveis.` };
         let report = `🔍 **${data.name} (${data.symbol?.toUpperCase()})**\n\n`;
         report += `Preço: $${md.current_price?.usd?.toLocaleString()}\n`;
-        report += `Market Cap: $${this.formatCurrency(md.market_cap?.usd)}\n`;
-        report += `Volume 24h: $${this.formatCurrency(md.total_volume?.usd)}\n\n`;
+        report += `Market Cap: ${this.formatCurrency(md.market_cap?.usd)}\n`;
+        report += `Volume 24h: ${this.formatCurrency(md.total_volume?.usd)}\n\n`;
         report += `Variações:\n`;
         report += `  1h:  ${md.price_change_percentage_1h_in_currency?.usd?.toFixed(2) || 'N/A'}%\n`;
         report += `  24h: ${md.price_change_percentage_24h?.toFixed(2) || 'N/A'}%\n`;
