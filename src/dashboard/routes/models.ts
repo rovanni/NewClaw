@@ -12,6 +12,7 @@ import {
     isPidAlive,
 } from '../../core/localRuntimeState';
 import { DashboardContext } from './types';
+import { createRateLimiter } from '../security';
 
 const log = createLogger('ModelsRoute');
 
@@ -95,11 +96,19 @@ const CTX_FLAGS = ['-c', '--ctx-size', '--context-size'];
  * ou redirecionamento, então uma string maliciosa aqui vira apenas um argumento inválido que o
  * servidor recusa.
  */
+/** Teto de tamanho para a string de opções de linha de comando que o usuário cola — nenhuma
+ *  opção real de servidor local (llamafile/llama.cpp/vLLM) chega perto disso; existe só para dar
+ *  um limite objetivo ao token da entrada (CodeQL js/loop-bound-injection: sem teto, o número de
+ *  iterações do parse e do filtro em `sanitizeServerOptions` cresce com o tamanho de uma string
+ *  100% controlada pelo cliente da rota `/api/models/local/*`). */
+const MAX_SERVER_OPTIONS_LENGTH = 4000;
+
 export function parseServerOptions(raw: string): string[] {
     const out: string[] = [];
+    const bounded = raw.length > MAX_SERVER_OPTIONS_LENGTH ? raw.slice(0, MAX_SERVER_OPTIONS_LENGTH) : raw;
     const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(raw)) !== null) {
+    while ((m = re.exec(bounded)) !== null) {
         out.push(m[1] ?? m[2] ?? m[3]);
     }
     return out;
@@ -159,6 +168,21 @@ export function buildServerArgs(file: string, port: number, userOptions: string)
 /** Tempo máximo esperando o modelo carregar antes de desistir. Modelos grandes lidos de disco
  *  lento levam minutos; abaixo disso o usuário veria "falhou" num carregamento que ia dar certo. */
 const LOCAL_SERVER_READY_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Limite dedicado para as rotas que leem a pasta de modelos do disco ou sobem um processo
+ * (`/local`, `/local/preview`, `/local/serve`) — mais estrito que o geral do dashboard
+ * (`security.ts`, 120/min), que já cobre estas rotas mas não distingue custo: aqui cada
+ * requisição faz `readdirSync`/`statSync` numa pasta que pode ter dezenas de arquivos de
+ * gigabytes, e `/local/serve` especificamente `spawn`a um processo que carrega um modelo inteiro
+ * na memória — martelar essa rota é um vetor de exaustão de CPU/RAM real, não só de rede. Mesmo
+ * padrão de `loginRateLimit` (limite estrito para uma rota cara/sensível, em cima do geral).
+ */
+const modelsFsRateLimit = createRateLimiter({
+    windowMs: 60 * 1000,
+    max: 20,
+    message: 'Muitas requisições a rotas de modelo local — aguarde um instante.',
+});
 
 /**
  * Processo do servidor local em execução. Um por vez, de propósito: cada processo carrega um
@@ -318,7 +342,7 @@ export function createModelsRouter(ctx: DashboardContext): Router {
      * do arquivo como id do modelo, então dá para dizer com precisão quais já estão no ar — sem
      * inferir nada.
      */
-    router.get('/local', async (req: Request, res: Response) => {
+    router.get('/local', modelsFsRateLimit, async (req: Request, res: Response) => {
         await adoptRunningServer();
         const dir = String(req.query.dir || ctx.config.localModelsDir || '').trim();
         if (!dir) {
@@ -397,7 +421,7 @@ export function createModelsRouter(ctx: DashboardContext): Router {
      *
      * Usa a MESMA função do carregamento — se preview e execução divergissem, a tela mentiria.
      */
-    router.post('/local/preview', (req: Request, res: Response) => {
+    router.post('/local/preview', modelsFsRateLimit, (req: Request, res: Response) => {
         const dir = (ctx.config.localModelsDir || '').trim();
         const file = String(req.body?.file || '');
         const options = String(req.body?.options ?? (ctx.config.localModelOptions || {})[file] ?? '');
@@ -441,7 +465,7 @@ export function createModelsRouter(ctx: DashboardContext): Router {
      *  - o executável é descoberto pelo servidor, não informado pela requisição;
      *  - os argumentos são montados aqui, fixos; nada do corpo da requisição vira argumento.
      */
-    router.post('/local/serve', async (req: Request, res: Response) => {
+    router.post('/local/serve', modelsFsRateLimit, async (req: Request, res: Response) => {
         const dir = (ctx.config.localModelsDir || '').trim();
         if (!dir) return res.status(400).json({ success: false, error: 'Nenhuma pasta de modelos configurada' });
 

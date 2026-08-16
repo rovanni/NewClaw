@@ -1028,6 +1028,140 @@
     // ver GoalOrchestrator.cancelActiveGoal). currentChatSessionId guarda o sessionId da
     // requisição em voo para que o clique em "Parar" cancele a sessão certa.
     let currentChatSessionId = null;
+    let turnPollingTimer = null;
+
+    function stopTurnPolling() {
+      if (turnPollingTimer) {
+        clearInterval(turnPollingTimer);
+        turnPollingTimer = null;
+      }
+    }
+
+    function setPendingTurn(turnId) {
+      const conv = getConv();
+      if (conv) {
+        conv.pendingTurnId = turnId;
+        save();
+      }
+    }
+
+    function getPendingTurn() {
+      const conv = getConv();
+      return conv?.pendingTurnId || null;
+    }
+
+    function clearPendingTurn() {
+      const conv = getConv();
+      if (conv) {
+        delete conv.pendingTurnId;
+        save();
+      }
+    }
+
+    function formatSemanticStatus(item) {
+      if (item.kind === 'turn' && item.statusEvent) {
+        const se = item.statusEvent;
+        if (se.status === 'executing_tool' && se.tool) {
+          // Nome amigável e traduzido por ferramenta (ex: "Pesquisando na internet...") quando
+          // existe uma chave dedicada; nome técnico cru (ex: "web_search") só como fallback para
+          // ferramenta ainda sem tradução — nunca inventa um texto, só não traduz o que não
+          // conhece ainda.
+          const toolKey = 'status_tool_' + se.tool;
+          const friendly = t(toolKey);
+          return { type: 'tool', text: friendly !== toolKey ? friendly : t('status_executing_tool', { tool: se.tool }) };
+        }
+        if (se.status === 'synthesizing') {
+          return { type: 'processing', text: t('status_synthesizing') };
+        }
+        if (se.status === 'thinking') {
+          return { type: 'thinking', text: t('status_thinking') };
+        }
+      } else if (item.kind === 'goal') {
+        if (item.status === 'replanning') {
+          return { type: 'processing', text: t('status_goal_replanning') };
+        }
+        if (item.status === 'executing') {
+          return { type: 'processing', text: t('status_goal_executing') };
+        }
+      }
+      const min = Math.floor((item.elapsedMs || 0) / 60000);
+      return { type: 'processing', text: min >= 1 ? t('status_still_running', { min }) : t('status_thinking') };
+    }
+
+    async function fetchAndRenderOutbox(turnId, maxRetries = 5, delayMs = 500) {
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const res = await newclawFetch('/api/chat/outbox?turnId=' + encodeURIComponent(turnId));
+          if (res.status === 200) {
+            const data = await res.json();
+            if (data.success) {
+              const responseText = data.response || '...';
+              addMsg('bot', responseText, mapServerAttachments(data.attachments));
+              speakText(responseText.replace(/```[\s\S]*?```/g,'(código)').replace(/[*#`_]/g,'').slice(0,500));
+              clearPendingTurn();
+              hideStatus();
+              setSendBtnBusy(false);
+              currentChatSessionId = null;
+              return true;
+            }
+          } else if (res.status === 404) {
+            // Outbox ainda não pronta (race condition): aguarda antes do próximo retry se ainda houver tentativas
+            console.info(`[OUTBOX] Resposta ainda não pronta na tentativa ${attempt}/${maxRetries}. Aguardando ${delayMs}ms...`);
+          }
+        } catch (err) {
+          console.warn(`[OUTBOX] Falha na tentativa ${attempt}/${maxRetries} ao buscar outbox:`, err);
+        }
+
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      }
+
+      // Fallback após esgotar tentativas: 404 ou erro de conexao -> limpa o turno pendente e sincroniza com o banco do servidor
+      clearPendingTurn();
+      hideStatus();
+      setSendBtnBusy(false);
+      currentChatSessionId = null;
+      await syncFromServer();
+      return false;
+    }
+
+    function startTurnPolling(turnId, sessionId) {
+      stopTurnPolling();
+      currentChatSessionId = sessionId;
+      setSendBtnBusy(true);
+
+      const poll = async () => {
+        try {
+          const sid = encodeURIComponent(sessionId);
+          const res = await newclawFetch('/api/chat/active?sessionId=' + sid + '&turnId=' + encodeURIComponent(turnId));
+          const { active = [], pendingAuth = [], pending = false } = await res.json();
+          renderPendingAuth(pendingAuth);
+
+          const mine = active.find(a => a.conversationId === sessionId) || (active.length > 0 ? active[0] : null);
+
+          // S227: pending=true (WebChannelAdapter.asyncTurns, via S226) cobre a janela entre o
+          // 202 de POST /api/chat e o turno virar algo rastreável em activeTurns/GoalStore —
+          // sem isto, active=[] nessa janela era lido como "terminou antes de começar" (bug
+          // observado no teste real do Windows, 12/08/2026: resposta computada, nunca exibida).
+          if (mine || pending) {
+            // Turno/goal ainda em processamento
+            const st = formatSemanticStatus(mine || {});
+            showStatus(st.type, st.text);
+          } else {
+            // Processamento finalizou! Para o polling e busca no Outbox
+            stopTurnPolling();
+            showStatus('receiving', t('status_receiving'));
+            await fetchAndRenderOutbox(turnId);
+          }
+        } catch (e) {
+          // Erro de rede no polling: nao encerra o loop, re-tenta no proximo tick
+        }
+      };
+
+      poll();
+      turnPollingTimer = setInterval(poll, 1500);
+    }
 
     function setSendBtnBusy(busy) {
       sendBtn.classList.toggle('stop', busy);
@@ -1037,21 +1171,15 @@
       sendBtn.disabled = false;
     }
 
-    /**
-     * Restaura o estado de "processando" ao abrir a página.
-     *
-     * O botão de parar e o indicador de progresso viviam só na aba que enviou a mensagem: bastava
-     * recarregar, trocar de tela ou o servidor reiniciar para o usuário perder qualquer indicação
-     * de que algo continuava rodando — e qualquer forma de interromper. O servidor sabe quais
-     * conversas têm turno ativo; aqui só perguntamos a ele.
-     */
-    /**
-     * Ações perigosas esperando decisão nesta conversa.
-     *
-     * Telegram/Discord/WhatsApp/Signal mostram dois botões inline; o canal web não tem botão de
-     * plataforma, então a tela pergunta ao servidor e desenha os mesmos dois botões. A decisão
-     * vai para POST /api/chat/auth-decision, que chama a MESMA closure dos outros canais.
-     */
+    function loadConversation(id) {
+      stopTurnPolling();
+      currentConvId = id;
+      localStorage.setItem(SKEY + SKEY_VERSION + 'current_conv', id);
+      renderSidebar();
+      renderChat();
+      restoreActiveTurn();
+    }
+
     function renderPendingAuth(pending) {
       const slot = document.getElementById('authPendingSlot');
       if (!slot) return;
@@ -1080,9 +1208,6 @@
         const data = await res.json();
         hideStatus();
         renderPendingAuth([]);
-        // Ação sem saída de texto é comum e legítima (`mkdir` não imprime nada), e a resposta de
-        // um goal é o conteúdo produzido, não um resumo sobre ele. Sem este fallback, autorizar
-        // um comando desses deixava uma bolha vazia na conversa — observado na validação ao vivo.
         const authText = data.error
           ? `⚠️ ${data.error}`
           : (data.response && data.response.trim() ? data.response : t('auth_done_no_output'));
@@ -1094,9 +1219,6 @@
       }
     }
 
-    // O card é construído com t(), então trocar de idioma precisa redesenhá-lo — mesmo padrão
-    // que config/app.js já usa para conteúdo gerado por JavaScript (data-i18n só alcança HTML
-    // estático).
     window.addEventListener('newclaw-lang-changed', () => syncServerState());
 
     async function syncServerState() {
@@ -1105,7 +1227,7 @@
         const res = await newclawFetch('/api/chat/active?sessionId=' + sid);
         const { pendingAuth = [] } = await res.json();
         renderPendingAuth(pendingAuth);
-      } catch { /* sem conexão: a tela segue no estado normal */ }
+      } catch { /* sem conexao: a tela segue no estado normal */ }
     }
 
     async function restoreActiveTurn() {
@@ -1114,30 +1236,27 @@
         const res = await newclawFetch('/api/chat/active?sessionId=' + sid);
         const { active = [], pendingAuth = [] } = await res.json();
         renderPendingAuth(pendingAuth);
-        if (!active.length) return;
-        // Prefere a conversa aberta; se o turno ativo é de outra, ainda assim mostra, porque o
-        // ponto é o usuário saber que existe algo em andamento.
-        const mine = active.find(a => a.conversationId === (currentConvId || 'web-session')) || active[0];
-        currentChatSessionId = mine.conversationId;
-        setSendBtnBusy(true);
-        const min = Math.floor(mine.elapsedMs / 60000);
-        showStatus('processing', min >= 1 ? t('status_still_running', { min }) : t('status_thinking'));
-      } catch { /* sem conexão: a tela segue no estado normal */ }
+
+        const pendingTurnId = getPendingTurn();
+        const mine = active.find(a => a.conversationId === (currentConvId || 'web-session')) || (active.length > 0 ? active[0] : null);
+
+        if (mine || pendingTurnId) {
+          const turnId = pendingTurnId || (mine ? mine.conversationId : 'restored-turn');
+          startTurnPolling(turnId, currentConvId || 'web-session');
+        }
+      } catch { /* sem conexao: a tela segue no estado normal */ }
     }
 
     async function cancelMessage() {
       if (!currentChatSessionId) return;
-      sendBtn.disabled = true; // evita clique duplo enquanto o /cancelar está em voo
+      sendBtn.disabled = true;
       showStatus('processing', t('status_cancelling'));
       try {
         const formData = new FormData();
         formData.append('message', '/cancelar');
         formData.append('sessionId', currentChatSessionId);
         await newclawFetch('/api/chat', { method: 'POST', body: formData });
-      } catch (err) { /* a requisição original (sendMessage) trata seu próprio erro/timeout */ }
-      // Não reabilita o botão nem restaura o status aqui: a requisição original em sendMessage()
-      // ainda está em voo e é ela quem, ao resolver (com o goal já cancelado no backend), decide
-      // o estado final do botão e da mensagem exibida.
+      } catch (err) { /* a requisicao original trata o retorno */ }
     }
 
     async function sendMessage() {
@@ -1156,19 +1275,30 @@
         formData.append('message', msg);
         formData.append('sessionId', currentChatSessionId);
         attachments.forEach(a => formData.append('files', a.file, a.fileName));
-        // Sem header Content-Type: o browser define o boundary multipart automaticamente.
+
         const res = await newclawFetch('/api/chat', { method: 'POST', body: formData });
-        showStatus('receiving', t('status_receiving'));
         const data = await res.json();
+
+        if (res.status === 202 && data.turnId) {
+          setPendingTurn(data.turnId);
+          startTurnPolling(data.turnId, currentChatSessionId);
+        } else if (data.error) {
+          hideStatus();
+          setSendBtnBusy(false);
+          currentChatSessionId = null;
+          addMsg('bot', uploadErrorText(data));
+        } else {
+          hideStatus();
+          setSendBtnBusy(false);
+          currentChatSessionId = null;
+          addMsg('bot', data.response || '...', mapServerAttachments(data.attachments));
+        }
+      } catch (err) {
         hideStatus();
-        const response = data.error ? uploadErrorText(data) : (data.response || '...');
-        addMsg('bot', response, mapServerAttachments(data.attachments));
-        speakText(response.replace(/```[\s\S]*?```/g,'(código)').replace(/[*#`_]/g,'').slice(0,500));
-      } catch (err) { hideStatus(); addMsg('bot', `⚠️ Falha: ${err.message}`); }
-      currentChatSessionId = null;
-      setSendBtnBusy(false); messageInput.focus();
-      // O turno pode ter parado justamente esperando autorização (goal em needs_auth): sem esta
-      // consulta, os botões só apareceriam ao recarregar a página.
+        setSendBtnBusy(false);
+        currentChatSessionId = null;
+        addMsg('bot', `⚠️ Falha: ${err.message}`);
+      }
       syncServerState();
     }
 

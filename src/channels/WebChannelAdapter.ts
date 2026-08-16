@@ -109,6 +109,46 @@ export class WebChannelAdapter implements ChannelAdapter {
     // buscar entregas assíncronas.
     private orphanedDeliveries: Map<string, NormalizedResponse[]> = new Map();
 
+    private outbox: Map<string, NormalizedResponse> = new Map();
+
+    public storeOutbox(turnId: string, response: NormalizedResponse): void {
+        this.outbox.set(turnId, response);
+    }
+
+    public consumeOutbox(turnId: string): NormalizedResponse | undefined {
+        const response = this.outbox.get(turnId);
+        if (response) {
+            this.outbox.delete(turnId);
+        }
+        return response;
+    }
+
+    private asyncTurns: Map<string, { chatId: string, attachments: ResponseAttachment[] }> = new Map();
+
+    public registerAsyncTurn(turnId: string, chatId: string): void {
+        this.asyncTurns.set(turnId, { chatId, attachments: [] });
+    }
+
+    /**
+     * S226: um turno fica registrado aqui desde o instante em que `POST /api/chat` é aceito
+     * (`registerAsyncTurn`, antes até da mensagem chegar ao GoalExtractor) até `send()` resolvê-lo
+     * (delete logo antes de `storeOutbox` — ver `send()`). Cobre exatamente a janela em que
+     * `activeTurns`/`GoalStore` ainda não têm nada rastreável para este turno (classificação em
+     * andamento, goal ainda não criado) — o sinal que faltava para `/api/chat/active` distinguir
+     * "recém-começou" de "não há nada acontecendo".
+     */
+    public hasPendingAsyncTurn(turnId: string): boolean {
+        return this.asyncTurns.has(turnId);
+    }
+
+    private findAsyncTurnByChatId(chatId: string): { chatId: string, attachments: ResponseAttachment[] } | undefined {
+        let match: { chatId: string, attachments: ResponseAttachment[] } | undefined;
+        for (const a of this.asyncTurns.values()) {
+            if (a.chatId === chatId) match = a;
+        }
+        return match;
+    }
+
     async start(): Promise<void> { /* sem conexão externa a iniciar */ }
 
     async stop(): Promise<void> {
@@ -117,6 +157,7 @@ export class WebChannelAdapter implements ChannelAdapter {
             p.reject(new Error('WebChannelAdapter stopped'));
         }
         this.pending.clear();
+        this.asyncTurns.clear();
         for (const [, t] of this.timedOutRequests) clearTimeout(t.cleanupTimer);
         this.timedOutRequests.clear();
         this.orphanedDeliveries.clear();
@@ -162,17 +203,39 @@ export class WebChannelAdapter implements ChannelAdapter {
 
     async send(response: NormalizedResponse, context: unknown): Promise<void> {
         const requestId = typeof context === 'string' ? context : String(context);
+        
+        // Fluxo Assíncrono (Incremento 2)
+        const a = this.asyncTurns.get(requestId);
+        if (a) {
+            this.asyncTurns.delete(requestId);
+            const withTurnAttachments: NormalizedResponse = a.attachments.length > 0
+                ? { ...response, attachments: [...(response.attachments ?? []), ...a.attachments] }
+                : response;
+            this.storeOutbox(requestId, this.mergeOrphaned(a.chatId, withTurnAttachments));
+            return;
+        }
+
+        // Fluxo Síncrono (Original / Auth-decision)
         const p = this.pending.get(requestId);
-        if (!p) {
+        if (p) {
+            clearTimeout(p.timer);
+            this.pending.delete(requestId);
+            const withTurnAttachments: NormalizedResponse = p.attachments.length > 0
+                ? { ...response, attachments: [...(response.attachments ?? []), ...p.attachments] }
+                : response;
+            p.resolve(this.mergeOrphaned(p.chatId, withTurnAttachments));
+            return;
+        }
+
+        // Se timeout do fluxo síncrono (orphaned deliveries)
+        const timedOut = this.timedOutRequests.get(requestId);
+        if (timedOut) {
             this.handleOrphanedSend(requestId, response);
             return;
         }
-        clearTimeout(p.timer);
-        this.pending.delete(requestId);
-        const withTurnAttachments: NormalizedResponse = p.attachments.length > 0
-            ? { ...response, attachments: [...(response.attachments ?? []), ...p.attachments] }
-            : response;
-        p.resolve(this.mergeOrphaned(p.chatId, withTurnAttachments));
+
+        // Caso 6: sem conexão HTTP original. A resposta ainda deve chegar à Outbox.
+        this.storeOutbox(requestId, response);
     }
 
     /**
@@ -252,7 +315,16 @@ export class WebChannelAdapter implements ChannelAdapter {
     /** Acumula um documento para entrega junto da resposta final de texto (ver nota de classe). */
     async sendDocument(chatId: string, buffer: Buffer, filename: string, _caption?: string): Promise<void> {
         const p = this.findPendingByChatId(chatId);
-        if (!p) {
+        if (p) {
+            p.attachments.push({ type: 'document', data: buffer, fileName: filename });
+            return;
+        }
+        
+        const a = this.findAsyncTurnByChatId(chatId);
+        if (a) {
+            a.attachments.push({ type: 'document', data: buffer, fileName: filename });
+            return;
+        }
             // Sessão do suplemento PowerPoint: mesmo sem HTTP vivo, o suplemento faz polling de
             // comandos (startCommandPolling em powerpoint.ts) — usa esse canal como entrega
             // assíncrona em vez de descartar. Cobre o caso de uma mensagem enfileirada atrás de
@@ -271,22 +343,26 @@ export class WebChannelAdapter implements ChannelAdapter {
             // descartar.
             this.queueOrphaned(chatId, { text: '', format: 'plain', attachments: [{ type: 'document', data: buffer, fileName: filename }] });
             log.info('send_document_queued_orphaned', `chatId=${chatId} filename=${filename} sem HTTP pendente — entrega adiada pra próxima mensagem da sessão`);
-            return;
-        }
-        p.attachments.push({ type: 'document', data: buffer, fileName: filename });
     }
 
     /** Acumula um áudio/voz para entrega junto da resposta final de texto (ver nota de classe). */
     async sendVoice(chatId: string, buffer: Buffer, filename: string = 'voice.ogg'): Promise<void> {
         const p = this.findPendingByChatId(chatId);
-        if (!p) {
-            // Mesma política de sendDocument (generalização, ver nota de classe): antes lançava
-            // exceção para evitar falso-sucesso, mas isso descartava o áudio pra sempre mesmo já
-            // pronto — agora fica em espera e é entregue na próxima mensagem da mesma sessão.
-            this.queueOrphaned(chatId, { text: '', format: 'plain', attachments: [{ type: 'audio', data: buffer, fileName: filename }] });
-            log.info('send_voice_queued_orphaned', `chatId=${chatId} filename=${filename} sem HTTP pendente — entrega adiada pra próxima mensagem da sessão`);
+        if (p) {
+            p.attachments.push({ type: 'audio', data: buffer, fileName: filename });
             return;
         }
-        p.attachments.push({ type: 'audio', data: buffer, fileName: filename });
+
+        const a = this.findAsyncTurnByChatId(chatId);
+        if (a) {
+            a.attachments.push({ type: 'audio', data: buffer, fileName: filename });
+            return;
+        }
+
+        // Mesma política de sendDocument (generalização, ver nota de classe): antes lançava
+        // exceção para evitar falso-sucesso, mas isso descartava o áudio pra sempre mesmo já
+        // pronto — agora fica em espera e é entregue na próxima mensagem da mesma sessão.
+        this.queueOrphaned(chatId, { text: '', format: 'plain', attachments: [{ type: 'audio', data: buffer, fileName: filename }] });
+        log.info('send_voice_queued_orphaned', `chatId=${chatId} filename=${filename} sem HTTP pendente — entrega adiada pra próxima mensagem da sessão`);
     }
 }

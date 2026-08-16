@@ -110,7 +110,13 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
         if (!baseUrl?.trim()) {
             return res.status(400).json({ success: false, error: 'baseUrl é obrigatório' });
         }
-        const url = String(baseUrl).trim().replace(/\/+$/, '');
+        // Sem regex para o trim de barras finais (CodeQL js/polynomial-redos): `/\/+$/` não é
+        // catastroficamente lento neste caso (âncora simples, sem grupos ambíguos), mas
+        // `baseUrl` é 100% controlado pelo cliente da rota — troca por um loop determinístico
+        // remove a classe de risco por completo em vez de argumentar que o regex específico é
+        // seguro hoje.
+        let url = String(baseUrl).trim();
+        while (url.endsWith('/')) url = url.slice(0, -1);
         if (!/^https?:\/\//i.test(url)) {
             return res.status(400).json({ success: false, error: 'baseUrl deve começar com http:// ou https://' });
         }

@@ -175,7 +175,17 @@ export function createChatRouter(ctx: DashboardContext): Router {
             }))
             : [];
 
-        res.json({ success: true, active, pendingAuth });
+        // S226: janela entre o 202 de POST /api/chat e o goal/turn existir em algo rastreável
+        // (activeTurns/GoalStore) — classificação (GoalExtractor/UnifiedIntentRouter) sozinha já
+        // leva alguns segundos, e até ela terminar `active` acima está corretamente vazio. Sem
+        // este campo, um polling que caia nessa janela conclui "terminou" antes de ter começado
+        // (incidente observado 12/08/2026: resposta computada em 13s pelo backend, nunca exibida
+        // — o polling desistiu do turnId nos primeiros ~2,5s). turnId é opcional e só informado
+        // pelo polling que já tem um turno em mãos (ver startTurnPolling no front, S227).
+        const turnId = typeof _req.query.turnId === 'string' ? _req.query.turnId : undefined;
+        const pending = !!(turnId && ctx.controller?.getWebAdapter().hasPendingAsyncTurn(turnId));
+
+        res.json({ success: true, active, pendingAuth, pending });
     });
 
     /**
@@ -295,28 +305,53 @@ export function createChatRouter(ctx: DashboardContext): Router {
                 metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
             };
 
-            // Mesmo pipeline usado por Telegram/Discord/WhatsApp/Signal: MessageBus enfileira
-            // por conversa, processa anexos (voice→whisper, photo/document→vision) e roda o
-            // AgentLoop/GoalOrchestrator. waitForResponse faz a ponte entre o fire-and-forget
-            // do MessageBus e o request/response HTTP desta rota. sessionId é passado para que
-            // send_document/send_audio (que só conhecem o chatId, não o requestId) consigam
-            // acumular anexos na requisição HTTP certa — ver WebChannelAdapter.
-            const responsePromise = webAdapter.waitForResponse(requestId, sessionId, AGENT_RESPONSE_TIMEOUT_MS);
-            await messageBus.processMessage(normalizedMsg);
-            const response = await responsePromise;
+            // Fluxo assíncrono (Incremento 2): O WebChannelAdapter não cria timer nem prende requisição HTTP.
+            webAdapter.registerAsyncTurn(requestId, sessionId);
 
-            const outAttachments = (response.attachments ?? []).map(serializeAttachment);
+            messageBus.processMessage(normalizedMsg).catch(err => {
+                console.error('processMessage_failed_async', err, 'Background processing failed for outbox flow');
+            });
 
-            res.json({
+            res.status(202).json({
                 success: true,
-                response: response.text,
-                sessionId,
-                options: response.options,
-                attachments: outAttachments.length > 0 ? outAttachments : undefined,
+                turnId: requestId,
+                sessionId
             });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });
         }
+    });
+
+    /**
+     * Incremento 2: GET /api/chat/outbox
+     * Endpoint determinístico para consultar a Outbox pelo turnId.
+     */
+    router.get('/outbox', async (req: Request, res: Response) => {
+        const turnId = req.query.turnId as string;
+        if (!turnId) {
+            return res.status(400).json({ success: false, error: 'turnId obrigatorio' });
+        }
+
+        if (!ctx.controller) {
+            return res.status(503).json({ success: false, error: 'Agente não inicializado' });
+        }
+
+        const webAdapter = ctx.controller.getWebAdapter();
+        const response = webAdapter.consumeOutbox(turnId);
+
+        if (!response) {
+            // A resposta não está pronta ou o turnId é inválido
+            return res.status(404).json({ success: false, error: 'not_ready_or_not_found' });
+        }
+
+        const outAttachments = (response.attachments ?? []).map(serializeAttachment);
+
+        res.json({
+            success: true,
+            response: response.text,
+            options: response.options,
+            attachments: outAttachments.length > 0 ? outAttachments : undefined,
+        });
     });
 
     return router;
