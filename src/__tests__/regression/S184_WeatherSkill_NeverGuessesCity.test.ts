@@ -50,8 +50,11 @@ const WEATHER = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'weathe
 
 /** Só o bloco de templates — comentários explicativos PODEM citar a cidade do incidente. */
 function blocoDeTemplates(): string {
-    const ini = LEARNER.indexOf('const skillDefs');
-    const fim = LEARNER.indexOf('const def = skillDefs[pattern];');
+    // S237 moveu os templates de dentro de createSkillFromPattern() para uma constante estática
+    // de classe (SkillLearner.SKILL_DEFS), compartilhada com tryCreateSkillProposal() — mesmos
+    // dados, marcadores de texto atualizados.
+    const ini = LEARNER.indexOf('private static readonly SKILL_DEFS');
+    const fim = LEARNER.indexOf('const def = SkillLearner.SKILL_DEFS[pattern];');
     return LEARNER.slice(ini, fim);
 }
 

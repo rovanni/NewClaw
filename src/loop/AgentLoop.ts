@@ -29,18 +29,20 @@ import { ANALYSIS_INTENT_PATTERN } from '../shared/analysisIntentPattern';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
 import { traceManager, ExecutionTrace } from '../core/ExecutionTrace';
-import { AgentFSM, AgentFSMEvent } from './AgentFSM';
+import { AgentFSM, AgentFSMEvent, type AgentFSMState } from './AgentFSM';
 import { FSMHistoryStore } from './FSMHistoryStore';
-import { ToolRegistry } from '../core/ToolRegistry';
+import { ToolRegistry, DIRECT_DELIVERABLE_TOOLS } from '../core/ToolRegistry';
 import { isReadOnlyExecCommand } from '../tools/exec_command';
 import { SkillLoader } from '../skills/SkillLoader';
 import { ModelProfile } from './ModelProfileRegistry';
 import { errorMessage } from '../shared/errors';
-import { ObserverValidator, ResponseCommit } from './ObserverValidator';
+import type { SemanticStatusEvent } from '../shared/SemanticStatus';
+import { ObserverValidator, ResponseCommit, EvidenceItem, GroundingState } from './ObserverValidator';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ProactiveRecovery } from './ProactiveRecovery';
 import type { WorkflowEngine } from './WorkflowEngine';
 import type { ContinuationContext, WorkflowStepResult, AuthDecision } from './WorkflowTypes';
+import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 
 import {
     ToolResult, ToolExecutor, LoopMetrics, ChannelContext,
@@ -373,6 +375,7 @@ export interface TurnState {
     cognitiveWorkspace: CognitiveWorkspace;
     lastToolExecution: { toolName: string; toolOutput: string; intent: string; category: string } | null;
     pendingObserverFeedback: string[];
+    semanticStatus?: SemanticStatusEvent;
 }
 
 export class AgentLoop {
@@ -783,10 +786,63 @@ export class AgentLoop {
         return /\bvou\s+\w+[^.!?]{0,40}\b(agora|neste\s+momento)\b/i.test(text);
     }
 
+    /**
+     * ADR-010 §4 — evidências candidatas do turno, derivadas de ExecutionTrace.steps. Substitui
+     * `lastToolExecution` (só a última execução) como fonte para C1: no incidente River
+     * (08/08/2026), a resposta falava de um ativo cujo dado veio de uma chamada ANTERIOR à
+     * última, e o validador comparou contra a execução errada.
+     *
+     * Pareamento estrito (ADR-010 §4, risco nomeado "Reality VR"): para cada `tool_result`, olha
+     * só a chamada de ferramenta IMEDIATAMENTE anterior. Se for da mesma ferramenta, usa os args
+     * dela; se não for, não sobe mais no histórico atrás — reaproveitar args de uma invocação
+     * NÃO-adjacente da mesma ferramenta descreveria uma evidência que não é aquela.
+     *
+     * Nunca lança: roda FORA do try que envolve a chamada ao juiz (ver commitResponse) — uma
+     * exceção aqui não pode escapar para o catch fail-open externo.
+     */
+    private static evidencesFromTrace(trace: ExecutionTrace): EvidenceItem[] {
+        const evidences: EvidenceItem[] = [];
+        const steps = trace.steps;
+        for (let i = 0; i < steps.length; i++) {
+            const step = steps[i];
+            if (step.type !== 'tool_result') continue;
+            const d = step.data as { tool: string; success?: boolean; output?: string; error?: string };
+            const output = d.success === false ? String(d.error ?? '') : String(d.output ?? '');
+            if (!output) continue;
+
+            let input: string | undefined;
+            for (let j = i - 1; j >= 0; j--) {
+                if (steps[j].type !== 'tool_call') continue;
+                const pd = steps[j].data as { tool: string; input?: unknown };
+                if (pd.tool === d.tool) {
+                    try { input = JSON.stringify(pd.input); } catch { /* evidencesFromTrace nunca lança — roda fora do try do gate */ }
+                }
+                break;
+            }
+
+            evidences.push({ id: `E${evidences.length + 1}`, tool: d.tool, input, output });
+        }
+        return evidences;
+    }
+
+    /**
+     * ADR-010 §10 — mensagem de bloqueio quando C1 (barreira de groundedness) não aprova a
+     * entrega. Deliberadamente genérica: a política de recuperação para REJECTED/NOT_EVALUABLE
+     * não está decidida pela ADR (§16 — "questões deliberadamente deixadas em aberto"). O único
+     * contrato aqui é negativo: o usuário nunca recebe `response` (a alegação não sustentada) nem
+     * o motivo interno do juiz (não é conteúdo para o usuário, é para log/auditoria).
+     */
+    private static groundingBlockedMessage(state: GroundingState): string {
+        if (state === 'UNVALIDATED') {
+            return 'Não consegui confirmar se a resposta é sustentada pelos dados obtidos nesta tentativa. Pode pedir de novo?';
+        }
+        return 'A resposta que eu ia enviar continha uma afirmação que os dados coletados não sustentam. Pode pedir de novo? Vou revisar antes de responder.';
+    }
+
     private async commitResponse(
         response: string,
         userText: string,
-        traceId: string,
+        trace: ExecutionTrace,
         conversationId: string,
         signal?: AbortSignal,
         toolFailureCount = 0,
@@ -893,7 +949,7 @@ export class AgentLoop {
             // seria inventar classificação sem base real — reason (texto livre, já rico)
             // e pattern legado continuam preservando essa informação sem distorção.
             this.reflectionMemory.record({
-                traceId,
+                traceId: trace.id,
                 conversationId,
                 userInput: userText,
                 intent: last.intent,
@@ -930,6 +986,40 @@ export class AgentLoop {
                 return `Já executei "${last.toolName}" e tenho os resultados, mas minha resposta anterior não os apresentou — só repetiu que ia buscar. Pode perguntar de novo? Desta vez uso os dados já coletados.`;
             }
 
+            // ADR-010 (C1) — barreira de groundedness: `ResponseCommit` acima valida alucinação
+            // de AÇÃO ("a ferramenta foi mesmo executada?"); este gate valida FIDELIDADE DO
+            // CONTEÚDO ("os números/fatos na resposta batem com o que a ferramenta devolveu?") —
+            // contrato irmão, não substituto (ADR-010 cabeçalho: "ResponseCommit NÃO foi
+            // alterado"). evidencesFromTrace roda fora deste try — não pode lançar (ver seu
+            // comentário) — e o try abaixo cobre só a preparação/chamada do juiz: se algo
+            // escapar ANTES do try interno de validateGrounding (ex: getBudgetAuxiliar), este
+            // catch bloqueia com UNVALIDATED em vez de deixar cair no catch externo fail-open.
+            const evidences = AgentLoop.evidencesFromTrace(trace);
+            try {
+                const g = await this.observer.validateGrounding(response, evidences, signal);
+                if (g.state !== 'VALIDATED' && g.state !== 'NOT_APPLICABLE') {
+                    log.warn(`[${this.ts()}] [GROUNDING] estado=${g.state} — bloqueando entrega (${g.reason})`);
+                    this.reflectionMemory.record({
+                        traceId: trace.id,
+                        conversationId,
+                        userInput: userText,
+                        intent: last.intent,
+                        toolUsed: last.toolName,
+                        toolOutput: last.toolOutput.slice(0, 1000),
+                        finalResponse: response.slice(0, 500),
+                        approved: false,
+                        reason: g.reason,
+                        confidence: 0,
+                        pattern: 'grounding_blocked',
+                        outcome: 'failure',
+                    });
+                    return AgentLoop.groundingBlockedMessage(g.state);
+                }
+            } catch (groundingErr) {
+                log.warn(`[${this.ts()}] [GROUNDING] falha antes do julgamento (${errorMessage(groundingErr)}) — bloqueando por segurança`);
+                return AgentLoop.groundingBlockedMessage('UNVALIDATED');
+            }
+
             return response;
         } catch (err) {
             log.warn(`[${this.ts()}] [COMMIT] commitResponse falhou (non-fatal): ${errorMessage(err)}`);
@@ -950,11 +1040,12 @@ export class AgentLoop {
      *
      * Só leitura de mapas em memória: pode ser chamado no polling do dashboard.
      */
-    public getActiveTurns(): Array<{ conversationId: string; elapsedMs: number }> {
+    public getActiveTurns(): Array<{ conversationId: string; elapsedMs: number; statusEvent?: SemanticStatusEvent }> {
         const now = Date.now();
         return [...this.activeTurns.keys()].map(conversationId => ({
             conversationId,
             elapsedMs: now - (this.turnStartTimes.get(conversationId) ?? now),
+            statusEvent: this.activeTurnStates.get(conversationId)?.semanticStatus,
         }));
     }
 
@@ -962,14 +1053,14 @@ export class AgentLoop {
         const ctrl = this.activeTurns.get(conversationId);
         if (ctrl) {
             ctrl.abort();
-            this.activeTurns.delete(conversationId);
-            this.turnStartTimes.delete(conversationId);
+            // removed: this.activeTurns.delete(conversationId);
+            // removed: this.turnStartTimes.delete
             log.info(`[${this.ts()}] [AGENT-FSM] Turn cancelled: ${conversationId}`);
         }
     }
 
-    public async process(conversationId: string, userText: string, _userId?: string, context?: ChannelContext): Promise<string | ProcessedResult> {
-        return this.run(conversationId, userText, conversationId, context);
+    public async process(conversationId: string, userText: string, _userId?: string, context?: ChannelContext, options?: { onStatus?: (event: SemanticStatusEvent) => void }): Promise<string | ProcessedResult> {
+        return this.run(conversationId, userText, conversationId, context, options);
     }
 
     /**
@@ -1009,23 +1100,33 @@ export class AgentLoop {
             .join('\n\n');
     }
 
-    public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext): Promise<string | ProcessedResult> {
+    public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext, options?: { onStatus?: (event: SemanticStatusEvent) => void }): Promise<string | ProcessedResult> {
         this.activeTurnStates.set(conversationId, {
             cognitiveWorkspace: new CognitiveWorkspace(),
             lastToolExecution: null,
             pendingObserverFeedback: [],
         });
         try {
-            return await this.runWithTools(conversationId, userText, 0, userId, context);
+            return await this.runWithTools(conversationId, userText, 0, userId, context, options);
         } finally {
-            // Cleanup: sempre executado mesmo em erros
-            this.activeTurnStates.delete(conversationId);
-            this.activeTurns.delete(conversationId);
-            this.turnStartTimes.delete(conversationId);
-            // Dispara cognição pós-turno (fire-and-forget — nunca bloqueia resposta)
-            if (this.postTurnCallback) {
-                setImmediate(this.postTurnCallback);
-            }
+            // S229: o comentário anterior aqui ("movido para clearActiveTurn via MessageBus para
+            // suportar Outbox") não corresponde ao código real — WebChannelAdapter/chat.ts (onde
+            // vive o Outbox: asyncTurns, outbox) nunca leem activeTurns/activeTurnStates/
+            // turnStartTimes; são mecanismos independentes. Sem esta chamada, nada nunca limpava
+            // esses mapas (clearActiveTurn() existia mas não era chamado em lugar nenhum),
+            // deixando o guard de turno concorrente preso até TURN_STALE_MS (7min) — causa raiz
+            // do incidente River #2 (ver S223) e da regressão em S101.
+            this.clearActiveTurn(conversationId);
+        }
+    }
+
+    public clearActiveTurn(conversationId: string): void {
+        this.activeTurnStates.delete(conversationId);
+        this.activeTurns.delete(conversationId);
+        this.turnStartTimes.delete(conversationId);
+        // Dispara cognição pós-turno (fire-and-forget — nunca bloqueia resposta)
+        if (this.postTurnCallback) {
+            setImmediate(this.postTurnCallback);
         }
     }
 
@@ -1374,7 +1475,7 @@ export class AgentLoop {
         traceManager.completeTrace(trace, 'completed', finalText);
         this.persistTrace(trace, 1, 'completed', finalText, channelContext);
 
-        return { text: await this.commitResponse(finalText, userText, trace.id, conversationId) };
+        return { text: await this.commitResponse(finalText, userText, trace, conversationId) };
     }
 
     /**
@@ -1633,7 +1734,7 @@ export class AgentLoop {
                 const deliveryResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile, turnSignal);
                 move('LLM_RESPONSE', { step: stepCount, phase: 'delivery', status: deliveryResponse.status });
 
-                if (deliveryResponse.status === 'cancelled') { move('CANCEL', { step: stepCount }); this.activeTurns.delete(conversationId); return { earlyReturn: true, result: { text: 'Operação cancelada.' } }; }
+                if (deliveryResponse.status === 'cancelled') { move('CANCEL', { step: stepCount }); /* removed: this.activeTurns.delete(conversationId); */ return { earlyReturn: true, result: { text: 'Operação cancelada.' } }; }
                 if (deliveryResponse.status === 'timeout' || deliveryResponse.status === 'error') break;
 
                 loopMessages.push({ role: 'assistant', content: deliveryResponse.content, toolCalls: deliveryResponse.toolCalls });
@@ -1717,12 +1818,41 @@ export class AgentLoop {
         maxSteps: number,
         toolFailureCount: number,
         move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+        requiresReasoning: boolean,
     ): Promise<string | ProcessedResult> {
         // Post-loop synthesis
         const executedToolsInLastStep = cycleHistory.length > 0;
         const hasGoodContent = lastBestContent && lastBestContent.length > 100;
 
         if (executedToolsInLastStep && !hasGoodContent) {
+            // Direct delivery bypass for single evidence provider tools (weather, crypto_analysis).
+            // DIRECT_DELIVERABLE_TOOLS só autoriza que a TOOL é capaz de produzir texto pronto —
+            // nunca que o TURNO dispensa interpretação. Essa segunda autoridade é
+            // `requiresReasoning`, decidida pelo UnifiedIntentRouter e apenas consumida aqui
+            // (parâmetro, sem recalcular/rechamar route() — ver campanha "Response Contract /
+            // Synthesis Authority", Sprint 8). Fonte única em `core/ToolRegistry.ts` — o mesmo
+            // conjunto passou a ser consultado por `GoalExecutionLoop.buildResult()` (14/08/2026).
+            const successfulExecutions = cycleHistory.filter(h => h.status === 'success');
+            const isSingleDirectDelivery =
+                successfulExecutions.length === 1 &&
+                DIRECT_DELIVERABLE_TOOLS.includes(successfulExecutions[0].tool) &&
+                requiresReasoning === false;
+
+            if (isSingleDirectDelivery) {
+                const targetTool = successfulExecutions[0].tool;
+                const turnState = this.getTurnState(conversationId);
+                const directOutput = turnState.lastToolExecution?.toolOutput
+                    ?? loopMessages.slice().reverse().find(m => m.role === 'tool')?.content;
+
+                if (typeof directOutput === 'string' && directOutput.trim().length > 0) {
+                    log.info(`[${this.ts()}] [SYNTHESIS-BYPASS] Direct delivery of ${targetTool} result (${directOutput.length} chars)`);
+                    move('FINAL_READY', { step: stepCount, reason: 'direct_deliverable_tool_bypass' });
+                    traceManager.completeTrace(trace, 'completed', directOutput);
+                    this.persistTrace(trace, stepCount, 'completed', directOutput, channelContext);
+                    return directOutput;
+                }
+            }
+
             log.info(`[${this.ts()}] [SYNTHESIS] Tools executed but response is stale/brief (${lastBestContent?.length || 0} chars). Generating post-action synthesis...`);
             move('SYNTHESIS_REQUIRED', { step: stepCount, tools: cycleHistory.length });
 
@@ -1767,7 +1897,14 @@ export class AgentLoop {
                     `ferramenta acima. Não estime, não arredonde de memória, não complete o que ` +
                     `faltou com valor plausível. Se o dado pedido não estiver nos resultados, diga ` +
                     `explicitamente que não foi obtido — uma resposta incompleta e honesta é ` +
-                    `correta; um valor inventado é um erro grave.`;
+                    `correta; um valor inventado é um erro grave.\n\n` +
+                    `REGRA ABSOLUTA — NÃO NARRE TENDÊNCIA SEM DADO HISTÓRICO: uma cotação/preço ` +
+                    `pontual (valor atual, sem série temporal) não sustenta frases como "vinha ` +
+                    `subindo", "fechou a semana em alta/baixa", "consolidando" ou qualquer leitura ` +
+                    `de tendência — isso é interpretação de mercado que o resultado da ferramenta ` +
+                    `não contém, mesmo que soe plausível. Apresente o valor puro. Só descreva ` +
+                    `tendência se o resultado da ferramenta tiver explicitamente múltiplos pontos ` +
+                    `no tempo (ex: variação 24h/7d já vinda pronta da tool).`;
                 if (failedTools.length === 0) return base + noFabrication;
                 return base + ` Para as fontes que falharam, explique brevemente o motivo. NÃO peça ao usuário para repetir ou especificar novamente o que já foi solicitado.` + noFabrication;
             })();
@@ -1823,7 +1960,7 @@ export class AgentLoop {
             move('LLM_RESPONSE', { step: stepCount, phase: 'synthesis', status: synthesisResponse.status });
             if (synthesisResponse.status === 'cancelled') {
                 move('CANCEL', { step: stepCount, phase: 'synthesis' });
-                this.activeTurns.delete(conversationId);
+                // removed: this.activeTurns.delete(conversationId);
                 return { text: 'Operação cancelada.' };
             }
             const rawSynthesis = synthesisResponse.content || '';
@@ -1844,7 +1981,7 @@ export class AgentLoop {
                 move('FINAL_READY', { step: stepCount, reason: 'synthesis' });
                 traceManager.completeTrace(trace, 'completed', synthesisText);
                 this.persistTrace(trace, stepCount, 'completed', synthesisText, channelContext);
-                return await this.commitResponse(synthesisText, userText, trace.id, conversationId, turnSignal, toolFailureCount);
+                return await this.commitResponse(synthesisText, userText, trace, conversationId, turnSignal, toolFailureCount);
             }
 
             log.warn(`[${this.ts()}] [SYNTHESIS] Failed to extract useful text (raw=${rawSynthesis.length}, extracted=${synthesisText?.length || 0})`);
@@ -1854,7 +1991,7 @@ export class AgentLoop {
             move('FINAL_READY', { step: stepCount, reason: 'last_best_content' });
             traceManager.completeTrace(trace, 'completed', lastBestContent);
             this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
-            return await this.commitResponse(lastBestContent, userText, trace.id, conversationId, turnSignal, toolFailureCount);
+            return await this.commitResponse(lastBestContent, userText, trace, conversationId, turnSignal, toolFailureCount);
         }
 
         log.info(`[${this.ts()}] [FALLBACK] Generating final synthesis...`);
@@ -1883,7 +2020,7 @@ export class AgentLoop {
         move('LLM_RESPONSE', { step: stepCount, phase: 'fallback', status: finalResponse.status });
         if (finalResponse.status === 'cancelled') {
             move('CANCEL', { step: stepCount, phase: 'fallback' });
-            this.activeTurns.delete(conversationId);
+            // removed: this.activeTurns.delete(conversationId);
             return { text: 'Operação cancelada.' };
         }
         const rawFinal = finalResponse.content || '';
@@ -1902,9 +2039,9 @@ export class AgentLoop {
         move('FINAL_READY', { step: stepCount, reason: stepCount >= maxSteps ? 'max_iterations' : 'fallback' });
         traceManager.completeTrace(trace, stepCount >= maxSteps ? 'max_iterations' : 'completed', text);
         this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text, channelContext);
-        this.activeTurns.delete(conversationId);
+        // removed: this.activeTurns.delete(conversationId);
 
-        return await this.commitResponse(text, userText, trace.id, conversationId, turnSignal, toolFailureCount);
+        return await this.commitResponse(text, userText, trace, conversationId, turnSignal, toolFailureCount);
     }
 
     /**
@@ -2905,13 +3042,21 @@ export class AgentLoop {
         }
 
         // ── Current-time fast path ──
-        // Deterministic direct facts (date/time) — Node.js has the clock, no LLM needed.
-        // Must check deterministicMatch explicitly — confirmation ('ok', 'sim') also matches direct+minimal+no-tools.
+        // Node.js já tem o relógio — não precisa de tool nem de mais interpretação quando o LLM
+        // (única autoridade semântica — ver UnifiedIntentRouter, campanha "Autoridade da
+        // Classificação") já declarou toolName='current_time' na própria classificação
+        // (buildClassificationMessages/llmClassify) — nunca decidido por regex aqui.
+        //
+        // requiresReasoning === false: sem este guard, "que horas são e me lembra de comprar
+        // leite às 15h" responderia só a hora, descartando silenciosamente a segunda instrução —
+        // é o LLM quem já precisa ter avaliado que o pedido inteiro é só a hora/data (mesmo
+        // toolBridge de buildClassificationMessages que rege 'weather'). intentDecision já foi
+        // calculado por setupTurn() — só consumido aqui, nunca recalculado.
         if (
             !hasPendingAuth &&
-            intentDecision.trace.deterministicMatch === 'current_time' &&
-            intentDecision.source === 'deterministic' &&
-            intentDecision.executionMode === 'direct'
+            intentDecision.toolName === 'current_time' &&
+            intentDecision.executionMode === 'direct' &&
+            intentDecision.requiresReasoning === false
         ) {
             const now = new Date();
             const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -2925,12 +3070,21 @@ export class AgentLoop {
         }
 
         // ── Tool-first fast path ──
-        // Deterministic tool intents (weather, etc.) bypass the cognition LLM loop entirely.
-        // Falls back to the full loop when the tool is missing or returns an error.
-        if (intentDecision.executionMode === 'tool' && intentDecision.toolName && intentDecision.confidence >= 0.85) {
+        // Tool declarada pelo próprio LLM na classificação (toolName/toolParams — ver
+        // UnifiedIntentRouter.llmClassify/buildClassificationMessages) bypassa o loop de
+        // cognição. Falls back ao loop completo quando a tool falta ou retorna erro.
+        //
+        // requiresReasoning === false é a autoridade adicional exigida pela campanha "Response
+        // Contract / Synthesis Authority": a allowlist FAST_PATH_ALLOWED (dentro de
+        // toolFirstFastPath) só autoriza que ESTA tool seja capaz de produzir texto pronto —
+        // nunca autoriza, sozinha, que o TURNO dispense interpretação. Quem decide isso é sempre
+        // o LLM (campanha "Autoridade da Classificação" — determinismo nunca mais decide
+        // toolName/requiresReasoning a partir do texto bruto). O valor já vem pronto do Router —
+        // não recalculado aqui.
+        if (intentDecision.executionMode === 'tool' && intentDecision.toolName && intentDecision.confidence >= 0.85 && intentDecision.requiresReasoning === false) {
             const fastResult = await this.toolFirstFastPath(conversationId, userText, intentDecision, channelContext, trace, move);
             if (fastResult !== null) {
-                this.activeTurns.delete(conversationId);
+                // removed: this.activeTurns.delete(conversationId);
                 return { action: 'earlyReturn', result: fastResult };
             }
             log.info(`[${this.ts()}] [FAST-PATH] Tool fast path fell back to cognition loop`);
@@ -3241,7 +3395,7 @@ export class AgentLoop {
 
     // ── Core execution loop ────────────────────────────────────────────────────
 
-    private async runWithTools(conversationId: string, userText: string, iteration: number, _userId?: string, channelContext?: ChannelContext): Promise<string | ProcessedResult> {
+    private async runWithTools(conversationId: string, userText: string, iteration: number, _userId?: string, channelContext?: ChannelContext, options?: { onStatus?: (event: SemanticStatusEvent) => void }): Promise<string | ProcessedResult> {
         const correlationId = channelContext?.correlationId;
         const turnLog = correlationId ? log.child({ cid: correlationId.slice(0, 8) }) : log;
 
@@ -3253,17 +3407,20 @@ export class AgentLoop {
             if (Date.now() - startedAt > this.TURN_STALE_MS) {
                 log.warn(`[${this.ts()}] [AGENT] Stale turn cleared for ${conversationId} (started ${Math.round((Date.now() - startedAt) / 1000)}s ago)`);
                 this.activeTurns.get(conversationId)?.abort();
-                this.activeTurns.delete(conversationId);
-                this.turnStartTimes.delete(conversationId);
+                // removed: this.activeTurns.delete(conversationId);
+                // removed: this.turnStartTimes.delete
             } else {
                 log.warn(`[${this.ts()}] [AGENT] Concurrent turn rejected for ${conversationId}`);
-                return 'Ainda estou processando sua mensagem anterior. Aguarde um momento.';
+                // S224: sinal estruturado (concurrentTurnRejected), não só o texto — quem chama
+                // (ex: GoalExecutionLoop) precisa distinguir isto de uma resposta real sem
+                // recorrer a comparação de string sobre prosa.
+                return { text: 'Ainda estou processando sua mensagem anterior. Aguarde um momento.', concurrentTurnRejected: true };
             }
         }
 
         turnLog.info('turn_start', `Cycle ${iteration + 1}`, { conversationId });
 
-        // status: 'success' | 'error' (execução normal de tool, ver ~linha 1973/2299/2641) |
+                // status: 'success' | 'error' (execução normal de tool, ver ~linha 1973/2299/2641) |
         // 'deferred' (send_document adiado para pós-validação — FIX E, ~linha 1835; conta como
         // já tratado para o DELIVERY-GUARD, ~linha 2564, mas nunca como um envio confirmado).
         const cycleHistory: Array<{ step: number; tool: string; input: string; status: string }> = [];
@@ -3322,6 +3479,33 @@ export class AgentLoop {
             log.info(`[${this.ts()}] [AGENT-FSM] ${transition.from} --${event}--> ${transition.to}`);
             traceManager.addStep(trace, 'fsm_transition', transition);
             this.fsmHistoryStore.record(transition, trace.id, conversationId);
+
+            const mapAgentFSMStateToSemanticStatus = (state: AgentFSMState): import('../shared/SemanticStatus').SemanticStatus => {
+                switch (state) {
+                    case 'IDLE': return 'idle';
+                    case 'THINKING': return 'thinking';
+                    case 'EXECUTING_TOOL': return 'executing_tool';
+                    case 'SYNTHESIZING': return 'synthesizing';
+                    case 'DONE': return 'done';
+                    case 'ERROR': return 'error';
+                    case 'TIMEOUT': return 'timeout';
+                    case 'CANCELLED': return 'cancelled';
+                }
+                const _exhaustiveCheck: never = state;
+                return _exhaustiveCheck;
+            };
+
+            const statusEvent: SemanticStatusEvent = {
+                status: mapAgentFSMStateToSemanticStatus(transition.to),
+                tool: meta?.tool as string | undefined
+            };
+            const currentState = this.activeTurnStates.get(conversationId);
+            if (currentState) {
+                currentState.semanticStatus = statusEvent;
+            }
+            if (options?.onStatus) {
+                options.onStatus(statusEvent);
+            }
         };
 
         try {
@@ -3421,7 +3605,7 @@ export class AgentLoop {
                 log.info(`[${this.ts()}] [AGENT-FSM] Turn cancelled at step ${stepCount}`);
                 move('CANCEL', { step: stepCount });
                 traceManager.completeTrace(trace, 'cancelled', 'Operação cancelada.');
-                this.activeTurns.delete(conversationId);
+                // removed: this.activeTurns.delete(conversationId);
                 return { text: 'Operação cancelada.' };
             }
 
@@ -3441,7 +3625,7 @@ export class AgentLoop {
                 }
                 traceManager.completeTrace(trace, 'timeout', timeoutMsg);
                 this.persistTrace(trace, stepCount, 'timeout', timeoutMsg, channelContext);
-                this.activeTurns.delete(conversationId);
+                // removed: this.activeTurns.delete(conversationId);
                 return timeoutMsg;
             }
 
@@ -3450,7 +3634,7 @@ export class AgentLoop {
                 move('FAIL', { step: stepCount, status: response.status });
                 traceManager.completeTrace(trace, 'error', response.fallbackMessage);
                 this.persistTrace(trace, stepCount, 'error', response.fallbackMessage || 'Error', channelContext);
-                this.activeTurns.delete(conversationId);
+                // removed: this.activeTurns.delete(conversationId);
                 return response.fallbackMessage || 'Erro ao processar sua mensagem.';
             }
 
@@ -3526,7 +3710,7 @@ export class AgentLoop {
                 move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : 'is_complete' });
                 traceManager.completeTrace(trace, 'completed', finalText);
                 this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                return { text: await this.commitResponse(finalText, userText, trace.id, conversationId, turnSignal, toolFailureCount) };
+                return { text: await this.commitResponse(finalText, userText, trace, conversationId, turnSignal, toolFailureCount) };
             }
 
             const nativeDispatchResult = await this.runNativeToolCallDispatch(
@@ -3557,7 +3741,7 @@ export class AgentLoop {
                     move('FINAL_READY', { step: stepCount, reason: 'no_tools_requested' });
                     traceManager.completeTrace(trace, 'completed', finalText);
                     this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                    return await this.commitResponse(finalText, userText, trace.id, conversationId, turnSignal, toolFailureCount);
+                    return await this.commitResponse(finalText, userText, trace, conversationId, turnSignal, toolFailureCount);
                 }
             }
 
@@ -3604,7 +3788,7 @@ export class AgentLoop {
         return await this.runSynthesisAndFallbackPhase(
             conversationId, userText, cycleHistory, loopMessages, lastBestContent, dedupAbort,
             dedupAbortTool, chatProfile, turnSignal, trace, channelContext, stepCount, maxSteps,
-            toolFailureCount, move,
+            toolFailureCount, move, intentDecision.requiresReasoning,
         );
 
         } catch (fsmError) {

@@ -53,6 +53,7 @@ interface GoalRow {
     allow_roadmap_adjustment: number;
     success_criteria: string | null;
     sent_artifacts: string | null;
+    plan_generation: number;
 }
 
 export class GoalStore {
@@ -112,7 +113,8 @@ export class GoalStore {
                 roadmap            TEXT,
                 current_milestone_index INTEGER NOT NULL DEFAULT 0,
                 allow_roadmap_adjustment INTEGER NOT NULL DEFAULT 1,
-                success_criteria       TEXT
+                success_criteria       TEXT,
+                plan_generation    INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_goals_session ON goals(session_key, status);
             CREATE INDEX IF NOT EXISTS idx_goals_conversation ON goals(conversation_id, status);
@@ -126,6 +128,10 @@ export class GoalStore {
         try { this.db.exec('ALTER TABLE goals ADD COLUMN allow_roadmap_adjustment INTEGER NOT NULL DEFAULT 1'); } catch { /* já existe */ }
         try { this.db.exec('ALTER TABLE goals ADD COLUMN success_criteria TEXT'); } catch { /* já existe */ }
         try { this.db.exec('ALTER TABLE goals ADD COLUMN sent_artifacts TEXT'); } catch { /* já existe */ }
+        // Sprint de Provenance: DEFAULT 0 preenche goals já existentes com geração única (0) —
+        // idêntico ao comportamento anterior a esta migração para eles (nenhuma distinção de
+        // geração existia, então tratar tudo como "a mesma geração" não muda nada observável).
+        try { this.db.exec('ALTER TABLE goals ADD COLUMN plan_generation INTEGER NOT NULL DEFAULT 0'); } catch { /* já existe */ }
         log.info('[GoalStore] schema ready');
     }
 
@@ -139,6 +145,12 @@ export class GoalStore {
             id: `goal_${now}_${rand}`,
             createdAt: now,
             updatedAt: now,
+            // Normaliza para o mesmo default (0) já gravado no INSERT abaixo — sem isso, o
+            // objeto em memória devolvido por create() divergia do que uma leitura subsequente
+            // via getById() (que sempre passa por rowToGoal()'s `row.plan_generation ?? 0`)
+            // devolveria, quebrando a invariante documentada em domainTypes.ts ("em runtime,
+            // todo Goal sempre tem um número real aqui, nunca undefined").
+            planGeneration: params.planGeneration ?? 0,
         };
 
         this.db.prepare(`
@@ -149,8 +161,8 @@ export class GoalStore {
                 requires_auth, authorization_scope, pending_txn_id,
                 created_at, updated_at, expires_at, completed_at,
                 is_construction, roadmap, current_milestone_index, allow_roadmap_adjustment,
-                success_criteria
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                success_criteria, plan_generation
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         `).run(
             goal.id,
             goal.sessionKey,
@@ -180,6 +192,7 @@ export class GoalStore {
             goal.currentMilestoneIndex ?? 0,
             goal.allowRoadmapAdjustment !== false ? 1 : 0,
             JSON.stringify(goal.successCriteria ?? []),
+            goal.planGeneration ?? 0,
         );
 
         log.info(`[GoalStore] created goal=${goal.id} session=${goal.sessionKey}`);
@@ -305,6 +318,7 @@ export class GoalStore {
         if (patch.allowRoadmapAdjustment !== undefined) { sets.push('allow_roadmap_adjustment = ?'); values.push(patch.allowRoadmapAdjustment ? 1 : 0); }
         if (patch.successCriteria !== undefined)       { sets.push('success_criteria = ?');       values.push(JSON.stringify(patch.successCriteria)); }
         if (patch.sentArtifacts !== undefined)         { sets.push('sent_artifacts = ?');         values.push(JSON.stringify(patch.sentArtifacts)); }
+        if (patch.planGeneration !== undefined)        { sets.push('plan_generation = ?');        values.push(patch.planGeneration); }
         if (patch.retryBudget !== undefined)       { sets.push('retry_budget = ?');       values.push(patch.retryBudget); }
         if (patch.replanBudget !== undefined)      { sets.push('replan_budget = ?');      values.push(patch.replanBudget); }
         if (patch.confidence !== undefined)        { sets.push('confidence = ?');         values.push(patch.confidence); }
@@ -510,7 +524,22 @@ export class GoalStore {
         this.db.transaction(() => {
             const goal = this.getById(goalId);
             if (!goal) return;
-            const idxFromEnd = [...goal.attempts].reverse().findIndex(a => a.planStepId === planStepId && predicate(a));
+            // Sprint de Provenance: uma correção retroativa (promote/downgrade) só pode acertar
+            // um attempt da geração VIGENTE do plano — sem isso, `planStepId` colidindo entre
+            // P1/P2 deixaria esta busca corrigir, por engano, um attempt de uma estratégia já
+            // abandonada.
+            //
+            // Fechamento de compatibilidade (achado da Validação Holística): `planGeneration
+            // === undefined` (attempt legado, anterior à Sprint de Provenance) significa
+            // semanticamente "geração 0", nunca "sempre elegível" — mesmo motivo e mesma
+            // correção aplicados a `buildResult()`/`resolveStepRefs()`. `?? 0` preserva goals
+            // legados nunca replanejados (0 contra 0) e fecha a exceção para os que replanejam.
+            const currentGeneration = goal.planGeneration ?? 0;
+            const idxFromEnd = [...goal.attempts].reverse().findIndex(a =>
+                a.planStepId === planStepId &&
+                (a.planGeneration ?? 0) === currentGeneration &&
+                predicate(a)
+            );
             if (idxFromEnd === -1) return;
             const realIdx = goal.attempts.length - 1 - idxFromEnd;
             const attempts = goal.attempts.map((a, i) => i === realIdx ? { ...a, ...patch } : a);
@@ -615,6 +644,7 @@ export class GoalStore {
             currentMilestoneIndex: row.current_milestone_index ?? 0,
             allowRoadmapAdjustment: row.allow_roadmap_adjustment === 1,
             successCriteria: this.parseJson<SuccessCriterion[]>(row.success_criteria, []),
+            planGeneration: row.plan_generation ?? 0,
             retryBudget: row.retry_budget,
             replanBudget: row.replan_budget,
             confidence: row.confidence,

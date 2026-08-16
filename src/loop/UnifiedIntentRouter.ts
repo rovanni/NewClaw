@@ -1,17 +1,34 @@
 /**
  * UnifiedIntentRouter — Autoridade cognitiva única para interpretação de tarefas
  *
- * Pipeline em 3 camadas:
- *   1. DeterministicGate — regex/keywords rápidos, zero latência
- *   2. SemanticRouting — classificação por intenção + contexto cognitivo
- *   3. StrategySelection — modo de execução, provider, budget
+ * Pipeline em 2 camadas (campanha "requiresReasoning → Authority", sprint "Autoridade da
+ * Classificação"):
+ *   1. SemanticRouting — LLM classifica intenção/categoria e, quando aplicável, já declara
+ *      toolName/toolParams e cognitiveLoad (requiresReasoning) — única autoridade semântica.
+ *      Fallback por keyword scoring (semanticRoute) só quando o LLM está indisponível.
+ *   2. StrategySelection — mapeia a categoria já decidida para executionMode/riskLevel/etc.
+ *      (mapeamento objetivo de categoria→consequência, nunca decide a categoria em si).
+ *
+ * DECISÃO ARQUITETURAL (não reversível sem nova decisão explícita): texto livre do usuário nunca
+ * mais é interpretado por regex/keyword para produzir uma categoria de intenção. O antigo
+ * "DeterministicGate" (regex/keywords contra a mensagem bruta, 10 regras fixas) foi removido —
+ * violava a Regra "Determinismo valida / LLM interpreta" mesmo quando o vocabulário reconhecido
+ * era fechado (ex.: "oi", "hora atual") — reconhecer que um texto SIGNIFICA uma saudação ainda é
+ * classificar intenção, não validar um fato estrutural. Precedente do próprio projeto para esta
+ * remoção: commit 539fb8c (23/05/2026) já retirou regras "ambíguas" do gate por este motivo;
+ * esta mudança generaliza o mesmo raciocínio às regras restantes.
+ *
+ * Fast Path continua existindo — agora autorizado pela decisão semântica do LLM (toolName +
+ * requiresReasoning=false) mais validação estrutural (`ToolRegistry`, `FAST_PATH_ALLOWED`,
+ * parâmetros resolvíveis), nunca por regex reconhecendo a mensagem. `classificationCache` (já
+ * existente, agora efetivamente lido por route()) preserva o custo de latência para textos
+ * repetidos, sem precisar de uma segunda chamada de LLM idêntica.
  *
  * Substitui (routing logic): SimpleDecisionEngine, routeIntent, ModelRouter.
  * Profile/provider selection permanece em ModelProfileRegistry, guiado por IntentDecision.modelCategory.
  */
 
 import { createLogger } from '../shared/AppLogger';
-import { keywordBoundaryMatches } from '../shared/keywordBoundary';
 import { boundedHash } from '../shared/boundedHash';
 import type { SkillLearner } from './SkillLearner';
 import type { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
@@ -113,257 +130,19 @@ export interface RoutingTrace {
     steps: Array<{ step: string; durationMs: number; result: string }>;
 }
 
-// ── Deterministic Gate Rules ───────────────────────────────────────────
-
-interface DeterministicRule {
-    id: string;
-    category: IntentCategory;
-    executionMode: ExecutionMode;
-    keywords: string[];
-    patterns: RegExp[];
-    confidence: number;
-    riskLevel: RiskLevel;
-    cognitiveLoad: CognitiveLoad;
-    requiresReasoning: boolean;
-    requiresTools: boolean;
-    requiresMemory: boolean;
-    requiresPlanning: boolean;
-    requiresStreaming: boolean;
-    modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution';
-    terminalAction: boolean;
-    toolName?: string;
-    toolParams?: (input: string) => Record<string, unknown>;
-    compoundAction?: (input: string) => { dataTool: string; dataParams: Record<string, unknown>; outputTool: string; outputParams: Record<string, unknown> };
-}
-
-const GREETING_PATTERN = /^(oi+|ol[aá]+|opa+|eai+|eae+|fala+|bom dia|boa tarde|boa noite|tudo bem|blz+|beleza+|tranquilo|obrigad[oa]?|valeu+|kk+|haha+|salve|coé?|hey|hi|hello|bye|tchau|flw|falou)[\s!.?]*$/i;
-const CONFIRMATION_PATTERN = /^(sim+|yes+|ok+|autorizado+|autorizar+|pode+|prosseguir+|manda bala+|faz isso+|executar+|rodar+|confirmo+|concordo+|positivo+|true|y)[\s!.?]*$/i;
-const REJECTION_PATTERN = /^(não+|nao+|no+|cancelar+|cancela+|parar+|para+|stop+|negativo+|abortar+|aborta+|false|n)[\s!.?]*$/i;
-
-const DESTRUCTIVE_KEYWORDS = [
-    'rm -rf', 'rm -r', 'del /', 'format', 'formatar',
-    'drop database', 'drop table', 'delete all', 'truncate',
-    'sudo rm', 'mkfs', 'shutdown', 'reboot'
-];
-
-const DETERMINISTIC_RULES: DeterministicRule[] = [
-    // ── Greetings (no tools, no reasoning) ──
-    {
-        id: 'greeting',
-        category: 'greeting',
-        executionMode: 'direct',
-        keywords: [],
-        patterns: [GREETING_PATTERN],
-        confidence: 0.97,
-        riskLevel: 'low',
-        cognitiveLoad: 'minimal',
-        requiresReasoning: false,
-        requiresTools: false,
-        requiresMemory: false,
-        requiresPlanning: false,
-        requiresStreaming: false,
-        modelCategory: 'light',
-        terminalAction: true,
-    },
-    {
-        id: 'confirmation',
-        category: 'confirmation',
-        executionMode: 'direct',
-        keywords: ['sim', 'autorizar', 'autorizado', 'pode', 'prosseguir', 'manda bala', 'ok'],
-        patterns: [CONFIRMATION_PATTERN],
-        confidence: 0.98,
-        riskLevel: 'low',
-        cognitiveLoad: 'minimal',
-        requiresReasoning: false,
-        requiresTools: false,
-        requiresMemory: false,
-        requiresPlanning: false,
-        requiresStreaming: false,
-        modelCategory: 'light',
-        terminalAction: true,
-    },
-    {
-        id: 'rejection',
-        category: 'rejection',
-        executionMode: 'direct',
-        keywords: ['não', 'nao', 'cancelar', 'abortar', 'parar'],
-        patterns: [REJECTION_PATTERN],
-        confidence: 0.98,
-        riskLevel: 'low',
-        cognitiveLoad: 'minimal',
-        requiresReasoning: false,
-        requiresTools: false,
-        requiresMemory: false,
-        requiresPlanning: false,
-        requiresStreaming: false,
-        modelCategory: 'light',
-        terminalAction: true,
-    },
-
-    // ── Destructive commands (HIGH RISK) ──
-    {
-        id: 'destructive',
-        category: 'system_operation',
-        executionMode: 'tool',
-        keywords: DESTRUCTIVE_KEYWORDS,
-        patterns: [],
-        confidence: 0.99,
-        riskLevel: 'high',
-        cognitiveLoad: 'normal',
-        requiresReasoning: true,
-        requiresTools: true,
-        requiresMemory: false,
-        requiresPlanning: true,
-        requiresStreaming: false,
-        modelCategory: 'execution',
-        terminalAction: false,
-        toolName: 'exec_command',
-        toolParams: (input: string) => ({ command: input }),
-    },
-
-    // ── Audio/TTS requests ──
-    {
-        id: 'audio_tts',
-        category: 'audio',
-        executionMode: 'hybrid',
-        keywords: ['enviar áudio', 'enviar audio', 'tts', 'voz', 'ouvir', 'narrar', 'converter em áudio', 'converter em audio', 'falar'],
-        patterns: [/^(por favor\s*)?(me\s*)?(gerar?\s*(um|uma)?\s*(áudio|audio|voz)|criar?\s*(um|uma)?\s*(áudio|audio|voz)|envi[ae]r?\s*(um|uma)?\s*(áudio|audio|voz)|falar?\s*(em)?\s*voz|narre|narrar)/i],
-        confidence: 0.90,
-        riskLevel: 'low',
-        cognitiveLoad: 'normal',
-        requiresReasoning: false,
-        requiresTools: true,
-        requiresMemory: false,
-        requiresPlanning: true,
-        requiresStreaming: false,
-        modelCategory: 'chat',
-        terminalAction: false,
-    },
-
-    // ── Memory operations ──
-    {
-        id: 'memory_write',
-        category: 'memory_operation',
-        executionMode: 'tool',
-        keywords: ['lembrar', 'lembre', 'memorizar', 'memorize', 'guardar', 'guarde', 'salvar na memória', 'salvar na memoria', 'adicionar nó', 'criar nó', 'conectar nó', 'anote', 'registre'],
-        patterns: [/(guarde|lembre|lembrete|memorize|anote|registre|adicionar|adiciona|guarda)\b/i],
-        confidence: 0.88,
-        riskLevel: 'low',
-        cognitiveLoad: 'minimal',
-        requiresReasoning: false,
-        requiresTools: true,
-        requiresMemory: true,
-        requiresPlanning: false,
-        requiresStreaming: false,
-        modelCategory: 'chat',
-        terminalAction: false,
-        toolName: 'memory_write',
-        toolParams: (input: string) => ({ action: 'create', id: `fact_${Date.now()}`, type: 'fact', name: input.slice(0, 50), content: input }),
-    },
-    {
-        id: 'memory_search',
-        category: 'memory_operation',
-        executionMode: 'hybrid',
-        keywords: ['buscar na memória', 'buscar na memoria', 'busca semântica', 'busca semantica', 'busca na memória', 'busca na memoria', 'o que você sabe', 'o que voce sabe', 'você lembra', 'voce lembra'],
-        // Palavras genéricas como 'busque', 'pesquise', 'procurar' foram removidas — são muito ambíguas
-        // e causam falso positivo em pedidos de dados externos (ex: "busque o preço do river").
-        // Apenas expressões explicitamente ligadas a memória/contexto interno devem disparar esta regra.
-        patterns: [/(o que (você|voce) (sabe|lembra|guardou|salvou)|buscar na mem[óo]ria|pesquisar na mem[óo]ria|busque?\s+na\s+mem[óo]ria|procurar na mem[óo]ria|busca (sem[aâ]ntica|na mem[óo]ria))/i],
-        confidence: 0.88,
-        riskLevel: 'low',
-        cognitiveLoad: 'minimal',
-        requiresReasoning: true,
-        requiresTools: true,
-        requiresMemory: true,
-        requiresPlanning: false,
-        requiresStreaming: false,
-        modelCategory: 'chat',
-        terminalAction: false,
-        toolName: 'memory_search',
-        toolParams: (input: string) => {
-            const query = input.replace(/^(o que (você|voce) (sabe|lembra)( sobre)?|buscar na mem[óo]ria|pesquisar|pesquise|procurar|busque|busca\s*(sem[aâ]ntica)?\s*(na\s*mem[óo]ria)?\s*(sobre)?)/i, '').trim() || input;
-            return { query };
-        },
-    },
-
-    // ── Shell/System commands ──
-    {
-        id: 'shell_command',
-        category: 'system_operation',
-        executionMode: 'tool',
-        keywords: ['executar comando', 'rodar comando', 'run command', 'terminal', 'shell', 'bash', 'ssh', 'instalar', 'install', 'pip install', 'npm install', 'apt', 'sudo'],
-        patterns: [/(executar comando|rodar comando|run command|terminal|shell|bash|instalar|pip install|npm install|apt)/i],
-        confidence: 0.85,
-        riskLevel: 'medium',
-        cognitiveLoad: 'normal',
-        requiresReasoning: false,
-        requiresTools: true,
-        requiresMemory: false,
-        requiresPlanning: true,
-        requiresStreaming: false,
-        modelCategory: 'execution',
-        terminalAction: false,
-        toolName: 'exec_command',
-        toolParams: (input: string) => ({ command: input }),
-    },
-
-    // ── Weather queries ──
-    {
-        id: 'weather_query',
-        category: 'information',
-        executionMode: 'tool',
-        keywords: [
-            'previsão do tempo', 'previsão de tempo', 'tempo hoje', 'clima hoje',
-            'clima amanhã', 'temperatura hoje', 'vai chover', 'está chovendo',
-            'como está o tempo', 'como esta o tempo', 'como tá o tempo',
-            'clima agora', 'tempo agora',
-        ],
-        patterns: [
-            /(previs[ãa]o\s*(do|de)\s*tempo|como\s+(est[áa]|t[áa])\s+o\s+(tempo|clima)|clima\s+(hoje|amanh[ãa]|agora)|tempo\s+(hoje|amanh[ãa]|agora)|temperatura\s+(atual|de\s+hoje|amanh[ãa])|vai\s+chover|est[áa]\s+chovendo|como\s+est[áa]\s+o\s+clima)/i,
-        ],
-        confidence: 0.93,
-        riskLevel: 'low',
-        cognitiveLoad: 'minimal',
-        requiresReasoning: false,
-        requiresTools: true,
-        requiresMemory: false,
-        requiresPlanning: false,
-        requiresStreaming: false,
-        modelCategory: 'light',
-        terminalAction: false,
-        toolName: 'weather',
-        toolParams: (input: string) => {
-            const cityMatch = input.match(/(?:em|de|para|n[ao])\s+([A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][a-záàãâéêíóõôúç]+(?:\s+[A-ZÁÀÃÂÉÊÍÓÕÔÚÇ][a-záàãâéêíóõôúç]+)*)/);
-            const city = cityMatch?.[1]?.trim();
-            return city ? { city } : {};
-        },
-    },
-
-    // ── Current time/date queries ──
-    {
-        id: 'current_time',
-        category: 'information',
-        executionMode: 'direct',
-        keywords: [
-            'que horas são', 'que horas sao', 'que hora é', 'que hora e',
-            'hora atual', 'horas agora', 'que dia é hoje', 'que dia e hoje',
-            'data de hoje', 'data atual', 'qual a data', 'qual o dia',
-        ],
-        patterns: [
-            /(que\s+hora[s]?\s+(s[ãa]o|[eé])|hora\s+atual|que\s+dia\s+[eé]\s+hoje|data\s+(de\s+hoje|atual)|qual\s+(a\s+data|o\s+dia))/i,
-        ],
-        confidence: 0.95,
-        riskLevel: 'low',
-        cognitiveLoad: 'minimal',
-        requiresReasoning: false,
-        requiresTools: false,
-        requiresMemory: false,
-        requiresPlanning: false,
-        requiresStreaming: false,
-        modelCategory: 'light',
-        terminalAction: false,
-    },
-];
+// ── Deterministic Gate (REMOVIDO) ───────────────────────────────────────
+//
+// Até esta sprint, existia aqui um array `DETERMINISTIC_RULES` (10 regras: greeting,
+// confirmation, rejection, destructive, audio_tts, memory_write, memory_search, shell_command,
+// weather_query, current_time) casado contra o texto bruto do usuário via regex/keyword em
+// `deterministicGate()`, ANTES de qualquer LLM rodar. Removido por violar "Determinismo valida /
+// LLM interpreta": reconhecer que um texto SIGNIFICA uma saudação, um pedido de clima ou uma
+// confirmação é classificação de intenção — mesmo quando o vocabulário reconhecido é fechado
+// (ex.: "oi", "hora atual") — não é validação de um fato estrutural. Ver header do arquivo.
+//
+// A verificação de comando destrutivo real (`isDestructiveCommand`, `shared/destructiveCommandPatterns.ts`)
+// nunca dependeu desta camada — roda no momento da execução (`exec_command.ts`/`ssh_exec.ts`),
+// sobre o comando resolvido, incondicionalmente. Removê-la daqui não reduz a segurança real.
 
 // ── Semantic categories (used when no deterministic match) ──────────
 
@@ -527,6 +306,19 @@ export function buildClassificationMessages(input: string, context?: RouterConte
 - destructive: deleting files/databases, formatting disks, dangerous system commands
 - conversation: general chat, opinions, follow-ups, ambiguous requests`;
 
+    // Ponte para Fast Path: campos opcionais além de category/cognitiveLoad/confidence. A
+    // autoridade sobre "isto pode ser respondido direto, sem mais interpretação" é sempre sua —
+    // determinismo só valida depois (tool existe, parâmetro resolvível, allowlist de formato).
+    // Só preencha quando o pedido inteiro é satisfeito por essa única capacidade — nunca quando
+    // houver comparação, resumo, análise ou qualquer instrução adicional junto.
+    const toolBridge = `
+Known simple capabilities (only set "toolName" when the ENTIRE request is nothing more than this — never when it also asks for comparison, summary, analysis, or any other instruction):
+- "weather": current/today's weather for a city. toolParams: {"city": "<city name>"} if a city is named, or {} if not (a default will be resolved separately).
+- "current_time": user is asking only for the current date/time, nothing else. toolParams: {} (no parameters).
+If the request needs any interpretation beyond one of these, omit "toolName" entirely.`;
+
+    const jsonSchema = `{"category": "<category>", "cognitiveLoad": "minimal|normal|deep", "confidence": 0.0, "toolName": "<weather|current_time, or omit>", "toolParams": {}}`;
+
     const recentMessages = resolveClassificationWindow(input, context);
     const lastAssistantMessage = extractLastAssistantMessage(recentMessages);
 
@@ -534,7 +326,7 @@ export function buildClassificationMessages(input: string, context?: RouterConte
         // Sem histórico disponível (primeira mensagem da sessão, ou sessão sem turnos recentes) —
         // comportamento idêntico ao original: classifica a mensagem isolada.
         return [
-            { role: 'system', content: `You are an intent classifier. Classify the user message into exactly one category.\n\n${baseCategories}\n\nRespond with ONLY valid JSON, no other text:\n{"category": "<category>", "cognitiveLoad": "minimal|normal|deep", "confidence": 0.0}` },
+            { role: 'system', content: `You are an intent classifier. Classify the user message into exactly one category.\n\n${baseCategories}\n${toolBridge}\n\nRespond with ONLY valid JSON, no other text:\n${jsonSchema}` },
             { role: 'user', content: input },
         ];
     }
@@ -542,10 +334,11 @@ export function buildClassificationMessages(input: string, context?: RouterConte
     const systemContent = `You are an intent classifier. Classifique a intenção da mensagem atual do usuário considerando a conversa recente. A última resposta do assistente é o antecedente mais imediato, mas use o histórico para detectar mudança de assunto, referência, confirmação, rejeição, dúvida, adiamento ou continuação.
 
 ${baseCategories}
+${toolBridge}
 
 ${lastAssistantMessage ? `A última resposta real do assistente nesta conversa foi:\n"""${lastAssistantMessage.slice(0, 500)}"""\n` : ''}
 Respond with ONLY valid JSON, no other text:
-{"category": "<category>", "cognitiveLoad": "minimal|normal|deep", "confidence": 0.0}`;
+${jsonSchema}`;
 
     return [
         { role: 'system', content: systemContent },
@@ -568,10 +361,19 @@ export class UnifiedIntentRouter {
     }
 
     /**
-     * Route a user input through the 3-layer pipeline.
-     * Layer 1: deterministic gate (regex, zero latency) for unambiguous cases.
-     * Layer 2: LLM classification for everything else (falls back to keyword scoring if no provider).
-     * Layer 3: strategy selection (sync).
+     * Route a user input through o pipeline.
+     *
+     * Autoridade semântica é sempre o LLM (`llmClassify`, com fallback por keyword scoring
+     * só quando o provider está indisponível — `semanticRoute`, degradação, não uma segunda
+     * autoridade). Determinismo entra em dois lugares, nenhum deles decidindo intenção:
+     *   1. Cache lookup (abaixo) — reaproveita uma decisão que o LLM JÁ tomou para o mesmo texto
+     *      normalizado (+ mesma janela de contexto), evitando repetir a chamada, não substituindo-a.
+     *   2. `strategySelection()` — mapeia a categoria já decidida para executionMode/riskLevel/etc.
+     *      (consequência objetiva de uma categoria, nunca a escolha da categoria em si).
+     *
+     * Campanha "requiresReasoning → Authority", sprint "Autoridade da Classificação": o antigo
+     * Layer 1 (`deterministicGate`, regex/keyword contra texto bruto) foi removido — ver header
+     * do arquivo.
      */
     async route(input: string, context?: RouterContext): Promise<IntentDecision> {
         const startTime = Date.now();
@@ -582,18 +384,18 @@ export class UnifiedIntentRouter {
             steps: [],
         };
 
-        // ── Layer 1: Deterministic Gate ──
-        const detStart = Date.now();
-        const deterministicMatch = this.deterministicGate(input);
-        trace.steps.push({ step: 'deterministic_gate', durationMs: Date.now() - detStart, result: deterministicMatch ? deterministicMatch.id : 'no_match' });
-
-        if (deterministicMatch) {
-            const decision = this.buildDecisionFromRule(deterministicMatch, input, 'deterministic', trace, startTime);
-            trace.deterministicMatch = deterministicMatch.id;
-            log.info(`[UNIFIED-ROUTER] Deterministic: ${deterministicMatch.id} → ${deterministicMatch.category} (confidence: ${decision.confidence})`);
-            // Gate determinístico nunca usa contexto (mensagem exata/ancorada, sem ambiguidade
-            // a resolver) — chave de cache sem contexto é segura aqui.
-            return this.cacheAndTrace(input, this.enrichWithSkillContext(input, decision));
+        // ── Cache: reaproveita uma classificação do LLM já feita para este texto (+ contexto) ──
+        const cacheStart = Date.now();
+        const cached = this.classificationCache.get(this.buildCacheKey(input, context));
+        if (cached && (Date.now() - cached.timestamp) < this.CACHE_TTL) {
+            // cached.decision carrega o próprio trace (de quando foi classificada de verdade) —
+            // devolvê-lo cru omitiria que ESTA chamada específica foi resolvida por cache. Anexa
+            // o passo sem descartar o histórico original.
+            const cacheTrace: RoutingTrace = {
+                ...cached.decision.trace,
+                steps: [...cached.decision.trace.steps, { step: 'cache_hit', durationMs: Date.now() - cacheStart, result: cached.decision.category }],
+            };
+            return { ...cached.decision, trace: cacheTrace };
         }
 
         // ── Layer 2: LLM Classification (with keyword fallback) ──
@@ -632,9 +434,11 @@ export class UnifiedIntentRouter {
     }
 
     /**
-     * Synchronous route — uses cache + deterministic gate + keyword fallback only.
-     * Does NOT call LLM (não pode: chatWithFallback é assíncrono). Use para contextos onde
-     * await não está disponível.
+     * Synchronous route — uses cache + keyword fallback only. Does NOT call LLM (não pode:
+     * chatWithFallback é assíncrono) e, por isso, NUNCA é autoridade semântica primária — só
+     * serve contextos síncronos como degradação (`semanticRoute`, mesmo fallback de Camada 2b
+     * usado por `route()` quando o LLM falha), nunca como um segundo caminho de classificação
+     * por regex contra o texto bruto (esse caminho foi removido — ver header do arquivo).
      *
      * Contrato quanto a `context.recentMessages`: aceito na assinatura (mesmo RouterContext de
      * route()) mas NUNCA lido aqui — routeSync nunca chama llmClassify, então não há como usar
@@ -656,73 +460,21 @@ export class UnifiedIntentRouter {
         const startTime = Date.now();
         const trace: RoutingTrace = { inputHash: this.hashInput(input), inputLength: input.length, totalTimeMs: 0, steps: [] };
 
-        const deterministicMatch = this.deterministicGate(input);
-        if (deterministicMatch) {
-            const decision = this.buildDecisionFromRule(deterministicMatch, input, 'deterministic', trace, startTime);
-            return this.cacheAndTrace(input, this.enrichWithSkillContext(input, decision));
-        }
-
         const semanticResult = this.semanticRoute(input);
         const decision = this.strategySelection(input, semanticResult, context);
         const enriched = this.enrichWithSkillContext(input, { ...decision, source: 'fallback' as const, trace: { ...trace, totalTimeMs: Date.now() - startTime } });
         return this.cacheAndTrace(input, enriched);
     }
 
-    // ── Layer 1: Deterministic Gate ─────────────────────────────────────
+    // ── Layer 2a: LLM Classification (única autoridade semântica) ─────────
 
-    private deterministicGate(input: string): DeterministicRule | null {
-        const normalized = input.toLowerCase().trim();
+    // TOOL_PARAM_SCHEMA: apenas as tools cujo formato de output já é "pronto para apresentação"
+    // (mesma responsabilidade que FAST_PATH_ALLOWED, em AgentLoop.ts, já valida de forma
+    // estrutural depois — esta lista aqui é só o que o LLM tem permissão de DECLARAR, a
+    // autorização final ainda passa pela allowlist e checagens de AgentLoop).
+    private static readonly KNOWN_TOOL_NAMES = new Set(['weather', 'current_time']);
 
-        for (const rule of DETERMINISTIC_RULES) {
-            // Check patterns first (more precise)
-            for (const pattern of rule.patterns) {
-                if (pattern.test(normalized)) {
-                    return rule;
-                }
-            }
-            // Check keywords
-            for (const keyword of rule.keywords) {
-                const kw = keyword.toLowerCase();
-                const found = normalized.includes(kw);
-                if (!found) continue;
-
-                // For high-specificity rules (crypto, shell), keyword match is sufficient
-                // For low-specificity rules (confirmation, rejection, greeting),
-                // require pattern match OR exact match to avoid false positives on common words like "sim"
-                if (rule.category === 'confirmation' || rule.category === 'rejection' || rule.category === 'greeting') {
-                    // Only match if it's the exact word or matches the pattern
-                    if (normalized === kw || rule.patterns.some(p => p.test(normalized))) {
-                        return rule;
-                    }
-                    continue;
-                }
-
-                // High-risk rules (destructive) require word-boundary match to avoid false positives.
-                // e.g. 'format' must not match inside 'informatica' or 'informativo'. Consolidado em
-                // shared/keywordBoundary.ts (allowPluralS:false preserva o comportamento ESTRITO
-                // original — nenhuma exceção de plural, igual ao regex inline que existia aqui).
-                if (rule.riskLevel === 'high') {
-                    if (!keywordBoundaryMatches(normalized, kw, { allowPluralS: false })) continue;
-                }
-
-                // Short keywords (≤4 chars) like 'ada', 'sol', 'eth', 'btc' require word-boundary
-                // to avoid matching substrings in common words (e.g. 'ada' in 'cada').
-                if (kw.length <= 4) {
-                    if (!keywordBoundaryMatches(normalized, kw, { allowPluralS: false })) continue;
-                }
-
-                if (rule.confidence >= 0.85 || rule.keywords.length < 10) {
-                    return rule;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    // ── Layer 2a: LLM Classification ─────────────────────────────────────
-
-    private async llmClassify(input: string, context?: RouterContext): Promise<{ category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number }> {
+    private async llmClassify(input: string, context?: RouterContext): Promise<{ category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number; toolName?: string; toolParams?: Record<string, unknown> }> {
         const messages: LLMMessage[] = buildClassificationMessages(input, context);
 
         try {
@@ -734,12 +486,16 @@ export class UnifiedIntentRouter {
             let raw = result.content.trim().replace(/^```json\s*|\s*```$/g, '');
             const jsonMatch = raw.match(/\{[\s\S]*"category"[\s\S]*\}/);
             if (jsonMatch) raw = jsonMatch[0];
-            const parsed = JSON.parse(raw) as { category?: string; cognitiveLoad?: string; confidence?: number };
+            const parsed = JSON.parse(raw) as { category?: string; cognitiveLoad?: string; confidence?: number; toolName?: string; toolParams?: Record<string, unknown> };
 
             const VALID_CATEGORIES: IntentCategory[] = ['greeting', 'conversation', 'information', 'creation', 'system_operation', 'data_analysis', 'memory_operation', 'audio', 'vision', 'destructive', 'confirmation', 'rejection'];
             const category = VALID_CATEGORIES.includes(parsed.category as IntentCategory) ? (parsed.category as IntentCategory) : 'conversation';
             const cognitiveLoad = (['minimal', 'normal', 'deep'].includes(parsed.cognitiveLoad ?? '') ? parsed.cognitiveLoad : 'normal') as CognitiveLoad;
             const confidence = typeof parsed.confidence === 'number' ? Math.min(Math.max(parsed.confidence, 0.5), 0.95) : 0.7;
+            // toolName só é aceito se pertencer ao conjunto conhecido — validação estrutural de
+            // um valor que o LLM declarou, não uma segunda interpretação do texto do usuário.
+            const toolName = typeof parsed.toolName === 'string' && UnifiedIntentRouter.KNOWN_TOOL_NAMES.has(parsed.toolName) ? parsed.toolName : undefined;
+            const toolParams = toolName && parsed.toolParams && typeof parsed.toolParams === 'object' ? parsed.toolParams : undefined;
 
             const MODEL_CATEGORY_MAP: Record<IntentCategory, 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'> = {
                 greeting: 'light', confirmation: 'light', rejection: 'light', conversation: 'chat',
@@ -748,17 +504,18 @@ export class UnifiedIntentRouter {
                 audio: 'chat', vision: 'vision', destructive: 'execution',
             };
 
-            log.info(`[UNIFIED-ROUTER] LLM classified: "${input.slice(0, 60)}" → ${category} (confidence: ${confidence})`);
-            return { category, modelCategory: MODEL_CATEGORY_MAP[category], cognitiveLoad, requiresReasoning: cognitiveLoad !== 'minimal', confidence };
+            log.info(`[UNIFIED-ROUTER] LLM classified: "${input.slice(0, 60)}" → ${category}${toolName ? ` (tool=${toolName})` : ''} (confidence: ${confidence})`);
+            return { category, modelCategory: MODEL_CATEGORY_MAP[category], cognitiveLoad, requiresReasoning: cognitiveLoad !== 'minimal', confidence, toolName, toolParams };
         } catch (err) {
             log.warn(`[UNIFIED-ROUTER] LLM classification failed, falling back to keyword routing: ${err}`);
             return this.semanticRoute(input);
         }
     }
 
-    // ── Layer 2b: Keyword Semantic Routing (fallback) ─────────────────────
+    // ── Layer 2b: Keyword Semantic Routing (fallback só para indisponibilidade do provider —
+    // nunca é uma segunda autoridade concorrente, nunca declara toolName) ─────────────────
 
-    private semanticRoute(input: string): { category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number } {
+    private semanticRoute(input: string): { category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number; toolName?: string; toolParams?: Record<string, unknown> } {
         const lower = input.toLowerCase().trim();
 
         // Score each semantic rule
@@ -801,10 +558,10 @@ export class UnifiedIntentRouter {
 
     private strategySelection(
         _input: string,
-        semantic: { category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number },
+        semantic: { category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number; toolName?: string; toolParams?: Record<string, unknown> },
         _context?: RouterContext
     ): IntentDecision {
-        const { category, modelCategory, cognitiveLoad, requiresReasoning, confidence } = semantic;
+        const { category, modelCategory, cognitiveLoad, requiresReasoning, confidence, toolName, toolParams } = semantic;
 
         // Determine execution mode based on category and cognitive load
         let executionMode: ExecutionMode;
@@ -939,6 +696,14 @@ export class UnifiedIntentRouter {
             requiresPlanning = true;
         }
 
+        // Override: "current_time" não é uma tool real (não existe em ToolRegistry) — é o
+        // marcador que o LLM usa para dizer "só a hora/data atual, nada mais" (ver toolBridge em
+        // buildClassificationMessages). O earlyReturn correspondente em AgentLoop.ts não chama
+        // nenhuma tool nem LLM — precisa de executionMode='direct', como current_time sempre teve.
+        if (toolName === 'current_time') {
+            executionMode = 'direct';
+        }
+
         return {
             intent: category,
             category,
@@ -953,61 +718,10 @@ export class UnifiedIntentRouter {
             riskLevel,
             cognitiveLoad,
             terminalAction,
+            toolName,
+            toolParams,
             source: 'semantic',
             trace: {} as RoutingTrace, // Will be filled by route()
-        };
-    }
-
-    // ── Helper: Build decision from deterministic rule ────────────────────
-
-    private buildDecisionFromRule(
-        rule: DeterministicRule,
-        input: string,
-        source: 'deterministic' | 'semantic' | 'fallback',
-        trace: RoutingTrace,
-        startTime: number
-    ): IntentDecision {
-        // Handle compound actions (e.g., crypto + audio)
-        let compoundAction: IntentDecision['compoundAction'] = undefined;
-        if (rule.compoundAction) {
-            compoundAction = rule.compoundAction(input);
-        }
-
-        // Handle audio that needs data first
-        if (rule.id === 'audio_tts') {
-            const topic = input
-                .replace(/^(por favor\s*)?(me\s*)?(gere|gerar|gera|cria|criar|envia|enviar|envie|manda|mandar|mande|fale|falar|narre|narrar)\s*(um|uma)?\s*(áudio|audio|voz|som)?\s*(sobre|com|do|da|de|para)?\s*/i, '')
-                .trim();
-            const needsData = /(valor|pre[cç]o|cota[cç][aã]o|quanto|bitcoin|btc|ethereum|eth|solana|sol|cardano|ada|xrp|dogecoin|doge|river|cripto|crypto|clima|tempo|temperatura)/i.test(topic);
-            if (needsData) {
-                compoundAction = {
-                    dataTool: 'web_search',
-                    dataParams: { query: topic },
-                    outputTool: 'send_audio',
-                    outputParams: { text: topic },
-                };
-            }
-        }
-
-        return {
-            intent: rule.category,
-            category: rule.category,
-            confidence: rule.confidence,
-            executionMode: rule.executionMode,
-            requiresReasoning: rule.requiresReasoning,
-            requiresTools: rule.requiresTools,
-            requiresMemory: rule.requiresMemory,
-            requiresPlanning: rule.requiresPlanning,
-            requiresStreaming: rule.requiresStreaming,
-            modelCategory: rule.modelCategory,
-            riskLevel: rule.riskLevel,
-            cognitiveLoad: rule.cognitiveLoad,
-            terminalAction: rule.terminalAction,
-            toolName: rule.toolName,
-            toolParams: rule.toolParams ? rule.toolParams(input) : undefined,
-            compoundAction,
-            source,
-            trace: { ...trace, totalTimeMs: Date.now() - startTime },
         };
     }
 
@@ -1089,7 +803,7 @@ export class UnifiedIntentRouter {
 
     /**
      * Get model category for a given input (used by ModelProfileRegistry for profile resolution).
-     * Uses sync routing (cache + deterministic + keyword fallback) — no LLM call.
+     * Uses sync routing (cache + keyword fallback) — no LLM call.
      */
     getModelCategory(input: string): 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution' {
         return this.routeSync(input).modelCategory;
@@ -1101,13 +815,6 @@ export class UnifiedIntentRouter {
      */
     getDecision(input: string): IntentDecision {
         return this.routeSync(input);
-    }
-
-    /**
-     * Check if input is a greeting (fast path).
-     */
-    isGreeting(input: string): boolean {
-        return GREETING_PATTERN.test(input.trim()) || input.trim().length <= 3;
     }
 
     /**

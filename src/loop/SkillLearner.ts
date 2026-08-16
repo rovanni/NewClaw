@@ -86,6 +86,83 @@ interface ToolPatternStat {
 }
 
 export class SkillLearner {
+    /**
+     * Definições curadas para padrões conhecidos. Nome/gatilho/descrição/prompt/tool_sequence
+     * dependem SÓ do pattern — a tool que disparou o registro (`item.tool_name` em
+     * tryCreateSkillProposal) nunca entra no conteúdo para estes 7 padrões (ver createSkillFromPattern).
+     * Precisa ser estático e compartilhado (não recriado a cada chamada) porque
+     * tryCreateSkillProposal usa as CHAVES deste objeto para decidir a identidade de dedup.
+     */
+    private static readonly SKILL_DEFS: Record<string, { name: string; trigger: string; description: string; prompt: string; toolSeq: string[] }> = {
+        crypto_price: {
+            name: 'Preço de Cripto',
+            trigger: '(pre[cç]o|cota[cç][aã]o|valor|quanto).*(bitcoin|btc|ethereum|eth|solana|sol|river|doge|ada|xrp)',
+            description: 'Busca preço de criptomoedas via web_search com instrução focada.',
+            prompt: 'Sempre que perguntarem sobre preço de criptomoedas, use web_search com {"query": "preço NOMEMOEDA"}. Formate o resultado com preço em USD, variação 24h e market cap.',
+            toolSeq: ['web_search']
+        },
+        crypto_query: {
+            name: 'Consulta Cripto',
+            trigger: '(bitcoin|btc|ethereum|eth|solana|sol|river|doge|ada|xrp)',
+            description: 'Consulta geral sobre criptomoedas com formato consistente.',
+            prompt: 'Use web_search para buscar dados de criptomoedas. Sempre inclua preço, variação 24h e volume.',
+            toolSeq: ['web_search']
+        },
+        // NÃO nomear cidade aqui. Um template embarcado no código vale para TODA instalação
+        // do NewClaw, no mundo inteiro — uma cidade escrita neste prompt vira o palpite
+        // padrão de quem mora em qualquer outro lugar.
+        //
+        // Evidência real (03/08/2026, 05:02): à pergunta "Vai chover hoje, qual a temperatura
+        // para hoje?", o log mostra o caminho rápido acertando —
+        // `[FAST-PATH] No city in intent or memory — falling back to cognition loop` — e logo
+        // depois a ferramenta sendo chamada com a cidade escrita neste prompt. A tool exige
+        // `city` e recusa sem ela; quem inventou a cidade foi o modelo, seguindo este texto.
+        // O usuário mora em outro estado e recebeu o clima de uma cidade distante como fato.
+        //
+        // É a diretriz "Nunca Adivinhar" aplicada onde ela mais importa: diante de um dado
+        // não observado, perguntar — nunca inferir um valor plausível e apresentá-lo como
+        // verdade. E `weather`, não `web_search`: a própria descrição da ferramenta diz
+        // "Sempre use esta ferramenta para clima — NÃO use web_search para isso".
+        weather: {
+            name: 'Previsão do Tempo',
+            trigger: '(clima|tempo|temperatura|previs[aã]o|chovendo)',
+            description: 'Consulta o tempo pela ferramenta dedicada, usando a cidade que o usuário informou.',
+            prompt: 'Use a ferramenta weather com a cidade que o usuário informou nesta mensagem, '
+                + 'ou com a que já for conhecida da conversa/memória. '
+                + 'Se nenhuma cidade for conhecida, PERGUNTE ao usuário de qual cidade ele quer a '
+                + 'previsão — nunca escolha uma cidade por conta própria.',
+            toolSeq: ['weather']
+        },
+        audio_request: {
+            name: 'Pedido de Áudio',
+            trigger: '(gerar|criar|enviar|manda|mande|fale).*(áudio|audio|voz|tts)',
+            description: 'Gera áudio TTS com conteúdo relevante em vez de repetir o pedido do usuário.',
+            prompt: 'Quando pedirem áudio, NUNCA repita o pedido. Gere o CONTEÚDO REAL para TTS. Use send_audio com {"text": "conteúdo gerado pelo assistente"}. Para áudio com dados, busque dados primeiro.',
+            toolSeq: ['send_audio']
+        },
+        memory_write: {
+            name: 'Salvar Memória',
+            trigger: '(lembre|lembrete|guarde|salve|memorize|anote)',
+            description: 'Salva informações na memória persistente com formato mais consistente.',
+            prompt: 'Use memory_write com {"action":"create","id":"fact_TIMESTAMP","type":"fact","name":"resumo","content":"texto completo"} para salvar.',
+            toolSeq: ['memory_write']
+        },
+        memory_search: {
+            name: 'Buscar Memória',
+            trigger: '(lembra|o que voc[eê] sabe|buscar na mem)',
+            description: 'Busca informações na memória semântica.',
+            prompt: 'Use memory_search com {"query": "termo de busca"} para encontrar informações salvas.',
+            toolSeq: ['memory_search']
+        },
+        write: {
+            name: 'Operações de Arquivo',
+            trigger: '(arquivo|html|css|site|p[aá]gina)',
+            description: 'Cria ou sobrescreve arquivos no workspace.',
+            prompt: 'Use write com {"path": "caminho/arquivo.html", "content": "conteudo"} para criar arquivos.',
+            toolSeq: ['write']
+        }
+    };
+
     private db: Database.Database;
     private skillsDir: string;
     private patternRecordCount = 0;
@@ -148,6 +225,75 @@ export class SkillLearner {
 
         this.cleanupCorruptedSkills();
         this.migrateSkillsWithHardcodedCity();
+        this.cleanupDuplicateKnownPatternProposals();
+    }
+
+    /**
+     * Remove propostas duplicadas de padrões CONHECIDOS já gravadas no banco antes desta correção.
+     *
+     * Por que uma migração e não só o fix em tryCreateSkillProposal: as linhas duplicadas
+     * ("Consulta Cripto (memory_admin)", "(read)", "(write)"...) já existem em instalações rodando
+     * — corrigir só a criação de propostas novas resolve o futuro, mas deixa o /config de quem já
+     * está em produção poluído para sempre. Mesmo raciocínio de migrateSkillsWithHardcodedCity().
+     *
+     * Escopo: só `status = 'proposed'` e só `source_pattern` presente em SKILL_DEFS — skills
+     * ATIVAS nunca tiveram esse problema (o operador só aprova uma vez) e padrões desconhecidos
+     * legitimamente variam de conteúdo por tool, não são duplicatas. Mantém 1 linha por
+     * source_pattern (a de maior prioridade/hits/mais antiga — conteúdo é idêntico entre as
+     * candidatas, então a escolha de qual sobra é só um critério determinístico de desempate).
+     *
+     * Origem: relato do operador em /config (15/08/2026) — mesma skill reaparecendo várias vezes
+     * com sufixos de tool diferentes, sem indicação de que já havia sido sugerida/ativa.
+     */
+    private cleanupDuplicateKnownPatternProposals(): void {
+        const knownPatterns = Object.keys(SkillLearner.SKILL_DEFS);
+        if (knownPatterns.length === 0) return;
+
+        const placeholders = knownPatterns.map(() => '?').join(',');
+
+        // Passo 1: um padrão conhecido já ATIVO não precisa de proposta nenhuma — a proposta seria
+        // idêntica ao que já está no ar. Sem este passo, uma instância com "Consulta Cripto" ativa
+        // ficava com "Consulta Cripto (read)" ainda proposta ao lado dela: a MESMA duplicata que
+        // motivou o fix, só que sobrevivendo à primeira versão da migração (que só deduplicava
+        // entre propostas, nunca comparava contra o que já estava ativo). Achado ao inspecionar o
+        // banco de produção logo após o primeiro deploy deste fix (15/08/2026).
+        const resultVsAtiva = this.db.prepare(`
+            DELETE FROM auto_skills
+            WHERE status = 'proposed'
+              AND source_pattern IN (${placeholders})
+              AND source_pattern IN (
+                  SELECT source_pattern FROM auto_skills
+                  WHERE status = 'active' AND source_pattern IN (${placeholders})
+              )
+        `).run(...knownPatterns, ...knownPatterns);
+
+        // Passo 2: entre as propostas restantes (padrões ainda sem skill ativa), mantém 1 por
+        // source_pattern — o caso original do fix (várias tools incidentais propondo o mesmo
+        // padrão em paralelo).
+        const resultEntreDuplicatas = this.db.prepare(`
+            DELETE FROM auto_skills
+            WHERE status = 'proposed'
+              AND source_pattern IN (${placeholders})
+              AND id NOT IN (
+                  SELECT id FROM (
+                      SELECT id, ROW_NUMBER() OVER (
+                          PARTITION BY source_pattern
+                          ORDER BY priority DESC, hits DESC, created_at ASC
+                      ) AS rn
+                      FROM auto_skills
+                      WHERE status = 'proposed' AND source_pattern IN (${placeholders})
+                  )
+                  WHERE rn = 1
+              )
+        `).run(...knownPatterns, ...knownPatterns);
+
+        const total = resultVsAtiva.changes + resultEntreDuplicatas.changes;
+        if (total > 0) {
+            log.info(
+                `Removidas ${total} propostas duplicadas de skills conhecidas `
+                + `(${resultVsAtiva.changes} já cobertas por skill ativa, ${resultEntreDuplicatas.changes} duplicadas entre si)`
+            );
+        }
     }
 
     /**
@@ -596,9 +742,24 @@ export class SkillLearner {
         ).all() as PatternRow[];
 
         for (const item of patterns) {
-            const alreadyExists = this.db.prepare(
-                'SELECT id FROM auto_skills WHERE source_pattern = ? AND source_tool = ? LIMIT 1'
-            ).get(item.pattern, item.tool_name) as { id: string } | undefined;
+            // Para padrões CONHECIDOS (em SKILL_DEFS), nome/gatilho/descrição/prompt/tool_sequence
+            // são função só do pattern — a tool que disparou o registro nunca entra no conteúdo
+            // (ver createSkillFromPattern: `def?.toolSeq ?? [toolName]`, o `def.toolSeq` sempre
+            // vence quando existe). Manter `source_tool` na chave de dedup fazia CADA tool
+            // incidental que passasse do limiar (write, read, memory_search, memory_admin...)
+            // gerar uma proposta NOVA com conteúdo idêntico, só disambiguada por sufixo — é o que
+            // o operador via em /config como "Consulta Cripto (memory_admin)", "(read)", "(write)"
+            // repetidos. Padrões desconhecidos (fora de SKILL_DEFS) continuam chaveados por
+            // (pattern, tool): ali a tool MUDA o prompt/toolSeq gerado, então são propostas
+            // legitimamente distintas.
+            const isKnownPattern = Object.prototype.hasOwnProperty.call(SkillLearner.SKILL_DEFS, item.pattern);
+            const alreadyExists = isKnownPattern
+                ? this.db.prepare(
+                    'SELECT id FROM auto_skills WHERE source_pattern = ? LIMIT 1'
+                  ).get(item.pattern) as { id: string } | undefined
+                : this.db.prepare(
+                    'SELECT id FROM auto_skills WHERE source_pattern = ? AND source_tool = ? LIMIT 1'
+                  ).get(item.pattern, item.tool_name) as { id: string } | undefined;
 
             if (alreadyExists) continue;
 
@@ -669,77 +830,7 @@ export class SkillLearner {
      * so learning is never blocked by the absence of a pre-defined entry.
      */
     private createSkillFromPattern(pattern: string, toolName: string, successCount: number): Skill {
-        const skillDefs: Record<string, { name: string; trigger: string; description: string; prompt: string; toolSeq: string[] }> = {
-            crypto_price: {
-                name: 'Preço de Cripto',
-                trigger: '(pre[cç]o|cota[cç][aã]o|valor|quanto).*(bitcoin|btc|ethereum|eth|solana|sol|river|doge|ada|xrp)',
-                description: 'Busca preço de criptomoedas via web_search com instrução focada.',
-                prompt: 'Sempre que perguntarem sobre preço de criptomoedas, use web_search com {"query": "preço NOMEMOEDA"}. Formate o resultado com preço em USD, variação 24h e market cap.',
-                toolSeq: ['web_search']
-            },
-            crypto_query: {
-                name: 'Consulta Cripto',
-                trigger: '(bitcoin|btc|ethereum|eth|solana|sol|river|doge|ada|xrp)',
-                description: 'Consulta geral sobre criptomoedas com formato consistente.',
-                prompt: 'Use web_search para buscar dados de criptomoedas. Sempre inclua preço, variação 24h e volume.',
-                toolSeq: ['web_search']
-            },
-            // NÃO nomear cidade aqui. Um template embarcado no código vale para TODA instalação
-            // do NewClaw, no mundo inteiro — uma cidade escrita neste prompt vira o palpite
-            // padrão de quem mora em qualquer outro lugar.
-            //
-            // Evidência real (03/08/2026, 05:02): à pergunta "Vai chover hoje, qual a temperatura
-            // para hoje?", o log mostra o caminho rápido acertando —
-            // `[FAST-PATH] No city in intent or memory — falling back to cognition loop` — e logo
-            // depois a ferramenta sendo chamada com a cidade escrita neste prompt. A tool exige
-            // `city` e recusa sem ela; quem inventou a cidade foi o modelo, seguindo este texto.
-            // O usuário mora em outro estado e recebeu o clima de uma cidade distante como fato.
-            //
-            // É a diretriz "Nunca Adivinhar" aplicada onde ela mais importa: diante de um dado
-            // não observado, perguntar — nunca inferir um valor plausível e apresentá-lo como
-            // verdade. E `weather`, não `web_search`: a própria descrição da ferramenta diz
-            // "Sempre use esta ferramenta para clima — NÃO use web_search para isso".
-            weather: {
-                name: 'Previsão do Tempo',
-                trigger: '(clima|tempo|temperatura|previs[aã]o|chovendo)',
-                description: 'Consulta o tempo pela ferramenta dedicada, usando a cidade que o usuário informou.',
-                prompt: 'Use a ferramenta weather com a cidade que o usuário informou nesta mensagem, '
-                    + 'ou com a que já for conhecida da conversa/memória. '
-                    + 'Se nenhuma cidade for conhecida, PERGUNTE ao usuário de qual cidade ele quer a '
-                    + 'previsão — nunca escolha uma cidade por conta própria.',
-                toolSeq: ['weather']
-            },
-            audio_request: {
-                name: 'Pedido de Áudio',
-                trigger: '(gerar|criar|enviar|manda|mande|fale).*(áudio|audio|voz|tts)',
-                description: 'Gera áudio TTS com conteúdo relevante em vez de repetir o pedido do usuário.',
-                prompt: 'Quando pedirem áudio, NUNCA repita o pedido. Gere o CONTEÚDO REAL para TTS. Use send_audio com {"text": "conteúdo gerado pelo assistente"}. Para áudio com dados, busque dados primeiro.',
-                toolSeq: ['send_audio']
-            },
-            memory_write: {
-                name: 'Salvar Memória',
-                trigger: '(lembre|lembrete|guarde|salve|memorize|anote)',
-                description: 'Salva informações na memória persistente com formato mais consistente.',
-                prompt: 'Use memory_write com {"action":"create","id":"fact_TIMESTAMP","type":"fact","name":"resumo","content":"texto completo"} para salvar.',
-                toolSeq: ['memory_write']
-            },
-            memory_search: {
-                name: 'Buscar Memória',
-                trigger: '(lembra|o que voc[eê] sabe|buscar na mem)',
-                description: 'Busca informações na memória semântica.',
-                prompt: 'Use memory_search com {"query": "termo de busca"} para encontrar informações salvas.',
-                toolSeq: ['memory_search']
-            },
-            write: {
-                name: 'Operações de Arquivo',
-                trigger: '(arquivo|html|css|site|p[aá]gina)',
-                description: 'Cria ou sobrescreve arquivos no workspace.',
-                prompt: 'Use write com {"path": "caminho/arquivo.html", "content": "conteudo"} para criar arquivos.',
-                toolSeq: ['write']
-            }
-        };
-
-        const def = skillDefs[pattern];
+        const def = SkillLearner.SKILL_DEFS[pattern];
 
         // Generic template for patterns not yet in skillDefs — learning is never blocked
         const name = def?.name ?? pattern.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -752,7 +843,13 @@ export class SkillLearner {
         const toolSeq = def?.toolSeq ?? [toolName];
 
         return {
-            id: `skill_${pattern}_${Date.now()}`,
+            // Inclui toolName e um sufixo aleatório, não só Date.now(): tryCreateSkillProposal()
+            // itera SINCRONAMENTE sobre todos os padrões maduros numa mesma chamada — quando 2+
+            // amadurecem juntos (cenário real já registrado no S185: 5 combinações crypto_query/
+            // write maduras ao mesmo tempo), dois INSERTs caem no mesmo milissegundo e colidem em
+            // PRIMARY KEY, perdendo uma proposta em silêncio (capturado só pelo catch genérico de
+            // recordPattern). Achado ao rodar S237 na suíte completa (mais rápida que isolada).
+            id: `skill_${pattern}_${toolName}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             name,
             trigger,
             description,

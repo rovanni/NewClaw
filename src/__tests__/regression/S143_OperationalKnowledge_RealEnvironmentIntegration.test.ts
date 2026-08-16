@@ -103,13 +103,18 @@ function makeAttempt(over: Partial<GoalAttempt>): GoalAttempt {
  *  captura as mensagens realmente montadas em vez de checar texto-fonte do arquivo. */
 function makeCapturingProviderFactory(responseJson: object): { factory: ProviderFactory; capturedMessages: LLMMessage[][] } {
     const capturedMessages: LLMMessage[][] = [];
+    const chat = async (messages: LLMMessage[]) => {
+        capturedMessages.push(messages);
+        return { content: JSON.stringify(responseJson) };
+    };
     const factory = {
-        getProviderWithModel: () => ({
-            chat: async (messages: LLMMessage[]) => {
-                capturedMessages.push(messages);
-                return { content: JSON.stringify(responseJson) };
-            },
-        }),
+        getProviderWithModel: () => ({ chat }),
+        // GoalPlanner.callPlannerLLM() passou a chamar chatWithFallback (S222) em vez de
+        // getProviderWithModel() direto — o fake precisa responder pelos dois caminhos.
+        chatWithFallback: async (messages: LLMMessage[]) => {
+            const r = await chat(messages);
+            return { status: 'success', content: r.content, attempts: [] };
+        },
     } as unknown as ProviderFactory;
     return { factory, capturedMessages };
 }

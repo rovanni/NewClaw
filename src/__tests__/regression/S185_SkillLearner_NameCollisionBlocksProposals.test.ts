@@ -29,6 +29,17 @@
  * REGRESSÃO SE: o guarda de nome voltar a descartar sem desambiguar; ou se voltar a sair em
  * silêncio quando descartar de verdade.
  *
+ * ATUALIZAÇÃO (15/08/2026, ver S237): a desambiguação por sufixo `(tool)` aqui validada resolveu
+ * o descarte mudo, mas criou um efeito colateral diferente — para os padrões CONHECIDOS de
+ * SKILL_DEFS, nome/gatilho/descrição/prompt/tool_sequence são função só do `pattern` (a tool nunca
+ * entra no conteúdo), então propor uma skill por `(pattern, tool)` gerava N propostas com
+ * conteúdo IDÊNTICO, só diferindo pelo sufixo — relatado pelo operador em /config como a mesma
+ * skill reaparecendo várias vezes. S237 corrigiu a identidade de dedup para `pattern` sozinho
+ * quando o padrão é conhecido (mantendo `(pattern, tool)` para os desconhecidos, onde a tool
+ * ainda muda o conteúdo). A simulação em S185-4 abaixo foi atualizada para refletir essa regra —
+ * o mecanismo de desambiguação por nome continua existindo e testado (S185-1/2/3/5), só deixou de
+ * ser exercitado pelos padrões conhecidos porque agora eles nem chegam a colidir.
+ *
  * Execução: npx ts-node src/__tests__/regression/S185_SkillLearner_NameCollisionBlocksProposals.test.ts
  */
 
@@ -80,13 +91,16 @@ console.log('\n=== S185-3 — a identidade real continua sendo (pattern, tool) =
     assert(idx > 0 && idxNome > idx, 'e continua rodando ANTES do guarda de nome');
 }
 
-console.log('\n=== S185-4 — reprodução: o cenário real deixa de bloquear ===');
+console.log('\n=== S185-4 — reprodução: o cenário real deixa de bloquear (regra pós-S237) ===');
 {
-    // Reproduz a lógica de nomeação/deduplicação com os dados medidos na instância.
+    // Reproduz a lógica de nomeação/deduplicação com os dados medidos na instância, já com a
+    // identidade de dedup corrigida pelo S237: padrão conhecido → chave é só `pattern` (o
+    // conteúdo não varia por tool, então não há razão para propor mais de uma vez); padrão
+    // desconhecido → chave continua `(pattern, tool)`, porque ali a tool muda o prompt gerado.
+    const CONHECIDOS = new Set(['crypto_query', 'write', 'weather']);
     const existentes = new Map<string, string>(); // nome → id
-    const porIdentidade = new Set<string>();      // pattern|tool
+    const porIdentidade = new Set<string>();      // chave de dedup efetiva
 
-    // O nome vem SÓ do pattern — é essa a origem da colisão.
     const nomeDoTemplate = (pattern: string) => ({
         crypto_query: 'Consulta Cripto',
         write: 'Operações de Arquivo',
@@ -94,32 +108,39 @@ console.log('\n=== S185-4 — reprodução: o cenário real deixa de bloquear ==
     } as Record<string, string>)[pattern] ?? pattern;
 
     const propor = (pattern: string, tool: string): 'criada' | 'ja-existe' | 'descartada' => {
-        if (porIdentidade.has(`${pattern}|${tool}`)) return 'ja-existe';
+        const chave = CONHECIDOS.has(pattern) ? pattern : `${pattern}|${tool}`;
+        if (porIdentidade.has(chave)) return 'ja-existe';
         let nome = nomeDoTemplate(pattern);
         if (existentes.has(nome)) {
             nome = `${nome} (${tool})`;
             if (existentes.has(nome)) return 'descartada';
         }
-        existentes.set(nome, `${pattern}|${tool}`);
-        porIdentidade.add(`${pattern}|${tool}`);
+        existentes.set(nome, chave);
+        porIdentidade.add(chave);
         return 'criada';
     };
 
-    assert(propor('crypto_query', 'exec_command') === 'criada', 'a primeira do pattern é criada (era o único caso que funcionava)');
-    assert(propor('crypto_query', 'read') === 'criada', 'crypto_query→read (367 sucessos) agora é proposta — antes era descartada');
-    assert(propor('crypto_query', 'write') === 'criada', 'crypto_query→write (169 sucessos) idem');
-    assert(propor('crypto_query', 'web_search') === 'criada', 'crypto_query→web_search (96 sucessos) idem');
+    assert(propor('crypto_query', 'exec_command') === 'criada', 'a primeira do pattern é criada');
+    // crypto_query é padrão CONHECIDO: read/write/web_search não abrem propostas novas — o
+    // conteúdo seria idêntico ao de crypto_query→exec_command, só o sufixo mudaria. É exatamente
+    // essa repetição que o operador reportou em /config.
+    assert(propor('crypto_query', 'read') === 'ja-existe', 'crypto_query→read não duplica a proposta já criada para o mesmo pattern (S237)');
+    assert(propor('crypto_query', 'write') === 'ja-existe', 'crypto_query→write idem');
+    assert(propor('crypto_query', 'web_search') === 'ja-existe', 'crypto_query→web_search idem');
     assert(propor('write', 'exec_command') === 'criada', 'outro pattern segue independente');
-    assert(propor('write', 'read') === 'criada', 'write→read (225 sucessos) agora é proposta');
+    assert(propor('write', 'read') === 'ja-existe', 'write→read também não duplica — write é padrão conhecido');
 
-    // O guarda continua fazendo o trabalho dele: a MESMA identidade não vira duas skills.
-    assert(propor('crypto_query', 'read') === 'ja-existe', 'repetir pattern+tool não duplica');
+    // Um padrão DESCONHECIDO (fora de SKILL_DEFS) continua propondo uma vez por tool — ali o
+    // conteúdo realmente muda (prompt/tool_sequence citam a tool).
+    assert(propor('novo_padrao_customizado', 'exec_command') === 'criada', 'padrão desconhecido: primeira tool cria');
+    assert(propor('novo_padrao_customizado', 'read') === 'criada', 'padrão desconhecido: segunda tool também cria — conteúdo é diferente');
+    assert(propor('novo_padrao_customizado', 'read') === 'ja-existe', 'padrão desconhecido: repetir a MESMA tool não duplica');
 
     const nomes = [...existentes.keys()];
     assert(new Set(nomes).size === nomes.length, 'todos os nomes finais são únicos', nomes);
     assert(
-        nomes.includes('Consulta Cripto') && nomes.includes('Consulta Cripto (read)'),
-        'a desambiguação é legível para quem lê a lista no painel',
+        nomes.includes('Consulta Cripto') && !nomes.includes('Consulta Cripto (read)'),
+        'crypto_query não gera "Consulta Cripto (read)" — a duplicata relatada pelo operador deixou de existir',
         nomes,
     );
 }

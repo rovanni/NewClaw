@@ -62,7 +62,7 @@ function makeLoop(agentLoopStub: unknown) {
     } as any;
     const providerFactory = { chatWithFallback: async () => ({ status: 'success', content: '{"success":true}' }) } as any;
     const loop = new GoalExecutionLoop(
-        agentLoopStub as any,
+        { clearActiveTurn: () => {}, ...(agentLoopStub as object) } as any,
         goalStore,
         fakePlanner,
         { record: () => {}, buildContextHint: () => '', findHardConstraints: () => [] } as any,

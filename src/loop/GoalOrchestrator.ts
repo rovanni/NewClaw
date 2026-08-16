@@ -17,7 +17,9 @@
 import { createLogger } from '../shared/AppLogger';
 import { AgentLoop, ProcessedResult } from './AgentLoop';
 import { GoalStore } from './GoalStore';
+import type { SemanticStatusEvent } from '../shared/SemanticStatus';
 import type { Goal } from './GoalTypes';
+import type { IntentCategory } from '../shared/domainTypes';
 import { GoalExtractor } from './GoalExtractor';
 import { GoalPlanner } from './GoalPlanner';
 import { GoalExecutionLoop } from './GoalExecutionLoop';
@@ -137,7 +139,8 @@ export class GoalOrchestrator {
         message: string,
         userId: string,
         context?: ChannelContext,
-        recentMessages?: Array<{ role: string; content: string }>
+        recentMessages?: Array<{ role: string; content: string }>,
+        options?: { onStatus?: (event: SemanticStatusEvent) => void }
     ): Promise<string | ProcessedResult> {
         // TTL cleanup a cada processamento (query lightweight)
         this.goalStore.expireStale();
@@ -526,13 +529,22 @@ export class GoalOrchestrator {
         }
 
         // ── Executar via GoalExecutionLoop ────────────────────────────────
+        // routerCategory vem do UnifiedIntentRouter já chamado acima (linha ~307) — mesma
+        // classificação, sem chamada de LLM nova. 'unknown' (fail-open do router) vira
+        // undefined: ensureResponseContractCriterion não injeta sem uma categoria real (ver
+        // NUNCA_ADIVINHAR.md — não inventa categoria, só deixa de reforçar).
         const goalRoiStart = Date.now();
         const result = await this.executionLoop.executeGoal(
             goal,
             context ?? { channel: 'unknown', chatId: conversationId, userId },
             async (update) => {
-                log.debug(`[GoalOrchestrator] progress goal=${update.goalId} cycle=${update.cycle} event=${update.event}`);
-            }
+                log.debug(`[GoalOrchestrator] progress goal=\${update.goalId} cycle=\${update.cycle} event=\${update.event}`);
+                if (options?.onStatus) {
+                    // GoalExecutionLoop triggers status changes mainly via store, but we can relay active state.
+                    // Precise state mapping can be added if executeGoal's update.event becomes typed.
+                }
+            },
+            routerCategory !== 'unknown' ? (routerCategory as IntentCategory) : undefined
         );
 
         // Fase 3 — ROI audit: métricas de execução via GoalOrchestrator.
@@ -699,12 +711,27 @@ export class GoalOrchestrator {
      * goal, que é justamente o caso que mais demora. Olhar apenas os turnos deixava a tela
      * dizendo "ocioso" com um goal de minutos em execução (relatado em 02/08/2026).
      */
-    getActiveGoals(): Array<{ id: string; sessionKey: string; status: string; createdAt: number }> {
+    getActiveGoals(): Array<{ id: string; sessionKey: string; status: string; createdAt: number; statusEvent?: import('../shared/SemanticStatus').SemanticStatusEvent }> {
+        const mapGoalStatusToSemanticStatus = (status: import('./GoalTypes').GoalStatus): import('../shared/SemanticStatus').SemanticStatus => {
+            switch (status) {
+                case 'active': return 'active';
+                case 'executing': return 'executing';
+                case 'blocked': return 'blocked';
+                case 'replanning': return 'replanning';
+                case 'completed': return 'completed';
+                case 'failed': return 'failed';
+                case 'abandoned': return 'abandoned';
+            }
+            const _exhaustiveCheck: never = status;
+            return _exhaustiveCheck;
+        };
+
         return this.goalStore.getAllActive().map(g => ({
             id: g.id,
             sessionKey: g.sessionKey,
             status: g.status,
             createdAt: g.createdAt,
+            statusEvent: { status: mapGoalStatusToSemanticStatus(g.status as import('./GoalTypes').GoalStatus) }
         }));
     }
 

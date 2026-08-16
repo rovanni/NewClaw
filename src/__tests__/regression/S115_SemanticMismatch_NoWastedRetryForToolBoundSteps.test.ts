@@ -64,7 +64,7 @@ function makeLoop(providerFactory: import('../../core/ProviderFactory').Provider
     const goalStore = new GoalStore(db);
     const fakeMemory = { getDatabase: () => db } as any;
     const fakePlanner = { getAvailableSkills: () => [], setSkillContext: () => {}, setModel: () => {}, replan: async () => ({ steps: [], strategy: 'n/a' }) } as any;
-    const fakeAgentLoop = { process: async () => agentLoopResponse ?? '' } as any;
+    const fakeAgentLoop = { process: async () => agentLoopResponse ?? '', clearActiveTurn: () => {} } as any;
     const loop = new GoalExecutionLoop(
         fakeAgentLoop, goalStore, fakePlanner,
         { record: () => {}, findToolFailures: () => '', findHardConstraints: () => [] } as any,
@@ -132,7 +132,7 @@ async function main() {
         // (evaluateAgentStepSuccess), que é um caminho distinto do StepSemanticValidator.
         const FILLER = 'dados registrados no sistema para análise posterior, aguardando revisão da equipe responsável pelo acompanhamento do cronograma estabelecido pela coordenação técnica envolvida. ';
         const agentloopResponse = FILLER + FILLER;
-        const fakeAgentLoop = { process: async () => { callCount++; return agentloopResponse; } };
+        const fakeAgentLoop = { process: async () => { callCount++; return agentloopResponse; }, clearActiveTurn: () => {} };
         const db = new (Database as any)(':memory:');
         const goalStore = new GoalStore(db);
         const fakeMemory = { getDatabase: () => db } as any;

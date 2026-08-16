@@ -69,7 +69,7 @@ function makeLoop(agentLoopResponse?: string, injectTrace = true, conversationId
     const goalStore = new GoalStore(db);
     const fakeMemory = { getDatabase: () => db } as any;
     const fakePlanner = { getAvailableSkills: () => [], setSkillContext: () => {}, setModel: () => {}, replan: async () => ({ steps: [], strategy: 'n/a' }) } as any;
-    const fakeAgentLoop = { process: async () => agentLoopResponse ?? '' } as any;
+    const fakeAgentLoop = { process: async () => agentLoopResponse ?? '', clearActiveTurn: () => {} } as any;
     const loop = new GoalExecutionLoop(
         fakeAgentLoop, goalStore, fakePlanner,
         { record: () => {}, findToolFailures: () => '', findHardConstraints: () => [] } as any,

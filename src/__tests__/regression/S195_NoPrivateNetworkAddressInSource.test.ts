@@ -23,6 +23,13 @@
  *   - Endereços dentro de string de documentação/comentário também falham quando são de faixa
  *     privada: um `192.168.x` num comentário é indistinguível da configuração real de alguém.
  *     Foi o caso de `server_config.ts`, ajustado para RFC 5737 nesta mesma sprint.
+ *   - `169.254.169.254` — critério diferente dos anteriores: não é exemplo nem endereço padrão de
+ *     ninguém, é a CONSTANTE UNIVERSAL do endpoint de metadado de instância de nuvem (idêntica em
+ *     toda conta AWS/GCP/Azure/OpenStack do mundo, documentada publicamente por cada provedor).
+ *     Usada em `OpenAIProvider.ts` como ALVO DE BLOQUEIO (SSRF, CWE-918) — o oposto do padrão que
+ *     este teste existe para proibir: lá o endereço aparece porque o código faz o cliente
+ *     CONECTAR nele; aqui aparece porque o código se RECUSA a conectar nele. Nenhuma topologia de
+ *     rede de usuário é revelada por este valor.
  *
  * Execução: npx ts-node src/__tests__/regression/S195_NoPrivateNetworkAddressInSource.test.ts
  */
@@ -49,7 +56,12 @@ const ALLOWED_LITERAL_IP = (ip: string): boolean =>
     ip === '0.0.0.0' ||
     ip.startsWith('192.0.2.') ||
     ip.startsWith('198.51.100.') ||
-    ip.startsWith('203.0.113.');
+    ip.startsWith('203.0.113.') ||
+    ip === CLOUD_METADATA_IP;
+
+/** Ver docstring do arquivo: constante universal (não-topologia), usada como alvo de bloqueio de
+ *  SSRF em `OpenAIProvider.ts` — não como endereço de configuração de ninguém. */
+const CLOUD_METADATA_IP = '169.254.169.254';
 
 let failures = 0;
 function check(ok: boolean, label: string, detail = '') {
@@ -90,7 +102,11 @@ for (const file of files) {
     if (path.basename(file) === path.basename(__filename)) continue; // este teste cita as faixas
     const lines = fs.readFileSync(file, 'utf-8').split('\n');
     lines.forEach((line, i) => {
-        if (PRIVATE_IP.test(line)) {
+        // A constante de metadado de nuvem pode aparecer várias vezes na mesma linha (ex: no
+        // Set literal, ou repetida em comentário) — remove TODAS as ocorrências antes de testar,
+        // para que a linha só seja sinalizada se sobrar algum outro endereço privado nela.
+        const withoutMetadataConstant = line.split(CLOUD_METADATA_IP).join('');
+        if (PRIVATE_IP.test(withoutMetadataConstant)) {
             privateHits.push(`${path.relative(ROOT, file)}:${i + 1}`);
         }
     });

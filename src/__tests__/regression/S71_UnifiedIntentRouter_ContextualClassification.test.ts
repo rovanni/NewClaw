@@ -250,14 +250,17 @@ console.log('\n=== S71-11 [Etapa 4 — auditoria de gates lexicais] — "continu
             `"${word}" isolado NÃO é capturado pelo gate determinístico (source=${decision.source}) — chega ao classificador contextual`,
         );
     }
-    // Controle negativo: "sim"/"ok" CONTINUAM sendo capturados deterministicamente (não regride
-    // o fast-path existente — a auditoria não recomendou removê-lo, e o teste prova que não foi
-    // removido).
+    // ATUALIZAÇÃO (campanha "requiresReasoning → Authority", sprint "Autoridade da
+    // Classificação"): o gate determinístico foi removido inteiramente — nenhuma mensagem chega
+    // mais com source==='deterministic'. "sim"/"ok" agora passam por semanticRoute() (fallback
+    // de keyword, sem providerFactory neste teste) e continuam classificados corretamente como
+    // 'confirmation' via SEMANTIC_RULES — só a AUTORIDADE que decide mudou (LLM/fallback, nunca
+    // mais regex direto contra o texto bruto), o resultado funcional é o mesmo.
     for (const word of ['sim', 'ok']) {
         const decision = await router.route(word);
         assert(
-            decision.source === 'deterministic' && decision.category === 'confirmation',
-            `"${word}" isolado CONTINUA no fast-path determinístico (source=${decision.source}, category=${decision.category}) — fast-path seguro preservado`,
+            decision.source === 'fallback' && decision.category === 'confirmation',
+            `"${word}" isolado classificado corretamente via fallback semântico (source=${decision.source}, category=${decision.category}) — nunca mais via gate determinístico`,
         );
     }
 }
@@ -265,7 +268,7 @@ console.log('\n=== S71-11 [Etapa 4 — auditoria de gates lexicais] — "continu
 console.log('\n=== S71-12 — routeSync() aceita recentMessages no contrato mas nunca o consome (contexto síncrono) ===');
 {
     const routerSrc = readSrc('loop/UnifiedIntentRouter.ts');
-    const routeSyncBody = routerSrc.slice(routerSrc.indexOf('routeSync(input: string'), routerSrc.indexOf('// ── Layer 1: Deterministic Gate'));
+    const routeSyncBody = routerSrc.slice(routerSrc.indexOf('routeSync(input: string'), routerSrc.indexOf('// ── Layer 2a: LLM Classification'));
     assert(!/context\.recentMessages/.test(routeSyncBody) && !/context\?\.recentMessages/.test(routeSyncBody), 'corpo de routeSync() nunca lê context.recentMessages (não pode chamar LLM de forma síncrona)');
     assert(!/llmClassify/.test(routeSyncBody), 'routeSync() nunca chama llmClassify');
 

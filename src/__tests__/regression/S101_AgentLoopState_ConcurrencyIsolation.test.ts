@@ -57,6 +57,10 @@ async function main() {
         turnStartTimes: new Map(),
         activeTurnStates: new Map(),
         getTurnState: AgentLoop.prototype['getTurnState'],
+        // S229: run() volta a chamar this.clearActiveTurn(conversationId) no finally — o dublê
+        // precisa do método real (mesmo padrão já usado aqui para getTurnState/run), senão a
+        // chamada falha com "this.clearActiveTurn is not a function".
+        clearActiveTurn: AgentLoop.prototype['clearActiveTurn'],
         postTurnCallback: null,
         runWithTools: async (conversationId: string, _userText: string, _step: number, _userId?: string, _context?: any) => {
             runWithToolsCalled = true;

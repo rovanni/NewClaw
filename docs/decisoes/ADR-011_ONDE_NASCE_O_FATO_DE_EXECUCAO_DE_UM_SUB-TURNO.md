@@ -182,3 +182,36 @@ falhas aprendeu com um acerto.
 O mecanismo é anterior à Sprint 043 — `evaluateAgentStepSuccess` é de 23/05/2026 e `failurePattern`
 de 26/05/2026. A auditoria de regressão de 09/08/2026 confirmou que os três dias anteriores não o
 introduziram nem o reforçaram.
+
+## 11. Incremento 2 fechado — 14/08/2026
+
+O §8 deixou explicitamente em aberto "quem passa a consumir [o fato] e se `evaluateAgentStepSuccess`
+sobrevive na forma atual". A resposta ficou incompleta por 5 dias: o ramo 3 da função (fato
+estrutural "alguma ferramenta do sub-turno falhou") continuava respondendo sozinho, por conta
+própria, a pergunta semântica da tabela do §3 ("a resposta cumpre a intenção do step?") — cujo dono
+natural, na própria tabela, é o `StepSemanticValidator`. `subToolFailures.length > 0` produzia
+`success: false` direto, sem deixar o validador semântico nem rodar.
+
+Isso é a MESMA classe de erro documentada em
+`docs/ARCHITECTURE/RESPONSABILIDADE_ANTES_DO_MECANISMO.md` ("Proibição — trocar apenas o
+mecanismo"): trocar regex por fato estrutural corrigiu o mecanismo, não a atribuição de
+responsabilidade — o ramo 3 continuou decidindo uma pergunta que não era sua.
+
+**Incidente que expôs a lacuna** (`goal_1786759490993_4ut0j`, "River #2", 14/08/2026, ~23h): um
+sub-turno chamou `crypto_analysis` (sucesso, preço real obtido) e `web_search` de confirmação
+(falhou). A resposta final do `AgentLoop` já incorporava o dado correto de `crypto_analysis` —
+inclusive aprovada pelo próprio commit do turno (`valid=true risk=0.10`). Mesmo assim, o step foi
+marcado `blocked`/`tool_error` só porque `web_search` estava em `subToolFailures`, descartando o
+dado já correto. Dois replans depois, o goal terminou entregando um arquivo `.txt` com "documento
+anexado" em vez de responder à pergunta na própria conversa.
+
+**Correção:** ramo 3 passa a retornar `success: true, confidence: 0.55, reason:
+'partial_tool_failure'` — confidence deliberadamente abaixo do ramo 4 (0.80), preservando
+`stepSuccessConfident = false` (o `GoalAttempt` grava `'partial'`, não `'success'` confiante). O
+step passa a alcançar `GoalEvaluator.evaluate()` como `outcome: 'success'`, o que libera
+`StepSemanticValidator.validate()` para ler a resposta real e, via a promoção ARCH-013
+(`shouldPromoteToConfidentSuccess`), confirmar ou não a relevância — o mesmo mecanismo que já
+decide essa pergunta para o ramo 4. Nenhum componente novo; o ramo 3 parou de responder no lugar do
+dono.
+
+Cobertura: `S219` (assertions atualizadas), `S219-2b` (novo).

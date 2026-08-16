@@ -28,7 +28,7 @@ import { GoalEvaluator } from './GoalEvaluator';
 import { RiskAnalyzer } from './RiskAnalyzer';
 import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { ProactiveRecovery, ToolExecutorLike } from './ProactiveRecovery';
-import { ToolRegistry } from '../core/ToolRegistry';
+import { ToolRegistry, DIRECT_DELIVERABLE_TOOLS } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { CaseMemory } from '../memory/CaseMemory';
 import { OperationalKnowledge } from '../memory/OperationalKnowledge';
@@ -43,7 +43,8 @@ import { StepSemanticValidator } from './StepSemanticValidator';
 import { GracefulDeliveryOrchestrator } from './GracefulDeliveryOrchestrator';
 import { StrategyDiversityGuard } from '../shared/StrategyDiversityGuard';
 import { resolvePath, commandExists } from '../utils/crossPlatform';
-import { ensureDeliverySuccessCriteria, AUTO_DELIVERY_CRITERION_IDS } from './planning/ensureDeliverySuccessCriteria';
+import { ensureDeliverySuccessCriteria, ensureResponseContractCriterion, AUTO_DELIVERY_CRITERION_IDS } from './planning/ensureDeliverySuccessCriteria';
+import type { IntentCategory } from '../shared/domainTypes';
 import { resolveInstallCommand } from './planning/resolveInstallCommand';
 import { inferExpectedExtensions, isExpectedDeliverableFile } from './planning/inferExpectedExtensions';
 import { MIN_DELIVERABLE_SIZE, resolveArtifactPathFromEvidence } from './planning/artifactContract';
@@ -216,7 +217,8 @@ export class GoalExecutionLoop {
     async executeGoal(
         goal: Goal,
         channelContext: ChannelContext,
-        onProgress?: ProgressCallback
+        onProgress?: ProgressCallback,
+        intentCategory?: IntentCategory
     ): Promise<GoalResult> {
         log.info(`[GoalLoop] start goal=${goal.id} replanBudget=${goal.replanBudget}`);
 
@@ -336,7 +338,10 @@ export class GoalExecutionLoop {
         // verdade. ensureDeliverySuccessCriteria garante determinsticamente um critério
         // tool_succeeded para send_document/send_audio quando presentes no plano final,
         // independente de o LLM ter lembrado de incluir isso em successCriteria.
-        const initialCriteria = ensureDeliverySuccessCriteria(initialPlan, planResult.successCriteria ?? []);
+        const initialCriteria = ensureResponseContractCriterion(
+            intentCategory,
+            ensureDeliverySuccessCriteria(initialPlan, planResult.successCriteria ?? []),
+        );
         if (initialCriteria.length > 0) {
             log.info(`[GoalLoop] successCriteria stored: ${initialCriteria.map(c => `${c.id}(${c.check})`).join(', ')}`);
         }
@@ -614,6 +619,13 @@ export class GoalExecutionLoop {
             // capacidade de recovery dos steps do novo plano.
             retryBudget: GOAL_LIMITS.MAX_RETRY_BUDGET,
             successCriteria: replanCriteria,
+            // Sprint de Provenance: currentPlan está sendo SUBSTITUÍDO inteiro aqui — os `id`s de
+            // step da nova chamada de GoalPlanner podem colidir com os da geração anterior (o LLM
+            // reusa "step_1"/"step_2" em toda chamada). Incrementar aqui, no único ponto real de
+            // troca de estratégia (`planWithSpiral`, chamado por todo caminho de replan), marca a
+            // fronteira que `buildResult()`/`resolveStepRefs()`/`updateLastAttempt()` precisam
+            // para não confundir um attempt da estratégia abandonada com um da vigente.
+            planGeneration: (goal.planGeneration ?? 0) + 1,
         });
         // Ao adotar novo plano: descarta componentes 'failed' e 'in_progress' do plano anterior
         // (tentativas fracassadas já descartadas), preserva apenas os 'completed'.
@@ -1228,6 +1240,11 @@ export class GoalExecutionLoop {
                 currentPlan: initialPlan,
                 status: 'executing',
                 cycleFocus: planResult.strategy || undefined,
+                // Sprint de Provenance: avanço de marco gera um plano inteiramente novo (nova
+                // chamada de `GoalPlanner.plan()`), estruturalmente idêntico a um replan mesmo
+                // sem passar por `planWithSpiral` — os `id`s de step do marco anterior podem
+                // colidir com os do novo. Mesma razão do incremento em `planWithSpiral`.
+                planGeneration: (goal.planGeneration ?? 0) + 1,
             });
             goal = this.goalStore.getById(goal.id)!;
             return { action: 'continueLoop', goal, totalReplans, priorFeedback };
@@ -1377,9 +1394,33 @@ export class GoalExecutionLoop {
 
         if (!allSendsOk) {
             this.goalStore.setStatus(goal.id, 'failed');
-            const sendErr = failedSends === deferredSends.length
+            const deliveryNote = failedSends === deferredSends.length
                 ? 'Objetivo validado, mas nenhum arquivo pôde ser entregue ao usuário. Verifique o workspace.'
                 : `Objetivo validado, mas ${failedSends} de ${deferredSends.length} arquivo(s) não foram entregues.`;
+            // O goal já foi validado (achieved=true — é POR ISSO que chegamos aqui) ANTES de
+            // qualquer send_document ser tentado. Uma falha de entrega de arquivo é um fato sobre
+            // o ANEXO, não sobre a resposta — descartar o conteúdo já validado e substituí-lo pela
+            // mensagem técnica de falha faz o usuário perder a resposta real por causa de um
+            // arquivo que, em muitos casos, ele nem pediu.
+            //
+            // `pickBestAvailableContent()` — mesma precedência de `buildResult()`: prefere o
+            // texto REAL de um step 'agentloop' (já sintetizado pelo LLM) sobre `validation.summary`
+            // quando ambos existem, porque o resumo do validador é uma DESCRIÇÃO do que foi
+            // produzido, não o produzido em si.
+            //
+            // Duas evidências reais do mesmo dia (15/08/2026), duas causas diferentes da mesma
+            // classe de bug:
+            //  1. goal_1786766665070_ju0ms ("e minha posição no river atual?"): não havia
+            //     nenhum step 'agentloop' com conteúdo melhor — usar só validation.summary (fix
+            //     original) já resolvia, porque o resumo ERA a explicação completa.
+            //  2. goal_1786792794722_2qxyj ("compensa investir na baixa?"): havia um step
+            //     'agentloop' com a análise real completa (o `write` do markdown virou agentloop
+            //     por SanitizePlanSteps, como sempre) — mas o fix original usava só
+            //     validation.summary, que aqui era só uma META-DESCRIÇÃO ("Foi elaborada uma
+            //     resposta detalhada... O relatório incluiu..."), não a análise em si. O usuário
+            //     via a meta-descrição + nota técnica, nunca a resposta real que já existia.
+            const bestContent = this.pickBestAvailableContent(goal, validation.summary);
+            const sendErr = bestContent ? `${bestContent}\n\n(${deliveryNote})` : deliveryNote;
             return { action: 'earlyReturn', result: this.buildResult(goal, false, totalCycles, totalReplans, sendErr) };
         }
         // FIX E: encerra imediatamente — sem replan, sem novos ciclos
@@ -2156,6 +2197,7 @@ export class GoalExecutionLoop {
             durationMs: Date.now() - startMs,
             executedAt: Date.now(),
             cycle,
+            planGeneration: goal.planGeneration ?? 0,
         });
     }
 
@@ -2368,7 +2410,12 @@ export class GoalExecutionLoop {
                 isAudioAlreadySent: () => isAudioAlreadySent?.() ?? false,
             },
         };
-        const response = await this.agentLoop.process(
+        // S223 originalmente chamava agentLoop.clearActiveTurn(goal.conversationId) aqui num
+        // finally próprio — tornado redundante pelo S229: AgentLoop.run() agora garante esse
+        // cleanup no seu PRÓPRIO finally, sempre, antes mesmo deste await resolver (sucesso ou
+        // exceção). Nada aqui lê activeTurns depois da chamada (ver S229_AgentLoop_
+        // RunFinallyClearsActiveTurn.test.ts e S223, reescrito para validar isto).
+        const response: Awaited<ReturnType<AgentLoop['process']>> = await this.agentLoop.process(
             goal.conversationId,
             stepPrompt,
             sessionUserId ?? goal.conversationId,
@@ -2376,6 +2423,22 @@ export class GoalExecutionLoop {
         );
         const text = typeof response === 'string' ? response : response.text;
         const respOptions = typeof response === 'string' ? undefined : response.options;
+
+        // S224 (defesa em profundidade — a causa raiz da auto-colisão foi fechada pelo S229,
+        // AgentLoop.run() garante cleanup no próprio finally; isto cobre o caso que continua
+        // existindo depois disso: uma colisão legítima entre chamadores distintos — ex: o
+        // Scheduler, que chama agentLoop.process() direto sem passar pela fila do MessageBus,
+        // colidindo com um step interno de goal em andamento na mesma conversa). Fato estrutural
+        // (concurrentTurnRejected), não comparação de string sobre o texto de "Ainda estou
+        // processando..." — sem isto, o step era registrado como outcome=success e alimentava a
+        // validação com um texto vazio de sentido, disparando um replan que não tinha chance de
+        // progredir (o incidente River #2 gastou o replan_budget inteiro assim).
+        if (typeof response !== 'string' && response.concurrentTurnRejected) {
+            log.warn(`[GoalStep] step rejected as concurrent turn: goal=${goal.id} step=${step.id} — marking failure, not success`);
+            const errorMsg = 'internal_concurrent_turn_rejected';
+            this.recordFailedAttempt(goal, step, cycle, startMs, { output: text.slice(0, 300), error: errorMsg });
+            return { earlyReturn: true, cycleResult: this.evaluator.evaluate(goal, step, { success: false, output: text, error: errorMsg }) };
+        }
 
         // Sprint 0.10 (achado L22): correlaciona o attempt com o ExecutionTrace real do
         // sub-turno que acabou de rodar, sem duplicar seu conteúdo — só a referência
@@ -2498,6 +2561,7 @@ export class GoalExecutionLoop {
             subToolCalls: agentloopSubToolCalls,
             subToolFailures: agentloopSubToolFailures,
             producedArtifactPaths: toolResult.artifactPaths,
+            planGeneration: goal.planGeneration ?? 0,
         };
         this.goalStore.addAttempt(goal.id, attempt);
 
@@ -2547,6 +2611,7 @@ export class GoalExecutionLoop {
                     executedAt: Date.now(),
                     cycle,
                     producedArtifactPaths: [fp],
+                    planGeneration: goal.planGeneration ?? 0,
                 });
             }
         }
@@ -2573,9 +2638,27 @@ export class GoalExecutionLoop {
         // 0.8: 'partial' significa que a tool rodou e produziu output real, só sem confirmação
         // confiável de conclusão; o texto produzido continua válido para referência por steps
         // seguintes independente da confiança na conclusão da tarefa).
+        //
+        // Sprint de Provenance: só candidatos da geração vigente entram no mapa — sem isso,
+        // `{{step_1.output}}` escrito pelo LLM no plano ATUAL poderia resolver para o output de
+        // um "step_1" de uma estratégia já abandonada (mesmo `planStepId`, geração diferente). O
+        // FORMATO da referência (`step_N`) não muda — é o mesmo rótulo que o LLM escreveu no
+        // JSON do plano vigente; só a fonte dos candidatos é restrita.
+        //
+        // Fechamento de compatibilidade (achado da Validação Holística): `planGeneration`
+        // ausente (attempt legado, anterior à Sprint de Provenance) significa semanticamente
+        // "geração 0" — nunca "sempre elegível". Tratar `undefined` como coringa universal
+        // deixava um Goal legado (nascido em geração 0, sem essa chave nos attempts antigos)
+        // parcialmente vulnerável à MESMA classe de bug que `planGeneration` existe para
+        // eliminar: depois de um replan real (geração 0 → 1), os attempts antigos continuariam
+        // "elegíveis" para a geração 1, sem nunca terem pertencido a ela. `?? 0` fecha essa
+        // exceção sem exigir nenhuma migração de dados — goals legados nunca replanejados
+        // continuam se comportando exatamente como antes (geração 0 contra geração 0).
+        const currentGeneration = goal.planGeneration ?? 0;
         const stepOutputs = new Map<string, string>();
         for (const attempt of goal.attempts) {
-            if ((attempt.result === 'success' || attempt.result === 'partial') && attempt.output) {
+            const sameGeneration = (attempt.planGeneration ?? 0) === currentGeneration;
+            if ((attempt.result === 'success' || attempt.result === 'partial') && attempt.output && sameGeneration) {
                 stepOutputs.set(attempt.planStepId, attempt.output);
             }
         }
@@ -2643,11 +2726,31 @@ export class GoalExecutionLoop {
             return { success: true, confidence: 0.70, reason: 'no_structural_observation' };
         }
 
-        // 3. Falhas estruturais: pelo menos uma ferramenta do sub-turno falhou
+        // 3. Falhas estruturais: pelo menos uma ferramenta do sub-turno falhou. Isso é fato —
+        //    mas "uma ferramenta falhou" não implica "o step falhou": o sub-turno pode ter
+        //    chamado outra ferramenta que teve sucesso, e a resposta final pode já responder à
+        //    intenção usando o dado dela. Decidir isso ("a resposta cumpre a intenção apesar da
+        //    falha parcial?") é pergunta semântica — mesma fronteira do item 4 abaixo, mesmo
+        //    dono (`StepSemanticValidator`, que roda logo em seguida para outcome!=='blocked').
+        //    Retornar success=false aqui pularia esse dono e decidiria a pergunta semântica por
+        //    fato estrutural — exatamente a lacuna que a própria ADR-011 (§8) deixou para um
+        //    incremento seguinte ("evaluateAgentStepSuccess e GoalEvaluator decidirem sobre esse
+        //    fato em vez de sobre prosa" — a decisão em si, não só o transporte do fato).
+        //    Confidence mais baixa que o item 4 (0.55 vs 0.80) mantém `stepSuccessConfident`
+        //    falso — `finalizeStepAttempt()` grava o attempt como 'partial', não 'success'
+        //    confiante — e é exatamente esse 'partial' que a promoção ARCH-013
+        //    (`shouldPromoteToConfidentSuccess`) já existe para confirmar quando o
+        //    StepSemanticValidator concluir que a resposta é relevante.
+        //    Evidência real (14/08/2026, goal_1786759490993_4ut0j — "incidente River #2"):
+        //    crypto_analysis obteve o preço real da River (commit do próprio AgentLoop:
+        //    valid=true, risk=0.10), web_search de confirmação falhou no mesmo sub-turno — o
+        //    step foi marcado tool_error mesmo assim (blocker desc continha a própria tabela de
+        //    preço correta), descartando o dado já obtido e disparando 2 replans que terminaram
+        //    entregando um arquivo .txt em vez de responder à pergunta original.
         if (subToolFailures.length > 0) {
             const failedTools = subToolFailures.map(f => f.tool).join(', ');
-            log.debug(`[GoalLoop] step-heuristic: structural tool failures [${failedTools}] tool=${step.toolName ?? 'agentloop'}`);
-            return { success: false, confidence: 0.92, reason: 'structural_tool_failure' };
+            log.debug(`[GoalLoop] step-heuristic: structural tool failures [${failedTools}] — deferring to StepSemanticValidator tool=${step.toolName ?? 'agentloop'}`);
+            return { success: true, confidence: 0.55, reason: 'partial_tool_failure' };
         }
 
         // 4. Nenhuma falha observada + resposta não-trivial → as ferramentas funcionaram
@@ -2770,6 +2873,7 @@ export class GoalExecutionLoop {
                 durationMs: 0,
                 executedAt: Date.now(),
                 producedArtifactPaths,
+                planGeneration: goal.planGeneration ?? 0,
             });
         } else if (attemptRecording === 'finalize') {
             this.goalStore.finalizeLastAttemptAsSuccess(goal.id, step.id, output);
@@ -3574,6 +3678,20 @@ export class GoalExecutionLoop {
                     }
                     break;
                 }
+                case 'response_produced': {
+                    // Sprint de Response Contract: GATE estrutural, não checagem de qualidade.
+                    // Este critério NUNCA fica 'met' aqui, de propósito — nenhum algoritmo
+                    // determinístico decide se "existe uma resposta adequada", isso é uma
+                    // pergunta semântica (RESPONSABILIDADE_ANTES_DO_MECANISMO.md: "determinismo
+                    // valida existência, LLM interpreta significado"). Permanecer 'unverifiable'
+                    // aqui é o que impede `allMet` (abaixo) de fechar `achieved=true` sozinho
+                    // quando o Planner declarou esta promessa — força a passagem pelo validador
+                    // LLM (`validateGoalCompletion`, Caminho 2), que já pergunta em prosa se o
+                    // entregável esperado foi produzido. Nenhum branch de disco/output/regex
+                    // decide isso aqui — a ausência de lógica é a implementação correta.
+                    criterion.status = 'unverifiable';
+                    break;
+                }
             }
         }
 
@@ -3792,6 +3910,15 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
             })()
             : '';
 
+        // Sprint de Response Contract: fato estrutural para o validador ponderar — não decide
+        // nada aqui, só informa que o Planner declarou esta promessa (Evidence Provider Pattern:
+        // fornece evidência ao LLM, não substitui o julgamento dele). Presença deste critério em
+        // `goal.successCriteria` é o único gatilho — nenhuma checagem de texto/idioma/tamanho.
+        const hasResponseContract = (goal.successCriteria ?? []).some(c => c.check === 'response_produced');
+        const responseContractBlock = hasResponseContract
+            ? '\n- CONTRATO DE RESPOSTA: o plano deste objetivo declarou que uma resposta em texto, endereçando a pergunta do usuário, é parte obrigatória da conclusão — não basta ter coletado dados ou executado side-effects (ex: memory_write) sem apresentá-los. Se os attempts acima produziram apenas dados brutos, recibos de side-effect, ou nenhuma resposta legível ao usuário, marque achieved=false.'
+            : '';
+
         const prompt = `Você é um validador de tarefas de software. Verifique se o objetivo especificado foi COMPLETAMENTE concluído.
 
 ALVO DE VALIDAÇÃO:
@@ -3812,7 +3939,7 @@ IMPORTANTE — INTERPRETAÇÃO DE OUTPUTS:
 - Se o conteúdo real do arquivo está disponível acima, use ESSE conteúdo como fonte primária de verdade.
 - Se houver ARTEFATOS JÁ ENTREGUES listados acima, o "summary" deve mencionar explicitamente esse artefato (nome do arquivo) como o resultado entregue — não descreva apenas os steps do ciclo atual (ex: releitura de um markdown de referência) como se fossem o objetivo em si.
 - Se PROGRESSO POR COMPONENTE mostra ≥70% concluído, considere entrega parcial como "achieved: true" com summary indicando o que ficou pendente.
-- QUALIDADE DE ARTEFATOS: se um arquivo criado pela ferramenta "write" tiver menos de 200 caracteres OU contiver placeholders evidentes ("[Inserir aqui", "TODO", "stub", "conteúdo será adicionado", texto genérico de uma linha sem dados reais), o objetivo NÃO foi atingido — marque achieved=false. Um arquivo de resumo de pesquisa com apenas uma frase genérica não constitui entrega real do objetivo.
+- QUALIDADE DE ARTEFATOS: se um arquivo criado pela ferramenta "write" tiver menos de 200 caracteres OU contiver placeholders evidentes ("[Inserir aqui", "TODO", "stub", "conteúdo será adicionado", texto genérico de uma linha sem dados reais), o objetivo NÃO foi atingido — marque achieved=false. Um arquivo de resumo de pesquisa com apenas uma frase genérica não constitui entrega real do objetivo.${responseContractBlock}
 
 Análise crítica: o objetivo ou marco atual foi atingido E o resultado/entregável esperado foi produzido com sucesso?
 Se for um marco de desenvolvimento, verifique se os arquivos/funcionalidades desse marco foram realmente criados e testados.
@@ -4206,6 +4333,54 @@ OU
         return found;
     }
 
+    /**
+     * Extrai o melhor texto de resposta já disponível — conteúdo real antes de resumo sobre ele.
+     * Compartilhado por `buildResult()` (caminho de sucesso) e pelo ramo de falha de envio
+     * diferido em `runValidationAchievedPhase()` (achado 15/08/2026, ver abaixo): as duas
+     * perguntas são a mesma ("qual é o melhor texto que já temos?"), só o que cada chamador faz
+     * com a resposta diverge — extraído para não duplicar a precedência em dois lugares.
+     *
+     * Sprint de Provenance: `planStepId` sozinho não é único entre gerações de plano (o LLM reusa
+     * "step_1"/"step_2" em toda chamada de GoalPlanner, inclusive em replans) — um attempt
+     * bem-sucedido de uma estratégia já abandonada não pode vencer aqui só por ter sido inserido
+     * depois no array. A chave de junção correta é `(planGeneration, planStepId)`; aqui só a
+     * geração importa, pois a ordem cronológica dentro da geração vigente continua sendo o
+     * desempate correto (não é substituída, é restringida antes).
+     *
+     * Fechamento de compatibilidade (achado da Validação Holística): `attempt.planGeneration ===
+     * undefined` (attempt legado, anterior à Sprint de Provenance) significa semanticamente
+     * "geração 0", não "sempre elegível" — um Goal legado que sofre um replan real (geração 0 → 1)
+     * não pode ter seus attempts antigos ainda concorrendo pela geração 1. `?? 0` fecha essa
+     * exceção sem exigir migração: um Goal legado NUNCA replanejado continua comparando 0 contra
+     * 0, comportamento idêntico a antes.
+     *
+     * `lastSuccess.output` só é seguro para entrega direta quando veio de um step 'agentloop'
+     * (toolName='agentloop' — texto já sintetizado pelo próprio LLM) ou de uma tool na allowlist
+     * `DIRECT_DELIVERABLE_TOOLS` (weather, crypto_analysis — prosa/tabela finais por design).
+     * Qualquer outra tool (web_navigate, web_search, list_workspace, read, ...) devolve um dump
+     * operacional pensado para o LLM ler e sintetizar, nunca para o usuário ler direto — mesma
+     * distinção que `AgentLoop.runSynthesisAndFallbackPhase()` já aplica antes de fazer bypass de
+     * síntese. Evidência real, 14/08/2026, goal_1786759205879_fmpwq: resposta final foi o texto de
+     * diagnóstico de `web_navigate` ("Busca em navegador texto: ... Resultados encontrados: 0"),
+     * não uma resposta.
+     *
+     * `fallbackText` (validation.summary ou overrideOutput, conforme o chamador) só vence quando
+     * NÃO há conteúdo real seguro para entrega direta, e nunca quando é o resumo genérico
+     * (`GENERIC_CRITERIA_SUMMARY` — sem informação nenhuma sobre o que foi entregue).
+     */
+    private pickBestAvailableContent(goal: Goal, fallbackText: string | undefined): string | undefined {
+        const currentGeneration = goal.planGeneration ?? 0;
+        const lastSuccess = [...goal.attempts].reverse()
+            .find(a => a.result === 'success' && (a.planGeneration ?? 0) === currentGeneration);
+        const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && (
+            lastSuccess.toolName === 'agentloop' ||
+            DIRECT_DELIVERABLE_TOOLS.includes(lastSuccess.toolName)
+        );
+        const hasGenericSummary = fallbackText === GENERIC_CRITERIA_SUMMARY;
+        return (lastSuccessIsSafeToDeliverRaw ? (lastSuccess?.output || undefined) : undefined)
+            ?? (!hasGenericSummary ? fallbackText : undefined);
+    }
+
     private buildResult(
         goal: Goal,
         success: boolean,
@@ -4213,7 +4388,6 @@ OU
         totalReplans: number,
         overrideOutput?: string
     ): GoalResult {
-        const lastSuccess = [...goal.attempts].reverse().find(a => a.result === 'success');
         // Fallback extra: resultado armazenado no plan step (via markStepDone)
         const lastCompletedStep = [...goal.currentPlan].reverse().find(s => s.status === 'completed');
         // GENERIC_CRITERIA_SUMMARY não carrega nenhuma informação sobre o que foi entregue —
@@ -4257,7 +4431,7 @@ OU
 
         // Usa || para tratar string vazia como ausente (exec_command com outputLen=0)
         const finalOutput = (summaryIsCoverNote && !hasGenericSummary ? overrideOutput : undefined)
-            ?? (lastSuccess?.output || undefined)
+            ?? this.pickBestAvailableContent(goal, overrideOutput)
             ?? lastCompletedStep?.result
             ?? (success ? overrideOutput ?? 'Tarefa concluída com sucesso.' : this.evaluator.buildFailureExplanation(goal));
 

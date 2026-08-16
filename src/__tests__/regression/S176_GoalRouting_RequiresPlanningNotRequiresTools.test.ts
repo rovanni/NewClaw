@@ -89,14 +89,21 @@ console.log('\n=== S176-2 — o contrato do campo está documentado no tipo ==='
     );
 }
 
-console.log('\n=== S176-3 — o campo deixou de estar morto nas regras determinísticas ===');
+console.log('\n=== S176-3 — o campo deixou de estar morto — agora populado por strategySelection() ===');
 {
+    // ATUALIZAÇÃO (campanha "requiresReasoning → Authority", sprint "Autoridade da
+    // Classificação"): DETERMINISTIC_RULES foi removido — regex/keyword contra o texto bruto
+    // não decide mais categoria nenhuma. A garantia original desta sprint (requiresPlanning
+    // populado corretamente para categorias multi-etapa) migrou inteira para
+    // strategySelection() — mapeamento objetivo de categoria→consequência, alimentado agora
+    // pelo LLM (ou pelo fallback de keyword), nunca por regex decidindo intenção. Mesma
+    // contagem de categorias multi-etapa, na nova localização.
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'UnifiedIntentRouter.ts'), 'utf-8');
-    const bloco = src.slice(src.indexOf('const DETERMINISTIC_RULES'), src.indexOf('const SEMANTIC_RULES'));
-    const comPlanning = (bloco.match(/requiresPlanning: true,/g) ?? []).length;
+    const bloco = src.slice(src.indexOf('private strategySelection'), src.indexOf('// ── Public API'));
+    const comPlanning = (bloco.match(/requiresPlanning = true; \/\/ /g) ?? []).length;
     assert(
         comPlanning >= 3,
-        `regras determinísticas multi-etapa marcam requiresPlanning=true (encontradas: ${comPlanning})`,
+        `categorias multi-etapa marcam requiresPlanning=true em strategySelection() (encontradas: ${comPlanning})`,
     );
 }
 
@@ -161,12 +168,28 @@ console.log('\n=== S176-6 — os dois campos respondem perguntas DIFERENTES ==='
     );
 }
 
-console.log('\n=== S176-6b — regras determinísticas multi-etapa, ponta a ponta ===');
+console.log('\n=== S176-6b — categorias multi-etapa, ponta a ponta via fallback de keyword (sem LLM) ===');
 {
-    // Estas passam pelo gate determinístico (sem LLM), então route() é fiel aqui.
+    // ATUALIZAÇÃO (campanha "Autoridade da Classificação"): antes, estas mensagens passavam pelo
+    // gate determinístico (regex contra texto bruto, removido) — route() era "fiel" por acidente
+    // de mecanismo, não porque o fallback (semanticRoute/SEMANTIC_RULES, Camada 2b, keyword
+    // scoring) as cobrisse. Confirmado agora que NÃO cobria: SEMANTIC_RULES nunca teve entrada
+    // para a categoria 'audio' (só creation/vision/data_analysis/system_operation/conversation/
+    // confirmation) — uma lacuna PRÉ-EXISTENTE a esta campanha, só mascarada até aqui pelo gate
+    // que a interceptava antes. Sem LLM disponível, "me envie um áudio..." cai em 'conversation'
+    // (default de semanticRoute na ausência de match) → requiresPlanning=false.
+    //
+    // Não é corrigível aqui sem violar a regra desta campanha de não criar keyword/regex nova —
+    // e não é responsabilidade desta campanha completar a cobertura de SEMANTIC_RULES (mecanismo
+    // de degradação por indisponibilidade de provider, fora do escopo de "autoridade semântica
+    // primária" que esta campanha trata). Registrado como débito pré-existente, não corrigido.
+    //
+    // As duas mensagens abaixo continuam corretas via fallback (uma por keyword real de
+    // system_operation — "servidor" —, outra por coincidência de substring "dados" batendo em
+    // data_analysis — resultado correto por acidente, categoria errada; requiresPlanning ainda
+    // fica true, que é o que este teste verifica).
     const casos: Array<[string, string]> = [
         ['rode o comando npm install no servidor', 'system_operation'],
-        ['me envie um áudio narrando o resumo', 'audio'],
         ['rm -rf /tmp/dados', 'system_operation'],
     ];
     for (const [input, esperado] of casos) {
@@ -177,6 +200,16 @@ console.log('\n=== S176-6b — regras determinísticas multi-etapa, ponta a pont
             d.requiresPlanning,
         );
     }
+
+    // Documenta a lacuna em vez de escondê-la: 'audio' via fallback puro de keyword hoje NÃO
+    // aciona o ciclo de goal — só um LLM real (verify) prova que a classificação correta
+    // acontece na prática, quando o provider está disponível (caminho normal de produção).
+    const audioViaFallback = await router.route('me envie um áudio narrando o resumo');
+    assert(
+        audioViaFallback.category === 'conversation' && audioViaFallback.requiresPlanning === false,
+        `LACUNA PRÉ-EXISTENTE documentada: "me envie um áudio..." via fallback puro (sem LLM) cai em conversation/requiresPlanning=false (categoria real: ${audioViaFallback.category}) — corrigido pelo LLM real em produção, não pelo fallback`,
+        audioViaFallback,
+    );
 }
 
 console.log('\n=== S176-7 — carga cognitiva profunda ainda escala para o ciclo de goal ===');

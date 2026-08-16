@@ -32,6 +32,7 @@ import { SendAudioTool } from '../tools/send_audio';
 import { SendDocumentTool } from '../tools/send_document';
 import { MemoryAdminTool } from '../tools/memory_admin';
 import { CryptoAnalysisTool } from '../tools/crypto_analysis';
+import { ApiRequestTool } from '../tools/api_request';
 import { SshExecTool } from '../tools/ssh_exec';
 import { WeatherTool } from '../tools/weather';
 import { ToolRegistry } from './ToolRegistry';
@@ -657,6 +658,16 @@ export class AgentController {
         ToolRegistry.register(new MemoryAdminTool(this.memory));
         ToolRegistry.register(new SshExecTool(), { dangerous: true });
         ToolRegistry.register(new CryptoAnalysisTool());
+        // Achado real (16/08/2026): `api_request` já era referenciado como tool disponível em
+        // GoalPlanner.STANDARD_TOOLS, AgentLoop.INFO_TOOLS/INFO_BATCH_TOOLS e
+        // GracefulDeliveryOrchestrator — mas nunca tinha sido registrada aqui. `ToolRegistry.get()`
+        // sempre devolvia `undefined` para ela; o LLM não tinha como cumprir um plano que a
+        // escolhesse, e caía em alternativas frágeis (exec_command com scripts PowerShell/curl
+        // dependentes de plataforma) para qualquer necessidade de chamada HTTP genérica que os
+        // outros tools não cobrem (ex: taxa de câmbio). `dangerous: true` — mesmo tratamento de
+        // exec_command/ssh_exec: é uma tool de requisição HTTP arbitrária (SSRF/exfiltração via
+        // URL ou corpo controlado pelo LLM), exige aprovação em modo SAFE por padrão.
+        ToolRegistry.register(new ApiRequestTool(), { dangerous: true });
         ToolRegistry.register(new WeatherTool());
         ToolRegistry.register(new ScheduleTool(this.scheduler));
 

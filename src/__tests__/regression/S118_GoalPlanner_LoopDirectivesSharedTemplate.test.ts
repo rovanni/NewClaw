@@ -32,17 +32,22 @@ function assert(condition: boolean, message: string, detail?: unknown): void {
 function makeFakePlanner(): { planner: GoalPlanner; capturedPrompt: { value: string } } {
     const captured = { value: '' };
     let calls = 0;
+    const chat = async (messages: Array<{ content: string }>) => {
+        calls++;
+        // Só captura a PRIMEIRA chamada — um retorno com steps=[] dispara
+        // retryWithMinimalPrompt() (2ª chamada, prompt minimalista sem as diretivas de
+        // loop), que sobrescreveria o prompt real que este teste quer inspecionar.
+        if (calls === 1) captured.value = messages[0]?.content ?? '';
+        return { content: JSON.stringify({ steps: [{ id: 'step_1', description: 'passo de teste', toolName: 'read', toolArgs: { path: 'a.txt' } }], strategy: 'teste S118' }) };
+    };
     const fakeProviderFactory = {
-        getProviderWithModel: () => ({
-            chat: async (messages: Array<{ content: string }>) => {
-                calls++;
-                // Só captura a PRIMEIRA chamada — um retorno com steps=[] dispara
-                // retryWithMinimalPrompt() (2ª chamada, prompt minimalista sem as diretivas de
-                // loop), que sobrescreveria o prompt real que este teste quer inspecionar.
-                if (calls === 1) captured.value = messages[0]?.content ?? '';
-                return { content: JSON.stringify({ steps: [{ id: 'step_1', description: 'passo de teste', toolName: 'read', toolArgs: { path: 'a.txt' } }], strategy: 'teste S118' }) };
-            },
-        }),
+        getProviderWithModel: () => ({ chat }),
+        // GoalPlanner.callPlannerLLM() passou a chamar chatWithFallback (S222) em vez de
+        // getProviderWithModel() direto — o fake precisa responder pelos dois caminhos.
+        chatWithFallback: async (messages: Array<{ content: string }>) => {
+            const r = await chat(messages);
+            return { status: 'success', content: r.content, attempts: [] };
+        },
     } as any;
     const fakeReflectionMemory = {
         findBlockerLessons: () => '',
@@ -129,6 +134,16 @@ console.log('\n=== S118.3 — CENÁRIO stuck-in-analysis: blocker goal_incomplet
     await planner.replan(goal, goal.blockers[0]);
     assert(capturedPrompt.value.includes('ALERTA: LOOP DE ANÁLISE DETECTADO'), 'diretiva stuck-in-analysis presente', capturedPrompt.value.slice(0, 300));
     assert(capturedPrompt.value.includes('  1. NÃO planeje mais steps somente de read'), 'formatação numerada presente via buildLoopDirective', capturedPrompt.value);
+
+    // Achado real 15/08/2026 (goals goal_1786759490993_4ut0j e goal_1786766665070_ju0ms): esta
+    // diretiva prescrevia "send_document ou write com resumo" como ÚNICA forma de entregar,
+    // mesmo para objetivos conversacionais — o LLM seguiu à risca, o arquivo nunca foi gravado de
+    // fato, o send falhou, e o usuário recebeu um erro técnico em vez de resposta. Corrigido para
+    // devolver a escolha do formato de entrega ao LLM, informado pela intenção original.
+    assert(!capturedPrompt.value.includes('send_document ou write com resumo'),
+        'a diretiva NÃO prescreve mais send_document como a forma de entregar (achado 15/08/2026)');
+    assert(capturedPrompt.value.includes('nem toda entrega é um arquivo'),
+        'a diretiva devolve a escolha do formato de entrega ao LLM, com base na intenção original');
 }
 
 console.log('\n=== S118.4 — CENÁRIO content_stub: blocker atual é content_stub ===');

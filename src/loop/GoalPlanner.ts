@@ -82,7 +82,23 @@ SCHEMAS OBRIGATÓRIOS (use caminhos RELATIVOS ao workspace — sem prefixo de se
                    OU {"action": "follow_link", "url": "https://exemplo.com", "link_text": "texto do link"}
   weather:         {"city": "Nome da cidade"} — NUNCA troque por web_search para clima.
   send_audio:      {"text": "conteúdo completo para narrar em português"} — NÃO use "file_path".
+  api_request:     {"method": "GET", "url": "https://api.exemplo.com/dados"}
+                   OU {"method": "POST", "url": "...", "body": "{\"chave\":\"valor\"}"}
 
+⚠️  Preço/cotação/taxa de câmbio de algo sem tool dedicada (dólar, euro, ação, índice): comece
+    por web_search (pesquise e extraia da página, como uma pessoa pesquisaria) — NÃO chame uma
+    API financeira específica via api_request para isso. Só recorra a api_request como estratégia
+    alternativa se web_search genuinamente não trouxer o valor após uma tentativa.
+⚠️  Chamada a uma API HTTP externa que NÃO seja preço/cotação (endpoint público nomeado pelo
+    usuário, webhook, JSON de terceiro específico): use api_request, NUNCA exec_command com
+    curl/Invoke-WebRequest/wget/urllib. api_request é a MESMA chamada HTTP em qualquer sistema
+    operacional; scripts de shell divergem entre Windows (PowerShell) e Linux/Mac (bash) e falham
+    de formas diferentes em cada um — evidência real (16/08/2026): pedido de conversão de moeda
+    gerou Invoke-WebRequest no Windows, quebrou com erro específico do PowerShell, e o replan
+    seguinte tentou curl/python/node em sequência até esgotar o budget. api_request evita a
+    classe inteira desse problema — mesmo quando a estratégia certa para preço/cotação é
+    web_search, se algum outro passo do plano precisar de uma chamada HTTP à parte, ainda vale
+    api_request em vez de exec_command.
 ⚠️  send_document SEM file_path será bloqueado automaticamente pelo sistema.
 ⚠️  weather SEM city será bloqueado automaticamente pelo sistema.
 ⚠️  send_audio SEM text será bloqueado automaticamente pelo sistema — "file_path" NÃO é um argumento válido para send_audio.
@@ -185,7 +201,7 @@ Responda APENAS com JSON válido (sem markdown):
   "strategy": "descrição de 1 linha da estratégia geral",
   "adjustedRoadmap": ["Marco 1...", "Marco 2..."],
   "successCriteria": [
-    { "id": "c1", "description": "O que deve ser verdade quando o objetivo estiver concluído", "check": "tool_succeeded|output_contains|output_not_contains|file_exists", "tool": "nome_da_tool", "value": "texto opcional para contains/not_contains" }
+    { "id": "c1", "description": "O que deve ser verdade quando o objetivo estiver concluído", "check": "tool_succeeded|output_contains|output_not_contains|file_exists|response_produced", "tool": "nome_da_tool", "value": "texto opcional para contains/not_contains" }
   ]
 }
 
@@ -194,6 +210,7 @@ CRITÉRIOS DE SUCESSO (successCriteria) — máximo 3, verificados deterministic
 - output_not_contains: output de attempt bem-sucedido NÃO contém value. Ex: nome substituído → { "check": "output_not_contains", "tool": "exec_command", "value": "NomeAntigo" }
 - output_contains: output contém value. Ex: conteúdo esperado existe → { "check": "output_contains", "tool": "exec_command", "value": "NovoConteudo" }
 - file_exists: exec_command retornou output não-vazio (arquivo encontrado). Ex: arquivo criado → { "check": "file_exists", "tool": "exec_command" }
+- response_produced: o objetivo só está concluído quando existe uma resposta em texto, adequada à pergunta do usuário — não basta ter coletado dados ou executado um side-effect (ex: memory_write) sem apresentá-los. Use quando o pedido do usuário é uma PERGUNTA (pedir informação, comparação, explicação, análise) — não use para pedidos de AÇÃO pura sem pergunta embutida (ex: "salve isso na memória", "delete o arquivo X"). Ex: { "id": "c_resposta", "description": "Existe uma resposta que endereça a pergunta do usuário", "check": "response_produced" }. Este critério nunca é satisfeito automaticamente — sua presença só direciona a validação final para examinar se a resposta existe, não decide sozinho.
 Inclua SEMPRE um critério tool_succeeded para send_document quando o objetivo envolve entrega de arquivo, e um critério tool_succeeded para send_audio quando o objetivo envolve entrega de áudio. Isso é reforço de qualidade — mesmo que você esqueça, o sistema garante esses critérios automaticamente com base nas tools do plano final.
 
 ⚠️ GERAÇÃO DE CONTEÚDO EXTENSO (slides, relatórios, HTML completo, documentos) — LEIA PRIMEIRO:
@@ -413,26 +430,47 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
         })
         : '';
 
-    const priorIncompletes = goal.blockers.filter(b => b.kind === 'goal_incomplete').length;
     const priorAnalysisOnly = goal.strategiesTried.filter(s =>
         /anali[sz]|leitura|ler |audit|mapear|verificar|identificar|diagnosticar/i.test(s)
     ).length;
-    const stuckInAnalysis = blocker.kind === 'goal_incomplete' &&
-        (priorIncompletes >= 1 || priorAnalysisOnly >= 2);
+    // Achado real (16/08/2026, campanha de tool-routing/latência, goal_1786895708302_dle1b):
+    // exigir `priorIncompletes >= 1` (a MESMA falha ter acontecido antes) deixava a PRIMEIRA
+    // ocorrência de goal_incomplete sem esta diretiva — e o replan seguinte repetia exatamente o
+    // mesmo erro (plano com só a tool de busca, sem step de síntese), forçando outro ciclo
+    // completo só para descobrir de novo o que a própria mensagem do blocker já dizia
+    // explicitamente ("dados coletados, mas nenhuma resposta em texto foi entregue"). Nesse goal
+    // real, isso se repetiu por 3 dos 4 replans (~90s de ~160s totais). `blocker.desc` já é o
+    // fato estrutural determinante — goal_incomplete SEMPRE significa "dado existe, entrega não
+    // aconteceu", nunca precisa de uma segunda ocorrência para ser diagnosticado.
+    const stuckInAnalysis = blocker.kind === 'goal_incomplete' || priorAnalysisOnly >= 2;
 
+    // Achado real (15/08/2026, goals goal_1786759490993_4ut0j e goal_1786766665070_ju0ms, mesmo
+    // dia, mesmo padrão): o item 3 desta diretiva prescrevia "send_document ou write com resumo"
+    // como o ÚNICO jeito de "entregar" — mesmo quando a INTENÇÃO ORIGINAL (presente no prompt,
+    // ver "INTENÇÃO ORIGINAL:" acima) era uma pergunta conversacional ("qual o valor do River?",
+    // "e minha posição no river atual?"). O LLM seguiu a instrução ao pé da letra: escreveu um
+    // arquivo, tentou enviá-lo, e quando o envio falhou (arquivo nunca gravado de fato), o usuário
+    // recebeu um erro técnico sobre o anexo em vez de uma resposta — que ele nem tinha pedido.
+    // Débito já registrado em CLAUDE.md ("GoalPlanner.ts (buildReplanPrompt): implementDirective
+    // é heurística embutida no Planner... nem fato para o LLM ponderar") — corrigido aqui porque
+    // passou a ter dano real evidenciado, não é mais só um risco teórico.
+    // Correção: a diretiva continua proibindo ficar preso em ciclos de só-leitura (fato
+    // estrutural: "N ciclos leram, nenhum produziu resultado"), mas para de prescrever QUAL
+    // mecanismo de entrega usar — devolve a decisão para o LLM, que já tem a intenção original no
+    // mesmo prompt para julgar se a resposta é um arquivo ou uma resposta direta no chat.
     const implementDirective = stuckInAnalysis
         ? buildLoopDirective({
-            header: 'ALERTA: LOOP DE ANÁLISE DETECTADO — ciclos anteriores só fizeram leitura sem implementar.',
+            header: 'ALERTA: LOOP DE ANÁLISE DETECTADO — ciclos anteriores só fizeram leitura sem produzir um resultado.',
             preamble: ['OBRIGATÓRIO neste replan:'],
             items: [
                 'NÃO planeje mais steps somente de read/exec_command/list_workspace — contexto já foi coletado.',
-                'IMPLEMENTE usando write ou edit para modificar os arquivos necessários.',
-                'ENTREGUE: inclua step final que confirme o resultado ao usuário (send_document ou write com resumo).',
+                'PRODUZA o resultado com os dados já coletados: se a INTENÇÃO ORIGINAL pede um artefato (arquivo, código, apresentação), use write/edit; se pede uma resposta/informação, responda diretamente — nem toda entrega é um arquivo.',
+                'Inclua um step final que efetivamente entregue esse resultado ao usuário, no formato que a intenção original pedir — não presuma qual é.',
             ],
             numbered: true,
             closing: closingFor(
-                'Um plano que só lê arquivos sem modificar/entregar será rejeitado novamente.',
-                'Ciclos anteriores só leram, sem implementar (modo GOD: sua decisão, não é imposto).',
+                'Um plano que só lê, sem produzir nem entregar o resultado pedido, será rejeitado novamente.',
+                'Ciclos anteriores só leram, sem produzir resultado (modo GOD: sua decisão, não é imposto).',
             ),
         })
         : '';
@@ -699,21 +737,20 @@ export class GoalPlanner {
     }
 
     private async callPlannerLLM(messages: LLMMessage[], timeoutMs: number): Promise<{ status: string; content: string }> {
-        const provider = this.providerFactory.getProviderWithModel(this.model);
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-            const response = await provider.chat(messages, undefined, { signal: controller.signal, timeoutMs });
-            return { status: 'success', content: response.content };
-        } catch (err) {
-            const msg = String(err);
-            if (msg.includes('abort') || msg.includes('timed out') || msg.includes('timeout')) {
-                return { status: 'timeout', content: '' };
-            }
-            return { status: 'error', content: '' };
-        } finally {
-            clearTimeout(timer);
+        // Reusa a mesma cadeia de resiliência multi-provider que AgentLoop e a validação de
+        // goal já usam (chatWithFallback) — antes esta chamada ia direto a getProviderWithModel(),
+        // um único provider fixo, sem fallback: se o modelo desta role (ex: "analysis") estivesse
+        // fora do ar, plan()/replan() degradavam direto para o plano genérico de 1 step, mesmo
+        // havendo outro provider saudável disponível (achado do incidente River #2, 11/08/2026).
+        // modelOverride=this.model preserva o modelo desta role na tentativa do provider padrão;
+        // providers seguintes usam o próprio modelo default, conforme a semântica já corrigida
+        // pela S173 (ownership do modelOverride).
+        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, timeoutMs, undefined, this.model);
+        if (result.status !== 'success') {
+            const lastAttempt = result.attempts[result.attempts.length - 1];
+            log.warn(`[GoalPlanner] callPlannerLLM failed: model=${this.model} status=${result.status} providersTried=${result.attempts.length} lastError="${(lastAttempt?.errorMessage ?? '').slice(0, 300)}"`);
         }
+        return { status: result.status, content: result.content };
     }
 
     setSkillContext(context: string): void {
@@ -995,7 +1032,7 @@ export class GoalPlanner {
             );
 
             // Parseia e valida os successCriteria
-            const VALID_CHECKS = new Set<string>(['tool_succeeded', 'output_not_contains', 'output_contains', 'file_exists']);
+            const VALID_CHECKS = new Set<string>(['tool_succeeded', 'output_not_contains', 'output_contains', 'file_exists', 'response_produced']);
             const rawCriteria = Array.isArray(parsed.successCriteria) ? parsed.successCriteria : [];
             const successCriteria: SuccessCriterion[] = rawCriteria
                 .slice(0, 3)

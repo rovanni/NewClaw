@@ -60,23 +60,45 @@ const ATTEMPT_OUTPUT_DELIVERABLE_LIMIT = 8000;
 const SOURCE = fs.readFileSync(
     path.join(process.cwd(), 'src', 'loop', 'GoalExecutionLoop.ts'), 'utf-8'
 );
+const AGENT_LOOP_SOURCE = fs.readFileSync(
+    path.join(process.cwd(), 'src', 'loop', 'AgentLoop.ts'), 'utf-8'
+);
+const TOOL_REGISTRY_SOURCE = fs.readFileSync(
+    path.join(process.cwd(), 'src', 'core', 'ToolRegistry.ts'), 'utf-8'
+);
+
+// Fonte única com AgentLoop.ts (core/ToolRegistry.ts) — copiado aqui pela mesma razão que o
+// resto da função é reproduzida (DI pesado demais para instanciar GoalExecutionLoop real).
+const DIRECT_DELIVERABLE_TOOLS: readonly string[] = ['weather', 'crypto_analysis'];
 
 /**
  * Reprodução do algoritmo de `buildResult()` (DI pesado demais para instanciar
  * GoalExecutionLoop — mesma abordagem de S10/S47/S48). A fidelidade da cópia é garantida
  * pelas asserções estruturais de S175-5 sobre o source real.
+ *
+ * 14/08/2026 (achado A da campanha "River — Goal-Driven Delivery"): `lastSuccessOutput` só entra
+ * na cadeia quando vem de uma tool "segura para entrega crua" (agentloop — já sintetizado pelo
+ * LLM — ou uma tool na allowlist). Sem isso, o dump operacional de `web_navigate`/`web_search`
+ * (URL, "Modo de navegacao: html-fallback", "Resultados encontrados: 0") podia vencer o resumo
+ * do validador e virar a resposta final.
  */
 function computeFinalOutput(
     overrideOutput: string | undefined,
     lastSuccessOutput: string | undefined,
+    lastSuccessToolName: string | undefined,
     lastCompletedStepResult: string | undefined,
     success: boolean,
     hasSeparateDelivery: boolean,
 ): string {
     const hasGenericSummary = overrideOutput === GENERIC_CRITERIA_SUMMARY;
     const summaryIsCoverNote = !success || hasSeparateDelivery;
+    const lastSuccessIsSafeToDeliverRaw = lastSuccessOutput !== undefined && (
+        lastSuccessToolName === 'agentloop' ||
+        (lastSuccessToolName !== undefined && DIRECT_DELIVERABLE_TOOLS.includes(lastSuccessToolName))
+    );
     return (summaryIsCoverNote && !hasGenericSummary ? overrideOutput : undefined)
-        ?? (lastSuccessOutput || undefined)
+        ?? (lastSuccessIsSafeToDeliverRaw ? (lastSuccessOutput || undefined) : undefined)
+        ?? (!hasGenericSummary ? overrideOutput : undefined)
         ?? lastCompletedStepResult
         ?? (success ? overrideOutput ?? 'Tarefa concluída com sucesso.' : 'Falha ao concluir o objetivo.');
 }
@@ -97,7 +119,7 @@ console.log('\n=== S175-1 — reproduz o incidente exato: pergunta sem artefato 
         + 'derivada da construção civil: assim como um andaime sustenta e dá acesso a níveis mais '
         + 'altos de um prédio em construção...';
 
-    const result = computeFinalOutput(resumoDoValidador, explicacaoReal, undefined, true, false);
+    const result = computeFinalOutput(resumoDoValidador, explicacaoReal, 'agentloop', undefined, true, false);
 
     assert(result === explicacaoReal, 'sem entrega separada, o usuário recebe a EXPLICAÇÃO', result.slice(0, 60));
     assert(result !== resumoDoValidador, 'o resumo do validador NÃO é a resposta final', result.slice(0, 60));
@@ -114,8 +136,46 @@ console.log('\n=== S175-2 — com entrega separada, o resumo continua sendo a no
     const resumo = 'Apresentação sobre IPv6 criada e entregue em aula_ipv6.pptx (12 slides).';
     const outputCru = 'Documento anexado';
 
-    const result = computeFinalOutput(resumo, outputCru, undefined, true, true);
+    const result = computeFinalOutput(resumo, outputCru, 'send_document', undefined, true, true);
     assert(result === resumo, 'com artefato entregue, o resumo em prosa continua vencendo', result);
+}
+
+console.log('\n=== S175-2b — achado A (14/08/2026): dump operacional NÃO vence o resumo do validador ===');
+{
+    // Incidente real: goal_1786759205879_fmpwq ("Qual o valor do River, criptomoeda?"). Um step
+    // 'web_navigate' (StepSemanticValidator promoveu erroneamente a 'success') virou lastSuccess.
+    // Sem o gate por identidade de tool, esse dump vencia qualquer resumo do validador — mesma
+    // classe de bug que S175 já guarda (resumo vs. conteúdo), só que na direção oposta: aqui o
+    // "conteúdo" não era conteúdo nenhum, era diagnóstico interno da ferramenta.
+    const resumoDoValidador = 'O valor da criptomoeda River (RIVER) foi obtido com sucesso. '
+        + 'O preço atual é de aproximadamente $2,61.';
+    const dumpOperacional = 'Busca em navegador texto: River cryptocurrency price\n'
+        + 'URL: https://lite.duckduckgo.com/lite/?q=River%20cryptocurrency%20price\n'
+        + 'Modo de navegacao: html-fallback\n'
+        + 'Resultados encontrados: 0\n\n'
+        + 'Leitura da pagina de resultados:\n'
+        + 'River cryptocurrency price at DuckDuckGo';
+
+    const result = computeFinalOutput(resumoDoValidador, dumpOperacional, 'web_navigate', undefined, true, false);
+    assert(result === resumoDoValidador, 'web_navigate não é tool de entrega direta — resumo do validador vence', result.slice(0, 60));
+    assert(!/Modo de navegacao/.test(result), 'o dump operacional não vaza para o usuário');
+
+    // Contraste: crypto_analysis É allowlisted — o output cru dela é a resposta pronta, e deve
+    // continuar vencendo o resumo (mesma garantia que Bitcoin/weather já tinham em AgentLoop.ts).
+    const outputCryptoAnalysis = '🔍 **Bitcoin (BTC)**\n\nPreço: $62.985\nMarket Cap: $1.26T\n';
+    const comCryptoAnalysis = computeFinalOutput(resumoDoValidador, outputCryptoAnalysis, 'crypto_analysis', undefined, true, false);
+    assert(comCryptoAnalysis === outputCryptoAnalysis, 'crypto_analysis (allowlisted) continua entregando o output cru', comCryptoAnalysis.slice(0, 40));
+
+    // Contraste: step 'agentloop' (texto já sintetizado pelo LLM) continua vencendo — é o mesmo
+    // caso S175-1 (scaffolding), agora explícito quanto ao toolName.
+    const outputAgentloop = 'O scaffolding é uma metáfora derivada da construção civil...';
+    const comAgentloop = computeFinalOutput(resumoDoValidador, outputAgentloop, 'agentloop', undefined, true, false);
+    assert(comAgentloop === outputAgentloop, "step 'agentloop' (já sintetizado) continua vencendo o resumo", comAgentloop.slice(0, 40));
+
+    // web_search sofre do mesmo problema estrutural que web_navigate — mesmo gate se aplica.
+    const outputWebSearch = 'Consulta: River cryptocurrency price 2026\nNenhum resultado relevante.';
+    const comWebSearch = computeFinalOutput(resumoDoValidador, outputWebSearch, 'web_search', undefined, true, false);
+    assert(comWebSearch === resumoDoValidador, 'web_search também não é tool de entrega direta — resumo vence', comWebSearch.slice(0, 60));
 }
 
 console.log('\n=== S175-3 — numa falha, a explicação do erro continua tendo prioridade ===');
@@ -125,20 +185,20 @@ console.log('\n=== S175-3 — numa falha, a explicação do erro continua tendo 
     const explicacaoDaFalha = 'Não foi possível gerar o PDF: o pandoc não está instalado.';
     const outputDeUmStepAnterior = 'Arquivo relatorio.md criado';
 
-    const semArtefato = computeFinalOutput(explicacaoDaFalha, outputDeUmStepAnterior, undefined, false, false);
+    const semArtefato = computeFinalOutput(explicacaoDaFalha, outputDeUmStepAnterior, 'write', undefined, false, false);
     assert(semArtefato === explicacaoDaFalha, 'falha sem artefato: explicação do erro vence', semArtefato);
 
-    const comArtefato = computeFinalOutput(explicacaoDaFalha, outputDeUmStepAnterior, undefined, false, true);
+    const comArtefato = computeFinalOutput(explicacaoDaFalha, outputDeUmStepAnterior, 'write', undefined, false, true);
     assert(comArtefato === explicacaoDaFalha, 'falha com artefato: explicação do erro vence', comArtefato);
 }
 
 console.log('\n=== S175-4 — sem NENHUM conteúdo real, ainda mostra algo (sem regressão) ===');
 {
     const resumo = 'Objetivo concluído conforme solicitado.';
-    const result = computeFinalOutput(resumo, undefined, undefined, true, false);
+    const result = computeFinalOutput(resumo, undefined, undefined, undefined, true, false);
     assert(result === resumo, 'sem conteúdo real disponível, o resumo ainda é usado — não regride pra vazio', result);
 
-    const generico = computeFinalOutput(GENERIC_CRITERIA_SUMMARY, undefined, undefined, true, false);
+    const generico = computeFinalOutput(GENERIC_CRITERIA_SUMMARY, undefined, undefined, undefined, true, false);
     assert(generico === GENERIC_CRITERIA_SUMMARY, 'fallback genérico preservado quando não há mais nada', generico);
 }
 
@@ -153,12 +213,47 @@ console.log('\n=== S175-5 — D2 presente estruturalmente em buildResult() ===')
         'o resumo só tem prioridade quando é nota de acompanhamento (falha, ou entrega separada)',
     );
     assert(
-        /\(summaryIsCoverNote && !hasGenericSummary \? overrideOutput : undefined\)\s*\n\s*\?\? \(lastSuccess\?\.output \|\| undefined\)/.test(SOURCE),
-        'sem entrega separada, o conteúdo real vem antes do resumo na cadeia de precedência',
+        /\(summaryIsCoverNote && !hasGenericSummary \? overrideOutput : undefined\)\s*\n\s*\?\? this\.pickBestAvailableContent\(goal, overrideOutput\)/.test(SOURCE),
+        'sem entrega separada, o conteúdo real (via pickBestAvailableContent — conteúdo seguro antes do resumo) vem antes do resumo na cadeia de precedência',
+    );
+    // 15/08/2026: a precedência "conteúdo real > resumo" foi extraída para pickBestAvailableContent()
+    // — compartilhada com o ramo de falha de envio diferido (ver S234). Guarda contra duplicação.
+    assert(
+        (SOURCE.match(/const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && \(/g) ?? []).length === 1,
+        'a lógica de "seguro para entrega crua" existe em UM lugar só — não duplicada em buildResult() e no ramo de falha',
     );
     assert(
         !/const finalOutput = \(hasGenericSummary \? undefined : overrideOutput\)/.test(SOURCE),
         'não volta à regra antiga (resumo sempre primeiro, com caso especial só pra string genérica)',
+    );
+    // Achado A (14/08/2026): o gate por identidade de tool existe e reusa a MESMA allowlist que
+    // AgentLoop.ts já usava para o bypass de síntese — fonte única em core/ToolRegistry.ts.
+    assert(
+        /const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && \(/.test(SOURCE),
+        'lastSuccessIsSafeToDeliverRaw existe como gate explícito, não implícito',
+    );
+    assert(
+        /lastSuccess\.toolName === 'agentloop' \|\|\s*\n\s*DIRECT_DELIVERABLE_TOOLS\.includes\(lastSuccess\.toolName\)/.test(SOURCE),
+        "o gate permite step 'agentloop' (já sintetizado) ou tool na allowlist — nunca tool arbitrária",
+    );
+    assert(
+        /import \{ ToolRegistry, DIRECT_DELIVERABLE_TOOLS \} from '\.\.\/core\/ToolRegistry';/.test(SOURCE),
+        'DIRECT_DELIVERABLE_TOOLS é importado de core/ToolRegistry — mesma fonte que AgentLoop.ts, não duplicado',
+    );
+    // Fonte única de fato: só uma declaração de DIRECT_DELIVERABLE_TOOLS em todo o repo (guarda
+    // contra uma futura cópia local divergindo, mesmo bug que TERMINAL_DELIVERY_TOOLS já corrige
+    // via S209).
+    assert(
+        /export const DIRECT_DELIVERABLE_TOOLS: readonly string\[\] = \['weather', 'crypto_analysis'\];/.test(TOOL_REGISTRY_SOURCE),
+        'DIRECT_DELIVERABLE_TOOLS é declarado uma única vez, em core/ToolRegistry.ts',
+    );
+    assert(
+        !/const DIRECT_DELIVERABLE_TOOLS = new Set/.test(AGENT_LOOP_SOURCE),
+        'AgentLoop.ts não tem mais cópia local de DIRECT_DELIVERABLE_TOOLS — consome a importada',
+    );
+    assert(
+        /import \{ ToolRegistry, DIRECT_DELIVERABLE_TOOLS \} from '\.\.\/core\/ToolRegistry';/.test(AGENT_LOOP_SOURCE),
+        'AgentLoop.ts importa DIRECT_DELIVERABLE_TOOLS da mesma fonte',
     );
 }
 

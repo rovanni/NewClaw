@@ -150,4 +150,11 @@ export interface AgentLoopConfig {
 export interface ProcessedResult {
     text: string;
     options?: ResponseOption[];
+    /**
+     * true quando este resultado NÃO é uma resposta real — é o guard de `activeTurns` recusando
+     * um turno concorrente para a mesma conversa (S224). Sinal estruturado, não para o chamador
+     * inferir a rejeição comparando o texto de `text` (isso seria uma heurística de string sobre
+     * prosa, exatamente o que ADR-011 e a regra "determinismo valida / LLM interpreta" proíbem).
+     */
+    concurrentTurnRejected?: boolean;
 }

@@ -30,6 +30,41 @@ const CONNECT_TIMEOUT_MS = 15_000;
 const LIVENESS_PROBE_TIMEOUT_MS = 3_000;
 
 /**
+ * Hosts sem nenhum uso legítimo como servidor OpenAI-Compatible — só existem para expor metadado
+ * de instância de nuvem (credenciais temporárias da AWS/GCP/Azure). `baseUrl` é 100% controlado
+ * por quem cadastra um provider custom (`/api/providers/add`, `/api/providers/test`), e o recurso
+ * em si EXIGE aceitar host arbitrário: é assim que um servidor local (llamafile, LM Studio, vLLM)
+ * ou de outra máquina na rede do usuário é configurado. Por isso a defesa aqui não é allowlist de
+ * host (quebraria o recurso) — é este bloqueio pontual, o único caso em que "endpoint arbitrário"
+ * nunca é uma configuração legítima (CWE-918 / CodeQL js/request-forgery).
+ *
+ * Checagem por string do hostname, não por resolução de DNS: cobre o caso real (alguém cola o
+ * endereço de metadado direto no campo, o mesmo padrão dos exploits SSRF→metadado documentados) —
+ * não cobre DNS rebinding (um hostname próprio que resolve para 169.254.169.254 só depois desta
+ * checagem). Aceito conscientemente: mitigar rebinding exigiria resolver e fixar o IP antes de
+ * cada fetch, mudança maior e fora do escopo desta correção pontual.
+ */
+const SSRF_BLOCKED_HOSTS = new Set([
+    '169.254.169.254',       // AWS/GCP/Azure/OpenStack — endpoint de metadado padrão
+    'metadata.google.internal', // GCP — alias DNS do mesmo endpoint
+    'fd00:ec2::254',          // AWS — endpoint de metadado IMDSv2 em IPv6
+]);
+
+/** CWE-918 — ver `SSRF_BLOCKED_HOSTS`. Lança se `baseUrl` aponta para um host de metadado de
+ *  nuvem; chamado no início de todo método que faz `fetch(this.baseUrl + ...)`. */
+function assertNotSsrfTarget(baseUrl: string): void {
+    let hostname: string;
+    try {
+        hostname = new URL(baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    } catch {
+        return; // URL inválida — quem chama já trata o fetch subsequente falhando
+    }
+    if (SSRF_BLOCKED_HOSTS.has(hostname)) {
+        throw new Error(`Endpoint bloqueado: "${hostname}" é um endereço de metadado de nuvem, nunca um servidor de modelo legítimo.`);
+    }
+}
+
+/**
  * Converte mensagens que carregam imagem para o formato multimodal da API da OpenAI.
  *
  * `LLMMessage.images` é o formato interno do projeto (base64 puro), desenhado sobre o campo
@@ -105,6 +140,7 @@ export class OpenAIProvider implements ILLMProvider {
      */
     async isResponsive(timeoutMs: number = LIVENESS_PROBE_TIMEOUT_MS): Promise<boolean> {
         try {
+            assertNotSsrfTarget(this.baseUrl);
             const headers: Record<string, string> = {};
             if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
             const resp = await fetch(`${this.baseUrl}/models`, {
@@ -123,6 +159,7 @@ export class OpenAIProvider implements ILLMProvider {
      * esse endpoint com o mesmo formato `{ data: [{ id }, ...] }`.
      */
     async discoverModels(): Promise<ModelInfo[]> {
+        assertNotSsrfTarget(this.baseUrl);
         const headers: Record<string, string> = {};
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
         const resp = await fetch(`${this.baseUrl}/models`, { headers });
@@ -148,6 +185,7 @@ export class OpenAIProvider implements ILLMProvider {
     }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
+        assertNotSsrfTarget(this.baseUrl);
         const queueEntryTime = Date.now();
         return await taskQueue.add(async () => {
             const queueWaitMs = Date.now() - queueEntryTime;

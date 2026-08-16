@@ -55,14 +55,19 @@ function assert(condition: boolean, message: string, detail?: unknown): void {
 function makeFakePlanner(): { planner: GoalPlanner; capturedPrompt: { value: string } } {
     const captured = { value: '' };
     let calls = 0;
+    const chat = async (messages: Array<{ content: string }>) => {
+        calls++;
+        if (calls === 1) captured.value = messages[0]?.content ?? '';
+        return { content: JSON.stringify({ steps: [{ id: 'step_1', description: 'passo de teste', toolName: 'read', toolArgs: { path: 'a.txt' } }], strategy: 'teste S124' }) };
+    };
     const fakeProviderFactory = {
-        getProviderWithModel: () => ({
-            chat: async (messages: Array<{ content: string }>) => {
-                calls++;
-                if (calls === 1) captured.value = messages[0]?.content ?? '';
-                return { content: JSON.stringify({ steps: [{ id: 'step_1', description: 'passo de teste', toolName: 'read', toolArgs: { path: 'a.txt' } }], strategy: 'teste S124' }) };
-            },
-        }),
+        getProviderWithModel: () => ({ chat }),
+        // GoalPlanner.callPlannerLLM() passou a chamar chatWithFallback (S222) em vez de
+        // getProviderWithModel() direto — o fake precisa responder pelos dois caminhos.
+        chatWithFallback: async (messages: Array<{ content: string }>) => {
+            const r = await chat(messages);
+            return { status: 'success', content: r.content, attempts: [] };
+        },
     } as any;
     const fakeReflectionMemory = {
         findBlockerLessons: () => '',

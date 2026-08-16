@@ -18,6 +18,28 @@ const log = createLogger('Toolregistry');
  */
 export const TERMINAL_DELIVERY_TOOLS: readonly string[] = ['send_audio', 'send_document'];
 
+/**
+ * Ferramentas cujo `output` já é texto pronto para o usuário — não uma leitura/dump operacional
+ * que precisa de síntese antes de virar resposta. Fonte única, consumida por dois caminhos de
+ * entrega independentes que precisam da MESMA resposta a "posso entregar isto cru?":
+ * `AgentLoop.runSynthesisAndFallbackPhase()` (bypass de síntese pós-loop) e
+ * `GoalExecutionLoop.buildResult()` (fallback de `finalOutput` quando não há resumo do
+ * validador). Até 14/08/2026 só o primeiro consultava isto (a constante vivia local ali) — o
+ * segundo usava `lastSuccess.output` sem checar a identidade da tool, e por isso podia entregar
+ * cru o dump operacional de `web_navigate`/`web_search` (URL, "Modo de navegacao: html-fallback",
+ * "Resultados encontrados: 0") como se fosse a resposta final. Evidência real, 14/08/2026,
+ * goal_1786759205879_fmpwq: `StepSemanticValidator` promoveu esse dump a "success" e o usuário
+ * recebeu o texto de diagnóstico da ferramenta, não uma resposta.
+ *
+ * Pertinência de conjunto (`Este valor pertence a este enum?`) é pergunta determinística —
+ * `docs/ARCHITECTURE/RESPONSABILIDADE_ANTES_DO_MECANISMO.md` lista exatamente esse tipo de
+ * checagem como apropriada a determinismo, e cita `TERMINAL_DELIVERY_TOOLS.includes()` (acima)
+ * como contra-exemplo legítimo do mesmo formato. Curada manualmente, não descoberta por
+ * heurística: `weather`/`crypto_analysis` produzem prosa/tabela finais por design; qualquer tool
+ * nova entra aqui só por decisão explícita, nunca por inferência sobre o formato do output.
+ */
+export const DIRECT_DELIVERABLE_TOOLS: readonly string[] = ['weather', 'crypto_analysis'];
+
 interface ToolEntry {
     tool: ToolExecutor;
     enabled: boolean;

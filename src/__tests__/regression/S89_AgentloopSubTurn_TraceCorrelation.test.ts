@@ -75,7 +75,7 @@ function makeLoop(fakeAgentLoop: any) {
     const fakeMemory = { getDatabase: () => db } as any;
     const fakePlanner = { getAvailableSkills: () => [], setSkillContext: () => {}, setModel: () => {}, replan: async () => ({ steps: [], strategy: 'n/a' }) } as any;
     const loop = new GoalExecutionLoop(
-        fakeAgentLoop, goalStore, fakePlanner,
+        { clearActiveTurn: () => {}, ...fakeAgentLoop }, goalStore, fakePlanner,
         { record: () => {}, buildContextHint: () => '', findHardConstraints: () => [] } as any,
         ToolRegistry, makeFakeProviderFactory(), fakeMemory,
         { findApplicableCasesShadow: async () => [], backfillMissingEmbeddings: async () => {}, captureIfEligible: () => {}, findSimilarShadow: () => [] } as any,

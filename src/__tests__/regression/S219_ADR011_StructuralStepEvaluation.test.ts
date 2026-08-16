@@ -10,7 +10,15 @@
  *      Era o caso que causava 12 ciclos, 5 replans, ~11 minutos sem resposta.
  *
  *   2. Falha real de ferramenta: subToolFailures=[{tool:'crypto_analysis', error:'...'}]
- *      → success=false, por fato estrutural — não por regex sobre prosa.
+ *      → success=true, confidence reduzida (0.55, 'partial_tool_failure'), NUNCA blocked
+ *      direto. Fato estrutural ("uma ferramenta falhou") não decide sozinho "o step falhou" —
+ *      essa é a pergunta semântica que ADR-011 §8 deixou explicitamente para um incremento
+ *      seguinte ("evaluateAgentStepSuccess e GoalEvaluator decidirem sobre esse fato"), fechado
+ *      em 14/08/2026 (incidente River #2: crypto_analysis obteve o preço real, web_search de
+ *      confirmação falhou no mesmo sub-turno, e o step era marcado tool_error mesmo assim,
+ *      descartando um dado já correto). A decisão semântica final continua com
+ *      `StepSemanticValidator` via ARCH-013 (promove 'partial'→'success' quando confirma
+ *      relevância) — este item só para de pular esse dono.
  *
  *   3. Attempts antigos: subToolFailures=undefined (goals persistidos antes de 4140ee9)
  *      → fallback conservador (success=true, conf=0.70), nunca tratado como "nenhuma falha".
@@ -70,10 +78,26 @@ console.log('\n=== S219-2 — evaluateAgentStepSuccess usa fatos estruturais ===
         'ramo 1: resposta vazia → empty_response (forma objetiva, preservado)');
     assert(/reason: 'no_structural_observation'/.test(fn),
         'ramo 2: subToolFailures undefined → no_structural_observation (fallback conservador)');
-    assert(/reason: 'structural_tool_failure'/.test(fn),
-        'ramo 3: subToolFailures não-vazio → structural_tool_failure');
+    assert(/reason: 'partial_tool_failure'/.test(fn),
+        'ramo 3: subToolFailures não-vazio → partial_tool_failure (14/08/2026: fecha ADR-011 §8)');
+    assert(!/success: false, confidence: 0\.92, reason: 'structural_tool_failure'/.test(fn),
+        'ramo 3 NÃO retorna mais success=false direto — decidir isso é do StepSemanticValidator');
     assert(/reason: 'no_tool_failures'/.test(fn),
         'ramo 4: subToolFailures vazio + resposta ≥15 chars → no_tool_failures');
+}
+
+console.log('\n=== S219-2b — ramo 3 devolve success=true (deixa StepSemanticValidator julgar) ===');
+{
+    const fnBody = goalLoopSrc.slice(goalLoopSrc.indexOf('private evaluateAgentStepSuccess('));
+    const fnEnd = fnBody.indexOf('\n    // ──');
+    const fn = fnBody.slice(0, fnEnd > 0 ? fnEnd : 500);
+
+    const branch3 = fn.match(/if \(subToolFailures\.length > 0\) \{[\s\S]*?\n {8}\}/);
+    assert(!!branch3, 'ramo 3 (subToolFailures.length > 0) localizado');
+    assert(!!branch3 && /success: true/.test(branch3[0]),
+        'ramo 3 retorna success=true — sub-turno chega a GoalEvaluator.evaluate() como outcome=success');
+    assert(!!branch3 && /confidence: 0\.55/.test(branch3[0]),
+        'ramo 3 usa confidence menor que o ramo 4 (0.55 < 0.80) — mantém stepSuccessConfident falso');
 }
 
 console.log('\n=== S219-3 — stepSuccessConfident usa fato estrutural ===');

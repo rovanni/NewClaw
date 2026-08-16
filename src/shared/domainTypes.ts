@@ -75,13 +75,26 @@ export interface GoalBlocker {
  *   `docs/issues/010-arch018-file-exists-checks-attempts-not-disk.md`). Alvo dinâmico por
  *   design (reavalia `goal.currentPlan` a cada chamada, mesmo padrão já usado por
  *   `tool_succeeded` contra `goal.attempts`, que também cresce entre avaliações).
+ * - response_produced → Sprint de Response Contract (investigação "User Request → Validated
+ *   Response → Delivery"): DELIBERADAMENTE não tem verificação determinística de satisfação —
+ *   nenhum branch de `evaluateCriteria()` jamais marca este check como `'met'`. Sua única função
+ *   é ser um GATE estrutural: a presença deste critério em `goal.successCriteria` impede que o
+ *   checklist determinístico feche `achieved=true` sozinho (porque `allMet` exige TODOS os
+ *   critérios `'met'`, e este nunca fica), forçando a passagem pelo validador LLM de
+ *   `validateGoalCompletion()` — o único lugar que já pergunta, em linguagem natural, se o
+ *   entregável esperado foi produzido. Não é uma checagem de qualidade textual (proibido: regex,
+ *   palavra-chave, tamanho, idioma) — é só a declaração estrutural "este Goal promete uma
+ *   resposta ao usuário", emitida pelo próprio `GoalPlanner` (mesmo mecanismo já usado para os
+ *   outros checks, sem chamada de LLM nova). Ver `docs/ARCHITECTURE/RESPONSABILIDADE_ANTES_DO_MECANISMO.md`
+ *   — "determinismo valida existência, LLM interpreta significado".
  */
 export type CriterionCheck =
     | 'tool_succeeded'
     | 'output_not_contains'
     | 'output_contains'
     | 'file_exists'
-    | 'pending_send_verified_on_disk';
+    | 'pending_send_verified_on_disk'
+    | 'response_produced';
 
 export interface SuccessCriterion {
     id: string;
@@ -214,6 +227,20 @@ export interface GoalAttempt {
      * `send_document` no replan, em vez de inferir por proximidade sintática no JSON do plano.
      */
     producedArtifactPaths?: string[];
+    /**
+     * Sprint de Provenance (Modelo de Dados — Provenance + Response Contract): cópia de
+     * `Goal.planGeneration` no instante em que este attempt foi criado — nunca recalculado depois
+     * (imutável, mesmo espírito de `executedAt`). Resolve a ambiguidade documentada na
+     * investigação: `planStepId` sozinho não é único entre gerações de plano (o LLM reusa
+     * `"step_1"`/`"step_2"` em toda chamada de `GoalPlanner`, inclusive em replans) — a chave de
+     * junção correta para "este attempt pertence à estratégia vigente?" é `(planGeneration,
+     * planStepId)`, nunca `planStepId` isolado.
+     *
+     * `undefined` = attempt persistido antes desta Sprint (dado legado) — consumidores devem
+     * tratá-lo como "geração desconhecida, sempre elegível", nunca excluí-lo por comparação
+     * estrita (mesmo padrão de ausência-como-sinal já usado por `subToolFailures`).
+     */
+    planGeneration?: number;
 }
 
 // ── Goal ──────────────────────────────────────────────────────────────────────
@@ -228,6 +255,21 @@ export interface Goal {
 
     status: GoalStatus;
     currentPlan: PlanStep[];
+    /**
+     * Geração vigente do plano — 0 na criação do Goal, +1 a cada substituição TOTAL de
+     * `currentPlan` (replan por blocker, ou avanço de marco em goal de construção). NUNCA
+     * incrementado por ajustes que preservam o plano em vigor (retry, injeção de step de
+     * dependência, enriquecimento de description, marcação de step concluído) — só quando o
+     * conjunto de steps em si é descartado e substituído por um novo, de uma chamada nova de
+     * `GoalPlanner`. É o lado "Goal" da chave `(planGeneration, planStepId)` — ver
+     * `GoalAttempt.planGeneration`.
+     *
+     * Opcional no tipo (mesmo padrão de `sentArtifacts?`/`allowRoadmapAdjustment?`) para não
+     * exigir que todo call site de `GoalStore.create()` passe o campo explicitamente —
+     * `GoalStore` aplica o default (0) na criação e na leitura (`rowToGoal`). Em runtime, todo
+     * `Goal` lido do `GoalStore` sempre tem um número real aqui, nunca `undefined`.
+     */
+    planGeneration?: number;
     attempts: GoalAttempt[];
     blockers: GoalBlocker[];
 

@@ -83,7 +83,7 @@ function makeFakeProviderFactory() {
 // manual injetado por needs_dependency quando não há comando automático seguro para o SO,
 // o caso real observado no log de produção para edge-tts). Resposta com sinal de sucesso
 // explícito ("concluída") evita escalonar para LLM — mantém o teste focado no que importa.
-const fakeAgentLoop = { process: async () => 'Instalação concluída manualmente (simulado).' } as any;
+const fakeAgentLoop = { process: async () => 'Instalação concluída manualmente (simulado).', clearActiveTurn: () => {} } as any;
 
 function makeLoop() {
     const db = new (Database as any)(':memory:');
