@@ -6,7 +6,20 @@
  */
 import { Database } from 'better-sqlite3';
 
-const DEFAULT_EMBED_MODEL = 'nomic-embed-text';
+/**
+ * Ponto único de verdade para o modelo de embedding (usado aqui, em memory_write.ts,
+ * memory_admin.ts, MemoryManager.ts e CMIIngestionPipeline.ts — antes cada um tinha sua própria
+ * string literal, 3 delas como `'nomic-embed-text:latest'` e 2 como `'nomic-embed-text'` sem
+ * tag).
+ *
+ * Achado real (16/08/2026, instância local de produção): o Ollama local só tinha
+ * `nomic-embed-text:v1.5` puxado — nem `:latest` nem o nome sem tag (que o Ollama resolve como
+ * `:latest` por convenção) existiam. Toda chamada de embedding vinha falhando silenciosamente —
+ * a geração sempre foi best-effort (fetch dentro de try/catch que nunca propaga falha) — e o
+ * embedding mais recente no banco de produção era de 09/06/2026, dois meses antes desta
+ * descoberta, apesar da aplicação rodando continuamente e criando nós novos o tempo todo.
+ */
+export const DEFAULT_EMBED_MODEL = 'nomic-embed-text:v1.5';
 
 export class EmbeddingService {
     private ollamaUrl: string;

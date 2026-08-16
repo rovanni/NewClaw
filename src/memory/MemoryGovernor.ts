@@ -819,12 +819,17 @@ export class MemoryGovernor {
      */
     private archiveNode(node: MemoryNode): void {
         try {
-            // Spread pode lançar "Too many properties to enumerate" se o metadata
-            // estiver corrompido com propriedades excessivas. Se isso acontecer,
-            // removemos o nó diretamente para interromper o ciclo de falha repetida.
+            // `node.metadata` deve chegar aqui como objeto (getAllNodes() já parseia — ver
+            // MemoryFacade.getAllNodes()). Guarda de tipo explícita, não um try/catch: espalhar
+            // uma STRING (`{...umaString}`) NUNCA lança — decompõe caractere-a-caractere em
+            // chaves numéricas, silenciosamente. Foi assim que o metadata de um nó real virou
+            // `{"0":"\"","1":"\\",...}`. O try/catch abaixo continua só para o caso legítimo,
+            // raro, de um objeto realmente gigante estourar o limite de enumeração do V8.
             let rawMetadata: Record<string, any>;
             try {
-                rawMetadata = { ...node.metadata };
+                rawMetadata = (node.metadata && typeof node.metadata === 'object' && !Array.isArray(node.metadata))
+                    ? { ...node.metadata }
+                    : {};
             } catch {
                 log.warn(`archiveNode ${node.id}: metadata unparseable (too many properties) — removing node directly`);
                 try { this.memoryFacade.removeNode(node.id); } catch { /* ignore */ }

@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import { createLogger } from '../shared/AppLogger';
 import { ConfidenceClassifier } from '../core/ConfidenceClassifier';
-import { MemoryNode, MemoryNodeRow, EpistemicStatus, IdentityScope } from './memoryTypes';
+import { MemoryNode, MemoryNodeRow, EpistemicStatus, IdentityScope, parseNodeMetadata } from './memoryTypes';
 import { safeExec } from './memorySchema';
 
 const log = createLogger('GraphRepository');
@@ -101,7 +101,15 @@ export function addNode(db: Database.Database, classifier: ConfidenceClassifier,
 
     const confidenceScore = node.confidence ?? classification.score;
 
-    let metadataObj = node.metadata || {};
+    // Guarda estrutural: se algum chamador passar `metadata` como string/array em vez de objeto
+    // (contrato do tipo violado em runtime), `Object.keys()` abaixo decomporia caractere-a-
+    // caractere em vez de truncar por chave — foi exatamente assim que o metadata de um nó real
+    // acabou virando `{"0":"\"","1":"\\",...}`. Reset determinístico (validação de tipo, não de
+    // conteúdo) em vez de propagar o valor malformado.
+    let metadataObj: Record<string, unknown> =
+        node.metadata && typeof node.metadata === 'object' && !Array.isArray(node.metadata)
+            ? node.metadata
+            : {};
     let metadataJson = JSON.stringify(metadataObj);
     if (metadataJson.length > 8000) {
         const truncated: Record<string, unknown> = {};
@@ -161,7 +169,7 @@ export function addNode(db: Database.Database, classifier: ConfidenceClassifier,
 export function getNode(db: Database.Database, id: string): MemoryNode | undefined {
     const row = db.prepare('SELECT * FROM memory_nodes WHERE id = ?').get(id) as MemoryNodeRow | undefined;
     if (!row) return undefined;
-    return { ...row, metadata: JSON.parse(row.metadata || '{}') };
+    return { ...row, metadata: parseNodeMetadata(row.metadata, id) };
 }
 
 export function getNodesByType(db: Database.Database, type: MemoryNode['type']): MemoryNode[] {

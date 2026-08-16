@@ -25,7 +25,7 @@ import * as graph from './graphRepository';
 import * as snap from './snapshotRepository';
 import { DashboardMemoryRepository } from '../dashboard/DashboardMemoryRepository';
 import { MemoryGraphRepository } from './MemoryGraphRepository';
-import { EmbeddingService } from './EmbeddingService';
+import { EmbeddingService, DEFAULT_EMBED_MODEL } from './EmbeddingService';
 import { ClassificationMemory } from './ClassificationMemory';
 import { DecisionMemory } from './DecisionMemory';
 import { DomainSummaryService } from './DomainSummaryService';
@@ -386,7 +386,7 @@ export class MemoryManager {
             const params: unknown[] = [...terms.map(t => `%${t}%`), limit];
             return this.db.prepare(`
                 SELECT * FROM memory_nodes
-                WHERE lifecycle_state NOT IN ('EXPIRED', 'SUMMARIZED', 'ARCHIVED')
+                WHERE (lifecycle_state IS NULL OR lifecycle_state NOT IN ('EXPIRED', 'SUMMARIZED', 'ARCHIVED'))
                 AND (${conditions})
                 ORDER BY confidence DESC, weight DESC
                 LIMIT ?
@@ -398,6 +398,21 @@ export class MemoryManager {
 
     // ── Semantic Search ────────────────────────────────────────────────────────
 
+    /**
+     * Combina busca semântica (embedding) com busca lexical (nome+conteúdo, FTS5/LIKE) — nunca
+     * uma como fallback condicional da outra. Achado real (15/08/2026): com o gate antigo
+     * ("só busca texto se embedding trouxe menos que `limit`"), uma query como "posição do
+     * usuário em River" enchia a cota de `limit` resultados com ruído semântico (score ≥0.3, mas
+     * irrelevante — ex: "agent_state", disciplinas de computação) ANTES de a busca textual rodar,
+     * escondendo por completo um nó cujo NOME literalmente continha "RIVER". A busca por
+     * nome/conteúdo (`searchNodes`, FTS5 sobre `name, content, type`) já cobre título e conteúdo
+     * corretamente — o bug nunca foi "não procura no título", foi "não chega a procurar".
+     *
+     * Não é decisão semântica (Regra 10): combinar dois mecanismos de recuperação determinísticos
+     * (similaridade de vetor, correspondência textual) e ordenar por score é comparação numérica
+     * objetiva — a interpretação de QUAL resultado responde à pergunta continua sendo do LLM que
+     * consome a saída desta tool, não desta função.
+     */
     async semanticSearch(query: string, limit: number = 5): Promise<Array<import('./memoryTypes').MemoryNode & { score: number }>> {
         const results: Array<import('./memoryTypes').MemoryNode & { score: number }> = [];
         const foundIds = new Set<string>();
@@ -423,16 +438,19 @@ export class MemoryManager {
             }
         }
 
-        if (results.length < limit) {
-            for (const node of this.searchNodes(query, limit)) {
-                if (!foundIds.has(node.id) && results.length < limit && node.lifecycle_state !== 'SUMMARIZED' && node.lifecycle_state !== 'EXPIRED') {
-                    results.push({ ...node, score: 0.4 });
-                    foundIds.add(node.id);
-                }
+        // SEMPRE roda — não gated por "results.length < limit". Um match textual exato no
+        // nome/conteúdo é evidência tão forte quanto (ou mais forte que) similaridade de vetor
+        // marginal, e não pode ser silenciosamente descartado só porque a cota já foi preenchida
+        // por ruído semântico.
+        for (const node of this.searchNodes(query, limit)) {
+            if (!foundIds.has(node.id) && node.lifecycle_state !== 'SUMMARIZED' && node.lifecycle_state !== 'EXPIRED') {
+                results.push({ ...node, score: 0.4 });
+                foundIds.add(node.id);
             }
         }
 
-        return results;
+        results.sort((a, b) => b.score - a.score);
+        return results.slice(0, limit);
     }
 
     async semanticSearchWithAttention(
@@ -477,7 +495,7 @@ export class MemoryManager {
             const response = await fetch(`${this.ollamaUrl}/api/embeddings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: 'nomic-embed-text:latest', prompt: text })
+                body: JSON.stringify({ model: DEFAULT_EMBED_MODEL, prompt: text })
             });
             if (!response.ok) return null;
             const data = await response.json() as { embedding?: number[] };

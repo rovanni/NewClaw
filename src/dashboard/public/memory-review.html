@@ -39,6 +39,7 @@
     }
     .pill-orphan { color: #fb923c; background: rgba(251,146,60,0.15); }
     .pill-sparse  { color: #facc15; background: rgba(250,204,21,0.13); }
+    .pill-decayed { color: #f87171; background: rgba(248,113,113,0.15); }
     .pill-dup     { color: var(--accent); background: var(--accent-bg); }
     .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
     .empty { color: var(--text-soft); padding: 18px 0; font-size: 0.84rem; }
@@ -192,15 +193,20 @@
           <div class="stat-value">${s.duplicateCount}</div>
           <div class="stat-sub">candidatos a mescla</div>
         </div>
+        <div class="card">
+          <div class="stat-label">Nós decaídos</div>
+          <div class="stat-value">${s.decayedCount}</div>
+          <div class="stat-sub">confiança abaixo de 30%</div>
+        </div>
       `;
 
       const issues = reviewData.issues || [];
       document.getElementById('issuesCount').textContent = issues.length ? `(${issues.length})` : '';
       document.getElementById('issuesList').innerHTML = issues.length
         ? issues.map((issue, idx) => {
-            const pillClass = issue.kind === 'orphan' ? 'pill-orphan' : 'pill-sparse';
+            const pillClass = issue.kind === 'orphan' ? 'pill-orphan' : issue.kind === 'decayed' ? 'pill-decayed' : 'pill-sparse';
             const graphHref = `/memory-graph?node=${encodeURIComponent(issue.nodeId)}`;
-            const deleteBtn = issue.kind === 'orphan'
+            const deleteBtn = (issue.kind === 'orphan' || issue.kind === 'decayed')
               ? `<button class="btn btn-danger" onclick="deleteOrphan(${idx})">Deletar</button>`
               : '';
             return `

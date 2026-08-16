@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
-import { PragmaColumnRow, CountRow } from './memoryTypes';
+import { PragmaColumnRow, isCharacterDecomposedMetadata } from './memoryTypes';
 
 const log = createLogger('Memoryschema');
 
@@ -226,6 +226,78 @@ export function migrateDomainNodeType(db: Database.Database): void {
     }
 }
 
+/**
+ * Repara `memory_nodes.metadata` corrompido em instâncias já em produção.
+ *
+ * Origem: `MemoryFacade.getAllNodes()` devolvia `metadata` como STRING crua (coluna do SQLite,
+ * nunca parseada), violando o contrato do tipo `MemoryNode` (metadata: Record<string,string>).
+ * `MemoryGovernor.decayAllConfidences()` consome exatamente essa lista e regrava o nó via
+ * `addNode({...node, ...})` — como `decayAllConfidences` roda no boot, a cada 24h E depois de
+ * CADA turno de conversa (`AgentController.ts`, callback pós-turno), cada regravação reempacotava
+ * a mesma string numa nova camada de `JSON.stringify`, e depois de ultrapassar 8000 caracteres o
+ * fallback de truncamento de `graphRepository.addNode()` decompunha a string caractere-a-
+ * caractere (`Object.keys()` sobre uma string devolve índices — "0","1","2"...), produzindo
+ * metadata do tipo `{"0":"\"","1":"\\",...,"_truncated":true}`. Achado investigando um nó preso
+ * em limbo (nunca conseguia permanecer conectado ao grafo) — o mesmo dado corrompido também
+ * derrubava `MemoryCurator.deduplicateNodes()` no meio do ciclo (`Cannot create property
+ * 'superseded_by' on string`), interrompendo a limpeza de nós irrelevantes para todo mundo, não
+ * só para o nó afetado.
+ *
+ * A causa (getAllNodes não parseava) já foi corrigida — esta migração só repara o ESTRAGO já
+ * feito em bancos existentes. O conteúdo original do metadata está irrecuperável neste ponto
+ * (múltiplas camadas de escaping perdem a informação); resetar para '{}' é seguro porque
+ * `metadata` nunca guarda o CONTEÚDO do nó (isso vive em `content`/`name`) — só anotações
+ * auxiliares (source, archived_at, superseded_by etc.), que passam a ser re-derivadas
+ * normalmente pelos próximos ciclos de governança.
+ */
+export function repairCorruptedNodeMetadata(db: Database.Database): void {
+    try {
+        const rows = db.prepare(
+            `SELECT id, metadata FROM memory_nodes WHERE metadata IS NOT NULL AND metadata != '' AND metadata != '{}'`
+        ).all() as Array<{ id: string; metadata: string }>;
+
+        if (rows.length === 0) return;
+
+        let repaired = 0;
+        const update = db.prepare('UPDATE memory_nodes SET metadata = ? WHERE id = ?');
+        const tx = db.transaction(() => {
+            for (const row of rows) {
+                let parsed: unknown;
+                try {
+                    parsed = JSON.parse(row.metadata);
+                } catch {
+                    update.run('{}', row.id);
+                    repaired++;
+                    continue;
+                }
+                if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                    update.run('{}', row.id);
+                    repaired++;
+                } else if (isCharacterDecomposedMetadata(parsed as Record<string, unknown>)) {
+                    // Segunda forma de corrupção: JSON.parse devolve um objeto VÁLIDO (não uma
+                    // string), mas suas chaves são índices sequenciais de caractere ("0","1",...)
+                    // — a mesma assinatura de `Object.keys()` aplicado sobre uma string dentro do
+                    // fallback de truncamento. O primeiro type-check (acima) não captura este
+                    // caso porque o valor parseado É um objeto — só o CONTEÚDO das chaves denuncia
+                    // a corrupção, daí a checagem estrutural separada.
+                    update.run('{}', row.id);
+                    repaired++;
+                }
+            }
+        });
+        tx();
+
+        if (repaired > 0) {
+            log.info(
+                'migration_done',
+                `repairCorruptedNodeMetadata: ${repaired} nó(s) com metadata corrompido resetado(s) para '{}' — conteúdo do nó (content/name) preservado intacto.`
+            );
+        }
+    } catch (e) {
+        log.error('migration_failed', e, 'repairCorruptedNodeMetadata failed');
+    }
+}
+
 export function ensureMemorySchema(db: Database.Database): void {
     safeAddColumn(db, 'memory_nodes', 'weight', 'REAL DEFAULT 1.0');
     safeAddColumn(db, 'memory_nodes', 'confidence', 'REAL DEFAULT 1.0');
@@ -245,6 +317,7 @@ export function ensureMemorySchema(db: Database.Database): void {
     safeExec(db, 'CREATE INDEX IF NOT EXISTS idx_memory_nodes_identity_scope ON memory_nodes(identity_scope)');
     migrateMemoryNodesCheckConstraint(db);
     migrateDomainNodeType(db);
+    repairCorruptedNodeMetadata(db);
 }
 
 export function ensureUserProfileSchema(db: Database.Database): void {
@@ -389,14 +462,52 @@ export function initializeSchema(db: Database.Database): Record<string, string> 
         log.info('[MemorySchema] Migrated: removed fts_rowid column');
     }
 
+    // `CREATE VIRTUAL TABLE IF NOT EXISTS` só checa se JÁ EXISTE uma tabela com esse NOME — não
+    // valida se o schema dela bate com o que está sendo pedido. Instâncias cuja `memory_nodes_fts`
+    // foi criada ANTES de o código passar a declarar `content='memory_nodes'` (external content
+    // table) ficam presas para sempre com uma tabela FTS5 standalone: guarda sua PRÓPRIA cópia de
+    // texto, sem nenhum trigger de sincronização com `memory_nodes`, e o `rowid` dela não tem
+    // relação garantida com o `rowid` de `memory_nodes` depois de qualquer INSERT/DELETE — o JOIN
+    // `f.rowid = n.rowid` usado em toda busca (DashboardMemoryRepository, CognitiveDomains,
+    // graphRepository) passa a comparar linhas que não se correspondem mais.
+    //
+    // Achado real (16/08/2026, banco de produção): buscar "river" devolvia 2 nós sem NENHUMA
+    // relação com a palavra (confirmado: nem name nem content continham "river"). `memory_nodes`
+    // tinha 86 linhas, `memory_nodes_fts` só 54 — o índice nunca foi repovoado desde que ficou
+    // desincronizado. A lógica de rebuild antiga (`ftsCount === 0`) nunca disparava porque a
+    // tabela antiga não estava vazia, só desconectada — "vazio" nunca foi a pergunta certa.
+    const existingFtsSql = (db.prepare(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='memory_nodes_fts'`
+    ).get() as { sql: string } | undefined)?.sql;
+    const hadSchemaMismatch = !!existingFtsSql && !existingFtsSql.includes(`content='memory_nodes'`);
+    if (hadSchemaMismatch) {
+        log.warn('[MemorySchema] memory_nodes_fts existe com schema antigo (sem content=memory_nodes, standalone) — recriando desconectada do zero.');
+        try { db.exec('DROP TABLE memory_nodes_fts'); } catch (e) { log.warn('fts_schema_migration_failed', errorMessage(e)); }
+    }
+
     db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memory_nodes_fts USING fts5(name, content, type, content='memory_nodes')`);
 
+    // `SELECT count(*) FROM <fts5 external-content table>` NÃO reflete se o índice de busca já
+    // foi construído — numa external-content table, a contagem espelha `memory_nodes` (a tabela
+    // de conteúdo), sempre, mesmo com o índice interno (`memory_nodes_fts_data`) vazio logo após
+    // o CREATE. Confirmado experimentalmente: `ftsCount === nodeCount` é verdade tanto antes
+    // quanto depois de rodar 'rebuild' — nenhum dos dois lados mede a pergunta que importa ("o
+    // índice tem as entradas de busca de verdade?").
+    //
+    // `memory_nodes_fts` não tem NENHUM trigger de sincronização (confirmado:
+    // `SELECT * FROM sqlite_master WHERE type='trigger'` vazio) — é uma external-content table
+    // pura, sem `INSERT`/`UPDATE`/`DELETE` espelhados automaticamente pelo SQLite nem por código
+    // da aplicação a cada `memory_write`. Isso significa que o rebuild em boot é o ÚNICO ponto de
+    // sincronização que existe: rodar só "quando a tabela acabou de ser criada" deixaria todo nó
+    // escrito ENTRE dois restarts permanentemente de fora do índice até o restart seguinte —
+    // mesma classe de bug que motivou esta investigação, só que para nós novos em vez de
+    // antigos. Por isso o rebuild roda incondicionalmente em todo boot, não só quando o schema
+    // acabou de ser corrigido. Custo: escala com o número de nós (dezenas a poucos milhares
+    // nesta aplicação), evento de boot, não de request — não precisa ser incremental para ser
+    // barato nesta escala.
     try {
-        const ftsCount = (db.prepare('SELECT count(*) as count FROM memory_nodes_fts').get() as CountRow).count;
-        if (ftsCount === 0) {
-            log.info('[MemorySchema] Rebuilding FTS index (empty)...');
-            db.exec(`INSERT INTO memory_nodes_fts(memory_nodes_fts) VALUES('rebuild')`);
-        }
+        log.info('[MemorySchema] Rebuilding FTS index...');
+        db.exec(`INSERT INTO memory_nodes_fts(memory_nodes_fts) VALUES('rebuild')`);
     } catch (e) {
         log.warn('[MemorySchema] FTS rebuild needed:', errorMessage(e));
         try {

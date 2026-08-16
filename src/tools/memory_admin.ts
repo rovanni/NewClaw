@@ -20,6 +20,7 @@ import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { MemoryManager } from '../memory/MemoryManager';
 import type { MemoryGraphRepository } from '../memory/MemoryGraphRepository';
 import { errorMessage } from '../shared/errors';
+import { DEFAULT_EMBED_MODEL } from '../memory/EmbeddingService';
 
 export class MemoryAdminTool implements ToolExecutor {
     name = 'memory_admin';
@@ -195,14 +196,14 @@ export class MemoryAdminTool implements ToolExecutor {
                 const resp = await fetch(`${this.memoryManager.getOllamaUrl()}/api/embeddings`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: 'nomic-embed-text:latest', prompt: text }),
+                    body: JSON.stringify({ model: DEFAULT_EMBED_MODEL, prompt: text }),
                     signal: AbortSignal.timeout(15000)
                 });
                 if (resp.ok) {
                     const data = await resp.json() as { embedding?: number[] };
                     if (data.embedding) {
                         const buf = Buffer.from(new Float64Array(data.embedding).buffer);
-                        this.repo.upsertEmbedding(node.id, buf, 'nomic-embed-text');
+                        this.repo.upsertEmbedding(node.id, buf, DEFAULT_EMBED_MODEL);
                         updated++;
                     } else { failed++; }
                 } else { failed++; }

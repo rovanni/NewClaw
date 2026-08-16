@@ -8,6 +8,7 @@ const log = createLogger('Memorycurator');
 import type { DomainSummaryService } from './DomainSummaryService';
 import { getDomainById } from './DomainRegistry';
 import type { ReflectionMemory } from './ReflectionMemory';
+import { parseNodeMetadata } from './memoryTypes';
 
 interface CuratorResult {
     orphansFixed: number;
@@ -100,8 +101,17 @@ export class MemoryCurator {
 
         const orphans = nodes.filter(n => !connectedNodes.has(n.id));
 
-        // Remove hubs from orphans to prevent self-loops
-        const trueOrphans = orphans.filter(o => o.id !== DAILY_HUB && o.id !== SYSTEM_HUB && o.id !== INFRA_HUB);
+        // Remove hubs from orphans to prevent self-loops. Também remove nós que outro mecanismo
+        // já aposentou deliberadamente (SUPERSEDED por deduplicateNodes, SUMMARIZED por
+        // consolidateStaleClusters, EXPIRED por TTL) — sem isso, curate() ficava reconectando um
+        // nó a cada ciclo (edge nova) e deduplicateNodes desfazendo no MESMO ciclo (edge
+        // retargetada/apagada ao marcar o nó SUPERSEDED), um cabo de guerra entre dois mecanismos
+        // que nunca liam o resultado um do outro. Achado investigando um nó preso em limbo que
+        // nunca ficava conectado nem desaparecia da lista de órfãos.
+        const trueOrphans = orphans.filter(o =>
+            o.id !== DAILY_HUB && o.id !== SYSTEM_HUB && o.id !== INFRA_HUB &&
+            (o.lifecycle_state == null || o.lifecycle_state === 'ACTIVE')
+        );
 
         if (trueOrphans.length === 0) {
             this.repo.deleteSelfLoops();
@@ -541,7 +551,7 @@ export class MemoryCurator {
 
             const metaRaw = db.prepare('SELECT metadata FROM memory_nodes WHERE id = ?')
                 .get(dup.id) as { metadata: string | null } | undefined;
-            const meta = JSON.parse(metaRaw?.metadata ?? '{}') as Record<string, string>;
+            const meta = parseNodeMetadata(metaRaw?.metadata, dup.id);
             meta['superseded_by'] = canonical.id;
             meta['superseded_at'] = new Date().toISOString();
 
@@ -741,7 +751,7 @@ export class MemoryCurator {
                             'SELECT metadata FROM memory_nodes WHERE id = ?'
                         ).get(node.id) as { metadata: string | null } | undefined;
 
-                        const meta: Record<string, string> = JSON.parse(metaRaw?.metadata ?? '{}');
+                        const meta = parseNodeMetadata(metaRaw?.metadata, node.id);
                         meta['summarized_into'] = summaryNode.id;
                         meta['summarized_at'] = new Date().toISOString();
 

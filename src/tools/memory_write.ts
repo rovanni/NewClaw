@@ -13,6 +13,7 @@
 import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
+import { DEFAULT_EMBED_MODEL } from '../memory/EmbeddingService';
 import { isProtectedNode } from '../memory/MemoryFacade';
 import { errorMessage } from '../shared/errors';
 import type { ExecutionOutcome } from '../memory/ProceduralMemoryService';
@@ -136,11 +137,13 @@ export class MemoryWriteTool implements ToolExecutor {
             }
         }
 
-        if (!args.id && args.content) {
-            args.id = `fact_${Date.now()}`;
-            args.name = (args.content as string).slice(0, 50);
-            args.type = args.type || 'fact';
-        }
+        // create() já reimplementa este preenchimento (auto id via slug+timestamp, auto type
+        // 'fact', auto name a partir do content) — mas ali passa primeiro por findSimilarNode()
+        // para evitar duplicata. Gerar o id aqui, ANTES do dispatch, fazia create() nunca ver
+        // `id` vazio — seu próprio bloco `if (!id) { ... findSimilarNode ... }` (adicionado no
+        // commit ccdc9e9, 20/05/2026) ficou morto desde que foi escrito: o dedup por similaridade
+        // nunca rodou em produção. Confirmado no incidente de 15/08/2026 (mesma campanha do
+        // S236/S240): 6 nós distintos no banco real descrevem a mesma posição em PI Network.
 
         // 2. Owner identity guard — rejeita sobrescrita quando dono está configurado e bloqueado
         const lockCheck = this.checkOwnerLock(
@@ -203,6 +206,7 @@ export class MemoryWriteTool implements ToolExecutor {
                 similar.name = name || similar.name;
                 this.memoryManager.addNode(similar);
                 if (domain) this.facade.setNodeDomain(similar.id, domain as string);
+                await this.regenerateEmbedding(similar.id, similar);
                 return { success: true, output: `✅ Nó "${similar.id}" atualizado (conteúdo similar já existia — duplicata evitada).` };
             }
             const slug = (name || content || 'node').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30);
@@ -217,11 +221,13 @@ export class MemoryWriteTool implements ToolExecutor {
             this.memoryManager.addNode(existing);
 
             if (domain) this.facade.setNodeDomain(id, domain as string);
+            await this.regenerateEmbedding(id, existing);
 
             return { success: true, output: `✅ Nó "${id}" atualizado (já existia).` };
         }
 
-        this.memoryManager.addNode({ id, type: type as MemoryNode['type'], name, content });
+        const newNode: MemoryNode = { id, type: type as MemoryNode['type'], name, content };
+        this.memoryManager.addNode(newNode);
 
         if (type === 'identity' && id !== 'core_user') {
             try { this.memoryManager.addEdge('core_user', id, 'has_identity'); } catch { /* ignore */ }
@@ -258,6 +264,13 @@ export class MemoryWriteTool implements ToolExecutor {
         }
 
         if (domain) this.facade.setNodeDomain(id, domain as string);
+
+        // Sem isso, um nó recém-criado nunca tem linha em memory_embeddings — fica permanentemente
+        // invisível à metade vetorial de MemoryManager.semanticSearch() (só update/connect/merge
+        // geravam embedding; create() nunca gerou, desde a extração para MemoryFacade em 17/05/2026).
+        // A busca lexical (S236) cobre apenas queries que compartilham palavra com nome/conteúdo —
+        // uma paráfrase ("minha posição atual") continua sem achar o fato.
+        await this.regenerateEmbedding(id, newNode);
 
         // Force immediate indexing so the node is findable in the very next query.
         // Without this, CognitiveMemoryIndex only indexes lazily → race condition.
@@ -514,14 +527,14 @@ export class MemoryWriteTool implements ToolExecutor {
             const resp = await fetch(`${this.memoryManager.getOllamaUrl()}/api/embeddings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: 'nomic-embed-text:latest', prompt: text }),
+                body: JSON.stringify({ model: DEFAULT_EMBED_MODEL, prompt: text }),
                 signal: AbortSignal.timeout(15000)
             });
             if (resp.ok) {
                 const data = await resp.json() as { embedding?: number[] };
                 if (data.embedding) {
                     const buf = Buffer.from(new Float64Array(data.embedding).buffer);
-                    this.facade.upsertEmbedding(nodeId, buf, 'nomic-embed-text');
+                    this.facade.upsertEmbedding(nodeId, buf, DEFAULT_EMBED_MODEL);
                 }
             }
         } catch { /* embedding optional */ }

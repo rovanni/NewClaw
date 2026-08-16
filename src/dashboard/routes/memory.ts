@@ -76,7 +76,14 @@ function isSystemNode(id: string): boolean {
            id.startsWith('time_') || id.startsWith('user_identity');
 }
 
-function computeMemoryReview(nodes: DashboardNode[], edges: DashboardEdge[]) {
+// Mesmo limiar que MemoryGovernor.DEFAULT_CONFIG.minConfidence usa para decidir arquivamento —
+// não é um número novo inventado para esta tela, é o mesmo corte que o sistema já usa para
+// decidir "essa memória decaiu demais". Duplicado aqui (em vez de importado) porque este arquivo
+// mantém suas funções de cômputo puras, sem depender de classes do motor de memória — mesmo
+// padrão já usado por isSystemNode() acima.
+const DECAYED_CONFIDENCE_THRESHOLD = 0.3;
+
+export function computeMemoryReview(nodes: DashboardNode[], edges: DashboardEdge[]) {
     const centrality: Record<string, { degree: number; inDegree: number; outDegree: number }> = {};
     for (const node of nodes) centrality[node.id] = { degree: 0, inDegree: 0, outDegree: 0 };
     for (const edge of edges) {
@@ -110,7 +117,22 @@ function computeMemoryReview(nodes: DashboardNode[], edges: DashboardEdge[]) {
 
     const duplicateCandidates = findDuplicateCandidates(reviewable);
 
-    // Issues: only orphans and sparse — duplicates have their own dedicated section in the UI
+    // Nós cuja confiança decaiu abaixo do limiar de arquivamento do MemoryGovernor — o operador
+    // pediu explicitamente uma forma de ver "nós que decairam muito" para decidir se apaga, em
+    // vez de depender só do arquivamento automático (que é lento por design para nós tipo fact).
+    const decayedNodes = reviewable
+        .filter((node) => {
+            const confidence = (node as { confidence?: unknown }).confidence;
+            return typeof confidence === 'number' && confidence < DECAYED_CONFIDENCE_THRESHOLD;
+        })
+        .map((node) => ({
+            id: node.id, type: node.type, name: node.name,
+            confidence: (node as { confidence?: number }).confidence ?? 0,
+        }))
+        .sort((a, b) => a.confidence - b.confidence)
+        .slice(0, 20);
+
+    // Issues: orphans, sparse e decayed — duplicates têm seção dedicada própria na UI
     const issues = [
         ...orphanNodes.map((node) => ({
             kind: 'orphan', priority: 100, nodeId: node.id,
@@ -122,6 +144,12 @@ function computeMemoryReview(nodes: DashboardNode[], edges: DashboardEdge[]) {
             nodeId: node.id, title: node.name || node.id,
             detail: `Conteúdo curto (${node.contentLength} chars), grau ${node.degree}`,
         })),
+        ...decayedNodes.map((node) => ({
+            kind: 'decayed',
+            priority: 90 - Math.round(node.confidence * 100),
+            nodeId: node.id, title: node.name || node.id,
+            detail: `Confiança em ${Math.round(node.confidence * 100)}% (abaixo de ${Math.round(DECAYED_CONFIDENCE_THRESHOLD * 100)}%)`,
+        })),
     ]
         .sort((a, b) => b.priority - a.priority)
         .slice(0, 25);
@@ -132,16 +160,17 @@ function computeMemoryReview(nodes: DashboardNode[], edges: DashboardEdge[]) {
     const orphanPenalty = Math.min(35, Math.round((orphanNodes.length / totalNodes) * 100));
     const sparsePenalty = Math.min(25, Math.round((sparseNodes.length / totalNodes) * 60));
     const duplicatePenalty = Math.min(15, duplicateCandidates.length * 3);
+    const decayedPenalty = Math.min(20, Math.round((decayedNodes.length / totalNodes) * 60));
     const densityBonus = Math.min(20, Math.round(edgeDensity * 8));
-    const qualityScore = Math.max(0, Math.min(100, 55 + densityBonus - orphanPenalty - sparsePenalty - duplicatePenalty));
+    const qualityScore = Math.max(0, Math.min(100, 55 + densityBonus - orphanPenalty - sparsePenalty - duplicatePenalty - decayedPenalty));
 
     return {
         summary: {
             totalNodes: nodes.length, totalEdges: edges.length,
             orphanCount: orphanNodes.length, sparseCount: sparseNodes.length,
-            duplicateCount: duplicateCandidates.length, qualityScore,
+            duplicateCount: duplicateCandidates.length, decayedCount: decayedNodes.length, qualityScore,
         },
-        orphanNodes, sparseNodes, duplicateCandidates, issues, centrality,
+        orphanNodes, sparseNodes, duplicateCandidates, decayedNodes, issues, centrality,
     };
 }
 
@@ -288,25 +317,50 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
             const q = req.query.q as string;
             if (!q) return res.status(400).json({ error: 'Query parameter "q" required' });
 
+            // Combina busca lexical (nome+conteúdo, FTS5/LIKE) com busca por embedding — nunca
+            // uma como fallback condicional da outra. Achado real (15/08/2026): o código antigo só
+            // rodava a busca textual quando `embeddingService.search()` devolvia ZERO resultados —
+            // mas `EmbeddingService.search()` não tem piso de similaridade (nenhum `score < X`
+            // corta o resultado), então praticamente qualquer busca com embeddings disponíveis
+            // devolve `results.length > 0`, e a busca por nome/conteúdo nunca chegava a rodar. Um
+            // nó com "RIVER" literalmente no nome ficava invisível se o ranking por vetor não o
+            // colocasse no top-20 semântico — mesmo sendo uma correspondência textual exata.
+            const dashboardRepo = ctx.memoryManager.getDashboardRepository();
+            const merged = new Map<string, { id: string; type: string; name: string; content: string; updated_at: string; score: number }>();
+
+            // 1. Lexical — sempre roda, já cobre nome E conteúdo (memory_nodes_fts indexa
+            //    `name, content, type`; fallback LIKE cobre os dois campos também).
+            for (const n of dashboardRepo.searchNodes(q)) {
+                merged.set(n.id, { id: n.id, type: n.type, name: n.name, content: n.content, updated_at: n.updated_at, score: 0.5 });
+            }
+
+            // 2. Semântica — soma, não substitui. Quando o mesmo nó aparece nos dois, fica com o
+            //    maior score (evidência textual exata não deve perder pra uma similaridade
+            //    marginal, mas uma similaridade muito alta também não deve perder pro score fixo
+            //    do match textual).
+            let usedEmbedding = false;
             if (ctx.embeddingService) {
                 try {
                     const available = await ctx.embeddingService.isAvailable();
                     if (available) {
-                        const results = await ctx.embeddingService.search(q, 20);
-                        if (results.length > 0) {
-                            const ids = results.map(r => r.id);
-                            const scores = new Map(results.map(r => [r.id, r.score]));
-                            const nodes = ctx.memoryManager.getDashboardRepository().searchNodes(q, ids);
-                            const nodesWithScore = nodes.map(n => ({ ...n, score: scores.get(n.id) || 0 }));
-                            nodesWithScore.sort((a, b) => b.score - a.score);
-                            return res.json({ success: true, nodes: nodesWithScore, method: 'embedding' });
+                        const embResults = await ctx.embeddingService.search(q, 20);
+                        if (embResults.length > 0) {
+                            usedEmbedding = true;
+                            const ids = embResults.map(r => r.id);
+                            const scoreMap = new Map(embResults.map(r => [r.id, r.score]));
+                            const embNodes = dashboardRepo.searchNodes(q, ids);
+                            for (const n of embNodes) {
+                                const embScore = scoreMap.get(n.id) ?? 0;
+                                const existing = merged.get(n.id);
+                                merged.set(n.id, { id: n.id, type: n.type, name: n.name, content: n.content, updated_at: n.updated_at, score: Math.max(existing?.score ?? 0, embScore) });
+                            }
                         }
                     }
-                } catch { /* fall through to text search */ }
+                } catch { /* busca por embedding é best-effort — resultado lexical continua valendo */ }
             }
 
-            const nodes = ctx.memoryManager.getDashboardRepository().searchNodes(q);
-            const method = nodes.length > 0 ? 'fts5' : 'like';
+            const nodes = [...merged.values()].sort((a, b) => b.score - a.score).slice(0, 20);
+            const method = usedEmbedding ? 'combined' : (nodes.length > 0 ? 'fts5_like' : 'none');
             return res.json({ success: true, nodes, method });
         } catch (err) {
             res.status(500).json({ error: errorMessage(err) });

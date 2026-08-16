@@ -16,6 +16,7 @@ import { BufferState, ChunkCutTrigger, ChunkMessage, ConversationChunk } from '.
 import { createDomainClassifierLLM, type DomainClassifierLLM } from '../DomainRegistry';
 import { createLogger } from '../../shared/AppLogger';
 import { extractText } from '../../shared/extractText';
+import { DEFAULT_EMBED_MODEL } from '../EmbeddingService';
 
 const log = createLogger('CMIIngestionPipeline');
 
@@ -258,7 +259,7 @@ export class CMIIngestionPipeline {
             const res = await fetch(`${this.ollamaUrl}/api/embeddings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: 'nomic-embed-text', prompt: text }),
+                body: JSON.stringify({ model: DEFAULT_EMBED_MODEL, prompt: text }),
                 signal: AbortSignal.timeout(EMBED_TIMEOUT_MS)
             });
             if (!res.ok) return null;

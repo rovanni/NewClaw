@@ -23,6 +23,7 @@ export interface BasicNode {
     len?: number;
     degree?: number;
     pagerank?: number;
+    lifecycle_state?: string | null;
 }
 
 export interface BasicEdge {
@@ -73,7 +74,7 @@ export class MemoryGraphRepository {
     // ── Node reads ────────────────────────────────────────────────────────────
 
     getAllNodes(): BasicNode[] {
-        return this.db.prepare('SELECT id, type, name, domain FROM memory_nodes').all() as BasicNode[];
+        return this.db.prepare('SELECT id, type, name, domain, lifecycle_state FROM memory_nodes').all() as BasicNode[];
     }
 
     getAllNodeIds(): string[] {
@@ -295,6 +296,10 @@ export class MemoryGraphRepository {
         const deletedMetrics = this.db.prepare(
             `DELETE FROM node_metrics WHERE node_id IN (${ph})`
         ).run(...safeToRemove).changes;
+        // memory_metrics_history.node_id tem FK (NO ACTION) para memory_nodes.id — mesmo achado
+        // de MemoryFacade.deleteNodeCascade() (16/08/2026): sem isso, remover um nó com histórico
+        // acumulado viola a constraint e aborta a limpeza inteira.
+        this.db.prepare(`DELETE FROM memory_metrics_history WHERE node_id IN (${ph})`).run(...safeToRemove);
         const deletedNodes = this.db.prepare(
             `DELETE FROM memory_nodes WHERE id IN (${ph})`
         ).run(...safeToRemove).changes;

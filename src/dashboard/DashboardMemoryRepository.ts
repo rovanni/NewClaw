@@ -275,7 +275,7 @@ export class DashboardMemoryRepository {
 
     /** Fetch all nodes + edges for the memory review computation (done in-route) */
     getReviewData(): { nodes: NodePreview[]; edges: EdgeRow[] } {
-        const nodes = this.db.prepare('SELECT id, type, name, content, updated_at FROM memory_nodes ORDER BY updated_at DESC').all() as NodePreview[];
+        const nodes = this.db.prepare('SELECT id, type, name, content, updated_at, confidence FROM memory_nodes ORDER BY updated_at DESC').all() as NodePreview[];
         const edges = this.db.prepare('SELECT from_node, to_node, relation FROM memory_edges').all() as EdgeRow[];
         return { nodes, edges };
     }

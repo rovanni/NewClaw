@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { AttentionFeedback } from './AttentionFeedback';
 import type { MemoryManager, MemoryNode } from './MemoryManager';
+import { parseNodeMetadata } from './memoryTypes';
 
 // ── Protected node registry ───────────────────────────────────────────────
 //
@@ -175,7 +176,22 @@ export class SqliteMemoryFacade implements MemoryFacade {
     }
 
     getAllNodes(): MemoryNode[] {
-        return this.db.prepare('SELECT * FROM memory_nodes').all() as MemoryNode[];
+        // `metadata` chega do SQLite como TEXT (JSON serializado) — precisa ser parseado aqui,
+        // igual `graphRepository.getNode()` já faz, para que o objeto devolvido cumpra o
+        // contrato do tipo MemoryNode (metadata: Record<string,string>). Sem isso, todo
+        // consumidor que grava de volta um nó lido daqui (MemoryGovernor.decayAllConfidences,
+        // garbageCollect/archiveNode) reempacota a STRING crua numa nova camada de
+        // JSON.stringify a cada ciclo — decayAllConfidences roda no boot, a cada 24h E depois de
+        // CADA turno de conversa, então a corrupção composta rapidamente. Achado investigando um
+        // nó preso em limbo (nunca fica órfão nem some) cujo metadata acabou virando uma string
+        // decomposta caractere-a-caractere (`{"0":"\"","1":"\\",...}`) — resultado exato de
+        // `Object.keys()` sendo chamado sobre uma string em vez de um objeto, dentro do fallback
+        // de truncamento de `graphRepository.addNode()`.
+        const rows = this.db.prepare('SELECT * FROM memory_nodes').all() as Array<Record<string, unknown>>;
+        return rows.map(row => ({
+            ...row,
+            metadata: parseNodeMetadata(row.metadata as string | null | undefined, row.id as string),
+        })) as MemoryNode[];
     }
 
     addNode(node: MemoryNode, source: string = 'unknown'): void {
@@ -253,6 +269,12 @@ export class SqliteMemoryFacade implements MemoryFacade {
         this.db.prepare('DELETE FROM memory_edges WHERE from_node = ? OR to_node = ?').run(id, id);
         this.db.prepare('DELETE FROM memory_embeddings WHERE node_id = ?').run(id);
         this.db.prepare('DELETE FROM node_metrics WHERE node_id = ?').run(id);
+        // `memory_metrics_history.node_id` tem FK para memory_nodes.id com NO ACTION (não CASCADE) —
+        // achado real (16/08/2026): deletar um nó com histórico acumulado (ex: 968 linhas, de um nó
+        // arquivado meses atrás) violava a constraint e abortava a exclusão/merge inteiro.
+        // `procedural_executions.node_id` tem a mesma FK mas com ON DELETE CASCADE — não precisa de
+        // limpeza manual aqui.
+        this.db.prepare('DELETE FROM memory_metrics_history WHERE node_id = ?').run(id);
         this.db.prepare('DELETE FROM memory_nodes WHERE id = ?').run(id);
     }
 
