@@ -25,6 +25,7 @@ audio/
 # Backups e logs
 backups/
 logs/
+*.log
 *.pid
 
 # Grafo cognitivo (skill cognitive-graph-builder): índice semântico do workspace, gerado por
@@ -48,6 +49,7 @@ scripts/testes/integration-campaign-evidence.json
 debug_loop.js
 fetch.js
 scratch/
+scratchpad/
 tmp_*.js
 tmp_*.mjs
 tmp_*.txt
