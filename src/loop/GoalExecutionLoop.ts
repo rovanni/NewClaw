@@ -877,26 +877,34 @@ export class GoalExecutionLoop {
             retryBudget: Math.max(0, goal.retryBudget - 1),
         });
         goal = this.goalStore.getById(goal.id)!;
-        // CORREÇÃO 2 (S10-PARTIAL): defense-in-depth para o gap DELIVERY-GUARD.
-        // Se deferredSends contém paths (capturados pelo intercept do main loop)
-        // e o DELIVERY-GUARD os entregou antes do downgrade para 'partial',
-        // a Correção 1 já registrou via callback. Este bloco cobre o caso
-        // onde o callback falhou silenciosamente ou não foi acionado.
-        // NÃO injeta steps de send (diferente do S10 em case 'success') —
-        // apenas garante que sentArtifacts reflita o que foi entregue.
-        if (cycleResult.deferredSends?.length) {
-            for (const sendArgs of cycleResult.deferredSends) {
-                const fp = String(sendArgs['file_path'] ?? sendArgs['path'] ?? '');
-                if (fp && !sentArtifacts.has(fp)) {
-                    trackArtifact(fp);
-                    log.info(
-                        `[S10-PARTIAL] goal=${goal.id}` +
-                        ` artifact="${fp}"` +
-                        ` source=deferred_sends_partial_fallback`
-                    );
-                }
-            }
-        }
+        // CORREÇÃO 2 (S10-PARTIAL), REMOVIDA em 17/08/2026: este bloco marcava em
+        // sentArtifacts todo artefato presente em cycleResult.deferredSends quando o
+        // outcome do step caía para 'partial' — mesma premissa que o histórico do teste S10
+        // (S10_SentArtifacts_DeliveryGuard.test.ts) já documentou como incorreta e removeu do
+        // caminho 'success' em 02/07/2026: deferredSends é populado por deferSendDocument()
+        // (intercept de send_document sob reason=goal_execution_policy em AgentLoop.ts) — por
+        // definição um artefato AGENDADO para envio controlado pós-validação, nunca um artefato
+        // já ENTREGUE. O comentário original supunha que este bloco cobria "DELIVERY-GUARD
+        // entregou mas o callback onArtifactDelivered falhou silenciosamente" — premissa
+        // estruturalmente impossível: onArtifactDelivered (entrega real, ver AgentLoop.ts
+        // "CORREÇÃO 1") é um callback inteiramente separado de deferSendDocument/deferredSends,
+        // nunca alimenta esse array.
+        //
+        // Por só existir aqui (em 'partial', nunca corrigida junto com 'success' porque o regex
+        // do teste S10 prendia o padrão de código exato do bloco antigo, não a classe do bug),
+        // este gêmeo sobreviveu 1+ mês sem detecção e causou falha real de entrega (achado ao
+        // vivo, goal_1786897254318_i6lzp, 16/08/2026, "qual o valor do dolar hoje?"): o primeiro
+        // ciclo do step 'agentloop' escreveu e deferiu o envio do arquivo real
+        // (tmp/cotacao_dolar.txt), mas teve outcome rebaixado para 'partial' por
+        // SEMANTIC-MISMATCH; este bloco marcou o arquivo como "já enviado" antes de qualquer
+        // envio real acontecer. Consequência em cascata: (1) o retry bem-sucedido do mesmo step
+        // não reinjetou o send como pending step (dedup contra sentArtifacts); (2) no despacho
+        // final, resolveArtifactPathFromEvidence() encontrou corretamente o path real em
+        // goal.attempts, mas o próprio guard `!sentArtifacts.has(evidencePath)` bloqueou a
+        // correção, por já constar como "enviado"; (3) sobrou apenas o send_document original do
+        // plano, com o file_path não verificado que RiskAnalyzer inferiu de um step 'write'
+        // irmão ainda não executado — esse arquivo nunca existiu no path esperado, e o goal
+        // terminou success=false apesar do conteúdo já estar pronto e correto.
         return { earlyReturn: false, goal, totalReplans, priorFeedback };
     }
 

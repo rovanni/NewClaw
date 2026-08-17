@@ -109,9 +109,20 @@ if (goalExecLoopFull) {
         goalExecLoopFull.includes('DELIVERY-GUARD-REGISTERED'),
         'GoalExecutionLoop loga DELIVERY-GUARD-REGISTERED quando callback é acionado'
     );
+    // "Correção 2 (S10-PARTIAL)" REMOVIDA em 17/08/2026 (achado real, goal_1786897254318_i6lzp,
+    // 16/08/2026 — ver S246_PartialOutcome_DeferredSendNotMarkedSent.test.ts): marcava em
+    // sentArtifacts todo artefato em cycleResult.deferredSends quando um step caía para
+    // 'partial' — mas deferredSends só existe para envios AGENDADOS (deferSendDocument, reason=
+    // goal_execution_policy), nunca para entregas reais confirmadas (essas usam
+    // onArtifactDelivered, callback inteiramente separado — testado acima). Marcar um artefato
+    // meramente agendado como "já enviado" bloqueava a correção evidence-based no despacho final
+    // (resolveArtifactPathFromEvidence, S163) e causou falha real de entrega. Este teste (P1.1)
+    // checava só a PRESENÇA da string "S10-PARTIAL" no arquivo — passava mesmo após a remoção,
+    // porque o comentário explicando a remoção também cita o nome. Substituído pela checagem
+    // negativa correta, que já vive em S246 (fonte única — não duplicada aqui).
     assert(
-        goalExecLoopFull.includes('S10-PARTIAL'),
-        'GoalExecutionLoop tem S10-PARTIAL em case partial (Correção 2 — defense-in-depth)'
+        !/for\s*\(\s*const sendArgs of cycleResult\.deferredSends\s*\)\s*\{[\s\S]{0,200}trackArtifact\(/.test(goalExecLoopFull),
+        'GoalExecutionLoop NÃO marca deferredSends (meramente agendados) como sentArtifacts em nenhum case do switch — nem success, nem partial (ver S246)'
     );
 }
 
@@ -140,6 +151,6 @@ console.log(`  ❌ Falhou: ${failed}`);
 console.log(`\nARQUITETURA ATUAL:`);
 console.log(`  1. sentArtifacts (Set<string>) — fonte de verdade de dedup intra-goal`);
 console.log(`  2. onArtifactDelivered callback — DELIVERY-GUARD → sentArtifacts (Correção 1)`);
-console.log(`  3. S10-PARTIAL — defense-in-depth em case 'partial' (Correção 2)`);
+console.log(`  3. S10-PARTIAL — REMOVIDO em 17/08/2026 (conflava "agendado" com "enviado", ver S246)`);
 console.log(`  4. SessionManager.deliveredArtifacts — contexto cognitivo cross-goal para LLM`);
 console.log(`  5. ArtifactDeliveryRegistry — REMOVIDO (Strategy B, auditoria jun/2026)`);
