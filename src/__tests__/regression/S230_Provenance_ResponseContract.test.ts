@@ -369,8 +369,15 @@ console.log('\n=== S230-16 — Fix presente estruturalmente: GoalExecutionLoop.t
 {
     const source = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'GoalExecutionLoop.ts'), 'utf-8');
     assert(
-        (source.match(/\(a\.planGeneration \?\? 0\) === currentGeneration/g) ?? []).length === 1,
-        'belongsToCurrentGeneration (buildResult) usa a semântica fechada (undefined = geração 0), não "sempre elegível"',
+        // 17/08/2026 (S248, ADR-010 priorStepEvidence): a MESMA semântica fechada
+        // (planGeneration ?? 0) === currentGeneration passou a ter um segundo consumidor
+        // legítimo em dispatchAgentloopStep() — evidência cross-step para o juiz de
+        // groundedness precisa da mesma restrição de geração que pickBestAvailableContent()
+        // já aplicava (nunca vazar attempt de uma estratégia abandonada por um replan). Duas
+        // ocorrências corretas do mesmo predicado, não duplicação acidental — a asserção de
+        // não-regressão abaixo (semântica antiga "undefined = sempre elegível") continua de pé.
+        (source.match(/\(a\.planGeneration \?\? 0\) === currentGeneration/g) ?? []).length === 2,
+        'belongsToCurrentGeneration (buildResult) E priorStepEvidence (dispatchAgentloopStep) usam a mesma semântica fechada (undefined = geração 0), não "sempre elegível"',
     );
     assert(
         (source.match(/\(attempt\.planGeneration \?\? 0\) === currentGeneration/g) ?? []).length === 1,

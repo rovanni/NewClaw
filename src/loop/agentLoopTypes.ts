@@ -1,4 +1,5 @@
 import { ResponseOption } from '../channels/ChannelAdapter';
+import { EvidenceItem } from './ObserverValidator';
 
 /** Duck-type para ferramentas que suportam injeção de contexto de canal */
 export interface ContextAwareTool {
@@ -131,6 +132,29 @@ export interface ChannelContext {
     recentMessages?: Array<{ role: string; content: string }>;
     /** ARCH-024: bus de callbacks de rastreamento de entrega — ver DeliveryTrackingContext acima. */
     deliveryTracking?: DeliveryTrackingContext;
+    /**
+     * ADR-010 (C1, barreira de groundedness) — evidência REAL de steps ANTERIORES do MESMO goal
+     * (mesma planGeneration), extraída de `goal.attempts` (result='success') por
+     * `GoalExecutionLoop.dispatchAgentloopStep()`. `AgentLoop.commitResponse()` mescla isto ao
+     * `ExecutionTrace` do turno atual antes de chamar `ObserverValidator.validateGrounding()`.
+     *
+     * Sem isto, o juiz de groundedness só enxerga o `ExecutionTrace` do turno/ciclo ATUAL — mas o
+     * GoalPlanner explicitamente instrui steps a reaproveitarem um fato já obtido num step
+     * anterior (ex.: "multiplicando o preço em USD (2.69) pela cotação do dólar obtida no
+     * step_1") em vez de re-consultar a ferramenta à toa (decisão legítima de custo, autoridade
+     * do Planner). Sem visibilidade sobre esse fato, o juiz classifica a afirmação como
+     * NOT_EVALUABLE e bloqueia a resposta, mesmo quando o valor reaproveitado é real e correto.
+     *
+     * Achado real (17/08/2026, goal_1786990038154_2uh8m, "Qual o valor do river em reais?"): 4
+     * replans, 12 ciclos, ~280s, TODOS bloqueados por este motivo — inclusive quando a afirmação
+     * rejeitada ("Preço atual da River (RIVER): US$ 2,69") era exatamente o valor correto,
+     * confirmado por uma consulta bem-sucedida poucos minutos antes na mesma conversa.
+     *
+     * Nunca inventado: só entra aqui o que já está persistido como `GoalAttempt.result==='success'`
+     * — mesma fonte de verdade que `resolveArtifactPathFromEvidence()` já usa para corrigir
+     * `file_path` de entregas diferidas (planning/artifactContract.ts).
+     */
+    priorStepEvidence?: EvidenceItem[];
 }
 
 export interface AgentLoopConfig {

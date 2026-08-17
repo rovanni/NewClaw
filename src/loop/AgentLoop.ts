@@ -846,6 +846,7 @@ export class AgentLoop {
         conversationId: string,
         signal?: AbortSignal,
         toolFailureCount = 0,
+        channelContext?: ChannelContext,
     ): Promise<string> {
         const last = this.getTurnState(conversationId).lastToolExecution;
 
@@ -994,7 +995,15 @@ export class AgentLoop {
             // comentário) — e o try abaixo cobre só a preparação/chamada do juiz: se algo
             // escapar ANTES do try interno de validateGrounding (ex: getBudgetAuxiliar), este
             // catch bloqueia com UNVALIDATED em vez de deixar cair no catch externo fail-open.
-            const evidences = AgentLoop.evidencesFromTrace(trace);
+            //
+            // channelContext.priorStepEvidence (achado real, 17/08/2026 — ver comentário em
+            // agentLoopTypes.ts): evidência real de steps ANTERIORES do MESMO goal, mesclada aqui
+            // para o juiz também enxergar fatos legitimamente reaproveitados de um step anterior
+            // (não só do ExecutionTrace deste turno). IDs renumerados sequencialmente após o
+            // merge — evidencesFromTrace e priorStepEvidence numeram cada um a partir de E1/G1
+            // independentemente, e o juiz recebe uma lista só, sem rótulos duplicados.
+            const evidences = [...AgentLoop.evidencesFromTrace(trace), ...(channelContext?.priorStepEvidence ?? [])]
+                .map((e, i) => ({ ...e, id: `E${i + 1}` }));
             try {
                 const g = await this.observer.validateGrounding(response, evidences, signal);
                 if (g.state !== 'VALIDATED' && g.state !== 'NOT_APPLICABLE') {
@@ -1475,7 +1484,7 @@ export class AgentLoop {
         traceManager.completeTrace(trace, 'completed', finalText);
         this.persistTrace(trace, 1, 'completed', finalText, channelContext);
 
-        return { text: await this.commitResponse(finalText, userText, trace, conversationId) };
+        return { text: await this.commitResponse(finalText, userText, trace, conversationId, undefined, 0, channelContext) };
     }
 
     /**
@@ -1981,7 +1990,7 @@ export class AgentLoop {
                 move('FINAL_READY', { step: stepCount, reason: 'synthesis' });
                 traceManager.completeTrace(trace, 'completed', synthesisText);
                 this.persistTrace(trace, stepCount, 'completed', synthesisText, channelContext);
-                return await this.commitResponse(synthesisText, userText, trace, conversationId, turnSignal, toolFailureCount);
+                return await this.commitResponse(synthesisText, userText, trace, conversationId, turnSignal, toolFailureCount, channelContext);
             }
 
             log.warn(`[${this.ts()}] [SYNTHESIS] Failed to extract useful text (raw=${rawSynthesis.length}, extracted=${synthesisText?.length || 0})`);
@@ -1991,7 +2000,7 @@ export class AgentLoop {
             move('FINAL_READY', { step: stepCount, reason: 'last_best_content' });
             traceManager.completeTrace(trace, 'completed', lastBestContent);
             this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
-            return await this.commitResponse(lastBestContent, userText, trace, conversationId, turnSignal, toolFailureCount);
+            return await this.commitResponse(lastBestContent, userText, trace, conversationId, turnSignal, toolFailureCount, channelContext);
         }
 
         log.info(`[${this.ts()}] [FALLBACK] Generating final synthesis...`);
@@ -2041,7 +2050,7 @@ export class AgentLoop {
         this.persistTrace(trace, stepCount, stepCount >= maxSteps ? 'max_iterations' : 'completed', text, channelContext);
         // removed: this.activeTurns.delete(conversationId);
 
-        return await this.commitResponse(text, userText, trace, conversationId, turnSignal, toolFailureCount);
+        return await this.commitResponse(text, userText, trace, conversationId, turnSignal, toolFailureCount, channelContext);
     }
 
     /**
@@ -3710,7 +3719,7 @@ export class AgentLoop {
                 move('FINAL_READY', { step: stepCount, reason: isFinalAnswer ? 'final_answer' : 'is_complete' });
                 traceManager.completeTrace(trace, 'completed', finalText);
                 this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                return { text: await this.commitResponse(finalText, userText, trace, conversationId, turnSignal, toolFailureCount) };
+                return { text: await this.commitResponse(finalText, userText, trace, conversationId, turnSignal, toolFailureCount, channelContext) };
             }
 
             const nativeDispatchResult = await this.runNativeToolCallDispatch(
@@ -3741,7 +3750,7 @@ export class AgentLoop {
                     move('FINAL_READY', { step: stepCount, reason: 'no_tools_requested' });
                     traceManager.completeTrace(trace, 'completed', finalText);
                     this.persistTrace(trace, stepCount, 'completed', finalText, channelContext);
-                    return await this.commitResponse(finalText, userText, trace, conversationId, turnSignal, toolFailureCount);
+                    return await this.commitResponse(finalText, userText, trace, conversationId, turnSignal, toolFailureCount, channelContext);
                 }
             }
 

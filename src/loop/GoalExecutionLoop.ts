@@ -50,6 +50,7 @@ import { inferExpectedExtensions, isExpectedDeliverableFile } from './planning/i
 import { MIN_DELIVERABLE_SIZE, resolveArtifactPathFromEvidence } from './planning/artifactContract';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext, ContextAwareTool } from './agentLoopTypes';
+import type { EvidenceItem } from './ObserverValidator';
 import type { SessionManager } from '../session/SessionManager';
 import { parseSessionKey } from '../session/SessionKeyFactory';
 
@@ -2398,10 +2399,28 @@ export class GoalExecutionLoop {
         const { channel: goalCh, userId: sessionUserId } = parseSessionKey(goal.sessionKey);
         const stepSessionKey = { channel: goalCh || 'unknown', userId: sessionUserId || goal.conversationId };
         this.sessionManager?.resetTurnToolCounts(stepSessionKey);
+        // Evidência real de steps ANTERIORES do MESMO goal (mesma planGeneration) para o juiz de
+        // groundedness (ADR-010 C1) — ver comentário de ChannelContext.priorStepEvidence
+        // (agentLoopTypes.ts) para o achado real que motivou isto (goal_1786990038154_2uh8m,
+        // 17/08/2026). Só entra aqui o que já é fato persistido (result==='success'), nunca uma
+        // alegação — mesma fonte de verdade que resolveArtifactPathFromEvidence() já usa.
+        const currentGeneration = goal.planGeneration ?? 0;
+        const priorStepEvidence: EvidenceItem[] = goal.attempts
+            .filter(a => a.result === 'success'
+                && (a.planGeneration ?? 0) === currentGeneration
+                && a.planStepId !== step.id
+                && a.output)
+            .map((a, i) => ({
+                id: `G${i + 1}`,
+                tool: a.toolName,
+                input: (() => { try { return JSON.stringify(a.args ?? {}); } catch { return undefined; } })(),
+                output: a.output ?? '',
+            }));
         // FIX C + P3-DEDUP: captura sends diferidos com deduplicação por file_path.
         // deferSendDocument só aceita um artefato por caminho único nesta execução.
         const goalChannelContext: ChannelContext = {
             ...channelContext,
+            priorStepEvidence,
             deliveryTracking: {
                 deferSendDocument: (args) => {
                     const fp = String(args['file_path'] ?? args['path'] ?? '');
@@ -4420,11 +4439,24 @@ OU
      * `fallbackText` (validation.summary ou overrideOutput, conforme o chamador) só vence quando
      * NÃO há conteúdo real seguro para entrega direta, e nunca quando é o resumo genérico
      * (`GENERIC_CRITERIA_SUMMARY` — sem informação nenhuma sobre o que foi entregue).
+     *
+     * Achado real (17/08/2026, goal_1786989885813_kik5n, "Qual o valor do River agora,
+     * criptomoeda?"): o step 'agentloop' já tinha produzido a resposta completa e correta
+     * ("Aqui está o valor atual da River... 💰 Preço atual $2,69..."), mas o goal tinha um SEGUNDO
+     * step depois dele — 'memory_write', persistindo o preço para reuso futuro (checklist de
+     * venda). Como a busca original pegava literalmente o ÚLTIMO attempt bem-sucedido de QUALQUER
+     * tool (sem checar segurança antes de escolher QUAL), `lastSuccess` virava o `memory_write`
+     * (não está na allowlist), a entrega direta ficava indisponível, e o resumo do validador — a
+     * mesma frase de "recibo de operação" que este método existe para evitar — vencia. A busca
+     * agora já filtra por segurança-para-entrega-crua NO PRÓPRIO find(): pula qualquer step de
+     * bookkeeping (memory_write, memory_admin, schedule, ...) posterior ao conteúdo real, em vez
+     * de desistir assim que o ÚLTIMO attempt no array não for seguro.
      */
     private pickBestAvailableContent(goal: Goal, fallbackText: string | undefined): string | undefined {
         const currentGeneration = goal.planGeneration ?? 0;
         const lastSuccess = [...goal.attempts].reverse()
-            .find(a => a.result === 'success' && (a.planGeneration ?? 0) === currentGeneration);
+            .find(a => a.result === 'success' && (a.planGeneration ?? 0) === currentGeneration
+                && (a.toolName === 'agentloop' || DIRECT_DELIVERABLE_TOOLS.includes(a.toolName)));
         const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && (
             lastSuccess.toolName === 'agentloop' ||
             DIRECT_DELIVERABLE_TOOLS.includes(lastSuccess.toolName)
