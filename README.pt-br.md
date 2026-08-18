@@ -10,6 +10,11 @@
 
 
 > **Segurança:** [Política de Segurança](SECURITY.pt-br.md) — como relatar uma vulnerabilidade em privado.
+>
+> **Documentação técnica:** [Visão Técnica](docs/TECHNICAL_OVERVIEW.pt-br.md) — arquitetura, o
+> motor de execução orientado a objetivos (Goals), a barreira de groundedness, internals da
+> memória, e como o roteamento de modelos (incluindo suporte a `.gguf`/llamafile 100% offline)
+> funciona por dentro.
 
 ---
 

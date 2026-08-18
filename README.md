@@ -10,6 +10,10 @@
 
 
 > **Security:** [Security Policy](SECURITY.md) — how to report a vulnerability privately.
+>
+> **Technical docs:** [Technical Overview](docs/TECHNICAL_OVERVIEW.md) — architecture, the goal-driven
+> execution engine, the groundedness barrier, memory internals, and how model routing (including
+> fully offline `.gguf`/llamafile support) actually works under the hood.
 
 ---
 
