@@ -1442,12 +1442,23 @@ async function loadLocalModels() {
  */
 function getServerParams() {
   return [
-    { flag: '--n-gpu-layers', value: true,  placeholder: 'ex.: 12',   desc: t('ml_param_ngl') },
-    { flag: '-c',             value: true,  placeholder: 'ex.: 8192', desc: t('ml_param_ctx') },
-    { flag: '-fit',           value: true,  placeholder: 'off',       desc: t('ml_param_fit') },
-    { flag: '-ctxcp',         value: true,  placeholder: '0',         desc: t('ml_param_ctxcp') },
-    { flag: '--no-mmap',      value: false,                            desc: t('ml_param_nommap') },
-    { flag: '--no-warmup',    value: false,                            desc: t('ml_param_nowarmup') },
+    { flag: '--n-gpu-layers',     value: true,  placeholder: 'ex.: 12',   desc: t('ml_param_ngl') },
+    { flag: '-c',                 value: true,  placeholder: 'ex.: 8192', desc: t('ml_param_ctx') },
+    { flag: '-fit',               value: true,  placeholder: 'off',       desc: t('ml_param_fit') },
+    { flag: '-ctxcp',             value: true,  placeholder: '0',         desc: t('ml_param_ctxcp') },
+    { flag: '--no-mmap',          value: false,                            desc: t('ml_param_nommap') },
+    { flag: '--no-warmup',        value: false,                            desc: t('ml_param_nowarmup') },
+    // Sampling — cada modelo costuma ter uma recomendação oficial diferente; o botão só oferece o
+    // parâmetro, o valor é de quem leu a recomendação do modelo escolhido (mesma filosofia dos 4
+    // parâmetros acima: nenhum vem preenchido).
+    { flag: '--temp',             value: true,  placeholder: 'ex.: 0.8',  desc: t('ml_param_temp') },
+    { flag: '--top-p',            value: true,  placeholder: 'ex.: 0.95', desc: t('ml_param_topp') },
+    { flag: '--top-k',            value: true,  placeholder: 'ex.: 40',   desc: t('ml_param_topk') },
+    { flag: '--min-p',            value: true,  placeholder: 'ex.: 0.05', desc: t('ml_param_minp') },
+    { flag: '--repeat-penalty',   value: true,  placeholder: 'ex.: 1.1',  desc: t('ml_param_repeatpenalty') },
+    { flag: '--presence-penalty', value: true,  placeholder: 'ex.: 0.0',  desc: t('ml_param_presencepenalty') },
+    { flag: '--flash-attn',       value: true,  placeholder: 'auto',      desc: t('ml_param_flashattn') },
+    { flag: '--jinja',            value: false,                           desc: t('ml_param_jinja') },
   ];
 }
 
@@ -1538,6 +1549,9 @@ function renderLocalOptionsEditor() {
          entender o que o NewClaw acrescenta por baixo, ele VÊ a linha que será executada. -->
     <div class="form-hint" style="margin-top:10px;">${t('ml_local_opts_preview_label')}</div>
     <pre class="ml-cmd-preview" id="mr-optsPreview">…</pre>
+    <!-- Flag conhecida sem valor (ex.: "-fit" sem "off") — mesma checagem que /local/serve rejeita
+         antes de subir o processo; aqui é só aviso, porque o usuário ainda pode estar digitando. -->
+    <div id="mr-optsWarnings" style="display:none;margin-top:8px;color:var(--warning,#f59e0b);font-size:.8rem;"></div>
     <div class="form-hint" style="margin-top:8px;">${t('ml_local_opts_examples')}</div>`;
 
   const input = document.getElementById('mr-optsInput');
@@ -1548,6 +1562,12 @@ function renderLocalOptionsEditor() {
       const r = await previewLocalCommand(localOptionsFor, input.value);
       const el = document.getElementById('mr-optsPreview');
       if (el) el.textContent = r.command || '';
+      const warnEl = document.getElementById('mr-optsWarnings');
+      if (warnEl) {
+        const warnings = r.warnings || [];
+        warnEl.style.display = warnings.length ? '' : 'none';
+        warnEl.innerHTML = warnings.map(w => `⚠️ ${esc(w)}`).join('<br>');
+      }
       // A ordenação dos projetores depende do modelo e vem junto com o preview; o select só é
       // preenchido aqui, quando existe resposta PARA ESTE modelo.
       if (r.projectors) { localProjectors = r.projectors; buildMmprojOptions(); }

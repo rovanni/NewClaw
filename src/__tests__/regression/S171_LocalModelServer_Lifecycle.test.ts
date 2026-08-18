@@ -26,7 +26,7 @@ import express from 'express';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createModelsRouter, parseServerOptions, rankProjectors } from '../../dashboard/routes/models';
+import { createModelsRouter, parseServerOptions, sanitizeServerOptions, findDanglingValueFlags, rankProjectors } from '../../dashboard/routes/models';
 // Diagnóstico do runtime local mudou de camada na Sprint 020 (`ADR-006`) — a atuação (spawn/kill)
 // continua na rota, e é o que o resto deste teste exercita.
 import { getLastKnownLocalServer } from '../../core/localRuntimeState';
@@ -163,6 +163,71 @@ async function main() {
         fs.rmSync(dir, { recursive: true, force: true });
     }
 
+    console.log('\n=== S171 — flag conhecida sem valor: rejeitada ANTES de subir o processo ===');
+    {
+        // Achado real (calibração de presets llamafile, 2026-08-18): "-fit" salvo sem valor
+        // (deveria ser "-fit off"), digitado à mão sem passar pelos chips da UI. Não é um risco de
+        // segurança (os tokens vão para spawn() como array, nunca por shell), mas o llama.cpp pode
+        // engolir a próxima flag como se fosse o valor desta — falha silenciosa, corrompendo duas
+        // flags de uma vez. Rejeitar antes do spawn evita gastar minutos carregando um modelo de
+        // vários GB para uma configuração que já se sabe malformada.
+        const dir = makeModelsDir(true);
+        const file = 'modelo-alfa-Q4_K_M.gguf';
+        const app = makeApp({ localModelsDir: dir, localModelOptions: { [file]: '-fit' } });
+        await withServer(app, async (base) => {
+            const res = await fetch(`${base}/api/models/local/serve`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file }),
+            });
+            const body = await res.json() as { success: boolean; error?: string };
+            assert(res.status === 400 && body.success === false, 'recusa -fit sem valor', { status: res.status, error: body.error });
+            assert(!!body.error && body.error.includes('-fit'), `erro nomeia a flag problemática (obtido: ${body.error})`);
+        });
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    console.log('\n=== S171 — preview avisa sobre flag sem valor, mas não bloqueia (usuário ainda digitando) ===');
+    {
+        const dir = makeModelsDir(true);
+        const file = 'modelo-alfa-Q4_K_M.gguf';
+        const app = makeApp({ localModelsDir: dir });
+        await withServer(app, async (base) => {
+            const comFlagSemValor = await fetch(`${base}/api/models/local/preview`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file, options: '-fit' }),
+            });
+            const bodyRuim = await comFlagSemValor.json() as { success: boolean; warnings?: string[] };
+            assert(bodyRuim.success === true, 'preview nunca bloqueia — só avisa');
+            assert(!!bodyRuim.warnings && bodyRuim.warnings.length > 0, `traz aviso para "-fit" sem valor (obtido: ${JSON.stringify(bodyRuim.warnings)})`);
+
+            const comFlagCompleta = await fetch(`${base}/api/models/local/preview`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file, options: '-fit off --n-gpu-layers 12' }),
+            });
+            const bodyBoa = await comFlagCompleta.json() as { warnings?: string[] };
+            assert((bodyBoa.warnings || []).length === 0, `sem aviso quando a flag tem valor (obtido: ${JSON.stringify(bodyBoa.warnings)})`);
+        });
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    console.log('\n=== S171 — sanitizeServerOptions + findDanglingValueFlags: comportamento unitário ===');
+    {
+        // O mesmo padrão relatado ao vivo (2026-08-18): comando colado inteiro, com o executável e
+        // as flags que o NewClaw já controla — tudo isso precisa sumir, sobrando só o que é do
+        // usuário de fato.
+        const colado = sanitizeServerOptions(parseServerOptions(
+            'llamafile-0.10.4.exe --server --model gemma-4-26B-A4B-it-Q4_K_M.gguf -fit off --n-gpu-layers 20'
+        ));
+        assert(!colado.includes('--server'), '--server (gerenciado) não sobrevive ao comando colado');
+        assert(!colado.includes('--model'), '--model (gerenciado) não sobrevive ao comando colado');
+        assert(!colado.some(t => t.endsWith('.exe')), 'o executável colado não sobrevive');
+        assert(colado.includes('-fit') && colado.includes('off'), `flags do usuário sobrevivem intactas (obtido: ${colado.join(' ')})`);
+
+        assert(findDanglingValueFlags(['--n-gpu-layers']).includes('--n-gpu-layers'), '--n-gpu-layers no fim da string, sem valor, é detectado');
+        assert(findDanglingValueFlags(['--temp', '--top-p', '0.9']).includes('--temp'), '--temp seguido de outra flag (não um número) é detectado');
+        assert(findDanglingValueFlags(['-fit', 'off']).length === 0, '-fit off (com valor) não gera aviso');
+        assert(findDanglingValueFlags(['--no-mmap']).length === 0, 'flag sem valor (--no-mmap) nunca é acusada de faltar valor');
+    }
+
     console.log('\n=== S171 — carregar sem pasta configurada é recusado antes de qualquer execução ===');
     {
         const app = makeApp({ localModelsDir: '' });
@@ -261,12 +326,19 @@ async function main() {
             'spawn nunca usa shell — as opções vão como array de argumentos, sem interpretação de ; ou &&'
         );
 
-        // O projeto é OSS e cada máquina tem hardware diferente: nenhum valor de flag pode vir
-        // embutido. REGRESSÃO SE alguém "ajudar" pondo uma tabela de flags por modelo no código.
+        // O projeto é OSS e cada máquina tem hardware diferente: nenhum VALOR de flag pode vir
+        // embutido (ex.: uma tabela "este modelo usa --n-gpu-layers 12"). REGRESSÃO SE alguém
+        // "ajudar" pondo uma tabela de flags-por-modelo no código.
         // Comentários citam flags como EXEMPLO ao explicar o porquê da decisão — isso é
         // documentação, não configuração embutida. A verificação olha só o código executável.
+        // `FLAGS_REQUIRE_VALUE` (validateção de "flag conhecida sem valor") também cita esses
+        // nomes de flag como código executável, mas por um motivo diferente e legítimo: é uma
+        // lista de NOMES para validação, sem nenhum valor de hardware pareado — a mesma categoria
+        // que `MANAGED_FLAGS_WITH_VALUE`/`MANAGED_FLAGS_STANDALONE` já são, só não colidiam com
+        // este regex por coincidência. Excluída aqui pelo mesmo motivo que comentários já eram.
         const semComentarios = src
             .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/const FLAGS_REQUIRE_VALUE = \[[\s\S]*?\];/, '')
             .split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
         assert(
             !/--n-gpu-layers|--no-mmap|--mmproj|-fit\b/.test(semComentarios),

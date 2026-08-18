@@ -144,6 +144,36 @@ export function sanitizeServerOptions(tokens: string[]): string[] {
     return out;
 }
 
+/** Flags do ecossistema llama.cpp/llamafile que exigem um valor logo em seguida — mesma lista dos
+ *  chips de atalho da UI (`ModelosView.js:getServerParams()`; mantidas em arquivos separados
+ *  porque um roda no navegador e o outro no servidor, sem import compartilhável entre os dois).
+ *  Não é uma lista fechada: uma flag fora daqui nunca é rejeitada, só as que o NewClaw conhece. */
+const FLAGS_REQUIRE_VALUE = [
+    '--n-gpu-layers', '-c', '--ctx-size', '--context-size', '-fit', '-ctxcp',
+    '--temp', '--top-p', '--top-k', '--min-p', '--repeat-penalty', '--presence-penalty', '--flash-attn',
+];
+
+/**
+ * Aponta flags conhecidas (que exigem valor) digitadas sem o valor — presas no fim da string ou
+ * seguidas imediatamente por outra flag.
+ *
+ * Não é um risco de segurança (os tokens vão pro `spawn` como array, nunca por shell — ver
+ * `buildServerArgs`), mas é uma falha silenciosa real: o llama.cpp/llamafile pode tratar a flag
+ * seguinte como se fosse o VALOR desta, corrompendo as duas por engano.
+ *
+ * Achado real (calibração de presets llamafile, 2026-08-18): `-fit` salvo sem valor em
+ * `GLM-4.7-Flash-Q4_K_M.gguf` — deveria ser `-fit off` —, digitado à mão sem passar pelos chips.
+ */
+export function findDanglingValueFlags(tokens: string[]): string[] {
+    const dangling: string[] = [];
+    for (let i = 0; i < tokens.length; i++) {
+        if (!FLAGS_REQUIRE_VALUE.includes(tokens[i])) continue;
+        const next = tokens[i + 1];
+        if (next === undefined || next.startsWith('-')) dangling.push(tokens[i]);
+    }
+    return dangling;
+}
+
 /**
  * Argumentos finais do servidor: o mínimo que o NewClaw precisa controlar, mais as opções que o
  * usuário definiu para AQUELE modelo.
@@ -427,6 +457,10 @@ export function createModelsRouter(ctx: DashboardContext): Router {
         const options = String(req.body?.options ?? (ctx.config.localModelOptions || {})[file] ?? '');
         const binary = dir ? findLocalServerBinary(dir) : null;
         const args = buildServerArgs(file, LOCAL_SERVER_PORT, options);
+        // Mesmo aviso que /local/serve vai rejeitar — aqui só avisa, porque o usuário ainda pode
+        // estar digitando (é um preview a cada tecla, não a ação de carregar).
+        const warnings = findDanglingValueFlags(sanitizeServerOptions(parseServerOptions(options)))
+            .map(flag => `"${flag}" está sem valor — o próximo argumento pode ser interpretado como o valor dela por engano.`);
         // Projetores ordenados por afinidade COM ESTE modelo — a lista muda conforme o modelo,
         // então vem daqui e não da listagem geral da pasta.
         let projectors: Array<{ file: string; likely: boolean }> = [];
@@ -442,6 +476,7 @@ export function createModelsRouter(ctx: DashboardContext): Router {
             success: true,
             binary: binary ? path.basename(binary) : null,
             command: `${quote(binary ? path.basename(binary) : 'servidor')} ${args.map(quote).join(' ')}`,
+            warnings,
             projectors,
         });
     });
@@ -493,11 +528,23 @@ export function createModelsRouter(ctx: DashboardContext): Router {
         stopLocalServer(); // um modelo por vez — ver comentário em localServer
 
         const port = LOCAL_SERVER_PORT;
+        const rawOptions = (ctx.config.localModelOptions || {})[file] || '';
+        // Rejeita ANTES de subir o processo — deixar o llamafile nascer com uma flag sem valor só
+        // pra falhar (ou pior, corromper a flag seguinte em silêncio) desperdiça minutos carregando
+        // um modelo de vários GB pra nada. Falha imediata > falha adiada (mesmo princípio do §2.7
+        // do ADR-002).
+        const dangling = findDanglingValueFlags(sanitizeServerOptions(parseServerOptions(rawOptions)));
+        if (dangling.length > 0) {
+            return res.status(400).json({
+                success: false,
+                error: `Opção(ões) sem valor: ${dangling.join(', ')}. Corrija em "Opções de carregamento" antes de usar este modelo.`,
+            });
+        }
         // `file` (nome puro) e não o caminho completo, porque o processo roda com cwd na própria
         // pasta: os servidores usam o valor de --model COMO ID do modelo em /v1/models, e passar o
         // caminho fazia o modelo aparecer como "/D/IA/.../arquivo.gguf" no catálogo e quebrava o
         // cruzamento com a listagem da pasta (que casa por nome de arquivo). Visto ao vivo, 02/08.
-        const args = buildServerArgs(file, port, (ctx.config.localModelOptions || {})[file] || '');
+        const args = buildServerArgs(file, port, rawOptions);
         log.info(`Subindo servidor local: ${path.basename(binary)} (${file})`);
 
         let child: ChildProcess;
