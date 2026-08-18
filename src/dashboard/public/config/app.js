@@ -139,12 +139,19 @@ export async function doSave() {
   if (c.openrouterKey)   config.openrouterKey   = c.openrouterKey;
   if (c.anthropicKey)    config.anthropicKey    = c.anthropicKey;
 
-  // Auto-pull/register missing models
+  // Auto-pull/register missing models — só faz sentido para categorias que de fato vão pro
+  // Ollama. `/api/ollama/exists` e `/api/ollama/pull` são endpoints do Ollama; chamar isso para
+  // uma categoria roteada a um provider local/custom (llamafile, LM Studio, vLLM...) sempre
+  // resulta em "não existe" seguido de um pull que sempre falha (404/400) — o nome de arquivo
+  // `.gguf` nunca é uma tag válida do registro do Ollama. Achado ao vivo (QA 2026-08-18):
+  // ensureLocalProvider() aponta as 6 categorias pro arquivo local e chama doSave(), que sem esta
+  // checagem tentava `ollama pull <arquivo>.gguf` a cada carregamento de modelo local.
   const toCheck = new Set();
   if (config.ollamaModel && config.defaultProvider === 'ollama') toCheck.add(config.ollamaModel);
   ['chat','code','vision','light','analysis','execution'].forEach(k => {
     const m = config.modelRouter[k];
-    if (m?.trim()) toCheck.add(m.trim());
+    const provider = config.modelRouter[`provider_${k}`] || config.defaultProvider;
+    if (m?.trim() && provider === 'ollama') toCheck.add(m.trim());
   });
 
   for (const model of toCheck) {
