@@ -42,6 +42,14 @@ export function mountLocalModelWizard(container, { ensureLocalProvider, computeS
 
   let open = false;
   let busy = false; // um carregamento em andamento — evita clique duplo em modelos diferentes
+  // Verdadeiro depois que ModelosView desmonta esta instância (troca de aba). Nenhuma continuação
+  // assíncrona iniciada por ESTA instância (refresh, saveDirAndRefresh, loadModel, o listener de
+  // providersStore) pode alterar DOM/painel/render depois disso — a mesma regra em todo ponto de
+  // retomada após `await`, sem exceção. Necessário porque #ml-wizardPanel é um id fixo: uma
+  // instância antiga ainda em voo consegue reencontrar o painel de uma instância NOVA remontada no
+  // mesmo container e mexer nele por engano (bug crítico achado por /review e reproduzido por /qa,
+  // 2026-08-19).
+  let destroyed = false;
 
   function isDismissed() {
     try { return localStorage.getItem(DISMISS_KEY) === '1'; } catch { return false; }
@@ -84,6 +92,7 @@ export function mountLocalModelWizard(container, { ensureLocalProvider, computeS
     panel.className = 'ml-guide-box';
     panel.innerHTML = `<div class="form-hint">${t('ml_wizard_loading')}</div>`;
     const state = await determineState();
+    if (destroyed) return; // instância desmontada durante o scan — nada a renderizar
     if (document.getElementById('ml-wizardPanel') === panel) renderStep(panel, state);
   }
 
@@ -123,9 +132,11 @@ export function mountLocalModelWizard(container, { ensureLocalProvider, computeS
       if (!v) return;
       configStore.set('localModelsDir', v);
       const state = await determineState();
+      if (destroyed) return; // instância desmontada durante o scan — não salva nem renderiza por ela
       // Buscar com sucesso É a declaração "esta é a minha pasta" — mesmo critério que a aba
       // Adicionar Modelo já usa (só persiste quando o scan não deu erro).
       if (state.step !== 'folder_error') await doSave();
+      if (destroyed) return;
       const panel = document.getElementById('ml-wizardPanel');
       if (panel) renderStep(panel, state);
     };
@@ -236,7 +247,11 @@ export function mountLocalModelWizard(container, { ensureLocalProvider, computeS
       clearInterval(timer);
       busy = false;
       if (btn.isConnected) { btn.disabled = false; btn.textContent = original; }
-      if (open) await refresh();
+      // O carregamento em si (serveLocalModel/ensureLocalProvider/loadProviders) segue até o fim
+      // mesmo se a instância foi desmontada — é efeito real no servidor de modelo, não efeito de
+      // UI, e abortá-lo deixaria o servidor num estado pela metade. Só o passo seguinte (reabrir
+      // o painel) é efeito de instância, e por isso é o que fica condicionado a `!destroyed`.
+      if (!destroyed && open) await refresh();
     }
   }
 
@@ -245,7 +260,7 @@ export function mountLocalModelWizard(container, { ensureLocalProvider, computeS
   // Enquanto o painel está aberto, recalcula quando o polling de saúde já em andamento trouxer
   // novidade (ex.: transição "confirming" → "done") — reaproveita o mesmo mecanismo de
   // atualização que a página já roda, sem criar um segundo polling.
-  const unsubHealth = providersStore.on('*', () => { if (open) refresh(); });
+  const unsubHealth = providersStore.on('*', () => { if (!destroyed && open) refresh(); });
 
-  return () => { unsubHealth(); };
+  return () => { destroyed = true; unsubHealth(); };
 }
