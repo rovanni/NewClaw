@@ -115,12 +115,16 @@ console.log('\n=== S182-4 — prontidão exige o modelo configurado entre os ser
         /const modeloServido = servidos\.length === 0 \|\| servidos\.includes\(defaultModel\);/.test(MODELOS),
         'catálogo vazio não reprova — sem lista não há como afirmar ausência (mesma regra de checkConfigCoherence)',
     );
+    // A expressão saiu de dentro de updateOverview() (onde só ela conseguia usá-la) para
+    // computeSystemReady(), uma função pura exportada — reaproveitada pelo LocalModelWizard sem
+    // duplicar a conta (Sprint Assistente de Configuração Rápida, 2026-08-18). Mesma lógica, só
+    // "const ready =" virou "return": o regex acompanha a forma atual, não a antiga.
     assert(
-        /const ready = h\.online && h\.count > 0 && !!defaultModel && modeloServido;/.test(MODELOS),
+        /return h\.online && h\.count > 0 && !!defaultModel && modeloServido;/.test(MODELOS),
         'a prontidão inclui a nova condição',
     );
     assert(
-        !/const ready = h\.online && h\.count > 0 && !!defaultModel;/.test(MODELOS),
+        !/return h\.online && h\.count > 0 && !!defaultModel;/.test(MODELOS),
         'a regra antiga (que só via "existe um nome escrito") não voltou',
     );
 }

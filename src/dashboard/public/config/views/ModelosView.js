@@ -3,6 +3,7 @@ import { showToast } from '../components/Toast.js';
 import { initDropdowns, updateDropdownModels } from '../components/ModelDropdown.js';
 import { addCustomProvider, removeCustomProvider, editCustomProvider, getCloudCatalog, testCustomProvider, getLocalModels, serveLocalModel, stopLocalModel, previewLocalCommand } from '../api.js';
 import { loadProviders, doSave, guideBox } from '../app.js';
+import { mountLocalModelWizard } from '../components/LocalModelWizard.js';
 
 // Funções (não const) porque t() precisa ser avaliado a cada render() — se fossem consts de
 // módulo, ficariam presas no idioma ativo no momento em que o arquivo foi importado pela primeira
@@ -177,6 +178,13 @@ export function render(container) {
       <div id="ov-coherence" style="display:none;margin-bottom:14px;"></div>
       <!-- "Seu modelo local não está carregado" + ação. Ver checkLocalModelDown(). -->
       <div id="ov-localdown" style="display:none;margin-bottom:14px;"></div>
+      <!-- Assistente de Configuração Rápida — sibling da faixa de status, de propósito: aquela
+           faixa é só leitura (label:valor), e um botão de ação misturado ali reproduziria o mesmo
+           erro que fez #ov-pending ser separado do card acima. Nunca aparece sozinho por estado
+           (ready===false não significa "quer modelo local") — só abre por clique explícito. Ver
+           components/LocalModelWizard.js.
+           (Sem crases neste comentário: ele vive dentro de um template literal.) -->
+      <div id="ml-wizardEntry" style="margin-bottom:14px;"></div>
 
       <div class="ml-tabs" id="ml-tabs">
         ${tabs.map((tab, i) => `<button type="button" class="ml-tab${i === 0 ? ' active' : ''}" data-tab="${tab.id}">${tab.icon} ${tab.label}${tab.id === 'routing' ? ' <span id="ml-routingTabWarn" style="display:none;">⚠️</span>' : ''}</button>`).join('')}
@@ -630,6 +638,15 @@ export function render(container) {
   wireModelRegistry(container);
   wireCategoryPicker(container);
 
+  // Assistente de Configuração Rápida — `ensureLocalProvider`/`computeSystemReady` passadas por
+  // referência, não importadas pelo componente: os dois vivem neste módulo (o segundo é puro, o
+  // primeiro repinta esta própria view), e `LocalModelWizard.js` já é importado por este arquivo
+  // pra ser montado — importar de volta criaria um ciclo entre os dois módulos.
+  const unsubWizard = mountLocalModelWizard(document.getElementById('ml-wizardEntry'), {
+    ensureLocalProvider,
+    computeSystemReady,
+  });
+
   // Subscribe to providersStore
   const unsubModels = providersStore.on('models', models => {
     updateDropdownModels(models);
@@ -701,6 +718,7 @@ export function render(container) {
     unsubHealthSync();
     unsubRouter();
     unsubCustomProviders();
+    unsubWizard();
     window.removeEventListener('newclaw-routing-decision', diagHandler);
   };
 
@@ -740,7 +758,7 @@ function wireTabs(container) {
  * llamafile perfeitamente no ar, e "Sistema pronto: ⚠️ Não" sem nada de errado. ModelRegistryService
  * já publica health de todo provider descoberto (nativo e custom); é só perguntar ao certo.
  */
-function activeProviderHealth() {
+export function activeProviderHealth() {
   // `salvo()`, não `snap()`: a saúde reportada tem que ser a do provedor que está de fato em uso
   // no servidor. Lendo o rascunho, trocar o seletor fazia a tela exibir a saúde de um provedor
   // que ainda não está valendo — foi assim que ela mostrou "Ollama — Online, 6 disponíveis"
@@ -842,6 +860,34 @@ function checkDuplicateEndpoints() {
     </ul>`;
 }
 
+/**
+ * "Sistema pronto pra uso?" — mesmo critério que a Visão Geral sempre calculou, extraído de
+ * `updateOverview()` pra função pura e exportada, reaproveitável pelo `LocalModelWizard` (passada
+ * como referência no mount, não importada — evita o ciclo `ModelosView.js` ↔ `LocalModelWizard.js`,
+ * já que este último é importado por `render()` pra ser montado). `updateOverview()` continua sendo
+ * a única chamadora dentro deste módulo; nenhum comportamento mudou, só saiu do meio da função de
+ * repintura da tela para poder ser chamada por fora dela também.
+ */
+export function computeSystemReady() {
+  const cs = configStore;
+  const h = activeProviderHealth();
+  const provSalvo = cs.salvo('defaultProvider');
+  const r = cs.salvo('modelRouter') || {};
+  const defaultModel = r.chat || cs.salvo('currentModel') || cs.salvo('ollamaModel') || '';
+  // Prontidão exige que o modelo configurado esteja ENTRE OS SERVIDOS pelo provedor em uso — não
+  // basta o provedor estar no ar com algum modelo e haver um nome escrito na configuração.
+  // Evidência real (02/08/2026): o painel deu "Sistema pronto ✅ Sim" com o provedor llamafile
+  // servindo GLM-4.6V-Flash-Q3_K_M.gguf enquanto a configuração pedia glm-4.7-flash-Q4_K_M.gguf.
+  //
+  // Catálogo vazio (provedor de nuvem que não expõe /models, discovery ainda não rodou) NÃO
+  // reprova: sem lista não há como afirmar ausência — mesma regra de checkConfigCoherence.
+  const servidos = (providersStore.get('catalog') || [])
+    .filter(m => m.provider === provSalvo)
+    .map(m => m.id);
+  const modeloServido = servidos.length === 0 || servidos.includes(defaultModel);
+  return h.online && h.count > 0 && !!defaultModel && modeloServido;
+}
+
 function updateOverview() {
   const cs = configStore;
   const h = activeProviderHealth();
@@ -867,21 +913,9 @@ function updateOverview() {
   el('ov-count')        && (el('ov-count').textContent = `${h.count} ${t('ml_ov_available_suffix')}`);
   el('ov-defaultmodel') && (el('ov-defaultmodel').textContent = defaultModel || '—');
 
-  // "Sistema pronto pra uso?" — agregado das 3 condições acima, é a resposta que a Visão Geral
-  // deve dar (nunca uma ação); detalhe operacional (sync, catálogo) mora só em Instalar Modelo.
-  // Prontidão exige que o modelo configurado esteja ENTRE OS SERVIDOS pelo provedor em uso —
-  // não basta o provedor estar no ar com algum modelo e haver um nome escrito na configuração.
-  // Evidência real (02/08/2026): o painel deu "Sistema pronto ✅ Sim" com o provedor llamafile
-  // servindo GLM-4.6V-Flash-Q3_K_M.gguf enquanto a configuração pedia glm-4.7-flash-Q4_K_M.gguf.
-  // Toda conversa nesse estado falharia, e a tela dizia que estava tudo certo.
-  //
-  // Catálogo vazio (provedor de nuvem que não expõe /models, discovery ainda não rodou) NÃO
-  // reprova: sem lista não há como afirmar ausência — mesma regra de checkConfigCoherence.
-  const servidos = (providersStore.get('catalog') || [])
-    .filter(m => m.provider === provSalvo)
-    .map(m => m.id);
-  const modeloServido = servidos.length === 0 || servidos.includes(defaultModel);
-  const ready = h.online && h.count > 0 && !!defaultModel && modeloServido;
+  // Agregado das 3 condições acima, é a resposta que a Visão Geral deve dar (nunca uma ação);
+  // detalhe operacional (sync, catálogo) mora só em Instalar Modelo.
+  const ready = computeSystemReady();
   el('ov-ready') && (el('ov-ready').textContent = ready ? t('ml_ov_ready_yes') : t('ml_ov_ready_no'));
 
   renderPendingChanges();
@@ -2115,7 +2149,7 @@ function wireCategoryPicker(container) {
  * provider padrão. Reusa addCustomProvider/editCustomProvider (as mesmas rotas do cadastro manual)
  * em vez de um caminho paralelo — um único mecanismo de provider, dois pontos de entrada na UI.
  */
-async function ensureLocalProvider(url, file) {
+export async function ensureLocalProvider(url, file) {
   const cs = configStore;
   // Apontar TAMBÉM as categorias do Model Router para o modelo carregado. Sem isto o roteador
   // continuava pedindo o modelo que estava configurado antes (ex.: 'glm-5.2:cloud', do Ollama)
