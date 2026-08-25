@@ -289,6 +289,22 @@ async function main() {
         assert(/spawn\([^)]*detached:\s*true/s.test(src), 'spawn com detached:true');
         assert(/child\.unref\(\)/.test(src), 'child.unref() — o NewClaw não espera pelo processo nem o arrasta ao morrer');
         assert(/process\.env\.LOCAL_SERVER_PORT/.test(src), 'porta configurável: duas instâncias na mesma máquina não disputam a mesma');
+
+        // Achado ao vivo (2026-08-24, mesma classe do incidente de 02/08 acima, roupagem nova):
+        // `detached:true` + `unref()` no lado do Node NÃO bastam sob pm2 no Windows. Confirmado
+        // lendo o próprio código-fonte do pm2 (God/Methods.js): o default `treekill: true` mata a
+        // ÁRVORE inteira de processos no restart via TreeKill — inclusive filhos detached — e só
+        // `treekill: false` restringe a morte ao processo principal (`process.kill(pid)` puro).
+        // Reproduzido ao vivo: `pm2 restart newclaw` com um modelo de 18GB carregado derrubou a
+        // porta 8080 junto, mesmo com o spawn corretíssimo acima. Sem esta trava, alguém "limpando"
+        // `ecosystem.config.cjs` sem saber por quê reintroduz o incidente de 02/08 por uma via
+        // diferente — o assert do Node continua verde, e o bug volta mesmo assim.
+        const ecosystemPath = path.join(process.cwd(), 'ecosystem.config.cjs');
+        const ecosystemSrc = fs.readFileSync(ecosystemPath, 'utf-8');
+        assert(
+            /treekill:\s*false/.test(ecosystemSrc),
+            'ecosystem.config.cjs declara treekill:false — sem isto, o pm2 mata o modelo local detached a cada restart no Windows'
+        );
     }
 
     console.log('\n=== S171 — opções de carregamento por modelo ===');

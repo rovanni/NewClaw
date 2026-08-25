@@ -52,17 +52,22 @@ const EVID: EvidenceItem[] = [
     { id: 'E2', tool: 'y', output: 'A = 10\nB = 20' },
 ];
 
-/** ProviderFactory falso: devolve o conteúdo pedido e um orçamento real do mecanismo existente. */
+/**
+ * ProviderFactory falso: devolve o conteúdo pedido e um orçamento real do mecanismo existente.
+ *
+ * Mocka chatWithFallback (não mais getProviderWithModel().chat() direto) — achado ao vivo
+ * (2026-08-24) trocou o mecanismo de validateGrounding()/validate() pelo mesmo usado por
+ * GoalPlanner.callPlannerLLM() desde S222 (chatWithFallback, com resiliência multi-provider), então
+ * o fake precisa responder pela mesma interface real que o código agora chama.
+ */
 function fakeFactory(conteudo: string | (() => never)) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getBudgetAuxiliar } = require('../../shared/auxTimeout');
     return {
-        getProviderWithModel: () => ({
-            chat: async () => {
-                if (typeof conteudo === 'function') conteudo();
-                return { content: conteudo as string };
-            },
-        }),
+        chatWithFallback: async () => {
+            if (typeof conteudo === 'function') conteudo();
+            return { status: 'success', content: conteudo as string, attempts: [] };
+        },
         getBudgetAuxiliar: (perfil: 'classificacao' | 'validacao') => getBudgetAuxiliar(perfil, null, null),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
@@ -78,12 +83,10 @@ function capturador(conteudo: string) {
     const { getBudgetAuxiliar } = require('../../shared/auxTimeout');
     const prompts: string[] = [];
     const factory = {
-        getProviderWithModel: () => ({
-            chat: async (msgs: Array<{ content: string }>) => {
-                prompts.push(msgs[0].content);
-                return { content: conteudo };
-            },
-        }),
+        chatWithFallback: async (msgs: Array<{ content: string }>) => {
+            prompts.push(msgs[0].content);
+            return { status: 'success', content: conteudo, attempts: [] };
+        },
         getBudgetAuxiliar: (perfil: 'classificacao' | 'validacao') => getBudgetAuxiliar(perfil, null, null),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
     return { factory, prompts };

@@ -339,7 +339,16 @@ export class ObserverValidator {
 
         try {
             const startTime = Date.now();
-            const response = await this.providerFactory.getProviderWithModel(this.observerModel).chat(messages, undefined, { signal });
+            // Reusa chatWithFallback em vez de getProviderWithModel() direto — mesmo mecanismo já
+            // corrigido em GoalPlanner.callPlannerLLM() pelo incidente River #2 (S221-S224/S222):
+            // getProviderWithModel() sem providerName cai sempre em this.defaultProvider, então um
+            // observerModel de nuvem configurado (ex: "glm-5.2:cloud") era ignorado sempre que o
+            // provedor padrão do usuário fosse um modelo local — sem fallback nenhum, um provedor
+            // local lento bastava para nunca validar resposta alguma. modelOverride preserva
+            // observerModel na tentativa do provedor padrão (semântica de "dono" da S173); se esse
+            // provedor falhar, os seguintes usam o próprio modelo, nunca herdam o override.
+            const orcamento = this.providerFactory.getBudgetAuxiliar('validacao');
+            const fallbackResult = await this.providerFactory.chatWithFallback(messages, undefined, undefined, orcamento.timeoutMs, signal, this.observerModel);
             const elapsed = Date.now() - startTime;
 
             // If the signal aborted while the LLM was running, discard the result silently.
@@ -350,7 +359,13 @@ export class ObserverValidator {
                 return { approved: true, reason: 'Validation result discarded after abort', confidence: 0, validationSkipped: true };
             }
 
-            const content = (response.content || '').trim();
+            if (fallbackResult.status !== 'success') {
+                const lastAttempt = fallbackResult.attempts[fallbackResult.attempts.length - 1];
+                log.warn(`Validation error: ${lastAttempt?.errorMessage ?? fallbackResult.status}, skipping`);
+                return { approved: false, reason: `Observer error: ${lastAttempt?.errorMessage ?? fallbackResult.status}`, confidence: 0, validationSkipped: true, failureType: 'other' };
+            }
+
+            const content = (fallbackResult.content || '').trim();
 
             // Extrai o primeiro objeto JSON válido que contenha "approved" no conteúdo.
             // O regex simples [^}]* quebrava com objetos aninhados ou reason com aspas.
@@ -563,17 +578,33 @@ export class ObserverValidator {
             };
         }
 
-        const controller = new AbortController();
-        const onOuterAbort = () => controller.abort();
-        signal?.addEventListener('abort', onOuterAbort, { once: true });
-        const timer = setTimeout(() => controller.abort(), orcamento.timeoutMs);
-
         try {
-            const llm = await this.providerFactory
-                .getProviderWithModel(this.observerModel)
-                .chat([{ role: 'user', content: prompt }], undefined, { signal: controller.signal, timeoutMs: orcamento.timeoutMs });
+            // Reusa chatWithFallback em vez de getProviderWithModel() direto — achado ao vivo
+            // (2026-08-24, prompt.txt + newclaw-audit.log, três turnos reais 16:11/17:45/19:12):
+            // getProviderWithModel() sem providerName cai sempre em this.defaultProvider, então
+            // com o provedor padrão apontando pra um modelo local lento (GLM-4.7-Flash 30B, ~150s
+            // por resposta comum), o juiz de grounding NUNCA tinha como concluir dentro do teto de
+            // `orcamento.timeoutMs` (até 120s pelo perfil 'validacao') — sem fallback nenhum pro
+            // Ollama, mesmo ele respondendo rápido e mesmo com observerModel="glm-5.2:cloud"
+            // configurado (nunca chegava a ser usado). Resultado observado: TODO turno virava
+            // UNVALIDATED e a entrega era bloqueada — mesmo quando a ferramenta (`weather`) tinha
+            // sucesso e trazia dado real (turno 19:12, log 19:18:14). Mesmo mecanismo já corrigido
+            // em GoalPlanner.callPlannerLLM() pelo incidente River #2 (S221-S224/S222) — chatWithFallback
+            // dá ao juiz a MESMA cadeia de resiliência que o resto do turno já usa, em vez de um
+            // provider único sem saída. chatWithFallback já cuida do externalSignal (aborta em
+            // todas as tentativas caso `signal` dispare) — sem precisar de um AbortController manual
+            // aqui.
+            const fallbackResult = await this.providerFactory.chatWithFallback(
+                [{ role: 'user', content: prompt }], undefined, undefined, orcamento.timeoutMs, signal, this.observerModel,
+            );
 
-            const parsed = this.parseGroundingOutput(llm.content || '', evidences);
+            if (fallbackResult.status !== 'success') {
+                const lastAttempt = fallbackResult.attempts[fallbackResult.attempts.length - 1];
+                log.warn(`[GROUNDING] juiz não concluiu (${(lastAttempt?.errorMessage ?? fallbackResult.status).slice(0, 80)}) — UNVALIDATED`);
+                return { state: 'UNVALIDATED', claims: [], reason: `juiz não concluiu: ${(lastAttempt?.errorMessage ?? fallbackResult.status).slice(0, 120)}`, elapsedMs: Date.now() - t0, ...base };
+            }
+
+            const parsed = this.parseGroundingOutput(fallbackResult.content || '', evidences);
             if (!parsed) {
                 log.warn(`[GROUNDING] saída do juiz sem estrutura válida — UNVALIDATED`);
                 return { state: 'UNVALIDATED', claims: [], reason: 'saída do juiz estruturalmente inválida', elapsedMs: Date.now() - t0, ...base };
@@ -586,9 +617,6 @@ export class ObserverValidator {
             // mesma coisa: o juiz não concluiu. Nunca é aprovação (ADR-010 §9).
             log.warn(`[GROUNDING] juiz não concluiu (${String(err).slice(0, 80)}) — UNVALIDATED`);
             return { state: 'UNVALIDATED', claims: [], reason: `juiz não concluiu: ${String(err).slice(0, 120)}`, elapsedMs: Date.now() - t0, ...base };
-        } finally {
-            clearTimeout(timer);
-            signal?.removeEventListener('abort', onOuterAbort);
         }
     }
 
