@@ -159,12 +159,20 @@ async function main() {
             parameters: {},
             execute: async () => ({ success: true, output: 'Operação finalizada normalmente.' }),
         });
+        // StepSemanticValidator migrou de getProviderWithModel() para chatWithFallback() (D-08,
+        // docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md) — mesmo mecanismo que
+        // ObserverValidator.validate() (goal completion, "achieved") já usa (S258). As duas
+        // chamadas passam pelo MESMO chatWithFallback agora; o mock distingue pelo conteúdo do
+        // prompt qual dos dois validadores está perguntando (mesmo padrão de S85/S115).
         const mismatchProviderFactory = {
-            chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S119' }) }),
+            chatWithFallback: async (messages: Array<{ content?: string }>) => {
+                const prompt = messages.map(m => m.content ?? '').join('\n');
+                if (prompt.includes('validador de relevância de resultado de ferramentas')) {
+                    return { status: 'success', content: JSON.stringify({ result: 'mismatch', confidence: 0.9, reason: 'teste S119 — output não endereça a intenção do step' }), attempts: [] };
+                }
+                return { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S119' }), attempts: [] };
+            },
             getProvider: () => undefined,
-            getProviderWithModel: () => ({
-                chat: async () => ({ status: 'success', content: JSON.stringify({ result: 'mismatch', confidence: 0.9, reason: 'teste S119 — output não endereça a intenção do step' }) }),
-            }),
         } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 
         const db = new (Database as any)(':memory:');

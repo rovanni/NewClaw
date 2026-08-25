@@ -1,57 +1,28 @@
-import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, OpenAIChatResponse, RawToolCall } from './providerTypes';
-import { taskQueue, TaskPriority } from './providerQueue';
-import { createLogger } from '../shared/AppLogger';
+import { OpenAIProvider } from './OpenAIProvider';
 
-const log = createLogger('DeepSeekProvider');
-
-export class DeepSeekProvider implements ILLMProvider {
-    name = 'deepseek';
-    private apiKey: string;
-    private model: string;
-
+/**
+ * DeepSeek fala a mesma API OpenAI-Compatible que `OpenAIProvider` já implementa
+ * (`/chat/completions`, `/models`, mesmo formato de tool-calling, mesmo header de auth) — herda
+ * `chat()`/`discoverModels()` inteiros em vez de reimplementá-los (D-07,
+ * docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md). Mesmo padrão já usado por
+ * `OpenRouterProvider` (`OpenAIProvider.ts`) — não uma abstração nova.
+ *
+ * Comparação estrutural feita antes de escolher `extends` em vez de uma classe neutra
+ * `OpenAICompatibleProvider`: nenhum comportamento herdado de `OpenAIProvider` é ilegítimo para
+ * a DeepSeek — proteção SSRF (`assertNotSsrfTarget`) é inerte pra um `baseUrl` fixo no código,
+ * nunca escolhido pelo usuário, mas inofensiva; o probe de liveness (`CONNECT_TIMEOUT_MS`) só
+ * adiciona uma checagem extra em caso de timeout, nunca subtrai comportamento; a conversão de
+ * imagem (`toOpenAIContent`) FECHA um bug real que a DeepSeek tinha e o OpenAIProvider já
+ * corrigiu (S192) — visão silenciosamente ignorada quando `visionProfile.provider` aponta pra
+ * cá. Único efeito colateral real, aceito conscientemente: a mensagem de erro HTTP passa a
+ * incluir o corpo da resposta (`${this.name} API error (status): body`, herdado de
+ * OpenAIProvider) em vez do formato terso anterior (`DeepSeek API error: status`) — mais
+ * diagnóstico, nenhuma classificação de retry em ProviderFactory.chatWithFallback depende do
+ * formato exato da mensagem.
+ */
+export class DeepSeekProvider extends OpenAIProvider {
     constructor(apiKey: string, model: string = 'deepseek-chat') {
-        this.apiKey = apiKey;
-        this.model = model;
-    }
-
-    setModel(model: string): void { this.model = model; }
-
-    async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
-        const queueEntryTime = Date.now();
-        return await taskQueue.add(async () => {
-            const queueWaitMs = Date.now() - queueEntryTime;
-            if (queueWaitMs > 500) log.info(`Queue wait: ${queueWaitMs}ms (budget: ${options?.timeoutMs ?? 'none'}ms)`);
-            const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
-                signal: options?.signal,
-                body: JSON.stringify({
-                    model: this.model,
-                    messages,
-                    tools: tools ? tools.map(t => ({
-                        type: 'function',
-                        function: { name: t.name, description: t.description, parameters: t.parameters }
-                    })) : undefined
-                })
-            });
-
-            if (!response.ok) throw new Error(`DeepSeek API error: ${response.status}`);
-
-            const data = await response.json() as OpenAIChatResponse;
-            const message = data.choices?.[0]?.message;
-
-            return {
-                content: message?.content || '',
-                toolCalls: message?.tool_calls?.map((tc: RawToolCall) => ({
-                    id: tc.id ?? `call_${Date.now()}`,
-                    name: tc.function?.name ?? '',
-                    arguments: (() => { try { return JSON.parse(tc.function?.arguments || '{}'); } catch { return {}; } })()
-                })),
-                usage: data.usage ? {
-                    prompt_tokens: data.usage?.prompt_tokens ?? 0,
-                    completion_tokens: data.usage?.completion_tokens ?? 0
-                } : undefined
-            };
-        }, { priority: TaskPriority.INTERACTIVE });
+        super(apiKey, model, 'https://api.deepseek.com/v1', 'deepseek');
+        this.name = 'deepseek';
     }
 }

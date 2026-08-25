@@ -231,15 +231,22 @@ export class StepSemanticValidator {
         ].filter(Boolean);
 
         const messages: LLMMessage[] = [{ role: 'user', content: lines.join('\n') }];
-        const provider = this.providerFactory.getProviderWithModel(VALIDATOR_MODEL);
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+        // Reusa chatWithFallback em vez de getProviderWithModel() direto (D-08,
+        // docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md) — mesmo mecanismo que
+        // ObserverValidator (S258) já usa. getProviderWithModel() sem providerName cai sempre em
+        // this.defaultProvider, sem nenhum fallback se essa única chamada falhar; chatWithFallback
+        // tenta os demais providers antes de desistir, com o mesmo TIMEOUT_MS de hoje delimitando
+        // cada tentativa. O fail-soft ("unverifiable") continua decidido aqui, não no
+        // ProviderFactory — qualquer status diferente de 'success' cai no mesmo ramo.
+        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, TIMEOUT_MS, undefined, VALIDATOR_MODEL);
+        if (result.status !== 'success') {
+            log.debug(`[StepSemanticValidator] LLM falhou (status=${result.status}) — unverifiable`);
+            return { result: 'unverifiable', confidence: 0.5, reason: 'erro na validação LLM', usedFastPath: false };
+        }
 
         try {
-            const response = await provider.chat(messages, undefined, { signal: controller.signal, timeoutMs: TIMEOUT_MS });
-            clearTimeout(timer);
-
-            const cleaned = response.content
+            const cleaned = result.content
                 .replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
             const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
             if (!jsonMatch) {
@@ -247,7 +254,7 @@ export class StepSemanticValidator {
             }
 
             const parsed = JSON.parse(jsonMatch[0]) as { result?: string; confidence?: number; reason?: string };
-            const result = (['relevant', 'mismatch', 'unverifiable'] as const).includes(parsed.result as SemanticValidationResult)
+            const parsedResult = (['relevant', 'mismatch', 'unverifiable'] as const).includes(parsed.result as SemanticValidationResult)
                 ? (parsed.result as SemanticValidationResult)
                 : 'unverifiable';
 
@@ -258,14 +265,13 @@ export class StepSemanticValidator {
             log.info(
                 `[StepSemanticValidator] LLM step=${step.id}` +
                 ` tool=${step.toolName ?? 'agentloop'}` +
-                ` result=${result} confidence=${confidence.toFixed(2)}` +
+                ` result=${parsedResult} confidence=${confidence.toFixed(2)}` +
                 ` reason="${(parsed.reason ?? '').slice(0, 80)}"`
             );
 
-            return { result, confidence, reason: parsed.reason, usedFastPath: false };
+            return { result: parsedResult, confidence, reason: parsed.reason, usedFastPath: false };
         } catch (err) {
-            clearTimeout(timer);
-            log.debug(`[StepSemanticValidator] LLM error: ${String(err).slice(0, 80)} — unverifiable`);
+            log.debug(`[StepSemanticValidator] erro ao interpretar resposta: ${String(err).slice(0, 80)} — unverifiable`);
             return { result: 'unverifiable', confidence: 0.5, reason: 'erro na validação LLM', usedFastPath: false };
         }
     }

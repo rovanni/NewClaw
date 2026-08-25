@@ -79,11 +79,12 @@ function makeGoal(objective: string): Goal {
 }
 
 /** ProviderFactory fake — devolve o JSON configurado em `nextResponse` como resposta do LLM de risco. */
+// Mocka chatWithFallback (não mais getProviderWithModel().chat() direto) — D-08,
+// docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md: RiskAnalyzer.callRiskLLM migrou para
+// o mesmo mecanismo que ObserverValidator (S258) já usa.
 function makeFakeProviderFactory(getResponse: () => string) {
     return {
-        getProviderWithModel: () => ({
-            chat: async () => ({ content: getResponse() }),
-        }),
+        chatWithFallback: async () => ({ status: 'success', content: getResponse(), attempts: [] }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 

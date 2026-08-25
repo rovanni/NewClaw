@@ -49,13 +49,22 @@ function emptyState(goalId: string): { cognitiveContext: unknown; progressModel:
 }
 
 // LLM sempre confirma mismatch (baixa relevância) para o StepSemanticValidator (slow path).
+//
+// StepSemanticValidator migrou de getProviderWithModel() para chatWithFallback() (D-08,
+// docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md) — mesmo mecanismo que
+// ObserverValidator.validate() (goal completion, "achieved") já usa (S258). Os dois passam
+// pelo MESMO chatWithFallback neste teste agora, então o mock precisa distinguir pelo conteúdo
+// da mensagem qual dos dois está perguntando, em vez de responder sempre a mesma coisa.
 function makeMismatchProviderFactory() {
     return {
-        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S115' }) }),
+        chatWithFallback: async (messages: Array<{ content?: string }>) => {
+            const prompt = messages.map(m => m.content ?? '').join('\n');
+            if (prompt.includes('validador de relevância de resultado de ferramentas')) {
+                return { status: 'success', content: JSON.stringify({ result: 'mismatch', confidence: 0.95, reason: 'teste S115 — output não endereça a intenção do step' }), attempts: [] };
+            }
+            return { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S115' }), attempts: [] };
+        },
         getProvider: () => undefined,
-        getProviderWithModel: () => ({
-            chat: async () => ({ status: 'success', content: JSON.stringify({ result: 'mismatch', confidence: 0.95, reason: 'teste S115 — output não endereça a intenção do step' }) }),
-        }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 

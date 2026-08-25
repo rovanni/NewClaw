@@ -495,23 +495,20 @@ export class RiskAnalyzer {
     /**
      * Chama o LLM de revisão de riscos usando modelo fixo (não o default).
      * Mesmo padrão do GoalPlanner.callPlannerLLM — gemma4 não entra em extended thinking.
+     *
+     * Reusa chatWithFallback em vez de getProviderWithModel() direto (D-08,
+     * docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md) — mesmo mecanismo que
+     * ObserverValidator (S258) e GoalPlanner (S222) já usam. getProviderWithModel() sem
+     * providerName cai sempre em this.defaultProvider, sem nenhum fallback se essa única
+     * chamada falhar; chatWithFallback tenta os demais providers antes de desistir, com o
+     * mesmo timeoutMs de hoje delimitando cada tentativa. A política de erro continua sendo
+     * decidida aqui (timeout vs. error), não dentro do ProviderFactory.
      */
     private async callRiskLLM(messages: LLMMessage[], timeoutMs: number): Promise<{ status: string; content: string }> {
-        const provider = this.providerFactory.getProviderWithModel(this.model);
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-            const response = await provider.chat(messages, undefined, { signal: controller.signal, timeoutMs });
-            return { status: 'success', content: response.content };
-        } catch (err) {
-            const msg = String(err);
-            if (msg.includes('abort') || msg.includes('timed out') || msg.includes('timeout')) {
-                return { status: 'timeout', content: '' };
-            }
-            return { status: 'error', content: '' };
-        } finally {
-            clearTimeout(timer);
-        }
+        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, timeoutMs, undefined, this.model);
+        if (result.status === 'success') return { status: 'success', content: result.content };
+        if (result.status === 'timeout') return { status: 'timeout', content: '' };
+        return { status: 'error', content: '' };
     }
 
     private async reviewPlanWithLLM(goal: Goal, plan: PlanStep[]): Promise<{

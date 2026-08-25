@@ -81,11 +81,12 @@ function makeGoal(objective: string): Goal {
     } as unknown as Goal;
 }
 
+// Mocka chatWithFallback (não mais getProviderWithModel().chat() direto) — D-08,
+// docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md: RiskAnalyzer.callRiskLLM e
+// contentStubClassifier migraram para o mesmo mecanismo que ObserverValidator (S258) já usa.
 function makeFakeProviderFactory(getResponse: () => string) {
     return {
-        getProviderWithModel: () => ({
-            chat: async () => ({ content: getResponse() }),
-        }),
+        chatWithFallback: async () => ({ status: 'success', content: getResponse(), attempts: [] }),
         // Sprint 043 — ver a mesma nota em S77: o classificador de stub passou a derivar o prazo
         // da latência observada; sem fonte de medição, a função real devolve o padrão do perfil.
         getBudgetAuxiliar: (perfil: PerfilAuxiliar) => getBudgetAuxiliar(perfil, null, null),

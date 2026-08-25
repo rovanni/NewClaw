@@ -78,60 +78,73 @@ if (TEXT_LONG_NO_OVERLAP.length < 200) throw new Error('TEXT_LONG_NO_OVERLAP cur
 const TEXT_LONG_RELEVANT = `${SHARED_TERMS} — ${FILLER}${FILLER}`;
 if (TEXT_LONG_RELEVANT.length < 200) throw new Error('TEXT_LONG_RELEVANT curto demais para o cenário S85.3 — ajuste o filler');
 
+// StepSemanticValidator migrou de getProviderWithModel() para chatWithFallback() (D-08,
+// docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md) — mesmo mecanismo que
+// ObserverValidator.validate() (goal completion, "achieved") já usa (S258). As duas chamadas
+// passam pelo MESMO chatWithFallback nestes cenários agora, então os mocks abaixo distinguem
+// pelo conteúdo do prompt qual dos dois validadores está perguntando, em vez de responder
+// sempre a mesma coisa (mesmo padrão já aplicado em S115).
+const SEMANTIC_VALIDATOR_PROMPT_MARKER = 'validador de relevância de resultado de ferramentas';
+
+function isSemanticValidatorPrompt(messages: Array<{ content?: string }>): boolean {
+    return messages.some(m => (m.content ?? '').includes(SEMANTIC_VALIDATOR_PROMPT_MARKER));
+}
+
 function makeFakeProviderFactory() {
     return {
-        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }) } as any),
-        getProvider: () => undefined,
         // ARCH-013: não existe mais uma 2ª chamada de LLM dedicada a "sucesso ou falha" — só o
         // fast path do StepSemanticValidator entra em jogo nos cenários que usam esta factory
-        // (SHARED_TERMS/TEXT_EXPLICIT_SUCCESS sempre batem o hitRate mínimo), então este mock
-        // nunca deveria ser invocado; resposta genérica aqui é só para não quebrar se for.
-        getProviderWithModel: () => ({ chat: async () => ({ status: 'success', content: '{}' }) }),
+        // (SHARED_TERMS/TEXT_EXPLICIT_SUCCESS sempre batem o hitRate mínimo), então o ramo do
+        // validador semântico abaixo nunca deveria ser invocado; resposta genérica aqui é só
+        // para não quebrar se for.
+        chatWithFallback: async (messages: Array<{ content?: string }>) => isSemanticValidatorPrompt(messages)
+            ? { status: 'success', content: '{}', attempts: [] }
+            : { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }), attempts: [] },
+        getProvider: () => undefined,
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 
 /** Simula erro/timeout do LLM de StepSemanticValidator (slow path) — fail-safe conservador. */
 function makeSemanticValidatorErrorProviderFactory() {
     return {
-        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }) }),
+        chatWithFallback: async (messages: Array<{ content?: string }>) => isSemanticValidatorPrompt(messages)
+            ? { status: 'error', content: '', attempts: [] }
+            : { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }), attempts: [] },
         getProvider: () => undefined,
-        getProviderWithModel: () => ({ chat: async () => { throw new Error('timeout simulado do validador semântico'); } }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 
 /** LLM do StepSemanticValidator (slow path) confirma relevância genuína, alta confiança. */
 function makeSemanticValidatorRelevantProviderFactory() {
     return {
-        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }) }),
+        chatWithFallback: async (messages: Array<{ content?: string }>) => isSemanticValidatorPrompt(messages)
+            ? { status: 'success', content: JSON.stringify({ result: 'relevant', confidence: 0.85, reason: 'teste S85 — LLM confirma relevância genuína' }), attempts: [] }
+            : { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }), attempts: [] },
         getProvider: () => undefined,
-        getProviderWithModel: () => ({
-            chat: async () => ({ status: 'success', content: JSON.stringify({ result: 'relevant', confidence: 0.85, reason: 'teste S85 — LLM confirma relevância genuína' }) }),
-        }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 
 /** Conta chamadas ao LLM do StepSemanticValidator — usado para provar 0 chamadas via fast path. */
 function makeCountingProviderFactory(counter: { calls: number }) {
     return {
-        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }) }),
-        getProvider: () => undefined,
-        getProviderWithModel: () => ({
-            chat: async () => {
+        chatWithFallback: async (messages: Array<{ content?: string }>) => {
+            if (isSemanticValidatorPrompt(messages)) {
                 counter.calls++;
-                return { status: 'success', content: JSON.stringify({ result: 'relevant', confidence: 0.85 }) };
-            },
-        }),
+                return { status: 'success', content: JSON.stringify({ result: 'relevant', confidence: 0.85 }), attempts: [] };
+            }
+            return { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }), attempts: [] };
+        },
+        getProvider: () => undefined,
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 
 function makeMismatchProviderFactory() {
     return {
-        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }) }),
-        getProvider: () => undefined,
         // Usado só pelo StepSemanticValidator (slow path) no cenário S85.5.
-        getProviderWithModel: () => ({
-            chat: async () => ({ status: 'success', content: JSON.stringify({ result: 'mismatch', confidence: 0.9, reason: 'teste S85 — output não endereça a intenção do step' }) }),
-        }),
+        chatWithFallback: async (messages: Array<{ content?: string }>) => isSemanticValidatorPrompt(messages)
+            ? { status: 'success', content: JSON.stringify({ result: 'mismatch', confidence: 0.9, reason: 'teste S85 — output não endereça a intenção do step' }), attempts: [] }
+            : { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }), attempts: [] },
+        getProvider: () => undefined,
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 

@@ -63,7 +63,6 @@ export function makeContentStubClassifier(providerFactory: ProviderFactory): Con
         ];
 
         const messages: LLMMessage[] = [{ role: 'user', content: lines.join('\n') }];
-        const provider = providerFactory.getProviderWithModel(CLASSIFIER_MODEL);
         // Orçamento derivado da latência observada do provedor (shared/auxTimeout.ts), como
         // DomainRegistry e GoalExtractor já fazem. O teto fixo de 6s que existia aqui era o
         // sétimo dos que a Sprint 7 mediu e deixou de fora por não ter evidência de abort —
@@ -81,14 +80,22 @@ export function makeContentStubClassifier(providerFactory: ProviderFactory): Con
         // é parar de tratar "este provedor é mais lento" como "o LLM não conseguiu classificar".
         const orcamento = providerFactory.getBudgetAuxiliar('classificacao');
         const TIMEOUT_MS = orcamento.timeoutMs;
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+        // Reusa chatWithFallback em vez de getProviderWithModel() direto (D-08,
+        // docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md) — mesmo mecanismo que
+        // ObserverValidator (S258) já usa. getProviderWithModel() sem providerName cai sempre em
+        // this.defaultProvider, sem nenhum fallback se essa única chamada falhar; chatWithFallback
+        // tenta os demais providers antes de desistir, com o mesmo TIMEOUT_MS de hoje delimitando
+        // cada tentativa. A política fail-closed continua decidida aqui, não no ProviderFactory —
+        // qualquer status diferente de 'success' (erro, timeout, cancelado) cai no mesmo ramo.
+        const result = await providerFactory.chatWithFallback(messages, undefined, undefined, TIMEOUT_MS, undefined, CLASSIFIER_MODEL);
+        if (result.status !== 'success') {
+            log.warn(`[ContentStubClassifier] tool=${toolName} chamada ao LLM falhou (status=${result.status}) — fail-closed (isStub=true)`);
+            return { isStub: true, reason: 'erro na classificação LLM (fail-closed)' };
+        }
 
         try {
-            const response = await provider.chat(messages, undefined, { signal: controller.signal, timeoutMs: TIMEOUT_MS });
-            clearTimeout(timer);
-
-            const cleaned = response.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            const cleaned = result.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
             const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
             if (!jsonMatch) {
                 log.warn(`[ContentStubClassifier] tool=${toolName} resposta sem JSON válido — fail-closed (isStub=true)`);
@@ -105,8 +112,7 @@ export function makeContentStubClassifier(providerFactory: ProviderFactory): Con
             log.info(`[ContentStubClassifier] tool=${toolName} isStub=${parsed.isStub} reason="${reason.slice(0, 100)}"`);
             return { isStub: parsed.isStub, reason };
         } catch (err) {
-            clearTimeout(timer);
-            log.warn(`[ContentStubClassifier] tool=${toolName} erro na classificação: ${String(err).slice(0, 100)} — fail-closed (isStub=true)`);
+            log.warn(`[ContentStubClassifier] tool=${toolName} erro ao interpretar resposta: ${String(err).slice(0, 100)} — fail-closed (isStub=true)`);
             return { isStub: true, reason: 'erro na classificação LLM (fail-closed)' };
         }
     };

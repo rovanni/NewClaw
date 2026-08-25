@@ -48,12 +48,16 @@ function readSrc(relPath: string): string {
     return fs.readFileSync(path.join(process.cwd(), 'src', relPath), 'utf-8');
 }
 
-/** ProviderFactory fake — devolve o JSON configurado como resposta do classificador. */
+/**
+ * ProviderFactory fake — devolve o JSON configurado como resposta do classificador.
+ *
+ * Mocka chatWithFallback (não mais getProviderWithModel().chat() direto) — D-08,
+ * docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md: mesma migração já feita em
+ * ObserverValidator (S258) e agora aplicada a contentStubClassifier.
+ */
 function makeFakeProviderFactory(getResponse: () => string) {
     return {
-        getProviderWithModel: () => ({
-            chat: async () => ({ content: getResponse() }),
-        }),
+        chatWithFallback: async () => ({ status: 'success', content: getResponse(), attempts: [] }),
         // Sprint 043: o classificador deixou de ter teto fixo de 6s e passou a derivar o prazo da
         // latência observada (shared/auxTimeout.ts), como DomainRegistry e GoalExtractor já faziam.
         // O dublê usa a função real sem fonte de medição — que é o caminho documentado de partida
@@ -95,9 +99,7 @@ console.log('\n=== S77-2 [runtime] — LLM responde isStub=false → sanitizePla
 console.log('\n=== S77-3 [runtime — fail-closed] — erro de rede/timeout do LLM é tratado como isStub=true, não deixa passar ===');
 {
     const throwingProviderFactory = {
-        getProviderWithModel: () => ({
-            chat: async () => { throw new Error('network error simulada'); },
-        }),
+        chatWithFallback: async () => ({ status: 'error', content: '', attempts: [] }),
         getBudgetAuxiliar: (perfil: PerfilAuxiliar) => getBudgetAuxiliar(perfil, null, null),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
     const classifier = makeContentStubClassifier(throwingProviderFactory);

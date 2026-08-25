@@ -66,11 +66,12 @@ function makeAttempt(overrides: Partial<GoalAttempt> = {}): GoalAttempt {
     };
 }
 
+// Mocka chatWithFallback (não mais getProviderWithModel().chat() direto) — D-08,
+// docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md: StepSemanticValidator.llmValidate migrou
+// para o mesmo mecanismo que ObserverValidator (S258) já usa.
 function makeProviderFactory(response: { result: string; confidence: number }) {
     return {
-        getProviderWithModel: () => ({
-            chat: async () => ({ status: 'success', content: JSON.stringify(response) }),
-        }),
+        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify(response), attempts: [] }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 
