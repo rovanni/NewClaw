@@ -1,4 +1,11 @@
 import { runtimeStore, skillsStore, toolsStore, providersStore } from '../state.js';
+import { stopLocalModel } from '../api.js';
+import { showToast } from '../components/Toast.js';
+import { loadProviders } from '../app.js';
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 // Diretriz 2026-07-25: o Dashboard principal responde só "o sistema está funcionando?" — cada
 // painel aqui precisa responder a pelo menos uma dessas perguntas (sistema online, provider
@@ -109,6 +116,22 @@ export function render(container) {
     el('f-maxIterations').addEventListener('input',   e => cs.set('maxIterations', +e.target.value));
     el('f-memoryWindowSize').addEventListener('input',e => cs.set('memoryWindowSize', +e.target.value));
   }
+
+  // Descarregar o modelo local direto do Dashboard — delegação no container porque #dashServices
+  // é recriado a cada updateHealthPanels() (mesma técnica de ModelosView para o botão irmão).
+  container.addEventListener('click', async e => {
+    if (!e.target.closest('[data-dash-unload-local]')) return;
+    const btn = e.target.closest('[data-dash-unload-local]');
+    btn.disabled = true;
+    try {
+      await stopLocalModel();
+      showToast(t('ml_local_unloaded_toast'), 'success');
+      await loadProviders(true);
+    } catch (err) {
+      showToast('❌ ' + (err?.message || String(err)), 'error');
+      btn.disabled = false;
+    }
+  });
 
   // Subscribe to stores
   const unsubs = [
@@ -253,6 +276,23 @@ function updateHealthPanels() {
     for (const h of health) {
       if (h.provider === 'ollama') continue;
       rows.push(serviceRow('🔗', h.provider, h.online));
+    }
+    // Ação de descarregar o modelo local — achado ao vivo (2026-08-24): a única forma de
+    // encerrar um modelo local que o NewClaw subiu ficava dentro de Modelos → Adicionar Modelo →
+    // Meus arquivos, uma aba que quem só usa o Assistente de Configuração nunca visita. Resultado
+    // relatado: VRAM ocupada indefinidamente, sem opção visível de liberar. `lastKnownLocalModel`
+    // já é buscado por loadProviders() a cada 120s (mesmo dado que alimenta o aviso "modelo não
+    // carregado" — ver ModelosView.checkLocalModelDown) — reaproveitado aqui, nenhuma rota/estado
+    // novo. `.running` distingue "é o processo que o NewClaw gerencia" de "só sei que
+    // alguém carregou isso antes" — só nesse caso faz sentido oferecer descarregar.
+    const lastLocal = providersStore.get('lastKnownLocalModel');
+    if (lastLocal?.running) {
+      rows.push(`
+        <div class="channel-row">
+          <span class="channel-icon">🖥️</span>
+          <span class="channel-name channel-name-wide">${t('ml_local_running_title', { model: esc(lastLocal.file) })}</span>
+          <button type="button" class="btn btn-ghost btn-sm" data-dash-unload-local="1">${t('ml_local_unload_btn')}</button>
+        </div>`);
     }
     svcEl.innerHTML = rows.join('') || `<div class="empty">${t('waiting_data')}</div>`;
   }

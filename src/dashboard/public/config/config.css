@@ -46,6 +46,12 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
   font-size:.83rem; cursor:pointer; border:none; transition:all .2s; text-align:center; width:100%;
 }
 .btn:active { transform:scale(.97); }
+/* Achado pelo /qa leigo (C4.5, 2026-08-23): nenhuma regra .btn* tinha estado :disabled — um botão
+   desabilitado (ex: "Próximo" no Wizard antes de escanear/testar) ficava com a mesma borda
+   destacada de um botão pronto pra clicar, sem nenhuma pista visual de que clicar não faz nada.
+   Regra única e global (não escopada ao Wizard) porque o gap valia pra qualquer .btn do dashboard. */
+.btn:disabled { opacity:.4; cursor:not-allowed; box-shadow:none; }
+.btn:disabled:active { transform:none; }
 .btn-primary { background:var(--accent-bg); color:var(--accent); border:1px solid var(--accent); }
 .btn-primary:hover { background:var(--accent); color:var(--bg-base); box-shadow:0 0 16px rgba(125,211,252,.25); }
 .btn-warning { background:rgba(251,191,36,.15); color:var(--warning); border:1px solid var(--warning); }
@@ -234,6 +240,33 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 .channel-name  { font-weight:600; width:80px; flex-shrink:0; }
 .channel-status{ color:var(--text-muted); flex:1; }
 .channel-detail{ color:var(--text-soft); font-size:.69rem; text-align:right; }
+/* Variante pra nome de conteúdo variável (ex.: "Usando agora: <nome do .gguf>") — a largura fixa
+   de 80px do .channel-name base é pensada pra rótulos curtos como "Ollama"/"Telegram" e quebra
+   feio com um nome de arquivo. Não altera .channel-name (as outras linhas dependem do alinhamento
+   fixo dele). */
+.channel-name-wide { width:auto; flex:1; }
+
+/* Lista de modelos pra carregar (Assistente Rápido e Assistente de Configuração — mesma lista,
+   dois componentes: LocalModelWizard.js e ConfigWizard.js). Achado ao vivo (2026-08-24, screenshot
+   real do usuário): uma lista de 10+ arquivos .gguf sem nenhuma separação visual entre linhas
+   dificultava saber qual botão "Usar este modelo" correspondia a qual nome — nomes de arquivo são
+   parecidos entre si (gemma-4-12B vs gemma-4-26B vs gemma-4-E4B) e o único jeito de acertar era
+   contar linhas com cuidado. Zebra striping — cor alternada a cada linha — é o padrão consagrado
+   pra esse problema exato (tabelas densas, listas de preço, extratos bancários). */
+.wizard-model-row {
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:6px 10px; border-radius:6px;
+}
+/* Achado ao vivo (2026-08-24, screenshot real do usuário, segunda rodada): var(--bg-input) como
+   cor da linha par não aparecia dentro do painel .ml-guide-box porque o PRÓPRIO painel já usa
+   var(--bg-input) como fundo — as duas cores coincidem, cancelando o contraste. Confirmado via
+   CSS computado (as duas rgb(23,27,34), idênticas). --bg-input/--bg-surface/--bg-base do tema
+   claro também são quase idênticos entre si (#ffffff/#fbfbfc/#ffffff) — trocar de token não
+   resolveria de forma confiável em nenhum dos dois temas, porque depende de qual token o
+   container ao redor já usa, que muda conforme onde a lista é montada. Overlay semi-transparente
+   neutro (preto/branco puros, não uma cor de tema) sempre contrasta com QUALQUER fundo por trás —
+   independente do container, do tema, ou de qual token ele usa. */
+.wizard-model-row:nth-child(even) { background:rgba(127,127,127,.12); }
 
 /* Alert rows (Dashboard) — problema em destaque, "sem alerta" com tom neutro/positivo */
 .alert-row {

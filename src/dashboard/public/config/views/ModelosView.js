@@ -4,6 +4,7 @@ import { initDropdowns, updateDropdownModels } from '../components/ModelDropdown
 import { addCustomProvider, removeCustomProvider, editCustomProvider, getCloudCatalog, testCustomProvider, getLocalModels, serveLocalModel, stopLocalModel, previewLocalCommand } from '../api.js';
 import { loadProviders, doSave, guideBox } from '../app.js';
 import { mountLocalModelWizard } from '../components/LocalModelWizard.js';
+import { mountConfigWizard } from '../components/ConfigWizard.js';
 
 // Funções (não const) porque t() precisa ser avaliado a cada render() — se fossem consts de
 // módulo, ficariam presas no idioma ativo no momento em que o arquivo foi importado pela primeira
@@ -57,13 +58,16 @@ const CATEGORY_CAPABILITY = {
   plannerModel: 'chat', riskModel: 'chat', observerModel: 'chat', classifierModel: 'chat',
 };
 
-const PROV_LABELS = {
+// Exportadas (além de usadas aqui mesmo) porque ConfigWizard.js referencia estes mesmos nomes/
+// ícones pra montar o PROVIDER_DEFINITIONS da Tela 1 — decisão da Fase B (2026-08-19): o Wizard
+// não duplica label/ícone, só adiciona metadado de fluxo que não existe em lugar nenhum hoje.
+export const PROV_LABELS = {
   ollama: 'Ollama (Local + Cloud)', gemini: 'Google Gemini',
   openrouter: 'OpenRouter', deepseek: 'DeepSeek', groq: 'Groq',
   anthropic: 'Anthropic (Claude)',
 };
 
-const CLOUD_PROVIDERS = [
+export const CLOUD_PROVIDERS = [
   { key: 'gemini',     icon: '✨', name: 'Google Gemini',    placeholder: 'AIza...' },
   { key: 'deepseek',   icon: '🌊', name: 'DeepSeek',         placeholder: 'sk-...' },
   { key: 'groq',       icon: '⚡', name: 'Groq',             placeholder: 'gsk_...' },
@@ -74,9 +78,11 @@ const CLOUD_PROVIDERS = [
 /** Label do provider criado automaticamente ao carregar um modelo local pelo dashboard. Fixo de
  *  propósito: carregar outro modelo depois reaponta ESTE provider em vez de acumular um por
  *  modelo já carregado alguma vez. */
-const LOCAL_PROVIDER_LABEL = 'Modelo local';
+export const LOCAL_PROVIDER_LABEL = 'Modelo local';
 
-const CUSTOM_PROVIDER_PRESETS = [
+// Exportada pelo mesmo motivo de CLOUD_PROVIDERS/PROV_LABELS acima: o Wizard (etapa Custom/
+// OpenAI-Compatible, C3) referencia os mesmos presets, não duplica.
+export const CUSTOM_PROVIDER_PRESETS = [
   { label: 'OpenAI',     baseUrl: 'https://api.openai.com/v1' },
   { label: 'LM Studio',  baseUrl: 'http://localhost:1234/v1' },
   { label: 'vLLM',       baseUrl: 'http://localhost:8000/v1' },
@@ -101,7 +107,13 @@ function getTabs() {
   // Ordem = a sequência de dependência real, a mesma que o guia de primeira vez já numerava:
   // é preciso ter um provedor para ter modelos, e ter modelos para poder escolher um. Antes as
   // abas estavam noutra ordem e a tela contradizia o próprio texto de ajuda (2026-08-02).
+  //
+  // "wizard" entra como primeira aba (i===0 já ganha .active automaticamente no template) — as
+  // 4 abas manuais continuam exatamente como estavam, nenhuma removida/reordenada entre si
+  // (Fase C, incremento 1, 2026-08-19: só a infraestrutura do Wizard, fluxos específicos ainda
+  // não conectados — ver components/ConfigWizard.js).
   return [
+    { id: 'wizard',    icon: '🧭', label: t('ml_tab_wizard') },
     { id: 'providers', icon: '🔌', label: t('ml_tab_providers') },
     { id: 'registry',  icon: '📚', label: t('ml_tab_registry') },
     { id: 'routing',   icon: '🧭', label: t('ml_tab_routing') },
@@ -159,6 +171,13 @@ export function render(container) {
         <p>${t('models_page_desc')}</p>
       </div>
 
+      <!-- Modelo local rodando à toa (não é mais o provedor em uso) — ACIMA até do card de status
+           de propósito: é a GPU/VRAM sendo desperdiçada agora, mais urgente que o status de
+           rotina abaixo. Achado ao vivo (2026-08-24): a ação já existia no Dashboard, mas quem
+           troca de provedor está NESTA tela, não lá — o aviso precisa estar onde a confusão
+           acontece, e visível antes de qualquer outra coisa. Ver checkOrphanedLocalModel(). -->
+      <div id="ov-orphanedlocal" style="display:none;margin-bottom:14px;"></div>
+
       <!-- Faixa de status — ACIMA das abas, de propósito: responde "está tudo certo?" em qualquer
            aba, sem gastar uma aba inteira nem obrigar a navegar até ela. Era a antiga "Visão
            Geral", que só informava e por isso quase ninguém abria; informação que vale sempre
@@ -186,8 +205,18 @@ export function render(container) {
            (Sem crases neste comentário: ele vive dentro de um template literal.) -->
       <div id="ml-wizardEntry" style="margin-bottom:14px;"></div>
 
+      <!-- title no badge ⚠️ da aba "routing": achado pelo /qa leigo (C4.5, 2026-08-23) — o badge
+           aparecia sem nenhuma explicação, mesmo numa instância nova. Investigação (checkInternalModels())
+           confirmou que ele significa "plannerModel/riskModel/observerModel sem valor" — reaproveita
+           o MESMO texto (internal_warn_title/body) já usado no aviso completo mais abaixo na página,
+           em vez de escrever um texto novo pro tooltip. -->
       <div class="ml-tabs" id="ml-tabs">
-        ${tabs.map((tab, i) => `<button type="button" class="ml-tab${i === 0 ? ' active' : ''}" data-tab="${tab.id}">${tab.icon} ${tab.label}${tab.id === 'routing' ? ' <span id="ml-routingTabWarn" style="display:none;">⚠️</span>' : ''}</button>`).join('')}
+        ${tabs.map((tab, i) => `<button type="button" class="ml-tab${i === 0 ? ' active' : ''}" data-tab="${tab.id}">${tab.icon} ${tab.label}${tab.id === 'routing' ? ` <span id="ml-routingTabWarn" style="display:none;" title="${esc(t('internal_warn_title'))} ${esc(t('internal_warn_body'))}">⚠️</span>` : ''}</button>`).join('')}
+      </div>
+
+      <!-- ═══ Assistente de Configuração ═══ -->
+      <div class="ml-panel active" data-panel="wizard">
+        <div id="ml-configWizard"></div>
       </div>
 
       <!-- ═══ Registry ═══ -->
@@ -434,7 +463,7 @@ export function render(container) {
       </div>
 
       <!-- ═══ Providers (primeira aba: é o passo 1 do fluxo) ═══ -->
-      <div class="ml-panel active" data-panel="providers">
+      <div class="ml-panel" data-panel="providers">
         <!-- Guia de primeira vez fica aqui, no começo do caminho que ele mesmo descreve. -->
         ${guideBox(t('ml_ov_guide'))}
         ${guideBox(t('ml_tab_providers_guide'))}
@@ -647,6 +676,20 @@ export function render(container) {
     computeSystemReady,
   });
 
+  // Assistente de Configuração — primeira aba, incremento 1 (Fase C, 2026-08-19): infraestrutura
+  // + Tela 1 real, fluxos específicos por família ainda não conectados. `CLOUD_PROVIDERS`/
+  // `PROV_LABELS`/`LOCAL_PROVIDER_LABEL` por referência, mesmo motivo do wizard local acima —
+  // são as mesmas constantes que a aba Provedores já usa, não uma cópia.
+  const unsubConfigWizard = mountConfigWizard(document.getElementById('ml-configWizard'), {
+    cloudProviders: CLOUD_PROVIDERS,
+    provLabels: PROV_LABELS,
+    localProviderLabel: LOCAL_PROVIDER_LABEL,
+    customPresets: CUSTOM_PROVIDER_PRESETS,
+    computeSystemReady,
+    applyDefaultProviderChange,
+    ensureLocalProvider,
+  });
+
   // Subscribe to providersStore
   const unsubModels = providersStore.on('models', models => {
     updateDropdownModels(models);
@@ -705,6 +748,21 @@ export function render(container) {
     }
   });
 
+  // "Descarregar" do aviso de modelo local órfão (rodando, mas não é mais o provedor em uso).
+  document.getElementById('ov-orphanedlocal')?.addEventListener('click', async e => {
+    const btn = e.target.closest('[data-unload-orphaned]');
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      await stopLocalModel();
+      showToast(t('ml_local_unloaded_toast'), 'success');
+      await loadProviders(true);
+    } catch (err) {
+      showToast('❌ ' + err.message, 'error');
+      btn.disabled = false;
+    }
+  });
+
   // Routing diagnostics
   if (window._newclawLastRoutingDecision) {
     updateRoutingDiag(window._newclawLastRoutingDecision);
@@ -719,6 +777,7 @@ export function render(container) {
     unsubRouter();
     unsubCustomProviders();
     unsubWizard();
+    unsubConfigWizard();
     window.removeEventListener('newclaw-routing-decision', diagHandler);
   };
 
@@ -767,8 +826,10 @@ export function activeProviderHealth() {
   const health = providersStore.get('health') || [];
   const entry = health.find(h => h.provider === prov);
   if (prov === 'ollama' || !entry) {
-    // Ollama tem contadores próprios já mantidos pelo polling; sem entrada de health (provider
-    // de nuvem por API key, que não expõe /models) cai no mesmo caminho de antes.
+    // Ollama tem contadores próprios já mantidos pelo polling; sem entrada de health (provider de
+    // nuvem por API key sem chave configurada, ou discovery ainda não rodou) cai no mesmo caminho
+    // de antes. Os 5 provedores nativos (gemini/deepseek/groq/openrouter/anthropic) COM chave já
+    // geram entrada via `ModelRegistryService.discoverAll()` — este ramo só sobra pra "sem chave".
     return {
       provider: prov,
       online: !!providersStore.get('ollamaOnline'),
@@ -922,6 +983,7 @@ function updateOverview() {
   checkDuplicateEndpoints();
   checkConfigCoherence();
   checkLocalModelDown();
+  checkOrphanedLocalModel();
   updateCatalogCard();
 }
 
@@ -953,6 +1015,38 @@ function checkLocalModelDown() {
     <div class="ml-test-title">${t('ml_local_down_title', { model: esc(last.file) })}</div>
     <div class="form-hint" style="margin:6px 0;">${t('ml_local_down_hint')}</div>
     <button type="button" class="btn btn-primary btn-sm" data-reload-local="${esc(last.file)}">${t('ml_local_down_btn')}</button>`;
+}
+
+/**
+ * Inverso de checkLocalModelDown(): o modelo local está RODANDO, mas não é mais o provedor em
+ * uso — a placa de vídeo continua ocupada por um modelo que ninguém está consultando mais.
+ *
+ * Achado ao vivo (2026-08-24): trocar o provedor padrão pra Ollama Cloud não descarrega o
+ * servidor local sozinho — mesmo princípio de checkLocalModelDown() ao contrário (o NewClaw
+ * nunca religa NEM desliga um modelo local sem pedido explícito, porque a GPU pode estar sendo
+ * usada por outra coisa; a decisão continua sendo de quem está na frente da máquina). O botão de
+ * descarregar já existia (Dashboard, e Adicionar Modelo → Meus arquivos) — o que faltava era
+ * avisar NESTA tela, onde a troca de provedor de fato acontece, em vez de depender do usuário
+ * lembrar de ir procurar em outra página.
+ */
+function checkOrphanedLocalModel() {
+  const box = document.getElementById('ov-orphanedlocal');
+  if (!box) return;
+  const cs = configStore;
+  const prov = cs.get('defaultProvider') || 'ollama';
+  const isCustom = (cs.get('customProviders') || []).some(p => p.label === prov);
+  const last = providersStore.get('lastKnownLocalModel');
+
+  // Só quando o modelo local está DE FATO no ar (last.running) E não é mais o provedor em uso —
+  // as duas condições precisam bater; sem elas não há recurso órfão para avisar.
+  if (isCustom || !last?.running) { box.style.display = 'none'; return; }
+
+  box.style.display = '';
+  box.className = 'ml-test-result ml-test-fail';
+  box.innerHTML = `
+    <div class="ml-test-title">${t('ml_local_orphaned_title', { model: esc(last.file) })}</div>
+    <div class="form-hint" style="margin:6px 0;">${t('ml_local_orphaned_hint')}</div>
+    <button type="button" class="btn btn-primary btn-sm" data-unload-orphaned="1">${t('ml_local_unload_btn')}</button>`;
 }
 
 /**
@@ -2423,7 +2517,13 @@ function realignRouterToProvider(prov) {
     return { count: stale.length, target };
 }
 
-function applyDefaultProviderChange(prov) {
+// Exportada pro Wizard (ConfigWizard.js): é o único ponto que já existe pra trocar o provedor
+// padrão SEM deixar `modelRouter` com nomes de modelo do provedor anterior — `realignRouterToProvider()`
+// detecta e corrige contra o catálogo real. Achado durante a investigação de C4 (2026-08-23): o C2/C3
+// trocavam `defaultProvider` direto via `configStore.set()`, sem passar por aqui — exatamente o
+// mecanismo que já existia pra evitar a classe de bug do `modelRouter` obsoleto encontrada ao vivo
+// no C2 (nome de arquivo .gguf tratado como tag Ollama). Corrigido nos dois, não só registrado como dívida.
+export function applyDefaultProviderChange(prov) {
     const cs = configStore;
     cs.set('defaultProvider', prov);
     const realigned = realignRouterToProvider(prov);

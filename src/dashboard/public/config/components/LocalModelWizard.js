@@ -20,6 +20,7 @@ import { configStore, providersStore } from '../state.js';
 import { getLocalModels, serveLocalModel } from '../api.js';
 import { doSave, loadProviders } from '../app.js';
 import { showToast } from './Toast.js';
+import { renderModelPickList } from './LocalModelPickList.js';
 
 /** Convenção de chave já usada por outras preferências de UI (`sidebar_collapsed`/`tts` em
  *  index.html) — reproduzida aqui como literal porque `config.html` é uma página separada, sem
@@ -28,13 +29,6 @@ const DISMISS_KEY = 'newclaw_v1_ml_wizard_convite_dispensado';
 
 function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function formatBytes(bytes) {
-  if (!bytes) return '';
-  const gb = bytes / (1024 ** 3);
-  if (gb >= 1) return `${gb.toFixed(1)} GB`;
-  return `${Math.round(bytes / (1024 ** 2))} MB`;
 }
 
 export function mountLocalModelWizard(container, { ensureLocalProvider, computeSystemReady }) {
@@ -189,21 +183,10 @@ export function mountLocalModelWizard(container, { ensureLocalProvider, computeS
       const list = document.getElementById('ml-wizardModelList');
       // DOM construído via createElement/textContent (não innerHTML de string) para nome de
       // arquivo vindo do disco — mesma disciplina que corrigiu o XSS real do CodeQL #14 em
-      // ModelDropdown.js, aplicada aqui desde o início em vez de copiada depois de quebrar.
-      state.models.forEach(m => {
-        const row = document.createElement('div');
-        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;';
-        const label = document.createElement('span');
-        label.textContent = `${m.id} (${formatBytes(m.sizeBytes)})`;
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn-primary btn-sm';
-        btn.textContent = t('ml_local_serve_btn');
-        btn.addEventListener('click', () => loadModel(m.id, btn));
-        row.appendChild(label);
-        row.appendChild(btn);
-        list.appendChild(row);
-      });
+      // ModelDropdown.js. Renderização em si vem de LocalModelPickList.js, compartilhada com
+      // ConfigWizard.js — ver docstring do módulo pra por que essa duplicação específica valia a
+      // pena eliminar (bug visual real) sem violar a independência entre os dois wizards.
+      renderModelPickList(list, state.models, loadModel);
     } else if (state.step === 'confirming') {
       panel.className = 'ml-test-result ml-test-pending';
       panel.innerHTML = `<div class="ml-test-title">${t('ml_wizard_step_confirming', { model: esc(state.file) })}</div>`;
