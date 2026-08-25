@@ -30,6 +30,12 @@ const CONSUMERS = [
   ...fs.readdirSync(path.join(PUBLIC_DIR, 'config', 'views'))
     .filter(f => f.endsWith('.js'))
     .map(f => path.join(PUBLIC_DIR, 'config', 'views', f)),
+  // Lacuna encontrada durante a campanha do Wizard (2026-08-23): components/ nunca foi varrido —
+  // LocalModelWizard.js e ConfigWizard.js chamam t() tanto quanto qualquer view, mas nenhum erro
+  // de digitação de chave neles seria pego aqui antes. Corrigido dentro da própria campanha C2.
+  ...fs.readdirSync(path.join(PUBLIC_DIR, 'config', 'components'))
+    .filter(f => f.endsWith('.js'))
+    .map(f => path.join(PUBLIC_DIR, 'config', 'components', f)),
 ];
 
 let failures = 0;

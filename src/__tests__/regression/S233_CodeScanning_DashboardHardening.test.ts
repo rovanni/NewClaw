@@ -120,12 +120,24 @@ console.log('\n=== S233-4 — #91: SSRF — endpoint de metadado de nuvem bloque
 
     const callSites = [
         ['isResponsive', /async isResponsive\([^)]*\): Promise<boolean> \{\s*\n\s*try \{\s*\n\s*assertNotSsrfTarget\(this\.baseUrl\);/],
-        ['discoverModels', /async discoverModels\(\): Promise<ModelInfo\[\]> \{\s*\n\s*assertNotSsrfTarget\(this\.baseUrl\);/],
         ['chat', /async chat\([^)]*\): Promise<LLMResponse> \{\s*\n\s*assertNotSsrfTarget\(this\.baseUrl\);/],
     ];
     for (const [name, pattern] of callSites) {
         assert((pattern as RegExp).test(OPENAI_PROVIDER_SRC), `${name}() chama assertNotSsrfTarget() antes de qualquer fetch`);
     }
+    // discoverModels() delegou a checagem pra discoverOpenAICompatibleModels() (fatia de validação
+    // de providers nativos, 2026-08-19) — extraída pra ser reaproveitada por DeepSeek/Groq sem
+    // duplicar a lógica de fetch/parse (ver OpenAIProvider.ts). A proteção não enfraqueceu: as duas
+    // asserções abaixo, juntas, comprovam a mesma garantia de antes (chama antes de qualquer
+    // fetch), só que em dois pontos — o método público e a função que ele delega.
+    assert(
+        /async discoverModels\(\): Promise<ModelInfo\[\]> \{\s*\n\s*return discoverOpenAICompatibleModels\(this\.baseUrl,/.test(OPENAI_PROVIDER_SRC),
+        'discoverModels() delega pra discoverOpenAICompatibleModels() com this.baseUrl',
+    );
+    assert(
+        /export async function discoverOpenAICompatibleModels\([^)]*\): Promise<ModelInfo\[\]> \{\s*\n\s*assertNotSsrfTarget\(baseUrl\);/.test(OPENAI_PROVIDER_SRC),
+        'discoverOpenAICompatibleModels() chama assertNotSsrfTarget() antes de qualquer fetch — a proteção real de discoverModels() agora mora aqui',
+    );
 
     // Reprodução funcional da função (fidelidade garantida pelas asserções estruturais acima).
     function assertNotSsrfTarget(baseUrl: string): void {

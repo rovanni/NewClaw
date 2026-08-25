@@ -1,6 +1,7 @@
-import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, GeminiChatResponse } from './providerTypes';
+import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, GeminiChatResponse, ModelInfo } from './providerTypes';
 import { taskQueue, TaskPriority } from './providerQueue';
 import { createLogger } from '../shared/AppLogger';
+import { guessCapabilities } from './modelCapabilityHeuristics';
 
 const log = createLogger('GeminiProvider');
 
@@ -15,6 +16,32 @@ export class GeminiProvider implements ILLMProvider {
     }
 
     setModel(model: string): void { this.model = model; }
+
+    /** `GET /v1beta/models` — endpoint real do Gemini (confirmado contra a documentação oficial):
+     *  auth por query param `key=`, não header; cada item vem como `name: "models/xxx"`, não
+     *  `id` puro — o prefixo é removido aqui porque é assim que `this.model` já é usado na URL de
+     *  `generateContent` (sem o prefixo). Só lista/valida a chave — não muda `chat()`. */
+    async discoverModels(): Promise<ModelInfo[]> {
+        const resp = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models?key=${this.apiKey}`,
+        );
+        if (!resp.ok) {
+            const err = new Error(`Gemini /models error: ${resp.status}`) as Error & { status?: number };
+            err.status = resp.status;
+            throw err;
+        }
+        const data = await resp.json() as { models?: Array<{ name: string; displayName?: string }> };
+        return (data.models || []).map(m => {
+            const id = m.name.startsWith('models/') ? m.name.slice('models/'.length) : m.name;
+            return {
+                id,
+                provider: this.name,
+                label: m.displayName || id,
+                capabilities: guessCapabilities(id),
+                status: 'available' as const,
+            };
+        });
+    }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         const queueEntryTime = Date.now();

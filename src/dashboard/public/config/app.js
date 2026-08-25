@@ -146,6 +146,15 @@ export async function doSave() {
   // `.gguf` nunca é uma tag válida do registro do Ollama. Achado ao vivo (QA 2026-08-18):
   // ensureLocalProvider() aponta as 6 categorias pro arquivo local e chama doSave(), que sem esta
   // checagem tentava `ollama pull <arquivo>.gguf` a cada carregamento de modelo local.
+  // Achado ao vivo (C4, 2026-08-23): trocar defaultProvider de 'local' pra 'ollama' via
+  // applyDefaultProviderChange()/realignRouterToProvider() só realinha categorias que o catálogo
+  // consegue provar pertencerem a outro provider (ver comentário em ModelosView.js:2444) — se o
+  // llama-server local não está rodando no momento da troca, o catálogo não tem esse modelo, e
+  // realignRouterToProvider corretamente não mexe (NUNCA_ADIVINHAR). Isso deixa categorias que o
+  // Wizard não tocou (code/vision/light/analysis/execution — só `chat` é setado explicitamente)
+  // com o nome do arquivo .gguf antigo, e o `provider_<k> || defaultProvider` abaixo (sem ownership
+  // real) as classifica como "pertence ao Ollama" só por não ter override explícito — a checagem já
+  // existente na linha seguinte cobria .gguf-quando-defaultProvider-é-local, não o inverso.
   const toCheck = new Set();
   if (config.ollamaModel && config.defaultProvider === 'ollama') toCheck.add(config.ollamaModel);
   ['chat','code','vision','light','analysis','execution'].forEach(k => {
@@ -156,6 +165,7 @@ export async function doSave() {
 
   for (const model of toCheck) {
     if (model.includes('groq') || model.includes('gemini') || model.includes('deepseek')) continue;
+    if (model.endsWith('.gguf')) continue;
     try {
       const exists = await modelExists(model);
       // `null` = não deu para verificar (provedor fora do ar, timeout). Nesse caso não se oferece
@@ -280,6 +290,7 @@ async function loadConfig() {
       customProviders:        c.customProviders || [],
       localModelsDir:         c.localModelsDir || '',
       localModelOptions:      c.localModelOptions || {},
+      directoryPicker:        c.directoryPicker || { policyAllowed: false, preference: 'native' },
     });
   } catch {}
   // Só a partir daqui mudanças no configStore contam como "não salvas" — o patch inicial acima

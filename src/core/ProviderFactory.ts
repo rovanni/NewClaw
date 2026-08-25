@@ -914,6 +914,14 @@ export class ProviderFactory {
         return p instanceof OllamaProvider ? p : undefined;
     }
 
+    /** Devolve a instância já registrada de um dos 5 provedores nativos de nuvem (gemini/deepseek/
+     *  groq/openrouter/anthropic), ou `undefined` se a API key não estiver configurada — mesmo
+     *  Map que o construtor já usa pra registrá-los (linhas 85-95), sem nova fonte de verdade.
+     *  Espelha `getOllamaProvider()`. */
+    getNativeProvider(name: 'gemini' | 'deepseek' | 'groq' | 'openrouter' | 'anthropic'): ILLMProvider | undefined {
+        return this.providers.get(name);
+    }
+
     getCurrentModel(): string {
         const provider = this.getProvider();
         if (provider instanceof OllamaProvider) return provider.getModel();

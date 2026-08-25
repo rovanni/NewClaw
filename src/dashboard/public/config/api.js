@@ -167,6 +167,28 @@ export async function stopLocalModel() {
   return json(f('/api/models/local/stop', { method: 'POST' }));
 }
 
+// WebDirectoryPicker — navega a partir do hint (o que já está no campo) ou de um `dir` específico
+// dentro da mesma sessão de navegação. Nunca uma lista de raízes do computador inteiro.
+export async function browseLocalDirectory({ hint, dir } = {}) {
+  const params = new URLSearchParams();
+  if (hint) params.set('hint', hint);
+  if (dir) params.set('dir', dir);
+  const qs = params.toString();
+  return json(f(`/api/models/local/browse${qs ? `?${qs}` : ''}`));
+}
+
+// NativeDirectoryPicker — bloqueia até o usuário escolher/cancelar no diálogo do SO, ou até o
+// timeout do servidor. `outcome.kind` é 'selected' | 'cancelled' | 'unavailable' — o chamador
+// nunca trata 'unavailable' como erro visível, só como sinal pra cair no WebDirectoryPicker.
+export async function triggerNativeDirectoryPicker(hint) {
+  const d = await json(f('/api/models/local/native-picker', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ hint }),
+  }));
+  return d.outcome;
+}
+
 // Testa um endpoint OpenAI-Compatible sem cadastrá-lo. A rota responde 200 mesmo quando o
 // endpoint do usuário está fora do ar (online:false + error) — por isso o retorno é o objeto
 // inteiro, não um booleano: a UI mostra o motivo da falha e a lista de modelos do sucesso.

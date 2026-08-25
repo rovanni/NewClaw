@@ -13,6 +13,13 @@ import {
 } from '../../core/localRuntimeState';
 import { DashboardContext } from './types';
 import { createRateLimiter } from '../security';
+import {
+    resolveEffectiveRoot,
+    ceilingFor,
+    listDirectory,
+    runNativeDirectoryPicker,
+    shouldAttemptNative,
+} from '../../core/DirectoryPickerService';
 
 const log = createLogger('ModelsRoute');
 
@@ -584,6 +591,14 @@ export function createModelsRouter(ctx: DashboardContext): Router {
                     ? `o servidor encerrou (código ${code}):\n${tail}`
                     : `o servidor encerrou com código ${code}`;
             }
+            // Achado ao vivo (2026-08-24): esta era a ÚNICA saída de diagnóstico de uma morte
+            // precoce do processo, e ela só chegava a algum lugar visível se a requisição HTTP
+            // original ainda estivesse com o loop de espera rodando quando isto disparasse. Uma
+            // troca de modelo cuja aba foi fechada, ou cujo fetch do navegador desistiu antes dos
+            // até 5 minutos de espera, perdia esse diagnóstico por completo — o processo morria,
+            // ninguém via por quê, e a única pista era tentar de novo. Logar aqui, no exato
+            // instante da morte, independe de haver alguém ainda esperando a resposta.
+            log.warn(`Servidor local morreu cedo: ${file} — ${exitedEarly}`);
         });
 
         // Espera o modelo carregar de verdade: enquanto carrega, o servidor já aceita conexão mas
@@ -605,6 +620,9 @@ export function createModelsRouter(ctx: DashboardContext): Router {
             await new Promise(r => setTimeout(r, 1500));
         }
 
+        // Mesmo achado do log.warn acima: sem isto, um timeout de 5min também desaparecia sem
+        // rastro caso ninguém estivesse mais esperando a resposta HTTP original.
+        log.warn(`Servidor local não respondeu a tempo (${LOCAL_SERVER_READY_TIMEOUT_MS}ms): ${file}`);
         stopLocalServer();
         res.status(504).json({ success: false, error: 'O modelo não terminou de carregar a tempo' });
     });
@@ -613,6 +631,48 @@ export function createModelsRouter(ctx: DashboardContext): Router {
     router.post('/local/stop', (_req: Request, res: Response) => {
         const stopped = stopLocalServer();
         res.json({ success: true, stopped });
+    });
+
+    /**
+     * WebDirectoryPicker — GET /api/models/local/browse[?dir=...]. Navegação assistida a partir do
+     * que já está digitado no campo (o `hint`), nunca uma lista de raízes implícitas (homedir +
+     * drives) — decisão fechada na campanha FP (ver docstring de `DirectoryPickerService`).
+     *
+     * `dir` ausente/vazio → raiz efetiva resolvida a partir de `hint` (ou `homedir()`); `dir`
+     * presente → navega dali, mas sempre confinado ao teto calculado a partir da MESMA raiz
+     * original (a fronteira nunca se move durante uma sessão de navegação — impede que sucessivos
+     * "subir" acabem escapando pra fora do que a raiz efetiva original permitia).
+     */
+    router.get('/local/browse', modelsFsRateLimit, (req: Request, res: Response) => {
+        const hint = typeof req.query.hint === 'string' ? req.query.hint : undefined;
+        const requestedDir = typeof req.query.dir === 'string' ? req.query.dir : undefined;
+        const root = resolveEffectiveRoot(hint);
+        const ceiling = ceilingFor(root);
+        const target = requestedDir || root;
+        const listing = listDirectory(target, ceiling);
+        res.json({ success: true, ...listing });
+    });
+
+    /**
+     * NativeDirectoryPicker — POST /api/models/local/native-picker. Bloqueia a resposta HTTP até o
+     * usuário escolher/cancelar no diálogo do próprio SO, ou até o timeout de sondagem+interação
+     * (`NATIVE_PICKER_TIMEOUT_MS`). Política+preferência são checadas AQUI, antes de sequer tentar
+     * — `runNativeDirectoryPicker` nunca decide "devo tentar", só "como tentar".
+     *
+     * Mesma autenticação (`authMiddleware`/`dashboardAuth`) e mesmo rate limit (`modelsFsRateLimit`)
+     * já aplicados a toda a família `/local/*` — nenhuma rota nova fora dessas proteções.
+     */
+    router.post('/local/native-picker', modelsFsRateLimit, async (req: Request, res: Response) => {
+        const preference = ctx.config.directoryPickerPreference;
+        if (!shouldAttemptNative(preference)) {
+            return res.json({
+                success: true,
+                outcome: { kind: 'unavailable', source: 'native', reason: 'not-permitted' },
+            });
+        }
+        const hint = typeof req.body?.hint === 'string' ? req.body.hint : undefined;
+        const outcome = await runNativeDirectoryPicker(hint);
+        res.json({ success: true, outcome });
     });
 
     return router;

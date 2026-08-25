@@ -65,6 +65,41 @@ function assertNotSsrfTarget(baseUrl: string): void {
 }
 
 /**
+ * Lista os modelos expostos por `{baseUrl}/models` — extraída de `OpenAIProvider.discoverModels()`
+ * pra ser reaproveitada por qualquer provider que fale o mesmo formato `{ data: [{ id }, ...] }`
+ * (confirmado contra a documentação oficial de cada um: DeepSeek e Groq devolvem exatamente esse
+ * envelope). `OpenAIProvider.discoverModels()` chama esta função com seus próprios campos; não é
+ * um comportamento novo, só reorganização — evita duplicar a mesma lógica de fetch/parse em
+ * `DeepSeekProvider`/`GroqProvider` em vez de copiar o método inteiro (o "adapter explosion" que
+ * `ANALISE_ARQUITETURAL_MODEL_REGISTRY_2026-07-22.md`, Fase 2, já identificou como risco).
+ */
+export async function discoverOpenAICompatibleModels(baseUrl: string, apiKey: string | undefined, label: string): Promise<ModelInfo[]> {
+    assertNotSsrfTarget(baseUrl);
+    const headers: Record<string, string> = {};
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    const resp = await fetch(`${baseUrl}/models`, { headers });
+    if (!resp.ok) {
+        // O status vai anexado ao erro para quem chama poder distinguir estados que não são
+        // "fora do ar". O caso concreto é o llamafile: ele ABRE a porta assim que sobe e
+        // responde 503 {"message":"Loading model"} durante toda a carga — que pode levar mais
+        // de dois minutos. Tratar isso como offline faz o painel dizer que o provedor caiu
+        // exatamente enquanto ele está subindo (observado em 02/08/2026). Detectar por texto
+        // da mensagem seria frágil; o status é o dado.
+        const err = new Error(`${label} /models error: ${resp.status}`) as Error & { status?: number };
+        err.status = resp.status;
+        throw err;
+    }
+    const data = await resp.json() as { data?: Array<{ id: string }> };
+    return (data.data || []).map(m => ({
+        id: m.id,
+        provider: label,
+        label: m.id,
+        capabilities: guessCapabilities(m.id),
+        status: 'available' as const,
+    }));
+}
+
+/**
  * Converte mensagens que carregam imagem para o formato multimodal da API da OpenAI.
  *
  * `LLMMessage.images` é o formato interno do projeto (base64 puro), desenhado sobre o campo
@@ -159,29 +194,7 @@ export class OpenAIProvider implements ILLMProvider {
      * esse endpoint com o mesmo formato `{ data: [{ id }, ...] }`.
      */
     async discoverModels(): Promise<ModelInfo[]> {
-        assertNotSsrfTarget(this.baseUrl);
-        const headers: Record<string, string> = {};
-        if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
-        const resp = await fetch(`${this.baseUrl}/models`, { headers });
-        if (!resp.ok) {
-            // O status vai anexado ao erro para quem chama poder distinguir estados que não são
-            // "fora do ar". O caso concreto é o llamafile: ele ABRE a porta assim que sobe e
-            // responde 503 {"message":"Loading model"} durante toda a carga — que pode levar mais
-            // de dois minutos. Tratar isso como offline faz o painel dizer que o provedor caiu
-            // exatamente enquanto ele está subindo (observado em 02/08/2026). Detectar por texto
-            // da mensagem seria frágil; o status é o dado.
-            const err = new Error(`${this.label} /models error: ${resp.status}`) as Error & { status?: number };
-            err.status = resp.status;
-            throw err;
-        }
-        const data = await resp.json() as { data?: Array<{ id: string }> };
-        return (data.data || []).map(m => ({
-            id: m.id,
-            provider: this.label,
-            label: m.id,
-            capabilities: guessCapabilities(m.id),
-            status: 'available' as const,
-        }));
+        return discoverOpenAICompatibleModels(this.baseUrl, this.apiKey, this.label);
     }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {

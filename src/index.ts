@@ -88,6 +88,11 @@ const config = {
     customProviders: parseCustomProviders(process.env.CUSTOM_PROVIDERS),
     localModelsDir: process.env.LOCAL_MODELS_DIR || '',
     localModelOptions: parseLocalModelOptions(process.env.LOCAL_MODEL_OPTIONS),
+    // Política (NEWCLAW_NATIVE_DIRECTORY_PICKER) é lida direto de process.env dentro de
+    // DirectoryPickerService — nunca guardada aqui, propositalmente (ver docstring do módulo).
+    // Preferência (dentro do que a política permitir) é config normal, mesmo padrão de
+    // localModelsDir.
+    directoryPickerPreference: (process.env.DIRECTORY_PICKER_PREFERENCE === 'web' ? 'web' : 'native') as 'native' | 'web',
     modelRouter: {
         chat: process.env.MODEL_CHAT,
         code: process.env.MODEL_CODE,

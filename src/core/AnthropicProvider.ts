@@ -1,6 +1,7 @@
-import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, ToolCall, AnthropicChatResponse, AnthropicContentBlock } from './providerTypes';
+import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, ToolCall, AnthropicChatResponse, AnthropicContentBlock, ModelInfo } from './providerTypes';
 import { taskQueue, TaskPriority } from './providerQueue';
 import { createLogger } from '../shared/AppLogger';
+import { guessCapabilities } from './modelCapabilityHeuristics';
 
 const log = createLogger('AnthropicProvider');
 
@@ -81,6 +82,28 @@ export class AnthropicProvider implements ILLMProvider {
     }
 
     setModel(model: string): void { this.model = model; }
+
+    /** `GET /v1/models` — endpoint real da Anthropic (confirmado contra a documentação oficial,
+     *  não é o mesmo formato OpenAI-Compatible: auth por `x-api-key`, não `Authorization: Bearer`,
+     *  e o campo de nome é `display_name`). Só lista/valida a chave — não muda `chat()`. */
+    async discoverModels(): Promise<ModelInfo[]> {
+        const resp = await fetch('https://api.anthropic.com/v1/models', {
+            headers: { 'x-api-key': this.apiKey, 'anthropic-version': ANTHROPIC_VERSION },
+        });
+        if (!resp.ok) {
+            const err = new Error(`Anthropic /models error: ${resp.status}`) as Error & { status?: number };
+            err.status = resp.status;
+            throw err;
+        }
+        const data = await resp.json() as { data?: Array<{ id: string; display_name?: string }> };
+        return (data.data || []).map(m => ({
+            id: m.id,
+            provider: this.name,
+            label: m.display_name || m.id,
+            capabilities: guessCapabilities(m.id),
+            status: 'available' as const,
+        }));
+    }
 
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         const queueEntryTime = Date.now();

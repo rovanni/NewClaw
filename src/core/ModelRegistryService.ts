@@ -7,6 +7,11 @@ import { guessCapabilities } from './modelCapabilityHeuristics';
 
 const log = createLogger('ModelRegistryService');
 
+/** Os 5 provedores nativos de nuvem por API key — validados por `discoverModels()` da mesma forma
+ *  que Ollama/custom, quando a key estiver configurada (fatia de validação de providers,
+ *  2026-08-19). Ollama fica de fora desta lista porque já tem seu próprio caminho dedicado acima. */
+const NATIVE_KEY_PROVIDERS = ['gemini', 'deepseek', 'groq', 'openrouter', 'anthropic'] as const;
+
 /** Evita bater nos providers a cada request — 30s é curto o bastante para refletir um pull/unload recente. */
 const CACHE_TTL_MS = 30_000;
 
@@ -151,6 +156,25 @@ export class ModelRegistryService {
                     modelCount: 0,
                     error: errorMessage(err),
                 });
+            }
+        }
+
+        // Provedores nativos de nuvem — só entram na varredura se já estiverem registrados no
+        // ProviderFactory, o que só acontece com API key configurada (mesma regra que já vale
+        // pra registro no construtor, herdada aqui, não reimplementada). O objetivo desta fatia é
+        // validação de autenticação/configuração pra `computeSystemReady()`, não um catálogo de
+        // modelos na UI — por isso `results` recebe os modelos descobertos (consistência com o
+        // formato que Ollama/custom já produzem), mas nenhuma tela nova é construída em cima disso.
+        for (const name of NATIVE_KEY_PROVIDERS) {
+            const provider = this.providerFactory.getNativeProvider(name);
+            if (!provider?.discoverModels) continue;
+            try {
+                const models = await provider.discoverModels();
+                results.push(...models);
+                health.push({ provider: name, online: true, modelCount: models.length });
+            } catch (err) {
+                log.warn(`${name} discovery failed: ${errorMessage(err)}`);
+                health.push({ provider: name, online: false, modelCount: 0, error: errorMessage(err) });
             }
         }
 
