@@ -241,6 +241,21 @@ está em `docs/ARCHITECTURE/README.md`:
   testada, que nunca executava porque o `import` era estático e a falha acontecia em tempo de
   compilação. Vale também para o **diagnóstico** — quem não alcança o sinal que classifica a causa
   deve reportar indeterminação, nunca escolher a mais provável.
+- **Quando Extrair Duplicação / Single Authoritative Knowledge**
+  (`docs/ARCHITECTURE/QUANDO_EXTRAIR_DUPLICACAO.md`) — diante de código duplicado, extrair só
+  quando os dois testes passam: (1) existe pelo menos um sinal de conhecimento compartilhado que
+  pode divergir (comportamento, regra de negócio, divergência já observada, risco concreto,
+  manutenção conjunta, ou representação do mesmo fato) — não só semelhança textual; e (2) a
+  extração cria um módulo-folha neutro que os dois lados importam, nunca um lado importando o
+  outro. Nem DRY sempre, nem duplicação sempre aceitável. Nasceu do Dashboard (24/08/2026):
+  `LocalModelWizard.js`/`ConfigWizard.js` duplicavam a renderização da lista de modelos locais
+  (já causou um bug visual — extraído para `LocalModelPickList.js`), mas mantinham `formatBytes()`
+  duplicado por valor (sem lógica — extrair criaria um wizard importando o outro, à toa).
+  Confirmado como padrão recorrente, não caso isolado, por investigação dedicada: **6 casos
+  adicionais** de duplicação que já causou divergência real e datada, em camadas diferentes do
+  sistema (retry de anexo — RFC-004; catálogos de dependências — auditoria 26/07; entrega de goal
+  cru — goal 14/08; regex de comando destrutivo; prefixo `$` duplicado em crypto — goal 14/08) —
+  ver Seção 5 do documento para citações e arquivos exatos.
 
 ## Filosofia do projeto
 

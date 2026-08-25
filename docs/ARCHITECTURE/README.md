@@ -21,10 +21,14 @@ instantâneo datado; as normas são vivas.
 | `SOBERANIA_DA_CONFIGURACAO.md` | *Quem* decide qual recurso usar, e o que o usuário fica sabendo |
 | `LOCALIDADE_DA_RECUPERACAO.md` | *Em que camada* uma política de recuperação deve viver |
 | `RESPONSABILIDADE_ANTES_DO_MECANISMO.md` | *Quem* deve tomar uma decisão de avaliação, *com qual evidência*, e só então *por qual mecanismo* (estrutura → determinismo; significado → LLM) |
+| `QUANDO_EXTRAIR_DUPLICACAO.md` | Diante de código duplicado, extrair ou manter duplicado — dois testes, não reflexo (Single Authoritative Knowledge; confirmado padrão recorrente, 6+ casos reais) |
+| `INVENTARIO_DUPLICACAO_2026-08-24.md` | Inventário completo, caso a caso, de todas as duplicidades de conhecimento já encontradas no repositório, classificadas com os testes de `QUANDO_EXTRAIR_DUPLICACAO.md` (EXTRAIR / MANTER INTENCIONALMENTE / INVESTIGAR / FORA DO ESCOPO) — não é norma nova, é a aplicação registrada da norma anterior |
 
-Os penúltimos dois foram formalizados pela `docs/decisoes/RFC-005_POLITICAS_DE_SUBSTITUICAO_DE_RECURSOS.md`
-(06/08/2026); o último, pela auditoria arquitetural de regressão de 09/08/2026. Todos são citados
-por `docs/DIRETRIZ_ARQUITETURA_2026-07-13.md`.
+Os antepenúltimos três foram formalizados pela `docs/decisoes/RFC-005_POLITICAS_DE_SUBSTITUICAO_DE_RECURSOS.md`
+(06/08/2026); o `RESPONSABILIDADE_ANTES_DO_MECANISMO.md`, pela auditoria arquitetural de regressão
+de 09/08/2026; os dois últimos, pelo achado ao vivo de 24/08/2026 (Dashboard, lista de modelos
+locais duplicada entre dois wizards) e pela investigação/inventário dedicados que se seguiram no
+mesmo dia. Todos são citados por `docs/DIRETRIZ_ARQUITETURA_2026-07-13.md`.
 
 ## Como abrir
 
