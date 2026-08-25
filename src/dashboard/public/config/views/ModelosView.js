@@ -2523,6 +2523,12 @@ function realignRouterToProvider(prov) {
 // trocavam `defaultProvider` direto via `configStore.set()`, sem passar por aqui — exatamente o
 // mecanismo que já existia pra evitar a classe de bug do `modelRouter` obsoleto encontrada ao vivo
 // no C2 (nome de arquivo .gguf tratado como tag Ollama). Corrigido nos dois, não só registrado como dívida.
+//
+// O CASO que `realignRouterToProvider()` corretamente recusa corrigir (catálogo sem evidência,
+// Nunca Adivinhar — ver comentário logo abaixo, e o mesmo em app.js) é a causa raiz de "Ollama API
+// error: 404" recorrente em produção — não um problema novo e separado. Ver
+// `ModelProfileRegistry.sanitizeProfile()` (S264): o lado do consumo agora invalida o par
+// impossível antes de ele alcançar `chatWithFallback`, sem tentar adivinhar o provider certo aqui.
 export function applyDefaultProviderChange(prov) {
     const cs = configStore;
     cs.set('defaultProvider', prov);

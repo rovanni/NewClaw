@@ -10,9 +10,10 @@
  *   3. Default profile se tudo falhar
  */
 
-import { ProviderFactory } from '../core/ProviderFactory';
+import { ProviderFactory, RESERVED_PROVIDER_NAMES } from '../core/ProviderFactory';
 import { createLogger } from '../shared/AppLogger';
 import { keywordBoundaryMatches } from '../shared/keywordBoundary';
+import { isLocalModelFile } from '../shared/localModelFile';
 const log = createLogger('ModelProfileRegistry');
 
 // Perfil de modelos por categoria
@@ -378,12 +379,50 @@ Category:`;
 
     getProfileByCategory(category: Category): Readonly<ModelProfile> | undefined {
         const found = this.config.profiles.find(p => p.category === category);
-        return found ? { ...found } : undefined;
+        return found ? this.sanitizeProfile(found) : undefined;
     }
 
     getProfile(id: string): Readonly<ModelProfile> | undefined {
         const found = this.config.profiles.find(p => p.id === id);
-        return found ? { ...found } : undefined;
+        return found ? this.sanitizeProfile(found) : undefined;
+    }
+
+    /**
+     * Descarta um perfil cujo par (model, provider) é objetivamente impossível — nunca escolhe um
+     * substituto (campanha "Ollama API error: 404", Fase 3, S264).
+     *
+     * Só invalida quando os TRÊS fatos são determinísticos e verificáveis sem depender do
+     * catálogo (nunca uma suposição sobre QUEM serve o modelo, só sobre quem NÃO serve):
+     *   1. `provider` está vazio (herdado) — um provider explícito é a escolha do operador,
+     *      preservada sempre, mesmo que pareça estranha.
+     *   2. `model` é um arquivo de modelo local (ex.: `.gguf`) — formato que nenhum provider
+     *      nativo entende como tag válida (mesmo fato já usado em `dashboard/routes/models.ts`
+     *      pra decidir o que listar como "modelo local").
+     *   3. O provider herdado (`ProviderFactory.getDefaultProvider()`) é um dos 6 nativos
+     *      (`RESERVED_PROVIDER_NAMES`) — nenhum deles serve arquivo de modelo local, sempre.
+     *
+     * Causa raiz real (não hipotética): `ensureLocalProvider()` grava esse par coerente no
+     * momento do carregamento (defaultProvider = provider local); `realignRouterToProvider()`
+     * corretamente não corrige quando o catálogo não confirma o modelo (servidor local
+     * indisponível) — por Nunca Adivinhar. O par inconsistente sobrevivia até
+     * `getProfileByCategory('execution')` (síntese, `AgentLoop.ts`) devolvê-lo intacto para
+     * `chatWithFallback`, que atribuía o arquivo `.gguf` ao provider nativo herdado — `Ollama API
+     * error: 404`, recorrente em produção (02/08 a 24/08/2026).
+     *
+     * Devolver `undefined` aqui é suficiente — todo chamador já tem uma cadeia de fallback
+     * própria (`?? chatProfile` na síntese; a sequência determinístico→LLM→default em
+     * `resolveProfile()`) que nunca precisou ser ensinada: só parou de receber um par quebrado.
+     *
+     * NUNCA infere o provider correto (ex.: "termina em .gguf, então é 'llamafile'") — isso seria
+     * a mesma adivinhação que este método existe para evitar, só que na direção oposta.
+     */
+    private sanitizeProfile(profile: ModelProfile): Readonly<ModelProfile> | undefined {
+        if (profile.provider) return { ...profile };
+        if (!isLocalModelFile(profile.model)) return { ...profile };
+        const inheritedProvider = this.providerFactory?.getDefaultProvider();
+        if (!inheritedProvider || !RESERVED_PROVIDER_NAMES.has(inheritedProvider)) return { ...profile };
+        log.warn(`Perfil '${profile.category}' descartado: modelo local '${profile.model}' não pode ser servido pelo provider herdado '${inheritedProvider}' — nenhum provider nativo serve arquivo de modelo local. Sem provider explícito configurado para esta categoria, não há como corrigir sem adivinhar; o chamador cai para seu próprio fallback.`);
+        return undefined;
     }
 
     getProfiles(): Readonly<ModelProfile>[] {

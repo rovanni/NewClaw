@@ -1965,6 +1965,13 @@ export class AgentLoop {
             // Usa 'execution' profile (kimi-k2.6) em vez de chatProfile (glm-5.1) para síntese:
             // glm-5.1 com contexto grande produz apenas thinking sem content → chain-of-thought vaza para o usuário.
             const synthesisProfile = this.profileRegistry.getProfileByCategory('execution') ?? chatProfile;
+            // Campanha "Ollama API error: 404" (Fase 3, S264): esta chamada não logava qual perfil
+            // usava antes de tentar — a causa raiz real (par model/provider inconsistente vindo de
+            // 'execution', não da categoria da chamada principal) ficava invisível nos logs até
+            // rastrear o código. getProfileByCategory() já invalida o par impossível antes de
+            // devolver (ver ModelProfileRegistry.sanitizeProfile) — este log é só para tornar
+            // visível QUAL perfil (o de execution, ou o fallback pra chatProfile) foi de fato usado.
+            log.info(`[${this.ts()}] [SYNTHESIS] profile: category=${synthesisProfile.category} model=${synthesisProfile.model} provider=${synthesisProfile.provider ?? '(herdado)'}`);
             const synthesisResponse = await this.callLLMWithFallback(synthMessages, [], synthesisProfile, turnSignal);
             move('LLM_RESPONSE', { step: stepCount, phase: 'synthesis', status: synthesisResponse.status });
             if (synthesisResponse.status === 'cancelled') {

@@ -155,6 +155,14 @@ export async function doSave() {
   // com o nome do arquivo .gguf antigo, e o `provider_<k> || defaultProvider` abaixo (sem ownership
   // real) as classifica como "pertence ao Ollama" só por não ter override explícito — a checagem já
   // existente na linha seguinte cobria .gguf-quando-defaultProvider-é-local, não o inverso.
+  //
+  // ESTA condição (não corrigida aqui — é achado, não fix) é a causa raiz real de "Ollama API
+  // error: 404" recorrente em produção (02/08 a 24/08/2026, 7+ ocorrências): quando o par
+  // model=.gguf/provider-herdado sobrevive até `ModelProfileRegistry.getProfileByCategory()`
+  // (ex.: síntese, `AgentLoop.ts:1967`), o par impossível chegava intacto em `chatWithFallback`.
+  // C4 é a CONDIÇÃO; o 404 é a MANIFESTAÇÃO observável dela em runtime — não duas explicações
+  // independentes. Correção do lado do consumo (invalida sem inferir substituto): campanha
+  // "Ollama API error: 404" Fase 3, `ModelProfileRegistry.sanitizeProfile()`, S264.
   const toCheck = new Set();
   if (config.ollamaModel && config.defaultProvider === 'ollama') toCheck.add(config.ollamaModel);
   ['chat','code','vision','light','analysis','execution'].forEach(k => {

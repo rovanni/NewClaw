@@ -20,11 +20,9 @@ import {
     runNativeDirectoryPicker,
     shouldAttemptNative,
 } from '../../core/DirectoryPickerService';
+import { LOCAL_MODEL_EXTENSIONS } from '../../shared/localModelFile';
 
 const log = createLogger('ModelsRoute');
-
-/** Extensões de arquivo de modelo local reconhecidas. Minúsculas; a comparação normaliza. */
-const LOCAL_MODEL_EXTENSIONS = ['.gguf'];
 
 /** Projetores multimodais acompanham um modelo de visão, mas não são modelos servíveis por si —
  *  listá-los junto faria o usuário escolher um arquivo que nenhum servidor aceita carregar

@@ -20,7 +20,12 @@ import { AnthropicProvider } from './AnthropicProvider';
 // silenciosamente sobrescrito no Map (ou sobrescreveria o nativo, dependendo da ordem de
 // registro), confundindo getFallbackOrder() e updateCredential()/removeCredential(). Ver
 // addCustomProvider() abaixo.
-const RESERVED_PROVIDER_NAMES = new Set(['gemini', 'deepseek', 'groq', 'openrouter', 'anthropic', 'ollama']);
+//
+// Exportado (campanha "Ollama API error: 404", Fase 3, S264): é a mesma lista, por valor, que
+// `ModelProfileRegistry` precisa pra saber se um provider herdado é nativo (nunca serve arquivo
+// de modelo local) antes de invalidar um par (modelo, provider) impossível — evita uma 3ª cópia
+// do mesmo conjunto de 6 nomes (a 2ª já existe em getFallbackOrder(), por necessidade de ordem).
+export const RESERVED_PROVIDER_NAMES = new Set(['gemini', 'deepseek', 'groq', 'openrouter', 'anthropic', 'ollama']);
 
 // Re-export everything so all existing imports continue to work unchanged
 export type { LLMMessage, LLMResponse, ToolCall, ToolDefinition, FallbackReason, AttemptInfo, LLMResult, MetricsSummary, ILLMProvider, ChatOptions, StreamChunk, SubstitutionPolicy } from './providerTypes';
