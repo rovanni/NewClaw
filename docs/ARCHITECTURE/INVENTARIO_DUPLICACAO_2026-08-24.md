@@ -316,22 +316,55 @@ documentado como mudança intencional).
    "não corrigir duplicidade simplesmente porque ela existe" se aplica aqui tanto quanto se aplicou
    aos 6 casos originais).
 
-### D-09 — wrapper de chamada a `chatWithFallback` repetido em 4 consumidores *(candidato registrado, não avaliado formalmente)*
+### D-09 — wrapper de chamada a `chatWithFallback` repetido em N consumidores *(investigação em lote concluída, 25/08/2026 — sem código alterado)*
 
-Achado pela revisão de código desta própria implementação (25/08/2026), não pela investigação
-original. `ObserverValidator`, `RiskAnalyzer`, `contentStubClassifier` e `StepSemanticValidator`
-repetem a mesma sequência — chamar `chatWithFallback` com `modelOverride`, checar
-`result.status !== 'success'`, e (em 3 dos 4) limpar cercas de markdown/extrair o primeiro objeto
-JSON da resposta via regex. Teste 0 preliminar: a parte de chamada+status-check é pequena (3-4
-linhas) e a extração de JSON é candidata a "implementação" (utilitário de parsing, sem regra de
-negócio própria) — mas isso é um pré-filtro rápido, não substitui o Teste 1 completo. O que NÃO é
-compartilhado entre os 4: a política de falha (cada um decide algo diferente — ver Parte 5) e o
-formato exato do veredito esperado (`{achieved}`, `{isStub}`, `{result}`, `{status:'timeout'|'error'}`
-todos diferentes). Um contra-teste de acoplamento não foi feito ainda — provável que forçar os 4
-formatos de veredito por uma função compartilhada exija um parâmetro de "como interpretar o JSON"
-tão genérico que a abstração ganharia pouco. **Decisão: MANTER, registrado para revisão futura** —
-não atende ainda ao limiar de evidência (nenhuma divergência observada entre os 4, e Teste 2 não
-feito) que o resto deste documento exige antes de extrair.
+Achado inicial pela revisão de código da implementação D-07/D-08 (25/08/2026), aprofundado por
+investigação em lote dedicada no mesmo dia — mapeamento completo, não amostragem.
+
+**Mapeamento completo — são 8 pontos de chamada em 6 arquivos, não 4:**
+
+| Consumidor | Model override | Timeout | Extração de JSON | Política de falha |
+|---|---|---|---|---|
+| `GoalPlanner.callPlannerLLM` | `this.model` | parâmetro | nenhuma — devolve `content` cru | `{status, content}` cru |
+| `ObserverValidator.validate` | `observerModel` | adaptativo (`'validacao'`) | **parser robusto** (`extractApprovedJson`) — contagem de chaves, tolera aninhamento/aspas | `approved:false` |
+| `ObserverValidator.validateGrounding` | `observerModel` | adaptativo | fence-strip + `.match(/\{[\s\S]*\}/)` | `UNVALIDATED` (nunca aprova) |
+| `RiskAnalyzer.callRiskLLM` | `this.model` | parâmetro | nenhuma — devolve `content` cru | `{status:'timeout'\|'error'}` |
+| `contentStubClassifier` | `CLASSIFIER_MODEL` | adaptativo (`'classificacao'`) | fence-strip + regex simples | `isStub:true` (fail-closed) |
+| `StepSemanticValidator.llmValidate` | `VALIDATOR_MODEL` | fixo 8000ms | fence-strip + regex simples | `unverifiable` (fail-soft) |
+| `GoalExecutionLoop.composeDeliverySummaryAfterFriction` | nenhum | fixo 30000ms | nenhuma — texto puro | `undefined` silencioso |
+| `GoalExecutionLoop.validateGoalCompletion` | nenhum | fixo 45000ms | fence-strip + `JSON.parse` direto (nem regex) | `achieved:false` explícito |
+
+**Teste 0**: chamar+checar status é implementação (forma correta de usar um método já existente,
+não regra de negócio); a política de falha É regra de negócio, e já está corretamente
+descentralizada por consumidor (Evidence Provider Pattern). A extração de JSON fica no meio —
+segue para o Teste 1.
+
+**Teste 1 — sinal concreto, não hipotético, encontrado nesta investigação**: `ObserverValidator.validate()`
+precisou de um parser por contagem de chaves (`extractApprovedJson`) porque o regex simples
+quebrava com objeto aninhado ou aspas dentro de `"reason"` (motivo documentado no próprio código).
+Esse fix real **nunca se propagou** para os outros 4 pontos que ainda fazem parsing — incluindo
+`validateGrounding()`, método **irmão na MESMA classe** que `validate()`. `validateGoalCompletion`
+usa uma terceira variante, ainda mais frágil (nem regex — `JSON.parse` direto sobre o texto após
+tirar as cercas de markdown). Três níveis de robustez diferentes para o mesmo problema, uma
+correção real que não chegou aos demais — divergência já observada, não risco abstrato.
+
+**Contra-teste de acoplamento, duas perguntas separadas**:
+- *Wrapper inteiro* (chamada + status + parse + política, como a campanha original propôs):
+  reprovado. Os 5 eixos que variam (model override, timeout, provider preferido, parsing, política
+  de falha) variam por razão arquitetural legítima — cada consumidor decide sua própria política de
+  falha, que é exatamente o que o Evidence Provider Pattern exige. Forçar um wrapper único acoplaria
+  consumidores que devem evoluir de forma independente — mesmo risco que a "Guarda contra abstração
+  prematura" (Seção 3) adverte.
+- *Só a extração de JSON* (fence-strip + parser tolerante a aninhamento/aspas): passa. É uma
+  função-folha pura (`texto → objeto | null`), sem estado, sem decidir política — os pontos que hoje
+  fazem parsing importariam um módulo novo, nenhum importando o outro.
+
+**Decisões:**
+
+| Alvo | Decisão |
+|---|---|
+| Wrapper completo (chamada+status+parse+política) | **MANTER INTENCIONALMENTE** — não criar um `chatWithFallbackAndParseAndHandleError()` ou equivalente só pra eliminar repetição; a variação entre os 8 pontos é correta, não acidental. |
+| Extração de JSON de resposta de LLM (fence-strip + parser tolerante) | **EXTRAIR (recomendado), escopo estreito** — evidência de divergência real já observada (não hipotética), contra-teste de acoplamento favorável (função-folha pura). **Não implementado nesta etapa** — fica registrado como correção futura caracterizada, fora do escopo da campanha seguinte (Security/CORS+`.env`), pra não misturar investigações. |
 
 ## Relação com outros documentos
 
