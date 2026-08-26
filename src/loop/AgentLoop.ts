@@ -37,7 +37,7 @@ import { SkillLoader } from '../skills/SkillLoader';
 import { ModelProfile } from './ModelProfileRegistry';
 import { errorMessage } from '../shared/errors';
 import type { SemanticStatusEvent } from '../shared/SemanticStatus';
-import { ObserverValidator, ResponseCommit, EvidenceItem, GroundingState } from './ObserverValidator';
+import { ObserverValidator, ResponseCommit, EvidenceItem, GroundingState, GroundedClaim } from './ObserverValidator';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ProactiveRecovery } from './ProactiveRecovery';
 import type { WorkflowEngine } from './WorkflowEngine';
@@ -1023,6 +1023,42 @@ export class AgentLoop {
                         outcome: 'failure',
                         category: last.category,
                     });
+
+                    // Achado real (26/08/2026, prompt.txt + newclaw-audit.log — "deepseek harness",
+                    // 5 tentativas bloqueadas na mesma conversa): a barreira acima está correta em
+                    // recusar a resposta, mas sem NENHUM caminho depois do bloqueio o usuário nunca
+                    // recebia nada, mesmo quando a maioria das afirmações era sustentada e só um
+                    // detalhe periférico (ex.: "com licença MIT") não era. ADR-010 §16 deixou a
+                    // política de recuperação deliberadamente em aberto — isto a implementa.
+                    //
+                    // g.claims já decompõe a resposta em afirmação → veredito (mesma chamada de LLM
+                    // que bloqueou acima); reaproveitado aqui, não recalculado. Se nenhuma afirmação
+                    // foi SUPPORTED (inclui sempre o caso UNVALIDATED, cujo claims é sempre []), não
+                    // há material para uma resposta parcial — cai direto no bloqueio de sempre.
+                    const supportedClaims = g.claims.filter(c => c.verdict === 'SUPPORTED');
+                    if (supportedClaims.length > 0) {
+                        const partial = await this.trySynthesizePartialResponse(userText, supportedClaims, evidences, signal);
+                        if (partial) {
+                            log.info(`[${this.ts()}] [GROUNDING] resposta parcial (${supportedClaims.length}/${g.claims.length} afirmações sustentadas) revalidada e entregue`);
+                            this.reflectionMemory.record({
+                                traceId: trace.id,
+                                conversationId,
+                                userInput: userText,
+                                intent: last.intent,
+                                toolUsed: last.toolName,
+                                toolOutput: last.toolOutput.slice(0, 1000),
+                                finalResponse: partial.slice(0, 500),
+                                approved: true,
+                                reason: `resposta parcial: ${supportedClaims.length}/${g.claims.length} afirmações sustentadas`,
+                                confidence: 0.6,
+                                pattern: 'grounding_partial_recovered',
+                                outcome: 'partial',
+                                category: last.category,
+                            });
+                            return partial;
+                        }
+                    }
+
                     return AgentLoop.groundingBlockedMessage(g.state);
                 }
             } catch (groundingErr) {
@@ -1034,6 +1070,62 @@ export class AgentLoop {
         } catch (err) {
             log.warn(`[${this.ts()}] [COMMIT] commitResponse falhou (non-fatal): ${errorMessage(err)}`);
             return response; // fail-safe: nunca bloquear por erro interno de validação
+        }
+    }
+
+    /**
+     * ADR-010 §16 — política de recuperação para REJECTED/NOT_EVALUABLE (antes inexistente).
+     *
+     * Reescreve a resposta usando SOMENTE as afirmações que o juiz de groundedness já marcou como
+     * SUPPORTED na mesma chamada que bloqueou a resposta original — não decide sozinho o que é
+     * "verdade": só sintetiza texto a partir de um veredito que a camada de julgamento (o juiz LLM
+     * de `validateGrounding`) já produziu. A síntese resultante passa pela MESMA barreira antes de
+     * ser aceita (uma única vez — sem recursão, sem retry em loop): se ela também falhar, o
+     * chamador cai no bloqueio padrão. "INSUFICIENTE" é um sinal estrutural que o próprio prompt
+     * pede ao modelo para emitir quando os fatos sustentados não bastam para responder — checado
+     * literalmente, não interpretado.
+     */
+    private async trySynthesizePartialResponse(
+        userText: string,
+        supportedClaims: GroundedClaim[],
+        evidences: EvidenceItem[],
+        signal?: AbortSignal,
+    ): Promise<string | null> {
+        try {
+            const factsList = supportedClaims.map(c => `- ${c.claim}`).join('\n');
+            const messages: LLMMessage[] = [{
+                role: 'system',
+                content:
+                    `O usuário perguntou: "${userText}"\n\n` +
+                    `Uma resposta anterior foi recusada porque continha afirmações não sustentadas pelas fontes consultadas. ` +
+                    `Os fatos abaixo, e SOMENTE eles, já foram confirmados contra as fontes:\n${factsList}\n\n` +
+                    `Escreva uma resposta curta e direta usando SOMENTE esses fatos — não acrescente nenhum detalhe, nome, ` +
+                    `número, data ou afirmação que não esteja explicitamente na lista acima, mesmo que pareça óbvio ou ` +
+                    `provável. Se os fatos acima não permitem responder de forma minimamente útil ao usuário, responda ` +
+                    `apenas com a palavra "INSUFICIENTE" e nada mais.`,
+            }];
+
+            const profile = this.profileRegistry.getProfileByCategory('execution');
+            if (!profile) return null;
+            const result = await this.callLLMWithFallback(messages, [], profile, signal);
+            if (result.status !== 'success' || !result.content) return null;
+
+            const text = (extractText(result.content) || result.content).trim();
+            // Sinal estrutural literal, tolerante só a formatação (aspas, negrito markdown,
+            // pontuação final) que o próprio modelo costuma acrescentar mesmo seguindo a
+            // instrução "responda apenas com a palavra X" — nunca uma interpretação de sentido.
+            const isInsufficientSentinel = /^["'*_\s]*INSUFICIENTE["'.!*_\s]*$/i.test(text);
+            if (!text || text.length < 10 || isInsufficientSentinel) return null;
+
+            const revalidated = await this.observer.validateGrounding(text, evidences, signal);
+            if (revalidated.state !== 'VALIDATED' && revalidated.state !== 'NOT_APPLICABLE') {
+                log.warn(`[${this.ts()}] [GROUNDING] resposta parcial também não passou (estado=${revalidated.state}) — descartando`);
+                return null;
+            }
+            return text;
+        } catch (err) {
+            log.warn(`[${this.ts()}] [GROUNDING] síntese parcial falhou (non-fatal): ${errorMessage(err)}`);
+            return null;
         }
     }
 
