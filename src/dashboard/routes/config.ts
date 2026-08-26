@@ -6,10 +6,20 @@ import { createLogger } from '../../shared/AppLogger';
 import { DashboardContext, ExtendedConfig } from './types';
 import { MAX_UPLOAD_FILES } from './chat';
 import { isNativePickerPolicyAllowed } from '../../core/DirectoryPickerService';
+import { applyEnvUpdates } from '../../shared/envSerializer';
 
 const log = createLogger('Dashboardserver');
 
-export function persistConfigToEnv(ctx: DashboardContext): void {
+/**
+ * Grava a config em `.env`. Devolve as chaves que NÃO puderam ser escritas com segurança (ver
+ * `shared/envSerializer.ts`) — nunca fica silencioso sobre isso; quem chama deve reportar.
+ *
+ * `null` (distinto de `[]`) significa falha TOTAL — nada foi persistido (erro de I/O, ou uma
+ * exceção construindo os próprios valores). Achado na revisão de código desta campanha: antes o
+ * `catch` devolvia `[]`, indistinguível de "gravou tudo com sucesso" — o chamador (rota abaixo)
+ * respondia `{success:true}` sem aviso nenhum mesmo quando o `.env` inteiro não tinha sido tocado.
+ */
+export function persistConfigToEnv(ctx: DashboardContext): string[] | null {
     try {
         const envPath = path.join(process.cwd(), '.env');
 
@@ -67,19 +77,36 @@ export function persistConfigToEnv(ctx: DashboardContext): void {
             }
         } catch { /* DB not available, skip */ }
 
-        for (const [key, value] of Object.entries(updates)) {
-            const regex = new RegExp(`^${key}=.*$`, 'm');
-            if (regex.test(envContent)) {
-                envContent = envContent.replace(regex, `${key}=${value}`);
-            } else {
-                envContent += `\n${key}=${value}`;
-            }
-        }
+        const { content: newEnvContent, rejected } = applyEnvUpdates(envContent, updates);
 
-        fs.writeFileSync(envPath, envContent.trim() + '\n');
-        log.info(`Persisted to .env: ${Object.keys(updates).join(', ')}`);
+        fs.writeFileSync(envPath, newEnvContent);
+        const written = Object.keys(updates).filter(k => !rejected.includes(k));
+        log.info(`Persisted to .env: ${written.join(', ')}`);
+        if (rejected.length > 0) {
+            // Nunca silencioso: um valor sem representação fiel no .env NÃO é escrito (o anterior
+            // permanece) — quem chama (a rota abaixo) precisa saber pra reportar ao operador,
+            // em vez de deixar a UI achar que salvou algo que na verdade ficou de fora.
+            log.error(`.env NÃO atualizado para (valor sem round-trip seguro, mantido o anterior): ${rejected.join(', ')}`);
+        }
+        return rejected;
     } catch (error) {
         log.error(`Failed to persist .env: ${errorMessage(error)}`);
+        return null;
+    }
+}
+
+/**
+ * Loga o resultado de `persistConfigToEnv()` nas rotas que não têm um campo de resposta dedicado
+ * pra isso (`routes/providers.ts`) — achado na revisão de código: 5 pontos de chamada lá
+ * descartavam o retorno, então um valor sem round-trip seguro (ex.: um `baseUrl`/`apiKey` de
+ * provider custom com aspas e quebra de linha) ficava de fora do `.env` sem NENHUM log. Extraído
+ * aqui, um só lugar, em vez de repetir a mesma checagem de 3 linhas em cada uma das 5 chamadas.
+ */
+export function logEnvPersistResult(result: string[] | null, context: string): void {
+    if (result === null) {
+        log.error(`[${context}] .env não foi atualizado — falha ao persistir (ver log anterior).`);
+    } else if (result.length > 0) {
+        log.warn(`[${context}] .env NÃO atualizado para (valor sem round-trip seguro): ${result.join(', ')}`);
     }
 }
 
@@ -210,7 +237,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
             }
         }
 
-        persistConfigToEnv(ctx);
+        const envRejected = persistConfigToEnv(ctx);
 
         const safeConfig = {
             language: ctx.config.language,
@@ -230,7 +257,21 @@ export function createConfigRouter(ctx: DashboardContext): Router {
             hasOllamaApiKey: !!ctx.config.ollamaApiKey,
             modelRouter: ctx.config.modelRouter || {}
         };
-        res.json({ success: true, config: safeConfig });
+        // envRejected nunca fica escondido do operador — um campo que não pôde ser gravado no
+        // .env com segurança (ver shared/envSerializer.ts) precisa aparecer na resposta, mesmo
+        // que a UI hoje não tenha um toast dedicado pra isso; melhor um campo ignorável do que
+        // nenhuma forma de descobrir por que uma mudança "salva" não sobreviveu ao restart.
+        // `null` (achado na revisão de código) é falha TOTAL — nada foi persistido — distinto de
+        // `[]` (gravou tudo) e de uma lista não-vazia (só alguns campos ficaram de fora).
+        res.json({
+            success: true,
+            config: safeConfig,
+            ...(envRejected === null
+                ? { envError: 'Falha ao gravar .env — as mudanças podem não sobreviver a um restart. Ver logs do servidor.' }
+                : envRejected.length > 0
+                    ? { envWarnings: { rejected: envRejected, message: 'Alguns valores não puderam ser salvos no .env com segurança (formato incompatível) — o valor anterior foi mantido.' } }
+                    : {}),
+        });
     });
 
     router.get('/history', (_req: Request, res: Response) => {

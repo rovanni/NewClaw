@@ -23,7 +23,7 @@ import { SkillInstaller } from '../skills/SkillInstaller';
 import type { SkillLearner } from '../loop/SkillLearner';
 import { createLogger } from '../shared/AppLogger';
 import { authMiddleware, createAuthRouter, dashboardAuth, initAuthPersistence } from './routes/auth';
-import { rateLimitMiddleware, loginRateLimit, csrfOriginCheck } from './security';
+import { rateLimitMiddleware, loginRateLimit, csrfOriginCheck, isTrustedOrigin } from './security';
 import { createConfigRouter } from './routes/config';
 import { createProvidersRouter } from './routes/providers';
 import { createModelsRouter } from './routes/models';
@@ -41,16 +41,55 @@ import { DashboardContext } from './routes/types';
 
 const log = createLogger('Dashboardserver');
 
+/**
+ * Mesmo conjunto de hostnames que `ProviderFactory.rodaNaMaquinaDoUsuario()` já usa pra decidir
+ * "isto é a própria máquina" — reaproveitado aqui em vez de comparar só contra o literal
+ * '127.0.0.1'. Achado na revisão de código desta campanha: escalar o aviso pra `process.exit(1)`
+ * sem isso derrubaria o boot de quem usa `DASHBOARD_HOST=localhost` ou `::1` — configurações
+ * igualmente locais/seguras, só escritas diferente, que antes só geravam log.warn.
+ */
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1']);
+
+/**
+ * Este bind expõe o Dashboard sem autenticação nenhuma? Extraída de `start()` para ser testável
+ * sem precisar derrubar o processo de teste com `process.exit()` — campanha de Security, item C.
+ *
+ * `.env.example` já documenta esta combinação como exigindo senha "OBRIGATORIAMENTE" — isto
+ * aplica o contrato já declarado, não uma política nova. Só bloqueia bind NÃO-loopback sem senha;
+ * qualquer forma de loopback (com ou sem senha configurada) nunca é afetada.
+ */
+export function isUnsafeExposedBoot(host: string, authEnabled: boolean): boolean {
+    return !LOOPBACK_HOSTNAMES.has(host) && !authEnabled;
+}
+
 export class DashboardServer {
     private app: express.Express;
     private server?: Server;
     private ctx: DashboardContext;
     private ownsCurator = false;
+    // Achado na revisão de segurança independente desta campanha (item C): isUnsafeExposedBoot()
+    // em start() só lê o estado CORRETO de dashboardAuth.enabled (incluindo a desativação
+    // explícita do operador, persistida no banco — ver auth.ts) depois de initAuthPersistence()
+    // rodar, dentro de setMemoryManager(). O entrypoint real (index.ts) já chama os dois na ordem
+    // certa, mas nada IMPEDIA um refactor futuro de inverter — este flag torna essa dependência
+    // de ordem uma falha alta (log.warn), não um bug silencioso usando um estado incompleto.
+    private authPersistenceLoaded = false;
 
     constructor(config: NewClawConfig) {
         this.ctx = { config };
         this.app = express();
-        this.app.use(cors());
+        // Campanha de Security (item B): `cors()` sem opções mandava
+        // `Access-Control-Allow-Origin: *` pra qualquer origem — o Dashboard não tem consumidor
+        // cross-origin legítimo conhecido (é uma UI própria, servida pelo mesmo processo).
+        // `isTrustedOrigin()` é a MESMA regra que `csrfOriginCheck` já usa pra decidir "isto é o
+        // próprio Dashboard" — fonte única, não duas políticas de origem que hoje coincidem por
+        // acaso. Sem `Origin` (requisição não vinda de navegador cross-origin, ex.: curl,
+        // navegação same-origin simples) o CORS nem se aplicaria de qualquer forma — permitido.
+        this.app.use(cors((req, callback) => {
+            const origin = req.headers.origin as string | undefined;
+            const allowed = !origin || isTrustedOrigin(origin, req.headers.host as string | undefined);
+            callback(null, { origin: allowed });
+        }));
         this.app.use(express.json());
         this.app.use(cookieParser());
 
@@ -120,6 +159,7 @@ export class DashboardServer {
         this.ctx.memoryManager = mm;
         this.ctx.memoryCurator = curator || new MemoryCurator(mm);
         initAuthPersistence(mm.getDatabase());
+        this.authPersistenceLoaded = true;
         this.ctx.embeddingService = mm.getEmbeddingService();
         this.ctx.classificationMemory = mm.getClassificationMemory();
         this.ctx.decisionMemory = mm.getDecisionMemory();
@@ -139,8 +179,40 @@ export class DashboardServer {
         // Para expor em LAN/proxy reverso defina DASHBOARD_HOST=0.0.0.0 (e DASHBOARD_PASSWORD).
         const host = process.env.DASHBOARD_HOST || '127.0.0.1';
 
-        if (host !== '127.0.0.1' && !dashboardAuth.enabled) {
-            log.warn(`⚠️  Dashboard em ${host}:${port} SEM senha. Defina DASHBOARD_PASSWORD ou volte para DASHBOARD_HOST=127.0.0.1.`);
+        if (!this.authPersistenceLoaded) {
+            // Falha alta, não silenciosa: sem isto, dashboardAuth.enabled só reflete
+            // DASHBOARD_PASSWORD do ambiente — uma desativação explícita do operador, persistida
+            // no banco (auth.ts), ainda não teria sido carregada, e a checagem abaixo julgaria
+            // com um estado incompleto. O entrypoint real (index.ts) chama setMemoryManager()
+            // antes de start(); isto pega qualquer chamador futuro que inverta essa ordem.
+            log.warn('start() chamado antes de setMemoryManager() — dashboardAuth.enabled pode não refletir uma desativação persistida pelo operador ainda.');
+        }
+
+        // Campanha de Security (item C): isto deixou de ser só um aviso. `.env.example` já
+        // documenta esta combinação como "OBRIGATORIAMENTE" exigindo senha — sem enforcement no
+        // código, era só uma sugestão que ninguém era impedido de ignorar, deixando a API inteira
+        // sem autenticação (authMiddleware: `if (!dashboardAuth.enabled) { next(); return; }`
+        // libera TUDO, não só rotas específicas) pra qualquer um que alcance a porta pela rede.
+        // Não é uma política nova — é aplicar o contrato que o próprio projeto já promete. Só
+        // bloqueia esta combinação específica; DASHBOARD_HOST=127.0.0.1 (padrão) nunca é afetado.
+        if (isUnsafeExposedBoot(host, dashboardAuth.enabled)) {
+            const msg =
+                `Dashboard configurado para ${host}:${port} sem DASHBOARD_PASSWORD — ` +
+                `boot interrompido. Definir DASHBOARD_HOST diferente de 127.0.0.1/localhost/::1 ` +
+                `expõe TODA a API do NewClaw sem autenticação pra rede (ver .env.example). ` +
+                `Defina DASHBOARD_PASSWORD antes de expor além de localhost, ou volte para ` +
+                `DASHBOARD_HOST=127.0.0.1.`;
+            log.error(msg);
+            // Achado na revisão de código: AppLogger grava o audit log de forma assíncrona
+            // (fs.WriteStream.write, sem esperar o `drain`) — process.exit(1) logo em seguida
+            // pode encerrar o processo antes dessa linha chegar ao disco, deixando só o stderr
+            // (se sobrar isso) como registro do motivo real do boot ter parado. console.error é a
+            // via mais confiável de stderr chegar ao operador (terminal, ou captura do pm2) nesse
+            // instante específico — reforço só deste ponto de saída fatal, não uma correção geral
+            // do AppLogger (que afetaria todo `log.error()` seguido de `process.exit`, fora do
+            // escopo desta campanha).
+            console.error(`[Dashboardserver] ${msg}`);
+            process.exit(1);
         }
 
         this.server = this.app.listen(port, host, () => {

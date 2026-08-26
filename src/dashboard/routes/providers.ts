@@ -4,7 +4,7 @@ import { createLogger } from '../../shared/AppLogger';
 import { DashboardContext } from './types';
 import { OpenAIProvider } from '../../core/OpenAIProvider';
 import { getLastKnownLocalServer } from '../../core/localRuntimeState';
-import { persistConfigToEnv } from './config';
+import { persistConfigToEnv, logEnvPersistResult } from './config';
 import { interpretOllamaPullFailure, interpretOllamaPullException } from './ollamaPullError';
 
 /** Teto de segurança pro pull — generoso o bastante pra um download local real grande, mas finito:
@@ -159,7 +159,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
         };
         customProviders.push(entry);
         ctx.config.customProviders = customProviders;
-        persistConfigToEnv(ctx);
+        logEnvPersistResult(persistConfigToEnv(ctx), 'POST /providers/custom');
         // Sem isto, o provider aparece na lista/config mas nunca entra de fato no fallback
         // automático do ProviderFactory — só existe no config até o próximo restart (achado ao
         // investigar viabilidade de fallback pra modelos locais via llamafile, 2026-07-31).
@@ -196,7 +196,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
         };
         customProviders[idx] = updated;
         ctx.config.customProviders = customProviders;
-        persistConfigToEnv(ctx);
+        logEnvPersistResult(persistConfigToEnv(ctx), 'PUT /providers/custom/:label');
         // addCustomProvider() sobrescreve a instância existente no Map (mesma label = mesma
         // chave) — não precisa remover antes, Map.set() já substitui.
         ctx.providerFactory?.addCustomProvider(updated);
@@ -212,7 +212,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
             return res.status(404).json({ success: false, error: `Provider "${label}" não encontrado` });
         }
         ctx.config.customProviders = next;
-        persistConfigToEnv(ctx);
+        logEnvPersistResult(persistConfigToEnv(ctx), 'DELETE /providers/custom/:label');
         ctx.providerFactory?.removeCustomProvider(String(label));
         log.info(`Custom provider removed: ${label}`);
         res.json({ success: true });
@@ -226,7 +226,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
         if (!customModels.includes(name)) {
             customModels.push(name);
             ctx.config.customModels = customModels;
-            persistConfigToEnv(ctx);
+            logEnvPersistResult(persistConfigToEnv(ctx), 'POST /models/add');
         }
         res.json({ success: true, message: `Model "${name}" added to list` });
     });
@@ -257,7 +257,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
             default:
                 return res.status(400).json({ error: `Unknown provider: ${provider}` });
         }
-        persistConfigToEnv(ctx);
+        logEnvPersistResult(persistConfigToEnv(ctx), 'DELETE /key/:provider');
         log.info(`API key removed for provider: ${provider}`);
         res.json({ success: true });
     });

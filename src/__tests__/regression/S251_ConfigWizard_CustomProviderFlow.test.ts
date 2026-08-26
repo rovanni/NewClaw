@@ -86,8 +86,8 @@ console.log('\n=== S251-2 — sem etapa de teste separada (mesma correção do O
 console.log('\n=== S251-3 — persistência de custom provider é direta (fora de configStore/doSave), confirmado no backend ===');
 {
     assert(
-        /persistConfigToEnv\(ctx\);/.test(PROVIDERS_ROUTE),
-        'confirma no backend real: POST/PUT /providers/custom grava direto (persistConfigToEnv), não espera doSave()',
+        /persistConfigToEnv\(ctx\)/.test(PROVIDERS_ROUTE),
+        'confirma no backend real: POST/PUT /providers/custom grava direto (persistConfigToEnv), não espera doSave() — chamada agora envolvida por logEnvPersistResult() (campanha de Security, S265/S267), continua direta e síncrona, só reporta o resultado',
     );
     // Achado ao vivo (2026-08-23), corrigido dentro do próprio C3: customProviders mora em
     // configStore (confirmado em app.js/state.js), nunca em providersStore. Ler da loja errada

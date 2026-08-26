@@ -102,6 +102,28 @@ export function rateLimitMiddleware(req: Request, res: Response, next: NextFunct
     generalRateLimit(req, res, next);
 }
 
+// ── Origem confiável: fonte única, usada por CORS e por CSRF ──────────────────────────────────
+
+/**
+ * Critério único de "esta origem é o próprio Dashboard" — campanha de Security (item B). Antes
+ * só existia dentro de `csrfOriginCheck`; `cors()` (DashboardServer.ts) tinha sua PRÓPRIA regra
+ * implícita (nenhuma — `Access-Control-Allow-Origin: *`, qualquer origem). Duas regras de origem
+ * que hoje coincidem por acaso é exatamente o cenário que diverge no futuro sem ninguém notar —
+ * extraída aqui pra ser a única definição, importada nos dois lugares.
+ *
+ * O Dashboard não tem nenhum consumidor legítimo cross-origin conhecido (é uma UI própria servida
+ * pelo mesmo processo) — "confiável" aqui significa, objetivamente, "a mesma origem que está
+ * atendendo a requisição", nunca uma lista de domínios externos.
+ */
+export function isTrustedOrigin(originHeader: string | undefined, requestHost: string | undefined): boolean {
+    if (!originHeader || !requestHost) return false;
+    try {
+        return new URL(originHeader).host === requestHost;
+    } catch {
+        return false;
+    }
+}
+
 // ── CSRF: checagem de Origin/Referer em requisições mutantes autenticadas por cookie ──────────
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -121,14 +143,8 @@ export function csrfOriginCheck(req: Request, res: Response, next: NextFunction)
         return;
     }
 
-    try {
-        const originHost = new URL(origin).host;
-        if (originHost !== req.headers.host) {
-            res.status(403).json({ error: 'Requisição bloqueada: Origin não corresponde ao host (proteção CSRF).' });
-            return;
-        }
-    } catch {
-        res.status(403).json({ error: 'Requisição bloqueada: Origin inválido.' });
+    if (!isTrustedOrigin(origin, req.headers.host)) {
+        res.status(403).json({ error: 'Requisição bloqueada: Origin não corresponde ao host (proteção CSRF).' });
         return;
     }
 
