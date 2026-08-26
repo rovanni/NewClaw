@@ -68,7 +68,38 @@ const PERFIS: Record<PerfilAuxiliar, DefinicaoPerfil> = {
 
     // Julgamento sobre um texto maior (validar conclusão de goal, avaliar um passo). Tolera
     // mais porque o custo de desistir é refazer trabalho, não só perder uma dica.
-    validacao: { fator: 4, minMs: 15_000, maxMs: 120_000, padraoMs: 45_000 },
+    //
+    // minMs subiu de 15_000 para 30_000 em 26/08/2026 — achado real, recorrente desde 16/08:
+    // `getLatenciaTipicaMs('ollama')` mistura chamadas RÁPIDAS (roteamento, classificação —
+    // várias por turno, ~0.5-2.5s) com a chamada PESADA de grounding (múltiplas afirmações,
+    // modelo de raciocínio) na MESMA média móvel por provedor (CircuitBreaker.recordSuccess()
+    // é chamado por TODO chatWithFallback bem-sucedido, sem distinguir o tipo de chamada). Como
+    // as chamadas rápidas são mais frequentes, a média fica cronicamente baixa e `latencia × 4`
+    // raramente supera o piso — então o piso É o orçamento de fato, na prática, para grounding.
+    // Evidência de que 15s é insuficiente: `newclaw-audit.log`, 7 ocorrências de
+    // "[GROUNDING] estado=UNVALIDATED" por timeout/saída malformada entre 16/08 e 26/08, com
+    // julgamentos que SÓ terminam (com veredito válido) entre ~8s e ~21s+ neste modelo. Não
+    // altera o mecanismo (ADR-010 §8 já decidiu reutilizar getBudgetAuxiliar) — só recalibra um
+    // parâmetro já existente com evidência de produção. Correção estrutural mais completa
+    // (segmentar a latência típica por tipo de chamada, não só por provedor) fica registrada como
+    // melhoria pendente — maior escopo, não implementada agora.
+    //
+    // maxMs subiu de 120_000 para 300_000 no mesmo achado, a pedido do operador: modelos locais
+    // (llamafile/.gguf) são tipicamente muito mais lentos que os de nuvem — o cabeçalho deste
+    // arquivo já documenta 14× de diferença (1.329ms nuvem vs 18.030ms local) para uma chamada
+    // LEVE de classificação; para grounding (chamada pesada), a diferença tende a ser proporcional
+    // ou maior. Sem levantar o teto, um provedor local cuja latência típica MEDIDA justificasse um
+    // orçamento maior (latência × fator > 120s) era cortado ali mesmo, mesmo respondendo de forma
+    // consistente — só mais devagar. Só muda de comportamento quando a latência medida do provedor
+    // já ultrapassa 30s por chamada (120_000 / fator=4); não afeta provedores rápidos.
+    //
+    // Não foi para 600_000 (10 min) como sugerido inicialmente: `AGENT_RESPONSE_TIMEOUT_MS` (lado
+    // do servidor) já limita o TURNO INTEIRO a 10 minutos, e grounding é só a ÚLTIMA etapa depois
+    // de tool calls + síntese — reservar o orçamento inteiro só para essa etapa deixaria zero
+    // margem para o resto do turno num provedor genuinamente lento. 300_000 (5 min) dá bastante
+    // folga sobre os ~120s antigos sem consumir sozinho o teto do turno. Ajustável se, na prática
+    // com modelo local, ainda for insuficiente — é um parâmetro, não uma decisão arquitetural nova.
+    validacao: { fator: 4, minMs: 30_000, maxMs: 300_000, padraoMs: 45_000 },
 };
 
 /** Fonte da latência típica — injetada para manter este módulo sem dependência de runtime. */
