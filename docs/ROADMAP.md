@@ -22,8 +22,9 @@ Major capabilities already implemented and in daily use — not tracked as "in p
 
 | Feature | Status | Description |
 | :--- | :---: | :--- |
-| **Python Sandbox** | ⏳ | Secure, isolated execution environment for data analysis (today, Python only runs via the general shell tool — no isolation). |
 | **Collaborative Graphs** | ⏳ | Multi-agent memory synchronization — today's memory graph is per-instance, not shared/synced across agents. |
+
+Dropped from the roadmap: a dedicated **Python Sandbox**. NewClaw's own runtime is TypeScript/Node — a secure, isolated Python execution environment would be a substantial cross-language subsystem, not a natural extension of the stack. Python already runs today via the general shell tool (`exec_command`, unsandboxed) when a task needs it; that's the accepted way this gets done, not a placeholder for a future dedicated sandbox.
 
 ---
 
@@ -47,8 +48,9 @@ Major capabilities already implemented and in daily use — not tracked as "in p
 
 | Funcionalidade | Status | Descrição |
 | :--- | :---: | :--- |
-| **Python Sandbox** | ⏳ | Ambiente isolado e seguro para análise de dados (hoje, Python só roda via a ferramenta de shell geral — sem isolamento). |
 | **Grafos Colaborativos** | ⏳ | Sincronização de memória entre múltiplos agentes — hoje o grafo de memória é por instância, não compartilhado/sincronizado. |
+
+Tirado do roadmap: um **Python Sandbox** dedicado. O runtime do próprio NewClaw é TypeScript/Node — um ambiente Python isolado e seguro seria um subsistema cross-language substancial, não uma extensão natural da stack. Python já roda hoje via a ferramenta de shell geral (`exec_command`, sem isolamento) quando a tarefa precisa; é assim que isso é resolvido, não um placeholder pra um sandbox dedicado futuro.
 
 ---
 
@@ -72,8 +74,9 @@ Major capabilities already implemented and in daily use — not tracked as "in p
 
 | Funcionalidad | Estado | Descripción |
 | :--- | :---: | :--- |
-| **Python Sandbox** | ⏳ | Entorno aislado y seguro para análisis de datos (hoy, Python solo corre vía la herramienta de shell general — sin aislamiento). |
 | **Gráficos Colaborativos** | ⏳ | Sincronización de memoria entre múltiples agentes — hoy el grafo de memoria es por instancia, no compartido/sincronizado. |
+
+Eliminado del roadmap: un **Python Sandbox** dedicado. El runtime del propio NewClaw es TypeScript/Node — un entorno Python aislado y seguro sería un subsistema cross-language sustancial, no una extensión natural de la stack. Python ya corre hoy vía la herramienta de shell general (`exec_command`, sin aislamiento) cuando la tarea lo necesita; así es como esto se resuelve, no un placeholder para un sandbox dedicado futuro.
 
 ---
 
