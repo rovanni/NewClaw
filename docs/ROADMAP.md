@@ -17,6 +17,7 @@ Major capabilities already implemented and in daily use — not tracked as "in p
 | **Cognitive memory** | Long-term memory graph with confidence decay, conflict detection/resolution, reflection on past failures, and case-based reasoning (`MemoryGovernor`, `ReflectionMemory`, `CaseMemory`, `OperationalKnowledge`). |
 | **Skills system** | Install, audit, and dynamically activate third-party skills at runtime, with static security auditing before activation. |
 | **Security hardening** | Ongoing dedicated effort — SSRF, path traversal, command injection, XSS, CSRF, and dependency-vulnerability fixes, each with a regression test tied to the incident. |
+| **Operational modes** | Three execution modes, switchable at runtime and persisted across restarts: **Safe** (confirmation required for `exec_command`/installs — recommended for production with end users), **Developer** (expanded autonomy — no per-call confirmation, automatic dependency installs, skill management — still backed by risk analysis and `ReflectionMemory`), and **God Mode** (full framework access, bypasses non-critical constraints, requires explicit confirmation to activate). The audit log and protections against destructive actions stay active in all three. |
 
 ## 🗺️ Roadmap v1.x (Current Phase)
 
@@ -43,6 +44,7 @@ Dropped from the roadmap: a dedicated **Python Sandbox**. NewClaw's own runtime 
 | **Memória cognitiva** | Grafo de memória de longo prazo com decaimento de confiança, detecção/resolução de conflitos, reflexão sobre falhas passadas e raciocínio baseado em casos. |
 | **Sistema de skills** | Instalar, auditar e ativar skills de terceiros em runtime, com auditoria estática de segurança antes da ativação. |
 | **Reforço de segurança** | Esforço contínuo e dedicado — correções de SSRF, path traversal, injeção de comando, XSS, CSRF e dependências vulneráveis, cada uma com teste de regressão amarrado ao incidente. |
+| **Modos operacionais** | Três modos de execução, trocáveis em runtime e persistidos entre reinicializações: **Safe** (confirmação obrigatória pra `exec_command`/instalações — recomendado pra produção com usuários finais), **Developer** (autonomia expandida — sem confirmação por chamada, instalação automática de dependências, gerenciamento de skills — mantém análise de risco e `ReflectionMemory`), e **God Mode** (acesso total ao framework, bypass de constraints não-críticas, requer confirmação explícita pra ativar). Audit log e proteções contra ações destrutivas continuam ativos nos três. |
 
 ### Fase atual (v1.x)
 
@@ -69,6 +71,7 @@ Tirado do roadmap: um **Python Sandbox** dedicado. O runtime do próprio NewClaw
 | **Memoria cognitiva** | Grafo de memoria a largo plazo con decaimiento de confianza, detección/resolución de conflictos, reflexión sobre fallos pasados y razonamiento basado en casos. |
 | **Sistema de skills** | Instalar, auditar y activar skills de terceros en tiempo de ejecución, con auditoría estática de seguridad antes de activar. |
 | **Refuerzo de seguridad** | Esfuerzo continuo y dedicado — correcciones de SSRF, path traversal, inyección de comandos, XSS, CSRF y dependencias vulnerables, cada una con test de regresión ligado al incidente. |
+| **Modos operativos** | Tres modos de ejecución, intercambiables en runtime y persistidos entre reinicios: **Safe** (confirmación obligatoria para `exec_command`/instalaciones — recomendado para producción con usuarios finales), **Developer** (autonomía expandida — sin confirmación por llamada, instalación automática de dependencias, gestión de skills — mantiene análisis de riesgo y `ReflectionMemory`), y **God Mode** (acceso total al framework, bypass de constraints no críticas, requiere confirmación explícita para activar). El audit log y las protecciones contra acciones destructivas permanecen activos en los tres. |
 
 ### Fase actual (v1.x)
 
