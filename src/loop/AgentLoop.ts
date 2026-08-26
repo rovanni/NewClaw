@@ -373,7 +373,7 @@ export function computeMemoryConfidence(
 
 export interface TurnState {
     cognitiveWorkspace: CognitiveWorkspace;
-    lastToolExecution: { toolName: string; toolOutput: string; intent: string; category: string } | null;
+    lastToolExecution: { toolName: string; toolOutput: string; intent: string; category: IntentCategory } | null;
     pendingObserverFeedback: string[];
     semanticStatus?: SemanticStatusEvent;
 }
@@ -1021,6 +1021,7 @@ export class AgentLoop {
                         confidence: 0,
                         pattern: 'grounding_blocked',
                         outcome: 'failure',
+                        category: last.category,
                     });
                     return AgentLoop.groundingBlockedMessage(g.state);
                 }

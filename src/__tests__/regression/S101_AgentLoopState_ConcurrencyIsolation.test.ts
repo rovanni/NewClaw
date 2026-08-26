@@ -33,7 +33,7 @@ async function main() {
 
     // Modifica o estado da conversa A
     stateA.cognitiveWorkspace.add(1, 'Raciocínio da conversa A');
-    stateA.lastToolExecution = { toolName: 'read', toolOutput: 'outA', intent: 'intentA', category: 'execution' };
+    stateA.lastToolExecution = { toolName: 'read', toolOutput: 'outA', intent: 'intentA', category: 'conversation' };
     stateA.pendingObserverFeedback.push('[OBSERVER] feedbackA');
 
     // Verifica que a conversa B permaneceu isolada e vazia
