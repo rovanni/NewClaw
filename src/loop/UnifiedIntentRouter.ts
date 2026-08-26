@@ -33,6 +33,7 @@ import { boundedHash } from '../shared/boundedHash';
 import type { SkillLearner } from './SkillLearner';
 import type { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import type { IntentCategory } from '../shared/domainTypes';
+import { KNOWN_SKILL_TOPICS, VALID_SKILL_TOPIC_SLUG } from '../shared/domainTypes';
 
 const log = createLogger('UnifiedIntentRouter');
 
@@ -114,11 +115,41 @@ export interface IntentDecision {
     preferredTools?: string[];
     /** Skill context text to inject into system prompt (from SkillLearner) */
     skillContext?: string;
+    /**
+     * Slug curto e livre da capacidade específica que este turno representa (ex.: "crypto_price",
+     * "weather", ou um slug novo proposto pelo LLM quando nenhum conhecido se aplica) — subproduto
+     * desta MESMA classificação, sem chamada de LLM adicional. Alimenta
+     * `SkillLearner.recordPattern()` (achado 26/08/2026: substituiu um classificador de 7
+     * categorias fixas via regex, que violava "Determinismo valida / LLM interpreta" e esgotava
+     * quando as 7 já tinham virado skill ativa). Ausente quando o turno não representa uma
+     * capacidade estreita e repetível (conversa geral, saudação, confirmação etc.) — ausência é
+     * uma saída válida, nunca inferida.
+     */
+    topicSlug?: string;
     /** Deterministic source (which gate matched) */
     source: 'deterministic' | 'semantic' | 'fallback';
     /** Routing trace for observability */
     trace: RoutingTrace;
 }
+
+/**
+ * Resultado bruto da classificação semântica (Camada 2a) — produzido por `llmClassify()` (LLM,
+ * autoridade única) ou `semanticRoute()` (fallback por keyword, só quando o LLM está
+ * indisponível). `strategySelection()` (Camada 2b) consome este tipo, nunca o produz. Extraído
+ * como tipo único porque as 3 assinaturas repetiam o mesmo objeto inline — duas cópias que
+ * divergissem em silêncio já seria o tipo de bug que este arquivo inteiro existe para evitar.
+ */
+type SemanticClassification = {
+    category: IntentCategory;
+    modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution';
+    cognitiveLoad: CognitiveLoad;
+    requiresReasoning: boolean;
+    confidence: number;
+    toolName?: string;
+    toolParams?: Record<string, unknown>;
+    /** Ver IntentDecision.topicSlug — mesmo contrato, só existe quando o LLM o declarou. */
+    topicSlug?: string;
+};
 
 export interface RoutingTrace {
     inputHash: string;
@@ -317,7 +348,17 @@ Known simple capabilities (only set "toolName" when the ENTIRE request is nothin
 - "current_time": user is asking only for the current date/time, nothing else. toolParams: {} (no parameters).
 If the request needs any interpretation beyond one of these, omit "toolName" entirely.`;
 
-    const jsonSchema = `{"category": "<category>", "cognitiveLoad": "minimal|normal|deep", "confidence": 0.0, "toolName": "<weather|current_time, or omit>", "toolParams": {}}`;
+    // topicSlug: NÃO é uma segunda categoria de roteamento — alimenta só SkillLearner (aprendizado
+    // de padrões para propor skills novas, revisadas manualmente antes de qualquer efeito). Prefira
+    // reutilizar um slug conhecido para o MESMO tipo de pedido não fragmentar entre várias
+    // ocorrências (ex.: sempre "crypto_price", nunca variar para "bitcoin_cotacao" na próxima vez
+    // que o pedido for essencialmente o mesmo). Omita quando o turno não representa uma capacidade
+    // específica e repetível (conversa geral, saudação, confirmação, pedido único e não recorrente).
+    const topicSlugBridge = `
+Known topic slugs (reuse one of these when the request matches, to avoid fragmenting the same capability under different labels): ${KNOWN_SKILL_TOPICS.join(', ')}.
+If the request represents a narrow, specific, potentially recurring capability that none of these covers, propose a new short slug (2-4 lowercase words joined by underscore, e.g. "translate_text", "generate_image"). Omit "topicSlug" entirely for general conversation, greetings, or one-off requests with no repeatable capability.`;
+
+    const jsonSchema = `{"category": "<category>", "cognitiveLoad": "minimal|normal|deep", "confidence": 0.0, "toolName": "<weather|current_time, or omit>", "toolParams": {}, "topicSlug": "<short_slug, or omit>"}`;
 
     const recentMessages = resolveClassificationWindow(input, context);
     const lastAssistantMessage = extractLastAssistantMessage(recentMessages);
@@ -326,7 +367,7 @@ If the request needs any interpretation beyond one of these, omit "toolName" ent
         // Sem histórico disponível (primeira mensagem da sessão, ou sessão sem turnos recentes) —
         // comportamento idêntico ao original: classifica a mensagem isolada.
         return [
-            { role: 'system', content: `You are an intent classifier. Classify the user message into exactly one category.\n\n${baseCategories}\n${toolBridge}\n\nRespond with ONLY valid JSON, no other text:\n${jsonSchema}` },
+            { role: 'system', content: `You are an intent classifier. Classify the user message into exactly one category.\n\n${baseCategories}\n${toolBridge}\n${topicSlugBridge}\n\nRespond with ONLY valid JSON, no other text:\n${jsonSchema}` },
             { role: 'user', content: input },
         ];
     }
@@ -335,6 +376,7 @@ If the request needs any interpretation beyond one of these, omit "toolName" ent
 
 ${baseCategories}
 ${toolBridge}
+${topicSlugBridge}
 
 ${lastAssistantMessage ? `A última resposta real do assistente nesta conversa foi:\n"""${lastAssistantMessage.slice(0, 500)}"""\n` : ''}
 Respond with ONLY valid JSON, no other text:
@@ -474,7 +516,7 @@ export class UnifiedIntentRouter {
     // autorização final ainda passa pela allowlist e checagens de AgentLoop).
     private static readonly KNOWN_TOOL_NAMES = new Set(['weather', 'current_time']);
 
-    private async llmClassify(input: string, context?: RouterContext): Promise<{ category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number; toolName?: string; toolParams?: Record<string, unknown> }> {
+    private async llmClassify(input: string, context?: RouterContext): Promise<SemanticClassification> {
         const messages: LLMMessage[] = buildClassificationMessages(input, context);
 
         try {
@@ -486,7 +528,7 @@ export class UnifiedIntentRouter {
             let raw = result.content.trim().replace(/^```json\s*|\s*```$/g, '');
             const jsonMatch = raw.match(/\{[\s\S]*"category"[\s\S]*\}/);
             if (jsonMatch) raw = jsonMatch[0];
-            const parsed = JSON.parse(raw) as { category?: string; cognitiveLoad?: string; confidence?: number; toolName?: string; toolParams?: Record<string, unknown> };
+            const parsed = JSON.parse(raw) as { category?: string; cognitiveLoad?: string; confidence?: number; toolName?: string; toolParams?: Record<string, unknown>; topicSlug?: string };
 
             const VALID_CATEGORIES: IntentCategory[] = ['greeting', 'conversation', 'information', 'creation', 'system_operation', 'data_analysis', 'memory_operation', 'audio', 'vision', 'destructive', 'confirmation', 'rejection'];
             const category = VALID_CATEGORIES.includes(parsed.category as IntentCategory) ? (parsed.category as IntentCategory) : 'conversation';
@@ -496,6 +538,11 @@ export class UnifiedIntentRouter {
             // um valor que o LLM declarou, não uma segunda interpretação do texto do usuário.
             const toolName = typeof parsed.toolName === 'string' && UnifiedIntentRouter.KNOWN_TOOL_NAMES.has(parsed.toolName) ? parsed.toolName : undefined;
             const toolParams = toolName && parsed.toolParams && typeof parsed.toolParams === 'object' ? parsed.toolParams : undefined;
+            // topicSlug: mesma regra — validação estrutural de FORMATO do que o LLM declarou
+            // (SkillLearner.recordPattern), nunca uma segunda interpretação do texto do usuário.
+            // Vocabulário aberto (ao contrário de toolName): qualquer slug bem-formado é aceito,
+            // não só os de KNOWN_SKILL_TOPICS — esses são só a preferência dada ao LLM no prompt.
+            const topicSlug = typeof parsed.topicSlug === 'string' && VALID_SKILL_TOPIC_SLUG.test(parsed.topicSlug) ? parsed.topicSlug : undefined;
 
             const MODEL_CATEGORY_MAP: Record<IntentCategory, 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'> = {
                 greeting: 'light', confirmation: 'light', rejection: 'light', conversation: 'chat',
@@ -504,8 +551,8 @@ export class UnifiedIntentRouter {
                 audio: 'chat', vision: 'vision', destructive: 'execution',
             };
 
-            log.info(`[UNIFIED-ROUTER] LLM classified: "${input.slice(0, 60)}" → ${category}${toolName ? ` (tool=${toolName})` : ''} (confidence: ${confidence})`);
-            return { category, modelCategory: MODEL_CATEGORY_MAP[category], cognitiveLoad, requiresReasoning: cognitiveLoad !== 'minimal', confidence, toolName, toolParams };
+            log.info(`[UNIFIED-ROUTER] LLM classified: "${input.slice(0, 60)}" → ${category}${toolName ? ` (tool=${toolName})` : ''}${topicSlug ? ` (topic=${topicSlug})` : ''} (confidence: ${confidence})`);
+            return { category, modelCategory: MODEL_CATEGORY_MAP[category], cognitiveLoad, requiresReasoning: cognitiveLoad !== 'minimal', confidence, toolName, toolParams, topicSlug };
         } catch (err) {
             log.warn(`[UNIFIED-ROUTER] LLM classification failed, falling back to keyword routing: ${err}`);
             return this.semanticRoute(input);
@@ -515,7 +562,7 @@ export class UnifiedIntentRouter {
     // ── Layer 2b: Keyword Semantic Routing (fallback só para indisponibilidade do provider —
     // nunca é uma segunda autoridade concorrente, nunca declara toolName) ─────────────────
 
-    private semanticRoute(input: string): { category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number; toolName?: string; toolParams?: Record<string, unknown> } {
+    private semanticRoute(input: string): SemanticClassification {
         const lower = input.toLowerCase().trim();
 
         // Score each semantic rule
@@ -558,10 +605,10 @@ export class UnifiedIntentRouter {
 
     private strategySelection(
         _input: string,
-        semantic: { category: IntentCategory; modelCategory: 'chat' | 'code' | 'vision' | 'light' | 'analysis' | 'execution'; cognitiveLoad: CognitiveLoad; requiresReasoning: boolean; confidence: number; toolName?: string; toolParams?: Record<string, unknown> },
+        semantic: SemanticClassification,
         _context?: RouterContext
     ): IntentDecision {
-        const { category, modelCategory, cognitiveLoad, requiresReasoning, confidence, toolName, toolParams } = semantic;
+        const { category, modelCategory, cognitiveLoad, requiresReasoning, confidence, toolName, toolParams, topicSlug } = semantic;
 
         // Determine execution mode based on category and cognitive load
         let executionMode: ExecutionMode;
@@ -720,6 +767,7 @@ export class UnifiedIntentRouter {
             terminalAction,
             toolName,
             toolParams,
+            topicSlug,
             source: 'semantic',
             trace: {} as RoutingTrace, // Will be filled by route()
         };

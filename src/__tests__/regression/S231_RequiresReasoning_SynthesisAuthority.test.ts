@@ -190,7 +190,7 @@ console.log('\n=== S231-11 — Fix presente estruturalmente: strategySelection()
 {
     const source = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'UnifiedIntentRouter.ts'), 'utf-8');
     assert(/toolName === 'current_time'\) \{\s*\n\s*executionMode = 'direct';/.test(source), 'strategySelection() força executionMode=direct quando toolName===current_time (não é tool real)');
-    assert(/toolName,\s*\n\s*toolParams,\s*\n\s*source: 'semantic'/.test(source), 'strategySelection() repassa toolName/toolParams no IntentDecision final, sem reinterpretar');
+    assert(/toolName,\s*\n\s*toolParams,\s*\n\s*topicSlug,\s*\n\s*source: 'semantic'/.test(source), 'strategySelection() repassa toolName/toolParams/topicSlug no IntentDecision final, sem reinterpretar');
 }
 
 console.log('\n=== S231-12 — Fix presente estruturalmente: AgentLoop.ts consumindo o novo contrato ===');

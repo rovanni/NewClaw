@@ -16,6 +16,16 @@
  * Exported skills are picked up by SkillLoader (hot-reload) and become available
  * to SkillDiscovery's semantic matching. Skills with file_exported=1 are excluded
  * from SkillLearner's own DB-based matching to avoid double-injection.
+ *
+ * Classificação do padrão (`recordPattern`'s `topicSlug`): NÃO é decidida aqui. Até 26/08/2026,
+ * um `extractPattern()` interno classificava o texto do usuário via regex num de 7 padrões fixos —
+ * uma decisão semântica tratada como validação estrutural (proibido por
+ * docs/ARCHITECTURE/RESPONSABILIDADE_ANTES_DO_MECANISMO.md), e um vocabulário fechado que parava
+ * de propor qualquer coisa nova assim que as 7 categorias já tivessem virado skill (achado real:
+ * 34 combinações elegíveis, zero propostas em 7 semanas). `UnifiedIntentRouter` já roda um LLM por
+ * turno para outro propósito — agora também emite `topicSlug` como subproduto dessa MESMA chamada
+ * (zero LLM novo), e `recordPattern()` só valida a FORMA do valor recebido (nunca reinterpreta o
+ * texto original).
  */
 
 import fs from 'fs';
@@ -23,6 +33,7 @@ import path from 'path';
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
+import { KNOWN_SKILL_TOPICS, VALID_SKILL_TOPIC_SLUG } from '../shared/domainTypes';
 const log = createLogger('Skilllearner');
 
 /** Row da tabela skill_patterns */
@@ -77,14 +88,6 @@ export interface SkillContextResult {
     matches: SkillMatch[];
 }
 
-interface ToolPatternStat {
-    pattern: string;
-    tool_name: string;
-    success_count: number;
-    fail_count: number;
-    avg_latency_ms: number;
-}
-
 export class SkillLearner {
     /**
      * Definições curadas para padrões conhecidos. Nome/gatilho/descrição/prompt/tool_sequence
@@ -92,8 +95,12 @@ export class SkillLearner {
      * tryCreateSkillProposal) nunca entra no conteúdo para estes 7 padrões (ver createSkillFromPattern).
      * Precisa ser estático e compartilhado (não recriado a cada chamada) porque
      * tryCreateSkillProposal usa as CHAVES deste objeto para decidir a identidade de dedup.
+     *
+     * Tipo derivado de `KNOWN_SKILL_TOPICS` (shared/domainTypes.ts) — mesma lista que
+     * `UnifiedIntentRouter` oferece ao LLM como slugs preferenciais. Uma única fonte: o
+     * compilador acusa se as chaves aqui divergirem da lista compartilhada.
      */
-    private static readonly SKILL_DEFS: Record<string, { name: string; trigger: string; description: string; prompt: string; toolSeq: string[] }> = {
+    private static readonly SKILL_DEFS: Record<typeof KNOWN_SKILL_TOPICS[number], { name: string; trigger: string; description: string; prompt: string; toolSeq: string[] }> = {
         crypto_price: {
             name: 'Preço de Cripto',
             trigger: '(pre[cç]o|cota[cç][aã]o|valor|quanto).*(bitcoin|btc|ethereum|eth|solana|sol|river|doge|ada|xrp)',
@@ -162,6 +169,13 @@ export class SkillLearner {
             toolSeq: ['write']
         }
     };
+
+    /** Type guard único para "este pattern está em SKILL_DEFS?" — usado tanto pela checagem de
+     *  dedup em tryCreateSkillProposal() quanto pelo lookup em createSkillFromPattern(), para as
+     *  duas nunca divergirem sobre o que conta como "conhecido". */
+    private static isKnownTopic(pattern: string): pattern is typeof KNOWN_SKILL_TOPICS[number] {
+        return Object.prototype.hasOwnProperty.call(SkillLearner.SKILL_DEFS, pattern);
+    }
 
     private db: Database.Database;
     private skillsDir: string;
@@ -362,10 +376,19 @@ export class SkillLearner {
     }
 
     /**
-     * Record a tool usage pattern - called after every tool execution
+     * Record a tool usage pattern - called after every tool execution.
+     *
+     * `topicSlug`: já classificado por `UnifiedIntentRouter` (uma vez por turno, reaproveitando a
+     * chamada de LLM que já roteia a mensagem — nenhuma chamada nova aqui). Ausente/malformado →
+     * não registra nada para este tool call (ausência é uma saída válida, nunca se adivinha uma
+     * categoria a partir do texto — NUNCA_ADIVINHAR.md). Isso é intencional mesmo quando o texto
+     * do usuário "parece" pertencer a um padrão conhecido: sem o slug já computado, não há decisão
+     * semântica nova tomada aqui — só validação estrutural do que já foi declarado. Não recebe mais
+     * o texto do usuário: `skill_patterns` nunca o armazenou (só pattern/tool/contadores), e sem
+     * `extractPattern()` não havia mais nada aqui para ler dele.
      */
-    recordPattern(userInput: string, toolName: string, success: boolean, latencyMs: number): void {
-        const pattern = this.extractPattern(userInput);
+    recordPattern(toolName: string, success: boolean, latencyMs: number, topicSlug?: string): void {
+        const pattern = topicSlug && VALID_SKILL_TOPIC_SLUG.test(topicSlug) ? topicSlug : null;
         if (!pattern) return;
 
         try {
@@ -448,45 +471,6 @@ export class SkillLearner {
             preferredTools,
             matches
         };
-    }
-
-    getRecommendedTools(userInput: string): string[] {
-        const stats = this.getPatternToolStats(userInput);
-        return stats
-            .filter(stat => this.computeConfidence(stat) >= 0.6)
-            .slice(0, 3)
-            .map(stat => stat.tool_name);
-    }
-
-    getToolHints(userInput: string): string {
-        const stats = this.getPatternToolStats(userInput);
-        if (stats.length === 0) return '';
-
-        const preferred = stats
-            .filter(stat => this.computeConfidence(stat) >= 0.6)
-            .slice(0, 2);
-        const discouraged = stats
-            .filter(stat => this.computeConfidence(stat) < 0.45 && (stat.success_count + stat.fail_count) >= 3)
-            .slice(0, 2);
-
-        const lines: string[] = [];
-        if (preferred.length > 0) {
-            lines.push('Ferramentas com bom historico para este padrao:');
-            preferred.forEach(stat => {
-                const successRate = Math.round(this.computeSuccessRate(stat) * 100);
-                lines.push(`- ${stat.tool_name}: ${successRate}% de sucesso, latencia media ${stat.avg_latency_ms}ms`);
-            });
-        }
-        if (discouraged.length > 0) {
-            lines.push('Ferramentas menos confiaveis para este padrao:');
-            discouraged.forEach(stat => {
-                const successRate = Math.round(this.computeSuccessRate(stat) * 100);
-                lines.push(`- ${stat.tool_name}: ${successRate}% de sucesso`);
-            });
-        }
-        lines.push('Use essas informacoes como prioridade suave; o agente ainda pode escolher outra ferramenta se o contexto pedir.');
-
-        return lines.join('\n');
     }
 
     getAllSkills(): Skill[] {
@@ -611,50 +595,6 @@ export class SkillLearner {
 
     // ── Pattern extraction ────────────────────────────────────────────────────
 
-    private extractPattern(input: string): string | null {
-        const lower = input.toLowerCase().trim();
-
-        if (/(pre[cç]o|cota[cç][aã]o|valor|quanto (custa|vale))/.test(lower)) return 'crypto_price';
-        if (/(bitcoin|btc|ethereum|eth|solana|sol|cardano|ada|xrp|dogecoin|doge|river)/.test(lower)) return 'crypto_query';
-        if (/(clima|tempo|temperatura|previs[aã]o|chovendo)/.test(lower)) return 'weather';
-        if (/(áudio|audio|voz|tts|falar|narre)/.test(lower) && /(gerar|criar|enviar|manda|mande|fale)/.test(lower)) return 'audio_request';
-        if (/(lembre|lembrete|guarde|salve|memorize|anote)/.test(lower)) return 'memory_write';
-        if (/(lembra|o que voc[eê] sabe|buscar na mem)/.test(lower)) return 'memory_search';
-        if (/(arquivo|html|css|site|p[aá]gina)/.test(lower)) return 'write';
-
-        return null;
-    }
-
-    private getPatternToolStats(userInput: string): ToolPatternStat[] {
-        const pattern = this.extractPattern(userInput);
-        if (!pattern) return [];
-
-        return this.db.prepare(
-            `SELECT pattern, tool_name, success_count, fail_count, avg_latency_ms
-             FROM skill_patterns
-             WHERE pattern = ?
-             ORDER BY
-                (success_count * 1.0 / (success_count + fail_count + 0.0001)) DESC,
-                success_count DESC,
-                avg_latency_ms ASC`
-        ).all(pattern) as ToolPatternStat[];
-    }
-
-    private computeSuccessRate(stat: ToolPatternStat): number {
-        const total = stat.success_count + stat.fail_count;
-        if (total <= 0) return 0;
-        return stat.success_count / total;
-    }
-
-    private computeConfidence(stat: ToolPatternStat): number {
-        const total = stat.success_count + stat.fail_count;
-        if (total <= 0) return 0;
-        const successRate = this.computeSuccessRate(stat);
-        const sampleWeight = Math.min(1, total / 5);
-        const latencyPenalty = stat.avg_latency_ms > 0 ? Math.min(0.15, stat.avg_latency_ms / 10000) : 0;
-        return Math.max(0, successRate * sampleWeight - latencyPenalty);
-    }
-
     /**
      * Returns only DB-resident active skills (file_exported = 0).
      * Skills with file_exported = 1 are served by SkillLoader and must not be double-injected.
@@ -752,7 +692,7 @@ export class SkillLearner {
             // repetidos. Padrões desconhecidos (fora de SKILL_DEFS) continuam chaveados por
             // (pattern, tool): ali a tool MUDA o prompt/toolSeq gerado, então são propostas
             // legitimamente distintas.
-            const isKnownPattern = Object.prototype.hasOwnProperty.call(SkillLearner.SKILL_DEFS, item.pattern);
+            const isKnownPattern = SkillLearner.isKnownTopic(item.pattern);
             const alreadyExists = isKnownPattern
                 ? this.db.prepare(
                     'SELECT id FROM auto_skills WHERE source_pattern = ? LIMIT 1'
@@ -830,7 +770,7 @@ export class SkillLearner {
      * so learning is never blocked by the absence of a pre-defined entry.
      */
     private createSkillFromPattern(pattern: string, toolName: string, successCount: number): Skill {
-        const def = SkillLearner.SKILL_DEFS[pattern];
+        const def = SkillLearner.isKnownTopic(pattern) ? SkillLearner.SKILL_DEFS[pattern] : undefined;
 
         // Generic template for patterns not yet in skillDefs — learning is never blocked
         const name = def?.name ?? pattern.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());

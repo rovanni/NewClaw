@@ -65,13 +65,11 @@ console.log('\n=== S237-1 — reprodução do incidente: várias tools incidenta
     }
 
     // Dispara tryCreateSkillProposal indiretamente via recordPattern (privado; chamado a cada
-    // múltiplo de 10 registros — usa observe(), que grava em skill_patterns e não conta pro
-    // gatilho, então grava 10 padrões "de recheio" com um pattern não classificável para acionar).
+    // múltiplo de 10 registros). recordPattern() só grava quando recebe um topicSlug já validado
+    // (26/08/2026: não classifica mais o texto via regex — ver domainTypes.KNOWN_SKILL_TOPICS) —
+    // por isso o "recheio" passa 'audio_request' explicitamente, irrelevante para esta asserção.
     for (let i = 0; i < 10; i++) {
-        // extractPattern() rejeita texto não-classificável (retorna null, recordPattern sai antes
-        // de incrementar o contador que dispara tryCreateSkillProposal) — por isso o "recheio"
-        // usa um padrão classificável (audio_request) e irrelevante para a asserção desta seção.
-        learner.recordPattern('mande um audio agora', 'noop_tool', true, 10);
+        learner.recordPattern('noop_tool', true, 10, 'audio_request');
     }
 
     const skills = learner.getAllSkills();
@@ -101,7 +99,7 @@ console.log('\n=== S237-2 — skill ATIVA de um padrão conhecido bloqueia novas
 
     seedMaturePattern(db, 'weather', 'web_search', 5);
     for (let i = 0; i < 10; i++) {
-        learner.recordPattern('mande um audio agora', 'noop_tool', true, 10);
+        learner.recordPattern('noop_tool', true, 10, 'audio_request');
     }
 
     const previsoes = learner.getAllSkills().filter(s => s.name.startsWith('Previsão do Tempo'));
@@ -115,13 +113,14 @@ console.log('\n=== S237-3 — padrão DESCONHECIDO continua propondo uma vez por
     const db = new Database(':memory:');
     const learner = new SkillLearner(db, path.join(process.cwd(), '__no_skills_dir__'));
 
-    // extractPattern só reconhece os 7 padrões fixos — para exercitar um padrão "desconhecido" é
-    // preciso inserir diretamente em skill_patterns (o caminho real via recordPattern nunca produz
-    // um pattern fora da lista fixa, mas a função de proposta em si não assume isso).
+    // Insere diretamente em skill_patterns (em vez de via recordPattern) só para isolar esta
+    // asserção da parte de classificação — desde 26/08/2026 recordPattern aceita qualquer
+    // topicSlug bem-formado vindo do UnifiedIntentRouter, não só os 7 de KNOWN_SKILL_TOPICS (ver
+    // S270), então "padrão desconhecido" também é alcançável pelo caminho real agora.
     seedMaturePattern(db, 'padrao_customizado_xyz', 'read', 5);
     seedMaturePattern(db, 'padrao_customizado_xyz', 'write', 5);
     for (let i = 0; i < 10; i++) {
-        learner.recordPattern('mande um audio agora', 'noop_tool', true, 10);
+        learner.recordPattern('noop_tool', true, 10, 'audio_request');
     }
 
     const customizadas = learner.getAllSkills().filter(s => s.source_pattern === 'padrao_customizado_xyz');

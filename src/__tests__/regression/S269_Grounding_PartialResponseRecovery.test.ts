@@ -80,6 +80,16 @@ console.log('\n=== S269-3 — a resposta parcial é revalidada pela MESMA barrei
     // devolve null e quem chamou (commitResponse) cai direto no bloqueio padrão.
     const selfCallCount = (methodBody.match(/this\.trySynthesizePartialResponse/g) ?? []).length;
     assert(selfCallCount === 0, 'trySynthesizePartialResponse não se chama recursivamente — no máximo 1 tentativa de síntese parcial por bloqueio');
+
+    // Achado real em produção (26/08/2026, após o deploy deste Sprint): a mensagem única enviada
+    // ao provider usava role:'system' (sem nenhuma mensagem 'user') e o Ollama devolveu stream
+    // vazio (done_reason="load", 0 chars) em vez de gerar texto — mesmo modelo que tinha acabado
+    // de responder normalmente na chamada anterior. Todo outro chamador de callLLMWithFallback
+    // nesta classe envia histórico de conversa real; todo outro ponto do projeto que faz UMA
+    // chamada avulsa (ObserverValidator, GoalPlanner, RiskAnalyzer, GoalExtractor, DomainRegistry)
+    // usa role:'user' para essa mensagem única — nunca 'system' sozinho.
+    assert(/role: 'user',\s*\n\s*content:/.test(methodBody), "a mensagem única enviada ao LLM usa role:'user' (não 'system') — mesma convenção de toda chamada avulsa do projeto");
+    assert(!/role: 'system',\s*\n\s*content:\s*\n\s*`O usuário perguntou/.test(methodBody), "não regride para role:'system' nesta chamada específica");
 }
 
 console.log('\n=== S269-4 — falha na síntese parcial nunca lança: cai em null, nunca quebra o turno (fail-safe consistente com o resto de commitResponse) ===');

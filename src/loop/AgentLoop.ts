@@ -1093,8 +1093,16 @@ export class AgentLoop {
     ): Promise<string | null> {
         try {
             const factsList = supportedClaims.map(c => `- ${c.claim}`).join('\n');
+            // role: 'user', não 'system' — achado real (26/08/2026, produção): uma mensagem ÚNICA
+            // com role:'system' (sem nenhuma mensagem 'user') fez o provider (Ollama) devolver
+            // stream vazio (`done_reason="load"`, 0 chars) em vez de gerar texto, mesmo o modelo já
+            // estando carregado (uma chamada anterior, MESMO modelo, tinha acabado de responder
+            // normalmente). Todo outro chamador de callLLMWithFallback nesta classe envia um
+            // histórico de conversa real; todo outro ponto do projeto que faz UMA chamada avulsa
+            // (ObserverValidator.validateGrounding, GoalPlanner, RiskAnalyzer, GoalExtractor,
+            // DomainRegistry) usa role:'user' para essa mensagem única — nunca 'system' sozinho.
             const messages: LLMMessage[] = [{
-                role: 'system',
+                role: 'user',
                 content:
                     `O usuário perguntou: "${userText}"\n\n` +
                     `Uma resposta anterior foi recusada porque continha afirmações não sustentadas pelas fontes consultadas. ` +
@@ -1562,7 +1570,7 @@ export class AgentLoop {
         traceManager.addStep(trace, 'tool_call',   { tool: toolName, input: toolArgs });
         traceManager.addStep(trace, 'tool_result', { tool: toolName, success: true, output: toolResult.output });
         this.decisionMemory.recordFromLoop(toolName, true, 0, userText);
-        this.skillLearner.recordPattern(userText, toolName, true, 0);
+        this.skillLearner.recordPattern(toolName, true, 0, intentDecision.topicSlug);
 
         this.getTurnState(conversationId).lastToolExecution = {
             toolName,
@@ -2305,7 +2313,7 @@ export class AgentLoop {
                 // motivo, acabava reusando a resposta ao usuário como se fosse erro.
                 traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output, error: result.error });
                 this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
-                this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
+                this.skillLearner.recordPattern(resolvedToolName, result.success, toolDuration, intentDecision.topicSlug);
 
                 cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
                 loopMessages.push({ role: 'tool', content: toolResultForModel(result) });
@@ -2630,7 +2638,7 @@ export class AgentLoop {
         // falha e perde o motivo, que só existe em `ToolResult.error`.
         traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output, error: result.error });
         this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
-        this.skillLearner.recordPattern(userText, resolvedToolName, result.success, toolDuration);
+        this.skillLearner.recordPattern(resolvedToolName, result.success, toolDuration, intentDecision.topicSlug);
 
         cycleHistory.push({ step: stepCount, tool: resolvedToolName, input: JSON.stringify(resolvedArgs), status: result.success ? 'success' : 'error' });
         loopMessages.push({ role: 'tool', content: toolResultForModel(result), tool_call_id: toolCall.id });

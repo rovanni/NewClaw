@@ -331,3 +331,29 @@ export interface Goal {
 // ── Intent (UnifiedIntentRouter) ────────────────────────────────────────────────
 
 export type IntentCategory = 'greeting' | 'conversation' | 'information' | 'creation' | 'system_operation' | 'data_analysis' | 'memory_operation' | 'audio' | 'vision' | 'destructive' | 'confirmation' | 'rejection';
+
+// ── Skill topic slugs (SkillLearner / UnifiedIntentRouter) ──────────────────────
+//
+// Achado real (26/08/2026): SkillLearner.extractPattern() classificava o texto do usuário em um
+// de 7 padrões fixos via regex — uma decisão semântica ("que capacidade este pedido representa?")
+// tratada como validação estrutural, proibido por RESPONSABILIDADE_ANTES_DO_MECANISMO.md. Além
+// disso, o vocabulário fechado significava que, uma vez que as 7 categorias já tivessem uma skill
+// ativa (como em produção, 08/2026), o mecanismo nunca mais propunha nada novo — 34 combinações
+// (padrão, ferramenta) elegíveis, zero propostas em 7 semanas.
+//
+// Correção: UnifiedIntentRouter (que já roda um LLM por turno, para outro propósito) passa a
+// também emitir um `topicSlug` livre — o LLM pode reutilizar um destes valores conhecidos (evita
+// fragmentação: "crypto_price" numa ocorrência, "bitcoin_cotacao" noutra nunca acumulariam juntos)
+// ou propor um slug novo para uma capacidade ainda não catalogada. SkillLearner.recordPattern()
+// passa a receber esse valor já computado, em vez de recalculá-lo via regex — zero chamadas de LLM
+// novas (reaproveita a classificação que já acontece), e determinismo aqui volta a ser só validação
+// estrutural (formato do slug), nunca interpretação do texto do usuário.
+//
+// Única fonte: SkillLearner.SKILL_DEFS usa exatamente estas chaves (tipo derivado, não duplicado —
+// ver S270).
+export const KNOWN_SKILL_TOPICS = ['crypto_price', 'crypto_query', 'weather', 'audio_request', 'memory_write', 'memory_search', 'write'] as const;
+
+/** Formato válido de um topicSlug — minúsculas, snake_case, 2-40 chars, começa com letra. Única
+ *  fonte: UnifiedIntentRouter valida o que aceita do LLM, SkillLearner valida o que recebe do
+ *  router — duas cópias divergentes aceitariam/rejeitariam valores diferentes em silêncio. */
+export const VALID_SKILL_TOPIC_SLUG = /^[a-z][a-z0-9_]{1,39}$/;
