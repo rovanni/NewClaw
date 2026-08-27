@@ -7,11 +7,18 @@
  *    TelegramPollingSupervisor, agentOutputParser delegam pra cá agora.
  *  - shared/htmlEntities.ts decodeHtmlEntities() (js/double-escaping) — web_navigate/web_search
  *    delegam pra cá agora; ordem de decodificação corrigida (&amp; por último).
- *  - web_navigate.ts extractReadableText() / web_search.ts extractReadableContent()
- *    (js/bad-tag-filter) — `</script >` com espaço agora é reconhecido como fechamento válido;
- *    S135.5 cobre a variante achada depois (2026-07-21, alertas #85/#86): `</script\t\n bar>`
- *    (lixo/atributos arbitrários antes do ">", não só espaço) também é uma end-tag válida pra
- *    parsers HTML reais e não casava com o regex anterior (`\s*>`, só espaço).
+ *  - extractStaticContent() (js/bad-tag-filter) — `</script >` com espaço agora é reconhecido
+ *    como fechamento válido; S135.5 cobre a variante achada depois (2026-07-21, alertas #85/#86):
+ *    `</script\t\n bar>` (lixo/atributos arbitrários antes do ">", não só espaço) também é uma
+ *    end-tag válida pra parsers HTML reais e não casava com o regex anterior (`\s*>`, só espaço).
+ *
+ *    ATUALIZAÇÃO (Sprint 4, campanha "Web Search Coverage & Evidence Quality", 26/08/2026): esta
+ *    proteção vivia duplicada em `web_navigate.ts` (`extractReadableText`) e `web_search.ts`
+ *    (`extractReadableContent`) — unificada em `shared/pageContentReader.ts`
+ *    (`extractStaticContent`), autoridade única agora usada pelos dois. Os métodos antigos não
+ *    existem mais nas ferramentas; o teste passou a chamar a função compartilhada diretamente —
+ *    mesma cobertura de segurança, sem duplicar o teste por consumidor (não há mais lógica própria
+ *    de extração em nenhum dos dois para testar separadamente).
  *
  * ModelDropdown.js (#14, js/xss-through-dom) não tem cobertura automatizada aqui — é DOM de
  * navegador (createElement/addEventListener), sem jsdom configurado neste projeto; validado por
@@ -22,8 +29,9 @@
 
 import { stripHtmlTags } from '../../shared/stripHtmlTags';
 import { decodeHtmlEntities } from '../../shared/htmlEntities';
-import { WebNavigateTool } from '../../tools/web_navigate';
-import { WebSearchTool } from '../../tools/web_search';
+import { extractStaticContent } from '../../shared/pageContentReader';
+
+const EXTRACT_OPTS = { maxChars: 4000, minLineLength: 30, maxLines: 40 };
 
 let passed = 0;
 let failed = 0;
@@ -52,45 +60,39 @@ async function main() {
         assert(decodeHtmlEntities('&#65;&#x42;') === 'AB', 'entidades numéricas (decimal e hex) continuam corretas');
     }
 
-    console.log('\n=== S135.3 — web_navigate.extractReadableText: "</script >" (com espaço) agora remove o conteúdo do script ===');
+    console.log('\n=== S135.3 — extractStaticContent: "</script >" (com espaço) agora remove o conteúdo do script ===');
     {
         const marker = 'XSS_MARKER_LEAKED_INTO_OUTPUT_1234567890';
         const html = `<script>${marker}();</script ><p>Texto legitimo da pagina que tem mais de trinta caracteres aqui.</p>`;
-        const tool = new WebNavigateTool();
-        const result: string = (tool as any).extractReadableText(html, 4000);
+        const result = extractStaticContent(html, EXTRACT_OPTS);
         assert(!result.includes(marker), 'conteúdo do script (fechado com espaço antes do ">") não aparece no texto extraído', result);
         assert(result.includes('Texto legitimo'), 'texto legítimo do parágrafo continua sendo extraído normalmente', result);
     }
 
-    console.log('\n=== S135.4 — web_search.extractReadableContent: mesma proteção ===');
+    console.log('\n=== S135.4 — mesma função, chamada por ambas as ferramentas antes (web_search.ts/web_navigate.ts) — proteção continua valendo para as duas agora que é uma autoridade só ===');
     {
         const marker = 'XSS_MARKER_LEAKED_INTO_OUTPUT_ABCDEFGHIJ';
         const html = `<script>${marker}();</script ><p>Outro texto legitimo da pagina com mais de quarenta caracteres aqui.</p>`;
-        const tool = new WebSearchTool();
-        const result: { title: string; content: string } = (tool as any).extractReadableContent(html);
-        assert(!result.content.includes(marker), 'conteúdo do script não aparece no content extraído', result.content);
-        assert(result.content.includes('Outro texto legitimo'), 'texto legítimo continua sendo extraído normalmente', result.content);
+        const result = extractStaticContent(html, EXTRACT_OPTS);
+        assert(!result.includes(marker), 'conteúdo do script não aparece no content extraído', result);
+        assert(result.includes('Outro texto legitimo'), 'texto legítimo continua sendo extraído normalmente', result);
     }
 
     console.log('\n=== S135.5 — "</script\\t\\n bar>" (lixo antes do ">", não só espaço) também remove o script (CodeQL #85/#86) ===');
     {
         const marker = 'XSS_MARKER_TRAILING_GARBAGE_END_TAG_KLMNOP';
         const evasive = '</script\t\n bar>';
-        const htmlNavigate = `<script>${marker}();${evasive}<p>Texto legitimo da pagina que tem mais de trinta caracteres aqui.</p>`;
-        const navResult: string = (new WebNavigateTool() as any).extractReadableText(htmlNavigate, 4000);
-        assert(!navResult.includes(marker), 'web_navigate: conteúdo do script (fechado com lixo antes do ">") não aparece no texto extraído', navResult);
-        assert(navResult.includes('Texto legitimo'), 'web_navigate: texto legítimo continua sendo extraído', navResult);
-
-        const htmlSearch = `<script>${marker}();${evasive}<p>Outro texto legitimo da pagina com mais de quarenta caracteres aqui.</p>`;
-        const searchResult: { title: string; content: string } = (new WebSearchTool() as any).extractReadableContent(htmlSearch);
-        assert(!searchResult.content.includes(marker), 'web_search: conteúdo do script não aparece no content extraído', searchResult.content);
-        assert(searchResult.content.includes('Outro texto legitimo'), 'web_search: texto legítimo continua sendo extraído', searchResult.content);
+        const html = `<script>${marker}();${evasive}<p>Texto legitimo da pagina que tem mais de trinta caracteres aqui.</p>`;
+        const result = extractStaticContent(html, EXTRACT_OPTS);
+        assert(!result.includes(marker), 'conteúdo do script (fechado com lixo antes do ">") não aparece no texto extraído', result);
+        assert(result.includes('Texto legitimo'), 'texto legítimo continua sendo extraído', result);
 
         // Garante que a tag continua exigindo o NOME exato "script" — "</scriptx>" não deve
         // fechar o script real (senão \b[^>]*> viraria permissivo demais e apagaria conteúdo
         // legítimo por engano).
-        const notATag = (new WebNavigateTool() as any).extractReadableText(
-            `<script>${marker}();</scriptx><p>Texto legitimo da pagina que tem mais de trinta caracteres aqui.</p>`, 4000
+        const notATag = extractStaticContent(
+            `<script>${marker}();</scriptx><p>Texto legitimo da pagina que tem mais de trinta caracteres aqui.</p>`,
+            EXTRACT_OPTS
         );
         assert(notATag.includes(marker), '"</scriptx>" (nome de tag diferente) NÃO fecha o script real — \\b continua exigindo o nome exato', notATag);
     }

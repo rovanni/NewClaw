@@ -11,6 +11,8 @@ import { promisify } from 'util';
 import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { errorMessage } from '../shared/errors';
 import { decodeHtmlEntities } from '../shared/htmlEntities';
+import { DDG_RESULT_LINK_CLASS } from '../shared/duckduckgoLite';
+import { extractStaticContent, extractTitle as extractPageTitle, fetchViaJina as fetchPageViaJina } from '../shared/pageContentReader';
 
 const execFileAsync = promisify(execFile);
 
@@ -116,7 +118,7 @@ export class WebNavigateTool implements ToolExecutor {
     private async openUrl(url: string, maxChars: number): Promise<string> {
         const validatedUrl = this.ensureHttpUrl(url);
         const html = await this.fetchHtml(validatedUrl);
-        const title = this.extractTitle(html) || validatedUrl;
+        const title = extractPageTitle(html) || validatedUrl;
         const browserDump = await this.getTextView(validatedUrl, html, Math.floor(maxChars * 0.7));
         const links = this.extractLinks(html, validatedUrl).slice(0, 12);
 
@@ -157,46 +159,37 @@ export class WebNavigateTool implements ToolExecutor {
         return this.limitOutput(`Link seguido: ${selected.text}\nURL de origem: ${validatedUrl}\n\n${opened}`, maxChars);
     }
 
+    /**
+     * Sprint 4 (campanha "Web Search Coverage & Evidence Quality", 26/08/2026): antes decidia
+     * "o navegador de texto/estático é bom o bastante (>=300 chars) ou cai pro Jina" — contagem de
+     * caracteres como proxy de qualidade (mesma violação encontrada em web_search.ts, com um
+     * limiar DIFERENTE — 200 lá, 300 aqui — nunca sincronizados). Agora só decide disponibilidade
+     * ESTRUTURAL: cada método (navegador de texto → extração estática → Jina) só é tentado se o
+     * anterior não produziu NADA; o primeiro que produzir algo não-vazio é usado, sem comparar
+     * tamanho/qualidade entre eles. `extractStaticContent`/`fetchViaJina` vêm de
+     * shared/pageContentReader.ts (autoridade única, compartilhada com web_search.ts).
+     * `minLineLength=30`/`maxLines=40` preservam exatamente os valores que este arquivo já usava.
+     */
     private async getTextView(url: string, html: string, maxChars: number): Promise<BrowserDumpResult> {
         const browserDump = await this.dumpUrlWithTextBrowser(url, maxChars);
-
-        // If text browser returned rich content, use it directly
-        if (browserDump && browserDump.content.length >= 300) {
+        if (browserDump && browserDump.content.trim().length > 0) {
             return browserDump;
         }
 
-        // Text browser failed or returned thin content (SPA/JS-rendered page like React apps)
-        // Try static HTML extraction first
-        const staticContent = this.extractReadableText(html, maxChars);
+        const staticContent = extractStaticContent(html, { maxChars, minLineLength: 30, maxLines: 40 });
+        if (staticContent.trim().length > 0) {
+            return { mode: 'html-fallback', content: staticContent };
+        }
 
-        // If content is still thin, try Jina AI Reader (handles JS-rendered SPAs)
-        if (staticContent.length < 300 || (browserDump && browserDump.content.length < 300)) {
-            const jinaContent = await this.fetchViaJina(url, maxChars);
-            if (jinaContent) {
-                return { mode: 'html-fallback', content: `[jina-reader]\n${jinaContent}` };
+        const jinaRaw = await fetchPageViaJina(url, maxChars);
+        if (jinaRaw) {
+            const content = jinaRaw.replace(/^(Title|URL|Published Time):.*$/gm, '').trim();
+            if (content.length > 0) {
+                return { mode: 'html-fallback', content: `[jina-reader]\n${content}` };
             }
         }
 
-        // Fall back to whatever we have
-        if (browserDump) return browserDump;
-        return { mode: 'html-fallback', content: staticContent };
-    }
-
-    private async fetchViaJina(url: string, maxChars: number): Promise<string | null> {
-        try {
-            const resp = await fetch(`https://r.jina.ai/${url}`, {
-                headers: { 'Accept': 'text/plain, text/markdown', 'User-Agent': 'Mozilla/5.0' },
-                signal: AbortSignal.timeout(20000)
-            });
-            if (!resp.ok) return null;
-            const text = (await resp.text()).trim();
-            if (text.length < 100) return null;
-            // Strip metadata header lines
-            const content = text.replace(/^(Title|URL|Published Time):.*$/gm, '').trim();
-            return this.limitOutput(content, maxChars);
-        } catch {
-            return null;
-        }
+        return { mode: 'html-fallback', content: '' };
     }
 
     private async dumpUrlWithTextBrowser(url: string, maxChars: number): Promise<BrowserDumpResult | null> {
@@ -245,42 +238,29 @@ export class WebNavigateTool implements ToolExecutor {
         return await resp.text();
     }
 
+    // Casa cada tag <a ...>texto</a> e inspeciona os atributos capturados independentemente da
+    // ORDEM em que aparecem — mesmo achado real do web_search.ts (26/08/2026): o HTML do
+    // DuckDuckGo Lite traz `href` antes de `class` (`<a rel="nofollow" href="..." class='...'>`),
+    // e exigir uma ordem fixa de atributos é tão frágil quanto exigir um caractere de aspas fixo.
     private extractSearchResults(html: string): ExtractedLink[] {
-        const rows = [...html.matchAll(/<a[^>]*class="result-link"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/gi)];
-        return rows
-            .map(row => ({
-                url: decodeHtmlEntities(row[1] || '').trim(),
-                text: this.cleanInlineText(row[2] || '')
-            }))
-            .filter(item => item.url && item.text);
-    }
+        const resultLinkClassRe = new RegExp(DDG_RESULT_LINK_CLASS);
+        const anchorRe = /<a\s+([^>]*)>(.*?)<\/a>/gi;
+        const results: ExtractedLink[] = [];
+        let anchor: RegExpExecArray | null;
 
-    private extractTitle(html: string): string {
-        const match = html.match(/<title[^>]*>(.*?)<\/title>/is);
-        return this.cleanInlineText(match?.[1] || '');
-    }
+        while ((anchor = anchorRe.exec(html)) !== null) {
+            const attrs = anchor[1];
+            if (!resultLinkClassRe.test(attrs)) continue;
 
-    private extractReadableText(html: string, maxChars: number): string {
-        // <\/script\b[^>]*> (não <\/script\s*>): tag de fechamento com qualquer conteúdo entre o
-        // nome da tag e o ">" (ex: "</script foo>", "</script\t\nbar>") é válida pra parsers HTML
-        // reais (atributos/lixo numa end-tag são ignorados, só o nome importa) mas não casava com
-        // \s*> — o conteúdo do script "sobrevivia" à remoção (CodeQL js/bad-tag-filter, variante
-        // além do espaço simples já coberto antes).
-        let text = html
-            .replace(/<script[\s\S]*?<\/script\b[^>]*>/gi, ' ')
-            .replace(/<style[\s\S]*?<\/style\b[^>]*>/gi, ' ')
-            .replace(/<noscript[\s\S]*?<\/noscript\b[^>]*>/gi, ' ')
-            .replace(/<\/?(article|main|section|p|h1|h2|h3|h4|li|br|div|tr|td)[^>]*>/gi, '\n')
-            .replace(/<[^>]+>/g, ' ');
+            const hrefMatch = attrs.match(/href="([^"]+)"/);
+            const url = hrefMatch ? decodeHtmlEntities(hrefMatch[1]).trim() : '';
+            const text = this.cleanInlineText(anchor[2] || '');
+            if (!url || !text) continue;
 
-        text = decodeHtmlEntities(text);
-        const lines = text
-            .split('\n')
-            .map(line => this.cleanInlineText(line))
-            .filter(line => line.length >= 30)
-            .filter(line => !this.isBoilerplate(line));
+            results.push({ url, text });
+        }
 
-        return this.limitOutput(lines.slice(0, 40).join('\n'), maxChars);
+        return results;
     }
 
     private extractLinks(html: string, baseUrl: string): ExtractedLink[] {
@@ -341,18 +321,6 @@ export class WebNavigateTool implements ToolExecutor {
             .trim();
     }
 
-    private isBoilerplate(text: string): boolean {
-        const lower = text.toLowerCase();
-        return [
-            'cookie',
-            'privacy policy',
-            'all rights reserved',
-            'subscribe',
-            'sign in',
-            'javascript',
-            'enable javascript'
-        ].some(fragment => lower.includes(fragment));
-    }
 
 
     private limitOutput(text: string, maxChars: number): string {

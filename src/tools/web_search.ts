@@ -5,6 +5,8 @@
 
 import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { decodeHtmlEntities } from '../shared/htmlEntities';
+import { DDG_RESULT_LINK_CLASS, DDG_RESULT_SNIPPET_CLASS } from '../shared/duckduckgoLite';
+import { readPageContent } from '../shared/pageContentReader';
 
 
 interface SearchCandidate {
@@ -160,7 +162,7 @@ export class WebSearchTool implements ToolExecutor {
                 if (titleMatch && linkMatch) {
                     results.push({
                         title: this.cleanText(titleMatch[1]),
-                        url: linkMatch[1],
+                        url: this.resolveBingRedirectUrl(linkMatch[1]),
                         snippet: descMatch ? this.cleanText(descMatch[1]) : '',
                         source: 'Bing News',
                         score: 1.0
@@ -170,6 +172,36 @@ export class WebSearchTool implements ToolExecutor {
             return results;
         } catch {
             return [];
+        }
+    }
+
+    /**
+     * O `<link>` do RSS da Bing News não é a URL do artigo — é um redirect de rastreamento
+     * (`bing.com/news/apiclick.aspx?...&url=<destino real, percent-encoded>&...`). Sem isto, todo
+     * `readPage()` posterior busca essa página de interstício da própria Bing ("Redirect Alert...")
+     * em vez do artigo, e o conteúdo lido nunca é o da fonte.
+     *
+     * Achado real (26/08/2026, campanha "Web Search Coverage & Evidence Quality"): confirmado
+     * reproduzindo o pipeline real, sem mock, para "deepseek harness" — as 3 páginas lidas via
+     * Bing News RSS trouxeram chrome/interstício da Bing, nunca o artigo de destino.
+     *
+     * Extração estrutural, não interpretação: lê o parâmetro `url` da própria query string —
+     * propriedade objetiva de uma URL bem formada, não julgamento sobre o conteúdo. Sem esse
+     * parâmetro ou com URL malformada, devolve o link original (NUNCA_ADIVINHAR — nunca inventa
+     * um destino que a URL não declarou).
+     *
+     * Decodifica entidades HTML ANTES de interpretar como URL — o `<link>` do RSS vem com `&`
+     * escapado como `&amp;` (é um nó de texto XML). Sem decodificar primeiro, `&amp;` nunca é
+     * reconhecido como separador de query string e `URLSearchParams` lê a query inteira como uma
+     * chave só, nunca achando `url` (bug próprio encontrado ao verificar esta mesma correção).
+     */
+    private resolveBingRedirectUrl(link: string): string {
+        try {
+            const parsed = new URL(decodeHtmlEntities(link));
+            const destino = parsed.searchParams.get('url');
+            return destino || link;
+        } catch {
+            return link;
         }
     }
 
@@ -187,14 +219,46 @@ export class WebSearchTool implements ToolExecutor {
             if (!resp.ok) return [];
 
             const html = await resp.text();
-            const rows = [...html.matchAll(/<a[^>]*class="result-link"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>[\s\S]{0,600}?<td[^>]*class="result-snippet"[^>]*>(.*?)<\/td>/gi)];
+            // Casa cada tag <a ...>texto</a> e inspeciona os atributos capturados
+            // independentemente da ORDEM em que aparecem — achado real (26/08/2026): o regex
+            // antigo exigia `class` ANTES de `href` na tag, mas o HTML real do DuckDuckGo Lite
+            // traz `href` primeiro e `class` depois (`<a rel="nofollow" href="..." class='...'>`).
+            // Exigir uma ordem específica de atributos é tão frágil quanto exigir um caractere de
+            // aspas específico — os dois são detalhes de serialização do HTML, não uma garantia
+            // de formato.
+            const resultLinkClassRe = new RegExp(DDG_RESULT_LINK_CLASS);
+            const nextResultLinkRe = new RegExp(`<a\\s+[^>]*${DDG_RESULT_LINK_CLASS}`, 'i');
+            // [\s\S]*?, não .*? — o HTML real do DuckDuckGo Lite quebra linha logo após
+            // `<td class='result-snippet'>`, antes do texto começar; "." não casa `\n` em JS sem
+            // a flag `s`, então o snippet nunca era capturado mesmo depois de corrigir aspas e
+            // ordem dos atributos (achado encontrado ao verificar esta própria correção contra
+            // HTML real, não sintético).
+            const snippetRe = new RegExp(`<td[^>]*${DDG_RESULT_SNIPPET_CLASS}[^>]*>([\\s\\S]*?)<\\/td>`, 'i');
+            const anchorRe = /<a\s+([^>]*)>(.*?)<\/a>/gi;
             const results: SearchCandidate[] = [];
+            let anchor: RegExpExecArray | null;
 
-            for (const row of rows.slice(0, maxResults)) {
-                const url = decodeHtmlEntities(row[1] || '').trim();
-                const title = this.cleanText(row[2] || '');
-                const snippet = this.cleanText(row[3] || '');
+            while ((anchor = anchorRe.exec(html)) !== null && results.length < maxResults) {
+                const attrs = anchor[1];
+                if (!resultLinkClassRe.test(attrs)) continue;
+
+                const hrefMatch = attrs.match(/href="([^"]+)"/);
+                const url = hrefMatch ? decodeHtmlEntities(hrefMatch[1]).trim() : '';
+                const title = this.cleanText(anchor[2] || '');
                 if (!url || !title) continue;
+
+                // Limite estrutural, não um número chutado: a janela de busca do snippet vai até
+                // o INÍCIO do próximo resultado real (ou fim do documento) — nunca invade o
+                // snippet de outro resultado, e nunca corta o snippet do resultado atual pela
+                // metade. Achado ao verificar esta correção contra HTML real: uma janela fixa de
+                // 600 chars (herdada do regex original quebrado, nunca validada de verdade) já
+                // cortava snippets legítimos mais longos, silenciosamente devolvendo vazio.
+                const restante = html.slice(anchorRe.lastIndex);
+                const proximoResultado = restante.search(nextResultLinkRe);
+                const windowAfter = proximoResultado >= 0 ? restante.slice(0, proximoResultado) : restante;
+                const snippetMatch = windowAfter.match(snippetRe);
+                const snippet = snippetMatch ? this.cleanText(snippetMatch[1]) : '';
+
                 results.push({ title, url, snippet, source: 'DuckDuckGo', score: 1.0 });
             }
 
@@ -363,119 +427,26 @@ export class WebSearchTool implements ToolExecutor {
         return pages.filter((page): page is ReadablePage => Boolean(page));
     }
 
+    /**
+     * Sprint 4 (campanha "Web Search Coverage & Evidence Quality", 26/08/2026): antes decidia
+     * "estático é bom o bastante (>=200 chars) ou cai pro Jina (>=100 chars)" — contagem de
+     * caracteres como proxy de qualidade, a mesma violação que a Sprint 3 encontrou no
+     * `web_navigate.ts` (limiares diferentes, já divergentes: 300/nenhum). Agora delega para
+     * `readPageContent()` (shared/pageContentReader.ts, autoridade única), que só decide
+     * disponibilidade ESTRUTURAL (vazio ou não) — nunca qualidade. `minLineLength`/`maxLines`
+     * preservam exatamente os valores que este arquivo já usava (40 chars, 18 linhas) — não foram
+     * unificados com os de web_navigate.ts por não terem relação de superconjunto entre si.
+     */
     private async readPage(candidate: SearchCandidate): Promise<ReadablePage | null> {
-        // Try direct fetch first
-        const direct = await this.fetchAndExtract(candidate.url);
-        if (direct && direct.content.length >= 200) {
-            return {
-                url: candidate.url,
-                title: direct.title || candidate.title,
-                content: direct.content,
-                excerpt: direct.content.slice(0, 700),
-                source: candidate.source
-            };
-        }
-
-        // Fallback: Jina AI Reader renders JS-heavy pages and returns clean markdown
-        const jina = await this.fetchViaJina(candidate.url);
-        if (jina && jina.length >= 100) {
-            const title = jina.match(/^Title:\s*(.+)$/m)?.[1]?.trim() || candidate.title;
-            const content = jina.replace(/^(Title|URL|Published Time):.*$/gm, '').trim();
-            return {
-                url: candidate.url,
-                title,
-                content: content.slice(0, 3500),
-                excerpt: content.slice(0, 700),
-                source: candidate.source
-            };
-        }
-
-        return null;
-    }
-
-    private async fetchAndExtract(url: string): Promise<{ title: string; content: string } | null> {
-        try {
-            const resp = await fetch(url, {
-                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-                redirect: 'follow',
-                signal: AbortSignal.timeout(12000)
-            });
-            const contentType = resp.headers.get('content-type') || '';
-            if (!resp.ok || !/text\/html|application\/xhtml\+xml/i.test(contentType)) return null;
-
-            const html = await resp.text();
-            const extracted = this.extractReadableContent(html);
-            return extracted.content ? extracted : null;
-        } catch {
-            return null;
-        }
-    }
-
-    private async fetchViaJina(url: string): Promise<string | null> {
-        try {
-            const jinaUrl = `https://r.jina.ai/${url}`;
-            const resp = await fetch(jinaUrl, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0',
-                    'Accept': 'text/plain, text/markdown'
-                },
-                signal: AbortSignal.timeout(20000)
-            });
-            if (!resp.ok) return null;
-            const text = await resp.text();
-            return text.trim().length > 50 ? text : null;
-        } catch {
-            return null;
-        }
-    }
-
-    private extractReadableContent(html: string): { title: string; content: string } {
-        const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/is);
-        const title = this.cleanText(titleMatch?.[1] || '');
-
-        // <\/tag\b[^>]*> (não <\/tag\s*>): tag de fechamento com qualquer conteúdo entre o nome
-        // da tag e o ">" (ex: "</script foo>", "</script\t\nbar>") é válida pra parsers HTML
-        // reais (atributos/lixo numa end-tag são ignorados, só o nome importa) mas não casava com
-        // \s*> — conteúdo de script/style "sobrevivia" à remoção (CodeQL js/bad-tag-filter,
-        // variante além do espaço simples já coberto antes).
-        let text = html
-            .replace(/<script[\s\S]*?<\/script\b[^>]*>/gi, ' ')
-            .replace(/<style[\s\S]*?<\/style\b[^>]*>/gi, ' ')
-            .replace(/<noscript[\s\S]*?<\/noscript\b[^>]*>/gi, ' ')
-            .replace(/<svg[\s\S]*?<\/svg\b[^>]*>/gi, ' ')
-            .replace(/<nav[\s\S]*?<\/nav\b[^>]*>/gi, ' ')
-            .replace(/<footer[\s\S]*?<\/footer\b[^>]*>/gi, ' ')
-            .replace(/<header[\s\S]*?<\/header\b[^>]*>/gi, ' ')
-            .replace(/<\/?(article|main|section|p|h1|h2|h3|li|br|div)[^>]*>/gi, '\n')
-            .replace(/<[^>]+>/g, ' ');
-
-        text = decodeHtmlEntities(text);
-        const lines = text
-            .split('\n')
-            .map(line => this.cleanText(line))
-            .filter(line => line.length >= 40);
-
-        const content = lines
-            .filter(line => !this.isBoilerplate(line))
-            .slice(0, 18)
-            .join('\n')
-            .slice(0, 3500);
-
-        return { title, content };
-    }
-
-    private isBoilerplate(text: string): boolean {
-        const lower = text.toLowerCase();
-        return [
-            'accept all',
-            'cookie',
-            'privacy policy',
-            'subscribe',
-            'sign in',
-            'all rights reserved',
-            'javascript',
-            'enable javascript'
-        ].some(fragment => lower.includes(fragment));
+        const page = await readPageContent(candidate.url, { maxChars: 3500, minLineLength: 40, maxLines: 18 });
+        if (!page) return null;
+        return {
+            url: candidate.url,
+            title: page.title || candidate.title,
+            content: page.content,
+            excerpt: page.content.slice(0, 700),
+            source: candidate.source
+        };
     }
 
     private formatOutput(query: string, topResults: SearchCandidate[], pages: ReadablePage[], notes: string[]): string {
