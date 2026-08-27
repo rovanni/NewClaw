@@ -390,33 +390,47 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
         })
         : '';
 
-    // Guard S3: exec_command repetitivo — proíbe a tool quando bloqueou 2+ vezes neste goal.
-    // O modelo tende a voltar para exec_command em replans mesmo após bloqueios repetidos
-    // (missing_tool ou tool_error), porque o StrategyDiversityGuard opera por "estratégia textual"
-    // e não por nome de tool. Esta diretiva é um freio explícito por nome.
+    // Guard S3: exec_command repetitivo — proíbe a tool só quando há evidência de REPETIÇÃO
+    // IDÊNTICA (mesma chamada, mesmos args), não de "falhou N vezes por motivos diferentes".
     //
-    // ARCH-016: fonte ADITIVA — o count original (blockers com toolName='exec_command' OU
-    // descrição mencionando marp/pandoc/html2pdf) continua, somado ao sinal estruturado de
-    // StrategyDiversityGuard.extractExhaustedTools() (goal.attempts com result='failure',
-    // agrupado por toolName real, sem depender de regex sobre descrição). Aditivo por design:
-    // não pode perder cobertura que o count original já tinha (blockers sem toolName mas cuja
-    // descrição menciona a ferramenta de conversão), só pode ficar mais sensível.
-    const execCommandBlockerCount = goal.blockers.filter(
+    // Achado real (Sprint G / execução real, 26/08/2026 — docs/issues/027, PENDENTE até esta
+    // correção): o count original somava QUALQUER blocker/attempt de exec_command, sem checar
+    // `blocker.kind`. Isso conflitava com o ciclo legítimo Descobrir→Instalar→Validar da RFC-003
+    // (docs/decisoes/RFC-003_AQUISICAO_CONHECIMENTO_OPERACIONAL.md), que precisa de várias
+    // chamadas DISTINTAS de exec_command na sequência normal (diagnóstico, instalação, conferência)
+    // — cada uma podendo falhar por um motivo novo sem que isso seja um loop. Em execução real com
+    // LLM real, 2 blockers distintos (`missing_tool` → `repeated_tool_call`) já bastavam pra banir
+    // exec_command e o LLM abandonava a instalação real em favor de entregar um script manual.
+    //
+    // `GoalEvaluator.hasIdenticalFailedAttempt()` (via `computeToolInputKey`) já é a autoridade que
+    // decide "isto é a MESMA chamada de novo" — produz `blocker.kind==='repeated_tool_call'`
+    // (contrato formal em `domainTypes.ts`: "mesma tool chamada com mesmos args múltiplas vezes —
+    // loop sem progresso"). Esta diretiva passa a reusar esse sinal em vez de recalcular um
+    // proxy próprio — não é troca de mecanismo (regex→LLM), é troca da FONTE do sinal, mesmo
+    // padrão que ADR-009 já usou para o problema irmão de causalidade em OperationalKnowledge.
+    const execCommandRepeatedCalls = goal.blockers.filter(
+        b => b.kind === 'repeated_tool_call' && b.toolName === 'exec_command'
+    ).length;
+
+    // Falhas distintas (não repetição idêntica) continuam contadas — mas só como EVIDÊNCIA pro
+    // Planner ponderar, nunca mais como gatilho de uma ordem imperativa. Mesma fonte ADITIVA de
+    // antes (ARCH-016, docs/issues/006): blockers com toolName='exec_command' OU descrição
+    // mencionando marp/pandoc/html2pdf, somado a StrategyDiversityGuard.extractExhaustedTools()
+    // via goal.attempts — cobertura preservada, só a consequência (ordem vs fato) muda.
+    const execCommandDistinctBlockers = goal.blockers.filter(
         b => b.toolName === 'exec_command' || (b.kind === 'tool_error' && /exec_command|marp|pandoc|html2pdf/i.test(b.description))
     ).length;
-    // Contagem separada da decisão de disparo: a fonte estruturada (extractExhaustedTools) só
-    // devolve um booleano de inclusão, não uma contagem — sem isso, um trigger vindo SÓ da fonte
-    // estruturada (0 blockers com toolName, mas 2+ attempts com result='failure') mostraria "(0
-    // falhas neste goal)" no texto, o que seria enganoso.
+    // execCommandAttemptFailures já é a contagem bruta de goal.attempts — cobre a mesma fonte que
+    // StrategyDiversityGuard.extractExhaustedTools() usa internamente (agrupa por toolName+failure),
+    // só que sem o corte >=2 embutido (o corte de exibição é aplicado abaixo, na decisão do hint).
     const execCommandAttemptFailures = goal.attempts.filter(a => a.toolName === 'exec_command' && a.result === 'failure').length;
-    const execCommandExhausted = StrategyDiversityGuard.extractExhaustedTools(goal).includes('exec_command');
-    const execCommandFailureCount = Math.max(execCommandBlockerCount, execCommandAttemptFailures);
-    const execCommandBanDirective = (execCommandBlockerCount >= 2 || execCommandExhausted)
+    const execCommandInformativeCount = Math.max(execCommandDistinctBlockers, execCommandAttemptFailures);
+
+    const execCommandBanDirective = execCommandRepeatedCalls >= 1
         ? buildLoopDirective({
-            header: `⛔ exec_command BLOQUEADO (${execCommandFailureCount} falhas neste goal):`,
+            header: `⛔ exec_command BLOQUEADO (repetiu a MESMA chamada ${execCommandRepeatedCalls}x neste goal):`,
             preamble: [
-                'exec_command falhou repetidamente — NÃO inclua exec_command em nenhum step deste replan.',
-                'ALTERNATIVAS obrigatórias:',
+                'exec_command repetiu exatamente a mesma chamada (mesmos args) e falhou — NÃO repita essa chamada; ALTERNATIVAS obrigatórias:',
             ],
             items: [
                 'Para gerar HTML/slides: use {sem toolName} — AgentLoop sintetiza diretamente com Reveal.js via CDN (sem conversão)',
@@ -424,10 +438,16 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
                 'Para enviar resultado: use send_document com o arquivo já criado via write ou AgentLoop',
             ],
             closing: closingFor(
-                'Qualquer step com toolName="exec_command" será descartado automaticamente.',
-                'exec_command já falhou repetidamente neste goal (modo GOD: sua decisão, não é imposto).',
+                'Qualquer step com toolName="exec_command" repetindo essa mesma chamada será descartado automaticamente — comandos DIFERENTES continuam permitidos.',
+                'exec_command repetiu a mesma chamada neste goal (modo GOD: sua decisão, não é imposto).',
             ),
         })
+        : '';
+    // Evidência informativa (sem imperativo) quando há falhas distintas mas nenhuma repetição
+    // idêntica — não substitui a decisão do Planner, só relata o fato, mesmo tom de
+    // `blockersBlock`/`reflectionBlock` abaixo.
+    const execCommandEvidenceHint = (!execCommandBanDirective && execCommandInformativeCount >= 2)
+        ? `\nexec_command falhou ${execCommandInformativeCount}x neste goal com comandos DIFERENTES (não repetição idêntica) — pondere se a próxima tentativa tem chance real de produzir resultado diferente antes de insistir.\n`
         : '';
 
     const priorAnalysisOnly = goal.strategiesTried.filter(s =>
@@ -537,7 +557,7 @@ OBJETIVO GLOBAL: ${goal.objective}
 ${milestoneInstruction}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}${retryHint}${ratioLimitHint}
-${pipVenvLoopDirective}${execCommandBanDirective}${contentStubDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${operationalSection}${contextBlock}${progressSection}${diversitySection}
+${pipVenvLoopDirective}${execCommandBanDirective}${execCommandEvidenceHint}${contentStubDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${operationalSection}${contextBlock}${progressSection}${diversitySection}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 
 ${buildToolContracts(availableTools)}

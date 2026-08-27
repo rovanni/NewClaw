@@ -10,6 +10,14 @@
  * os outros 3 detectam categoria de blocker/ação, não "tool falhou N vezes", então
  * `extractExhaustedTools()` não se aplica a eles (ver docs/issues/006).
  *
+ * ATUALIZAÇÃO (26/08/2026, docs/issues/027): execução real (Sprint G) mostrou que o ban de
+ * exec_command disparava com falhas DISTINTAS (comandos diferentes, cada um uma tentativa nova),
+ * não só repetição idêntica — cortando o ciclo legítimo Descobrir→Instalar→Validar da RFC-003.
+ * `execCommandBanDirective` passou a exigir `blocker.kind==='repeated_tool_call'` (autoridade já
+ * existente em `GoalEvaluator.hasIdenticalFailedAttempt`/`computeToolInputKey`) para o bloqueio
+ * imperativo; falhas distintas viram evidência informativa (`execCommandEvidenceHint`), não ordem.
+ * S118.2/S118.2b reescritos para a semântica corrigida; S118.2c/S118.2d novos.
+ *
  * Este teste dirige `GoalPlanner.replan()` de verdade (não reimplementa a lógica) com um
  * provider LLM fake que só captura o prompt final — confirma que cada um dos 4 cenários
  * dispara a diretiva certa no texto realmente enviado ao LLM.
@@ -91,37 +99,62 @@ console.log('\n=== S118.1 — CENÁRIO pip/venv: 2+ blockers environment_limit c
     assert(capturedPrompt.value.includes('  1. python3 -c "import zipfile'), 'formatação numerada (1./2./3.) presente via buildLoopDirective', capturedPrompt.value);
 }
 
-console.log('\n=== S118.2 — CENÁRIO exec_command: 2+ blockers com toolName=exec_command ===');
+console.log('\n=== S118.2 — CENÁRIO exec_command: repetição IDÊNTICA (blocker.kind=repeated_tool_call) bane a tool ===');
 {
     const { planner, capturedPrompt } = makeFakePlanner();
     const goal = makeGoal({
         blockers: [
-            blocker('tool_error', 'exec_command falhou: comando não encontrado', 'exec_command'),
-            blocker('tool_error', 'exec_command falhou de novo', 'exec_command'),
+            blocker('repeated_tool_call', "'exec_command' já falhou neste step — mesma chamada não vai produzir resultado diferente", 'exec_command'),
         ],
     });
     await planner.replan(goal, goal.blockers[goal.blockers.length - 1]);
-    assert(capturedPrompt.value.includes('⛔ exec_command BLOQUEADO (2 falhas neste goal):'), 'diretiva exec_command presente com contagem correta', capturedPrompt.value.slice(0, 300));
+    assert(capturedPrompt.value.includes('⛔ exec_command BLOQUEADO (repetiu a MESMA chamada 1x neste goal):'), 'diretiva exec_command presente quando há repetição idêntica real', capturedPrompt.value.slice(0, 300));
     assert(capturedPrompt.value.includes('  • Para gerar HTML/slides:'), 'formatação com marcador (•) presente via buildLoopDirective', capturedPrompt.value);
 }
 
-console.log('\n=== S118.2b — exec_command via fonte estruturada aditiva: attempts com result=failure, sem blockers com toolName ===');
+console.log('\n=== S118.2b — achado Sprint G (26/08/2026, docs/issues/027): falhas DISTINTAS de exec_command NÃO banem a tool, só viram evidência ===');
+{
+    const { planner, capturedPrompt } = makeFakePlanner();
+    const goal = makeGoal({
+        blockers: [
+            blocker('missing_tool', "'jq' não é conhecido — Pesquise a documentação oficial", 'exec_command'),
+            blocker('tool_error', 'npm error code E404', 'exec_command'),
+        ],
+    });
+    await planner.replan(goal, goal.blockers[goal.blockers.length - 1]);
+    assert(!capturedPrompt.value.includes('⛔ exec_command BLOQUEADO'), '2 falhas DISTINTAS (missing_tool + tool_error, sem repetição idêntica) NÃO disparam o ban — corrige o achado da Sprint G', capturedPrompt.value.slice(0, 400));
+    assert(capturedPrompt.value.includes('exec_command falhou 2x neste goal com comandos DIFERENTES'), 'vira evidência informativa (fato, não ordem) para o Planner ponderar', capturedPrompt.value.slice(0, 400));
+    assert(!capturedPrompt.value.includes('será descartado automaticamente'), 'nenhuma linguagem imperativa de bloqueio presente quando não há repetição idêntica');
+}
+
+console.log('\n=== S118.2c — fonte estruturada aditiva (attempts com result=failure) também vira só evidência, não ban ===');
 {
     const { planner, capturedPrompt } = makeFakePlanner();
     const now = Date.now();
     const goal = makeGoal({
         blockers: [blocker('goal_incomplete', 'objetivo não atingido')],
         attempts: [
-            { id: 'a1', planStepId: 's1', toolName: 'exec_command', args: {}, result: 'failure', durationMs: 10, executedAt: now },
-            { id: 'a2', planStepId: 's2', toolName: 'exec_command', args: {}, result: 'failure', durationMs: 10, executedAt: now },
+            { id: 'a1', planStepId: 's1', toolName: 'exec_command', args: { command: 'winget install jq' }, result: 'failure', durationMs: 10, executedAt: now },
+            { id: 'a2', planStepId: 's2', toolName: 'exec_command', args: { command: 'npm install -g jq' }, result: 'failure', durationMs: 10, executedAt: now },
         ],
     });
     await planner.replan(goal, goal.blockers[goal.blockers.length - 1]);
-    assert(
-        capturedPrompt.value.includes('⛔ exec_command BLOQUEADO (2 falhas neste goal):'),
-        'fonte estruturada (StrategyDiversityGuard.extractExhaustedTools) dispara a diretiva mesmo sem 2 blockers com toolName=exec_command, com contagem correta (via attempts, não 0)',
-        capturedPrompt.value.slice(0, 300)
-    );
+    assert(!capturedPrompt.value.includes('⛔ exec_command BLOQUEADO'), 'attempts com args diferentes (progresso real, não repetição) não banem exec_command', capturedPrompt.value.slice(0, 400));
+    assert(capturedPrompt.value.includes('exec_command falhou 2x neste goal com comandos DIFERENTES'), 'fonte estruturada (extractExhaustedTools) continua contribuindo — agora como evidência, não gatilho', capturedPrompt.value.slice(0, 400));
+}
+
+console.log('\n=== S118.2d — repetição idêntica JUNTO com falhas distintas: só a diretiva de ban aparece (sem duplicar com a evidência) ===');
+{
+    const { planner, capturedPrompt } = makeFakePlanner();
+    const goal = makeGoal({
+        blockers: [
+            blocker('missing_tool', "'jq' não é conhecido", 'exec_command'),
+            blocker('repeated_tool_call', "'exec_command' já falhou neste step — mesma chamada não vai produzir resultado diferente", 'exec_command'),
+        ],
+    });
+    await planner.replan(goal, goal.blockers[goal.blockers.length - 1]);
+    assert(capturedPrompt.value.includes('⛔ exec_command BLOQUEADO'), 'repetição idêntica real ainda bane a tool mesmo com falhas distintas no histórico', capturedPrompt.value.slice(0, 400));
+    assert(!capturedPrompt.value.includes('exec_command falhou 2x neste goal com comandos DIFERENTES'), 'evidência informativa não aparece quando o ban já disparou — sem texto redundante');
 }
 
 console.log('\n=== S118.3 — CENÁRIO stuck-in-analysis: blocker goal_incomplete prévio + estratégias só de análise ===');
