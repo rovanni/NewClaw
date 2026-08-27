@@ -449,8 +449,9 @@ quando `KNOWN_DEPS` resolve uma dependência conhecida. Bloqueios de segurança 
 > `docs/decisoes/ADR-003_APRENDIZADO_POR_EVIDENCIA_DE_AMBIENTE.md` (03/08/2026) e implementado no
 > mesmo dia — cobertura em `S158.1` (dependência ausente do ambiente → não aprende) e `S158.1b`
 > (caminho de Pesquisa, dependência presente → aprende, sem nenhum step `verify_*` envolvido).
-> Falta apenas a Sprint G (validação em execução real). Os três candidatos listados no fim desta
-> seção foram todos avaliados e
+> Sprint G (validação em execução real) encerrada em 26/08/2026 — ver ADR-003 §6.5 e
+> `docs/issues/027` para o achado colateral (`execCommandBanDirective` interrompe o ciclo antes da
+> captura em cenários reais). Os três candidatos listados no fim desta seção foram todos avaliados e
 > **descartados** — a decisão foi um quarto caminho (verificação objetiva do estado do ambiente),
 > pelas razões registradas na ADR §4. A investigação que motivou a ADR também encontrou que o
 > problema é maior do que esta seção descreve: o gate de captura não falha só no caminho
@@ -738,7 +739,8 @@ Implementação              ✅ captureFromGoal(goal, isDependencyAvailable) + 
    ↓
 Atualização dos testes     ✅ S158.1 reescrito (ausente → não aprende) + S158.1b novo (presente → aprende)
    ↓
-Sprint G                   ⏳ Validação Progressiva formal, etapa 4: execução real (ADR-003 §6.5)
+Sprint G                   ✅ Validação Progressiva formal, etapa 4: execução real (ADR-003 §6.5),
+                               encerrada em 26/08/2026 — achado colateral em docs/issues/027
    ↓
 Publicação                 ⏳
 ```

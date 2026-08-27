@@ -4,8 +4,9 @@
 > captureFromGoal()`, dois call sites em `GoalExecutionLoop`, cobertura em `S158.1`/`S158.1b`).
 > Duas passagens desta ADR foram corrigidas *depois* de escrever o código, para que o documento
 > continue sendo a fonte de verdade: §4.4 (a função nova prevista era desnecessária —
-> `commandExists()` já existia) e §6.4 (a captura não precisou virar assíncrona). Falta a
-> **Sprint G** — Validação Progressiva formal, etapa 4 (execução real), §6.5.
+> `commandExists()` já existia) e §6.4 (a captura não precisou virar assíncrona). **Sprint G**
+> (Validação Progressiva, etapa 4, execução real) encerrada em 26/08/2026 — ver §6.5 para o
+> resultado e o achado colateral registrado em `docs/issues/027`.
 >
 > Diferente de ADR-001 e
 > ADR-002 (que registram decisões já implementadas), este documento decide antes de codificar,
@@ -287,6 +288,23 @@ Validação Progressiva (`DIRETRIZ_ARQUITETURA_2026-07-13.md`), as quatro etapas
    ausente do sistema. Para simular ausência, renomear o diretório do binário real e restaurar em
    seguida — **nunca** filtrar o `PATH` do processo (quebra a resolução do `cmd.exe`; lição
    registrada no teste ao vivo de 28/07/2026).
+
+**Sprint G encerrada em 26/08/2026 — etapa 4 concluída, com achado colateral registrado à parte.**
+Três goals reais (`sprintg-verify9`, `sprintg-verify11`, `jq`) rodados em instância isolada, LLM
+real (`glm-5.2:cloud`), modo `developer`. Confirmado em execução real: `GoalEvaluator` classifica
+corretamente `missing_tool` vs `tool_error` genérico, e o ramo de Pesquisa da RFC-003 (§ desta ADR)
+dispara como esperado para dependência desconhecida (`jq`, sem comando resolvido para Windows).
+
+**Não confirmado nesta rodada:** se o fix de causalidade (`isToolExistenceProbe` do ADR-004 +
+prefixo `verify_` do ADR-009, ambos ativos em `OperationalKnowledge.ts:267-268`) segura na
+prática — `[OPKNOW-CAPTURE]` não disparou em nenhuma das 3 execuções, porque nenhum goal chegou a
+`needs_dependency`. Causa identificada e registrada separadamente, fora do escopo desta ADR:
+`docs/issues/027-execcommandbandirective-conflita-com-ciclo-rfc003.md` — a diretiva
+`execCommandBanDirective` (`GoalPlanner.ts:414`) bane `exec_command` do replan após 2 blockers
+relacionados a ele, cortando o ciclo Descobrir→Instalar→Validar antes de qualquer instalação real
+se completar. A validação da etapa 4 desta ADR está satisfeita (mecanismo e classificação
+corretos); a validação de que o fix de causalidade sobrevive a uma captura real de verdade fica
+pendente de uma execução futura que não esbarre nesse achado — não é reabertura desta ADR.
 
 ### 6.6 Reversibilidade
 
