@@ -295,16 +295,34 @@ real (`glm-5.2:cloud`), modo `developer`. Confirmado em execução real: `GoalEv
 corretamente `missing_tool` vs `tool_error` genérico, e o ramo de Pesquisa da RFC-003 (§ desta ADR)
 dispara como esperado para dependência desconhecida (`jq`, sem comando resolvido para Windows).
 
-**Não confirmado nesta rodada:** se o fix de causalidade (`isToolExistenceProbe` do ADR-004 +
+**Não confirmado naquela rodada:** se o fix de causalidade (`isToolExistenceProbe` do ADR-004 +
 prefixo `verify_` do ADR-009, ambos ativos em `OperationalKnowledge.ts:267-268`) segura na
 prática — `[OPKNOW-CAPTURE]` não disparou em nenhuma das 3 execuções, porque nenhum goal chegou a
 `needs_dependency`. Causa identificada e registrada separadamente, fora do escopo desta ADR:
 `docs/issues/027-execcommandbandirective-conflita-com-ciclo-rfc003.md` — a diretiva
-`execCommandBanDirective` (`GoalPlanner.ts:414`) bane `exec_command` do replan após 2 blockers
+`execCommandBanDirective` (`GoalPlanner.ts:414`) bania `exec_command` do replan após 2 blockers
 relacionados a ele, cortando o ciclo Descobrir→Instalar→Validar antes de qualquer instalação real
-se completar. A validação da etapa 4 desta ADR está satisfeita (mecanismo e classificação
-corretos); a validação de que o fix de causalidade sobrevive a uma captura real de verdade fica
-pendente de uma execução futura que não esbarre nesse achado — não é reabertura desta ADR.
+se completar.
+
+**Atualização 27/08/2026 — fix de causalidade finalmente observado em execução real, após a
+correção do `execCommandBanDirective` (commit `1edc550`).** Três novas execuções reais: `jq`
+(produziu `missing_tool`, mas o goal falhou antes de `completed` — captura nunca invocada),
+`cowsay` (goal completou, mas o único blocker foi `tool_error`, não `missing_tool` — o filtro de
+`captureFromGoal()`, `OperationalKnowledge.ts:207`, nunca teve entrada pra processar) e `serve`
+(as duas condições juntas, pela primeira vez: `missing_tool` **e** `success=true`). Na execução de
+`serve`: `[OPKNOW-ANCORA]` → `[OPKNOW-CAPTURE]` → `[OPKNOW-RECORD]` dispararam, e o comando
+creditado (`"node tmp/check_serve.js"`) não foi classificado como sonda nem como step `verify_*` —
+as duas exclusões de ADR-004/ADR-009 funcionaram corretamente, sem o falso-positivo que motivou
+qualquer uma delas. A etapa 4 desta ADR está agora **integralmente validada em execução real**,
+incluindo o fix de causalidade — encerrado, sem pendência.
+
+**Achado novo, adjacente, fora do escopo de ADR-004/ADR-009 (registrado, não corrigido):** o
+comando creditado na execução de `serve` referencia um arquivo temporário do workspace daquele
+goal (`tmp/check_serve.js`), não o `npm install -g serve` que o script contém internamente. Hoje é
+só evidência fraca (1 sucesso, RFC-001 §2) — se acumular confiança suficiente para virar atalho
+tático, o Planner receberia um caminho não portável entre sessões. Nem ADR-004 (sondas) nem
+ADR-009 (steps `verify_*`) cobrem essa dimensão — candidato a investigação futura, não aberta
+agora.
 
 ### 6.6 Reversibilidade
 
