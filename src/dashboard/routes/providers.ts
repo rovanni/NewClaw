@@ -6,6 +6,7 @@ import { OpenAIProvider } from '../../core/OpenAIProvider';
 import { getLastKnownLocalServer } from '../../core/localRuntimeState';
 import { persistConfigToEnv, logEnvPersistResult } from './config';
 import { interpretOllamaPullFailure, interpretOllamaPullException } from './ollamaPullError';
+import { assertNotSsrfTarget } from '../../core/ssrfGuard';
 
 /** Teto de segurança pro pull — generoso o bastante pra um download local real grande, mas finito:
  *  evita que um nome ambíguo (Ollama tenta resolver e nunca responde) prenda a requisição pra sempre. */
@@ -268,6 +269,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
 
         const ollamaUrl = ctx.config.ollamaUrl || 'http://localhost:11434';
         try {
+            assertNotSsrfTarget(ollamaUrl);
             const pullRes = await fetch(`${ollamaUrl}/api/pull`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -291,6 +293,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
         const model = String(req.params.model);
         const ollamaUrl = ctx.config.ollamaUrl || 'http://localhost:11434';
         try {
+            assertNotSsrfTarget(ollamaUrl);
             const resp = await fetch(`${ollamaUrl}/api/tags`);
             if (resp.ok) {
                 const data = await resp.json() as { models?: Array<{ name: string }> };

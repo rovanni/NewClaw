@@ -63,6 +63,7 @@ const MODELS_SRC = fs.readFileSync(path.join(process.cwd(), 'src', 'dashboard', 
 const OPENAI_PROVIDER_SRC = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'OpenAIProvider.ts'), 'utf-8');
 const OLLAMA_PROVIDER_SRC = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'OllamaProvider.ts'), 'utf-8');
 const SSRF_GUARD_SRC = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'ssrfGuard.ts'), 'utf-8');
+const STATUS_SRC = fs.readFileSync(path.join(process.cwd(), 'src', 'dashboard', 'routes', 'status.ts'), 'utf-8');
 
 console.log('\n=== S233-1 — #96: trim de baseUrl sem regex (polynomial-redos) ===');
 {
@@ -210,6 +211,37 @@ console.log('\n=== S233-4 — #91/#104: SSRF — endpoint de metadado de nuvem b
         try { assertNotSsrfTarget(url); } catch { ok = false; }
         assert(ok, `endpoint legítimo continua permitido: ${url}`);
     }
+}
+
+console.log('\n=== S233-5 — #104: 3 consumidores diretos de ollamaUrl fora de OpenAIProvider/OllamaProvider, achados na revisão independente pós-implementação (28/08/2026) ===');
+{
+    // routes/providers.ts: POST /ollama/pull e GET /ollama/exists/:model faziam fetch(ollamaUrl)
+    // direto, sem passar pela classe OllamaProvider — ambos exigem autenticação, mas usavam o
+    // MESMO ctx.config.ollamaUrl configurável, sem nenhuma proteção até esta correção.
+    assert(/import \{ assertNotSsrfTarget \} from '\.\.\/\.\.\/core\/ssrfGuard';/.test(PROVIDERS_SRC),
+        'routes/providers.ts importa assertNotSsrfTarget de ssrfGuard.ts');
+    assert(
+        /const ollamaUrl = ctx\.config\.ollamaUrl \|\| 'http:\/\/localhost:11434';\s*\n\s*try \{\s*\n\s*assertNotSsrfTarget\(ollamaUrl\);\s*\n\s*const pullRes = await fetch\(`\$\{ollamaUrl\}\/api\/pull`/.test(PROVIDERS_SRC),
+        'POST /ollama/pull chama assertNotSsrfTarget(ollamaUrl) antes do fetch',
+    );
+    assert(
+        /const ollamaUrl = ctx\.config\.ollamaUrl \|\| 'http:\/\/localhost:11434';\s*\n\s*try \{\s*\n\s*assertNotSsrfTarget\(ollamaUrl\);\s*\n\s*const resp = await fetch\(`\$\{ollamaUrl\}\/api\/tags`\)/.test(PROVIDERS_SRC),
+        'GET /ollama/exists/:model chama assertNotSsrfTarget(ollamaUrl) antes do fetch',
+    );
+
+    // routes/status.ts: GET /health é a rota MAIS sensível dos 3 achados — está na allowlist de
+    // authMiddleware (checagem de load balancer/watchdog, sem autenticação nenhuma por design).
+    // Sem proteção, seria alcançável por QUALQUER UM, mesmo numa instância com dashboardAuth
+    // ligada. O catch continua bare de propósito — nunca vaza a mensagem do bloqueio a um
+    // chamador anônimo, só o status genérico "unreachable", igual a qualquer outra falha de rede.
+    assert(/import \{ assertNotSsrfTarget \} from '\.\.\/\.\.\/core\/ssrfGuard';/.test(STATUS_SRC),
+        'routes/status.ts importa assertNotSsrfTarget de ssrfGuard.ts');
+    assert(
+        /assertNotSsrfTarget\(ollamaUrl\);\s*\n\s*const ollamaRes = await fetch\(`\$\{ollamaUrl\}\/api\/tags`/.test(STATUS_SRC),
+        'healthHandler (GET /health) chama assertNotSsrfTarget(ollamaUrl) antes do fetch',
+    );
+    assert(/\} catch \{\s*\n\s*ollamaStatus = 'unreachable';/.test(STATUS_SRC),
+        'catch continua bare — o bloqueio SSRF não vaza detalhe nenhum pro chamador anônimo de /health');
 }
 
 console.log(`\n${'─'.repeat(60)}`);

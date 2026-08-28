@@ -7,6 +7,7 @@ import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import { getEventLoopMonitor } from '../../shared/EventLoopMonitor';
 import { DashboardContext } from './types';
+import { assertNotSsrfTarget } from '../../core/ssrfGuard';
 
 const log = createLogger('Dashboardserver');
 const DIR = process.cwd();
@@ -78,7 +79,12 @@ export function healthHandler(ctx: DashboardContext) {
 
         let ollamaStatus = 'unknown';
         try {
-            const ollamaRes = await fetch(`${ctx.config.ollamaUrl || 'http://localhost:11434'}/api/tags`, {
+            const ollamaUrl = ctx.config.ollamaUrl || 'http://localhost:11434';
+            // /health não exige autenticação (allowedPaths de authMiddleware, checagem de load
+            // balancer/watchdog) — o catch abaixo é bare de propósito, para nunca vazar a
+            // mensagem de bloqueio (nem qualquer outro detalhe do erro) a um chamador anônimo.
+            assertNotSsrfTarget(ollamaUrl);
+            const ollamaRes = await fetch(`${ollamaUrl}/api/tags`, {
                 signal: AbortSignal.timeout(3000),
             });
             ollamaStatus = ollamaRes.ok ? 'healthy' : 'degraded';
