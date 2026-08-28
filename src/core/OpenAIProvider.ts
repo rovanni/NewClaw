@@ -2,6 +2,7 @@ import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, Ope
 import { taskQueue, TaskPriority } from './providerQueue';
 import { createLogger } from '../shared/AppLogger';
 import { guessCapabilities } from './modelCapabilityHeuristics';
+import { assertNotSsrfTarget } from './ssrfGuard';
 
 const log = createLogger('OpenAIProvider');
 
@@ -28,41 +29,6 @@ const CONNECT_TIMEOUT_MS = 15_000;
 /** Teto do probe de vida (`/models`). Curto de propósito: um servidor saudável responde em
  *  milissegundos; se nem isso ele faz, esperar mais não muda o veredito. */
 const LIVENESS_PROBE_TIMEOUT_MS = 3_000;
-
-/**
- * Hosts sem nenhum uso legítimo como servidor OpenAI-Compatible — só existem para expor metadado
- * de instância de nuvem (credenciais temporárias da AWS/GCP/Azure). `baseUrl` é 100% controlado
- * por quem cadastra um provider custom (`/api/providers/add`, `/api/providers/test`), e o recurso
- * em si EXIGE aceitar host arbitrário: é assim que um servidor local (llamafile, LM Studio, vLLM)
- * ou de outra máquina na rede do usuário é configurado. Por isso a defesa aqui não é allowlist de
- * host (quebraria o recurso) — é este bloqueio pontual, o único caso em que "endpoint arbitrário"
- * nunca é uma configuração legítima (CWE-918 / CodeQL js/request-forgery).
- *
- * Checagem por string do hostname, não por resolução de DNS: cobre o caso real (alguém cola o
- * endereço de metadado direto no campo, o mesmo padrão dos exploits SSRF→metadado documentados) —
- * não cobre DNS rebinding (um hostname próprio que resolve para 169.254.169.254 só depois desta
- * checagem). Aceito conscientemente: mitigar rebinding exigiria resolver e fixar o IP antes de
- * cada fetch, mudança maior e fora do escopo desta correção pontual.
- */
-const SSRF_BLOCKED_HOSTS = new Set([
-    '169.254.169.254',       // AWS/GCP/Azure/OpenStack — endpoint de metadado padrão
-    'metadata.google.internal', // GCP — alias DNS do mesmo endpoint
-    'fd00:ec2::254',          // AWS — endpoint de metadado IMDSv2 em IPv6
-]);
-
-/** CWE-918 — ver `SSRF_BLOCKED_HOSTS`. Lança se `baseUrl` aponta para um host de metadado de
- *  nuvem; chamado no início de todo método que faz `fetch(this.baseUrl + ...)`. */
-function assertNotSsrfTarget(baseUrl: string): void {
-    let hostname: string;
-    try {
-        hostname = new URL(baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '');
-    } catch {
-        return; // URL inválida — quem chama já trata o fetch subsequente falhando
-    }
-    if (SSRF_BLOCKED_HOSTS.has(hostname)) {
-        throw new Error(`Endpoint bloqueado: "${hostname}" é um endereço de metadado de nuvem, nunca um servidor de modelo legítimo.`);
-    }
-}
 
 /**
  * Lista os modelos expostos por `{baseUrl}/models` — extraída de `OpenAIProvider.discoverModels()`

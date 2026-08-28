@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import express from 'express';
 import crypto from 'crypto';
+import { isUnsafeExposedBoot } from '../hostSafety';
 
 // ── Persistência no SQLite (injetada via initAuthPersistence) ──
 interface SimpleDb {
@@ -310,6 +311,22 @@ export function createAuthRouter(): Router {
         if (enabled === true && !password && !dashboardAuth.passwordHash) {
             res.status(400).json({ success: false, error: 'Defina uma senha antes de ativar a autenticação' });
             return;
+        }
+        // T09 (Campanha de Segurança, achado ligado ao alerta CodeQL #104): revalida a MESMA
+        // condição que isUnsafeExposedBoot() já bloqueia no boot — desativar auth com o host já
+        // exposto (não-loopback) deixaria toda a API sem autenticação até o próximo restart, sem
+        // nenhuma revalidação. `isUnsafeExposedBoot()` só rodava uma vez, no boot; esta é a única
+        // outra ação que pode criar a mesma condição em runtime. Mesma autoridade, não uma
+        // heurística nova — ver src/dashboard/hostSafety.ts.
+        if (enabled === false) {
+            const host = process.env.DASHBOARD_HOST || '127.0.0.1';
+            if (isUnsafeExposedBoot(host, false)) {
+                res.status(400).json({
+                    success: false,
+                    error: `Não é possível desativar a autenticação com DASHBOARD_HOST=${host} — isso exporia toda a API sem senha para a rede. Mude DASHBOARD_HOST para 127.0.0.1/localhost antes de desativar.`,
+                });
+                return;
+            }
         }
         if (typeof enabled === 'boolean') {
             dashboardAuth.enabled = enabled;

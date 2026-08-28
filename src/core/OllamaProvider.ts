@@ -3,6 +3,7 @@ import { errorMessage } from '../shared/errors';
 import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo } from './providerTypes';
 import { guessCapabilities, mapOllamaCapabilities } from './modelCapabilityHeuristics';
 import { taskQueue, TaskPriority } from './providerQueue';
+import { assertNotSsrfTarget } from './ssrfGuard';
 
 const log = createLogger('Providerfactory');
 
@@ -109,6 +110,7 @@ export class OllamaProvider implements ILLMProvider {
      * Único ponto de leitura desse endpoint — antes duplicado inline em routes/providers.ts.
      */
     async discoverModels(): Promise<ModelInfo[]> {
+        assertNotSsrfTarget(this.baseUrl);
         const headers: Record<string, string> = {};
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
         const resp = await fetch(`${this.baseUrl}/api/tags`, { headers });
@@ -261,6 +263,7 @@ export class OllamaProvider implements ILLMProvider {
 
         let response: Response;
         try {
+            assertNotSsrfTarget(this.baseUrl);
             response = await fetch(`${this.baseUrl}/api/chat`, {
                 method: 'POST',
                 headers,
@@ -553,6 +556,7 @@ export class OllamaProvider implements ILLMProvider {
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
         try {
+            assertNotSsrfTarget(this.baseUrl);
             const response = await fetch(`${this.baseUrl}/api/chat`, {
                 method: 'POST',
                 headers,

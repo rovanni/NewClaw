@@ -37,6 +37,14 @@
  * fd00:ec2::254). Checagem por string do hostname, não por resolução de DNS — não cobre DNS
  * rebinding, limitação documentada no próprio código.
  *
+ * ATUALIZAÇÃO (28/08/2026, alerta CodeQL #104, Campanha de Segurança): `assertNotSsrfTarget()` e
+ * `SSRF_BLOCKED_HOSTS` foram extraídos para `src/core/ssrfGuard.ts` — autoridade única reusada
+ * também por `OllamaProvider` (mesma classe de risco: `baseUrl` configurável via
+ * `/api/config`, sem proteção nenhuma até esta correção). Não bloqueia ranges privados/loopback/
+ * LAN — decisão explícita da campanha, quebraria o uso legítimo de providers locais/self-hosted.
+ * Achado T09 (revalidação de `dashboardAuth` ao desativar em runtime, mesma campanha) tem teste
+ * próprio em `S274_DashboardAuth_RevalidateHostOnDisable.test.ts` — este arquivo cobre só SSRF.
+ *
  * Execução: npx ts-node src/__tests__/regression/S233_CodeScanning_DashboardHardening.test.ts
  */
 
@@ -53,6 +61,8 @@ function assert(condition: boolean, message: string, detail?: unknown): void {
 const PROVIDERS_SRC = fs.readFileSync(path.join(process.cwd(), 'src', 'dashboard', 'routes', 'providers.ts'), 'utf-8');
 const MODELS_SRC = fs.readFileSync(path.join(process.cwd(), 'src', 'dashboard', 'routes', 'models.ts'), 'utf-8');
 const OPENAI_PROVIDER_SRC = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'OpenAIProvider.ts'), 'utf-8');
+const OLLAMA_PROVIDER_SRC = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'OllamaProvider.ts'), 'utf-8');
+const SSRF_GUARD_SRC = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'ssrfGuard.ts'), 'utf-8');
 
 console.log('\n=== S233-1 — #96: trim de baseUrl sem regex (polynomial-redos) ===');
 {
@@ -110,13 +120,17 @@ console.log('\n=== S233-3 — #93/#94/#95: rate-limit dedicado nas rotas fs/spaw
     }
 }
 
-console.log('\n=== S233-4 — #91: SSRF — endpoint de metadado de nuvem bloqueado, host arbitrário preservado ===');
+console.log('\n=== S233-4 — #91/#104: SSRF — endpoint de metadado de nuvem bloqueado, host arbitrário preservado ===');
 {
-    assert(/const SSRF_BLOCKED_HOSTS = new Set\(\[/.test(OPENAI_PROVIDER_SRC),
-        'SSRF_BLOCKED_HOSTS existe como allowlist... NEGATIVA (bloqueio pontual, não allowlist de host)');
-    assert(/'169\.254\.169\.254',/.test(OPENAI_PROVIDER_SRC), 'bloqueia o endpoint de metadado padrão AWS/GCP/Azure');
-    assert(/'metadata\.google\.internal',/.test(OPENAI_PROVIDER_SRC), 'bloqueia o alias DNS de metadado do GCP');
-    assert(/'fd00:ec2::254',/.test(OPENAI_PROVIDER_SRC), 'bloqueia o endpoint de metadado IMDSv2 da AWS (IPv6)');
+    assert(/export const SSRF_BLOCKED_HOSTS = new Set\(\[/.test(SSRF_GUARD_SRC),
+        'SSRF_BLOCKED_HOSTS existe em ssrfGuard.ts, exportado — autoridade única (não allowlist de host, bloqueio pontual)');
+    assert(/'169\.254\.169\.254',/.test(SSRF_GUARD_SRC), 'bloqueia o endpoint de metadado padrão AWS/GCP/Azure');
+    assert(/'metadata\.google\.internal',/.test(SSRF_GUARD_SRC), 'bloqueia o alias DNS de metadado do GCP');
+    assert(/'fd00:ec2::254',/.test(SSRF_GUARD_SRC), 'bloqueia o endpoint de metadado IMDSv2 da AWS (IPv6)');
+    assert(!/SSRF_BLOCKED_HOSTS/.test(OPENAI_PROVIDER_SRC.replace(/import.*ssrfGuard.*\n/, '')),
+        'OpenAIProvider.ts não tem mais cópia própria do blocklist — só importa de ssrfGuard.ts');
+    assert(/import \{ assertNotSsrfTarget \} from '\.\/ssrfGuard';/.test(OPENAI_PROVIDER_SRC),
+        'OpenAIProvider.ts importa assertNotSsrfTarget de ssrfGuard.ts (Single Authoritative Knowledge)');
 
     const callSites = [
         ['isResponsive', /async isResponsive\([^)]*\): Promise<boolean> \{\s*\n\s*try \{\s*\n\s*assertNotSsrfTarget\(this\.baseUrl\);/],
@@ -137,6 +151,24 @@ console.log('\n=== S233-4 — #91: SSRF — endpoint de metadado de nuvem bloque
     assert(
         /export async function discoverOpenAICompatibleModels\([^)]*\): Promise<ModelInfo\[\]> \{\s*\n\s*assertNotSsrfTarget\(baseUrl\);/.test(OPENAI_PROVIDER_SRC),
         'discoverOpenAICompatibleModels() chama assertNotSsrfTarget() antes de qualquer fetch — a proteção real de discoverModels() agora mora aqui',
+    );
+
+    // #104 (28/08/2026): OllamaProvider tem a MESMA classe de risco (baseUrl configurável via
+    // /api/config, ollama.setBaseUrl()) e não tinha nenhuma proteção até esta correção. Reusa
+    // ssrfGuard.ts — não duplica o blocklist, não cria uma segunda política.
+    assert(/import \{ assertNotSsrfTarget \} from '\.\/ssrfGuard';/.test(OLLAMA_PROVIDER_SRC),
+        'OllamaProvider.ts importa assertNotSsrfTarget de ssrfGuard.ts — mesma autoridade do OpenAIProvider');
+    const ollamaCallSites = [
+        ['discoverModels', /async discoverModels\(\): Promise<ModelInfo\[\]> \{\s*\n\s*assertNotSsrfTarget\(this\.baseUrl\);/],
+        ['fallbackNonStreaming', /try \{\s*\n\s*assertNotSsrfTarget\(this\.baseUrl\);\s*\n\s*const response = await fetch\(`\$\{this\.baseUrl\}\/api\/chat`/],
+    ];
+    for (const [name, pattern] of ollamaCallSites) {
+        assert((pattern as RegExp).test(OLLAMA_PROVIDER_SRC), `OllamaProvider.${name}() chama assertNotSsrfTarget() antes do fetch`);
+    }
+    assert(
+        (OLLAMA_PROVIDER_SRC.match(/assertNotSsrfTarget\(this\.baseUrl\);/g) || []).length === 3,
+        'OllamaProvider chama assertNotSsrfTarget() nos 3 pontos de fetch (discoverModels, stream, fallbackNonStreaming)',
+        OLLAMA_PROVIDER_SRC.match(/assertNotSsrfTarget\(this\.baseUrl\);/g),
     );
 
     // Reprodução funcional da função (fidelidade garantida pelas asserções estruturais acima).

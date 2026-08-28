@@ -38,29 +38,11 @@ import { createSystemRouter } from './routes/system';
 import { createMaintenanceRouter } from './routes/maintenance';
 import { createIntegrationsRouter } from './routes/integrations';
 import { DashboardContext } from './routes/types';
+import { isUnsafeExposedBoot } from './hostSafety';
 
 const log = createLogger('Dashboardserver');
 
-/**
- * Mesmo conjunto de hostnames que `ProviderFactory.rodaNaMaquinaDoUsuario()` já usa pra decidir
- * "isto é a própria máquina" — reaproveitado aqui em vez de comparar só contra o literal
- * '127.0.0.1'. Achado na revisão de código desta campanha: escalar o aviso pra `process.exit(1)`
- * sem isso derrubaria o boot de quem usa `DASHBOARD_HOST=localhost` ou `::1` — configurações
- * igualmente locais/seguras, só escritas diferente, que antes só geravam log.warn.
- */
-const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1']);
-
-/**
- * Este bind expõe o Dashboard sem autenticação nenhuma? Extraída de `start()` para ser testável
- * sem precisar derrubar o processo de teste com `process.exit()` — campanha de Security, item C.
- *
- * `.env.example` já documenta esta combinação como exigindo senha "OBRIGATORIAMENTE" — isto
- * aplica o contrato já declarado, não uma política nova. Só bloqueia bind NÃO-loopback sem senha;
- * qualquer forma de loopback (com ou sem senha configurada) nunca é afetada.
- */
-export function isUnsafeExposedBoot(host: string, authEnabled: boolean): boolean {
-    return !LOOPBACK_HOSTNAMES.has(host) && !authEnabled;
-}
+export { isUnsafeExposedBoot };
 
 export class DashboardServer {
     private app: express.Express;
