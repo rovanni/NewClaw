@@ -180,3 +180,28 @@ export const skillsStore = new Store({
   activeCount: 0,
   proposedCount: 0,
 });
+
+/**
+ * O modelo que o sistema usa para conversa — é isto que "modelo ativo" significa em toda a UI de
+ * config: herói e Estado Geral do Dashboard, Visão Geral e cálculo de prontidão de Modelos.
+ * Autoridade única desta regra (ARCH — Single Authoritative Knowledge): antes vivia copiada em
+ * quatro funções e a cópia do Dashboard chegou a divergir — mostrava o modelo de fallback do
+ * provider Ollama como se fosse o ativo (corrigido 2026-08-29, cobertura S275).
+ *
+ * Lê SEMPRE o espelho do servidor (`salvo`), nunca o rascunho da tela: é estado vigente, não
+ * intenção (mesma regra de S180). Precedência:
+ *   1. `modelRouter.chat` — o modelo roteado para conversa, escolha explícita do operador e o
+ *      que o sistema de fato usa quando o usuário fala com ele;
+ *   2. `currentModel` — o modelo padrão do provider (num provider de modelo único é o placeholder
+ *      'default', que o servidor ignora — por isso vem depois de `chat`);
+ *   3. `ollamaModel` — o fallback do provider Ollama, usado só quando uma chamada não informa
+ *      modelo.
+ * Devolve '' quando nada está configurado; quem exibe decide o placeholder ('—' etc.).
+ *
+ * Recebe o store por parâmetro (não importa `configStore` direto) para o Dashboard poder passar
+ * `window.__configStore` e para manter a função testável de forma isolada.
+ */
+export function activeChatModel(store) {
+  const router = store.salvo('modelRouter') || {};
+  return router.chat || store.salvo('currentModel') || store.salvo('ollamaModel') || '';
+}

@@ -1,4 +1,4 @@
-import { runtimeStore, skillsStore, toolsStore, providersStore } from '../state.js';
+import { runtimeStore, skillsStore, toolsStore, providersStore, activeChatModel } from '../state.js';
 import { stopLocalModel } from '../api.js';
 import { showToast } from '../components/Toast.js';
 import { loadProviders } from '../app.js';
@@ -167,15 +167,12 @@ function updateRuntime(s) {
   const ring = document.getElementById('avatarRing');
   if (ring) ring.style.borderColor = online ? 'var(--success)' : 'var(--danger)';
 
-  // Hero model from configStore — "modelo ativo" é o modelo que o Model Router usa para conversa
-  // (modelRouter.chat), não o modelo de fallback do provider Ollama (currentModel/ollamaModel, que
-  // só entram quando uma chamada não especifica modelo). Lê o espelho do servidor (salvo), nunca o
-  // rascunho da tela — mesma regra de S180 e a mesma precedência de ModelosView.updateOverview(),
-  // para as duas telas não discordarem do que "modelo ativo" significa.
+  // "Modelo ativo" = o modelo da conversa. Regra única (precedência + leitura do espelho) em
+  // activeChatModel() de state.js — a mesma fonte que a Visão Geral de Modelos usa, para as duas
+  // telas não discordarem. Ver S275/S180.
   const cs = window.__configStore;
   if (cs) {
-    const r = cs.salvo('modelRouter') || {};
-    const model = r.chat || cs.salvo('currentModel') || cs.salvo('ollamaModel') || '—';
+    const model = activeChatModel(cs) || '—';
     const heroModel = el('heroModel');
     const heroBadge = el('heroModelBadge');
     if (heroModel) heroModel.textContent = model;
@@ -253,11 +250,8 @@ function updateHealthPanels() {
   const rt = runtimeStore.snap();
   const health = providersStore.get('health') || [];
   const ollamaOnline = providersStore.get('ollamaOnline');
-  // Ver updateRuntime(): o modelo em vigor para conversa é modelRouter.chat; currentModel/
-  // ollamaModel são só fallback do provider quando a chamada não especifica modelo. Espelho do
-  // servidor (salvo), não o rascunho — S180.
-  const rSalvo = cs.salvo('modelRouter') || {};
-  const model = rSalvo.chat || cs.salvo('currentModel') || cs.salvo('ollamaModel') || '';
+  // Mesmo "modelo ativo da conversa" do herói — regra única em activeChatModel() (state.js).
+  const model = activeChatModel(cs);
   const sysOnline = rt.status === 'online';
 
   const defaultProvider = s.defaultProvider || 'ollama';

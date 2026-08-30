@@ -1,4 +1,4 @@
-import { configStore, providersStore, logAcaoUI } from '../state.js';
+import { configStore, providersStore, logAcaoUI, activeChatModel } from '../state.js';
 import { showToast } from '../components/Toast.js';
 import { initDropdowns, updateDropdownModels } from '../components/ModelDropdown.js';
 import { addCustomProvider, removeCustomProvider, editCustomProvider, getCloudCatalog, testCustomProvider, getLocalModels, serveLocalModel, stopLocalModel, previewLocalCommand } from '../api.js';
@@ -934,8 +934,7 @@ export function computeSystemReady() {
   const cs = configStore;
   const h = activeProviderHealth();
   const provSalvo = cs.salvo('defaultProvider');
-  const r = cs.salvo('modelRouter') || {};
-  const defaultModel = r.chat || cs.salvo('currentModel') || cs.salvo('ollamaModel') || '';
+  const defaultModel = activeChatModel(cs); // regra única em state.js — ver S275/S180
   // Prontidão exige que o modelo configurado esteja ENTRE OS SERVIDOS pelo provedor em uso — não
   // basta o provedor estar no ar com algum modelo e haver um nome escrito na configuração.
   // Evidência real (02/08/2026): o painel deu "Sistema pronto ✅ Sim" com o provedor llamafile
@@ -953,15 +952,11 @@ export function computeSystemReady() {
 function updateOverview() {
   const cs = configStore;
   const h = activeProviderHealth();
-  // O modelo roteado para conversa é o que o sistema de fato usa quando o usuário fala com ele —
-  // e é sempre escolha explícita dele. Vem antes de currentModel porque este último, num provider
-  // de modelo único, é o placeholder 'default' (o servidor ignora o campo e serve o que carregou):
-  // exibir "Modelo padrão: default" não informa nada. Sem adivinhar nada: se nenhum dos dois
-  // estiver definido, continua '—'.
   // Toda a Visão Geral fala do que está EM VIGOR no servidor — nunca do rascunho da tela.
+  // A regra do "modelo ativo da conversa" (precedência chat→currentModel→ollamaModel, sempre do
+  // espelho) é autoridade única de activeChatModel() em state.js.
   const provSalvo = cs.salvo('defaultProvider');
-  const r = cs.salvo('modelRouter') || {};
-  const defaultModel = r.chat || cs.salvo('currentModel') || cs.salvo('ollamaModel') || '';
+  const defaultModel = activeChatModel(cs);
 
   const el = id => document.getElementById(id);
   const providerLabel = PROV_LABELS[provSalvo] || provSalvo || '—';

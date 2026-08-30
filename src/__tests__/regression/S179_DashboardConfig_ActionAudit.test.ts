@@ -156,7 +156,7 @@ console.log('\n=== S179-5 — as ações que funcionam também deixam rastro ===
         );
     }
     assert(
-        /import \{ configStore, providersStore, logAcaoUI \} from '\.\.\/state\.js'/.test(MODELOS),
+        /import \{[^}]*\blogAcaoUI\b[^}]*\} from '\.\.\/state\.js'/.test(MODELOS),
         'o logger vem do mesmo módulo que já é a fonte do estado — nenhum módulo novo criado',
     );
 }

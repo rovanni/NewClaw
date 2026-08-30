@@ -128,16 +128,24 @@ console.log('\n=== S180-5 — a Visão Geral lê o espelho, não o rascunho ==='
     );
     assert(
         /const provSalvo = cs\.salvo\('defaultProvider'\);/.test(MODELOS)
-        && /const r = cs\.salvo\('modelRouter'\) \|\| \{\};/.test(MODELOS),
-        'provedor e modelo exibidos vêm do espelho',
+        && /const defaultModel = activeChatModel\(cs\);/.test(MODELOS),
+        'provedor e modelo exibidos vêm do espelho (modelo via autoridade única activeChatModel)',
     );
     assert(
         !/function activeProviderHealth\(\) \{\s*const s = configStore\.snap\(\);/.test(MODELOS),
         'activeProviderHealth não volta a ler o rascunho',
     );
+    // A cadeia de fallback do "modelo ativo" foi centralizada em activeChatModel() (state.js) —
+    // S275 cobre a autoridade em si; aqui garantimos só que ela lê o espelho, não o rascunho,
+    // que é a invariante desta regressão.
+    const ACM = STATE.slice(STATE.indexOf('export function activeChatModel('));
+    const corpoACM = ACM.slice(0, ACM.indexOf('\n}') + 2);
     assert(
-        /const defaultModel = r\.chat \|\| cs\.salvo\('currentModel'\) \|\| cs\.salvo\('ollamaModel'\) \|\| '';/.test(MODELOS),
-        'o modelo padrão exibido também vem do espelho, em toda a cadeia de fallback',
+        /store\.salvo\('modelRouter'\)/.test(corpoACM)
+        && /store\.salvo\('currentModel'\)/.test(corpoACM)
+        && /store\.salvo\('ollamaModel'\)/.test(corpoACM)
+        && !/\bstore\.(get|snap)\(/.test(corpoACM),
+        'activeChatModel resolve toda a cadeia pelo espelho (salvo), nunca pelo rascunho (get/snap)',
     );
 }
 
