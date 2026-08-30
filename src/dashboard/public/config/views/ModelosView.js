@@ -442,6 +442,7 @@ export function render(container) {
                   <svg class="msa" width="11" height="11" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
                   <div class="model-dropdown" id="dropdown-ollamaModel"></div>
                 </div>
+                <div class="form-hint">${t('main_ollama_model_hint')}</div>
               </div>
             </div>
             <!-- O MODELO do classificador saiu daqui (2026-08-02): virou mais um slot no seletor
