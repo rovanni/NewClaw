@@ -39,6 +39,7 @@ import { createMaintenanceRouter } from './routes/maintenance';
 import { createIntegrationsRouter } from './routes/integrations';
 import { DashboardContext } from './routes/types';
 import { isUnsafeExposedBoot } from './hostSafety';
+import { createHostGate } from './hostSafety';
 
 const log = createLogger('Dashboardserver');
 
@@ -60,6 +61,9 @@ export class DashboardServer {
     constructor(config: NewClawConfig) {
         this.ctx = { config };
         this.app = express();
+        // Issue 026 nº1: PRIMEIRO middleware, antes de cors/json/auth — perímetro da API inteira.
+        // Sem senha, só atende Host loopback (ver hostSafety.ts). Lê o estado a cada requisição.
+        this.app.use(createHostGate(() => dashboardAuth.enabled));
         // Campanha de Security (item B): `cors()` sem opções mandava
         // `Access-Control-Allow-Origin: *` pra qualquer origem — o Dashboard não tem consumidor
         // cross-origin legítimo conhecido (é uma UI própria, servida pelo mesmo processo).
