@@ -599,47 +599,4 @@ export class GoalEvaluator {
         }
         return null;
     }
-
-    /**
-     * Gera texto de explicação para o usuário quando goal falha.
-     *
-     * Usa goal.toolsTried (nomes de ferramenta limpos), NÃO goal.strategiesTried:
-     * strategiesTried guarda descrições de step já enriquecidas com hints internos
-     * de replanning (ex: "[ATENÇÃO — tentativa anterior com X retornou output
-     * irrelevante: ... Use abordagem diferente...]", ver GoalExecutionLoop.ts
-     * mismatchHint) — texto escrito para o PRÓPRIO LLM replanejador consumir no
-     * próximo ciclo, não para o usuário final. Juntar essas entradas aqui vazava
-     * jargão interno (nomes de step truncados, marcadores [ATENÇÃO —) direto na
-     * resposta do Telegram.
-     */
-    buildFailureExplanation(goal: Goal): string {
-        const strategies = goal.toolsTried.length > 0
-            ? `Tentei: ${goal.toolsTried.join(', ')}.`
-            : '';
-        const lastBlocker = goal.blockers[goal.blockers.length - 1];
-        const blockerMsg = lastBlocker
-            ? `Último bloqueio: ${lastBlocker.description}.`
-            : '';
-
-        // goal.sentArtifacts registra arquivos REALMENTE entregues ao usuário durante a
-        // execução deste goal (trackArtifact, disparado só após send_document/DELIVERY-GUARD
-        // confirmarem o envio) — um goal pode entregar arquivos válidos e só DEPOIS esbarrar
-        // num step adicional (ex: uma tentativa de sobrescrita bloqueada, ou um replan que
-        // expira o reasoning budget) que o derruba para failed. Sem checar isso aqui, o usuário
-        // recebe "Não consegui completar" como se nada tivesse sido feito, mesmo tendo acabado
-        // de receber os arquivos corretos segundos antes. Reproduzido ao vivo (09/07 19:32):
-        // goal entregou 2 .pptx válidos (19:28, 19:29) e ainda assim reportou falha total no
-        // rodapé, sem mencionar os arquivos já enviados.
-        const sentArtifacts = goal.sentArtifacts ?? [];
-        const deliveredMsg = sentArtifacts.length > 0
-            ? `Consegui gerar e enviar: ${sentArtifacts.join(', ')}. Porém não finalizei o restante do pedido.`
-            : '';
-
-        return [
-            deliveredMsg || `Não consegui completar: "${goal.userIntent.slice(0, 150)}"`,
-            strategies,
-            blockerMsg,
-            'Você pode reformular o pedido ou fornecer mais informações para eu tentar de outra forma.',
-        ].filter(Boolean).join(' ');
-    }
 }

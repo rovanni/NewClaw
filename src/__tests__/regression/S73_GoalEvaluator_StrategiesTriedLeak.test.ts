@@ -39,12 +39,17 @@
  *
  * Escopo tocado: loop/GoalEvaluator.ts (1 linha).
  *
+ * NOTA (issue 020, Incremento 1): `GoalEvaluator.buildFailureExplanation()` deixou de existir — a
+ * mensagem de falha passou a ter autoridade única em `GracefulDeliveryOrchestrator.buildFailureMessage()`.
+ * As asserções abaixo são as mesmas; só o alvo mudou. O incidente que este teste guarda (jargão de
+ * replanejamento vazando na resposta) continua sendo regressão se voltar.
+ *
  * Execução: npx ts-node src/__tests__/regression/S73_GoalEvaluator_StrategiesTriedLeak.test.ts
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { GoalEvaluator } from '../../loop/GoalEvaluator';
+import { GracefulDeliveryOrchestrator } from '../../loop/GracefulDeliveryOrchestrator';
 import { Goal } from '../../loop/GoalTypes';
 
 let passed = 0;
@@ -109,11 +114,11 @@ function makeIncidentGoal(): Goal {
 
 async function main(): Promise<void> {
 
-console.log('\n=== S73-1 [runtime — reprodução do incidente real] — buildFailureExplanation NÃO vaza jargão interno de replanning ===');
+console.log('\n=== S73-1 [runtime — reprodução do incidente real] — buildFailureMessage NÃO vaza jargão interno de replanning ===');
 {
-    const evaluator = new GoalEvaluator();
+    const authority = new GracefulDeliveryOrchestrator();
     const goal = makeIncidentGoal();
-    const explanation = evaluator.buildFailureExplanation(goal);
+    const explanation = authority.buildFailureMessage(goal);
 
     assert(!explanation.includes('[ATENÇÃO —'), 'resposta ao usuário não contém o marcador interno "[ATENÇÃO —" (hint de replanning)', explanation);
     assert(!explanation.includes('Use abordagem diferente'), 'resposta ao usuário não contém a instrução de replanning voltada ao LLM', explanation);
@@ -141,11 +146,11 @@ console.log('\n=== S73-1b [estrutural] — GoalExecutionLoop remove o mismatchHi
     assert(cleanStepDesc.slice(0, 100) === cleanStepDesc, 'a descrição base real (sem hint) cabe inteira em 100 chars — o slice não corta mais em nenhum lugar', cleanStepDesc);
 }
 
-console.log('\n=== S73-2 [runtime] — buildFailureExplanation AINDA informa quais ferramentas foram tentadas (via toolsTried, não strategiesTried) ===');
+console.log('\n=== S73-2 [runtime] — buildFailureMessage AINDA informa quais ferramentas foram tentadas (via toolsTried, não strategiesTried) ===');
 {
-    const evaluator = new GoalEvaluator();
+    const authority = new GracefulDeliveryOrchestrator();
     const goal = makeIncidentGoal();
-    const explanation = evaluator.buildFailureExplanation(goal);
+    const explanation = authority.buildFailureMessage(goal);
 
     assert(explanation.includes('memory_search') && explanation.includes('exec_command') && explanation.includes('read'),
         'os 3 nomes de ferramenta de goal.toolsTried aparecem na explicação — transparência preservada, só o jargão interno foi removido', explanation);
@@ -154,10 +159,10 @@ console.log('\n=== S73-2 [runtime] — buildFailureExplanation AINDA informa qua
 
 console.log('\n=== S73-3 [runtime] — goal sem toolsTried (nenhuma ferramenta chegou a rodar) não quebra e não imprime "Tentei:" vazio ===');
 {
-    const evaluator = new GoalEvaluator();
+    const authority = new GracefulDeliveryOrchestrator();
     const goal = makeIncidentGoal();
     goal.toolsTried = [];
-    const explanation = evaluator.buildFailureExplanation(goal);
+    const explanation = authority.buildFailureMessage(goal);
     assert(!explanation.includes('Tentei: .'), 'sem toolsTried, o bloco "Tentei:" é omitido em vez de aparecer vazio', explanation);
     assert(explanation.length > 0, 'explicação ainda é gerada normalmente sem toolsTried', explanation);
 }

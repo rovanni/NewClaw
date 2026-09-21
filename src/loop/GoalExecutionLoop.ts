@@ -1096,7 +1096,7 @@ export class GoalExecutionLoop {
         // Verificar se ainda tem replan budget
         if (goal.replanBudget <= 0) {
             this.goalStore.setStatus(goal.id, 'failed');
-            const explanation = this.evaluator.buildFailureExplanation(goal);
+            const explanation = this.gracefulDelivery.buildFailureMessage(goal, state.cognitiveContext);
             await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'failed', message: explanation });
             return { earlyReturn: true, result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
         }
@@ -1106,7 +1106,7 @@ export class GoalExecutionLoop {
         if (progress === 'regressing') {
             log.warn(`[GoalLoop] goal=${goal.id} regressing — aborting`);
             this.goalStore.setStatus(goal.id, 'failed');
-            const explanation = this.evaluator.buildFailureExplanation(goal);
+            const explanation = this.gracefulDelivery.buildFailureMessage(goal, state.cognitiveContext);
             return { earlyReturn: true, result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
         }
 
@@ -1142,8 +1142,9 @@ export class GoalExecutionLoop {
         this.goalStore.setStatus(goal.id, 'failed');
         this.recordFailedStrategy(step, cycleResult.output ?? 'step falhou', goal.id, state);
         this.updateProgressModel(step, 'failed', cycleResult.output, state);
-        // cycleResult.output tem prioridade quando contém mensagem rica (ex: dep install falhou → instrução manual)
-        const explanation = cycleResult.output ?? this.evaluator.buildFailureExplanation(goal);
+        // cycleResult.output carrega o motivo específico quando existe (ex: dep install falhou →
+        // instrução manual). Entra como FATO de entrada; quem compõe a mensagem é a autoridade única.
+        const explanation = this.gracefulDelivery.buildFailureMessage(goal, state.cognitiveContext, cycleResult.output);
         await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'failed', message: explanation });
         return { earlyReturn: true, result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
     }
@@ -1612,12 +1613,8 @@ export class GoalExecutionLoop {
             }
 
             this.goalStore.setStatus(goal.id, 'failed');
-            const baseExplanation = validation.reason ?? this.evaluator.buildFailureExplanation(goal);
-            // Entrega parcial: se há conteúdo útil coletado, enriquece a mensagem final
+            const explanation = this.gracefulDelivery.buildFailureMessage(goal, state.cognitiveContext, validation.reason);
             const graceful = this.gracefulDelivery.assess(goal, state.cognitiveContext);
-            const explanation = graceful.hasPartialContent
-                ? graceful.partialSummary
-                : baseExplanation;
             log.info(
                 `[GOAL-LIFECYCLE] goal=${goal.id} session=${goal.sessionKey}` +
                 ` state=failed reason="replan_budget_exhausted"` +
@@ -1848,7 +1845,7 @@ export class GoalExecutionLoop {
                     // mismatchHint embutido de um ciclo anterior (linha ~1010) — cortar em
                     // 100 chars sem remover o hint primeiro produz um blocker.description
                     // truncado no meio do marcador interno (ex: "...via send_audio. [AT'"),
-                    // que buildFailureExplanation() (GoalEvaluator.ts) expõe ao usuário como
+                    // que GracefulDeliveryOrchestrator.buildFailureMessage() expõe ao usuário como
                     // texto quebrado. Remove o hint antes de truncar — mesma sub-string
                     // '[ATENÇÃO —' já usada em alreadyHinted acima, não é um padrão novo.
                     const cleanStepDesc = pendingStep.description.split(' [ATENÇÃO —')[0];
@@ -2088,7 +2085,7 @@ export class GoalExecutionLoop {
             log.info(`[GoalLoop] goal=${currentGoal.id} final validation failed at MAX_CYCLES: ${validation.reason}`);
         }
         this.goalStore.setStatus(currentGoal.id, 'failed');
-        const explanation = this.evaluator.buildFailureExplanation(currentGoal);
+        const explanation = this.gracefulDelivery.buildFailureMessage(currentGoal, state.cognitiveContext);
         return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
     }
 
@@ -4510,7 +4507,7 @@ OU
         // validador é fixo em pt-BR e não recebe diretiva nenhuma — para um usuário en-US/es-ES,
         // preferir o resumo entregava a mensagem final no idioma errado.
         const hasSeparateDelivery = (goal.sentArtifacts ?? []).length > 0;
-        // Numa falha, `overrideOutput` é a explicação do que deu errado (buildFailureExplanation,
+        // Numa falha, `overrideOutput` é a explicação do que deu errado (GracefulDeliveryOrchestrator,
         // blockReason, erro de envio) — continua tendo prioridade, como sempre teve.
         const summaryIsCoverNote = !success || hasSeparateDelivery;
 
@@ -4518,7 +4515,7 @@ OU
         const finalOutput = (summaryIsCoverNote && !hasGenericSummary ? overrideOutput : undefined)
             ?? this.pickBestAvailableContent(goal, overrideOutput)
             ?? lastCompletedStep?.result
-            ?? (success ? overrideOutput ?? 'Tarefa concluída com sucesso.' : this.evaluator.buildFailureExplanation(goal));
+            ?? (success ? overrideOutput ?? 'Tarefa concluída com sucesso.' : this.gracefulDelivery.buildFailureMessage(goal));
 
         // H1 observabilidade: resultado final estruturado para correlacionar com [USER-MESSAGE]
         log.info(
