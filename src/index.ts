@@ -75,6 +75,9 @@ const config = {
     ollamaUrl: process.env.OLLAMA_URL || 'http://localhost:11434',
     ollamaModel: process.env.OLLAMA_MODEL || 'glm-5.2:cloud',
     ollamaApiKey: process.env.OLLAMA_API_KEY || '',
+    // Gravado por persistConfigToEnv() (routes/config.ts); sem esta leitura o prompt customizado
+    // sumia silenciosamente no próximo boot (docs/issues/025).
+    systemPrompt: process.env.SYSTEM_PROMPT || '',
     maxIterations: parseInt(process.env.MAX_ITERATIONS || '5'),
     memoryWindowSize: parseInt(process.env.MEMORY_WINDOW_SIZE || '20'),
     skillsDir: process.env.SKILLS_DIR || './skills',
