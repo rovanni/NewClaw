@@ -192,7 +192,15 @@ export interface GoalAttempt {
     error?: string;
     durationMs: number;
     executedAt: number;
-    /** Ciclo de execução do GoalExecutionLoop em que este attempt ocorreu */
+    /**
+     * Ciclo de execução do GoalExecutionLoop em que este attempt ocorreu.
+     *
+     * Preenchido nos attempts gravados DENTRO do laço (`recordFailedAttempt`, o attempt principal
+     * de `dispatchToolStep` e o pseudo-attempt de entrega do AgentLoop). **Ausente** nos gravados
+     * por `markStepDone` em modo 'add' — `resumeGoal()` (a autorização roda fora do laço, sem ciclo
+     * corrente) e o dedup de envio diferido. Quem ler este campo deve tratar `undefined` como
+     * "ciclo desconhecido", nunca como zero. Nenhum consumidor de produção o lê hoje.
+     */
     cycle?: number;
     /** Descobertas feitas durante este attempt (ex: conteúdo de arquivo, estrutura detectada) */
     discoveries?: string[];
