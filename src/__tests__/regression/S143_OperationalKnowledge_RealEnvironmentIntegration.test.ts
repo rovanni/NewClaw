@@ -25,6 +25,7 @@ import * as os from 'os';
 import * as path from 'path';
 import Database from 'better-sqlite3';
 import { OperationalKnowledge } from '../../memory/OperationalKnowledge';
+import { withFailureAnchor } from './_fixtures/withFailureAnchor';
 import { GoalPlanner } from '../../loop/GoalPlanner';
 import { ReflectionMemory } from '../../memory/ReflectionMemory';
 import { Goal, GoalAttempt, GoalBlocker } from '../../loop/GoalTypes';
@@ -44,7 +45,9 @@ function freshReflectionMemory(): ReflectionMemory {
 
 function makeGoal(over: Partial<Goal>): Goal {
     const now = Date.now();
-    return {
+    // Issue 022: a produção sempre grava o fracasso ANTES do blocker `missing_tool` — ver
+    // `_fixtures/withFailureAnchor.ts`.
+    return withFailureAnchor({
         id: 'goal_s143',
         sessionKey: 'telegram:1',
         conversationId: '1',
@@ -66,7 +69,7 @@ function makeGoal(over: Partial<Goal>): Goal {
         updatedAt: now,
         expiresAt: now + 3600_000,
         ...over,
-    } as Goal;
+    } as Goal);
 }
 
 /**

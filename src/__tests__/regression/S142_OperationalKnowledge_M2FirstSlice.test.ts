@@ -41,6 +41,7 @@ import * as path from 'path';
 import Database from 'better-sqlite3';
 import { OperationalKnowledge, currentPlatform, computeConfidenceLevel } from '../../memory/OperationalKnowledge';
 import { Goal, GoalAttempt, GoalBlocker } from '../../loop/GoalTypes';
+import { withFailureAnchor } from './_fixtures/withFailureAnchor';
 
 let passed = 0;
 let failed = 0;
@@ -58,9 +59,11 @@ function freshOperationalKnowledge(): OperationalKnowledge {
     return new OperationalKnowledge(mockMemoryManager);
 }
 
-function makeGoal(blockers: GoalBlocker[], attempts: GoalAttempt[]): Goal {
+function makeGoal(blockers: GoalBlocker[], attempts: GoalAttempt[], opts: { withoutFailureAnchor?: boolean } = {}): Goal {
     const now = Date.now();
-    return {
+    // Issue 022: a produção sempre grava o fracasso ANTES do blocker `missing_tool` — ver
+    // `_fixtures/withFailureAnchor.ts`. `withoutFailureAnchor` existe só para provar o caso inverso.
+    const goal = {
         id: 'goal_s142',
         sessionKey: 'telegram:1',
         conversationId: '1',
@@ -82,6 +85,7 @@ function makeGoal(blockers: GoalBlocker[], attempts: GoalAttempt[]): Goal {
         updatedAt: now,
         expiresAt: now + 3600_000,
     } as Goal;
+    return opts.withoutFailureAnchor ? goal : withFailureAnchor(goal);
 }
 
 /**
@@ -477,6 +481,25 @@ async function main() {
 
         const result = ok.captureFromGoal(goal, () => true);
         assert(result.captured === 1, 'ADR-004: `where jq` não é probe de `yq` — segue candidato normal', result);
+    }
+
+    // Issue 022 — sem âncora (nenhum attempt falho), captureFromGoal() NÃO aprende. Antes, um fallback
+    // temporal (`executedAt >= detectedAt`) aceitava este estado — que a produção não produz — e
+    // capturava por carimbo de tempo, reintroduzindo a dependência do relógio da ADR-009 C1.
+    {
+        const ok = freshOperationalKnowledge();
+        const t0 = Date.now();
+        const goal = makeGoal(
+            [makeBlocker({ missingDependency: 'puppeteer', detectedAt: t0 })],
+            [
+                makeAttempt({ planStepId: 'install_puppeteer', args: { command: 'npm install puppeteer' }, executedAt: t0 + 5 }),
+                makeAttempt({ planStepId: 'verify_1', args: { command: 'echo verificando' }, executedAt: t0 + 10 }),
+            ],
+            { withoutFailureAnchor: true },
+        );
+        const { captured } = ok.captureFromGoal(goal, () => true);
+        assert(captured === 0, 'sem attempt falho (sem âncora) NÃO captura — silêncio em vez de inferir causalidade por relógio (issue 022)', { captured });
+        assert(ok.buildEvidenceHint('puppeteer') === '', 'nada foi aprendido');
     }
 
     console.log(`\n${'─'.repeat(60)}`);

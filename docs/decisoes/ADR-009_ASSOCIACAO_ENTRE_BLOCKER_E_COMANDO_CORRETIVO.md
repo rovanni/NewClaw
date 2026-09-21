@@ -140,8 +140,8 @@ o sinal que já estava lá.
 `outcome: 'needs_dependency'` direto para isolar `handleNeedsDependencyOutcome`, sem passar por
 `evaluate()` nem por `recordFailedAttempt`.
 
-O fallback temporal que permaneceu na implementação atual **acomoda esse cenário sintético**, não um
-caminho real. Removê-lo depende de decidir o que fazer com o teste — ver Seção 4.3.
+O fallback temporal que permaneceu na implementação atual **acomodava esse cenário sintético**, não um
+caminho real. Foi removido em 21/09/2026 — ver Seção 4.3.1.
 
 **3. O `install_` muda de papel.** Deixa de ser a informação *necessária* para eliminar o relógio e
 passa a ser o sinal *semanticamente correto*: identifica o passo corretivo por papel, sem depender de
@@ -151,7 +151,7 @@ ordem nenhuma. Continua sendo o refinamento mais forte disponível, por outro mo
 
 | Critério | Estado |
 |---|---|
-| **C1** — não depender da resolução do relógio | **Alcançável integralmente.** A âncora posicional cobre todo o fluxo de produção. O modo temporal remanescente serve ao cenário sintético do teste, e sua remoção está condicionada à Seção 4.3 |
+| **C1** — não depender da resolução do relógio | **Alcançável integralmente.** A âncora posicional cobre todo o fluxo de produção. O modo temporal foi removido em 21/09/2026 (§4.3.1) |
 | **C2** — corrigir ≠ verificar, de forma geral | **Pleno.** Exclusão por papel (`verify_`), não por texto de comando. É a parte estrutural da correção do defeito medido |
 | **C3** — falhar para o lado de não aprender | **Validado na prática.** Impediu duas implementações defeituosas de gravar conhecimento sem âncora: falhas ruidosas, zero conhecimento incorreto persistido |
 | **C4** — observável quando não associa | **Validado na prática.** O `[OPKNOW-SKIP]` apontou a causa de cada implementação defeituosa na primeira linha do log |
@@ -182,6 +182,33 @@ aqui, e como a emenda anterior demonstrou ao errar por isso.
 
 Duas saídas, nenhuma decidida: evoluir o teste para atravessar `evaluate()`/`recordFailedAttempt`, ou
 mantê-lo sintético com a simplificação documentada. Fora do escopo desta ADR.
+
+### 4.3.1 Emenda de 21/09/2026 — dívida quitada, `fallback` temporal removido
+
+A decisão que a Seção 4.3 deixou aberta foi tomada (issue 022): **evoluir o teste e remover o
+`fallback`.**
+
+- `OperationalKnowledge.captureFromGoal()` **não aprende mais sem âncora posicional.** Um blocker
+  `missing_tool` num goal sem nenhum attempt falho é registrado como `[OPKNOW-SKIP] ...
+  motivo=nenhum_attempt_falho_no_goal` e ignorado — a comparação `executedAt >= blocker.detectedAt`
+  deixou de existir. C1 passa a valer **integralmente**, sem ressalva, e o modo `'temporal'` some do
+  log (`[OPKNOW-ANCORA]` continua emitindo `ancora=posicional`, valor agora constante, para não
+  quebrar quem lê o log).
+- O `S158.2`/`S158.3` **atravessam o `evaluate()` real**: a dependência sintética é registrada em
+  `KNOWN_DEPS` só durante o caso, a tool original falha de verdade (`spawn <dep> ENOENT`) e é o
+  `GoalEvaluator` que produz o `needs_dependency` — depois de um attempt `'failure'` real. Nada é
+  injetado por fora. `makeSyntheticCycleResult()` foi removido.
+- `S142`/`S143` montavam goals à mão com blocker e só attempts de sucesso — o mesmo defeito de
+  fidelidade — e dependiam do `fallback`. Agora constroem o goal como a produção o faz
+  (`_fixtures/withFailureAnchor.ts`), e o `S142` ganhou o caso inverso: sem âncora, **não captura**.
+
+**Por que remover é seguro:** o `fallback` só era alcançável por cenários sintéticos (§4.2), e o
+comportamento de falha é fail-closed — no pior caso o sistema aprende menos, nunca aprende errado
+(C3). **O que esta emenda não prova:** que não existe um caminho de produção ainda não mapeado que
+grave `missing_tool` sem attempt falho. A evidência é a leitura de código (§4.2, refeita em
+21/09/2026) e o `S158` orgânico; não houve execução real com LLM. Se um dia aparecer
+`[OPKNOW-SKIP] motivo=nenhum_attempt_falho_no_goal` em produção, é exatamente o sinal de que essa
+premissa falhou.
 
 ## 5. O que esta ADR NÃO decide
 

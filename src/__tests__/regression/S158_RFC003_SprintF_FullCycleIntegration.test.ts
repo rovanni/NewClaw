@@ -278,54 +278,67 @@ async function main() {
             name: 'exec_command', description: 'test', parameters: {},
             execute: async (args: any) => ({ success: true, output: `ok: ${args?.command}` }),
         }, { dangerous: true });
-        // Tool "real" do step original — sempre sucede (o que está sob teste aqui é o
-        // ciclo de aquisição/captura, não o comportamento de falha do step original, já
-        // coberto por S84.3).
+        // Tool do step original — FALHA DE VERDADE na 1ª chamada de cada goal (`origShouldFail`
+        // é rearmado antes de cada um) e depois sucede. Issue 022: este caso antes fabricava um
+        // `CycleResult` `needs_dependency` e o injetava direto em `handleNeedsDependencyOutcome()`,
+        // produzindo um goal com blocker `missing_tool` e NENHUM attempt falho — estado que a
+        // produção não alcança (todo `evaluate()` vem depois de um attempt 'failure'). Agora a
+        // falha nasce na tool, passa por `recordFailedAttempt`/attempt principal e por
+        // `GoalEvaluator.evaluate()` REAL, que produz o `needs_dependency` sozinho.
+        let origShouldFail = true;
         ToolRegistry.register({
             name: ORIG_TOOL, description: 'test', parameters: {},
-            execute: async () => ({ success: true, output: 'tarefa original concluída' }),
+            execute: async () => {
+                if (origShouldFail) { origShouldFail = false; return { success: false, output: '', error: `spawn ${SYNTH_DEP_DET} ENOENT` }; }
+                return { success: true, output: 'tarefa original concluída' };
+            },
         });
 
         const ok = freshOperationalKnowledge();
 
-        function makeSyntheticCycleResult() {
-            const syntheticDep: DependencyInfo = {
-                name: SYNTH_DEP_DET,
-                installByPlatform: { [platform!]: INSTALL_MARKER },
-                manualInstructions: 'instrução manual de teste S158',
-                verifyCmd: VERIFY_MARKER,
-                type: 'system',
-            };
-            return {
-                outcome: 'needs_dependency' as const,
-                confidence: 0.8,
-                blocker: {
-                    kind: 'missing_tool' as const,
-                    toolName: ORIG_TOOL,
-                    missingDependency: SYNTH_DEP_DET,
-                    description: `Binário '${SYNTH_DEP_DET}' não encontrado`,
-                    suggestedActions: [],
-                    detectedAt: Date.now(),
-                },
-                depInfo: syntheticDep,
-            };
+        // A dependência sintética entra em KNOWN_DEPS SÓ durante S158.2/S158.3 (removida em
+        // `finally` antes do S158.4, que precisa dela AUSENTE do catálogo para exercitar o ramo
+        // "Aprendido"). É o mesmo registro que `GoalEvaluator.evaluate()` consulta em produção —
+        // nada é injetado por fora do fluxo.
+        const syntheticDep: DependencyInfo = {
+            name: SYNTH_DEP_DET,
+            installByPlatform: { [platform!]: INSTALL_MARKER },
+            manualInstructions: 'instrução manual de teste S158',
+            verifyCmd: VERIFY_MARKER,
+            type: 'system',
+        };
+        KNOWN_DEPS[SYNTH_DEP_DET] = syntheticDep;
+
+        /** Roda um goal de ponta a ponta pelo laço real; devolve o goal final. */
+        async function runOrganicGoal(stepId: string, description: string) {
+            origShouldFail = true;
+            const { loop, goalStore } = makeLoop(ok);
+            const goal = makeGoal(goalStore, [
+                { id: stepId, description, toolName: ORIG_TOOL, toolArgs: {}, status: 'pending', fallbackSteps: [] },
+            ]);
+            const state = emptyState(goal.id) as any;
+            await (loop as any).runLoopInternal(goal, channelContext, undefined, 0, 0, undefined, state);
+            return goalStore.getById(goal.id)!;
         }
 
         permissionRegistry.setMode(OperationalMode.DEVELOPER, 'test-s158-2', true);
         try {
             // S158.2 — primeira execução real do ciclo determinístico completo
             {
-                const { loop, goalStore } = makeLoop(ok);
-                const goal = makeGoal(goalStore, [
-                    { id: 'stepOrig1', description: 'Usar dependência sintética determinística (1ª vez)', toolName: ORIG_TOOL, toolArgs: {}, status: 'pending', fallbackSteps: [] },
-                ]);
-                const step = goal.currentPlan[0];
-                const cycleResult = makeSyntheticCycleResult();
-                const handled = await (loop as any).handleNeedsDependencyOutcome(goal, step, cycleResult, 0, 0, undefined, undefined);
-                const state = emptyState(handled.goal.id) as any;
-                await (loop as any).runLoopInternal(handled.goal, channelContext, undefined, 0, 0, handled.priorFeedback, state);
-                const stored = goalStore.getById(handled.goal.id)!;
+                const stored = await runOrganicGoal('stepOrig1', 'Usar dependência sintética determinística (1ª vez)');
 
+                // Fidelidade (issue 022): o estado que a produção produz — fracasso REAL gravado
+                // ANTES do blocker, produzido por evaluate() real, não fabricado.
+                assert(
+                    stored.attempts.length > 0 && stored.attempts[0].result === 'failure' && stored.attempts[0].toolName === ORIG_TOOL,
+                    'S158.2: o 1º attempt do goal é o fracasso real da tool original (âncora posicional existe, como em produção)',
+                    stored.attempts.map(a => ({ tool: a.toolName, result: a.result }))
+                );
+                assert(
+                    stored.blockers.some(b => b.kind === 'missing_tool' && b.missingDependency === SYNTH_DEP_DET),
+                    'S158.2: o blocker missing_tool foi produzido pelo GoalEvaluator real (não injetado)',
+                    stored.blockers
+                );
                 assert(stored.status === 'completed', 'S158.2: install real + verify real + step original executam e o goal completa', stored.status);
                 assert(
                     stored.attempts.some(a => a.planStepId.startsWith('verify_') && a.result === 'success'),
@@ -342,15 +355,7 @@ async function main() {
 
             // S158.3 — segunda execução real do MESMO ciclo (2º goal) → confiança sobe a 'validated'
             {
-                const { loop, goalStore } = makeLoop(ok);
-                const goal = makeGoal(goalStore, [
-                    { id: 'stepOrig2', description: 'Usar dependência sintética determinística (2ª vez)', toolName: ORIG_TOOL, toolArgs: {}, status: 'pending', fallbackSteps: [] },
-                ]);
-                const step = goal.currentPlan[0];
-                const cycleResult = makeSyntheticCycleResult();
-                const handled = await (loop as any).handleNeedsDependencyOutcome(goal, step, cycleResult, 0, 0, undefined, undefined);
-                const state = emptyState(handled.goal.id) as any;
-                await (loop as any).runLoopInternal(handled.goal, channelContext, undefined, 0, 0, handled.priorFeedback, state);
+                await runOrganicGoal('stepOrig2', 'Usar dependência sintética determinística (2ª vez)');
 
                 assert(
                     ok.getTacticalCommand(SYNTH_DEP_DET) === INSTALL_MARKER,
@@ -358,6 +363,10 @@ async function main() {
                     ok.getTacticalCommand(SYNTH_DEP_DET)
                 );
             }
+
+            // A dependência sai de KNOWN_DEPS: o S158.4 precisa dela AUSENTE do catálogo Distribuído
+            // para provar que o conhecimento Aprendido (OperationalKnowledge) resolve sozinho.
+            delete KNOWN_DEPS[SYNTH_DEP_DET];
 
             // S158.4 — REUTILIZAÇÃO real: 3º goal, mesma dependência (agora 'validated'), falha
             // ORGÂNICA dentro de runLoopInternal (não CycleResult sintético) — prova que o
@@ -395,6 +404,7 @@ async function main() {
                 assert(stored.status === 'completed', 'S158.4: goal completa reaproveitando o comando aprendido, sem nova pesquisa', stored.status);
             }
         } finally {
+            delete KNOWN_DEPS[SYNTH_DEP_DET];
             permissionRegistry.setMode(OperationalMode.SAFE, 'test-s158-2-restore');
         }
     }

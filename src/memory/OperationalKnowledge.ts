@@ -235,22 +235,28 @@ export class OperationalKnowledge {
                     ? ancoraPorTool
                     : goal.attempts.findIndex(a => a.result !== 'success');
 
-                // **Um blocker pode existir sem nenhum attempt falho registrado.** No caminho
-                // determinístico (`needs_dependency`), o blocker é produzido pela avaliação do
-                // ciclo, não necessariamente por um attempt com `result !== 'success'` gravado —
-                // medido em 08/08/2026: `motivo=nenhum_attempt_falho_no_goal` com `blocker_tool`
-                // presente. Era por isso que a versão original usava carimbo de tempo: ele não
-                // exige que o fracasso esteja em `attempts`.
+                // **Sem âncora não há causalidade — e sem causalidade não se aprende.** Em produção
+                // esse caso não existe: todo blocker `missing_tool` nasce em `GoalEvaluator.classifyError`
+                // (único chamador: `evaluate()`), e todo `evaluate()` do `GoalExecutionLoop` é
+                // precedido de um attempt `'failure'` gravado (`recordFailedAttempt` ou o attempt
+                // principal de `dispatchToolStep`) — verificado por leitura em 08/08/2026 e de novo em
+                // 21/09/2026, e coberto agora pelo `S158`, que atravessa o `evaluate()` real.
                 //
-                // Quando a âncora existe, a ordenação é POSICIONAL e o relógio não participa
-                // (`ADR-009` C1 pleno). Quando não existe, degrada para a comparação temporal —
-                // agora com `>=` em vez de `>`, que é o que impede o empate de milissegundo de
-                // descartar o comando corretivo. Nesse modo o C1 é satisfeito apenas em parte, e
-                // por isso o log diz qual estratégia foi usada.
-                const modoAncora = idxFalha >= 0 ? 'posicional' : 'temporal';
+                // Antes existia aqui um fallback que comparava `a.executedAt >= blocker.detectedAt`,
+                // justificado por "o caminho determinístico pode produzir o blocker sem attempt falho".
+                // Essa justificativa era falsa: só o `S158` original, que fabricava um `CycleResult` e
+                // o injetava direto em `handleNeedsDependencyOutcome()`, alcançava esse estado (issue
+                // 022). O fallback existia para acomodar um cenário de teste, e reintroduzia a
+                // dependência do relógio que a `ADR-009` C1 eliminou. Removido: um goal sem fracasso
+                // registrado é inconsistente, e a resposta correta a dado inconsistente é não
+                // aprender (`docs/ARCHITECTURE/NUNCA_ADIVINHAR.md`), nunca inferir por carimbo de tempo.
+                if (idxFalha < 0) {
+                    log.info(`[OPKNOW-SKIP] goal=${goal.id} dependency=${blocker.missingDependency} motivo=nenhum_attempt_falho_no_goal`);
+                    continue;
+                }
 
                 const idxFix = goal.attempts.findIndex((a, i) =>
-                    (idxFalha >= 0 ? i > idxFalha : a.executedAt >= blocker.detectedAt) &&
+                    i > idxFalha &&
                     a.toolName === 'exec_command' &&
                     a.result === 'success' &&
                     typeof a.args?.command === 'string' &&
@@ -268,11 +274,11 @@ export class OperationalKnowledge {
                     !isToolExistenceProbe(a.args.command as string, blocker.missingDependency!)
                 );
                 if (idxFix < 0) {
-                    log.info(`[OPKNOW-SKIP] goal=${goal.id} dependency=${blocker.missingDependency} motivo=nenhum_comando_corretivo_candidato ancora=${modoAncora} idx_falha=${idxFalha}`);
+                    log.info(`[OPKNOW-SKIP] goal=${goal.id} dependency=${blocker.missingDependency} motivo=nenhum_comando_corretivo_candidato ancora=posicional idx_falha=${idxFalha}`);
                     continue;
                 }
                 const fixAttempt = goal.attempts[idxFix];
-                log.info(`[OPKNOW-ANCORA] goal=${goal.id} dependency=${blocker.missingDependency} ancora=${modoAncora} idx_falha=${idxFalha} idx_fix=${idxFix}`);
+                log.info(`[OPKNOW-ANCORA] goal=${goal.id} dependency=${blocker.missingDependency} ancora=posicional idx_falha=${idxFalha} idx_fix=${idxFix}`);
 
                 const verifiedByStep = goal.attempts.some((a, i) =>
                     i > idxFix &&
