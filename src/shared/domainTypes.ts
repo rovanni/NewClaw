@@ -53,7 +53,21 @@ export interface GoalBlocker {
      * missingDependency='yq' — os dois nunca compartilham o mesmo significado.
      */
     missingDependency?: string;
+    /**
+     * Texto para o PRÓXIMO CICLO DO LLM REPLANEJADOR (`GoalPlanner.buildReplanPrompt`, "BLOCKER
+     * ATUAL") — pode conter jargão interno (retryBudget, nome de mecanismo, instrução imperativa
+     * tipo "[BONUS REPLAN] Complete APENAS X"). NUNCA lido diretamente por texto voltado ao usuário
+     * final — ver `userSummary` (issue 030). Continua sendo o único campo que `GoalPlanner` lê.
+     */
     description: string;
+    /**
+     * Texto alternativo, compreensível para o USUÁRIO final, sem jargão de replanejamento/retry —
+     * issue 030. Opcional: quando ausente, `description` já era adequada para o usuário (a maioria
+     * dos blockers é — ex. "Ferramenta 'X' não encontrada no sistema") e continua sendo usada como
+     * está. Só os produtores cujo `description` mistura instrução interna precisam preenchê-lo.
+     * Único consumidor: `GracefulDeliveryOrchestrator.buildFailureMessage()` ("O que faltou").
+     */
+    userSummary?: string;
     /** Ações sugeridas — GoalPlanner usa isso como input para replan */
     suggestedActions: string[];
     detectedAt: number;

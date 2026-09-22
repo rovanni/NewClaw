@@ -1593,7 +1593,10 @@ export class GoalExecutionLoop {
                     .join('; ');
                 const bonusBlocker: GoalBlocker = {
                     kind: 'goal_incomplete',
+                    // Instrução IMPERATIVA para o LLM replanejador ("Complete APENAS...") — nunca
+                    // apropriada como explicação ao usuário (issue 030).
                     description: `[BONUS REPLAN — ${progressPct}% concluído] Complete APENAS os componentes pendentes: ${pendingComponents || (validation.reason ?? 'componentes ainda não entregues')}`,
+                    userSummary: `O objetivo foi concluído parcialmente (${progressPct}%). Itens pendentes: ${pendingComponents || (validation.reason ?? 'não especificados')}.`,
                     suggestedActions: ['Foque exclusivamente nos componentes pendentes — não replanejar o que já foi entregue'],
                     detectedAt: Date.now(),
                 };
@@ -1851,6 +1854,10 @@ export class GoalExecutionLoop {
                             kind: 'semantic_mismatch' as const,
                             toolName: pendingStep.toolName,
                             description: `Step '${cleanStepDesc.slice(0, 100)}' retornou output irrelevante ${retryOutcomeLabel}: ${semanticValidation.reason ?? 'mismatch semântico'}${dirHint}`,
+                            // issue 030: versão sem jargão de replanejamento (retryOutcomeLabel,
+                            // "ferramenta fixa, mesmos argumentos") — o motivo semântico sozinho já
+                            // é uma frase legível, produzida pelo validador (LLM), não texto interno.
+                            userSummary: `A etapa "${cleanStepDesc.slice(0, 100)}" não produziu o resultado esperado: ${semanticValidation.reason ?? 'o resultado não correspondia ao que foi pedido'}.`,
                             suggestedActions: isDirListing
                                 ? [
                                     'Usar o path completo de um dos arquivos listados acima em vez do diretório',

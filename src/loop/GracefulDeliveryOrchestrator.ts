@@ -151,7 +151,9 @@ export class GracefulDeliveryOrchestrator {
         }
 
         // 6. O que faltou (sem repetir o motivo) e o próximo passo.
-        const blockerText = lastBlocker?.description?.trim();
+        // userSummary, quando presente, é a versão sem jargão de replanejamento (issue 030) — o
+        // ÚNICO consumidor deste campo. description continua intocada para GoalPlanner.buildReplanPrompt.
+        const blockerText = (lastBlocker?.userSummary ?? lastBlocker?.description)?.trim();
         if (blockerText && (!reasonText || !reasonText.includes(blockerText))) {
             lines.push('', `**O que faltou:** ${blockerText}`);
         }
