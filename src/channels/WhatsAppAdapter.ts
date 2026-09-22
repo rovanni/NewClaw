@@ -270,6 +270,24 @@ export class WhatsAppAdapter implements ChannelAdapter {
         await this.send(response, jid);
     }
 
+    /**
+     * Implementa `ChannelAdapter.sendDocument` (issue 033) — deliberadamente FORA de
+     * `sendQueue`/`sendAttachment`: aquele caminho engole exceção (`try { } catch(e) {
+     * log.error(...) }`, sem relançar), o que fazia `MessageBus.sendDocument()` achar que o envio
+     * deu certo mesmo quando `sock.sendMessage` falhou. Mesmo padrão já usado por
+     * `TelegramAdapter.sendDocument`/`WebChannelAdapter.sendDocument` — a chamada de rede real
+     * propaga a própria exceção, sem interceptação no meio do caminho.
+     */
+    async sendDocument(chatId: string, buffer: Buffer, filename: string, caption?: string): Promise<void> {
+        if (!this.sock) throw new Error('WhatsApp não conectado.');
+        await this.sock.sendMessage(chatId, {
+            document: buffer,
+            fileName: filename,
+            mimetype: 'application/octet-stream',
+            caption,
+        });
+    }
+
     async healthCheck(): Promise<{ ok: boolean; details?: string }> {
         if (!this._isConnected || !this.sock) {
             return { ok: false, details: 'Not connected' };

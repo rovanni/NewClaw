@@ -742,8 +742,10 @@ export class MessageBus {
     async sendDocument(channel: ChannelType, chatId: string, buffer: Buffer, filename: string, caption?: string): Promise<void> {
         const adapter = this.adapters.get(channel);
         if (!adapter?.sendDocument) {
-            log.warn('send_document_unsupported', `Adapter "${channel}" does not support sendDocument`);
-            return;
+            // Lança em vez de retornar silenciosamente: mesma correção já aplicada a sendVoice()
+            // acima, replicada aqui (issue 033) — um warn+return fazia send_document.ts acreditar
+            // que o documento foi entregue quando nenhum canal real o recebeu.
+            throw new Error(`Adapter "${channel}" does not support sendDocument`);
         }
         await adapter.sendDocument(chatId, buffer, filename, caption);
     }

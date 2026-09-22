@@ -227,6 +227,27 @@ export class SignalAdapter implements ChannelAdapter {
         await this.send(response, phoneNumber);
     }
 
+    /**
+     * Implementa `ChannelAdapter.sendDocument` (issue 033) — chama `execSignalCli` diretamente,
+     * FORA do `try/catch` que engole exceção dentro de `send()`/`sendAttachment` (aquele caminho
+     * só loga e segue, o que fazia `MessageBus.sendDocument()` achar que o envio deu certo mesmo
+     * quando `signal-cli send` falhava). `signal-cli send -a` exige um caminho de arquivo, não
+     * bytes — grava num arquivo temporário e limpa, sempre (sucesso ou falha).
+     */
+    async sendDocument(chatId: string, buffer: Buffer, filename: string, caption?: string): Promise<void> {
+        const fsPromises = await import('fs/promises');
+        const os = await import('os');
+        const tmpPath = path.join(os.tmpdir(), `newclaw-signal-doc-${Date.now()}-${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`);
+        await fsPromises.writeFile(tmpPath, buffer);
+        try {
+            const args = ['-u', this.config.phoneNumber, 'send', chatId, '-a', tmpPath];
+            if (caption) args.push('--caption', caption);
+            await this.execSignalCli(args); // rejeita normalmente — sem catch local, propaga
+        } finally {
+            await fsPromises.unlink(tmpPath).catch(() => {});
+        }
+    }
+
     async healthCheck(): Promise<{ ok: boolean; details?: string }> {
         if (!this._isConnected) {
             return { ok: false, details: 'Not connected' };

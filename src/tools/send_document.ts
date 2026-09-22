@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { resolvePath } from '../utils/crossPlatform';
 import { MessageBus } from '../channels/MessageBus';
+import { ChannelType } from '../channels/ChannelAdapter';
 import { DiscordAdapter } from '../channels/DiscordAdapter';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
@@ -12,7 +13,7 @@ const log = createLogger('SendDocumentTool');
 
 export class SendDocumentTool implements ToolExecutor {
     name = 'send_document';
-    description = 'Enviar um arquivo como documento ao usuário. Suporta Telegram, Discord e o chat do Dashboard web. Caminhos relativos são resolvidos a partir do workspace.';
+    description = 'Enviar um arquivo como documento ao usuário. Suporta Telegram, Discord, WhatsApp, Signal e o chat do Dashboard web. Caminhos relativos são resolvidos a partir do workspace.';
     // ARCH-015 (S26): texto co-localizado, agregado por GoalPlanner.buildRequiredArgsReference().
     requiredArgsHint = '- send_document: SEMPRE forneça file_path com o caminho completo do arquivo. Nunca chame send_document sem file_path.';
     parameters = {
@@ -63,12 +64,19 @@ export class SendDocumentTool implements ToolExecutor {
             return { success: false, output: '', error: `Arquivo não encontrado: ${resolvedPath}` };
         }
 
+        // Discord e Web têm modelo de transporte próprio (adapter.send() direto para Discord —
+        // exceção documentada em ARCHITECTURE.md; limite de payload HTTP para Web) e continuam com
+        // método dedicado. Telegram/WhatsApp/Signal passam pela MESMA autoridade —
+        // bus.sendDocument(this.channel, ...) — nunca um canal fixo (issue 033: antes, qualquer
+        // canal fora de discord/web caía num `sendToTelegram` hardcoded, então um documento pedido
+        // no WhatsApp/Signal era "enviado" para o adapter do Telegram, com o chatId errado, e o
+        // sistema reportava sucesso mesmo sem nada ter chegado a lugar nenhum).
         if (this.channel === 'discord') {
             return this.sendToDiscord(resolvedPath, this.chatId, caption, filename);
         } else if (this.channel === 'web') {
             return this.sendToWeb(resolvedPath, this.chatId, caption, filename);
         } else {
-            return this.sendToTelegram(resolvedPath, this.chatId, caption, filename);
+            return this.sendToChannel(this.channel as ChannelType, resolvedPath, this.chatId, caption, filename);
         }
     }
 
@@ -120,24 +128,34 @@ export class SendDocumentTool implements ToolExecutor {
         }
     }
 
-    private async sendToTelegram(resolvedPath: string, chatId: string, caption?: string, filename?: string): Promise<ToolResult> {
-        const stats = fs.statSync(resolvedPath);
-        if (stats.size > 50 * 1024 * 1024) {
-            return { success: false, output: '', error: 'Arquivo excede 50MB (limite Telegram).' };
+    /**
+     * Telegram/WhatsApp/Signal — a MESMA autoridade (`bus.sendDocument`) para os três, roteada
+     * pelo canal real (`this.channel`), nunca um canal fixo (issue 033).
+     *
+     * Teto de tamanho só para Telegram (limite documentado da própria API). WhatsApp/Signal ainda
+     * não têm teto próprio aqui — o valor real não foi pesquisado, e não seria correto supor um
+     * número sem fonte (NUNCA_ADIVINHAR.md); decisão registrada como pendente na issue 033.
+     */
+    private async sendToChannel(channel: ChannelType, resolvedPath: string, chatId: string, caption?: string, filename?: string): Promise<ToolResult> {
+        if (channel === 'telegram') {
+            const stats = fs.statSync(resolvedPath);
+            if (stats.size > 50 * 1024 * 1024) {
+                return { success: false, output: '', error: 'Arquivo excede 50MB (limite Telegram).' };
+            }
         }
 
         if (!chatId) {
-            return { success: false, output: '', error: 'Contexto Telegram incompleto.' };
+            return { success: false, output: '', error: `Contexto ${channel} incompleto.` };
         }
 
         const displayName = filename || path.basename(resolvedPath);
 
         try {
             const fileBuffer = fs.readFileSync(resolvedPath);
-            await this.bus.sendDocument('telegram', chatId, fileBuffer, displayName, caption);
-            return { success: true, output: `✅ Documento "${displayName}" enviado ao Telegram.` };
+            await this.bus.sendDocument(channel, chatId, fileBuffer, displayName, caption);
+            return { success: true, output: `✅ Documento "${displayName}" enviado.` };
         } catch (error) {
-            return { success: false, output: '', error: `Erro Telegram: ${errorMessage(error)}` };
+            return { success: false, output: '', error: `Erro ao enviar documento (${channel}): ${errorMessage(error)}` };
         }
     }
 }
