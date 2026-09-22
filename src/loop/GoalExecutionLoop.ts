@@ -3684,8 +3684,27 @@ export class GoalExecutionLoop {
                     // (goal cujo único trabalho restante é reenviar um arquivo que já existia
                     // ANTES do goal começar, sem nenhum `write`/`exec_command` como evidência —
                     // `file_exists`/`tool_succeeded` nunca teriam attempt pra consultar).
+                    //
+                    // Achado real (issue 037/039, 2026-09-22, goal_1790086129179_0dv0c): este
+                    // bypass é uma pergunta ESTRUTURAL ("o arquivo existe, com tipo/tamanho
+                    // esperado?") — legítima por determinismo. Mas o cenário que ele resolve
+                    // (ARCH-018) pressupõe goal SEM histórico de reprovação: nada tinha rodado
+                    // ainda quando o bypass foi desenhado. Sem essa guarda, ele também disparava
+                    // quando o arquivo FOI escrito no mesmo goal e o validador LLM já tinha
+                    // avaliado esse exato conteúdo como NÃO atendendo ao pedido (`achieved=false`,
+                    // 2 ciclos antes) — "o artefato satisfaz a intenção do usuário?" é pergunta
+                    // semântica (RESPONSABILIDADE_ANTES_DO_MECANISMO.md), e este checker de disco
+                    // não tem — nem deveria ter — evidência para respondê-la. `goal.blockers` já
+                    // carrega essa evidência (reprovações anteriores, sejam elas semânticas ou
+                    // técnicas); em vez de criar um avaliador novo, o bypass passa a checar essa
+                    // evidência já existente (regra de evidência: corrige o fluxo de informação,
+                    // não soma outro avaliador). Qualquer blocker prévio no goal desativa o atalho
+                    // e cai para o caminho normal (LLM validator) — mais conservador do que o
+                    // necessário no caso raro de um blocker não relacionado ao artefato, mas nunca
+                    // erra para o lado de pular uma reprovação semântica real.
                     const pendingSendSteps = this.getPendingSteps(goal.currentPlan, 'send_document');
-                    const allVerified = pendingSendSteps.length > 0 && pendingSendSteps.every(s => {
+                    const hasPriorBlocker = goal.blockers.length > 0;
+                    const allVerified = !hasPriorBlocker && pendingSendSteps.length > 0 && pendingSendSteps.every(s => {
                         const fp = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
                         if (!fp) return false;
                         if (!isExpectedDeliverableFile(goal.userIntent, fp)) return false;
@@ -3726,6 +3745,13 @@ export class GoalExecutionLoop {
                             siblingDelivery.evidence = artifactList.slice(0, 120);
                         }
                     } else {
+                        if (hasPriorBlocker) {
+                            log.info(
+                                `[VALIDATION-BYPASS-SKIPPED] goal=${goal.id}` +
+                                ` reason=prior_blocker_exists` +
+                                ` blockers=${goal.blockers.length}`
+                            );
+                        }
                         criterion.status = 'unverifiable';
                     }
                     break;
