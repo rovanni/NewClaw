@@ -395,6 +395,7 @@ export class AgentController {
                 phoneNumber: config.signalPhoneNumber,
                 allowedNumbers: config.signalAllowedNumbers,
                 signalCliPath: config.signalCliPath || 'signal-cli',
+                signalCliConfigDir: config.signalCliConfigDir || undefined,
             });
             this.signalAdapter.setBus(this.messageBus);
             this.messageBus.registerAdapter(this.signalAdapter);

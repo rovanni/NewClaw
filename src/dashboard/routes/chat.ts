@@ -22,7 +22,10 @@ const AGENT_RESPONSE_TIMEOUT_MS = 10 * 60_000;
 // Antes eram dois números literais independentes — 5 aqui e 5 na interface — que podiam divergir
 // numa edição e ninguém perceberia (RFC-004, Correção 5).
 export const MAX_UPLOAD_FILES = MessageBus.MAX_ATTACHMENTS_PER_MESSAGE;
-export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+// Mesma autoridade única de MAX_UPLOAD_FILES acima (issue 032) — antes era um literal 20MB próprio
+// deste arquivo; agora é o mesmo teto que agentMediaHandlers.ts aplica a QUALQUER canal que entregue
+// bytes inline via attachment.data, não uma política exclusiva do upload HTTP do Dashboard.
+export const MAX_UPLOAD_BYTES = MessageBus.MAX_ATTACHMENT_BYTES;
 
 const upload = multer({
     storage: multer.memoryStorage(),

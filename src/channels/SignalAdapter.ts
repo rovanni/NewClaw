@@ -18,6 +18,8 @@
 import { execFile } from 'child_process';
 import { errorMessage } from '../shared/errors';
 import { createServer, type Server } from 'http';
+import { existsSync, readFileSync } from 'fs';
+import path from 'path';
 import {
     ChannelAdapter,
     ChannelType,
@@ -45,6 +47,13 @@ export interface SignalConfig extends ChannelConfig {
     rpcPort?: number;
     /** Internal HTTP server port for receiving webhooks */
     webhookPort?: number;
+    /**
+     * Diretório `--config` do signal-cli (issue 032) — onde ele já grava anexos recebidos, em
+     * `<signalCliConfigDir>/attachments/<id>`. O caminho padrão do signal-cli varia por sistema
+     * operacional e não é adivinhado aqui (NUNCA_ADIVINHAR.md) — sem este valor, o adapter
+     * continua sem ler anexo nenhum, exatamente como antes desta Sprint.
+     */
+    signalCliConfigDir?: string;
 }
 
 interface SignalMessage {
@@ -92,6 +101,7 @@ export class SignalAdapter implements ChannelAdapter {
             allowedNumbers: config.allowedNumbers || [],
             rpcPort: config.rpcPort || 7583,
             webhookPort: config.webhookPort || 7584,
+            signalCliConfigDir: config.signalCliConfigDir || undefined,
         };
         // Merge remaining config keys
         if (config.botToken !== undefined) (this.config as Record<string, unknown>).botToken = config.botToken;
@@ -314,6 +324,12 @@ export class SignalAdapter implements ChannelAdapter {
         if (dataMessage.attachments && dataMessage.attachments.length > 0) {
             for (const att of dataMessage.attachments) {
                 const contentType = att.contentType || '';
+                // Materialização (issue 032): mesmo padrão do canal Web — popula `data` (base64)
+                // aqui, sem mudar ChannelAdapter nem agentMediaHandlers.ts. `undefined` quando não
+                // for possível (sem SIGNAL_CLI_CONFIG_DIR, id suspeito, arquivo ausente ou maior
+                // que o teto) — o attachment segue só com metadados, mesmo "falha ao baixar" de
+                // hoje (RFC-004: fato, nunca decisão de encerrar o turno).
+                const data = this.readAttachmentFile(att.id, att.size);
                 if (contentType.startsWith('image/')) {
                     type = 'photo';
                     attachments.push({
@@ -321,6 +337,7 @@ export class SignalAdapter implements ChannelAdapter {
                         fileId: att.id || '',
                         mimeType: contentType,
                         fileName: att.filename,
+                        data,
                     });
                 } else if (contentType.startsWith('audio/')) {
                     type = 'voice';
@@ -328,6 +345,7 @@ export class SignalAdapter implements ChannelAdapter {
                         type: 'voice',
                         fileId: att.id || '',
                         mimeType: contentType,
+                        data,
                     });
                 } else {
                     type = 'document';
@@ -336,6 +354,7 @@ export class SignalAdapter implements ChannelAdapter {
                         fileId: att.id || '',
                         mimeType: contentType,
                         fileName: att.filename,
+                        data,
                     });
                 }
             }
@@ -375,6 +394,35 @@ export class SignalAdapter implements ChannelAdapter {
 
         if (this.bus) {
             await this.bus.processMessage(normalizedMsg);
+        }
+    }
+
+    /**
+     * Lê o anexo que o signal-cli já gravou em disco (issue 032) e devolve base64, ou `undefined`
+     * quando não é possível — nunca lança. `id` vem do próprio signal-cli (processo local
+     * confiável, não digitado pelo remetente), mas é validado por defesa em profundidade antes de
+     * virar caminho — mesmo princípio de `toFileSafeId` já usado no projeto.
+     */
+    private readAttachmentFile(id: string | undefined, declaredSize: number | undefined): string | undefined {
+        if (!this.config.signalCliConfigDir) return undefined; // sem configuração explícita, nunca lê (NUNCA_ADIVINHAR.md)
+        if (!id || /[\\/]|\.\./.test(id)) {
+            if (id) log.warn('attachment_id_rejected', `id="${id}" contém caractere não permitido`);
+            return undefined;
+        }
+        if (declaredSize !== undefined && declaredSize > MessageBus.MAX_ATTACHMENT_BYTES) {
+            log.warn('attachment_too_large', `declared=${declaredSize} limit=${MessageBus.MAX_ATTACHMENT_BYTES} id=${id}`);
+            return undefined;
+        }
+        const filePath = path.join(this.config.signalCliConfigDir, 'attachments', id);
+        if (!existsSync(filePath)) {
+            log.warn('attachment_file_not_found', `path=${filePath}`);
+            return undefined;
+        }
+        try {
+            return readFileSync(filePath).toString('base64');
+        } catch (e) {
+            log.warn('attachment_read_failed', `path=${filePath} error=${errorMessage(e)}`);
+            return undefined;
         }
     }
 

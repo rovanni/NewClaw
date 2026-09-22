@@ -12,7 +12,9 @@ import {
     makeWASocket,
     useMultiFileAuthState,
     DisconnectReason,
+    downloadMediaMessage,
     type WASocket,
+    type WAMessage,
     type proto,
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
@@ -35,6 +37,20 @@ import { errorMessage } from '../shared/errors';
 import type { WorkflowCallbackFn, AuthDecision } from '../loop/WorkflowTypes';
 
 const log = createLogger('WhatsAppAdapter');
+
+/**
+ * `fileLength` do protocolo WhatsApp chega como `number`, `string` ou `Long` (protobufjs),
+ * dependendo do campo/versão. Sem assumir a forma: aceita as três, devolve `undefined` (tamanho
+ * desconhecido) para qualquer outra coisa — nunca lança, nunca adivinha um número.
+ */
+export function toDeclaredBytes(v: unknown): number | undefined {
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string') { const n = Number(v); return Number.isFinite(n) ? n : undefined; }
+    if (v && typeof v === 'object' && typeof (v as { toNumber?: unknown }).toNumber === 'function') {
+        try { const n = (v as { toNumber: () => number }).toNumber(); return Number.isFinite(n) ? n : undefined; } catch { return undefined; }
+    }
+    return undefined;
+}
 
 export interface WhatsAppConfig extends ChannelConfig {
     /** Session auth directory */
@@ -344,6 +360,25 @@ export class WhatsAppAdapter implements ChannelAdapter {
 
         if (!text && attachments.length === 0) return;
 
+        // ── Materialização de bytes (issue 032) ─────────────────────────────────
+        // Antes deste ponto, `attachments` só tem metadados (fileId/mimeType/...) — nenhum dos
+        // três caminhos que agentMediaHandlers.ts sabe ler (fileId+downloadFile, url, data) batia
+        // para WhatsApp, então todo anexo virava "falha ao baixar". Mesmo padrão do canal Web:
+        // materializa aqui e popula `attachment.data` (base64) — sem mudar ChannelAdapter nem
+        // agentMediaHandlers.ts. Só um attachment por mensagem chega deste adapter (protocolo
+        // WhatsApp), então basta olhar o sub-tipo da mensagem para o `fileLength` declarado.
+        if (attachments.length > 0) {
+            const declaredLength =
+                message.imageMessage?.fileLength ?? message.videoMessage?.fileLength ??
+                message.audioMessage?.fileLength ?? message.documentMessage?.fileLength ??
+                message.stickerMessage?.fileLength;
+            const data = await this.materializeAttachment(msg, declaredLength);
+            if (data) attachments[0].data = data;
+            // `data` ausente (teto excedido, sem socket, ou download falhou): attachment segue só
+            // com metadados — agentMediaHandlers.ts trata como "falha ao baixar" hoje mesmo, fato
+            // honesto para o Core, nunca decisão de encerrar o turno (RFC-004).
+        }
+
         // ── Rota estruturada: protocolo "auth:<decision>:<txnId>" ─────────────
         const parts = text.split(':');
         if (parts[0] === 'auth' && parts.length === 3 && this.workflowCallback) {
@@ -376,6 +411,30 @@ export class WhatsAppAdapter implements ChannelAdapter {
 
         if (this.bus) {
             await this.bus.processMessage(normalizedMsg);
+        }
+    }
+
+    /**
+     * Baixa o anexo da mensagem recebida e devolve base64, ou `undefined` quando não é possível —
+     * nunca lança (issue 032). Recusa ANTES de baixar quando o WhatsApp já declarou o tamanho e
+     * ele excede `MessageBus.MAX_ATTACHMENT_BYTES` (evita gastar rede/memória com um arquivo que
+     * seria descartado de qualquer forma); `declaredLength` de forma desconhecida (protobuf `Long`
+     * não reconhecido, ausente) não bloqueia o download — só pula a checagem prévia, e o teto
+     * segue valendo depois, em `agentMediaHandlers.ts` (autoridade única, todos os canais).
+     */
+    private async materializeAttachment(msg: proto.IWebMessageInfo, declaredLength: unknown): Promise<string | undefined> {
+        const declared = toDeclaredBytes(declaredLength);
+        if (declared !== undefined && declared > MessageBus.MAX_ATTACHMENT_BYTES) {
+            log.warn('attachment_too_large', `declared=${declared} limit=${MessageBus.MAX_ATTACHMENT_BYTES} msgId=${msg.key?.id}`);
+            return undefined;
+        }
+        if (!this.sock) return undefined;
+        try {
+            const buffer = await downloadMediaMessage(msg as WAMessage, 'buffer', {});
+            return buffer.toString('base64');
+        } catch (e) {
+            log.warn('attachment_download_failed', `msgId=${msg.key?.id} error=${errorMessage(e)}`);
+            return undefined;
         }
     }
 

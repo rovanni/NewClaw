@@ -1,7 +1,7 @@
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import type { NormalizedMessage, ChannelAttachment } from '../channels/ChannelAdapter';
-import type { MessageBus } from '../channels/MessageBus';
+import { MessageBus } from '../channels/MessageBus';
 import type { MemoryManager } from '../memory/MemoryManager';
 import type { ProviderFactory } from './ProviderFactory';
 import fsStatic from 'fs';
@@ -119,6 +119,24 @@ async function fetchBuffer(url: string): Promise<Buffer> {
 }
 
 /**
+ * Autoridade única de teto de tamanho para anexo inline (issue 032) — o único ponto do Core que
+ * decodifica `attachment.data` para QUALQUER canal (hoje: Web; a partir desta Sprint, também
+ * WhatsApp/Signal). Antes deste guard, `Buffer.from(attachment.data, 'base64')` rodava sem nenhum
+ * limite — um documento grande materializava inteiro em memória antes de qualquer checagem.
+ *
+ * `Buffer.byteLength(str, 'base64')` calcula o tamanho decodificado por fórmula, sem alocar o
+ * buffer inteiro — o teto é aplicado ANTES da alocação real.
+ */
+function inlineAttachmentTooLarge(base64Data: string): boolean {
+    return Buffer.byteLength(base64Data, 'base64') > MessageBus.MAX_ATTACHMENT_BYTES;
+}
+
+function attachmentTooLargeMessage(): string {
+    const mb = Math.floor(MessageBus.MAX_ATTACHMENT_BYTES / (1024 * 1024));
+    return `⚠️ Arquivo excede o limite de ${mb}MB para anexos.`;
+}
+
+/**
  * Acrescenta a transcrição ao texto da mensagem sem apagar o que já existe.
  *
  * Antes era `msg.text = transcription`, atribuição direta: a legenda que acompanhava o áudio era
@@ -141,6 +159,10 @@ export async function transcribeAttachment(
         let audioBuffer!: Buffer;
         if (attachment.data) {
             // Canais sem download por fileId (ex: web) enviam o conteúdo já em base64.
+            if (inlineAttachmentTooLarge(attachment.data)) {
+                voiceLog.warn('audio_inline_too_large', `bytes~=${Buffer.byteLength(attachment.data, 'base64')} limit=${MessageBus.MAX_ATTACHMENT_BYTES}`);
+                return attachmentTooLargeMessage();
+            }
             audioBuffer = Buffer.from(attachment.data, 'base64');
             voiceLog.info('audio_from_inline_data', `size=${audioBuffer.length} type=${attachment.type}`);
         } else if (attachment.url) {
@@ -315,6 +337,10 @@ export async function handleDocumentAttachment(
             documentLog.info('downloading_from_discord', `Downloading ${fileName}`, { url });
             fileBuffer = await downloadWithRetry('document_url', documentLog, () => fetchBuffer(url));
         } else if (attachment.data) {
+            if (inlineAttachmentTooLarge(attachment.data)) {
+                documentLog.warn('document_inline_too_large', `bytes~=${Buffer.byteLength(attachment.data, 'base64')} limit=${MessageBus.MAX_ATTACHMENT_BYTES}`);
+                return attachmentTooLargeMessage();
+            }
             fileBuffer = Buffer.from(attachment.data, 'base64');
         }
 
@@ -419,6 +445,10 @@ export async function handlePhotoAttachment(
             const url = attachment.url;
             fileBuffer = await downloadWithRetry('photo_url', visionLog, () => fetchBuffer(url));
         } else if (attachment.data) {
+            if (inlineAttachmentTooLarge(attachment.data)) {
+                visionLog.warn('photo_inline_too_large', `bytes~=${Buffer.byteLength(attachment.data, 'base64')} limit=${MessageBus.MAX_ATTACHMENT_BYTES}`);
+                return attachmentTooLargeMessage();
+            }
             fileBuffer = Buffer.from(attachment.data, 'base64');
         }
 

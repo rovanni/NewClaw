@@ -56,6 +56,16 @@ export class MessageBus {
      */
     static readonly MAX_ATTACHMENTS_PER_MESSAGE = parseInt(process.env.MAX_ATTACHMENTS_PER_MESSAGE || '10', 10);
 
+    /**
+     * Teto de tamanho para um anexo materializado inline (`ChannelAttachment.data`, base64).
+     * Autoridade única — issue 032: antes só o upload HTTP do Dashboard (`multer`, mesmo valor
+     * 20MB) tinha teto; `agentMediaHandlers.ts` decodificava `attachment.data` de QUALQUER canal
+     * sem limite nenhum. Não é uma política do Dashboard nem de um canal específico — vive aqui
+     * (a mesma autoridade de `MAX_ATTACHMENTS_PER_MESSAGE`) para que todo consumidor de
+     * `attachment.data`, hoje e no futuro, herde o mesmo teto sem precisar redeclará-lo.
+     */
+    static readonly MAX_ATTACHMENT_BYTES = parseInt(process.env.MAX_ATTACHMENT_BYTES || String(20 * 1024 * 1024), 10);
+
     private adapters: Map<ChannelType, ChannelAdapter> = new Map();
     private agentLoop: AgentLoop;
     private sessionManager: SessionManager;

@@ -10,6 +10,10 @@ export interface NewClawConfig {
     signalPhoneNumber?: string;
     signalAllowedNumbers?: string[];
     signalCliPath?: string;
+    /** Diretório `--config` do signal-cli — onde ele grava anexos recebidos. Issue 032: sem isto,
+     *  o adapter nunca tenta ler bytes de anexo (o caminho padrão do signal-cli varia por SO e
+     *  não deve ser adivinhado — ver NUNCA_ADIVINHAR.md). Ausente = comportamento inalterado. */
+    signalCliConfigDir?: string;
     language: string;
     defaultProvider: string;
     geminiApiKey?: string;

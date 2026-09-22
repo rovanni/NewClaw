@@ -65,6 +65,8 @@ const config = {
     signalPhoneNumber: process.env.SIGNAL_PHONE_NUMBER || '',
     signalAllowedNumbers: (process.env.SIGNAL_ALLOWED_NUMBERS || '').split(',').map(id => id.trim()).filter(id => id.length > 0),
     signalCliPath: process.env.SIGNAL_CLI_PATH || 'signal-cli',
+    // Issue 032: sem valor padrão de propósito — ver docstring em agentControllerTypes.ts.
+    signalCliConfigDir: process.env.SIGNAL_CLI_CONFIG_DIR || '',
     language: process.env.APP_LANG || 'pt-BR',
     defaultProvider: process.env.DEFAULT_PROVIDER || 'gemini',
     geminiApiKey: process.env.GEMINI_API_KEY,
