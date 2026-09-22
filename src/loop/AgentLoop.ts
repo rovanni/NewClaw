@@ -827,16 +827,38 @@ export class AgentLoop {
 
     /**
      * ADR-010 §10 — mensagem de bloqueio quando C1 (barreira de groundedness) não aprova a
-     * entrega. Deliberadamente genérica: a política de recuperação para REJECTED/NOT_EVALUABLE
-     * não está decidida pela ADR (§16 — "questões deliberadamente deixadas em aberto"). O único
-     * contrato aqui é negativo: o usuário nunca recebe `response` (a alegação não sustentada) nem
-     * o motivo interno do juiz (não é conteúdo para o usuário, é para log/auditoria).
+     * entrega, e `trySynthesizePartialResponse()` (S269, 26/08/2026) não teve claim SUPPORTED
+     * nenhum para reescrever a partir dele. O único contrato NEGATIVO permanece: o usuário nunca
+     * recebe `response` (a alegação não sustentada) nem `g.reason` cru (texto de log/auditoria,
+     * formato técnico "REJECTED: N afirmação(ões); primeira não sustentada: '...'" — não é texto
+     * de usuário, mesma lição da issue 030 para `GoalBlocker.description`).
+     *
+     * Achado real (22/09/2026, audit log de instância em produção, 16-30/08): dos 53
+     * bloqueios reais em produção, só 3 tiveram recuperação parcial (S269); os outros 50 (94%)
+     * caíam aqui — e ATÉ AQUI, `REJECTED` e `NOT_EVALUABLE` recebiam o MESMO texto ("continha uma
+     * afirmação que os dados não sustentam"), apesar de serem estados epistemológicos opostos
+     * (ADR-010 §5): `REJECTED` é uma contradição POSITIVAMENTE determinada pela evidência;
+     * `NOT_EVALUABLE` é a evidência não determinar nada — nem a favor, nem contra. Um usuário
+     * perguntando sobre "DeepSeek Harness" (o mesmo caso real do S269) recebia repetidamente uma
+     * mensagem que soa como "você disse algo falso", quando o caso real era "não achei confirmação
+     * específica o bastante nas fontes" — a MESMA confusão que `ADR-010 §15` já proíbe
+     * explicitamente ("não transformar ausência de evidência em falsidade"), só que na barreira,
+     * não na mensagem final.
+     *
+     * Puramente determinístico — `state` já é um enum FECHADO, decidido pelo LLM Judge antes deste
+     * ponto (o trabalho semântico já aconteceu); mapear texto por valor de enum já resolvido é
+     * "este valor pertence a este enum?", não interpretação (RESPONSABILIDADE_ANTES_DO_MECANISMO,
+     * passo 6). Herda o mesmo débito de idioma que toda mensagem fixa deste método já tinha antes
+     * desta correção (Core só emite pt-BR — issue 018, fora do escopo aqui).
      */
     private static groundingBlockedMessage(state: GroundingState): string {
         if (state === 'UNVALIDATED') {
             return 'Não consegui confirmar se a resposta é sustentada pelos dados obtidos nesta tentativa. Pode pedir de novo?';
         }
-        return 'A resposta que eu ia enviar continha uma afirmação que os dados coletados não sustentam. Pode pedir de novo? Vou revisar antes de responder.';
+        if (state === 'NOT_EVALUABLE') {
+            return 'Não encontrei, nas fontes que consultei, confirmação específica o suficiente para os detalhes da minha resposta — não é que os dados contradigam o que eu ia dizer, é que eles não chegam a confirmar. Pode reformular pedindo menos detalhe, ou apontar uma fonte específica para eu consultar?';
+        }
+        return 'A resposta que eu ia enviar continha uma afirmação que os dados coletados contradizem. Pode pedir de novo? Vou revisar antes de responder.';
     }
 
     private async commitResponse(
