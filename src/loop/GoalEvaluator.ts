@@ -454,22 +454,6 @@ export class GoalEvaluator {
         );
     }
 
-    /** Avalia se o goal ainda tem progresso real entre ciclos */
-    evaluateProgress(goal: Goal): 'progressing' | 'stalled' | 'regressing' {
-        const attempts = goal.attempts;
-        if (attempts.length < 2) return 'progressing';
-
-        const recent = attempts.slice(-3);
-        const hasPositive = recent.some(a => a.result === 'success' || a.result === 'partial');
-
-        // Verifica tendência: todos os recentes falharam?
-        const allFailed = recent.every(a => a.result === 'failure');
-
-        if (allFailed && recent.length >= 2) return 'stalled';
-        if (!hasPositive && attempts.length > 5) return 'regressing';
-        return 'progressing';
-    }
-
     private classifyError(error: string, toolName: string, exitCode?: number): GoalBlocker {
         // Sinal ESTRUTURADO tem prioridade sobre qualquer parsing de texto: exit code 127 é
         // convenção POSIX garantida pelo shell (não pela mensagem que o SO produziu) para "comando

@@ -2,24 +2,36 @@
 /**
  * TESTE DE REGRESSÃO — S279 (issue 020, fechamento da cobertura do Incremento 1)
  *
- * O S278 provou de forma ESTRUTURAL que os 6 pontos de falha genérica chamam a autoridade única
- * (`GracefulDeliveryOrchestrator.buildFailureMessage`), e de forma COMPORTAMENTAL apenas duas saídas
+ * O S278 provou de forma ESTRUTURAL que os pontos de falha genérica chamam a autoridade única
+ * (`GracefulDeliveryOrchestrator.buildFailureMessage`), e de forma COMPORTAMENTAL só duas saídas
  * ("outcome failed" e "validação final"). Ficavam três só com cobertura estrutural. Este teste as
  * dispara de verdade, sem alterar produção, e prova que cada uma termina na mesma autoridade:
  *
  *   blocked      → `evaluate()` REAL produz o outcome, `handleBlockedOutcome` REAL o trata
  *   MAX_CYCLES   → `runLoopInternal` REAL entra já com o contador no limite
- *   regressing   → INALCANÇÁVEL hoje (ver S279.2) — a saída é exercitada com o gatilho substituído
  *
- * ACHADO (S279.2): `GoalEvaluator.evaluateProgress()` nunca devolve 'regressing'. `AttemptOutcome` só
- * tem 3 valores, e "nenhum success/partial nos últimos 3 attempts" implica que os 3 são 'failure' —
- * caso em que a função já devolveu 'stalled' na linha anterior. Além disso `GoalExecutionLoop` não tem
- * ramo para 'stalled'. A saída "regressing — aborting" é código morto, e a "detecção de stall" não
- * produz efeito. Este teste registra o fato; NÃO o corrige (issue 029).
+ * ACHADO original (S279.2, 21/09/2026): a terceira saída, "progresso regredindo"
+ * (`GoalEvaluator.evaluateProgress()` → `'regressing'`), era código morto — a função nunca devolvia
+ * `'regressing'` de verdade (`AttemptOutcome` só tem 3 valores; "nenhum success/partial nos últimos
+ * 3 attempts" implica que os 3 são `'failure'`, caso em que a função já tinha devolvido `'stalled'`
+ * na linha anterior) e `GoalExecutionLoop` nunca tinha ramo para `'stalled'`. A "detecção de stall"
+ * não produzia nenhum efeito, desde o commit que a introduziu.
+ *
+ * RESOLUÇÃO (22/09/2026, issue 029): removida. `GoalEvaluator.evaluateProgress()` e o bloco
+ * `if (progress === 'regressing') {...}` em `GoalExecutionLoop.ts` deixaram de existir — não foram
+ * mantidos como "inalcançáveis, mas presentes". A alternativa (implementar detecção de stall real)
+ * exigiria decidir um comportamento novo de produto (quantas falhas seguidas abortam um goal?) sem
+ * evidência de necessidade: o goal sempre termina de qualquer forma pelo esgotamento do
+ * `replanBudget` (saída "blocked", já coberta abaixo). Remover não muda nenhum comportamento
+ * observável — o branch já era inatingível — só elimina a proteção que o código prometia e não
+ * cumpria. A prova por enumeração exaustiva (S279.2 abaixo) é o que sustentou essa decisão; mantida
+ * aqui como evidência histórica, não como teste de um comportamento que ainda existe.
  *
  * Execução: npx ts-node src/__tests__/regression/S279_GoalFailure_ThreeExitsReachAuthority.test.ts
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { GoalEvaluator } from '../../loop/GoalEvaluator';
 import { GOAL_LIMITS } from '../../loop/GoalLimits';
 import { ToolRegistry } from '../../core/ToolRegistry';
@@ -85,47 +97,43 @@ async function main(): Promise<void> {
             assert(spy.calls === 1 && out.includes(spy.last), 'PROVA: o caminho executado invocou buildFailureMessage exatamente 1 vez e devolveu o texto que chegou ao usuário', spy);
         }
 
-        // ── S279.2 — saída "regressing" ─────────────────────────────────────────────────────────
-        console.log('\n=== S279.2 — saída "regressing": alcançabilidade e ligação com a autoridade ===');
+        // ── S279.2 — "progresso regredindo": prova histórica de por que foi REMOVIDA ────────────
+        console.log('\n=== S279.2 [histórico] — evaluateProgress() nunca devolvia "regressing" (por isso foi removida, issue 029) ===');
         {
-            // (a) ACHADO — enumeração exaustiva. evaluateProgress só depende dos 3 últimos attempts e de
-            // "mais de 5 attempts", então cobrir tamanhos 0..8 cobre qualquer tamanho.
-            const evaluator = new GoalEvaluator();
+            // Reimplementa aqui, LOCALMENTE, a lógica exata que existia em GoalEvaluator.evaluateProgress()
+            // antes da remoção — a prova por enumeração exaustiva não depende de o código de produção
+            // ainda existir; é sobre a LÓGICA que foi removida, preservada como evidência da decisão.
+            function extinctEvaluateProgress(attempts: Array<{ result: GoalAttempt['result'] }>): 'progressing' | 'stalled' | 'regressing' {
+                if (attempts.length < 2) return 'progressing';
+                const recent = attempts.slice(-3);
+                const hasPositive = recent.some(a => a.result === 'success' || a.result === 'partial');
+                const allFailed = recent.every(a => a.result === 'failure');
+                if (allFailed && recent.length >= 2) return 'stalled';
+                if (!hasPositive && attempts.length > 5) return 'regressing';
+                return 'progressing';
+            }
+
             const values: GoalAttempt['result'][] = ['success', 'failure', 'partial'];
             const seen: Record<string, number> = {};
             let total = 0;
-            const mk = (results: GoalAttempt['result'][]) => ({
-                attempts: results.map((r, i) => ({ id: `a${i}`, planStepId: `s${i}`, toolName: 't', args: {}, result: r, durationMs: 1, executedAt: i })),
-            }) as any;
             const walk = (prefix: GoalAttempt['result'][], n: number): void => {
-                if (prefix.length === n) { const r = evaluator.evaluateProgress(mk(prefix)); seen[r] = (seen[r] ?? 0) + 1; total++; return; }
+                if (prefix.length === n) { const r = extinctEvaluateProgress(prefix.map(result => ({ result }))); seen[r] = (seen[r] ?? 0) + 1; total++; return; }
                 for (const v of values) walk([...prefix, v], n);
             };
             for (let n = 0; n <= 8; n++) walk([], n);
             assert(total === 9841, 'a enumeração cobriu todas as 9841 sequências de attempts (tamanhos 0..8)', total);
             assert(seen['regressing'] === undefined,
-                'ACHADO: evaluateProgress NUNCA devolve "regressing" — a saída é inalcançável com AttemptOutcome de 3 valores (issue 029)', seen);
-            assert((seen['stalled'] ?? 0) > 0 && (seen['progressing'] ?? 0) > 0, 'os outros dois valores existem (stalled, progressing)', seen);
+                'CONFIRMADO: a lógica removida nunca devolvia "regressing" — a remoção não mudou nenhum comportamento observável', seen);
 
-            // (b) A saída, se um dia for alcançada, chega à autoridade. Como hoje é inalcançável, o
-            // GATILHO é substituído (evaluateProgress → 'regressing'); todo o resto é o handler real.
-            const TOOL = '__s279_regressing__';
-            ToolRegistry.register({ name: TOOL, description: 'test', parameters: {}, execute: async () => ({ success: false, output: '' }) });
-            const { loop, goalStore } = makeLoop({ achieved: true });
-            const spy = spyAuthority(loop);
-            const goal = makeGoal(goalStore, [step(TOOL)], { replanBudget: 3, toolsTried: [TOOL] });
-            const cycleResult = (loop as any).evaluator.evaluate(goal, goal.currentPlan[0], { success: false, output: '', error: 'falha genérica xyz' });
-            assert(cycleResult.outcome === 'blocked', 'pré-condição: outcome "blocked" com replan budget > 0 (passa da checagem de budget zerado)', cycleResult.outcome);
-
-            (loop as any).evaluator.evaluateProgress = () => 'regressing';   // gatilho substituído — ver cabeçalho
-            const handled = await (loop as any).handleBlockedOutcome(
-                goal, goal.currentPlan[0], cycleResult, 1, 0, undefined, emptyState(goal.id), undefined);
-            assert(handled.earlyReturn === true, 'com "regressing" o handler encerra o goal (earlyReturn)', handled);
-            assert(goalStore.getById(goal.id)!.status === 'failed', 'o goal termina failed');
-            const out: string = handled.result.finalOutput;
-            assert(out.includes(SIGNATURE_HEAD) && out.includes(SIGNATURE_TAIL), 'a mensagem tem a assinatura da autoridade única', out);
-            assert(goalStore.getById(goal.id)!.replanBudget === 3, 'e NÃO consumiu replan budget (saiu antes do replan)', goalStore.getById(goal.id)!.replanBudget);
-            assert(spy.calls === 1 && out.includes(spy.last), 'PROVA: o caminho executado invocou buildFailureMessage exatamente 1 vez e devolveu o texto que chegou ao usuário', spy);
+            // A remoção de fato aconteceu — a função e o branch que a consumia não existem mais.
+            const evaluatorSrc = fs.readFileSync(path.resolve(__dirname, '../../loop/GoalEvaluator.ts'), 'utf8');
+            const loopSrc = fs.readFileSync(path.resolve(__dirname, '../../loop/GoalExecutionLoop.ts'), 'utf8');
+            assert(typeof (new GoalEvaluator() as any).evaluateProgress === 'undefined',
+                'GoalEvaluator.evaluateProgress não existe mais — o compilador impede qualquer chamada direta');
+            assert(!/evaluateProgress/.test(evaluatorSrc), 'nenhum vestígio de evaluateProgress em GoalEvaluator.ts', evaluatorSrc.includes('evaluateProgress'));
+            assert(!/evaluateProgress|regressing/.test(loopSrc), 'GoalExecutionLoop.ts não chama mais evaluateProgress nem trata "regressing"', {
+                hasEvaluateProgress: loopSrc.includes('evaluateProgress'), hasRegressing: loopSrc.includes('regressing'),
+            });
         }
 
         // ── S279.3 — saída MAX_CYCLES ───────────────────────────────────────────────────────────

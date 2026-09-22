@@ -1101,14 +1101,6 @@ export class GoalExecutionLoop {
             return { earlyReturn: true, result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
         }
 
-        // Stall detection — sem progresso real?
-        const progress = this.evaluator.evaluateProgress(goal);
-        if (progress === 'regressing') {
-            log.warn(`[GoalLoop] goal=${goal.id} regressing — aborting`);
-            this.goalStore.setStatus(goal.id, 'failed');
-            const explanation = this.gracefulDelivery.buildFailureMessage(goal, state.cognitiveContext);
-            return { earlyReturn: true, result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
-        }
 
         // Replan com Espiral (Q1 + Q2 envolvem cada replanejamento)
         this.goalStore.update(goal.id, {

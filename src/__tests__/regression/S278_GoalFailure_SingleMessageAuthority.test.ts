@@ -21,6 +21,12 @@
  * Fora do escopo de propósito (mensagem = razão própria e deliberada): expirou, abandonado por nova
  * mensagem, plano bloqueado antes de executar, aguardando autorização, falha de envio pós-validação.
  *
+ * ATUALIZAÇÃO (22/09/2026, issue 029): a saída "progresso regredindo" (`evaluateProgress()` →
+ * `'regressing'`) foi REMOVIDA — o S279 (issue 020) já tinha provado por enumeração exaustiva que
+ * ela era código morto (a função nunca devolvia `'regressing'` de verdade; o gatilho só era
+ * exercitado ali substituindo a implementação). Eram 6 saídas genéricas, agora são 5.
+ *
+
  * Execução: npx ts-node src/__tests__/regression/S278_GoalFailure_SingleMessageAuthority.test.ts
  */
 
@@ -74,13 +80,13 @@ async function main(): Promise<void> {
             'nenhum ponto de GoalExecutionLoop chama buildFailureExplanation');
 
         const calls = loopSrc.match(/this\.gracefulDelivery\.buildFailureMessage\(/g) ?? [];
-        assert(calls.length === 6,
-            'os 6 pontos que produziam o texto genérico de falha (5 saídas + fallback de buildResult) chamam a autoridade única', calls.length);
+        assert(calls.length === 5,
+            'os 5 pontos que produzem o texto genérico de falha (4 saídas + fallback de buildResult) chamam a autoridade única — ' +
+            'a saída "progresso regredindo" foi REMOVIDA (issue 029: evaluateProgress() nunca era alcançada, dead code)', calls.length);
 
         // Cada saída de falha genérica, pelo trecho que a antecede — não basta contar chamadas.
         const exits: Array<[string, RegExp]> = [
             ['replan budget zerado (blocked)', /goalStore\.setStatus\(goal\.id, 'failed'\);\s*const explanation = this\.gracefulDelivery\.buildFailureMessage\(goal, state\.cognitiveContext\);\s*await onProgress/],
-            ['progresso regredindo', /regressing — aborting[\s\S]{0,120}buildFailureMessage\(goal, state\.cognitiveContext\)/],
             ['outcome failed (motivo do chamador)', /buildFailureMessage\(goal, state\.cognitiveContext, cycleResult\.output\)/],
             ['validação final com replan budget esgotado', /buildFailureMessage\(goal, state\.cognitiveContext, validation\.reason\)/],
             ['MAX_CYCLES', /setStatus\(currentGoal\.id, 'failed'\);\s*const explanation = this\.gracefulDelivery\.buildFailureMessage\(currentGoal, state\.cognitiveContext\)/],
@@ -89,6 +95,11 @@ async function main(): Promise<void> {
         for (const [name, re] of exits) {
             assert(re.test(loopSrc), `saída "${name}" passa pela autoridade única`);
         }
+
+        const evaluatorSrc = fs.readFileSync(path.resolve(__dirname, '../../loop/GoalEvaluator.ts'), 'utf8');
+        assert(!/evaluateProgress/.test(loopSrc), 'GoalExecutionLoop não chama mais evaluateProgress() (issue 029)', loopSrc.includes('evaluateProgress'));
+        assert(!/evaluateProgress/.test(evaluatorSrc), 'GoalEvaluator.evaluateProgress() foi removido, não só deixou de ser chamado', evaluatorSrc.includes('evaluateProgress'));
+        assert(!/'regressing'|'stalled'/.test(evaluatorSrc), 'os estados mortos "regressing"/"stalled" não sobrevivem em nenhuma assinatura', evaluatorSrc);
     }
 
     // ── 2. COMPORTAMENTAL ─────────────────────────────────────────────────────────────────────
