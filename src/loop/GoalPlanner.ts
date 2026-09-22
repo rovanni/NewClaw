@@ -765,7 +765,11 @@ export class GoalPlanner {
         // modelOverride=this.model preserva o modelo desta role na tentativa do provider padrão;
         // providers seguintes usam o próprio modelo default, conforme a semântica já corrigida
         // pela S173 (ownership do modelOverride).
-        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, timeoutMs, undefined, this.model);
+        // Issue 038 (22/09/2026, reproduzido ao vivo gerando PPTX): planejamento raciocina bastante
+        // antes de emitir o JSON do plano — o teto de "thinking" pensado pra chat curto abortava
+        // esse raciocínio legítimo, cascateando pro fallback llamafile morto. reasoningIntensive
+        // aplica o mesmo fator (4×) já calibrado pra chamadas de validação (auxTimeout.ts).
+        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, timeoutMs, undefined, this.model, { reasoningIntensive: true });
         if (result.status !== 'success') {
             const lastAttempt = result.attempts[result.attempts.length - 1];
             log.warn(`[GoalPlanner] callPlannerLLM failed: model=${this.model} status=${result.status} providersTried=${result.attempts.length} lastError="${(lastAttempt?.errorMessage ?? '').slice(0, 300)}"`);

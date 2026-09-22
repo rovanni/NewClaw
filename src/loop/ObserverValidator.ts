@@ -348,7 +348,10 @@ export class ObserverValidator {
             // observerModel na tentativa do provedor padrão (semântica de "dono" da S173); se esse
             // provedor falhar, os seguintes usam o próprio modelo, nunca herdam o override.
             const orcamento = this.providerFactory.getBudgetAuxiliar('validacao');
-            const fallbackResult = await this.providerFactory.chatWithFallback(messages, undefined, undefined, orcamento.timeoutMs, signal, this.observerModel);
+            // Issue 038: mesmo perfil 'validacao' já usado pro timeout externo — reasoningIntensive
+            // aplica o mesmo fator (4×) ao orçamento interno de "thinking" do provider, evitando
+            // que o juiz de grounding seja abortado por raciocínio legítimo (ver ChatFallbackOptions).
+            const fallbackResult = await this.providerFactory.chatWithFallback(messages, undefined, undefined, orcamento.timeoutMs, signal, this.observerModel, { reasoningIntensive: true });
             const elapsed = Date.now() - startTime;
 
             // If the signal aborted while the LLM was running, discard the result silently.
@@ -594,8 +597,11 @@ export class ObserverValidator {
             // provider único sem saída. chatWithFallback já cuida do externalSignal (aborta em
             // todas as tentativas caso `signal` dispare) — sem precisar de um AbortController manual
             // aqui.
+            // Issue 038: mesmo motivo do outro call site de grounding acima — reasoningIntensive
+            // evita que o juiz seja abortado pelo teto de "thinking" pensado para chat curto.
             const fallbackResult = await this.providerFactory.chatWithFallback(
                 [{ role: 'user', content: prompt }], undefined, undefined, orcamento.timeoutMs, signal, this.observerModel,
+                { reasoningIntensive: true },
             );
 
             if (fallbackResult.status !== 'success') {

@@ -4089,11 +4089,18 @@ OU
 
         let llmResult: Awaited<ReturnType<typeof this.providerFactory.chatWithFallback>> | undefined;
         try {
+            // Issue 038 (22/09/2026): este é o validador de conclusão do goal — julga um contexto
+            // grande (steps, attempts, conteúdo real de artefatos) antes de decidir achieved.
+            // reasoningIntensive evita que o teto de "thinking" pensado pra chat curto aborte esse
+            // raciocínio legítimo (mesmo fator 4× já calibrado em auxTimeout.ts).
             llmResult = await this.providerFactory.chatWithFallback(
                 [{ role: 'user', content: prompt }] as LLMMessage[],
                 undefined,
                 undefined,
                 45_000,
+                undefined,
+                undefined,
+                { reasoningIntensive: true },
             );
 
             if (llmResult.status !== 'success') {

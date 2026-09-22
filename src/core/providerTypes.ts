@@ -207,6 +207,24 @@ export function isSubstitutionPolicy(valor: unknown): valor is SubstitutionPolic
 export interface ChatFallbackOptions {
     /** O resultado desta chamada é entregue ao usuário, então uma substituição precisa ser dita. */
     anunciarSubstituicao?: boolean;
+    /**
+     * Issue 038 (campanha "sistema não utilizável", 22/09/2026): o guard-rail de "thinking"
+     * travado (`OllamaProvider.MAX_THINKING_BUDGET_CHARS`/`MAX_THINKING_DURATION_MS`, nascido do
+     * S72 — modelo genuinamente travado numa resposta CONVERSACIONAL) usa um único orçamento
+     * fixo pra toda chamada. Reproduzido ao vivo: o mesmo guard-rail também aborta o "juiz" de
+     * grounding (`ObserverValidator`) e o planejamento (`GoalPlanner`) — que legitimamente
+     * raciocinam mais antes de produzir a primeira linha de conteúdo — descartando o raciocínio
+     * já feito e mascarando uma resposta correta como "não confirmada" (log real: previsão do
+     * tempo com dados certos, bloqueada só porque o juiz nunca terminou de julgar).
+     *
+     * Opt-in explícito (mesmo padrão de `anunciarSubstituicao` acima): só quem chama sabe se a
+     * tarefa é curta/conversacional (padrão, mantém o teto original — protege o caso real do
+     * S72) ou pesada o bastante para precisar de mais espaço antes de decidir "modelo travado".
+     * Multiplica MAX_THINKING_BUDGET_CHARS/MAX_THINKING_DURATION_MS pelo mesmo fator (4×) já
+     * calibrado com evidência real para chamadas de validação em `shared/auxTimeout.ts`
+     * (`PERFIS.validacao.fator`) — não um número novo inventado para este achado.
+     */
+    reasoningIntensive?: boolean;
 }
 
 export interface CustomProviderConfig {
@@ -223,4 +241,7 @@ export interface ChatOptions {
     /** Budget (ms) measured from when chatWithFallback started the attempt.
      *  Each provider subtracts queue-wait time before applying it internally. */
     timeoutMs?: number;
+    /** Ver `ChatFallbackOptions.reasoningIntensive` (issue 038) — repassado pelo ProviderFactory
+     *  até o provider real (hoje só OllamaProvider consulta isto). */
+    reasoningIntensive?: boolean;
 }

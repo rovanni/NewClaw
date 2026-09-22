@@ -153,7 +153,7 @@ export class OllamaProvider implements ILLMProvider {
                 if (queueWaitMs > 500) {
                     log.info(`[STREAM] Queue wait: ${queueWaitMs}ms — remaining budget: ${remainingMs ?? 'default'}ms`);
                 }
-                return this._consumeStream(messages, tools, remainingMs, options?.signal);
+                return this._consumeStream(messages, tools, remainingMs, options?.signal, options?.reasoningIntensive);
             },
             { priority }
         );
@@ -177,7 +177,7 @@ export class OllamaProvider implements ILLMProvider {
      *
      * Handles partial buffers (lines broken between chunks).
      */
-    async *streamChat(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal): AsyncGenerator<StreamChunk> {
+    async *streamChat(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal, reasoningIntensive?: boolean): AsyncGenerator<StreamChunk> {
         const streamId = `str-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
@@ -213,8 +213,20 @@ export class OllamaProvider implements ILLMProvider {
         // Two independent limits — whichever fires first:
         //   chars  (~2× normal thinking for a conversational reply)
         //   time   (absolute wall-clock cap regardless of chunk rate)
-        const MAX_THINKING_BUDGET_CHARS = 8_000;
-        const MAX_THINKING_DURATION_MS  = 60_000;
+        //
+        // Issue 038 (22/09/2026): este teto único, calibrado para o caso conversacional do S72
+        // (chat curto), também abortava chamadas legitimamente pesadas (juiz de grounding,
+        // planejamento) que precisam raciocinar mais antes da primeira linha de conteúdo —
+        // reproduzido ao vivo descartando ~8000 chars de raciocínio real repetidamente.
+        // `reasoningIntensive` é opt-in explícito de quem chama (`ChatFallbackOptions`, mesmo
+        // padrão de `anunciarSubstituicao`) — o multiplicador reusa o fator (4×) já calibrado
+        // com evidência real para chamadas de validação em `shared/auxTimeout.ts`
+        // (`PERFIS.validacao.fator`), não um número novo inventado para este achado. Sem o
+        // opt-in, o teto original do S72 continua intacto — nenhuma chamada existente muda de
+        // comportamento.
+        const THINKING_BUDGET_MULTIPLIER = reasoningIntensive ? 4 : 1;
+        const MAX_THINKING_BUDGET_CHARS = 8_000 * THINKING_BUDGET_MULTIPLIER;
+        const MAX_THINKING_DURATION_MS  = 60_000 * THINKING_BUDGET_MULTIPLIER;
         let thinkingYielded = 0;
         let thinkingStartMs: number | null = null;
         let hasNonThinkingOutput = false;
@@ -437,7 +449,7 @@ export class OllamaProvider implements ILLMProvider {
      * Consume the streaming generator and collect full response.
      * On stream failure, throws — caller handles retries and fallback.
      */
-    private async _consumeStream(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal): Promise<LLMResponse> {
+    private async _consumeStream(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal, reasoningIntensive?: boolean): Promise<LLMResponse> {
         let content = '';
         let thinking = '';
         const toolCalls: RawToolCall[] = [];
@@ -451,7 +463,7 @@ export class OllamaProvider implements ILLMProvider {
         this._reasoningBudgetAborted = false;
 
         try {
-            for await (const chunk of this.streamChat(messages, tools, customTimeoutMs, externalSignal)) {
+            for await (const chunk of this.streamChat(messages, tools, customTimeoutMs, externalSignal, reasoningIntensive)) {
                 chunkCount++;
                 switch (chunk.type) {
                     case 'content': content += chunk.value; break;

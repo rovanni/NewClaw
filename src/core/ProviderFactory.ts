@@ -369,7 +369,7 @@ export class ProviderFactory {
                         ? this.mensagensComFatoDaSubstituicao(messages, preferredProvider as string, providerName)
                         : messages;
 
-                    const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs };
+                    const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs, reasoningIntensive: opts?.reasoningIntensive };
                     const chatPromise = provider.chat(mensagensDoProvider, tools, chatOptions);
                     let result: LLMResponse;
 
