@@ -1645,7 +1645,10 @@ export class GoalExecutionLoop {
 
         if (Date.now() > goal.expiresAt) {
             this.goalStore.setStatus(goal.id, 'abandoned');
-            return { action: 'earlyReturn', result: this.buildResult(goal, false, totalCycles, totalReplans, 'Objetivo expirou por tempo limite.') };
+            // issue 028: mesma autoridade única das saídas genéricas de falha (issue 020) — o
+            // motivo ("expirou") é um fato de entrada, não substitui o resumo do que já foi obtido.
+            const explanation = this.gracefulDelivery.buildFailureMessage(goal, state.cognitiveContext, 'Objetivo expirou por tempo limite.');
+            return { action: 'earlyReturn', result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
         }
         return { action: 'continueLoop', goal, totalReplans, priorFeedback };
     }
@@ -1711,9 +1714,11 @@ export class GoalExecutionLoop {
             const abandonReason = this.goalStore.consumeAbandonReason(goal.id)
                 ?? 'Goal interrompido: nova mensagem do usuário recebida durante execução.';
             log.info(`[GoalLoop] goal=${goal.id} foi abandonado durante execução do step — saindo do loop (${abandonReason})`);
+            // issue 028: mesma autoridade única — cobre também /cancelar (GoalOrchestrator.cancelActiveGoal).
+            const explanation = this.gracefulDelivery.buildFailureMessage(goal, state.cognitiveContext, abandonReason);
             return {
                 action: 'earlyReturn',
-                result: this.buildResult(goal, false, totalCycles, totalReplans, abandonReason),
+                result: this.buildResult(goal, false, totalCycles, totalReplans, explanation),
             };
         }
 
@@ -2053,8 +2058,9 @@ export class GoalExecutionLoop {
             // Verificar TTL após cada ciclo
             if (Date.now() > currentGoal.expiresAt) {
                 this.goalStore.setStatus(currentGoal.id, 'abandoned');
-                return this.buildResult(currentGoal, false, totalCycles, totalReplans,
-                    'Objetivo expirou por tempo limite.');
+                // issue 028: mesma autoridade única (ver o outro ponto de expiração acima).
+                const explanation = this.gracefulDelivery.buildFailureMessage(currentGoal, state.cognitiveContext, 'Objetivo expirou por tempo limite.');
+                return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
             }
         }
 

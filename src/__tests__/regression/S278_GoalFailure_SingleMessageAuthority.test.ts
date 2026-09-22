@@ -79,9 +79,14 @@ async function main(): Promise<void> {
         assert(!/\.buildFailureExplanation\s*\(/.test(loopSrc),
             'nenhum ponto de GoalExecutionLoop chama buildFailureExplanation');
 
+        // Contagem MÍNIMA, não exata: a partir da issue 028 (expiração/abandono, categoria
+        // distinta) o arquivo ganhou MAIS chamadas legítimas à mesma autoridade — um número fixo
+        // aqui quebraria a cada categoria nova que reusar a autoridade, o que é o comportamento
+        // desejado, não uma regressão. As 5 saídas de FALHA GENÉRICA desta issue são verificadas
+        // individualmente abaixo, por conteúdo, não por contagem total.
         const calls = loopSrc.match(/this\.gracefulDelivery\.buildFailureMessage\(/g) ?? [];
-        assert(calls.length === 5,
-            'os 5 pontos que produzem o texto genérico de falha (4 saídas + fallback de buildResult) chamam a autoridade única — ' +
+        assert(calls.length >= 5,
+            'pelo menos os 5 pontos que produzem o texto genérico de falha (4 saídas + fallback de buildResult) chamam a autoridade única — ' +
             'a saída "progresso regredindo" foi REMOVIDA (issue 029: evaluateProgress() nunca era alcançada, dead code)', calls.length);
 
         // Cada saída de falha genérica, pelo trecho que a antecede — não basta contar chamadas.
