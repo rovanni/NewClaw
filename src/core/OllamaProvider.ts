@@ -496,7 +496,19 @@ export class OllamaProvider implements ILLMProvider {
             // externalSignal after we return, so no thinking leaks to a cancelled user).
             // Do NOT promote thinking when there are also tool calls: the thinking is internal
             // reasoning accompanying the action and must never reach the user as a response.
-            if (!content && thinking && thinking.length > 50 && toolCalls.length === 0) {
+            //
+            // Issue 042 (22/09/2026, achado no mesmo teste ao vivo que motivou a issue 038):
+            // reproduzido com reasoningIntensive=true — o teto de TEMPO da chamada (não o de
+            // chars, já corrigido) estourou primeiro, e este recovery promoveu ~11800 chars de
+            // raciocínio bruto e incompleto a "content". Para um chamador que espera prosa livre
+            // (turno conversacional), isso é uma recuperação legítima. Para um chamador que
+            // opta por reasoningIntensive — os 4 call sites hoje esperam JSON estruturado
+            // (veredito de grounding, plano, conclusão de goal) — um CoT truncado NUNCA é um
+            // substituto válido: só troca um timeout limpo por "saída do juiz sem estrutura
+            // válida", mais confuso. `reasoningIntensive` já é o sinal de "este chamador produz
+            // saída estruturada, não prosa" — reusar em vez de inventar uma segunda flag
+            // (Nunca Adivinhar: reportar o timeout real, não chutar que o CoT bruto é a resposta).
+            if (!reasoningIntensive && !content && thinking && thinking.length > 50 && toolCalls.length === 0) {
                 log.info(`[${consumeId}] [STREAM-CONSUME] Aborted with ${thinking.length} chars of thinking, no content — recovering thinking as content`);
                 content = thinking;
                 thinking = '';
