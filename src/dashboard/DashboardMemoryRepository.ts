@@ -40,6 +40,7 @@ export interface MsgRow {
     content: string;
     created_at: string;
     conversation_id?: string;
+    attachments?: unknown[];
 }
 
 export interface MemoryStats {
@@ -101,9 +102,22 @@ export class DashboardMemoryRepository {
 
     getMessagesByConversation(convId: string, limit: number): MsgRow[] {
         const rows = this.db.prepare(
-            'SELECT role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?'
-        ).all(convId, limit) as MsgRow[];
-        return rows.reverse();
+            'SELECT role, content, created_at, attachments FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?'
+        ).all(convId, limit) as (Omit<MsgRow, 'attachments'> & { attachments: string | null })[];
+        // `attachments` chega como TEXT (JSON) ou NULL do SQLite — nunca expor a string crua pro
+        // chamador (issue 040/041): um JSON malformado (não deveria acontecer, mas nunca escrito
+        // por outro caminho que não seja conversationRepository.addMessage) vira mensagem sem
+        // anexo em vez de quebrar a rota inteira.
+        return rows.reverse().map(r => {
+            let attachments: unknown[] | undefined;
+            if (r.attachments) {
+                try {
+                    const parsed = JSON.parse(r.attachments);
+                    if (Array.isArray(parsed)) attachments = parsed;
+                } catch { /* JSON malformado — trata como sem anexo */ }
+            }
+            return { role: r.role, content: r.content, created_at: r.created_at, attachments };
+        });
     }
 
     /**

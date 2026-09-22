@@ -597,6 +597,13 @@ export class MessageBus {
             });
 
             // 4. Envia resposta antes de gravar no DB — erro de DB nunca bloqueia o usuário
+            // Issue 040/041: alguns adapters (WebChannelAdapter) só sabem quais anexos foram
+            // realmente mesclados na entrega DEPOIS de send() resolver (sendDocument/sendVoice
+            // chamados durante a execução do goal ficam acumulados dentro do adapter até esse
+            // ponto) — captura o retorno pra persistir o mesmo anexo que o usuário recebeu, não
+            // só o texto. Adapters que não mesclam nada (Telegram/Discord/WhatsApp/Signal)
+            // retornam void — deliveredAttachments fica undefined, comportamento inalterado.
+            let deliveredAttachments: NormalizedResponse['attachments'];
             if (adapter) {
                 // H1 observabilidade: correlaciona mensagem recebida com resposta enviada
                 log.info(`[USER-MESSAGE] message_id=${msg.messageId} session=${composeSessionKey(sessionKey)} correlationId=${correlationId} response_len=${responseText?.length ?? 0} duration_ms=${duration}`);
@@ -605,10 +612,11 @@ export class MessageBus {
                     format: 'markdown',
                     options: responseOptions
                 };
-                await adapter.send(normalizedResponse, msg.rawContext);
+                const delivered = await adapter.send(normalizedResponse, msg.rawContext);
+                deliveredAttachments = delivered?.attachments;
             }
 
-            await this.sessionManager.recordAssistantMessage(sessionKey, responseText || '', { model: 'newclaw' }).catch(err => {
+            await this.sessionManager.recordAssistantMessage(sessionKey, responseText || '', { model: 'newclaw' }, deliveredAttachments).catch(err => {
                 log.error('record_assistant_message_failed', err, 'Failed to persist assistant message; response already sent');
             });
 

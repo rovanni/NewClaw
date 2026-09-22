@@ -1,11 +1,13 @@
 /**
  * ChannelAdapter — Interface comum para todos os canais de entrada/saída
- * 
+ *
  * Cada canal (Telegram, Discord, Signal, WhatsApp, etc.) implementa
  * esta interface para normalizar mensagens de/para o AgentLoop.
- * 
+ *
  * Inspirado no OpenClaw Gateway, mas integrado ao NewClaw.
  */
+
+import path from 'path';
 
 export type ChannelType = 'telegram' | 'discord' | 'signal' | 'whatsapp' | 'web';
 
@@ -77,6 +79,52 @@ export interface ResponseAttachment {
     mimeType?: string;
 }
 
+// Movido de dashboard/routes/chat.ts (issue 040/041, 22/09/2026): a mesma serialização
+// (Buffer → base64, extensão → mimetype) agora é consumida também por conversationRepository.ts
+// (Core, para persistir o anexo entregue) — Core nunca pode importar de dashboard/ (ver
+// docs/ARCHITECTURE.md, "Dependências proibidas"), então a lógica compartilhada mora aqui, o
+// módulo-folha neutro que os dois lados já importam. dashboard/routes/chat.ts reexporta os
+// mesmos nomes para não quebrar call sites nem o teste S14 que já importa de lá.
+//
+// Anexos de SAÍDA (arquivos gerados pelo agente via send_document/send_audio) chegam como
+// Buffer puro — Telegram/Discord não precisam de mimetype (a própria API do canal infere), mas o
+// navegador precisa de um Blob com `type` correto pra abrir/baixar direito. Cobre só as extensões
+// que as skills deste projeto realmente geram (pptx-generator, html-pdf-converter, marp) — sem
+// dependência nova (pacote `mime`) para uma lista pequena e estável.
+const EXT_MIME: Record<string, string> = {
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.pdf': 'application/pdf',
+    '.html': 'text/html',
+    '.htm': 'text/html',
+    '.md': 'text/markdown',
+    '.txt': 'text/plain',
+    '.csv': 'text/csv',
+    '.json': 'application/json',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.zip': 'application/zip',
+    '.mp3': 'audio/mpeg',
+    '.ogg': 'audio/ogg',
+    '.mp4': 'video/mp4',
+};
+export function mimeTypeForFile(fileName: string): string {
+    return EXT_MIME[path.extname(fileName).toLowerCase()] || 'application/octet-stream';
+}
+
+/** Serializa ResponseAttachment (data: Buffer | string) para JSON — base64 puro. */
+export function serializeAttachment(a: ResponseAttachment): { type: string; fileName?: string; mimeType: string; data: string } {
+    const fileName = a.fileName || 'arquivo';
+    return {
+        type: a.type,
+        fileName,
+        mimeType: a.mimeType || mimeTypeForFile(fileName),
+        data: Buffer.isBuffer(a.data) ? a.data.toString('base64') : String(a.data),
+    };
+}
+
 /** Tipo de ação de digitação para o canal */
 export type TypingAction = 'typing' | 'upload_photo' | 'record_video' | 'record_voice' | 'upload_document';
 
@@ -125,8 +173,22 @@ export interface ChannelAdapter {
     start(): Promise<void>;
     /** Parar o adapter */
     stop(): Promise<void>;
-    /** Enviar mensagem para o canal */
-    send(response: NormalizedResponse, context: unknown): Promise<void>;
+    /**
+     * Enviar mensagem para o canal.
+     *
+     * Retorno opcional (issue 040/041, campanha "sistema não utilizável", 22/09/2026): um
+     * adapter que mescla anexos acumulados via sendDocument()/sendVoice() ANTES de entregar
+     * (ex.: WebChannelAdapter, que só resolve o texto e os anexos juntos no outbox) pode
+     * devolver o `NormalizedResponse` final — o que o usuário realmente recebeu, texto e
+     * anexos — para que o chamador persista isso no histórico (ver `SessionManager.
+     * recordAssistantMessage`). Sem isso, MessageBus/AgentController nunca sabem que um anexo
+     * foi mesclado dentro do adapter, e o histórico salvo no banco só tem o texto — motivo
+     * pelo qual um PPTX entregue "sumia" de uma conversa reaberta depois. Adapters que não
+     * mesclam nada (Telegram/Discord/WhatsApp/Signal, que enviam anexo direto à plataforma,
+     * que já é o registro permanente) continuam retornando `void` — mudança aditiva, nenhum
+     * adapter existente precisa mudar.
+     */
+    send(response: NormalizedResponse, context: unknown): Promise<NormalizedResponse | void>;
     /** Enviar mensagem diretamente para um chatId (sem rawContext — usado pelo Scheduler) */
     sendToChat?(chatId: string, response: NormalizedResponse): Promise<void>;
     /** Verificar saúde */

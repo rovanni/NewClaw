@@ -201,9 +201,9 @@ export class WebChannelAdapter implements ChannelAdapter {
         });
     }
 
-    async send(response: NormalizedResponse, context: unknown): Promise<void> {
+    async send(response: NormalizedResponse, context: unknown): Promise<NormalizedResponse | void> {
         const requestId = typeof context === 'string' ? context : String(context);
-        
+
         // Fluxo Assíncrono (Incremento 2)
         const a = this.asyncTurns.get(requestId);
         if (a) {
@@ -211,8 +211,9 @@ export class WebChannelAdapter implements ChannelAdapter {
             const withTurnAttachments: NormalizedResponse = a.attachments.length > 0
                 ? { ...response, attachments: [...(response.attachments ?? []), ...a.attachments] }
                 : response;
-            this.storeOutbox(requestId, this.mergeOrphaned(a.chatId, withTurnAttachments));
-            return;
+            const final = this.mergeOrphaned(a.chatId, withTurnAttachments);
+            this.storeOutbox(requestId, final);
+            return final;
         }
 
         // Fluxo Síncrono (Original / Auth-decision)
@@ -223,19 +224,21 @@ export class WebChannelAdapter implements ChannelAdapter {
             const withTurnAttachments: NormalizedResponse = p.attachments.length > 0
                 ? { ...response, attachments: [...(response.attachments ?? []), ...p.attachments] }
                 : response;
-            p.resolve(this.mergeOrphaned(p.chatId, withTurnAttachments));
-            return;
+            const final = this.mergeOrphaned(p.chatId, withTurnAttachments);
+            p.resolve(final);
+            return final;
         }
 
         // Se timeout do fluxo síncrono (orphaned deliveries)
         const timedOut = this.timedOutRequests.get(requestId);
         if (timedOut) {
             this.handleOrphanedSend(requestId, response);
-            return;
+            return response;
         }
 
         // Caso 6: sem conexão HTTP original. A resposta ainda deve chegar à Outbox.
         this.storeOutbox(requestId, response);
+        return response;
     }
 
     /**

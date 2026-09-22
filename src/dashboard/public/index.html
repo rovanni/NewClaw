@@ -616,14 +616,33 @@
         for (const sc of data.conversations) {
           const localId = sc.sessionId || sc.user_id || sc.id;
           const local = conversations.find(c => c.id === localId);
+          const serverUpdatedAt = new Date(sc.updated_at).getTime();
           if (!local) {
             const msgRes = await fetch(`/api/conversations/${sc.id}/messages?limit=50`);
             const msgData = await msgRes.json();
             conversations.push({
               id: localId, serverId: sc.id, title: localId,
-              messages: (msgData.messages || []).map(m => ({role: m.role, content: m.content, timestamp: new Date(m.created_at).getTime()})),
-              createdAt: new Date(sc.created_at).getTime(), updatedAt: new Date(sc.updated_at).getTime()
+              messages: (msgData.messages || []).map(mapServerMessage),
+              createdAt: new Date(sc.created_at).getTime(), updatedAt: serverUpdatedAt
             });
+          } else if (serverUpdatedAt > (local.updatedAt || 0)) {
+            // Achado real (campanha "sistema não utilizável", 22/09/2026): uma resposta pode
+            // demorar minutos (goal complexo) — se a aba recarrega, troca de navegador, ou perde
+            // o turnId em memória antes do outbox ser consumido (ver fetchAndRenderOutbox), a
+            // resposta fica só no banco, nunca chega à tela, e este bloco antes só tratava
+            // conversas DESCONHECIDAS localmente (`if (!local)`) — uma conversa já aberta nunca
+            // era re-sincronizada, mesmo com o servidor mostrando atividade mais recente.
+            // O servidor é a fonte de verdade: substitui as mensagens locais pelas dele em vez de
+            // tentar mesclar (evita duplicar mensagens já renderizadas via polling do outbox).
+            const serverId = local.serverId || sc.id;
+            try {
+              const msgRes = await fetch(`/api/conversations/${serverId}/messages?limit=50`);
+              const msgData = await msgRes.json();
+              if (msgData.success) {
+                local.messages = (msgData.messages || []).map(mapServerMessage);
+                local.updatedAt = serverUpdatedAt;
+              }
+            } catch (e) { console.warn('[SYNC] Falha ao ressincronizar conversa existente:', localId, e); }
           }
         }
         save(); renderSidebar();
@@ -981,6 +1000,18 @@
         mimeType: a.mimeType,
         data: a.data,
       }));
+    }
+
+    // Mesma forma que addMsg() já grava localmente (role, content, timestamp, attachments) —
+    // usada por syncFromServer() tanto para conversas novas quanto para ressincronizar uma
+    // existente, para as duas nunca divergirem de novo.
+    function mapServerMessage(m) {
+      return {
+        role: m.role,
+        content: m.content,
+        timestamp: new Date(m.created_at).getTime(),
+        attachments: mapServerAttachments(m.attachments),
+      };
     }
 
     async function regenerateMsg(idx) {

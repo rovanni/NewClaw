@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { Message } from './memoryTypes';
 import { createLogger } from '../shared/AppLogger';
+import { serializeAttachment, type ResponseAttachment } from '../channels/ChannelAdapter';
 const log = createLogger('ConversationRepository');
 
 export function getOrCreateConversation(db: Database.Database, userId: string): string {
@@ -28,10 +29,17 @@ export function addMessage(
     db: Database.Database,
     conversationId: string,
     role: Message['role'],
-    content: string
+    content: string,
+    attachments?: ResponseAttachment[]
 ): void {
+    // Serializa como o outbox já serializa pro navegador (base64 puro, mesma forma que
+    // downloadAttachment() no dashboard já sabe consumir) — nenhum formato novo, só persistido
+    // desta vez. `undefined`/vazio grava NULL, não uma string "[]" ou "undefined".
+    const attachmentsJson = attachments && attachments.length > 0
+        ? JSON.stringify(attachments.map(serializeAttachment))
+        : null;
     try {
-        db.prepare('INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)').run(conversationId, role, content);
+        db.prepare('INSERT INTO messages (conversation_id, role, content, attachments) VALUES (?, ?, ?, ?)').run(conversationId, role, content, attachmentsJson);
         db.prepare('UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(conversationId);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

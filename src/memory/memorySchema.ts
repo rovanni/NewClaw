@@ -380,6 +380,14 @@ export function initializeSchema(db: Database.Database): Record<string, string> 
             FOREIGN KEY (conversation_id) REFERENCES conversations(id)
         )
     `);
+    // Issue 040/041 (campanha "sistema não utilizável", 22/09/2026): sem esta coluna, um anexo
+    // entregue de verdade (PPTX, áudio) só existia no instante do outbox — recarregar a página,
+    // trocar de navegador ou reabrir uma conversa antiga fazia o anexo sumir da tela pra sempre,
+    // mesmo com o arquivo real intacto em disco. `CREATE TABLE IF NOT EXISTS` acima não altera
+    // tabelas já existentes — mesmo padrão de migração já usado por CaseMemory/GoalStore/
+    // OwnerProfileService: ALTER TABLE ADD COLUMN dentro de try/catch, silencioso quando a coluna
+    // já existe (SQLite não tem "ADD COLUMN IF NOT EXISTS").
+    try { db.exec('ALTER TABLE messages ADD COLUMN attachments TEXT'); } catch { /* já existe */ }
 
     db.exec(`
         CREATE TABLE IF NOT EXISTS memory_nodes (

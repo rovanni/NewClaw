@@ -10,6 +10,7 @@
  */
 
 import { MemoryManager } from '../memory/MemoryManager';
+import type { ResponseAttachment } from '../channels/ChannelAdapter';
 import type { MemoryFacade } from '../memory/MemoryFacade';
 import { SessionTranscript, TranscriptEntry, TranscriptMeta } from './SessionTranscript';
 import { composeSessionKey } from './SessionKeyFactory';
@@ -238,12 +239,12 @@ export class SessionManager {
         });
     }
 
-    async recordAssistantMessage(key: SessionKey, content: string, meta?: TranscriptMeta): Promise<number> {
+    async recordAssistantMessage(key: SessionKey, content: string, meta?: TranscriptMeta, attachments?: ResponseAttachment[]): Promise<number> {
         const sid = this.sessionKey(key);
         return this.withMutex(sid, async () => {
             const transcript = await this.getOrCreateSession(key);
             const seq = await transcript.appendAsync('assistant', content, meta);
-            this.memory.addMessage(this.conversationId(key), 'assistant', content);
+            this.memory.addMessage(this.conversationId(key), 'assistant', content, attachments);
             log.info(`${sid} assistant seq=${seq} len=${content.length} tokens≈${Math.round(estimateTokens(content))}`);
             // CMI: fire-and-forget
             const entry: TranscriptEntry = { ts: new Date().toISOString(), seq, role: 'assistant', content, meta };

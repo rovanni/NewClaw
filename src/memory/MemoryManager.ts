@@ -24,6 +24,7 @@ import * as conv from './conversationRepository';
 import * as graph from './graphRepository';
 import * as snap from './snapshotRepository';
 import { DashboardMemoryRepository } from '../dashboard/DashboardMemoryRepository';
+import type { ResponseAttachment } from '../channels/ChannelAdapter';
 import { MemoryGraphRepository } from './MemoryGraphRepository';
 import { EmbeddingService, DEFAULT_EMBED_MODEL } from './EmbeddingService';
 import { ClassificationMemory } from './ClassificationMemory';
@@ -299,8 +300,8 @@ export class MemoryManager {
         return conv.createNewConversation(this.db, userId);
     }
 
-    addMessage(conversationId: string, role: 'user' | 'assistant' | 'system' | 'tool', content: string): void {
-        conv.addMessage(this.db, conversationId, role, content);
+    addMessage(conversationId: string, role: 'user' | 'assistant' | 'system' | 'tool', content: string, attachments?: ResponseAttachment[]): void {
+        conv.addMessage(this.db, conversationId, role, content, attachments);
         if (role === 'user') this.incrementInteractionCount();
     }
 

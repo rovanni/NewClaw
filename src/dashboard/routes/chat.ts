@@ -1,11 +1,16 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import crypto from 'crypto';
-import path from 'path';
 import { errorMessage } from '../../shared/errors';
 import { DashboardContext } from './types';
-import type { ChannelAttachment, NormalizedMessage, ResponseAttachment } from '../../channels/ChannelAdapter';
+import type { ChannelAttachment, NormalizedMessage } from '../../channels/ChannelAdapter';
+import { mimeTypeForFile, serializeAttachment } from '../../channels/ChannelAdapter';
 import { MessageBus } from '../../channels/MessageBus';
+
+// Reexportados para não quebrar call sites externos (ex: S14 test) — implementação real mora em
+// channels/ChannelAdapter.ts desde a issue 040/041 (ver comentário lá: Core também precisa desta
+// serialização pra persistir anexos entregues, e Core não pode importar de dashboard/).
+export { mimeTypeForFile, serializeAttachment };
 
 const chatRateLimit = new Map<string, number[]>();
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -69,45 +74,6 @@ function classifyAttachmentType(mimeType: string): ChannelAttachment['type'] {
     if (mimeType.startsWith('audio/')) return 'audio';
     if (mimeType.startsWith('video/')) return 'video';
     return 'document';
-}
-
-// Anexos de SAÍDA (arquivos gerados pelo agente via send_document/send_audio) chegam como
-// Buffer puro — Telegram/Discord não precisam de mimetype (a própria API do canal infere),
-// mas o navegador precisa de um Blob com `type` correto pra abrir/baixar direito. Cobre só
-// as extensões que as skills deste projeto realmente geram (pptx-generator, html-pdf-converter,
-// marp) — sem dependência nova (pacote `mime`) para uma lista pequena e estável.
-const EXT_MIME: Record<string, string> = {
-    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    '.pdf': 'application/pdf',
-    '.html': 'text/html',
-    '.htm': 'text/html',
-    '.md': 'text/markdown',
-    '.txt': 'text/plain',
-    '.csv': 'text/csv',
-    '.json': 'application/json',
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.zip': 'application/zip',
-    '.mp3': 'audio/mpeg',
-    '.ogg': 'audio/ogg',
-    '.mp4': 'video/mp4',
-};
-export function mimeTypeForFile(fileName: string): string {
-    return EXT_MIME[path.extname(fileName).toLowerCase()] || 'application/octet-stream';
-}
-
-/** Serializa ResponseAttachment (data: Buffer | string) para JSON — o front recebe base64 puro. */
-export function serializeAttachment(a: ResponseAttachment): { type: string; fileName?: string; mimeType: string; data: string } {
-    const fileName = a.fileName || 'arquivo';
-    return {
-        type: a.type,
-        fileName,
-        mimeType: a.mimeType || mimeTypeForFile(fileName),
-        data: Buffer.isBuffer(a.data) ? a.data.toString('base64') : String(a.data),
-    };
 }
 
 export function createChatRouter(ctx: DashboardContext): Router {
