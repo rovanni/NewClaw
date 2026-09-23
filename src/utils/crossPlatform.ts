@@ -522,7 +522,13 @@ export function resolvePath(
 
     return {
         resolved: unique[0] ?? inputPath,
-        error: `⛔ Caminho fora do sandbox: ${inputPath} → tentados: ${unique.join(', ')}`,
+        // As raízes permitidas vão na mensagem: sem esse fato, quem recebe o erro (o Planner, num
+        // replan) só sabe que "este caminho falhou" e não que a FRONTEIRA existe — visto em
+        // 23/09/2026, quando um replan trocou exec_command (que lia a pasta externa) por `read`
+        // nessa mesma pasta, falhou, e abandonou o objetivo do usuário.
+        error: `⛔ Caminho fora do sandbox: ${inputPath} → tentados: ${unique.join(', ')}. `
+             + `Raízes permitidas para read/write/edit: ${[...new Set(allowedRoots)].join(', ')}. `
+             + `exec_command não é limitado a estas raízes.`,
     };
 }
 

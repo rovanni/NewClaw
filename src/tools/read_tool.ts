@@ -25,7 +25,7 @@ const NEAR_EMPTY_THRESHOLD_BYTES = 50;
 
 export class ReadTool implements ToolExecutor {
     name = 'read';
-    description = 'Ler conteúdo de um arquivo ou listar entradas de um diretório. Se o caminho for um diretório, lista automaticamente. Caminhos relativos são resolvidos a partir do workspace.';
+    description = 'Ler conteúdo de um arquivo ou listar entradas de um diretório. Se o caminho for um diretório, lista automaticamente. Caminhos relativos são resolvidos a partir do workspace. Só alcança o workspace, a pasta temporária e a pasta do usuário — para ler caminhos fora dessas raízes use exec_command.';
     // ARCH-015 (S26): texto co-localizado, agregado por GoalPlanner.buildRequiredArgsReference().
     requiredArgsHint = '- read: aceita caminho relativo ao workspace ou absoluto. Para diretórios, lista automaticamente o conteúdo.';
     parameters = {
