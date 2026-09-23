@@ -40,6 +40,64 @@ export const TERMINAL_DELIVERY_TOOLS: readonly string[] = ['send_audio', 'send_d
  */
 export const DIRECT_DELIVERABLE_TOOLS: readonly string[] = ['weather', 'crypto_analysis'];
 
+/** Forma mínima e já convencionada de `tool.parameters` (JSON-Schema-like) — cada tool declara a
+ *  sua (ex: `memory_write.ts`), nunca tipada em `ToolExecutor` porque cada tool tem seu próprio
+ *  formato de `properties`. Só o suficiente pra validação estrutural abaixo. */
+interface ToolArgsSchema {
+    required?: string[];
+    properties?: Record<string, { enum?: string[]; description?: string }>;
+}
+
+/**
+ * Valida `args` contra o schema declarativo da própria tool (`tool.parameters`) ANTES do
+ * despacho — checagem puramente estrutural ("este campo existe?", "este valor pertence a este
+ * enum?"), nunca interpretação de significado (`docs/ARCHITECTURE/RESPONSABILIDADE_ANTES_DO_MECANISMO.md`,
+ * mesma categoria de `TERMINAL_DELIVERY_TOOLS.includes()` acima). Retorna `null` quando tudo bate.
+ *
+ * Achado real (issue 043, campanha "sistema não utilizável", 22/09/2026): nenhum ponto de
+ * despacho (`ProactiveRecovery.tryWithRetry`, usado por `GoalExecutionLoop`) validava isto antes
+ * de chamar `tool.execute()` — um campo obrigatório ausente/vazio (ex: `memory_write` chamado sem
+ * `action` nem `content`, que juntos decidiriam a ação) só era descoberto DENTRO da própria tool,
+ * depois de já ter consumido um round-trip completo de LLM, com uma mensagem de erro
+ * (`Ação "" inválida`) que não lista os valores aceitos nem orienta o replanejador — o goal ficou
+ * preso reformulando repetidamente sem se corrigir. Esta checagem intercepta o caso ANTES da
+ * chamada, com uma mensagem que já lista os valores aceitos.
+ *
+ * Deliberadamente NÃO reimplementa o "resolver de parâmetro via evidência" que já existe em
+ * `AgentLoop.executeFastPath` (`resolveMissingParameterFromEvidence`) — aquilo é uma estratégia de
+ * RECUPERAÇÃO (tenta preencher o valor ausente antes de desistir), isto aqui é só a VALIDAÇÃO
+ * estrutural que deveria ter barrado o despacho de qualquer forma. São responsabilidades
+ * diferentes: uma tenta consertar, a outra apenas constata.
+ */
+export function validateToolArgs(tool: { parameters?: unknown }, args: Record<string, unknown>): string | null {
+    const schema = tool.parameters as ToolArgsSchema | undefined;
+    if (!schema) return null;
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    const properties = schema.properties ?? {};
+
+    for (const field of required) {
+        const value = args[field];
+        // '' conta como ausente: nenhum enum/valor de negócio legítimo deste projeto é uma string
+        // vazia — é sempre o resultado de um fallback que não tinha valor real pra usar (ver
+        // memory_write.ts:112, causa raiz real deste achado).
+        if (value === undefined || value === null || value === '') {
+            const prop = properties[field];
+            const options = prop?.enum ? ` Valores aceitos: ${prop.enum.join(', ')}.` : '';
+            const desc = prop?.description ? ` (${prop.description})` : '';
+            return `Campo obrigatório "${field}" ausente ou vazio.${desc}${options}`;
+        }
+    }
+
+    for (const [field, value] of Object.entries(args)) {
+        const prop = properties[field];
+        if (prop?.enum && typeof value === 'string' && value !== '' && !prop.enum.includes(value)) {
+            return `Valor "${value}" inválido para "${field}". Valores aceitos: ${prop.enum.join(', ')}.`;
+        }
+    }
+
+    return null;
+}
+
 interface ToolEntry {
     tool: ToolExecutor;
     enabled: boolean;

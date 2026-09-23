@@ -14,7 +14,7 @@ import { createHash } from 'crypto';
 import { ToolResult } from './AgentLoop';
 import { createLogger } from '../shared/AppLogger';
 import { computeToolInputKey } from './planning/computeToolInputKey';
-import { ToolRegistry } from '../core/ToolRegistry';
+import { ToolRegistry, validateToolArgs } from '../core/ToolRegistry';
 import { permissionRegistry } from '../core/PermissionRegistry';
 import { CORE_TRANSIENT_PATTERNS, NETWORK_PATTERN, RATE_LIMIT_PATTERN, HTTP_429_PATTERN } from '../shared/transientErrorPatterns';
 
@@ -447,6 +447,19 @@ export class ProactiveRecovery {
         if (!tool) {
             return {
                 result: { success: false, output: '', error: `Ferramenta "${toolName}" não encontrada` },
+                finalToolName: toolName,
+                finalArgs: args,
+            };
+        }
+
+        // Issue 043: valida contra o schema da própria tool ANTES de gastar uma tentativa real —
+        // um campo obrigatório ausente/vazio nunca é "transiente" (retry não resolve), então nem
+        // entra no loop de retry abaixo. Mensagem já lista os valores aceitos, para o replanejador
+        // se corrigir sem precisar de mais um round-trip de LLM só para descobrir isso.
+        const validationError = validateToolArgs(tool as unknown as { parameters?: unknown }, args);
+        if (validationError) {
+            return {
+                result: { success: false, output: '', error: validationError },
                 finalToolName: toolName,
                 finalArgs: args,
             };
