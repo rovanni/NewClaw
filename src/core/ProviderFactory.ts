@@ -280,9 +280,16 @@ export class ProviderFactory {
 
         if (activeProviders.length === 0) {
             log.error(`[${requestId}] ALL_PROVIDERS_CIRCUIT_OPEN — no provider available`);
+            // Sem `fallbackMessage`, o AgentLoop (`response.fallbackMessage || 'Erro ao processar...'`)
+            // descartava este texto e o usuário recebia só o genérico — visto em 23/09/2026, com o
+            // Ollama parado após o reboot: turno respondido com "Erro ao processar sua mensagem.",
+            // log com `Provider error at step 1: undefined`.
+            const indisponivel = 'Todos os providers estão temporariamente indisponíveis. Tente novamente em alguns segundos.';
             return {
                 status: 'error' as const,
-                content: 'Todos os providers estão temporariamente indisponíveis. Tente novamente em alguns segundos.',
+                content: indisponivel,
+                fallbackReason: 'unavailable' as FallbackReason,
+                fallbackMessage: indisponivel,
                 attempts: attemptLog,
             };
         }
@@ -587,7 +594,13 @@ export class ProviderFactory {
             content: '',
             toolCalls: undefined,
             fallbackReason: isTimeoutError ? 'timeout' : 'error' as FallbackReason,
-            fallbackMessage: 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.',
+            // "Demorou mais que o esperado" só é verdade para timeout. Uma falha que não é timeout
+            // (ex.: `fetch failed` em 4 ms, provider fora do ar) recebia o mesmo texto e mandava o
+            // usuário esperar por algo que nunca ia responder. Sem inferir a causa (DNS, recusa,
+            // TLS): o fato observado é que o provider não respondeu.
+            fallbackMessage: isTimeoutError
+                ? 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.'
+                : `Não foi possível obter resposta do provedor "${attemptLog[attemptLog.length - 1]?.provider ?? 'desconhecido'}". Verifique se o serviço está em execução e acessível e tente novamente.`,
             attempts: attemptLog
         };
     }

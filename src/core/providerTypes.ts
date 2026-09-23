@@ -98,7 +98,9 @@ export interface ToolDefinition {
 
 export type FallbackReason = 'timeout' | 'error' | 'empty_response' | 'streaming_failed' | 'cancelled'
     /** O recurso declarado falhou e a política `estrita` proibiu substituí-lo (`RFC-005` §1.3). */
-    | 'policy_strict';
+    | 'policy_strict'
+    /** Nenhum provider aceitou a tentativa: circuito aberto após falhas de conexão consecutivas. */
+    | 'unavailable';
 
 export interface AttemptInfo {
     provider: string;
