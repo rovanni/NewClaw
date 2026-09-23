@@ -7,7 +7,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
 import { getLocalRuntimeLifecycle } from './localRuntimeState';
-import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy, ChatFallbackOptions } from './providerTypes';
+import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy, ChatFallbackOptions, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS } from './providerTypes';
 import { GeminiProvider } from './GeminiProvider';
 import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
@@ -373,12 +373,23 @@ export class ProviderFactory {
                     const chatPromise = provider.chat(mensagensDoProvider, tools, chatOptions);
                     let result: LLMResponse;
 
-                    if (timeoutMs) {
-                        const attemptTimeout = setTimeout(() => currentAbort.abort(), timeoutMs);
+                    // Issue 047 (23/09/2026): este timer é uma camada de abort INDEPENDENTE do teto
+                    // interno do provider (OllamaProvider.streamChat's MAX_TIMEOUT) — sem elevar
+                    // também aqui, ele dispara com o `timeoutMs` original (aqui frequentemente ~30-60s,
+                    // vindo de getBudgetAuxiliar('validacao') preso no piso) ANTES do teto interno já
+                    // corretamente elevado pela issue 038 (240s) ter qualquer chance de agir.
+                    // Reproduzido ao vivo: `[STREAM] maxTimeout=240000ms` seguido de
+                    // `[STREAM] ABORTED ... duration=65619ms` — abortado por fora, não por dentro.
+                    const effectiveTimeoutMs = (opts?.reasoningIntensive && timeoutMs)
+                        ? Math.max(timeoutMs, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS)
+                        : timeoutMs;
+
+                    if (effectiveTimeoutMs) {
+                        const attemptTimeout = setTimeout(() => currentAbort.abort(), effectiveTimeoutMs);
                         // Safety timeout is 15s longer than the abort: gives _consumeStream time to
                         // recover thinking-as-content after the abort fires (both are async operations
                         // and the Promise.race reject would otherwise beat the recovery resolution).
-                        const safetyTimeoutMs = timeoutMs + 15000;
+                        const safetyTimeoutMs = effectiveTimeoutMs + 15000;
                         try {
                             result = await Promise.race([
                                 chatPromise,
@@ -520,7 +531,15 @@ export class ProviderFactory {
                     ? this.mensagensComFatoDaSubstituicao(messages, preferredProvider as string, 'ollama')
                     : messages;
                 try {
-                    const result = await ollamaProvider.fallbackNonStreaming(mensagensNaoStreaming, tools, timeoutMs);
+                    // Issue 047: mesmo raciocínio do timer de tentativa acima — fallbackNonStreaming()
+                    // nem recebe reasoningIntensive (não precisa: é uma chamada única, sem teto de
+                    // "thinking" interno próprio), mas o timeoutMs passado por fora precisa do mesmo
+                    // piso, ou uma chamada pesada que só chegou até aqui por já ter estourado o
+                    // streaming abortaria de novo, cedo demais, na última tentativa.
+                    const effectiveNonStreamingTimeoutMs = (opts?.reasoningIntensive && timeoutMs)
+                        ? Math.max(timeoutMs, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS)
+                        : timeoutMs;
+                    const result = await ollamaProvider.fallbackNonStreaming(mensagensNaoStreaming, tools, effectiveNonStreamingTimeoutMs);
                     if (result.content && result.content.trim()) {
                         attemptLog.push({ provider: 'ollama', model: 'non-streaming-fallback', duration: Date.now() - startTime, status: 'success' });
                         return {

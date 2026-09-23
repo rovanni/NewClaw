@@ -227,6 +227,29 @@ export interface ChatFallbackOptions {
     reasoningIntensive?: boolean;
 }
 
+/**
+ * Piso de timeout (ms) para chamadas `reasoningIntensive` — usado em MAIS de uma camada que
+ * decide "quando desistir" de uma chamada de LLM: o teto duro interno de cada provider
+ * (`OllamaProvider.streamChat`'s `MAX_TIMEOUT`) E o timeout de tentativa em
+ * `ProviderFactory.chatWithFallback` (`attemptTimeout`/`safetyTimeoutMs`).
+ *
+ * Issue 047 (23/09/2026, achado ao vivo, mesmo dia da issue 044): a issue 044 corrigiu só a
+ * primeira camada — `ProviderFactory` mantinha seu PRÓPRIO `setTimeout(timeoutMs)` sem saber de
+ * `reasoningIntensive`, abortando a chamada por fora aos ~65s enquanto o teto interno do
+ * provider (corretamente elevado a 240s) nunca chegava a ser testado. Reproduzido ao vivo:
+ * `[STREAM] START ... maxTimeout=240000ms` (teto interno correto) seguido de
+ * `[STREAM] ABORTED ... duration=65619ms` (abortado por fora, pelo timer desta constante fora de
+ * sincronia). Extraído aqui — em vez de duplicar "240_000" ou "60_000 × 4" em cada lugar — porque
+ * as duas camadas já divergiram uma vez; um valor só, importado dos dois lados, fecha essa classe
+ * de bug em vez de só este caso.
+ *
+ * Numericamente igual a `MAX_THINKING_DURATION_MS` com o multiplicador de `reasoningIntensive`
+ * (`OllamaProvider.ts`: `60_000 × 4`) — mantidos como constantes separadas (não uma reexportando
+ * a outra) porque representam conceitos distintos (teto de tempo em "thinking" vs. piso de
+ * timeout de tentativa), que hoje coincidem em valor mas não são a mesma coisa por definição.
+ */
+export const REASONING_INTENSIVE_TIMEOUT_FLOOR_MS = 240_000;
+
 export interface CustomProviderConfig {
     label: string;
     baseUrl: string;
