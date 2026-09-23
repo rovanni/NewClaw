@@ -2512,12 +2512,35 @@ export class AgentLoop {
             }
 
             // After all toolCalls in the batch are processed, check for a terminal result.
-            if (terminalBatchResult !== null) {
+            //
+            // Issue 046 (23/09/2026, achado ao vivo): o atalho abaixo (`endsTurn()` — ADR-007)
+            // é uma otimização legítima QUANDO a ferramenta de entrega é a única coisa que
+            // aconteceu no batch ("não há nada a dizer além do conteúdo", doc de
+            // `ToolRegistry.endsTurn()`). Mas o mesmo batch pode conter OUTRA tool não-terminal
+            // (ex: `weather`) cujo resultado o usuário está esperando — reproduzido ao vivo:
+            // usuário perguntou a previsão do tempo, o modelo chamou `weather` (sucesso, dado
+            // real) E `send_document` (entrega de um PDF de um pedido anterior) no MESMO batch;
+            // `send_document`, sendo terminal, encerrava o turno com só o recibo do PDF —
+            // a previsão do tempo, já obtida com sucesso, nunca chegava a virar resposta.
+            //
+            // `otherToolCallsThisBatch` (via `cycleHistory`, já preenchido por TODA chamada de
+            // tool, `step === stepCount` escopa à chamada atual) detecta essa condição sem
+            // reimplementar nada — se existir qualquer chamada não-terminal neste mesmo batch,
+            // o atalho não se aplica: o loop continua para uma síntese normal (LLM compõe a
+            // resposta incorporando os dois resultados), preservando o comportamento original
+            // (atalho intacto) para o caso comum de um único `send_document`/`send_audio`.
+            const otherToolCallsThisBatch = cycleHistory.some(
+                h => h.step === stepCount && !ToolRegistry.isTerminalDelivery(h.tool)
+            );
+            if (terminalBatchResult !== null && !otherToolCallsThisBatch) {
                 log.info(`[${this.ts()}] [TASK-FSM] Terminal batch done → task DONE, returning result`);
                 move('FINAL_READY', { step: stepCount, terminal: true });
                 traceManager.completeTrace(trace, 'completed', terminalBatchResult);
                 this.persistTrace(trace, stepCount, 'completed', terminalBatchResult, channelContext);
                 return { action: 'earlyReturn', result: terminalBatchResult };
+            }
+            if (terminalBatchResult !== null && otherToolCallsThisBatch) {
+                log.info(`[${this.ts()}] [TASK-FSM] Terminal tool succeeded mas há outra tool não-terminal no mesmo batch — síntese normal em vez do atalho (issue 046)`);
             }
 
             return {
