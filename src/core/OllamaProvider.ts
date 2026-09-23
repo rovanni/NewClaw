@@ -190,23 +190,6 @@ export class OllamaProvider implements ILLMProvider {
         // Floor raised to 150s: gemma4:31b-cloud observed up to 84s TTFT at ~3k tokens under load.
         const approxInputTokens = messages.reduce((sum, m) => sum + Math.ceil((m.content?.length || 0) / 4), 0);
         const CONNECTION_TIMEOUT = Math.max(150_000, Math.min(300_000, Math.ceil(approxInputTokens / 30) * 1000));
-        const MAX_TIMEOUT = customTimeoutMs || 300_000;
-        // Scale activity timeout with MAX_TIMEOUT so long-generation tasks (e.g. 385s budget)
-        // aren't killed after 90s of model silence. Cap at 180s to keep a safety ceiling.
-        const ACTIVITY_TIMEOUT = Math.min(180_000, Math.max(90_000, Math.floor(MAX_TIMEOUT * 0.4)));
-
-        // Validate signal BEFORE creating timers to avoid leaking them on early abort
-        if (externalSignal?.aborted) {
-            throw new Error('Aborted by external signal before fetch');
-        }
-
-        const startTime = Date.now();
-        let firstChunkReceived = false;
-        let stats = { content: 0, thinking: 0, reasoning: 0, delta: 0, unknown: 0, total: 0 };
-
-        let activityTimer: NodeJS.Timeout | null = null;
-        let maxTimer: NodeJS.Timeout | null = null;
-        let connectionTimer: NodeJS.Timeout | null = null;
 
         // Generic thinking budget: if model generates thinking without ever producing
         // content or tool_calls, the reasoning loop is stuck. Abort before MAX_TIMEOUT.
@@ -227,6 +210,42 @@ export class OllamaProvider implements ILLMProvider {
         const THINKING_BUDGET_MULTIPLIER = reasoningIntensive ? 4 : 1;
         const MAX_THINKING_BUDGET_CHARS = 8_000 * THINKING_BUDGET_MULTIPLIER;
         const MAX_THINKING_DURATION_MS  = 60_000 * THINKING_BUDGET_MULTIPLIER;
+
+        // Issue 044 (23/09/2026): MAX_TIMEOUT (teto DURO, aborta a chamada inteira) é
+        // independente de MAX_THINKING_DURATION_MS (teto SUAVE, só sobre o tempo em "thinking")
+        // — mas quando quem chama passa `customTimeoutMs` menor que o teto suave (achado ao
+        // vivo: `ObserverValidator` passa `getBudgetAuxiliar('validacao').timeoutMs`, que na
+        // prática fica preso no piso de 30s — ver `shared/auxTimeout.ts` sobre a média de
+        // latência por provedor ficar contaminada por chamadas rápidas), o teto duro dispara
+        // ANTES do suave ter qualquer chance de atuar — reproduzido ao vivo, juiz de grounding
+        // abortado aos exatos 30000ms com 8119 chars de thinking (bem abaixo do teto suave de
+        // 32000 com reasoningIntensive), goal=weather bloqueado com UNVALIDATED mesmo com dado
+        // real e correto já obtido. `reasoningIntensive` já eleva o teto suave (4×) desde a
+        // issue 038 — sem também elevar o piso do teto duro, essa elevação nunca tem efeito
+        // prático para o call site que mais precisa dela. Só se aplica quando `reasoningIntensive`
+        // é true — sem o opt-in, `MAX_TIMEOUT` continua exatamente `customTimeoutMs || 300_000`,
+        // como antes (não pode elevar o teto de chamadas rápidas como `GoalExtractor`, que passa
+        // `customTimeoutMs` propositalmente curto — 6s — para desistir cedo e cair em heurística).
+        const MAX_TIMEOUT = reasoningIntensive
+            ? Math.max(customTimeoutMs || 300_000, MAX_THINKING_DURATION_MS)
+            : (customTimeoutMs || 300_000);
+        // Scale activity timeout with MAX_TIMEOUT so long-generation tasks (e.g. 385s budget)
+        // aren't killed after 90s of model silence. Cap at 180s to keep a safety ceiling.
+        const ACTIVITY_TIMEOUT = Math.min(180_000, Math.max(90_000, Math.floor(MAX_TIMEOUT * 0.4)));
+
+        // Validate signal BEFORE creating timers to avoid leaking them on early abort
+        if (externalSignal?.aborted) {
+            throw new Error('Aborted by external signal before fetch');
+        }
+
+        const startTime = Date.now();
+        let firstChunkReceived = false;
+        let stats = { content: 0, thinking: 0, reasoning: 0, delta: 0, unknown: 0, total: 0 };
+
+        let activityTimer: NodeJS.Timeout | null = null;
+        let maxTimer: NodeJS.Timeout | null = null;
+        let connectionTimer: NodeJS.Timeout | null = null;
+
         let thinkingYielded = 0;
         let thinkingStartMs: number | null = null;
         let hasNonThinkingOutput = false;
