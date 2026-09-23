@@ -150,13 +150,36 @@ export class AgentController {
 
         // GoalStore: tabela goals no mesmo SQLite
         this.goalStore = new GoalStore(this.db);
-        // ITEM6: detecta goals em estado não-terminal deixados por shutdown anterior
+        // ITEM6: detecta goals em estado não-terminal deixados por shutdown anterior.
+        //
+        // Issue 045 (23/09/2026, achado ao vivo testando o dashboard real): esta detecção
+        // existia desde sempre, mas `recovered=false` no log era literal — nenhuma ação de fato
+        // acontecia. Um goal interrompido por restart (deploy, crash, `pm2 restart`) ficava
+        // `status='executing'` (ou blocked/replanning) indefinidamente, até seu TTL de 30min
+        // expirar via `GoalStore.expireStale()` — que só roda quando uma NOVA mensagem chega
+        // (`GoalOrchestrator.ts`). `GET /api/chat/active` continuava reportando esse goal como
+        // ativo o tempo todo, e o frontend (`startTurnPolling`) ficava preso mostrando "Trabalhando
+        // no seu pedido..." pro usuário, sem nenhuma saída, por até ~30 minutos — reproduzido ao
+        // vivo, elapsedMs>1.000.000 (>16min) sem nenhum sinal de progresso possível, já que o
+        // processo que executava aquele goal nem existe mais.
+        //
+        // Diferente do TTL geral (que tolera um goal genuinamente lento), aqui não há ambiguidade
+        // nenhuma pra esperar: o processo que poderia estar executando este goal acabou de
+        // reiniciar — é IMPOSSÍVEL que ele ainda esteja em andamento. `abandoned` é o único estado
+        // terminal alcançável a partir de TODOS os 4 status não-terminais (`active`, `executing`,
+        // `blocked`, `replanning` — ver `ALLOWED_TRANSITIONS`), e `setStatus()` já limpa
+        // `pending_txn_id`/`requires_auth` ao entrar em qualquer terminal — nenhum código novo além
+        // de chamar o que já existe.
         const orphanedGoals = this.goalStore.getAllActive();
+        for (const g of orphanedGoals) {
+            this.goalStore.markAbandonReason(g.id, 'Goal interrompido: processo reiniciado (deploy ou queda) antes da conclusão.');
+            this.goalStore.setStatus(g.id, 'abandoned');
+        }
         log.info(
             `[GOAL-RECOVERY] count=${orphanedGoals.length}` +
             ` goal_ids="${orphanedGoals.map(g => g.id).join(',') || '(none)'}"` +
             ` statuses="${orphanedGoals.map(g => g.status).join(',') || '(none)'}"` +
-            ` recovered=false`
+            ` recovered=${orphanedGoals.length > 0}`
         );
 
         this.memory = new MemoryManager(this.db, config.ollamaUrl);
