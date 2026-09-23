@@ -1342,7 +1342,15 @@
         document.getElementById('statusIndicatorSlot').appendChild(indicator);
       }
       const icons = { thinking: '🤔', sending: '📡', receiving: '📥', processing: '⚙️', tool: '🔧', error: '❌' };
-      indicator.innerHTML = `<span>${icons[type]||'⏳'}</span> ${text}`;
+      // Achado real (campanha "sistema não utilizável", 22/09/2026, print do usuário): a maioria
+      // das strings status_* (shared.js, pt-BR/en-US/es-ES) já embute seu próprio emoji — mais
+      // específico que o genérico daqui (ex: "🔍 Pesquisando na internet..." para web_search vs.
+      // só "🔧" de icons.tool). Prefixar de novo duplicava o ícone ("⚙️ ⚙️ Trabalhando no seu
+      // pedido...", "⚙️ 🔄 Ajustando o plano..."). Só adiciona o genérico quando o texto NÃO já
+      // começa com um emoji — Extended_Pictographic é propriedade estrutural do Unicode (forma do
+      // caractere), não interpretação de significado, então checagem por regex aqui é apropriada.
+      const jaTemEmoji = /^\p{Extended_Pictographic}/u.test(text.trim());
+      indicator.innerHTML = jaTemEmoji ? text : `<span>${icons[type]||'⏳'}</span> ${text}`;
       if (type === 'thinking' || type === 'processing' || type === 'tool') {
         indicator.innerHTML += ' <span class="typing-dots" style="display:inline-block;width:20px;text-align:left;">.</span>';
         let dots = 0;
