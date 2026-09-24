@@ -85,6 +85,36 @@ export const TOOL_GROUP_REGISTRY: Record<string, string> = {
     web_navigate: 'search',
 };
 
+/**
+ * Último recurso quando uma trava de segurança encerrou o turno e nem a síntese conseguiu texto:
+ * relata SÓ o estado factual (o que rodou, com que resultado) e diz que o pedido não foi concluído.
+ *
+ * Existe para que a narração do LLM que acompanhava uma chamada de ferramenta ("Executando agora
+ * com o caminho correto:") nunca seja entregue como se fosse a conclusão da tarefa. Log de auditoria
+ * de 23/09/2026: exec_command ×4 → same_tool_limit → o texto de 110 caracteres do passo anterior
+ * (> 100, logo "bom conteúdo") saiu como resposta final, sem nenhuma execução depois dele.
+ *
+ * Texto fixo em português: mesmo débito de i18n do Core já declarado em ARCHITECTURE.md ("Gaps
+ * conhecidos"); só é usado quando a síntese por LLM, que respeita o idioma, também falhou.
+ */
+export function buildInterruptionNotice(
+    cycleHistory: Array<{ tool: string; status: string }>,
+    guardLabel: string,
+): string {
+    const porFerramenta = new Map<string, { ok: number; erro: number }>();
+    for (const h of cycleHistory) {
+        const e = porFerramenta.get(h.tool) ?? { ok: 0, erro: 0 };
+        if (h.status === 'success') e.ok++; else e.erro++;
+        porFerramenta.set(h.tool, e);
+    }
+    const feito = [...porFerramenta.entries()]
+        .map(([tool, e]) => `${tool} (${e.ok} com sucesso${e.erro > 0 ? `, ${e.erro} com erro` : ''})`)
+        .join('; ');
+    return `Execução interrompida pela trava de segurança (${guardLabel}). ` +
+        (feito ? `Até aqui: ${feito}. ` : 'Nenhuma ferramenta chegou a ser concluída. ') +
+        `Não foi possível concluir o pedido neste turno — peça para continuar ou reformule.`;
+}
+
 // ── Tool Utility Score ───────────────────────────────────────────────────────
 // Generic keyword-overlap heuristic measuring how relevant a tool's output is
 // to the user's original message. Used for observability only — does NOT affect
@@ -1954,7 +1984,11 @@ export class AgentLoop {
     ): Promise<string | ProcessedResult> {
         // Post-loop synthesis
         const executedToolsInLastStep = cycleHistory.length > 0;
-        const hasGoodContent = lastBestContent && lastBestContent.length > 100;
+        // Turno encerrado por trava de segurança (`dedupAbort`): o último texto do LLM é, por
+        // construção, a narração de uma ação que NÃO chegou a continuar — nunca uma conclusão.
+        // Sem este `!dedupAbort`, a síntese honesta de interrupção (dedupSynthesisBody, abaixo) era
+        // pulada sempre que essa narração tinha mais de 100 caracteres.
+        const hasGoodContent = !dedupAbort && lastBestContent && lastBestContent.length > 100;
 
         if (executedToolsInLastStep && !hasGoodContent) {
             // Direct delivery bypass for single evidence provider tools (weather, crypto_analysis).
@@ -2126,7 +2160,7 @@ export class AgentLoop {
             log.warn(`[${this.ts()}] [SYNTHESIS] Failed to extract useful text (raw=${rawSynthesis.length}, extracted=${synthesisText?.length || 0})`);
         }
 
-        if (lastBestContent) {
+        if (lastBestContent && !dedupAbort) {
             move('FINAL_READY', { step: stepCount, reason: 'last_best_content' });
             traceManager.completeTrace(trace, 'completed', lastBestContent);
             this.persistTrace(trace, stepCount, 'completed', lastBestContent, channelContext);
@@ -2170,7 +2204,10 @@ export class AgentLoop {
         }
         // If the final synthesis call also returned nothing useful, fall back to the
         // best content seen during the turn rather than sending a generic error.
-        if ((!text || text === 'Desculpe, não consegui gerar uma resposta. Pode reformular a pergunta?') && lastBestContent) {
+        if (dedupAbort && (!text || text === 'Desculpe, não consegui gerar uma resposta. Pode reformular a pergunta?')) {
+            log.warn(`[${this.ts()}] [FALLBACK] Turno interrompido por trava (${dedupAbortTool}) e a síntese falhou — relatando só o estado factual`);
+            text = buildInterruptionNotice(cycleHistory, dedupAbortTool);
+        } else if ((!text || text === 'Desculpe, não consegui gerar uma resposta. Pode reformular a pergunta?') && lastBestContent) {
             log.warn(`[${this.ts()}] [FALLBACK] Final synthesis empty — using lastBestContent (${lastBestContent.length} chars)`);
             text = lastBestContent;
         }
