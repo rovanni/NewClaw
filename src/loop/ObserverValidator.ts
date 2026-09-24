@@ -351,7 +351,7 @@ export class ObserverValidator {
             // Issue 038: mesmo perfil 'validacao' já usado pro timeout externo — reasoningIntensive
             // aplica o mesmo fator (4×) ao orçamento interno de "thinking" do provider, evitando
             // que o juiz de grounding seja abortado por raciocínio legítimo (ver ChatFallbackOptions).
-            const fallbackResult = await this.providerFactory.chatWithFallback(messages, undefined, undefined, orcamento.timeoutMs, signal, this.observerModel, { reasoningIntensive: true });
+            const fallbackResult = await this.providerFactory.chatWithFallback(messages, undefined, undefined, orcamento.timeoutMs, signal, this.observerModel, { reasoningIntensive: true, diag: { component: 'ObserverValidator', role: 'observer', phase: 'quality' } });
             const elapsed = Date.now() - startTime;
 
             // If the signal aborted while the LLM was running, discard the result silently.
@@ -601,7 +601,7 @@ export class ObserverValidator {
             // evita que o juiz seja abortado pelo teto de "thinking" pensado para chat curto.
             const fallbackResult = await this.providerFactory.chatWithFallback(
                 [{ role: 'user', content: prompt }], undefined, undefined, orcamento.timeoutMs, signal, this.observerModel,
-                { reasoningIntensive: true },
+                { reasoningIntensive: true, diag: { component: 'ObserverValidator', role: 'observer', phase: 'grounding' } },
             );
 
             if (fallbackResult.status !== 'success') {

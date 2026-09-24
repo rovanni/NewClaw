@@ -756,7 +756,7 @@ export class GoalPlanner {
         }
     }
 
-    private async callPlannerLLM(messages: LLMMessage[], timeoutMs: number): Promise<{ status: string; content: string }> {
+    private async callPlannerLLM(messages: LLMMessage[], timeoutMs: number, phase: string = 'plan', goalId?: string): Promise<{ status: string; content: string }> {
         // Reusa a mesma cadeia de resiliência multi-provider que AgentLoop e a validação de
         // goal já usam (chatWithFallback) — antes esta chamada ia direto a getProviderWithModel(),
         // um único provider fixo, sem fallback: se o modelo desta role (ex: "analysis") estivesse
@@ -769,7 +769,7 @@ export class GoalPlanner {
         // antes de emitir o JSON do plano — o teto de "thinking" pensado pra chat curto abortava
         // esse raciocínio legítimo, cascateando pro fallback llamafile morto. reasoningIntensive
         // aplica o mesmo fator (4×) já calibrado pra chamadas de validação (auxTimeout.ts).
-        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, timeoutMs, undefined, this.model, { reasoningIntensive: true });
+        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, timeoutMs, undefined, this.model, { reasoningIntensive: true, diag: { component: 'GoalPlanner', role: 'planner', phase, goalId } });
         if (result.status !== 'success') {
             const lastAttempt = result.attempts[result.attempts.length - 1];
             log.warn(`[GoalPlanner] callPlannerLLM failed: model=${this.model} status=${result.status} providersTried=${result.attempts.length} lastError="${(lastAttempt?.errorMessage ?? '').slice(0, 300)}"`);
@@ -840,7 +840,7 @@ export class GoalPlanner {
             // replan (ver computeDynamicTimeout) porque um valor fixo nunca escala com o tamanho
             // real do prompt — agora escala com o contexto em vez de arriscar repetir o bug.
             const { timeoutMs } = computeDynamicTimeout(messages);
-            const result = await this.callPlannerLLM(messages, timeoutMs);
+            const result = await this.callPlannerLLM(messages, timeoutMs, 'plan', goal.id);
 
             if (result.status !== 'success') {
                 log.warn(`[GoalPlanner] plan failed: model=${this.model} status=${result.status} raw="${result.content.slice(0, 150)}"`);
@@ -931,7 +931,7 @@ export class GoalPlanner {
             // 45021ms, "replan empty after parse" consumindo replanBudget à toa) — ver
             // computeDynamicTimeout e o mesmo problema já documentado em plan() (comentário S7).
             const { timeoutMs } = computeDynamicTimeout(messages);
-            const result = await this.callPlannerLLM(messages, timeoutMs);
+            const result = await this.callPlannerLLM(messages, timeoutMs, 'replan', goal.id);
 
             if (result.status !== 'success') {
                 log.warn(`[GoalPlanner] replan failed: model=${this.model} status=${result.status} raw="${result.content.slice(0, 150)}"`);
@@ -981,7 +981,7 @@ export class GoalPlanner {
         try {
             // Mesmo racional de plan()/replan() — ver computeDynamicTimeout.
             const { timeoutMs } = computeDynamicTimeout(messages);
-            const result = await this.callPlannerLLM(messages, timeoutMs);
+            const result = await this.callPlannerLLM(messages, timeoutMs, 'roadmap', goal.id);
 
             if (result.status !== 'success') {
                 log.warn(`[GoalPlanner] planRoadmap failed status=${result.status}`);
@@ -1164,7 +1164,7 @@ Regras:
         const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
         log.info(`[GoalPlanner] retry_minimal context=${context} goal=${goal.id} promptLen=${prompt.length}`);
         try {
-            const result = await this.callPlannerLLM(messages, 30_000);
+            const result = await this.callPlannerLLM(messages, 30_000, 'retry-minimal-' + context, goal.id);
             if (result.status !== 'success' || !result.content) return null;
             const parsed = await this.parsePlanResponse(result.content);
             if (parsed.steps.length === 0) {

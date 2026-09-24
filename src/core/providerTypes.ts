@@ -206,7 +206,28 @@ export function isSubstitutionPolicy(valor: unknown): valor is SubstitutionPolic
  * coincidência que a próxima chamada nova pode desfazer em silêncio — a `ADR-005` §5.1 registra o
  * que acontece quando se conta caminhos à mão (contou dois; eram cinco).
  */
+/**
+ * Rótulo de DIAGNÓSTICO de uma chamada ao LLM (Campanha B2, 24/09/2026). Só alimenta a linha
+ * `[LLM-CALL]` de `ProviderFactory.chatWithFallback`; nenhum campo aqui altera o comportamento da
+ * chamada. Existe porque o log não dizia QUEM chamava: modelo e papel estavam misturados
+ * (`glm-5.3-flash` atende AgentLoop, planejador e validadores) e não dava para separar
+ * "modelo ruim" de "tipo de tarefa pesada" — B1 mostrou que trocar o modelo não resolvia.
+ */
+export interface LlmCallDiag {
+    /** Quem chama: "AgentLoop", "GoalPlanner.plan", "GoalPlanner.replan", "StepSemanticValidator"... */
+    component: string;
+    /** Papel do modelo (categoria do perfil: chat/code/execution...) quando o chamador o conhece. */
+    role?: string;
+    /** Fase dentro do componente: "loop", "synthesis", "delivery-guard"... */
+    phase?: string;
+    goalId?: string;
+    cycle?: number;
+    step?: string;
+}
+
 export interface ChatFallbackOptions {
+    /** Só observabilidade: ver `LlmCallDiag`. Ignorado por qualquer decisão do ProviderFactory. */
+    diag?: LlmCallDiag;
     /** O resultado desta chamada é entregue ao usuário, então uma substituição precisa ser dita. */
     anunciarSubstituicao?: boolean;
     /**

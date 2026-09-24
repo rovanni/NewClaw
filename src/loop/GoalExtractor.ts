@@ -254,7 +254,8 @@ Regras:
                 undefined,
                 orcamento.timeoutMs,
                 undefined,
-                this.classifierModel
+                this.classifierModel,
+                { diag: { component: 'GoalExtractor', role: 'classifier' } }
             );
 
             if (result.status !== 'success') {

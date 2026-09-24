@@ -201,6 +201,7 @@ export function createDomainClassifierLLM(
                 orcamento.timeoutMs,
                 undefined,
                 model,
+                { diag: { component: 'DomainRegistry', role: 'classifier' } },
             );
 
             if (result.status !== 'success') {

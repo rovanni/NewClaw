@@ -520,7 +520,7 @@ export class UnifiedIntentRouter {
         const messages: LLMMessage[] = buildClassificationMessages(input, context);
 
         try {
-            const result = await this.providerFactory!.chatWithFallback(messages, undefined, undefined, 30000);
+            const result = await this.providerFactory!.chatWithFallback(messages, undefined, undefined, 30000, undefined, undefined, { diag: { component: 'UnifiedIntentRouter', role: 'classifier' } });
             if (result.status !== 'success' || !result.content) throw new Error('LLM classification failed');
 
             // Sanitize: strip markdown fences and extract JSON object from potentially mixed content.

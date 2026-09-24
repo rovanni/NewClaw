@@ -239,7 +239,7 @@ export class StepSemanticValidator {
         // tenta os demais providers antes de desistir, com o mesmo TIMEOUT_MS de hoje delimitando
         // cada tentativa. O fail-soft ("unverifiable") continua decidido aqui, não no
         // ProviderFactory — qualquer status diferente de 'success' cai no mesmo ramo.
-        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, TIMEOUT_MS, undefined, VALIDATOR_MODEL);
+        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, TIMEOUT_MS, undefined, VALIDATOR_MODEL, { diag: { component: 'StepSemanticValidator', role: 'validator' } });
         if (result.status !== 'success') {
             log.debug(`[StepSemanticValidator] LLM falhou (status=${result.status}) — unverifiable`);
             return { result: 'unverifiable', confidence: 0.5, reason: 'erro na validação LLM', usedFastPath: false };

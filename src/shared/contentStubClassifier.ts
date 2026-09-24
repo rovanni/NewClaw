@@ -88,7 +88,7 @@ export function makeContentStubClassifier(providerFactory: ProviderFactory): Con
         // tenta os demais providers antes de desistir, com o mesmo TIMEOUT_MS de hoje delimitando
         // cada tentativa. A política fail-closed continua decidida aqui, não no ProviderFactory —
         // qualquer status diferente de 'success' (erro, timeout, cancelado) cai no mesmo ramo.
-        const result = await providerFactory.chatWithFallback(messages, undefined, undefined, TIMEOUT_MS, undefined, CLASSIFIER_MODEL);
+        const result = await providerFactory.chatWithFallback(messages, undefined, undefined, TIMEOUT_MS, undefined, CLASSIFIER_MODEL, { diag: { component: 'contentStubClassifier', role: 'classifier' } });
         if (result.status !== 'success') {
             log.warn(`[ContentStubClassifier] tool=${toolName} chamada ao LLM falhou (status=${result.status}) — fail-closed (isStub=true)`);
             return { isStub: true, reason: 'erro na classificação LLM (fail-closed)' };

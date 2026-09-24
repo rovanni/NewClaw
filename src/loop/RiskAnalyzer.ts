@@ -505,7 +505,7 @@ export class RiskAnalyzer {
      * decidida aqui (timeout vs. error), não dentro do ProviderFactory.
      */
     private async callRiskLLM(messages: LLMMessage[], timeoutMs: number): Promise<{ status: string; content: string }> {
-        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, timeoutMs, undefined, this.model);
+        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, timeoutMs, undefined, this.model, { diag: { component: 'RiskAnalyzer', role: 'risk' } });
         if (result.status === 'success') return { status: 'success', content: result.content };
         if (result.status === 'timeout') return { status: 'timeout', content: '' };
         return { status: 'error', content: '' };

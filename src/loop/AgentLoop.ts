@@ -677,7 +677,7 @@ export class AgentLoop {
 
         try {
             const response = await this.callLLMWithFallback(
-                messages, [], profile, new AbortController().signal
+                messages, [], profile, new AbortController().signal, 'workflow-synthesis'
             );
             const text = extractFinalText(response, null);
             log.info(`[WF] synthesis done conv=${conversationId} chars=${text.length}`);
@@ -1167,7 +1167,7 @@ export class AgentLoop {
 
             const profile = this.profileRegistry.getProfileByCategory('execution');
             if (!profile) return null;
-            const result = await this.callLLMWithFallback(messages, [], profile, signal);
+            const result = await this.callLLMWithFallback(messages, [], profile, signal, 'aux-execution-profile');
             if (result.status !== 'success' || !result.content) return null;
 
             const text = (extractText(result.content) || result.content).trim();
@@ -1376,7 +1376,7 @@ export class AgentLoop {
 
     // ── LLM call with fallback ─────────────────────────────────────────────────
 
-    private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: ModelProfile, signal?: AbortSignal): Promise<LLMResult> {
+    private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: ModelProfile, signal?: AbortSignal, phase: string = 'loop'): Promise<LLMResult> {
         const { timeoutMs, approxTokens, totalChars, scaleMs } = computeDynamicTimeout(messages);
         log.info(`[${this.ts()}] [TIMEOUT] Dynamic: ${Math.round(timeoutMs / 1000)}s (tokens≈${approxTokens}, chars=${totalChars}, scale=${Math.round(scaleMs / 1000)}s, clamp=[45-420]s)`);
 
@@ -1388,7 +1388,7 @@ export class AgentLoop {
                 // máquina, ele precisa ficar sabendo (`RFC-005` §1.3/§1.4). Os demais pontos de
                 // chamada de `chatWithFallback` (classificador, extrator de goal, validador) não
                 // marcam isto: a saída deles é estruturada e um aviso a corromperia.
-                () => this.providerFactory.chatWithFallback(messages, toolDefs, chatProfile?.provider, timeoutMs, signal, chatProfile?.model, { anunciarSubstituicao: true }),
+                () => this.providerFactory.chatWithFallback(messages, toolDefs, chatProfile?.provider, timeoutMs, signal, chatProfile?.model, { anunciarSubstituicao: true, diag: { component: 'AgentLoop', role: chatProfile?.category, phase } }),
                 { priority: TaskPriority.INTERACTIVE }
             );
 
@@ -1485,7 +1485,7 @@ export class AgentLoop {
                 }
             ];
 
-            const llmResult = await this.providerFactory.chatWithFallback(promptMessages, undefined, undefined, 8000);
+            const llmResult = await this.providerFactory.chatWithFallback(promptMessages, undefined, undefined, 8000, undefined, undefined, { diag: { component: 'AgentLoop', phase: 'evidence-check' } });
             if (llmResult.status !== 'success' || !llmResult.content) return null;
 
             // Safe Structured JSON Parsing & Schema Validation
@@ -1893,7 +1893,7 @@ export class AgentLoop {
                 stepCount++;
                 log.info(`[${this.ts()}] [DELIVERY] Step ${stepCount}...`);
                 move('LLM_REQUEST', { step: stepCount, phase: 'delivery' });
-                const deliveryResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile, turnSignal);
+                const deliveryResponse = await this.callLLMWithFallback(loopMessages, toolDefs, chatProfile, turnSignal, 'delivery-guard');
                 move('LLM_RESPONSE', { step: stepCount, phase: 'delivery', status: deliveryResponse.status });
 
                 if (deliveryResponse.status === 'cancelled') { move('CANCEL', { step: stepCount }); /* removed: this.activeTurns.delete(conversationId); */ return { earlyReturn: true, result: { text: 'Operação cancelada.' } }; }
@@ -2129,7 +2129,7 @@ export class AgentLoop {
             // devolver (ver ModelProfileRegistry.sanitizeProfile) — este log é só para tornar
             // visível QUAL perfil (o de execution, ou o fallback pra chatProfile) foi de fato usado.
             log.info(`[${this.ts()}] [SYNTHESIS] profile: category=${synthesisProfile.category} model=${synthesisProfile.model} provider=${synthesisProfile.provider ?? '(herdado)'}`);
-            const synthesisResponse = await this.callLLMWithFallback(synthMessages, [], synthesisProfile, turnSignal);
+            const synthesisResponse = await this.callLLMWithFallback(synthMessages, [], synthesisProfile, turnSignal, 'synthesis');
             move('LLM_RESPONSE', { step: stepCount, phase: 'synthesis', status: synthesisResponse.status });
             if (synthesisResponse.status === 'cancelled') {
                 move('CANCEL', { step: stepCount, phase: 'synthesis' });
@@ -2189,7 +2189,7 @@ export class AgentLoop {
         ];
         move('LLM_REQUEST', { step: stepCount, phase: 'fallback' });
         log.info(`[${this.ts()}] [FALLBACK] Trimmed context: ${loopMessages.length} → ${fallbackSynthMessages.length} messages`);
-        const finalResponse = await this.callLLMWithFallback(fallbackSynthMessages, [], chatProfile, turnSignal);
+        const finalResponse = await this.callLLMWithFallback(fallbackSynthMessages, [], chatProfile, turnSignal, 'fallback-synthesis');
         move('LLM_RESPONSE', { step: stepCount, phase: 'fallback', status: finalResponse.status });
         if (finalResponse.status === 'cancelled') {
             move('CANCEL', { step: stepCount, phase: 'fallback' });

@@ -72,7 +72,9 @@ assert(
     'GoalPlanner.ts importa computeDynamicTimeout de shared/dynamicTimeout'
 );
 
-const dynamicCalls = [...plannerSource.matchAll(/const\s*\{\s*timeoutMs\s*\}\s*=\s*computeDynamicTimeout\(messages\);\s*\n\s*const result = await this\.callPlannerLLM\(messages, timeoutMs\)/g)];
+// B2 (24/09/2026): callPlannerLLM ganhou parâmetros opcionais de diagnóstico (fase, goalId) — o
+// invariante protegido (timeout dinâmico nos 3 planejadores; retry fixo em 30_000) não mudou.
+const dynamicCalls = [...plannerSource.matchAll(/const\s*\{\s*timeoutMs\s*\}\s*=\s*computeDynamicTimeout\(messages\);\s*\n\s*const result = await this\.callPlannerLLM\(messages, timeoutMs(?:,[^)]*)?\)/g)];
 assert(
     dynamicCalls.length === 3,
     `3 call sites usando computeDynamicTimeout(messages) → callPlannerLLM(messages, timeoutMs) — encontrado: ${dynamicCalls.length}`
@@ -88,7 +90,7 @@ assert(
 // retryWithMinimalPrompt() continua com timeout fixo curto — comportamento ESPERADO (prompt
 // deliberadamente minimalista, não o caso que este teste protege).
 assert(
-    /callPlannerLLM\(messages,\s*30_000\)/.test(plannerSource),
+    /callPlannerLLM\(messages,\s*30_000(?:,[^)]*)?\)/.test(plannerSource),
     'retryWithMinimalPrompt() mantém 30_000ms fixo (prompt minimalista, não afetado por este fix)'
 );
 

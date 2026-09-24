@@ -7,7 +7,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
 import { getLocalRuntimeLifecycle } from './localRuntimeState';
-import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy, ChatFallbackOptions, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS } from './providerTypes';
+import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy, ChatFallbackOptions, LlmCallDiag, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS } from './providerTypes';
 import { GeminiProvider } from './GeminiProvider';
 import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
@@ -38,6 +38,57 @@ export { OllamaProvider } from './OllamaProvider';
 export { AnthropicProvider } from './AnthropicProvider';
 
 const log = createLogger('Providerfactory');
+
+/**
+ * Linha de diagnóstico de UMA chamada completa a `chatWithFallback` (Campanha B2). Pura: recebe o
+ * resultado já produzido e devolve texto — não decide nada, não guarda estado.
+ *
+ * `in_est` é sempre calculado (caracteres/4, mesma aproximação de `computeDynamicTimeout`);
+ * `in`/`out` só existem quando o provider reportou uso (chamada concluída). `reasoning_chars` vem
+ * da mensagem do PRÓPRIO aborto por orçamento de raciocínio ("... after N chars"), a única
+ * medida do raciocínio descartado — o texto dele nunca chega ao resultado.
+ */
+export function buildLlmCallSummary(
+    diag: LlmCallDiag | undefined,
+    messages: LLMMessage[],
+    result: LLMResult,
+    wallMs: number,
+): string {
+    const attempts = result.attempts ?? [];
+    let reasoningChars = 0;
+    let aborted = false;
+    for (const a of attempts) {
+        const m = /Reasoning budget exceeded after (\d+) chars/.exec(a.errorMessage ?? '');
+        if (m) { aborted = true; reasoningChars = Math.max(reasoningChars, Number(m[1])); }
+    }
+    const chars = messages.reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : 0), 0);
+    // `model`: o modelo REAL da chamada — o da primeira tentativa. A última pode ser o pseudo-modelo
+    // 'non-streaming-fallback' (nome interno de attemptLog), que escondia o modelo verdadeiro
+    // (visto na primeira execução real de B2). O caminho não-streaming vira o campo `via`.
+    const NAO_STREAMING = 'non-streaming-fallback';
+    const real = attempts.find(a => a.model !== NAO_STREAMING) ?? attempts[0];
+    const viaNaoStreaming = attempts.some(a => a.model === NAO_STREAMING);
+    const parts: Array<[string, string | number | boolean | undefined]> = [
+        ['component', diag?.component ?? 'unlabeled'],
+        ['role', diag?.role],
+        ['phase', diag?.phase],
+        ['goal', diag?.goalId],
+        ['cycle', diag?.cycle],
+        ['step', diag?.step],
+        ['model', real?.model],
+        ['via', viaNaoStreaming ? 'non-streaming' : undefined],
+        ['status', result.status],
+        ['fallback', result.fallbackReason],
+        ['attempts', attempts.length],
+        ['aborted', aborted],
+        ['reasoning_chars', aborted ? reasoningChars : undefined],
+        ['in_est', Math.round(chars / 4)],
+        ['in', result.usage?.prompt_tokens],
+        ['out', result.usage?.completion_tokens],
+        ['ms', wallMs],
+    ];
+    return parts.filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`).join(' ');
+}
 
 export class ProviderFactory {
     private providers: Map<string, ILLMProvider> = new Map();
@@ -235,7 +286,21 @@ export class ProviderFactory {
      * - Only ONE response is returned — the LAST successful attempt.
      * - No partial content from failed attempts is ever included.
      */
+    /**
+     * Ponto de entrada. Contrato INALTERADO: mesmos parâmetros, mesmo resultado (o objeto devolvido
+     * é o do corpo, sem cópia nem alteração). A única diferença é a linha `[LLM-CALL]` de
+     * diagnóstico ao final (Campanha B2) — que nunca pode afetar a chamada.
+     */
     async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number, externalSignal?: AbortSignal, modelOverride?: string, opts?: ChatFallbackOptions): Promise<LLMResult> {
+        const t0 = Date.now();
+        const result = await this.chatWithFallbackImpl(messages, tools, preferredProvider, timeoutMs, externalSignal, modelOverride, opts);
+        try {
+            log.info(`[LLM-CALL] ${buildLlmCallSummary(opts?.diag, messages, result, Date.now() - t0)}`);
+        } catch { /* diagnóstico nunca derruba a chamada */ }
+        return result;
+    }
+
+    private async chatWithFallbackImpl(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number, externalSignal?: AbortSignal, modelOverride?: string, opts?: ChatFallbackOptions): Promise<LLMResult> {
         if (externalSignal?.aborted) {
             return { status: 'cancelled', content: '', fallbackReason: 'cancelled', fallbackMessage: 'Operação cancelada.', attempts: [] };
         }
