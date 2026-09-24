@@ -49,6 +49,28 @@ const log = createLogger('SanitizePlanSteps');
 // de caçar cada nova frase-molde (5 rodadas de regex nesta família de bug: "step_1" → "step 1" →
 // "etapas anteriores" → "gerado pelo assistente" → "passo 1", ver shared/contentStubPatterns.ts)
 // por uma regra determinística sobre a ORDEM dos steps no plano, não sobre as palavras do LLM.
+/**
+ * Fato que acompanha um step de escrita rebaixado a AgentLoop por causa do CONTEÚDO (placeholder,
+ * stub, dado ainda não produzido): o caminho que o plano escolheu para o arquivo.
+ *
+ * O rebaixamento descarta `toolArgs` inteiro, e o AgentLoop que executa o step recebe só a
+ * `description`. Os steps seguintes do plano, porém, foram escritos supondo aquele caminho — e o
+ * AgentLoop tem a sua própria convenção (`tmp/...`, agentPrompts.ts FILE_OPS). Log de auditoria de
+ * 23/09/2026: o `write` do script foi rebaixado, o AgentLoop gravou em `workspace/tmp/X.py`, e o
+ * step seguinte executou `python workspace/X.py` — "No such file or directory", nas 3 vezes que o
+ * plano foi refeito, até o goal falhar (26 min). Duas autoridades para o mesmo caminho.
+ *
+ * É FATO, não ordem (EVIDENCE_PROVIDER_PATTERN): diz o que o plano supôs; onde gravar continua
+ * sendo decisão do AgentLoop.
+ */
+function plannedPathIntent(tool: string | undefined, args: Record<string, unknown> | undefined): string | undefined {
+    if (!tool || !args) return undefined;
+    const raw = args.path ?? args.file_path;
+    if (typeof raw !== 'string' || !raw.trim()) return undefined;
+    return `[INTENÇÃO DO PLANO] Este passo gravaria o arquivo '${raw.trim()}' (ferramenta '${tool}'). ` +
+        `Os passos seguintes do plano foram escritos supondo exatamente esse caminho.`;
+}
+
 const DATA_PRODUCING_TOOLS = new Set([
     'weather', 'crypto_analysis', 'web_search', 'web_navigate',
     'read', 'read_document', 'memory_search', 'exec_command', 'ssh_exec',
@@ -167,8 +189,8 @@ export async function sanitizePlanSteps(
     for (let i = 0; i < rawSteps.length; i++) {
         const s = rawSteps[i];
         const rawToolName = s.toolName ? String(s.toolName) : undefined;
-        // Preenchido só pelo check de args obrigatórios abaixo; anexado à description no push
-        // final do step. Ver o comentário longo naquele bloco para o porquê.
+        // Preenchido pelo check de args obrigatórios e pelos rebaixamentos por conteúdo (ver
+        // plannedPathIntent); anexado à description no push final do step.
         let missingArgsIntent: string | undefined;
 
         // Resolve alias antes de validar (ex: provide_file → send_document)
@@ -232,6 +254,7 @@ export async function sanitizePlanSteps(
                     detail: `${placeholderEntry[0]}="${String(placeholderEntry[1]).slice(0, 80)}"`,
                     description: String(s.description ?? 'Execute step'),
                 });
+                missingArgsIntent = plannedPathIntent(resolvedTool, toolArgs);
                 resolvedTool = undefined;
                 toolArgs = undefined;
             }
@@ -269,6 +292,7 @@ export async function sanitizePlanSteps(
                     detail: `${contentStr.length} chars, depende de step produtor de dado ainda não executado`,
                     description: String(s.description ?? 'Execute step'),
                 });
+                missingArgsIntent = plannedPathIntent(resolvedTool, toolArgs);
                 resolvedTool = undefined;
                 toolArgs = undefined;
             } else {
@@ -286,6 +310,7 @@ export async function sanitizePlanSteps(
                         detail: `${contentStr.length} chars, LLM reason="${verdict.reason.slice(0, 80)}"`,
                         description: String(s.description ?? 'Execute step'),
                     });
+                    missingArgsIntent = plannedPathIntent(resolvedTool, toolArgs);
                     resolvedTool = undefined;
                     toolArgs = undefined;
                 }

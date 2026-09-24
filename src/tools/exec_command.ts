@@ -292,10 +292,18 @@ export function decodeClixmlError(output: string): string {
  * corrigida. Mesma classe de problema (mismatch de encoding entre o que o processo filho
  * escreve e o que o Node espera) já resolvida para Python via PYTHONIOENCODING/PYTHONUTF8
  * logo abaixo — aqui é o equivalente para quando o comando é encaminhado ao PowerShell.
+ *
+ * $PSDefaultParameterValues['Get-Content:Encoding'] = 'UTF8': o lado de ENTRADA do mesmo problema.
+ * O Windows PowerShell 5.1 lê arquivo sem BOM como ANSI, então `Get-Content` de um arquivo UTF-8
+ * (o que a ferramenta `write` e o Python com PYTHONUTF8 gravam) devolvia "â€” OperaÃ§Ãµes" ao LLM.
+ * Reproduzido com este wrapper em 23/09/2026 e visto no log de auditoria do mesmo dia; o arquivo
+ * estava correto, só a leitura estava errada. `-Encoding` explícito no comando continua valendo.
+ * Custo aceito: um arquivo ANSI legado (ex.: CSV do Excel) aparece com "�" — o que o NewClaw
+ * grava é UTF-8.
  */
 export function wrapForWindowsPowerShell(command: string): string {
     const translated = translateWcForPowerShell(translateHeadTailForPowerShell(translateLsFlagsForPowerShell(translateDevNullForPowerShell(translateChainOperatorsForPowerShell(command)))));
-    const withoutProgressNoise = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; ${translated}`;
+    const withoutProgressNoise = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; $PSDefaultParameterValues['Get-Content:Encoding'] = 'UTF8'; ${translated}`;
     const encoded = Buffer.from(withoutProgressNoise, 'utf16le').toString('base64');
     return `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
 }
