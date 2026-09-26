@@ -1157,6 +1157,17 @@
       return false;
     }
 
+    // Quantas consultas seguidas a /api/chat/active precisam falhar para a tela avisar que perdeu a conexão.
+    // O polling roda a cada 1,5 s, então 3 falhas ≈ 5 s. Antes o erro era engolido e o último texto de status
+    // ("Ainda processando…") ficava congelado para sempre com o servidor fora do ar (issue 048, 26/09/2026).
+    const POLL_FAILURES_BEFORE_WARNING = 3;
+
+    /** Puro: dado o número de falhas seguidas e o resultado da última consulta, devolve o novo contador e se avisa. */
+    function nextPollHealth(previousFailures, failed) {
+      const failures = failed ? previousFailures + 1 : 0;
+      return { failures, warn: failures >= POLL_FAILURES_BEFORE_WARNING };
+    }
+
     function startTurnPolling(turnId, sessionId) {
       stopTurnPolling();
       currentChatSessionId = sessionId;
@@ -1185,13 +1196,23 @@
             showStatus('receiving', t('status_receiving'));
             await fetchAndRenderOutbox(turnId);
           }
+          return { failed: false };
         } catch (e) {
-          // Erro de rede no polling: nao encerra o loop, re-tenta no proximo tick
+          // Erro de rede no polling: nao encerra o loop, re-tenta no proximo tick — mas quem chama
+          // precisa SABER que falhou (ver `pollWithHealth`), senao a tela congela mentindo.
+          return { failed: true };
         }
       };
 
       poll();
-      turnPollingTimer = setInterval(poll, 1500);
+      let consecutivePollFailures = 0;
+      const pollWithHealth = async () => {
+        const result = await poll();
+        const health = nextPollHealth(consecutivePollFailures, !!(result && result.failed));
+        consecutivePollFailures = health.failures;
+        if (health.warn) showStatus('error', t('status_connection_lost'));
+      };
+      turnPollingTimer = setInterval(pollWithHealth, 1500);
     }
 
     function setSendBtnBusy(busy) {

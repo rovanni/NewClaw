@@ -96,16 +96,28 @@ export function createChatRouter(ctx: DashboardContext): Router {
         };
 
         const active: Array<{ conversationId: string; elapsedMs: number; kind: 'turn' | 'goal'; status?: string }> = [];
+        const now = Date.now();
+        const activeGoals = controller?.goalOrchestrator?.getActiveGoals?.() ?? [];
+        // O tempo que a interface mostra ("já faz N min") é o da ESPERA do usuário. Durante um goal, cada
+        // passo é um turno novo do AgentLoop cujo `elapsedMs` recomeça do zero; mostrar só o do turno fazia a
+        // tela dizer "2 min" depois de 1 hora (issue 048, achado no navegador em 26/09/2026). Quando há um
+        // goal para a MESMA conversa, vale o maior dos dois: a idade do goal.
+        const goalAgeByConversation = new Map<string, number>();
+        for (const g of activeGoals) {
+            if (g.status === 'blocked') continue; // parado esperando decisão: não é espera em andamento (ver abaixo)
+            const goalConversationId = (g.sessionKey ?? '').split(':').pop() || g.id;
+            const age = g.createdAt ? now - g.createdAt : 0;
+            goalAgeByConversation.set(goalConversationId, Math.max(goalAgeByConversation.get(goalConversationId) ?? 0, age));
+        }
         for (const t of controller?.agentLoop?.getActiveTurns?.() ?? []) {
-            active.push({ ...t, kind: 'turn' });
+            active.push({ ...t, elapsedMs: Math.max(t.elapsedMs, goalAgeByConversation.get(t.conversationId) ?? 0), kind: 'turn' });
         }
 
         // Goals TAMBÉM contam, e são o caso que mais demora: uma pergunta pode ser roteada para o
         // GoalOrchestrator em vez do AgentLoop, e aí `activeTurns` fica vazio enquanto o trabalho
         // continua por minutos. Foi exatamente o que aconteceu em 02/08/2026 (route=goal, 189s de
         // execução) — olhar só os turnos deixaria a tela dizendo "ocioso" com o goal rodando.
-        const now = Date.now();
-        for (const g of controller?.goalOrchestrator?.getActiveGoals?.() ?? []) {
+        for (const g of activeGoals) {
             // sessionKey costuma ser "canal:usuário"; a interface web usa a parte do usuário como
             // id de conversa. Sem a chave, o goal ainda aparece — o essencial é o usuário saber
             // que existe algo em andamento.
