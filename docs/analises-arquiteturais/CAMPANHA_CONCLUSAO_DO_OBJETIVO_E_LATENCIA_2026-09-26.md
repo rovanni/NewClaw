@@ -1,6 +1,8 @@
 # Campanha: conclusão do objetivo e latência (RFC-007 → Sprint 5) — 22–26/09/2026
 
-**Status:** ENCERRADA. Seis commits, oito testes de regressão novos, suíte em **306/306**.
+**Status:** ENCERRADA **COM UMA PENDÊNCIA CRÍTICA** (seção 9): a validação final no navegador confirmou as correções das
+Sprints 1 a 3, mas o replay do incidente original **não** melhorou — o juiz de grounding com o modelo pesado não consegue
+concluir dentro dos tetos atuais. Seis commits, oito testes de regressão novos, suíte em **306/306**.
 **Método:** evidência antes de correção; instrumento em modo sombra antes de mudar comportamento; uma sprint
 por vez, cada uma com teste unitário (com controle negativo), regressão completa e validação em execução real.
 
@@ -107,3 +109,29 @@ Registradas para não repetir o erro:
 - O prompt do Planner não é logado: não se sabe se o fato `commands_validated` chegou ao plano inicial que
   escreveu `python3` (os dois replans seguintes usaram `py -3`).
 - O juiz não devolve justificativa por afirmação; a única justificativa disponível é a saída crua (`judgeRaw`).
+
+## 9. Validação final no navegador (26/09/2026, 12:12–12:51, instância isolada, todas as sombras desligadas)
+
+| Teste | Resultado |
+|---|---|
+| 1 — mensagem numa conversa que o servidor não conhecia (banco zerado, painel com conversas antigas) | **Passou** — conversa recriada, resposta "funcionou", sem `FOREIGN KEY` |
+| 2 — "Limpar Histórico" pela interface (confirmação aceita; banco com 0 conversas) e nova mensagem na conversa antiga em cache | **Passou** — conversa recriada às 12:15:39 e respondida, 1 conversa / 2 mensagens no banco |
+| 3 — criação com entrega ("crie tabuada_final.txt … e me envie") | **Passou** — critérios só de entrega (sem `auto_response_produced`), `goal_satisfied`, 3 ciclos, 0 replans, anexo visível |
+| 4 — replay do incidente (exercício da Calculadora, 1.509 chars, `intent_chars=1509` íntegro) | **NÃO melhorou** — ver abaixo |
+
+**Teste 4.** O plano inicial já não tem `auto_response_produced` (Sprint 2 funcionou: critérios só de entrega), e o pedido
+chega íntegro aos replans (`intentChars=1509`, Sprint 1). Mesmo assim, depois de **30 minutos o goal seguia em execução**
+(pior que os 29,8 min do incidente), com 3 juízes consecutivos em `timeout` (311–319 s cada, ≈ 16 min só neles), 1
+`semantic_mismatch`, 1 replan e um segundo ciclo em curso.
+
+**Mecanismo (determinístico, comprovado nos logs e no contrafactual da Sprint 4):** cada resposta de um passo `agentloop`
+passa pelo juiz de grounding. A requisição do juiz nasce com `timeout=30000ms` (piso do perfil `validacao`); com
+`reasoningIntensive` o teto vai a 240 s. O streaming é abortado aos 32.000 chars de raciocínio (~77 s) e a refação sem
+streaming tem teto de **240 s**. Para esse tipo de prompt o `glm-5.3:cloud` precisa de **305–392 s** naturalmente. Logo:
+77 s + 240 s ≈ 319 s e `status=timeout` → `UNVALIDATED` (fail-closed) → resposta bloqueada → `semantic_mismatch` →
+replan. Não é azar de latência; com esse modelo, esse juiz não fecha dentro dos tetos.
+
+**Implicação.** Os itens "política de raciocínio" e "modelo do juiz" (seção 7) deixam de ser otimização e passam a ser
+**correção funcional**: o caminho `agentloop → juiz` falha por construção com o modelo pesado em respostas longas.
+O que a evidência já sustenta como candidato (ainda não aplicado): juiz em modelo mais leve (52–260 s no contrafactual,
+mesmo estado do pesado em 6/6 rodadas e em 2/2 julgamentos reais). Falta o replay do incidente com esse juiz.
