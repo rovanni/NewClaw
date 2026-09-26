@@ -27,6 +27,7 @@ import { resolveToolAlias } from './planning/toolAliasResolver';
 import { resolveArtifactPathFromEvidence } from './planning/artifactContract';
 import { KNOWN_DEPS } from './GoalEvaluator';
 import { resolvePath } from '../utils/crossPlatform';
+import { createHash } from 'crypto';
 
 const log = createLogger('RiskAnalyzer');
 
@@ -114,6 +115,81 @@ function stableStringify(value: unknown): string {
     return `{${keys.map(k => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`).join(',')}}`;
 }
 
+// ── Modo sombra da revisão por LLM (campanha S-D, issue 048) ─────────────────────────────────
+//
+// Opt-in EXPLÍCITO (`RISK_REVIEW_SHADOW=true`, lido a cada chamada, mesmo padrão de
+// `COGNITIVE_KERNEL_APPLY_DECISION` em CognitiveKernelGate.ts: observar sem aplicar). Desligado —
+// o padrão — `analyze()` é exatamente o que era. Ligado, o revisor roda em segundo plano sobre
+// CÓPIAS do plano e do goal, e o que ele propõe NÃO chega ao plano real, aos `risks` nem ao
+// `planRejected`: só vira UMA linha `[RISK-SHADOW]`. O desfecho do plano real não ganha mecanismo
+// novo — correlaciona-se pelos logs que já existem (`[GoalStep] goal= step= outcome=`,
+// `[GOAL-RESULT]`), usando `goalId` e `startedAt` desta linha.
+//
+// O que decide se a revisão "foi boa" fica DE FORA de propósito: aqui só se coletam fatos.
+
+/** Resumo estrutural de um step — sem os args crus (só um hash), para o log não carregar conteúdo. */
+export interface ShadowStepSummary {
+    id: string;
+    tool: string;
+    description: string;
+    argsHash: string;
+}
+
+/** Fatos que `reviewPlanWithLLM` preenche quando recebe um `sink` (modo sombra); ignorado no modo real. */
+export interface ReviewTrace {
+    /** llm_failed | no_json | confirmed (plan:null) | rejected | proposed | error */
+    outcome?: string;
+    llmStatus?: string;
+    detectedRisks?: number;
+    rejectionReason?: string;
+    /** Proposta do LLM ANTES da inferência de file_path e do sanitizePlanSteps. */
+    rawProposal?: ShadowStepSummary[];
+    /** Steps que a inferência de file_path do próprio revisor consertou. */
+    repairedByInference?: number;
+    /** Reparos que o sanitizePlanSteps precisou fazer sobre a proposta do LLM. */
+    sanitizerMutations?: Array<{ stepId: string; originalTool: string; reason: string }>;
+    /** Proposta final (depois do sanitizer), a que o modo real aplicaria. */
+    proposed?: ShadowStepSummary[];
+    planAdjusted?: boolean;
+}
+
+function argsHash(args: unknown): string {
+    return createHash('sha1').update(stableStringify(args ?? {})).digest('hex').slice(0, 8);
+}
+
+function summarizeSteps(steps: Array<{ id?: unknown; toolName?: unknown; description?: unknown; toolArgs?: unknown }>): ShadowStepSummary[] {
+    return steps.map((s, i) => ({
+        id: String(s.id ?? `step_${i + 1}`),
+        tool: String(s.toolName ?? 'agentloop'),
+        description: String(s.description ?? '').slice(0, 80),
+        argsHash: argsHash(s.toolArgs),
+    }));
+}
+
+/** Diff estrutural por posição (a mesma comparação que `planAdjusted` usa) — determinístico, sem julgamento. */
+export function diffShadowPlans(before: ShadowStepSummary[], after: ShadowStepSummary[]): {
+    stepCountDelta: number;
+    changed: Array<{ index: number; fields: string[] }>;
+    added: string[];
+    removed: string[];
+} {
+    const changed: Array<{ index: number; fields: string[] }> = [];
+    const common = Math.min(before.length, after.length);
+    for (let i = 0; i < common; i++) {
+        const fields: string[] = [];
+        if (before[i].tool !== after[i].tool) fields.push('tool');
+        if (before[i].description !== after[i].description) fields.push('description');
+        if (before[i].argsHash !== after[i].argsHash) fields.push('args');
+        if (fields.length > 0) changed.push({ index: i, fields });
+    }
+    return {
+        stepCountDelta: after.length - before.length,
+        changed,
+        added: after.slice(common).map(s => s.tool),
+        removed: before.slice(common).map(s => s.tool),
+    };
+}
+
 export class RiskAnalyzer {
     private model: string = RISK_REVIEW_MODEL_DEFAULT;
     private readonly classifyContentStub: ContentStubClassifier;
@@ -130,6 +206,53 @@ export class RiskAnalyzer {
 
     setModel(model: string): void {
         if (model) this.model = model;
+    }
+
+    /** Opt-in explícito da campanha S-D — desligado por padrão (ver "Modo sombra" acima). */
+    static shadowModeEnabled(): boolean {
+        return process.env.RISK_REVIEW_SHADOW === 'true';
+    }
+
+    /**
+     * Roda a revisão por LLM SEM aplicá-la e registra uma linha `[RISK-SHADOW]`.
+     *
+     * `analyze()` não espera por este método (o plano real não paga a latência de uma revisão que
+     * descarta) e nunca vê uma exceção dele. Devolve a Promise só para que testes possam esperá-la.
+     * Trabalha sobre CÓPIAS profundas de `goal` e `plan`: nada que o executor mude depois, e nada
+     * que a revisão mude, atravessa a fronteira entre PLANO REAL e PLANO SHADOW.
+     */
+    async observeShadowReview(goal: Goal, plan: PlanStep[]): Promise<void> {
+        const startedAt = Date.now();
+        try {
+            const goalCopy = structuredClone(goal);
+            const planCopy = structuredClone(plan);
+            const before = summarizeSteps(planCopy);
+            const trace: ReviewTrace = {};
+
+            const result = await this.reviewPlanWithLLM(goalCopy, planCopy, 'shadow', trace);
+
+            const proposed = trace.proposed ?? (result.planAdjusted ? summarizeSteps(result.adjustedPlan) : null);
+            log.info('[RISK-SHADOW] ' + JSON.stringify({
+                v: 1,
+                goalId: goal.id,
+                startedAt,
+                durationMs: Date.now() - startedAt,
+                outcome: trace.outcome ?? 'unknown',
+                llmStatus: trace.llmStatus ?? null,
+                planAdjusted: result.planAdjusted,
+                rejected: Boolean(result.planRejected),
+                rejectionReason: result.rejectionReason ?? null,
+                detectedRisks: trace.detectedRisks ?? result.risks.length,
+                before,
+                rawProposal: trace.rawProposal ?? null,
+                proposed,
+                diff: proposed ? diffShadowPlans(before, proposed) : null,
+                repairedByInference: trace.repairedByInference ?? 0,
+                sanitizerMutations: trace.sanitizerMutations ?? [],
+            }));
+        } catch (err) {
+            log.warn('[RISK-SHADOW] falha ao observar a revisão (ignorada, o plano real não foi afetado):', String(err));
+        }
     }
 
     async analyze(
@@ -365,7 +488,16 @@ export class RiskAnalyzer {
         }
 
         // ── 2. Revisão LLM do plano completo ────────────────────────────────
-        const llmResult = await this.reviewPlanWithLLM(goal, plan);
+        // Modo sombra (S-D): o revisor roda em segundo plano e NADA do que ele produz volta para
+        // cá — `llmResult` fica neutro (plano original, sem riscos de LLM, sem rejeição). O plano
+        // real é o do Planner. Ver o bloco "Modo sombra" acima de `RiskAnalyzer`.
+        let llmResult: Awaited<ReturnType<RiskAnalyzer['reviewPlanWithLLM']>>;
+        if (RiskAnalyzer.shadowModeEnabled()) {
+            void this.observeShadowReview(goal, plan);
+            llmResult = { risks: [], adjustedPlan: plan, planAdjusted: false };
+        } else {
+            llmResult = await this.reviewPlanWithLLM(goal, plan);
+        }
 
         if (llmResult.risks.length > 0) risks.push(...llmResult.risks);
 
@@ -504,14 +636,14 @@ export class RiskAnalyzer {
      * mesmo timeoutMs de hoje delimitando cada tentativa. A política de erro continua sendo
      * decidida aqui (timeout vs. error), não dentro do ProviderFactory.
      */
-    private async callRiskLLM(messages: LLMMessage[], timeoutMs: number): Promise<{ status: string; content: string }> {
-        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, timeoutMs, undefined, this.model, { diag: { component: 'RiskAnalyzer', role: 'risk' } });
+    private async callRiskLLM(messages: LLMMessage[], timeoutMs: number, goalId?: string, phase?: string): Promise<{ status: string; content: string }> {
+        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, timeoutMs, undefined, this.model, { diag: { component: 'RiskAnalyzer', role: 'risk', goalId, phase } });
         if (result.status === 'success') return { status: 'success', content: result.content };
         if (result.status === 'timeout') return { status: 'timeout', content: '' };
         return { status: 'error', content: '' };
     }
 
-    private async reviewPlanWithLLM(goal: Goal, plan: PlanStep[]): Promise<{
+    private async reviewPlanWithLLM(goal: Goal, plan: PlanStep[], mode: 'real' | 'shadow' = 'real', sink?: ReviewTrace): Promise<{
         risks: string[];
         adjustedPlan: PlanStep[];
         planAdjusted: boolean;
@@ -521,6 +653,13 @@ export class RiskAnalyzer {
         const stepsStr = plan
             .map((s, i) => `${i + 1}. [${s.toolName ?? 'agentloop'}] ${s.description}`)
             .join('\n');
+
+        // Origem dos logs desta revisão: no modo sombra nenhuma linha pode se passar por um efeito
+        // real (`created_by=risk_analyzer`, "[RiskAnalyzer] LLM review"...), ou toda análise de log
+        // futura contaria a proposta descartada como se tivesse sido aplicada.
+        const shadow = mode === 'shadow';
+        const tag = shadow ? '[RiskAnalyzer:shadow]' : '[RiskAnalyzer]';
+        const createdBy = shadow ? 'risk_analyzer_shadow' : 'risk_analyzer';
 
         const prompt = `Você é um analisador de riscos de execução. Revise este plano antes de executá-lo.
 
@@ -561,10 +700,14 @@ OU
             const result = await this.callRiskLLM(
                 [{ role: 'user', content: prompt }] as LLMMessage[],
                 60_000,
+                goal.id,
+                shadow ? 'shadow-review' : undefined,
             );
+            if (sink) sink.llmStatus = result.status;
 
             if (result.status !== 'success') {
-                log.warn('[RiskAnalyzer] LLM review failed — using original plan');
+                log.warn(`${tag} LLM review failed — using original plan`);
+                if (sink) sink.outcome = 'llm_failed';
                 return { risks: [], adjustedPlan: plan, planAdjusted: false };
             }
 
@@ -574,18 +717,23 @@ OU
             // que causam SyntaxError: "Unexpected non-whitespace character after JSON".
             const jsonMatch = stripped.match(/\{[\s\S]*\}/);
             if (!jsonMatch) {
-                log.warn('[RiskAnalyzer] LLM review response has no JSON object — using original plan');
+                log.warn(`${tag} LLM review response has no JSON object — using original plan`);
+                if (sink) sink.outcome = 'no_json';
                 return { risks: [], adjustedPlan: plan, planAdjusted: false };
             }
             const parsed = JSON.parse(jsonMatch[0]);
 
             const detectedRisks: string[] = Array.isArray(parsed.risks) ? parsed.risks : [];
+            if (sink) sink.detectedRisks = detectedRisks.length;
 
             if (!parsed.plan || !Array.isArray(parsed.plan) || parsed.plan.length === 0) {
+                if (sink) sink.outcome = 'confirmed';
                 return { risks: detectedRisks, adjustedPlan: plan, planAdjusted: false };
             }
 
             const rawSteps: Array<Record<string, unknown>> = parsed.plan.slice(0, 5);
+            // Só observabilidade: a proposta crua, ANTES de a inferência de file_path e o sanitizer a tocarem.
+            if (sink) sink.rawProposal = summarizeSteps(rawSteps);
 
             // Pré-processamento específico do RiskAnalyzer, ANTES de CR#3 (rejeição por args
             // inválidos) e ANTES da sanitização comum: resolve file_path de send_document antes
@@ -650,7 +798,7 @@ OU
                     log.info(
                         `[STEP-MUTATION]` +
                         ` step=${String(s.id ?? `step_${i + 1}`)}` +
-                        ` created_by=risk_analyzer` +
+                        ` created_by=${createdBy}` +
                         ` original_tool=send_document` +
                         ` new_tool=send_document` +
                         ` reason="file_path inferred from prior write: ${inferredPath}"` +
@@ -674,7 +822,7 @@ OU
                 log.info(
                     `[STEP-MUTATION]` +
                     ` step=${String(s.id ?? `step_${i + 1}`)}` +
-                    ` created_by=risk_analyzer` +
+                    ` created_by=${createdBy}` +
                     ` original_tool=send_document` +
                     ` new_tool=send_document` +
                     ` reason="file_path resolved from goal.attempts evidence: ${evidencePath}"` +
@@ -709,7 +857,8 @@ OU
                 const rejectionReason =
                     `Plano rejeitado: ${invalidArgsCount}/${toolStepsCount} tool-steps sem argumentos obrigatórios. ` +
                     `Para 'edit' inclua oldText+newText. Para 'send_document' inclua file_path. Para 'read' inclua path.`;
-                log.warn(`[RiskAnalyzer] plan rejected (${invalidArgsCount}/${toolStepsCount} invalid args) — requesting structured replan`);
+                log.warn(`${tag} plan rejected (${invalidArgsCount}/${toolStepsCount} invalid args) — requesting structured replan`);
+                if (sink) { sink.outcome = 'rejected'; sink.rejectionReason = rejectionReason; sink.repairedByInference = repairedStepIndices.size; }
                 return {
                     risks: [...detectedRisks, rejectionReason],
                     adjustedPlan: plan,   // devolve plano original sem degradação silenciosa
@@ -722,12 +871,17 @@ OU
             const sanitized = await sanitizePlanSteps(
                 rawSteps,
                 this.toolRegistry,
-                '[RiskAnalyzer] adjusted step',
+                `${tag} adjusted step`,
                 detectMissingRequiredArgs,
                 this.classifyContentStub,
                 evidenceBackedPaths,
             );
             const adjustedPlan: PlanStep[] = sanitized.steps;
+            if (sink) {
+                sink.repairedByInference = repairedStepIndices.size;
+                sink.sanitizerMutations = sanitized.mutations.map(m => ({ stepId: m.stepId, originalTool: m.originalTool, reason: m.reason }));
+                sink.proposed = summarizeSteps(adjustedPlan);
+            }
 
             // Pós-processamento específico do RiskAnalyzer: tools críticas (edit, exec_command)
             // com args ausentes NÃO são convertidas silenciosamente para agentloop — o plano é
@@ -744,7 +898,7 @@ OU
                 log.info(
                     `[STEP-MUTATION]` +
                     ` step=${m.stepId}` +
-                    ` created_by=risk_analyzer` +
+                    ` created_by=${createdBy}` +
                     ` original_tool=${m.originalTool}` +
                     ` new_tool=agentloop` +
                     ` reason="${m.detail}"` +
@@ -753,7 +907,7 @@ OU
                 if (CRITICAL_TOOLS.has(m.originalTool)) {
                     criticalMutations.push(`'${m.originalTool}' ${m.stepId}: args ausentes [${m.detail}]`);
                     log.warn(
-                        `[RiskAnalyzer] critical mutation detected:` +
+                        `${tag} critical mutation detected:` +
                         ` step=${m.stepId} tool=${m.originalTool} missing=${m.detail}` +
                         ` — will reject plan`
                     );
@@ -766,7 +920,8 @@ OU
                     `Plano rejeitado: ${criticalMutations.length} step(s) crítico(s) com argumentos obrigatórios ausentes — ` +
                     criticalMutations.join('; ') +
                     '. Replaneje fornecendo os argumentos corretos (path, content, command).';
-                log.warn(`[RiskAnalyzer] plan rejected (critical_mutations): ${criticalMutations.join(', ')}`);
+                log.warn(`${tag} plan rejected (critical_mutations): ${criticalMutations.join(', ')}`);
+                if (sink) { sink.outcome = 'rejected'; sink.rejectionReason = rejectionReason; }
                 return {
                     risks: [...detectedRisks, rejectionReason],
                     adjustedPlan: plan,
@@ -792,7 +947,8 @@ OU
                     stableStringify(s.toolArgs ?? {}) !== stableStringify(plan[i]?.toolArgs ?? {})
                 );
 
-            log.info(`[RiskAnalyzer] LLM review: risks=${detectedRisks.length} planAdjusted=${planAdjusted} steps=${adjustedPlan.length}`);
+            log.info(`${tag} LLM review: risks=${detectedRisks.length} planAdjusted=${planAdjusted} steps=${adjustedPlan.length}`);
+            if (sink) { sink.outcome = 'proposed'; sink.planAdjusted = planAdjusted; }
 
             return {
                 risks: detectedRisks,
@@ -800,7 +956,8 @@ OU
                 planAdjusted,
             };
         } catch (err) {
-            log.warn('[RiskAnalyzer] LLM review error — using original plan:', String(err));
+            log.warn(`${tag} LLM review error — using original plan:`, String(err));
+            if (sink) sink.outcome = 'error';
             return { risks: [], adjustedPlan: plan, planAdjusted: false };
         }
     }

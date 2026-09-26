@@ -155,6 +155,12 @@ export interface ChannelContext {
      * `file_path` de entregas diferidas (planning/artifactContract.ts).
      */
     priorStepEvidence?: EvidenceItem[];
+    /**
+     * Só observabilidade (`[GROUNDING-TRACE]`, S-E/issue 048): a qual goal/step este turno pertence.
+     * Nenhuma decisão lê isto — existe para o log do juiz de grounding poder dizer QUAL passo do
+     * plano produziu o texto avaliado, sem o AgentLoop precisar conhecer a semântica de goals.
+     */
+    goalTrace?: { goalId: string; stepId: string; stepDescription?: string; planGeneration?: number };
 }
 
 export interface AgentLoopConfig {

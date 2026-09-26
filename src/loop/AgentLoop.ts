@@ -1057,7 +1057,7 @@ export class AgentLoop {
             const evidences = [...AgentLoop.evidencesFromTrace(trace), ...(channelContext?.priorStepEvidence ?? [])]
                 .map((e, i) => ({ ...e, id: `E${i + 1}` }));
             try {
-                const g = await this.observer.validateGrounding(response, evidences, signal);
+                const g = await this.observer.validateGrounding(response, evidences, signal, { traceId: trace.id, conversationId, phase: 'initial', ...channelContext?.goalTrace });
                 if (g.state !== 'VALIDATED' && g.state !== 'NOT_APPLICABLE') {
                     log.warn(`[${this.ts()}] [GROUNDING] estado=${g.state} — bloqueando entrega (${g.reason})`);
                     this.reflectionMemory.record({
@@ -1092,6 +1092,7 @@ export class AgentLoop {
                         const partial = await this.trySynthesizePartialResponse(userText, supportedClaims, evidences, signal);
                         if (partial) {
                             log.info(`[${this.ts()}] [GROUNDING] resposta parcial (${supportedClaims.length}/${g.claims.length} afirmações sustentadas) revalidada e entregue`);
+                            log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: trace.id, conversationId, ...channelContext?.goalTrace, state: g.state, claimsTotal: g.claims.length, supported: supportedClaims.length, path: 'partial_delivered', partialChars: partial.length, evidenceSources: { turn: evidences.length - (channelContext?.priorStepEvidence?.length ?? 0), priorSteps: channelContext?.priorStepEvidence?.length ?? 0 }, ...(process.env.TRACE_CONTENT === 'true' ? { deliveredText: partial.slice(0, 3000) } : {}) })}`);
                             this.reflectionMemory.record({
                                 traceId: trace.id,
                                 conversationId,
@@ -1111,6 +1112,7 @@ export class AgentLoop {
                         }
                     }
 
+                    log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: trace.id, conversationId, ...channelContext?.goalTrace, state: g.state, claimsTotal: g.claims.length, supported: supportedClaims.length, path: supportedClaims.length > 0 ? 'blocked_partial_rejected' : 'blocked_no_supported_claims', evidenceSources: { turn: evidences.length - (channelContext?.priorStepEvidence?.length ?? 0), priorSteps: channelContext?.priorStepEvidence?.length ?? 0 } })}`);
                     return AgentLoop.groundingBlockedMessage(g.state);
                 }
             } catch (groundingErr) {
@@ -1177,7 +1179,7 @@ export class AgentLoop {
             const isInsufficientSentinel = /^["'*_\s]*INSUFICIENTE["'.!*_\s]*$/i.test(text);
             if (!text || text.length < 10 || isInsufficientSentinel) return null;
 
-            const revalidated = await this.observer.validateGrounding(text, evidences, signal);
+            const revalidated = await this.observer.validateGrounding(text, evidences, signal, { phase: 'partial-revalidation' });
             if (revalidated.state !== 'VALIDATED' && revalidated.state !== 'NOT_APPLICABLE') {
                 log.warn(`[${this.ts()}] [GROUNDING] resposta parcial também não passou (estado=${revalidated.state}) — descartando`);
                 return null;

@@ -519,7 +519,10 @@ export class GoalOrchestrator {
         }
 
         log.info(`[GoalOrchestrator] executing goal=${goal.id}`);
-        log.info(`[GOAL-LIFECYCLE] goal=${goal.id} session=${sessionKey} state=created intent="${message.slice(0, 80)}" timestamp=${Date.now()}`);
+        log.info(`[GOAL-LIFECYCLE] goal=${goal.id} session=${sessionKey} state=created intent_chars=${message.length} intent="${message.slice(0, 80)}" timestamp=${Date.now()}`);
+        if (process.env.TRACE_CONTENT === 'true') {
+            log.info(`[GOAL-INTENT] goal=${goal.id} chars=${message.length} text=${JSON.stringify(message.slice(0, 4000))}`);
+        }
 
         // ── Injetar skill context no planner (sempre, para limpar contexto anterior) ──
         const skillContext = this.agentLoop.getSkillContextForQuery(message);

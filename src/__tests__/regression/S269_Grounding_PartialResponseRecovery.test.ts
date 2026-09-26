@@ -74,7 +74,7 @@ console.log('\n=== S269-3 — a resposta parcial é revalidada pela MESMA barrei
         agentLoopSource.indexOf('private async trySynthesizePartialResponse'),
         agentLoopSource.indexOf('// ── Entry points'),
     );
-    assert(/this\.observer\.validateGrounding\(text, evidences, signal\)/.test(methodBody), 'trySynthesizePartialResponse chama validateGrounding() de novo sobre o texto novo (mesma barreira, não um atalho)');
+    assert(/this\.observer\.validateGrounding\(text, evidences, signal(?:, \{[^)]*\})?\)/.test(methodBody), 'trySynthesizePartialResponse chama validateGrounding() de novo sobre o texto novo (mesma barreira, não um atalho)');
     assert(/revalidated\.state !== 'VALIDATED' && revalidated\.state !== 'NOT_APPLICABLE'/.test(methodBody), 'só aceita a resposta parcial se o segundo julgamento também aprovar (VALIDATED ou NOT_APPLICABLE) — mesmo critério fail-closed do bloqueio original');
     // Sem recursão: o método não chama a si mesmo nem re-tenta em loop — uma falha na revalidação
     // devolve null e quem chamou (commitResponse) cai direto no bloqueio padrão.

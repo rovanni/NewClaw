@@ -7,6 +7,7 @@
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
+import { createHash } from 'crypto';
 import { ANALYSIS_INTENT_PATTERN } from '../shared/analysisIntentPattern';
 const log = createLogger('Observervalidator');
 
@@ -117,6 +118,69 @@ export interface EvidenceItem {
     tool: string;
     input?: string;
     output: string;
+}
+
+/** Quanto de cada evidência o juiz de grounding enxerga (o resto é cortado e MARCADO no prompt). */
+const GROUNDING_EVIDENCE_CHARS = 2000;
+
+// ── Observabilidade do juiz de grounding (`[GROUNDING-TRACE]`) ───────────────────────────────
+// Só fatos, nenhuma interpretação: o que o juiz recebeu (tamanho de cada evidência e se foi
+// cortada), o que devolveu (TODAS as afirmações com veredito e evidência citada, não só a
+// primeira) e por qual caminho a função saiu. Nasceu de um goal real de 25 min em que a resposta
+// final foi bloqueada 4 vezes por "NOT_EVALUABLE" e o log não permitia dizer se as afirmações
+// rejeitadas eram legítimas (issue 048).
+//
+// Dois níveis, porque evidência e resposta carregam conteúdo do usuário:
+//   - SEMPRE: estrutura (tamanhos, vereditos, ids, truncamento, hash da resposta). Sem texto de evidência.
+//   - `TRACE_CONTENT=true` (opt-in, vale também para `[GOAL-INTENT]`): também o texto da resposta, o texto EXATO de cada
+//     evidência como o juiz a viu, e a saída crua do juiz. Para investigação, não para uso corrente.
+
+export interface GroundingTraceContext {
+    traceId?: string;
+    conversationId?: string;
+    /** De qual goal/step veio o texto avaliado (quando o turno faz parte de um goal). */
+    goalId?: string;
+    stepId?: string;
+    stepDescription?: string;
+    planGeneration?: number;
+    /** `initial` = julgamento da resposta do turno; `partial-revalidation` = revalidação da resposta parcial. */
+    phase?: 'initial' | 'partial-revalidation';
+}
+
+interface GroundingEvidenceFact {
+    id: string;
+    tool: string;
+    inputChars: number;
+    outputChars: number;
+    /** Quantos chars o juiz de fato viu (≤ GROUNDING_EVIDENCE_CHARS). */
+    sentChars: number;
+    truncated: boolean;
+}
+
+interface GroundingTraceRecord {
+    v: number;
+    phase: string;
+    traceId?: string;
+    conversationId?: string;
+    goalId?: string;
+    stepId?: string;
+    stepDescription?: string;
+    planGeneration?: number;
+    /** skipped_no_evidence | prompt_too_long | judge_failed | judge_error | malformed_judge_output | verdict */
+    outcome: string;
+    state?: GroundingState;
+    elapsedMs: number;
+    budgetMs: number;
+    responseChars: number;
+    promptChars?: number;
+    judgeOutputChars?: number;
+    judgeStatus?: string;
+    judgeError?: string;
+    evidences: GroundingEvidenceFact[];
+    claims?: Array<{ claim: string; verdict: string; evidence: string[] }>;
+    claimCounts?: { SUPPORTED: number; NOT_SUPPORTED: number; NOT_EVALUABLE: number };
+    /** Só sai no log com GROUNDING_TRACE_CONTENT=true. */
+    judgeRaw?: string;
 }
 
 export interface GroundingVerdict {
@@ -529,14 +593,35 @@ export class ObserverValidator {
         response: string,
         evidences: EvidenceItem[],
         signal?: AbortSignal,
+        /** Só observabilidade (`[GROUNDING-TRACE]`): quem chama e em que fase. Não influencia o julgamento. */
+        traceCtx?: GroundingTraceContext,
     ): Promise<GroundingVerdict> {
         const t0 = Date.now();
         const orcamento = this.providerFactory.getBudgetAuxiliar('validacao');
         const base = { budgetMs: orcamento.timeoutMs, budgetOrigin: orcamento.origem };
 
+        // Fatos do julgamento para o log. Preenchido à medida que a função avança e emitido em
+        // TODOS os caminhos de saída — inclusive os que não chegam a um veredito.
+        const evidenceFacts: GroundingEvidenceFact[] = evidences.map(e => ({
+            id: e.id,
+            tool: e.tool,
+            inputChars: (e.input ?? '').length,
+            outputChars: e.output.length,
+            sentChars: Math.min(e.output.length, GROUNDING_EVIDENCE_CHARS),
+            truncated: e.output.length > GROUNDING_EVIDENCE_CHARS,
+        }));
+        const emit = (outcome: string, extra: Partial<GroundingTraceRecord> = {}): void =>
+            ObserverValidator.traceGrounding({
+                v: 1, phase: traceCtx?.phase ?? 'initial', traceId: traceCtx?.traceId, conversationId: traceCtx?.conversationId,
+                goalId: traceCtx?.goalId, stepId: traceCtx?.stepId, stepDescription: traceCtx?.stepDescription, planGeneration: traceCtx?.planGeneration,
+                outcome, elapsedMs: Date.now() - t0, budgetMs: orcamento.timeoutMs,
+                responseChars: response.length, evidences: evidenceFacts, ...extra,
+            }, response, evidences);
+
         // Sem evidência não há afirmação derivada de ferramenta a verificar. Não é aprovação:
         // é o domínio de C1 não se aplicar (ADR-010 §10).
         if (evidences.length === 0 || !response.trim()) {
+            emit('skipped_no_evidence', { state: 'NOT_APPLICABLE' });
             return { state: 'NOT_APPLICABLE', claims: [], reason: 'nenhuma evidência de ferramenta no turno', elapsedMs: 0, ...base };
         }
 
@@ -554,7 +639,7 @@ export class ObserverValidator {
         //
         // Por isso a resposta entra inteira e, se o conjunto não couber, o resultado é
         // UNVALIDATED (abaixo), nunca um julgamento parcial.
-        const EVIDENCIA_CHARS = 2000, ARGS_CHARS = 200;
+        const EVIDENCIA_CHARS = GROUNDING_EVIDENCE_CHARS, ARGS_CHARS = 200;
         const corta = (texto: string, limite: number, marca: string): string =>
             texto.length > limite ? `${texto.slice(0, limite)}\n${marca}` : texto;
 
@@ -574,6 +659,7 @@ export class ObserverValidator {
         // provedor cortar em silêncio e devolver veredito sobre um prefixo.
         if (prompt.length > GROUNDING_MAX_PROMPT_CHARS) {
             log.warn(`[GROUNDING] prompt de ${prompt.length} chars excede ${GROUNDING_MAX_PROMPT_CHARS} — UNVALIDATED`);
+            emit('prompt_too_long', { state: 'UNVALIDATED', promptChars: prompt.length });
             return {
                 state: 'UNVALIDATED', claims: [],
                 reason: `resposta não avaliável integralmente: prompt de ${prompt.length} chars excede o teto de ${GROUNDING_MAX_PROMPT_CHARS}`,
@@ -607,23 +693,55 @@ export class ObserverValidator {
             if (fallbackResult.status !== 'success') {
                 const lastAttempt = fallbackResult.attempts[fallbackResult.attempts.length - 1];
                 log.warn(`[GROUNDING] juiz não concluiu (${(lastAttempt?.errorMessage ?? fallbackResult.status).slice(0, 80)}) — UNVALIDATED`);
+                emit('judge_failed', { state: 'UNVALIDATED', promptChars: prompt.length, judgeStatus: fallbackResult.status, judgeError: (lastAttempt?.errorMessage ?? '').slice(0, 120) });
                 return { state: 'UNVALIDATED', claims: [], reason: `juiz não concluiu: ${(lastAttempt?.errorMessage ?? fallbackResult.status).slice(0, 120)}`, elapsedMs: Date.now() - t0, ...base };
             }
 
             const parsed = this.parseGroundingOutput(fallbackResult.content || '', evidences);
             if (!parsed) {
                 log.warn(`[GROUNDING] saída do juiz sem estrutura válida — UNVALIDATED`);
+                emit('malformed_judge_output', { state: 'UNVALIDATED', promptChars: prompt.length, judgeOutputChars: (fallbackResult.content ?? '').length, judgeRaw: fallbackResult.content ?? '' });
                 return { state: 'UNVALIDATED', claims: [], reason: 'saída do juiz estruturalmente inválida', elapsedMs: Date.now() - t0, ...base };
             }
 
             const state = ObserverValidator.aggregateGrounding(parsed);
+            emit('verdict', {
+                state, promptChars: prompt.length, judgeOutputChars: (fallbackResult.content ?? '').length, judgeRaw: fallbackResult.content ?? '',
+                claims: parsed.map(c => ({ claim: c.claim.slice(0, 200), verdict: c.verdict, evidence: c.evidence })),
+                claimCounts: {
+                    SUPPORTED: parsed.filter(c => c.verdict === 'SUPPORTED').length,
+                    NOT_SUPPORTED: parsed.filter(c => c.verdict === 'NOT_SUPPORTED').length,
+                    NOT_EVALUABLE: parsed.filter(c => c.verdict === 'NOT_EVALUABLE').length,
+                },
+            });
             return { state, claims: parsed, reason: ObserverValidator.describeGrounding(state, parsed), elapsedMs: Date.now() - t0, ...base };
         } catch (err) {
             // Timeout, abort, erro de rede, provedor/modelo indisponível — todos significam a
             // mesma coisa: o juiz não concluiu. Nunca é aprovação (ADR-010 §9).
             log.warn(`[GROUNDING] juiz não concluiu (${String(err).slice(0, 80)}) — UNVALIDATED`);
+            emit('judge_error', { state: 'UNVALIDATED', judgeError: String(err).slice(0, 120) });
             return { state: 'UNVALIDATED', claims: [], reason: `juiz não concluiu: ${String(err).slice(0, 120)}`, elapsedMs: Date.now() - t0, ...base };
         }
+    }
+
+    /** Emite `[GROUNDING-TRACE]` (ver o bloco de tipos no topo do arquivo). Nunca lança. */
+    private static traceGrounding(rec: GroundingTraceRecord, response: string, evidences: EvidenceItem[]): void {
+        // Limite só do TEXTO QUE VAI PARA O LOG — nunca do que o juiz recebe (a resposta entra inteira no prompt).
+        const capForLog = (text: string, limit: number): string => text.slice(0, limit);
+        try {
+            const out: Record<string, unknown> = { ...rec, responseHash: createHash('sha1').update(response).digest('hex').slice(0, 8) };
+            delete out.judgeRaw;
+            if (process.env.TRACE_CONTENT === 'true') {
+                out.responseText = capForLog(response, 6000);
+                out.evidenceSent = evidences.map(e => ({
+                    id: e.id, tool: e.tool,
+                    input: capForLog(e.input ?? '', 200),
+                    output: capForLog(e.output, GROUNDING_EVIDENCE_CHARS),
+                }));
+                if (rec.judgeRaw !== undefined) out.judgeRaw = capForLog(rec.judgeRaw, 4000);
+            }
+            log.info('[GROUNDING-TRACE] ' + JSON.stringify(out));
+        } catch { /* observabilidade nunca pode afetar o julgamento */ }
     }
 
     /**

@@ -355,6 +355,7 @@ export class GoalExecutionLoop {
         if (initialCriteria.length > 0) {
             log.info(`[GoalLoop] successCriteria stored: ${initialCriteria.map(c => `${c.id}(${c.check})`).join(', ')}`);
         }
+        this.tracePlan(goal, 'initial', initialPlan, initialCriteria, planResult.successCriteria ?? [], intentCategory);
 
         this.goalStore.update(goal.id, {
             currentPlan: initialPlan,
@@ -632,6 +633,7 @@ export class GoalExecutionLoop {
             abandonedDeliveryTools,
             ensureDeliverySuccessCriteria(finalPlan, mergedCriteria),
         );
+        this.tracePlan(goal, 'replan', finalPlan, replanCriteria, planResult.successCriteria ?? [], undefined);
 
         this.goalStore.update(goal.id, {
             currentPlan: finalPlan,
@@ -2422,6 +2424,7 @@ export class GoalExecutionLoop {
         // deferSendDocument só aceita um artefato por caminho único nesta execução.
         const goalChannelContext: ChannelContext = {
             ...channelContext,
+            goalTrace: { goalId: goal.id, stepId: step.id, stepDescription: (step.description ?? '').slice(0, 120), planGeneration: currentGeneration },
             priorStepEvidence,
             deliveryTracking: {
                 deferSendDocument: (args) => {
@@ -4502,6 +4505,36 @@ OU
         const hasGenericSummary = fallbackText === GENERIC_CRITERIA_SUMMARY;
         return (lastSuccessIsSafeToDeliverRaw ? (lastSuccess?.output || undefined) : undefined)
             ?? (!hasGenericSummary ? fallbackText : undefined);
+    }
+
+    /**
+     * `[PLAN-TRACE]` (S-E, issue 048) — só fatos: o que o plano contém e de onde veio cada critério.
+     * Existe para responder "por que este passo/critério existe se o usuário não o pediu?": o plano
+     * não carrega origem por passo (`PlanStep` não tem esse campo), mas a origem de cada CRITÉRIO é
+     * observável sem heurística — ele estava na lista devolvida pelo Planner (`planner`) ou foi
+     * acrescentado por uma função determinística (`auto`, ids reservados `auto_*`). Nunca lança.
+     */
+    private tracePlan(
+        goal: Goal,
+        phase: 'initial' | 'replan',
+        steps: PlanStep[],
+        criteria: SuccessCriterion[],
+        plannerCriteria: SuccessCriterion[],
+        intentCategory: IntentCategory | undefined,
+    ): void {
+        try {
+            const fromPlanner = new Set(plannerCriteria.map(c => c.id));
+            log.info('[PLAN-TRACE] ' + JSON.stringify({
+                v: 1,
+                goalId: goal.id,
+                phase,
+                generation: goal.planGeneration ?? 0,
+                intentCategory: intentCategory ?? null,
+                intentChars: (goal.userIntent ?? '').length,
+                steps: steps.map(s => ({ id: s.id, tool: s.toolName ?? 'agentloop', description: (s.description ?? '').slice(0, 120) })),
+                criteria: criteria.map(c => ({ id: c.id, check: c.check, source: fromPlanner.has(c.id) ? 'planner' : 'auto' })),
+            }));
+        } catch { /* observabilidade nunca pode afetar a execução */ }
     }
 
     private buildResult(
