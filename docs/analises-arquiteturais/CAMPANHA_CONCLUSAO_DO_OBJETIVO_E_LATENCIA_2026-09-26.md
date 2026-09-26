@@ -1,8 +1,9 @@
-# Campanha: conclusão do objetivo e latência (RFC-007 → Sprint 5) — 22–26/09/2026
+# Campanha: conclusão do objetivo e latência (RFC-007 → Sprint 7) — 22–26/09/2026
 
-**Status:** ENCERRADA **COM UMA PENDÊNCIA CRÍTICA** (seção 9): a validação final no navegador confirmou as correções das
-Sprints 1 a 3, mas o replay do incidente original **não** melhorou — o juiz de grounding com o modelo pesado não consegue
-concluir dentro dos tetos atuais. Seis commits, oito testes de regressão novos, suíte em **306/306**.
+**Status:** ENCERRADA. Dez commits de código e testes, dez testes de regressão novos, suíte em **308/308**.
+A pendência crítica encontrada na validação final (juiz de grounding sem conseguir concluir; seção 9) foi **resolvida na
+Sprint 7**: o replay do incidente passou de >32 min sem terminar para **10 min 29 s**, `goal_satisfied`, 0 replans.
+Decisões que dependem do usuário continuam pendentes (seção 7).
 **Método:** evidência antes de correção; instrumento em modo sombra antes de mudar comportamento; uma sprint
 por vez, cada uma com teste unitário (com controle negativo), regressão completa e validação em execução real.
 
@@ -28,6 +29,9 @@ que ninguém pediu (teste, "harness", relatório), travado no juiz de grounding 
 | `a645fc0` | Sprint 2 | `response_produced` não é exigido quando o plano já entrega um artefato | S305 (14) |
 | `b3f3903` | Sprint 3 | Sombra do juiz com evidência ampliada | S306 (18) |
 | `2c5fbe2` | Sprint 5 | Sombra de modelo do juiz (pesado × leve) | S307 (19) |
+| `039941d` | Sprint 6 | Painel: o tempo mostrado é o da espera do usuário (idade do goal); perda de conexão com o servidor deixa de ser silenciosa | S308 (20) |
+| `284f7c7` | Sprint 7 | O fallback sem streaming do `ProviderFactory` respeita o modelo pedido (usava o padrão) | S309 |
+| `2270ff9` | Sprint 7 | Diagnóstico: a tentativa falhada e o `[LLM-CALL]` registram o modelo pedido, não o padrão | S309 (10) |
 
 A Sprint 4 foi **medição, sem código** (seção 5). Além dos commits: 4 alertas do CodeQL (#104, #108, #109,
 #110) dispensados no GitHub com justificativa técnica; code-scanning ficou com **0 abertos**.
@@ -44,10 +48,14 @@ A Sprint 4 foi **medição, sem código** (seção 5). Além dos commits: 4 aler
 | 6 | Aborto por orçamento de raciocínio + refação sem streaming: 27% do tempo de LLM no caminho real | 263 chamadas / 12 execuções | **Medido** (Sprint 4); decisão pendente |
 | 7 | Revisor semântico de plano: expira (~78 s) com o modelo de produção e, quando funciona, introduz defeitos estruturais que o sanitizer conserta | 139 execuções no log de produção; 3 controles | **Instrumentado** (S-D); decisão pendente |
 | 8 | 4 alertas CodeQL | GitHub | **Dispensados** (controle existente verificado) |
+| 9 | O painel dizia "já faz 2 min" com 1 hora de espera (idade do TURNO, que recomeça a cada passo do goal) e congelava o último status quando o servidor caía (o `catch` do polling engolia o erro) | Achado no navegador; código de `chat.ts` e `index.html` | **Corrigido** (Sprint 6) |
+| 10 | O fallback sem streaming trocava em silêncio o modelo configurado (juiz/planejador/revisor) pelo modelo PADRÃO; com o juiz leve, a refação ia para o pesado e dava timeout | Replay: `START provider=…/glm-5.3-flash` e refação no `glm-5.3` (271 s e 350 s); `ProviderFactory.ts` | **Corrigido** (Sprint 7) |
+| 11 | O `[LLM-CALL]` mostrava o modelo padrão para qualquer chamada com tentativa falhada (o `catch` recalculava o modelo da instância compartilhada) | `model=glm-5.3` numa chamada feita com o leve | **Corrigido** (Sprint 7) |
 
 **Fora do escopo (só registrados):** JSON cru e `$$` duplicado na conversa do River (a conversa certa não foi
 analisada); cabeçalho "Entrega pendente de uma tarefa anterior" fixo em português (`WebChannelAdapter`);
-`AgentLoop` entrega arquivos de apoio que ele mesmo cria (o harness de teste); `PlanStep` sem campo de origem.
+`AgentLoop` entrega arquivos de apoio que ele mesmo cria (o harness de teste); `PlanStep` sem campo de origem;
+o indicador de status mostra "parar. ." (o texto já termina em ponto e o `showStatus` soma a animação de pontos).
 
 ## 4. Instrumentos (todos opt-in e desligados por padrão, exceto onde indicado)
 
@@ -66,7 +74,8 @@ engolida; nenhuma sombra dispara outra; o texto do pedido não vai para o log (s
 
 - 263 chamadas no caminho real, 6.302 s de LLM: **1.675 s (27%) descartados em abortos**. Maiores: juiz de
   grounding 542 s, planejador 534 s, perfil de execução do `AgentLoop` 237 s (66% do seu tempo), qualidade 168 s.
-- Todo o fallback ocorreu no `glm-5.3:cloud` (43 de 250 chamadas); `glm-5.3-flash` 0/5 e `kimi-k2.6` 0/8.
+- ~~Todo o fallback ocorreu no `glm-5.3:cloud`~~ — **RETRATADO (seção 6):** era artefato do log; a divisão por
+  modelo das taxas de fallback destas medições é inválida. A parcela de 27% descartados **não** depende do rótulo do modelo.
 - **Contrafactual** (prompt real do juiz, sem limite, 3 rodadas por modelo):
 
   | Modelo | Tempo (mín / mediana / máx) | Raciocínio | Estado agregado |
@@ -91,21 +100,29 @@ Registradas para não repetir o erro:
   que "o Grounding impediu o pedido": o pedido já estava cumprido; o trabalho extra travou.
 - `truncar a 2.000 chars` foi testado como causa do bloqueio e **não** foi (as afirmações rejeitadas não dependiam
   da evidência cortada).
+- **Retratação da Sprint 4:** "todo o fallback ocorre no `glm-5.3` e o leve 0/5" era **artefato de log**. No `catch` de
+  tentativa falhada, o `ProviderFactory` recalculava `modelUsed` a partir da instância compartilhada (modelo padrão), então
+  TODA tentativa falhada era registrada com o padrão e o `[LLM-CALL]` mostrava `model=glm-5.3` até para chamadas feitas com o
+  leve. O leve também estoura o orçamento de 32.000 chars (replay: 31.993 chars em 77 s). Corrigido na Sprint 7 (S309-5).
 
 ## 7. Decisões pendentes (do usuário — nada implementado)
 
 1. **Revisor semântico de plano** (`RiskAnalyzer.reviewPlanWithLLM`): manter com modelo/timeout adequados, rodar só
    com sinais estruturais de risco, ou desativar? Falta acumular `[RISK-SHADOW]` em uso real.
-2. **Modelo do juiz de grounding:** trocar o pesado pelo leve? Falta acumular `[GROUNDING-SHADOW-MODEL]`.
+2. **Modelo do juiz de grounding:** trocar o pesado pelo leve? Com a Sprint 7 o leve **funciona** (replay do incidente em
+   10 min 29 s) e concordou no estado nos 8 julgamentos comparados (6 rodadas + 2 reais), mas decompõe as afirmações de outro
+   jeito; a troca continua sendo configuração do operador (`OBSERVER_MODEL`), decidida com mais `[GROUNDING-SHADOW-MODEL]`.
 3. **Afirmações sobre ações pendentes / sobre o pedido do usuário:** o que o juiz deve receber como evidência?
    (a sombra da Sprint 3 mostrou o efeito parcial).
-4. **Política de raciocínio** (teto no fallback sem streaming, o S72): decisão de política, depende de 1 e 2.
+4. **Política de raciocínio** (teto no fallback sem streaming, o S72): decisão de política, depende de 1 e 2. O modelo
+   leve também pode estourar o orçamento de 32.000 chars; com a Sprint 7 isso não derruba mais o julgamento.
 5. Se o `AgentLoop` deve entregar arquivos de apoio que ele mesmo cria; se `PlanStep` deve ter campo de origem.
 
 ## 8. Limites conhecidos
 
 - Medições vêm de uma máquina e, no agregado, de um único modelo pesado; o contrafactual é n=3 por modelo.
-- O log de produção é anterior a `[LLM-CALL]`; a atribuição por componente vem das execuções isoladas.
+- O log de produção é anterior a `[LLM-CALL]`; a atribuição por componente vem das execuções isoladas. Antes do commit
+  `2270ff9`, o `model=` do `[LLM-CALL]` de chamadas com tentativa falhada mostra o modelo padrão (seção 6).
 - O prompt do Planner não é logado: não se sabe se o fato `commands_validated` chegou ao plano inicial que
   escreveu `python3` (os dois replans seguintes usaram `py -3`).
 - O juiz não devolve justificativa por afirmação; a única justificativa disponível é a saída crua (`judgeRaw`).
@@ -131,7 +148,30 @@ streaming tem teto de **240 s**. Para esse tipo de prompt o `glm-5.3:cloud` prec
 77 s + 240 s ≈ 319 s e `status=timeout` → `UNVALIDATED` (fail-closed) → resposta bloqueada → `semantic_mismatch` →
 replan. Não é azar de latência; com esse modelo, esse juiz não fecha dentro dos tetos.
 
-**Implicação.** Os itens "política de raciocínio" e "modelo do juiz" (seção 7) deixam de ser otimização e passam a ser
-**correção funcional**: o caminho `agentloop → juiz` falha por construção com o modelo pesado em respostas longas.
-O que a evidência já sustenta como candidato (ainda não aplicado): juiz em modelo mais leve (52–260 s no contrafactual,
-mesmo estado do pesado em 6/6 rodadas e em 2/2 julgamentos reais). Falta o replay do incidente com esse juiz.
+**Implicação.** O caminho `agentloop → juiz` falhava por construção com o modelo pesado em respostas longas. Restava
+testar o juiz leve, e esse teste revelou a causa que faltava (seção 10).
+
+## 10. Sprints 6 e 7 e o replay definitivo (26/09/2026, 14:07–15:47)
+
+**Sprint 6, validada no navegador.** Derrubei o servidor no meio de um goal: em poucos segundos o painel mostrou
+"⚠️ Conexão com o servidor perdida — tentando reconectar…" e, ao subir de novo, o aviso sumiu sozinho. O contador passou a
+mostrar "já faz 31 min" (a API devolvia 32 min; o relógio real, 31,6), contra "2 min" depois de mais de 1 hora antes.
+
+**Replay com o juiz leve, ANTES da Sprint 7:** falhou aos ~37 min. Das 4 chamadas do juiz, 2 usaram o modelo **pesado**
+(timeouts de 271 s e 350 s) e 2 usaram o leve (75 s e 23 s, sem fallback). Causa comprovada no código: o streaming cria uma
+instância com o modelo pedido (`getProviderWithModel`, `ProviderFactory.ts`), mas o fallback sem streaming usava a
+instância compartilhada com o modelo padrão. Com `OBSERVER_MODEL` leve, quando o streaming estourava o orçamento, a refação
+trocava para o pesado sem aviso — o oposto da regra de soberania da configuração do usuário.
+
+**Replay com a Sprint 7:** o log da própria requisição do juiz mostra `START provider=ollama/glm-5.3-flash:cloud` →
+streaming abortado aos 31.993 chars (77 s) → `trying non-streaming fallback (model=glm-5.3-flash:cloud)` → sucesso.
+
+| Replay do incidente (mesmo pedido, 1.509 chars) | Resultado | Tempo |
+|---|---|---|
+| Original (produção, 22/09) | terminou, com replans e trabalho extra | 29,8 min |
+| Juiz pesado, sem as correções | não terminou (3 juízes em `timeout`) | >32 min (interrompido) |
+| Juiz leve, **antes** da Sprint 7 | falhou (o fallback trocou para o pesado) | ~37 min |
+| Juiz leve, **com** a Sprint 7 | **`goal_satisfied`**, 4 ciclos, **0 replans** | **10 min 29 s** |
+
+Dos 10 min 29 s, cerca de 3 min 19 s são planejamento inicial e o restante, execução do passo e duas rodadas do juiz
+(211 s, com aborto e refação, e 82 s). O que resta de lento é latência do modelo, não bloqueio.
